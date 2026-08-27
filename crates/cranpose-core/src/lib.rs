@@ -435,40 +435,19 @@ pub(crate) type ScopeId = usize;
 pub(crate) type FrameCallbackId = u64;
 type LocalStackSnapshot = Rc<Vec<composer::LocalContext>>;
 
-#[derive(Clone)]
-pub(crate) struct LocalKey(Rc<()>);
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) struct LocalKey(Key);
 
 impl LocalKey {
     fn new() -> Self {
-        Self(Rc::new(()))
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        Self(NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
     }
-}
 
-impl std::fmt::Debug for LocalKey {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("LocalKey")
-            .field(&(Rc::as_ptr(&self.0) as usize))
-            .finish()
-    }
-}
-
-impl std::fmt::Display for LocalKey {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:p}", Rc::as_ptr(&self.0))
-    }
-}
-
-impl PartialEq for LocalKey {
-    fn eq(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.0, &other.0)
-    }
-}
-
-impl Eq for LocalKey {}
-
-impl Hash for LocalKey {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        Rc::as_ptr(&self.0).hash(state);
+    /// A slot source unique to this local, so entries for two same-typed
+    /// locals never adopt each other when a neighboring provider leaves.
+    pub(crate) fn entry_source(self) -> Key {
+        avalanche_location_key(self.0)
     }
 }
 

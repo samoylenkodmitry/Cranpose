@@ -3741,3 +3741,99 @@ fn two_composables_from_one_template_invocation_stay_distinct() {
     );
     assert_composition_valid(&composition);
 }
+
+#[composable]
+fn await_free_async_fn_probe(flag: bool) {
+    async fn arms(flag: bool) {
+        if flag {
+            let value = remember_branch_marker(301);
+            BRANCH_SEEN.with(|seen| seen.set(value));
+        } else {
+            let value = remember_branch_marker(302);
+            BRANCH_SEEN.with(|seen| seen.set(value));
+        }
+    }
+    poll_ready(arms(flag));
+}
+
+#[test]
+fn an_await_free_async_fn_keeps_branch_identity() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, flag: bool| {
+        composition.render(101, || await_free_async_fn_probe(flag))
+    };
+
+    pass(&mut composition, true).expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (1, 301));
+
+    pass(&mut composition, false).expect("switch arms inside the async fn");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (2, 302),
+        "an async fn with no await runs synchronously when polled during \
+         composition; its arms need folds like any other conditional"
+    );
+    assert_composition_valid(&composition);
+}
+
+#[composable]
+fn suspending_arm_probe(flag: bool) {
+    poll_ready(async {
+        if flag {
+            let value = remember_branch_marker(303);
+            BRANCH_SEEN.with(|seen| seen.set(value));
+            std::future::ready(()).await;
+        } else {
+            let value = remember_branch_marker(304);
+            BRANCH_SEEN.with(|seen| seen.set(value));
+            std::future::ready(()).await;
+        }
+    });
+}
+
+#[test]
+fn a_composing_arm_before_an_await_keeps_branch_identity() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, flag: bool| {
+        composition.render(102, || suspending_arm_probe(flag))
+    };
+
+    pass(&mut composition, true).expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (1, 303));
+
+    pass(&mut composition, false).expect("switch the awaiting arms");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (2, 304),
+        "a suspension-free statement inside an awaiting arm can carry a fold \
+         that closes before the await; the arms must not share slots"
+    );
+    assert_composition_valid(&composition);
+}
+
+#[composable]
+fn suspending_arm_send_probe(flag: bool) {
+    let make = async move || {
+        if flag {
+            let value = remember_branch_marker(305);
+            BRANCH_SEEN.with(|seen| seen.set(value));
+            std::future::ready(7).await
+        } else {
+            std::future::ready(9).await
+        }
+    };
+    let future = require_send(make());
+    drop(future);
+}
+
+#[test]
+fn a_suspending_arm_future_stays_send() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+    composition
+        .render(103, || suspending_arm_send_probe(true))
+        .expect("initial composition");
+    assert_composition_valid(&composition);
+}

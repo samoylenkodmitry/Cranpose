@@ -4288,3 +4288,141 @@ fn scoped_recompose_after_root_replay_does_not_self_parent_root() {
         "a root scope replay must not attach its root node as its own child",
     );
 }
+
+#[test]
+fn a_surviving_keyed_remember_keeps_its_slot_when_a_same_statement_neighbor_leaves() {
+    thread_local! {
+        static KEYED_INITS: Cell<usize> = const { Cell::new(0) };
+        static KEYED_SEEN: Cell<i32> = const { Cell::new(0) };
+    }
+
+    fn keyed_through_helper(key: u32) -> i32 {
+        rememberKeyed(key, |key| {
+            KEYED_INITS.with(|count| count.set(count.get() + 1));
+            100 + *key as i32
+        })
+    }
+
+    #[composable]
+    fn keyed_pair(with_first: bool) {
+        let (_first, second) = (
+            with_first.then_some(1u32).map(keyed_through_helper),
+            rememberKeyed(9u32, |_| {
+                KEYED_INITS.with(|count| count.set(count.get() + 1));
+                200
+            }),
+        );
+        KEYED_SEEN.with(|slot| slot.set(second));
+    }
+
+    let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, with_first: bool| {
+        composition.render(861, || keyed_pair(with_first))
+    };
+    pass(&mut composition, true).expect("initial composition");
+    assert_eq!(KEYED_INITS.with(Cell::get), 2);
+    assert_eq!(KEYED_SEEN.with(Cell::get), 200);
+
+    pass(&mut composition, false).expect("drop the first keyed remember");
+    assert_eq!(
+        (KEYED_INITS.with(Cell::get), KEYED_SEEN.with(Cell::get)),
+        (2, 200),
+        "the surviving call's key did not change, so its initializer must not rerun; \
+         adopting the vanished neighbor's slot forces a spurious key mismatch"
+    );
+}
+
+#[test]
+fn a_surviving_coroutine_scope_keeps_its_identity_when_a_neighbor_leaves() {
+    thread_local! {
+        static SECOND_SCOPE: Cell<usize> = const { Cell::new(0) };
+    }
+
+    fn scope_through_helper(_slot: u32) -> CoroutineScope {
+        rememberCoroutineScope()
+    }
+
+    #[composable]
+    fn scope_pair(with_first: bool) {
+        let (_first, second) = (
+            with_first.then_some(1u32).map(scope_through_helper),
+            rememberCoroutineScope(),
+        );
+        SECOND_SCOPE.with(|slot| slot.set(second.probe_identity()));
+    }
+
+    let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, with_first: bool| {
+        composition.render(862, || scope_pair(with_first))
+    };
+    pass(&mut composition, true).expect("initial composition");
+    let original = SECOND_SCOPE.with(Cell::get);
+
+    pass(&mut composition, false).expect("drop the first scope");
+    assert_eq!(
+        SECOND_SCOPE.with(Cell::get),
+        original,
+        "the surviving call must keep its own scope; adopting the vanished \
+         neighbor's scope silently rebinds every task the survivor launched"
+    );
+}
+
+#[test]
+fn a_surviving_provider_keeps_its_entry_when_a_same_typed_neighbor_leaves() {
+    thread_local! {
+        static SECOND_READ: Cell<i32> = const { Cell::new(0) };
+    }
+
+    let first = compositionLocalOf(|| 0);
+    let second = compositionLocalOf(|| 0);
+    let mut composition = test_composition();
+    let runtime = composition.runtime_handle();
+    let with_first = MutableState::with_runtime(true, runtime.clone());
+    let second_value = MutableState::with_runtime(20, runtime.clone());
+
+    #[composable]
+    fn reader(second: CompositionLocal<i32>) {
+        let value = second.current();
+        SECOND_READ.with(|slot| slot.set(value));
+    }
+
+    #[composable]
+    fn tree(
+        first: CompositionLocal<i32>,
+        second: CompositionLocal<i32>,
+        with_first: MutableState<bool>,
+        second_value: MutableState<i32>,
+    ) {
+        let mut provided = Vec::new();
+        if with_first.value() {
+            provided.push(first.provides(10));
+        }
+        provided.push(second.provides(second_value.value()));
+        CompositionLocalProvider(provided, || reader(second.clone()));
+    }
+
+    composition
+        .render(863, || {
+            tree(first.clone(), second.clone(), with_first, second_value)
+        })
+        .expect("initial composition");
+    assert_eq!(SECOND_READ.with(Cell::get), 20);
+
+    with_first.set_value(false);
+    while composition
+        .process_invalid_scopes()
+        .expect("drop the first provider")
+    {}
+
+    second_value.set_value(30);
+    while composition
+        .process_invalid_scopes()
+        .expect("change the surviving provider's value")
+    {}
+    assert_eq!(
+        SECOND_READ.with(Cell::get),
+        30,
+        "the surviving provider must keep its own entry; adopting the vanished \
+         neighbor's entry orphans the reader's subscription"
+    );
+}

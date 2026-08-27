@@ -103,13 +103,14 @@ impl<T: Clone + 'static> Eq for CompositionLocal<T> {}
 
 impl<T: Clone + 'static> CompositionLocal<T> {
     pub fn provides(&self, value: T) -> ProvidedValue {
-        let key = self.key.clone();
+        let key = self.key;
+        let entry_source = key.entry_source();
         let equivalent = Arc::clone(&self.equivalent);
         ProvidedValue {
             key,
             apply: Box::new(move |composer: &Composer| {
                 let runtime = composer.runtime_handle();
-                let entry_ref = composer.remember_internal(|| {
+                let entry_ref = composer.remember_internal(entry_source, || {
                     Rc::new(LocalStateEntry::new(
                         value.clone(),
                         runtime.clone(),
@@ -136,7 +137,7 @@ pub(crate) fn malformed_composition_local_for_test<T: Clone + 'static>(
     local: &CompositionLocal<T>,
     entry: Rc<dyn Any>,
 ) -> ProvidedValue {
-    let key = local.key.clone();
+    let key = local.key;
     ProvidedValue {
         key,
         apply: Box::new(move |_| entry.clone()),
@@ -188,12 +189,14 @@ impl<T: Clone + 'static> Eq for StaticCompositionLocal<T> {}
 
 impl<T: Clone + 'static> StaticCompositionLocal<T> {
     pub fn provides(&self, value: T) -> ProvidedValue {
-        let key = self.key.clone();
+        let key = self.key;
+        let entry_source = key.entry_source();
         ProvidedValue {
             key,
             apply: Box::new(move |composer: &Composer| {
-                let entry_ref =
-                    composer.remember_internal(|| Rc::new(StaticLocalEntry::new(value.clone())));
+                let entry_ref = composer.remember_internal(entry_source, || {
+                    Rc::new(StaticLocalEntry::new(value.clone()))
+                });
                 entry_ref.update(|entry| entry.set(value.clone()));
                 entry_ref.with(|entry| entry.clone() as Rc<dyn Any>)
             }),
@@ -214,7 +217,7 @@ pub(crate) fn malformed_static_composition_local_for_test<T: Clone + 'static>(
     local: &StaticCompositionLocal<T>,
     entry: Rc<dyn Any>,
 ) -> ProvidedValue {
-    let key = local.key.clone();
+    let key = local.key;
     ProvidedValue {
         key,
         apply: Box::new(move |_| entry.clone()),

@@ -1331,24 +1331,21 @@ impl Composer {
     }
 
     #[track_caller]
-    pub(crate) fn remember_internal<T: 'static>(&self, init: impl FnOnce() -> T) -> Owned<T> {
-        self.remember_with_kind(PayloadKind::Internal, init)
+    pub(crate) fn remember_internal<T: 'static>(
+        &self,
+        source_salt: crate::Key,
+        init: impl FnOnce() -> T,
+    ) -> Owned<T> {
+        let source = crate::caller_location_key() ^ source_salt;
+        self.with_slot_session_mut(|slots| {
+            slots.remember_with_kind(PayloadKind::Internal, source, init)
+        })
     }
 
     #[track_caller]
     pub(crate) fn remember_effect<T: Default + 'static>(&self) -> Owned<T> {
         let source = crate::caller_location_key();
         self.with_slot_session_mut(|slots| slots.remember_effect::<T>(source))
-    }
-
-    #[track_caller]
-    fn remember_with_kind<T: 'static>(
-        &self,
-        kind: PayloadKind,
-        init: impl FnOnce() -> T,
-    ) -> Owned<T> {
-        let source = crate::caller_location_key();
-        self.with_slot_session_mut(|slots| slots.remember_with_kind(kind, source, init))
     }
 
     #[track_caller]
@@ -1448,7 +1445,7 @@ impl Composer {
                     Ok(typed) => return typed.value(),
                     Err(_) => {
                         log::error!(
-                            "composition local entry type mismatch for key {}",
+                            "composition local entry type mismatch for key {:?}",
                             local.key
                         );
                         return local.default_value();
@@ -1470,7 +1467,7 @@ impl Composer {
                     Ok(typed) => return typed.value(),
                     Err(_) => {
                         log::error!(
-                            "static composition local entry type mismatch for key {}",
+                            "static composition local entry type mismatch for key {:?}",
                             local.key
                         );
                         return local.default_value();

@@ -1,7 +1,7 @@
 use std::{hash::Hash, rc::Rc};
 
 use crate::{
-    composer_context, location_key,
+    composer_context,
     owned::Owned,
     runtime,
     state::{
@@ -23,6 +23,7 @@ pub fn remember<T: 'static>(init: impl FnOnce() -> T) -> Owned<T> {
 /// stores the key beside the value and re-runs `init` on mismatch — the JC
 /// `remember(key1) { ... }` contract.
 #[allow(non_snake_case)]
+#[track_caller]
 pub fn rememberKeyed<K, T>(key: K, init: impl FnOnce(&K) -> T) -> T
 where
     K: PartialEq + 'static,
@@ -268,8 +269,7 @@ pub fn rememberMutableStateOfNeverEqual<T: Clone + 'static>(
 pub fn derivedStateOf<T: 'static + Clone>(compute: impl Fn() -> T + 'static) -> State<T> {
     let source = crate::caller_location_key();
     composer_context::with_composer(|composer| {
-        let key = location_key(file!(), line!(), column!());
-        composer.with_group(key, |composer| {
+        composer.with_group(source, |composer| {
             let should_recompute = composer
                 .current_recompose_scope()
                 .map(|scope| scope.should_recompose())

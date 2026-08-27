@@ -212,6 +212,96 @@ impl BranchGroupInjector<'_> {
         SyncInteriors { injector: self }.visit_expr_mut(expr);
     }
 
+    fn instrument_block_by_suspension(&mut self, block: &mut Block) {
+        if block_contains_await(block) {
+            self.instrument_nonsuspending_statements(block);
+        } else {
+            let previous = std::mem::replace(&mut self.in_content_closure, true);
+            self.wrap_block(block);
+            self.in_content_closure = previous;
+        }
+    }
+
+    fn instrument_suspending_expr(&mut self, expr: &mut Expr) {
+        match expr {
+            Expr::If(expr_if) => {
+                if expr_contains_await(&expr_if.cond) {
+                    self.instrument_sync_interiors(&mut expr_if.cond);
+                } else {
+                    self.wrap_condition(&mut expr_if.cond);
+                }
+                self.instrument_block_by_suspension(&mut expr_if.then_branch);
+                if let Some((_, else_expr)) = &mut expr_if.else_branch {
+                    match else_expr.as_mut() {
+                        Expr::Block(block_expr) => {
+                            self.instrument_block_by_suspension(&mut block_expr.block);
+                        }
+                        other => self.instrument_suspending_expr(other),
+                    }
+                }
+            }
+            Expr::Match(expr_match) => {
+                if expr_contains_await(&expr_match.expr) {
+                    self.instrument_sync_interiors(&mut expr_match.expr);
+                } else {
+                    self.visit_expr_mut(&mut expr_match.expr);
+                }
+                for arm in &mut expr_match.arms {
+                    if let Some((_, guard)) = &mut arm.guard {
+                        if expr_contains_await(guard) {
+                            self.instrument_sync_interiors(guard);
+                        } else {
+                            self.wrap_condition(guard);
+                        }
+                    }
+                    if expr_contains_await(&arm.body) {
+                        self.instrument_suspending_expr(&mut arm.body);
+                    } else {
+                        self.wrap_arm_body(&mut arm.body);
+                    }
+                }
+            }
+            Expr::While(while_loop) => {
+                if expr_contains_await(&while_loop.cond) {
+                    self.instrument_sync_interiors(&mut while_loop.cond);
+                } else {
+                    self.wrap_condition(&mut while_loop.cond);
+                }
+                self.instrument_block_by_suspension(&mut while_loop.body);
+            }
+            Expr::ForLoop(for_loop) => {
+                if expr_contains_await(&for_loop.expr) {
+                    self.instrument_sync_interiors(&mut for_loop.expr);
+                } else {
+                    self.visit_expr_mut(&mut for_loop.expr);
+                }
+                self.instrument_block_by_suspension(&mut for_loop.body);
+            }
+            Expr::Loop(loop_expr) => self.instrument_block_by_suspension(&mut loop_expr.body),
+            Expr::Block(block_expr) => {
+                self.instrument_block_by_suspension(&mut block_expr.block);
+            }
+            Expr::Unsafe(unsafe_block) => {
+                self.instrument_block_by_suspension(&mut unsafe_block.block);
+            }
+            Expr::Paren(paren) => self.instrument_suspending_expr(&mut paren.expr),
+            Expr::Group(group) => self.instrument_suspending_expr(&mut group.expr),
+            Expr::Await(await_expr) => self.instrument_suspending_expr(&mut await_expr.base),
+            Expr::Assign(assign) => self.instrument_suspending_expr(&mut assign.right),
+            Expr::Return(expr_return) => {
+                if let Some(value) = &mut expr_return.expr {
+                    self.instrument_suspending_expr(value);
+                }
+            }
+            Expr::Break(expr_break) => {
+                if let Some(value) = &mut expr_break.expr {
+                    self.instrument_suspending_expr(value);
+                }
+            }
+            other => self.instrument_sync_interiors(other),
+        }
+    }
+
     fn instrument_nonsuspending_statements(&mut self, block: &mut Block) {
         let previous = std::mem::replace(&mut self.in_content_closure, true);
         let guard = syn::Ident::new("__cranpose_branch_group_guard", Span::mixed_site());
@@ -219,10 +309,17 @@ impl BranchGroupInjector<'_> {
         for mut stmt in block.stmts.drain(..) {
             if stmt_suspends(&stmt) {
                 match &mut stmt {
-                    Stmt::Expr(expr, _) => self.instrument_sync_interiors(expr),
+                    Stmt::Expr(expr, _) => self.instrument_suspending_expr(expr),
                     Stmt::Local(local) => {
                         if let Some(init) = &mut local.init {
-                            self.instrument_sync_interiors(&mut init.expr);
+                            self.instrument_suspending_expr(&mut init.expr);
+                            if let Some((_, diverge)) = &mut init.diverge {
+                                if let Expr::Block(block_expr) = diverge.as_mut() {
+                                    self.instrument_block_by_suspension(&mut block_expr.block);
+                                } else {
+                                    self.instrument_suspending_expr(diverge);
+                                }
+                            }
                         }
                     }
                     _ => {}
@@ -266,11 +363,7 @@ impl BranchGroupInjector<'_> {
                 return;
             }
             if signature.asyncness.is_some() {
-                if block_contains_await(block) {
-                    self.instrument_nonsuspending_statements(block);
-                } else {
-                    self.instrument_sync_interiors_block(block);
-                }
+                self.instrument_block_by_suspension(block);
             } else {
                 self.instrument_sync_interiors_block(block);
             }
@@ -295,7 +388,7 @@ impl VisitMut for BranchGroupInjector<'_> {
         match expr {
             Expr::Closure(closure) => {
                 if closure.asyncness.is_some() && expr_contains_await(&closure.body) {
-                    self.instrument_sync_interiors(&mut closure.body);
+                    self.instrument_suspending_expr(&mut closure.body);
                     return;
                 }
                 let previous = std::mem::replace(&mut self.in_content_closure, true);
@@ -309,13 +402,7 @@ impl VisitMut for BranchGroupInjector<'_> {
                 self.in_content_closure = previous;
             }
             Expr::Async(async_block) => {
-                if block_contains_await(&async_block.block) {
-                    self.instrument_nonsuspending_statements(&mut async_block.block);
-                    return;
-                }
-                let previous = std::mem::replace(&mut self.in_content_closure, true);
-                self.wrap_block(&mut async_block.block);
-                self.in_content_closure = previous;
+                self.instrument_block_by_suspension(&mut async_block.block);
             }
             Expr::Const(const_block) => {
                 self.instrument_sync_interiors_block(&mut const_block.block);

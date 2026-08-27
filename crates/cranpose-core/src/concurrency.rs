@@ -90,10 +90,16 @@ impl CoroutineScope {
             task.cancel();
         }
     }
+
+    #[cfg(test)]
+    pub(crate) fn probe_identity(&self) -> usize {
+        Rc::as_ptr(&self.inner) as *const () as usize
+    }
 }
 
 /// Remembers a [`CoroutineScope`] bound to this position in the composition.
 #[allow(non_snake_case)]
+#[track_caller]
 pub fn rememberCoroutineScope() -> CoroutineScope {
     remember(|| CoroutineScope {
         inner: Rc::new(ScopeInner {
@@ -457,7 +463,7 @@ where
     K: PartialEq + 'static,
 {
     crate::__launched_effect_async_impl(
-        crate::location_key(file!(), line!(), column!()),
+        crate::caller_location_key(),
         std::panic::Location::caller().into(),
         key,
         move |_scope| {
@@ -585,6 +591,7 @@ impl<T: Send + 'static> Drop for Bridge<T> {
 /// place the framework bridges "a service publishes from another thread" to
 /// "a composition collects".
 #[allow(non_snake_case)]
+#[track_caller]
 pub fn rememberEventStream<T, K, R, S>(key: K, subscribe: S) -> EventStream<T>
 where
     T: Send + 'static,
@@ -597,24 +604,20 @@ where
     #[cfg(not(target_arch = "wasm32"))]
     let dispatcher = current_runtime_handle().map(|runtime| runtime.dispatcher());
 
-    crate::__disposable_effect_impl(
-        crate::location_key(file!(), line!(), column!()),
-        key,
-        move |scope| {
+    crate::__disposable_effect_impl(crate::caller_location_key(), key, move |scope| {
+        #[cfg(not(target_arch = "wasm32"))]
+        let Some(dispatcher) = dispatcher else {
+            log::warn!("cranpose: an event stream was remembered without a runtime");
+            return scope.on_dispose(|| {});
+        };
+        let registration = subscribe(EventSender {
             #[cfg(not(target_arch = "wasm32"))]
-            let Some(dispatcher) = dispatcher else {
-                log::warn!("cranpose: an event stream was remembered without a runtime");
-                return scope.on_dispose(|| {});
-            };
-            let registration = subscribe(EventSender {
-                #[cfg(not(target_arch = "wasm32"))]
-                dispatcher,
-                bridge: id,
-                _events: std::marker::PhantomData,
-            });
-            scope.on_dispose(move || drop(registration))
-        },
-    );
+            dispatcher,
+            bridge: id,
+            _events: std::marker::PhantomData,
+        });
+        scope.on_dispose(move || drop(registration))
+    });
 
     stream
 }
@@ -881,7 +884,7 @@ where
     let state = remember(|| mutableStateOf(initial)).with(|state| *state);
     let handle = ProduceScope { state };
     crate::__launched_effect_async_impl(
-        crate::location_key(file!(), line!(), column!()),
+        crate::caller_location_key(),
         std::panic::Location::caller().into(),
         key,
         move |_scope| producer(handle),

@@ -58,7 +58,18 @@ represented structurally:
   — a fn pointer, a macro-expanded router — still key apart because
   their definitions differ. `emit_node` is `#[track_caller]` the same
   way, so a raw node record carries a folded source and an arm can never
-  adopt another arm's node.
+  adopt another arm's node. Every hook that wraps `remember` or keys an
+  effect group propagates the same caller identity — `rememberKeyed`,
+  `rememberCoroutineScope`, `CollectEvents`, `collectAsState`,
+  `produceState`, `rememberEventStream`, and `derivedStateOf`'s group are
+  all `#[track_caller]`-stamped rather than baking their own definition
+  line, so two same-statement calls stay apart when one leaves
+  (`a_surviving_keyed_remember_keeps_its_slot_when_a_same_statement_neighbor_leaves`,
+  `a_surviving_coroutine_scope_keeps_its_identity_when_a_neighbor_leaves`).
+  A composition-local provider entry is keyed by its `LocalKey` besides
+  its position, so two same-typed providers never adopt each other's
+  entry and subscriptions when a neighbor leaves
+  (`a_surviving_provider_keeps_its_entry_when_a_same_typed_neighbor_leaves`).
 
 Branch departure needs no special lifecycle: an arm's groups and slots are
 ordinary unvisited content, detached and dispose-or-retained exactly as
@@ -130,23 +141,31 @@ typed IR:
   or returns are instrumented through the interior visitor
   (`a_const_fn_returned_callable_keeps_branch_identity`).
 - **An async body that awaits is not composition territory, but what it
-  defines is.** An await-free async block or closure runs synchronously
-  when polled, so its conditionals carry folds like any other code and
-  its future stays `Send` — no guard can cross a suspension point that
-  does not exist (pinned as
-  `an_await_free_async_block_keeps_branch_identity`; a nested item's
+  defines is.** An await-free async block, closure, or nested `async fn`
+  runs synchronously when polled, so its conditionals carry folds like
+  any other code and its future stays `Send` — no guard can cross a
+  suspension point that does not exist (pinned as
+  `an_await_free_async_block_keeps_branch_identity` and
+  `an_await_free_async_fn_keeps_branch_identity`; a nested item's
   awaits belong to its own future and do not mark the block,
-  `a_dormant_async_item_does_not_mark_the_block_suspending`). Inside a suspending body,
-  instrumentation is per statement: a statement containing an await or
-  an opaque macro invocation is left bare — its expansion may suspend,
-  and under-instrumentation is the `Send`-safe side — while the
-  syntactically suspension-free statements around it keep their folds
-  (`a_harmless_macro_does_not_disable_the_rest_of_an_async_body`). A body
-  that awaits keeps its own statements untouched — a fold held across a
-  suspension would poison `Send` — while the synchronous closures and
-  functions it defines are instrumented normally, since their guards
-  live only while those bodies run
-  (`a_sync_closure_from_a_suspending_async_body_keeps_branch_identity`).
+  `a_dormant_async_item_does_not_mark_the_block_suspending`). Inside a
+  suspending body, instrumentation recurses to the exact expression that
+  suspends: suspension-free statements keep their folds
+  (`a_harmless_macro_does_not_disable_the_rest_of_an_async_body`), and a
+  control-flow statement containing an await keeps folds on its
+  await-free conditions and sub-blocks — an arm that composes and then
+  awaits closes its guards before the suspension point, so the future
+  stays `Send` (`a_composing_arm_before_an_await_keeps_branch_identity`,
+  `a_suspending_arm_future_stays_send`). What stays bare is only the
+  non-control-flow expression carrying the await itself and any opaque
+  macro invocation — its expansion may suspend, and
+  under-instrumentation is the `Send`-safe side. A value-position
+  let-scrutinee inside such a statement also carries no fold of its own:
+  the sync path covers that spot with a whole-statement fold, and a
+  whole-statement fold across an await would poison `Send`. The
+  synchronous closures and functions a suspending body defines are
+  instrumented normally, since their guards live only while those bodies
+  run (`a_sync_closure_from_a_suspending_async_body_keeps_branch_identity`).
 
 And identity across *data* is still the author's statement: one call site
 fed different values is one slot in Compose too, so a list screen that

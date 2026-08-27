@@ -797,6 +797,7 @@ impl Future for FolderNext {
 /// The provider's own answer rather than the descriptor's: one that fetches its
 /// bytes over a network hands back a pipe, which cannot be stat-ed, while still
 /// listing a size for the document.
+#[cfg(feature = "media")]
 pub fn content_uri_length(uri: &str) -> Option<u64> {
     let length = call_activity(|env, activity| {
         let argument = env.new_string(uri).map_err(|error| error.to_string())?;
