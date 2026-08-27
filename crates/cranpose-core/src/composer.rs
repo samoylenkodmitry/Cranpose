@@ -1801,14 +1801,21 @@ impl Composer {
     pub fn with_composition_locals<R>(
         &self,
         provided: Vec<ProvidedValue>,
+        site: crate::Key,
         f: impl FnOnce(&Composer) -> R,
     ) -> R {
         if provided.is_empty() {
             return f(self);
         }
+        // Only the last provider for a local is readable, so only it gets an
+        // entry: applying shadowed ones would leave same-identity siblings
+        // whose slots adopt each other when the list shrinks.
         let mut context = LocalContext::default();
-        for value in provided {
-            let (key, entry) = value.into_entry(self);
+        for value in provided.into_iter().rev() {
+            if context.values.contains_key(&value.key()) {
+                continue;
+            }
+            let (key, entry) = value.into_entry(self, site);
             context.values.insert(key, entry);
         }
         {

@@ -4482,3 +4482,169 @@ fn a_surviving_same_local_provider_keeps_its_entry_when_the_leader_leaves() {
          adopting the departed leader's entry orphans the reader's subscription"
     );
 }
+
+#[test]
+fn a_provider_built_inside_a_slot_initializer_does_not_reenter_the_writer() {
+    thread_local! {
+        static INIT_BUILT: Cell<bool> = const { Cell::new(false) };
+    }
+
+    let local = compositionLocalOf(|| 0);
+    let mut composition = test_composition();
+
+    #[composable]
+    fn build_in_initializer(local: CompositionLocal<i32>) {
+        let held = remember(|| {
+            INIT_BUILT.with(|built| built.set(true));
+            local.provides(1)
+        });
+        held.with(|provided| {
+            let _ = provided;
+        });
+    }
+
+    composition
+        .render(865, || build_in_initializer(local.clone()))
+        .expect("a provider constructed inside a remember initializer");
+    assert!(INIT_BUILT.with(Cell::get));
+}
+
+fn same_site_provider_rows(keyed: bool) {
+    thread_local! {
+        static ROW_READ: Cell<i32> = const { Cell::new(0) };
+    }
+    ROW_READ.with(|slot| slot.set(0));
+
+    let local = compositionLocalOf(|| 0);
+    let mut composition = test_composition();
+    let runtime = composition.runtime_handle();
+    let with_leading = MutableState::with_runtime(true, runtime.clone());
+    let survivor_value = MutableState::with_runtime(10, runtime.clone());
+
+    #[composable]
+    fn reader(local: CompositionLocal<i32>) {
+        let value = local.current();
+        ROW_READ.with(|slot| slot.set(value));
+    }
+
+    #[composable]
+    fn tree(
+        local: CompositionLocal<i32>,
+        with_leading: MutableState<bool>,
+        survivor_value: MutableState<i32>,
+        keyed: bool,
+    ) {
+        let mut rows = Vec::new();
+        if with_leading.value() {
+            rows.push((1u32, 1));
+        }
+        rows.push((2u32, survivor_value.value()));
+        let provided = rows
+            .into_iter()
+            .map(|(id, value)| {
+                if keyed {
+                    let mut provider = None;
+                    with_key(&id, || provider = Some(local.provides(value)));
+                    provider.expect("keyed provider")
+                } else {
+                    local.provides(value)
+                }
+            })
+            .collect::<Vec<_>>();
+        CompositionLocalProvider(provided, || reader(local.clone()));
+    }
+
+    composition
+        .render(866, || {
+            tree(local.clone(), with_leading, survivor_value, keyed)
+        })
+        .expect("initial composition");
+    assert_eq!(ROW_READ.with(Cell::get), 10);
+
+    with_leading.set_value(false);
+    while composition
+        .process_invalid_scopes()
+        .expect("drop the leading row")
+    {}
+    survivor_value.set_value(20);
+    while composition
+        .process_invalid_scopes()
+        .expect("change the surviving row's value")
+    {}
+    assert_eq!(
+        ROW_READ.with(Cell::get),
+        20,
+        "one construction site feeding one provider list must still leave the \
+         surviving provider its own entry and its reader's subscription"
+    );
+}
+
+#[test]
+fn same_site_provider_occurrences_keep_identity() {
+    same_site_provider_rows(false);
+}
+
+#[test]
+fn with_key_distinguishes_same_site_provider_occurrences() {
+    same_site_provider_rows(true);
+}
+
+#[test]
+fn sibling_provider_scopes_from_one_construction_site_stay_distinct() {
+    thread_local! {
+        static SIBLING_READ: Cell<i32> = const { Cell::new(0) };
+    }
+
+    let local = compositionLocalOf(|| 0);
+    let mut composition = test_composition();
+    let runtime = composition.runtime_handle();
+    let with_leading = MutableState::with_runtime(true, runtime.clone());
+    let survivor_value = MutableState::with_runtime(10, runtime.clone());
+
+    fn build(local: &CompositionLocal<i32>, value: i32) -> Vec<ProvidedValue> {
+        vec![local.provides(value)]
+    }
+
+    #[composable]
+    fn reader(local: CompositionLocal<i32>) {
+        let value = local.current();
+        SIBLING_READ.with(|slot| slot.set(value));
+    }
+
+    #[composable]
+    fn tree(
+        local: CompositionLocal<i32>,
+        with_leading: MutableState<bool>,
+        survivor_value: MutableState<i32>,
+    ) {
+        if with_leading.value() {
+            CompositionLocalProvider(build(&local, 1), || {});
+        }
+        CompositionLocalProvider(build(&local, survivor_value.value()), {
+            let local = local.clone();
+            move || reader(local)
+        });
+    }
+
+    composition
+        .render(867, || tree(local.clone(), with_leading, survivor_value))
+        .expect("initial composition");
+    assert_eq!(SIBLING_READ.with(Cell::get), 10);
+
+    with_leading.set_value(false);
+    while composition
+        .process_invalid_scopes()
+        .expect("drop the leading sibling scope")
+    {}
+    survivor_value.set_value(20);
+    while composition
+        .process_invalid_scopes()
+        .expect("change the surviving sibling's value")
+    {}
+    assert_eq!(
+        SIBLING_READ.with(Cell::get),
+        20,
+        "two sibling provider scopes fed from one construction site must not \
+         share entries; the survivor keeps its reader's subscription"
+    );
+}

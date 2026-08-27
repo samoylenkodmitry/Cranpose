@@ -77,13 +77,28 @@ represented structurally:
   (`a_surviving_keyed_remember_keeps_its_slot_when_a_same_statement_neighbor_leaves`,
   `a_surviving_coroutine_scope_keeps_its_identity_when_a_neighbor_leaves`,
   `a_surviving_animation_keeps_its_state_when_a_same_statement_neighbor_leaves`).
-  A composition-local provider entry is keyed by its creation site — the
-  `LocalKey`, the `provides` call site, and the branch fold in effect
-  while the provider list was built — so neither two same-typed locals
-  nor two providers of the same local adopt each other's entry and
-  subscriptions when a neighbor leaves
+  A composition-local provider entry is keyed by the `LocalKey`, the
+  `provides` call site, and the provider call it is applied under —
+  never by composer state, so a provider can be built anywhere,
+  including inside a slot initializer
+  (`a_provider_built_inside_a_slot_initializer_does_not_reenter_the_writer`).
+  Within one provider list only the last provider per local gets an
+  entry — the others are unreadable by map semantics, and applying them
+  would leave same-identity siblings that adopt each other when the
+  list shrinks — so an iterator building same-local providers from one
+  site keeps the survivor's entry and its reader's subscription
+  (`same_site_provider_occurrences_keep_identity`,
+  `with_key_distinguishes_same_site_provider_occurrences`), sibling
+  provider scopes fed from one construction site stay distinct by their
+  own call sites
+  (`sibling_provider_scopes_from_one_construction_site_stay_distinct`),
+  and neither two same-typed locals nor two providers of the same local
+  adopt each other's entries when a neighbor leaves
   (`a_surviving_provider_keeps_its_entry_when_a_same_typed_neighbor_leaves`,
   `a_surviving_same_local_provider_keeps_its_entry_when_the_leader_leaves`).
+  Same-site provider calls repeated in a loop share their site like any
+  positional identity; the escape is `with_key` around the provider
+  call, whose keyed group namespaces the entries it applies.
 
 Branch departure needs no special lifecycle: an arm's groups and slots are
 ordinary unvisited content, detached and dispose-or-retained exactly as
