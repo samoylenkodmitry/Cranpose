@@ -786,6 +786,18 @@ pub fn has_pending_measure_repasses() -> bool {
     with_render_state(|state| lock_repass_manager(&state.measure_repasses).has_pending_repass())
 }
 
+/// Returns a stable snapshot of pending measure repass node IDs without
+/// consuming them.
+///
+/// The layout pass takes these ids to bubble measure dirtiness; the scene phase
+/// needs the same ids *before* that happens, to scope its graph update to the
+/// subtree that moved. Without the snapshot a measure repass reaches the scene
+/// phase as "something changed, but nothing says where", which is
+/// indistinguishable from a full invalidation.
+pub fn pending_measure_repass_nodes_snapshot() -> Vec<NodeId> {
+    with_render_state(|state| lock_repass_manager(&state.measure_repasses).dirty_nodes_snapshot())
+}
+
 /// Takes all pending measure repass node IDs.
 ///
 /// The caller should iterate over these and call `bubble_measure_dirty` for each.

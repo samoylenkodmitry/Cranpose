@@ -646,9 +646,12 @@ impl LazyListState {
     ///
     /// Returns the amount of scroll actually consumed.
     ///
-    /// This triggers layout invalidation via registered callbacks. The callbacks are
-    /// registered by LazyColumnImpl/LazyRowImpl with schedule_layout_repass(node_id),
-    /// which provides O(subtree) performance instead of O(entire app).
+    /// This triggers layout invalidation via registered callbacks. The callbacks
+    /// are registered by LazyColumnImpl/LazyRowImpl with
+    /// `schedule_measure_repass(node_id)` — the list's own item sizes are what
+    /// changes, so the repass has to bubble measure dirtiness, not just
+    /// placement. The node id carries through to the scene phase, which scopes
+    /// its graph update to that subtree: O(subtree) instead of O(entire app).
     pub fn dispatch_scroll_delta(&self, delta: f32) -> f32 {
         // Guard against stale handles: fling animation frame callbacks can fire
         // after a tab switch disposes the composition group that owns this state.
