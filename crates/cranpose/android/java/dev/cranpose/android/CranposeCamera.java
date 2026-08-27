@@ -62,6 +62,7 @@ final class CranposeCamera {
     private volatile String openId = null;
     private volatile int flash = 0;
     private volatile int rotationDegrees = 0;
+    private volatile String openPhysicalId = null;
     private android.hardware.display.DisplayManager.DisplayListener displayListener;
 
     CranposeCamera(Activity activity) {
@@ -97,29 +98,115 @@ final class CranposeCamera {
         return false;
     }
 
+    /**
+     * The characteristics of a lens id, which is either a camera the device
+     * lists or one of the cameras behind it, written {@code logical:physical}.
+     */
+    private CameraCharacteristics charsFor(String id) throws Exception {
+        int mark = id.indexOf(':');
+        return manager().getCameraCharacteristics(mark < 0 ? id : id.substring(mark + 1));
+    }
+
+    private static String openId(String id) {
+        int mark = id.indexOf(':');
+        return mark < 0 ? id : id.substring(0, mark);
+    }
+
+    private static String physicalId(String id) {
+        int mark = id.indexOf(':');
+        return mark < 0 ? null : id.substring(mark + 1);
+    }
+
+    /**
+     * The lenses behind a device that carries several, widest first.
+     *
+     * <p>A modern phone lists one back camera and one front camera; the ultra
+     * wide and the tele sit behind the back one and never appear in
+     * {@code getCameraIdList}. Camera2 reaches them by opening the listed
+     * camera and pointing an output at the lens behind it, which is what
+     * {@code logical:physical} names here. A device whose lenses are listed
+     * separately reports none of these and keeps its own ids.
+     */
+    private java.util.List<String> lensesBehind(String id) {
+        java.util.List<String> found = new java.util.ArrayList<>();
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
+            return found;
+        }
+        try {
+            java.util.Set<String> behind =
+                    manager().getCameraCharacteristics(id).getPhysicalCameraIds();
+            if (behind == null || behind.size() < 2) {
+                return found;
+            }
+            for (String one : behind) {
+                if (takesPictures(manager().getCameraCharacteristics(one))) {
+                    found.add(id + ":" + one);
+                }
+            }
+        } catch (Exception e) {
+            android.util.Log.w("cranpose", "camera list behind " + id + " failed", e);
+        }
+        return found;
+    }
+
     private java.util.List<String> facingIds(int wanted) {
         java.util.List<String> ids = new java.util.ArrayList<>();
         try {
             for (String id : manager().getCameraIdList()) {
                 CameraCharacteristics chars = manager().getCameraCharacteristics(id);
                 Integer facing = chars.get(CameraCharacteristics.LENS_FACING);
-                if (facing != null && facing == wanted && takesPictures(chars)) {
+                if (facing == null || facing != wanted || !takesPictures(chars)) {
+                    continue;
+                }
+                java.util.List<String> behind = lensesBehind(id);
+                if (behind.isEmpty()) {
                     ids.add(id);
+                } else {
+                    ids.addAll(behind);
                 }
             }
             ids.sort((a, b) -> {
                 try {
-                    return Float.compare(
-                            shortestFocalLength(manager().getCameraCharacteristics(a)),
-                            shortestFocalLength(manager().getCameraCharacteristics(b)));
+                    return Float.compare(shortestFocalLength(charsFor(a)),
+                            shortestFocalLength(charsFor(b)));
                 } catch (Exception e) {
                     return 0;
                 }
             });
+            return oneCameraPerLens(ids);
         } catch (Exception e) {
             android.util.Log.w("cranpose", "camera list failed", e);
         }
         return ids;
+    }
+
+    /**
+     * Keeps one camera per focal length, the list already being in focal
+     * length order.
+     *
+     * <p>A phone exposes the same lens more than once — a Pixel 9 Pro carries
+     * six cameras behind its back camera, which are its three lenses twice
+     * over. Offering the same picture under two names asks a person to pick
+     * between them with nothing to go on.
+     */
+    private java.util.List<String> oneCameraPerLens(java.util.List<String> ids) {
+        java.util.List<String> kept = new java.util.ArrayList<>();
+        float last = Float.NaN;
+        for (String id : ids) {
+            float focal;
+            try {
+                focal = shortestFocalLength(charsFor(id));
+            } catch (Exception e) {
+                kept.add(id);
+                continue;
+            }
+            if (!Float.isNaN(last) && Math.abs(focal - last) < 0.01f) {
+                continue;
+            }
+            last = focal;
+            kept.add(id);
+        }
+        return kept;
     }
 
     private java.util.List<String> backIds() {
@@ -169,7 +256,7 @@ final class CranposeCamera {
      */
     private int rotationFor(String id) {
         try {
-            CameraCharacteristics chars = manager().getCameraCharacteristics(id);
+            CameraCharacteristics chars = charsFor(id);
             Integer sensorOrientation = chars.get(CameraCharacteristics.SENSOR_ORIENTATION);
             Integer facing = chars.get(CameraCharacteristics.LENS_FACING);
             int sensor = sensorOrientation == null ? 0 : sensorOrientation;
@@ -240,7 +327,9 @@ final class CranposeCamera {
                 }
                 id = ids.get(ids.size() > 1 ? 1 : 0);
             }
-            Boolean available = manager().getCameraCharacteristics(id)
+            // The flash belongs to the camera the device lists, not to the
+            // lens behind it, which reports none of its own.
+            Boolean available = manager().getCameraCharacteristics(openId(id))
                     .get(CameraCharacteristics.FLASH_INFO_AVAILABLE);
             return available != null && available;
         } catch (Exception e) {
@@ -327,7 +416,8 @@ final class CranposeCamera {
                 return;
             }
             openId = backId;
-            CameraCharacteristics chars = manager.getCameraCharacteristics(backId);
+            openPhysicalId = physicalId(backId);
+            CameraCharacteristics chars = charsFor(backId);
             rotationDegrees = rotationFor(backId);
             watchDisplay();
             StreamConfigurationMap streamMap = chars.get(
@@ -348,7 +438,7 @@ final class CranposeCamera {
                     still.getWidth(), still.getHeight(), ImageFormat.JPEG, 1);
             stillReader.setOnImageAvailableListener(this::onStill, previewHandler);
 
-            manager.openCamera(backId, new CameraDevice.StateCallback() {
+            manager.openCamera(openId(backId), new CameraDevice.StateCallback() {
                 @Override
                 public void onOpened(CameraDevice device) {
                     camera = device;
@@ -398,16 +488,30 @@ final class CranposeCamera {
 
                 @Override
                 public void onConfigureFailed(CameraCaptureSession s) {
+                    // A lens behind the listed camera can refuse this pair of
+                    // streams; the camera itself takes them, so fall back to it
+                    // rather than leaving the screen with no picture.
+                    if (openPhysicalId != null) {
+                        openPhysicalId = null;
+                        chosenId = openId(openId == null ? "" : openId);
+                        createSession();
+                        return;
+                    }
                     CranposeActivity.onCameraFailed("the camera session could not be configured");
                     stop();
                 }
             };
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                OutputConfiguration previewOutput =
+                        new OutputConfiguration(previewReader.getSurface());
+                OutputConfiguration stillOutput = new OutputConfiguration(stillReader.getSurface());
+                if (openPhysicalId != null) {
+                    previewOutput.setPhysicalCameraId(openPhysicalId);
+                    stillOutput.setPhysicalCameraId(openPhysicalId);
+                }
                 SessionConfiguration configuration = new SessionConfiguration(
                         SessionConfiguration.SESSION_REGULAR,
-                        Arrays.asList(
-                                new OutputConfiguration(previewReader.getSurface()),
-                                new OutputConfiguration(stillReader.getSurface())),
+                        Arrays.asList(previewOutput, stillOutput),
                         command -> cameraHandler.post(command),
                         callback);
                 camera.createCaptureSession(configuration);
