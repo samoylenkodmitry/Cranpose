@@ -48,9 +48,13 @@ const NATIVE_WINDOW_POSITION_POLL_INTERVAL: Duration = Duration::from_millis(16)
 const NATIVE_WINDOW_POSITION_SETTLE_TIMEOUT: Duration = Duration::from_millis(36);
 const NATIVE_WINDOW_POSITION_SETTLE_POLL: Duration = Duration::from_millis(1);
 const NATIVE_WINDOW_PLACEMENT_MARGIN: f32 = 32.0;
-/// Soft wall-clock budget for `wait_for_idle`. Elapsing this alone is not
-/// proof the *application* failed to converge -- see
-/// `ROBOT_IDLE_MIN_ITERATIONS` below for why.
+/// Soft wall-clock budget for `wait_for_idle`, and the only budget that can
+/// name the application at fault. Elapsing it is not on its own proof the
+/// *application* failed to converge: it must also be the application that the
+/// wait is blocked on (composition still producing work, rather than a frame
+/// the compositor has not shown -- see `IdleWaitTimeout::SurfaceNotPresenting`)
+/// and the loop must have turned enough times for the elapsed time to mean
+/// anything at all -- see `ROBOT_IDLE_MIN_ITERATIONS` below.
 #[cfg(feature = "robot")]
 const ROBOT_IDLE_TIMEOUT: Duration = Duration::from_secs(10);
 /// Minimum number of `about_to_wait` turns the idle-wait loop must actually
@@ -66,10 +70,23 @@ const ROBOT_IDLE_TIMEOUT: Duration = Duration::from_secs(10);
 /// an application defect, and must not fail the same way.
 #[cfg(feature = "robot")]
 const ROBOT_IDLE_MIN_ITERATIONS: u32 = 100;
+/// How long `wait_for_idle` waits for a frame the compositor has not handed
+/// back yet, measured from the turn composition settled rather than from the
+/// start of the wait. A present is a wait on another process, so it gets a
+/// budget of its own: under load a compositor can take many seconds to turn a
+/// frame around, and the budget above exists to catch an application that
+/// will not stop producing work, which is a different question with a
+/// different answer. It stays under `run_robot_test.sh`'s own per-example
+/// timeout so a surface that never presents is reported with the diagnostic
+/// the message below carries, rather than killed as an opaque exit 124.
+#[cfg(feature = "robot")]
+const ROBOT_IDLE_PRESENT_TIMEOUT: Duration = Duration::from_secs(30);
 /// Absolute ceiling on `wait_for_idle`, independent of iteration count. Even
 /// a host so overloaded that the loop can barely execute must not hang the
 /// robot driver forever; past this point the wait is abandoned and reported
-/// as host starvation rather than blamed on the application.
+/// as host starvation rather than blamed on the application. A wait blocked
+/// on the compositor never reaches this: `ROBOT_IDLE_PRESENT_TIMEOUT` above
+/// bounds that one, and bounds it sooner.
 #[cfg(feature = "robot")]
 const ROBOT_IDLE_STARVATION_CEILING: Duration = Duration::from_secs(60);
 #[cfg(feature = "robot")]
@@ -172,6 +189,7 @@ struct RobotController {
     idle_started_at: Option<Instant>,
     idle_iterations: u32,
     idle_structure_clean_frames: u32,
+    idle_present_blocked_since: Option<Instant>,
     waiting_for_present_generation: Option<u64>,
     waiting_for_pump_present_generation: Option<u64>,
     pump_present_started_at: Option<Instant>,
@@ -187,16 +205,21 @@ struct RobotScrollSequence {
     remaining: u32,
 }
 
-/// Why `wait_for_idle` gave up. The two causes need different messages and
-/// different remediation: one names a broken application, the other names a
-/// host that never let the application run.
+/// Why `wait_for_idle` gave up. Each cause names a different owner and needs
+/// a different message and remediation: a broken application, a compositor
+/// that never showed the frame, or a host that never let the application run.
 #[cfg(feature = "robot")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum IdleWaitTimeout {
-    /// The soft budget elapsed AND the loop actually turned enough times for
-    /// that elapsed time to mean something: the application kept producing
-    /// work instead of converging.
+    /// The soft budget elapsed while the application was the outstanding
+    /// work, AND the loop actually turned enough times for that elapsed time
+    /// to mean something: the application kept producing work instead of
+    /// converging.
     AppNotConverging,
+    /// `ROBOT_IDLE_PRESENT_TIMEOUT` elapsed with the only outstanding work a
+    /// frame the compositor had not handed back: composition converged and
+    /// the surface never presented.
+    SurfaceNotPresenting,
     /// The absolute ceiling elapsed without the loop ever reaching the
     /// iteration floor: the host did not schedule this process enough to
     /// tell whether the application was converging at all.
@@ -217,6 +240,7 @@ impl RobotController {
             idle_started_at: None,
             idle_iterations: 0,
             idle_structure_clean_frames: 0,
+            idle_present_blocked_since: None,
             waiting_for_present_generation: None,
             waiting_for_pump_present_generation: None,
             pump_present_started_at: None,
@@ -248,13 +272,39 @@ impl RobotController {
         self.idle_started_at = Some(started_at);
         self.idle_iterations = 0;
         self.idle_structure_clean_frames = 0;
+        self.idle_present_blocked_since = None;
+    }
+
+    /// Record whether this turn found composition settled with only a frame
+    /// the compositor has not handed back still outstanding. The clock runs
+    /// from the turn that became true, so a wait that spends time on the
+    /// application first does not spend the surface's budget doing it, and an
+    /// application that goes back to producing work returns the wait to the
+    /// convergence budget.
+    fn observe_idle_present_block(&mut self, present_is_sole_blocker: bool, now: Instant) {
+        if !present_is_sole_blocker {
+            self.idle_present_blocked_since = None;
+        } else if self.idle_present_blocked_since.is_none() {
+            self.idle_present_blocked_since = Some(now);
+        }
     }
 
     /// Convergence-based timeout check: see the constants above for why
     /// elapsed time alone cannot tell a livelocked application from a
     /// starved host. Returns `None` while the wait should keep running.
+    ///
+    /// The two budgets belong to different owners and never apply at once.
+    /// While composition is settled and a frame is outstanding, the wait is on
+    /// the compositor: an application in that state has converged, so the
+    /// budget that exists to catch one which will not stop producing work has
+    /// nothing to say about it and must not fail it.
     fn idle_wait_timeout(&self, now: Instant) -> Option<IdleWaitTimeout> {
         let started_at = self.idle_started_at?;
+        if let Some(blocked_since) = self.idle_present_blocked_since {
+            let blocked_for = now.saturating_duration_since(blocked_since);
+            return (blocked_for >= ROBOT_IDLE_PRESENT_TIMEOUT)
+                .then_some(IdleWaitTimeout::SurfaceNotPresenting);
+        }
         let elapsed = now.saturating_duration_since(started_at);
         if elapsed >= ROBOT_IDLE_TIMEOUT && self.idle_iterations >= ROBOT_IDLE_MIN_ITERATIONS {
             return Some(IdleWaitTimeout::AppNotConverging);
@@ -306,6 +356,7 @@ impl RobotController {
         self.idle_started_at = None;
         self.waiting_for_present_generation = None;
         self.idle_structure_clean_frames = 0;
+        self.idle_present_blocked_since = None;
     }
 
     /// Whether the driver is waiting on something the loop has to turn to give.
@@ -5637,12 +5688,31 @@ impl ApplicationHandler for App {
                         );
                     }
 
-                    if let Some(timeout) = controller.idle_wait_timeout(Instant::now()) {
+                    // Composition has settled and the only thing left is a
+                    // frame the compositor has not handed back. That wait is
+                    // on the surface, not on the application, and belongs to
+                    // the surface's budget.
+                    let present_is_sole_blocker = waiting_for_present
+                        && !needs_update
+                        && !has_active_animations
+                        && !has_transient_frame_callbacks;
+                    let timeout_check_at = Instant::now();
+                    controller
+                        .observe_idle_present_block(present_is_sole_blocker, timeout_check_at);
+                    if let Some(timeout) = controller.idle_wait_timeout(timeout_check_at) {
                         let iterations = controller.idle_iterations;
+                        let target_generation = controller.waiting_for_present_generation;
                         controller.finish_idle_wait();
                         let message = match timeout {
                             IdleWaitTimeout::AppNotConverging => format!(
-                                "wait_for_idle: timed out after {iterations} iterations; needs_update={needs_update}, needs_redraw={}, has_animations={has_active_animations}, waiting_for_present={waiting_for_present}",
+                                "wait_for_idle: timed out after {ROBOT_IDLE_TIMEOUT:?} ({iterations} iterations); needs_update={needs_update}, needs_redraw={}, has_animations={has_active_animations}, waiting_for_present={waiting_for_present}",
+                                app.needs_redraw(),
+                            ),
+                            IdleWaitTimeout::SurfaceNotPresenting => format!(
+                                "wait_for_idle: the window surface refused {} consecutive frames over {:?} and never reached generation {target_generation:?} (currently {}); composition had already settled, so this is the compositor and not the application -- the window is occluded, off-screen, or on a display that is not compositing; needs_update={needs_update}, needs_redraw={}, has_animations={has_active_animations}, waiting_for_present={waiting_for_present}",
+                                self.unpresentable_frames_since_present,
+                                ROBOT_IDLE_PRESENT_TIMEOUT,
+                                self.presented_frame_generation,
                                 app.needs_redraw(),
                             ),
                             IdleWaitTimeout::HostStarved => format!(
@@ -6126,9 +6196,9 @@ mod tests {
     };
     #[cfg(feature = "robot")]
     use super::{
-        ControlFlow, IdleWaitTimeout, ROBOT_IDLE_MIN_ITERATIONS, ROBOT_IDLE_STARVATION_CEILING,
-        ROBOT_IDLE_TIMEOUT, ROBOT_PARKED_COMMAND_POLL_INTERVAL, ROBOT_PRESENT_WAIT_TIMEOUT,
-        bound_park_for_robot,
+        ControlFlow, IdleWaitTimeout, ROBOT_IDLE_MIN_ITERATIONS, ROBOT_IDLE_PRESENT_TIMEOUT,
+        ROBOT_IDLE_STARVATION_CEILING, ROBOT_IDLE_TIMEOUT, ROBOT_PARKED_COMMAND_POLL_INTERVAL,
+        ROBOT_PRESENT_WAIT_TIMEOUT, bound_park_for_robot,
     };
     #[cfg(feature = "robot")]
     use super::{
@@ -6487,6 +6557,85 @@ mod tests {
         assert_eq!(
             controller.idle_wait_timeout(started_at + ROBOT_IDLE_STARVATION_CEILING),
             Some(IdleWaitTimeout::HostStarved)
+        );
+    }
+
+    #[cfg(feature = "robot")]
+    #[test]
+    fn robot_idle_wait_does_not_blame_the_app_for_a_slow_present() {
+        // Regression test for a real failure on a loaded host: "timed out
+        // after 1280577 iterations; needs_update=false, needs_redraw=true,
+        // has_animations=false, waiting_for_present=true" on a 10-core
+        // machine at load average 24, which then passed in isolation and
+        // passed again in a full suite run on the same commit.
+        //
+        // 1.28M turns inside the soft budget is a loop with all the CPU it
+        // asked for, so the starvation floor does not apply and the failure
+        // was reported as an application defect. But the diagnostics it
+        // printed say composition had already converged -- no pending update,
+        // no animation -- and the only outstanding work was a frame the
+        // compositor had not handed back. An application that has settled
+        // cannot be failed for not converging, however long the surface
+        // takes.
+        let (mut controller, _robot) = RobotController::new(|| {});
+        let started_at = Instant::now();
+
+        controller.start_idle_wait_at(started_at);
+        controller.idle_iterations = 1_280_577;
+        controller.observe_idle_present_block(true, started_at);
+
+        assert_eq!(
+            controller.idle_wait_timeout(started_at + ROBOT_IDLE_TIMEOUT),
+            None
+        );
+        assert_eq!(
+            controller.idle_wait_timeout(
+                started_at + ROBOT_IDLE_PRESENT_TIMEOUT - std::time::Duration::from_millis(1)
+            ),
+            None
+        );
+    }
+
+    #[cfg(feature = "robot")]
+    #[test]
+    fn robot_idle_wait_blames_the_surface_when_a_present_never_lands() {
+        // Patience for a slow present cannot be unconditional, or a window the
+        // compositor refuses to show parks the driver forever. Past the
+        // absolute ceiling the wait is abandoned -- and because composition
+        // had settled, it is the surface that is named, distinctly from both
+        // an application defect and a starved host.
+        let (mut controller, _robot) = RobotController::new(|| {});
+        let started_at = Instant::now();
+
+        controller.start_idle_wait_at(started_at);
+        controller.idle_iterations = 1_280_577;
+        controller.observe_idle_present_block(true, started_at);
+
+        assert_eq!(
+            controller.idle_wait_timeout(started_at + ROBOT_IDLE_PRESENT_TIMEOUT),
+            Some(IdleWaitTimeout::SurfaceNotPresenting)
+        );
+    }
+
+    #[cfg(feature = "robot")]
+    #[test]
+    fn robot_idle_wait_still_blames_an_app_that_churns_while_a_present_is_outstanding() {
+        // The exemption is for a *settled* composition waiting on a frame, not
+        // for any wait that happens to have a present outstanding. An
+        // application still producing work owns the wait even while the
+        // surface has a frame in flight, and must keep failing on the soft
+        // budget.
+        let (mut controller, _robot) = RobotController::new(|| {});
+        let started_at = Instant::now();
+
+        controller.start_idle_wait_at(started_at);
+        controller.idle_iterations = ROBOT_IDLE_MIN_ITERATIONS;
+        controller.observe_idle_present_block(true, started_at);
+        controller.observe_idle_present_block(false, started_at);
+
+        assert_eq!(
+            controller.idle_wait_timeout(started_at + ROBOT_IDLE_TIMEOUT),
+            Some(IdleWaitTimeout::AppNotConverging)
         );
     }
 
