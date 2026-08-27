@@ -269,6 +269,38 @@ impl BranchGroupInjector<'_> {
         }
     }
 
+    fn suspending_place_value_parts(&mut self, place: &mut Expr) {
+        match place {
+            Expr::Index(index) => {
+                self.suspending_place_or_value(&mut index.expr);
+                self.suspending_value_part(&mut index.index);
+            }
+            Expr::Field(field) => self.suspending_place_or_value(&mut field.base),
+            Expr::Paren(paren) => self.suspending_place_value_parts(&mut paren.expr),
+            Expr::Group(group) => self.suspending_place_value_parts(&mut group.expr),
+            Expr::Unary(unary) if matches!(unary.op, syn::UnOp::Deref(_)) => {
+                self.suspending_place_or_value(&mut unary.expr);
+            }
+            _ => {}
+        }
+    }
+
+    fn suspending_place_or_value(&mut self, expr: &mut Expr) {
+        if expr_is_place(expr) {
+            self.suspending_place_value_parts(expr);
+        } else {
+            self.suspending_value_part(expr);
+        }
+    }
+
+    fn suspending_value_part(&mut self, expr: &mut Expr) {
+        if expr_contains_await(expr) {
+            self.instrument_suspending_expr(expr);
+        } else {
+            self.wrap_value_part(expr);
+        }
+    }
+
     fn instrument_suspending_child(&mut self, expr: &mut Expr) {
         if expr_contains_await(expr) {
             self.instrument_suspending_expr(expr);
@@ -323,7 +355,14 @@ impl BranchGroupInjector<'_> {
             Expr::Group(group) => self.instrument_suspending_expr(&mut group.expr),
             Expr::Await(await_expr) => self.instrument_suspending_child(&mut await_expr.base),
             Expr::Let(let_expr) => self.instrument_suspending_child(&mut let_expr.expr),
-            Expr::Assign(assign) => self.instrument_suspending_child(&mut assign.right),
+            Expr::Assign(assign) => {
+                self.instrument_suspending_child(&mut assign.right);
+                if expr_contains_await(&assign.left) {
+                    self.suspending_place_value_parts(&mut assign.left);
+                } else {
+                    self.wrap_place_value_parts(&mut assign.left);
+                }
+            }
             Expr::Return(expr_return) => {
                 if let Some(value) = &mut expr_return.expr {
                     self.instrument_suspending_child(value);

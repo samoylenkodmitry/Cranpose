@@ -630,40 +630,47 @@ impl InfiniteTransition {
         &self.inner.label
     }
 
+    #[track_caller]
     fn run(&self) {
         let run_key = self.inner.run_token.get();
         cranpose_core::label_next_ui_task(format!("loop {}", self.inner.label));
         let weak: Weak<InfiniteTransitionInner> = Rc::downgrade(&self.inner);
-        cranpose_core::LaunchedEffectAsync!(run_key, move |scope| {
-            Box::pin(async move {
-                let clock = scope.runtime().frame_clock();
-                let mut start_time: Option<u64> = None;
+        cranpose_core::__launched_effect_async_impl(
+            cranpose_core::caller_location_key()
+                ^ cranpose_core::location_key(file!(), line!(), column!()),
+            std::panic::Location::caller().into(),
+            run_key,
+            move |scope| {
+                Box::pin(async move {
+                    let clock = scope.runtime().frame_clock();
+                    let mut start_time: Option<u64> = None;
 
-                loop {
-                    if !scope.is_active() {
-                        break;
+                    loop {
+                        if !scope.is_active() {
+                            break;
+                        }
+
+                        let Some(inner) = weak.upgrade() else {
+                            break;
+                        };
+                        inner.restart_pending.set(false);
+
+                        if inner.animations.borrow().is_empty() || !inner.has_subscribers() {
+                            break;
+                        }
+
+                        let now = clock.next_perpetual_frame().await;
+                        if !scope.is_active() {
+                            break;
+                        }
+
+                        let start = start_time.get_or_insert(now);
+                        let play_time = now.saturating_sub(*start);
+                        inner.on_frame(play_time);
                     }
-
-                    let Some(inner) = weak.upgrade() else {
-                        break;
-                    };
-                    inner.restart_pending.set(false);
-
-                    if inner.animations.borrow().is_empty() || !inner.has_subscribers() {
-                        break;
-                    }
-
-                    let now = clock.next_perpetual_frame().await;
-                    if !scope.is_active() {
-                        break;
-                    }
-
-                    let start = start_time.get_or_insert(now);
-                    let play_time = now.saturating_sub(*start);
-                    inner.on_frame(play_time);
-                }
-            })
-        });
+                })
+            },
+        );
     }
 
     #[allow(non_snake_case)]

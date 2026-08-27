@@ -192,26 +192,33 @@ static KEEP_SCREEN_ON_EFFECTS: std::sync::atomic::AtomicUsize =
 /// Keeps the platform display awake while this call remains in composition and
 /// `enabled` is true. Multiple active callers are reference-counted.
 #[allow(non_snake_case)]
+#[track_caller]
 pub fn KeepScreenOn(enabled: bool) {
-    cranpose_core::DisposableEffect!(enabled, move |scope| {
-        if !enabled {
-            return cranpose_core::DisposableEffectResult::default();
-        }
-        if KEEP_SCREEN_ON_EFFECTS.fetch_add(1, std::sync::atomic::Ordering::AcqRel) == 0 {
-            cranpose_services::set_keep_screen_on(true);
-        }
-        scope.on_dispose(move || {
-            if KEEP_SCREEN_ON_EFFECTS.fetch_sub(1, std::sync::atomic::Ordering::AcqRel) == 1 {
-                cranpose_services::set_keep_screen_on(false);
+    cranpose_core::__disposable_effect_impl(
+        cranpose_core::caller_location_key()
+            ^ cranpose_core::location_key(file!(), line!(), column!()),
+        enabled,
+        move |scope| {
+            if !enabled {
+                return cranpose_core::DisposableEffectResult::default();
             }
-        })
-    });
+            if KEEP_SCREEN_ON_EFFECTS.fetch_add(1, std::sync::atomic::Ordering::AcqRel) == 0 {
+                cranpose_services::set_keep_screen_on(true);
+            }
+            scope.on_dispose(move || {
+                if KEEP_SCREEN_ON_EFFECTS.fetch_sub(1, std::sync::atomic::Ordering::AcqRel) == 1 {
+                    cranpose_services::set_keep_screen_on(false);
+                }
+            })
+        },
+    );
 }
 
 /// Installs a declared bundled-asset set on a worker and returns the outcome
 /// on the UI runtime. Work is cancelled with the owning composition.
 #[cfg(not(target_arch = "wasm32"))]
 #[allow(non_snake_case)]
+#[track_caller]
 pub fn BundledAssetInstallEffect<K: PartialEq + 'static>(
     keys: K,
     spec: cranpose_services::BundledAssetInstallSpec,
@@ -219,12 +226,17 @@ pub fn BundledAssetInstallEffect<K: PartialEq + 'static>(
         Result<cranpose_services::BundledAssetInstallOutcome, cranpose_services::BundledAssetError>,
     ) + 'static,
 ) {
-    cranpose_core::LaunchedEffect!(keys, move |scope| {
-        scope.launch_background(
-            move |_token| async move { cranpose_services::install_bundled_asset_set(&spec) },
-            on_result,
-        );
-    });
+    cranpose_core::__launched_effect_impl(
+        cranpose_core::caller_location_key()
+            ^ cranpose_core::location_key(file!(), line!(), column!()),
+        keys,
+        move |scope| {
+            scope.launch_background(
+                move |_token| async move { cranpose_services::install_bundled_asset_set(&spec) },
+                on_result,
+            );
+        },
+    );
 }
 
 /// Registers a lifecycle observer for the lifetime of the current composition.
@@ -233,6 +245,7 @@ pub fn BundledAssetInstallEffect<K: PartialEq + 'static>(
 /// [`cranpose_services::local_lifecycle_state`] instead; this is for work that
 /// must react to a *transition*.
 #[allow(non_snake_case)]
+#[track_caller]
 pub fn LifecycleEffect<K: PartialEq + 'static>(
     keys: K,
     observer: impl FnMut(cranpose_services::LifecycleEvent) + 'static,
@@ -248,6 +261,7 @@ static ACTIVE_BACK_HANDLERS: std::sync::atomic::AtomicUsize =
 /// Nested handlers follow stack order: the innermost active handler receives
 /// the request and dropping it restores the handler beneath it.
 #[allow(non_snake_case)]
+#[track_caller]
 pub fn BackHandler(enabled: bool, mut on_back: impl FnMut() + 'static) {
     let requests = cranpose_core::rememberEventStream(enabled, move |sender| {
         if !enabled {
@@ -312,6 +326,7 @@ pub fn rememberAppUpdateState() -> cranpose_core::State<cranpose_services::AppUp
 /// the loop starts and stops with it. There is no wake handle to hold and no
 /// scheduler to poke: stopping is a state change like any other.
 #[allow(non_snake_case)]
+#[track_caller]
 pub fn FrameEffect<K: PartialEq + 'static>(
     keys: K,
     running: bool,
@@ -320,21 +335,27 @@ pub fn FrameEffect<K: PartialEq + 'static>(
     let on_frame: std::rc::Rc<std::cell::RefCell<dyn FnMut(u64)>> =
         std::rc::Rc::new(std::cell::RefCell::new(on_frame));
     let on_frame = cranpose_core::rememberUpdatedState(on_frame);
-    cranpose_core::LaunchedEffectAsync!((keys, running), move |scope| {
-        Box::pin(async move {
-            if !running {
-                return;
-            }
-            let clock = scope.runtime().frame_clock();
-            while scope.is_active() {
-                let now = clock.next_frame().await;
-                if !scope.is_active() {
-                    break;
+    cranpose_core::__launched_effect_async_impl(
+        cranpose_core::caller_location_key()
+            ^ cranpose_core::location_key(file!(), line!(), column!()),
+        std::panic::Location::caller().into(),
+        (keys, running),
+        move |scope| {
+            Box::pin(async move {
+                if !running {
+                    return;
                 }
-                (on_frame.value().borrow_mut())(now);
-            }
-        })
-    });
+                let clock = scope.runtime().frame_clock();
+                while scope.is_active() {
+                    let now = clock.next_frame().await;
+                    if !scope.is_active() {
+                        break;
+                    }
+                    (on_frame.value().borrow_mut())(now);
+                }
+            })
+        },
+    );
 }
 
 #[doc(hidden)]

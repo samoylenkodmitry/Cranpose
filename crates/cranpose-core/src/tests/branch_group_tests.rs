@@ -3945,3 +3945,41 @@ fn an_await_free_conditional_beside_an_awaiting_sibling_keeps_branch_identity() 
     );
     assert_composition_valid(&composition);
 }
+
+#[composable]
+fn suspending_assignee_probe(flag: bool) {
+    poll_ready(async {
+        let mut slots = [0i32; 2];
+        slots[if flag {
+            let value = remember_branch_marker(601);
+            BRANCH_SEEN.with(|seen| seen.set(value));
+            0
+        } else {
+            let value = remember_branch_marker(602);
+            BRANCH_SEEN.with(|seen| seen.set(value));
+            1
+        }] = std::future::ready(9).await;
+        let _ = slots;
+    });
+}
+
+#[test]
+fn a_conditional_assignee_of_a_suspending_assignment_keeps_branch_identity() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, flag: bool| {
+        composition.render(107, || suspending_assignee_probe(flag))
+    };
+
+    pass(&mut composition, true).expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (1, 601));
+
+    pass(&mut composition, false).expect("switch arms inside the assignee");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (2, 602),
+        "the assignee of a suspending assignment evaluates after the await \
+         completes; its arms carry folds and must not share slots"
+    );
+    assert_composition_valid(&composition);
+}

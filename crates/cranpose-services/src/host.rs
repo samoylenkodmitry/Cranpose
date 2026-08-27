@@ -424,9 +424,11 @@ pub fn register_durable_save(save: impl Fn() + Send + Sync + 'static) -> Durable
 /// and under a background-work lease, so a slow write does not stall the
 /// lifecycle callback the platform is waiting on.
 #[allow(non_snake_case)]
+#[track_caller]
 pub fn DurableSaveEffect<K: PartialEq + 'static>(keys: K, save: impl Fn() + Send + Sync + 'static) {
     cranpose_core::__disposable_effect_impl(
-        cranpose_core::location_key(file!(), line!(), column!()),
+        cranpose_core::caller_location_key()
+            ^ cranpose_core::location_key(file!(), line!(), column!()),
         keys,
         move |scope| {
             let registration = register_durable_save(save);
@@ -659,6 +661,61 @@ mod tests {
         assert_eq!(
             application_directories(),
             Err(PlatformDirectoryError::NoApplicationId)
+        );
+    }
+
+    #[test]
+    fn a_surviving_durable_save_keeps_its_registration_when_a_leader_leaves() {
+        let _guard = test_lock();
+        durable_saves()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clear();
+        let ran: Arc<Mutex<Vec<&'static str>>> = Arc::new(Mutex::new(Vec::new()));
+        let show_first = std::rc::Rc::new(std::cell::Cell::new(true));
+
+        fn saves(show_first: bool, ran: &Arc<Mutex<Vec<&'static str>>>) {
+            if show_first {
+                let ran = Arc::clone(ran);
+                DurableSaveEffect((), move || {
+                    ran.lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .push("first");
+                });
+            }
+            let ran = Arc::clone(ran);
+            DurableSaveEffect((), move || {
+                ran.lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .push("tail");
+            });
+        }
+
+        let mut composition = cranpose_core::Composition::new(cranpose_core::MemoryApplier::new());
+        let root_key = cranpose_core::location_key(file!(), line!(), column!());
+        let mut pass = {
+            let ran = Arc::clone(&ran);
+            let show_first = std::rc::Rc::clone(&show_first);
+            move || saves(show_first.get(), &ran)
+        };
+
+        composition
+            .render(root_key, &mut pass)
+            .expect("initial composition");
+        show_first.set(false);
+        composition
+            .render(root_key, &mut pass)
+            .expect("drop the leading save");
+
+        let outcome = run_durable_saves(std::time::Duration::from_secs(5));
+        assert_eq!(outcome, DurableSaveOutcome::Completed);
+        assert_eq!(
+            ran.lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .as_slice(),
+            ["tail"],
+            "the surviving effect must keep its own registration; adopting the \
+             departed leader's group keeps the wrong save alive"
         );
     }
 }
