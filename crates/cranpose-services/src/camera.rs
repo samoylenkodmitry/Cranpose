@@ -882,16 +882,12 @@ pub async fn capture_camera_still() -> Result<CameraStill, CameraError> {
 }
 
 #[cfg(all(
-    not(target_arch = "wasm32"),
-    not(target_os = "android"),
-    not(target_os = "ios"),
+    any(target_os = "macos", target_os = "windows"),
     feature = "camera-native"
 ))]
 mod native;
 #[cfg(all(
-    not(target_arch = "wasm32"),
-    not(target_os = "android"),
-    not(target_os = "ios"),
+    any(target_os = "macos", target_os = "windows"),
     feature = "camera-native"
 ))]
 pub use native::install_native_camera;

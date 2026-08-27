@@ -49,7 +49,8 @@ system-theme = []
 system-theme-web = ["dep:web-sys"]
 # Native desktop file/folder picker (rfd; xdg-portal surfaces GVFS/WebDAV mounts).
 file-picker-native = ["dep:rfd"]
-# Native desktop camera capture (nokhwa: AVFoundation / MSMF / V4L2).
+# Native desktop camera capture (nokhwa: AVFoundation on macOS, Media
+# Foundation on Windows).
 camera-native = ["dep:nokhwa"]
 # Web file/folder picker (rfd + File System Access).
 file-picker-web = [
@@ -69,6 +70,12 @@ open = { version = "5.3.5", optional = true }
 # locations (GVFS/WebDAV) on Linux. iOS uses its own backend, so exclude it.
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android"), not(target_os = "ios")))'.dependencies]
 rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"], optional = true }
+
+# Desktop camera capture. macOS and Windows only: the Linux backend reaches
+# v4l2 through a bindgen old enough to carry its own rustix family, and a
+# second family of a crate this workspace already builds is what the
+# duplicate-dependency budget exists to refuse.
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
 nokhwa = { version = "0.10", features = ["input-native"], optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]

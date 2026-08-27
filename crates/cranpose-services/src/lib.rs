@@ -71,9 +71,7 @@ pub use bundled_assets::{
     bundled_assets, clear_platform_bundled_assets, set_platform_bundled_assets,
 };
 #[cfg(all(
-    not(target_arch = "wasm32"),
-    not(target_os = "android"),
-    not(target_os = "ios"),
+    any(target_os = "macos", target_os = "windows"),
     feature = "camera-native"
 ))]
 pub use camera::install_native_camera;
