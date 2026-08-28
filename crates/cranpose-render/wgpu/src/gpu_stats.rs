@@ -199,6 +199,9 @@ pub struct FrameStatsSnapshot {
     pub shadow_shape_cache_misses: u32,
     pub shadow_shape_cache_hit_pixels: u64,
     pub shadow_shape_cache_miss_pixels: u64,
+    /// Converted shadows whose caster occluded every visible coverage pixel
+    /// this frame: they composite nothing and their draw item is dropped.
+    pub shadow_fully_occluded_composites: u32,
     pub shadow_text_blur_fallbacks: u32,
     pub blur_passes: u32,
     pub composite_passes: u32,
@@ -372,6 +375,7 @@ pub(crate) struct FrameStats {
     pub shadow_shape_cache_misses: Cell<u32>,
     pub shadow_shape_cache_hit_pixels: Cell<u64>,
     pub shadow_shape_cache_miss_pixels: Cell<u64>,
+    pub shadow_fully_occluded_composites: Cell<u32>,
     pub shadow_text_blur_fallbacks: Cell<u32>,
     pub blur_passes: Cell<u32>,
     pub composite_passes: Cell<u32>,
@@ -549,6 +553,16 @@ impl FrameStats {
         );
     }
 
+    /// A converted shadow whose opaque caster occludes every visible pixel of
+    /// its coverage: nothing composites, the draw item is dropped outright.
+    pub fn record_shadow_fully_occluded(&self) {
+        self.shadow_fully_occluded_composites.set(
+            self.shadow_fully_occluded_composites
+                .get()
+                .saturating_add(1),
+        );
+    }
+
     pub fn record_shadow_shape_cache_miss(&self, width: u32, height: u32) {
         self.shadow_shape_cache_misses
             .set(self.shadow_shape_cache_misses.get().saturating_add(1));
@@ -700,6 +714,7 @@ impl FrameStats {
             shadow_shape_cache_misses: self.shadow_shape_cache_misses.get(),
             shadow_shape_cache_hit_pixels: self.shadow_shape_cache_hit_pixels.get(),
             shadow_shape_cache_miss_pixels: self.shadow_shape_cache_miss_pixels.get(),
+            shadow_fully_occluded_composites: self.shadow_fully_occluded_composites.get(),
             shadow_text_blur_fallbacks: self.shadow_text_blur_fallbacks.get(),
             blur_passes: self.blur_passes.get(),
             composite_passes: self.composite_passes.get(),
@@ -751,6 +766,7 @@ impl FrameStats {
         self.shadow_shape_cache_misses.set(0);
         self.shadow_shape_cache_hit_pixels.set(0);
         self.shadow_shape_cache_miss_pixels.set(0);
+        self.shadow_fully_occluded_composites.set(0);
         self.shadow_text_blur_fallbacks.set(0);
         self.blur_passes.set(0);
         self.composite_passes.set(0);

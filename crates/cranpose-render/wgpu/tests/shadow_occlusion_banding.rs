@@ -205,3 +205,73 @@ fn the_shadow_ring_survives_and_the_card_interior_stays_clean() {
          background: below={below:?} background={background:?}"
     );
 }
+
+/// A clipped shadow can be entirely invisible: when the caster overhangs
+/// its clip container on every side, the clip cuts the shadow's coverage to
+/// a region that lies wholly under the opaque caster, and the band scissors
+/// come back empty. Converting that shadow used to hand the segment plan a
+/// composite index with no prepared draw behind it; the plan then read past
+/// the prepared command buffer and the whole frame failed
+/// (robot_liquid_visual died on exactly this at its toggle keyframes). A
+/// fully occluded shadow must simply vanish from the frame.
+#[test]
+fn a_fully_occluded_shadow_drops_its_composite_instead_of_desyncing_the_plan() {
+    let (_lock, renderer) = support::headless_renderer_parts().expect("headless renderer");
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(renderer, root_key, || {
+        Box(
+            Modifier::empty()
+                .size_points(FRAME_WIDTH as f32, FRAME_HEIGHT as f32)
+                .background(Color(0.85, 0.86, 0.88, 1.0)),
+            BoxSpec::new(),
+            || {
+                // A clipping window with an opaque shadowed card overhanging
+                // it on every side: the visible (clipped) part of the
+                // shadow's coverage sits entirely under the caster.
+                Box(
+                    Modifier::empty()
+                        .offset(160.0, 160.0)
+                        .size_points(200.0, 200.0)
+                        .clip_to_bounds(),
+                    BoxSpec::new(),
+                    || {
+                        Box(
+                            Modifier::empty()
+                                .offset(-60.0, -60.0)
+                                .required_size(cranpose_ui::Size {
+                                    width: 320.0,
+                                    height: 320.0,
+                                })
+                                .rounded_corners(2.0)
+                                .shadow(CARD_ELEVATION)
+                                .background(Color(0.98, 0.98, 0.99, 1.0)),
+                            BoxSpec::new(),
+                            || {},
+                        );
+                    },
+                );
+            },
+        );
+    });
+    shell.set_viewport(FRAME_WIDTH as f32, FRAME_HEIGHT as f32);
+    shell.set_buffer_size(FRAME_WIDTH, FRAME_HEIGHT);
+    shell.update();
+
+    // The first captures fill the shadow cache; warm captures composite from
+    // it and take the fused-batch conversion path that desynced.
+    let mut occluded_seen = 0u32;
+    for _ in 0..4 {
+        shell.update();
+        shell
+            .renderer()
+            .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
+            .expect("a frame with a fully occluded shadow must still render");
+        let stats = shell.renderer().last_frame_stats().expect("frame stats");
+        occluded_seen = occluded_seen.max(stats.shadow_fully_occluded_composites);
+    }
+    assert!(
+        occluded_seen > 0,
+        "fixture must exercise the fully occluded shadow path \
+         (shadow_fully_occluded_composites stayed 0)"
+    );
+}

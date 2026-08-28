@@ -7750,6 +7750,13 @@ impl GpuRenderer {
             (width, height),
         );
         let bands = shadow_band_scissors(coverage, shadow.occluder, root_scale);
+        if cranpose_core::env_flag!("CRANPOSE_SHADOW_BAND_DIAG") {
+            eprintln!(
+                "[shadow-band-diag] bands={} coverage={coverage:?} occluder={:?} scale={root_scale} scissor={scissor:?}",
+                bands.len(),
+                shadow.occluder,
+            );
+        }
         let rounded_mask = inner_shadow_composite_mask(shadow, root_scale).map(|mut mask| {
             mask.rect[0] -= viewport_offset[0];
             mask.rect[1] -= viewport_offset[1];
@@ -8694,7 +8701,14 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
         // A converted shadow contributes one composite entry PER band, all at
         // the shadow's own z; the first band replaces the shadow's ordered
         // item in place and the rest append behind it for the sort to gather.
+        // A composite with NO bands is a fully occluded shadow — the opaque
+        // caster covers every visible pixel of its coverage (a bottom bar
+        // whose shadow only reaches past the screen edge, at some scales).
+        // Its item must vanish outright: converting it would hand the plan a
+        // composite index with nothing behind it, aliasing the next entry or
+        // running off the end of the prepared command buffer.
         let mut extra_band_items: Vec<(usize, SegmentDrawItem)> = Vec::new();
+        let mut fully_occluded_zs: SmallVec<[usize; 4]> = SmallVec::new();
         let mut flattened_band_count = 0usize;
         for (z_index, item) in &mut ordered_items {
             let SegmentDrawItem::Shadow(shadow_index) = *item else {
@@ -8708,8 +8722,13 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
             ) else {
                 continue;
             };
-            let first_band_index = composites.len() + flattened_band_count;
             let band_count = composite.bands.len();
+            if band_count == 0 {
+                self.renderer.frame_stats.record_shadow_fully_occluded();
+                fully_occluded_zs.push(*z_index);
+                continue;
+            }
+            let first_band_index = composites.len() + flattened_band_count;
             flattened_band_count += band_count;
             cached_shadow_composites.push((*z_index, composite));
             *item = SegmentDrawItem::Composite(first_band_index);
@@ -8719,6 +8738,13 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
                     SegmentDrawItem::Composite(first_band_index + band),
                 ));
             }
+        }
+        if !fully_occluded_zs.is_empty() {
+            // Z indices are unique per ordered item, so the z alone names the
+            // dropped shadow.
+            ordered_items.retain(|(z_index, item)| {
+                !(matches!(item, SegmentDrawItem::Shadow(_)) && fully_occluded_zs.contains(z_index))
+            });
         }
         ordered_items.extend(extra_band_items);
         let mut merged_composites =
