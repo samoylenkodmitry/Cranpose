@@ -224,3 +224,15 @@ Signature → cause → what to do. One lesson per line, no incident history.
   pattern also appears in the calling shell's own command line (it always
   does when you just typed it) matches the parent `bash -lc` and kills the
   session with exit 255 and zero output.
+
+- **samarch-1's real display (DISPLAY=:0) fails three robot tests that xvfb
+  CI passes, on main itself** — robot_counter_button_release_external_visual
+  ("Increment click did not update counter"), robot_regression_shader_visual
+  _contract ("glass/blur overlap lost backdrop detail in the right half",
+  byte-identical pixel counts across runs), and robot_markdown_full_demo_
+  code_block_visual_contract (wheel input or blank code block, varies).
+  Verified at origin/main f1b4ce58: all three FAIL on :0 and pass in CI's
+  xvfb run of the same commits. Before attributing an X0 robot failure to a
+  branch, run the same test at origin/main on :0 first; conversely a real-
+  display-only failure is invisible to CI, so a green board does not clear
+  it. The suites' authoritative environment is the one CI runs.
