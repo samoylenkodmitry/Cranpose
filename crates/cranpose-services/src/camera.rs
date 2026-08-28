@@ -881,17 +881,6 @@ pub async fn capture_camera_still() -> Result<CameraStill, CameraError> {
     arrived.unwrap_or(Err(CameraError::NotRunning))
 }
 
-#[cfg(all(
-    any(target_os = "macos", target_os = "windows"),
-    feature = "camera-native"
-))]
-mod native;
-#[cfg(all(
-    any(target_os = "macos", target_os = "windows"),
-    feature = "camera-native"
-))]
-pub use native::install_native_camera;
-
 #[cfg(test)]
 mod tests {
     use super::*;
