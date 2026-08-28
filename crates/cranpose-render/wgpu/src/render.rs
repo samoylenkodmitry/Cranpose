@@ -649,6 +649,96 @@ fn shadow_band_scissors(
     bands
 }
 
+#[cfg(test)]
+mod shadow_band_tests {
+    use super::{Rect, shadow_band_scissors};
+
+    fn area(bands: &[(u32, u32, u32, u32)]) -> u64 {
+        bands
+            .iter()
+            .map(|(_, _, w, h)| u64::from(*w) * u64::from(*h))
+            .sum()
+    }
+
+    fn disjoint(bands: &[(u32, u32, u32, u32)]) -> bool {
+        for (i, a) in bands.iter().enumerate() {
+            for b in bands.iter().skip(i + 1) {
+                let x_overlap = a.0 < b.0 + b.2 && b.0 < a.0 + a.2;
+                let y_overlap = a.1 < b.1 + b.3 && b.1 < a.1 + a.3;
+                if x_overlap && y_overlap {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    #[test]
+    fn an_interior_occluder_leaves_four_disjoint_bands_that_tile_the_ring() {
+        let occluder = Rect {
+            x: 20.0,
+            y: 30.0,
+            width: 60.0,
+            height: 40.0,
+        };
+        let bands = shadow_band_scissors((10, 20, 80, 60), Some(occluder), 1.0);
+        assert_eq!(bands.len(), 4);
+        assert!(disjoint(&bands));
+        assert_eq!(area(&bands), 80 * 60 - 60 * 40);
+    }
+
+    #[test]
+    fn an_occluder_outside_the_coverage_changes_nothing() {
+        let occluder = Rect {
+            x: 500.0,
+            y: 500.0,
+            width: 40.0,
+            height: 40.0,
+        };
+        let bands = shadow_band_scissors((10, 20, 80, 60), Some(occluder), 1.0);
+        assert_eq!(bands.as_slice(), &[(10, 20, 80, 60)]);
+    }
+
+    #[test]
+    fn an_occluder_swallowing_the_coverage_leaves_nothing_to_draw() {
+        let occluder = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 200.0,
+            height: 200.0,
+        };
+        let bands = shadow_band_scissors((10, 20, 80, 60), Some(occluder), 1.0);
+        assert!(bands.is_empty());
+    }
+
+    #[test]
+    fn a_fractional_occluder_shrinks_inward_so_no_covered_pixel_is_skipped() {
+        let occluder = Rect {
+            x: 20.4,
+            y: 30.6,
+            width: 59.9,
+            height: 39.9,
+        };
+        let bands = shadow_band_scissors((10, 20, 80, 60), Some(occluder), 1.0);
+        // ceil(20.4)=21, ceil(30.6)=31, floor(80.3)=80, floor(70.5)=70: the
+        // excluded rect is strictly inside the true occluder.
+        assert_eq!(area(&bands), 80 * 60 - (80u64 - 21) * (70 - 31));
+        assert!(disjoint(&bands));
+    }
+
+    #[test]
+    fn the_root_scale_maps_a_logical_occluder_into_device_pixels() {
+        let occluder = Rect {
+            x: 10.0,
+            y: 15.0,
+            width: 30.0,
+            height: 20.0,
+        };
+        let bands = shadow_band_scissors((0, 0, 200, 200), Some(occluder), 2.0);
+        assert_eq!(area(&bands), 200 * 200 - 60 * 40);
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct TextImageCacheKey(u64);
 
