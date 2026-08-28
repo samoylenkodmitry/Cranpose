@@ -25,7 +25,6 @@ jobs:
     runs-on: [self-hosted, Linux, cranpose-heavy]
     timeout-minutes: 90
     env:
-      RUSTC_WRAPPER: sccache
       SCCACHE_CACHE_SIZE: 40G
       CARGO_INCREMENTAL: "0"
     steps:
@@ -54,10 +53,8 @@ jobs:
 
       - name: Start sccache
         run: |
-          command -v sccache >/dev/null || RUSTC_WRAPPER= cargo install sccache --locked
           command -v just >/dev/null || cargo install just --locked
-          sccache --start-server || true
-          sccache --zero-stats || true
+          scripts/ci/start_sccache.sh
 
       - name: Run the robot suite on the GPU
         # The suite relaxes the environment-sensitive frame-rate assertions
@@ -76,7 +73,7 @@ jobs:
 
       - name: sccache stats
         if: always()
-        run: command -v sccache >/dev/null && sccache --show-stats || true
+        run: '"$RUSTC_WRAPPER" --show-stats || true'
 
   robot-capture-software:
     name: robot external captures (software present)
@@ -86,7 +83,6 @@ jobs:
     runs-on: [self-hosted, Linux, cranpose-heavy]
     timeout-minutes: 45
     env:
-      RUSTC_WRAPPER: sccache
       SCCACHE_CACHE_SIZE: 40G
       CARGO_INCREMENTAL: "0"
     steps:
@@ -107,9 +103,8 @@ jobs:
 
       - name: Start sccache
         run: |
-          command -v sccache >/dev/null || RUSTC_WRAPPER= cargo install sccache --locked
           command -v just >/dev/null || cargo install just --locked
-          sccache --start-server || true
+          scripts/ci/start_sccache.sh
 
       - name: Run the external capture trio on software present
         # See robot-e2e-gpu above: this suite and that one share a
@@ -163,7 +158,6 @@ jobs:
     runs-on: [self-hosted, cranpose-heavy]
     timeout-minutes: 90
     env:
-      RUSTC_WRAPPER: sccache
       SCCACHE_CACHE_SIZE: 40G
       CARGO_INCREMENTAL: "0"
     steps:
@@ -211,19 +205,15 @@ jobs:
             armv7-linux-androideabi \
             i686-linux-android \
             x86_64-linux-android
-          command -v sccache >/dev/null \
-            || RUSTC_WRAPPER= cargo install sccache --locked
           command -v just >/dev/null || cargo install just --locked
           command -v cargo-ndk >/dev/null || cargo install cargo-ndk --locked
           if [[ ! -f "$ANDROID_NDK_HOME/source.properties" ]]; then
             yes | sdkmanager "ndk;27.0.12077973"
           fi
           cargo ndk --version
-          sccache --version
+          scripts/ci/start_sccache.sh
           java -version
           test -f "$ANDROID_NDK_HOME/source.properties"
-          sccache --start-server || true
-          sccache --zero-stats || true
 
       - name: Clippy Android ABIs
         # Gradle does not deny warnings, so the APK build below cannot be the
@@ -241,4 +231,4 @@ jobs:
 
       - name: sccache stats
         if: always()
-        run: command -v sccache >/dev/null && sccache --show-stats || true
+        run: '"$RUSTC_WRAPPER" --show-stats || true'
