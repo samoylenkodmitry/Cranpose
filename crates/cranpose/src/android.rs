@@ -1487,6 +1487,48 @@ fn create_android_gpu_resources_for_existing_device(
     })
 }
 
+/// Swapchain depth: three images, the platform's own buffering depth.
+///
+/// Android has composited through a triple-buffered BufferQueue since Project
+/// Butter, and every View or Compose app runs at that depth. At depth 2 a GPU
+/// still holding the previous frame stalls the next acquire: on a Kirin 980
+/// scrolling a glass-chrome list, acquire p90 was 10.8 ms and the scroll held
+/// 47-49 fps; at depth 3 the same scene acquires in 0.9 ms and holds 53-55 fps.
+/// The cost is the one extra frame of latency every Android app already pays.
+///
+/// `debug.cranpose.frame_latency` (1..=3) overrides this on device without a
+/// rebuild.
+fn android_frame_latency(requested: Option<&str>) -> u32 {
+    requested
+        .and_then(|value| value.trim().parse::<u32>().ok())
+        .filter(|latency| (1..=3).contains(latency))
+        .unwrap_or(3)
+}
+
+#[cfg(test)]
+mod frame_latency_tests {
+    use super::android_frame_latency;
+
+    #[test]
+    fn the_platform_depth_is_what_an_app_gets_without_asking() {
+        assert_eq!(android_frame_latency(None), 3);
+    }
+
+    #[test]
+    fn the_switch_takes_any_depth_the_surface_can_hold() {
+        for (spelling, depth) in [("1", 1), (" 2 ", 2), ("3", 3)] {
+            assert_eq!(android_frame_latency(Some(spelling)), depth);
+        }
+    }
+
+    #[test]
+    fn a_depth_the_surface_cannot_hold_still_starts_the_app() {
+        for mistyped in ["0", "4", "two", ""] {
+            assert_eq!(android_frame_latency(Some(mistyped)), 3, "{mistyped:?}");
+        }
+    }
+}
+
 fn create_android_surface_config(
     surface: &wgpu::Surface<'static>,
     adapter: &wgpu::Adapter,
@@ -1503,12 +1545,9 @@ fn create_android_surface_config(
         .copied()
         .ok_or(AndroidSurfaceError::NoAlphaMode)?;
     let present_mode = crate::present_mode::select_android_present_mode(&surface_caps);
-    // `debug.cranpose.frame_latency` lets the swapchain depth be A/B'd on device.
-    let desired_maximum_frame_latency =
-        crate::android_frame_telemetry::system_property("debug.cranpose.frame_latency")
-            .and_then(|value| value.parse::<u32>().ok())
-            .filter(|latency| (1..=3).contains(latency))
-            .unwrap_or(2);
+    let desired_maximum_frame_latency = android_frame_latency(
+        crate::android_frame_telemetry::system_property("debug.cranpose.frame_latency").as_deref(),
+    );
     log::info!(
         "Android surface: supported present modes {:?}, selected {:?}, desired_maximum_frame_latency {}",
         surface_caps.present_modes,
