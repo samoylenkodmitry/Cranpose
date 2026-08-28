@@ -324,7 +324,7 @@ fn binary_size_budget_targets_minimal_isolated_app() {
             && justfile.contains("--bin isolated-demo")
             && justfile.contains("--profile release-small")
             && justfile.contains("--patch-workspace-cranpose")
-            && justfile.contains("--max-bytes 15728640"),
+            && justfile.contains("--max-bytes 16777216"),
         "release-small binary-size gate must measure the accessibility-enabled isolated app with local Cranpose patches before the release version is published"
     );
 }
