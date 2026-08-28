@@ -143,7 +143,7 @@ impl DemoTab {
             DemoTab::Shaders => "Shaders",
             DemoTab::ShaderRect => "Shader Rect",
             DemoTab::Liquid => "Liquid UI",
-            DemoTab::GlassFeed => "Glass Feed",
+            DemoTab::GlassFeed => "Receipts",
             DemoTab::MarkdownViewer => "Markdown",
             DemoTab::FilePicker => "File Picker",
             DemoTab::Rotary => "Rotary Input",
@@ -182,7 +182,7 @@ impl DemoTab {
             "shaderrect" => Some(Self::ShaderRect),
             "markdown" | "markdownviewer" => Some(Self::MarkdownViewer),
             "liquid" | "liquidui" => Some(Self::Liquid),
-            "glassfeed" => Some(Self::GlassFeed),
+            "glassfeed" | "receipts" => Some(Self::GlassFeed),
             _ => None,
         }
     }
@@ -191,7 +191,6 @@ impl DemoTab {
 pub const DEMO_TABS: [DemoTab; 25] = [
     DemoTab::Counter,
     DemoTab::Liquid,
-    DemoTab::GlassFeed,
     DemoTab::CompositionLocal,
     DemoTab::Async,
     DemoTab::Animations,
@@ -214,6 +213,7 @@ pub const DEMO_TABS: [DemoTab; 25] = [
     DemoTab::FilePicker,
     DemoTab::Rotary,
     DemoTab::Wear,
+    DemoTab::GlassFeed,
 ];
 
 pub fn demo_tab_labels() -> Vec<&'static str> {
