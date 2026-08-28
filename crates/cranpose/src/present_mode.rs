@@ -32,6 +32,15 @@ pub(crate) fn select_present_mode(caps: &wgpu::SurfaceCapabilities) -> wgpu::Pre
 ///
 /// `debug.cranpose.present_mode` (`fifo`, `mailbox`, `immediate`, `auto_vsync`,
 /// `auto_no_vsync`) overrides this on device without a rebuild.
+///
+/// The override is a request, not a guarantee: `[Mailbox, Fifo]` is what
+/// *recent* Android Vulkan surfaces advertise, and `Fifo` is the only mode
+/// Vulkan requires. The Mate 20 X (Kirin 980, EMUI) offers `Fifo` alone —
+/// `mailbox` and `immediate` requests fall back, `get_current_texture`
+/// blocks ~5 ms at 60 Hz, and no swapchain configuration can free-run
+/// there. Measuring render throughput on such a device means frame-capacity
+/// math from the stage telemetry (the longest pipeline stage bounds
+/// capacity), never an uncapped fps number.
 #[cfg(target_os = "android")]
 pub(crate) fn select_android_present_mode(caps: &wgpu::SurfaceCapabilities) -> wgpu::PresentMode {
     let requested = crate::android_frame_telemetry::system_property("debug.cranpose.present_mode")
