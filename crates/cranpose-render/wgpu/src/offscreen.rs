@@ -349,7 +349,7 @@ mod tests {
     }
 
     #[test]
-    fn an_unparseable_override_falls_back_to_the_platform_default() {
+    fn an_unparsable_override_falls_back_to_the_platform_default() {
         assert_eq!(
             resolve_composition_format(Some("half"), true),
             wgpu::TextureFormat::Rgba8Unorm

@@ -1570,7 +1570,7 @@ mod present_thread_tests {
     }
 
     #[test]
-    fn an_unparseable_override_falls_back_to_the_core_default() {
+    fn an_unparsable_override_falls_back_to_the_core_default() {
         assert!(resolve_present_thread(Some("maybe"), 8));
         assert!(!resolve_present_thread(Some(""), 4));
     }
