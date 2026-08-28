@@ -68,7 +68,7 @@ clippy-wasm:
 clippy-ios:
     cargo clippy -p desktop-app --bin cranpose-ios --target aarch64-apple-ios-sim --no-default-features --features ios -- -D warnings
 
-# Lint the exact package, features and target the Android build ships.
+# Lint the exact package, features and ABIs the Android build ships.
 #
 # `just android` runs Gradle, which does not deny warnings, so Android was the
 # one shipped target with no zero-warning gate: anything behind an
@@ -78,15 +78,22 @@ clippy-ios:
 # `android,renderer-wgpu` and `defaultFeatures` is false); `--platform` is the
 # demo's `minSdk`. Change them together or this stops checking what ships.
 #
-# `missing_const_for_thread_local` is allowed for this target only.
-# `thread_local!` expands differently per target, and the Android expansion
-# defeats the lint's const detection: on the same pinned toolchain and the
-# same source it fires 16 times here and never on host, including on
-# initializers that are already `const {}` and on one that cannot be const at
-# all (`HashMap::default()`). It stays enabled everywhere else, so a genuine
+# Every ABI `releaseAbis` builds under CI is linted, not just arm64. The
+# 32-bit ones are not redundant: `libc::timespec::tv_sec` is `i64` on
+# aarch64 and `i32` on armeabi-v7a and x86, so a width assumption that is
+# invisible on a 64-bit ABI is a type error on a 32-bit one. An arm64-only
+# gate reported an `as i64` on that field as an unnecessary cast, and taking
+# that advice would have broken the shipped 32-bit build.
+#
+# `missing_const_for_thread_local` is allowed here only. `thread_local!`
+# expands differently per target, and the Android expansion defeats the
+# lint's const detection: on the same pinned toolchain and the same source it
+# fires 16 times here and never on host, including on initializers already
+# written as `const {}` and on one that cannot be const at all
+# (`HashMap::default()`). It stays enabled everywhere else, so a genuine
 # non-const initializer is still caught by `just clippy`.
 clippy-android:
-    cargo ndk --platform 24 -t arm64-v8a clippy -p desktop-app-platform --lib --no-default-features --features android,renderer-wgpu -- -D warnings -A clippy::missing_const_for_thread_local
+    cargo ndk --platform 24 -t arm64-v8a -t armeabi-v7a -t x86 -t x86_64 clippy -p desktop-app-platform --lib --no-default-features --features android,renderer-wgpu -- -D warnings -A clippy::missing_const_for_thread_local
 
 # --- test ------------------------------------------------------------------
 
@@ -319,4 +326,4 @@ ci: fmt-check typos versions test clippy doc budgets
 # Needs a Linux box with the X11 stack, an Android SDK and (on macOS) Xcode.
 
 # Every gate, including the platform builds and the robot suite.
-ci-full: ci clippy-wasm web android robot
+ci-full: ci clippy-wasm clippy-ios clippy-android web android robot

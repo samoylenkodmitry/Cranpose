@@ -138,10 +138,11 @@ impl PerfHintSession {
         }
         // SAFETY: session is the live pointer `open` created on this thread.
         unsafe {
-            if target_ns > 0 && (target_ns - self.target_ns).abs() > self.target_ns / 64 {
-                if (self.api.update_target)(self.session, target_ns) == 0 {
-                    self.target_ns = target_ns;
-                }
+            if target_ns > 0
+                && (target_ns - self.target_ns).abs() > self.target_ns / 64
+                && (self.api.update_target)(self.session, target_ns) == 0
+            {
+                self.target_ns = target_ns;
             }
             (self.api.report_actual)(self.session, actual_ns);
         }

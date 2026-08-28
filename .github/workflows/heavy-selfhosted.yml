@@ -225,6 +225,12 @@ jobs:
           sccache --start-server || true
           sccache --zero-stats || true
 
+      - name: Clippy Android ABIs
+        # Gradle does not deny warnings, so the APK build below cannot be the
+        # zero-warning gate for this target. Runs first: a lint failure should
+        # not wait behind a full release APK.
+        run: just clippy-android
+
       - name: Build Android release APK
         # --no-daemon: never attach to a shared/foreign Gradle daemon on this
         # self-hosted box. Reused daemons started by other builds on the runner

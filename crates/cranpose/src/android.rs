@@ -350,7 +350,7 @@ fn push_pending_inputs_from_android_event(
     let event_source = motion_event.source();
     let logical_of = |x: f32, y: f32| {
         let logical = android_platform.pointer_position(x as f64, y as f64);
-        (logical.x as f32, logical.y as f32)
+        (logical.x, logical.y)
     };
 
     match motion_event.action() {
@@ -935,10 +935,8 @@ fn drain_present_returns_into_loop(
                 }
             }
         });
-    if presented {
-        if let Some(resources) = gpu_resources.as_mut() {
-            resources.surface_dirty = false;
-        }
+    if presented && let Some(resources) = gpu_resources.as_mut() {
+        resources.surface_dirty = false;
     }
     if refused {
         if let Some(resources) = gpu_resources.as_mut() {
@@ -1394,29 +1392,28 @@ fn create_android_gpu_resources(
     // file is keyed by adapter identity (vendor, device, driver strings), so
     // a driver update or a different GPU starts cold instead of feeding wgpu
     // a stale blob. `run` decided the directory; a pre-set full path wins.
-    if cranpose_render_wgpu::debug_toggle_os("CRANPOSE_PIPELINE_CACHE_FILE").is_none() {
-        if let Some(cache_dir) =
+    if cranpose_render_wgpu::debug_toggle_os("CRANPOSE_PIPELINE_CACHE_FILE").is_none()
+        && let Some(cache_dir) =
             cranpose_render_wgpu::debug_toggle_os("CRANPOSE_PIPELINE_CACHE_DIR")
+    {
+        let mut driver_hash: u64 = 0xcbf2_9ce4_8422_2325;
+        for byte in adapter_info
+            .driver
+            .bytes()
+            .chain(adapter_info.driver_info.bytes())
         {
-            let mut driver_hash: u64 = 0xcbf2_9ce4_8422_2325;
-            for byte in adapter_info
-                .driver
-                .bytes()
-                .chain(adapter_info.driver_info.bytes())
-            {
-                driver_hash ^= u64::from(byte);
-                driver_hash = driver_hash.wrapping_mul(0x0000_0100_0000_01b3);
-            }
-            let file_name = format!(
-                "pipeline_cache_v1_{:04x}_{:04x}_{driver_hash:016x}.bin",
-                adapter_info.vendor, adapter_info.device,
-            );
-            let file_path = std::path::Path::new(&cache_dir).join(file_name);
-            cranpose_render_wgpu::set_debug_toggle_os(
-                "CRANPOSE_PIPELINE_CACHE_FILE",
-                Some(file_path.as_os_str()),
-            );
+            driver_hash ^= u64::from(byte);
+            driver_hash = driver_hash.wrapping_mul(0x0000_0100_0000_01b3);
         }
+        let file_name = format!(
+            "pipeline_cache_v1_{:04x}_{:04x}_{driver_hash:016x}.bin",
+            adapter_info.vendor, adapter_info.device,
+        );
+        let file_path = std::path::Path::new(&cache_dir).join(file_name);
+        cranpose_render_wgpu::set_debug_toggle_os(
+            "CRANPOSE_PIPELINE_CACHE_FILE",
+            Some(file_path.as_os_str()),
+        );
     }
 
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
@@ -1496,7 +1493,7 @@ fn create_android_surface_config(
     width: u32,
     height: u32,
 ) -> Result<wgpu::SurfaceConfiguration, AndroidSurfaceError> {
-    let surface_caps = surface.get_capabilities(&adapter);
+    let surface_caps = surface.get_capabilities(adapter);
     let surface_format =
         crate::surface_format::select_display_surface_format(&surface_caps.formats)
             .ok_or(AndroidSurfaceError::NoSurfaceFormat)?;
@@ -1781,14 +1778,14 @@ pub fn run(
     // `CRANPOSE_PIPELINE_CACHE_FILE` from this directory. Seeded properties
     // (above) and pre-set environments win, so tests and debugging can
     // redirect or disable it.
-    if cranpose_render_wgpu::debug_toggle_os("CRANPOSE_PIPELINE_CACHE_DIR").is_none() {
-        if let Some(data_path) = app.internal_data_path() {
-            let cache_dir = data_path.join("cranpose_gpu");
-            cranpose_render_wgpu::set_debug_toggle_os(
-                "CRANPOSE_PIPELINE_CACHE_DIR",
-                Some(cache_dir.as_os_str()),
-            );
-        }
+    if cranpose_render_wgpu::debug_toggle_os("CRANPOSE_PIPELINE_CACHE_DIR").is_none()
+        && let Some(data_path) = app.internal_data_path()
+    {
+        let cache_dir = data_path.join("cranpose_gpu");
+        cranpose_render_wgpu::set_debug_toggle_os(
+            "CRANPOSE_PIPELINE_CACHE_DIR",
+            Some(cache_dir.as_os_str()),
+        );
     }
 
     // Threaded present runtime (pipeline step 7b), default OFF: the frame
@@ -2149,8 +2146,8 @@ pub fn run(
                             }
                         }
 
-                        if overlay_window_options.is_none() {
-                            if let Some(native_window) = app.native_window() {
+                        if overlay_window_options.is_none()
+                            && let Some(native_window) = app.native_window() {
                                 let width = native_window.width() as u32;
                                 let height = native_window.height() as u32;
                                 let density =
@@ -2247,7 +2244,6 @@ pub fn run(
                                     }
                                 }
                             }
-                        }
                     }
                     MainEvent::TerminateWindow { .. } => {
                         log::info!("Window terminated");
@@ -2260,8 +2256,8 @@ pub fn run(
                         }
                     }
                     MainEvent::WindowResized { .. } => {
-                        if overlay_window_options.is_none() {
-                            if let Some(native_window) = app.native_window() {
+                        if overlay_window_options.is_none()
+                            && let Some(native_window) = app.native_window() {
                                 let width = native_window.width() as u32;
                                 let height = native_window.height() as u32;
 
@@ -2280,8 +2276,7 @@ pub fn run(
 
                                 if let (Some(resources), Some(shell)) =
                                     (&mut gpu_resources, &mut app_shell)
-                                {
-                                    if width > 0 && height > 0 {
+                                    && width > 0 && height > 0 {
                                         resources.config.width = width;
                                         resources.config.height = height;
                                         if present_thread {
@@ -2311,9 +2306,7 @@ pub fn run(
                                             current_host_window_size = actual_size;
                                         }
                                     }
-                                }
                             }
-                        }
                     }
                     MainEvent::ContentRectChanged { .. } => {
                         let density = update_android_platform_geometry(&app, &mut android_platform);
@@ -2329,13 +2322,12 @@ pub fn run(
                             density
                         );
 
-                        if let Some(shell) = &mut app_shell {
-                            if let Some(actual_size) =
+                        if let Some(shell) = &mut app_shell
+                            && let Some(actual_size) =
                                 update_android_shell_geometry(shell, density, &host_window_registry)
                             {
                                 current_host_window_size = actual_size;
                             }
-                        }
                     }
                     MainEvent::RedrawNeeded { .. } => {
                         if let Some(shell) = &mut app_shell {
@@ -2413,22 +2405,20 @@ pub fn run(
                         // Follow OS light/dark switches live (uiMode arrives as
                         // a configuration change).
                         let theme = system_theme_from_android(app.config().ui_mode_night());
-                        if android_platform_env().set_system_theme(theme) {
-                            if let Some(shell) = &mut app_shell {
+                        if android_platform_env().set_system_theme(theme)
+                            && let Some(shell) = &mut app_shell {
                                 shell.request_root_render();
                             }
-                        }
                         // So does the font-size setting: the platform changes
                         // the configuration rather than restarting the process,
                         // so an app that never re-read it would keep laying
                         // text out at the size the user just moved away from.
-                        if crate::android_font_scale::refresh_font_scale(&app) {
-                            if let Some(shell) = &mut app_shell {
+                        if crate::android_font_scale::refresh_font_scale(&app)
+                            && let Some(shell) = &mut app_shell {
                                 shell.set_font_scale_curve(
                                     crate::android_font_scale::font_scale_curve(),
                                 );
                             }
-                        }
                         // Multi-window transitions arrive as configuration
                         // changes too, and they gate the renderer's
                         // round-display corner cull: re-read the platform
@@ -2553,8 +2543,8 @@ pub fn run(
                     match action {
                         android_overlay_window::AndroidOverlayPointerAction::Down => {
                             pending_inputs.push(PendingInput::PointerDown(
-                                logical.x as f32,
-                                logical.y as f32,
+                                logical.x,
+                                logical.y,
                                 None,
                                 // The overlay JNI bridge does not forward tool
                                 // type; overlay surfaces are touch in practice.
@@ -2563,8 +2553,8 @@ pub fn run(
                         }
                         android_overlay_window::AndroidOverlayPointerAction::Up => {
                             pending_inputs.push(PendingInput::PointerUp(
-                                logical.x as f32,
-                                logical.y as f32,
+                                logical.x,
+                                logical.y,
                                 None,
                                 PointerSource::Touch,
                             ));
@@ -2574,8 +2564,8 @@ pub fn run(
                         }
                         android_overlay_window::AndroidOverlayPointerAction::Move => {
                             pending_inputs.push(PendingInput::PointerMove(
-                                logical.x as f32,
-                                logical.y as f32,
+                                logical.x,
+                                logical.y,
                                 None,
                                 PointerSource::Touch,
                             ));
@@ -2587,33 +2577,31 @@ pub fn run(
 
         // Install the soft-keyboard focus hook as soon as the shell exists so
         // the first tap on a text field already opens the keyboard.
-        if !soft_keyboard_installed {
-            if let Some(shell) = &mut app_shell {
-                shell.set_platform_text_input(Rc::new(AndroidSoftKeyboard::new(Rc::clone(
-                    &ime_session,
-                ))));
-                soft_keyboard_installed = true;
-                log::info!("Android soft keyboard focus hook installed");
+        if !soft_keyboard_installed && let Some(shell) = &mut app_shell {
+            shell.set_platform_text_input(Rc::new(AndroidSoftKeyboard::new(Rc::clone(
+                &ime_session,
+            ))));
+            soft_keyboard_installed = true;
+            log::info!("Android soft keyboard focus hook installed");
 
-                // The system clipboard is per-AppContext (it backs the text
-                // selection menu), so it registers once the shell exists.
-                let clipboard_app = app.clone();
-                shell.app_context().enter(move || {
-                    cranpose_ui::clipboard_session::set_platform_clipboard(Rc::new(
-                        crate::android_services::AndroidClipboard { app: clipboard_app },
-                    ));
-                });
+            // The system clipboard is per-AppContext (it backs the text
+            // selection menu), so it registers once the shell exists.
+            let clipboard_app = app.clone();
+            shell.app_context().enter(move || {
+                cranpose_ui::clipboard_session::set_platform_clipboard(Rc::new(
+                    crate::android_services::AndroidClipboard { app: clipboard_app },
+                ));
+            });
 
-                // Cold-start guard (bug 5): on a fresh launch the OS can restore
-                // the soft keyboard left over from the previous process — even on
-                // a screen with no text field. Re-request it only if a field is
-                // genuinely focused this launch; otherwise force it hidden so the
-                // keyboard does not resurrect on relaunch. `notify_app_resumed`
-                // returns whether a focused field re-opened it.
-                if !shell.notify_app_resumed() {
-                    ime_session.ensure_hidden();
-                    log::info!("No focused field at launch; ensured soft keyboard hidden");
-                }
+            // Cold-start guard (bug 5): on a fresh launch the OS can restore
+            // the soft keyboard left over from the previous process — even on
+            // a screen with no text field. Re-request it only if a field is
+            // genuinely focused this launch; otherwise force it hidden so the
+            // keyboard does not resurrect on relaunch. `notify_app_resumed`
+            // returns whether a focused field re-opened it.
+            if !shell.notify_app_resumed() {
+                ime_session.ensure_hidden();
+                log::info!("No focused field at launch; ensured soft keyboard hidden");
             }
         }
 
@@ -2716,17 +2704,17 @@ pub fn run(
         // input handling: refreshes the IME's selection view and restarts
         // the input session when the field content diverged from the mirror
         // (e.g. the app transformed or rejected input).
-        if ime_session.is_active() {
-            if let Some(shell) = &mut app_shell {
-                ime_session.sync_editor_state(shell.ime_editor_state());
-            }
+        if ime_session.is_active()
+            && let Some(shell) = &mut app_shell
+        {
+            ime_session.sync_editor_state(shell.ime_editor_state());
         }
 
         // Check if app side requested a frame (animations, state changes)
-        if android_frame_driver.take_frame_request() {
-            if let Some(shell) = &mut app_shell {
-                shell.mark_dirty();
-            }
+        if android_frame_driver.take_frame_request()
+            && let Some(shell) = &mut app_shell
+        {
+            shell.mark_dirty();
         }
 
         confirm_android_host_window_request(
@@ -2775,13 +2763,13 @@ pub fn run(
         // recomposition that work asked for still runs.
         let offscreen_due = next_offscreen_update.is_some_and(|at| at <= web_time::Instant::now());
         if offscreen && (offscreen_pending_ui || offscreen_due) {
-            if let Some(shell) = &mut app_shell {
-                if shell.needs_update() {
-                    android_host_window::with_android_host_window_registry(
-                        &host_window_registry,
-                        || shell.update(),
-                    );
-                }
+            if let Some(shell) = &mut app_shell
+                && shell.needs_update()
+            {
+                android_host_window::with_android_host_window_registry(
+                    &host_window_registry,
+                    || shell.update(),
+                );
             }
             next_offscreen_update = match offscreen_pending_ui {
                 true => Some(web_time::Instant::now() + OFFSCREEN_UPDATE_PERIOD),
@@ -2812,7 +2800,7 @@ pub fn run(
                 if let Err(error) = crate::android_accessibility::sync(
                     &app,
                     shell,
-                    android_platform.scale_factor() as f32,
+                    android_platform.scale_factor(),
                     &mut accessibility_elements,
                     &mut accessibility_revision,
                     &mut accessibility_policy,
@@ -2874,17 +2862,16 @@ pub fn run(
                 if accessibility_policy
                     .wake_deadline()
                     .is_some_and(|deadline| deadline <= std::time::Instant::now())
-                {
-                    if let Err(error) = crate::android_accessibility::sync(
+                    && let Err(error) = crate::android_accessibility::sync(
                         &app,
                         shell,
-                        android_platform.scale_factor() as f32,
+                        android_platform.scale_factor(),
                         &mut accessibility_elements,
                         &mut accessibility_revision,
                         &mut accessibility_policy,
-                    ) {
-                        log::warn!("{error}");
-                    }
+                    )
+                {
+                    log::warn!("{error}");
                 }
             }
         } else {
@@ -2909,19 +2896,17 @@ pub fn run(
         // telemetry stamps are property-gated and read zero in production.
         // Threaded-present frames complete elsewhere and report nothing
         // rather than a made-up number.
-        if adpf_sync_presented {
-            if let Some(started) = adpf_work_started {
-                let reported = crate::android_frame_telemetry::vsync_period_ns();
-                let period = if reported > 0 {
-                    reported
-                } else {
-                    crate::android_vsync::observed_vsync_period_ns().unwrap_or(16_666_667)
-                };
-                let session = perf_hint
-                    .get_or_insert_with(|| crate::android_perf_hint::PerfHintSession::open(period));
-                if let Some(session) = session.as_mut() {
-                    session.report(started.elapsed().as_nanos() as i64, period);
-                }
+        if adpf_sync_presented && let Some(started) = adpf_work_started {
+            let reported = crate::android_frame_telemetry::vsync_period_ns();
+            let period = if reported > 0 {
+                reported
+            } else {
+                crate::android_vsync::observed_vsync_period_ns().unwrap_or(16_666_667)
+            };
+            let session = perf_hint
+                .get_or_insert_with(|| crate::android_perf_hint::PerfHintSession::open(period));
+            if let Some(session) = session.as_mut() {
+                session.report(started.elapsed().as_nanos() as i64, period);
             }
         }
         if let Some(now) = presented_at {
