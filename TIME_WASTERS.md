@@ -212,3 +212,15 @@ Signature → cause → what to do. One lesson per line, no incident history.
   broken build. Never end a device script with `KEYCODE_SLEEP`; it locks every
   later round out until a human unlocks the phone. Check
   `dumpsys window policy | grep showing` before trusting an empty logcat.
+
+- **A `$var` inside `ssh host 'bash -lc "..."` belongs to the remote LOGIN
+  shell, not to the script.** `for rev in a b; do git checkout $rev; ...` ran
+  a three-commit bisect where every arm silently tested the SAME tree: the
+  remote outer shell expanded `$rev` to empty before `bash -lc` ever parsed
+  the loop, `git checkout -q` with no argument is a no-op that exits 0, and
+  the loop's own `echo === $rev ===` printed `===  ===` — the tell was in the
+  output and still easy to read past. Escape as `\$rev` (and `\$PATH`), or
+  scp a script file. Related self-kill: `pkill -f <pattern>` where the
+  pattern also appears in the calling shell's own command line (it always
+  does when you just typed it) matches the parent `bash -lc` and kills the
+  session with exit 255 and zero output.

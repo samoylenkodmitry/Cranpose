@@ -148,11 +148,14 @@ pub fn update_graph_from_applier_report_into(
         if try_translate_scrolled_layer(
             applier,
             &mut graph.root,
-            &remaining_dirty_nodes,
+            &mut remaining_dirty_nodes,
             changed_nodes,
-            false,
-            Point::default(),
-            AbsOrigin::ROOT,
+            TranslateAncestorContext {
+                ancestor_hashed: false,
+                inherited_translated_content_context: false,
+                parent_content_offset: Point::default(),
+                parent_abs: AbsOrigin::ROOT,
+            },
         ) {
             if remaining_dirty_nodes.is_empty() {
                 return GraphUpdateReport {
@@ -261,11 +264,15 @@ fn replace_dirty_layers_from_applier(
                 child_layer,
                 dirty_nodes,
                 changed_nodes,
-                child_ancestor_hashed,
-                parent.content_offset,
-                AbsOrigin {
-                    content_origin: parent.scene_children_origin,
-                    layer_translation: parent.scene_children_layer_translation,
+                TranslateAncestorContext {
+                    ancestor_hashed: child_ancestor_hashed,
+                    inherited_translated_content_context:
+                        child_inherited_translated_content_context,
+                    parent_content_offset: parent.content_offset,
+                    parent_abs: AbsOrigin {
+                        content_origin: parent.scene_children_origin,
+                        layer_translation: parent.scene_children_layer_translation,
+                    },
                 },
             ) {
                 // Retained hit nodes moved with their layers; the hit graph
@@ -369,15 +376,29 @@ fn translate_bail(reason: &str) -> bool {
     false
 }
 
+/// Everything a container's own lowering would have inherited from its
+/// parent: the ancestor context a scoped translate runs under.
+#[derive(Clone, Copy)]
+struct TranslateAncestorContext {
+    ancestor_hashed: bool,
+    inherited_translated_content_context: bool,
+    parent_content_offset: Point,
+    parent_abs: AbsOrigin,
+}
+
 fn try_translate_scrolled_layer(
     applier: &mut MemoryApplier,
     container: &mut LayerNode,
-    dirty_nodes: &HashSet<NodeId>,
+    dirty_nodes: &mut HashSet<NodeId>,
     changed_nodes: &mut Vec<NodeId>,
-    container_ancestor_hashed: bool,
-    parent_content_offset: Point,
-    parent_abs: AbsOrigin,
+    ancestors: TranslateAncestorContext,
 ) -> bool {
+    let TranslateAncestorContext {
+        ancestor_hashed: container_ancestor_hashed,
+        inherited_translated_content_context,
+        parent_content_offset,
+        parent_abs,
+    } = ancestors;
     let Some(node_id) = container.node_id else {
         return translate_bail("no node id");
     };
@@ -422,29 +443,30 @@ fn try_translate_scrolled_layer(
     if graphics_layer != container.graphics_layer {
         return translate_bail("container graphics layer changed");
     }
-    // The child sets must match one to one: a row entering or leaving is a
-    // content change, and the rebuild path owns that frame. A child that is
-    // itself dirty stays untouched here — the caller recurses into it and
-    // the ordinary dirty handling rebuilds it with a fresh transform.
-    if fresh_children.len() != container.children.len() {
-        return translate_bail("child set size changed");
-    }
-    for (child, child_id) in container.children.iter().zip(&fresh_children) {
+    // A scroll may slide a lazy window: children retained across the frame
+    // move, entering ones are lowered fresh below, leaving ones drop. The
+    // scene's child set is the PLACED fresh children in fresh order — a
+    // child whose layout cannot be read or that is not placed is absent,
+    // exactly as a full lowering leaves it. A retained child that is
+    // itself dirty (a recycled lazy slot recomposed to new content) keeps
+    // its old subtree here — the caller recurses into it and the ordinary
+    // dirty handling rebuilds it with a fresh transform.
+    let mut old_ids = Vec::with_capacity(container.children.len());
+    for child in &container.children {
         let RenderNode::Layer(layer) = child else {
             return translate_bail("non-layer child");
         };
-        if layer.node_id != Some(*child_id) {
-            return translate_bail("child order or identity changed");
-        }
-        if dirty_nodes.contains(child_id) {
-            continue;
-        }
-        if layer.has_origin_sinks {
-            return translate_bail("child subtree publishes window origins");
-        }
+        let Some(child_id) = layer.node_id else {
+            return translate_bail("child without node id");
+        };
+        old_ids.push(child_id);
     }
-    // Fresh child geometry, read whole before anything mutates.
-    let mut fresh_child_layouts = Vec::with_capacity(fresh_children.len());
+    let old_index_by_id: std::collections::HashMap<NodeId, usize> = old_ids
+        .iter()
+        .enumerate()
+        .map(|(index, id)| (*id, index))
+        .collect();
+    let mut placed_fresh = Vec::with_capacity(fresh_children.len());
     for child_id in &fresh_children {
         let state = applier
             .with_node::<LayoutNode, _>(*child_id, |node| node.layout_state())
@@ -452,24 +474,27 @@ fn try_translate_scrolled_layer(
                 applier.with_node::<SubcomposeLayoutNode, _>(*child_id, |node| node.layout_state())
             });
         let Ok(state) = state else {
-            return translate_bail("child layout read failed");
+            continue;
         };
-        fresh_child_layouts.push(state);
+        if !state.is_placed {
+            continue;
+        }
+        placed_fresh.push((*child_id, state));
     }
-    for ((child, state), child_id) in container
-        .children
-        .iter()
-        .zip(&fresh_child_layouts)
-        .zip(&fresh_children)
-    {
-        let RenderNode::Layer(layer) = child else {
+    let fresh_id_set: HashSet<NodeId> = placed_fresh.iter().map(|(id, _)| *id).collect();
+    for (child_id, state) in &placed_fresh {
+        let Some(&old_index) = old_index_by_id.get(child_id) else {
+            // Entering: lowered fresh below, its own layout is its business.
+            continue;
+        };
+        let RenderNode::Layer(layer) = &container.children[old_index] else {
             return false;
         };
         if dirty_nodes.contains(child_id) {
             continue;
         }
-        if !state.is_placed {
-            return translate_bail("child unplaced");
+        if layer.has_origin_sinks {
+            return translate_bail("child subtree publishes window origins");
         }
         if state.size.width != layer.local_bounds.width
             || state.size.height != layer.local_bounds.height
@@ -478,9 +503,79 @@ fn try_translate_scrolled_layer(
         }
     }
 
+    // Everything the patch needs, computed before any mutation so a failed
+    // entering-child lowering leaves the graph untouched.
+    let content_offset = layout_state.content_offset;
+    let (translation_x, translation_y) = modifier_slices
+        .graphics_layer()
+        .map(|layer| (layer.translation_x, layer.translation_y))
+        .unwrap_or((0.0, 0.0));
+    let top_left = Point {
+        x: parent_abs.content_origin.x + layout_state.position.x,
+        y: parent_abs.content_origin.y + layout_state.position.y,
+    };
+    let layer_translation = Point {
+        x: parent_abs.layer_translation.x + translation_x,
+        y: parent_abs.layer_translation.y + translation_y,
+    };
+    let window_origin = Point {
+        x: top_left.x + layer_translation.x,
+        y: top_left.y + layer_translation.y,
+    };
+    let child_origin = Point {
+        x: top_left.x + content_offset.x,
+        y: top_left.y + content_offset.y,
+    };
+    let translation_delta = Point {
+        x: layer_translation.x - container.scene_children_layer_translation.x,
+        y: layer_translation.y - container.scene_children_layer_translation.y,
+    };
+
+    // Entering children (the lazy window slid) are lowered fresh with the
+    // container's NEW origins as ancestor context — the exact lowering a
+    // dirty-child replacement runs, just scoped to the rows that actually
+    // appeared.
+    let child_inherited_translated_content_context =
+        inherited_translated_content_context || container.translated_content_context;
+    let children_ancestor_hashed =
+        crate::graph_hash::layer_children_ancestor_hashed(container, container_ancestor_hashed);
+    let mut entering: std::collections::HashMap<NodeId, LayerNode> =
+        std::collections::HashMap::new();
+    for (child_id, _) in &placed_fresh {
+        if old_index_by_id.contains_key(child_id) {
+            continue;
+        }
+        let Some(mut lowered) = build_layer_node_from_applier_internal(
+            applier,
+            *child_id,
+            container.motion_context_animated,
+            child_inherited_translated_content_context,
+            Some(AbsOrigin {
+                content_origin: child_origin,
+                layer_translation,
+            }),
+        ) else {
+            // Absent from the scene exactly as a full lowering leaves it.
+            continue;
+        };
+        if content_offset != Point::default() {
+            lowered.transform_to_parent =
+                lowered
+                    .transform_to_parent
+                    .then(ProjectiveTransform::translation(
+                        content_offset.x,
+                        content_offset.y,
+                    ));
+        }
+        crate::graph_hash::recompute_layer_raster_cache_hashes_under(
+            &mut lowered,
+            children_ancestor_hashed,
+        );
+        entering.insert(*child_id, lowered);
+    }
+
     // Everything checks out — mutate, mirroring exactly what a rebuild
     // computes for each field.
-    let content_offset = layout_state.content_offset;
     let mut transform = layer_transform_to_parent(
         container.local_bounds,
         layout_state.position,
@@ -503,22 +598,6 @@ fn try_translate_scrolled_layer(
     // Live origins, exactly as the full build publishes them: the
     // container's own sinks now, and the remembered child origins through
     // the subtree so a later scoped rebuild inside it resolves correctly.
-    let (translation_x, translation_y) = modifier_slices
-        .graphics_layer()
-        .map(|layer| (layer.translation_x, layer.translation_y))
-        .unwrap_or((0.0, 0.0));
-    let top_left = Point {
-        x: parent_abs.content_origin.x + layout_state.position.x,
-        y: parent_abs.content_origin.y + layout_state.position.y,
-    };
-    let layer_translation = Point {
-        x: parent_abs.layer_translation.x + translation_x,
-        y: parent_abs.layer_translation.y + translation_y,
-    };
-    let window_origin = Point {
-        x: top_left.x + layer_translation.x,
-        y: top_left.y + layer_translation.y,
-    };
     if let Some(sink) = modifier_slices.text_field_window_origin() {
         sink.set(window_origin);
     }
@@ -530,51 +609,81 @@ fn try_translate_scrolled_layer(
             height: layout_state.size.height,
         });
     }
-    let child_origin = Point {
-        x: top_left.x + content_offset.x,
-        y: top_left.y + content_offset.y,
-    };
-    let translation_delta = Point {
-        x: layer_translation.x - container.scene_children_layer_translation.x,
-        y: layer_translation.y - container.scene_children_layer_translation.y,
-    };
     container.scene_children_origin = child_origin;
     container.scene_children_layer_translation = layer_translation;
 
-    for ((child, state), child_id) in container
-        .children
-        .iter_mut()
-        .zip(&fresh_child_layouts)
-        .zip(&fresh_children)
-    {
+    // The children, in the fresh frame's order: retained layers move (their
+    // own raster hashes exclude placement, so every cache survives),
+    // entering ones land already lowered, leaving ones drop.
+    let mut old_by_id: std::collections::HashMap<NodeId, Box<LayerNode>> =
+        std::collections::HashMap::new();
+    for child in container.children.drain(..) {
         let RenderNode::Layer(layer) = child else {
             // Checked above; a non-layer child bailed before any mutation.
-            return false;
-        };
-        if dirty_nodes.contains(child_id) {
-            // The caller's recursion rebuilds this one with a fresh
-            // transform of its own.
             continue;
-        }
-        let mut child_transform =
-            layer_transform_to_parent(layer.local_bounds, state.position, &layer.graphics_layer);
-        if content_offset != Point::default() {
-            child_transform = child_transform.then(ProjectiveTransform::translation(
-                content_offset.x,
-                content_offset.y,
-            ));
-        }
-        layer.transform_to_parent = child_transform;
-        let new_children_origin = Point {
-            x: child_origin.x + state.position.x + layer.content_offset.x,
-            y: child_origin.y + state.position.y + layer.content_offset.y,
         };
-        let origin_delta = Point {
-            x: new_children_origin.x - layer.scene_children_origin.x,
-            y: new_children_origin.y - layer.scene_children_origin.y,
-        };
-        offset_scene_origins(layer, origin_delta, translation_delta);
+        let child_id = layer.node_id.expect("checked above");
+        if fresh_id_set.contains(&child_id) {
+            old_by_id.insert(child_id, layer);
+        } else {
+            // Leaving: its layers are gone from the scene; the replay layer
+            // must forget them.
+            collect_layer_node_ids(&layer, changed_nodes);
+        }
     }
+    let mut new_children = Vec::with_capacity(placed_fresh.len());
+    for (child_id, state) in &placed_fresh {
+        if let Some(mut layer) = old_by_id.remove(child_id) {
+            if !dirty_nodes.contains(child_id) {
+                let mut child_transform = layer_transform_to_parent(
+                    layer.local_bounds,
+                    state.position,
+                    &layer.graphics_layer,
+                );
+                if content_offset != Point::default() {
+                    child_transform = child_transform.then(ProjectiveTransform::translation(
+                        content_offset.x,
+                        content_offset.y,
+                    ));
+                }
+                layer.transform_to_parent = child_transform;
+                let new_children_origin = Point {
+                    x: child_origin.x + state.position.x + layer.content_offset.x,
+                    y: child_origin.y + state.position.y + layer.content_offset.y,
+                };
+                let origin_delta = Point {
+                    x: new_children_origin.x - layer.scene_children_origin.x,
+                    y: new_children_origin.y - layer.scene_children_origin.y,
+                };
+                offset_scene_origins(&mut layer, origin_delta, translation_delta);
+            }
+            // A dirty retained child keeps its old content; the caller's
+            // recursion rebuilds it with a fresh transform of its own.
+            new_children.push(RenderNode::Layer(layer));
+        } else if let Some(lowered) = entering.remove(child_id) {
+            // The fresh lowering satisfied this subtree's dirt, its own
+            // node's included.
+            dirty_nodes.remove(child_id);
+            remove_dirty_descendants(&lowered, dirty_nodes);
+            collect_layer_node_ids(&lowered, changed_nodes);
+            new_children.push(RenderNode::Layer(Box::new(lowered)));
+        }
+        // Neither retained nor lowered: absent from the scene, exactly as a
+        // full lowering leaves it.
+    }
+    container.children = new_children;
+
+    // Entering and leaving children can change what the subtree carries.
+    container.has_hit_targets = container.hit_test.is_some()
+        || container.children.iter().any(|child| match child {
+            RenderNode::Layer(child_layer) => child_layer.has_hit_targets,
+            RenderNode::Primitive(_) | RenderNode::DrawRun(_) => false,
+        });
+    container.has_origin_sinks = modifier_slices_have_origin_sinks(&modifier_slices)
+        || container.children.iter().any(|child| match child {
+            RenderNode::Layer(child_layer) => child_layer.has_origin_sinks,
+            RenderNode::Primitive(_) | RenderNode::DrawRun(_) => false,
+        });
 
     // The container's own hash covers its children's transforms; the moved
     // children's own hashes exclude placement and stay valid as they are.
@@ -3336,6 +3445,111 @@ mod tests {
         assert!(
             updated_row_top < initial_row_top - consumed_scroll * 0.75,
             "the translation must actually land: initial_y={initial_row_top} updated_y={updated_row_top}"
+        );
+        assert_dirty_hash_road_matches_full_walk(&graph);
+    }
+
+    /// The row-boundary frame of a lazy scroll: the window slides, a row
+    /// leaves, a row enters, and every retained row only moves. On the
+    /// device these frames still pay a full re-lowering of the visible
+    /// subtree (scene 6.0-6.5 ms while translated frames sit under 2 ms) —
+    /// the scoped update must lower ONLY the entering rows and translate
+    /// the rest.
+    #[test]
+    fn a_sliding_lazy_window_lowers_only_the_entering_rows() {
+        let state_holder: Rc<RefCell<Option<LazyListState>>> = Rc::new(RefCell::new(None));
+        let state_holder_for_comp = state_holder.clone();
+        let mut composition = cranpose_ui::run_test_composition(move || {
+            let list_state = rememberLazyListState();
+            *state_holder_for_comp.borrow_mut() = Some(list_state);
+            LazyColumn(
+                Modifier::empty().size_points(240.0, 320.0),
+                list_state,
+                LazyColumnSpec::default(),
+                |scope| {
+                    scope.items(60, |index| {
+                        cranpose_ui::Box(
+                            Modifier::empty()
+                                .size_points(240.0, 60.0)
+                                .background(Color(0.9, 0.9, 0.92, 1.0)),
+                            cranpose_ui::BoxSpec::default(),
+                            move || {
+                                Text(
+                                    format!("row {index}"),
+                                    Modifier::empty(),
+                                    TextStyle::default(),
+                                );
+                            },
+                        );
+                    });
+                },
+            );
+        });
+
+        let root = composition.root().expect("composition root");
+        let viewport = Size {
+            width: 240.0,
+            height: 320.0,
+        };
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        applier
+            .compute_layout(root, viewport)
+            .expect("initial lazy layout");
+        let mut graph = build_graph_from_applier(&mut applier, root, 1.0).expect("initial graph");
+        graph.root.recompute_raster_cache_hashes();
+        // Drain the structural bookkeeping the initial build already
+        // satisfied, exactly as the shell's first frame does.
+        let _ = applier.take_structural_change_parents_attached_to(root);
+        let initial_row_top = find_text_top(&graph.root, "row 4").expect("initial row text");
+        applier.clear_runtime_handle();
+        drop(applier);
+
+        let list_state = (*state_holder.borrow()).expect("list state should be captured");
+        let consumed = list_state.dispatch_scroll_delta(-96.0);
+        assert!(consumed != 0.0, "the lazy scroll must consume the delta");
+        // The shell folds layout and measure repasses into one scoped set —
+        // a lazy scroll arrives as a measure repass on the list node.
+        let mut dirty_nodes = cranpose_ui::pending_layout_repass_nodes_snapshot();
+        dirty_nodes.extend(cranpose_ui::pending_measure_repass_nodes_snapshot());
+
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        applier
+            .compute_layout(root, viewport)
+            .expect("scrolled lazy layout");
+        // The window slid during measure; the shell folds the structural
+        // parents into the same scoped update.
+        dirty_nodes.extend(applier.take_structural_change_parents_attached_to(root));
+        dirty_nodes.sort_unstable();
+        dirty_nodes.dedup();
+        assert!(
+            !dirty_nodes.is_empty(),
+            "a lazy scroll must mark the list dirty"
+        );
+
+        reset_lowered_layer_count();
+        let report = update_graph_from_applier_report(&mut applier, &mut graph, &dirty_nodes, 1.0);
+        applier.clear_runtime_handle();
+
+        assert!(report.applied, "the boundary frame must apply in place");
+        let lowered = lowered_layer_count();
+        assert!(
+            lowered > 0,
+            "rows crossed the window boundary; the entering subtrees must lower"
+        );
+        assert!(
+            lowered <= 8,
+            "only the entering rows may lower on a boundary frame; \
+             {lowered} layers were rebuilt (dirty={dirty_nodes:?})"
+        );
+        let updated_row_top = find_text_top(&graph.root, "row 4").expect("updated row text");
+        assert!(
+            updated_row_top < initial_row_top - 60.0,
+            "the retained rows must move with the scroll: \
+             initial_y={initial_row_top} updated_y={updated_row_top}"
         );
         assert_dirty_hash_road_matches_full_walk(&graph);
     }
