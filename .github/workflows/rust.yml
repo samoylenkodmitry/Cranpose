@@ -73,6 +73,9 @@ jobs:
       - name: Run workspace clippy
         run: just clippy
 
+      - name: Run clippy on the macOS camera backend
+        run: just clippy-camera-desktop
+
       - name: Build documentation
         # A broken intra-doc link is a broken published page.
         run: just doc

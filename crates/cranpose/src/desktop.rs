@@ -5999,6 +5999,12 @@ pub fn try_run(
     #[cfg(feature = "media")]
     cranpose_media::install();
 
+    // The camera, on a Mac. AVFoundation is the same capture stack iOS uses,
+    // so the backend is the iOS one. Linux and Windows have no desktop camera
+    // backend yet, and there the feature compiles away.
+    #[cfg(all(feature = "camera-desktop", target_os = "macos"))]
+    crate::apple_camera::register();
+
     // Heat and battery, so an application that paces itself by them paces
     // itself on a laptop too rather than reading every desktop as unsupported.
     crate::desktop_power::register();

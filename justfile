@@ -68,6 +68,20 @@ clippy-wasm:
 clippy-ios:
     cargo clippy -p desktop-app --bin cranpose-ios --target aarch64-apple-ios-sim --no-default-features --features ios -- -D warnings
 
+# Lint the macOS desktop camera backend.
+#
+# `just clippy` builds default features, and `camera-desktop` is off by
+# default, so the macOS half of `apple_camera.rs` would reach main unlinted
+# without this. That is the same shape of hole `clippy-android` was added to
+# close. Runs on any host: off a Mac the backend compiles away and this only
+# proves the feature still resolves.
+#
+# `robot` rides along because the desktop shell's screenshot helpers are only
+# called from robot code: without it those three functions are dead and the
+# recipe fails on them instead of on the camera.
+clippy-camera-desktop:
+    cargo clippy -p cranpose --no-default-features --features desktop,renderer-wgpu,camera-desktop,robot --all-targets -- -D warnings
+
 # Lint the exact package, features and ABIs the Android build ships.
 #
 # `just android` runs Gradle, which does not deny warnings, so Android was the
