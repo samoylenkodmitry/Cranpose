@@ -31,6 +31,28 @@ use cranpose_render_common::{HitTestTarget, RenderScene, Renderer};
 use cranpose_ui::{LayoutTree, TextMeasurer};
 use cranpose_ui_graphics::{Point, Rect, Size};
 
+/// How many `AppShell::update` turns a headless robot pump gives the shell
+/// before it treats the composition as wedged.
+///
+/// This budget is an iteration count rather than a wall clock on purpose, and
+/// it is the opposite call from the desktop robot's `wait_for_idle`. There the
+/// wait is on a compositor in another process, so loop turns say nothing about
+/// whether the frame is coming and only elapsed time can bound it. Here
+/// `AppShell::update` is synchronous work against an in-memory renderer --
+/// no compositor, no surface to acquire, nothing to block on -- so the number
+/// of turns a healthy app needs is a property of the app and is the same on
+/// every host. Timing it instead would hand a loaded machine fewer turns than
+/// a quiet one and decide headless results by host load, which is exactly the
+/// flakiness the desktop side had to remove.
+///
+/// The limit matches `ROOT_RENDER_REPLAY_LIMIT` and has room to spare: the
+/// loop condition is `AppShell::needs_redraw`, which reports stale pixels and
+/// renderer warm-up rather than pending composition work, and against the
+/// in-memory renderer one update clears it -- every call in the suite settles
+/// on the first turn. What the budget guards is a shell that stays dirty
+/// however many turns it is given.
+const HEADLESS_IDLE_UPDATE_LIMIT: u32 = 100;
+
 /// Main robot testing rule that provides programmatic control over a real app.
 ///
 /// This is similar to Jetpack Compose's `ComposeTestRule` but for full app testing
@@ -87,17 +109,33 @@ where
         self.frame_time_nanos
     }
 
-    /// Pump the app until it's idle (no pending updates).
+    /// Pump the shell until it stops asking to be redrawn.
     ///
-    /// This ensures all compositions, layouts, and renders have completed.
+    /// The condition is `AppShell::needs_redraw` -- stale pixels and renderer
+    /// warm-up. That is a weaker question than "has every pending composition,
+    /// layout and render drained", which is what `FrameSchedule` answers, so a
+    /// caller that needs the composition itself settled has to say so.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the shell still wants a redraw after
+    /// `HEADLESS_IDLE_UPDATE_LIMIT` turns. Returning quietly instead would
+    /// hand back a half-settled tree and move the failure to whichever
+    /// assertion read it next, which is the harder bug to find.
     pub fn wait_for_idle(&mut self) {
-        // Update multiple times to ensure everything settles
-        for _ in 0..10 {
+        for _ in 0..HEADLESS_IDLE_UPDATE_LIMIT {
             self.shell.update();
             if !self.shell.needs_redraw() {
-                break;
+                return;
             }
         }
+        panic!(
+            "wait_for_idle: the shell still wants a redraw after \
+             {HEADLESS_IDLE_UPDATE_LIMIT} update turns (animations={}, \
+             transient frame callbacks={})",
+            self.shell.has_active_animations(),
+            self.shell.has_transient_frame_callbacks(),
+        );
     }
 
     /// Perform a click at the given coordinates.
@@ -561,5 +599,80 @@ mod tests {
 
         robot.advance_time(8_000_000);
         assert_eq!(robot.frame_time_nanos(), 24_000_000);
+    }
+
+    #[test]
+    fn robot_idle_pump_settles_a_healthy_app_far_inside_its_budget() {
+        // The budget is an iteration count because every turn here is
+        // synchronous work with nothing to block on, so what a healthy app
+        // needs does not move with host load. Pin that it is a budget with
+        // room rather than one the suite runs up against: an app that settles
+        // must not depend on where in the budget it lands.
+        let mut robot = create_headless_robot_test(800, 600, || {});
+
+        for _ in 0..HEADLESS_IDLE_UPDATE_LIMIT {
+            robot.wait_for_idle();
+            assert!(!robot.shell_mut().needs_redraw());
+        }
+    }
+
+    /// A renderer that never finishes warming up, so `needs_redraw` stays true
+    /// however many turns it is given. `needs_frame_warmup` is the hook a real
+    /// renderer uses to demand initial frames, which makes this the shape a
+    /// wedged shell actually takes.
+    #[derive(Default)]
+    struct NeverWarmRenderer {
+        inner: TestRenderer,
+    }
+
+    impl Renderer for NeverWarmRenderer {
+        type Scene = TestScene;
+        type Error = ();
+
+        fn attach_app_context_services(&mut self, app_context: &cranpose_ui::AppContext) {
+            self.inner.attach_app_context_services(app_context);
+        }
+
+        fn scene(&self) -> &Self::Scene {
+            self.inner.scene()
+        }
+
+        fn scene_mut(&mut self) -> &mut Self::Scene {
+            self.inner.scene_mut()
+        }
+
+        fn rebuild_scene(
+            &mut self,
+            layout_tree: &LayoutTree,
+            viewport: Size,
+        ) -> Result<(), Self::Error> {
+            self.inner.rebuild_scene(layout_tree, viewport)
+        }
+
+        fn rebuild_scene_from_applier(
+            &mut self,
+            applier: &mut cranpose_core::MemoryApplier,
+            root: cranpose_core::NodeId,
+            viewport: Size,
+        ) -> Result<(), Self::Error> {
+            self.inner
+                .rebuild_scene_from_applier(applier, root, viewport)
+        }
+
+        fn needs_frame_warmup(&self) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "still wants a redraw after")]
+    fn robot_idle_pump_fails_loudly_when_the_shell_never_settles() {
+        // Exhausting the budget used to `break` and return, handing the caller
+        // a tree that had not settled and moving the failure to whichever
+        // assertion read it next -- which is the harder bug to find. It has to
+        // fail here instead, where the diagnostic can say what is still dirty.
+        let mut robot = RobotTestRule::new(800, 600, NeverWarmRenderer::default(), || {});
+
+        robot.wait_for_idle();
     }
 }

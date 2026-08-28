@@ -70,15 +70,6 @@ pub fn wait_for_recursive_depth_registration(rule: &mut ComposeTestRule) {
     );
 }
 
-pub fn pump_robot_until_stable(robot: &mut RobotTestRule<TestRenderer>, max_steps: usize) {
-    for _ in 0..max_steps {
-        robot.shell_mut().update();
-        if !robot.shell_mut().needs_redraw() {
-            break;
-        }
-    }
-}
-
 pub fn pump_shell_until_stable<R>(shell: &mut AppShell<R>)
 where
     R: Renderer,

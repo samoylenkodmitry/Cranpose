@@ -10,9 +10,7 @@ use cranpose_ui_graphics::DrawPrimitive;
 use desktop_app::app::{
     combined_app, DemoTab, TEST_ACTIVE_TAB_STATE, TEST_COMPOSITION_LOCAL_COUNTER,
 };
-use tab_switch_regression_support::{
-    pump_robot_until_stable, set_active_tab, wait_for_active_tab_registration_robot,
-};
+use tab_switch_regression_support::{set_active_tab, wait_for_active_tab_registration_robot};
 
 fn drain_all(composition: &mut Composition<MemoryApplier>) -> Result<(), NodeError> {
     loop {
@@ -446,7 +444,7 @@ fn animations_to_other_tabs_preserve_tab_content_markers() {
     wait_for_active_tab_registration_robot(&mut robot);
 
     set_active_tab(DemoTab::Animations);
-    pump_robot_until_stable(&mut robot, 40);
+    robot.wait_for_idle();
     assert_animations_tab_visible(&mut robot, "before leaving Animations");
 
     let tab_markers = [
@@ -474,7 +472,7 @@ fn animations_to_other_tabs_preserve_tab_content_markers() {
 
     for (tab, marker) in tab_markers {
         set_active_tab(tab);
-        pump_robot_until_stable(&mut robot, 60);
+        robot.wait_for_idle();
         assert_layout_contains_text(
             &mut robot,
             marker,
