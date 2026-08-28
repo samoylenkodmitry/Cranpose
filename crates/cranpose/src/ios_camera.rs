@@ -14,8 +14,8 @@ use std::{
 
 use block2::RcBlock;
 use cranpose_services::{
-    Camera, CameraError, CameraFrame, CameraLens, CameraState, CameraStill, FlashMode, FrameFormat,
-    set_platform_camera,
+    Camera, CameraError, CameraFrame, CameraLens, CameraLenses, CameraState, CameraStill,
+    FlashMode, FrameFormat, LensFacing, publish_camera_lenses, set_platform_camera,
 };
 use dispatch2::{DispatchQueue, DispatchRetained};
 use objc2::{
@@ -114,6 +114,7 @@ impl Camera for IosCamera {
         }
         let device = start_session()?;
         cranpose_services::publish_camera_state(CameraState::Running { device });
+        publish_lenses(self.lens());
         Ok(())
     }
 
@@ -162,13 +163,7 @@ impl Camera for IosCamera {
     }
 
     fn lenses(&self) -> Vec<CameraLens> {
-        back_lenses()
-            .into_iter()
-            .map(|device| CameraLens {
-                id: unsafe { device.uniqueID() }.to_string(),
-                name: lens_name(&device),
-            })
-            .collect()
+        all_lenses()
     }
 
     fn lens(&self) -> Option<String> {
@@ -181,10 +176,7 @@ impl Camera for IosCamera {
     }
 
     fn use_lens(&self, id: &str) -> bool {
-        if !back_lenses()
-            .iter()
-            .any(|device| unsafe { device.uniqueID() }.to_string() == id)
-        {
+        if !all_lenses().iter().any(|lens| lens.id == id) {
             return false;
         }
         let running = session_slot().lock().map(|s| s.is_some()).unwrap_or(false);
@@ -193,10 +185,25 @@ impl Camera for IosCamera {
             Err(_) => return false,
         }
         if !running {
+            publish_lenses(Some(id.to_string()));
             return true;
         }
+        // The device changes without a Stopped in between, so the viewfinder
+        // keeps the last frame instead of blanking while the new one opens.
         self.stop();
-        start_session().is_ok()
+        match start_session() {
+            Ok(device) => {
+                cranpose_services::publish_camera_state(CameraState::Running { device });
+                publish_lenses(Some(id.to_string()));
+                true
+            }
+            Err(error) => {
+                // The old device is already closed, so a screen that heard
+                // Running must hear that there is nothing running now.
+                cranpose_services::publish_camera_state(CameraState::Failed(error));
+                false
+            }
+        }
     }
 
     fn has_flash(&self) -> bool {
@@ -235,9 +242,6 @@ impl Camera for IosCamera {
 /// [`select_camera_device`] opens when the app picks no lens, and listing them
 /// beside their own constituents would offer the same picture twice.
 fn back_lenses() -> Vec<Retained<AVCaptureDevice>> {
-    let Some(media_type) = (unsafe { AVMediaTypeVideo }) else {
-        return Vec::new();
-    };
     let types: [&AVCaptureDeviceType; 3] = unsafe {
         [
             AVCaptureDeviceTypeBuiltInUltraWideCamera,
@@ -245,17 +249,67 @@ fn back_lenses() -> Vec<Retained<AVCaptureDevice>> {
             AVCaptureDeviceTypeBuiltInTelephotoCamera,
         ]
     };
-    let wanted = NSArray::from_slice(&types);
+    let mut found = discover_devices(&types, AVCaptureDevicePosition::Back);
+    found.sort_by_key(|device| lens_order(device));
+    found
+}
+
+/// The front camera, when the device has one.
+fn front_lenses() -> Vec<Retained<AVCaptureDevice>> {
+    let types: [&AVCaptureDeviceType; 1] = unsafe { [AVCaptureDeviceTypeBuiltInWideAngleCamera] };
+    discover_devices(&types, AVCaptureDevicePosition::Front)
+}
+
+fn discover_devices(
+    types: &[&AVCaptureDeviceType],
+    position: AVCaptureDevicePosition,
+) -> Vec<Retained<AVCaptureDevice>> {
+    let Some(media_type) = (unsafe { AVMediaTypeVideo }) else {
+        return Vec::new();
+    };
+    let wanted = NSArray::from_slice(types);
     let session = unsafe {
         AVCaptureDeviceDiscoverySession::discoverySessionWithDeviceTypes_mediaType_position(
             &wanted,
             Some(media_type),
-            AVCaptureDevicePosition::Back,
+            position,
         )
     };
-    let mut found: Vec<Retained<AVCaptureDevice>> = unsafe { session.devices() }.to_vec();
-    found.sort_by_key(|device| lens_order(device));
-    found
+    unsafe { session.devices() }.to_vec()
+}
+
+/// Every device the application may pick, back lenses first, widest first,
+/// then the front one.
+fn all_lenses() -> Vec<CameraLens> {
+    let mut lenses: Vec<CameraLens> = back_lenses()
+        .into_iter()
+        .map(|device| CameraLens {
+            id: unsafe { device.uniqueID() }.to_string(),
+            name: lens_name(&device),
+            facing: LensFacing::Back,
+        })
+        .collect();
+    for (index, device) in front_lenses().into_iter().enumerate() {
+        lenses.push(CameraLens {
+            id: unsafe { device.uniqueID() }.to_string(),
+            name: if index == 0 {
+                "Front".to_string()
+            } else {
+                format!("Front {}", index + 1)
+            },
+            facing: LensFacing::Front,
+        });
+    }
+    lenses
+}
+
+/// Publishes the lens list and the device in use, so a lens control observes
+/// instead of paying a discovery session per recomposition.
+fn publish_lenses(active: Option<String>) {
+    publish_camera_lenses(CameraLenses {
+        lenses: all_lenses(),
+        active,
+    });
 }
 
 fn lens_order(device: &AVCaptureDevice) -> u8 {
@@ -440,10 +494,6 @@ fn frame_from_sample(sample: &CMSampleBuffer) -> Option<CameraFrame> {
     let bytes_per_row = CVPixelBufferGetBytesPerRow(pixel_buffer);
     let base = CVPixelBufferGetBaseAddress(pixel_buffer) as *const u8;
 
-    // The sensor delivers landscape buffers; rotate 90° clockwise so the
-    // in-app viewfinder is upright in portrait. Output is `height` x `width`.
-    let out_w = height;
-    let out_h = width;
     // Recycle a parked buffer when one fits (clear keeps capacity, so after
     // the first few frames this allocates nothing at all).
     let mut rgba = buffer_pool()
@@ -452,33 +502,34 @@ fn frame_from_sample(sample: &CMSampleBuffer) -> Option<CameraFrame> {
         .and_then(|mut pool| pool.pop())
         .unwrap_or_default();
     rgba.clear();
-    rgba.resize(out_w * out_h * 4, 0);
+    rgba.resize(width * height * 4, 0);
     if !base.is_null() && bytes_per_row >= width * 4 {
-        for sy in 0..height {
-            let src_row = unsafe { base.add(sy * bytes_per_row) };
-            let dx = height - 1 - sy;
-            for sx in 0..width {
-                let src = unsafe { src_row.add(sx * 4) };
+        for y in 0..height {
+            let src_row = unsafe { base.add(y * bytes_per_row) };
+            let out_row = &mut rgba[y * width * 4..(y + 1) * width * 4];
+            for x in 0..width {
+                let src = unsafe { src_row.add(x * 4) };
                 let (b, g, r, a) = unsafe { (*src, *src.add(1), *src.add(2), *src.add(3)) };
-                // 90° clockwise: src(sx, sy) -> dst(height-1-sy, sx).
-                let dst = (sx * out_w + dx) * 4;
-                rgba[dst] = r;
-                rgba[dst + 1] = g;
-                rgba[dst + 2] = b;
-                rgba[dst + 3] = a;
+                let dst = x * 4;
+                out_row[dst] = r;
+                out_row[dst + 1] = g;
+                out_row[dst + 2] = b;
+                out_row[dst + 3] = a;
             }
         }
     }
 
     unsafe { CVPixelBufferUnlockBaseAddress(pixel_buffer, flags) };
 
-    // Already upright and already RGBA: the rotation happened in the same pass
-    // as the colour conversion above, so the frame needs no further turning.
+    // The sensor delivers landscape buffers; the app runs in portrait, so the
+    // frame carries a 90° clockwise turn. The turn is metadata rather than a
+    // pixel pass here: `CameraFrame::upright_rgba8` fuses it with whatever
+    // conversion the consumer does anyway, the same as on Android.
     CameraFrame::new(
-        out_w as u32,
-        out_h as u32,
+        width as u32,
+        height as u32,
         FrameFormat::Rgba8,
-        0,
+        90,
         FRAME_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::AcqRel),
         rgba,
     )

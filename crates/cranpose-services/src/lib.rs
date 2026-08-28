@@ -71,14 +71,20 @@ pub use bundled_assets::{
     BundledAssetError, BundledAssetReader, BundledAssets, BundledAssetsRef, StreamingAssetReader,
     bundled_assets, clear_platform_bundled_assets, set_platform_bundled_assets,
 };
+#[cfg(all(
+    any(target_os = "macos", target_os = "windows"),
+    feature = "camera-native"
+))]
+pub use camera::install_native_camera;
 pub use camera::{
-    Camera, CameraError, CameraFrame, CameraLens, CameraObserver, CameraRef, CameraState,
-    CameraStill, FlashMode, FrameFormat, camera, camera_state, camera_supported,
-    capture_camera_still, clear_platform_camera, dropped_camera_frames, latest_camera_frame,
-    observe_camera_frames, observe_camera_state, observe_camera_stills, publish_camera_frame,
+    Camera, CameraError, CameraFrame, CameraLens, CameraLenses, CameraObserver, CameraRef,
+    CameraState, CameraStill, FlashMode, FrameFormat, LensFacing, UprightRgba, camera,
+    camera_lenses, camera_state, camera_supported, capture_camera_still, clear_platform_camera,
+    dropped_camera_frames, latest_camera_frame, observe_camera_frames, observe_camera_lenses,
+    observe_camera_state, observe_camera_stills, publish_camera_frame, publish_camera_lenses,
     publish_camera_state, publish_camera_still, record_dropped_camera_frame, rememberCameraFrames,
-    rememberCameraState, rememberCameraStills, request_camera_still, set_platform_camera,
-    start_camera, stop_camera,
+    rememberCameraLenses, rememberCameraState, rememberCameraStills, request_camera_still,
+    set_platform_camera, start_camera, stop_camera,
 };
 pub use content::{
     BytesContent, Content, ContentChannel, ContentEntry, ContentError, ContentFolder,

@@ -91,6 +91,7 @@ public class CranposeActivity extends NativeActivity {
     private static native void nativeOnCameraFrameDropped();
     private static native void nativeOnCameraState(int kind, String detail);
     private static native void nativeOnCameraStill(byte[] jpeg, String error);
+    private static native void nativeOnCameraLenses(String list, String active);
 
     /** One preview frame, in the format the sensor produced. */
     static void onCameraFrame(
@@ -121,6 +122,14 @@ public class CranposeActivity extends NativeActivity {
     /** A still, or the reason there is none. */
     static void onCameraStill(byte[] jpeg, String error) {
         nativeOnCameraStill(jpeg, error == null ? "" : error);
+    }
+
+    /**
+     * The devices the application may pick between, one {@code id|facing|name}
+     * per line, and the id of the one in use.
+     */
+    static void onCameraLenses(String list, String active) {
+        nativeOnCameraLenses(list == null ? "" : list, active == null ? "" : active);
     }
 
     private static final int CAMERA_RUNNING = 1;

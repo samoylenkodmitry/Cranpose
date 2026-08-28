@@ -30,7 +30,7 @@ never silently pretend.
 | safe-area insets  | ■   | ■ WindowInsets listener → `local_safe_area_insets` | ● zero | ● zero | replaced cranscan's marker-file bridge |
 | system theme      | ■ `window.theme()` polled | ■ uiMode + ConfigChanged | ■ winit `ThemeChanged` (+ cached env probe) | ■ `prefers-color-scheme` listener | drives LiquidTheme Auto |
 | image picker      | ■   | ● file-picker fallback | ● | ● | camera source stays iOS-only for now |
-| camera            | ■ `AVCaptureSession` | ■ Camera2 (`CranposeCamera`) | □ | □ | frames pushed as `CameraFrame`, NV12 on Android and RGBA on iOS; observable state, bounded latest-wins analysis stream, stills asked for rather than waited on |
+| camera            | ■ `AVCaptureSession` | ■ Camera2 (`CranposeCamera`) | ● nokhwa on macOS and Windows (`camera-native`); Linux open | □ | frames pushed as `CameraFrame` with the turn carried as `rotation_degrees` (`upright_rgba8` applies it in the conversion pass); observable state and lens list (`CameraLenses`, `LensFacing`); bounded latest-wins analysis stream; stills asked for rather than waited on |
 | background activity | ■ | □ (FGS is app policy) | □ | □ | documented |
 | file save dialog  | □ (export picker still open) | ■ ACTION_CREATE_DOCUMENT | ■ rfd save | ■ browser download | `FilePicker::save_file`; killed cranscan's direct rfd |
 | launch arguments  | ● argv (`simctl launch`, `launchArguments`) | ■ intent extras + `onNewIntent` | ● argv | □ (query string still open) | `launch_args()`; `is_debuggable()` = `FLAG_DEBUGGABLE` on Android, `debug_assertions` elsewhere |
