@@ -9,6 +9,8 @@ pub(crate) use cranpose_render_common::debug_toggles;
 pub use debug_toggles::{debug_toggle, debug_toggle_os, set_debug_toggle, set_debug_toggle_os};
 mod display_clip;
 mod effect_renderer;
+mod fast_cores;
+pub use fast_cores::pin_current_thread_to_fast_cores;
 mod frame_graph;
 mod frame_packet;
 mod frontend;

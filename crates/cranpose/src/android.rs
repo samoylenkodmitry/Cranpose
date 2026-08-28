@@ -1858,6 +1858,12 @@ pub fn run(
     // environment-gated telemetry is reachable on device.
     crate::android_frame_telemetry::seed_env_from_system_properties();
 
+    // After the property seeding (`debug.cranpose.core_pin` must be
+    // readable), before the renderer exists: in the non-threaded present
+    // mode the GPU driver's workers spawn from this thread and inherit
+    // the mask. The threaded mode's present thread pins itself.
+    cranpose_render_wgpu::pin_current_thread_to_fast_cores("producer");
+
     // Give the renderer's pipeline disk cache a writable home. Only the
     // directory is decided here — the blob's file name is keyed by adapter
     // identity, which is not known until device setup composes

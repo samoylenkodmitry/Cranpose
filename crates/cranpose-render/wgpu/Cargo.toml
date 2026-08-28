@@ -54,6 +54,11 @@ wgpu = { version = "29.0", default-features = false, features = [
     "wgsl",
 ] }
 
+# Fast-core affinity for the frame-critical threads (`fast_cores`): safe
+# sched_setaffinity, so the big.LITTLE placement fix needs no local unsafe.
+[target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
+rustix = { version = "1.1", features = ["thread"] }
+
 [target.'cfg(target_os = "windows")'.dependencies]
 wgpu = { version = "29.0", default-features = false, features = [
     "std",
