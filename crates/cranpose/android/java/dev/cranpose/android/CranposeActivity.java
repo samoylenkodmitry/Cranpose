@@ -28,6 +28,7 @@ import android.view.WindowManager;
 import android.window.OnBackInvokedCallback;
 import android.window.OnBackInvokedDispatcher;
 import android.view.accessibility.AccessibilityEvent;
+import android.view.accessibility.AccessibilityManager;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.accessibility.AccessibilityNodeProvider;
 import android.view.WindowInsets;
@@ -694,10 +695,35 @@ public class CranposeActivity extends NativeActivity {
 
     private static native void nativeOnAccessibilityCustomAction(int virtualViewId, int actionIndex);
 
+    private static native void nativeOnAccessibilityStateChanged(boolean enabled);
+
+    private AccessibilityManager.AccessibilityStateChangeListener
+            cranposeAccessibilityStateListener;
+
+    /**
+     * Mirrors {@link AccessibilityManager}'s state into the native frame loop,
+     * which skips the whole semantics snapshot/encode/publish pipeline while
+     * no assistive technology is running.
+     */
+    private void trackAccessibilityState() {
+        AccessibilityManager manager =
+                (AccessibilityManager) getSystemService(Context.ACCESSIBILITY_SERVICE);
+        if (manager == null) {
+            return;
+        }
+        cranposeAccessibilityStateListener =
+                CranposeActivity::nativeOnAccessibilityStateChanged;
+        manager.addAccessibilityStateChangeListener(cranposeAccessibilityStateListener);
+        nativeOnAccessibilityStateChanged(manager.isEnabled());
+    }
+
     /** Publishes Cranpose's semantic tree through Android's native virtual-view API. */
     public void cranposeSetAccessibilityElements(String payload) {
-        final List<CranposeAccessibilityElement> elements = parseAccessibilityElements(payload);
+        // Parsed inside the posted task: the caller is the native frame loop,
+        // whose budget the parse must not consume; the UI thread is idle in
+        // this architecture.
         runOnUiThread(() -> {
+            final List<CranposeAccessibilityElement> elements = parseAccessibilityElements(payload);
             View host = getWindow().getDecorView();
             if (cranposeAccessibilityProvider == null) {
                 cranposeAccessibilityProvider = new CranposeAccessibilityProvider(host);
@@ -1906,6 +1932,7 @@ public class CranposeActivity extends NativeActivity {
         installTrimMemoryHook();
         focusNativeContentView();
         installInsetsListener();
+        trackAccessibilityState();
         registerNetworkCallback();
         dispatchDeeplink(getIntent());
         dispatchIncomingShares(getIntent());
@@ -2061,6 +2088,15 @@ public class CranposeActivity extends NativeActivity {
     protected void onDestroy() {
         cranposeBackgroundServiceHandler.removeCallbacks(cranposeBackgroundServiceAsk);
         CranposeBackgroundService.stop(this);
+        if (cranposeAccessibilityStateListener != null) {
+            AccessibilityManager manager =
+                    (AccessibilityManager) getSystemService(Context.ACCESSIBILITY_SERVICE);
+            if (manager != null) {
+                manager.removeAccessibilityStateChangeListener(
+                        cranposeAccessibilityStateListener);
+            }
+            cranposeAccessibilityStateListener = null;
+        }
         try {
             unregisterReceiver(cranposeUpdateInstallReceiver);
         } catch (IllegalArgumentException ignored) {

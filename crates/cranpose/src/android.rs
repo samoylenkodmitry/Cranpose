@@ -1883,6 +1883,8 @@ pub fn run(
     let mut app_shell: Option<AppShell<WgpuRenderer>> = None;
     let mut accessibility_elements = Vec::new();
     let mut accessibility_revision = None;
+    let mut accessibility_policy =
+        crate::accessibility_publish_policy::AccessibilityPublishPolicy::new();
 
     log::info!("Starting Compose Android Application");
 
@@ -2040,11 +2042,18 @@ pub fn run(
                 .as_ref()
                 .is_some_and(|shell| shell.has_pending_ui());
         let offscreen_timeout = next_offscreen_update.map(duration_until_frame_deadline);
+        // A deferred accessibility publish (throttle window still closed when
+        // the last semantics change arrived) bounds the sleep so its trailing
+        // flush cannot wait on the next app-driven frame.
+        let accessibility_flush_timeout = accessibility_policy
+            .wake_deadline()
+            .map(|deadline| deadline.saturating_duration_since(std::time::Instant::now()));
         let idle_timeout = match no_surface {
             true => earliest_android_poll_timeout(pending_confirmation_timeout, offscreen_timeout),
-            false => {
-                earliest_android_poll_timeout(pending_confirmation_timeout, frame_deadline_timeout)
-            }
+            false => earliest_android_poll_timeout(
+                earliest_android_poll_timeout(pending_confirmation_timeout, frame_deadline_timeout),
+                accessibility_flush_timeout,
+            ),
         };
 
         // Vote the display frame rate the way HWUI does: the panel's fastest
@@ -2806,6 +2815,7 @@ pub fn run(
                     android_platform.scale_factor() as f32,
                     &mut accessibility_elements,
                     &mut accessibility_revision,
+                    &mut accessibility_policy,
                 ) {
                     log::warn!("{error}");
                 }
@@ -2858,6 +2868,24 @@ pub fn run(
                 }
             } else {
                 frame_telemetry.note_idle_iteration();
+                // An accessibility publish deferred by the throttle window
+                // must not be lost to an idle loop: once the window opens,
+                // flush it even though no frame is being produced.
+                if accessibility_policy
+                    .wake_deadline()
+                    .is_some_and(|deadline| deadline <= std::time::Instant::now())
+                {
+                    if let Err(error) = crate::android_accessibility::sync(
+                        &app,
+                        shell,
+                        android_platform.scale_factor() as f32,
+                        &mut accessibility_elements,
+                        &mut accessibility_revision,
+                        &mut accessibility_policy,
+                    ) {
+                        log::warn!("{error}");
+                    }
+                }
             }
         } else {
             frame_telemetry.note_idle_iteration();
