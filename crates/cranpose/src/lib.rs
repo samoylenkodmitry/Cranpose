@@ -539,8 +539,20 @@ mod apple_thermal;
 #[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
 mod ios_writable_folder;
 
-#[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
-mod ios_camera;
+// One AVFoundation backend for both Apple targets. The macOS half is opt-in
+// through `camera-desktop` and rides the desktop shell, so the condition here
+// matches the two places that call `register` exactly; a module compiled with
+// no caller is dead code, which is how a warning gets into a release.
+#[cfg(any(
+    all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),
+    all(
+        feature = "camera-desktop",
+        feature = "desktop-shell",
+        feature = "renderer-wgpu",
+        target_os = "macos"
+    )
+))]
+mod apple_camera;
 
 #[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
 mod ios_keyboard;

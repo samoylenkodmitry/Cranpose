@@ -1,10 +1,20 @@
-//! iOS live camera via `AVCaptureSession`.
+//! Apple live camera via `AVCaptureSession`, on iOS and on macOS.
 //!
 //! Registered as the platform camera (see
-//! [`cranpose_services::set_platform_camera`]) by the iOS backend. A video data
-//! output delivers BGRA frames on a background dispatch queue; each frame is
-//! converted to tightly-packed RGBA and stored so the app's preview pump can
-//! poll it (matching the desktop/Android live viewfinder).
+//! [`cranpose_services::set_platform_camera`]) by the iOS backend and by the
+//! desktop shell on a Mac. A video data output delivers BGRA frames on a
+//! background dispatch queue; each frame is converted to tightly-packed RGBA
+//! and stored so the app's preview pump can poll it (matching the Android
+//! live viewfinder).
+//!
+//! The two targets share the session, the delegates, the frame conversion and
+//! the still capture, because AVFoundation is one stack. They differ in what
+//! a device is: a phone carries a fixed set of built-in lenses behind a
+//! position, and a Mac carries one built-in camera plus whatever a person
+//! plugs in or points at it. The iOS-only calls (focus range, virtual
+//! multi-camera switching, torch, flash, high-resolution stills) are absent
+//! from the macOS half rather than guarded at runtime: several are declared
+//! unavailable on macOS, so messaging them would be a wrong answer at best.
 #![allow(unsafe_code)]
 
 use std::{
@@ -23,19 +33,29 @@ use objc2::{
     rc::Retained,
     runtime::{AnyObject, Bool, ProtocolObject},
 };
+// The device-type names are link-time symbols, so each one is imported only on
+// the target whose AVFoundation defines it. An iOS-only name referenced from a
+// Mac build does not fail to compile, it fails to link.
+#[cfg(target_os = "ios")]
 use objc2_av_foundation::{
-    AVCaptureAutoFocusRangeRestriction, AVCaptureConnection, AVCaptureDevice,
-    AVCaptureDeviceDiscoverySession, AVCaptureDeviceInput, AVCaptureDevicePosition,
-    AVCaptureDeviceType, AVCaptureDeviceTypeBuiltInDualWideCamera,
+    AVCaptureAutoFocusRangeRestriction, AVCaptureDeviceTypeBuiltInDualWideCamera,
     AVCaptureDeviceTypeBuiltInTelephotoCamera, AVCaptureDeviceTypeBuiltInTripleCamera,
-    AVCaptureDeviceTypeBuiltInUltraWideCamera, AVCaptureDeviceTypeBuiltInWideAngleCamera,
-    AVCaptureFlashMode, AVCaptureFocusMode, AVCaptureOutput, AVCapturePhoto,
-    AVCapturePhotoCaptureDelegate, AVCapturePhotoOutput, AVCapturePhotoSettings,
+    AVCaptureDeviceTypeBuiltInUltraWideCamera, AVCaptureFlashMode,
     AVCapturePrimaryConstituentDeviceRestrictedSwitchingBehaviorConditions,
-    AVCapturePrimaryConstituentDeviceSwitchingBehavior, AVCaptureSession,
-    AVCaptureSessionPresetPhoto, AVCaptureTorchMode, AVCaptureVideoDataOutput,
-    AVCaptureVideoDataOutputSampleBufferDelegate, AVMediaType, AVMediaTypeVideo, AVVideoCodecKey,
-    AVVideoCodecTypeJPEG,
+    AVCapturePrimaryConstituentDeviceSwitchingBehavior, AVCaptureTorchMode,
+};
+use objc2_av_foundation::{
+    AVCaptureConnection, AVCaptureDevice, AVCaptureDeviceDiscoverySession, AVCaptureDeviceInput,
+    AVCaptureDevicePosition, AVCaptureDeviceType, AVCaptureDeviceTypeBuiltInWideAngleCamera,
+    AVCaptureFocusMode, AVCaptureOutput, AVCapturePhoto, AVCapturePhotoCaptureDelegate,
+    AVCapturePhotoOutput, AVCapturePhotoSettings, AVCaptureSession, AVCaptureSessionPresetPhoto,
+    AVCaptureVideoDataOutput, AVCaptureVideoDataOutputSampleBufferDelegate, AVMediaType,
+    AVMediaTypeVideo, AVVideoCodecKey, AVVideoCodecTypeJPEG,
+};
+#[cfg(target_os = "macos")]
+use objc2_av_foundation::{
+    AVCaptureDeviceTypeContinuityCamera, AVCaptureDeviceTypeDeskViewCamera,
+    AVCaptureDeviceTypeExternal,
 };
 use objc2_core_media::CMSampleBuffer;
 use objc2_core_video::{
@@ -97,14 +117,14 @@ fn lens_slot() -> &'static Mutex<Option<String>> {
     SLOT.get_or_init(|| Mutex::new(None))
 }
 
-/// Installs the iOS camera as the platform camera.
+/// Installs the AVFoundation camera as the platform camera.
 pub(crate) fn register() {
-    set_platform_camera(Arc::new(IosCamera));
+    set_platform_camera(Arc::new(AppleCamera));
 }
 
-struct IosCamera;
+struct AppleCamera;
 
-impl Camera for IosCamera {
+impl Camera for AppleCamera {
     fn start(&self) -> Result<(), CameraError> {
         if session_slot().lock().map(|s| s.is_some()).unwrap_or(false) {
             cranpose_services::publish_camera_state(CameraState::Running {
@@ -138,6 +158,7 @@ impl Camera for IosCamera {
         Ok(())
     }
 
+    #[cfg(target_os = "ios")]
     fn set_torch(&self, on: bool) -> bool {
         let Ok(slot) = session_slot().lock() else {
             return false;
@@ -160,6 +181,14 @@ impl Camera for IosCamera {
         unsafe { device.setTorchMode(mode) };
         unsafe { device.unlockForConfiguration() };
         true
+    }
+
+    /// `torchMode` is declared unavailable on macOS, and no Mac camera carries
+    /// a lamp, so the answer is no rather than a message the runtime may not
+    /// answer.
+    #[cfg(target_os = "macos")]
+    fn set_torch(&self, _on: bool) -> bool {
+        false
     }
 
     fn lenses(&self) -> Vec<CameraLens> {
@@ -206,6 +235,7 @@ impl Camera for IosCamera {
         }
     }
 
+    #[cfg(target_os = "ios")]
     fn has_flash(&self) -> bool {
         if let Ok(slot) = session_slot().lock()
             && let Some(holder) = slot.as_ref()
@@ -216,6 +246,12 @@ impl Camera for IosCamera {
             .first()
             .map(|device| unsafe { device.hasFlash() })
             .unwrap_or(false)
+    }
+
+    /// Same reading as the torch: `hasFlash` is declared unavailable on macOS.
+    #[cfg(target_os = "macos")]
+    fn has_flash(&self) -> bool {
+        false
     }
 
     fn set_flash(&self, mode: FlashMode) -> bool {
@@ -241,6 +277,7 @@ impl Camera for IosCamera {
 /// The virtual triple/dual devices are left out: they are what
 /// [`select_camera_device`] opens when the app picks no lens, and listing them
 /// beside their own constituents would offer the same picture twice.
+#[cfg(target_os = "ios")]
 fn back_lenses() -> Vec<Retained<AVCaptureDevice>> {
     let types: [&AVCaptureDeviceType; 3] = unsafe {
         [
@@ -255,9 +292,31 @@ fn back_lenses() -> Vec<Retained<AVCaptureDevice>> {
 }
 
 /// The front camera, when the device has one.
+#[cfg(target_os = "ios")]
 fn front_lenses() -> Vec<Retained<AVCaptureDevice>> {
     let types: [&AVCaptureDeviceType; 1] = unsafe { [AVCaptureDeviceTypeBuiltInWideAngleCamera] };
     discover_devices(&types, AVCaptureDevicePosition::Front)
+}
+
+/// Every camera a Mac can open: the built-in one, an iPhone acting as a
+/// continuity camera, the desk view that camera also offers, and anything
+/// plugged in.
+///
+/// The position is left unspecified because a Mac answers it inconsistently.
+/// The built-in camera reports front, a continuity camera reports the position
+/// of the lens the phone is using, and a USB camera reports nothing at all, so
+/// asking a discovery session for one position would drop whole devices.
+#[cfg(target_os = "macos")]
+fn mac_devices() -> Vec<Retained<AVCaptureDevice>> {
+    let types: [&AVCaptureDeviceType; 4] = unsafe {
+        [
+            AVCaptureDeviceTypeBuiltInWideAngleCamera,
+            AVCaptureDeviceTypeExternal,
+            AVCaptureDeviceTypeContinuityCamera,
+            AVCaptureDeviceTypeDeskViewCamera,
+        ]
+    };
+    discover_devices(&types, AVCaptureDevicePosition::Unspecified)
 }
 
 fn discover_devices(
@@ -280,6 +339,7 @@ fn discover_devices(
 
 /// Every device the application may pick, back lenses first, widest first,
 /// then the front one.
+#[cfg(target_os = "ios")]
 fn all_lenses() -> Vec<CameraLens> {
     let mut lenses: Vec<CameraLens> = back_lenses()
         .into_iter()
@@ -303,6 +363,28 @@ fn all_lenses() -> Vec<CameraLens> {
     lenses
 }
 
+/// Every camera the application may pick, in the order the discovery session
+/// gives them: the built-in one first, then anything attached.
+///
+/// A Mac names its cameras itself, and the names are better than anything this
+/// code could infer — "FaceTime HD Camera", the phone's own name for a
+/// continuity camera, the model name of a USB one.
+#[cfg(target_os = "macos")]
+fn all_lenses() -> Vec<CameraLens> {
+    mac_devices()
+        .into_iter()
+        .map(|device| CameraLens {
+            id: unsafe { device.uniqueID() }.to_string(),
+            name: unsafe { device.localizedName() }.to_string(),
+            facing: match unsafe { device.position() } {
+                AVCaptureDevicePosition::Front => LensFacing::Front,
+                AVCaptureDevicePosition::Back => LensFacing::Back,
+                _ => LensFacing::External,
+            },
+        })
+        .collect()
+}
+
 /// Publishes the lens list and the device in use, so a lens control observes
 /// instead of paying a discovery session per recomposition.
 fn publish_lenses(active: Option<String>) {
@@ -312,6 +394,7 @@ fn publish_lenses(active: Option<String>) {
     });
 }
 
+#[cfg(target_os = "ios")]
 fn lens_order(device: &AVCaptureDevice) -> u8 {
     let kind = unsafe { device.deviceType() };
     let ultra = unsafe { AVCaptureDeviceTypeBuiltInUltraWideCamera };
@@ -325,6 +408,7 @@ fn lens_order(device: &AVCaptureDevice) -> u8 {
     }
 }
 
+#[cfg(target_os = "ios")]
 fn lens_name(device: &AVCaptureDevice) -> String {
     match lens_order(device) {
         0 => "Ultra wide".into(),
@@ -443,22 +527,28 @@ fn capture_photo() -> Option<CameraStill> {
         let codec: &AnyObject = codec_value.as_ref();
         let format = NSDictionary::from_slices(&[codec_key], &[codec]);
         let settings = unsafe { AVCapturePhotoSettings::photoSettingsWithFormat(Some(&format)) };
-        // `maxPhotoDimensions` (iOS 16+) supersedes these, but the deprecated
-        // switches still map onto it and keep the iOS 15 floor working.
-        #[allow(deprecated)]
-        unsafe {
-            settings.setHighResolutionPhotoEnabled(true);
-        }
-        let wanted = match *flash_slot().lock().ok()? {
-            FlashMode::Off => AVCaptureFlashMode::Off,
-            FlashMode::Auto => AVCaptureFlashMode::Auto,
-            FlashMode::On => AVCaptureFlashMode::On,
-        };
-        let supported = unsafe { holder.photo_output.supportedFlashModes() }
-            .iter()
-            .any(|mode| mode.as_i64() == wanted.0 as i64);
-        if supported {
-            unsafe { settings.setFlashMode(wanted) };
+        // The high-resolution switch and the flash are a phone's. macOS
+        // declares both unavailable, and a Mac camera has no lamp to fire.
+        #[cfg(target_os = "ios")]
+        {
+            // `maxPhotoDimensions` (iOS 16+) supersedes these, but the
+            // deprecated switches still map onto it and keep the iOS 15 floor
+            // working.
+            #[allow(deprecated)]
+            unsafe {
+                settings.setHighResolutionPhotoEnabled(true);
+            }
+            let wanted = match *flash_slot().lock().ok()? {
+                FlashMode::Off => AVCaptureFlashMode::Off,
+                FlashMode::Auto => AVCaptureFlashMode::Auto,
+                FlashMode::On => AVCaptureFlashMode::On,
+            };
+            let supported = unsafe { holder.photo_output.supportedFlashModes() }
+                .iter()
+                .any(|mode| mode.as_i64() == wanted.0 as i64);
+            if supported {
+                unsafe { settings.setFlashMode(wanted) };
+            }
         }
         unsafe {
             holder
@@ -521,24 +611,35 @@ fn frame_from_sample(sample: &CMSampleBuffer) -> Option<CameraFrame> {
 
     unsafe { CVPixelBufferUnlockBaseAddress(pixel_buffer, flags) };
 
-    // The sensor delivers landscape buffers; the app runs in portrait, so the
-    // frame carries a 90° clockwise turn. The turn is metadata rather than a
-    // pixel pass here: `CameraFrame::upright_rgba8` fuses it with whatever
-    // conversion the consumer does anyway, the same as on Android.
+    // On a phone the sensor delivers landscape buffers while the app runs in
+    // portrait, so the frame carries a 90° clockwise turn. The turn is
+    // metadata rather than a pixel pass here: `CameraFrame::upright_rgba8`
+    // fuses it with whatever conversion the consumer does anyway, the same as
+    // on Android. A Mac camera is already the way up its window is, so it
+    // carries no turn.
+    #[cfg(target_os = "ios")]
+    let rotation = 90;
+    #[cfg(target_os = "macos")]
+    let rotation = 0;
     CameraFrame::new(
         width as u32,
         height as u32,
         FrameFormat::Rgba8,
-        90,
+        rotation,
         FRAME_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::AcqRel),
         rgba,
     )
 }
 
-/// Picks the back camera, preferring an auto-switching virtual multi-camera
-/// (triple, then dual-wide) so the system can drop to the ultra-wide constituent
-/// for macro (close-up receipts, below the wide lens's minimum focus distance).
-/// Falls back to the plain wide-angle camera on devices without a virtual one.
+/// Picks the device to open: the one the application asked for, or the
+/// platform's default.
+///
+/// On iOS the default prefers an auto-switching virtual multi-camera (triple,
+/// then dual-wide) so the system can drop to the ultra-wide constituent for
+/// macro (close-up receipts, below the wide lens's minimum focus distance),
+/// and falls back to the plain wide-angle camera on devices without a virtual
+/// one. A Mac has no virtual device, so the default is whatever AVFoundation
+/// names first, which is the built-in camera when there is one.
 fn select_camera_device(media_type: &AVMediaType) -> Option<Retained<AVCaptureDevice>> {
     if let Some(id) = lens_slot().lock().ok().and_then(|slot| slot.clone()) {
         let wanted = NSString::from_str(&id);
@@ -546,21 +647,24 @@ fn select_camera_device(media_type: &AVMediaType) -> Option<Retained<AVCaptureDe
             return Some(device);
         }
     }
-    let virtual_types: [&AVCaptureDeviceType; 2] = unsafe {
-        [
-            AVCaptureDeviceTypeBuiltInTripleCamera,
-            AVCaptureDeviceTypeBuiltInDualWideCamera,
-        ]
-    };
-    for device_type in virtual_types {
-        if let Some(device) = unsafe {
-            AVCaptureDevice::defaultDeviceWithDeviceType_mediaType_position(
-                device_type,
-                Some(media_type),
-                AVCaptureDevicePosition::Back,
-            )
-        } {
-            return Some(device);
+    #[cfg(target_os = "ios")]
+    {
+        let virtual_types: [&AVCaptureDeviceType; 2] = unsafe {
+            [
+                AVCaptureDeviceTypeBuiltInTripleCamera,
+                AVCaptureDeviceTypeBuiltInDualWideCamera,
+            ]
+        };
+        for device_type in virtual_types {
+            if let Some(device) = unsafe {
+                AVCaptureDevice::defaultDeviceWithDeviceType_mediaType_position(
+                    device_type,
+                    Some(media_type),
+                    AVCaptureDevicePosition::Back,
+                )
+            } {
+                return Some(device);
+            }
         }
     }
     unsafe { AVCaptureDevice::defaultDeviceWithMediaType(media_type) }
@@ -585,23 +689,28 @@ fn start_session() -> Result<String, CameraError> {
     // (macro, below the wide lens's minimum focus distance) stay sharp. Any of
     // these calls throw if unsupported, so they are all guarded.
     if unsafe { device.lockForConfiguration() }.is_ok() {
-        if unsafe { device.isAutoFocusRangeRestrictionSupported() } {
-            unsafe {
-                device.setAutoFocusRangeRestriction(AVCaptureAutoFocusRangeRestriction::Near)
-            };
+        // The focus-range restriction and the constituent-device switching are
+        // both a phone's, and macOS declares neither.
+        #[cfg(target_os = "ios")]
+        {
+            if unsafe { device.isAutoFocusRangeRestrictionSupported() } {
+                unsafe {
+                    device.setAutoFocusRangeRestriction(AVCaptureAutoFocusRangeRestriction::Near)
+                };
+            }
+            if unsafe { device.primaryConstituentDeviceSwitchingBehavior() }
+                != AVCapturePrimaryConstituentDeviceSwitchingBehavior::Unsupported
+            {
+                unsafe {
+                    device.setPrimaryConstituentDeviceSwitchingBehavior_restrictedSwitchingBehaviorConditions(
+                        AVCapturePrimaryConstituentDeviceSwitchingBehavior::Auto,
+                        AVCapturePrimaryConstituentDeviceRestrictedSwitchingBehaviorConditions(0),
+                    )
+                };
+            }
         }
         if unsafe { device.isFocusModeSupported(AVCaptureFocusMode::ContinuousAutoFocus) } {
             unsafe { device.setFocusMode(AVCaptureFocusMode::ContinuousAutoFocus) };
-        }
-        if unsafe { device.primaryConstituentDeviceSwitchingBehavior() }
-            != AVCapturePrimaryConstituentDeviceSwitchingBehavior::Unsupported
-        {
-            unsafe {
-                device.setPrimaryConstituentDeviceSwitchingBehavior_restrictedSwitchingBehaviorConditions(
-                    AVCapturePrimaryConstituentDeviceSwitchingBehavior::Auto,
-                    AVCapturePrimaryConstituentDeviceRestrictedSwitchingBehaviorConditions(0),
-                )
-            };
         }
         unsafe { device.unlockForConfiguration() };
     }
@@ -652,7 +761,9 @@ fn start_session() -> Result<String, CameraError> {
     }
     unsafe { session.addOutput(&photo_output) };
     // `maxPhotoDimensions` (iOS 16+) supersedes this, but the deprecated
-    // switch still maps onto it and keeps the iOS 15 floor working.
+    // switch still maps onto it and keeps the iOS 15 floor working. macOS
+    // declares it unavailable and gives full sensor size without asking.
+    #[cfg(target_os = "ios")]
     #[allow(deprecated)]
     unsafe {
         photo_output.setHighResolutionCaptureEnabled(true);

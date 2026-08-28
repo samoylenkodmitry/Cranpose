@@ -110,6 +110,21 @@ audio = ["dep:cranpose-audio", "cranpose-audio/aaudio"]
 # Adds the desktop output device (cpal) so sound works while developing on
 # macOS, Windows or Linux. Linux builds need the ALSA development headers.
 audio-desktop = ["audio", "cranpose-audio/cpal-backend"]
+# Desktop camera capture on macOS, through the same `AVCaptureSession` stack
+# the iOS backend uses, so the two share one file. Off by default: an
+# application that opens no camera should not link AVFoundation. Linux and
+# Windows have no desktop camera backend yet, and there this compiles away.
+# A Mac only hands frames to a signed, bundled application carrying
+# `NSCameraUsageDescription`; a bare executable is refused by the system, not
+# by this code.
+camera-desktop = [
+    "dep:objc2",
+    "dep:block2",
+    "dep:dispatch2",
+    "dep:objc2-av-foundation",
+    "dep:objc2-core-media",
+    "dep:objc2-core-video",
+]
 # The in-process media backend (`cranpose_media`), registered into
 # `cranpose_services::media`. Off by default because it links a system audio
 # library on desktop (ALSA on Linux, CoreAudio on macOS, WASAPI on Windows) and
@@ -288,11 +303,54 @@ mach2 = "0.6"
 accesskit_macos = "0.26.3"
 # Thermal pressure. `NSProcessInfo` is Foundation rather than UIKit, so the
 # reading a Mac gives is the same one iOS gives and needs no second mapping.
+# The collection types below that are the camera's (`camera-desktop`): this
+# entry is not optional, so the classes it names are listed here rather than
+# added by the feature.
 objc2-foundation = { version = "0.3", default-features = false, features = [
     "std",
+    "NSArray",
+    "NSDictionary",
+    "NSEnumerator",
+    "NSError",
     "NSObject",
     "NSProcessInfo",
     "NSString",
+    "NSValue",
+] }
+# The macOS half of the AVFoundation camera (`camera-desktop`). Same crates
+# and same versions the iOS backend takes, so a Mac build adds no dependency
+# the workspace does not already resolve.
+objc2 = { version = "0.6", optional = true }
+block2 = { version = "0.6", optional = true }
+dispatch2 = { version = "0.3", optional = true }
+objc2-av-foundation = { version = "0.3", default-features = false, optional = true, features = [
+    "dispatch2",
+    "std",
+    "block2",
+    "objc2-core-media",
+    "AVCaptureSession",
+    "AVCaptureSessionPreset",
+    "AVCaptureDevice",
+    "AVCaptureInput",
+    "AVCaptureOutput",
+    "AVCaptureOutputBase",
+    "AVCaptureVideoDataOutput",
+    "AVCapturePhotoOutput",
+    "AVMediaFormat",
+    "AVVideoSettings",
+] }
+objc2-core-media = { version = "0.3", default-features = false, optional = true, features = [
+    "std",
+    "objc2-core-video",
+    "CMSampleBuffer",
+] }
+objc2-core-video = { version = "0.3", default-features = false, optional = true, features = [
+    "std",
+    "CVBase",
+    "CVPixelBuffer",
+    "CVImageBuffer",
+    "CVBuffer",
+    "CVReturn",
 ] }
 wgpu = { version = "29.0", optional = true, default-features = false, features = [
     "std",

@@ -1441,7 +1441,7 @@ fn unsafe_code_stays_in_reviewed_platform_boundary_modules() {
         "ios_image_picker.rs",
         "ios_notifier.rs",
         "ios_writable_folder.rs",
-        "ios_camera.rs",
+        "apple_camera.rs",
         // AVAudioPlayer, the audio-session interruption observer and the
         // MediaPlayer remote commands, behind the same reviewed boundary as
         // the other iOS services.
@@ -1665,7 +1665,7 @@ fn workspace_ffi_boundaries_are_explicit() {
         "crates/cranpose/src/ios_image_picker.rs",
         "crates/cranpose/src/ios_notifier.rs",
         "crates/cranpose/src/ios_writable_folder.rs",
-        "crates/cranpose/src/ios_camera.rs",
+        "crates/cranpose/src/apple_camera.rs",
         // AVAudioPlayer, the audio-session interruption observer and the
         // MediaPlayer remote commands, behind the same reviewed boundary as
         // the other iOS services.
