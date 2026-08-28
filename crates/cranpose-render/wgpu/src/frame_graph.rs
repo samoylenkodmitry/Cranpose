@@ -464,6 +464,7 @@ impl WgpuFrameGraphExecutor {
         size: wgpu::Extent3d,
     ) -> FrameCommandStats {
         queue.write_texture(destination, data, data_layout, size);
+        note_upload_write();
         FrameCommandStats {
             upload_bytes: data.len() as u64,
             ..FrameCommandStats::default()
@@ -481,6 +482,7 @@ impl WgpuFrameGraphExecutor {
             return FrameCommandStats::default();
         }
         queue.write_buffer(buffer, offset, data);
+        note_upload_write();
         FrameCommandStats {
             upload_bytes: data.len() as u64,
             ..FrameCommandStats::default()
@@ -632,6 +634,7 @@ impl WgpuFrameGraphExecutor {
     }
 
     fn submit(queue: &wgpu::Queue, encoder: wgpu::CommandEncoder) -> wgpu::SubmissionIndex {
+        let _ = take_upload_write_calls();
         queue.submit(std::iter::once(encoder.finish()))
     }
 
@@ -657,13 +660,32 @@ impl WgpuFrameGraphExecutor {
 
         let finish_ms = submit_start.duration_since(finish_start).as_secs_f64() * 1000.0;
         let submit_ms = submit_end.duration_since(submit_start).as_secs_f64() * 1000.0;
+        let upload_writes = take_upload_write_calls();
         if finish_ms + submit_ms >= threshold_ms {
             log::warn!(
-                "[wgpu-render-stage:submit] finish_ms={finish_ms:.3} submit_ms={submit_ms:.3}"
+                "[wgpu-render-stage:submit] finish_ms={finish_ms:.3} submit_ms={submit_ms:.3} upload_writes={upload_writes}"
             );
         }
         submission
     }
+}
+
+std::thread_local! {
+    /// Individual `write_buffer`/`write_texture` calls issued since the last
+    /// submit on this thread. Many small writes carry per-call staging and
+    /// synchronization cost on tiler drivers even when total bytes are tiny,
+    /// and byte totals cannot distinguish one 64 KB write from a thousand
+    /// 64-byte ones — which is the difference a submit stall investigation
+    /// has to see.
+    static UPLOAD_WRITE_CALLS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+fn note_upload_write() {
+    UPLOAD_WRITE_CALLS.with(|calls| calls.set(calls.get().saturating_add(1)));
+}
+
+fn take_upload_write_calls() -> u32 {
+    UPLOAD_WRITE_CALLS.with(|calls| calls.replace(0))
 }
 
 fn frame_graph_pass_telemetry_threshold_ms() -> Option<f64> {
@@ -1362,6 +1384,7 @@ impl UploadAllocator {
             self.slots[index] = self.create_slot(device, required_size);
         }
         queue.write_buffer(&self.slots[index].buffer, 0, bytes);
+        note_upload_write();
         uploaded_bytes.set(uploaded_bytes.get().saturating_add(bytes.len() as u64));
         index
     }
