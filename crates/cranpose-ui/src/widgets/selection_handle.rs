@@ -335,11 +335,13 @@ pub fn SelectionHandle(
                             state.vy = (state.vy - omega * cy * dt) * decay;
                         }
                         glide_for_draw.set(state);
-                        // Keep frames coming while the glide is in flight: a
-                        // stationary hold otherwise stops redraws and the
-                        // spring freezes mid-transition. Render-side only —
-                        // no composition state is touched.
-                        crate::request_render_invalidation();
+                        // Keep the glide advancing: the spring lives in a
+                        // Cell no observation can see, so this draw must
+                        // name its own node for the next frame's re-record —
+                        // a bare render invalidation only re-presents the
+                        // retained scene and would freeze the spring
+                        // mid-transition.
+                        crate::request_current_draw_redraw();
                     }
                     let (dx, dy) = if state.x.is_finite() {
                         (state.x - glide_tip.x, state.y - glide_tip.y)
