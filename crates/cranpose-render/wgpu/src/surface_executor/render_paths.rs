@@ -2313,23 +2313,6 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
                         "root direct path does not support backdrop child surfaces".to_string()
                     );
                 };
-                flush_pending_shader_layer_composites(
-                    backend,
-                    &mut pending_shader_composites,
-                    surface_view,
-                    (width, height),
-                    &mut pending_shader_load_op,
-                    &mut next_load_op,
-                )?;
-                flush_pending_layer_composites(
-                    backend,
-                    &mut pending_composites,
-                    surface_view,
-                    (width, height),
-                    &mut pending_composite_load_op,
-                    &mut next_load_op,
-                );
-                flush_pending_clear(backend, surface_view, &mut next_load_op);
                 let backdrop_layer = BackdropLayer {
                     node_id: child.node_id,
                     rect: resolved_child.backdrop_rect,
@@ -2338,6 +2321,26 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
                     effect: backdrop,
                     z_index: child.z_index,
                 };
+                if let Some(dependency_rect) = backdrop_dependency_rect(
+                    resolved_child.backdrop_rect,
+                    child.visual_clip,
+                    &backdrop_layer.effect,
+                    root_scale,
+                    (width, height),
+                ) {
+                    flush_pending_queues_for_backdrop_capture(
+                        backend,
+                        &mut pending_composites,
+                        &mut pending_composite_load_op,
+                        &mut pending_shader_composites,
+                        &mut pending_shader_load_op,
+                        surface_view,
+                        (width, height),
+                        &mut next_load_op,
+                        dependency_rect,
+                        root_scale,
+                    )?;
+                }
                 let child_backdrop_capture_rect = visible_backdrop_capture_rect(
                     resolved_child.backdrop_rect,
                     child.visual_clip,
@@ -3884,10 +3887,100 @@ fn release_pending_layer_composites<B: SurfaceExecutionBackend>(
     }
 }
 
-fn pending_layer_composites_intersect_rect(pending: &[PendingLayerComposite], rect: Rect) -> bool {
-    pending
-        .iter()
-        .any(|pending| dest_quad_intersects_rect(pending.dest_quad, rect))
+/// Whether a pending composite actually writes inside `rect`. The dest quad
+/// alone over-reports: a prepared backdrop composite's quad spans its whole
+/// padded capture and relies on the scissor to confine the write, so two
+/// stacked glass elements read as overlapping when their painted pixels
+/// never touch.
+fn pending_write_intersects_rect(
+    dest_quad: [[f32; 2]; 4],
+    scissor: Option<(u32, u32, u32, u32)>,
+    rect: Rect,
+) -> bool {
+    if !dest_quad_intersects_rect(dest_quad, rect) {
+        return false;
+    }
+    scissor.is_none_or(|(x, y, width, height)| {
+        rects_intersect(
+            Rect {
+                x: x as f32,
+                y: y as f32,
+                width: width as f32,
+                height: height as f32,
+            },
+            rect,
+        )
+    })
+}
+
+fn pending_load_op_holds_clear(load_op: &Option<wgpu::LoadOp<wgpu::Color>>) -> bool {
+    matches!(load_op, Some(wgpu::LoadOp::Clear(_)))
+}
+
+/// The pixels a backdrop layer READS (its padded capture) or WRITES (its
+/// output reach, which morph glass extends past the capture) — the region
+/// that decides whether pending composites must land before the layer's
+/// snapshot copy. `None` means the layer resolves to nothing visible, so
+/// nothing is captured and nothing needs flushing.
+fn backdrop_dependency_rect(
+    effect_rect: Rect,
+    clip: Option<Rect>,
+    effect: &RenderEffect,
+    root_scale: f32,
+    target_size: (u32, u32),
+) -> Option<Rect> {
+    let visible_rect =
+        visible_layer_rect(effect_rect, clip, root_scale, target_size.0, target_size.1)?;
+    let capture = backdrop_capture_rect(visible_rect, clip, effect, root_scale, target_size);
+    let output = backdrop_output_rect(visible_rect, clip, effect, root_scale, target_size);
+    union_rect(Some(capture), output)
+}
+
+/// Land pending composites before a backdrop capture ONLY when the capture
+/// genuinely depends on them — or when a queue still owns the frame's clear,
+/// which covers every pixel. The unconditional flush this replaces cost a
+/// root-target pass per glass element: a fixed-glass page fragmented its
+/// whole composite batch into per-element passes (issue #500, cause 2).
+#[allow(clippy::too_many_arguments)]
+fn flush_pending_queues_for_backdrop_capture<B: SurfaceExecutionBackend>(
+    backend: &mut B,
+    pending_composites: &mut Vec<PendingLayerComposite>,
+    pending_composite_load_op: &mut Option<wgpu::LoadOp<wgpu::Color>>,
+    pending_shader_composites: &mut Vec<PendingShaderLayerComposite>,
+    pending_shader_load_op: &mut Option<wgpu::LoadOp<wgpu::Color>>,
+    target_view: &wgpu::TextureView,
+    viewport: (u32, u32),
+    next_load_op: &mut wgpu::LoadOp<wgpu::Color>,
+    dependency_rect: Rect,
+    root_scale: f32,
+) -> Result<(), String> {
+    let dependency_pixels = surface_pixel_rect(dependency_rect, root_scale);
+    let must_flush = pending_composites.iter().any(|pending| {
+        pending_write_intersects_rect(pending.dest_quad, pending.scissor, dependency_pixels)
+    }) || pending_shader_composites.iter().any(|pending| {
+        pending_write_intersects_rect(pending.dest_quad, pending.scissor, dependency_pixels)
+    }) || pending_load_op_holds_clear(pending_composite_load_op)
+        || pending_load_op_holds_clear(pending_shader_load_op);
+    if must_flush {
+        flush_pending_shader_layer_composites(
+            backend,
+            pending_shader_composites,
+            target_view,
+            viewport,
+            pending_shader_load_op,
+            next_load_op,
+        )?;
+        flush_pending_layer_composites(
+            backend,
+            pending_composites,
+            target_view,
+            viewport,
+            pending_composite_load_op,
+            next_load_op,
+        );
+    }
+    flush_pending_clear(backend, target_view, next_load_op);
+    Ok(())
 }
 
 fn dest_quad_intersects_rect(dest_quad: [[f32; 2]; 4], rect: Rect) -> bool {
@@ -4598,15 +4691,7 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
             )
         });
 
-        // Pending composite dest quads are in physical pixels; the capture rect is
-        // logical, so scale it before the overlap test.
-        if child_backdrop_capture_rect.is_some_and(|rect| {
-            pending_layer_composites_intersect_rect(
-                &pending_composites,
-                surface_pixel_rect(rect, target_scale),
-            )
-        }) || !resolved_child.shadow_draws.is_empty()
-        {
+        if !resolved_child.shadow_draws.is_empty() {
             flush_pending_shader_layer_composites(
                 backend,
                 &mut pending_shader_composites,
@@ -4623,18 +4708,30 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
                 &mut pending_composite_load_op,
                 &mut next_load_op,
             );
+            flush_pending_clear(backend, &target.view, &mut next_load_op);
         }
 
         if let Some(backdrop) = &child_surface.backdrop {
-            flush_pending_shader_layer_composites(
-                backend,
-                &mut pending_shader_composites,
-                &target.view,
+            if let Some(dependency_rect) = backdrop_dependency_rect(
+                resolved_child.backdrop_rect,
+                child.visual_clip,
+                backdrop,
+                target_scale,
                 (width, height),
-                &mut pending_shader_load_op,
-                &mut next_load_op,
-            )?;
-            flush_pending_clear(backend, &target.view, &mut next_load_op);
+            ) {
+                flush_pending_queues_for_backdrop_capture(
+                    backend,
+                    &mut pending_composites,
+                    &mut pending_composite_load_op,
+                    &mut pending_shader_composites,
+                    &mut pending_shader_load_op,
+                    &target.view,
+                    (width, height),
+                    &mut next_load_op,
+                    dependency_rect,
+                    target_scale,
+                )?;
+            }
             let backdrop_layer = BackdropLayer {
                 node_id: child.node_id,
                 rect: resolved_child.backdrop_rect,

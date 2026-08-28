@@ -53,6 +53,7 @@ pub(crate) fn source_path(tab: DemoTab) -> &'static str {
         DemoTab::Shaders => "apps/desktop-demo/src/app/shaders.rs",
         DemoTab::ShaderRect => "apps/desktop-demo/src/app/shader_rect.rs",
         DemoTab::Liquid => "apps/desktop-demo/src/app/liquid_ui.rs",
+        DemoTab::GlassFeed => "apps/desktop-demo/src/app/glass_feed.rs",
         DemoTab::MarkdownViewer => "apps/desktop-demo/src/app/markdown.rs",
         DemoTab::Rotary => "apps/desktop-demo/src/app/rotary.rs",
         DemoTab::Wear => "apps/desktop-demo/src/app/wear.rs",

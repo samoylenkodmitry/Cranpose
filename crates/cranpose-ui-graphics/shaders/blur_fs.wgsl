@@ -18,7 +18,8 @@ fn sample_with_tile_mode(uv: vec2<f32>) -> vec4<f32> {
     if (tile_mode >= 2.5) {
         // Decal: out-of-bounds samples are transparent.
         let clamped_uv = clamp(uv, vec2<f32>(0.0), vec2<f32>(1.0));
-        return textureSample(input_texture, input_sampler, clamped_uv) * inside_unit_bounds(uv);
+        return textureSampleLevel(input_texture, input_sampler, clamped_uv, 0.0)
+            * inside_unit_bounds(uv);
     }
 
     if (tile_mode >= 1.5) {
@@ -29,18 +30,18 @@ fn sample_with_tile_mode(uv: vec2<f32>) -> vec4<f32> {
             select(wrap_x, 2.0 - wrap_x, wrap_x > 1.0),
             select(wrap_y, 2.0 - wrap_y, wrap_y > 1.0),
         );
-        return textureSample(input_texture, input_sampler, mirrored_uv);
+        return textureSampleLevel(input_texture, input_sampler, mirrored_uv, 0.0);
     }
 
     if (tile_mode >= 0.5) {
         // Repeated: wrap to [0,1).
         let repeated_uv = vec2<f32>(uv.x - floor(uv.x), uv.y - floor(uv.y));
-        return textureSample(input_texture, input_sampler, repeated_uv);
+        return textureSampleLevel(input_texture, input_sampler, repeated_uv, 0.0);
     }
 
     // Clamp: sample nearest edge texel outside bounds.
     let clamped_uv = clamp(uv, vec2<f32>(0.0), vec2<f32>(1.0));
-    return textureSample(input_texture, input_sampler, clamped_uv);
+    return textureSampleLevel(input_texture, input_sampler, clamped_uv, 0.0);
 }
 
 @fragment
@@ -63,11 +64,11 @@ fn blur_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     var color = vec4<f32>(0.0);
     var total_weight = 0.0;
 
-    for (var i: i32 = -32; i <= 32; i = i + 1) {
-        if (abs(i) > tap_count) {
-            continue;
-        }
-
+    // The trip count comes off the uniform buffer, so control flow stays
+    // uniform and the loop shrinks with the radius: a radius-6 blur runs 13
+    // iterations, not a fixed 65. Sampling is explicit-LOD (the sources are
+    // mipless offscreens), which frees the taps from derivative uniformity.
+    for (var i: i32 = -tap_count; i <= tap_count; i = i + 1) {
         let fi = f32(i);
         let weight = exp(-(fi * fi) * inv_2sigma2);
         let offset = dir * fi * pixel_size;
