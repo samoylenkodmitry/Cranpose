@@ -42,6 +42,7 @@ use cranpose_ui_graphics::{
     BlendMode, Brush, Color, ColorFilter, FxHasher, ImageBitmap, ImageSampling, Point, Rect,
     RenderEffect, RenderHash, RuntimeShader, StrokeCap, StrokeJoin, TileMode,
 };
+use smallvec::SmallVec;
 use web_time::Instant;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -541,24 +542,111 @@ struct CachedShadowSurface {
 
 struct CachedShadowComposite {
     source: Rc<OffscreenTarget>,
-    scissor: Option<(u32, u32, u32, u32)>,
+    /// The scissored strips the composite actually fills: the shadow's
+    /// coverage minus the caster's occluded interior. One full-coverage band
+    /// when the caster occludes nothing.
+    bands: SmallVec<[(u32, u32, u32, u32); 4]>,
     rounded_mask: Option<RoundedCompositeMask>,
     dest_viewport: Option<(f32, f32, f32, f32)>,
 }
 
 impl CachedShadowComposite {
-    fn batch_item(&self) -> CompositeBatchItem<'_> {
-        CompositeBatchItem {
+    fn band_items(&self) -> impl Iterator<Item = CompositeBatchItem<'_>> + '_ {
+        self.bands.iter().map(move |band| CompositeBatchItem {
             source: &self.source,
             alpha: 1.0,
-            scissor: self.scissor,
+            scissor: Some(*band),
             rounded_mask: self.rounded_mask,
             blend_mode: BlendMode::SrcOver,
             dest_viewport: self.dest_viewport,
             source_viewport: None,
             sample_mode: CompositeSampleMode::Nearest,
-        }
+        })
     }
+
+    fn banded_pixels(&self) -> u64 {
+        self.bands
+            .iter()
+            .map(|(_, _, w, h)| u64::from(*w) * u64::from(*h))
+            .sum()
+    }
+}
+
+/// A shadow composite's true fill region: the dest-viewport quad the draw
+/// covers, intersected with its scissor when one is set.
+fn shadow_composite_coverage(
+    dest_viewport: (f32, f32, f32, f32),
+    scissor: Option<(u32, u32, u32, u32)>,
+    target: (u32, u32),
+) -> (u32, u32, u32, u32) {
+    let (dx, dy, dw, dh) = dest_viewport;
+    let left = dx.floor().max(0.0) as u32;
+    let top = dy.floor().max(0.0) as u32;
+    let right = (((dx + dw).ceil()).max(0.0) as u32).min(target.0);
+    let bottom = (((dy + dh).ceil()).max(0.0) as u32).min(target.1);
+    let quad = (
+        left,
+        top,
+        right.saturating_sub(left),
+        bottom.saturating_sub(top),
+    );
+    let Some((sx, sy, sw, sh)) = scissor else {
+        return quad;
+    };
+    let left = quad.0.max(sx);
+    let top = quad.1.max(sy);
+    let right = (quad.0 + quad.2).min(sx.saturating_add(sw));
+    let bottom = (quad.1 + quad.3).min(sy.saturating_add(sh));
+    (
+        left,
+        top,
+        right.saturating_sub(left),
+        bottom.saturating_sub(top),
+    )
+}
+
+/// The scissored strips left of a shadow composite's coverage after the
+/// caster's occluded interior is carved out: top and bottom bands span the
+/// full coverage width, left and right bands fill the remaining sides. The
+/// occluder is shrunk to whole pixels (ceil/floor inward) so no partially
+/// covered pixel is ever skipped; a coverage the occluder misses comes back
+/// as the single original rect.
+fn shadow_band_scissors(
+    coverage: (u32, u32, u32, u32),
+    occluder: Option<Rect>,
+    root_scale: f32,
+) -> SmallVec<[(u32, u32, u32, u32); 4]> {
+    let mut bands = SmallVec::new();
+    let (cx, cy, cw, ch) = coverage;
+    if cw == 0 || ch == 0 {
+        return bands;
+    }
+    let (c_left, c_top) = (cx, cy);
+    let (c_right, c_bottom) = (cx.saturating_add(cw), cy.saturating_add(ch));
+    let occluded = occluder.and_then(|rect| {
+        let left = ((rect.x * root_scale).ceil().max(0.0) as u32).max(c_left);
+        let top = ((rect.y * root_scale).ceil().max(0.0) as u32).max(c_top);
+        let right = (((rect.x + rect.width) * root_scale).floor().max(0.0) as u32).min(c_right);
+        let bottom = (((rect.y + rect.height) * root_scale).floor().max(0.0) as u32).min(c_bottom);
+        (left < right && top < bottom).then_some((left, top, right, bottom))
+    });
+    let Some((o_left, o_top, o_right, o_bottom)) = occluded else {
+        bands.push(coverage);
+        return bands;
+    };
+    if o_top > c_top {
+        bands.push((c_left, c_top, cw, o_top - c_top));
+    }
+    if o_bottom < c_bottom {
+        bands.push((c_left, o_bottom, cw, c_bottom - o_bottom));
+    }
+    if o_left > c_left {
+        bands.push((c_left, o_top, o_left - c_left, o_bottom - o_top));
+    }
+    if o_right < c_right {
+        bands.push((o_right, o_top, c_right - o_right, o_bottom - o_top));
+    }
+    bands
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -7554,15 +7642,22 @@ impl GpuRenderer {
         )?;
         let cached = self.cached_shadow_surface(&key)?;
         let viewport_offset = [plan.source_device_bounds.x, plan.source_device_bounds.y];
-        self.frame_stats.record_shadow_shape_cache_hit(
-            plan.source_device_bounds.width,
-            plan.source_device_bounds.height,
-        );
 
         let clip_scissor = shadow
             .clip
             .and_then(|clip| scissor_rect_for_rect(clip, root_scale, width, height));
         let scissor = clip_scissor.or(plan.processing_scissor);
+        let coverage = shadow_composite_coverage(
+            (
+                viewport_offset[0],
+                viewport_offset[1],
+                plan.source_device_bounds.width as f32,
+                plan.source_device_bounds.height as f32,
+            ),
+            scissor,
+            (width, height),
+        );
+        let bands = shadow_band_scissors(coverage, shadow.occluder, root_scale);
         let rounded_mask = inner_shadow_composite_mask(shadow, root_scale).map(|mut mask| {
             mask.rect[0] -= viewport_offset[0];
             mask.rect[1] -= viewport_offset[1];
@@ -7575,12 +7670,15 @@ impl GpuRenderer {
             plan.source_device_bounds.height as f32,
         ));
 
-        Some(CachedShadowComposite {
+        let composite = CachedShadowComposite {
             source: cached,
-            scissor,
+            bands,
             rounded_mask,
             dest_viewport,
-        })
+        };
+        self.frame_stats
+            .record_shadow_shape_cache_hit(composite.banded_pixels());
+        Some(composite)
     }
 
     fn insert_cached_shadow_surface(
@@ -8484,6 +8582,13 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
         );
         #[cfg(target_arch = "wasm32")]
         let _ = culled_shadow_items;
+        // The ablation switch removes the items themselves: a shadow item
+        // that merely encoded nothing would still split the segment's batch
+        // passes, and the measurement would charge shadows for pass breaks
+        // they no longer cause.
+        if skip_shadow_draws() {
+            ordered_items.retain(|(_, item)| !matches!(item, SegmentDrawItem::Shadow(_)));
+        }
         let mut cached_shadow_composites: Vec<(usize, CachedShadowComposite)> = Vec::new();
         ordered_items.extend(
             composites
@@ -8497,6 +8602,11 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
                 .enumerate()
                 .map(|(index, (z_index, _))| (*z_index, SegmentDrawItem::ShaderComposite(index))),
         );
+        // A converted shadow contributes one composite entry PER band, all at
+        // the shadow's own z; the first band replaces the shadow's ordered
+        // item in place and the rest append behind it for the sort to gather.
+        let mut extra_band_items: Vec<(usize, SegmentDrawItem)> = Vec::new();
+        let mut flattened_band_count = 0usize;
         for (z_index, item) in &mut ordered_items {
             let SegmentDrawItem::Shadow(shadow_index) = *item else {
                 continue;
@@ -8509,24 +8619,32 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
             ) else {
                 continue;
             };
-            let composite_index = composites.len() + cached_shadow_composites.len();
+            let first_band_index = composites.len() + flattened_band_count;
+            let band_count = composite.bands.len();
+            flattened_band_count += band_count;
             cached_shadow_composites.push((*z_index, composite));
-            *item = SegmentDrawItem::Composite(composite_index);
+            *item = SegmentDrawItem::Composite(first_band_index);
+            for band in 1..band_count {
+                extra_band_items.push((
+                    *z_index,
+                    SegmentDrawItem::Composite(first_band_index + band),
+                ));
+            }
         }
-        let mut merged_composites = Vec::with_capacity(
-            composites
-                .len()
-                .saturating_add(cached_shadow_composites.len()),
-        );
+        ordered_items.extend(extra_band_items);
+        let mut merged_composites =
+            Vec::with_capacity(composites.len().saturating_add(flattened_band_count));
         merged_composites.extend(composites.iter().copied());
-        merged_composites.extend(
-            cached_shadow_composites
-                .iter()
-                .map(|(z_index, composite)| (*z_index, composite.batch_item())),
-        );
+        for (z_index, composite) in &cached_shadow_composites {
+            for item in composite.band_items() {
+                merged_composites.push((*z_index, item));
+            }
+        }
         // Z indices are unique — the scene hands every op its own `next_z` — so an
         // unstable sort cannot reorder anything a stable one wouldn't, and it skips
         // the stable sort's scratch allocation, paid here once per segment per frame.
+        // The one exception is a banded shadow: its bands share the shadow's z, and
+        // being disjoint scissored strips of one composite they commute freely.
         ordered_items.sort_unstable_by_key(|(z_index, _)| *z_index);
         #[cfg(not(target_arch = "wasm32"))]
         maybe_print_segment_diag(
@@ -12258,12 +12376,20 @@ impl GpuRenderer {
 
         if let Some(key) = cache_key {
             if let Some(cached) = self.cached_shadow_surface(&key) {
-                self.frame_stats
-                    .record_shadow_shape_cache_hit(bounds_w, bounds_h);
                 let clip_scissor = shadow
                     .clip
                     .and_then(|clip| scissor_rect_for_rect(clip, root_scale, width, height));
                 let scissor = clip_scissor.or(processing_scissor);
+                let coverage = shadow_composite_coverage(
+                    (
+                        viewport_offset[0],
+                        viewport_offset[1],
+                        bounds_w as f32,
+                        bounds_h as f32,
+                    ),
+                    scissor,
+                    (width, height),
+                );
                 let rounded_mask =
                     inner_shadow_composite_mask(shadow, root_scale).map(|mut mask| {
                         mask.rect[0] -= viewport_offset[0];
@@ -12276,24 +12402,28 @@ impl GpuRenderer {
                     bounds_w as f32,
                     bounds_h as f32,
                 ));
-                {
-                    self.effect_renderer
-                        .encode_composite_to_view_scissored_with_alpha_and_mask_and_blend_mode(
-                            frame_encoder,
-                            &self.device,
-                            &cached,
-                            target_view,
-                            1.0,
-                            wgpu::LoadOp::Load,
-                            scissor,
-                            rounded_mask,
-                            BlendMode::SrcOver,
-                            dest_viewport,
-                            CompositeSampleMode::Nearest,
-                        );
+                let composite = CachedShadowComposite {
+                    source: cached,
+                    bands: shadow_band_scissors(coverage, shadow.occluder, root_scale),
+                    rounded_mask,
+                    dest_viewport,
+                };
+                self.frame_stats
+                    .record_shadow_shape_cache_hit(composite.banded_pixels());
+                let band_items: SmallVec<[CompositeBatchItem<'_>; 4]> =
+                    composite.band_items().collect();
+                if !band_items.is_empty() {
+                    self.effect_renderer.encode_composite_batch_to_view_pass(
+                        frame_encoder,
+                        &self.device,
+                        target_view,
+                        (width, height),
+                        wgpu::LoadOp::Load,
+                        &band_items,
+                    );
+                    frame_encoder.record_pass();
+                    self.effect_renderer.record_composite_pass();
                 }
-                frame_encoder.record_pass();
-                self.effect_renderer.record_composite_pass();
                 return true;
             }
             self.frame_stats
@@ -12375,32 +12505,44 @@ impl GpuRenderer {
             mask.rect[1] -= viewport_offset[1];
             mask
         });
-        let dest_viewport = Some((
+        let dest_viewport = (
             viewport_offset[0],
             viewport_offset[1],
             bounds_w as f32,
             bounds_h as f32,
-        ));
-        {
-            self.effect_renderer
-                .encode_composite_to_view_scissored_with_alpha_and_mask_and_blend_mode(
-                    frame_encoder,
-                    &device,
-                    &source,
-                    target_view,
-                    1.0,
-                    wgpu::LoadOp::Load,
-                    scissor,
-                    rounded_mask,
-                    BlendMode::SrcOver,
-                    dest_viewport,
-                    CompositeSampleMode::Nearest,
-                );
+        );
+        // The filling frame bands exactly like every cache-hit frame after
+        // it, so hit and miss render the same pixels.
+        let coverage = shadow_composite_coverage(dest_viewport, scissor, (width, height));
+        let bands = shadow_band_scissors(coverage, shadow.occluder, root_scale);
+        let band_items: SmallVec<[CompositeBatchItem<'_>; 4]> = bands
+            .iter()
+            .map(|band| CompositeBatchItem {
+                source: &source,
+                alpha: 1.0,
+                scissor: Some(*band),
+                rounded_mask,
+                blend_mode: BlendMode::SrcOver,
+                dest_viewport: Some(dest_viewport),
+                source_viewport: None,
+                sample_mode: CompositeSampleMode::Nearest,
+            })
+            .collect();
+        if !band_items.is_empty() {
+            self.effect_renderer.encode_composite_batch_to_view_pass(
+                frame_encoder,
+                &device,
+                target_view,
+                (width, height),
+                wgpu::LoadOp::Load,
+                &band_items,
+            );
+            frame_encoder.record_pass();
+            self.effect_renderer.record_composite_pass();
         }
-        frame_encoder.record_pass();
+        drop(band_items);
 
         self.effect_renderer.record_blur_pass();
-        self.effect_renderer.record_composite_pass();
         frame_encoder.release_transient_offscreen(scratch_descriptor, scratch);
         if let Some(key) = cache_key {
             self.insert_cached_shadow_surface(key, source);
@@ -18472,6 +18614,7 @@ mod tests {
             texts: vec![],
             blur_radius: 8.0,
             clip: None,
+            occluder: None,
             z_index: 0,
         }
     }
@@ -22486,6 +22629,7 @@ mod tests {
             texts: Vec::new(),
             blur_radius: 8.0,
             clip: None,
+            occluder: None,
             z_index: 1,
         }];
         let mut ordered_items = vec![
@@ -22537,6 +22681,7 @@ mod tests {
             texts: Vec::new(),
             blur_radius: 8.0,
             clip: None,
+            occluder: None,
             z_index: 1,
         }];
         let mut ordered_items = vec![(1, SegmentDrawItem::Shadow(0))];

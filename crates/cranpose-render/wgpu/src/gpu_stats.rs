@@ -536,13 +536,16 @@ impl FrameStats {
             .set(self.layer_cache_evictions.get().saturating_add(1));
     }
 
-    pub fn record_shadow_shape_cache_hit(&self, width: u32, height: u32) {
+    /// One cached-shadow composite landed; `composited_pixels` is the area
+    /// its scissored bands actually fill — the fill-rate cost — not the
+    /// cached surface's own size.
+    pub fn record_shadow_shape_cache_hit(&self, composited_pixels: u64) {
         self.shadow_shape_cache_hits
             .set(self.shadow_shape_cache_hits.get().saturating_add(1));
         self.shadow_shape_cache_hit_pixels.set(
             self.shadow_shape_cache_hit_pixels
                 .get()
-                .saturating_add((width as u64) * (height as u64)),
+                .saturating_add(composited_pixels),
         );
     }
 
@@ -914,7 +917,7 @@ mod tests {
         stats.record_layer_cache_hit(3, 4);
         stats.record_layer_cache_miss(&test_layer_cache_key(), 5, 6);
         stats.record_layer_cache_eviction();
-        stats.record_shadow_shape_cache_hit(8, 9);
+        stats.record_shadow_shape_cache_hit(72);
         stats.record_shadow_shape_cache_miss(10, 11);
         stats.record_shadow_text_blur_fallback();
         stats.record_text_image_cache_hit(13, 17);

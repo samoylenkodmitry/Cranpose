@@ -111,6 +111,45 @@ fn shadow_shape(
     )
 }
 
+/// The largest rectangle the caster provably paints over its own shadow:
+/// its transformed footprint inset past the rounded corners. Only an
+/// axis-aligned, fully opaque layer occludes — rotation makes the
+/// axis-aligned inset wrong and layer alpha lets the shadow show through.
+/// (Whether the caster's CONTENT covers its bounds is the application's
+/// contract, exactly as on the reference platform, whose `drawShadow`
+/// assumes an opaque occluder unless told otherwise.)
+fn shadow_occluder(
+    layer: &GraphicsLayer,
+    transformed_bounds: Rect,
+    resolved_shape: Option<&RoundedCornerShape>,
+) -> Option<Rect> {
+    if layer.alpha < 1.0
+        || layer.rotation_x.abs() > f32::EPSILON
+        || layer.rotation_y.abs() > f32::EPSILON
+        || layer.rotation_z.abs() > f32::EPSILON
+    {
+        return None;
+    }
+    let inset = resolved_shape
+        .map(|shape| {
+            let radii = shape.radii();
+            radii
+                .top_left
+                .max(radii.top_right)
+                .max(radii.bottom_right)
+                .max(radii.bottom_left)
+        })
+        .unwrap_or(0.0)
+        .max(0.0);
+    let occluder = Rect {
+        x: transformed_bounds.x + inset,
+        y: transformed_bounds.y + inset,
+        width: transformed_bounds.width - inset * 2.0,
+        height: transformed_bounds.height - inset * 2.0,
+    };
+    (occluder.width > 1.0 && occluder.height > 1.0).then_some(occluder)
+}
+
 pub(crate) fn push_layer_shadow(
     scene: &mut CompositorScene,
     layer: &GraphicsLayer,
@@ -130,6 +169,7 @@ pub(crate) fn push_layer_shadow(
             )))
         }
     };
+    let occluder = shadow_occluder(layer, transformed_bounds, resolved_shape.as_ref());
 
     if let Some(ambient_pass) = shadow_geometry.ambient {
         let ambient = Color(
@@ -144,6 +184,7 @@ pub(crate) fn push_layer_shadow(
             texts: vec![],
             blur_radius: ambient_pass.blur_radius,
             clip,
+            occluder,
             z_index: 0, // populated by CompositorScene::push_shadow_draw()
         });
     }
@@ -161,6 +202,7 @@ pub(crate) fn push_layer_shadow(
             texts: vec![],
             blur_radius: spot_pass.blur_radius,
             clip,
+            occluder,
             z_index: 0, // populated by CompositorScene::push_shadow_draw()
         });
     }
@@ -843,6 +885,7 @@ impl TextStyleDrawSink for CompositorScene {
             }],
             blur_radius,
             clip,
+            occluder: None,
             z_index: 0,
         });
     }
@@ -2251,6 +2294,7 @@ fn push_shadow_primitive(
                 texts: vec![],
                 blur_radius,
                 clip,
+                occluder: None,
                 z_index: 0,
             });
         }
@@ -2291,6 +2335,7 @@ fn push_shadow_primitive(
                 clip: clip.map_or(Some(transformed_clip), |parent_clip| {
                     parent_clip.intersect(transformed_clip)
                 }),
+                occluder: None,
                 z_index: 0,
             });
         }

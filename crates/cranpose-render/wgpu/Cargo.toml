@@ -37,6 +37,7 @@ bytemuck = { version = "1.25", features = ["derive"] }
 log = "0.4"
 naga = { version = "29.0.3", features = ["wgsl-in"] }
 web-time = { workspace = true }
+smallvec = "1.15.1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # Substrate for the stage executor: vetted scoped parallelism so the frame

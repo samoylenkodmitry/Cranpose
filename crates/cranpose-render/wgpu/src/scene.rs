@@ -329,6 +329,12 @@ pub(crate) struct ShadowDraw {
     pub blur_radius: f32,
     /// Optional clip rect applied when compositing (inner shadows clip to element bounds).
     pub clip: Option<Rect>,
+    /// The region the caster provably paints over this shadow: its footprint
+    /// inset to the largest rectangle inside its rounded outline. Composites
+    /// skip it — the reference platform's `drawShadow` assumes an opaque
+    /// occluder the same way — so it is only set for an axis-aligned caster
+    /// whose layer is fully opaque.
+    pub occluder: Option<Rect>,
     /// Z-index for correct draw ordering.
     pub z_index: usize,
 }

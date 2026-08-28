@@ -2482,6 +2482,9 @@ impl TranslateBy for ShadowDraw {
         if let Some(clip) = self.clip.as_mut() {
             clip.translate_by(delta);
         }
+        if let Some(occluder) = self.occluder.as_mut() {
+            occluder.translate_by(delta);
+        }
     }
 }
 
