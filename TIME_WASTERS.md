@@ -235,4 +235,9 @@ Signature → cause → what to do. One lesson per line, no incident history.
   xvfb run of the same commits. Before attributing an X0 robot failure to a
   branch, run the same test at origin/main on :0 first; conversely a real-
   display-only failure is invisible to CI, so a green board does not clear
-  it. The suites' authoritative environment is the one CI runs.
+  it. The suites' authoritative environment is the one CI runs. And before
+  blaming the display at all, rerun the same binary with `TZ=UTC`: cranscan's
+  nightly suite-wide red turned out to be UTC-stored dates grouped against
+  the LOCAL calendar day (every run between local midnight and UTC midnight
+  grew an extra date header and shifted all content ~26 px), which reads
+  exactly like an environment failure and follows the clock, not the box.
