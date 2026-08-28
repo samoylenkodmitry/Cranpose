@@ -1848,3 +1848,78 @@ fn launched_effect_reruns_on_hash_colliding_but_unequal_keys() {
     );
     assert!(scopes[1].is_active());
 }
+
+// A keyed DisposableEffect whose key changes in the same recomposition pass
+// that removes its host must end that pass with the resource released. The
+// eager cleanup runs during composition, the replacement body is deferred to
+// the side-effect drain — if the removal lands between the two, the deferred
+// body must not acquire a resource that no live slot will ever dispose.
+// (Found live on a device: a camera restarted by exactly this interleaving
+// kept streaming behind an unrelated screen.)
+fn removal_races_keyed_effect_rerun(flip_key_first: bool) {
+    thread_local! {
+        static LIVE: Cell<i32> = const { Cell::new(0) };
+        static STARTS: Cell<usize> = const { Cell::new(0) };
+    }
+    LIVE.with(|c| c.set(0));
+    STARTS.with(|c| c.set(0));
+
+    #[composable]
+    fn holder(key: MutableState<u32>) {
+        let k = key.value();
+        DisposableEffect!(k, move |_| {
+            STARTS.with(|c| c.set(c.get() + 1));
+            LIVE.with(|c| c.set(c.get() + 1));
+            DisposableEffectResult::new(move || LIVE.with(|c| c.set(c.get() - 1)))
+        });
+    }
+
+    #[composable]
+    fn host(shown: MutableState<bool>, key: MutableState<u32>) {
+        if shown.value() {
+            holder(key);
+        }
+    }
+
+    let mut composition = test_composition();
+    let runtime = composition.runtime_handle();
+    let shown = MutableState::with_runtime(true, runtime.clone());
+    let key = MutableState::with_runtime(1u32, runtime);
+
+    composition
+        .render(location_key(file!(), line!(), column!()), move || {
+            host(shown, key)
+        })
+        .expect("initial composition");
+    assert_eq!(STARTS.with(|c| c.get()), 1);
+    assert_eq!(LIVE.with(|c| c.get()), 1);
+
+    if flip_key_first {
+        key.set_value(2);
+        shown.set_value(false);
+    } else {
+        shown.set_value(false);
+        key.set_value(2);
+    }
+    composition
+        .process_invalid_scopes()
+        .expect("recompose the removal pass");
+
+    assert_eq!(
+        LIVE.with(|c| c.get()),
+        0,
+        "a keyed effect whose host left in the same pass must release its \
+         resource (starts={})",
+        STARTS.with(|c| c.get()),
+    );
+}
+
+#[test]
+fn keyed_effect_removed_in_the_pass_its_key_changes_still_disposes() {
+    removal_races_keyed_effect_rerun(true);
+}
+
+#[test]
+fn keyed_effect_removed_before_its_key_write_still_disposes() {
+    removal_races_keyed_effect_rerun(false);
+}
