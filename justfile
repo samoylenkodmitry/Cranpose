@@ -68,6 +68,26 @@ clippy-wasm:
 clippy-ios:
     cargo clippy -p desktop-app --bin cranpose-ios --target aarch64-apple-ios-sim --no-default-features --features ios -- -D warnings
 
+# Lint the exact package, features and target the Android build ships.
+#
+# `just android` runs Gradle, which does not deny warnings, so Android was the
+# one shipped target with no zero-warning gate: anything behind an
+# android-only `cfg` reached main unlinted. The package, `--lib`,
+# `--no-default-features` and the feature list mirror what
+# `CranposeAndroidPlugin` passes to `cargo ndk` (its `features` convention is
+# `android,renderer-wgpu` and `defaultFeatures` is false); `--platform` is the
+# demo's `minSdk`. Change them together or this stops checking what ships.
+#
+# `missing_const_for_thread_local` is allowed for this target only.
+# `thread_local!` expands differently per target, and the Android expansion
+# defeats the lint's const detection: on the same pinned toolchain and the
+# same source it fires 16 times here and never on host, including on
+# initializers that are already `const {}` and on one that cannot be const at
+# all (`HashMap::default()`). It stays enabled everywhere else, so a genuine
+# non-const initializer is still caught by `just clippy`.
+clippy-android:
+    cargo ndk --platform 24 -t arm64-v8a clippy -p desktop-app-platform --lib --no-default-features --features android,renderer-wgpu -- -D warnings -A clippy::missing_const_for_thread_local
+
 # --- test ------------------------------------------------------------------
 
 # `--profile ci` keeps the debuginfo that the local dev profile strips, so a
