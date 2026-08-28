@@ -62,10 +62,6 @@ impl AccessibilityPublishPolicy {
         became_enabled
     }
 
-    pub(crate) fn enabled(&self) -> bool {
-        self.enabled
-    }
-
     /// Whether the bridge may probe-and-publish right now. `false` either
     /// means no assistive technology is listening, or the throttle window is
     /// still closed — in the latter case a wake deadline is armed so the
@@ -112,7 +108,6 @@ mod tests {
     fn disabled_policy_never_publishes_and_arms_no_wake() {
         let mut policy = AccessibilityPublishPolicy::new();
         let now = Instant::now();
-        assert!(!policy.enabled());
         assert!(!policy.try_begin_publish(now));
         assert_eq!(policy.wake_deadline(), None);
     }
