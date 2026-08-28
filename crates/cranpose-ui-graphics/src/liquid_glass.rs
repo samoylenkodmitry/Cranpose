@@ -332,14 +332,18 @@ pub fn liquid_menu_glass_effect(
     } else {
         0.0
     };
-    // Split the blur exactly like the morph-glass material path: the
-    // wcKSRD optical blur is a 9x9 footprint, so spreading it over a large
-    // radius quantizes into a visible GRID (the "lines instead of blur"
-    // on the edit menu). Cap the optical tap at the safe radius and route
-    // everything heavier through the smooth Gaussian pass.
+    // Route the blur exactly like the morph-glass material path: the wcKSRD
+    // optical blur quantizes into a visible GRID past a couple of pixels
+    // (the "lines instead of blur" on the edit menu), so anything heavier
+    // rides the smooth separable Gaussian pass ENTIRELY — the wider kernel
+    // swallows the capped optical tap's contribution (sigmas add in
+    // quadrature), and skipping it saves the per-pixel tap loop.
     const WCKSRD_OPTICAL_BLUR_RADIUS_PX: f32 = 2.0;
-    let wcksrd_blur = requested_blur.min(WCKSRD_OPTICAL_BLUR_RADIUS_PX);
-    let gaussian_blur = (requested_blur - wcksrd_blur).max(0.0);
+    let (wcksrd_blur, gaussian_blur) = if requested_blur > WCKSRD_OPTICAL_BLUR_RADIUS_PX {
+        (0.0, requested_blur)
+    } else {
+        (requested_blur, 0.0)
+    };
     shader.set_float(GLASS_BLUR_RADIUS_UNIFORM, wcksrd_blur);
     shader.set_input_padding(12.0 + requested_blur);
     let optical = RenderEffect::runtime_shader(shader);

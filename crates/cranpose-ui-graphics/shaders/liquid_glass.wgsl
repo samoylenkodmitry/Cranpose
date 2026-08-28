@@ -178,10 +178,33 @@ fn sample_wcksrd_path(
         }
         return textureSampleLevel(input_texture, input_sampler, center_uv, 0.0);
     }
-    let blur_step = blur_radius / 4.0;
+    if reconstruct_sharp {
+        // Loupe rims soften per pixel up to ~4.5px, wide enough that a
+        // coarser grid ripples against the compressed re-image; only this
+        // path keeps the dense 9x9 footprint.
+        let blur_step = blur_radius / 4.0;
+        var accumulated = vec4<f32>(0.0);
+        for (var x = -4; x <= 4; x = x + 1) {
+            for (var y = -4; y <= 4; y = y + 1) {
+                let offset = vec2<f32>(f32(x), f32(y)) * blur_step / tex_size;
+                accumulated = accumulated + textureSampleLevel(
+                    input_texture,
+                    input_sampler,
+                    clamp(center_uv + offset, vec2<f32>(0.0), vec2<f32>(1.0)),
+                    0.0,
+                );
+            }
+        }
+        return accumulated / 81.0;
+    }
+    // Material glass caps this blur at 2px (heavier radii ride the separable
+    // Gaussian pre-pass), so half-radius spacing keeps every tap within
+    // bilinear reach of its neighbour: the same +/-radius footprint as the
+    // 9x9 grid at under a third of the taps.
+    let blur_step = blur_radius / 2.0;
     var accumulated = vec4<f32>(0.0);
-    for (var x = -4; x <= 4; x = x + 1) {
-        for (var y = -4; y <= 4; y = y + 1) {
+    for (var x = -2; x <= 2; x = x + 1) {
+        for (var y = -2; y <= 2; y = y + 1) {
             let offset = vec2<f32>(f32(x), f32(y)) * blur_step / tex_size;
             accumulated = accumulated + textureSampleLevel(
                 input_texture,
@@ -191,7 +214,7 @@ fn sample_wcksrd_path(
             );
         }
     }
-    return accumulated / 81.0;
+    return accumulated / 25.0;
 }
 
 fn sample_wcksrd_reflection_path(

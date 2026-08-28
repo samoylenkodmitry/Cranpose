@@ -20,7 +20,7 @@ fn sample_with_tile_mode(uv: vec2<f32>) -> vec4<f32> {
     let tile_mode = params.texture_size_and_tile_mode.z;
     if (tile_mode >= 2.5) {
         let clamped_uv = clamp(uv, vec2<f32>(0.0), vec2<f32>(1.0));
-        return textureSample(input_texture, input_sampler, clamped_uv) * inside_unit_bounds(uv);
+        return textureSampleLevel(input_texture, input_sampler, clamped_uv, 0.0) * inside_unit_bounds(uv);
     }
 
     if (tile_mode >= 1.5) {
@@ -30,16 +30,16 @@ fn sample_with_tile_mode(uv: vec2<f32>) -> vec4<f32> {
             select(wrap_x, 2.0 - wrap_x, wrap_x > 1.0),
             select(wrap_y, 2.0 - wrap_y, wrap_y > 1.0),
         );
-        return textureSample(input_texture, input_sampler, mirrored_uv);
+        return textureSampleLevel(input_texture, input_sampler, mirrored_uv, 0.0);
     }
 
     if (tile_mode >= 0.5) {
         let repeated_uv = vec2<f32>(uv.x - floor(uv.x), uv.y - floor(uv.y));
-        return textureSample(input_texture, input_sampler, repeated_uv);
+        return textureSampleLevel(input_texture, input_sampler, repeated_uv, 0.0);
     }
 
     let clamped_uv = clamp(uv, vec2<f32>(0.0), vec2<f32>(1.0));
-    return textureSample(input_texture, input_sampler, clamped_uv);
+    return textureSampleLevel(input_texture, input_sampler, clamped_uv, 0.0);
 }
 
 fn blurred_sample(uv: vec2<f32>) -> vec4<f32> {
@@ -66,11 +66,9 @@ fn blurred_sample(uv: vec2<f32>) -> vec4<f32> {
     var color = vec4<f32>(0.0);
     var total_weight = 0.0;
 
-    for (var i: i32 = -32; i <= 32; i = i + 1) {
-        if (abs(i) > tap_count) {
-            continue;
-        }
-
+    // Uniform-bounded trip count: see blur_fs.wgsl — the radius decides the
+    // iteration count instead of a fixed 65-pass loop with a skip branch.
+    for (var i: i32 = -tap_count; i <= tap_count; i = i + 1) {
         let fi = f32(i);
         let weight = exp(-(fi * fi) * inv_2sigma2);
         let offset = dir * fi * pixel_size;

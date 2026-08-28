@@ -22,6 +22,7 @@ use cranpose_ui::{
 };
 
 mod animations;
+mod glass_feed;
 mod hacker_news;
 mod images;
 mod interactive_anim;
@@ -42,6 +43,8 @@ mod winamp;
 mod xkcd;
 
 use animations::AnimationsTab;
+use glass_feed::GlassFeedTab;
+pub use glass_feed::GLASS_FEED_LIST_TAG;
 pub use hacker_news::HACKER_NEWS_SCROLL_STABILITY_TARGET_TITLE;
 use hacker_news::{HackerNewsScrollStabilityFixtureTab, HackerNewsTab};
 use images::images_tab;
@@ -105,6 +108,9 @@ pub enum DemoTab {
     Shaders,
     ShaderRect,
     Liquid,
+    /// Fixed glass chrome over a scrolling lazy list (issue #500's dominant
+    /// scroll-cost topology).
+    GlassFeed,
     MarkdownViewer,
     FilePicker,
     Rotary,
@@ -137,6 +143,7 @@ impl DemoTab {
             DemoTab::Shaders => "Shaders",
             DemoTab::ShaderRect => "Shader Rect",
             DemoTab::Liquid => "Liquid UI",
+            DemoTab::GlassFeed => "Glass Feed",
             DemoTab::MarkdownViewer => "Markdown",
             DemoTab::FilePicker => "File Picker",
             DemoTab::Rotary => "Rotary Input",
@@ -175,14 +182,16 @@ impl DemoTab {
             "shaderrect" => Some(Self::ShaderRect),
             "markdown" | "markdownviewer" => Some(Self::MarkdownViewer),
             "liquid" | "liquidui" => Some(Self::Liquid),
+            "glassfeed" => Some(Self::GlassFeed),
             _ => None,
         }
     }
 }
 
-pub const DEMO_TABS: [DemoTab; 24] = [
+pub const DEMO_TABS: [DemoTab; 25] = [
     DemoTab::Counter,
     DemoTab::Liquid,
+    DemoTab::GlassFeed,
     DemoTab::CompositionLocal,
     DemoTab::Async,
     DemoTab::Animations,
@@ -574,6 +583,7 @@ fn tab_requires_scroll(tab: DemoTab) -> bool {
             | DemoTab::Winamp
             | DemoTab::MarkdownViewer
             | DemoTab::Liquid
+            | DemoTab::GlassFeed
     )
 }
 
@@ -604,6 +614,7 @@ fn render_active_tab(active: DemoTab, startup: StartupSelection, winamp_tab_stat
         DemoTab::Rotary => rotary_tab(),
         DemoTab::Wear => wear::wear_tab(),
         DemoTab::Liquid => LiquidUiTab(),
+        DemoTab::GlassFeed => GlassFeedTab(),
     }
 }
 

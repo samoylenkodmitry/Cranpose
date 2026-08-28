@@ -853,8 +853,18 @@ impl ResolvedGlass {
         } else {
             self.blur_radius_dp * density * activity
         };
-        let wcksrd_blur_radius = requested_blur_radius_px.min(WCKSRD_OPTICAL_BLUR_RADIUS_PX);
-        let gaussian_blur_radius = (requested_blur_radius_px - wcksrd_blur_radius).max(0.0);
+        // A blur past the optical cap rides the separable Gaussian pass
+        // ENTIRELY. Stacking the capped optical tap on top of a Gaussian
+        // that is already 3-10x wider moves the effective radius by under a
+        // percent (sigmas add in quadrature) while costing a 25-tap loop on
+        // every glass pixel of every frame — fixed glass over a scrolling
+        // list re-runs it per frame with no cache to hide behind.
+        let (wcksrd_blur_radius, gaussian_blur_radius) =
+            if requested_blur_radius_px > WCKSRD_OPTICAL_BLUR_RADIUS_PX {
+                (0.0, requested_blur_radius_px)
+            } else {
+                (requested_blur_radius_px, 0.0)
+            };
         shader.set_float(GLASS_BLUR_RADIUS_UNIFORM, wcksrd_blur_radius);
         shader.set_float(GLASS_ACTIVITY_UNIFORM, activity);
         let resting_tint = dynamics.resting_tint.unwrap_or(Color::TRANSPARENT);
@@ -1186,8 +1196,8 @@ mod tests {
         assert!(matches!(
             first.as_ref(),
             RenderEffect::Blur {
-                radius_x: 4.0,
-                radius_y: 4.0,
+                radius_x: 6.0,
+                radius_y: 6.0,
                 ..
             }
         ));
@@ -1203,11 +1213,48 @@ mod tests {
         assert_eq!(shader.uniforms()[11], resolved.highlight + 0.2);
         assert_eq!(shader.uniforms()[18], resolved.saturation + 0.35);
         assert!((shader.uniforms()[17] - 0.2).abs() < 1.0e-6);
-        assert_eq!(
-            shader.uniforms()[GLASS_BLUR_RADIUS_UNIFORM],
-            WCKSRD_OPTICAL_BLUR_RADIUS_PX
-        );
+        assert_eq!(shader.uniforms()[GLASS_BLUR_RADIUS_UNIFORM], 0.0);
         assert_eq!(shader.uniforms()[GLASS_EFFECT_DENSITY_UNIFORM], 2.0);
+    }
+
+    #[test]
+    fn heavy_backdrop_blur_rides_the_gaussian_pass_alone() {
+        // Regular glass at phone density: 8dp x 3 = 24px. The Gaussian
+        // carries the whole radius; the shader's per-pixel tap loop must
+        // stay out of the steady-state frame cost (uniform 93 at zero takes
+        // the single-tap path).
+        let effect = Glass::regular()
+            .resolve(&light_colors())
+            .backdrop_effect(3.0, GlassDynamics::default());
+        let RenderEffect::Chain { first, .. } = &effect else {
+            panic!("heavy blur must ride the separable Gaussian pre-pass");
+        };
+        assert!(matches!(
+            first.as_ref(),
+            RenderEffect::Blur {
+                radius_x: 24.0,
+                radius_y: 24.0,
+                ..
+            }
+        ));
+        assert_eq!(
+            terminal_shader(effect).uniforms()[GLASS_BLUR_RADIUS_UNIFORM],
+            0.0
+        );
+    }
+
+    #[test]
+    fn featherweight_backdrop_blur_stays_in_the_optical_tap() {
+        // At or below the optical cap there is no Gaussian pass to ride:
+        // the whole radius stays on the shader uniform, chain-free.
+        let RenderEffect::Shader { shader } = Glass::regular()
+            .blur_radius(0.5)
+            .resolve(&light_colors())
+            .backdrop_effect(3.0, GlassDynamics::default())
+        else {
+            panic!("a sub-cap blur must not build a Gaussian chain");
+        };
+        assert_eq!(shader.uniforms()[GLASS_BLUR_RADIUS_UNIFORM], 1.5);
     }
 
     #[test]
@@ -1328,10 +1375,9 @@ mod tests {
         assert_eq!(uniforms[GLASS_REFRACTION_CURVE_UNIFORM], 0.8);
         assert_eq!(uniforms[GLASS_DISPERSION_UNIFORM], 0.42);
         assert_eq!(uniforms[GLASS_TRANSMISSION_REFRACTION_UNIFORM], 1.0);
-        assert_eq!(
-            uniforms[GLASS_BLUR_RADIUS_UNIFORM],
-            WCKSRD_OPTICAL_BLUR_RADIUS_PX
-        );
+        // 3dp x 2 = 6px outgrows the optical cap, so the Gaussian pre-pass
+        // owns the whole radius and the optical tap stays off.
+        assert_eq!(uniforms[GLASS_BLUR_RADIUS_UNIFORM], 0.0);
     }
 
     #[test]
