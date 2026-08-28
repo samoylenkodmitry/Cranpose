@@ -88,7 +88,7 @@ pub use shape_replay::{inject_feed_capture_for_tests, pending_feed_capture_count
 pub use shape_replay::{planner_replay_queue_stats_for_tests, recycled_ops_capacities_for_tests};
 
 /// The optional device features the renderer exploits when the adapter
-/// offers them: pipeline caching (see [`pipeline_disk_cache`]) and the
+/// offers them: pipeline caching (see `pipeline_disk_cache`) and the
 /// timestamp queries behind `CRANPOSE_GPU_PASS_TIMING`. Every platform's
 /// `request_device` passes this so a profiling toggle never needs a rebuilt
 /// binary; intersecting with the adapter's own features keeps the request
