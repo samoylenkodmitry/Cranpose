@@ -33,6 +33,16 @@
   `ssh macm3` (macOS, Apple toolchains). They are faster than this machine and
   keep long compiles off it. Note macOS logs in over ssh with zsh, which does
   not word-split unquoted expansions, so wrap remote scripts in `bash -lc "..."`.
+- the CI runner names mislead. `mac-idle-Cranpose` is this Mac: it registers
+  only while nobody is at the keyboard and exists for signing, so offline is its
+  normal state, it is not spare macOS capacity, and bringing it up is not a way
+  to speed CI. `dmitriis-mac-Cranpose` is macm3 and is the default macOS runner;
+  every macOS job serialises on it. The Linux heavy pool is two --
+  `samarch-1-cranpose` and `samarch-1-cranpose-2`; the Macs carry
+  `cranpose-heavy` as well but do not match `[self-hosted, Linux, ...]`. A deep
+  queue is queueing, not a stall: the jobs API lags the runner by minutes, so
+  read that runner's own `_diag/Runner_*.log` for JobDispatcher lines and check
+  its load before diagnosing one.
 - perf scripts are perf*.sh at project root
 - e2e robot headless tests is `just robot` (should all pass)
 - do not use big models as subagents (opus, codex xhigh thinking, etc), only small fast & cheap to not waste tokens
