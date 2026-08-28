@@ -71,11 +71,6 @@ pub use bundled_assets::{
     BundledAssetError, BundledAssetReader, BundledAssets, BundledAssetsRef, StreamingAssetReader,
     bundled_assets, clear_platform_bundled_assets, set_platform_bundled_assets,
 };
-#[cfg(all(
-    any(target_os = "macos", target_os = "windows"),
-    feature = "camera-native"
-))]
-pub use camera::install_native_camera;
 pub use camera::{
     Camera, CameraError, CameraFrame, CameraLens, CameraLenses, CameraObserver, CameraRef,
     CameraState, CameraStill, FlashMode, FrameFormat, LensFacing, UprightRgba, camera,
