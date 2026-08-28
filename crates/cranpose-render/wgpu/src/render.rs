@@ -282,6 +282,17 @@ const MAX_SHADOW_SURFACE_CACHE_ITEMS: usize = 512;
 // ~10-15 rasters of 4-12MB each; a 64MB budget made the large entries evict
 // each other every frame during scroll, re-blurring tens of megapixels.
 const MAX_SHADOW_SURFACE_CACHE_BYTES: u64 = 384 * 1024 * 1024;
+
+/// Ablation switch for shadow fill: `CRANPOSE_SKIP_SHADOWS=1` (on Android,
+/// `debug.cranpose.skip_shadows`) drops every drop-shadow encode and
+/// composite for the frame. Shadow composites measured as the largest fill
+/// on a device profile — this toggle is how that cost is isolated on real
+/// hardware before and after fill-reduction work.
+fn skip_shadow_draws() -> bool {
+    crate::debug_toggles::debug_toggle("CRANPOSE_SKIP_SHADOWS")
+        .map(|v| matches!(v.as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false)
+}
 const MAX_TEXT_IMAGE_CACHE_ITEMS: usize = 1024;
 const MAX_TEXT_GLYPH_MASK_CACHE_ITEMS: usize = 8192;
 const MAX_TEXT_GLYPH_ATLAS_ITEMS: usize = 8192;
@@ -7517,7 +7528,11 @@ impl GpuRenderer {
         height: u32,
         root_scale: f32,
     ) -> Option<CachedShadowComposite> {
-        if shadow.blur_radius <= 0.0 || shadow.shapes.is_empty() || !shadow.texts.is_empty() {
+        if shadow.blur_radius <= 0.0
+            || shadow.shapes.is_empty()
+            || !shadow.texts.is_empty()
+            || skip_shadow_draws()
+        {
             return None;
         }
 
@@ -11742,7 +11757,7 @@ impl GpuRenderer {
         height: u32,
         root_scale: f32,
     ) {
-        if shadow.shapes.is_empty() && shadow.texts.is_empty() {
+        if shadow.shapes.is_empty() && shadow.texts.is_empty() || skip_shadow_draws() {
             return;
         }
 
