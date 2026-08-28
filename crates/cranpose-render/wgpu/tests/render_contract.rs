@@ -552,9 +552,22 @@ fn first_child_composite_consumes_pending_clear_load_op() {
     let shadow_body = block_after(&source, "if !resolved_child.shadow_draws.is_empty()");
     assert!(
         nested_underlay_body.contains("flush_pending_clear")
-            && backdrop_body.contains("flush_pending_clear")
+            && backdrop_body.contains("flush_pending_queues_for_backdrop_capture")
             && shadow_body.contains("flush_pending_clear"),
         "target readers such as underlays, backdrop snapshots, and shadow draws must still initialize the target before reading/compositing"
+    );
+    let capture_flush_start = source
+        .find("fn flush_pending_queues_for_backdrop_capture")
+        .expect("backdrop captures must go through the shared dependency-gated flush");
+    let capture_flush_end = source[capture_flush_start..]
+        .find("\npub(crate) fn ")
+        .or_else(|| source[capture_flush_start..].find("\nfn "))
+        .map(|offset| capture_flush_start + offset)
+        .expect("the capture flush helper must be followed by another item");
+    let capture_flush_body = &source[capture_flush_start..capture_flush_end];
+    assert!(
+        capture_flush_body.contains("flush_pending_clear"),
+        "the dependency-gated capture flush must still initialize the target before the snapshot copy"
     );
 }
 
