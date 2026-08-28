@@ -131,6 +131,7 @@ pub fn publish_memory_pressure(pressure: MemoryPressure) {
 /// }
 /// ```
 #[allow(non_snake_case)]
+#[track_caller]
 pub fn rememberMemoryPressure() -> EventStream<MemoryPressure> {
     rememberEventStream((), |sender| {
         observe_memory_pressure(move |pressure| sender.send(pressure))

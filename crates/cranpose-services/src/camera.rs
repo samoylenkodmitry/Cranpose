@@ -820,6 +820,7 @@ pub fn rememberCameraStills() -> EventStream<Result<CameraStill, CameraError>> {
 /// The lens list and the device in use, observed for as long as this call
 /// stays in the composition.
 #[allow(non_snake_case)]
+#[track_caller]
 pub fn rememberCameraLenses() -> State<CameraLenses> {
     let updates = rememberEventStream((), |sender| {
         observe_camera_lenses(move |lenses| sender.send(lenses))
