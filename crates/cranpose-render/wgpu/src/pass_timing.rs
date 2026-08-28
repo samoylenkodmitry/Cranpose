@@ -61,6 +61,11 @@ pub struct GpuPassTimingEntry {
 pub struct GpuPassTimingReport {
     /// Frames whose timestamps have been read back into this window.
     pub frames: u32,
+    /// Total GPU busy span — first pass begin to last pass end, summed over
+    /// the window's frames. Per-label times are stage-boundary occupancy
+    /// windows that overlap on pipelined GPUs and can sum past the frame;
+    /// this span is the frame-level wall number they cannot give.
+    pub span_ms: f64,
     /// Entries sorted by descending GPU time; zero-time labels are omitted.
     pub entries: Vec<GpuPassTimingEntry>,
 }
@@ -93,6 +98,7 @@ pub(crate) struct PassTimer {
     slots: Vec<ReadbackSlot>,
     frame_index: Cell<u64>,
     frames_harvested: Cell<u32>,
+    span_nanoseconds: Cell<u64>,
     dropped_passes: Cell<u64>,
     dropped_frames: Cell<u64>,
 }
@@ -143,6 +149,7 @@ impl PassTimer {
             slots,
             frame_index: Cell::new(0),
             frames_harvested: Cell::new(0),
+            span_nanoseconds: Cell::new(0),
             dropped_passes: Cell::new(0),
             dropped_frames: Cell::new(0),
         })
@@ -185,12 +192,14 @@ impl PassTimer {
                 SLOT_MAPPED => {
                     {
                         let mapped = slot.buffer.slice(..).get_mapped_range();
-                        accumulate_frame(
+                        let span = accumulate_frame(
                             &mut self.totals.borrow_mut(),
                             &slot.passes.borrow(),
                             &mapped,
                             self.period_ns,
                         );
+                        self.span_nanoseconds
+                            .set(self.span_nanoseconds.get().saturating_add(span));
                     }
                     slot.buffer.unmap();
                     slot.passes.borrow_mut().clear();
@@ -263,6 +272,7 @@ impl PassTimer {
         entries.sort_by(|a, b| b.total_ms.total_cmp(&a.total_ms));
         GpuPassTimingReport {
             frames: self.frames_harvested.get(),
+            span_ms: self.span_nanoseconds.get() as f64 / 1_000_000.0,
             entries,
         }
     }
@@ -273,8 +283,9 @@ impl PassTimer {
             let frames = f64::from(report.frames);
             let total_ms: f64 = report.entries.iter().map(|entry| entry.total_ms).sum();
             let mut line = format!(
-                "[GPU-PASS f#{frame}] frames={} gpu={:.2}ms/frame",
+                "[GPU-PASS f#{frame}] frames={} span={:.2}ms/frame occupancy={:.2}ms/frame",
                 report.frames,
+                report.span_ms / frames,
                 total_ms / frames,
             );
             for entry in &report.entries {
@@ -298,6 +309,7 @@ impl PassTimer {
             *total = LabelTotal::default();
         }
         self.frames_harvested.set(0);
+        self.span_nanoseconds.set(0);
         self.dropped_passes.set(0);
         self.dropped_frames.set(0);
     }
@@ -380,7 +392,8 @@ pub(crate) fn begin_timed_render_pass<'encoder>(
     })
 }
 
-/// Folds one frame's resolved timestamps into the label totals.
+/// Folds one frame's resolved timestamps into the label totals and returns
+/// the frame's GPU busy span (first begin to last end) in nanoseconds.
 ///
 /// `mapped` holds little-endian `u64` ticks, two per recorded pass; a pair
 /// whose end precedes its begin (a reset counter mid-frame) is skipped.
@@ -389,12 +402,14 @@ fn accumulate_frame(
     passes: &[(u16, u32)],
     mapped: &[u8],
     period_ns: f32,
-) {
+) -> u64 {
     let read_tick = |index: u32| -> Option<u64> {
         let offset = index as usize * 8;
         let bytes = mapped.get(offset..offset + 8)?;
         Some(u64::from_le_bytes(bytes.try_into().expect("8-byte slice")))
     };
+    let mut first_begin = u64::MAX;
+    let mut last_end = 0u64;
     for &(label_id, begin_index) in passes {
         let Some(total) = totals.get_mut(usize::from(label_id)) else {
             continue;
@@ -405,11 +420,17 @@ fn accumulate_frame(
         if end < begin {
             continue;
         }
+        first_begin = first_begin.min(begin);
+        last_end = last_end.max(end);
         total.nanoseconds = total
             .nanoseconds
             .saturating_add(((end - begin) as f64 * f64::from(period_ns)) as u64);
         total.passes += 1;
     }
+    if last_end <= first_begin {
+        return 0;
+    }
+    ((last_end - first_begin) as f64 * f64::from(period_ns)) as u64
 }
 
 #[cfg(test)]

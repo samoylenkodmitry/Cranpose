@@ -98,7 +98,7 @@ use crate::{
     layer_surface_cache::LayerSurfaceCache,
     lazy_resource::PassPipeline,
     normalized_scene::{ChildLayerComposite, CollectedLayer, translate_quad},
-    offscreen::{COMPOSITION_FORMAT, OffscreenTarget, composition_bytes_per_pixel},
+    offscreen::{OffscreenTarget, composition_bytes_per_pixel, composition_format},
     output_conversion::OutputConverter,
     pipeline::push_layer_shadow,
     rect_to_quad,
@@ -6499,7 +6499,7 @@ impl GpuRenderer {
         #[cfg(target_arch = "wasm32")]
         let _ = store_feed_generation;
         let display_format = surface_format;
-        let composition_format = COMPOSITION_FORMAT;
+        let composition_format = composition_format();
         // Construction time is worth a line of its own. Before pipelines were
         // built lazily this call linked every pipeline the frontend could ever
         // need, and on a GL device each link ended in a blocking
@@ -7322,7 +7322,7 @@ impl GpuRenderer {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn segment_capture_pipeline(&self, kind: RetainedPipelineKind) -> &wgpu::RenderPipeline {
-        let format = COMPOSITION_FORMAT;
+        let format = composition_format();
         match kind {
             RetainedPipelineKind::Mesh => {
                 self.segment_capture_pipelines
@@ -7634,7 +7634,7 @@ impl GpuRenderer {
         let max_texture_dim = self.max_texture_dim();
         OffscreenTarget::new(
             &self.device,
-            COMPOSITION_FORMAT,
+            composition_format(),
             width.min(max_texture_dim).max(1),
             height.min(max_texture_dim).max(1),
         )

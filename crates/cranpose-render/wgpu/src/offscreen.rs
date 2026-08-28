@@ -8,7 +8,27 @@ use std::cell::OnceCell;
 
 use crate::gpu_stats::FrameStats;
 
-pub(crate) const COMPOSITION_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+/// The format every offscreen surface and the persistent composition target
+/// share. `Rgba16Float` (8 B/px) keeps composition exact and presentation
+/// deterministic; on bandwidth-starved GPUs those 8 bytes double the cost of
+/// every pass in the frame, so `CRANPOSE_COMPOSITION_8BIT=1`
+/// (`debug.cranpose.composition_8bit` over adb) drops the whole pipeline to
+/// `Rgba8Unorm` — the same encoded values the presentation quantizes to,
+/// stored at 4 B/px. The choice is latched at first use: render pipelines
+/// bake their target format, so it cannot change mid-process.
+pub(crate) fn composition_format() -> wgpu::TextureFormat {
+    static FORMAT: std::sync::OnceLock<wgpu::TextureFormat> = std::sync::OnceLock::new();
+    *FORMAT.get_or_init(|| {
+        let eight_bit = crate::debug_toggles::debug_toggle("CRANPOSE_COMPOSITION_8BIT")
+            .map(|v| matches!(v.as_str(), "1" | "true" | "yes"))
+            .unwrap_or(false);
+        if eight_bit {
+            wgpu::TextureFormat::Rgba8Unorm
+        } else {
+            wgpu::TextureFormat::Rgba16Float
+        }
+    })
+}
 
 /// A GPU texture that can serve as both a render target and a texture source.
 pub(crate) struct OffscreenTarget {
@@ -111,7 +131,7 @@ impl OffscreenTarget {
 }
 
 pub(crate) fn composition_bytes_per_pixel() -> u64 {
-    crate::frame_graph::texture_format_bytes_per_pixel(COMPOSITION_FORMAT)
+    crate::frame_graph::texture_format_bytes_per_pixel(composition_format())
 }
 
 /// Pool of reusable offscreen render targets.
