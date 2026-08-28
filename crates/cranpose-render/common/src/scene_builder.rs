@@ -399,6 +399,11 @@ fn try_translate_scrolled_layer(
         parent_content_offset,
         parent_abs,
     } = ancestors;
+    // Ablation switch: measure or bisect against the pre-translate world
+    // (every scrolled frame re-lowers) without a rebuild.
+    if cranpose_core::env_flag!("CRANPOSE_DISABLE_SCROLL_TRANSLATE") {
+        return translate_bail("fast path disabled by ablation switch");
+    }
     let Some(node_id) = container.node_id else {
         return translate_bail("no node id");
     };
@@ -656,6 +661,17 @@ fn try_translate_scrolled_layer(
                     y: new_children_origin.y - layer.scene_children_origin.y,
                 };
                 offset_scene_origins(&mut layer, origin_delta, translation_delta);
+                // The renderer memoizes per-node facts DERIVED from a
+                // layer's own transform (surface requirements carry its
+                // direct translation), evicting per changed node. A moved
+                // child must be reported or the collector keeps compositing
+                // it at the stale offset — the frame then freezes while
+                // layout walks on (robot_scroll_decoration_invariance's
+                // anti-correlated underline). Descendants keep their own
+                // transforms, so the moved child alone is stale.
+                if let Some(moved_id) = layer.node_id {
+                    changed_nodes.push(moved_id);
+                }
             }
             // A dirty retained child keeps its old content; the caller's
             // recursion rebuilds it with a fresh transform of its own.
