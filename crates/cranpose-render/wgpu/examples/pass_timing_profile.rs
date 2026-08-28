@@ -17,15 +17,21 @@ use cranpose_app_shell::AppShell;
 use cranpose_core::location_key;
 use cranpose_foundation::lazy::{LazyItems, LazyListScope, LazyListState, rememberLazyListState};
 use cranpose_ui::{
-    Color, LinearArrangement, Modifier, RenderEffect, composable,
-    widgets::{Box, BoxSpec, LazyColumn, LazyColumnSpec},
+    Color, LinearArrangement, Modifier, RenderEffect, TextStyle, composable,
+    widgets::{Box, BoxSpec, LazyColumn, LazyColumnSpec, Text},
 };
 use cranpose_ui_graphics::{LiquidGlassRect, LiquidGlassSpec, TileMode, liquid_glass_effect};
 
 const FRAME_WIDTH: u32 = 1080;
 const FRAME_HEIGHT: u32 = 2244;
 const WARMUP_FRAMES: usize = 60;
-const MEASURED_FRAMES: usize = 240;
+
+fn measured_frames() -> usize {
+    std::env::var("PROFILE_FRAMES")
+        .ok()
+        .and_then(|raw| raw.parse().ok())
+        .unwrap_or(240)
+}
 const SCROLL_DELTA_PER_FRAME: f32 = -30.0;
 
 #[composable]
@@ -42,9 +48,16 @@ fn CardRow(index: usize) {
             .height(280.0)
             .rounded_corners(24.0)
             .shadow(12.0)
-            .background(fill),
+            .background(fill)
+            .padding(28.0),
         BoxSpec::new(),
-        || {},
+        move || {
+            Text(
+                format!("Receipt {index} — Grocery Market"),
+                Modifier::empty(),
+                TextStyle::default(),
+            );
+        },
     );
 }
 
@@ -204,23 +217,46 @@ fn main() {
         shell.debug_enter_app_context(|| state.dispatch_scroll_delta(SCROLL_DELTA_PER_FRAME));
     };
 
+    // Render straight to a texture with no readback: a per-frame readback
+    // serializes the CPU on the GPU and buries every real hot path under
+    // semwait in a CPU profile.
+    let target = {
+        let device = shell.renderer().try_device().expect("device");
+        device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Profile Render Target"),
+            size: wgpu::Extent3d {
+                width: FRAME_WIDTH,
+                height: FRAME_HEIGHT,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Bgra8UnormSrgb,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        })
+    };
+    let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+
     for _ in 0..WARMUP_FRAMES {
         scroll(&mut shell);
         shell.update();
         shell
             .renderer()
-            .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
-            .expect("frame capture");
+            .render(&view, FRAME_WIDTH, FRAME_HEIGHT)
+            .expect("frame render");
     }
     // A fresh window after warmup: everything cached that will ever cache.
     let start = std::time::Instant::now();
-    for _ in 0..MEASURED_FRAMES {
+    let measured_frames = measured_frames();
+    for _ in 0..measured_frames {
         scroll(&mut shell);
         shell.update();
         shell
             .renderer()
-            .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
-            .expect("frame capture");
+            .render(&view, FRAME_WIDTH, FRAME_HEIGHT)
+            .expect("frame render");
     }
     let elapsed = start.elapsed().as_secs_f64();
 
@@ -228,8 +264,8 @@ fn main() {
     let stats = shell.renderer().last_frame_stats().expect("frame stats");
     println!(
         "frames={} wall_fps={:.1} report_frames={}",
-        MEASURED_FRAMES,
-        MEASURED_FRAMES as f64 / elapsed,
+        measured_frames,
+        measured_frames as f64 / elapsed,
         report.frames,
     );
     println!(

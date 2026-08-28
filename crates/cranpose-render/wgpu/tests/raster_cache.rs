@@ -37,6 +37,7 @@ fn test_layer(
         shadow_clip: None,
         hit_test: None,
         has_hit_targets: false,
+        has_origin_sinks: false,
         isolation: IsolationReasons::default(),
         cache_policy,
         cache_hashes: LayerRasterCacheHashes::default(),

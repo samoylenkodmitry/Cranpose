@@ -2614,6 +2614,7 @@ mod tests {
                 clip: None,
             }),
             has_hit_targets: true,
+            has_origin_sinks: false,
             isolation: cranpose_render_common::graph::IsolationReasons::default(),
             cache_policy: cranpose_render_common::graph::CachePolicy::None,
             cache_hashes: LayerRasterCacheHashes::default(),

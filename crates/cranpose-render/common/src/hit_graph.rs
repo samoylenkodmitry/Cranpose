@@ -204,6 +204,7 @@ mod tests {
                 clip: None,
             }),
             has_hit_targets: true,
+            has_origin_sinks: false,
             isolation: IsolationReasons::default(),
             cache_policy: CachePolicy::None,
             cache_hashes: LayerRasterCacheHashes::default(),

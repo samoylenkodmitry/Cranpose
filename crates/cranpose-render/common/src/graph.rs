@@ -296,6 +296,11 @@ pub struct LayerNode {
     pub shadow_clip: Option<Rect>,
     pub hit_test: Option<HitTestNode>,
     pub has_hit_targets: bool,
+    /// Whether this subtree publishes live window origins (a text field's
+    /// popup anchor, a scroll container's viewport rect). Those sinks are
+    /// written during a full lowering, so the scroll fast path may translate
+    /// a retained subtree in place only when this is false.
+    pub has_origin_sinks: bool,
     pub isolation: IsolationReasons,
     pub cache_policy: CachePolicy,
     pub cache_hashes: LayerRasterCacheHashes,
@@ -798,6 +803,7 @@ mod tests {
             shadow_clip: None,
             hit_test: None,
             has_hit_targets: false,
+            has_origin_sinks: false,
             isolation: IsolationReasons::default(),
             cache_policy: CachePolicy::None,
             cache_hashes: LayerRasterCacheHashes::default(),

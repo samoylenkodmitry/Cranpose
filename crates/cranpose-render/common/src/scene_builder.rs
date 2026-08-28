@@ -33,6 +33,7 @@ struct BuildNodeSnapshot {
     content_offset: Point,
     motion_context_animated: bool,
     translated_content_context: bool,
+    has_own_origin_sinks: bool,
     measured_max_width: Option<f32>,
     resolved_modifiers: ResolvedModifiers,
     draw_commands: Vec<DrawCommand>,
@@ -58,6 +59,28 @@ struct SnapshotNodeData {
 pub struct GraphUpdateReport {
     pub applied: bool,
     pub hit_graph_dirty: bool,
+}
+
+// Counts full layer lowerings so tests can assert what a scoped update did
+// NOT rebuild — the scroll fast path's whole contract.
+#[cfg(test)]
+thread_local! {
+    static LOWERED_LAYER_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn note_layer_lowered() {
+    #[cfg(test)]
+    LOWERED_LAYER_COUNT.with(|count| count.set(count.get() + 1));
+}
+
+#[cfg(test)]
+fn reset_lowered_layer_count() {
+    LOWERED_LAYER_COUNT.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+fn lowered_layer_count() -> usize {
+    LOWERED_LAYER_COUNT.with(std::cell::Cell::get)
 }
 
 pub fn build_graph_from_layout_tree(root: &LayoutBox, scale: f32) -> RenderGraph {
@@ -121,6 +144,37 @@ pub fn update_graph_from_applier_report_into(
     if let Some(root_id) = graph.root.node_id
         && remaining_dirty_nodes.contains(&root_id)
     {
+        remaining_dirty_nodes.remove(&root_id);
+        if try_translate_scrolled_layer(
+            applier,
+            &mut graph.root,
+            &remaining_dirty_nodes,
+            changed_nodes,
+            false,
+            Point::default(),
+            AbsOrigin::ROOT,
+        ) {
+            if remaining_dirty_nodes.is_empty() {
+                return GraphUpdateReport {
+                    applied: true,
+                    hit_graph_dirty: true,
+                };
+            }
+            let inherited = graph.root.translated_content_context;
+            let walked = replace_dirty_layers_from_applier(
+                applier,
+                &mut graph.root,
+                &mut remaining_dirty_nodes,
+                inherited,
+                false,
+                changed_nodes,
+            );
+            let applied = walked.is_some() && remaining_dirty_nodes.is_empty();
+            return GraphUpdateReport {
+                applied,
+                hit_graph_dirty: true,
+            };
+        }
         let Some(root) = build_layer_node_from_applier(applier, root_id, scale, false) else {
             return GraphUpdateReport {
                 applied: false,
@@ -202,6 +256,36 @@ fn replace_dirty_layers_from_applier(
             .node_id
             .is_some_and(|node_id| dirty_nodes.remove(&node_id))
         {
+            if try_translate_scrolled_layer(
+                applier,
+                child_layer,
+                dirty_nodes,
+                changed_nodes,
+                child_ancestor_hashed,
+                parent.content_offset,
+                AbsOrigin {
+                    content_origin: parent.scene_children_origin,
+                    layer_translation: parent.scene_children_layer_translation,
+                },
+            ) {
+                // Retained hit nodes moved with their layers; the hit graph
+                // must be re-collected against the new transforms.
+                report.hit_graph_dirty = true;
+                report.updated = true;
+                // Dirty descendants inside the patched container get the
+                // ordinary treatment, with this container's freshly patched
+                // origins as their ancestor context.
+                let child_report = replace_dirty_layers_from_applier(
+                    applier,
+                    child_layer,
+                    dirty_nodes,
+                    child_inherited_translated_content_context,
+                    child_ancestor_hashed,
+                    changed_nodes,
+                )?;
+                report.hit_graph_dirty |= child_report.hit_graph_dirty;
+                continue;
+            }
             let mut replacement = build_layer_node_from_applier_internal(
                 applier,
                 child_layer
@@ -268,6 +352,252 @@ fn replace_dirty_layers_from_applier(
     Some(report)
 }
 
+/// The frame a scroll produces: a container is dirty, its children are clean,
+/// and they only moved. Re-lowering the visible subtree for that frame was
+/// the largest single CPU item on a profiled device (5.8 ms of a 17 ms
+/// Kirin 980 frame) for content the replay layer then recognized as
+/// unchanged. This patches the retained children's transforms in place —
+/// their own raster-cache hashes exclude placement, so every cache survives
+/// the move — and bails to the ordinary rebuild on anything it cannot prove:
+/// a container with its own draw content, a changed child set, a resized
+/// child, a dirty descendant, or a subtree that publishes live window
+/// origins (whose sinks only a full lowering rewrites).
+fn translate_bail(reason: &str) -> bool {
+    if cranpose_core::env_flag!("CRANPOSE_SCENE_UPDATE_DIAG") {
+        eprintln!("[scene-update-diag] translate bail: {reason}");
+    }
+    false
+}
+
+fn try_translate_scrolled_layer(
+    applier: &mut MemoryApplier,
+    container: &mut LayerNode,
+    dirty_nodes: &HashSet<NodeId>,
+    changed_nodes: &mut Vec<NodeId>,
+    container_ancestor_hashed: bool,
+    parent_content_offset: Point,
+    parent_abs: AbsOrigin,
+) -> bool {
+    let Some(node_id) = container.node_id else {
+        return translate_bail("no node id");
+    };
+    if container
+        .children
+        .iter()
+        .any(|child| !matches!(child, RenderNode::Layer(_)))
+    {
+        return translate_bail("container has own primitive children");
+    }
+    let Some(data) = snapshot_node_data(applier, node_id) else {
+        return translate_bail("container snapshot read failed");
+    };
+    let SnapshotNodeData {
+        layout_state,
+        modifier_slices,
+        resolved_modifiers: _,
+        children: fresh_children,
+    } = data;
+    if !layout_state.is_placed
+        || layout_state.size.width != container.local_bounds.width
+        || layout_state.size.height != container.local_bounds.height
+    {
+        return translate_bail("container unplaced or resized");
+    }
+    if !modifier_slices.draw_commands().is_empty()
+        || modifier_slices.annotated_text().is_some()
+        || modifier_slices.translated_content_context() != container.translated_content_context
+    {
+        return translate_bail("container draw/text/translated-context changed");
+    }
+    let clip_to_bounds = modifier_slices.clip_to_bounds();
+    if clip_to_bounds != container.clip_to_bounds {
+        return translate_bail("container clip changed");
+    }
+    let graphics_layer = graphics_layer_with_shaped_clip(
+        modifier_slices.graphics_layer().unwrap_or_default(),
+        clip_to_bounds,
+        modifier_slices.corner_shape(),
+        container.local_bounds,
+    );
+    if graphics_layer != container.graphics_layer {
+        return translate_bail("container graphics layer changed");
+    }
+    // The child sets must match one to one: a row entering or leaving is a
+    // content change, and the rebuild path owns that frame. A child that is
+    // itself dirty stays untouched here — the caller recurses into it and
+    // the ordinary dirty handling rebuilds it with a fresh transform.
+    if fresh_children.len() != container.children.len() {
+        return translate_bail("child set size changed");
+    }
+    for (child, child_id) in container.children.iter().zip(&fresh_children) {
+        let RenderNode::Layer(layer) = child else {
+            return translate_bail("non-layer child");
+        };
+        if layer.node_id != Some(*child_id) {
+            return translate_bail("child order or identity changed");
+        }
+        if dirty_nodes.contains(child_id) {
+            continue;
+        }
+        if layer.has_origin_sinks {
+            return translate_bail("child subtree publishes window origins");
+        }
+    }
+    // Fresh child geometry, read whole before anything mutates.
+    let mut fresh_child_layouts = Vec::with_capacity(fresh_children.len());
+    for child_id in &fresh_children {
+        let state = applier
+            .with_node::<LayoutNode, _>(*child_id, |node| node.layout_state())
+            .or_else(|_| {
+                applier.with_node::<SubcomposeLayoutNode, _>(*child_id, |node| node.layout_state())
+            });
+        let Ok(state) = state else {
+            return translate_bail("child layout read failed");
+        };
+        fresh_child_layouts.push(state);
+    }
+    for ((child, state), child_id) in container
+        .children
+        .iter()
+        .zip(&fresh_child_layouts)
+        .zip(&fresh_children)
+    {
+        let RenderNode::Layer(layer) = child else {
+            return false;
+        };
+        if dirty_nodes.contains(child_id) {
+            continue;
+        }
+        if !state.is_placed {
+            return translate_bail("child unplaced");
+        }
+        if state.size.width != layer.local_bounds.width
+            || state.size.height != layer.local_bounds.height
+        {
+            return translate_bail("child resized");
+        }
+    }
+
+    // Everything checks out — mutate, mirroring exactly what a rebuild
+    // computes for each field.
+    let content_offset = layout_state.content_offset;
+    let mut transform = layer_transform_to_parent(
+        container.local_bounds,
+        layout_state.position,
+        &graphics_layer,
+    );
+    if parent_content_offset != Point::default() {
+        transform = transform.then(ProjectiveTransform::translation(
+            parent_content_offset.x,
+            parent_content_offset.y,
+        ));
+    }
+    container.transform_to_parent = transform;
+    container.content_offset = content_offset;
+    if container.translated_content_context {
+        container.translated_content_offset = modifier_slices
+            .translated_content_offset()
+            .unwrap_or(content_offset);
+    }
+
+    // Live origins, exactly as the full build publishes them: the
+    // container's own sinks now, and the remembered child origins through
+    // the subtree so a later scoped rebuild inside it resolves correctly.
+    let (translation_x, translation_y) = modifier_slices
+        .graphics_layer()
+        .map(|layer| (layer.translation_x, layer.translation_y))
+        .unwrap_or((0.0, 0.0));
+    let top_left = Point {
+        x: parent_abs.content_origin.x + layout_state.position.x,
+        y: parent_abs.content_origin.y + layout_state.position.y,
+    };
+    let layer_translation = Point {
+        x: parent_abs.layer_translation.x + translation_x,
+        y: parent_abs.layer_translation.y + translation_y,
+    };
+    let window_origin = Point {
+        x: top_left.x + layer_translation.x,
+        y: top_left.y + layer_translation.y,
+    };
+    if let Some(sink) = modifier_slices.text_field_window_origin() {
+        sink.set(window_origin);
+    }
+    if let Some(sink) = modifier_slices.viewport_window_rect() {
+        sink.set(Rect {
+            x: window_origin.x,
+            y: window_origin.y,
+            width: layout_state.size.width,
+            height: layout_state.size.height,
+        });
+    }
+    let child_origin = Point {
+        x: top_left.x + content_offset.x,
+        y: top_left.y + content_offset.y,
+    };
+    let translation_delta = Point {
+        x: layer_translation.x - container.scene_children_layer_translation.x,
+        y: layer_translation.y - container.scene_children_layer_translation.y,
+    };
+    container.scene_children_origin = child_origin;
+    container.scene_children_layer_translation = layer_translation;
+
+    for ((child, state), child_id) in container
+        .children
+        .iter_mut()
+        .zip(&fresh_child_layouts)
+        .zip(&fresh_children)
+    {
+        let RenderNode::Layer(layer) = child else {
+            // Checked above; a non-layer child bailed before any mutation.
+            return false;
+        };
+        if dirty_nodes.contains(child_id) {
+            // The caller's recursion rebuilds this one with a fresh
+            // transform of its own.
+            continue;
+        }
+        let mut child_transform =
+            layer_transform_to_parent(layer.local_bounds, state.position, &layer.graphics_layer);
+        if content_offset != Point::default() {
+            child_transform = child_transform.then(ProjectiveTransform::translation(
+                content_offset.x,
+                content_offset.y,
+            ));
+        }
+        layer.transform_to_parent = child_transform;
+        let new_children_origin = Point {
+            x: child_origin.x + state.position.x + layer.content_offset.x,
+            y: child_origin.y + state.position.y + layer.content_offset.y,
+        };
+        let origin_delta = Point {
+            x: new_children_origin.x - layer.scene_children_origin.x,
+            y: new_children_origin.y - layer.scene_children_origin.y,
+        };
+        offset_scene_origins(layer, origin_delta, translation_delta);
+    }
+
+    // The container's own hash covers its children's transforms; the moved
+    // children's own hashes exclude placement and stay valid as they are.
+    crate::graph_hash::refresh_layer_own_raster_cache_hashes(container, container_ancestor_hashed);
+    changed_nodes.push(node_id);
+    true
+}
+
+/// Shifts a retained subtree's remembered window origins by the rigid
+/// translation its root just took, keeping them as live as a full build
+/// would have left them.
+fn offset_scene_origins(layer: &mut LayerNode, origin_delta: Point, translation_delta: Point) {
+    layer.scene_children_origin.x += origin_delta.x;
+    layer.scene_children_origin.y += origin_delta.y;
+    layer.scene_children_layer_translation.x += translation_delta.x;
+    layer.scene_children_layer_translation.y += translation_delta.y;
+    for child in &mut layer.children {
+        if let RenderNode::Layer(child_layer) = child {
+            offset_scene_origins(child_layer, origin_delta, translation_delta);
+        }
+    }
+}
+
 fn layer_hit_graph_state_dirty(previous: &LayerNode, replacement: &LayerNode) -> bool {
     if previous.hit_test.is_some() || replacement.hit_test.is_some() {
         return true;
@@ -327,6 +657,7 @@ fn build_layer_node_internal(
         content_offset,
         motion_context_animated,
         translated_content_context,
+        has_own_origin_sinks,
         measured_max_width,
         resolved_modifiers,
         draw_commands,
@@ -419,6 +750,11 @@ fn build_layer_node_internal(
             RenderNode::Layer(child_layer) => child_layer.has_hit_targets,
             RenderNode::Primitive(_) | RenderNode::DrawRun(_) => false,
         });
+    let has_origin_sinks = has_own_origin_sinks
+        || children.iter().any(|child| match child {
+            RenderNode::Layer(child_layer) => child_layer.has_origin_sinks,
+            RenderNode::Primitive(_) | RenderNode::DrawRun(_) => false,
+        });
 
     LayerNode {
         node_id: Some(node_id),
@@ -443,6 +779,7 @@ fn build_layer_node_internal(
         shadow_clip,
         hit_test,
         has_hit_targets,
+        has_origin_sinks,
         isolation,
         cache_policy,
         cache_hashes: LayerRasterCacheHashes::default(),
@@ -489,13 +826,7 @@ fn build_layer_node_from_applier(
     )
 }
 
-fn build_layer_node_from_applier_internal(
-    applier: &mut MemoryApplier,
-    node_id: NodeId,
-    inherited_motion_context_animated: bool,
-    inherited_translated_content_context: bool,
-    parent_abs: Option<AbsOrigin>,
-) -> Option<LayerNode> {
+fn snapshot_node_data(applier: &mut MemoryApplier, node_id: NodeId) -> Option<SnapshotNodeData> {
     if let Ok(data) = applier.with_node::<LayoutNode, _>(node_id, |node| {
         let state = node.layout_state();
         let children = node.children.clone();
@@ -507,38 +838,40 @@ fn build_layer_node_from_applier_internal(
             children,
         }
     }) {
-        return build_layer_node_from_data(
-            applier,
-            node_id,
-            data,
-            inherited_motion_context_animated,
-            inherited_translated_content_context,
-            parent_abs,
-        );
+        return Some(data);
     }
 
-    if let Ok(data) = applier.with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
-        let state = node.layout_state();
-        let children = node.active_children();
-        let modifier_slices = node.modifier_slices_snapshot();
-        SnapshotNodeData {
-            layout_state: state,
-            modifier_slices,
-            resolved_modifiers: node.resolved_modifiers(),
-            children,
-        }
-    }) {
-        return build_layer_node_from_data(
-            applier,
-            node_id,
-            data,
-            inherited_motion_context_animated,
-            inherited_translated_content_context,
-            parent_abs,
-        );
-    }
+    applier
+        .with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
+            let state = node.layout_state();
+            let children = node.active_children();
+            let modifier_slices = node.modifier_slices_snapshot();
+            SnapshotNodeData {
+                layout_state: state,
+                modifier_slices,
+                resolved_modifiers: node.resolved_modifiers(),
+                children,
+            }
+        })
+        .ok()
+}
 
-    None
+fn build_layer_node_from_applier_internal(
+    applier: &mut MemoryApplier,
+    node_id: NodeId,
+    inherited_motion_context_animated: bool,
+    inherited_translated_content_context: bool,
+    parent_abs: Option<AbsOrigin>,
+) -> Option<LayerNode> {
+    let data = snapshot_node_data(applier, node_id)?;
+    build_layer_node_from_data(
+        applier,
+        node_id,
+        data,
+        inherited_motion_context_animated,
+        inherited_translated_content_context,
+        parent_abs,
+    )
 }
 
 fn build_layer_node_from_data(
@@ -549,6 +882,7 @@ fn build_layer_node_from_data(
     inherited_translated_content_context: bool,
     parent_abs: Option<AbsOrigin>,
 ) -> Option<LayerNode> {
+    note_layer_lowered();
     let SnapshotNodeData {
         layout_state,
         modifier_slices,
@@ -738,6 +1072,11 @@ fn build_layer_node_from_data(
             RenderNode::Layer(child_layer) => child_layer.has_hit_targets,
             RenderNode::Primitive(_) | RenderNode::DrawRun(_) => false,
         });
+    let has_origin_sinks = modifier_slices_have_origin_sinks(&modifier_slices)
+        || render_children.iter().any(|child| match child {
+            RenderNode::Layer(child_layer) => child_layer.has_origin_sinks,
+            RenderNode::Primitive(_) | RenderNode::DrawRun(_) => false,
+        });
 
     let layer = LayerNode {
         node_id: Some(node_id),
@@ -763,6 +1102,7 @@ fn build_layer_node_from_data(
         shadow_clip,
         hit_test,
         has_hit_targets,
+        has_origin_sinks,
         isolation,
         cache_policy,
         cache_hashes: LayerRasterCacheHashes::default(),
@@ -1464,6 +1804,7 @@ fn layout_box_to_snapshot(node: &LayoutBox, parent: Option<&LayoutBox>) -> Build
         content_offset: node.content_offset,
         motion_context_animated: node.node_data.modifier_slices.motion_context_animated(),
         translated_content_context: node.node_data.modifier_slices.translated_content_context(),
+        has_own_origin_sinks: modifier_slices_have_origin_sinks(&node.node_data.modifier_slices),
         measured_max_width: None,
         resolved_modifiers: node.node_data.resolved_modifiers,
         draw_commands: node.node_data.modifier_slices.draw_commands().to_vec(),
@@ -1477,6 +1818,14 @@ fn layout_box_to_snapshot(node: &LayoutBox, parent: Option<&LayoutBox>) -> Build
         graphics_layer: has_graphics_layer.then_some(graphics_layer),
         children,
     }
+}
+
+/// Whether this node publishes a live window origin during the scene build —
+/// a text field's popup anchor or a scroll container's viewport rect. Layers
+/// over such nodes must be re-lowered when they move, never translated in
+/// place, or the sinks go stale.
+fn modifier_slices_have_origin_sinks(slices: &ModifierNodeSlices) -> bool {
+    slices.text_field_window_origin().is_some() || slices.viewport_window_rect().is_some()
 }
 
 fn graphics_layer_with_shaped_clip(
@@ -1839,6 +2188,7 @@ mod tests {
             content_offset: Point::default(),
             motion_context_animated: false,
             translated_content_context: false,
+            has_own_origin_sinks: false,
             measured_max_width: None,
             resolved_modifiers: ResolvedModifiers::default(),
             draw_commands: vec![child_command],
@@ -1863,6 +2213,7 @@ mod tests {
             content_offset: Point::default(),
             motion_context_animated: false,
             translated_content_context: false,
+            has_own_origin_sinks: false,
             measured_max_width: None,
             resolved_modifiers: ResolvedModifiers::default(),
             draw_commands: vec![],
@@ -1935,6 +2286,7 @@ mod tests {
             content_offset: Point::default(),
             motion_context_animated: false,
             translated_content_context: false,
+            has_own_origin_sinks: false,
             measured_max_width: None,
             resolved_modifiers: ResolvedModifiers::default(),
             draw_commands: vec![],
@@ -1959,6 +2311,7 @@ mod tests {
             content_offset: Point { x: 13.0, y: -9.0 },
             motion_context_animated: false,
             translated_content_context: false,
+            has_own_origin_sinks: false,
             measured_max_width: None,
             resolved_modifiers: ResolvedModifiers::default(),
             draw_commands: vec![],
@@ -2008,6 +2361,7 @@ mod tests {
                 content_offset: Point::default(),
                 motion_context_animated: false,
                 translated_content_context: false,
+                has_own_origin_sinks: false,
                 measured_max_width: None,
                 resolved_modifiers: ResolvedModifiers::default(),
                 draw_commands: vec![child_command],
@@ -2032,6 +2386,7 @@ mod tests {
                 content_offset: offset,
                 motion_context_animated,
                 translated_content_context: true,
+                has_own_origin_sinks: false,
                 measured_max_width: None,
                 resolved_modifiers: ResolvedModifiers::default(),
                 draw_commands: vec![],
@@ -2777,6 +3132,214 @@ mod tests {
         assert_dirty_hash_road_matches_full_walk(&graph);
     }
 
+    /// The device's real dirty shape: structural bookkeeping marks the whole
+    /// ancestor chain above a scrolling list on every scrolled frame
+    /// (`[2, 36, 41]` in the profiled trace), even when no child set changed.
+    /// Each container in the chain must be walked through, not rebuilt, or
+    /// the "scoped" update rebuilds from the outermost ancestor — which is
+    /// exactly what the Kirin 980 was paying.
+    #[test]
+    fn an_overmarked_ancestor_chain_still_translates_instead_of_relowering() {
+        let scroll_holder: Rc<RefCell<Option<ScrollState>>> = Rc::new(RefCell::new(None));
+        let scroll_holder_for_comp = scroll_holder.clone();
+
+        let mut composition = cranpose_ui::run_test_composition(move || {
+            let scroll_state =
+                cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| *state);
+            *scroll_holder_for_comp.borrow_mut() = Some(scroll_state);
+            cranpose_ui::Box(
+                Modifier::empty().size_points(240.0, 320.0),
+                cranpose_ui::BoxSpec::default(),
+                move || {
+                    Column(
+                        Modifier::empty()
+                            .size_points(240.0, 320.0)
+                            .vertical_scroll(scroll_state, false),
+                        ColumnSpec::default(),
+                        || {
+                            for index in 0..12usize {
+                                cranpose_ui::Box(
+                                    Modifier::empty()
+                                        .size_points(240.0, 60.0)
+                                        .background(Color(0.9, 0.9, 0.92, 1.0)),
+                                    cranpose_ui::BoxSpec::default(),
+                                    move || {
+                                        Text(
+                                            format!("row {index}"),
+                                            Modifier::empty(),
+                                            TextStyle::default(),
+                                        );
+                                    },
+                                );
+                            }
+                        },
+                    );
+                },
+            );
+        });
+
+        let root = composition.root().expect("composition root");
+        let viewport = Size {
+            width: 240.0,
+            height: 320.0,
+        };
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        applier
+            .compute_layout(root, viewport)
+            .expect("initial scroll layout");
+        let mut graph = build_graph_from_applier(&mut applier, root, 1.0).expect("initial graph");
+        graph.root.recompute_raster_cache_hashes();
+        let initial_row_top = find_text_top(&graph.root, "row 3").expect("initial row text");
+        applier.clear_runtime_handle();
+        drop(applier);
+
+        let scroll_state = scroll_holder
+            .borrow()
+            .as_ref()
+            .cloned()
+            .expect("scroll state should be captured");
+        let consumed_scroll = scroll_state.dispatch_raw_delta(96.0);
+        assert!(consumed_scroll > 0.0, "test scroll must be consumed");
+        // The chain the device over-marks: the scrolling column plus every
+        // ancestor up to and including the root.
+        let mut dirty_nodes = cranpose_ui::pending_layout_repass_nodes_snapshot();
+        dirty_nodes.push(graph.root.node_id.expect("root id"));
+        let mut cursor = &graph.root;
+        while let Some(RenderNode::Layer(child)) = cursor
+            .children
+            .iter()
+            .find(|child| matches!(child, RenderNode::Layer(_)))
+        {
+            let chain = child.node_id.expect("chain node id");
+            if dirty_nodes.contains(&chain) {
+                break;
+            }
+            dirty_nodes.push(chain);
+            cursor = child;
+        }
+
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        applier
+            .compute_layout(root, viewport)
+            .expect("scrolled layout");
+        reset_lowered_layer_count();
+        let report = update_graph_from_applier_report(&mut applier, &mut graph, &dirty_nodes, 1.0);
+        applier.clear_runtime_handle();
+
+        assert!(report.applied, "chain update should apply in place");
+        let lowered = lowered_layer_count();
+        assert_eq!(
+            lowered, 0,
+            "an over-marked ancestor chain over a pure scroll must still \
+             translate; {lowered} layers were rebuilt (dirty={dirty_nodes:?})"
+        );
+        let updated_row_top = find_text_top(&graph.root, "row 3").expect("updated row text");
+        assert!(
+            updated_row_top < initial_row_top - consumed_scroll * 0.75,
+            "the translation must land through the chain: initial_y={initial_row_top} updated_y={updated_row_top}"
+        );
+        assert_dirty_hash_road_matches_full_walk(&graph);
+    }
+
+    /// The frame a scroll produces: the container is dirty, its children are
+    /// clean, and they only moved. A device profile put the cost of
+    /// re-lowering the visible subtree on every scrolled frame at 5.8 ms of a
+    /// 17 ms Kirin 980 frame — the largest single CPU item — for content the
+    /// replay layer then recognized as unchanged. The scoped update must
+    /// translate the retained children, not rebuild them.
+    #[test]
+    fn a_scrolled_container_translates_clean_children_instead_of_relowering() {
+        let scroll_holder: Rc<RefCell<Option<ScrollState>>> = Rc::new(RefCell::new(None));
+        let scroll_holder_for_comp = scroll_holder.clone();
+
+        let mut composition = cranpose_ui::run_test_composition(move || {
+            let scroll_state =
+                cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| *state);
+            *scroll_holder_for_comp.borrow_mut() = Some(scroll_state);
+            Column(
+                Modifier::empty()
+                    .size_points(240.0, 320.0)
+                    .vertical_scroll(scroll_state, false),
+                ColumnSpec::default(),
+                || {
+                    for index in 0..12usize {
+                        cranpose_ui::Box(
+                            Modifier::empty()
+                                .size_points(240.0, 60.0)
+                                .background(Color(0.9, 0.9, 0.92, 1.0)),
+                            cranpose_ui::BoxSpec::default(),
+                            move || {
+                                Text(
+                                    format!("row {index}"),
+                                    Modifier::empty(),
+                                    TextStyle::default(),
+                                );
+                            },
+                        );
+                    }
+                },
+            );
+        });
+
+        let root = composition.root().expect("composition root");
+        let viewport = Size {
+            width: 240.0,
+            height: 320.0,
+        };
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        applier
+            .compute_layout(root, viewport)
+            .expect("initial scroll layout");
+        let mut graph = build_graph_from_applier(&mut applier, root, 1.0).expect("initial graph");
+        graph.root.recompute_raster_cache_hashes();
+        let initial_row_top = find_text_top(&graph.root, "row 3").expect("initial row text");
+        applier.clear_runtime_handle();
+        drop(applier);
+
+        let scroll_state = scroll_holder
+            .borrow()
+            .as_ref()
+            .cloned()
+            .expect("scroll state should be captured");
+        let consumed_scroll = scroll_state.dispatch_raw_delta(96.0);
+        assert!(consumed_scroll > 0.0, "test scroll must be consumed");
+        let dirty_nodes = cranpose_ui::pending_layout_repass_nodes_snapshot();
+        assert!(
+            !dirty_nodes.is_empty(),
+            "a scroll must schedule a scoped scene update"
+        );
+
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        applier
+            .compute_layout(root, viewport)
+            .expect("scrolled layout");
+        reset_lowered_layer_count();
+        let report = update_graph_from_applier_report(&mut applier, &mut graph, &dirty_nodes, 1.0);
+        applier.clear_runtime_handle();
+
+        assert!(report.applied, "scroll update should apply in place");
+        let lowered = lowered_layer_count();
+        assert_eq!(
+            lowered, 0,
+            "a pure scroll of clean children must translate the retained \
+             subtrees, not re-lower them; {lowered} layers were rebuilt"
+        );
+        let updated_row_top = find_text_top(&graph.root, "row 3").expect("updated row text");
+        assert!(
+            updated_row_top < initial_row_top - consumed_scroll * 0.75,
+            "the translation must actually land: initial_y={initial_row_top} updated_y={updated_row_top}"
+        );
+        assert_dirty_hash_road_matches_full_walk(&graph);
+    }
+
     #[test]
     fn update_graph_from_applier_keeps_parent_content_offset_for_dirty_scroll_child() {
         let label_holder: Rc<RefCell<Option<cranpose_core::MutableState<String>>>> =
@@ -3191,6 +3754,7 @@ mod tests {
             content_offset: Point::default(),
             motion_context_animated: false,
             translated_content_context: false,
+            has_own_origin_sinks: false,
             measured_max_width: None,
             resolved_modifiers: ResolvedModifiers::default(),
             draw_commands: vec![],
@@ -3239,6 +3803,7 @@ mod tests {
             content_offset: Point::default(),
             motion_context_animated: false,
             translated_content_context: false,
+            has_own_origin_sinks: false,
             measured_max_width: None,
             resolved_modifiers: ResolvedModifiers::default(),
             draw_commands: vec![behind, overlay],
@@ -3283,6 +3848,7 @@ mod tests {
             content_offset: Point::default(),
             motion_context_animated: false,
             translated_content_context: false,
+            has_own_origin_sinks: false,
             measured_max_width: None,
             resolved_modifiers: ResolvedModifiers::default(),
             draw_commands: vec![DrawCommand::Behind(Rc::new(
@@ -3364,6 +3930,7 @@ mod tests {
             content_offset: Point::default(),
             motion_context_animated: false,
             translated_content_context: false,
+            has_own_origin_sinks: false,
             measured_max_width: None,
             resolved_modifiers: ResolvedModifiers::default(),
             draw_commands: vec![],
@@ -3390,6 +3957,7 @@ mod tests {
             content_offset: Point::default(),
             motion_context_animated: false,
             translated_content_context: false,
+            has_own_origin_sinks: false,
             measured_max_width: None,
             resolved_modifiers: ResolvedModifiers::default(),
             draw_commands: vec![],
@@ -3430,6 +3998,7 @@ mod tests {
             content_offset: Point::default(),
             motion_context_animated: false,
             translated_content_context: false,
+            has_own_origin_sinks: false,
             measured_max_width: None,
             resolved_modifiers: ResolvedModifiers::default(),
             draw_commands: vec![],
@@ -3477,6 +4046,7 @@ mod tests {
             content_offset: Point::default(),
             motion_context_animated: false,
             translated_content_context: false,
+            has_own_origin_sinks: false,
             measured_max_width: Some(180.0),
             resolved_modifiers: ResolvedModifiers::default(),
             draw_commands: vec![],
@@ -3531,6 +4101,7 @@ mod tests {
             content_offset: Point::default(),
             motion_context_animated: false,
             translated_content_context: false,
+            has_own_origin_sinks: false,
             measured_max_width: Some(320.0),
             resolved_modifiers: ResolvedModifiers::default(),
             draw_commands: vec![],
@@ -3586,6 +4157,7 @@ mod tests {
             content_offset: Point::default(),
             motion_context_animated: false,
             translated_content_context: false,
+            has_own_origin_sinks: false,
             measured_max_width: Some(field_width),
             resolved_modifiers: ResolvedModifiers::default(),
             draw_commands: vec![],
@@ -3662,6 +4234,7 @@ mod tests {
             content_offset: Point::default(),
             motion_context_animated: false,
             translated_content_context: false,
+            has_own_origin_sinks: false,
             measured_max_width: Some(120.0),
             resolved_modifiers: ResolvedModifiers::default(),
             draw_commands: vec![],
@@ -3685,6 +4258,7 @@ mod tests {
             content_offset: Point { x: 0.0, y: -18.5 },
             motion_context_animated: false,
             translated_content_context: true,
+            has_own_origin_sinks: false,
             measured_max_width: None,
             resolved_modifiers: ResolvedModifiers::default(),
             draw_commands: vec![],
@@ -3726,6 +4300,7 @@ mod tests {
             content_offset: Point::default(),
             motion_context_animated: false,
             translated_content_context: false,
+            has_own_origin_sinks: false,
             measured_max_width: Some(120.0),
             resolved_modifiers: ResolvedModifiers::default(),
             draw_commands: vec![],
@@ -3749,6 +4324,7 @@ mod tests {
             content_offset: Point { x: 0.0, y: -18.0 },
             motion_context_animated: false,
             translated_content_context: false,
+            has_own_origin_sinks: false,
             measured_max_width: None,
             resolved_modifiers: ResolvedModifiers::default(),
             draw_commands: vec![],
@@ -3793,6 +4369,7 @@ mod tests {
             content_offset: Point::default(),
             motion_context_animated: false,
             translated_content_context: false,
+            has_own_origin_sinks: false,
             measured_max_width: Some(120.0),
             resolved_modifiers: ResolvedModifiers::default(),
             draw_commands: vec![],
@@ -3823,6 +4400,7 @@ mod tests {
             content_offset: Point { x: 0.0, y: -18.5 },
             motion_context_animated: false,
             translated_content_context: true,
+            has_own_origin_sinks: false,
             measured_max_width: None,
             resolved_modifiers: ResolvedModifiers::default(),
             draw_commands: vec![],
@@ -3863,6 +4441,7 @@ mod tests {
             content_offset: Point::default(),
             motion_context_animated: false,
             translated_content_context: false,
+            has_own_origin_sinks: false,
             measured_max_width: Some(120.0),
             resolved_modifiers: ResolvedModifiers::default(),
             draw_commands: vec![],
@@ -3886,6 +4465,7 @@ mod tests {
             content_offset: Point::default(),
             motion_context_animated: true,
             translated_content_context: false,
+            has_own_origin_sinks: false,
             measured_max_width: None,
             resolved_modifiers: ResolvedModifiers::default(),
             draw_commands: vec![],
@@ -4180,6 +4760,7 @@ mod tests {
             content_offset: Point::default(),
             motion_context_animated: false,
             translated_content_context: false,
+            has_own_origin_sinks: false,
             measured_max_width: Some(120.0),
             resolved_modifiers: ResolvedModifiers::default(),
             draw_commands: vec![],
@@ -4208,6 +4789,7 @@ mod tests {
             content_offset: Point { x: 0.0, y: -18.5 },
             motion_context_animated: false,
             translated_content_context: true,
+            has_own_origin_sinks: false,
             measured_max_width: None,
             resolved_modifiers: ResolvedModifiers::default(),
             draw_commands: vec![],
