@@ -500,6 +500,10 @@ where
     }
 
     fn run_render_phase_in_context(&mut self, recomposed_this_frame: bool) -> FrameUpdateResult {
+        // Tick cursor blink before the dirty sets are drained: a visibility
+        // flip schedules a scoped draw repass on the focused field plus a
+        // render invalidation, and both must land in THIS frame's take.
+        cranpose_ui::tick_cursor_blink();
         let render_dirty = take_render_invalidation();
         let pointer_dirty = take_pointer_invalidation();
         take_focus_invalidation();
@@ -537,14 +541,16 @@ where
         // hide its soft keyboard (no-op while focus is live or when no
         // keyboard was requested).
         let _ = cranpose_ui::has_focused_field();
-        // Tick cursor blink timer - only marks dirty when visibility state changes
-        let cursor_blink_dirty = cranpose_ui::tick_cursor_blink();
 
-        let render_only_dirty = (render_dirty
+        // A render invalidation with every tracked dirty set empty is a
+        // frame REQUEST, not a scene change: everything that alters recorded
+        // draws names its node (draw observations for snapshot reads, scoped
+        // repasses for caret/focus/press state). The retained scene is
+        // re-presented; nothing is re-recorded.
+        let render_only_dirty = render_dirty
             && partial_dirty_nodes.is_empty()
             && !draw_repass_pending
-            && !structural_dirty)
-            || cursor_blink_dirty;
+            && !structural_dirty;
         let scene_dirty = self.scene_dirty;
         let draw_only_partial_dirty = !draw_dirty_nodes.is_empty()
             && layout_dirty_nodes.is_empty()
@@ -558,7 +564,6 @@ where
             || scoped_scene_dirty
             || partial_scene_dirty
             || draw_repass_pending
-            || render_only_dirty
             || structural_dirty;
 
         if !needs_scene_rebuild {
@@ -582,10 +587,31 @@ where
                 }),
                 render_only_dirty,
                 recomposed_this_frame,
-                path: "skip",
+                path: if render_only_dirty {
+                    "present-retained"
+                } else {
+                    "skip"
+                },
             });
             self.scoped_layout_scene_nodes = layout_dirty_nodes;
-            return FrameUpdateResult::default();
+            // A pure frame request still presents: encode re-runs against the
+            // retained scene with fresh per-frame inputs (animated motion
+            // contexts, shader time), it just records no draws. The dev
+            // overlay must keep counting through such streams — an animation
+            // that never dirties a node would otherwise freeze its numbers.
+            if render_only_dirty && self.dev_options.fps_counter {
+                let viewport_size = Size {
+                    width: self.viewport.0,
+                    height: self.viewport.1,
+                };
+                self.refresh_dev_overlay_text_for_frame_at(viewport_size, Instant::now());
+                let text = self.dev_overlay_text.as_str();
+                self.renderer.draw_dev_overlay(text, viewport_size);
+            }
+            return FrameUpdateResult {
+                visual_changed: render_only_dirty,
+                structure_changed: false,
+            };
         }
         self.scene_dirty = false;
         let viewport_size = Size {

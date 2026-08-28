@@ -806,9 +806,15 @@ impl TextFieldModifierNode {
                 }
                 PointerEventKind::Move => {
                     // Keep the live press stream fresh for the widget layer.
+                    // The press reaches the contextual menu through metrics
+                    // published while this field draws, and no observation
+                    // tracks the cell — the repass names the stale node.
                     if let Some(mut track) = refs.press_track.get() {
                         track.position = event.global_position;
                         refs.press_track.set(Some(track));
+                        if let Some(node_id) = refs.node_id.get() {
+                            crate::schedule_draw_repass(node_id);
+                        }
                         crate::request_render_invalidation();
                     }
                     // A claimed gesture belongs to the widget's menu slide:
@@ -851,11 +857,17 @@ impl TextFieldModifierNode {
                     // channel even when no visual state changed in the field
                     // itself, so a continuous hold, slide, and release can run
                     // the hovered menu action.
+                    if let Some(node_id) = refs.node_id.get() {
+                        crate::schedule_draw_repass(node_id);
+                    }
                     crate::request_render_invalidation();
                 }
                 PointerEventKind::Cancel => {
                     refs.press_track.set(None);
                     refs.gesture_claimed.set(false);
+                    if let Some(node_id) = refs.node_id.get() {
+                        crate::schedule_draw_repass(node_id);
+                    }
                     crate::request_render_invalidation();
                 }
                 _ => {}

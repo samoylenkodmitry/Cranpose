@@ -73,6 +73,10 @@ impl TextFieldHandler {
 }
 
 impl crate::text_field_focus::FocusedTextFieldHandler for TextFieldHandler {
+    fn node_id(&self) -> Option<cranpose_core::NodeId> {
+        self.node_id
+    }
+
     fn handle_key(&self, event: &crate::key_event::KeyEvent) -> bool {
         use crate::key_event::KeyEventType;
 

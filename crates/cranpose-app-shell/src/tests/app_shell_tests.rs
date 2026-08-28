@@ -971,6 +971,65 @@ fn idle_ui_task_wakes_for_an_update_without_scheduling_a_frame() {
     assert!(!settled.needs_frame);
 }
 
+/// A device trace of a Library scroll showed 13 of 155 frames answering a
+/// bare render invalidation — every tracked dirty set empty — with a full
+/// scene rebuild costing 11 ms of scene time apiece. A render invalidation
+/// with nothing dirty is a frame REQUEST: the retained scene must be
+/// re-presented, and no scene recording of any kind may run. Everything
+/// that changes recorded draws names its node — draw observations for
+/// snapshot reads, scoped repasses for caret, focus, and press state.
+#[test]
+fn a_bare_render_invalidation_re_presents_without_scene_work() {
+    let _guard = test_guard();
+    let rebuilds = Rc::new(Cell::new(0));
+    let updates = Rc::new(Cell::new(0));
+    let visual_updates = Rc::new(Cell::new(0));
+    let mut shell = AppShell::new(
+        ScopedUpdateCountingRenderer::with_visual_updates(
+            Rc::clone(&rebuilds),
+            Rc::clone(&updates),
+            Rc::clone(&visual_updates),
+            Rc::new(RefCell::new(Vec::new())),
+        ),
+        location_key(file!(), line!(), column!()),
+        || {
+            Text(
+                "retained content".to_string(),
+                Modifier::empty(),
+                TextStyle::default(),
+            );
+        },
+    );
+
+    shell.set_viewport(320.0, 240.0);
+    shell.update();
+    while shell.frame_schedule().needs_update {
+        shell.update();
+    }
+    assert!(rebuilds.get() > 0, "settling must have built the scene");
+    // The first frame request after a build legitimately flushes the
+    // needs_redraw flags composition left behind (a scoped re-record of
+    // those nodes). Steady state — the shape the device traces show — is
+    // every request after that.
+    shell.debug_enter_app_context(cranpose_ui::request_render_invalidation);
+    shell.update();
+    let settled = (rebuilds.get(), updates.get(), visual_updates.get());
+
+    shell.debug_enter_app_context(cranpose_ui::request_render_invalidation);
+    let result = shell.update();
+
+    assert!(
+        result.visual_changed,
+        "a frame request must still present the retained scene"
+    );
+    assert!(!result.structure_changed);
+    assert_eq!(
+        (rebuilds.get(), updates.get(), visual_updates.get()),
+        settled,
+        "a bare render invalidation must not rebuild or scoped-update the scene"
+    );
+}
+
 #[test]
 fn two_app_shells_do_not_share_density_or_render_invalidations() {
     let _guard = test_guard();
@@ -4967,39 +5026,6 @@ fn app_shell_new_drains_root_render_requests_before_first_frame() {
     assert!(
         texts.iter().any(|text| text == "Render 2"),
         "initial frame should reflect the replayed root render, got {texts:?}"
-    );
-}
-
-#[test]
-fn render_invalidation_without_scene_changes_rebuilds_scene() {
-    let _guard = test_guard();
-    let root_key = location_key(file!(), line!(), column!());
-    let rebuilds = Rc::new(Cell::new(0));
-    let mut shell = AppShell::new(
-        CountingRenderer::new(Rc::clone(&rebuilds)),
-        root_key,
-        box_content,
-    );
-
-    shell.update();
-    rebuilds.set(0);
-
-    let app_context = Rc::clone(&shell.app_context);
-    app_context.enter(cranpose_ui::request_render_invalidation);
-    assert!(
-        shell.debug_enter_app_context(cranpose_ui::peek_render_invalidation),
-        "test setup must install a render invalidation"
-    );
-    let result = shell.run_render_phase();
-
-    assert_eq!(
-        rebuilds.get(),
-        1,
-        "pure render invalidation should rebuild scene for render-only updates"
-    );
-    assert!(
-        result.visual_changed,
-        "pure render invalidation should report visual work"
     );
 }
 
