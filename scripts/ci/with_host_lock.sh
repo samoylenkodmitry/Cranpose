@@ -31,6 +31,10 @@ set -euo pipefail
 # releases it immediately. There is no PID file to go stale and no cleanup
 # step that a crash can skip.
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/../dev_build_common.sh"
+
 readonly lock_file="/tmp/cranpose-host-capacity.lock"
 # Long enough for a neighbour's Android or wasm build to finish, short enough
 # to stay inside the robot job's 90-minute cap. On expiry the command runs
@@ -61,6 +65,20 @@ if ! command -v flock >/dev/null 2>&1; then
   exec "$@"
 fi
 
+# Before the lock fd below exists, not after: this wrapper's whole job is to
+# run a build (`--shared`) or a measurement (`--exclusive`) underneath it,
+# and that command is frequently `cargo`. sccache's server is a long-lived
+# daemon that cargo spawns lazily on the first wrapped rustc call, and a
+# daemon spawned while fd 9 is open inherits a copy of it that it then holds
+# for as long as it lives -- which is indefinite. Since flock's shared and
+# exclusive modes are enforced across every open file description on the
+# file, not just the one this script itself still holds, that inherited copy
+# alone is enough to block every later exclusive acquire, even long after
+# this script has exited. See run_robot_test.sh for the reproduction; the
+# mechanism here is identical, just reached through the android/web/budgets
+# `--shared` builds instead of the robot suite's own build step.
+enable_local_sccache
+
 exec 9>"$lock_file"
 
 flock_mode="-s"
@@ -79,4 +97,11 @@ else
   fi
 fi
 
-exec "$@"
+# 8>&- 9>&-: never let the wrapped command inherit this lock's fd. If
+# sccache's server is not already running (enable_local_sccache above failed
+# or found nothing to start), the command spawning it here -- directly, or
+# indirectly by execing further into another script -- must not hand it a
+# copy of the lock to hold open forever. fd 8 is not opened by this script,
+# but closing it too costs nothing and matches the same guard everywhere else
+# this lock file is touched.
+exec "$@" 8>&- 9>&-

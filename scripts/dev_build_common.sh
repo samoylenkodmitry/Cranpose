@@ -18,22 +18,35 @@ is_ci_env() {
 }
 
 enable_local_sccache() {
-    local sccache_bin
+    local sccache_bin="${RUSTC_WRAPPER:-}"
 
-    if is_ci_env; then
-        return 0
-    fi
-    if [ "${CRANPOSE_USE_SCCACHE:-1}" = "0" ]; then
-        return 0
-    fi
-    if [ -n "${RUSTC_WRAPPER:-}" ]; then
-        return 0
-    fi
-    if ! sccache_bin="$(find_local_tool sccache)"; then
-        return 0
+    if [ -z "$sccache_bin" ]; then
+        if is_ci_env || [ "${CRANPOSE_USE_SCCACHE:-1}" = "0" ]; then
+            return 0
+        fi
+        if ! sccache_bin="$(find_local_tool sccache)"; then
+            return 0
+        fi
+        export RUSTC_WRAPPER="$sccache_bin"
     fi
 
-    export RUSTC_WRAPPER="$sccache_bin"
+    # Start the daemon now, on purpose, before any caller has a chance to
+    # open a lock fd: sccache spawns its server lazily on the first wrapped
+    # rustc call, and that server is a long-lived daemon that inherits
+    # whatever file descriptors its parent (cargo, and above it this script)
+    # happens to have open at that moment. A flock fd leaked into it that way
+    # stays held for the daemon's lifetime, which can be forever -- see
+    # run_robot_test.sh's host-capacity lock for why that matters. Starting
+    # the server here, before a caller's lock section begins, means the later
+    # build never needs to spawn it. --start-server is a no-op against an
+    # already-running server, so calling this more than once is harmless.
+    # Only ever touch a binary actually named sccache: RUSTC_WRAPPER can
+    # point at anything, and most wrappers do not understand this flag.
+    case "$(basename -- "$sccache_bin")" in
+        sccache|sccache.exe) ;;
+        *) return 0 ;;
+    esac
+    command -v "$sccache_bin" >/dev/null 2>&1 || return 0
     "$sccache_bin" --start-server >/dev/null 2>&1 || true
 }
 

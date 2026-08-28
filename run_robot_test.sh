@@ -42,6 +42,13 @@ if [ ! -x "${CARGO_RUNNER[0]}" ]; then
     CARGO_RUNNER=(cargo)
 fi
 
+# Before the host lock fd below exists, not after: sccache's server is a
+# long-lived daemon that inherits whatever fds are open in its parent at the
+# moment cargo lazily spawns it, and a lock fd leaked into a daemon that way
+# is held for the daemon's life. Calling this here means the build under the
+# lock further down never has to spawn the server itself.
+enable_local_sccache
+
 # The host lock, in two phases (scripts/ci/with_host_lock.sh owns the file).
 #
 # Phase one, from here: the shared side, the same side every heavy build on
@@ -113,7 +120,6 @@ if ! [[ "$ROBOT_FAILURE_LOG_LINES" =~ ^[1-9][0-9]*$ ]]; then
 fi
 
 enable_local_tmpdir
-enable_local_sccache
 enable_local_cargo_job_limit
 export WINIT_X11_SCALE_FACTOR="${WINIT_X11_SCALE_FACTOR:-1}"
 
@@ -437,7 +443,11 @@ else
         echo "Host was not ready for robot build." | tee -a "$LOG_FILE"
         exit 1
     fi
-    "${CARGO_RUNNER[@]}" build "${BUILD_ARGS[@]}" 2>&1 | tee -a "$LOG_FILE"
+    # 8>&- 9>&-: never let the build inherit the host-capacity lock fds. If
+    # sccache's server is not already running (enable_local_sccache above
+    # failed to start it, or something else killed it), cargo spawning it
+    # here must not hand it a copy of the lock to hold open forever.
+    "${CARGO_RUNNER[@]}" build "${BUILD_ARGS[@]}" 8>&- 9>&- 2>&1 | tee -a "$LOG_FILE"
 
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         echo "Build failed!" | tee -a "$LOG_FILE"
@@ -787,12 +797,17 @@ run_test() {
             robot_env_args+=("$entry")
         done < <(robot_process_env "$headless_env" "${example_env[@]}")
 
+        # 8>&- 9>&-: the same reasoning as the build above, for the example
+        # binary itself. fd 8 is already closed process-wide by this point
+        # (the exclusive phase closed it), but closing both here as well
+        # means no lock fd survives into this child even if that ever
+        # changes, and even if the exclusive holder below dies mid-run.
         if command -v timeout >/dev/null 2>&1; then
-            env -i "${robot_env_args[@]}" timeout --kill-after=15s "${timeout_secs}s" "$example_bin" > "$attempt_output" 2>&1
+            env -i "${robot_env_args[@]}" timeout --kill-after=15s "${timeout_secs}s" "$example_bin" > "$attempt_output" 2>&1 8>&- 9>&-
             local exit_code=$?
         else
             run_with_portable_timeout "$timeout_secs" 15 "$attempt_output" \
-                env -i "${robot_env_args[@]}" "$example_bin"
+                env -i "${robot_env_args[@]}" "$example_bin" 8>&- 9>&-
             local exit_code=$?
         fi
 
