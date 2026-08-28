@@ -948,7 +948,7 @@ fn configure_native_client_builder(
 ) -> Result<reqwest::blocking::ClientBuilder, HttpError> {
     #[cfg(target_os = "android")]
     {
-        return Ok(builder.tls_certs_only(android_root_certificates()?));
+        Ok(builder.tls_certs_only(android_root_certificates()?))
     }
 
     #[cfg(not(target_os = "android"))]

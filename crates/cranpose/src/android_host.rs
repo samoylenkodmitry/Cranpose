@@ -102,12 +102,10 @@ pub(crate) fn install(app: android_activity::AndroidApp) {
             std::env::set_var("XDG_DATA_HOME", path);
         }
     }
-    if let Some(package) = package_name(&app) {
-        if let Err(error) = set_application_id(&package) {
-            log::warn!(
-                "cranpose: the Android package name is not a usable application id: {error}"
-            );
-        }
+    if let Some(package) = package_name(&app)
+        && let Err(error) = set_application_id(&package)
+    {
+        log::warn!("cranpose: the Android package name is not a usable application id: {error}");
     }
     set_host_controller(Arc::new(AndroidHost { app }));
 }

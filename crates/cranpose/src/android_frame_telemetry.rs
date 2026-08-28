@@ -195,6 +195,17 @@ pub(crate) fn seed_env_from_system_properties() {
 
 /// `CLOCK_MONOTONIC` in nanoseconds — the same clock `AChoreographer` frame
 /// times use, so the two can be subtracted directly.
+// `timespec` fields are `i64` on the 64-bit ABIs and `i32` on armeabi-v7a and
+// x86. The widening is mandatory on 32-bit and is a no-op on 64-bit, and there
+// is no spelling that satisfies both: `as i64` trips `unnecessary_cast` on
+// 64-bit, `i64::from` trips `useless_conversion` there instead. Keeping
+// `i64::from` and allowing the 64-bit complaint is the honest resolution — it
+// states the widening intent, and dropping it to silence the lint would make
+// this a type error on the two 32-bit ABIs that CI ships.
+#[allow(
+    clippy::useless_conversion,
+    reason = "identity on 64-bit ABIs, required widening on armeabi-v7a and x86"
+)]
 pub(crate) fn monotonic_nanos() -> i64 {
     let mut now = libc::timespec {
         tv_sec: 0,
@@ -204,7 +215,11 @@ pub(crate) fn monotonic_nanos() -> i64 {
     unsafe {
         libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut now);
     }
-    now.tv_sec as i64 * 1_000_000_000 + now.tv_nsec as i64
+    // `timespec` fields are `i64` on 64-bit ABIs and `i32` on armeabi-v7a and
+    // x86, so this has to widen on 32-bit and must not look like a redundant
+    // cast on 64-bit. `i64::from` is both: infallible widening where the types
+    // differ, identity where they do not, and no `unnecessary_cast` either way.
+    i64::from(now.tv_sec) * 1_000_000_000 + i64::from(now.tv_nsec)
 }
 
 static VSYNC_LAST_NS: AtomicI64 = AtomicI64::new(0);
