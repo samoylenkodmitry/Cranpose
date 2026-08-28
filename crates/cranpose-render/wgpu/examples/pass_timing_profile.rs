@@ -126,14 +126,24 @@ fn CardListScene(list_state: LazyListState) {
             );
             // The fixed glass chrome cranscan holds over its Library scroll:
             // a toolbar and a tab bar, each an uncacheable backdrop that
-            // re-captures and re-blurs every scrolled frame.
-            GlassBar(24.0, 40.0, FRAME_WIDTH as f32 - 48.0, 200.0);
-            GlassBar(
-                24.0,
-                FRAME_HEIGHT as f32 - 240.0,
-                FRAME_WIDTH as f32 - 48.0,
-                200.0,
-            );
+            // re-captures and re-blurs every scrolled frame. PROFILE_BARS
+            // (default 2) sizes the chrome so the per-backdrop-boundary cost
+            // can be measured by delta.
+            let bars: usize = std::env::var("PROFILE_BARS")
+                .ok()
+                .and_then(|raw| raw.parse().ok())
+                .unwrap_or(2);
+            if bars >= 1 {
+                GlassBar(24.0, 40.0, FRAME_WIDTH as f32 - 48.0, 200.0);
+            }
+            if bars >= 2 {
+                GlassBar(
+                    24.0,
+                    FRAME_HEIGHT as f32 - 240.0,
+                    FRAME_WIDTH as f32 - 48.0,
+                    200.0,
+                );
+            }
         },
     );
 }
