@@ -6860,6 +6860,8 @@ impl GpuRenderer {
         let output_converter = OutputConverter::new(&device, display_format);
         let screenshot_converter = OutputConverter::new(&device, wgpu::TextureFormat::Rgba8Unorm);
         let effects_ms = instant_ms(effects_started, Instant::now());
+        let mut frame_graph_executor = WgpuFrameGraphExecutor::new();
+        frame_graph_executor.init_pass_timing(&device, &queue);
 
         let renderer = Self {
             device,
@@ -6969,7 +6971,7 @@ impl GpuRenderer {
             scratch_effect_ranges: Vec::new(),
             scratch_layer_events: Vec::new(),
             staged_uploads: StagedBufferUploads::default(),
-            frame_graph_executor: WgpuFrameGraphExecutor::new(),
+            frame_graph_executor,
             deferred_offscreen_releases: Vec::new(),
             effect_renderer,
             layer_surface_cache: LayerSurfaceCache::new(),
@@ -8560,8 +8562,7 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
         {
             let _clear = self
                 .recorder
-                .encoder()
-                .begin_render_pass(&wgpu::RenderPassDescriptor {
+                .begin_timed_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("Layer Event Clear Pass"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                         view: target_view,
@@ -8573,9 +8574,7 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
                         },
                     })],
                     depth_stencil_attachment: None,
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                    multiview_mask: None,
+                    ..Default::default()
                 });
         }
         self.recorder.record_pass();
@@ -9439,6 +9438,8 @@ impl GpuRenderer {
         if self.gpu_stats_enabled && self.frame_count.is_multiple_of(60) {
             gpu_stats::print_gpu_memory_report(&self.device, self.frame_count);
         }
+        self.frame_graph_executor
+            .end_pass_timing_frame(&self.device, &self.queue);
         self.frame_stats.reset();
         let after_stats = Instant::now();
         if let Some(total_ms) = should_log_wgpu_render_stage(render_start, after_stats) {
@@ -9515,6 +9516,10 @@ impl GpuRenderer {
 
     pub fn last_frame_stats(&self) -> Option<gpu_stats::FrameStatsSnapshot> {
         self.last_frame_stats
+    }
+
+    pub fn gpu_pass_timings(&self) -> crate::pass_timing::GpuPassTimingReport {
+        self.frame_graph_executor.pass_timing_report()
     }
 
     pub fn needs_frame_warmup(&self) -> bool {
@@ -9723,7 +9728,7 @@ impl GpuRenderer {
                         }
                         .encode(
                             &self.device,
-                            frame_encoder.encoder(),
+                            frame_encoder,
                             output_view,
                             bind_group,
                             self.adapter_backend,
@@ -9780,7 +9785,7 @@ impl GpuRenderer {
                     }
                     .encode(
                         &self.device,
-                        frame_encoder.encoder(),
+                        &mut frame_encoder,
                         output_view,
                         bind_group,
                         self.adapter_backend,
@@ -10160,7 +10165,7 @@ impl GpuRenderer {
                 SegmentRenderCommand::Shadow(index) => {
                     if first_batch && matches!(initial_load_op, wgpu::LoadOp::Clear(_)) {
                         {
-                            let _clear = frame_encoder.encoder().begin_render_pass(
+                            let _clear = frame_encoder.begin_timed_render_pass(
                                 &wgpu::RenderPassDescriptor {
                                     label: Some("Shadow Pre-Clear"),
                                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -10173,9 +10178,7 @@ impl GpuRenderer {
                                         },
                                     })],
                                     depth_stencil_attachment: None,
-                                    timestamp_writes: None,
-                                    occlusion_query_set: None,
-                                    multiview_mask: None,
+                                    ..Default::default()
                                 },
                             );
                         }
@@ -10861,27 +10864,23 @@ impl GpuRenderer {
                     continue;
                 };
                 let mut capture_pass =
-                    frame_encoder
-                        .encoder()
-                        .begin_render_pass(&wgpu::RenderPassDescriptor {
-                            label: Some("Segment Surface Capture Pass"),
-                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                view: &entry.texture.view,
-                                resolve_target: None,
-                                depth_slice: None,
-                                ops: wgpu::Operations {
-                                    // Transparent clear: the surface holds
-                                    // the span's premultiplied flattening
-                                    // and nothing else.
-                                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                                    store: wgpu::StoreOp::Store,
-                                },
-                            })],
-                            depth_stencil_attachment: None,
-                            timestamp_writes: None,
-                            occlusion_query_set: None,
-                            multiview_mask: None,
-                        });
+                    frame_encoder.begin_timed_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("Segment Surface Capture Pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &entry.texture.view,
+                            resolve_target: None,
+                            depth_slice: None,
+                            ops: wgpu::Operations {
+                                // Transparent clear: the surface holds
+                                // the span's premultiplied flattening
+                                // and nothing else.
+                                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: None,
+                        ..Default::default()
+                    });
                 let draws = self.encode_retained_op(
                     slot,
                     job.first,
@@ -10921,38 +10920,34 @@ impl GpuRenderer {
             let mut retained_encode_ms = 0.0_f64;
             {
                 let mut render_pass =
-                    frame_encoder
-                        .encoder()
-                        .begin_render_pass(&wgpu::RenderPassDescriptor {
-                            label: Some("Fused Segment Draw Pass"),
-                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                view: target_view,
-                                resolve_target: None,
-                                depth_slice: None,
-                                ops: wgpu::Operations {
-                                    load: load_op,
-                                    store: wgpu::StoreOp::Store,
-                                },
-                            })],
-                            // Clear + Discard: the display-clip depth
-                            // buffer is born and dies inside this pass — on
-                            // tiled GPUs it never leaves GMEM.
-                            depth_stencil_attachment: display_clip_depth_view.as_ref().map(
-                                |view| wgpu::RenderPassDepthStencilAttachment {
-                                    view,
-                                    depth_ops: Some(wgpu::Operations {
-                                        load: wgpu::LoadOp::Clear(
-                                            crate::display_clip::DISPLAY_CLIP_DEPTH_CLEAR,
-                                        ),
-                                        store: wgpu::StoreOp::Discard,
-                                    }),
-                                    stencil_ops: None,
-                                },
-                            ),
-                            timestamp_writes: None,
-                            occlusion_query_set: None,
-                            multiview_mask: None,
-                        });
+                    frame_encoder.begin_timed_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("Fused Segment Draw Pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: target_view,
+                            resolve_target: None,
+                            depth_slice: None,
+                            ops: wgpu::Operations {
+                                load: load_op,
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        // Clear + Discard: the display-clip depth
+                        // buffer is born and dies inside this pass — on
+                        // tiled GPUs it never leaves GMEM.
+                        depth_stencil_attachment: display_clip_depth_view.as_ref().map(|view| {
+                            wgpu::RenderPassDepthStencilAttachment {
+                                view,
+                                depth_ops: Some(wgpu::Operations {
+                                    load: wgpu::LoadOp::Clear(
+                                        crate::display_clip::DISPLAY_CLIP_DEPTH_CLEAR,
+                                    ),
+                                    store: wgpu::StoreOp::Discard,
+                                }),
+                                stencil_ops: None,
+                            }
+                        }),
+                        ..Default::default()
+                    });
 
                 // The cached span composite replaces the frame's leading
                 // draws, so it goes down before every fused batch — same
@@ -11144,24 +11139,20 @@ impl GpuRenderer {
                 };
                 {
                     let mut capture_pass =
-                        frame_encoder
-                            .encoder()
-                            .begin_render_pass(&wgpu::RenderPassDescriptor {
-                                label: Some("Static Span Capture Pass"),
-                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                    view: &texture.view,
-                                    resolve_target: None,
-                                    depth_slice: None,
-                                    ops: wgpu::Operations {
-                                        load: wgpu::LoadOp::Clear(clear),
-                                        store: wgpu::StoreOp::Store,
-                                    },
-                                })],
-                                depth_stencil_attachment: None,
-                                timestamp_writes: None,
-                                occlusion_query_set: None,
-                                multiview_mask: None,
-                            });
+                        frame_encoder.begin_timed_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("Static Span Capture Pass"),
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view: &texture.view,
+                                resolve_target: None,
+                                depth_slice: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Clear(clear),
+                                    store: wgpu::StoreOp::Store,
+                                },
+                            })],
+                            depth_stencil_attachment: None,
+                            ..Default::default()
+                        });
                     // `has_gradient` is the LIVE first batch's whole-batch
                     // flag: it selects the same fs_solid/gradient pipeline
                     // variant the live path draws the span through.
@@ -11337,7 +11328,7 @@ impl GpuRenderer {
                             upload_offset,
                         );
                         {
-                            let mut render_pass = frame_encoder.encoder().begin_render_pass(
+                            let mut render_pass = frame_encoder.begin_timed_render_pass(
                                 &wgpu::RenderPassDescriptor {
                                     label: Some("Segment Shape Pass"),
                                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -11350,9 +11341,7 @@ impl GpuRenderer {
                                         },
                                     })],
                                     depth_stencil_attachment: None,
-                                    timestamp_writes: None,
-                                    occlusion_query_set: None,
-                                    multiview_mask: None,
+                                    ..Default::default()
                                 },
                             );
                             self.draw_prepared_shapes(
@@ -11410,7 +11399,7 @@ impl GpuRenderer {
                             upload_offset,
                         );
                         let draw_result = {
-                            let mut render_pass = frame_encoder.encoder().begin_render_pass(
+                            let mut render_pass = frame_encoder.begin_timed_render_pass(
                                 &wgpu::RenderPassDescriptor {
                                     label: Some("Segment Image Pass"),
                                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -11423,9 +11412,7 @@ impl GpuRenderer {
                                         },
                                     })],
                                     depth_stencil_attachment: None,
-                                    timestamp_writes: None,
-                                    occlusion_query_set: None,
-                                    multiview_mask: None,
+                                    ..Default::default()
                                 },
                             );
                             self.draw_prepared_images(
@@ -11466,7 +11453,7 @@ impl GpuRenderer {
                                 upload_offset,
                             );
                             {
-                                let mut render_pass = frame_encoder.encoder().begin_render_pass(
+                                let mut render_pass = frame_encoder.begin_timed_render_pass(
                                     &wgpu::RenderPassDescriptor {
                                         label: Some("Segment Text Glyph Atlas Pass"),
                                         color_attachments: &[Some(
@@ -11481,9 +11468,7 @@ impl GpuRenderer {
                                             },
                                         )],
                                         depth_stencil_attachment: None,
-                                        timestamp_writes: None,
-                                        occlusion_query_set: None,
-                                        multiview_mask: None,
+                                        ..Default::default()
                                     },
                                 );
                                 self.draw_prepared_glyphs(&mut render_pass, &prepared_glyphs)?;
@@ -11513,7 +11498,7 @@ impl GpuRenderer {
                                 upload_offset,
                             );
                             {
-                                let mut render_pass = frame_encoder.encoder().begin_render_pass(
+                                let mut render_pass = frame_encoder.begin_timed_render_pass(
                                     &wgpu::RenderPassDescriptor {
                                         label: Some("Segment Text Pass"),
                                         color_attachments: &[Some(
@@ -11528,9 +11513,7 @@ impl GpuRenderer {
                                             },
                                         )],
                                         depth_stencil_attachment: None,
-                                        timestamp_writes: None,
-                                        occlusion_query_set: None,
-                                        multiview_mask: None,
+                                        ..Default::default()
                                     },
                                 );
                                 self.draw_prepared_images(
@@ -11659,7 +11642,7 @@ impl GpuRenderer {
                                 upload_offset,
                             );
                             {
-                                let mut render_pass = frame_encoder.encoder().begin_render_pass(
+                                let mut render_pass = frame_encoder.begin_timed_render_pass(
                                     &wgpu::RenderPassDescriptor {
                                         label: Some("Segment Retained Pass"),
                                         color_attachments: &[Some(
@@ -11674,9 +11657,7 @@ impl GpuRenderer {
                                             },
                                         )],
                                         depth_stencil_attachment: None,
-                                        timestamp_writes: None,
-                                        occlusion_query_set: None,
-                                        multiview_mask: None,
+                                        ..Default::default()
                                     },
                                 );
                                 for (_, item) in &ordered_items[start..end] {
@@ -12072,7 +12053,7 @@ impl GpuRenderer {
                             upload_offset,
                         );
                         let draw_result = {
-                            let mut render_pass = frame_encoder.encoder().begin_render_pass(
+                            let mut render_pass = frame_encoder.begin_timed_render_pass(
                                 &wgpu::RenderPassDescriptor {
                                     label: Some("Zero Blur Shadow Text Image Pass"),
                                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -12085,9 +12066,7 @@ impl GpuRenderer {
                                         },
                                     })],
                                     depth_stencil_attachment: None,
-                                    timestamp_writes: None,
-                                    occlusion_query_set: None,
-                                    multiview_mask: None,
+                                    ..Default::default()
                                 },
                             );
                             self.draw_prepared_images(
@@ -12210,8 +12189,8 @@ impl GpuRenderer {
                         upload_offset,
                     );
                     let draw_result = {
-                        let mut render_pass = frame_encoder.encoder().begin_render_pass(
-                            &wgpu::RenderPassDescriptor {
+                        let mut render_pass =
+                            frame_encoder.begin_timed_render_pass(&wgpu::RenderPassDescriptor {
                                 label: Some("Shadow Source Text Image Pass"),
                                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                                     view: &source.view,
@@ -12223,11 +12202,8 @@ impl GpuRenderer {
                                     },
                                 })],
                                 depth_stencil_attachment: None,
-                                timestamp_writes: None,
-                                occlusion_query_set: None,
-                                multiview_mask: None,
-                            },
-                        );
+                                ..Default::default()
+                            });
                         self.draw_prepared_images(
                             &mut render_pass,
                             &prepared_images,
@@ -12386,24 +12362,20 @@ impl GpuRenderer {
 
             {
                 let mut render_pass =
-                    frame_encoder
-                        .encoder()
-                        .begin_render_pass(&wgpu::RenderPassDescriptor {
-                            label: Some("Shadow Source Shape Pass"),
-                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                view: source_view,
-                                resolve_target: None,
-                                depth_slice: None,
-                                ops: wgpu::Operations {
-                                    load: *next_load_op,
-                                    store: wgpu::StoreOp::Store,
-                                },
-                            })],
-                            depth_stencil_attachment: None,
-                            timestamp_writes: None,
-                            occlusion_query_set: None,
-                            multiview_mask: None,
-                        });
+                    frame_encoder.begin_timed_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("Shadow Source Shape Pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: source_view,
+                            resolve_target: None,
+                            depth_slice: None,
+                            ops: wgpu::Operations {
+                                load: *next_load_op,
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: None,
+                        ..Default::default()
+                    });
                 self.draw_prepared_shapes(
                     &mut render_pass,
                     blend_mode,
@@ -14416,25 +14388,20 @@ impl GpuRenderer {
             frame_encoder.allocate_staged_upload_bytes(staged_uploads.bytes.len() as u64);
         self.flush_staged_uploads_at(frame_encoder.encoder(), &staged_uploads, upload_offset);
         self.restore_staged_uploads(staged_uploads);
-        let mut render_pass =
-            frame_encoder
-                .encoder()
-                .begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("Shape Pass"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: target_view,
-                        resolve_target: None,
-                        depth_slice: None,
-                        ops: wgpu::Operations {
-                            load: load_op,
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                    multiview_mask: None,
-                });
+        let mut render_pass = frame_encoder.begin_timed_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Shape Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target_view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: load_op,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            ..Default::default()
+        });
         self.draw_prepared_shapes(&mut render_pass, blend_mode, batch, width, height, &[]);
     }
 

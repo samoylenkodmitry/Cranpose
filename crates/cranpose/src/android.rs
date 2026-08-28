@@ -1418,10 +1418,7 @@ fn create_android_gpu_resources(
 
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("Android Device"),
-        // The pipeline cache feature where the driver offers it (Vulkan) —
-        // see `pipeline_disk_cache` in the renderer. The intersection stays
-        // empty on adapters without it, so nothing else changes.
-        required_features: adapter.features() & wgpu::Features::PIPELINE_CACHE,
+        required_features: cranpose_render_wgpu::optional_device_features(&adapter),
         required_limits: crate::gpu_limits::mobile_device_limits(adapter.limits()),
         experimental_features: wgpu::ExperimentalFeatures::disabled(),
         memory_hints: crate::gpu_limits::mobile_memory_hints(),

@@ -19,6 +19,7 @@ mod lazy_resource;
 mod normalized_scene;
 mod offscreen;
 mod output_conversion;
+pub(crate) mod pass_timing;
 mod pipeline;
 #[cfg(not(target_arch = "wasm32"))]
 mod pipeline_disk_cache;
@@ -65,6 +66,7 @@ use frame_packet::ReplayConfirmation;
 pub use frame_packet::{CancelReason, PresentOutcome};
 use frontend::{DevOverlayCache, RendererFrontend};
 pub use gpu_stats::FrameStatsSnapshot as RenderStatsSnapshot;
+pub use pass_timing::{GpuPassTimingEntry, GpuPassTimingReport};
 #[doc(hidden)]
 #[cfg(not(target_arch = "wasm32"))]
 pub use pipeline::retained_feed_generation;
@@ -84,6 +86,16 @@ pub use shape_replay::{inject_feed_capture_for_tests, pending_feed_capture_count
 #[doc(hidden)]
 #[cfg(not(target_arch = "wasm32"))]
 pub use shape_replay::{planner_replay_queue_stats_for_tests, recycled_ops_capacities_for_tests};
+
+/// The optional device features the renderer exploits when the adapter
+/// offers them: pipeline caching (see [`pipeline_disk_cache`]) and the
+/// timestamp queries behind `CRANPOSE_GPU_PASS_TIMING`. Every platform's
+/// `request_device` passes this so a profiling toggle never needs a rebuilt
+/// binary; intersecting with the adapter's own features keeps the request
+/// valid on adapters without them.
+pub fn optional_device_features(adapter: &wgpu::Adapter) -> wgpu::Features {
+    adapter.features() & (wgpu::Features::PIPELINE_CACHE | wgpu::Features::TIMESTAMP_QUERY)
+}
 
 /// Convert an axis-aligned rectangle to four corner positions (TL, TR, BL, BR).
 pub(crate) fn rect_to_quad(rect: Rect) -> [[f32; 2]; 4] {
@@ -1056,6 +1068,15 @@ impl WgpuRenderer {
     pub fn last_frame_stats(&self) -> Option<RenderStatsSnapshot> {
         self.sync_gpu_renderer()
             .and_then(GpuRenderer::last_frame_stats)
+    }
+
+    /// GPU milliseconds by pass label, aggregated since the last `[GPU-PASS]`
+    /// print. Empty unless `CRANPOSE_GPU_PASS_TIMING` armed pass timing on a
+    /// device with [`wgpu::Features::TIMESTAMP_QUERY`].
+    pub fn gpu_pass_timings(&self) -> GpuPassTimingReport {
+        self.sync_gpu_renderer()
+            .map(GpuRenderer::gpu_pass_timings)
+            .unwrap_or_default()
     }
 
     pub fn debug_cpu_allocation_stats(&self) -> DebugCpuAllocationStats {

@@ -616,10 +616,8 @@ fn projective_composite_has_encode_only_entry_point() {
         "projective composites must expose an encode-only path for frame-recorder layer composition"
     );
     assert!(
-        body.contains(".encoder()")
-            && body.contains("begin_render_pass")
-            && body.contains("pass.draw(0..4, 0..1);"),
-        "projective composites must encode a WGPU pass into the caller-owned command encoder"
+        body.contains(".begin_timed_render_pass(") && body.contains("pass.draw(0..4, 0..1);"),
+        "projective composites must encode a WGPU pass into the caller-owned recorder"
     );
     assert!(
         !effect_source.contains("pub fn composite_to_view_projective("),

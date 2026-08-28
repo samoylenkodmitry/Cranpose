@@ -380,7 +380,7 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
         let (device, queue) =
             match pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
                 label: Some("Cranpose iOS Device"),
-                required_features: wgpu::Features::empty(),
+                required_features: cranpose_render_wgpu::optional_device_features(&adapter),
                 required_limits: crate::gpu_limits::mobile_device_limits(adapter.limits()),
                 experimental_features: wgpu::ExperimentalFeatures::disabled(),
                 memory_hints: crate::gpu_limits::mobile_memory_hints(),
