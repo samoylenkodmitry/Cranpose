@@ -120,13 +120,12 @@ featureless:
     cargo check -p cranpose-testing --no-default-features
     cargo check --workspace --all-features
 
-# Duplicate-dependency budgets, per slice.
+# Duplicate-dependency budget, resolved for every shipped target so the
+# verdict is identical on every host. Any duplicate version family must either
+# be collapsed or recorded as upstream debt in xtask; stale debt entries fail
+# the gate too.
 dep-budget:
     cargo xtask dependency-budget --explain
-    cargo xtask dependency-budget --strict --explain
-    cargo xtask dependency-budget --strict --slice desktop-platform --explain
-    cargo xtask dependency-budget --strict --slice optional-features --explain
-    cargo xtask dependency-budget --strict --slice wgpu-stack --explain
 
 # Desktop binary size ceiling, measured against the isolated demo.
 size-budget:
