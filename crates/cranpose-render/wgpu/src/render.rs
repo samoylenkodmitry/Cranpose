@@ -8018,6 +8018,7 @@ impl<C: FrameCommandRecorder> RecordingSurfaceBackend<'_, '_, C> {
                     load_op,
                     scissor,
                     viewport,
+                    None,
                 );
             if shader_applied {
                 self.renderer
@@ -8169,10 +8170,16 @@ impl<C: FrameCommandRecorder> RecordingSurfaceBackend<'_, '_, C> {
         dest_viewport: (f32, f32, f32, f32),
     ) -> Result<bool, String> {
         let device = self.renderer.device.clone();
+        let (intermediate_width, intermediate_height) =
+            crate::effect_renderer::direct_tail_intermediate_size(
+                first_effect,
+                source.width,
+                source.height,
+            );
         let intermediate_descriptor = self.renderer.transient_offscreen_descriptor(
             "Render Effect Direct Shader Tail Intermediate",
-            source.width,
-            source.height,
+            intermediate_width,
+            intermediate_height,
         );
         let intermediate = self
             .recorder
@@ -8226,6 +8233,8 @@ impl<C: FrameCommandRecorder> RecordingSurfaceBackend<'_, '_, C> {
                 load_op,
                 scissor,
                 dest_viewport,
+                ((intermediate_width, intermediate_height) != (source.width, source.height))
+                    .then_some((source.width as f32, source.height as f32)),
             );
         self.recorder
             .record_passes(first_passes.saturating_add(u32::from(shader_applied)));

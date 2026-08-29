@@ -22,6 +22,27 @@ use crate::{
     shaders,
 };
 
+/// The size for a `Chain(Blur, Shader)` tail intermediate: the blur's own
+/// scratch size. The vertical axis otherwise writes every destination pixel
+/// — sixteen times the horizontal pass's work at a quarter-scale scratch —
+/// only for the shader to consume a texture whose extra resolution a
+/// radius-16+ Gaussian already destroyed. The shader receives the logical
+/// extent separately, so its pixel-calibrated offsets stay correct.
+pub(crate) fn direct_tail_intermediate_size(
+    first_effect: &RenderEffect,
+    width: u32,
+    height: u32,
+) -> (u32, u32) {
+    if let RenderEffect::Blur {
+        radius_x, radius_y, ..
+    } = first_effect
+        && (*radius_x > 0.0 || *radius_y > 0.0)
+    {
+        return blur_scratch_size(*radius_x, *radius_y, width, height);
+    }
+    (width, height)
+}
+
 pub(crate) fn blur_scratch_size(
     radius_x: f32,
     radius_y: f32,
@@ -425,6 +446,12 @@ struct ShaderPassOptions {
     scissor: Option<(u32, u32, u32, u32)>,
     dest_viewport: Option<(f32, f32, f32, f32)>,
     pipeline_mode: RuntimeShaderPipelineMode,
+    /// The logical pixel extent the source texture REPRESENTS, when it is
+    /// rasterized smaller than that (a blur chain's scratch-size
+    /// intermediate). The shader divides pixel-calibrated offsets by this
+    /// instead of `textureDimensions`, which would inflate them by the
+    /// downscale factor. `None` means the source is at its logical size.
+    source_logical_size: Option<(f32, f32)>,
 }
 
 #[derive(Clone, Copy)]
@@ -1473,6 +1500,7 @@ impl EffectRenderer {
                 scissor: None,
                 dest_viewport: None,
                 pipeline_mode: RuntimeShaderPipelineMode::Replace,
+                source_logical_size: None,
             },
         )
     }
@@ -1489,6 +1517,7 @@ impl EffectRenderer {
         load_op: wgpu::LoadOp<wgpu::Color>,
         scissor: Option<(u32, u32, u32, u32)>,
         dest_viewport: (f32, f32, f32, f32),
+        source_logical_size: Option<(f32, f32)>,
     ) -> bool {
         if dest_viewport.2 <= 0.0 || dest_viewport.3 <= 0.0 {
             return false;
@@ -1505,6 +1534,7 @@ impl EffectRenderer {
                 scissor,
                 dest_viewport: Some(dest_viewport),
                 pipeline_mode: RuntimeShaderPipelineMode::PremultipliedSrcOver,
+                source_logical_size,
             },
         )
     }
@@ -1662,6 +1692,10 @@ impl EffectRenderer {
         padded[slot + 1] = layer_pixel_rect[1];
         padded[slot + 2] = layer_pixel_rect[2];
         padded[slot + 3] = layer_pixel_rect[3];
+        if let Some((logical_width, logical_height)) = options.source_logical_size {
+            padded[slot + 4] = logical_width;
+            padded[slot + 5] = logical_height;
+        }
         let uniform_bind_group = recorder.upload_uniform(
             UploadAllocatorId::EffectUniform,
             effect_uniform_spec(),
@@ -2400,7 +2434,36 @@ fn composite_sampling_mode_value(sample_mode: CompositeSampleMode) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{BlurUniforms, projective_dest_bounds_rect};
+    use super::{BlurUniforms, direct_tail_intermediate_size, projective_dest_bounds_rect};
+    use cranpose_ui_graphics::{RenderEffect, RuntimeShader};
+
+    #[test]
+    fn a_frost_chain_tail_intermediate_shrinks_to_the_blur_scratch() {
+        let frost = RenderEffect::Blur {
+            radius_x: 24.0,
+            radius_y: 24.0,
+            edge_treatment: Default::default(),
+        };
+        // Radius 24 downsamples 4x on each side.
+        assert_eq!(direct_tail_intermediate_size(&frost, 1080, 360), (270, 90));
+
+        // A zero blur is the composite fast path; nothing shrinks.
+        let no_frost = RenderEffect::Blur {
+            radius_x: 0.0,
+            radius_y: 0.0,
+            edge_treatment: Default::default(),
+        };
+        assert_eq!(
+            direct_tail_intermediate_size(&no_frost, 1080, 360),
+            (1080, 360)
+        );
+
+        // A shader first stage samples at texel precision; full size.
+        let lens = RenderEffect::Shader {
+            shader: RuntimeShader::new("fn f() {}"),
+        };
+        assert_eq!(direct_tail_intermediate_size(&lens, 1080, 360), (1080, 360));
+    }
 
     #[test]
     fn blur_uniforms_use_vec4_packing_for_gl_backends() {
