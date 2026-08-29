@@ -350,3 +350,38 @@ Signature → cause → what to do. One lesson per line, no incident history.
   the END of the run, which over-samples whatever phase ran last. Check
   line counts against expected frame counts before believing any logcat
   capture, and keep per-frame switches to the one being read.
+
+- **A pkill on a shared CI host kills CI, and a "free the host" order must
+  name the exclusion** — freeing samarch-1 for a queued robot job,
+  `pkill -f run_robot_test` also hit the CI job that had started six seconds
+  earlier: the runner executes the same scripts by the same names from its
+  own work directory. The job died with a bare signal 15 that got three
+  confident wrong attributions inside ten minutes ("superseded run", "test
+  failure", "host guard") — only the person who typed the pkill could know,
+  because nothing in the artifacts said so. Scope the kill to your own
+  checkout (`pkill -f '/home/s/robot-repro.*run_robot_test'`), and when
+  ordering a host cleared, say "everything except the runner's _work
+  directory" out loud — the receiver should not have to infer that the
+  freeze's beneficiary runs the same binaries.
+
+- **A half-instrumented invalidation scheme is a new bug, not a half-fix** —
+  #538's first commit recorded geometry changes only in the node setters,
+  but the engine writes ordinary children's geometry through a direct
+  handle that bypasses them. The recorded ids switched frames onto the
+  scoped scene path, and the full-rebuild fallback that had been silently
+  rescuing every unrecorded node left with the redundancy: the branch was
+  WORSE than main (robot_drag_selection: main PASS, branch FAIL). Partial
+  coverage is worse than none. The durable fix made the fields private so
+  an unrecorded write does not compile — prefer making the bypass
+  impossible over enumerating the sites, and distrust any optimisation
+  that is "correct for the cases we enumerated".
+
+- **Two scene-test traps that make a green lie** — a moved Text sibling
+  rescues itself (re-measuring a text re-shapes it and schedules its own
+  draw repass, sneaking the row into the scene scope), so a pin for missing
+  geometry records must move a solid box; and tiny scenes flood the scope
+  through the retained-redraw sweep so everything self-heals, so pin with
+  per-item lazy scopes and assert rebuilds == 0 against a harness that
+  counts its internal fallback as a rebuild. Both greens looked like proof
+  and proved nothing; both were caught only by severing the mechanism and
+  demanding the red first.
