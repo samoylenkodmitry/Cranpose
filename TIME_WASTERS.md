@@ -241,3 +241,24 @@ Signature → cause → what to do. One lesson per line, no incident history.
   the LOCAL calendar day (every run between local midnight and UTC midnight
   grew an extra date header and shifted all content ~26 px), which reads
   exactly like an environment failure and follows the clock, not the box.
+
+- **`std::thread::available_parallelism()` reports the calling thread's
+  affinity mask, not the machine** — after `sched_setaffinity` restricted a
+  thread to 4 of 8 cores, every later parallelism read on that thread (and
+  its children, which inherit the mask) answered 4. On the Mate 20 X this
+  silently flipped the ≥6-core present-thread class and the pipeline ran
+  single-threaded; the affinity readback listing one frame thread where the
+  unpinned arm had two was the only visible symptom, and it cost a full APK
+  rebuild + device A/B round to discover. Read machine-topology facts
+  before any affinity call, and treat any capacity decision made after a
+  pin as suspect.
+
+- **Heavy ssh builds on samarch-1 can kill a CI job running on the same
+  box** — a `cargo test` over ssh while `samarch-1-cranpose` had a job
+  broke the job's sccache server ("Server startup failed: Address in use"
+  at job start, then "server shut down unexpectedly" + connection resets
+  mid-job), failing the job with infra "could not compile" errors on
+  crates.io deps that compile everywhere. The "validate on samarch before
+  CI" advice needs a check first: if the runner is mid-job, wait or use the
+  second checkout with its own SCCACHE_DIR/port, or skip sccache
+  (`SCCACHE_DISABLE=1`/unset RUSTC_WRAPPER) for the validation build.
