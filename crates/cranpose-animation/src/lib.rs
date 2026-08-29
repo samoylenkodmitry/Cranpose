@@ -11,7 +11,10 @@ pub mod decay_spec;
 // Re-export animation system
 pub use animation::*;
 pub use color::animateColorAsState;
-pub use decay_spec::{FlingCalculator, FlingInfo, FloatDecayAnimationSpec, SplineBasedDecaySpec};
+pub use decay_spec::{
+    ExponentialDecaySpec, FloatDecayAnimationSpec, IOS_DECELERATION_RATE_FAST,
+    IOS_DECELERATION_RATE_NORMAL,
+};
 
 pub mod prelude {
     pub use crate::{
@@ -21,6 +24,6 @@ pub mod prelude {
             animateFloatAsState, infiniteRepeatable, rememberInfiniteTransition, spring, tween,
         },
         color::animateColorAsState,
-        decay_spec::{FlingCalculator, FloatDecayAnimationSpec, SplineBasedDecaySpec},
+        decay_spec::{ExponentialDecaySpec, FloatDecayAnimationSpec},
     };
 }
