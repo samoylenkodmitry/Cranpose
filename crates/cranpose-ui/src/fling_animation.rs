@@ -7,18 +7,19 @@ use std::{
     rc::Rc,
 };
 
-use cranpose_animation::{FloatDecayAnimationSpec, SplineBasedDecaySpec};
+use cranpose_animation::{ExponentialDecaySpec, FloatDecayAnimationSpec, IOS_DECELERATION_RATE_NORMAL};
 use cranpose_core::{
     RuntimeHandle,
     internal::{FrameCallbackRegistration, FrameClock},
 };
 
-/// Minimum velocity (in px/sec) to trigger a fling animation.
-/// Below this, the scroll just stops immediately.
-pub const MIN_FLING_VELOCITY: f32 = 1.0;
-
-/// Default fling friction value (matches Android ViewConfiguration).
-const DEFAULT_FLING_FRICTION: f32 = 0.015;
+/// Minimum release velocity (in points/sec) for `UIScrollView` to start
+/// decelerating at all; below this a release just stops. Measured on the iOS
+/// 26.5 Simulator: releases consistently below ~260pt/s never decelerate,
+/// releases consistently above ~350pt/s always do, with a noisy transition
+/// between (real touch-velocity noise near a threshold, not a measurement
+/// artifact — see `ios_fling_measurement.rs`). 300 sits in that band.
+pub const MIN_FLING_VELOCITY: f32 = 300.0;
 
 /// Minimum unconsumed delta (in pixels) to consider a boundary hit.
 const BOUNDARY_EPSILON: f32 = 0.5;
@@ -136,7 +137,7 @@ struct FlingAnimationState {
     /// Frame time when the animation started (used for deterministic timing).
     start_frame_time_nanos: Cell<Option<u64>>,
     /// Decay animation spec for computing position/velocity.
-    decay_spec: SplineBasedDecaySpec,
+    decay_spec: ExponentialDecaySpec,
     /// Current frame callback registration (kept alive to continue animation).
     registration: Option<FrameCallbackRegistration>,
     /// Whether the animation is still active.
@@ -168,17 +169,10 @@ impl FlingAnimation {
     /// # Arguments
     /// * `initial_value` - Current scroll position (used as reference)
     /// * `velocity` - Initial velocity in px/sec (from VelocityTracker)
-    /// * `density` - Screen density for physics calculations
     /// * `on_scroll` - Callback invoked each frame with scroll DELTA (not absolute position)
     /// * `on_end` - Callback invoked when animation completes
-    pub fn start_fling<F, G>(
-        &self,
-        initial_value: f32,
-        velocity: f32,
-        density: f32,
-        on_scroll: F,
-        on_end: G,
-    ) where
+    pub fn start_fling<F, G>(&self, initial_value: f32, velocity: f32, on_scroll: F, on_end: G)
+    where
         F: Fn(f32) -> f32 + 'static, // Returns consumed amount
         G: FnOnce() + 'static,
     {
@@ -191,10 +185,7 @@ impl FlingAnimation {
             return;
         }
 
-        // Match Jetpack Compose's default friction (ViewConfiguration.getScrollFriction).
-        let friction = DEFAULT_FLING_FRICTION;
-        let calc = cranpose_animation::FlingCalculator::new(friction, density);
-        let decay_spec = SplineBasedDecaySpec::with_calculator(calc);
+        let decay_spec = ExponentialDecaySpec::new(IOS_DECELERATION_RATE_NORMAL);
 
         let anim_state = FlingAnimationState {
             initial_value,
@@ -250,18 +241,47 @@ impl Clone for FlingAnimation {
 /// [`FlingAnimation::start_fling`]. Settle policies remap this proposed rest
 /// position before the deceleration starts (the `UIScrollView
 /// targetContentOffset` analog).
-pub fn fling_rest_position(initial_value: f32, velocity: f32, density: f32) -> f32 {
+pub fn fling_rest_position(initial_value: f32, velocity: f32) -> f32 {
     if velocity.abs() < MIN_FLING_VELOCITY {
         return initial_value;
     }
-    let calc = cranpose_animation::FlingCalculator::new(DEFAULT_FLING_FRICTION, density);
-    let spec = SplineBasedDecaySpec::with_calculator(calc);
+    let spec = ExponentialDecaySpec::new(IOS_DECELERATION_RATE_NORMAL);
     spec.get_target_value(initial_value, velocity)
 }
 
-/// Spring stiffness for settle animations (critically damped ≈ 0.35 s), the
-/// iOS large-title snap feel.
-const SETTLE_STIFFNESS: f32 = 300.0;
+/// Damped-spring parameters for a [`SettleAnimation`]. `advance_spring`
+/// already generalizes over damping ratio, so the two settle use cases in
+/// this crate share one scheduler and differ only in these two numbers.
+#[derive(Debug, Clone, Copy)]
+pub struct SpringParams {
+    pub stiffness: f32,
+    pub damping_ratio: f32,
+}
+
+impl SpringParams {
+    /// Settle-policy remapping (e.g. the liquid nav bar's title-collapse
+    /// snap): critically damped, settling in ≈0.35s, the iOS large-title
+    /// snap feel.
+    pub const SETTLE_POLICY: Self = Self {
+        stiffness: 300.0,
+        damping_ratio: 1.0,
+    };
+
+    /// Overscroll bounce-back: the spring a scroll container's rubber-banded
+    /// offset relaxes through once the finger releases (or a fling's own
+    /// velocity decays) while still past the edge. Fit to a `UIScrollView`
+    /// bounce-back trace recorded on the iOS 26.5 Simulator (drag past the
+    /// top edge, hold to zero velocity, release: -177pt to rest in 667ms) —
+    /// see `ios_fling_measurement.rs`. Overdamped rather than critical: a
+    /// critically-damped ζ=1 spring at the same stiffness overshoots the
+    /// measured curve's shape by 15-20x; this (stiffness, damping_ratio) pair
+    /// was fit by least squares against the recorded trace, residual ≤2.9pt
+    /// (mean 0.79pt) against a 177pt swing.
+    pub const OVERSCROLL_BOUNCE: Self = Self {
+        stiffness: 1909.69,
+        damping_ratio: 2.71,
+    };
+}
 
 /// Position/velocity epsilons below which a settle animation finishes.
 const SETTLE_REST_DISTANCE: f32 = 0.1;
@@ -271,6 +291,7 @@ struct SettleAnimationState {
     value: Cell<f32>,
     velocity: Cell<f32>,
     target: f32,
+    params: SpringParams,
     last_frame_time_nanos: Cell<Option<u64>>,
     registration: Option<FrameCallbackRegistration>,
     is_running: Cell<bool>,
@@ -281,19 +302,22 @@ pub(crate) struct SettleEnd {
     pub(crate) hit_boundary: bool,
 }
 
-/// Drives a critically-damped spring toward a settle target on a scroll
-/// container, taking over the gesture's release velocity so a policy-adjusted
-/// rest position still reads as one continuous deceleration.
+/// Drives a damped spring toward a settle target on a scroll container,
+/// taking over the gesture's release velocity so a policy-adjusted rest
+/// position (or an overscroll bounce-back) still reads as one continuous
+/// deceleration.
 pub struct SettleAnimation {
     state: Rc<RefCell<Option<SettleAnimationState>>>,
     frame_clock: FrameClock,
+    params: SpringParams,
 }
 
 impl SettleAnimation {
-    pub fn new(runtime: RuntimeHandle) -> Self {
+    pub fn new(runtime: RuntimeHandle, params: SpringParams) -> Self {
         Self {
             state: Rc::new(RefCell::new(None)),
             frame_clock: runtime.frame_clock(),
+            params,
         }
     }
 
@@ -317,6 +341,7 @@ impl SettleAnimation {
             value: Cell::new(initial_value),
             velocity: Cell::new(initial_velocity),
             target,
+            params: self.params,
             last_frame_time_nanos: Cell::new(None),
             registration: None,
             is_running: Cell::new(true),
@@ -349,6 +374,7 @@ impl Clone for SettleAnimation {
         Self {
             state: self.state.clone(),
             frame_clock: self.frame_clock.clone(),
+            params: self.params,
         }
     }
 }
@@ -387,8 +413,8 @@ fn schedule_next_settle_frame<F, G>(
                 anim_state.value.get(),
                 anim_state.velocity.get(),
                 anim_state.target,
-                1.0,
-                SETTLE_STIFFNESS,
+                anim_state.params.damping_ratio,
+                anim_state.params.stiffness,
                 dt.max(0.0),
             );
 
@@ -453,14 +479,14 @@ mod tests {
 
     #[test]
     fn test_min_velocity_threshold() {
-        assert_eq!(MIN_FLING_VELOCITY, 1.0);
+        assert_eq!(MIN_FLING_VELOCITY, 300.0);
     }
 
     #[test]
     fn settle_animation_springs_to_target_and_ends() {
         let runtime = Runtime::new(Arc::new(DefaultScheduler));
         let handle = runtime.handle();
-        let settle = SettleAnimation::new(handle.clone());
+        let settle = SettleAnimation::new(handle.clone(), SpringParams::SETTLE_POLICY);
         let position = Rc::new(Cell::new(30.0f32));
         let ended = Rc::new(Cell::new(false));
         let position_for_scroll = Rc::clone(&position);
@@ -493,7 +519,7 @@ mod tests {
     fn settle_reports_reduced_velocity_when_crossing_boundary() {
         let runtime = Runtime::new(Arc::new(DefaultScheduler));
         let handle = runtime.handle();
-        let settle = SettleAnimation::new(handle.clone());
+        let settle = SettleAnimation::new(handle.clone(), SpringParams::SETTLE_POLICY);
         let position = Rc::new(Cell::new(30.0f32));
         let ended = Rc::new(Cell::new(None::<(f32, bool)>));
         let position_for_scroll = Rc::clone(&position);
@@ -525,9 +551,9 @@ mod tests {
 
     #[test]
     fn fling_rest_position_is_beyond_start_in_fling_direction() {
-        let rest = fling_rest_position(100.0, 900.0, 1.0);
+        let rest = fling_rest_position(100.0, 900.0);
         assert!(rest > 100.0, "rest {rest} must be past the start");
-        assert_eq!(fling_rest_position(100.0, 0.0, 1.0), 100.0);
+        assert_eq!(fling_rest_position(100.0, 0.0), 100.0);
     }
 
     #[test]
@@ -538,7 +564,7 @@ mod tests {
         let finished = Rc::new(Cell::new(false));
         let finished_flag = Rc::clone(&finished);
 
-        fling.start_fling(0.0, 10_000.0, 1.0, |_| 0.0, move || finished_flag.set(true));
+        fling.start_fling(0.0, 10_000.0, |_| 0.0, move || finished_flag.set(true));
 
         handle.drain_frame_callbacks(0);
         handle.drain_frame_callbacks(16_000_000);

@@ -98,24 +98,67 @@ impl ScrollMetrics {
 /// half-faded.
 pub type ScrollSettlePolicy = Rc<dyn Fn(f32, f32) -> f32>;
 
+/// `UIScrollView`'s rubber-band constant. Matches the published WebKit/UIKit
+/// value (0.55) and was independently reproduced by least-squares fit
+/// against a drag-past-the-top-edge trace recorded on the iOS 26.5 Simulator
+/// (fit c=0.5499, residual <=0.18pt) — see `ios_fling_measurement.rs`.
+const RUBBER_BAND_COEFFICIENT: f32 = 0.55;
+
+/// Maps a raw (unresisted) pull `x` past the edge to the on-screen overscroll
+/// offset via `UIScrollView`'s rubber-band curve, `f(x) = x*d*c/(d+c*x)`,
+/// where `d` is the scrollable viewport's main-axis extent and `c` is
+/// [`RUBBER_BAND_COEFFICIENT`]. This asymptotically approaches `d` as `x`
+/// grows rather than hard-clamping, matching the measured curve exactly
+/// (unlike a linear-resistance-then-clamp model).
+fn rubber_band(raw: f32, dimension: f32) -> f32 {
+    if !dimension.is_finite() || dimension <= 0.0 {
+        return raw;
+    }
+    let x = raw.abs();
+    let c = RUBBER_BAND_COEFFICIENT;
+    (x * dimension * c / (dimension + c * x)).copysign(raw)
+}
+
+/// Inverse of [`rubber_band`]: recovers the raw pull that produced a given
+/// on-screen `visible` offset. Used to keep the raw accumulator consistent
+/// whenever something other than [`OverscrollEffect::apply_drag_delta`]
+/// writes the visible offset directly (the settle/bounce-back animation), so
+/// a drag resuming right after an interrupted settle composes smoothly
+/// instead of jumping.
+fn rubber_band_inverse(visible: f32, dimension: f32) -> f32 {
+    if !dimension.is_finite() || dimension <= 0.0 {
+        return visible;
+    }
+    let c = RUBBER_BAND_COEFFICIENT;
+    let v = visible.abs().min(dimension * 0.999_9);
+    (v * dimension / (c * (dimension - v))).copysign(visible)
+}
+
 #[derive(Clone)]
 pub(crate) struct OverscrollEffect {
     inner: Rc<OverscrollEffectInner>,
 }
 
 struct OverscrollEffectInner {
-    offset: Cell<f32>,
-    limit: Cell<f32>,
+    /// Cumulative raw (unresisted) pull past the edge; the single source of
+    /// truth `visible` is derived from via [`rubber_band`].
+    raw: Cell<f32>,
+    /// What's actually rendered as the overscroll translation.
+    visible: Cell<f32>,
+    /// The scrollable viewport's main-axis extent, i.e. `d` in the
+    /// rubber-band formula.
+    dimension: Cell<f32>,
     invalidate_callbacks: RefCell<HashMap<u64, Rc<dyn Fn()>>>,
     next_callback_id: Cell<u64>,
 }
 
 impl OverscrollEffect {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             inner: Rc::new(OverscrollEffectInner {
-                offset: Cell::new(0.0),
-                limit: Cell::new(160.0),
+                raw: Cell::new(0.0),
+                visible: Cell::new(0.0),
+                dimension: Cell::new(0.0),
                 invalidate_callbacks: RefCell::new(HashMap::new()),
                 next_callback_id: Cell::new(1),
             }),
@@ -123,28 +166,26 @@ impl OverscrollEffect {
     }
 
     pub(crate) fn offset(&self) -> f32 {
-        self.inner.offset.get()
+        self.inner.visible.get()
     }
 
-    pub(crate) fn set_limit(&self, limit: f32) {
-        if !limit.is_finite() || limit <= 0.0 {
+    pub(crate) fn set_dimension(&self, dimension: f32) {
+        if !dimension.is_finite() || dimension <= 0.0 {
             return;
         }
-        self.inner.limit.set(limit);
-        self.set_offset(self.offset().clamp(-limit, limit));
+        self.inner.dimension.set(dimension);
+        self.set_visible(rubber_band(self.inner.raw.get(), dimension));
     }
 
     pub(crate) fn apply_drag_delta(&self, delta: f32) -> f32 {
         if !delta.is_finite() || delta.abs() <= f32::EPSILON {
             return 0.0;
         }
-        let limit = self.inner.limit.get();
-        let offset = self.offset();
-        let resistance = (1.0 - offset.abs() / limit).clamp(0.12, 1.0) * 0.5;
-        let next = (offset + delta * resistance).clamp(-limit, limit);
-        let applied = next - offset;
-        self.set_offset(next);
-        applied
+        let before = self.offset();
+        let raw = self.inner.raw.get() + delta;
+        self.inner.raw.set(raw);
+        self.set_visible(rubber_band(raw, self.inner.dimension.get()));
+        self.offset() - before
     }
 
     pub(crate) fn apply_settle_delta(&self, delta: f32) -> f32 {
@@ -153,14 +194,13 @@ impl OverscrollEffect {
             return 0.0;
         }
         let proposed = offset + delta;
-        let crosses_edge = offset.abs() > f32::EPSILON && proposed.signum() != offset.signum();
-        let next = if crosses_edge {
-            0.0
-        } else {
-            proposed.clamp(-self.inner.limit.get(), self.inner.limit.get())
-        };
+        let crosses_edge = proposed.signum() != offset.signum();
+        let next = if crosses_edge { 0.0 } else { proposed };
         let applied = next - offset;
-        self.set_offset(next);
+        self.inner
+            .raw
+            .set(rubber_band_inverse(next, self.inner.dimension.get()));
+        self.set_visible(next);
         applied
     }
 
@@ -221,11 +261,11 @@ impl OverscrollEffect {
         Rc::ptr_eq(&self.inner, &other.inner)
     }
 
-    fn set_offset(&self, offset: f32) {
-        if (offset - self.offset()).abs() <= f32::EPSILON {
+    fn set_visible(&self, visible: f32) {
+        if (visible - self.offset()).abs() <= f32::EPSILON {
             return;
         }
-        self.inner.offset.set(offset);
+        self.inner.visible.set(visible);
         let callbacks = self
             .inner
             .invalidate_callbacks
@@ -825,7 +865,7 @@ impl LayoutModifierNode for ScrollNode {
             self.state
                 .set_viewport_extent(if self.is_vertical { height } else { width });
             self.overscroll
-                .set_limit((if self.is_vertical { height } else { width }) * 0.5);
+                .set_dimension(if self.is_vertical { height } else { width });
         }
 
         // Step 6: Read scroll value and calculate offset

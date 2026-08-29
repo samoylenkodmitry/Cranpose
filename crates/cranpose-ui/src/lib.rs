@@ -391,3 +391,7 @@ mod lazy_row_tests;
 #[cfg(test)]
 #[path = "tests/wear_widget_tests.rs"]
 mod wear_widget_tests;
+
+#[cfg(test)]
+#[path = "tests/ios_fling_measurement.rs"]
+mod ios_fling_measurement;

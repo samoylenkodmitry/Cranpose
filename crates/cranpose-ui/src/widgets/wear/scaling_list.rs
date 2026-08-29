@@ -1062,7 +1062,6 @@ fn wear_scaling_list_input(
                                         fling.start_fling(
                                             0.0,
                                             speed,
-                                            crate::current_density(),
                                             move |delta| fling_state.dispatch_raw_delta(delta),
                                             || {},
                                         );

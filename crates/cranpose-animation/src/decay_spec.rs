@@ -1,236 +1,23 @@
 //! Decay animation specification for fling animations.
 //!
-//! Port of Jetpack Compose's SplineBasedDecay and FlingCalculator.
-//! This provides the physics for Android-feel fling scrolling.
+//! Port of `UIScrollView`'s deceleration: a fling's velocity decays by a
+//! constant fraction every millisecond (`v(t) = v0 * rate^t`), which
+//! integrates to a closed-form position and rest offset. `rate` is exactly
+//! `UIScrollView.DecelerationRate`, read on-device in
+//! `cranpose-ui/src/tests/ios_fling_measurement.rs`; the exponential law
+//! itself, the rubber-band resistance curve, and the overscroll bounce spring
+//! were all fit against traces recorded from a real `UIScrollView` in the iOS
+//! Simulator (see that test module and the PR that introduced it for the
+//! recorded traces and residual error against iOS's own
+//! `targetContentOffset` predictions).
 
-use std::sync::LazyLock;
+/// `UIScrollView.DecelerationRate.normal.rawValue`, read at runtime on iOS
+/// 26.5 (matches Apple's documented constant).
+pub const IOS_DECELERATION_RATE_NORMAL: f32 = 0.998;
 
-// ============================================================================
-// Android Fling Spline
-// ============================================================================
-
-/// Tension curve inflection point
-const INFLECTION: f32 = 0.35;
-const START_TENSION: f32 = 0.5;
-const END_TENSION: f32 = 1.0;
-const P1: f32 = START_TENSION * INFLECTION;
-const P2: f32 = 1.0 - END_TENSION * (1.0 - INFLECTION);
-
-/// Number of samples in the spline lookup tables
-const NB_SAMPLES: usize = 100;
-
-/// Precomputed spline data for fast lookups.
-struct SplineData {
-    positions: [f32; NB_SAMPLES + 1],
-}
-
-/// Lazily computed spline tables.
-static SPLINE_DATA: LazyLock<SplineData> = LazyLock::new(|| {
-    let mut positions = [0.0f32; NB_SAMPLES + 1];
-
-    let mut x_min = 0.0f32;
-
-    for (i, position) in positions.iter_mut().enumerate().take(NB_SAMPLES) {
-        let alpha = i as f32 / NB_SAMPLES as f32;
-
-        // Find x such that bezier(x) = alpha
-        let mut x_max = 1.0f32;
-        let x;
-        let coef;
-        loop {
-            let x_mid = x_min + (x_max - x_min) / 2.0;
-            let c = 3.0 * x_mid * (1.0 - x_mid);
-            let tx = c * ((1.0 - x_mid) * P1 + x_mid * P2) + x_mid * x_mid * x_mid;
-            if (tx - alpha).abs() < 1e-5 {
-                x = x_mid;
-                coef = c;
-                break;
-            }
-            if tx > alpha {
-                x_max = x_mid;
-            } else {
-                x_min = x_mid;
-            }
-        }
-        *position = coef * ((1.0 - x) * START_TENSION + x) + x * x * x;
-    }
-
-    positions[NB_SAMPLES] = 1.0;
-
-    SplineData { positions }
-});
-
-/// Result of sampling the fling spline.
-#[derive(Debug, Clone, Copy)]
-pub struct FlingResult {
-    /// Distance coefficient (0.0 to 1.0) - fraction of total distance traveled.
-    pub distance_coefficient: f32,
-    /// Velocity coefficient - instantaneous velocity at this point.
-    pub velocity_coefficient: f32,
-}
-
-/// Android fling spline implementation.
-///
-/// This is a port of Android's native fling scroll physics from `android.widget.Scroller`.
-/// It provides smooth, natural-feeling fling deceleration.
-pub struct AndroidFlingSpline;
-
-impl AndroidFlingSpline {
-    /// Sample the spline at a given time (0.0 to 1.0).
-    ///
-    /// Returns coefficients for distance and velocity at that point in the fling.
-    pub fn fling_position(time: f32) -> FlingResult {
-        let clamped_time = time.clamp(0.0, 1.0);
-        let index = (NB_SAMPLES as f32 * clamped_time) as usize;
-
-        let (distance_coef, velocity_coef) = if index < NB_SAMPLES {
-            let t_inf = index as f32 / NB_SAMPLES as f32;
-            let t_sup = (index + 1) as f32 / NB_SAMPLES as f32;
-            let d_inf = SPLINE_DATA.positions[index];
-            let d_sup = SPLINE_DATA.positions[index + 1];
-            let vel = (d_sup - d_inf) / (t_sup - t_inf);
-            let dist = d_inf + (clamped_time - t_inf) * vel;
-            (dist, vel)
-        } else {
-            (1.0, 0.0)
-        };
-
-        FlingResult {
-            distance_coefficient: distance_coef,
-            velocity_coefficient: velocity_coef,
-        }
-    }
-
-    /// Compute deceleration rate for a given velocity and friction.
-    pub fn deceleration(velocity: f32, friction: f32) -> f64 {
-        (INFLECTION as f64 * velocity.abs() as f64 / friction as f64).ln()
-    }
-}
-
-// ============================================================================
-// Fling Calculator
-// ============================================================================
-
-/// Earth's gravity in SI units (m/s²)
-const GRAVITY_EARTH: f32 = 9.80665;
-/// Inches per meter (for density conversion)
-const INCHES_PER_METER: f32 = 39.37;
-/// Deceleration rate constant (from Android Scroller)
-const DECELERATION_RATE: f32 = 2.358_201_6; // (ln(0.78) / ln(0.9)).abs()
-
-/// Computes physical deceleration based on density and friction.
-fn compute_deceleration(friction: f32, density: f32) -> f32 {
-    GRAVITY_EARTH * INCHES_PER_METER * density * 160.0 * friction
-}
-
-/// Information about a fling animation.
-#[derive(Debug, Clone, Copy)]
-pub struct FlingInfo {
-    /// Initial velocity in px/sec.
-    pub initial_velocity: f32,
-    /// Total distance that will be traveled.
-    pub distance: f32,
-    /// Total duration in milliseconds.
-    pub duration: i64,
-}
-
-impl FlingInfo {
-    /// Get position at a given time (in milliseconds).
-    pub fn position(&self, time_ms: i64) -> f32 {
-        let spline_pos = if self.duration > 0 {
-            time_ms as f32 / self.duration as f32
-        } else {
-            1.0
-        };
-        self.distance
-            * self.initial_velocity.signum()
-            * AndroidFlingSpline::fling_position(spline_pos).distance_coefficient
-    }
-
-    /// Get velocity at a given time (in milliseconds), in px/sec.
-    pub fn velocity(&self, time_ms: i64) -> f32 {
-        let spline_pos = if self.duration > 0 {
-            time_ms as f32 / self.duration as f32
-        } else {
-            1.0
-        };
-        AndroidFlingSpline::fling_position(spline_pos).velocity_coefficient
-            * self.initial_velocity.signum()
-            * self.distance
-            / self.duration as f32
-            * 1000.0
-    }
-
-    /// Check if the fling is finished at the given time.
-    pub fn is_finished(&self, time_ms: i64) -> bool {
-        time_ms >= self.duration
-    }
-}
-
-/// Calculator for Android-feel fling animations.
-///
-/// This uses the Android Scroller physics to compute natural fling behavior
-/// based on physical constants and screen density.
-#[derive(Debug, Clone, Copy)]
-pub struct FlingCalculator {
-    friction: f32,
-    magic_physical_coefficient: f32,
-}
-
-impl FlingCalculator {
-    /// Default friction value (matches Android default)
-    pub const DEFAULT_FRICTION: f32 = 0.015;
-
-    /// Create a new fling calculator.
-    ///
-    /// # Arguments
-    /// * `friction` - Scroll friction coefficient (higher = faster deceleration)
-    /// * `density` - Screen density in dp (e.g., 1.0 for mdpi, 2.0 for xhdpi)
-    pub fn new(friction: f32, density: f32) -> Self {
-        Self {
-            friction,
-            magic_physical_coefficient: compute_deceleration(0.84, density),
-        }
-    }
-
-    /// Create a calculator with default friction for the given density.
-    pub fn with_density(density: f32) -> Self {
-        Self::new(Self::DEFAULT_FRICTION, density)
-    }
-
-    fn spline_deceleration(&self, velocity: f32) -> f64 {
-        AndroidFlingSpline::deceleration(velocity, self.friction * self.magic_physical_coefficient)
-    }
-
-    /// Compute the duration of a fling in milliseconds.
-    pub fn fling_duration(&self, velocity: f32) -> i64 {
-        let l = self.spline_deceleration(velocity);
-        let decel_minus_one = DECELERATION_RATE as f64 - 1.0;
-        (1000.0 * (l / decel_minus_one).exp()) as i64
-    }
-
-    /// Compute the total distance a fling will travel.
-    pub fn fling_distance(&self, velocity: f32) -> f32 {
-        let l = self.spline_deceleration(velocity);
-        let decel_minus_one = DECELERATION_RATE as f64 - 1.0;
-        self.friction
-            * self.magic_physical_coefficient
-            * (DECELERATION_RATE as f64 / decel_minus_one * l).exp() as f32
-    }
-
-    /// Get complete fling information for a given initial velocity.
-    pub fn fling_info(&self, velocity: f32) -> FlingInfo {
-        FlingInfo {
-            initial_velocity: velocity,
-            distance: self.fling_distance(velocity),
-            duration: self.fling_duration(velocity),
-        }
-    }
-}
-
-// ============================================================================
-// Decay Animation Spec
-// ============================================================================
+/// `UIScrollView.DecelerationRate.fast.rawValue`, read at runtime on iOS
+/// 26.5 (matches Apple's documented constant).
+pub const IOS_DECELERATION_RATE_FAST: f32 = 0.99;
 
 /// Trait for decay animation specifications.
 ///
@@ -263,29 +50,46 @@ pub trait FloatDecayAnimationSpec {
     fn get_target_value(&self, initial_value: f32, initial_velocity: f32) -> f32;
 }
 
-/// Spline-based decay animation spec matching Android fling behavior.
+/// Velocity magnitude, in points/sec, below which a decaying fling is
+/// considered visually at rest. Points move less than a tenth of a point
+/// per second below this, imperceptible at any real screen density.
+const REST_VELOCITY_PTS_PER_SEC: f64 = 0.1;
+
+/// Exponential decay animation spec matching `UIScrollView`'s deceleration.
+///
+/// `initial_velocity` and the values returned by `get_velocity_from_nanos`
+/// are in points/sec (Cranpose's velocity-tracker convention throughout the
+/// gesture pipeline); internally the law is evaluated in points/ms, which is
+/// the unit `UIScrollView.DecelerationRate` and
+/// `scrollViewWillEndDragging(_:withVelocity:targetContentOffset:)` use.
 #[derive(Debug, Clone, Copy)]
-pub struct SplineBasedDecaySpec {
-    calculator: FlingCalculator,
+pub struct ExponentialDecaySpec {
+    /// Per-millisecond multiplicative decay constant
+    /// (`UIScrollView.DecelerationRate`).
+    rate: f32,
 }
 
-impl SplineBasedDecaySpec {
-    /// Create a new spline-based decay spec for the given density.
-    pub fn new(density: f32) -> Self {
-        Self {
-            calculator: FlingCalculator::with_density(density),
-        }
+impl ExponentialDecaySpec {
+    /// Creates a decay spec for the given per-millisecond decay `rate`
+    /// (e.g. [`IOS_DECELERATION_RATE_NORMAL`]).
+    pub fn new(rate: f32) -> Self {
+        Self { rate }
     }
 
-    /// Create a spec with a custom FlingCalculator.
-    pub fn with_calculator(calculator: FlingCalculator) -> Self {
-        Self { calculator }
+    fn ln_rate(&self) -> f64 {
+        (self.rate as f64).ln()
     }
 }
 
-impl FloatDecayAnimationSpec for SplineBasedDecaySpec {
+impl Default for ExponentialDecaySpec {
+    fn default() -> Self {
+        Self::new(IOS_DECELERATION_RATE_NORMAL)
+    }
+}
+
+impl FloatDecayAnimationSpec for ExponentialDecaySpec {
     fn abs_velocity_threshold(&self) -> f32 {
-        0.0
+        REST_VELOCITY_PTS_PER_SEC as f32
     }
 
     fn get_value_from_nanos(
@@ -294,9 +98,11 @@ impl FloatDecayAnimationSpec for SplineBasedDecaySpec {
         initial_value: f32,
         initial_velocity: f32,
     ) -> f32 {
-        let time_ms = play_time_nanos / 1_000_000;
-        let info = self.calculator.fling_info(initial_velocity);
-        initial_value + info.position(time_ms)
+        let t_ms = play_time_nanos as f64 / 1_000_000.0;
+        let v0_per_ms = initial_velocity as f64 / 1000.0;
+        let ln_rate = self.ln_rate();
+        let delta = v0_per_ms * ((self.rate as f64).powf(t_ms) - 1.0) / ln_rate;
+        initial_value + delta as f32
     }
 
     fn get_velocity_from_nanos(
@@ -305,19 +111,22 @@ impl FloatDecayAnimationSpec for SplineBasedDecaySpec {
         _initial_value: f32,
         initial_velocity: f32,
     ) -> f32 {
-        let time_ms = play_time_nanos / 1_000_000;
-        let info = self.calculator.fling_info(initial_velocity);
-        info.velocity(time_ms)
+        let t_ms = play_time_nanos as f64 / 1_000_000.0;
+        (initial_velocity as f64 * (self.rate as f64).powf(t_ms)) as f32
     }
 
     fn get_duration_nanos(&self, _initial_value: f32, initial_velocity: f32) -> i64 {
-        let duration_ms = self.calculator.fling_duration(initial_velocity);
-        duration_ms * 1_000_000
+        let v0 = initial_velocity.abs() as f64;
+        if v0 <= REST_VELOCITY_PTS_PER_SEC {
+            return 0;
+        }
+        let t_ms = (REST_VELOCITY_PTS_PER_SEC / v0).ln() / self.ln_rate();
+        (t_ms * 1_000_000.0) as i64
     }
 
     fn get_target_value(&self, initial_value: f32, initial_velocity: f32) -> f32 {
-        let distance = self.calculator.fling_distance(initial_velocity);
-        initial_value + distance * initial_velocity.signum()
+        let v0_per_ms = initial_velocity as f64 / 1000.0;
+        initial_value - (v0_per_ms / self.ln_rate()) as f32
     }
 }
 
@@ -326,100 +135,69 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_decay_spec_built_from_a_calculator_flings_like_that_calculator() {
-        // Two ways to say the same thing: a density, or the calculator that
-        // density would have produced. A control that already has a calculator
-        // — one tuned for a different friction, say — must be able to hand it
-        // over rather than have a second one built behind its back.
-        let from_density = SplineBasedDecaySpec::new(2.0);
-        let from_calculator =
-            SplineBasedDecaySpec::with_calculator(FlingCalculator::with_density(2.0));
-
-        for velocity in [-4_000.0f32, -250.0, 250.0, 4_000.0] {
-            for millis in [0i64, 50, 250, 1_000] {
-                let nanos = millis * 1_000_000;
-                assert_eq!(
-                    from_density.get_value_from_nanos(nanos, 0.0, velocity),
-                    from_calculator.get_value_from_nanos(nanos, 0.0, velocity),
-                    "velocity {velocity} at {millis}ms"
-                );
-            }
-        }
+    fn ios_deceleration_rates_match_apple_documented_constants() {
+        assert_eq!(IOS_DECELERATION_RATE_NORMAL, 0.998);
+        assert_eq!(IOS_DECELERATION_RATE_FAST, 0.99);
     }
 
     #[test]
-    fn test_spline_endpoints() {
-        let start = AndroidFlingSpline::fling_position(0.0);
-        assert!((start.distance_coefficient - 0.0).abs() < 0.01);
-
-        let end = AndroidFlingSpline::fling_position(1.0);
-        assert!((end.distance_coefficient - 1.0).abs() < 0.01);
+    fn value_at_zero_time_is_initial_value() {
+        let spec = ExponentialDecaySpec::new(IOS_DECELERATION_RATE_NORMAL);
+        assert_eq!(spec.get_value_from_nanos(0, 100.0, 900.0), 100.0);
     }
 
     #[test]
-    fn test_spline_monotonic() {
-        let mut prev = 0.0;
-        for i in 0..=100 {
-            let t = i as f32 / 100.0;
-            let result = AndroidFlingSpline::fling_position(t);
-            assert!(
-                result.distance_coefficient >= prev,
-                "Spline should be monotonically increasing"
-            );
-            prev = result.distance_coefficient;
-        }
+    fn velocity_at_zero_time_is_initial_velocity() {
+        let spec = ExponentialDecaySpec::new(IOS_DECELERATION_RATE_NORMAL);
+        assert!((spec.get_velocity_from_nanos(0, 0.0, 900.0) - 900.0).abs() < 1e-3);
     }
 
     #[test]
-    fn test_fling_calculator() {
-        let calc = FlingCalculator::with_density(2.0); // xhdpi
-
-        // A typical fling velocity
-        let velocity = 5000.0; // px/sec
-        let duration = calc.fling_duration(velocity);
-        let distance = calc.fling_distance(velocity);
-
-        assert!(duration > 0, "Duration should be positive");
-        assert!(distance > 0.0, "Distance should be positive");
-
-        // Higher velocity should mean longer duration and distance
-        let high_velocity = 10000.0;
-        assert!(calc.fling_duration(high_velocity) > duration);
-        assert!(calc.fling_distance(high_velocity) > distance);
-    }
-
-    #[test]
-    fn test_decay_spec() {
-        let spec = SplineBasedDecaySpec::new(2.0);
-
+    fn value_converges_to_target_by_the_reported_duration() {
+        let spec = ExponentialDecaySpec::new(IOS_DECELERATION_RATE_NORMAL);
         let initial_value = 100.0;
         let velocity = 5000.0;
-
-        // At t=0, position should be initial value
-        let pos_0 = spec.get_value_from_nanos(0, initial_value, velocity);
-        assert!((pos_0 - initial_value).abs() < 1.0);
-
-        // At end, position should be at target
         let duration = spec.get_duration_nanos(initial_value, velocity);
         let target = spec.get_target_value(initial_value, velocity);
         let pos_end = spec.get_value_from_nanos(duration, initial_value, velocity);
         assert!(
-            (pos_end - target).abs() < 10.0,
-            "End position {} should be near target {}",
-            pos_end,
-            target
+            (pos_end - target).abs() < 1.0,
+            "end position {pos_end} should be near target {target}"
         );
     }
 
     #[test]
-    fn test_negative_velocity() {
-        let calc = FlingCalculator::with_density(2.0);
+    fn negative_velocity_moves_target_backward() {
+        let spec = ExponentialDecaySpec::new(IOS_DECELERATION_RATE_NORMAL);
+        let target = spec.get_target_value(0.0, -5000.0);
+        assert!(target < 0.0, "target {target} must be negative");
+    }
 
-        let velocity = -5000.0;
-        let info = calc.fling_info(velocity);
+    #[test]
+    fn fast_rate_decays_faster_than_normal_rate_for_the_same_velocity() {
+        let normal = ExponentialDecaySpec::new(IOS_DECELERATION_RATE_NORMAL);
+        let fast = ExponentialDecaySpec::new(IOS_DECELERATION_RATE_FAST);
+        let velocity = 3000.0;
+        assert!(
+            fast.get_target_value(0.0, velocity) < normal.get_target_value(0.0, velocity),
+            "fast deceleration must travel a shorter distance than normal"
+        );
+        assert!(fast.get_duration_nanos(0.0, velocity) < normal.get_duration_nanos(0.0, velocity));
+    }
 
-        // Position should move in negative direction
-        let pos_mid = info.position(info.duration / 2);
-        assert!(pos_mid < 0.0, "Should move in negative direction");
+    /// Ground truth from `scrollViewWillEndDragging`'s own `targetContentOffset`,
+    /// recorded on the iOS 26.5 Simulator (iPhone 17 Pro Max) at v=480.8 pt/s,
+    /// offset=400, rate=.normal: iOS predicted target 635.33. This model
+    /// predicts 640.18, a 4.85pt (2.06%) residual — see
+    /// `cranpose-ui/src/tests/ios_fling_measurement.rs` for the full sweep
+    /// (24 free-flight samples, mean 0.85% / 3.96pt, max 4.09% / 5.16pt).
+    #[test]
+    fn target_matches_recorded_ios_target_content_offset_within_measured_tolerance() {
+        let spec = ExponentialDecaySpec::new(IOS_DECELERATION_RATE_NORMAL);
+        let target = spec.get_target_value(400.0, 480.8);
+        assert!(
+            (target - 635.33).abs() < 5.2,
+            "target {target} outside the measured 5.2pt tolerance"
+        );
     }
 }

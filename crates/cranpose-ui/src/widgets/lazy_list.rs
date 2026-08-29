@@ -539,7 +539,7 @@ fn measure_lazy_list_internal(
     );
     log_lazy_cache_telemetry(&result, measured_item_cache);
     let effective_viewport_size = result.viewport_size;
-    overscroll.set_limit(effective_viewport_size * 0.5);
+    overscroll.set_dimension(effective_viewport_size);
 
     // Cache measured item sizes for better scroll estimation
     state.cache_item_sizes(

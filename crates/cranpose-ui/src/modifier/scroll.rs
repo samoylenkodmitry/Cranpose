@@ -39,9 +39,10 @@ use web_time::Instant;
 
 use super::{Modifier, Point, PointerEvent, PointerEventKind, inspector_metadata};
 use crate::{
-    current_density,
     draggable::DraggableState,
-    fling_animation::{FlingAnimation, MIN_FLING_VELOCITY, SettleAnimation, fling_rest_position},
+    fling_animation::{
+        FlingAnimation, MIN_FLING_VELOCITY, SettleAnimation, SpringParams, fling_rest_position,
+    },
     render_state::schedule_modifier_slices_repass,
     scroll::{
         ScrollElement, ScrollMotionContext, ScrollMotionContextKey, ScrollSettlePolicy,
@@ -876,7 +877,7 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
             self.scroll_target.settle_policy().and_then(|policy| {
                 let current = self.scroll_target.current_offset();
                 let proposed = if start_fling {
-                    fling_rest_position(current, fling_velocity, current_density())
+                    fling_rest_position(current, fling_velocity)
                 } else {
                     current
                 };
@@ -927,7 +928,6 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
         fling.start_fling(
             initial_value,
             fling_velocity,
-            current_density(),
             move |delta| {
                 let consumed = overscroll_for_fling.apply_to_fling(delta, |delta| {
                     scroll_target_for_fling.apply_fling_delta(delta)
@@ -962,7 +962,7 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
             return;
         };
         self.motion_context.set_active(true);
-        let settle = SettleAnimation::new(runtime);
+        let settle = SettleAnimation::new(runtime, SpringParams::SETTLE_POLICY);
         let scroll_target_for_settle = self.scroll_target.clone();
         let scroll_target_for_end = self.scroll_target.clone();
         let detector_for_end = self.clone_for_watcher();
@@ -992,7 +992,7 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
             self.motion_context.set_active(false);
             return;
         };
-        let settle = SettleAnimation::new(runtime);
+        let settle = SettleAnimation::new(runtime, SpringParams::OVERSCROLL_BOUNCE);
         let overscroll_for_settle = self.overscroll.clone();
         let overscroll_for_end = self.overscroll.clone();
         let detector_for_end = self.clone_for_watcher();
@@ -1487,7 +1487,7 @@ fn lazy_list_content_offset_reader(
         if info.visible_items_info.is_empty() {
             return Point::default();
         };
-        overscroll.set_limit(info.viewport_size * 0.5);
+        overscroll.set_dimension(info.viewport_size);
         let main_offset = info.snap_anchor_offset;
         let bounce = overscroll.offset();
         if is_vertical {
