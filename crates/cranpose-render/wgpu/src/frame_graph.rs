@@ -661,9 +661,17 @@ impl WgpuFrameGraphExecutor {
         let finish_ms = submit_start.duration_since(finish_start).as_secs_f64() * 1000.0;
         let submit_ms = submit_end.duration_since(submit_start).as_secs_f64() * 1000.0;
         let upload_writes = take_upload_write_calls();
+        let pass_labels = take_render_pass_labels();
         if finish_ms + submit_ms >= threshold_ms {
+            let pass_total: u32 = pass_labels.iter().map(|(_, count)| count).sum();
+            let mut split = String::new();
+            for (label, count) in &pass_labels {
+                use std::fmt::Write;
+                let _ = write!(split, " [{label}]={count}");
+            }
             log::warn!(
-                "[wgpu-render-stage:submit] finish_ms={finish_ms:.3} submit_ms={submit_ms:.3} upload_writes={upload_writes}"
+                "[wgpu-render-stage:submit] finish_ms={finish_ms:.3} submit_ms={submit_ms:.3} \
+                 upload_writes={upload_writes} passes={pass_total}{split}"
             );
         }
         submission
@@ -686,6 +694,37 @@ fn note_upload_write() {
 
 fn take_upload_write_calls() -> u32 {
     UPLOAD_WRITE_CALLS.with(|calls| calls.replace(0))
+}
+
+std::thread_local! {
+    /// Render passes begun since the last submit on this thread, counted per
+    /// pass label. On a tiler every pass is a tile load/store cycle whatever
+    /// its draw count, so the per-frame submit stall has to be attributable
+    /// to *which* passes ran, not just how long encoding took — the 60-frame
+    /// GPU stats cadence cannot be joined against a per-frame stall. Only
+    /// populated while the stage telemetry threshold is set; the label copy
+    /// is a diagnostic cost, not a shipping one.
+    static RENDER_PASS_LABELS: std::cell::RefCell<Vec<(String, u32)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+pub(crate) fn note_render_pass(label: Option<&str>) {
+    if frame_graph_pass_telemetry_threshold_ms().is_none() {
+        return;
+    }
+    let label = label.unwrap_or("<unlabeled>");
+    RENDER_PASS_LABELS.with(|labels| {
+        let mut labels = labels.borrow_mut();
+        if let Some(entry) = labels.iter_mut().find(|(name, _)| name == label) {
+            entry.1 += 1;
+        } else {
+            labels.push((label.to_owned(), 1));
+        }
+    });
+}
+
+fn take_render_pass_labels() -> Vec<(String, u32)> {
+    RENDER_PASS_LABELS.with(|labels| std::mem::take(&mut *labels.borrow_mut()))
 }
 
 fn frame_graph_pass_telemetry_threshold_ms() -> Option<f64> {
