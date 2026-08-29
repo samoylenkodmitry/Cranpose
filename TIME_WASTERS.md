@@ -309,3 +309,30 @@ Signature → cause → what to do. One lesson per line, no incident history.
   sequence was the evidence; no aggregate over it could have been. When a
   counter says "this fires constantly", print the identities before theorising
   about the cause.
+
+- **A per-item diagnostic does not add a constant to a benchmark, it adds a
+  term proportional to the item count — usually the very quantity the change
+  reduces** — #530 was measured with `CRANPOSE_SCENE_UPDATE_DIAG=1` on both
+  arms, which looks like a fair comparison and is not. That flag `eprintln!`s
+  one line per built layer; the pre-fix arm built 50.8 layers per frame and
+  the post-fix arm 11.3, so the instrument cost about 4.5x more on the arm it
+  was meant to show as slower. Reported scene_ms p50 was 0.77 -> 0.25;
+  re-measured with the flag off on both arms it is 0.040 -> 0.020. Real
+  halving, right mechanism, magnitudes ~20x too large and the ratio
+  exaggerated. An instrument like this does not merely add noise, it biases in
+  the flattering direction, so a result measured under it is unsafe in exactly
+  the case you most want to believe. Take the headline number with every
+  diagnostic off, and use the diagnostics only for counts and identities —
+  those (166,257 structural events -> 291, 50.8 -> 11.3 builds per frame) are
+  immune to their own overhead.
+
+- **Reasoning that is airtight about work avoided still has to be measured** —
+  no-op attach/detach called `bubble_layout_dirty` and `bubble_measure_dirty`
+  unconditionally, each walking to the root and marking every ancestor
+  `needs_measure`, about 166,000 times per run for child lists that did not
+  change. Guarding those bubbles is correct and the argument for it is exact.
+  The measured effect on a desktop scroll is 0.01 ms, one quantum of the
+  telemetry's resolution. Avoided work is not the same quantity as saved time:
+  the ancestors were already marked by something else, so marking them again
+  cost the walk and nothing more. Count the work you remove, then measure the
+  time, and believe the second number.
