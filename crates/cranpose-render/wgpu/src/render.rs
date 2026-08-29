@@ -9451,6 +9451,24 @@ impl GpuRenderer {
             .merge_and_reset_debug_counters(&self.frame_stats);
         self.frame_graph_executor.reset_upload_allocators();
         let snapshot = self.frame_stats.snapshot();
+        // The eprintln-based 60-frame stats never reach logcat on devices
+        // whose stdio pump forwards nothing (Mate 20 X measured zero pump
+        // lines), so the per-frame surface/cache counters ride the stage
+        // telemetry switch through the logger, where the submit line
+        // carrying the pass split already arrives.
+        if crate::frame_graph::frame_graph_pass_telemetry_threshold_ms().is_some() {
+            log::warn!(
+                "[wgpu-render-stage:frame-stats] layer_hit={} layer_miss={} miss_px={} \
+                 offscreen_acq={} offscreen_new={} isolated={} draws={}",
+                snapshot.layer_cache_hits,
+                snapshot.layer_cache_misses,
+                snapshot.layer_cache_miss_pixels,
+                snapshot.offscreen_acquires,
+                snapshot.offscreen_news,
+                snapshot.isolated_layer_renders,
+                snapshot.draw_calls,
+            );
+        }
         self.last_frame_stats = Some(snapshot);
         PRESENTED_FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         update_frame_warmup_budget(&mut self.pending_frame_warmup_frames, &snapshot);

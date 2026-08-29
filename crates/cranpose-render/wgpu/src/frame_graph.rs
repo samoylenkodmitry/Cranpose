@@ -727,7 +727,7 @@ fn take_render_pass_labels() -> Vec<(String, u32)> {
     RENDER_PASS_LABELS.with(|labels| std::mem::take(&mut *labels.borrow_mut()))
 }
 
-fn frame_graph_pass_telemetry_threshold_ms() -> Option<f64> {
+pub(crate) fn frame_graph_pass_telemetry_threshold_ms() -> Option<f64> {
     crate::debug_toggles::debug_toggle("CRANPOSE_WGPU_RENDER_STAGE_TELEMETRY_MS")
         .and_then(|raw| raw.parse::<f64>().ok())
         .filter(|threshold| *threshold >= 0.0)
