@@ -475,6 +475,14 @@ pub(crate) struct CompositeBatchItem<'a> {
     pub(crate) sample_mode: CompositeSampleMode,
 }
 
+/// One draw of a fused composite batch: blits and runtime-shader
+/// composites interleaved in painter's order inside a single render pass.
+#[derive(Clone, Copy)]
+pub(crate) enum FusedCompositeItem<'a> {
+    Blit(CompositeBatchItem<'a>),
+    Shader(ShaderCompositeBatchItem<'a>),
+}
+
 pub(crate) struct PreparedCompositeDraw<'a> {
     texture_bind_group: &'a wgpu::BindGroup,
     uniform_bind_group: wgpu::BindGroup,
@@ -1574,6 +1582,81 @@ impl EffectRenderer {
             self.draw_prepared_shader_src_over(device, &mut pass, viewport, draw, false);
         }
 
+        true
+    }
+
+    /// Encodes blits and runtime-shader composites interleaved in the
+    /// items' own order inside ONE render pass. Returns false when a
+    /// shader pipeline fails validation — all-or-nothing, so the caller
+    /// can fall back without a half-drawn pass.
+    pub(crate) fn encode_fused_composite_batch_to_view<C: FrameCommandRecorder>(
+        &mut self,
+        recorder: &mut C,
+        device: &wgpu::Device,
+        dest_view: &wgpu::TextureView,
+        viewport: (u32, u32),
+        load_op: wgpu::LoadOp<wgpu::Color>,
+        items: &[FusedCompositeItem<'_>],
+    ) -> bool {
+        if items.is_empty() {
+            return true;
+        }
+        let mut blit_items = Vec::new();
+        let mut shader_items = Vec::new();
+        for item in items {
+            match item {
+                FusedCompositeItem::Blit(item) => blit_items.push(*item),
+                FusedCompositeItem::Shader(item) => shader_items.push(*item),
+            }
+        }
+        let Some(prepared_shaders) =
+            self.prepare_shader_batch_draws(recorder, device, &shader_items, false)
+        else {
+            return false;
+        };
+        let prepared_blits =
+            self.prepare_composite_batch_draws(recorder, device, load_op, &blit_items, false);
+
+        let mut pass = recorder.begin_timed_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Batched Composite Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: dest_view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: load_op,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            ..Default::default()
+        });
+
+        let mut blit_cursor = 0usize;
+        let mut shader_cursor = 0usize;
+        for item in items {
+            match item {
+                FusedCompositeItem::Blit(_) => {
+                    self.draw_prepared_composite(
+                        &mut pass,
+                        viewport,
+                        &prepared_blits[blit_cursor],
+                        false,
+                    );
+                    blit_cursor += 1;
+                }
+                FusedCompositeItem::Shader(_) => {
+                    self.draw_prepared_shader_src_over(
+                        device,
+                        &mut pass,
+                        viewport,
+                        &prepared_shaders[shader_cursor],
+                        false,
+                    );
+                    shader_cursor += 1;
+                }
+            }
+        }
         true
     }
 

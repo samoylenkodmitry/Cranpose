@@ -540,7 +540,7 @@ fn first_child_composite_consumes_pending_clear_load_op() {
     );
     let nested_underlay_start = source
         .find(
-            "if child.needs_nested_underlay {\n            flush_pending_shader_layer_composites(\n                backend,\n                &mut pending_shader_composites,\n                &target.view,",
+            "if child.needs_nested_underlay {\n            flush_pending_composite_queues_fused(\n                backend,\n                &mut pending_composites,",
         )
         .expect("nested underlay branch must initialize target before child capture");
     let nested_underlay_end = source[nested_underlay_start..]
