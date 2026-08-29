@@ -2077,3 +2077,152 @@ fn reparenting_records_a_structural_change_on_both_parents() {
         "the new parent gained a child"
     );
 }
+
+#[derive(Default)]
+struct DirtyFlagNode {
+    children: Vec<NodeId>,
+    parent: Option<NodeId>,
+    needs_measure: Cell<bool>,
+    needs_layout: Cell<bool>,
+}
+
+impl Node for DirtyFlagNode {
+    fn insert_child(&mut self, child: NodeId) -> bool {
+        if self.children.contains(&child) {
+            return false;
+        }
+        self.children.push(child);
+        true
+    }
+
+    fn remove_child(&mut self, child: NodeId) -> bool {
+        let before = self.children.len();
+        self.children.retain(|&id| id != child);
+        self.children.len() < before
+    }
+
+    fn children(&self) -> Vec<NodeId> {
+        self.children.clone()
+    }
+
+    fn on_attached_to_parent(&mut self, parent: NodeId) {
+        self.parent = Some(parent);
+    }
+
+    fn on_removed_from_parent(&mut self) {
+        self.parent = None;
+    }
+
+    fn parent(&self) -> Option<NodeId> {
+        self.parent
+    }
+
+    fn mark_needs_measure(&self) {
+        self.needs_measure.set(true);
+    }
+
+    fn needs_measure(&self) -> bool {
+        self.needs_measure.get()
+    }
+
+    fn mark_needs_layout(&self) {
+        self.needs_layout.set(true);
+    }
+
+    fn needs_layout(&self) -> bool {
+        self.needs_layout.get()
+    }
+}
+
+fn dirty_flag_tree(applier: &mut MemoryApplier) -> (NodeId, NodeId, NodeId) {
+    let grandparent = applier.create(Box::new(DirtyFlagNode::default()));
+    let parent = applier.create(Box::new(DirtyFlagNode::default()));
+    let child = applier.create(Box::new(DirtyFlagNode::default()));
+    insert_child_with_reparenting(applier, grandparent, parent);
+    insert_child_with_reparenting(applier, parent, child);
+    for id in [grandparent, parent, child] {
+        applier
+            .with_node::<DirtyFlagNode, _>(id, |node| {
+                node.needs_measure.set(false);
+                node.needs_layout.set(false);
+            })
+            .expect("tree node exists");
+    }
+    (grandparent, parent, child)
+}
+
+/// One wrong assumption implemented twice: "the child list did not change,
+/// therefore there is nothing to invalidate". A child can grow without
+/// membership changing. This is the core-side enforcement point of that
+/// invariant (the scene-side one is the app shell's
+/// `sibling_moved_by_another_rows_growth_reaches_the_scoped_scene_update`):
+/// re-attaching a child that carries pending measure or layout dirt must
+/// still bubble, because the attach-time bubble is the only road that dirt
+/// has to the root's layout gate — swallow it and the grown subtree keeps its
+/// old geometry until an unrelated pass runs.
+#[test]
+fn reattaching_a_dirty_child_still_bubbles_to_ancestors() {
+    let mut applier = test_applier();
+    let (grandparent, parent, child) = dirty_flag_tree(&mut applier);
+
+    applier
+        .with_node::<DirtyFlagNode, _>(child, |node| node.needs_measure.set(true))
+        .expect("child exists");
+
+    let mut commands = CommandQueue::default();
+    commands.push(Command::AttachChild {
+        parent_id: parent,
+        child_id: child,
+        bubble: DirtyBubble::LAYOUT_AND_MEASURE,
+    });
+    commands
+        .apply(&mut applier)
+        .expect("re-attach of an existing child succeeds");
+
+    for (label, id) in [("parent", parent), ("grandparent", grandparent)] {
+        let marked = applier
+            .with_node::<DirtyFlagNode, _>(id, |node| node.needs_measure.get())
+            .expect("ancestor exists");
+        assert!(
+            marked,
+            "{label} must be marked needs_measure when a dirty child re-attaches: \
+             the unchanged child list says nothing about unchanged geometry"
+        );
+    }
+}
+
+/// The guard the test above must not undo: a re-attach of a CLEAN child is
+/// the steady-state scroll pattern, and bubbling it re-measures the whole
+/// tree every frame for nothing (#534's win).
+#[test]
+fn reattaching_a_clean_child_bubbles_nothing() {
+    let mut applier = test_applier();
+    let (grandparent, parent, child) = dirty_flag_tree(&mut applier);
+
+    let mut commands = CommandQueue::default();
+    commands.push(Command::AttachChild {
+        parent_id: parent,
+        child_id: child,
+        bubble: DirtyBubble::LAYOUT_AND_MEASURE,
+    });
+    commands
+        .apply(&mut applier)
+        .expect("re-attach of an existing child succeeds");
+
+    for (label, id) in [
+        ("parent", parent),
+        ("grandparent", grandparent),
+        ("child", child),
+    ] {
+        let (measure, layout) = applier
+            .with_node::<DirtyFlagNode, _>(id, |node| {
+                (node.needs_measure.get(), node.needs_layout.get())
+            })
+            .expect("tree node exists");
+        assert!(
+            !measure && !layout,
+            "{label} must stay clean when an already-present, clean child \
+             re-attaches: bubbling a no-op re-measures the tree every frame"
+        );
+    }
+}

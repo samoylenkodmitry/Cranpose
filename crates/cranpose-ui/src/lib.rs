@@ -187,8 +187,9 @@ pub use render_state::{
     prune_draw_observations_to_nodes, request_current_draw_redraw, request_focus_invalidation,
     request_layout_invalidation, request_pointer_invalidation, request_render_invalidation,
     schedule_draw_repass, schedule_layout_repass, schedule_measure_repass, take_draw_repass_nodes,
-    take_focus_invalidation, take_layout_invalidation, take_layout_repass_nodes,
-    take_measure_repass_nodes, take_pointer_invalidation, take_render_invalidation,
+    take_focus_invalidation, take_geometry_scene_nodes, take_layout_invalidation,
+    take_layout_repass_nodes, take_measure_repass_nodes, take_pointer_invalidation,
+    take_render_invalidation,
 };
 pub use renderer::{HeadlessRenderer, PaintLayer, RecordedRenderScene, RenderOp};
 pub use safe_area::{WindowInsets, local_ime_insets, local_safe_area_insets, window_insets};
