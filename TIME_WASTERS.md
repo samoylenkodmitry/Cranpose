@@ -363,12 +363,16 @@ Signature → cause → what to do. One lesson per line, no incident history.
   reads exactly like "layout is free"; and threshold 0 turns on the
   PER-NODE log sharing the same threshold, a warn storm inside the phase
   being timed.
-- **A property name of 32 bytes reads back empty through the legacy
-  `__system_property_get` on the Mate 20 X's bionic while `adb getprop`
-  shows the value fine.** `debug.cranpose.layout_measure_ms` (32 bytes)
-  seeded nothing with no error anywhere: prop set, app silent, instrument
-  dark. `debug.cranpose.layout_ms` (24) works. The in-tree comment claiming
-  the pre-O name cap is gone was tested against `adb getprop`, not against
-  the legacy reader the app actually uses. Keep `debug.cranpose.*` names at
-  31 bytes or fewer, and when a prop-backed knob stays silent, suspect the
-  NAME before the plumbing.
+- **A build command piped through `tail` exits 0 on compile failure, and
+  gradle then packages the previous good `.so` — so the "new" binary runs
+  old code with no error anywhere.** `cargo ndk ... | tail -1` swallowed a
+  hard E0308 in cranpose (a 43-entry const against a `[; 42]` annotation);
+  two device captures then ran a stale lib and read as "instrument dark",
+  which got diagnosed as a property-name-length problem that was never
+  real. Two rules: never pipe a build's exit status away (grep the output
+  AFTER checking it, or use pipefail), and when a shipped diagnostic stays
+  silent, `strings` the artifact for the new identifier BEFORE theorising —
+  ten seconds of `strings | grep` beats an hour of plumbing archaeology.
+  The false 32-byte-name diagnosis also briefly entered a commit comment:
+  a hypothesis formed against a binary that never contained the code can
+  contaminate the record, so verify the artifact first.
