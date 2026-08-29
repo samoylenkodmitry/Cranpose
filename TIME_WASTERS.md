@@ -284,17 +284,20 @@ Signature → cause → what to do. One lesson per line, no incident history.
   kill the server. When a change claims a host-wide invariant, grep the
   whole `.github/workflows` tree for the pattern before believing it holds.
 
-- **`CRANPOSE_FRAME_STAGE_TELEMETRY_MS` produces nothing under
-  `CRANPOSE_HEADLESS=1`** — the desktop frame-stage instrument sits on the
-  present path, which a headless run never takes, so a headless capture with
-  that variable set yields two samples and reads as "no slow frames" rather
-  than "no instrument". It also goes through `log::warn!`, so even on a
-  presenting run it needs `RUST_LOG=warn` (env_logger defaults to `error`) and
-  a binary built with the `logging` feature — `robot-app` pulls it, a plain
-  build does not. Headless, use `CRANPOSE_UPDATE_STAGE_TELEMETRY_MS=0`: it is
-  `eprintln!`, so it needs neither the feature nor `RUST_LOG`. Cost one
-  measurement round before anyone noticed the arms were empty rather than
-  equal.
+- **Two frame instruments print lines that both start `total_ms=`, and they
+  are not the same instrument** — `CRANPOSE_DESKTOP_FRAME_TELEMETRY_MS`
+  (`cranpose/src/desktop.rs`) sits on the present path, so a headless run
+  never reaches it and yields a couple of samples that read as "no slow
+  frames" rather than "no instrument". `CRANPOSE_FRAME_STAGE_TELEMETRY_MS`
+  (`cranpose-app-shell/src/shell_frame.rs`) is a different one, called from
+  `process_frame_in_context` with no present involved and no headless check
+  in the file; it fires headless. It does go through `log::warn!`, so it
+  needs `RUST_LOG=warn` and a binary built with the `logging` feature —
+  `robot-app` pulls it, a plain build does not. An earlier version of this
+  entry claimed the second variable was the present-path one, on a
+  measurement actually taken with the first; both print `total_ms=`, and
+  nobody checked which function emitted the line. Confirm which module reads
+  the variable before attributing a silence to it.
 
 - **Aggregate structural-change counts hide the thing you are looking for** —
   chasing a scroll frame that re-lowered 51 layers, per-parent totals said only
