@@ -20,8 +20,6 @@ pub(crate) struct LayerEvent {
 impl LayerEvent {
     fn kind_order(self) -> u8 {
         match self.kind {
-            // Backdrop must run before same-z content/effects so it samples only
-            // already-rendered background.
             LayerEventKind::Backdrop(_) => 0,
             LayerEventKind::Effect(_) => 1,
         }

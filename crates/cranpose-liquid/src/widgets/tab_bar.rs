@@ -1,7 +1,3 @@
-//! The floating glass tab bar: a capsule of tabs over live content with a
-//! liquid selection blob (dual-spring stretch), plus an optional detached
-//! circular accessory (the iOS 26 search button).
-
 use std::{cell::RefCell, rc::Rc};
 
 use cranpose_macros::composable;
@@ -86,45 +82,15 @@ fn tab_selection_content_color(colors: crate::theme::LiquidColors) -> Color {
 }
 
 const BAR_HEIGHT: f32 = 64.0;
-/// Resting bubble height: the reference bubble fills the bar to ~4dp
-/// insets (56/64 — a 52dp blob read as a floating pill with odd gaps,
-/// user screenshots on both bars).
 const BLOB_HEIGHT: f32 = 56.0;
 const BLOB_MARGIN: f32 = 4.0;
-/// Raised bubble growth over the resting blob — VERTICAL ONLY. Measured
-/// on the raw hold recording (bottom_bar_click_to_change_then_hold_a_
-/// little.mov, held frames f_0260/f_0300): the held bubble keeps its rest
-/// width (348px over a 319px cell pitch = the 1.09 rest factor) while its
-/// height grows 56dp -> ~82dp (238px against the 185px bar), poking ~9dp
-/// past BOTH bar edges. A uniform 1.375x projection made a 1.5-pitch-wide
-/// capsule that sat over the neighbor cell and garbled its glyphs for the
-/// whole hold.
 const FLIGHT_LENS_HEIGHT_PROJECTION: f32 = 68.0 / BLOB_HEIGHT;
-/// A whisper of ellipse bow on the raised capsule — enough to soften the
-/// corners off a flat-topped rectangle (feedback item 7) without bowing
-/// it into a circle/oval. The reference raised bubble is a CURVED ROUNDED
-/// RECTANGLE: wider than tall, mostly-straight top and bottom edges,
-/// rounded corners (tab-swipe f_028 over "Account"). A 0.55 blend rounded
-/// it into a circle (user: "should not be this circle-like round, and not
-/// oval, more like curved rounded rectangle").
 const FLIGHT_ELLIPSE_BLEND: f32 = 0.25;
-/// Resting bubble width over the cell pitch. Measured on the reference
-/// (bottom-bar-click f_0000: bubble 96 over pitch 87.5): the bubble is
-/// barely wider than its cell, so a CELL-CENTERED rest keeps its edge
-/// flush inside the pill even at the end cells. The overhang this factor
-/// asks for (tab·0.05) is what [`tab_lens_rest_width`] caps at
-/// [`BLOB_MARGIN`], which is the whole reason an end cell is legal.
 const TAB_LENS_REST_WIDTH_FACTOR: f32 = 1.10;
-/// Fraction of the shared droplet stretch the tab bubble surface carries:
-/// the reference mid-swipe bubble elongates to ~1.15x its rest width
-/// (tab-swipe T400), never a multi-cell worm.
 const TAB_STRAIN_RESPONSE: f32 = 0.30;
-/// Width allotted to each tab inside the pill.
 const TAB_WIDTH: f32 = 78.0;
-/// Plain icon frame size (its path occupies about 25dp over 11dp labels).
 const TAB_ICON_SIZE: f32 = 32.0;
 const TAB_LABEL_SIZE: f32 = 11.0;
-/// The drag lens overflows the pill vertically like the reference bubble.
 const TAP_SLOP: f32 = 6.0;
 const ACCESSORY_GAP: f32 = 10.0;
 
@@ -156,44 +122,15 @@ fn tab_flight_lens_material(foreground: cranpose_ui_graphics::Color, accent: Col
     Glass::lens()
         .no_clip()
         .tint(neutral_surface_tint(foreground, 0.06, 0.05))
-        // The color-mask act is the LENS's own optic: dark ink transmitted
-        // through the bubble takes the accent (reference behavior); the
-        // cells beneath keep their honest colors.
         .ink_recolor(accent, 0.85)
         .blur_radius(0.0)
-        // The bubble MAGNIFIES its content (light-mode recording): the icon
-        // and label under the bubble read visibly bigger than the same
-        // glyphs outside it, while the tab spacing compresses inward — a
-        // true lens, not a 1:1 pass-through. The etalon's full-face field
-        // (depth 1.0) pulls the neighbours in; the modest optical zoom
-        // scales the ridden cell up so the covered icon is "a little
-        // bigger" like the reference.
         .refraction_depth(1.0)
         .refraction_curve(0.25)
         .optical_zoom(1.22)
-        // The raised bubble's rim is a FOLD band like the toggle's: the
-        // reference hold frames (raw recording f_0260) read a thin darker
-        // ring re-imaging the content just outside the silhouette, with
-        // chromatic micro-fringes — without it the bubble fades out as a
-        // soft white sticker over the white bar. Kept shallow: 4dp reached
-        // the covered cell's teal label and threw vivid cyan streaks along
-        // the lip where the reference shows a faint washed ghost.
         .fold_depth(2.5)
-        // The ride's rainbow (user feedback item 3): the riding bubble's
-        // caps carry the toggle-class chromatic split; the REST bubble
-        // stays the verified subtle look because dispersion and the fold
-        // ride press_depth (shallow floor at rest, deep on the ride).
         .dispersion(0.9)
-        // Raised milk: the reference's held bubble face lifts modestly
-        // toward white as it rises (on-white-click-hold sheet, held rows
-        // f_0240+); lift scales by activity, so the verified resting look
-        // is untouched. Kept subtle — the fully clear face read flat, the
-        // heavy wash of earlier rounds read foggy.
         .lift(0.05)
         .highlight(0.18)
-        // Bottom-biased contact shadow (user feedback item 3: the ride
-        // bubble casts a visible soft shadow on the white bar; the default
-        // lens spread erased it on white-on-white).
         .shadow_style(GlassShadow::new(
             cranpose_ui_graphics::Color::BLACK.with_alpha(0.14),
             12.0,
@@ -205,24 +142,10 @@ fn tab_flight_lens_material(foreground: cranpose_ui_graphics::Color, accent: Col
 fn tab_bar_surface_material(foreground: cranpose_ui_graphics::Color) -> Glass {
     Glass::regular()
         .tint(neutral_surface_tint(foreground, 0.0, 0.04))
-        // 4dp let bold section headers read through the face as strong
-        // dark smears; the reference face (bar_over_headers) drowns them
-        // to a faint ghost while the color wash survives. The flat-tile
-        // composite solve below is blur-invariant, so the measured
-        // tint/saturation/lift stay pinned.
         .blur_radius(9.0)
-        // Measured on bar_over_orange_purple: tile (242,150,77) reads
-        // (253,210,168) through the bar. Saturation deepens the channels
-        // before the screen lift, so the lift knob runs higher than the
-        // per-channel solve (~0.52); this pair lands the measured composite
-        // and drowns the fold ghosts the way the reference does.
         .saturation(1.15)
         .lift(neutral_surface_lift(foreground, 0.60, -0.24))
         .highlight(0.20)
-        // The reference bar folds nearby content inside its long edges:
-        // section headers under the top edge render mirrored upside-down
-        // (bar_headers_folded) — the same pure-displacement fold as the
-        // toggle, shallower.
         .fold_depth(8.0)
         .adaptive_frost(foreground, 0.28)
 }
@@ -233,11 +156,8 @@ fn tab_flight_tint_multiplier(activity: f32) -> f32 {
 
 fn tab_lens_activity_motion(raised: bool) -> cranpose_animation::AnimationType {
     if raised {
-        // Continuous contact rise on the toggle's calibrated spring (~10
-        // frames to full, the reference on-white gesture rows).
         cranpose_animation::spring(0.9, 1400.0)
     } else {
-        // The return into the bar keeps its slower material drain.
         cranpose_animation::spring(1.0, 900.0)
     }
 }
@@ -459,11 +379,6 @@ struct TabFlightNode {
 fn tab_flight_dynamics(geometry: TabFlightGeometry, node: TabFlightNode) -> GlassDynamics {
     let activity = geometry.lens_activity.clamp(0.0, 1.0);
     let energy = geometry.pose.energy() * activity;
-    // The rest bubble is a capsule (r = h/2); the raised bubble keeps that
-    // full corner and additionally blends its SDF toward an ellipse
-    // (activity-scaled at the material layer), so the tall held body reads
-    // as the reference's continuously curved oval — a reduced corner
-    // radius squares the silhouette into a rounded rectangle instead.
     let radius = geometry.base_size.height * (0.48 + 0.02 * energy);
     let glue = 20.0;
     let shapes = geometry
@@ -498,9 +413,6 @@ fn tab_flight_dynamics(geometry: TabFlightGeometry, node: TabFlightNode) -> Glas
             ),
             shapes,
             glue,
-            // 1.1 was calibrated for the old 1.5-pitch-wide bubble; on the
-            // cell-width body the same amplitude curls the rim into marble
-            // swirls mid-travel where the reference keeps clean arc smears.
             wobble_amplitude: 0.5 * energy,
             wobble_phase: geometry.lens_position * 0.045,
             bulge_amplitude: geometry.pose.bulge_amplitude.min(8.0) * activity,
@@ -508,17 +420,11 @@ fn tab_flight_dynamics(geometry: TabFlightGeometry, node: TabFlightNode) -> Glas
             ellipse_blend: FLIGHT_ELLIPSE_BLEND,
             deformation: Some(crate::material::GlassDeformation::incompressible(
                 geometry.pose.axis,
-                // Reference mid-swipe bubble elongates to ~1.15x its rest
-                // width (tab-swipe T400) — the raw droplet stretch (up to
-                // 1.5) read as a two-cell worm.
                 1.0 + (geometry.pose.stretch - 1.0) * activity * TAB_STRAIN_RESPONSE,
             )),
             zoom_anchor: (0.0, 0.0),
         }),
         activity: Some(activity),
-        // Ride depth: the raised bubble runs the full vivid rim (fold +
-        // dispersion at strength); the resting bubble keeps a shallow
-        // floor so its verified look is untouched.
         press_depth: Some(0.3 + 0.7 * activity),
         resting_tint: Some(geometry.resting_tint),
         tint_alpha_multiplier: Some(tab_flight_tint_multiplier(geometry.lens_activity)),
@@ -634,8 +540,6 @@ fn LiquidTabBarLayout(
             let on_select = Rc::clone(&on_select);
             let accessory = Rc::clone(&accessory);
 
-            // The main pill (wrapped in a stack so the drag lens can float
-            // ABOVE the finished bar and magnify icons + glass together).
             let lens_x_outer = cranpose_core::remember(|| {
                 cranpose_core::mutableStateOf((
                     0.0f32,
@@ -645,11 +549,6 @@ fn LiquidTabBarLayout(
                 ))
             })
             .with(|state| *state);
-            // Held glass comes CLOSER and lights up: while a finger rests
-            // on the bar the whole surface scales up a touch and the shader
-            // concentrates saturation + a gradient highlight under the
-            // finger (user-observed reference behavior of every touched
-            // glass surface).
             let bar_touch =
                 cranpose_core::remember(|| cranpose_core::mutableStateOf((0.0f32, 0.0f32)))
                     .with(|state| *state);
@@ -660,11 +559,6 @@ fn LiquidTabBarLayout(
                 cranpose_animation::spring(1.0, 600.0),
                 "tabbar-hold-press",
             );
-            // The rise transforms the WHOLE stack — pill, cells, and the
-            // floating lens are one optical body. Lifting only the pill
-            // scaled the cells away from the unscaled lens, drifting the
-            // bubble off its cell in proportion to the cell's distance
-            // from the pill center.
             let bar_lift = Modifier::empty().graphics_layer(move || {
                 let press = bar_press.get().clamp(0.0, 1.0);
                 let rise = 1.0 + 0.03 * press;
@@ -675,9 +569,6 @@ fn LiquidTabBarLayout(
                     ..Default::default()
                 }
             });
-            // The stack is pinned to the pill height so the mounting lens
-            // (taller than the bar) can never inflate it — an unpinned stack
-            // grew on press and the centering Row shifted the whole bar down.
             Box(
                 bar_lift.then(Modifier::empty().height(BAR_HEIGHT)),
                 BoxSpec::default(),
@@ -685,26 +576,17 @@ fn LiquidTabBarLayout(
                     let tabs = Rc::clone(&tabs);
                     let typography = typography.clone();
                     let on_select = Rc::clone(&on_select);
-                    // The bar's edge is defined by shadow and contrast, not a
-                    // bright rim stroke.
                     let pill = Modifier::empty()
-                        .glass_effect_with(
-                            // Dark labels must never sink into dark content
-                            // scrolling beneath: the glass lifts adaptively over
-                            // dark backdrops (inert over the light ones the
-                            // pinned captures use).
-                            tab_bar_surface_material(colors.label),
-                            move || {
-                                let press = bar_press.get().clamp(0.0, 1.0);
-                                let (touch_x, touch_y) = bar_touch.get();
-                                GlassDynamics {
-                                    highlight_boost: 0.45 * press,
-                                    saturation_boost: 0.12 * press,
-                                    touch: (press > 0.01).then_some((touch_x, touch_y, press)),
-                                    ..Default::default()
-                                }
-                            },
-                        )
+                        .glass_effect_with(tab_bar_surface_material(colors.label), move || {
+                            let press = bar_press.get().clamp(0.0, 1.0);
+                            let (touch_x, touch_y) = bar_touch.get();
+                            GlassDynamics {
+                                highlight_boost: 0.45 * press,
+                                saturation_boost: 0.12 * press,
+                                touch: (press > 0.01).then_some((touch_x, touch_y, press)),
+                                ..Default::default()
+                            }
+                        })
                         .height(BAR_HEIGHT);
                     Box(pill, BoxSpec::default(), move || {
                         let tabs = Rc::clone(&tabs);
@@ -721,19 +603,12 @@ fn LiquidTabBarLayout(
                                 spec.max_tab_width
                             };
 
-                            // One optical body owns selection at rest, under direct
-                            // manipulation, and throughout release settle.
                             let lens_pressed =
                                 cranpose_core::remember(|| cranpose_core::mutableStateOf(false))
                                     .with(|state| *state);
                             let resting_lens_x = tab_lens_resting_left(selected, tab_width, count);
                             let lens_axis =
                                 crate::motion::remember_liquid_drag_axis(resting_lens_x);
-                            // Controlled-state restore only: while a finger
-                            // holds the bar the axis belongs to the gesture
-                            // (an unconditional settle re-targeted the lens
-                            // back every frame and cancelled the touch-down
-                            // attract — live report).
                             if !lens_pressed.get() {
                                 lens_axis.settle_to(resting_lens_x, LiquidMotion::glide());
                             }
@@ -748,23 +623,7 @@ fn LiquidTabBarLayout(
                                 tab_lens_activity_motion(lens_raised),
                                 "tabbar-lens-activity",
                             );
-                            // The reference raises the surface CONTINUOUSLY:
-                            // depth, chroma and scale rise together over ~10
-                            // frames (on-white gesture rows) — contact and
-                            // return ride the same animated channel.
                             let lens_activity = lens_activity_anim.get();
-                            // The color-mask act under the LIVE bubble is the
-                            // LENS MATERIAL's own optic — the shader recolors
-                            // the ink it transmits — never a recolor of the
-                            // cells themselves (an element recolor gets
-                            // refracted into accent smears around the bubble
-                            // rim). The accented CELL follows the lens center
-                            // crossing, not the committed model: a click
-                            // promotes the destination the instant `selected`
-                            // snaps while the bubble is still at the origin
-                            // (on-white-click 0ms: Conversation teal, bubble
-                            // parked at Translate — the reference hands the
-                            // accent off mid-flight).
                             let visual_index = crate::motion::liquid_visual_index(
                                 selected,
                                 lens_x,
@@ -791,9 +650,6 @@ fn LiquidTabBarLayout(
                                 },
                             );
 
-                            // Swipe/tap surface across the whole pill interior:
-                            // the shared lens gesture (crate::motion) with the
-                            // bar's clamp rules and hold feedback.
                             let row_width = tab_width * count as f32;
                             let gesture = Modifier::empty()
                                 .size(Size::new(row_width, BLOB_HEIGHT))
@@ -837,9 +693,6 @@ fn LiquidTabBarLayout(
                                 });
                             Box(gesture, BoxSpec::default(), || {});
 
-                            // Publish the lens springs for the overlay rendered
-                            // ABOVE the finished bar (outside this glass layer, so
-                            // the lens magnifies icons and glass together).
                             let published = (lens_x, lens_activity, tab_width, lens_pose);
                             if lens_x_outer.get() != published {
                                 lens_x_outer.set(published);
@@ -847,19 +700,9 @@ fn LiquidTabBarLayout(
                         });
                     });
 
-                    // The lens bubble, floating above the whole pill. Its shape
-                    // follows the droplet law (crate::dynamics): cruising speed
-                    // stretches it along the travel axis, launch compresses it,
-                    // braking swells the leading edge — orthogonal axis inverse,
-                    // area conserved — and it magnifies harder in motion. The
-                    // search accessory's circle joins its liquid field: drag the
-                    // lens to the bar's end and the two glue through a
-                    // smooth-union neck.
                     let (lens_px, lens_activity, lens_tab_w, pose) = lens_x_outer.get();
                     let lens_w = tab_lens_rest_width(lens_tab_w);
                     let lens_h = BLOB_HEIGHT * FLIGHT_LENS_HEIGHT_PROJECTION;
-                    // Node headroom for the deformation extremes (max axis
-                    // stretch + leading bulge, max ortho swell) and rim glow.
                     let deformation_headroom =
                         crate::dynamics::STRETCH_MAX.max(1.0 / crate::dynamics::STRETCH_MIN);
                     let node_w = lens_w * deformation_headroom + crate::dynamics::BULGE_MAX + 20.0;
@@ -888,10 +731,6 @@ fn LiquidTabBarLayout(
 
                     let lens_geometry = geometry;
                     let lens = Modifier::empty()
-                        // required_size: the stack is pinned to BAR_HEIGHT so
-                        // the taller lens can never inflate the bar; the node
-                        // still measures (and draws) at its full size and the
-                        // offset centers it on the pill.
                         .required_size(lens_node.size)
                         .offset(node_x, node_top)
                         .glass_effect_with(
@@ -921,7 +760,6 @@ fn LiquidTabBarLayout(
 #[composable]
 #[allow(non_snake_case)]
 pub fn LiquidTabBarSearchAccessory(on_click: impl Fn() + 'static) {
-    // The reference search circle is nearly flush with the bar height.
     crate::widgets::GlassIconButton(
         Modifier::empty(),
         crate::widgets::GlassButtonSpec::glass(),
@@ -958,17 +796,11 @@ mod tests {
     #[test]
     fn resting_lens_centers_on_its_cell_and_stays_inside_the_pill() {
         let tab = 78.0;
-        // Every cell settles cell-centered, the reference behavior
-        // (bottom-bar-click f_0000: end bubble center == cell center).
         assert_eq!(tab_lens_resting_left(0, tab, 5), 0.0);
         assert_eq!(tab_lens_resting_left(1, tab, 5), tab);
         assert_eq!(tab_lens_resting_left(3, tab, 5), 3.0 * tab);
         assert_eq!(tab_lens_resting_left(4, tab, 5), 4.0 * tab);
         assert_eq!(tab_lens_resting_left(9, tab, 5), 4.0 * tab);
-        // What makes the cell-centered end legal: the rest bubble's
-        // overhang past its cell never exceeds the pill inset, so the
-        // bubble edge lands flush inside the pill's rounded end instead
-        // of crossing it (the reference gap).
         let overhang = (tab_lens_rest_width(tab) - tab) * 0.5;
         assert!(overhang <= BLOB_MARGIN + 1.0e-4);
     }
@@ -1087,9 +919,6 @@ mod tests {
             resting,
             (TAB_WIDTH * TAB_LENS_REST_WIDTH_FACTOR, BLOB_HEIGHT)
         );
-        // Measured on the raw hold recording: the held bubble keeps its
-        // rest width (1.09x pitch held vs 1.10x at rest — no growth) and
-        // stands ~82dp against the 64dp bar, ~9dp past both edges.
         assert_eq!(raised.0, resting.0);
         assert!((raised.1 / resting.1 - FLIGHT_LENS_HEIGHT_PROJECTION).abs() < 0.001);
         assert!((raised.1 - 68.0).abs() < 0.5);
@@ -1102,8 +931,6 @@ mod tests {
 
     #[test]
     fn tab_grid_matches_the_reference_inner_inset() {
-        // The bubble fills the bar to ~4dp insets (56/64, re-judged
-        // against the user's reference frames).
         assert_eq!(BLOB_MARGIN, 4.0);
         assert_eq!(BLOB_HEIGHT + 2.0 * BLOB_MARGIN, BAR_HEIGHT);
     }
@@ -1115,17 +942,9 @@ mod tests {
             cranpose_ui_graphics::Color::from_rgb_u8(0, 122, 255),
         );
         let generic_lens = Glass::lens();
-        // A modest raised milk (activity-scaled) — clear enough to keep
-        // the wcKSRD face readable, lifted enough to match the held rows.
         assert!(glass.lift.is_some_and(|lift| (0.0..=0.15).contains(&lift)));
-        // The etalon's full-face field: interior spans edge to center so a
-        // gap-centered flight frame pulls both neighbor icons in instead of
-        // transmitting blank bar white (the two-cell milk blob).
         assert_eq!(glass.refraction_depth, 1.0);
         assert!(glass.refraction_curve < generic_lens.refraction_curve);
-        // The ride runs toggle-class dispersion; the REST bubble stays
-        // subtle because the dynamics floor press_depth 0.3 scales it —
-        // the effective resting split sits below the generic default.
         assert!(glass.dispersion * 0.3 < generic_lens.dispersion);
         assert_eq!(glass.blur_radius, Some(0.0));
         assert!(glass.highlight < generic_lens.highlight);
@@ -1133,9 +952,6 @@ mod tests {
             glass.shadow,
             "the moving lens needs its target-visible SDF contact outline"
         );
-        // A clear glass so the covered icon shows through, recolored and
-        // fringed (light-mode reference recording): a milkier tint washed
-        // the content to white.
         assert!(
             glass
                 .tint
@@ -1155,8 +971,6 @@ mod tests {
     #[test]
     fn bar_surface_adapts_frost_to_its_foreground() {
         let glass = tab_bar_surface_material(cranpose_ui_graphics::Color::BLACK);
-        // 9dp drowns bold section headers to the reference's faint ghost
-        // (bar_over_headers) — 4dp let them read as strong dark smears.
         assert_eq!(glass.blur_radius, Some(9.0));
         assert_eq!(glass.saturation, Some(1.15));
         assert_eq!(glass.lift, Some(0.60));
@@ -1202,8 +1016,6 @@ mod tests {
         assert_eq!(settle.stiffness, 900.0);
     }
 
-    /// Destinations appear in declaration order, and each shorthand builds the
-    /// icon treatment it names.
     #[test]
     fn a_scope_declares_destinations_in_order() {
         let tabs = collect_tabs(|scope| {
@@ -1227,10 +1039,6 @@ mod tests {
 
     #[test]
     fn a_resting_lens_overhangs_its_cell_within_the_legal_margin() {
-        // The pill is the cell strip plus BLOB_MARGIN a side, so an end
-        // bubble crosses it the moment its overhang outgrows that margin.
-        // A caller picks the cell width (`LiquidTabBarSpec::new`), so the
-        // rule has to hold across the range, not just at TAB_WIDTH.
         for tab_width in [24.0_f32, 44.0, 78.0, 80.0, 120.0, 400.0] {
             let width = tab_lens_rest_width(tab_width);
             assert!(
@@ -1248,8 +1056,6 @@ mod tests {
 
     #[test]
     fn a_reference_width_cell_keeps_the_measured_rest_proportion() {
-        // The cap must not disturb the widths the reference was measured
-        // at — it only takes over once a cell outgrows the pill inset.
         for tab_width in [24.0_f32, 44.0, 78.0, 80.0] {
             assert!(
                 (tab_lens_rest_width(tab_width) - tab_width * TAB_LENS_REST_WIDTH_FACTOR).abs()

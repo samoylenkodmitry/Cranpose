@@ -1,10 +1,3 @@
-//! Robot test for LazyList after navigating through Modifiers Showcase.
-//!
-//! Run with:
-//! ```bash
-//! cargo run --package desktop-app --example robot_lazy_list_after_modifiers --features robot-app
-//! ```
-
 use std::time::Duration;
 
 use cranpose::AppLauncher;

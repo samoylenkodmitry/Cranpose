@@ -1,5 +1,3 @@
-//! Robot test: full LeetCode Daily Composer layout scroll stability repro for issue #269.
-
 #![expect(
     clippy::too_many_arguments,
     reason = "full-layout robot fixture keeps application call shapes intact"

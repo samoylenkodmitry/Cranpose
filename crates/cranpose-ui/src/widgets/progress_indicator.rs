@@ -100,8 +100,6 @@ pub fn CircularProgressIndicator(modifier: Modifier, color: Color, stroke_width:
     let sized = modifier.size_points(CIRCULAR_INDICATOR_DIAMETER, CIRCULAR_INDICATOR_DIAMETER);
     Canvas(sized, move |scope| {
         let size = scope.size();
-        // Start at 12 o'clock like Compose (0 degrees points right in
-        // screen coordinates, so shift back by 90 degrees).
         let start_angle = rotation.get() - 90.0;
         let sweep_angle = sweep.get();
         if let Some(data) = circular_arc_path_data(
@@ -179,8 +177,6 @@ pub(crate) fn circular_arc_path_data(
     if outer_r <= 0.0 {
         return None;
     }
-    // Cap the sweep just below a full turn so the arc endpoints never
-    // coincide (a 360-degree SVG arc collapses to nothing).
     let sweep = sweep_angle_deg.clamp(0.0, 359.9);
     if sweep <= 0.0 {
         return None;
@@ -248,7 +244,7 @@ mod tests {
                 let path = VectorPath::parse(&data).expect("valid SVG arc path");
                 assert!(!path.is_empty(), "arc path must produce geometry");
                 let bounds = path.bounds();
-                let eps = 0.51; // arc flattening tolerance
+                let eps = 0.51;
                 assert!(
                     bounds.x >= -eps
                         && bounds.y >= -eps
@@ -291,7 +287,6 @@ mod tests {
             }
         }
         assert!(seen_band, "band must be visible for mid phases");
-        // Fully off-track at both extremes.
         assert!(linear_indicator_band(width, 0.0).is_none());
         assert!(linear_indicator_band(width, 1.0).is_none());
     }
@@ -326,10 +321,6 @@ mod tests {
         });
     }
 
-    /// The spinner's draw output must change as its infinite transition is
-    /// ticked by the frame clock: mount the widget, capture the Canvas draw
-    /// primitives, advance the animation clock, and require different
-    /// primitives from the same draw closure.
     #[test]
     fn circular_progress_indicator_animates_transition() {
         use crate::{layout::MeasureLayoutOptions, measure_layout_with_options};
@@ -346,7 +337,6 @@ mod tests {
             })
             .expect("initial render");
 
-        // Collect the spinner's draw commands from the laid-out tree.
         let root = composition.root().expect("composition root");
         let handle = composition.runtime_handle();
 
@@ -413,7 +403,6 @@ mod tests {
             "spinner draw closure must emit primitives"
         );
 
-        // Advance the animation clock by a few frames (~1/3 of a rotation).
         let mut time = 0u64;
         for _ in 0..30 {
             time += 16_666_667;

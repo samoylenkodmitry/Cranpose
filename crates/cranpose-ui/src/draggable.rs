@@ -35,9 +35,6 @@ pub type DragDeltaHandler = Rc<dyn Fn(f32)>;
 struct DraggableStateInner {
     on_delta: RefCell<DragDeltaHandler>,
     dragging: MutableState<bool>,
-    /// Everything this state has been dragged by, in logical pixels. The
-    /// gesture pipeline reads it to reason about direction; a caller that keeps
-    /// its own position never has to.
     offset: Cell<f32>,
 }
 
@@ -51,8 +48,6 @@ pub struct DraggableState {
 }
 
 impl PartialEq for DraggableState {
-    /// Two handles are equal when they drive the same control — identity, not
-    /// value, so a composable that takes one skips on recomposition.
     fn eq(&self, other: &Self) -> bool {
         Rc::ptr_eq(&self.inner, &other.inner)
     }
@@ -113,9 +108,6 @@ impl DraggableState {
         handler(delta);
     }
 
-    /// A stable identity for this state, used to key the gesture that drives
-    /// it so a recomposition reuses the running gesture instead of restarting
-    /// it mid-drag.
     pub(crate) fn identity(&self) -> usize {
         Rc::as_ptr(&self.inner) as usize
     }
@@ -153,10 +145,6 @@ mod tests {
         body()
     }
 
-    /// A remembered handle has to survive recomposition -- a control given a
-    /// fresh state each pass would forget it was being dragged -- while the
-    /// closure it delivers to has to be the latest pass's, or a delta lands on
-    /// a value the first pass captured.
     #[test]
     fn a_remembered_drag_state_survives_recomposition_and_takes_the_new_handler() {
         use cranpose_core::{Composition, MemoryApplier, location_key};

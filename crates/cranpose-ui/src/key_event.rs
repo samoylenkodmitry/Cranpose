@@ -5,10 +5,6 @@
 
 use std::fmt;
 
-// `Modifiers` lives in `cranpose-foundation` because `PointerEvent` there
-// needs it too and this crate sits above foundation in the dependency graph;
-// re-exported here so keyboard call sites keep importing it from
-// `cranpose_ui`/`cranpose_ui::key_event`.
 pub use cranpose_foundation::Modifiers;
 
 /// Type of keyboard event.
@@ -26,7 +22,6 @@ pub enum KeyEventType {
 /// the character they produce (which depends on keyboard layout).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum KeyCode {
-    // Letters
     A,
     B,
     C,
@@ -54,7 +49,6 @@ pub enum KeyCode {
     Y,
     Z,
 
-    // Numbers
     Digit0,
     Digit1,
     Digit2,
@@ -66,7 +60,6 @@ pub enum KeyCode {
     Digit8,
     Digit9,
 
-    // Function keys
     F1,
     F2,
     F3,
@@ -80,7 +73,6 @@ pub enum KeyCode {
     F11,
     F12,
 
-    // Navigation
     ArrowUp,
     ArrowDown,
     ArrowLeft,
@@ -90,7 +82,6 @@ pub enum KeyCode {
     PageUp,
     PageDown,
 
-    // Editing
     Backspace,
     Delete,
     Enter,
@@ -98,7 +89,6 @@ pub enum KeyCode {
     Space,
     Escape,
 
-    // Modifiers (for completeness, usually detected via Modifiers struct)
     ShiftLeft,
     ShiftRight,
     ControlLeft,
@@ -108,7 +98,6 @@ pub enum KeyCode {
     MetaLeft,
     MetaRight,
 
-    // Punctuation and symbols
     Minus,
     Equal,
     BracketLeft,

@@ -1,28 +1,3 @@
-//! Scroll modifier extensions for Modifier.
-//!
-//! # Overview
-//! This module implements scrollable containers with gesture-based interaction.
-//! It follows the pattern of separating:
-//! - **State management** (`ScrollGestureState`) - tracks pointer/drag state
-//! - **Event handling** (`ScrollGestureDetector`) - processes events and updates state
-//! - **Layout** (`ScrollElement`/`ScrollNode` in `scroll.rs`) - applies scroll offset
-//!
-//! # Gesture Flow
-//! 1. **Down**: Record initial position, reset drag state
-//! 2. **Move**: Check if movement along the scroll axis exceeds
-//!    `DRAG_THRESHOLD` (8dp of touch slop — pointer positions arrive in
-//!    logical, density-independent pixels on every platform)
-//!    - The drag is captured only when the scroll axis DOMINATES the total
-//!      movement (`|main| >= |cross|`, Compose-style axis locking). A drag
-//!      that decisively belongs to the other axis locks this detector out
-//!      for the rest of the gesture, so a horizontal scrollable nested in a
-//!      vertical one (chips row in a screen list) wins mostly-horizontal
-//!      drags and never steals mostly-vertical ones — and vice versa.
-//!    - Once captured: start consuming events, apply scroll delta. This
-//!      prevents child click handlers from firing during scrolls, and makes
-//!      enclosing scrollables abandon the gesture (they see consumed moves).
-//! 3. **Up/Cancel**: Clean up state, consume if was dragging
-
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
@@ -65,56 +40,29 @@ fn set_last_fling_velocity(velocity: f32) {
     crate::render_state::record_last_fling_velocity(velocity);
 }
 
-/// Local gesture state for scroll drag handling.
-///
-/// This is NOT part of `ScrollState` to keep the scroll model pure.
-/// Each scroll modifier instance has its own gesture state, which enables
-/// multiple independent scroll regions without state interference.
 struct ScrollGestureState {
-    /// Position where pointer was pressed down.
-    /// Used to calculate total drag distance for threshold detection.
     drag_down_position: Option<Point>,
 
-    /// Last known pointer position during drag.
-    /// Used to calculate incremental delta for each move event.
     last_position: Option<Point>,
 
-    /// Whether we've crossed the drag threshold and are actively scrolling.
-    /// Once true, we consume all events until Up/Cancel to prevent child
-    /// handlers from receiving drag events.
     is_dragging: bool,
 
-    /// Whether this gesture was decided to belong to the cross axis
-    /// (its cross-axis movement crossed the touch slop while dominating the
-    /// main axis). A locked-out detector never captures for the rest of the
-    /// gesture, so e.g. a horizontal chips row cannot steal a vertical
-    /// screen scroll that happens to drift sideways later on.
     axis_locked_out: bool,
 
-    /// Velocity tracker for fling gesture detection.
     velocity_tracker: VelocityTracker1D,
 
-    /// Time when gesture down started (for velocity calculation).
     gesture_start_time: Option<Instant>,
 
-    /// Platform timestamp (ms) of the Down event, when the platform provides
-    /// input timestamps. Preferred over `gesture_start_time` because batched
-    /// input delivery (Android) makes delivery-time deltas meaningless.
     gesture_start_event_time_ms: Option<i64>,
 
-    /// Last time a velocity sample was recorded (milliseconds since gesture start).
     last_velocity_sample_ms: Option<i64>,
 
-    /// Current fling animation (if any).
     fling_animation: Option<FlingAnimation>,
 
     is_overscrolling: bool,
 
-    /// Current settle animation driving toward a policy target (if any).
     settle_animation: Option<SettleAnimation>,
 
-    /// Frame loop watching for wheel-scroll idleness to run the settle policy
-    /// (wheel gestures have no end event).
     wheel_settle_watcher: Option<WheelSettleWatcher>,
 }
 
@@ -137,15 +85,6 @@ impl Default for ScrollGestureState {
     }
 }
 
-// ============================================================================
-// Helper Functions
-// ============================================================================
-
-/// Calculates the total movement distance from the original down position.
-///
-/// This is used to determine if we've crossed the drag threshold. Returns
-/// the distance along the requested axis (Y for `is_vertical`, X otherwise);
-/// callers pass `!is_vertical` to read the cross-axis component.
 #[inline]
 fn calculate_total_delta(from: Point, to: Point, is_vertical: bool) -> f32 {
     if is_vertical {
@@ -155,10 +94,6 @@ fn calculate_total_delta(from: Point, to: Point, is_vertical: bool) -> f32 {
     }
 }
 
-/// Calculates the incremental movement delta from the previous position.
-///
-/// This is used to update the scroll offset incrementally during drag.
-/// Returns the distance in the scroll axis direction (Y for vertical, X for horizontal).
 #[inline]
 fn calculate_incremental_delta(from: Point, to: Point, is_vertical: bool) -> f32 {
     if is_vertical {
@@ -168,70 +103,36 @@ fn calculate_incremental_delta(from: Point, to: Point, is_vertical: bool) -> f32
     }
 }
 
-// ============================================================================
-// Scroll Gesture Detector (Generic Implementation)
-// ============================================================================
-
-/// Trait for scroll targets that can receive scroll deltas.
-///
-/// Implemented by both `ScrollState` (regular scroll) and `LazyListState` (lazy lists).
 trait ScrollTarget: Clone {
-    /// Apply a gesture delta. Returns the consumed amount in gesture coordinates.
     fn apply_delta(&self, delta: f32) -> f32;
 
-    /// Apply a wheel/trackpad event delta. Returns the consumed amount.
     fn apply_wheel_delta(&self, delta: f32) -> f32 {
         self.apply_delta(delta)
     }
 
-    /// Apply a scroll delta during fling. Returns consumed delta in scroll coordinates.
     fn apply_fling_delta(&self, delta: f32) -> f32;
 
-    /// Called after scroll to trigger any necessary invalidation.
     fn invalidate(&self);
 
-    /// Get the current scroll offset.
     fn current_offset(&self) -> f32;
 
-    /// Whether the target can currently scroll in either direction.
-    ///
-    /// When this is `false` the gesture detector must not capture drags:
-    /// a non-scrollable target (e.g. a lazy list realized in full inside an
-    /// unbounded parent, or a scroll container whose content fits its
-    /// viewport) would otherwise consume the move events that an enclosing
-    /// scrollable needs to receive.
     fn can_scroll(&self) -> bool {
         true
     }
 
-    /// Whether the target can consume a gesture moving in the direction of
-    /// `gesture_delta` RIGHT NOW. A target pinned at one end must yield the
-    /// drag to its enclosing scrollable instead of capturing a gesture it
-    /// cannot consume — otherwise an exhausted inner list swallows every
-    /// event and the page around it goes dead.
     fn can_consume(&self, gesture_delta: f32) -> bool {
         let _ = gesture_delta;
         self.can_scroll()
     }
 
-    /// Settle policy remapping the post-interaction rest offset (see
-    /// [`ScrollSettlePolicy`]). `None` keeps natural rest positions.
     fn settle_policy(&self) -> Option<ScrollSettlePolicy> {
         None
     }
 
-    /// Whether releasing a fast drag should throw the target onwards.
-    ///
-    /// True for anything that scrolls. False for a control the finger places —
-    /// a scrollbar thumb, a sheet handle, a knob — where continuing to move
-    /// after the finger has left reads as the control slipping out of the
-    /// user's hand.
     fn allows_fling(&self) -> bool {
         true
     }
 
-    /// Called when a drag starts and again when it ends, so a target can expose
-    /// the fact to its visuals.
     fn set_dragging(&self, dragging: bool) {
         let _ = dragging;
     }
@@ -246,9 +147,7 @@ impl ScrollTarget for ScrollState {
         self.dispatch_raw_delta(delta)
     }
 
-    fn invalidate(&self) {
-        // ScrollState triggers invalidation internally
-    }
+    fn invalidate(&self) {}
 
     fn current_offset(&self) -> f32 {
         self.value()
@@ -259,8 +158,6 @@ impl ScrollTarget for ScrollState {
     }
 
     fn can_consume(&self, gesture_delta: f32) -> bool {
-        // apply_delta maps a gesture delta to dispatch_raw_delta(-delta):
-        // finger up (negative) raises the offset toward max_value.
         let raw = -gesture_delta;
         if raw > 0.0 {
             self.value_non_reactive() < self.max_value()
@@ -276,9 +173,6 @@ impl ScrollTarget for ScrollState {
 
 impl ScrollTarget for LazyListState {
     fn apply_delta(&self, delta: f32) -> f32 {
-        // LazyListState uses positive delta directly
-        // dispatch_scroll_delta already calls self.invalidate() which triggers the
-        // layout invalidation callback registered in lazy_scroll_impl
         self.dispatch_scroll_delta(delta)
     }
 
@@ -294,28 +188,19 @@ impl ScrollTarget for LazyListState {
         -self.dispatch_scroll_delta(-delta)
     }
 
-    fn invalidate(&self) {
-        // dispatch_scroll_delta already handles invalidation internally via callback.
-        // The registered callback uses schedule_layout_repass for scoped layout work.
-    }
+    fn invalidate(&self) {}
 
     fn current_offset(&self) -> f32 {
-        // LazyListState doesn't have a simple offset - use first visible item offset
         self.first_visible_item_scroll_offset()
     }
 
     fn can_scroll(&self) -> bool {
-        // Before the first measure pass no bounds are known; stay permissive
-        // so gestures that race the first layout are not dropped.
         self.layout_info().total_items_count == 0
             || self.can_scroll_forward_non_reactive()
             || self.can_scroll_backward_non_reactive()
     }
 
     fn can_consume(&self, gesture_delta: f32) -> bool {
-        // The list scrolls FORWARD on a NEGATIVE dispatch_scroll_delta
-        // (`pushing_forward = delta < 0`), and apply_delta passes the
-        // gesture delta straight through.
         if self.layout_info().total_items_count == 0 {
             return true;
         }
@@ -327,13 +212,6 @@ impl ScrollTarget for LazyListState {
     }
 }
 
-/// Everything one drag-driven modifier needs to run a gesture: what receives the
-/// deltas, where the transient gesture state lives, which axis is being dragged,
-/// and an optional guard that can decline the gesture while it is in flight.
-///
-/// Scrolling, lazy scrolling and [`Modifier::draggable`] differ only in these
-/// fields; the event loop that reads pointers and drives the detector is the
-/// same for all three and lives in [`drag_gesture_input`].
 struct DragGesture<S: ScrollTarget> {
     target: S,
     gesture_state: Rc<RefCell<ScrollGestureState>>,
@@ -343,12 +221,6 @@ struct DragGesture<S: ScrollTarget> {
     guard: Option<Rc<dyn Fn() -> bool>>,
 }
 
-/// The pointer handling shared by every drag-driven modifier.
-///
-/// Touch slop, axis locking, pointer selection, consumed-event yielding,
-/// velocity tracking, fling and settle all live behind this one loop, so a new
-/// drag-driven modifier inherits the same feel as scrolling instead of growing
-/// a second, subtly different gesture implementation.
 fn drag_gesture_input<K, S>(key: K, gesture: DragGesture<S>) -> Modifier
 where
     K: std::hash::Hash + 'static,
@@ -380,15 +252,10 @@ where
                     loop {
                         let event = await_scope.await_pointer_event().await;
 
-                        // Drags track the primary pointer only; secondary
-                        // pointers belong to multi-touch gestures (pinch/zoom)
-                        // handled by other modifiers.
                         if event.id != 0 {
                             continue;
                         }
 
-                        // An event another modifier already claimed ends this
-                        // gesture rather than being applied twice.
                         if event.is_consumed() {
                             if matches!(
                                 event.kind,
@@ -432,9 +299,6 @@ where
                                 },
                                 &event,
                             ),
-                            // Rotary is opt-in via
-                            // `Modifier::on_rotary_scroll_event`; drag surfaces
-                            // ignore it.
                             PointerEventKind::Zoom
                             | PointerEventKind::RotaryScrollPre
                             | PointerEventKind::RotaryScroll
@@ -453,8 +317,6 @@ where
 }
 
 impl ScrollTarget for DraggableState {
-    /// A drag surface has no bounds of its own: whatever the caller does with
-    /// the delta is the answer, so the whole gesture is consumed.
     fn apply_delta(&self, delta: f32) -> f32 {
         self.drag_by(delta);
         delta
@@ -465,15 +327,12 @@ impl ScrollTarget for DraggableState {
         delta
     }
 
-    fn invalidate(&self) {
-        // Whatever the delta handler writes to invalidates on its own.
-    }
+    fn invalidate(&self) {}
 
     fn current_offset(&self) -> f32 {
         self.offset()
     }
 
-    /// A placed control stops where it is let go.
     fn allows_fling(&self) -> bool {
         false
     }
@@ -483,17 +342,8 @@ impl ScrollTarget for DraggableState {
     }
 }
 
-/// Generic scroll gesture detector that works with any ScrollTarget.
-///
-/// This struct provides a clean interface for processing pointer events
-/// and managing scroll interactions. The generic parameter S determines
-/// how scroll deltas are applied.
-/// Wheel/trackpad frame-time idleness after which the settle policy runs
-/// (wheel gestures have no end event to hook).
 const WHEEL_SETTLE_IDLE_NANOS: u64 = 180_000_000;
 
-/// Frame loop that waits for the scroll offset to sit still after wheel input
-/// and then runs the settle policy. Cancelled by any new gesture.
 struct WheelSettleWatcher {
     is_running: Rc<Cell<bool>>,
     registration: Rc<RefCell<Option<FrameCallbackRegistration>>>,
@@ -507,26 +357,20 @@ impl WheelSettleWatcher {
 }
 
 struct ScrollGestureDetector<S: ScrollTarget> {
-    /// Shared gesture state (position tracking, drag status).
     gesture_state: Rc<RefCell<ScrollGestureState>>,
 
-    /// The scroll target to update when drag is detected.
     scroll_target: S,
 
-    /// Whether this is vertical or horizontal scroll.
     is_vertical: bool,
 
-    /// Whether to reverse the scroll direction (flip delta).
     reverse_scrolling: bool,
 
     overscroll: crate::scroll::OverscrollEffect,
 
-    /// Active motion state for renderer policy selection.
     motion_context: ScrollMotionContext,
 }
 
 impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
-    /// Creates a new detector for the given scroll configuration.
     fn new(
         gesture_state: Rc<RefCell<ScrollGestureState>>,
         scroll_target: S,
@@ -545,18 +389,9 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
         }
     }
 
-    /// Handles pointer down event.
-    ///
-    /// Records the initial position for threshold calculation and
-    /// resets drag state. We don't consume Down events because we
-    /// don't know yet if this will become a drag or a click.
-    ///
-    /// Returns `false` - Down events are never consumed to allow
-    /// potential child click handlers to receive the initial press.
     fn on_down(&self, position: Point, time_ms: Option<i64>) -> bool {
         let mut gs = self.gesture_state.borrow_mut();
 
-        // Cancel any running fling/settle animation and wheel-settle watcher
         if let Some(fling) = gs.fling_animation.take() {
             fling.cancel();
         }
@@ -577,7 +412,6 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
         gs.gesture_start_event_time_ms = time_ms;
         gs.is_overscrolling = self.overscroll.offset().abs() > 0.001;
 
-        // Add initial position to velocity tracker
         let pos = if self.is_vertical {
             position.y
         } else {
@@ -586,23 +420,9 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
         gs.velocity_tracker.add_data_point(0, pos);
         gs.last_velocity_sample_ms = Some(0);
 
-        // Never consume Down - we don't know if this is a drag yet
         false
     }
 
-    /// Handles pointer move event.
-    ///
-    /// This is the core gesture detection logic:
-    /// 1. Safety check: if no primary button is pressed but we think we're
-    ///    tracking, we missed an Up event - reset state.
-    /// 2. Calculate total movement from down position on BOTH axes.
-    /// 3. Axis-locked slop: start dragging once the scroll-axis movement
-    ///    exceeds `DRAG_THRESHOLD` (8dp) AND dominates the cross-axis
-    ///    movement; a decisively cross-axis drag locks this detector out
-    ///    for the rest of the gesture.
-    /// 4. While dragging, apply scroll delta and consume events.
-    ///
-    /// Returns `true` if event should be consumed (we're actively dragging).
     fn on_move(
         &self,
         position: Point,
@@ -612,7 +432,6 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
     ) -> bool {
         let mut gs = self.gesture_state.borrow_mut();
 
-        // Safety: detect missed Up events (hit test delivered to wrong target)
         if !buttons.contains(PointerButton::Primary) && gs.drag_down_position.is_some() {
             if gs.is_dragging {
                 self.scroll_target.set_dragging(false);
@@ -640,23 +459,12 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
 
         let incremental_delta = calculate_incremental_delta(last_pos, position, self.is_vertical);
 
-        // Axis-locked touch slop (Compose-style): capture only when the
-        // movement along the scroll axis crosses the slop AND dominates the
-        // cross-axis movement, so of two nested scrollables the one whose
-        // axis matches the drag wins. Ties go to the innermost handler
-        // (children are dispatched before their ancestors). A drag that
-        // decisively belongs to the cross axis locks this detector out for
-        // the rest of the gesture. Targets that cannot scroll in either
-        // direction never capture, so enclosing scrollables receive the
-        // gesture instead.
         let mut edge_candidate = false;
         if !gs.is_dragging && !gs.axis_locked_out {
             let signed_main_delta = calculate_total_delta(down_pos, position, self.is_vertical);
             let main_delta = signed_main_delta.abs();
             let cross_delta = calculate_total_delta(down_pos, position, !self.is_vertical).abs();
             if main_delta > DRAG_THRESHOLD && main_delta >= cross_delta {
-                // Direction-aware capture: a target pinned at one end yields
-                // gestures it cannot consume to its enclosing scrollable.
                 if self.scroll_target.can_consume(signed_main_delta) {
                     gs.is_dragging = true;
                     self.scroll_target.set_dragging(true);
@@ -671,7 +479,6 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
 
         gs.last_position = Some(position);
 
-        // Track velocity for fling
         let pos = if self.is_vertical {
             position.y
         } else {
@@ -682,22 +489,12 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
             .zip(time_ms)
             .map(|(start_ms, now_ms)| now_ms - start_ms);
         let sample_ms = if let Some(event_sample_ms) = event_sample_ms {
-            // The platform supplied real input timestamps: trust them.
-            // Android delivers touch samples batched/frame-aligned, so several
-            // moves are processed back-to-back here; only the event's own
-            // timestamp yields the real dt between finger positions. Real
-            // pauses must also stay real so a stop-then-release does not fling
-            // (the tracker treats gaps > ASSUME_STOPPED_MS as stopped).
             Some(match gs.last_velocity_sample_ms {
                 Some(last_sample_ms) => event_sample_ms.max(last_sample_ms),
                 None => event_sample_ms.max(0),
             })
         } else if let Some(start_time) = gs.gesture_start_time {
-            // Fallback: delivery-time stamping for platforms without input
-            // timestamps (desktop mouse, web).
             let elapsed_ms = start_time.elapsed().as_millis() as i64;
-            // Keep sample times strictly increasing so velocity stays stable when
-            // multiple move events land in the same millisecond.
             Some(match gs.last_velocity_sample_ms {
                 Some(last_sample_ms) => {
                     let mut sample_ms = if elapsed_ms <= last_sample_ms {
@@ -705,7 +502,6 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
                     } else {
                         elapsed_ms
                     };
-                    // Clamp large processing gaps so frame stalls don't erase fling velocity.
                     if sample_ms - last_sample_ms > ASSUME_STOPPED_MS {
                         sample_ms = last_sample_ms + ASSUME_STOPPED_MS;
                     }
@@ -726,7 +522,7 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
         }
 
         if gs.is_dragging {
-            drop(gs); // Release borrow before calling scroll target
+            drop(gs);
             let delta = if self.reverse_scrolling {
                 -incremental_delta
             } else {
@@ -735,7 +531,7 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
             let overscroll = self.overscroll.clone();
             overscroll.apply_to_scroll(delta, |delta| self.scroll_target.apply_delta(delta));
             self.scroll_target.invalidate();
-            true // Consume event while dragging
+            true
         } else if gs.is_overscrolling {
             drop(gs);
             let delta = if self.reverse_scrolling {
@@ -786,12 +582,6 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
         consumed
     }
 
-    /// Handles pointer up event.
-    ///
-    /// Cleans up drag state. If we were actively dragging, calculates fling
-    /// velocity and starts fling animation if velocity is above threshold.
-    ///
-    /// Returns `true` if we were dragging (event should be consumed).
     fn finish_gesture(&self, allow_fling: bool, release_time_ms: Option<i64>) -> bool {
         let (was_dragging, gesture_owned, velocity, start_fling, existing_fling) = {
             let mut gs = self.gesture_state.borrow_mut();
@@ -800,10 +590,6 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
             let mut velocity = 0.0;
 
             if allow_fling && gesture_owned && gs.gesture_start_time.is_some() {
-                // A finger that rested before lifting must not fling: the
-                // tracker only sees inter-SAMPLE gaps, so a release long
-                // after the last move would otherwise replay the stale
-                // pre-hold velocity (hold-then-release phantom fling).
                 let release_sample_ms = release_time_ms
                     .zip(gs.gesture_start_event_time_ms)
                     .map(|(release_ms, start_ms)| release_ms - start_ms)
@@ -851,7 +637,6 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
             )
         };
 
-        // Always record velocity for test accessibility (even if below fling threshold)
         if allow_fling && gesture_owned {
             log::debug!(
                 target: "cranpose::velocity",
@@ -860,7 +645,6 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
             set_last_fling_velocity(velocity);
         }
 
-        // Convert gesture velocity to scroll-offset velocity (offset units/s).
         let adjusted_velocity = if self.reverse_scrolling {
             -velocity
         } else {
@@ -869,10 +653,6 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
         let fling_velocity = -adjusted_velocity;
         let has_overscroll = self.overscroll.offset().abs() > 0.001;
 
-        // Settle policy: remap where this interaction comes to rest (the
-        // `targetContentOffset` analog). When it moves the rest position, a
-        // spring seeded with the release velocity replaces the decay so the
-        // adjustment still reads as one continuous deceleration.
         let settle_target = if was_dragging {
             self.scroll_target.settle_policy().and_then(|policy| {
                 let current = self.scroll_target.current_offset();
@@ -954,8 +734,6 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
         gs.fling_animation = Some(fling);
     }
 
-    /// Springs the scroll offset to `target` (offset units), seeded with the
-    /// release velocity so policy-adjusted rests feel like one deceleration.
     fn start_settle_animation(&self, target: f32, initial_velocity: f32) {
         let Some(runtime) = current_runtime_handle() else {
             self.motion_context.set_active(false);
@@ -1034,26 +812,14 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
         }
     }
 
-    /// Handles pointer up event.
-    ///
-    /// Cleans up drag state. If we were actively dragging, calculates fling
-    /// velocity and starts fling animation if velocity is above threshold.
-    ///
-    /// Returns `true` if we were dragging (event should be consumed).
     fn on_up(&self, time_ms: Option<i64>) -> bool {
         self.finish_gesture(self.scroll_target.allows_fling(), time_ms)
     }
 
-    /// Handles pointer cancel event.
-    ///
-    /// Cleans up state without starting a fling. Returns `true` if we were dragging.
     fn on_cancel(&self) -> bool {
         self.finish_gesture(false, None)
     }
 
-    /// Handles mouse wheel / trackpad scroll event.
-    ///
-    /// Returns `true` when the target consumed any delta.
     fn on_scroll(&self, axis_delta: f32, event: &PointerEvent) -> bool {
         if axis_delta.abs() <= f32::EPSILON {
             return false;
@@ -1107,10 +873,6 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
         }
     }
 
-    /// Arms (once) a frame loop that runs the settle policy after the wheel
-    /// goes idle. Wheel input has no end event, so idleness — the offset
-    /// sitting still for [`WHEEL_SETTLE_IDLE_NANOS`] of frame time — is the
-    /// gesture end.
     fn ensure_wheel_settle_watcher(&self) {
         if self.scroll_target.settle_policy().is_none() && self.overscroll.offset().abs() <= 0.001 {
             return;
@@ -1165,7 +927,6 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
                     if !this.is_running.get() {
                         return;
                     }
-                    // A live drag or fling owns the settle decision now.
                     {
                         let gs = this.gesture_state.borrow();
                         let animating = gs.is_dragging
@@ -1573,10 +1334,6 @@ impl ModifierNodeElement for TranslatedContentContextElement {
     }
 }
 
-// ============================================================================
-// Modifier Extensions
-// ============================================================================
-
 impl Modifier {
     /// Creates a horizontally scrollable modifier.
     ///
@@ -1612,21 +1369,12 @@ impl Modifier {
     }
 }
 
-/// Internal implementation for scroll modifiers.
-///
-/// Creates a combined modifier consisting of:
-/// 1. Pointer input handler (for gesture detection)
-/// 2. Layout modifier (for applying scroll offset)
-///
-/// The pointer input is added FIRST so it appears earlier in the modifier
-/// chain, allowing it to intercept events before layout-related handlers.
 fn scroll_impl(
     state: ScrollState,
     is_vertical: bool,
     reverse_scrolling: bool,
     guard: Option<Rc<dyn Fn() -> bool>>,
 ) -> Modifier {
-    // Create local gesture state - each scroll modifier instance is independent
     let gesture_state = Rc::new(RefCell::new(ScrollGestureState::default()));
     let motion_context = scroll_motion_context_for_key(ScrollMotionContextKey::ScrollState {
         state_id: state.id(),
@@ -1634,21 +1382,18 @@ fn scroll_impl(
         reverse_scrolling,
     });
 
-    // Set up pointer input handler
     let pointer_input = drag_gesture_input(
         (state.id(), is_vertical),
         DragGesture {
             target: state,
             gesture_state,
             is_vertical,
-            // `ScrollState` handles reversing in layout, not input.
             reverse_input: false,
             motion_context: motion_context.clone(),
             guard,
         },
     );
 
-    // Create layout modifier for applying scroll offset to content
     let overscroll = motion_context.overscroll();
     let element = ScrollElement::new(state, overscroll.clone(), is_vertical, reverse_scrolling);
     let layout_modifier =
@@ -1671,17 +1416,12 @@ fn scroll_impl(
         overscroll,
     ));
 
-    // Combine: pointer input THEN layout modifier, clip to bounds by default
     pointer_input
         .then(motion_modifier)
         .then(translated_content_modifier)
         .then(layout_modifier)
         .clip_to_bounds()
 }
-
-// ============================================================================
-// Lazy Scroll Support for LazyListState
-// ============================================================================
 
 use cranpose_foundation::lazy::LazyListState;
 
@@ -1734,7 +1474,6 @@ impl Modifier {
     }
 }
 
-/// Internal implementation for lazy scroll modifiers.
 fn lazy_scroll_impl(
     state: LazyListState,
     is_vertical: bool,
@@ -1770,10 +1509,6 @@ fn lazy_scroll_impl(
             },
         ))
 }
-
-// ============================================================================
-// General drag support
-// ============================================================================
 
 impl Modifier {
     /// Drags along `axis`, reporting each delta to `state`.
@@ -1820,8 +1555,6 @@ fn draggable_impl(
             gesture_state: Rc::new(RefCell::new(ScrollGestureState::default())),
             is_vertical,
             reverse_input: false,
-            // A drag surface has no overscroll of its own: there is no edge to
-            // stretch, because the caller owns the bounds.
             motion_context: scroll_motion_context_for_key(ScrollMotionContextKey::Draggable {
                 state_identity: identity,
                 is_vertical,

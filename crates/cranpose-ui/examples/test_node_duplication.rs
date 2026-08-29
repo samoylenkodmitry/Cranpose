@@ -11,7 +11,6 @@ fn inner_content() {
 fn outer_content() {
     Text("Outer start", Modifier::empty(), TextStyle::default());
 
-    // This Column should contain "Inner 1" and "Inner 2"
     Column(Modifier::empty(), ColumnSpec::default(), || {
         inner_content();
     });
@@ -22,7 +21,6 @@ fn outer_content() {
 fn main() {
     let mut composition = Composition::new(MemoryApplier::new());
 
-    // Initial render
     composition
         .render(location_key(file!(), line!(), column!()), outer_content)
         .unwrap();

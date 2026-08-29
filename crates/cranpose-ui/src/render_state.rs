@@ -17,11 +17,6 @@ pub(crate) type ModifierChainTraceCallback =
 
 struct RenderState {
     layout_repasses: Mutex<LayoutRepassManager>,
-    /// Scoped re-*measure* requests (see [`schedule_measure_repass`]). Unlike
-    /// `layout_repasses`, processing these bubbles *measure* dirtiness up the
-    /// tree so a subtree is re-measured (not just re-placed) — needed when a
-    /// node's own size changes off a frame callback (e.g. a collapsing row) and
-    /// an ancestor `LazyColumn` would otherwise reuse its cached item slot.
     measure_repasses: Mutex<LayoutRepassManager>,
     draw_repasses: Mutex<DrawRepassManager>,
     modifier_slice_repasses: Mutex<LayoutRepassManager>,
@@ -93,9 +88,6 @@ fn new_draw_observer() -> SnapshotStateObserver {
 }
 
 thread_local! {
-    /// The node whose draw closure is being recorded right now, so a
-    /// draw-phase animation can name itself (see
-    /// [`request_current_draw_redraw`]).
     static CURRENT_DRAW_NODE: std::cell::Cell<Option<NodeId>> = const { std::cell::Cell::new(None) };
 }
 
@@ -361,12 +353,6 @@ fn normalize_density(density: f32) -> f32 {
     }
 }
 
-/// Keeps the font scale inside the range platforms actually offer.
-///
-/// Android's accessibility settings reach 2.0, and a bold-text or display-size
-/// combination can push a little past it; below 0.5 text stops being text. A
-/// nonsense value from a host is treated as "no scaling" rather than allowed to
-/// collapse or explode every layout that reads it.
 fn normalize_font_scale(scale: f32) -> f32 {
     if scale.is_finite() && scale > 0.0 {
         scale.clamp(MIN_FONT_SCALE, MAX_FONT_SCALE)
@@ -522,14 +508,6 @@ pub(crate) fn with_semantics_dispatch<R>(
     f(&context.semantics_dispatch)
 }
 
-/// Runs `f` against the semantics queue of the app context `id` names.
-///
-/// Addressed by id rather than by whatever context happens to be current,
-/// because the caller is an app's own frame loop or an event callback, which may
-/// well be outside any context — and because the answer must be the queue the
-/// node actually belongs to, never a neighbouring app's. A context that is gone
-/// drops the request instead of panicking: shutdown order is not something a
-/// requester holder can see.
 pub(crate) fn with_semantics_dispatch_by_app_context(
     id: AppContextId,
     f: impl FnOnce(&crate::semantics_dispatch::SemanticsInvalidationState),
@@ -537,7 +515,6 @@ pub(crate) fn with_semantics_dispatch_by_app_context(
     with_app_context_by_id(id, |context| f(&context.semantics_dispatch));
 }
 
-/// The identity of the current app context, or `None` outside one.
 pub(crate) fn current_app_context_id_opt() -> Option<AppContextId> {
     current_app_context().map(|context| context.id)
 }
@@ -612,10 +589,6 @@ fn with_draw_observer<R>(f: impl FnOnce(&SnapshotStateObserver) -> R) -> R {
     f(&context.draw_observer)
 }
 
-/// Manages scoped layout invalidations for specific nodes.
-///
-/// Similar to PointerDispatchManager, this tracks which specific nodes
-/// need layout invalidation rather than forcing a global invalidation.
 struct LayoutRepassManager {
     dirty_nodes: HashSet<NodeId>,
 }
@@ -646,7 +619,6 @@ impl LayoutRepassManager {
     }
 }
 
-/// Tracks draw-only invalidations so render data can be refreshed without layout.
 struct DrawRepassManager {
     dirty_nodes: HashSet<NodeId>,
 }
@@ -711,12 +683,6 @@ pub fn schedule_layout_repass(node_id: NodeId) {
         lock_repass_manager(&state.layout_repasses).schedule_repass(node_id);
         state.layout_invalidated.store(true, Ordering::Relaxed);
     });
-    // Set the layout-invalidated flag so the app shell knows to process repasses.
-    // The app shell will check take_layout_repass_nodes() first (scoped path),
-    // and only falls back to global invalidation if the flag is set without any repass nodes.
-    // Also request render invalidation so the frame is actually drawn.
-    // Without this, programmatic scrolls (e.g., scroll_to_item) wouldn't trigger a redraw
-    // until the next user interaction caused a frame request.
     request_render_invalidation();
 }
 
@@ -1107,10 +1073,6 @@ mod tests {
     use super::*;
     use crate::text::{AnnotatedString, TextLayoutResult, TextMeasurer, TextMetrics, TextStyle};
 
-    /// A draw-phase animation (the selection handle's glide spring) advances
-    /// a Cell no observation can see and must name its own node for the next
-    /// frame's re-record; robot_selection_vertical_grab froze exactly when a
-    /// bare render invalidation stopped rebuilding the scene.
     #[test]
     fn a_draw_closure_can_name_its_own_node_for_the_next_frame() {
         let _scope = app_context_test_scope();
@@ -1130,8 +1092,6 @@ mod tests {
             "the next frame must be requested"
         );
 
-        // Outside a recording there is no node to name: a plain frame
-        // request, nothing scheduled.
         request_current_draw_redraw();
         assert!(take_draw_repass_nodes().is_empty());
         assert!(take_render_invalidation());
@@ -1216,8 +1176,6 @@ mod tests {
                 "every Sp on screen just changed size"
             );
 
-            // The same value is not a change; relaying out on every read would
-            // make a per-frame poll expensive for nothing.
             set_font_scale(1.3);
             assert!(!take_layout_invalidation());
         });

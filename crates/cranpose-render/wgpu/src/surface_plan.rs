@@ -21,15 +21,6 @@ pub(crate) struct LayerSurfaceRequirements {
     pub(crate) contains_translated_content: bool,
     pub(crate) translated_content_axes: TranslatedContentAxes,
     pub(crate) contains_backdrop_content: bool,
-    /// Whether this layer or anything under it draws through a runtime shader.
-    ///
-    /// A runtime shader's output changes every frame from uniforms that are
-    /// deliberately excluded from every content hash — including them would
-    /// mint a new cache key per frame and fill the LRU with stale textures. So
-    /// no hash can tell an ancestor that the subtree changed, and an ancestor
-    /// that raster-caches replays the shader frozen at whatever frame it first
-    /// rastered. Every cache admission therefore consults the whole subtree,
-    /// not just the layer's own effect.
     pub(crate) contains_runtime_shader: bool,
 }
 
@@ -76,9 +67,6 @@ pub(crate) struct TranslationRenderContext {
 pub(crate) struct LayerSurfaceRequest<'a> {
     pub(crate) root_scale: f32,
     pub(crate) backdrop_underlay: Option<&'a OffscreenTarget>,
-    /// The one colour the underlay holds under this child, when it holds
-    /// only one; the raster cache key carries it so the child keeps its
-    /// raster while it moves over that colour.
     pub(crate) backdrop_underlay_color: Option<u32>,
     pub(crate) allow_runtime_cache: bool,
     pub(crate) logical_rect_override: Option<Rect>,
@@ -108,9 +96,6 @@ fn layer_contains_text_primitives(layer: &LayerNode) -> bool {
             node: PrimitiveNode::Text(_),
             ..
         }) => true,
-        // Text drawn through a `DrawScope` rasterizes the same glyph masks and
-        // wants the same rigid snapping; missing it here would leave canvas
-        // text blurred on a fractionally offset layer.
         RenderNode::Primitive(PrimitiveEntry {
             node: PrimitiveNode::Draw(draw),
             ..
@@ -221,9 +206,6 @@ fn layer_contains_gpu_effect_text_primitives(layer: &LayerNode) -> bool {
 fn draw_primitive_is_pixel_sensitive(draw: &cranpose_ui_graphics::DrawPrimitive) -> bool {
     match draw {
         cranpose_ui_graphics::DrawPrimitive::Image { .. } => true,
-        // Glyph coverage masks resample as badly as an image does — a text
-        // node without a local surface marks its layer pixel-stable for the
-        // same reason.
         cranpose_ui_graphics::DrawPrimitive::Text(_) => true,
         cranpose_ui_graphics::DrawPrimitive::Blend { primitive, .. } => {
             draw_primitive_is_pixel_sensitive(primitive)
@@ -321,12 +303,6 @@ pub(crate) fn composite_sample_mode_for_requirements(
     effective.composite_sample_mode()
 }
 
-/// The density a layer's forced surface must be rasterized at.
-///
-/// `layer_scale` is the uniform scale of the layer's own transform; it raises
-/// the density so a magnifying (pinch-zoomed) layer resolves real detail instead
-/// of being sampled up from a 1x raster. See
-/// [`SurfaceRequirementSet::target_scale`].
 pub(crate) fn layer_surface_target_scale(
     translated_content_context: bool,
     surface_capture_active: bool,
@@ -349,8 +325,6 @@ pub(crate) fn layer_surface_target_scale(
     }
 }
 
-/// The uniform scale of `layer`'s own transform, for
-/// [`layer_surface_target_scale`].
 pub(crate) fn layer_surface_scale(layer: &LayerNode) -> f32 {
     layer_uniform_scale(&layer.graphics_layer)
 }
@@ -369,8 +343,6 @@ pub(crate) fn effect_layer_target_scale(layer: &EffectLayer, root_scale: f32) ->
     {
         root_scale
     } else {
-        // Effect layers are already flattened into the scene's device space;
-        // there is no residual layer transform for the composite to magnify.
         layer.requirements.target_scale(root_scale, 1.0)
     }
 }
@@ -454,11 +426,6 @@ pub(crate) fn layer_surface_requirements_cached(
     let mut contains_translated_content = layer.translated_content_context;
     let mut translated_content_axes = translated_content_axes_for_layer(layer);
     let mut contains_backdrop_content = layer.backdrop().is_some();
-    // Render effects only, which is the skip this widens: a backdrop shader
-    // reads the scene behind it, and that path has its own admission rules
-    // (`layer_uses_external_backdrop_input`, the underlay checks) written
-    // against a hash that does see the scene. Folding backdrops in here would
-    // make every ancestor of every glass surface uncacheable on a guess.
     let mut contains_runtime_shader = layer
         .effect()
         .is_some_and(RenderEffect::contains_runtime_shader);
@@ -1053,10 +1020,6 @@ mod tests {
         );
     }
 
-    /// A pinch-zoomed layer: a scaling `transform_to_parent` forces an
-    /// offscreen surface, and that surface must be allocated at the layer's
-    /// EFFECTIVE device scale. Rasterizing it at plain `root_scale` and letting
-    /// the composite magnify the texture is what made zoom fuzzy.
     #[test]
     fn zoomed_layer_surface_resolves_at_root_scale_times_the_layer_scale() {
         let mut layer = test_layer(Rect {
@@ -1094,8 +1057,6 @@ mod tests {
         );
     }
 
-    /// The scale must come off the layer, not off a constant: halving the zoom
-    /// halves the density the surface is allocated at.
     #[test]
     fn zoomed_layer_surface_scale_tracks_the_layer_scale() {
         let mut layer = test_layer(Rect {
@@ -1121,7 +1082,6 @@ mod tests {
         );
     }
 
-    /// An unscaled layer is untouched: same texture density as before the fix.
     #[test]
     fn unscaled_layer_surface_keeps_the_root_scale_density() {
         let layer = test_layer(Rect {
@@ -1146,18 +1106,6 @@ mod tests {
         );
     }
 
-    /// The invariant the robot's layout-jitter contract watches, without a GPU:
-    /// a layer whose scale ANIMATES must stay put in layout space and must not
-    /// re-rasterize every frame.
-    ///
-    /// Raising `target_scale` to the live layer scale made both false at once.
-    /// A 36 dp box sweeping 0.85 -> 1.15 got a distinct surface size on nearly
-    /// every frame (measured on the demo's Animations tab: 37, 38, 39, 40, 41,
-    /// 42 px within one sweep), so its rounded-corner antialiasing was
-    /// recomputed at a new sub-pixel phase per frame, and the ceil'd texture
-    /// was stretched across a destination quad built from the unpadded rect,
-    /// compressing the content toward the quad's origin by up to half a device
-    /// pixel. Nothing moved in layout space, but every edge pixel did.
     #[test]
     fn an_animated_layer_scale_holds_its_surface_and_its_layout_rect() {
         use cranpose_render_common::layer_transform::layer_transform_to_parent;
@@ -1177,7 +1125,6 @@ mod tests {
 
         let mut surface_sizes: Vec<(u32, u32)> = Vec::new();
         for frame in 0..=40 {
-            // The demo's "Scale + Fade (layer lambda)" animation.
             let progress = frame as f32 / 40.0;
             let mut layer = test_layer(local_bounds);
             layer.graphics_layer.scale = 0.85 + 0.3 * progress;
@@ -1199,10 +1146,6 @@ mod tests {
                 surface_sizes.push((width, height));
             }
 
-            // What the composite actually maps: the whole texture onto the quad
-            // the surface rect maps to. The layer's own content stops at
-            // `local_bounds * target_scale` texels, so its layout-space extent
-            // is that fraction of the quad.
             let surface_rect =
                 device_pixel_exact_surface_rect(local_bounds, target_scale, width, height);
             let quad = layer.transform_to_parent.bounds_for_rect(surface_rect);
@@ -1213,8 +1156,6 @@ mod tests {
                 height: quad.height * (local_bounds.height * target_scale) / height as f32,
             };
 
-            // ... and that has to be exactly where layout put the layer,
-            // whatever resolution the texture happened to get.
             let laid_out = layer.transform_to_parent.bounds_for_rect(local_bounds);
             for (label, composited, laid_out) in [
                 ("x", composited.x, laid_out.x),
@@ -1277,9 +1218,6 @@ mod tests {
 
     #[test]
     fn a_layer_drawing_scope_text_snaps_as_rigidly_as_one_holding_a_text_node() {
-        // Glyph masks are rasterized on the pixel grid either way; a canvas that
-        // draws its own text has exactly the same crispness requirement as a
-        // `Text` composable.
         assert!(!layer_needs_rigid_snap(
             &test_layer(Rect {
                 x: 0.0,

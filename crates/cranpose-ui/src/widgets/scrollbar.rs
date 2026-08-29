@@ -175,9 +175,6 @@ pub fn Scrollbar(
         };
         let bounds = spec.thumb_bounds(track);
 
-        // The drag runs against the metrics of the frame the finger is in, not
-        // the ones composition happened to see, so a thumb dragged while the
-        // content is still growing keeps following the finger.
         let dragged = rememberDraggableState(move |delta| {
             let metrics = state.metrics();
             let Some(geometry) = metrics.thumb(bounds) else {

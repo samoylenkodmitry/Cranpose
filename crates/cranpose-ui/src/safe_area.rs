@@ -111,10 +111,8 @@ mod tests {
 
     #[test]
     fn returns_one_shared_local_per_thread() {
-        // `CompositionLocal` is not `Debug`, so compare with `==` directly.
         assert!(local_safe_area_insets() == local_safe_area_insets());
         assert!(local_ime_insets() == local_ime_insets());
-        // The IME local is distinct from the safe-area local.
         assert!(local_ime_insets() != local_safe_area_insets());
     }
 

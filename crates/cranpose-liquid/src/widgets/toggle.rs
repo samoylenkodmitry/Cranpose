@@ -1,11 +1,3 @@
-//! The iOS 26 switch: a 63×28 capsule track with a wide capsule thumb
-//! (~60% of the track). Pressing lifts the whole thumb into a transparent
-//! refractive glass capsule that grows past the track edges (the reference
-//! "toggle in action" frames): the track color refracts through it with a
-//! rainbow rim while the white thumb dissolves into the glass. Releasing
-//! lets the lens shrink back slowly; the white thumb rematerializes at the
-//! end of the settle. The thumb is swipable; a tap flips.
-
 use cranpose_animation::{
     AnimationSpec, AnimationType, Easing, animateColorAsState, animateFloatAsState, spring,
 };
@@ -29,64 +21,20 @@ pub(crate) const TRACK_HEIGHT: f32 = 28.0;
 const THUMB_WIDTH: f32 = 37.0;
 const THUMB_HEIGHT: f32 = 25.0;
 const THUMB_MARGIN: f32 = 1.5;
-/// The pressed dome anchored to the 63dp track (user-corrected twice):
-/// the chromatic ring spans ~44 x 27dp (T133/T266 at 6.27 px/dp) — a
-/// BIG dome leaning toward the travel side with the gray sticking out
-/// its trailing edge. The "thinner" read is OPTICAL: the rim band
-/// compresses the transmitted content inward so the gray under the
-/// glass slims, while the dome itself stays grand. A small dome was the
-/// wrong fix; a spilling halo was the original defect.
-/// A WIDE GRAND capsule, not a round dome: the reference hold silhouette
-/// is ~1.5 wider than tall (interior aspect 1.41, rim ring 1.78 measured
-/// on the hold tile). The dome stays grand while the OPTICS thin the gray
-/// content inside it (user: "the dome itself stays grand"); a 44dp width
-/// read too circular against the 36dp height.
 const LENS_WIDTH: f32 = 54.0;
-/// TALLER than the 28dp track: the pressed dome pokes ~4dp past both bar
-/// edges (user: "the glass bubble should be wider in height than the
-/// toggle itself").
 const LENS_HEIGHT: f32 = 36.0;
-/// Centered on the track so the dome pokes symmetrically past the top
-/// and bottom edges.
 const LENS_VERTICAL_OFFSET: f32 = 0.0;
-/// The raised lens leans toward the travel side, measured from the thumb
-/// center on the reference press and settle frames (~6-8dp in every phase:
-/// press leans toward the destination, flight leads the thumb, settle
-/// overhangs the arrival end).
 const LENS_TRAVEL_LEAN: f32 = 7.0;
-/// Glass node span beyond the lens shape (rim glow + wobble live here).
-/// The full dome plus the travel lean needs real headroom — 10dp cut the
-/// leaning edge flat (live report).
 const LENS_PAD: f32 = 18.0;
-/// Pointer travel below this is a tap, not a swipe.
 const TAP_SLOP: f32 = 4.0;
-// The flight itself now carries the raised lens; the reference keeps the
-// lens clearly readable ~750 ms after release (toggle-press sheet still
-// shows it at 883 ms) before the thumb rematerializes.
 const LENS_RELEASE_LINGER_MS: u64 = 400;
 const LENS_RELEASE_FADE_MS: u64 = 400;
 
 fn toggle_track_motion() -> AnimationType {
-    // The reference track crosses into sage ~17 ms after release and reaches
-    // full green ~150 ms later (toggle-press sheet, 60 fps): a fast-start
-    // sweep with no delay. EaseOut at 150 front-loaded the change and read
-    // fully green ~70 ms in (sheet: ours full at 231 ms vs target 283-300);
-    // 260 keeps the instant sage onset while the tail spans the reference's
-    // ~150 ms of visible progression.
     AnimationType::Tween(AnimationSpec::tween(260, Easing::EaseOut))
 }
 
 fn toggle_lens_material() -> Glass {
-    // ONE continuous light path (example/shaders.txt wcKSRD etalon): a
-    // single `sin(pow(clamp(-sdf/refraction), 0.25) * 1.57)` displacement
-    // field, blurred, with the etalon's border + gradient lighting. The
-    // ONLY honest chromatic addition is tracing that SAME field per RGB
-    // channel at its own refractive index (dispersion) — real material
-    // aberration, not a separate spectral band. No fold crutch, no zoom
-    // chamber, no meniscus/absorption overrides, no leading-edge content
-    // gather: those layered "cratches" read as cheated compound parts.
-    // The reference press look is this etalon field over the pressed
-    // content (white-washed face + gray blob).
     Glass::lens()
         .shape(LiquidShape::Capsule)
         .tint(cranpose_ui_graphics::Color::WHITE.with_alpha(0.02))
@@ -119,9 +67,6 @@ fn toggle_lens_release() -> AnimationType {
 }
 
 fn track_tint_progress(progress: f32) -> f32 {
-    // Direct contact never paints the committed endpoint color. The whole
-    // fixed capsule moves through gray/sage together; release owns the final
-    // transition into system green.
     let t = ((progress.clamp(0.0, 1.0) - 0.20) / 1.25).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
 }
@@ -144,12 +89,6 @@ fn lens_translation_x(thumb_x: f32, node_width: f32) -> f32 {
     thumb_x + (THUMB_WIDTH - node_width) * 0.5
 }
 
-/// The reference track is a recessed WELL, not a flat fill (rest frame
-/// f_001, center column at 3x): a cool-bright blue-tinted edge fading over
-/// ~2.5dp at the top, the base face, and a warm bright lip peaking ~1.5dp
-/// above the bottom edge with a neutral seam under it. These chromatic
-/// edges are exactly what the pressed dome's rim band re-images into its
-/// blue top / orange bottom arcs — the flat fill starved the ring.
 fn track_well_brush(track: cranpose_ui_graphics::Color) -> Brush {
     let scale = |c: cranpose_ui_graphics::Color, r: f32, g: f32, b: f32| {
         cranpose_ui_graphics::Color::rgba(
@@ -159,9 +98,6 @@ fn track_well_brush(track: cranpose_ui_graphics::Color) -> Brush {
             c.a(),
         )
     };
-    // A whisper of a recess, not a lit lip: the strong bottom lip
-    // (1.46x) re-imaged by the dome as a weird bright highlight. The
-    // reference well is nearly flat with only a faint cool top edge.
     let cool_top = scale(track, 1.05, 1.07, 1.09);
     let lip = scale(track, 1.08, 1.07, 1.04);
     let seam = scale(track, 1.02, 1.02, 1.0);
@@ -179,10 +115,6 @@ fn track_well_brush(track: cranpose_ui_graphics::Color) -> Brush {
     )
 }
 
-/// The lean's travel side for a fresh press: the only end this switch can
-/// head to. Movement and release retarget it through the gesture handler —
-/// the fluid motion axis is unusable here because a slow drag stays under
-/// its direction threshold and holds whatever the previous flight left.
 fn lens_press_travel(checked: bool) -> f32 {
     if checked { -1.0 } else { 1.0 }
 }
@@ -204,16 +136,10 @@ fn lens_ride_x(drag_progress: Option<f32>, thumb_x: f32) -> f32 {
 pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) + 'static) {
     let colors = liquid_colors();
 
-    // Some(progress 0..1) while the finger drags the thumb.
     let drag_progress = remember(|| mutableStateOf(Option::<f32>::None)).with(|s| *s);
     let pressed = remember(|| mutableStateOf(false)).with(|s| *s);
-    // ±1: which end the gesture is heading to. Press aims at the flip side,
-    // movement follows the finger, release holds the committed side through
-    // the linger (the settled lens keeps overhanging its arrival end).
     let travel_dir = remember(|| mutableStateOf(1.0f32)).with(|s| *s);
     let off_track = colors.toggle_off;
-    // Mid-drag the complete track interpolates with the finger. Its capsule
-    // geometry is fixed; the glass is a separate optical layer above it.
     let base_track = match drag_progress.get() {
         Some(progress) => {
             interpolate_track_color(off_track, colors.toggle_on, track_tint_progress(progress))
@@ -226,9 +152,6 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
             }
         }
     };
-    // The uncovered tail retains the system accent. The lens itself creates
-    // the lighter, lower-saturation interior through refraction; applying
-    // that tone transform to the whole track washes out the reference color.
     let animated_track = animateColorAsState(base_track, toggle_track_motion(), "toggle-track");
     let track_color = if drag_progress.get().is_some() {
         base_track
@@ -239,9 +162,6 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
     let min_x = THUMB_MARGIN;
     let max_x = TRACK_WIDTH - THUMB_MARGIN - THUMB_WIDTH;
 
-    // While dragging, the spring target follows the finger: the thumb trails
-    // it with a droplet lag; on release it continues into the settle from the
-    // same spring state, velocity preserved.
     let target_x = match drag_progress.get() {
         Some(progress) => min_x + (max_x - min_x) * progress,
         None => {
@@ -257,12 +177,6 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
     lens_axis.settle_to(target_x, LiquidMotion::snappy());
     let lens_x = lens_axis.value();
 
-    // Lens presence: springs to 1 fast on press (the glass materializes in
-    // ~120ms), decays slowly after release (the reference lens lingers
-    // through the settle flight for ~0.6s before the white thumb returns).
-    // A quick TAP holds the lens raised through the whole flip flight —
-    // the reference shows the full glass riding the thumb to the far end,
-    // not a faint trace of a barely-risen press.
     let thumb_in_flight = (thumb_x.get() - target_x).abs() > 1.5;
     let lens_target = if pressed.get() || thumb_in_flight {
         1.0
@@ -278,12 +192,6 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
         },
         "toggle-lens",
     );
-    // Dome press physics: the held dome is squashed deep (wide vivid rim
-    // band — the reference gray-hold rainbow); on release it relaxes to a
-    // shallow bead over the flight (the reference's thin settled ring with
-    // faint sparks). Raised-ness (lens_progress) and press depth are
-    // distinct: the lens stays raised through the whole flight while its
-    // optics relax the moment the finger lifts.
     let press_depth = animateFloatAsState(
         if pressed.get() { 1.0 } else { 0.45 },
         AnimationType::Tween(AnimationSpec::tween(120, Easing::EaseOut)),
@@ -293,10 +201,6 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
     let on_change = std::rc::Rc::new(on_change);
     let track = Modifier::empty()
         .size(Size::new(TRACK_WIDTH, TRACK_HEIGHT))
-        // The controlled value is part of the gesture identity. Once a
-        // release commits a new value, the next gesture must capture that
-        // value; keeping one coroutine under a constant key leaves `checked`
-        // frozen at the first composition and prevents reversing the switch.
         .pointer_input(checked, {
             let on_change = std::rc::Rc::clone(&on_change);
             let lens_axis = std::rc::Rc::clone(&lens_axis);
@@ -315,10 +219,6 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
                                     PointerEventKind::Down => {
                                         dragging = true;
                                         down_x = event.position.x;
-                                        // The finger grabs the thumb WHERE it
-                                        // touched it: without this offset the
-                                        // first move snaps the thumb center
-                                        // under the finger (live report).
                                         grab_offset =
                                             event.position.x - (thumb_x.get() + THUMB_WIDTH * 0.5);
                                         lens_axis.begin(thumb_x.get(), event.time_ms);
@@ -393,10 +293,6 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
             }
         })
         .draw_behind(move |scope| {
-            // The track is a solid recessed well that only INTERPOLATES its
-            // color (gray -> green). It must never carry moving content: a
-            // press-time white wash + a gray blob made the backdrop slide
-            // with the dome during a drag instead of just changing color.
             scope.draw_round_rect(
                 track_well_brush(track_color),
                 CornerRadii::uniform(TRACK_HEIGHT * 0.5),
@@ -406,11 +302,6 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
     Box(track.then(modifier), BoxSpec::default(), move || {
         let thumb_x_for_layer = thumb_x;
         let lens_for_thumb = lens_progress;
-        // Resting thumb: a plain white capsule. It dissolves into the glass
-        // as the lens rises and rematerializes near the settle's end, so
-        // while the dome rides there is only the uniform track color beneath
-        // it — the refraction distorts nothing that reads as sliding
-        // background.
         let thumb = Modifier::empty()
             .size(Size::new(THUMB_WIDTH, THUMB_HEIGHT))
             .offset(0.0, (TRACK_HEIGHT - THUMB_HEIGHT) * 0.5)
@@ -423,8 +314,6 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
                     ..Default::default()
                 }
             })
-            // A soft whisper lifting the thumb off the track (the reference
-            // thumb floats; nothing dark).
             .drop_shadow(
                 cranpose_ui_graphics::LayerShape::Rounded(
                     cranpose_ui_graphics::RoundedCornerShape::uniform(THUMB_HEIGHT * 0.5),
@@ -443,10 +332,6 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
             });
         Box(thumb, BoxSpec::default(), || {});
 
-        // The interaction lens: one glass node riding the thumb; its SDF
-        // capsule inflates from thumb-size to the full lens with a viscous
-        // bulge along the drag direction. The morph (not a layer scale)
-        // grows it so refraction, rim and wobble stay physically coherent.
         let deformation_headroom =
             crate::dynamics::STRETCH_MAX.max(1.0 / crate::dynamics::STRETCH_MIN);
         let node_w =
@@ -456,9 +341,6 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
         let lens_for_layer = lens_progress;
         let physics_axis = std::rc::Rc::clone(&lens_axis);
         let lens = Modifier::empty()
-            // required_size: the lens node MUST exceed the 63×28 track
-            // box — plain size() would be coerced by the parent's
-            // constraints, clamping the SDF and slicing the lens.
             .required_size(Size::new(node_w, node_h))
             .offset(0.0, (TRACK_HEIGHT - node_h) * 0.5 + LENS_VERTICAL_OFFSET)
             .graphics_layer(move || GraphicsLayer {
@@ -469,14 +351,7 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
                 let grow = lens_for_layer.get().clamp(0.0, 1.2);
                 let base_w = THUMB_WIDTH + (LENS_WIDTH - THUMB_WIDTH) * grow;
                 let base_h = THUMB_HEIGHT + (LENS_HEIGHT - THUMB_HEIGHT) * grow;
-                // Droplet law over the ride position: drag speed
-                // stretches the lens along the track, braking swells
-                // its leading edge (crate::dynamics).
                 let pose = physics_axis.liquid_pose();
-                // The lens leans toward its travel side in every raised
-                // phase (the reference press leans toward the destination,
-                // the settle overhangs the arrival end). The lean lives in
-                // the SDF center so the optics tilt while the node holds.
                 let lean = travel_dir.get() * LENS_TRAVEL_LEAN * grow.clamp(0.0, 1.0);
                 GlassDynamics {
                     activity: Some(grow.clamp(0.0, 1.0)),
@@ -492,10 +367,6 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
                         bulge_direction: pose.bulge_direction,
                         ellipse_blend: 0.0,
                         deformation: Some(pose.deformation()),
-                        // The magnification stays anchored on the thumb the
-                        // lens rides: the leaning silhouette must not drag
-                        // the optical axis toward the empty well (the white
-                        // bloom on the trailing face).
                         zoom_anchor: (-lean, 0.0),
                     }),
                     ..Default::default()
@@ -513,9 +384,6 @@ mod tests {
     fn toggle_geometry_matches_the_reference_proportions() {
         assert_eq!((TRACK_WIDTH, TRACK_HEIGHT), (63.0, 28.0));
         assert_eq!((THUMB_WIDTH, THUMB_HEIGHT), (37.0, 25.0));
-        // Reference hold (6.27 px/dp): ring ~44 x 27dp — a big dome,
-        // wider than the thumb (the gray sticks out via the LEAN), still
-        // inside the track vertically.
         assert_eq!((LENS_WIDTH, LENS_HEIGHT), (54.0, 36.0));
         const { assert!(LENS_WIDTH > THUMB_WIDTH) };
         const { assert!(LENS_HEIGHT > TRACK_HEIGHT) };
@@ -524,9 +392,6 @@ mod tests {
             LiquidShape::Capsule,
             "the pressed switch thumb remains a capsule while its optical body inflates"
         );
-        // The dome rides high enough to expose the white face strip under
-        // its top rim (reference f_009: ~1.3dp of washed face between dome
-        // top and blob top feeds the luminous band).
         assert!(LENS_VERTICAL_OFFSET.abs() < 1.0e-6);
 
         let mid = interpolate_track_color(
@@ -541,25 +406,16 @@ mod tests {
 
     #[test]
     fn toggle_lens_leans_toward_the_travel_side() {
-        // T133 detail geometry: ~12dp of gray outside the trailing rim with
-        // the 44dp dome -> the center leans ~13dp into the travel.
         assert_eq!(LENS_TRAVEL_LEAN, 7.0);
-        // A fresh press has no motion yet: the only travel side is the
-        // opposite end of the track.
         assert_eq!(lens_press_travel(false), 1.0);
         assert_eq!(lens_press_travel(true), -1.0);
 
-        // Mid-drag the leaning lens frees the departed track region: its
-        // trailing edge must clear the whole-track interpolation samples
-        // (the traveling-fill contract probes 5dp in from the track end).
         let min = THUMB_MARGIN;
         let max = TRACK_WIDTH - THUMB_MARGIN - THUMB_WIDTH;
         let mid_thumb_center = (min + max) * 0.5 + THUMB_WIDTH * 0.5;
         let lens_trailing_edge = mid_thumb_center + LENS_TRAVEL_LEAN - LENS_WIDTH * 0.5;
         assert!(lens_trailing_edge > 5.0);
 
-        // The node itself never leans — the lean lives in the SDF center so
-        // the oversized node's padding absorbs it on both sides.
         let node_width = LENS_WIDTH
             * crate::dynamics::STRETCH_MAX.max(1.0 / crate::dynamics::STRETCH_MIN)
             + crate::dynamics::BULGE_MAX
@@ -590,10 +446,6 @@ mod tests {
 
     #[test]
     fn toggle_track_color_sweeps_on_the_reference_clock() {
-        // Measured on the toggle-press sheet (60 fps): sage appears ~17 ms
-        // after release and the visible sweep spans ~150 ms (full green at
-        // 283-300 ms) — no delay, fast start, EaseOut tail stretched so the
-        // front-loaded curve doesn't finish the visible change in ~70 ms.
         let AnimationType::Tween(spec) = toggle_track_motion() else {
             panic!("toggle track color needs a bounded transition");
         };
@@ -629,9 +481,6 @@ mod tests {
         assert_eq!(spec.delay_millis, LENS_RELEASE_LINGER_MS);
         assert_eq!(spec.duration_millis, LENS_RELEASE_FADE_MS);
         assert_eq!(spec.easing, Easing::EaseIn);
-        // The reference lens stays readable ~750 ms after release
-        // (toggle-press sheet still shows it at 883 ms) before the thumb
-        // rematerializes.
         assert!((700..=900).contains(&(spec.delay_millis + spec.duration_millis)));
     }
 }

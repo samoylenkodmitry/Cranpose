@@ -1,23 +1,3 @@
-//! Test for conditional rendering bug
-//!
-//! ## Summary of Bugs
-//!
-//! 1. **Conditional Text Bug**: Text in if/else blocks outside content closures
-//!    may not update visually when the condition changes, even though
-//!    recomposition happens correctly.
-//!
-//! 2. **Root Cause**: The composition layer works correctly - conditionals
-//!    are re-evaluated and nodes are updated. However, the rendering pipeline
-//!    may not rebuild the scene when these changes occur.
-//!
-//! ## Reproduction Steps
-//!
-//! Run the demo app and click "Increment":
-//! - "Counter: X" text updates correctly (it's inside a Row closure)
-//! - "if counter % 2 == 0/!= 0" text does NOT update (it's outside any closure)
-//!
-//! Both read from the same state, but only one updates visually.
-
 use cranpose_core::MutableState;
 use cranpose_macros::composable;
 use cranpose_testing::ComposeTestRule;
@@ -25,15 +5,12 @@ use cranpose_ui::*;
 
 #[composable]
 fn conditional_outside_closure_app(counter: MutableState<i32>) {
-    // BUG REPRODUCTION: This conditional is outside any content closure
-    // When counter changes, recomposition happens but the visual may not update
     if counter.get() % 2 == 0 {
         Text("Even", Modifier::empty().padding(8.0), TextStyle::default());
     } else {
         Text("Odd", Modifier::empty().padding(8.0), TextStyle::default());
     }
 
-    // This should work because state is read inside the closure
     Column(Modifier::empty().padding(16.0), ColumnSpec::default(), {
         move || {
             Text(
@@ -47,10 +24,8 @@ fn conditional_outside_closure_app(counter: MutableState<i32>) {
 
 #[composable]
 fn conditional_inside_closure_app(counter: MutableState<i32>) {
-    // CORRECT PATTERN: Conditional is inside the content closure
     Column(Modifier::empty().padding(16.0), ColumnSpec::default(), {
         move || {
-            // State is read here, inside the closure
             if counter.get() % 2 == 0 {
                 Text("Even", Modifier::empty().padding(8.0), TextStyle::default());
             } else {
@@ -71,7 +46,6 @@ fn test_conditional_inside_closure_works() {
     let _app_context = cranpose_ui::AppContext::new();
     let _app_context_scope = _app_context.enter_scope();
     _app_context.enter(cranpose_ui::reset_render_state_for_tests);
-    // This shows the CORRECT pattern that should always work
 
     let mut rule = ComposeTestRule::new();
     let runtime = rule.runtime_handle();
@@ -87,7 +61,6 @@ fn test_conditional_inside_closure_works() {
     })
     .expect("initial render succeeds");
 
-    // Change counter multiple times
     for i in 1..=3 {
         counter.set(i);
         rule.pump_until_idle()
@@ -98,7 +71,6 @@ fn test_conditional_inside_closure_works() {
     eprintln!("✓ Correct pattern works as expected\n");
 }
 
-/// This test documents the exact issue from the demo app
 #[test]
 fn test_demo_app_pattern_analysis() {
     let _app_context = cranpose_ui::AppContext::new();

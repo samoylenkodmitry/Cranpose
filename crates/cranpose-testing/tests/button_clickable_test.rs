@@ -1,8 +1,3 @@
-//! Test that Button widget properly integrates with clickable modifier system
-//!
-//! This test verifies that the Button widget internally applies Modifier.clickable()
-//! so that click handlers are properly wired into the pointer input system.
-
 use cranpose_core::MutableState;
 use cranpose_macros::composable;
 use cranpose_testing::ComposeTestRule;
@@ -46,16 +41,12 @@ fn test_button_creates_valid_composition() {
     let _app_context = cranpose_ui::AppContext::new();
     let _app_context_scope = _app_context.enter_scope();
     _app_context.enter(cranpose_ui::reset_render_state_for_tests);
-    // This test verifies that Button widgets can be created within a composition.
-    // The Button widget should internally apply Modifier.clickable() to connect
-    // the on_click handler to the pointer input system.
 
     let mut rule = ComposeTestRule::new();
     let runtime = rule.runtime_handle();
 
     let clicked_count = MutableState::with_runtime(0, runtime.clone());
 
-    // Set content with a button
     rule.set_content({
         let count = clicked_count;
         move || {
@@ -64,32 +55,17 @@ fn test_button_creates_valid_composition() {
     })
     .expect("initial render succeeds");
 
-    // Verify initial state
     assert_eq!(
         clicked_count.get(),
         0,
         "Button should not have been clicked yet"
     );
 
-    // The composition should have created nodes for Column, Text, Button, ButtonSpec, and Button's Text child
     let node_count = rule.applier_mut().len();
     assert!(
         node_count >= 4,
         "Should have at least 4 nodes (Column, Text, Button, ButtonSpec, Button's Text)"
     );
-
-    // In a real app, clicking would:
-    // 1. Window system generates mouse event
-    // 2. AppShell calls hit_test() on the rendered scene
-    // 3. Scene finds HitRegion containing the button's click_action
-    // 4. HitRegion.dispatch() invokes the click_action handler
-    // 5. The handler increments the counter
-    // 6. State change triggers recomposition
-    //
-    // The critical fix this test validates:
-    // - Button now internally applies Modifier.clickable()
-    // - This ensures click handlers are extracted into HitRegions during rendering
-    // - Before this fix, Button stored on_click but never connected it to modifiers
 }
 
 #[composable]
@@ -154,7 +130,6 @@ fn test_multiple_buttons_in_composition() {
     let _app_context = cranpose_ui::AppContext::new();
     let _app_context_scope = _app_context.enter_scope();
     _app_context.enter(cranpose_ui::reset_render_state_for_tests);
-    // Test that multiple buttons can coexist and each has its own click handler
 
     let mut rule = ComposeTestRule::new();
     let runtime = rule.runtime_handle();
@@ -171,12 +146,9 @@ fn test_multiple_buttons_in_composition() {
     })
     .expect("initial render succeeds");
 
-    // Verify initial state
     assert_eq!(button1_clicks.get(), 0);
     assert_eq!(button2_clicks.get(), 0);
 
-    // Both buttons should be created successfully
-    // Should have: Column, 2 Texts for click counts, 2 Buttons, 2 Texts inside buttons = 7 nodes minimum
     let node_count = rule.applier_mut().len();
     assert!(
         node_count >= 7,

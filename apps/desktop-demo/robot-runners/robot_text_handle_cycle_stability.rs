@@ -1,14 +1,3 @@
-//! Regression harness for the reported fps decay: repeated cycles of
-//! "select text → sweep the end handle across the full field width → release"
-//! must not accumulate per-frame cost. Samples renderer counters, runtime
-//! heap/observer stats, and frame-work timings after every cycle and fails
-//! if the late cycles are measurably heavier than the early ones.
-//!
-//! Run with:
-//! ```bash
-//! cargo run --package desktop-app --example robot_text_handle_cycle_stability --features robot-app
-//! ```
-
 use std::time::Duration;
 
 use cranpose::{
@@ -26,9 +15,6 @@ const FIELD_Y: f32 = 160.0;
 const FIELD_WIDTH: f32 = 500.0;
 const FIELD_HEIGHT: f32 = 72.0;
 
-/// Local-diagnosis knob: `CRANPOSE_CYCLE_STABILITY_CYCLES` overrides the
-/// cycle count so a profiler can watch an arbitrarily long accumulation
-/// window. CI always runs the default.
 fn cycle_count() -> usize {
     std::env::var("CRANPOSE_CYCLE_STABILITY_CYCLES")
         .ok()
@@ -133,11 +119,6 @@ fn main() {
                 );
             }
 
-            // Steady state = cycles 1-2 (cycle 0 still warms caches). The
-            // late cycles must not be structurally heavier: every leak class
-            // this harness guards against (retained layers, composition
-            // nodes, observer scopes, per-frame passes) grows monotonically
-            // with cycles, so a late/early ratio near 1 proves stability.
             let early = &samples[1];
             let late = &samples[cycles - 1];
             let structural: [(&str, f64, f64, f64); 7] = [
@@ -217,11 +198,6 @@ fn main() {
                     failures.push(format!("{name} grew {early_v:.0} → {late_v:.0}"));
                 }
             }
-            // Frame work: the whole point of the report. Late-cycle drag
-            // frames must cost what early-cycle drag frames cost, and idle
-            // frames after release must stay flat too. Three-cycle averages
-            // absorb scheduler noise while still catching the record-chain
-            // class of leak (+35% over 30 cycles pre-fix).
             let avg3 = |pick: fn(&CycleSample) -> f32, window: &[CycleSample]| {
                 window.iter().map(|s| pick(s) as f64).sum::<f64>() / window.len() as f64
             };
@@ -277,17 +253,10 @@ fn HandleCycleFixture() {
     );
 }
 
-/// One user cycle: dismiss any menu, drag-select a band of text, grab the
-/// end handle, sweep it across the full field width and back
-/// [`SWEEPS_PER_CYCLE`] times, release. Returns the frame-work timing
-/// measured across the sweep window (the frames the user watches degrade).
 fn run_cycle(robot: &Robot, left_x: f32, right_x: f32, line_y: f32) -> (f32, f32) {
-    // A click first collapses the previous selection and dismisses the
-    // action menu, exactly like the user's next touch.
     let _ = robot.click((left_x + right_x) * 0.5, line_y);
     let _ = robot.wait_for_present_frame();
 
-    // Drag-select from right to left.
     let _ = robot.mouse_move(right_x, line_y);
     let _ = robot.mouse_down();
     let _ = robot.wait_for_present_frame();
@@ -299,7 +268,6 @@ fn run_cycle(robot: &Robot, left_x: f32, right_x: f32, line_y: f32) -> (f32, f32
     let _ = robot.mouse_up();
     let _ = robot.wait_for_present_frame();
 
-    // Grab the end (lower) handle from its rendered dot and sweep.
     let shot = robot.screenshot().expect("handle-grab frame");
     let grab =
         lower_handle_center(&shot, (left_x, line_y, right_x - left_x)).unwrap_or((left_x, line_y));
@@ -326,9 +294,6 @@ fn run_cycle(robot: &Robot, left_x: f32, right_x: f32, line_y: f32) -> (f32, f32
     (drag_fps.work_avg_ms, drag_fps.work_p95_ms)
 }
 
-/// Samples one cycle's cost profile: a short pumped window for idle
-/// frame-work timing plus the renderer and runtime counters of the last
-/// frame. `drag` carries the in-sweep timings measured by [`run_cycle`].
 fn sample(robot: &Robot, drag: (f32, f32), cycle: usize) -> CycleSample {
     let _ = robot.reset_fps_stats();
     let _ = robot.pump_frames(30);
@@ -380,9 +345,6 @@ fn sample(robot: &Robot, drag: (f32, f32), cycle: usize) -> CycleSample {
     }
 }
 
-/// Full stat dumps for the leak hunt: every tracked runtime and renderer
-/// counter, printed verbatim so a growth invisible to the curated table
-/// still shows in a first/last diff.
 fn dump_all_stats(robot: &Robot, cycle: usize) {
     if let Ok(leak) = robot.get_runtime_leak_debug_stats() {
         println!("=== cycle {cycle} runtime stats ===\n{leak:#?}");
@@ -392,8 +354,6 @@ fn dump_all_stats(robot: &Robot, cycle: usize) {
     }
 }
 
-/// Centroid of the blue dot hanging below the selected line — the end
-/// handle's grab point (same detection as `robot_drag_selection`).
 fn lower_handle_center(shot: &RobotScreenshot, band: (f32, f32, f32)) -> Option<(f32, f32)> {
     let (sx, sy) = (
         shot.width as f32 / shot.logical_width.max(1.0),

@@ -1,10 +1,3 @@
-//! Robot test for LazyList tab - validates item positions, bounds, and rendering
-//!
-//! Run with:
-//! ```bash
-//! cargo run --package desktop-app --example robot_lazy_list --features robot-app
-//! ```
-
 use std::time::Duration;
 
 use cranpose::AppLauncher;
@@ -78,7 +71,6 @@ fn main() {
                 false
             };
 
-            // Find items with FULL BOUNDS (x, y, width, height)
             let find_visible_items_with_bounds = |list_bounds: Option<(f32, f32, f32, f32)>| {
                 type Rect = (f32, f32, f32, f32);
                 type VisibleItemBounds = (usize, Rect, Rect);
@@ -119,7 +111,6 @@ fn main() {
                 items
             };
 
-            // Step 1: Navigate to LazyList tab
             println!("\n--- Step 1: Navigate to 'Lazy List' tab ---");
             if !click_button("Lazy List") {
                 println!("FATAL: Could not find 'Lazy List' tab button");
@@ -132,7 +123,6 @@ fn main() {
                 println!("  ⚠️  Lazy List tab content did not appear within timeout");
             }
 
-            // Step 2: Verify tab content
             println!("\n--- Step 2: Verify LazyList content ---");
             let has_title = verify_text("Lazy List Demo");
             let has_count = verify_text_prefix("Virtualized list with");
@@ -145,7 +135,6 @@ fn main() {
 
             let mut has_issues = false;
 
-            // Step 2b: Capture tree rects for LazyList viewport
             println!("\n--- Step 2b: Capture LazyList tree rects ---");
             let semantics = robot.get_semantics().ok();
             let list_bounds = semantics
@@ -225,7 +214,6 @@ fn main() {
                 has_issues = true;
             }
 
-            // Step 3: Find all visible items with FULL BOUNDS
             println!("\n--- Step 3: Validate item BOUNDS (detecting overlaps) ---");
             let mut items = find_visible_items_with_bounds(list_bounds);
             items.sort_by(|a, b| {
@@ -259,7 +247,6 @@ fn main() {
                     idx, row.0, row.1, row.2, row.3, group.0, group.1, group.2, group.3
                 );
 
-                // Check for suspicious sizes
                 if group.3 < 10.0 {
                     println!("      ⚠️  Height too small! Expected ~40-60px");
                     has_issues = true;
@@ -289,7 +276,6 @@ fn main() {
                 }
             }
 
-            // Check for overlaps
             println!("\n--- Step 4: Check for OVERLAPPING items ---");
             let mut overlap_count = 0;
             for i in 0..items.len() {
@@ -297,7 +283,6 @@ fn main() {
                     let (idx_a, _row_a, group_a) = items[i];
                     let (idx_b, _row_b, group_b) = items[j];
 
-                    // Check if item j starts before item i ends
                     let item_a_bottom = group_a.1 + group_a.3;
                     if group_b.1 < item_a_bottom {
                         println!("  ⚠️  OVERLAP: Item #{} (bottom={:.1}) overlaps with Item #{} (top={:.1})",
@@ -314,7 +299,6 @@ fn main() {
                 println!("  ✓ No overlapping items detected");
             }
 
-            // Check vertical gaps
             println!("\n--- Step 5: Check item SPACING ---");
             for i in 1..items.len() {
                 let (idx_prev, _row_prev, group_prev) = items[i - 1];
@@ -329,7 +313,6 @@ fn main() {
                 }
             }
 
-            // Step 6: Validate reuse pool stats after scrolling
             println!("\n--- Step 6: Validate reuse pool stats ---");
             if let Some((x, y, w, h)) = find_text_in_semantics(&robot, "Item #0") {
                 robot
@@ -369,7 +352,6 @@ fn main() {
                 println!("  ✓ Cached pool within cap: {}", cached_value);
             }
 
-            // Summary
             println!("\n=== SUMMARY ===");
             if has_issues || overlap_count > 0 || has_bounds_mismatch {
                 println!("✗ LazyColumn has rendering issues:");

@@ -1,20 +1,3 @@
-//! Robot test for text selection, copy, and paste functionality
-//!
-//! This test validates:
-//! 1. Navigate to "Text Input" tab
-//! 2. Focus the first input field
-//! 3. Select the last 3 characters using Shift+Left
-//! 4. Copy selected text with Ctrl+C
-//! 5. Paste the copied text twice with Ctrl+V
-//! 6. Validate the resulting text
-//! 7. Press "Add !" button
-//! 8. Validate final text
-//!
-//! Run with:
-//! ```bash
-//! cargo run --package desktop-app --example robot_copy_paste --features robot-app
-//! ```
-
 use std::time::Duration;
 
 use cranpose::AppLauncher;
@@ -31,7 +14,6 @@ fn main() {
         .with_size(900, 700)
         .with_headless(true)
         .with_test_driver(|robot| {
-            // Timeout after 30 seconds
             std::thread::spawn(|| {
                 std::thread::sleep(Duration::from_secs(30));
                 println!("✗ Test timed out after 30 seconds");
@@ -53,9 +35,6 @@ fn main() {
                 (true, false)
             };
 
-            // =========================================================
-            // TEST 1: Switch to Text Input tab
-            // =========================================================
             println!("--- Test 1: Switch to Text Input Tab ---");
 
             if let Some((x, y, w, h)) = find_button_in_semantics(&robot, "Text Input") {
@@ -70,7 +49,6 @@ fn main() {
                 let _ = robot.mouse_up();
                 std::thread::sleep(Duration::from_millis(500));
 
-                // Verify we switched
                 if find_in_semantics(&robot, |elem| find_text(elem, "Text Input Demo")).is_some() {
                     println!("  ✓ PASS: Switched to Text Input tab\n");
                 } else {
@@ -82,13 +60,8 @@ fn main() {
                 all_passed = false;
             }
 
-            // =========================================================
-            // TEST 2: Focus the first input field
-            // =========================================================
             println!("--- Test 2: Focus First Input Field ---");
 
-            // Find the text field by looking for initial "Type here..." text
-            // then clear it and type our test content
             let text_field_focused = if let Some((x, y, w, h)) =
                 find_in_semantics(&robot, |elem| find_text(elem, "Type here..."))
             {
@@ -99,7 +72,6 @@ fn main() {
                     cx, cy
                 );
 
-                // Click to focus
                 let _ = robot.mouse_move(cx, cy);
                 std::thread::sleep(Duration::from_millis(30));
                 let _ = robot.mouse_down();
@@ -107,19 +79,16 @@ fn main() {
                 let _ = robot.mouse_up();
                 std::thread::sleep(Duration::from_millis(200));
 
-                // Select all text (Ctrl+A) and replace with our test content
                 let _ =
                     robot.send_key_with_modifiers("a", false, command_ctrl, false, command_meta);
                 std::thread::sleep(Duration::from_millis(100));
 
-                // Type initial text "abcdef" (replaces selection)
                 match robot.type_text("abcdef") {
                     Ok(_) => {
                         println!("  Typed 'abcdef' (replacing initial text)");
                         let _ = robot.wait_for_idle();
                         std::thread::sleep(Duration::from_millis(300));
 
-                        // Verify text field has "abcdef"
                         if find_in_semantics(&robot, |elem| find_text(elem, "abcdef")).is_some() {
                             println!("  ✓ PASS: Text field focused and contains 'abcdef'\n");
                             true
@@ -142,7 +111,6 @@ fn main() {
             };
 
             if !text_field_focused {
-                // Can't continue without focused text field
                 println!("\n=== Test Summary ===");
                 println!("✗ SOME TESTS FAILED (could not focus text field)");
                 std::thread::sleep(Duration::from_secs(1));
@@ -150,12 +118,8 @@ fn main() {
                 return;
             }
 
-            // =========================================================
-            // TEST 3: Select last 3 characters using Shift+Left
-            // =========================================================
             println!("--- Test 3: Select Last 3 Characters (Shift+Left) ---");
 
-            // Cursor should be at end after typing, so Shift+Left 3 times selects "def"
             for i in 1..=3 {
                 match robot.send_key_with_modifiers("Left", true, false, false, false) {
                     Ok(_) => println!("  Shift+Left ({}/3)", i),
@@ -169,9 +133,6 @@ fn main() {
             let _ = robot.wait_for_idle();
             println!("  ✓ Selected last 3 characters ('def')\n");
 
-            // =========================================================
-            // TEST 4: Copy selected text with Ctrl+C
-            // =========================================================
             println!("--- Test 4: Copy Selected Text (Ctrl+C) ---");
 
             match robot.send_key_with_modifiers("c", false, command_ctrl, false, command_meta) {
@@ -186,16 +147,11 @@ fn main() {
                 }
             }
 
-            // =========================================================
-            // TEST 5: Paste copied text twice with Ctrl+V
-            // =========================================================
             println!("--- Test 5: Paste Text Twice (Ctrl+V x2) ---");
 
-            // First, move cursor to end (press End key, or Right 3 times to deselect and go to end)
             let _ = robot.send_key("End");
             std::thread::sleep(Duration::from_millis(100));
 
-            // Paste first time
             match robot.send_key_with_modifiers("v", false, command_ctrl, false, command_meta) {
                 Ok(_) => {
                     let _ = robot.wait_for_idle();
@@ -208,7 +164,6 @@ fn main() {
                 }
             }
 
-            // Paste second time
             match robot.send_key_with_modifiers("v", false, command_ctrl, false, command_meta) {
                 Ok(_) => {
                     let _ = robot.wait_for_idle();
@@ -222,17 +177,8 @@ fn main() {
                 }
             }
 
-            // =========================================================
-            // TEST 6: Validate resulting text
-            // =========================================================
             println!("--- Test 6: Validate Resulting Text ---");
 
-            // After operations:
-            // - Started with "abcdef" (cursor at end)
-            // - Selected last 3 chars: "def"
-            // - Copied "def"
-            // - Moved cursor to end (after "def", so at position 6)
-            // - Pasted "def" twice -> "abcdefdefdef"
             let expected_text = "abcdefdefdef";
 
             std::thread::sleep(Duration::from_millis(300));
@@ -245,14 +191,12 @@ fn main() {
             {
                 println!("  ✓ PASS: Current value shows '{}'\n", expected_text);
             } else {
-                // Check what text we actually have
                 println!(
                     "  ✗ FAIL: Expected '{}' but got different text",
                     expected_text
                 );
                 println!("  Looking for actual text in semantics...");
 
-                // Try to find any text containing "abc"
                 if let Some((_, _, _, _)) = find_in_semantics(&robot, |elem| {
                     if let Some(ref text) = elem.text {
                         if text.contains("abc") {
@@ -266,16 +210,11 @@ fn main() {
                         }
                     }
                     None
-                }) {
-                    // Found something
-                }
+                }) {}
                 all_passed = false;
                 println!();
             }
 
-            // =========================================================
-            // TEST 7: Press "Add !" button
-            // =========================================================
             println!("--- Test 7: Press 'Add !' Button ---");
 
             if let Some((x, y, w, h)) = find_in_semantics(&robot, |elem| find_button(elem, "Add !"))
@@ -297,12 +236,8 @@ fn main() {
                 all_passed = false;
             }
 
-            // =========================================================
-            // TEST 8: Validate final text
-            // =========================================================
             println!("--- Test 8: Validate Final Text ---");
 
-            // After "Add !" button: "abcdefdefdef!"
             let final_text = format!("{}!", expected_text);
 
             std::thread::sleep(Duration::from_millis(200));
@@ -316,7 +251,6 @@ fn main() {
                 println!("  ✓ PASS: Current value shows '{}'\n", final_text);
             } else {
                 println!("  ✗ FAIL: Expected final text '{}'", final_text);
-                // Debug: show what text we actually have
                 println!("  Looking for actual text in semantics...");
                 let _ = find_in_semantics(&robot, |elem| {
                     if let Some(ref text) = elem.text {
@@ -333,9 +267,6 @@ fn main() {
                 println!();
             }
 
-            // =========================================================
-            // Summary
-            // =========================================================
             println!("\n=== Test Summary ===");
             if all_passed {
                 println!("✓ ALL TESTS PASSED");

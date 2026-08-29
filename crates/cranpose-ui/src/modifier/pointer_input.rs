@@ -102,8 +102,6 @@ impl PointerInputTaskRegistry {
 
 #[derive(Clone)]
 struct PointerInputElement {
-    /// Where the gesture was declared. Part of its identity, and not one of
-    /// the `keys` the caller passed, which are what `keyCount` reports.
     site: KeyToken,
     keys: Vec<KeyToken>,
     handler: PointerInputHandler,
@@ -147,9 +145,6 @@ impl fmt::Debug for PointerInputElement {
 
 impl PartialEq for PointerInputElement {
     fn eq(&self, other: &Self) -> bool {
-        // Only compare keys, not handler_id. In Compose, elements are equal if their
-        // keys match, even if the handler closure is recreated on recomposition.
-        // This ensures nodes are reused instead of being dropped and recreated.
         self.site == other.site && self.keys == other.keys
     }
 }
@@ -158,8 +153,6 @@ impl Eq for PointerInputElement {}
 
 impl Hash for PointerInputElement {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        // Only hash keys, not handler_id. This ensures stable hashing across
-        // recompositions when the closure is recreated but keys remain the same.
         self.site.hash(state);
         self.keys.hash(state);
     }
@@ -250,10 +243,6 @@ impl Future for NextPointerEvent {
 struct PointerInputScopeState {
     events: RefCell<VecDeque<PointerEvent>>,
     waiting: RefCell<Option<Waker>>,
-    /// Shared with the owning [`SuspendingPointerInputNode`] (and therefore
-    /// with every scope the node ever hands out): the layout pass publishes the
-    /// node's resolved size into this cell, so `scope.size()` reports live
-    /// dimensions rather than the `0x0` a per-scope cell would be stuck at.
     size: Rc<Cell<Size>>,
 }
 
@@ -407,17 +396,11 @@ impl ArcWake for PointerInputTaskWaker {
 }
 
 pub struct SuspendingPointerInputNode {
-    /// Which `pointer_input` call the running gesture belongs to. A node that
-    /// is handed to a different declaration is running the wrong gesture.
     site: KeyToken,
     keys: Vec<KeyToken>,
     handler: PointerInputHandler,
     dispatcher: PointerEventDispatcher,
     task: Option<PointerInputTask>,
-    /// The node's resolved layout size, published by the layout pass through
-    /// [`PointerInputNode::layout_size_sink`]. Lives on the node rather than on
-    /// the scope state so it survives handler restarts (a key change recreates
-    /// the scope but not the node, and the size has not changed).
     layout_size: Rc<Cell<Size>>,
     state: NodeState,
 }
@@ -439,18 +422,10 @@ impl SuspendingPointerInputNode {
     }
 
     fn update(&mut self, site: KeyToken, keys: Vec<KeyToken>, handler: PointerInputHandler) {
-        // Only restart if keys changed - not if handler Rc pointer changed.
-        // In Compose, closures are recreated every composition but the task should
-        // continue running as long as the keys are the same. This matches Jetpack
-        // Compose behavior where rememberUpdatedState keeps the task alive.
-        //
-        // A different declaration site is a different gesture, whatever its
-        // keys say: the node has been handed from one `pointer_input` call to
-        // another, and the arriving one is the gesture that is on screen.
         let should_restart = self.site != site || self.keys != keys;
         self.site = site;
         self.keys = keys;
-        self.handler = handler; // Update handler even if not restarting
+        self.handler = handler;
         if should_restart {
             self.restart();
         }
@@ -494,13 +469,8 @@ impl ModifierNode for SuspendingPointerInputNode {
         self.cancel();
     }
 
-    fn on_reset(&mut self) {
-        // Don't restart on reset - only restart when keys/handler actually change
-        // (which is handled by update() method). Restarting here would kill the
-        // active task and lose its registered waker, preventing events from being delivered.
-    }
+    fn on_reset(&mut self) {}
 
-    // Capability-driven implementation using helper macro
     impl_pointer_input_node!();
 }
 

@@ -22,8 +22,6 @@ use crate::{
     state::{MutationPolicy, SnapshotMutableState},
 };
 
-/// Reset the snapshot runtime for tests to ensure clean state.
-/// This matches the pattern used in integration_tests.rs.
 #[cfg(test)]
 fn reset_snapshot_runtime() -> TestRuntimeGuard {
     crate::snapshot_pinning::reset_pinning_table();

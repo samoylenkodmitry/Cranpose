@@ -1,12 +1,3 @@
-//! Regression coverage for devices with small uniform-buffer binding limits.
-//!
-//! Android requests `wgpu::Limits::downlevel_defaults()`-shaped device limits,
-//! whose 16 KiB `max_uniform_buffer_binding_size` is below the desktop-sized
-//! shape batch uniform (768 shapes x 80 bytes = 60 KiB). The renderer must
-//! size its batch buffers and shader arrays from the actual device limits
-//! instead of compile-time desktop constants, or the very first
-//! "Shape Bind Group" raises a validation error and the app dies on launch.
-
 mod support;
 
 #[path = "../src/test_support.rs"]
@@ -35,8 +26,6 @@ fn downlevel_uniform_renderer() -> Result<(WgpuRenderer, Arc<wgpu::Device>), Str
         force_fallback_adapter: false,
     }))
     .map_err(|err| format!("adapter request failed: {err:?}"))?;
-    // The exact limits shape Android requests: downlevel defaults with texture
-    // resolution raised to the adapter's, leaving the 16 KiB uniform binding cap.
     let required_limits = wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits());
     assert_eq!(
         required_limits.max_uniform_buffer_binding_size, 16384,
@@ -126,8 +115,6 @@ fn renderer_survives_downlevel_uniform_binding_limit() {
     };
 
     let error_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
-    // Force batch buffer/bind group creation plus a real multi-batch render:
-    // 300 shapes exceed the 16 KiB uniform budget (204 shapes) and must split.
     let app_context = AppContext::new();
     renderer.attach_app_context_services(&app_context);
     renderer.scene_mut().graph = Some(many_shapes_graph(300, 256.0, 256.0));

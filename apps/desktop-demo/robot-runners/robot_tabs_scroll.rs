@@ -1,15 +1,3 @@
-//! Robot test for tabs row scrolling and click behavior
-//!
-//! This test validates:
-//! 1. Tabs row scrolls correctly when dragged
-//! 2. Tab buttons don't fire click events during drag gestures
-//! 3. Tab buttons still fire clicks for tap gestures
-//!
-//! Run with:
-//! ```bash
-//! cargo run --package desktop-app --example robot_tabs_scroll --features robot-app
-//! ```
-
 use std::time::Duration;
 
 use cranpose::AppLauncher;
@@ -38,7 +26,6 @@ fn main() {
 
             println!("--- Test 1: Verify Tabs Row is Scrollable ---");
 
-            // Dump semantic tree to understand structure
             println!("\n--- Semantic Tree Dump ---");
             match robot.get_semantics() {
                 Ok(semantics) => {
@@ -119,7 +106,6 @@ fn main() {
                 println!("  Tab {}: '{}' at x={:.1}, y={:.1}", i, label, x, y);
             }
 
-            // Compare positions
             let mut tabs_moved = false;
             if overflow && initial_tabs.len() == after_drag_tabs.len() {
                 for (initial, after) in initial_tabs.iter().zip(&after_drag_tabs) {
@@ -156,7 +142,6 @@ fn main() {
             println!("(This test relies on visual inspection of console output)");
             println!("Expected: NO click messages during drag");
 
-            // Drag back to original position
             std::thread::sleep(Duration::from_millis(300));
             if overflow {
                 if let Some((x, y, w, h)) = find_tab(&after_drag_tabs, "Counter App") {

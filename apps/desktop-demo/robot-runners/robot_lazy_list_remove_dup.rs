@@ -1,10 +1,3 @@
-//! Robot test for LazyList after removing items - validates duplicate layouts.
-//!
-//! Run with:
-//! ```bash
-//! cargo run --package desktop-app --example robot_lazy_list_remove_dup --features robot-app
-//! ```
-
 use std::{collections::HashMap, time::Duration};
 
 use cranpose::AppLauncher;

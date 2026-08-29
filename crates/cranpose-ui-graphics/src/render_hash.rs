@@ -239,11 +239,6 @@ fn hash_color_filter<H: Hasher>(filter: ColorFilter, state: &mut H) {
 }
 
 fn hash_runtime_shader<H: Hasher>(shader: &RuntimeShader, state: &mut H) {
-    // Only hash the source, not the uniforms. Uniforms change every frame for
-    // animated shaders (time, position, etc.) and including them would produce
-    // a new effect_hash every frame, filling the layer surface cache with
-    // stale entries. The pipeline cache already deduplicates by source hash,
-    // and stable_id in the cache key distinguishes different nodes.
     shader.source_hash().hash(state);
     hash_f32_bits(shader.input_padding(), state);
 }
@@ -575,12 +570,6 @@ mod tests {
         };
         assert_ne!(base.render_hash(), changed.render_hash());
     }
-
-    // ── Stroke / arc hashing ────────────────────────────────────────────────
-    //
-    // These are load-bearing: `LayerRasterCacheKey` and the scene-range surface
-    // cache key off content hashes. A stroke or arc parameter that does not
-    // reach the hash would silently replay a stale cached surface.
 
     use crate::{Stroke, StrokeCap, StrokeJoin};
 

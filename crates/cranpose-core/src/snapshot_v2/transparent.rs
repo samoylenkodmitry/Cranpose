@@ -1,8 +1,3 @@
-//! Transparent observer snapshot implementations.
-//!
-//! These snapshots are optimized for observer chaining, allowing observers
-//! to be temporarily changed without allocating new snapshot structures.
-
 use super::*;
 
 /// A transparent mutable snapshot that allows observer replacement.
@@ -20,7 +15,6 @@ pub struct TransparentObserverMutableSnapshot {
     parent: Option<Weak<TransparentObserverMutableSnapshot>>,
     nested_count: Cell<usize>,
     applied: Cell<bool>,
-    /// Whether this snapshot can be reused for observer changes
     reusable: Cell<bool>,
 }
 
@@ -33,8 +27,6 @@ impl TransparentObserverMutableSnapshot {
         parent: Option<Weak<TransparentObserverMutableSnapshot>>,
     ) -> Arc<Self> {
         Arc::new(Self {
-            // Transparent snapshots don't allocate new IDs, so they shouldn't pin
-            // to prevent garbage collection of old records
             state: SnapshotState::new_with_pinning(
                 id,
                 invalid,
@@ -203,7 +195,6 @@ impl TransparentObserverSnapshot {
         parent: Option<Weak<TransparentObserverSnapshot>>,
     ) -> Arc<Self> {
         Arc::new(Self {
-            // Transparent snapshots don't allocate new IDs, so they shouldn't pin
             state: SnapshotState::new_with_pinning(id, invalid, read_observer, None, false, false),
             parent,
             reusable: Cell::new(true),

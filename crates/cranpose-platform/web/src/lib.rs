@@ -15,8 +15,6 @@ impl WebPlatform {
     }
 
     pub fn pointer_position(&self, x: f64, y: f64) -> Point {
-        // offset_x/offset_y are already in CSS pixels (logical coordinates)
-        // so we don't need to divide by scale_factor
         Point {
             x: x as f32,
             y: y as f32,

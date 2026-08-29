@@ -1,11 +1,3 @@
-//! Android writable-folder store built on the Storage Access Framework.
-//!
-//! The write-side complement of [`crate::android_file_picker`]. The user grants
-//! a persistent read/write tree through the chooser in that module; this turns
-//! the granted tree URI into a [`WritableFolderStore`]. Document I/O runs
-//! synchronously over JNI and is safe to call from a background worker thread —
-//! [`crate::android_jni::with_android_activity_env`] attaches the calling
-//! thread.
 #![allow(unsafe_code)]
 
 use std::{
@@ -27,8 +19,6 @@ use jni::{
 
 static APP: OnceLock<AndroidApp> = OnceLock::new();
 
-/// Registers the Android writable-folder store factory. Called once at startup
-/// from [`crate::android::run`].
 pub(crate) fn register(app: AndroidApp) {
     let _ = APP.set(app);
     set_writable_folder_store_factory(Box::new(|handle| {
@@ -54,12 +44,9 @@ fn string_err(error: impl std::fmt::Display) -> String {
     error.to_string()
 }
 
-/// Staging suffix used by [`AndroidFolderWriter`], committed with
-/// `cranposeFolderCommit` so a partial write never replaces a good document.
 const STAGING_SUFFIX: &str = ".tmp";
 
 struct AndroidWritableFolder {
-    /// The persisted SAF tree URI (`content://…`).
     tree: String,
 }
 
@@ -99,9 +86,6 @@ impl WritableFolderStore for AndroidWritableFolder {
         if fd < 0 {
             return Err(FolderError::NotFound(name.to_string()));
         }
-        // SAFETY: the Java side detaches the descriptor from its
-        // `ParcelFileDescriptor`, transferring ownership to this process; the
-        // `File` closes it on drop.
         Ok(Box::new(AndroidFolderReader {
             file: Some(unsafe { File::from_raw_fd(fd) }),
         }))
@@ -114,7 +98,6 @@ impl WritableFolderStore for AndroidWritableFolder {
         if fd < 0 {
             return Err(FolderError::ReadOnly);
         }
-        // SAFETY: as above — ownership of the detached descriptor moves here.
         Ok(Box::new(AndroidFolderWriter {
             tree: self.tree.clone(),
             staging,
@@ -132,7 +115,6 @@ impl WritableFolderStore for AndroidWritableFolder {
     }
 }
 
-/// Parses one `name\tsize\tmodified` row from `cranposeFolderList`.
 fn parse_entry(row: &str) -> Option<FolderEntry> {
     let mut fields = row.split('\t');
     let name = fields.next()?;
@@ -218,7 +200,6 @@ impl Drop for AndroidFolderWriter {
     }
 }
 
-/// Which descriptor mode `cranposeFolderOpen*` should hand back.
 #[derive(Clone, Copy)]
 enum Descriptor {
     Read,

@@ -17,8 +17,6 @@ pub enum SystemTheme {
 }
 
 thread_local! {
-    /// Theme pushed by the platform backend (winit `ThemeChanged`, Android
-    /// `uiMode`, iOS trait collection, web `prefers-color-scheme` listener).
     static PLATFORM_SYSTEM_THEME: Cell<Option<SystemTheme>> = const { Cell::new(None) };
 }
 
@@ -41,9 +39,6 @@ pub fn default_system_theme() -> SystemTheme {
     detected_system_theme()
 }
 
-/// One-shot environment detection, cached after the first call — the desktop
-/// probe shells out to `gsettings`/`defaults`/`reg`, which must not run on
-/// every composition-local read.
 fn detected_system_theme() -> SystemTheme {
     thread_local! {
         static DETECTED: Cell<Option<SystemTheme>> = const { Cell::new(None) };

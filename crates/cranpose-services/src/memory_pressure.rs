@@ -53,8 +53,6 @@ impl Registry {
         self.observers.push((id, observer));
     }
 
-    /// The observers a report should reach. Handed back rather than run here
-    /// so the caller can leave the lock before running application code.
     fn publish(&self) -> Vec<Observer> {
         self.observers
             .iter()
@@ -154,10 +152,6 @@ mod tests {
         (observer, seen)
     }
 
-    /// These exercise `Registry` directly rather than the process-global one,
-    /// for the same reason the incoming-share tests do: the global is shared
-    /// by every test in this binary and the harness runs them on parallel
-    /// threads.
     #[test]
     fn trim_levels_map_to_the_three_kinds() {
         assert_eq!(

@@ -1,12 +1,3 @@
-//! The Wear scaling list's scroll state, the image painter, and the
-//! scale-down overflow policy.
-//!
-//! A scaling list's position *is* an anchor plus an offset, so every question
-//! about it — how far away a row is, whether the list even has that row,
-//! whether an animation is running — is answered by arithmetic over what the
-//! last measure pass saw. Those answers decide whether a "scroll to item" moves
-//! in the right direction, which is not something a screenshot shows.
-
 use cranpose_ui::{
     TextOverflow,
     round_scaling_list::CentreAnchor,
@@ -46,9 +37,6 @@ fn a_scaling_list_reports_the_anchor_it_is_given() {
 fn an_animation_to_a_row_the_list_does_not_have_is_not_started() {
     run_test_composition(|| {
         let state = rememberWearScalingListState(CentreAnchor::default());
-        // Nothing is measured, so row 900 does not exist. Starting an animation
-        // towards it would leave the list creeping towards a row that will
-        // never arrive.
         state.animate_scroll_to_item(900, 0.0);
         assert_eq!(
             state.anchor(),
@@ -72,9 +60,6 @@ fn cancelling_an_animation_that_is_not_running_is_harmless() {
 fn a_distance_of_zero_is_reported_for_the_anchored_row_itself() {
     run_test_composition(|| {
         let state = rememberWearScalingListState(CentreAnchor::default());
-        // With nothing measured the estimate spans no rows, so the anchored row
-        // is on the centre line by definition. A non-zero answer here would
-        // make an animation start moving away from where it already is.
         assert_eq!(state.distance_to_item(0, 0.0), 0.0);
     });
 }
@@ -83,8 +68,6 @@ fn a_distance_of_zero_is_reported_for_the_anchored_row_itself() {
 fn a_distance_ignores_an_offset_that_is_not_a_number() {
     run_test_composition(|| {
         let state = rememberWearScalingListState(CentreAnchor::default());
-        // A NaN offset would poison the anchor and freeze the list, so it is
-        // taken as no offset at all.
         assert_eq!(
             state.distance_to_item(0, f32::NAN),
             state.distance_to_item(0, 0.0)
@@ -105,8 +88,6 @@ fn a_bitmap_painter_hands_back_the_bitmap_it_was_built_from() {
 
 #[test]
 fn a_region_painter_still_reports_the_atlas_it_samples() {
-    // A region painter draws part of a bitmap, and whatever uploads textures
-    // needs the whole atlas, not the part.
     let painter = Painter::from_bitmap_region(
         one_pixel(),
         cranpose_ui_graphics::Rect {
@@ -138,8 +119,6 @@ fn scale_down_reports_its_floor_and_the_other_policies_report_none() {
 
 #[test]
 fn a_scale_down_floor_that_cannot_be_drawn_at_is_normalised_away() {
-    // A floor of zero or below would let text shrink to nothing rather than
-    // clip, which reads to the user as text that vanished.
     for impossible in [0.0, -4.0, f32::NAN] {
         let floor = TextOverflow::ScaleDown {
             min_font_size_sp: impossible,
@@ -178,8 +157,6 @@ fn the_wear_widgets_compose_against_a_scaling_list_state() {
         );
     });
 
-    // Wear widgets draw through a canvas and a graphics layer, so composing is
-    // only half of it: measuring is where a layer with no size shows up.
     let root = composition.root().expect("a composed root");
     let handle = composition.runtime_handle();
     let mut applier = composition.applier_mut();
@@ -192,13 +169,6 @@ fn the_wear_widgets_compose_against_a_scaling_list_state() {
     applier.clear_runtime_handle();
     measured.expect("the wear screen measures");
 }
-
-// The rest of the Wear widget surface that neither `widget_composition.rs`
-// nor the test above already reaches for real: `WearButton`, `ListHeader`,
-// `ScreenScaffold`, `SwitchButton` (the checked/label wrapper over the
-// already-tested `SwitchButtonNode`), and `WearScalingLazyColumn`. That last
-// one also subcomposes `WearScalingItem` and `WearScalingLazyColumnNode` on
-// its own measure pass, so neither gets a standalone entry here.
 
 #[test]
 fn a_wear_button_composes_its_label() {

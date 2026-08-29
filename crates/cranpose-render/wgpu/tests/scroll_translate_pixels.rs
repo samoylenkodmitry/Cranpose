@@ -1,12 +1,3 @@
-//! A scrolled frame's pixels must move by the consumed delta. The scroll
-//! translate fast path patches layer transforms without re-lowering; every
-//! consumer of the retained scene — dynamic conversion, retained span
-//! replay, cached-layer composites — must honor the moved transforms, or
-//! the presented frame silently freezes while layout (and semantics) walk
-//! on without it. robot_scroll_decoration_invariance caught exactly that:
-//! an underline row anti-correlated with its text's semantic position by
-//! precisely the per-step scroll delta, meaning nothing on screen moved.
-
 mod support;
 
 use std::{cell::RefCell, rc::Rc};
@@ -108,7 +99,6 @@ impl Harness {
     }
 }
 
-/// First y at which the second row's blue fill appears in the given column.
 fn blue_row_top(frame: &cranpose_render_wgpu::CapturedFrame, x: u32) -> Option<u32> {
     (0..frame.height).find(|&y| {
         let offset = ((y * frame.width + x) * 4) as usize;
@@ -117,7 +107,6 @@ fn blue_row_top(frame: &cranpose_render_wgpu::CapturedFrame, x: u32) -> Option<u
             frame.pixels[offset + 1],
             frame.pixels[offset + 2],
         );
-        // Color(0.20, 0.55, 0.90) in sRGB-ish bytes: strongly blue.
         b > 180 && g > 100 && g < 180 && r < 100
     })
 }
@@ -127,7 +116,6 @@ fn a_scrolled_frame_moves_its_pixels_by_the_consumed_delta() {
     let (_lock, renderer) = support::headless_renderer_parts().expect("headless renderer");
     let mut harness = Harness::new(renderer);
 
-    // Settle: a warm frame so every cache and retained recording exists.
     harness.scroll(-1.0);
     let before = harness.capture();
     let before_top = blue_row_top(&before, FRAME_WIDTH / 2)

@@ -165,12 +165,6 @@ pub fn default_notifier() -> NotifierRef {
         .clone()
 }
 
-/// Zero-dependency desktop notifications through the OS-native CLI surface:
-/// `notify-send` (Linux/BSD, libnotify), `osascript` (macOS), and a PowerShell
-/// toast (Windows). Replace-by-id and cancel are honored where the tool
-/// supports them (Linux); elsewhere they are best-effort. Deep-link taps are
-/// not observable through these CLIs, so `NotifyRequest::deeplink` is not
-/// delivered on desktop.
 #[cfg(all(
     feature = "notifier-native",
     not(target_arch = "wasm32"),
@@ -184,8 +178,6 @@ mod desktop {
 
     pub(super) struct DesktopNotifier;
 
-    /// Stable numeric id for notify-send's replace-id from the request's
-    /// string id (FNV-1a folded to a positive u32; 0 means "no id" there).
     #[cfg(target_os = "linux")]
     fn numeric_id(id: &str) -> u32 {
         let mut hash: u32 = 0x811c_9dc5;
@@ -310,11 +302,8 @@ mod tests {
         assert_eq!(plain.body, "3 of 12 pages");
         assert_eq!(plain.deeplink, None);
 
-        // Progress that is still running says so, which is what stops the
-        // platform letting the user swipe away work that is still going.
         let ongoing = plain.clone().ongoing(true);
         assert!(ongoing.ongoing);
-        // And a finished one goes back to being dismissable.
         assert!(!ongoing.ongoing(false).ongoing);
     }
 
@@ -334,7 +323,6 @@ mod tests {
     fn default_is_noop_then_registered_takes_over() {
         let _guard = crate::registry::test_service_guard();
         clear_platform_notifier();
-        // No panic on the no-op default.
         default_notifier().notify(NotifyRequest::new("a", "t", "b"));
         let rec = Arc::new(Recorder::default());
         set_platform_notifier(rec.clone());

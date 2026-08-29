@@ -1,5 +1,3 @@
-//! Global snapshot implementation.
-
 use super::*;
 
 /// The global mutable snapshot.
@@ -24,7 +22,6 @@ impl GlobalSnapshot {
     /// and reads the latest records. Pinning would prevent garbage collection.
     pub fn new(id: SnapshotId, invalid: SnapshotIdSet) -> Arc<Self> {
         Arc::new(Self {
-            // Global snapshot doesn't pin - it always reads current state
             state: SnapshotState::new_with_pinning(id, invalid, None, None, false, false),
             nested_count: Cell::new(0),
         })
@@ -58,7 +55,6 @@ thread_local! {
     static GLOBAL_SNAPSHOT: RefCell<Option<Arc<GlobalSnapshot>>> = const { RefCell::new(None) };
 }
 
-/// Clear the global snapshot (for testing only).
 #[cfg(test)]
 pub(crate) fn clear_global_snapshot_for_tests() {
     GLOBAL_SNAPSHOT.with(|cell| {
@@ -76,7 +72,7 @@ impl GlobalSnapshot {
     }
 
     pub fn read_only(&self) -> bool {
-        false // Global snapshot is mutable
+        false
     }
 
     pub fn root_global(&self) -> Arc<Self> {
@@ -110,10 +106,7 @@ impl GlobalSnapshot {
         self.state.has_pending_children()
     }
 
-    pub fn dispose(&self) {
-        // Global snapshot cannot be disposed
-        // This is a no-op
-    }
+    pub fn dispose(&self) {}
 
     pub fn record_read(&self, state: &dyn StateObject) {
         self.state.record_read(state);
@@ -123,17 +116,13 @@ impl GlobalSnapshot {
         self.state.record_write(state, self.state.id.get());
     }
 
-    pub fn close(&self) {
-        // Global snapshot is never closed
-    }
+    pub fn close(&self) {}
 
     pub fn is_disposed(&self) -> bool {
-        false // Global snapshot is never disposed
+        false
     }
 
     pub fn apply(&self) -> SnapshotApplyResult {
-        // Global snapshot changes are immediately visible
-        // No need to apply
         SnapshotApplyResult::Success
     }
 
@@ -142,16 +131,11 @@ impl GlobalSnapshot {
         read_observer: Option<ReadObserver>,
         write_observer: Option<WriteObserver>,
     ) -> Arc<MutableSnapshot> {
-        // Kotlin's takeNewSnapshot pattern: allocate child, then advance global
-        // This ensures child can read global's records (old global ID not in child's invalid)
-
         let base_parent_id = self.state.id.get();
 
-        // Atomic operation: allocate child ID and advance global
         let (new_id, child_invalid, new_global_invalid) =
             super::runtime::with_runtime(|runtime| runtime.take_new_snapshot_advancing_global());
 
-        // Update local GlobalSnapshot state with the new global ID
         let new_global_id = super::runtime::with_runtime(|runtime| runtime.global_snapshot_id());
         self.state.id.set(new_global_id);
         self.state.invalid.replace(new_global_invalid);
@@ -196,11 +180,9 @@ impl GlobalSnapshot {
 pub fn advance_global_snapshot(new_id: SnapshotId) {
     let global = GlobalSnapshot::get_or_create();
     global.advance(new_id);
-    // Periodically clean up unused records after advancing
     super::maybe_check_and_overwrite_unused_records_locked(new_id);
 }
 
-/// Get the current global snapshot ID.
 #[cfg(test)]
 pub fn global_snapshot_id() -> SnapshotId {
     let global = GlobalSnapshot::get_or_create();
@@ -236,7 +218,6 @@ mod tests {
         let snapshot1 = GlobalSnapshot::get_or_create();
         let snapshot2 = GlobalSnapshot::get_or_create();
 
-        // Should return the same instance
         assert_eq!(snapshot1.snapshot_id(), snapshot2.snapshot_id());
     }
 
@@ -246,9 +227,6 @@ mod tests {
         let snapshot = GlobalSnapshot::new(1, SnapshotIdSet::new());
         assert_eq!(snapshot.snapshot_id(), 1);
 
-        // Test that advance updates the snapshot ID
-        // Note: We don't call the actual advance() because it modifies global runtime state.
-        // Instead, just verify the local ID can be updated.
         snapshot.state.id.set(5);
         assert_eq!(snapshot.snapshot_id(), 5);
 
@@ -263,7 +241,7 @@ mod tests {
         assert!(!snapshot.is_disposed());
 
         snapshot.dispose();
-        assert!(!snapshot.is_disposed()); // Still not disposed
+        assert!(!snapshot.is_disposed());
     }
 
     #[test]
@@ -282,7 +260,7 @@ mod tests {
 
         assert_eq!(nested.snapshot_id(), 1);
         assert!(nested.read_only());
-        assert_eq!(global.nested_count.get(), 0); // Not tracked for readonly
+        assert_eq!(global.nested_count.get(), 0);
     }
 
     #[test]
@@ -291,8 +269,6 @@ mod tests {
         let global = GlobalSnapshot::new(1, SnapshotIdSet::new());
         let nested = global.take_nested_mutable_snapshot(None, None);
 
-        // After Kotlin-style advance: child is allocated first, then global advances
-        // So child ID < new global ID (matching Kotlin's takeNewSnapshot behavior)
         assert!(nested.snapshot_id() < global.snapshot_id());
         assert!(!nested.read_only());
     }

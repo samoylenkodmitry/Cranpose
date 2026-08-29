@@ -1,5 +1,3 @@
-//! The primitive glass container.
-
 use cranpose_macros::composable;
 use cranpose_ui::{
     Modifier,

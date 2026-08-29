@@ -236,9 +236,6 @@ mod tests {
         }
     }
 
-    /// An axis-aligned gradient is the common case, and getting the axis wrong
-    /// is invisible until a two-colour fill runs the wrong way. Each helper has
-    /// to pin its own axis to zero and vary only the other.
     #[test]
     fn an_axis_gradient_varies_along_its_own_axis_only() {
         let vertical = Brush::vertical_gradient(red_to_blue(), 10.0, 90.0);
@@ -255,8 +252,6 @@ mod tests {
         assert_eq!(end, Point { x: 90.0, y: 0.0 });
     }
 
-    /// The default form has no length of its own: it runs from the origin to
-    /// infinity so the renderer fits it to whatever it is painted into.
     #[test]
     fn a_default_axis_gradient_spans_whatever_it_is_painted_into() {
         for brush in [
@@ -270,8 +265,6 @@ mod tests {
         }
     }
 
-    /// A tiled gradient repeats instead of holding its end colours, which is
-    /// how a repeating stripe or a shimmer is drawn.
     #[test]
     fn a_tiled_axis_gradient_carries_its_tile_mode() {
         let vertical = Brush::vertical_gradient_tiled(red_to_blue(), 0.0, 8.0, TileMode::Repeated);
@@ -284,9 +277,6 @@ mod tests {
         assert_eq!(tile_mode, TileMode::Mirror);
     }
 
-    /// Explicit stops are what an uneven gradient needs — most of the run in
-    /// one colour and a band at the end. The positions travel beside the
-    /// colours rather than being inferred from how many there are.
     #[test]
     fn explicit_stops_travel_beside_their_colours() {
         let stops_in = vec![

@@ -1,13 +1,3 @@
-//! Robot test verifying scroll actually moves content visually.
-//!
-//! This test catches regressions where scroll value changes but the UI
-//! doesn't update (e.g., when layout caches aren't invalidated properly).
-//!
-//! Run with:
-//! ```bash
-//! cargo run --package desktop-app --example robot_scroll_visual --features robot-app
-//! ```
-
 use std::time::Duration;
 
 use cranpose::AppLauncher;
@@ -40,7 +30,6 @@ fn main() {
             std::thread::sleep(Duration::from_millis(500));
             let _ = robot.wait_for_idle();
 
-            // Navigate to Lazy List tab
             let lazy_tab = find_button_in_semantics(&robot, "Lazy List");
 
             if let Some((x, y, w, h)) = lazy_tab {
@@ -94,8 +83,6 @@ fn main() {
             }
             println!("  Scroll action complete, checking list index...");
 
-            // ===== CRITICAL ASSERTION =====
-            // If scroll works, the first visible index must change.
             let mut after_index = None;
             for _ in 0..20 {
                 if let Some(idx) = read_first_index(&robot) {

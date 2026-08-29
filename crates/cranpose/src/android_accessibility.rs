@@ -1,4 +1,3 @@
-//! Android `AccessibilityNodeProvider` bridge for the native canvas surface.
 #![allow(unsafe_code)]
 
 use std::sync::{
@@ -24,15 +23,8 @@ use crate::{
 static ACTIVATIONS: OnceLock<Mutex<Vec<(f32, f32)>>> = OnceLock::new();
 static CUSTOM_ACTIONS: OnceLock<Mutex<Vec<(i32, usize)>>> = OnceLock::new();
 static LOOP_WAKER: Mutex<Option<android_activity::AndroidAppWaker>> = Mutex::new(None);
-/// Whether Android reports any assistive technology as active, pushed by
-/// `CranposeActivity` through `nativeOnAccessibilityStateChanged`. The frame
-/// loop samples it every iteration; `false` until the activity's first push,
-/// which happens in `onCreate` before the first frame can need it.
 static PLATFORM_ACCESSIBILITY_ENABLED: AtomicBool = AtomicBool::new(false);
 
-/// `CRANPOSE_A11Y_SYNC` (property `debug.cranpose.a11y_sync`) A/B override:
-/// `0` forces the bridge off, `1` forces it on regardless of what the platform
-/// reports, anything else defers to `AccessibilityManager`.
 fn accessibility_sync_override() -> Option<bool> {
     static OVERRIDE: OnceLock<Option<bool>> = OnceLock::new();
     *OVERRIDE.get_or_init(|| match std::env::var("CRANPOSE_A11Y_SYNC").as_deref() {
@@ -42,7 +34,6 @@ fn accessibility_sync_override() -> Option<bool> {
     })
 }
 
-/// The bridge state the policy should follow this frame.
 fn accessibility_bridge_enabled() -> bool {
     accessibility_sync_override()
         .unwrap_or_else(|| PLATFORM_ACCESSIBILITY_ENABLED.load(Ordering::Relaxed))
@@ -80,8 +71,6 @@ pub(crate) fn drain_activations() -> Vec<(f32, f32)> {
     )
 }
 
-/// `(virtual view id, index into that element's custom action list)` pairs a
-/// screen reader asked for since the last frame.
 pub(crate) fn drain_custom_actions() -> Vec<(i32, usize)> {
     std::mem::take(
         &mut *custom_actions()
@@ -99,14 +88,8 @@ pub(crate) fn sync(
     policy: &mut AccessibilityPublishPolicy,
 ) -> Result<(), String> {
     if policy.update_enabled(accessibility_bridge_enabled()) {
-        // Assistive technology just arrived: whatever tree it can see on the
-        // Java side is from a previous activation. Republish unconditionally.
         *seen_revision = None;
     }
-    // The policy gate comes before any tree walk: the snapshot + encode +
-    // JNI hop costs ~6.5 ms of a 16.7 ms frame on a 2018 SoC, so with no
-    // assistive technology listening (or the throttle window still closed)
-    // the frame must pay one comparison and nothing else.
     let now = std::time::Instant::now();
     if !policy.try_begin_publish(now) {
         return Ok(());
@@ -154,10 +137,6 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccess
     wake_loop();
 }
 
-/// `AccessibilityManager` state pushed by the activity: once at `onCreate`
-/// and again whenever assistive technology starts or stops. The wake matters
-/// on enable — the frame loop may be idle, and the republish must not wait
-/// for the next app-driven frame.
 #[doc(hidden)]
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilityStateChanged(
@@ -171,11 +150,6 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccess
     }
 }
 
-/// A screen reader picked one of the node's custom actions.
-///
-/// Only the identity travels: which virtual view, and which action in the list
-/// that view published. Resolving that to a handler happens on the frame loop
-/// against the live semantics tree, so nothing here holds app state.
 #[doc(hidden)]
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilityCustomAction(

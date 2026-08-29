@@ -126,8 +126,6 @@ impl MeasurePolicy for BoxMeasurePolicy {
     }
 }
 
-// Row and Column use FlexMeasurePolicy with axis-specific configuration.
-
 /// Unified Flex layout policy that powers both Row and Column.
 ///
 /// This policy implements Jetpack Compose's flex layout semantics:
@@ -188,7 +186,6 @@ pub enum CrossAxisAlignment {
 }
 
 impl CrossAxisAlignment {
-    /// Calculate the offset for positioning a child on the cross axis.
     fn align(&self, available: f32, child: f32) -> f32 {
         match self {
             CrossAxisAlignment::Start => 0.0,
@@ -255,7 +252,6 @@ impl FlexMeasurePolicy {
         )
     }
 
-    /// Extract main and cross axis values from constraints.
     fn get_axis_constraints(&self, constraints: Constraints) -> (f32, f32, f32, f32) {
         match self.axis {
             Axis::Horizontal => (
@@ -273,7 +269,6 @@ impl FlexMeasurePolicy {
         }
     }
 
-    /// Create constraints from main and cross axis values.
     fn make_constraints(
         &self,
         min_main: f32,
@@ -297,7 +292,6 @@ impl FlexMeasurePolicy {
         }
     }
 
-    /// Get the main axis size from width/height.
     fn get_main_axis_size(&self, width: f32, height: f32) -> f32 {
         match self.axis {
             Axis::Horizontal => width,
@@ -305,7 +299,6 @@ impl FlexMeasurePolicy {
         }
     }
 
-    /// Get the cross axis size from width/height.
     fn get_cross_axis_size(&self, width: f32, height: f32) -> f32 {
         match self.axis {
             Axis::Horizontal => height,
@@ -313,7 +306,6 @@ impl FlexMeasurePolicy {
         }
     }
 
-    /// Calculate spacing between children based on arrangement.
     fn get_spacing(&self) -> f32 {
         match self.main_axis_arrangement {
             LinearArrangement::SpacedBy(value) => value.max(0.0),
@@ -351,7 +343,6 @@ impl MeasurePolicy for FlexMeasurePolicy {
         let main_axis_bounded = max_main.is_finite();
         let spacing = self.get_spacing();
 
-        // Separate children into fixed and weighted
         let mut fixed_children: SmallVec<[usize; 8]> = SmallVec::new();
         let parent_data: SmallVec<[ParentData; 8]> = measurables
             .iter()
@@ -367,8 +358,6 @@ impl MeasurePolicy for FlexMeasurePolicy {
             }
         }
 
-        // Measure fixed children first
-        // Children get loose constraints on both axes (min = 0)
         let child_constraints = self.make_constraints(0.0, max_main, 0.0, max_cross);
 
         let mut placeables: SmallVec<[Option<cranpose_ui_layout::Placeable>; 8]> = SmallVec::new();
@@ -387,7 +376,6 @@ impl MeasurePolicy for FlexMeasurePolicy {
             placeables[idx] = Some(placeable);
         }
 
-        // Calculate spacing
         let num_children = measurables.len();
         let total_spacing = if num_children > 1 {
             spacing * (num_children - 1) as f32
@@ -395,17 +383,13 @@ impl MeasurePolicy for FlexMeasurePolicy {
             0.0
         };
 
-        // Measure weighted children
         if !weighted_children.is_empty() {
             if main_axis_bounded {
-                // Calculate remaining space for weighted children
                 let used_main = fixed_main_size + total_spacing;
                 let remaining_main = (max_main - used_main).max(0.0);
 
-                // Calculate total weight
                 let total_weight: f32 = weighted_children.iter().map(|(_, data)| data.weight).sum();
 
-                // Measure each weighted child with its allocated space
                 for &(idx, parent_data) in &weighted_children {
                     let measurable = &measurables[idx];
                     let allocated = if total_weight > 0.0 {
@@ -415,10 +399,8 @@ impl MeasurePolicy for FlexMeasurePolicy {
                     };
 
                     let weighted_constraints = if parent_data.fill {
-                        // fill=true: child gets tight constraints on main axis
                         self.make_constraints(allocated, allocated, 0.0, max_cross)
                     } else {
-                        // fill=false: child gets loose constraints on main axis
                         self.make_constraints(0.0, allocated, 0.0, max_cross)
                     };
 
@@ -429,7 +411,6 @@ impl MeasurePolicy for FlexMeasurePolicy {
                     placeables[idx] = Some(placeable);
                 }
             } else {
-                // Main axis unbounded: ignore weights, measure like fixed children
                 for &(idx, _) in &weighted_children {
                     let measurable = &measurables[idx];
                     let placeable = measurable.measure(child_constraints);
@@ -449,18 +430,15 @@ impl MeasurePolicy for FlexMeasurePolicy {
             })
             .collect();
 
-        // Calculate total main size
         let total_main: f32 = placeables
             .iter()
             .map(|p| self.get_main_axis_size(p.width(), p.height()))
             .sum::<f32>()
             + total_spacing;
 
-        // Container size
         let container_main = total_main.clamp(min_main, max_main);
         let container_cross = max_cross_size.clamp(min_cross, max_cross);
 
-        // Arrange children along main axis
         let child_main_sizes: SmallVec<[f32; 8]> = placeables
             .iter()
             .map(|p| self.get_main_axis_size(p.width(), p.height()))
@@ -470,8 +448,6 @@ impl MeasurePolicy for FlexMeasurePolicy {
             SmallVec::with_capacity(child_main_sizes.len());
         main_positions.resize(child_main_sizes.len(), 0.0);
 
-        // If distribution arrangements overflow, use Start arrangement to avoid negative spacing.
-        // Fixed SpacedBy gaps stay valid under overflow and must remain part of layout.
         let arrangement = if total_main > container_main
             && !matches!(self.main_axis_arrangement, LinearArrangement::SpacedBy(_))
         {
@@ -481,7 +457,6 @@ impl MeasurePolicy for FlexMeasurePolicy {
         };
         arrangement.arrange(container_main, &child_main_sizes, &mut main_positions);
 
-        // Place children
         placements.reserve(placeables.len());
         for (idx, (placeable, main_pos)) in placeables.into_iter().zip(main_positions).enumerate() {
             let child_cross = self.get_cross_axis_size(placeable.width(), placeable.height());
@@ -506,7 +481,6 @@ impl MeasurePolicy for FlexMeasurePolicy {
             placements.push(Placement::new(placeable.node_id(), x, y, 0));
         }
 
-        // Create final size
         let (width, height) = match self.axis {
             Axis::Horizontal => (container_main, container_cross),
             Axis::Vertical => (container_cross, container_main),
@@ -525,20 +499,16 @@ impl MeasurePolicy for FlexMeasurePolicy {
 
         match self.axis {
             Axis::Horizontal => {
-                // Row: sum of children's min intrinsic widths + spacing
                 measurables
                     .iter()
                     .map(|m| m.min_intrinsic_width(height))
                     .sum::<f32>()
                     + total_spacing
             }
-            Axis::Vertical => {
-                // Column: max of children's min intrinsic widths
-                measurables
-                    .iter()
-                    .map(|m| m.min_intrinsic_width(height))
-                    .fold(0.0, f32::max)
-            }
+            Axis::Vertical => measurables
+                .iter()
+                .map(|m| m.min_intrinsic_width(height))
+                .fold(0.0, f32::max),
         }
     }
 
@@ -552,20 +522,16 @@ impl MeasurePolicy for FlexMeasurePolicy {
 
         match self.axis {
             Axis::Horizontal => {
-                // Row: sum of children's max intrinsic widths + spacing
                 measurables
                     .iter()
                     .map(|m| m.max_intrinsic_width(height))
                     .sum::<f32>()
                     + total_spacing
             }
-            Axis::Vertical => {
-                // Column: max of children's max intrinsic widths
-                measurables
-                    .iter()
-                    .map(|m| m.max_intrinsic_width(height))
-                    .fold(0.0, f32::max)
-            }
+            Axis::Vertical => measurables
+                .iter()
+                .map(|m| m.max_intrinsic_width(height))
+                .fold(0.0, f32::max),
         }
     }
 
@@ -578,15 +544,11 @@ impl MeasurePolicy for FlexMeasurePolicy {
         };
 
         match self.axis {
-            Axis::Horizontal => {
-                // Row: max of children's min intrinsic heights
-                measurables
-                    .iter()
-                    .map(|m| m.min_intrinsic_height(width))
-                    .fold(0.0, f32::max)
-            }
+            Axis::Horizontal => measurables
+                .iter()
+                .map(|m| m.min_intrinsic_height(width))
+                .fold(0.0, f32::max),
             Axis::Vertical => {
-                // Column: sum of children's min intrinsic heights + spacing
                 measurables
                     .iter()
                     .map(|m| m.min_intrinsic_height(width))
@@ -605,15 +567,11 @@ impl MeasurePolicy for FlexMeasurePolicy {
         };
 
         match self.axis {
-            Axis::Horizontal => {
-                // Row: max of children's max intrinsic heights
-                measurables
-                    .iter()
-                    .map(|m| m.max_intrinsic_height(width))
-                    .fold(0.0, f32::max)
-            }
+            Axis::Horizontal => measurables
+                .iter()
+                .map(|m| m.max_intrinsic_height(width))
+                .fold(0.0, f32::max),
             Axis::Vertical => {
-                // Column: sum of children's max intrinsic heights + spacing
                 measurables
                     .iter()
                     .map(|m| m.max_intrinsic_height(width))
@@ -652,7 +610,6 @@ impl FlowRowMeasurePolicy {
         }
     }
 
-    /// Simulates the wrapping flow for intrinsic height queries.
     fn wrapped_intrinsic_height(
         &self,
         measurables: &[Box<dyn Measurable>],
@@ -713,8 +670,6 @@ impl MeasurePolicy for FlowRowMeasurePolicy {
             return crate::modifier::Size { width, height };
         }
 
-        // Children get loose constraints capped at the incoming maximums;
-        // wrapping happens on their measured sizes.
         let child_constraints = Constraints {
             min_width: 0.0,
             max_width: constraints.max_width,
@@ -727,8 +682,8 @@ impl MeasurePolicy for FlowRowMeasurePolicy {
             .map(|measurable| measurable.measure(child_constraints))
             .collect();
 
-        let mut cursor_x = 0.0_f32; // end of the current line's content
-        let mut line_top = 0.0_f32; // y of the current line
+        let mut cursor_x = 0.0_f32;
+        let mut line_top = 0.0_f32;
         let mut line_height = 0.0_f32;
         let mut max_line_width = 0.0_f32;
 
@@ -737,10 +692,6 @@ impl MeasurePolicy for FlowRowMeasurePolicy {
             let child_width = placeable.width();
             let child_height = placeable.height();
 
-            // Wrap when the child (plus the gap separating it from the
-            // previous child) no longer fits. The first child of a line
-            // never wraps, so an oversized child overflows instead of
-            // looping.
             if cursor_x > 0.0
                 && cursor_x + self.main_axis_spacing + child_width > constraints.max_width
             {
@@ -769,7 +720,6 @@ impl MeasurePolicy for FlowRowMeasurePolicy {
     }
 
     fn min_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], height: f32) -> f32 {
-        // Narrowest sensible layout: one child per line.
         measurables
             .iter()
             .map(|m| m.min_intrinsic_width(height))
@@ -777,7 +727,6 @@ impl MeasurePolicy for FlowRowMeasurePolicy {
     }
 
     fn max_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], height: f32) -> f32 {
-        // Widest layout: everything on a single line.
         let total_spacing = if measurables.len() > 1 {
             self.main_axis_spacing * (measurables.len() - 1) as f32
         } else {
@@ -832,7 +781,6 @@ impl MeasurePolicy for LeafMeasurePolicy {
         placements: &mut Vec<Placement>,
     ) -> crate::modifier::Size {
         placements.clear();
-        // Use intrinsic size but constrain to provided constraints
         let (width, height) =
             constraints.constrain(self.intrinsic_size.width, self.intrinsic_size.height);
 
@@ -896,8 +844,6 @@ impl MeasurePolicy for EmptyMeasurePolicy {
         placements: &mut Vec<Placement>,
     ) -> crate::modifier::Size {
         placements.clear();
-        // Empty policy returns the maximum available space
-        // The actual measurement is handled by modifier nodes in the chain
         let (width, height) = constraints.constrain(0.0, 0.0);
 
         crate::modifier::Size { width, height }

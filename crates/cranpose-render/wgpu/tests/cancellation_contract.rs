@@ -1,13 +1,3 @@
-//! Pipeline step 7a: packet validity and cancellation-by-protocol. A
-//! packet built against a dead renderer instance, a stale surface
-//! configuration, or another viewport must be refused at the head of the
-//! present stage — before any encoding — with every buffer it carries
-//! returned to the producer: the direct scene to the recycling pool and
-//! the unconsumed replay plan to the planner (its releases re-queued so
-//! pool slot ids never leak, its unconfirmable awaiting entries purged,
-//! its buffers recycled). A cancel is an outcome, not an error, and a
-//! packet built after the change presents normally.
-
 mod support;
 
 use std::path::Path;
@@ -72,8 +62,6 @@ fn rect_primitive(rect: Rect, color: Color) -> RenderNode {
     })
 }
 
-/// A direct-eligible root (no shadow, no effects): its packets carry a
-/// `PacketRoot::Direct` scene, which is what the cancel path must return.
 fn direct_graph() -> RenderGraph {
     RenderGraph::new(test_layer(
         Some(7_100),
@@ -97,8 +85,6 @@ fn command_for(node_id: usize) -> DrawCommandId {
     }
 }
 
-/// A render target on the renderer's CURRENT device (created fresh after
-/// any reinit, since the old device's views die with it).
 fn target_view(renderer: &support::LockedRenderer, width: u32, height: u32) -> wgpu::TextureView {
     let device = renderer
         .try_device()
@@ -120,10 +106,6 @@ fn target_view(renderer: &support::LockedRenderer, width: u32, height: u32) -> w
     texture.create_view(&wgpu::TextureViewDescriptor::default())
 }
 
-/// 7a-1: renderer replacement with a packet in flight. The stale packet is
-/// cancelled for its renderer epoch — never drawn against the new store —
-/// its scene returns to the producer pool, the planner carries no leaked
-/// state, and the next-built packet presents normally.
 #[test]
 fn renderer_replacement_cancels_in_flight_packet() {
     let mut renderer = match support::headless_renderer() {
@@ -182,9 +164,6 @@ fn renderer_replacement_cancels_in_flight_packet() {
     );
 }
 
-/// 7a-2: surface reconfigure with a packet waiting. The packet cancels for
-/// its surface epoch, its buffers return, and a packet built after the
-/// reconfigure presents.
 #[test]
 fn surface_reconfigure_cancels_waiting_packet() {
     let mut renderer = match support::headless_renderer() {
@@ -224,8 +203,6 @@ fn surface_reconfigure_cancels_waiting_packet() {
     assert_eq!(outcome, PresentOutcome::Presented);
 }
 
-/// 7a-3: viewport mismatch. A packet lowered for one size, presented at
-/// another, cancels — the payload's coordinates are wrong for the target.
 #[test]
 fn viewport_mismatch_cancels_packet() {
     let mut renderer = match support::headless_renderer() {
@@ -252,11 +229,6 @@ fn viewport_mismatch_cancels_packet() {
     assert!(renderer.has_retained_direct_scene_for_tests());
 }
 
-/// 7a-4: a cancelled packet returns its scene AND its replay buffers. The
-/// scene repopulates the producer pool (and feeds the next build), the
-/// batch's awaiting-confirmation entries purge (they can never confirm —
-/// every later frame could be a Surface frame with no ack), and the op
-/// buffers recycle with capacity intact.
 #[test]
 fn cancelled_packet_returns_scene_and_replay_buffers() {
     let mut renderer = match support::headless_renderer() {
@@ -305,8 +277,6 @@ fn cancelled_packet_returns_scene_and_replay_buffers() {
          capacity intact"
     );
 
-    // The recycled scene actually feeds the next build (taken from the
-    // pool), closing the loop.
     let packet = renderer
         .build_frame_packet_for_tests(WIDTH, HEIGHT)
         .expect("the next build must lower normally");
@@ -320,13 +290,6 @@ fn cancelled_packet_returns_scene_and_replay_buffers() {
     assert_eq!(outcome, PresentOutcome::Presented);
 }
 
-/// 7a-5: the slot-hold invariant, pinned structurally (render_contract.rs
-/// pattern): a frame's retained slots cannot be released before the frame
-/// completes, because the store frees slots in exactly ONE place — the
-/// release drain at the head of `consume_replay_ops`, which only ever runs
-/// on a frame's OWN ops batch before that frame encodes. Planner-side, a
-/// displaced slot (5b) and a cancelled batch's releases both re-queue into
-/// `pending_releases`, which drains ONLY into a later frame's ops.
 #[test]
 fn slot_releases_drain_only_inside_a_later_frames_consume() {
     let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -367,10 +330,6 @@ fn slot_releases_drain_only_inside_a_later_frames_consume() {
     );
 }
 
-/// 7a §6: the render-error scene return, pinned structurally: when the
-/// direct draw errs, the packet's `CompositorScene` must still travel back
-/// through `returns.scene` — `render_root_direct` yields the scene in BOTH
-/// arms and the present backend stashes it before propagating the error.
 #[test]
 fn render_error_path_returns_the_direct_scene() {
     let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));

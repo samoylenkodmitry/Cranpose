@@ -113,9 +113,6 @@ pub trait FocusedTextFieldHandler {
 pub(crate) struct TextFieldFocusState {
     focused_field: RefCell<Option<Weak<RefCell<bool>>>>,
     focused_handler: RefCell<Option<Rc<dyn FocusedTextFieldHandler>>>,
-    /// The [`crate::modal::local_modal_depth`] the currently focused field was
-    /// composed at, so a closing modal can tell whether the field it guarded
-    /// is the one that just went away (see [`Self::focused_at_depth`]).
     focused_modal_depth: Cell<usize>,
 }
 
@@ -162,7 +159,6 @@ impl TextFieldFocusState {
         self.focused_modal_depth.set(0);
     }
 
-    /// Whether a live field is focused and was composed at exactly `depth`.
     fn focused_at_depth(&self, depth: usize) -> bool {
         self.has_focused_field() && self.focused_modal_depth.get() == depth
     }
@@ -323,10 +319,6 @@ pub fn request_focus(
         return;
     }
 
-    // The caret is drawn from focus state no draw observation can see: both
-    // the field losing focus and the one gaining it must re-record their
-    // draws, and only a scoped repass on each keeps that off the
-    // whole-scene rebuild path.
     let previous_field = focused_field_node();
     let gaining_field = handler.node_id();
 
@@ -338,23 +330,13 @@ pub fn request_focus(
         crate::schedule_draw_repass(node_id);
     }
 
-    // Start cursor blink animation (timer-based, not continuous redraw)
     crate::cursor_animation::start_cursor_blink();
 
-    // Tell the platform to show its soft keyboard (fires on every focus
-    // request on purpose - see text_input_session module docs).
     crate::text_input_session::notify_text_input_focus_gained();
 
-    // Cursor is drawn via create_draw_closure() which checks focus at draw
-    // time. No layout change occurs on focus.
     crate::request_render_invalidation();
 }
 
-/// Clears focus if the currently focused field was composed at exactly
-/// `depth` — called when the modal that occupied `depth` closes, so a field
-/// that went away with it does not strand the platform keyboard open. A
-/// field at another depth (outside that modal, or inside an unrelated one)
-/// is untouched.
 pub(crate) fn clear_focus_for_closed_modal(depth: usize) {
     let owns_focus =
         crate::render_state::with_text_field_focus(|state| state.focused_at_depth(depth));
@@ -365,17 +347,13 @@ pub(crate) fn clear_focus_for_closed_modal(depth: usize) {
 
 /// Clears focus from the currently focused text field.
 pub fn clear_focus() {
-    // The unfocused field's caret and selection must leave its recorded
-    // draws; capture its node before the registry forgets it.
     if let Some(node_id) = focused_field_node() {
         crate::schedule_draw_repass(node_id);
     }
     crate::render_state::with_text_field_focus(|state| state.clear_focus());
 
-    // Stop cursor blink animation
     crate::cursor_animation::stop_cursor_blink();
 
-    // Tell the platform to hide its soft keyboard.
     crate::text_input_session::notify_text_input_focus_lost();
 
     crate::request_render_invalidation();
@@ -396,17 +374,10 @@ pub fn focused_field_node() -> Option<cranpose_core::NodeId> {
 pub fn has_focused_field() -> bool {
     let has_focus = crate::render_state::with_text_field_focus(|state| state.has_focused_field());
     if !has_focus {
-        // The focused field may have just been detected as stale (removed from
-        // the composition without clear_focus). Hide the soft keyboard; this
-        // is a gated no-op when no keyboard request is outstanding.
         crate::text_input_session::notify_text_input_focus_lost();
     }
     has_focus
 }
-
-// ============================================================================
-// O(1) Dispatch Functions - Bypass tree scan by using stored handler
-// ============================================================================
 
 /// Dispatches a key event to the focused text field. Returns true if consumed.
 /// O(1) operation using stored handler.
@@ -496,7 +467,6 @@ pub fn focused_caret_geometry() -> Option<ImeCaretGeometry> {
 mod tests {
     use super::*;
 
-    // Mock handler for testing
     struct MockHandler;
     impl FocusedTextFieldHandler for MockHandler {
         fn handle_key(&self, _: &KeyEvent) -> bool {
@@ -517,8 +487,6 @@ mod tests {
         Rc::new(MockHandler)
     }
 
-    // A handler that knows which node draws its caret, like the production
-    // text field handler does.
     struct NodeBackedHandler(cranpose_core::NodeId);
     impl FocusedTextFieldHandler for NodeBackedHandler {
         fn node_id(&self) -> Option<cranpose_core::NodeId> {
@@ -538,10 +506,6 @@ mod tests {
         fn set_composition(&self, _: &str, _: Option<(usize, usize)>) {}
     }
 
-    /// Caret and focus state live outside the draw-observation system, so a
-    /// focus transition must name the stale nodes itself: both the field
-    /// losing the caret and the field gaining it get a scoped draw repass —
-    /// never a whole-scene rebuild.
     #[test]
     fn focus_transitions_schedule_scoped_draw_repasses_on_both_fields() {
         let _app_context = crate::render_state::app_context_test_scope();
@@ -569,9 +533,6 @@ mod tests {
         );
     }
 
-    /// A caret blink flip repaints exactly one node. The tick schedules a
-    /// scoped draw repass on the focused field so the frame takes the
-    /// ordinary dirty-node path.
     #[test]
     fn a_blink_transition_schedules_a_scoped_repass_on_the_focused_field() {
         let _app_context = crate::render_state::app_context_test_scope();
@@ -612,8 +573,8 @@ mod tests {
         assert!(*focus1.borrow());
 
         request_focus(focus2.clone(), mock_handler(), 0);
-        assert!(!*focus1.borrow()); // First should be unfocused
-        assert!(*focus2.borrow()); // Second should be focused
+        assert!(!*focus1.borrow());
+        assert!(*focus2.borrow());
         clear_focus();
     }
 
@@ -794,8 +755,6 @@ mod tests {
         request_focus(focus.clone(), mock_handler(), 0);
         assert_eq!(*keyboard.calls.borrow(), vec!["show"]);
 
-        // Tapping the (already focused) field again must re-request the
-        // keyboard: the user may have dismissed it with the back gesture.
         request_focus(focus, mock_handler(), 0);
         assert_eq!(*keyboard.calls.borrow(), vec!["show", "show"]);
 
@@ -812,14 +771,11 @@ mod tests {
         {
             let focus = Rc::new(RefCell::new(false));
             request_focus(focus, mock_handler(), 0);
-            // The focused field's Rc is dropped here (field removed from the
-            // composition without an explicit clear_focus).
         }
 
         assert!(!has_focused_field());
         assert_eq!(*keyboard.calls.borrow(), vec!["show", "hide"]);
 
-        // Repeated stale checks must not re-hide.
         assert!(!has_focused_field());
         assert_eq!(*keyboard.calls.borrow(), vec!["show", "hide"]);
     }

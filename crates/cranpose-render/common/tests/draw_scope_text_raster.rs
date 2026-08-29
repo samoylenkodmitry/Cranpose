@@ -1,12 +1,3 @@
-//! `DrawScope` text against real fonts.
-//!
-//! The draw scope hands the renderer a block box it measured itself, so the
-//! contract that matters is that the glyphs the rasterizer actually lays out
-//! fit that box — and that redrawing an unchanged string does no work twice.
-//! These run the production measurer and the production atlas collector over
-//! the embedded fallback font, which is what the renderer uses when an app
-//! registers none.
-
 #![cfg(feature = "embedded-default-font")]
 
 use cranpose_render_common::software_text_raster::{
@@ -29,8 +20,6 @@ fn measurer() -> SoftwareTextMeasurer {
     SoftwareTextMeasurer::from_font_set(fonts(), 256)
 }
 
-/// The block box a draw scope would emit for `text`: what the production
-/// measurer reports, laid out at `origin`.
 fn measured_block(origin: (f32, f32), text: &str, style: &TextStyle) -> (Rect, UiTextStyle) {
     let ui_style = text_style_for_draw_style(style);
     let measurer = measurer();
@@ -48,7 +37,6 @@ fn measured_block(origin: (f32, f32), text: &str, style: &TextStyle) -> (Rect, U
     )
 }
 
-/// Runs the atlas collector exactly as the renderer does for a text draw.
 fn collect(
     rect: Rect,
     text: &str,
@@ -80,9 +68,6 @@ fn every_glyph_lands_inside_the_block_measure_text_reported() {
     let run = collect(rect, "SCORE 1234", &ui_style, &style, &mut cache);
     assert!(!run.is_empty(), "the run must produce glyphs");
 
-    // Glyph placements are relative to the block's own origin, so the box the
-    // caller was told about is 0..width by 0..height here. A one-pixel margin
-    // absorbs anti-aliased overhang and the rasterizer's integer flooring.
     const OVERHANG: f32 = 1.0;
     for glyph in &run {
         let placement = glyph.placement();
@@ -162,7 +147,6 @@ fn a_stable_string_rasterizes_once_and_is_served_from_the_glyph_cache_after_that
 
 #[test]
 fn only_the_new_characters_of_a_changing_counter_rasterize() {
-    // The case a game hits every frame: same digits, one of them ticking.
     let style = TextStyle::new(18.0);
     let mut cache = SoftwareGlyphRasterCache::with_capacity_at_least_one(GLYPH_CACHE_CAPACITY);
     for score in 0..10 {
@@ -170,8 +154,6 @@ fn only_the_new_characters_of_a_changing_counter_rasterize() {
         let (rect, ui_style) = measured_block((0.0, 0.0), &text, &style);
         collect(rect, &text, &ui_style, &style, &mut cache);
     }
-    // 'S', 'C', 'O', 'R', 'E', ' ' and ten digits — the shared prefix is
-    // rasterized once, not once per frame.
     assert!(
         cache.stats().entries <= 16,
         "expected one mask per distinct glyph, got {}",
@@ -198,7 +180,6 @@ fn an_unknown_font_family_falls_back_to_the_framework_font() {
 
 #[test]
 fn characters_the_font_cannot_draw_measure_and_collect_without_panicking() {
-    // Private-use codepoints have no outline in any shipped face.
     let text = "A\u{E000}\u{10FFFD}B";
     let style = TextStyle::new(20.0);
     let (rect, ui_style) = measured_block((0.0, 0.0), text, &style);
@@ -206,8 +187,6 @@ fn characters_the_font_cannot_draw_measure_and_collect_without_panicking() {
 
     let mut cache = SoftwareGlyphRasterCache::with_capacity_at_least_one(GLYPH_CACHE_CAPACITY);
     let run = collect(rect, text, &ui_style, &style, &mut cache);
-    // The two drawable letters still make it through; the missing glyphs are
-    // simply skipped rather than taking the run down with them.
     assert!(!run.is_empty());
     for glyph in &run {
         let placement = glyph.placement();
@@ -246,8 +225,6 @@ fn the_measured_baseline_is_the_row_glyphs_are_actually_placed_on() {
     let mut cache = SoftwareGlyphRasterCache::with_capacity_at_least_one(GLYPH_CACHE_CAPACITY);
     let run = collect(rect, "H", &ui_style, &style, &mut cache);
     let placement = run.first().expect("one glyph").placement();
-    // 'H' sits on the baseline with no descender, so its ink bottom is the
-    // baseline row (within the rasterizer's integer flooring).
     let ink_bottom = (placement.y + placement.height as i32) as f32;
     assert!(
         (ink_bottom - baseline).abs() <= 1.5,
@@ -257,10 +234,6 @@ fn the_measured_baseline_is_the_row_glyphs_are_actually_placed_on() {
 
 #[test]
 fn a_drawn_run_that_names_a_line_height_policy_is_laid_out_by_it() {
-    // A draw scope could not state a line-height policy at all, so every run it
-    // drew took the plain branch — the box is the requested height, the leading
-    // split evenly — while a `Text` composable of the same style took the AOSP
-    // one. Two rules in one frame, and a device pixel between them on every row.
     use cranpose_ui::text::{LineHeightAlignment, LineHeightMode, LineHeightStyle, LineHeightTrim};
 
     let asked = 30.0;
@@ -297,8 +270,6 @@ fn a_drawn_run_that_names_a_line_height_policy_is_laid_out_by_it() {
     );
     assert_ne!(plain_box.baseline, styled_box.baseline);
 
-    // And the policy reaches the rasterizer, not just the measurer: the glyphs
-    // are placed on the row the styled box reports.
     let ui_style = text_style_for_draw_style(&styled);
     let (rect, _) = measured_block((0.0, 0.0), "H", &styled);
     let mut cache = SoftwareGlyphRasterCache::with_capacity_at_least_one(GLYPH_CACHE_CAPACITY);
@@ -315,27 +286,11 @@ fn a_drawn_run_that_names_a_line_height_policy_is_laid_out_by_it() {
 
 #[test]
 fn letter_spacing_pads_a_run_with_half_a_space_at_each_edge() {
-    // Android resolves `letterSpacing` in Minikin, which puts HALF a letter
-    // space on each side of every cluster: `LayoutCore.cpp` adds
-    // `letterSpaceHalf` before a script run's first glyph, a full `letterSpace`
-    // at each cluster boundary, and `letterSpaceHalf` after the last. So a run
-    // of n characters is n letter spaces wider than an untracked one -- not
-    // n-1 -- and its ink starts half a letter space in.
-    //
-    // This test previously asserted the n-1 rule and no lead-in. It was wrong
-    // in both halves: a five-letter word came out one whole letter space narrow
-    // and its ink half a letter space to the left of where Compose puts it.
-    //
-    // (The trailing half is real on the platform these widgets are measured
-    // against. The `sdk_gwear` emulator runs Android 14, whose `Layout.cpp` has
-    // no letter-spacing code at all; the edge trimming that removes the two
-    // half spaces arrives in Android 15 and is opt-in per run even there.)
     const WORD: &str = "ORBIT";
     const TRACKING: f32 = 5.0;
     let plain = TextStyle::new(20.0);
     let tracked = TextStyle::new(20.0).with_letter_spacing(TRACKING);
     let mut cache = SoftwareGlyphRasterCache::with_capacity_at_least_one(GLYPH_CACHE_CAPACITY);
-    // `(block width, ink left, ink right)`.
     let mut spans = |style: &TextStyle| {
         let (rect, ui_style) = measured_block((0.0, 0.0), WORD, style);
         let run = collect(rect, WORD, &ui_style, style, &mut cache);
@@ -378,10 +333,6 @@ fn letter_spacing_pads_a_run_with_half_a_space_at_each_edge() {
         chars * TRACKING - TRACKING * 0.5
     );
 
-    // The consequence that matters for parity: because the two half spaces are
-    // symmetric, the ink stays centred in the block it was measured for. A
-    // centred string does not move when tracking is added -- only a start- or
-    // end-aligned one does, and it moves by exactly half a letter space.
     let plain_slack = (plain_width - plain_right) - plain_left;
     let tracked_slack = (tracked_width - tracked_right) - tracked_left;
     assert!(

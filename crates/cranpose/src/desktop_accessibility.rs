@@ -1,4 +1,3 @@
-//! Native desktop accessibility through AccessKit platform adapters.
 #![allow(unsafe_code)]
 
 use std::{
@@ -100,9 +99,6 @@ impl DesktopAccessibilityBridge {
         }
         self.previous = elements;
         let update = tree_update(&self.previous);
-        // Keyed by the shared element id, not the layout node id: several
-        // elements can share one layout node once that node publishes drawn
-        // controls, and a click has to land on the one AccessKit named.
         self.centers = accessibility::element_ids(&self.previous)
             .into_iter()
             .zip(&self.previous)
@@ -130,9 +126,6 @@ impl DesktopAccessibilityBridge {
                         clicks.push(*center);
                     }
                 }
-                // A custom action has no position to synthesise a click at, so
-                // it is parked by identity and run against the live semantics
-                // tree on the next frame, exactly as the Android bridge does.
                 Action::CustomAction => {
                     if let Some(ActionData::CustomAction(index)) = request.data
                         && index >= 0
@@ -147,8 +140,6 @@ impl DesktopAccessibilityBridge {
         clicks
     }
 
-    /// Runs the custom actions a screen reader picked. Returns whether any ran,
-    /// so the caller knows whether a redraw is owed.
     pub(crate) fn run_custom_actions(&mut self, shell: &mut AppShell<WgpuRenderer>) -> bool {
         if self.pending_custom_actions.is_empty() {
             return false;
@@ -207,9 +198,6 @@ fn tree_update(elements: &[AccessibilityElement]) -> TreeUpdate {
         if let Some(value) = &element.value {
             node.set_value(value.as_str());
         }
-        // AccessKit's `description` is the supplementary phrase a screen
-        // reader reads after the label, which is the role Compose's
-        // `stateDescription` plays.
         if let Some(state) = &element.state_description {
             node.set_description(state.as_str());
         }
@@ -348,9 +336,6 @@ impl PlatformAdapter {
     fn process_event(&mut self, window: &dyn Window, event: &WindowEvent) {
         match event {
             WindowEvent::Moved(_) | WindowEvent::SurfaceResized(_) => {
-                // Wayland intentionally does not expose absolute window
-                // positions. AT-SPI only needs this update on X11, where the
-                // outer desktop position is available.
                 let Ok(outer_origin) = window.outer_position() else {
                     return;
                 };
@@ -413,9 +398,6 @@ mod tests {
         assert_eq!(label.value(), Some("Receipts"));
     }
 
-    /// Drawn controls all hang off one layout node, so a bridge that keyed
-    /// AccessKit nodes by layout node id published one node for a whole
-    /// settings list and clicked the wrong row.
     #[test]
     fn drawn_controls_sharing_a_layout_node_become_separate_accesskit_nodes() {
         let elements = vec![

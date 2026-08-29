@@ -1,16 +1,3 @@
-//! Comprehensive robot test for LazyList tab in the full desktop-app
-//!
-//! Tests:
-//! 1. Navigate to Lazy List tab
-//! 2. Scroll list by 1 position and validate
-//! 3. Press "Set usize::MAX" and validate
-//! 4. Press "Jump to Middle" and validate
-//!
-//! Run with:
-//! ```bash
-//! cargo run --package desktop-app --example robot_lazy_tab_test --features robot-app
-//! ```
-
 use std::time::Duration;
 
 use cranpose::AppLauncher;
@@ -29,7 +16,6 @@ fn main() {
             println!("✓ App launched\n");
             std::thread::sleep(Duration::from_millis(500));
 
-            // Helper to find and click button
             let click_button = |name: &str| -> bool {
                 if let Some((x, y, w, h)) = find_button_in_semantics(&robot, name) {
                     println!("  Found button '{}' at ({:.1}, {:.1})", name, x, y);
@@ -46,12 +32,10 @@ fn main() {
                 false
             };
 
-            // Helper to find text and return position
             let find_text = |text: &str| -> Option<(f32, f32, f32, f32)> {
                 find_text_in_semantics(&robot, text)
             };
 
-            // Find all visible items (Item #N pattern)
             let find_visible_items = || -> Vec<usize> {
                 let mut items = Vec::new();
                 for i in 0..30 {
@@ -60,7 +44,6 @@ fn main() {
                         items.push(i);
                     }
                 }
-                // Also check for huge numbers near middle
                 for offset in 0..20 {
                     let mid = usize::MAX / 2;
                     let idx = mid.saturating_sub(10).saturating_add(offset);
@@ -72,28 +55,23 @@ fn main() {
                 items
             };
 
-            // Get count from "Virtualized list with X items" text
             let get_item_count_text = || -> Option<String> {
-                // Search for various patterns - be more specific to find the right text
                 for count in [100usize, 10, 1000] {
                     let text = format!("Virtualized list with {} items", count);
                     if find_text(&text).is_some() {
                         return Some(format!("{} items", count));
                     }
                 }
-                // Check for the huge number (usize::MAX)
                 let huge_text = format!("Virtualized list with {} items", usize::MAX);
                 if find_text(&huge_text).is_some() {
                     return Some(format!("{} items (usize::MAX)", usize::MAX));
                 }
-                // Try partial match with just "Virtualized list"
                 if find_text("Virtualized list").is_some() {
                     return Some("(found 'Virtualized list' text)".to_string());
                 }
                 None
             };
 
-            // === PHASE 0: Navigate to Lazy List tab ===
             println!("=== PHASE 0: Navigate to Lazy List Tab ===");
             if !click_button("Lazy List") {
                 println!("FATAL: Could not find Lazy List tab!");
@@ -102,14 +80,12 @@ fn main() {
             }
             std::thread::sleep(Duration::from_millis(400));
 
-            // Verify we're on the right tab
             if find_text("Lazy List Demo").is_some() {
                 println!("  ✓ Lazy List Demo tab loaded");
             } else {
                 println!("  ✗ Lazy List Demo NOT loaded!");
             }
 
-            // === PHASE 1: Initial state validation ===
             println!("\n=== PHASE 1: Initial State ===");
 
             if let Some(count_text) = get_item_count_text() {
@@ -122,14 +98,11 @@ fn main() {
             println!("  Visible items: {:?}", initial_items);
             println!("  Total visible: {}", initial_items.len());
 
-            // === PHASE 2: Scroll list ===
             println!("\n=== PHASE 2: Scroll List ===");
 
-            // Find the LazyColumn area (below the buttons) and scroll
             if let Some((_, y, _, _)) = find_text("Item #0") {
-                // Do a drag scroll
                 let start_y = y + 100.0;
-                let end_y = y - 100.0; // Scroll up = drag down
+                let end_y = y - 100.0;
                 println!("  Scrolling from y={:.0} to y={:.0}", start_y, end_y);
                 robot.drag(400.0, start_y, 400.0, end_y).ok();
                 std::thread::sleep(Duration::from_millis(300));
@@ -144,14 +117,12 @@ fn main() {
                 println!("  ⚠️ Scroll may not have worked");
             }
 
-            // === PHASE 3: Click "Set usize::MAX" ===
             println!("\n=== PHASE 3: Click 'Set usize::MAX' ===");
 
             if click_button("Set usize::MAX") {
                 println!("  ✓ Clicked 'Set usize::MAX'");
                 std::thread::sleep(Duration::from_millis(500));
 
-                // Verify app didn't crash
                 if find_text("Lazy List Demo").is_some() {
                     println!("  ✓ App still responsive!");
                 } else {
@@ -173,14 +144,12 @@ fn main() {
                 println!("  ✗ 'Set usize::MAX' button not found!");
             }
 
-            // === PHASE 4: Click "Jump to Middle" ===
             println!("\n=== PHASE 4: Click 'Jump to Middle' ===");
 
             if click_button("Jump to Middle") {
                 println!("  ✓ Clicked 'Jump to Middle'");
                 std::thread::sleep(Duration::from_millis(500));
 
-                // Verify app didn't crash
                 if find_text("Lazy List Demo").is_some() {
                     println!("  ✓ App still responsive!");
                 } else {
@@ -196,7 +165,6 @@ fn main() {
                 let middle_items = find_visible_items();
                 println!("  Visible items after jump: {} items", middle_items.len());
 
-                // Check if we're seeing items near the middle
                 let mid = usize::MAX / 2;
                 let mut found_middle = false;
                 for &idx in &middle_items {
@@ -217,7 +185,6 @@ fn main() {
                 println!("  ✗ 'Jump to Middle' button not found!");
             }
 
-            // === SUMMARY ===
             println!("\n=== SUMMARY ===");
             let success = find_text("Lazy List Demo").is_some();
 

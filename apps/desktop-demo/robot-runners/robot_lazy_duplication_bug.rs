@@ -17,7 +17,6 @@ fn main() {
             std::thread::sleep(Duration::from_millis(500));
             let _ = robot.wait_for_idle();
 
-            // Step 1: Navigate to LazyList tab
             println!("\n--- Step 1: Navigate to 'Lazy List' tab ---");
             if let Some((x, y, w, h)) = find_button_in_semantics(&robot, "Lazy List") {
                 robot.click(x + w / 2.0, y + h / 2.0).ok();
@@ -29,7 +28,6 @@ fn main() {
             }
             let _ = robot.wait_for_idle();
 
-            // Step 2: Click "Set usize::MAX" button
             println!("\n--- Step 2: Click 'Set usize::MAX' ---");
             if let Some((x, y, w, h)) = find_button_in_semantics(&robot, "Set usize::MAX") {
                 robot.click(x + w / 2.0, y + h / 2.0).ok();
@@ -40,14 +38,11 @@ fn main() {
                 std::process::exit(1);
             }
 
-            // Wait for update
             let _ = robot.wait_for_idle();
 
-            // Step 3: Verify no duplication of "Visible:" and "Cached:"
             println!("\n--- Step 3: Verify UI indicators ---");
 
             if let Ok(elements) = robot.get_semantics() {
-                // Debug: dump the semantics tree
                 fn dump_tree(tree: &[SemanticElement], indent: usize) {
                     for node in tree {
                         let prefix = "  ".repeat(indent);
@@ -63,7 +58,6 @@ fn main() {
                 dump_tree(&elements, 0);
                 println!("=== END TREE ===\n");
 
-                // Count occurrences
                 let visible_count = count_text_starting_with(&elements, "Visible:");
                 let cached_count = count_text_starting_with(&elements, "Cached:");
 

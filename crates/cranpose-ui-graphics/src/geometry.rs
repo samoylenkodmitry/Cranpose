@@ -670,12 +670,6 @@ pub trait DrawScope {
         blend_mode: BlendMode,
     );
 
-    // ── Stroked outlines ────────────────────────────────────────────────────
-    //
-    // Strokes are *centered* on the geometry: a `width`-wide stroke covers
-    // `width / 2` inside and `width / 2` outside the path, like Skia and
-    // Jetpack Compose. A non-positive or non-finite width draws nothing.
-
     /// Strokes the outline of the whole scope rect.
     fn draw_rect_stroked(&mut self, brush: Brush, stroke: Stroke);
     fn draw_rect_stroked_blend(&mut self, brush: Brush, stroke: Stroke, blend_mode: BlendMode);
@@ -725,8 +719,6 @@ pub trait DrawScope {
         stroke: Stroke,
         blend_mode: BlendMode,
     );
-
-    // ── Arcs ────────────────────────────────────────────────────────────────
 
     /// Strokes a circular arc.
     ///
@@ -865,19 +857,6 @@ pub trait DrawScope {
         }
     }
 
-    // ── Text ────────────────────────────────────────────────────────────────
-    //
-    // Text is the one primitive a draw scope cannot resolve on its own: it
-    // needs fonts, which live above this crate. Measurement is therefore
-    // delegated to whatever the UI layer installed on the scope, and the same
-    // measurement decides where `draw_text*` puts the glyphs — so a caller that
-    // centers text from `measure_text` and the renderer that rasterizes it are
-    // reading the same numbers.
-    //
-    // There is deliberately no `_blend` variant: the text draw path has no
-    // blend-mode channel (glyphs are composited `SrcOver` against the atlas
-    // coverage mask), so a blended overload could only lie about what it does.
-
     /// The block size, line height and first baseline `text` would occupy in
     /// `style`.
     ///
@@ -985,12 +964,6 @@ impl TapeRef {
         (self.0 & Self::INDEX_MASK) as usize
     }
 
-    /// The packed word itself. Because per-store indices appear on the tape
-    /// in strictly increasing order (see [`CommandRecording::tape`]), `d`
-    /// consecutive tape entries are one kind's run exactly when
-    /// `tape[p + d].raw() == tape[p].raw() + d` — same kind bits, index
-    /// advanced by every step. Span verification decomposes tape ranges into
-    /// per-kind contiguous store runs on this single comparison.
     pub(crate) fn raw(self) -> u32 {
         self.0
     }
@@ -1038,10 +1011,6 @@ pub struct SolidArcRecord {
 /// gradients, images, text, blends, and content markers whole).
 #[derive(Clone, Debug, Default)]
 pub struct CommandRecording {
-    /// INVARIANT: per-store indices appear on the tape in strictly
-    /// increasing order (0, 1, 2, ... per kind) — recording appends only.
-    /// Sequential consumers (`finish`'s `others.drain(..)`) rely on it;
-    /// random-access consumers use the index directly.
     pub(crate) tape: Vec<TapeRef>,
     pub(crate) rects: Vec<SolidRectRecord>,
     pub(crate) round_rects: Vec<SolidRoundRectRecord>,
@@ -1105,9 +1074,6 @@ impl CommandRecording {
         self.tape.is_empty()
     }
 
-    /// Test support: the identity of the tape's allocation, so buffer-reuse
-    /// tests can assert that re-recording ping-pongs between the same two
-    /// allocations instead of growing fresh ones every frame.
     #[doc(hidden)]
     pub fn tape_ptr(&self) -> *const u8 {
         self.tape.as_ptr() as *const u8
@@ -1121,11 +1087,6 @@ impl CommandRecording {
         self.others.clear();
     }
 
-    /// A buffer-reusing deep copy: `clone_from` on every store, so
-    /// refreshing a long-lived recording (the replay snapshot, twice per
-    /// convergence cycle on a heavy scene's ~17k-record tape) truncates and
-    /// copies into the existing allocations instead of cloning five fresh
-    /// buffers. Semantically identical to `*self = source.clone()`.
     pub(crate) fn clone_records_from(&mut self, source: &Self) {
         self.tape.clone_from(&source.tape);
         self.rects.clone_from(&source.rects);
@@ -1152,19 +1113,9 @@ pub struct FinishedRecording {
 #[derive(Default)]
 pub struct DrawScopeDefault {
     size: Size,
-    /// The compact recording every draw call writes into; materialized into
-    /// `out` once, when the scope finishes.
     rec: CommandRecording,
-    /// Materialization target, owned by the consumer across frames (see
-    /// [`Self::with_recording`]); untouched until [`Self::finish`].
     out: Vec<DrawPrimitive>,
-    /// How many [`DrawPrimitive::Content`] markers this scope has recorded.
-    /// Consumers splitting a command around its content would otherwise have
-    /// to re-scan thousands of just-recorded primitives to learn "none".
     content_markers: u32,
-    /// `None` falls back to [`estimate_text_measurement`]. Every scope the
-    /// framework builds carries the app's real measurer; a hand-built one
-    /// (tests, tooling) does not have to.
     text_measurer: Option<Rc<dyn DrawTextMeasurer>>,
 }
 
@@ -1292,8 +1243,6 @@ impl DrawScopeDefault {
     /// arc bands, tight bounds, and the degeneracy drop happen, so the
     /// output is exactly what recording used to produce directly.
     pub fn finish(mut self) -> FinishedRecording {
-        // Composition diagnostic for retention work: how much of a heavy
-        // command is typed records vs ordinary primitives.
         if std::env::var_os("CRANPOSE_RECORD_MIX_DIAG").is_some() && self.rec.tape.len() > 400 {
             eprintln!(
                 "[record-mix] tape={} rects={} round_rects={} arcs={} others={}",
@@ -1309,9 +1258,6 @@ impl DrawScopeDefault {
         out.reserve(self.rec.tape.len());
         let mut dropped: Vec<u32> = Vec::new();
         {
-            // `others` moves out via drain; the increasing-index invariant
-            // on the tape makes tape order equal drain order. Copy stores
-            // are addressed directly by the entry's index.
             let mut others = self.rec.others.drain(..);
             for (tape_index, entry) in self.rec.tape.iter().enumerate() {
                 match entry.kind() {
@@ -1404,18 +1350,11 @@ impl DrawScopeDefault {
         let mut spans: Vec<FrameSpan> = Vec::with_capacity(replay_spans.len());
         let mut any_retained = false;
         {
-            // `others` moves out via drain (tape order equals drain order by
-            // the increasing-index invariant); Copy stores are addressed
-            // directly by each entry's index, so a bypassed span costs
-            // nothing to step past.
             let mut others = self.rec.others.drain(..);
             let tape = &self.rec.tape;
             let rects = &self.rec.rects;
             let round_rects = &self.rec.round_rects;
             let arcs = &self.rec.arcs;
-            // Materializes one contiguous tape range into `out`. Kept as a
-            // macro so `out`, `dropped`, and the `others` cursor stay plain
-            // locals the borrow checker can split by field.
             macro_rules! materialize_range {
                 ($start:expr, $end:expr) => {{
                     let prim_start = out.len() as u32;
@@ -1476,18 +1415,10 @@ impl DrawScopeDefault {
                         recolors,
                         bounds,
                     } => {
-                        // A retained span holds solid arcs and circles by
-                        // construction; anything else in its range means
-                        // the ordinary path must draw it.
                         let compact = tape[tape_start..tape_end]
                             .iter()
                             .all(|entry| entry.kind() != RecordKind::Other);
                         if compact && !capture && bypass(slot) {
-                            // The bypass: the records are never materialized
-                            // — direct indexing leaves nothing to advance.
-                            // Capture guaranteed each record one clean
-                            // shape, so no drop tracking is needed on the
-                            // way past.
                             any_retained = true;
                             let position = out.len() as u32;
                             spans.push(FrameSpan::Retained {
@@ -1523,16 +1454,7 @@ impl DrawScopeDefault {
                 }
             }
         }
-        // Deliberately NOT cleared: the typed stores must survive until the
-        // renderer has drawn this frame, so a bypassed span that cannot be
-        // drawn retained (context drift, op cap) can still be materialized
-        // on demand from the recording — which the consumer publishes and
-        // pins to the frame as its owned `fallback`. The next recording's
-        // scope clears the buffers on construction anyway.
         note_recorded_primitive_count(self.size, tape_len);
-        // `fallback` is attached by the consumer once the recording is
-        // published under its shared handle — the recording is still owned
-        // by value here.
         let frame = any_retained.then_some(CommandReplayFrame {
             center,
             spans,
@@ -1598,12 +1520,6 @@ impl DrawScopeDefault {
         }
     }
 
-    /// Shared lowering for [`DrawScope::draw_arc`] and
-    /// [`DrawScope::draw_annular_sector`].
-    ///
-    /// Resolves the band, computes the *tight* bounding box (caps included) and
-    /// drops degenerate geometry on the floor instead of emitting NaN-bearing
-    /// primitives the renderers would have to defend against.
     #[allow(clippy::too_many_arguments)]
     fn push_arc(
         &mut self,
@@ -1616,9 +1532,6 @@ impl DrawScopeDefault {
         inner_radius: f32,
         blend_mode: BlendMode,
     ) {
-        // The common case records raw parameters only; band resolution,
-        // tight bounds, and the degeneracy drop run at materialization
-        // (see [`materialize_solid_arc`]), producing identical output.
         if blend_mode == BlendMode::SrcOver
             && let Brush::Solid(color) = brush
         {
@@ -2124,12 +2037,7 @@ impl DrawScope for DrawScopeDefault {
     }
 
     fn draw_vector_path(&mut self, path: &crate::VectorPath, brush: Brush) {
-        /// Rasterization supersampling factor relative to scope units.
-        /// Combined with the rasterizer's own sub-scanline anti-aliasing
-        /// and linear image sampling, this keeps icon edges crisp on
-        /// high-density screens.
         const SUPERSAMPLE: f32 = 2.0;
-        /// Safety cap for the rasterized mask dimensions.
         const MAX_MASK_PIXELS: f32 = 4096.0;
 
         if path.is_empty() {
@@ -2153,8 +2061,6 @@ impl DrawScope for DrawScopeDefault {
             return;
         }
 
-        // Rasterize a padded, integer-aligned bounding box so anti-aliased
-        // edges are never clipped by the mask border.
         let origin = Point::new(bounds.x.floor() - 1.0, bounds.y.floor() - 1.0);
         let rect_width = (bounds.x + bounds.width).ceil() - origin.x + 1.0;
         let rect_height = (bounds.y + bounds.height).ceil() - origin.y + 1.0;
@@ -2223,8 +2129,6 @@ impl DrawScope for DrawScopeDefault {
     }
 
     fn draw_text_at(&mut self, rect: Rect, brush: Brush, text: &str, style: &TextStyle) {
-        // An empty run has no glyphs and a zero-area box, which every renderer
-        // would drop anyway — stop here so it never reaches the scene.
         if text.is_empty() {
             return;
         }
@@ -2273,10 +2177,6 @@ mod tests {
     use super::*;
     use crate::{Color, FontStyle, FontWeight, ImageBitmap, RenderEffect};
 
-    /// The compact recorder routes solid `SrcOver` shapes through typed
-    /// records and everything else through ordinary primitives; the tape
-    /// must reassemble the exact sequence recording used to produce
-    /// directly, arc lowering and degeneracy drops included.
     #[test]
     fn compact_recording_materializes_in_recorded_order() {
         let size = Size::new(100.0, 100.0);
@@ -2299,13 +2199,12 @@ mod tests {
             },
         ];
 
-        // Interleave every routing path.
         let record = |scope: &mut DrawScopeDefault| {
             scope.draw_rect_at(rect, solid.clone());
             scope.draw_arc(solid.clone(), center, 30.0, 0.5, 1.5, stroke);
             scope.draw_rect_at(rect, gradient.clone());
             scope.draw_circle(solid.clone(), center, 12.0);
-            scope.draw_arc(solid.clone(), center, 30.0, 0.5, 0.0, stroke); // degenerate: dropped
+            scope.draw_arc(solid.clone(), center, 30.0, 0.5, 0.0, stroke);
             scope.draw_rect_at_blend(rect, solid.clone(), BlendMode::Plus);
             scope.draw_content();
             scope.draw_annular_sector(gradient.clone(), center, 10.0, 20.0, 0.0, 2.0);
@@ -2316,9 +2215,6 @@ mod tests {
         record(&mut compact);
         let finished = compact.finish();
 
-        // The expected sequence, built through the primitives the ordinary
-        // lowering produces (the non-solid arc still takes that path, so it
-        // serves as its own reference for the solid one's geometry).
         let arc_via_ordinary = |brush: Brush, radius: f32, start: f32, sweep: f32| {
             let mut scope = DrawScopeDefault::new(size);
             scope.draw_arc(brush, center, radius, start, sweep, stroke);
@@ -2372,8 +2268,6 @@ mod tests {
         assert_eq!(finished.content_markers, 2);
     }
 
-    /// A recording that reuses another command's buffers (junk capacity in
-    /// every store) must be byte-identical to one recorded fresh.
     #[test]
     fn reused_recording_buffers_record_identically_to_fresh() {
         let size = Size::new(64.0, 64.0);
@@ -2393,7 +2287,6 @@ mod tests {
         record(&mut fresh);
         let fresh = fresh.finish();
 
-        // Dirty the buffers with an unrelated recording first.
         let mut dirty = DrawScopeDefault::new(size);
         dirty.draw_rect(Brush::solid(Color::BLACK));
         dirty.draw_content();
@@ -2469,14 +2362,10 @@ mod tests {
             panic!("expected image primitive, got {:?}", primitives[0]);
         };
 
-        // Padded, integer-aligned bounds: (3,3) to (21,21).
         assert_eq!((rect.x, rect.y), (3.0, 3.0));
         assert_eq!((rect.width, rect.height), (18.0, 18.0));
-        // Rasterized at 2x supersampling.
         assert_eq!((image.width(), image.height()), (36, 36));
 
-        // Probe the pixel at path point (12, 12): mask position
-        // ((12 - 3) * 2, (12 - 3) * 2) = (18, 18) — fully covered red.
         let pixels = image.pixels();
         let index = (18 * 36 + 18) * 4;
         assert_eq!(
@@ -2484,7 +2373,6 @@ mod tests {
             &[255, 0, 0, 255],
             "path interior must be opaque brush color"
         );
-        // A corner outside the square must be transparent.
         assert_eq!(pixels[3], 0, "outside the path must stay transparent");
     }
 
@@ -2506,7 +2394,6 @@ mod tests {
             panic!("expected image primitive");
         };
         let pixels = image.pixels();
-        // Center of the mask: interior pixel with half-alpha blue.
         let width = image.width() as usize;
         let index = ((image.height() as usize / 2) * width + width / 2) * 4;
         assert_eq!(&pixels[index..index + 3], &[0, 0, 255]);
@@ -2565,10 +2452,6 @@ mod tests {
         ));
     }
 
-    /// The retained-recording path exists so a command that re-records every
-    /// frame keeps the buffers it already grew. Handing storage in and getting
-    /// it back has to record exactly what a fresh scope would, and the count of
-    /// content markers has to come back without re-scanning the primitives.
     #[test]
     fn a_reused_recording_buffer_records_what_a_fresh_one_would() {
         let size = Size::new(16.0, 16.0);
@@ -2586,8 +2469,6 @@ mod tests {
         assert_eq!(fresh.content_marker_count(), 2);
         let expected = fresh.finish();
 
-        // Storage the caller already owns, carrying capacity from an earlier
-        // frame. What comes out has to be the same recording.
         let storage = Vec::with_capacity(64);
         let mut reused = DrawScopeDefault::with_text_measurer_reusing(size, measurer, storage);
         draw(&mut reused);
@@ -2599,9 +2480,6 @@ mod tests {
         assert_eq!(reused.dropped, expected.dropped);
     }
 
-    /// A frame that is about to serve a previous frame's primitives should not
-    /// pay to build this frame's. Finishing recording-only returns the buffers
-    /// cleared, and the marker count, without materializing anything.
     #[test]
     fn finishing_recording_only_materializes_nothing_but_still_reports_markers() {
         let mut scope = DrawScopeDefault::new(Size::new(8.0, 8.0));
@@ -2623,9 +2501,6 @@ mod tests {
         );
     }
 
-    /// Where a block of text lands inside the rect it was given. Split out of
-    /// the draw so the rule is stated once; a wrong vertical rule is what makes
-    /// baseline-aligned text sit a line too low.
     #[test]
     fn a_text_block_is_placed_by_its_alignment_inside_the_rect() {
         let rect = Rect {
@@ -2667,8 +2542,6 @@ mod tests {
         );
         assert_eq!(right, Point::new(50.0, 44.0));
 
-        // Baseline alignment places the baseline on the rect's top edge, which
-        // is what lets a caller line text up with something else.
         let baseline = align_text_block(
             rect,
             measurement,
@@ -2984,16 +2857,10 @@ mod tests {
         assert_eq!(LayerShape::default(), LayerShape::Rectangle);
     }
 
-    // ── Stroke / arc lowering ───────────────────────────────────────────────
-
     use std::f32::consts::{FRAC_PI_2, PI};
 
     use crate::{StrokeCap, StrokeJoin};
 
-    /// Arc bounds are conservative-approximate (fast endpoint trig plus a
-    /// containment pad, see `stroke.rs`); geometry tests compare within that
-    /// documented slack. The strict containment guard lives in the stroke
-    /// module's property test.
     fn approx(a: f32, b: f32) -> bool {
         (a - b).abs() < 0.25
     }
@@ -3018,8 +2885,6 @@ mod tests {
                 stroke: Some(stroke),
                 ..
             } => {
-                // The stored rect stays the *geometric* rect; the renderer
-                // inflates it by half the stroke width when it builds the quad.
                 assert_eq!(*rect, Rect::from_size(Size::new(20.0, 20.0)));
                 assert_eq!(stroke.width, 3.0);
                 assert_eq!(stroke.join, StrokeJoin::Bevel);
@@ -3107,8 +2972,6 @@ mod tests {
 
     #[test]
     fn draw_circle_stroked_lowers_to_stroked_round_rect() {
-        // A stroked circle must reuse the round-rect path so it shares the
-        // shape pipeline (and therefore the batch) with every other shape.
         let mut scope = scope(40.0);
         scope.draw_circle_stroked(
             Brush::solid(Color::BLUE),
@@ -3169,8 +3032,6 @@ mod tests {
                 assert!(approx(*sweep_angle, FRAC_PI_2));
                 assert_eq!(stroke.width, 10.0);
                 assert_eq!(*inner_radius, 0.0);
-                // Band is 45..55; a 0..90 degree sweep with butt caps spans
-                // x = 100..155 and y = 100..155.
                 assert!(approx(rect.x, 100.0), "{rect:?}");
                 assert!(approx(rect.y, 100.0), "{rect:?}");
                 assert!(approx(rect.width, 55.0), "{rect:?}");
@@ -3183,8 +3044,6 @@ mod tests {
     #[test]
     fn draw_arc_bounds_cover_a_quadrant_spanning_sweep() {
         let mut scope = scope(200.0);
-        // 0 -> 270 degrees: the bounds must be the full outer circle, not the
-        // chord between the two endpoints.
         scope.draw_arc(
             Brush::solid(Color::RED),
             Point::new(100.0, 100.0),
@@ -3228,7 +3087,6 @@ mod tests {
                 assert_eq!(*radius, 50.0);
                 assert_eq!(*inner_radius, 30.0);
                 assert!(approx(*sweep_angle, PI));
-                // 0 -> 180 degrees: x spans -50..+50, y spans 0..+50.
                 assert!(approx(rect.x, 50.0), "{rect:?}");
                 assert!(approx(rect.y, 100.0), "{rect:?}");
                 assert!(approx(rect.width, 100.0), "{rect:?}");
@@ -3345,7 +3203,6 @@ mod tests {
         let DrawPrimitive::Arc { rect: negative, .. } = &primitives[0] else {
             panic!("expected arc");
         };
-        // 0 -> 90 degrees clockwise, band 38..42.
         assert!(approx(negative.x, 100.0), "{negative:?}");
         assert!(approx(negative.y, 100.0), "{negative:?}");
         assert!(approx(negative.width, 42.0), "{negative:?}");
@@ -3353,7 +3210,6 @@ mod tests {
         let DrawPrimitive::Arc { rect: full, .. } = &primitives[1] else {
             panic!("expected arc");
         };
-        // Anything past a full turn is a closed ring: the whole outer circle.
         assert!(approx(full.x, 58.0), "{full:?}");
         assert!(approx(full.width, 84.0), "{full:?}");
         assert!(approx(full.height, 84.0), "{full:?}");
@@ -3365,14 +3221,12 @@ mod tests {
         let brush = Brush::solid(Color::RED);
         let center = Point::new(25.0, 25.0);
 
-        // Zero / negative / non-finite stroke widths.
         scope.draw_rect_stroked(brush.clone(), Stroke::new(0.0));
         scope.draw_rect_stroked(brush.clone(), Stroke::new(-4.0));
         scope.draw_rect_stroked(brush.clone(), Stroke::new(f32::NAN));
         scope.draw_round_rect_stroked(brush.clone(), CornerRadii::uniform(2.0), Stroke::new(0.0));
         scope.draw_circle_stroked(brush.clone(), center, 10.0, Stroke::new(0.0));
         scope.draw_circle_stroked(brush.clone(), center, f32::NAN, Stroke::new(2.0));
-        // Zero and non-finite sweeps.
         scope.draw_arc(brush.clone(), center, 10.0, 0.0, 0.0, Stroke::new(2.0));
         scope.draw_arc(brush.clone(), center, 10.0, 0.0, f32::NAN, Stroke::new(2.0));
         scope.draw_arc(
@@ -3383,10 +3237,8 @@ mod tests {
             1.0,
             Stroke::new(2.0),
         );
-        // Zero-width arc stroke and zero radius with zero width.
         scope.draw_arc(brush.clone(), center, 10.0, 0.0, 1.0, Stroke::new(0.0));
         scope.draw_arc(brush.clone(), center, 0.0, 0.0, 1.0, Stroke::new(0.0));
-        // Annular sectors with an empty band.
         scope.draw_annular_sector(brush.clone(), center, 10.0, 10.0, 0.0, 1.0);
         scope.draw_annular_sector(brush.clone(), center, 20.0, 10.0, 0.0, 1.0);
         scope.draw_annular_sector(brush.clone(), center, 0.0, 0.0, 0.0, 1.0);
@@ -3401,8 +3253,6 @@ mod tests {
 
     #[test]
     fn zero_radius_arc_with_positive_width_stays_finite() {
-        // radius 0 with a fat stroke is a filled wedge of radius width/2 —
-        // legal, and it must not produce NaN bounds.
         let mut scope = scope(50.0);
         scope.draw_arc(
             Brush::solid(Color::RED),
@@ -3423,10 +3273,6 @@ mod tests {
         assert!(rect.width > 0.0 && rect.height > 0.0, "{rect:?}");
     }
 
-    // ── Text ────────────────────────────────────────────────────────────────
-
-    /// Measures every character as a fixed box, so a test can predict the block
-    /// a draw is supposed to occupy without depending on a font.
     struct FixedAdvanceTextMeasurer {
         advance: f32,
         line_height: f32,
@@ -3513,7 +3359,6 @@ mod tests {
             width: 200.0,
             height: 80.0,
         };
-        // "AB" measures 20x20 with the fixed-advance measurer.
         let cases = [
             (TextAlign::Left, TextVerticalAlign::Top, 100.0, 50.0),
             (TextAlign::Center, TextVerticalAlign::Center, 190.0, 80.0),
@@ -3554,7 +3399,6 @@ mod tests {
         );
         let primitives = scope.into_primitives();
         let text = unwrap_text(&primitives[0]);
-        // The box edge is the baseline, so the block starts one ascent above it.
         assert!(
             approx(text.rect.y, 100.0 - measured.first_baseline),
             "{:?}",
@@ -3581,7 +3425,6 @@ mod tests {
     #[test]
     fn draw_text_from_ignores_alignment_and_anchors_the_top_left() {
         let (mut scope, _) = text_scope(Size::new(400.0, 400.0));
-        // Alignment would move the block if the anchor form honored it.
         let style = TextStyle::new(16.0)
             .with_align(TextAlign::Center)
             .with_vertical_align(TextVerticalAlign::Bottom);
@@ -3739,10 +3582,6 @@ mod tests {
                 "byte {byte} moved"
             );
             if byte < 255 {
-                // Anything above a byte and below the next composites at the
-                // byte below it, however close to the next it sits. Rounding
-                // would take the top of that range up, and HWUI's `(int)` does
-                // not.
                 let nearly_next = (byte as f32 + 0.999) / 255.0;
                 assert!(
                     (GraphicsLayer::composite_alpha_8bit(nearly_next) - exact).abs() < 1e-6,

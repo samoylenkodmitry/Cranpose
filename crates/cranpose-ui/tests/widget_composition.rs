@@ -1,12 +1,3 @@
-//! Every widget `cranpose-ui` exports, composed once.
-//!
-//! The layout and paint behaviour of these widgets is pinned down by the robot
-//! suite against a real window. What that suite cannot reach is the widgets
-//! nothing in the demo happens to use: a composable that reads a composition
-//! local nobody provided, or remembers under a key it shares with its own
-//! slot, fails the first time somebody composes it — and until somebody does,
-//! it is a component the library claims to have.
-
 use std::{cell::Cell, rc::Rc};
 
 use cranpose_foundation::{
@@ -27,12 +18,8 @@ use cranpose_ui::{
     },
 };
 
-/// One 24pt square, as a vector path an icon can parse.
 const ICON: &str = "M0 0 L24 0 L24 24 L0 24 Z";
 
-/// Composes `content` and measures it, because a widget built on subcompose
-/// only reaches its content during measurement: composing alone would report
-/// success for a widget whose body never runs.
 fn composed(content: impl FnMut() + 'static) {
     let mut composition = run_test_composition(content);
     let root = composition
@@ -50,8 +37,6 @@ fn composed(content: impl FnMut() + 'static) {
     measured.expect("the tree measures");
 }
 
-/// Composes `content` inside a popup host, which is where a dialog or a popup
-/// puts its layer. Without one there is nothing for them to compose into.
 fn composed_in_popup_host(content: impl Fn() + 'static) {
     let content = std::rc::Rc::new(content);
     composed(move || {
@@ -341,14 +326,6 @@ fn a_horizontal_scrollbar_composes_against_a_scroll_state() {
         );
     });
 }
-
-// The tests below close the gap PLAN.md described: every widget below composed
-// only through a unit test beside its own module, the robot suite, or not at
-// all. `Canvas`, `BoxWithConstraints`, `Scrollbar` (the base, orientation-generic
-// entry point) and `Layout`/`SubcomposeLayout` are not repeated here — they are
-// already composed for real by the widgets above and below them (the scrollbars,
-// the progress indicators, `SwipeToDismiss`, `LazyColumn`/`LazyRow`), which call
-// straight into them with no indirection left untested.
 
 #[test]
 fn an_icon_composes_from_a_path_size_and_colour() {

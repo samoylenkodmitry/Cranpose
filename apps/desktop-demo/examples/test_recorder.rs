@@ -1,13 +1,3 @@
-//! Simple test app to verify recorder functionality
-//!
-//! Runs the app with recording enabled, records interactions, and then
-//! verifies the generated robot test file.
-//!
-//! Run with:
-//! ```bash
-//! cargo run --package desktop-app --example test_recorder
-//! ```
-
 use std::path::PathBuf;
 
 use cranpose::AppLauncher;

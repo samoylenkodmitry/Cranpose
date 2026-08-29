@@ -48,7 +48,6 @@ pub fn scroll_delta_to_reveal(caret: Rect, viewport: Rect, ime_bottom: f32) -> f
     let ime_bottom = ime_bottom.max(0.0);
     let visible_top = viewport.y;
     let visible_bottom = viewport.y + viewport.height - ime_bottom;
-    // Keyboard (or a degenerate viewport) leaves nothing usable: don't fight it.
     if visible_bottom <= visible_top {
         return 0.0;
     }
@@ -56,19 +55,12 @@ pub fn scroll_delta_to_reveal(caret: Rect, viewport: Rect, ime_bottom: f32) -> f
     let caret_top = caret.y;
     let caret_bottom = caret.y + caret.height.max(0.0);
 
-    // Hidden below the fold (behind the keyboard or past the viewport bottom):
-    // scroll just enough to reveal the caret bottom plus a margin, but never so
-    // far that the caret top is pushed above the visible top.
     if caret_bottom + BRING_INTO_VIEW_MARGIN > visible_bottom {
         let needed = caret_bottom + BRING_INTO_VIEW_MARGIN - visible_bottom;
-        // Never scroll so far that the caret top is pushed above the visible
-        // top (matters only when the caret is taller than the usable region).
         let max_delta = (caret_top - visible_top).max(0.0);
         return needed.min(max_delta);
     }
 
-    // Hidden above the top of the viewport: scroll back so the caret top clears
-    // the top edge by a margin.
     if caret_top - BRING_INTO_VIEW_MARGIN < visible_top {
         return caret_top - BRING_INTO_VIEW_MARGIN - visible_top;
     }
@@ -206,12 +198,9 @@ mod tests {
 
     #[test]
     fn caret_behind_keyboard_scrolls_content_up() {
-        // Viewport 0..1000, keyboard covers bottom 400 → usable 0..600.
         let viewport = rect(0.0, 1000.0);
-        // Caret at y=700..720 is behind the keyboard.
         let caret = rect(700.0, 20.0);
         let delta = scroll_delta_to_reveal(caret, viewport, 400.0);
-        // Must move content up so the caret bottom (720) + margin clears 600.
         assert!(
             delta > 0.0,
             "expected a positive (content-up) delta, got {delta}"
@@ -220,7 +209,6 @@ mod tests {
             (delta - (720.0 + BRING_INTO_VIEW_MARGIN - 600.0)).abs() < 0.01,
             "delta {delta} should reveal the caret bottom plus a margin"
         );
-        // After applying the delta the caret bottom sits at/above the fold.
         let revealed_bottom = caret.y + caret.height - delta;
         assert!(revealed_bottom <= 600.0 - BRING_INTO_VIEW_MARGIN + 0.01);
     }
@@ -228,8 +216,6 @@ mod tests {
     #[test]
     fn caret_just_below_fold_uses_margin() {
         let viewport = rect(0.0, 1000.0);
-        // Usable region 0..600; caret bottom exactly at 600 still needs a nudge
-        // for the margin.
         let caret = rect(580.0, 20.0);
         let delta = scroll_delta_to_reveal(caret, viewport, 400.0);
         assert!((delta - BRING_INTO_VIEW_MARGIN).abs() < 0.01, "got {delta}");
@@ -237,7 +223,6 @@ mod tests {
 
     #[test]
     fn caret_above_viewport_top_scrolls_content_down() {
-        // Container starts at y=200 (below a header); caret sits above it.
         let viewport = rect(200.0, 800.0);
         let caret = rect(150.0, 20.0);
         let delta = scroll_delta_to_reveal(caret, viewport, 0.0);
@@ -253,7 +238,6 @@ mod tests {
 
     #[test]
     fn no_usable_space_does_not_scroll() {
-        // Keyboard taller than the viewport: refuse rather than scroll wildly.
         let viewport = rect(0.0, 300.0);
         let caret = rect(280.0, 20.0);
         assert_eq!(scroll_delta_to_reveal(caret, viewport, 400.0), 0.0);

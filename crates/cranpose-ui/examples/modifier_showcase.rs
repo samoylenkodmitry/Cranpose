@@ -1,19 +1,11 @@
-/// Comprehensive showcase of the modifier system demonstrating:
-/// - Complex modifier chains with proper ordering
-/// - Padding, offset, size, and custom modifiers
-/// - Dynamic modifier updates during recomposition
-/// - Performance with large modifier chains
-/// - Real-world UI patterns (cards, lists, buttons)
 use cranpose_core::{Composition, MemoryApplier, location_key};
 use cranpose_ui::{
     Box as ComposeBox, BoxSpec, Column, ColumnSpec, Modifier, Row, RowSpec, Size, Text, TextStyle,
     composable,
 };
 
-/// Demonstrates a typical card UI pattern with complex modifier stacking
 #[composable]
 fn card(title: &'static str, content: &'static str) {
-    // Card container with padding and size constraints
     ComposeBox(
         Modifier::empty()
             .padding(16.0)
@@ -28,14 +20,12 @@ fn card(title: &'static str, content: &'static str) {
                 Modifier::empty().padding(8.0),
                 ColumnSpec::default(),
                 move || {
-                    // Title with bottom padding
                     Text(
                         title,
                         Modifier::empty().padding_each(0.0, 0.0, 0.0, 12.0),
                         TextStyle::default(),
                     );
 
-                    // Content with padding
                     Text(
                         content,
                         Modifier::empty().padding(4.0),
@@ -47,7 +37,6 @@ fn card(title: &'static str, content: &'static str) {
     );
 }
 
-/// Demonstrates dynamic modifiers that change during recomposition
 #[composable]
 fn animated_box(frame: i32) {
     let x = (frame as f32 * 10.0) % 200.0;
@@ -68,7 +57,6 @@ fn animated_box(frame: i32) {
     );
 }
 
-/// Demonstrates a complex list with many items and modifiers
 #[composable]
 fn long_list(item_count: usize) {
     Column(
@@ -112,7 +100,6 @@ fn long_list(item_count: usize) {
     );
 }
 
-/// Demonstrates modifier reordering and updates
 #[composable]
 fn reorderable_modifiers(use_large_padding: bool) {
     let padding = if use_large_padding { 32.0 } else { 8.0 };
@@ -132,7 +119,6 @@ fn reorderable_modifiers(use_large_padding: bool) {
     );
 }
 
-/// Main showcase demonstrating all features
 #[composable]
 fn showcase() {
     Column(Modifier::empty(), ColumnSpec::default(), || {
@@ -146,7 +132,6 @@ fn showcase() {
             "This demonstrates a typical card UI with nested padding and size constraints.",
         );
 
-        // Section 2: Dynamic modifiers
         Text(
             "=== Dynamic Modifiers ===",
             Modifier::empty()
@@ -154,9 +139,8 @@ fn showcase() {
                 .padding_each(0.0, 0.0, 0.0, 16.0),
             TextStyle::default(),
         );
-        animated_box(5); // Frame 5
+        animated_box(5);
 
-        // Section 3: Performance test with list
         Text(
             "=== Performance: 50 Items ===",
             Modifier::empty()
@@ -166,7 +150,6 @@ fn showcase() {
         );
         long_list(50);
 
-        // Section 4: Reorderable modifiers
         Text(
             "=== Modifier Reordering ===",
             Modifier::empty()
@@ -174,7 +157,7 @@ fn showcase() {
                 .padding_each(0.0, 0.0, 0.0, 16.0),
             TextStyle::default(),
         );
-        reorderable_modifiers(true); // Large padding
+        reorderable_modifiers(true);
     });
 }
 
@@ -184,7 +167,6 @@ fn main() {
 
     let mut composition = Composition::new(MemoryApplier::new());
 
-    // Initial render
     println!("📊 Rendering initial composition...");
     let start = std::time::Instant::now();
     composition
@@ -193,7 +175,6 @@ fn main() {
     let initial_duration = start.elapsed();
     println!("✅ Initial render: {:?}\n", initial_duration);
 
-    // Count nodes
     if let Some(root) = composition.root() {
         let mut applier = composition.applier_mut();
         let node_count = count_nodes(&mut applier, root, 0);
@@ -201,16 +182,14 @@ fn main() {
         println!("🎯 Demonstrates: Complex nesting, dynamic modifiers, performance\n");
     }
 
-    // Test recomposition with modifier changes
     println!("🔄 Testing recomposition with modifier changes...");
     let recomp_start = std::time::Instant::now();
     composition
         .render(location_key(file!(), line!(), column!()), || {
-            // Same structure but with different modifier values
             Column(Modifier::empty(), ColumnSpec::default(), || {
                 Text("Updated!", Modifier::empty(), TextStyle::default());
-                animated_box(10); // Different frame
-                reorderable_modifiers(false); // Different padding
+                animated_box(10);
+                reorderable_modifiers(false);
             });
         })
         .unwrap();
@@ -221,7 +200,6 @@ fn main() {
         initial_duration.as_secs_f64() / recomp_duration.as_secs_f64()
     );
 
-    // Performance stress test
     println!("💪 Performance stress test: 1000 items...");
     let stress_start = std::time::Instant::now();
     composition
@@ -237,9 +215,8 @@ fn main() {
     println!("All modifier system features working correctly.");
 }
 
-/// Helper to recursively count all nodes in the tree
 fn count_nodes(applier: &mut MemoryApplier, node_id: usize, _depth: usize) -> usize {
-    let mut count = 1; // This node
+    let mut count = 1;
 
     if let Ok(children) = applier.with_node(node_id, |node: &mut cranpose_ui::LayoutNode| {
         node.children.clone()

@@ -1,5 +1,3 @@
-//! Grouped-inset surfaces: cards, list sections and rows (the Settings look).
-
 use std::{cell::RefCell, rc::Rc};
 
 use cranpose_animation::animateColorAsState;
@@ -94,9 +92,6 @@ pub fn LiquidListSection(
             );
         }
         let content = Rc::clone(&content);
-        // Rows STACK: the card itself is a Box, so the section provides the
-        // Column (composing rows straight into the card overprinted them all
-        // at the card's origin).
         LiquidCard(Modifier::empty().fill_max_width(), move || {
             let content = Rc::clone(&content);
             Column(

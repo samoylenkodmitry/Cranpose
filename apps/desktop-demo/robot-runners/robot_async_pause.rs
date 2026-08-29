@@ -1,11 +1,3 @@
-//! Robot test for Async Runtime pause button clicks.
-//!
-//! This reproduces a bug where button clicks stop working after switching tabs.
-//! The test:
-//! 1. Switches to Async Runtime tab
-//! 2. Clicks the "Pause Animation" button
-//! 3. Verifies the button text changed to "Resume Animation"
-
 use std::time::Duration;
 
 use cranpose::AppLauncher;
@@ -24,7 +16,6 @@ fn main() {
         .with_size(800, 600)
         .with_headless(true)
         .with_test_driver(|robot| {
-            // Timeout after a full robot run budget.
             std::thread::spawn(|| {
                 std::thread::sleep(Duration::from_secs(TEST_TIMEOUT_SECS));
                 println!("✗ Test TIMEOUT after {} seconds", TEST_TIMEOUT_SECS);
@@ -35,7 +26,6 @@ fn main() {
             std::thread::sleep(Duration::from_millis(500));
             let _ = robot.wait_for_idle();
 
-            // 1. Switch to Async Runtime tab
             println!("\n--- Step 1: Switch to Async Runtime Tab ---");
 
             let semantics = robot.get_semantics().unwrap();
@@ -51,14 +41,12 @@ fn main() {
                 let _ = robot.mouse_up();
                 println!("✓ Clicked Async Runtime tab");
 
-                // Wait for tab switch and animation to start
                 std::thread::sleep(Duration::from_millis(500));
             } else {
                 println!("✗ Failed to find Async Runtime tab");
                 let _ = robot.exit();
             }
 
-            // Verify we are on Async Runtime tab
             let semantics = robot.get_semantics().unwrap();
             let on_async_tab = semantics
                 .iter()
@@ -71,10 +59,8 @@ fn main() {
                 let _ = robot.exit();
             }
 
-            // 2. Click the pause button
             println!("\n--- Step 2: Click Pause Animation Button ---");
 
-            // Look for the pause button - could be "Pause animation" or "Resume animation"
             let semantics = robot.get_semantics().unwrap();
             let pause_pos = semantics
                 .iter()
@@ -89,11 +75,9 @@ fn main() {
                 let _ = robot.mouse_up();
                 println!("✓ Clicked Pause animation button");
 
-                // Wait for state change
                 std::thread::sleep(Duration::from_millis(300));
             } else {
                 println!("✗ Failed to find Pause animation button");
-                // Print what we found for debugging
                 println!("Available text elements:");
                 for root in semantics.iter() {
                     print_all_texts(root, 0);
@@ -101,7 +85,6 @@ fn main() {
                 let _ = robot.exit();
             }
 
-            // 3. Verify the button text changed
             println!("\n--- Step 3: Verify Button State Changed ---");
 
             let semantics = robot.get_semantics().unwrap();
@@ -115,7 +98,6 @@ fn main() {
                 println!("✓ ALL TESTS PASSED");
                 let _ = robot.exit();
             } else {
-                // Check if pause button still shows "Pause Animation"
                 let still_pause = semantics
                     .iter()
                     .any(|root| find_text_center(root, "Pause animation").is_some());

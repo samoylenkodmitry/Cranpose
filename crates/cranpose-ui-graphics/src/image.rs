@@ -82,44 +82,44 @@ impl ColorFilter {
                 0.0,
                 0.0,
                 tint.r(),
-                0.0, // R' = A * tint.r
+                0.0,
                 0.0,
                 0.0,
                 0.0,
                 tint.g(),
-                0.0, // G' = A * tint.g
+                0.0,
                 0.0,
                 0.0,
                 0.0,
                 tint.b(),
-                0.0, // B' = A * tint.b
+                0.0,
                 0.0,
                 0.0,
                 0.0,
                 tint.a(),
-                0.0, // A' = A * tint.a
+                0.0,
             ],
             Self::Modulate(modulate) => [
                 modulate.r(),
                 0.0,
                 0.0,
                 0.0,
-                0.0, // R' = R * modulate.r
+                0.0,
                 0.0,
                 modulate.g(),
                 0.0,
                 0.0,
-                0.0, // G' = G * modulate.g
+                0.0,
                 0.0,
                 0.0,
                 modulate.b(),
                 0.0,
-                0.0, // B' = B * modulate.b
+                0.0,
                 0.0,
                 0.0,
                 0.0,
                 modulate.a(),
-                0.0, // A' = A * modulate.a
+                0.0,
             ],
             Self::Matrix(matrix) => matrix,
         }
@@ -286,17 +286,11 @@ fn bitmap_content_id(width: u32, height: u32, pixels: &[u8]) -> u64 {
 mod tests {
     use super::*;
 
-    /// Every filter has to be expressible as one 4x5 matrix, because that is
-    /// the only form composing two of them can work in. A tint that came out
-    /// as something other than "take the alpha, paint it in this colour" would
-    /// tint composed content differently from tinting it directly.
     #[test]
     fn every_colour_filter_states_itself_as_a_matrix() {
         let identity = ColorFilter::Matrix([
-            1.0, 0.0, 0.0, 0.0, 0.0, //
-            0.0, 1.0, 0.0, 0.0, 0.0, //
-            0.0, 0.0, 1.0, 0.0, 0.0, //
-            0.0, 0.0, 0.0, 1.0, 0.0,
+            1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0,
+            0.0, 1.0, 0.0,
         ]);
         assert_eq!(
             ColorFilter::matrix(identity.as_matrix()).as_matrix(),
@@ -304,8 +298,6 @@ mod tests {
             "a matrix filter is its own matrix"
         );
 
-        // A tint reads the source alpha only: every colour column is zero and
-        // the alpha column carries the tint.
         let tint = Color(0.25, 0.5, 0.75, 1.0);
         let matrix = ColorFilter::tint(tint).as_matrix();
         for row in 0..4 {
@@ -319,8 +311,6 @@ mod tests {
         assert_eq!(matrix[13], tint.b());
         assert_eq!(matrix[18], tint.a());
 
-        // A modulation scales each channel by its own factor instead, which is
-        // the diagonal.
         let modulate = ColorFilter::modulate(Color(0.5, 0.25, 0.125, 1.0)).as_matrix();
         assert_eq!(modulate[0], 0.5);
         assert_eq!(modulate[6], 0.25);
@@ -433,10 +423,8 @@ mod tests {
     #[test]
     fn matrix_filter_transforms_channels() {
         let matrix = [
-            1.0, 0.0, 0.0, 0.0, 0.1, // R + 0.1
-            0.0, 0.5, 0.0, 0.0, 0.0, // G * 0.5
-            0.0, 0.0, 0.0, 1.0, 0.0, // A -> B
-            0.0, 0.0, 0.0, 1.0, 0.0, // A passthrough
+            1.0, 0.0, 0.0, 0.0, 0.1, 0.0, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0,
+            0.0, 1.0, 0.0,
         ];
         let filter = ColorFilter::matrix(matrix);
         let transformed = filter.apply_rgba([0.2, 0.6, 0.9, 0.4]);

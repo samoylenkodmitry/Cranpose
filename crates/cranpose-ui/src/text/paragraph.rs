@@ -3,7 +3,7 @@ use crate::text::unit::TextUnit;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub enum TextAlign {
     #[default]
-    Unspecified, // Kotlin distinction
+    Unspecified,
     Left,
     Right,
     Center,
@@ -130,11 +130,11 @@ fn resolve_content_direction(text: &str, fallback: ResolvedTextDirection) -> Res
 fn is_rtl_char(ch: char) -> bool {
     matches!(
         ch as u32,
-        0x0590..=0x08FF | // Hebrew, Arabic, Syriac, Thaana, NKo, Samaritan, Mandaic, Arabic ext
-        0xFB1D..=0xFDFF | // Hebrew/Arabic presentation forms
-        0xFE70..=0xFEFF | // Arabic presentation forms B
-        0x10800..=0x10FFF | // Cypriot, Imperial Aramaic and other RTL historical scripts
-        0x1E800..=0x1EEFF // Adlam and Arabic mathematical alphabetic symbols
+        0x0590..=0x08FF |
+        0xFB1D..=0xFDFF |
+        0xFE70..=0xFEFF |
+        0x10800..=0x10FFF |
+        0x1E800..=0x1EEFF
     )
 }
 

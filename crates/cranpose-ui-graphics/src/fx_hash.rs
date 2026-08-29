@@ -44,8 +44,6 @@ impl Hasher for FxHasher {
         for chunk in chunks {
             self.fold(u64::from_le_bytes(*chunk));
         }
-        // The tail is folded together with its own length, so `[1]` and `[1, 0]`
-        // stay distinct even though both pad to the same word.
         if !tail.is_empty() {
             let mut word = [0u8; 8];
             word[..tail.len()].copy_from_slice(tail);
@@ -161,8 +159,6 @@ mod tests {
 
     #[test]
     fn low_bits_avalanche_enough_for_hash_map_bucketing() {
-        // hashbrown indexes buckets with the low bits; a raw FxHash fold leaves
-        // those nearly unmixed, so this guards the finalizer specifically.
         let mut buckets = [0usize; 64];
         for value in 0u64..64_000 {
             buckets[(hash_of(&value) & 63) as usize] += 1;

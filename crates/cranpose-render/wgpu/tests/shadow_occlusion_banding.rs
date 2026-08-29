@@ -1,12 +1,3 @@
-//! Shadow composites over opaque casters — the fill-rate contract behind a
-//! list of elevated cards (issue #500). A drop shadow's cached surface spans
-//! the caster's whole footprint plus the blur reach, but the opaque caster is
-//! drawn right on top: everything under it is invisible umbra. Skia's
-//! `drawShadow` — the reference platform's shadow — assumes an opaque
-//! occluder and never fills that region; compositing it anyway made card
-//! shadows the single largest fill on a measured device frame (4.9 MP against
-//! a 2.4 MP screen). The composite must cover only the visible ring.
-
 mod support;
 
 use std::{cell::RefCell, rc::Rc};
@@ -109,15 +100,6 @@ impl Harness {
     }
 }
 
-/// Warm scrolled frames composite every visible card's ambient and spot
-/// shadow from the shape-shadow cache. Unbanded, each composite fills the
-/// caster's whole footprint plus blur reach: ~0.95 MP a frame on this
-/// fixture, over twice its 0.41 MP screen — the same pathology a device
-/// profile showed at 4.9 MP against a 2.4 MP screen. Everything inside the
-/// caster's rounded footprint (the 608x120 card inset by its corner radius)
-/// is invisible under the opaque card, so banded composites must land the
-/// per-frame shadow fill under 0.55 MP. The margin catches the occluded
-/// interior creeping back in without flaking on band rounding.
 #[test]
 fn an_opaque_card_shadow_composites_only_its_visible_ring() {
     let (_lock, renderer) = support::headless_renderer_parts().expect("headless renderer");
@@ -141,9 +123,6 @@ fn an_opaque_card_shadow_composites_only_its_visible_ring() {
     );
 }
 
-/// Banding must never eat the visible ring itself: below an elevated opaque
-/// card the shadow still darkens the background, and the card's interior
-/// stays the card's own color.
 #[test]
 fn the_shadow_ring_survives_and_the_card_interior_stays_clean() {
     let (_lock, renderer) = support::headless_renderer_parts().expect("headless renderer");
@@ -170,9 +149,6 @@ fn the_shadow_ring_survives_and_the_card_interior_stays_clean() {
             frame.pixels[offset + 2],
         ]
     };
-    // The list is padded 16 px; cards start at x=16 and are 608 wide. Find a
-    // card top edge by scanning for the bright card fill along a column well
-    // inside the card body.
     let x_inside = FRAME_WIDTH / 2;
     let mut card_top: Option<u32> = None;
     let mut y = 40u32;
@@ -193,8 +169,6 @@ fn the_shadow_ring_survives_and_the_card_interior_stays_clean() {
         "the card interior must stay the card's own bright fill: {interior:?}"
     );
 
-    // A few pixels below the card's bottom edge the spot shadow darkens the
-    // 0.85-grey background.
     let below = pixel(x_inside, card_bottom + 4);
     let background = pixel(x_inside, card_bottom + 60);
     let below_sum: u32 = below.iter().map(|c| *c as u32).sum();
@@ -206,14 +180,6 @@ fn the_shadow_ring_survives_and_the_card_interior_stays_clean() {
     );
 }
 
-/// A clipped shadow can be entirely invisible: when the caster overhangs
-/// its clip container on every side, the clip cuts the shadow's coverage to
-/// a region that lies wholly under the opaque caster, and the band scissors
-/// come back empty. Converting that shadow used to hand the segment plan a
-/// composite index with no prepared draw behind it; the plan then read past
-/// the prepared command buffer and the whole frame failed
-/// (robot_liquid_visual died on exactly this at its toggle keyframes). A
-/// fully occluded shadow must simply vanish from the frame.
 #[test]
 fn a_fully_occluded_shadow_drops_its_composite_instead_of_desyncing_the_plan() {
     let (_lock, renderer) = support::headless_renderer_parts().expect("headless renderer");
@@ -225,9 +191,6 @@ fn a_fully_occluded_shadow_drops_its_composite_instead_of_desyncing_the_plan() {
                 .background(Color(0.85, 0.86, 0.88, 1.0)),
             BoxSpec::new(),
             || {
-                // A clipping window with an opaque shadowed card overhanging
-                // it on every side: the visible (clipped) part of the
-                // shadow's coverage sits entirely under the caster.
                 Box(
                     Modifier::empty()
                         .offset(160.0, 160.0)
@@ -257,8 +220,6 @@ fn a_fully_occluded_shadow_drops_its_composite_instead_of_desyncing_the_plan() {
     shell.set_buffer_size(FRAME_WIDTH, FRAME_HEIGHT);
     shell.update();
 
-    // The first captures fill the shadow cache; warm captures composite from
-    // it and take the fused-batch conversion path that desynced.
     let mut occluded_seen = 0u32;
     for _ in 0..4 {
         shell.update();

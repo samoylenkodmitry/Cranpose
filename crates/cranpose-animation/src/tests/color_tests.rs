@@ -43,8 +43,6 @@ fn color_lerp_clamps_overshoot_to_valid_range() {
     let start = Color(0.0, 0.0, 0.0, 0.0);
     let end = Color(1.0, 1.0, 1.0, 1.0);
 
-    // Springs can overshoot the target fraction; the result must stay a
-    // valid color.
     assert_color_near(start.lerp(&end, 1.5), Color(1.0, 1.0, 1.0, 1.0), 1e-6);
     assert_color_near(end.lerp(&start, 1.5), Color(0.0, 0.0, 0.0, 0.0), 1e-6);
 }
@@ -57,7 +55,6 @@ fn color_springs_as_four_clamped_dimensions() {
         assert!((color.dimension(index) - expected).abs() < 1e-6);
     }
 
-    // Overshooting spring dimensions clamp back into the valid gamut.
     let rebuilt = <Color as SpringScalar>::from_dimensions([1.5, -0.5, 0.5, 2.0]);
     assert_color_near(rebuilt, Color(1.0, 0.0, 0.5, 1.0), 1e-6);
 }
@@ -108,7 +105,7 @@ fn animate_color_as_state_interpolates_over_time() {
         if !composition.should_render() {
             break;
         }
-        frame_time += 16_666_667; // ~60 FPS
+        frame_time += 16_666_667;
         runtime.drain_frame_callbacks(frame_time);
         let _ = composition
             .process_invalid_scopes()

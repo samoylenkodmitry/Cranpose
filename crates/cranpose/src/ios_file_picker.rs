@@ -1,15 +1,3 @@
-//! iOS file, folder and document choosers built on
-//! `UIDocumentPickerViewController`.
-//!
-//! The system document picker surfaces every provider the device exposes
-//! through the Files app — local storage, iCloud Drive, and third-party
-//! providers such as a mounted WebDAV share — so a chosen folder is a
-//! security-scoped URL into the chosen provider rather than a private path.
-//! Reads and writes hold that scope for the duration of each operation.
-//!
-//! Registered as the platform file picker (see
-//! [`cranpose_services::set_platform_file_picker`]) by the iOS backend, which
-//! runs on the UIKit main thread.
 #![allow(unsafe_code)]
 
 use std::{
@@ -39,7 +27,6 @@ use objc2_ui_kit::{
 };
 use objc2_uniform_type_identifiers::{UTType, UTTypeDirectory, UTTypeItem};
 
-/// Installs the iOS chooser as the platform file picker.
 pub(crate) fn register() {
     set_platform_file_picker(Rc::new(IosFilePicker));
 }
@@ -96,14 +83,6 @@ impl FilePicker for IosFilePicker {
         request: SaveDocumentRequest,
     ) -> PickerFuture<Result<Option<ContentSinkRef>, FilePickerError>> {
         Box::pin(async move {
-            // `UIDocumentPickerViewController` exports files that already
-            // exist, so the sink stages the document in the app's temporary
-            // directory and presents the export chooser when it is committed.
-            //
-            // The directory comes from the framework's platform directories
-            // rather than from the process temporary directory: those are
-            // scoped to the application, and everything else the framework
-            // writes already goes through them.
             let directories = cranpose_services::application_directories()
                 .map_err(|error| ContentError::Io(error.to_string()))?;
             std::fs::create_dir_all(&directories.temporary).map_err(|error| {
@@ -135,7 +114,6 @@ impl FilePicker for IosFilePicker {
     }
 }
 
-/// What a chooser is asked to return.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Kind {
     File,
@@ -144,7 +122,6 @@ enum Kind {
 
 type PickResult = Result<Vec<Retained<NSURL>>, FilePickerError>;
 
-/// One-shot slot shared between the chooser delegate and the awaiting future.
 #[derive(Default)]
 struct PickSlot {
     result: Option<PickResult>,
@@ -153,8 +130,6 @@ struct PickSlot {
 
 type SharedSlot = Rc<RefCell<PickSlot>>;
 
-/// Future resolved when the delegate receives a selection or cancellation.
-/// Holds the delegate alive (the chooser keeps only a weak reference to it).
 struct PickFuture {
     slot: SharedSlot,
     _delegate: Retained<PickerDelegate>,
@@ -211,11 +186,9 @@ impl PickerDelegate {
     }
 }
 
-/// Presents a chooser configured by `build` and resolves to its selection.
 fn present(
     build: impl FnOnce(MainThreadMarker) -> Retained<UIDocumentPickerViewController>,
 ) -> PickerFuture<PickResult> {
-    // UIKit work must happen on the main thread; composition runs there.
     let Some(mtm) = MainThreadMarker::new() else {
         return Box::pin(async {
             Err(FilePickerError::Failed(
@@ -245,23 +218,6 @@ fn present(
 
 fn present_open(kind: Kind, multiple: bool) -> PickerFuture<PickResult> {
     present(move |mtm| {
-        // `public.directory`, not `public.folder`. The picker enables a
-        // provider only if it can vend something conforming to the type asked
-        // for, and Apple defines these as
-        //
-        //     public.folder     a user-browsable directory (i.e. not a
-        //                       package); conforms to public.directory
-        //     public.directory  a file system directory (includes packages
-        //                       AND folders); conforms to public.item
-        //
-        // so `public.folder` is the narrow one, and asking for it disables
-        // every provider whose directories are not typed as that exact kind.
-        // What this picker is for is a directory to walk, which is what
-        // `public.directory` means; a folder conforms to it, so nothing that
-        // matched before stops matching.
-        //
-        // SAFETY: `UTTypeItem`/`UTTypeDirectory` are immutable framework
-        // constants.
         let ty: &UTType = match kind {
             Kind::File => unsafe { UTTypeItem },
             Kind::Folder => unsafe { UTTypeDirectory },
@@ -298,9 +254,6 @@ fn url_path(url: &NSURL) -> PathBuf {
         .unwrap_or_default()
 }
 
-/// The security scope of an originally-chosen URL. Children of a chosen folder
-/// share their parent's scope, so one scope object is held by every handle
-/// derived from one selection.
 struct SecurityScope {
     url: Retained<NSURL>,
 }
@@ -310,7 +263,6 @@ impl SecurityScope {
         Self { url }
     }
 
-    /// Runs `body` while the scope is held.
     fn enter<T>(&self, body: impl FnOnce() -> std::io::Result<T>) -> Result<T, ContentError> {
         let accessed = unsafe { self.url.startAccessingSecurityScopedResource() };
         let result = body().map_err(map_io);
@@ -356,7 +308,6 @@ fn metadata_for(scope: &SecurityScope, path: &Path) -> ContentMetadata {
     metadata
 }
 
-/// A file inside a security-scoped selection.
 struct IosFile {
     scope: Rc<SecurityScope>,
     path: PathBuf,
@@ -421,7 +372,6 @@ impl ContentReader for IosReader {
     }
 }
 
-/// A folder inside a security-scoped selection.
 struct IosFolder {
     scope: Rc<SecurityScope>,
     path: PathBuf,
@@ -464,8 +414,6 @@ impl ContentFolder for IosFolder {
     }
 }
 
-/// A document staged in the temporary directory and exported through the
-/// system chooser when it is committed.
 struct ExportSink {
     staging: PathBuf,
     file: RefCell<Option<std::fs::File>>,

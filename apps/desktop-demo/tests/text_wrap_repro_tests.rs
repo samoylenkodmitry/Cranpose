@@ -1,9 +1,3 @@
-//! The demo screen in `test_screens/text_wrap_repro.rs`, checked headlessly so
-//! the repro is verifiable on a machine that cannot open a window.
-//!
-//! Asserts the same thing the screen shows: every paragraph on it PAINTS the
-//! height LAYOUT measured, so the sibling placed under it is never drawn over.
-
 use cranpose_render_common::{
     graph::{LayerNode, PrimitiveNode, RenderNode, TextPrimitiveNode},
     scene_builder::build_graph_from_applier,
@@ -12,8 +6,6 @@ use cranpose_testing::ComposeTestRule;
 use cranpose_ui::{LayoutBox, LayoutEngine, Size};
 use desktop_app::test_screens::text_wrap_repro::TextWrapReproScreen;
 
-/// The painted string carries its wrap points as newlines, so strings are
-/// compared with whitespace removed rather than verbatim.
 fn squashed(value: &str) -> String {
     value.chars().filter(|c| !c.is_whitespace()).collect()
 }
@@ -55,7 +47,6 @@ fn find_painted<'a>(layer: &'a LayerNode, needle: &str) -> Option<&'a TextPrimit
 
 #[test]
 fn repro_screen_paragraphs_paint_the_height_they_measured() {
-    // The opening words of each paragraph on the screen.
     const PARAGRAPHS: [&str; 2] = ["fed back картица scored", "fp32 back ПДВ under"];
 
     let mut rule = ComposeTestRule::new();

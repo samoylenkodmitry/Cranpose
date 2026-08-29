@@ -1,6 +1,3 @@
-//! Robot test: a sprite button must visibly switch to its pressed sprite while the
-//! pointer is held down, and back to normal after release.
-
 use std::time::Duration;
 
 use cranpose::{AppLauncher, Robot};
@@ -86,7 +83,6 @@ fn main() {
             std::thread::sleep(Duration::from_millis(50));
             robot.mouse_down().expect("mouse down");
 
-            // While the button is held, the pressed sprite must be presented.
             if let Err(actual) = wait_for_sprite_color(&robot, center_x, center_y, PRESSED_RGBA) {
                 let _ = robot.mouse_up();
                 fail(

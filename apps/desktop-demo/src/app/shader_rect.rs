@@ -1,10 +1,3 @@
-//! Shader Rect demo tab — SDF-based shader effects ported from Android Compose Playground.
-//!
-//! Features:
-//! - Fire shader with multiple style variations (classic, blue ice, emerald, thin neon)
-//! - Simple halo border with press-to-intensify
-//! - Hover reactivity: flame intensity and smoke respond to mouse proximity
-
 #![allow(non_snake_case)]
 
 use std::sync::{Arc, OnceLock};
@@ -21,10 +14,6 @@ use cranpose_ui::{
     TextStyle,
 };
 use cranpose_ui_graphics::{CompositingStrategy, RenderEffect, RuntimeShader};
-
-// ---------------------------------------------------------------------------
-// Shared WGSL boilerplate
-// ---------------------------------------------------------------------------
 
 const WGSL_PREAMBLE: &str = r#"
 struct VertexOutput {
@@ -59,17 +48,6 @@ fn sd_round_box(p: vec2<f32>, b: vec2<f32>, r: f32) -> f32 {
     return length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0) - r;
 }
 "#;
-
-// ---------------------------------------------------------------------------
-// Fire shader WGSL
-// ---------------------------------------------------------------------------
-// Uniforms:
-//   0,1   = resolution (dp)        2     = time [0..1]
-//   3     = band width (dp)        4     = corner radius (dp)
-//   5,6   = contour size (dp)      7     = smoke scale
-//   8     = intensity              9     = smoke opacity
-//   10    = core scale             11    = smoke blue tint [0..1]
-//   12    = thin mode [0..1]       13-15 = color tint RGB
 
 fn fire_halo_wgsl() -> Arc<str> {
     static SOURCE: OnceLock<Arc<str>> = OnceLock::new();
@@ -275,10 +253,6 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {{
         .clone()
 }
 
-// ---------------------------------------------------------------------------
-// Halo border shader WGSL
-// ---------------------------------------------------------------------------
-
 fn halo_border_wgsl() -> Arc<str> {
     static SOURCE: OnceLock<Arc<str>> = OnceLock::new();
     SOURCE
@@ -344,10 +318,6 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {{
         .clone()
 }
 
-// ---------------------------------------------------------------------------
-// Effect builders
-// ---------------------------------------------------------------------------
-
 struct FireShaderParams {
     resolution_w: f32,
     resolution_h: f32,
@@ -408,10 +378,6 @@ fn halo_border_effect(p: &HaloBorderParams) -> RenderEffect {
     shader.set_float4(8, p.color.0, p.color.1, p.color.2, p.color.3);
     RenderEffect::runtime_shader(shader)
 }
-
-// ---------------------------------------------------------------------------
-// Fire style presets
-// ---------------------------------------------------------------------------
 
 #[derive(Clone, Copy, PartialEq)]
 struct FireStyle {
@@ -509,10 +475,6 @@ const FIRE_NEON_THIN: FireStyle = FireStyle {
     press_core_mult: 1.8,
 };
 
-// ---------------------------------------------------------------------------
-// Tab layout
-// ---------------------------------------------------------------------------
-
 #[composable]
 pub(crate) fn ShaderRectTab() {
     Column(
@@ -529,7 +491,6 @@ pub(crate) fn ShaderRectTab() {
                  Hover to intensify, press for full blaze.",
             );
 
-            // Fire variations in rows of two
             Row(
                 Modifier::empty().fill_max_width(),
                 RowSpec::default(),
@@ -590,10 +551,6 @@ fn SectionCaption(text: &'static str) {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Fire shader box with hover + press reactivity
-// ---------------------------------------------------------------------------
-
 #[composable]
 fn FireShaderBox(style: FireStyle) {
     let content_width = 220.0f32;
@@ -618,7 +575,6 @@ fn FireShaderBox(style: FireStyle) {
     let is_pressed = cranpose_core::rememberMutableStateOf(|| false);
     let is_hovered = cranpose_core::rememberMutableStateOf(|| false);
 
-    // Hover smoothly boosts intensity/smoke; press goes further
     let target_intensity = if is_pressed.get() {
         style.base_intensity * style.press_intensity_mult
     } else if is_hovered.get() {
@@ -730,10 +686,6 @@ fn FireShaderBox(style: FireStyle) {
         },
     );
 }
-
-// ---------------------------------------------------------------------------
-// Halo border box
-// ---------------------------------------------------------------------------
 
 #[composable]
 fn HaloBorderBox(color: Color, corner_radius: f32, max_halo_width: f32, label: &'static str) {

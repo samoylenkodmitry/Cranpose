@@ -170,11 +170,7 @@ pub trait BundledAssetReader: Send {
 /// its asset is a span of something larger, how many bytes of it are its own.
 pub struct StreamingAssetReader<R> {
     source: R,
-    /// The asset the caller asked for, so a failure names that rather than
-    /// wherever it happened to resolve to.
     path: String,
-    /// Bytes left when the asset ends before its stream does; `None` when the
-    /// stream's own end is the asset's end.
     remaining: Option<u64>,
 }
 
@@ -223,8 +219,6 @@ impl<R: std::io::Read + Send> BundledAssetReader for StreamingAssetReader<R> {
             }
         }
         if filled == 0 {
-            // A stream that ends early ends the asset with it; recording that
-            // stops the next call re-reading a source with nothing left.
             self.remaining = Some(0);
             return Ok(None);
         }
@@ -400,11 +394,6 @@ mod tests {
         }
     }
 
-    /// The Android package path opens a descriptor onto the whole APK and
-    /// tells the reader how many of its bytes belong to this asset. Reading
-    /// past that count would hand the caller the next asset's bytes; stopping
-    /// short of it would truncate this one. Neither is visible without a
-    /// stream that continues past the asset, which is what this gives it.
     #[test]
     fn a_length_bounded_reader_stops_at_the_asset_and_not_at_the_stream() {
         let asset_len = crate::content::DEFAULT_CHUNK_LEN + 5;

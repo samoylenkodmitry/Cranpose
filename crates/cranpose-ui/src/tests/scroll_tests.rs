@@ -19,8 +19,6 @@ fn with_test_runtime<T>(f: impl FnOnce() -> T) -> T {
     f()
 }
 
-/// Returns (handler, chain). The chain must be kept alive while the handler
-/// is used — dropping it cancels the underlying pointer input task.
 fn pointer_handler_for(modifier: Modifier) -> (Rc<dyn Fn(PointerEvent)>, ModifierNodeChain) {
     let elements = modifier.elements();
     let mut chain = ModifierNodeChain::new();
@@ -315,9 +313,6 @@ fn vertical_scroll_ignores_move_consumed_by_child_drag() {
 
 #[test]
 fn touch_drag_moves_content_with_the_finger() {
-    // Touch semantics: content must FOLLOW the finger.
-    // Dragging the finger UP (y decreases) moves content up, revealing content
-    // further down, i.e. the scroll offset must INCREASE by the drag distance.
     let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
         let scroll_state = ScrollState::new(100.0);
@@ -326,7 +321,6 @@ fn touch_drag_moves_content_with_the_finger() {
             pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state, false));
 
         handler(scroll_pointer_event(PointerEventKind::Down, 0.0, 100.0));
-        // Finger moves up by 60px (beyond the 8px drag threshold).
         handler(scroll_pointer_event(PointerEventKind::Move, 0.0, 40.0));
         handler(scroll_pointer_event(PointerEventKind::Up, 0.0, 40.0));
 
@@ -348,7 +342,6 @@ fn touch_drag_down_moves_content_down() {
             pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state, false));
 
         handler(scroll_pointer_event(PointerEventKind::Down, 0.0, 40.0));
-        // Finger moves down by 60px: content follows, scroll offset decreases.
         handler(scroll_pointer_event(PointerEventKind::Move, 0.0, 100.0));
         handler(scroll_pointer_event(PointerEventKind::Up, 0.0, 100.0));
 
@@ -360,8 +353,6 @@ fn touch_drag_down_moves_content_down() {
     });
 }
 
-/// Dispatches an event leaf-first (child, then parent), mirroring the
-/// shell's hit-path dispatch order for nested scrollables.
 fn dispatch_nested(
     child: &Rc<dyn Fn(PointerEvent)>,
     parent: &Rc<dyn Fn(PointerEvent)>,
@@ -375,15 +366,10 @@ fn dispatch_nested(
 
 #[test]
 fn exhausted_inner_scrollable_yields_the_drag_to_its_parent() {
-    // A list nested in a page, with the LIST pinned at its end: dragging
-    // further in that direction cannot be consumed by the list, so the
-    // PAGE must scroll. Capturing on `max_value > 0` alone made the
-    // exhausted inner list swallow every gesture and the page went dead
-    // (live report: whole sections unreachable, buttons "not active").
     let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
         let inner = ScrollState::new(400.0);
-        inner.set_max_value(400.0); // pinned at the end
+        inner.set_max_value(400.0);
         let outer = ScrollState::new(0.0);
         outer.set_max_value(600.0);
         let (child, _child_chain) =
@@ -391,7 +377,6 @@ fn exhausted_inner_scrollable_yields_the_drag_to_its_parent() {
         let (parent, _parent_chain) =
             pointer_handler_for(Modifier::empty().vertical_scroll(outer, false));
 
-        // Finger up = scroll onward, beyond the inner's limit.
         dispatch_nested(
             &child,
             &parent,
@@ -435,7 +420,6 @@ fn exhausted_inner_scrollable_yields_the_drag_to_its_parent() {
             outer.value_non_reactive()
         );
 
-        // And the opposite direction still belongs to the inner list.
         dispatch_nested(
             &child,
             &parent,
@@ -461,9 +445,6 @@ fn exhausted_inner_scrollable_yields_the_drag_to_its_parent() {
 
 #[test]
 fn horizontal_drag_with_jitter_scrolls_nested_horizontal_not_vertical_parent() {
-    // A chips row (horizontal scroll) nested in a screen list (vertical
-    // scroll): a mostly-horizontal drag with vertical jitter must scroll the
-    // chips row by the horizontal drag distance and leave the screen alone.
     let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
         let horizontal = ScrollState::new(100.0);
@@ -480,13 +461,11 @@ fn horizontal_drag_with_jitter_scrolls_nested_horizontal_not_vertical_parent() {
             &parent,
             scroll_pointer_event(PointerEventKind::Down, 100.0, 100.0),
         );
-        // Below the slop on both axes: nobody captures yet.
         dispatch_nested(
             &child,
             &parent,
             scroll_pointer_event(PointerEventKind::Move, 106.0, 96.0),
         );
-        // dx = 14 crosses the slop and dominates dy = 6: the child captures.
         let capture = dispatch_nested(
             &child,
             &parent,
@@ -496,7 +475,6 @@ fn horizontal_drag_with_jitter_scrolls_nested_horizontal_not_vertical_parent() {
             capture.is_consumed(),
             "the horizontal child must capture a mostly-horizontal drag"
         );
-        // Keep dragging right with vertical jitter.
         dispatch_nested(
             &child,
             &parent,
@@ -513,8 +491,6 @@ fn horizontal_drag_with_jitter_scrolls_nested_horizontal_not_vertical_parent() {
             scroll_pointer_event(PointerEventKind::Up, 170.0, 97.0),
         );
 
-        // Content follows the finger from the position preceding the
-        // capturing move (106): 170 - 106 = 64 to the right.
         assert!(
             (horizontal.value_non_reactive() - 36.0).abs() < 1e-3,
             "the horizontal scrollable must scroll by the horizontal drag \
@@ -531,9 +507,6 @@ fn horizontal_drag_with_jitter_scrolls_nested_horizontal_not_vertical_parent() {
 
 #[test]
 fn vertical_drag_with_horizontal_jitter_scrolls_parent_not_nested_child() {
-    // The same nesting dragged mostly vertically, with sideways jitter that
-    // crosses the slop: the vertical parent must win even though the
-    // horizontal child sees every event first.
     let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
         let horizontal = ScrollState::new(100.0);
@@ -550,8 +523,6 @@ fn vertical_drag_with_horizontal_jitter_scrolls_parent_not_nested_child() {
             &parent,
             scroll_pointer_event(PointerEventKind::Down, 100.0, 100.0),
         );
-        // dx = 12 crosses the slop too, but dy = 30 dominates: the child must
-        // decline and the parent must capture.
         let capture = dispatch_nested(
             &child,
             &parent,
@@ -577,7 +548,6 @@ fn vertical_drag_with_horizontal_jitter_scrolls_parent_not_nested_child() {
             100.0,
             "the horizontal child must not steal a mostly-vertical drag"
         );
-        // Finger moved down by 70 from the down position: content follows.
         assert!(
             (vertical.value_non_reactive() - 30.0).abs() < 1e-3,
             "the vertical parent must scroll by the vertical drag distance \
@@ -589,9 +559,6 @@ fn vertical_drag_with_horizontal_jitter_scrolls_parent_not_nested_child() {
 
 #[test]
 fn cross_axis_drag_locks_scrollable_out_for_the_rest_of_the_gesture() {
-    // A drag that decisively starts vertical must never be captured by a
-    // horizontal scrollable later in the gesture, even when its horizontal
-    // component eventually exceeds the vertical one.
     let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
         let horizontal = ScrollState::new(100.0);
@@ -600,9 +567,7 @@ fn cross_axis_drag_locks_scrollable_out_for_the_rest_of_the_gesture() {
             pointer_handler_for(Modifier::empty().horizontal_scroll(horizontal, false));
 
         handler(scroll_pointer_event(PointerEventKind::Down, 100.0, 100.0));
-        // Decisively vertical: dy = 20 crosses the slop while dx = 4.
         handler(scroll_pointer_event(PointerEventKind::Move, 104.0, 120.0));
-        // The drag drifts sideways: dx = 60 now exceeds dy = 25.
         let late_move = scroll_pointer_event(PointerEventKind::Move, 160.0, 125.0);
         handler(late_move.clone());
         handler(scroll_pointer_event(PointerEventKind::Up, 160.0, 125.0));
@@ -621,8 +586,6 @@ fn cross_axis_drag_locks_scrollable_out_for_the_rest_of_the_gesture() {
 
 #[test]
 fn lazy_touch_drag_up_scrolls_toward_later_items() {
-    // Finger up => content up => later items become visible => the pending
-    // lazy scroll delta must be negative (dispatch_scroll_delta(<0) scrolls forward).
     let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
         let mut list_state = None;
@@ -986,17 +949,6 @@ fn lazy_wheel_scroll_preserves_input_delta_after_viewport_measurement() {
     });
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Android batched input delivery regression tests.
-//
-// Android delivers MotionEvents batched/frame-aligned: several touch samples
-// (with their own timestamps) are processed back-to-back in one main-loop
-// iteration. Velocity must be computed from the events' timestamps, NOT the
-// delivery time, otherwise dt collapses to ~1ms per sample and every release
-// produces a near-MAX_FLING_VELOCITY fling whose direction is dominated by
-// release jitter ("fling gestures act almost randomly").
-// ─────────────────────────────────────────────────────────────────────────────
-
 fn timed_pointer_event(kind: PointerEventKind, x: f32, y: f32, time_ms: i64) -> PointerEvent {
     PointerEvent::new(kind, Point { x, y }, Point { x, y })
         .with_buttons(primary_buttons())
@@ -1005,9 +957,6 @@ fn timed_pointer_event(kind: PointerEventKind, x: f32, y: f32, time_ms: i64) -> 
 
 #[test]
 fn batched_touch_delivery_computes_real_finger_velocity() {
-    // Finger moves down 8dp every 8ms => real velocity is exactly 1000 dp/s.
-    // All events are handed over back-to-back (delivery dt ~ 0), mimicking
-    // Android's batched frame-aligned input delivery.
     let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
         crate::render_state::debug_reset_last_fling_velocity();
@@ -1016,7 +965,7 @@ fn batched_touch_delivery_computes_real_finger_velocity() {
         let (handler, _chain) =
             pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state, false));
 
-        let t0 = 1_234_567i64; // arbitrary uptime base
+        let t0 = 1_234_567i64;
         handler(timed_pointer_event(PointerEventKind::Down, 0.0, 100.0, t0));
         for i in 1..=12i64 {
             handler(timed_pointer_event(
@@ -1047,9 +996,6 @@ fn batched_touch_delivery_computes_real_finger_velocity() {
 
 #[test]
 fn release_jitter_does_not_reverse_or_inflate_fling() {
-    // Steady 1000 dp/s downward drag, but the finger rolls back 2dp right at
-    // release (very common on lift-off). The computed fling must stay in the
-    // finger's travel direction with a sane magnitude.
     let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
         crate::render_state::debug_reset_last_fling_velocity();
@@ -1070,7 +1016,6 @@ fn release_jitter_does_not_reverse_or_inflate_fling() {
                 t0 + i * 8,
             ));
         }
-        // Lift-off jitter: 2dp back, one input period later.
         handler(timed_pointer_event(
             PointerEventKind::Move,
             0.0,
@@ -1098,9 +1043,6 @@ fn release_jitter_does_not_reverse_or_inflate_fling() {
 
 #[test]
 fn batched_same_millisecond_samples_do_not_explode_velocity() {
-    // Two historical samples of one batched MotionEvent can land in the same
-    // millisecond once truncated to ms. The tracker must tolerate equal
-    // timestamps without producing huge/NaN velocities.
     let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
         crate::render_state::debug_reset_last_fling_velocity();
@@ -1120,7 +1062,6 @@ fn batched_same_millisecond_samples_do_not_explode_velocity() {
                 y,
                 t0 + i * 8,
             ));
-            // duplicate-timestamp sample (ms truncation of a 120Hz pair)
             y += 0.5;
             handler(timed_pointer_event(
                 PointerEventKind::Move,
@@ -1164,7 +1105,6 @@ fn lazy_list_fling_velocity_uses_event_timestamps() {
 
         let t0 = 42_000i64;
         handler(timed_pointer_event(PointerEventKind::Down, 0.0, 400.0, t0));
-        // Finger up (towards later items) 8dp every 8ms => -1000 dp/s.
         for i in 1..=12i64 {
             handler(timed_pointer_event(
                 PointerEventKind::Move,
@@ -1194,17 +1134,6 @@ fn lazy_list_fling_velocity_uses_event_timestamps() {
 
 #[test]
 fn three_consecutive_flings_compute_the_same_velocity_sign() {
-    // Device report: "several flings in one direction — one of them wrongly
-    // goes to the opposite direction". This locks the detector-level
-    // invariants for consecutive gestures:
-    // - velocity samples of the previous gesture never leak into the next one
-    //   (the tracker is reset on pointer down), and
-    // - the fling animation still running from the previous gesture never
-    //   mixes its decaying velocity into the newly computed one.
-    //
-    // Realistic Android timing: 8ms input samples, ~104ms gesture, ~300ms
-    // between gestures with the previous fling still animating (spline decay
-    // of a ~1000 dp/s fling lasts >500ms) when the next finger lands.
     let _app_context = crate::render_state::app_context_test_scope();
     let runtime = Runtime::new(Arc::new(DefaultScheduler));
     let handle = runtime.handle();
@@ -1215,7 +1144,7 @@ fn three_consecutive_flings_compute_the_same_velocity_sign() {
     let (handler, _chain) =
         pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state, false));
 
-    let mut event_ms = 7_777_000i64; // arbitrary uptime base
+    let mut event_ms = 7_777_000i64;
     let mut frame_ns = 0u64;
     let mut velocities = Vec::new();
 
@@ -1226,7 +1155,6 @@ fn three_consecutive_flings_compute_the_same_velocity_sign() {
             600.0,
             event_ms,
         ));
-        // Finger flicks UP 8dp every 8ms (~ -1000 dp/s).
         let mut y = 600.0;
         for _ in 0..12 {
             event_ms += 8;
@@ -1244,8 +1172,6 @@ fn three_consecutive_flings_compute_the_same_velocity_sign() {
         let velocity = crate::render_state::debug_last_fling_velocity();
         velocities.push(velocity);
 
-        // Drive ~300ms of fling frames; the fling from this gesture is still
-        // animating when the next Down lands and cancels it.
         let offset_before_frames = scroll_state.value_non_reactive();
         for _ in 0..19 {
             frame_ns += 16_000_000;
@@ -1274,14 +1200,11 @@ fn three_consecutive_flings_compute_the_same_velocity_sign() {
 
 #[test]
 fn vertical_scroll_box_bottom_reachable_at_fractional_density() {
-    // Phone-like geometry: 2280 physical px viewport at density 2.75 and item
-    // heights that are whole physical pixels (177px) but fractional in dp.
-    // The bottom of the content must remain exactly reachable.
     let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
         let density = 2.75f32;
-        let viewport_dp = 2280.0 / density; // 829.0909...
-        let item_dp = 177.0 / density; // 64.3636...
+        let viewport_dp = 2280.0 / density;
+        let item_dp = 177.0 / density;
         let item_count = 30usize;
 
         let scroll_state = ScrollState::new(0.0);
@@ -1326,8 +1249,6 @@ fn vertical_scroll_box_bottom_reachable_at_fractional_density() {
             scroll_state.max_value()
         );
 
-        // Drag to the bottom with realistic touch gestures (finger up 200dp per
-        // gesture, 8ms-per-8dp samples) until the offset stops moving.
         let (handler, _chain) =
             pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state, false));
         let mut time = 10_000i64;
@@ -1347,7 +1268,6 @@ fn vertical_scroll_box_bottom_reachable_at_fractional_density() {
                 y -= 8.0;
                 handler(timed_pointer_event(PointerEventKind::Move, 0.0, y, time));
             }
-            // Rest before release so no fling is started.
             time += 200;
             handler(timed_pointer_event(PointerEventKind::Up, 0.0, y, time));
             time += 100;
@@ -1365,11 +1285,6 @@ fn vertical_scroll_box_bottom_reachable_at_fractional_density() {
 
 #[test]
 fn drags_over_fully_realized_lazy_list_scroll_the_outer_container() {
-    // Device repro: LazyColumn (with one item taller than the screen) nested
-    // in a vertical_scroll Box. The unbounded inner list is realized in full
-    // and cannot scroll itself, so its gesture detector must NOT capture
-    // drags — the outer scrollable has to receive them and reach the true
-    // bottom of the content.
     let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
         let mut list_state = None;
@@ -1378,8 +1293,6 @@ fn drags_over_fully_realized_lazy_list_scroll_the_outer_container() {
         });
         let list_state = list_state.expect("lazy list state should be created");
 
-        // Simulate the unbounded measure result: all 15 items realized
-        // (10x50 + 800 + 4x50 = 1500 content), no internal scrollability.
         cranpose_foundation::lazy::measure_lazy_list(
             15,
             &list_state,
@@ -1398,7 +1311,6 @@ fn drags_over_fully_realized_lazy_list_scroll_the_outer_container() {
         );
         assert!(!list_state.can_scroll_forward_non_reactive());
 
-        // Outer vertical_scroll Box: viewport 500, content 1500 => max 1000.
         let outer_state = ScrollState::new(0.0);
         outer_state.set_max_value(1000.0);
 
@@ -1407,8 +1319,6 @@ fn drags_over_fully_realized_lazy_list_scroll_the_outer_container() {
         let (outer_handler, _outer_chain) =
             pointer_handler_for(Modifier::empty().vertical_scroll(outer_state, false));
 
-        // The shell dispatches gesture events along the hit path innermost
-        // first without stopping on consumption for moves; replicate that.
         let dispatch = |event: PointerEvent| {
             inner_handler(event.clone());
             outer_handler(event);
@@ -1431,7 +1341,7 @@ fn drags_over_fully_realized_lazy_list_scroll_the_outer_container() {
                 y -= 8.0;
                 dispatch(timed_pointer_event(PointerEventKind::Move, 10.0, y, time));
             }
-            time += 200; // rest so release does not fling
+            time += 200;
             dispatch(timed_pointer_event(PointerEventKind::Up, 10.0, y, time));
             time += 100;
             gestures += 1;
@@ -1449,9 +1359,6 @@ fn drags_over_fully_realized_lazy_list_scroll_the_outer_container() {
 
 #[test]
 fn drag_release_inside_settle_band_springs_to_policy_edge() {
-    // A settle policy (nav-bar large-title snap) must take over when the
-    // finger lifts inside the band with no fling: the offset springs to the
-    // policy target instead of resting half-collapsed.
     let _app_context = crate::render_state::app_context_test_scope();
     let runtime = Runtime::new(Arc::new(DefaultScheduler));
     let scroll_state = ScrollState::new(0.0);
@@ -1470,7 +1377,6 @@ fn drag_release_inside_settle_band_springs_to_policy_edge() {
 
     handler(timed_pointer_event(PointerEventKind::Down, 0.0, 200.0, 0));
     handler(timed_pointer_event(PointerEventKind::Move, 0.0, 168.0, 16));
-    // Long rest before the lift so the release velocity is zero (no fling).
     handler(timed_pointer_event(PointerEventKind::Up, 0.0, 168.0, 500));
     assert!(
         (scroll_state.value_non_reactive() - 32.0).abs() < 0.5,
@@ -1528,9 +1434,6 @@ fn drag_release_below_band_midpoint_springs_back_to_zero() {
 
 #[test]
 fn fling_release_is_retargeted_by_settle_policy() {
-    // With momentum, the policy receives the fling's PREDICTED rest position
-    // and the deceleration is replaced by a spring straight to the remapped
-    // target (the UIScrollView targetContentOffset behavior).
     let _app_context = crate::render_state::app_context_test_scope();
     let runtime = Runtime::new(Arc::new(DefaultScheduler));
     let scroll_state = ScrollState::new(0.0);
@@ -1545,7 +1448,6 @@ fn fling_release_is_retargeted_by_settle_policy() {
     let (handler, _chain) =
         pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state, false));
 
-    // 8dp every 8ms of upward finger motion = a solid 1000 dp/s fling.
     handler(timed_pointer_event(PointerEventKind::Down, 0.0, 400.0, 0));
     let mut y = 400.0;
     let mut time = 0i64;
@@ -1571,8 +1473,6 @@ fn fling_release_is_retargeted_by_settle_policy() {
 
 #[test]
 fn wheel_idle_inside_settle_band_snaps_to_policy_edge() {
-    // Wheel input has no end event: after the offset sits still for the idle
-    // window, the settle policy must run (nav-bar snap for mouse users).
     let _app_context = crate::render_state::app_context_test_scope();
     let runtime = Runtime::new(Arc::new(DefaultScheduler));
     let scroll_state = ScrollState::new(0.0);
@@ -1596,7 +1496,6 @@ fn wheel_idle_inside_settle_band_snaps_to_policy_edge() {
         scroll_state.value_non_reactive()
     );
 
-    // Idle frames: the watcher accumulates ~16ms of frame time each.
     for frame in 1..600u64 {
         runtime.handle().drain_frame_callbacks(frame * 16_000_000);
         if (scroll_state.value_non_reactive() - 52.0).abs() < 0.25 {

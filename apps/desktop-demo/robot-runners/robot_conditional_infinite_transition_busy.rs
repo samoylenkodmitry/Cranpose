@@ -1,9 +1,3 @@
-//! Robot regression for conditionally inserted infinite transitions.
-//!
-//! The busy indicator is absent on the first composition. Clicking the button
-//! inserts a draw-only consumer of `rememberInfiniteTransition`; screenshots
-//! must keep changing after the first painted frame.
-
 use std::time::{Duration, Instant};
 
 use cranpose::{AppLauncher, Robot, RobotScreenshot};

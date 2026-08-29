@@ -1,11 +1,3 @@
-//! What the host is, answered the same way on every target.
-//!
-//! Density, the surface an application draws into, and where the platform keeps
-//! its fonts are all things an application needs and none of them are things an
-//! application should discover for itself: every answer is behind a different
-//! platform API, and a call site that reaches for one has target-specific code
-//! in it and is wrong on the target it did not write.
-
 use std::path::Path;
 
 /// Where this platform keeps the font files a system family is drawn from, or
@@ -24,7 +16,6 @@ pub fn system_font_directory() -> Option<&'static Path> {
     } else if cfg!(target_arch = "wasm32") {
         return None;
     } else {
-        // The freedesktop location every mainstream distribution populates.
         "/usr/share/fonts"
     };
     Some(Path::new(directory))

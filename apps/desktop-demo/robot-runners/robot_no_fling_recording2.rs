@@ -1,5 +1,3 @@
-//! Robot test verifying tabbar drag produces scroll momentum when overflow exists.
-
 use std::time::Duration;
 
 use cranpose::AppLauncher;

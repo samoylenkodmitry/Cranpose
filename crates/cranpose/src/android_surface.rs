@@ -1,4 +1,3 @@
-//! Android WGPU surface bridge.
 #![allow(unsafe_code)]
 
 use std::{ffi::c_void, ptr::NonNull};
@@ -37,8 +36,5 @@ pub(crate) fn create_android_wgpu_surface(
         raw_window_handle,
     };
 
-    // SAFETY: `native_window_ptr` comes from `ndk::NativeWindow::ptr()` for the
-    // currently live Android surface, and the owning `NativeWindow` is retained
-    // in `GpuResources` for at least as long as the returned `wgpu::Surface`.
     unsafe { instance.create_surface_unsafe(target) }.map_err(AndroidSurfaceError::from)
 }

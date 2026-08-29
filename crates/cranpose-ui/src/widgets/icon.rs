@@ -107,8 +107,6 @@ pub fn IconWith(
             config.content_description = Some(description.clone());
             config.role = Some(SemanticsWidgetRole::Image);
         }),
-        // A decorative icon publishes nothing, so a screen reader reads the
-        // control around it once instead of reading the glyph too.
         None => modifier,
     };
     Box(modifier, BoxSpec::default(), || {})
@@ -144,7 +142,6 @@ impl IconButtonColors {
         self
     }
 
-    /// The surface for the state the button is in.
     fn surface(&self, enabled: bool, pressed: bool) -> Option<Color> {
         if !enabled {
             return self.disabled_background.or(self.background);
@@ -304,8 +301,6 @@ mod tests {
         assert_eq!(full.surface(true, true), Some(held));
         assert_eq!(full.surface(false, false), Some(off));
 
-        // A button that states only its resting surface keeps it in every
-        // state rather than flashing to nothing when held.
         let plain = IconButtonColors::default().with_background(rest);
         assert_eq!(plain.surface(true, true), Some(rest));
         assert_eq!(plain.surface(false, true), Some(rest));

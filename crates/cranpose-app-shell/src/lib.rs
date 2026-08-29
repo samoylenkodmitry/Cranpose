@@ -20,16 +20,10 @@ use cranpose_core::{
     Applier, Composition, Key, MemoryApplier, NodeError, NodeId, enter_event_handler_scope,
     location_key, run_in_mutable_snapshot,
 };
-// Re-export the rotary (Wear OS crown / rotating bezel) event so platform
-// backends can build one and apps can type their window-level handler.
 pub use cranpose_foundation::{
-    DEFAULT_ROTARY_SCROLL_FACTOR_DP, RotaryScrollEvent, rotary_scroll_pixels_from_detents,
+    DEFAULT_ROTARY_SCROLL_FACTOR_DP, Modifiers, PointerSource, RotaryScrollEvent,
+    rotary_scroll_pixels_from_detents,
 };
-// Re-export the pointer device source and the keyboard-modifiers type so
-// platform backends can stamp them. `Modifiers` lives in cranpose-foundation
-// (not cranpose-ui, which merely re-exports it) because `PointerEvent` needs
-// it too; re-exported from here directly rather than via cranpose-ui.
-pub use cranpose_foundation::{Modifiers, PointerSource};
 use cranpose_foundation::{PointerButton, PointerButtons, PointerEvent, PointerEventKind};
 use cranpose_render_common::{HitTestTarget, RenderScene, Renderer};
 use cranpose_runtime_std::StdRuntime;
@@ -43,22 +37,15 @@ use cranpose_ui::{
     request_render_invalidation, take_draw_repass_nodes, take_focus_invalidation,
     take_layout_invalidation, take_pointer_invalidation, take_render_invalidation,
 };
-// Re-export key event types for use by cranpose
 pub use cranpose_ui::{KeyCode, KeyEvent, KeyEventType};
 use cranpose_ui_graphics::{Point, Rect, Size};
 pub use fps_monitor::FpsStats;
 use hit_path_tracker::{HitPathTracker, PointerId};
 #[cfg(test)]
 use shell_frame::build_draw_refresh_scope;
-// Use web_time for cross-platform time support (native + WASM) - compatible with winit
 use web_time::Instant;
-// The wheel sample every host normalizes into, and the convention it carries.
 pub use wheel::WheelScroll;
 
-/// Bridges the in-tree selection menu's clipboard actions to the desktop OS
-/// clipboard (`arboard`). Holds a persistent clipboard handle (Linux X11 loses
-/// clipboard contents when the last owning handle drops), shared behind an
-/// `Rc<RefCell<..>>` so it stays alive for the app-context's lifetime.
 #[cfg(all(
     feature = "clipboard-native",
     not(target_arch = "wasm32"),
@@ -89,7 +76,6 @@ impl cranpose_ui::clipboard_session::PlatformClipboard for ShellClipboard {
             .and_then(|clipboard| clipboard.get_text().ok())
     }
 }
-// Re-export the platform soft-keyboard hook so runtimes only depend on the shell
 #[cfg(any(test, feature = "test-support"))]
 use cranpose_core::{
     CompositionPassDebugStats, SlotId,
@@ -103,9 +89,7 @@ use cranpose_core::{
     MemoryApplierDebugStats, RecomposeScopeRegistryDebugStats, SlotTableDebugStats,
     debug_recompose_scope_registry_stats,
 };
-// Re-export the IME editable-state snapshot for platform text-input bridges
-pub use cranpose_ui::ImeEditorState;
-pub use cranpose_ui::PlatformTextInputHandler;
+pub use cranpose_ui::{ImeEditorState, PlatformTextInputHandler};
 
 /// How the platform should vote the display's frame rate on behalf of the app.
 ///
@@ -194,63 +178,22 @@ where
     layout_tree: Option<LayoutTree>,
     semantics_tree: Option<SemanticsTree>,
     semantics_enabled: bool,
-    /// Monotonic counter that moves whenever the cached layout/semantics
-    /// snapshots are invalidated or semantics tracking is toggled. Accessibility
-    /// bridges compare it against the revision they last projected so a frame
-    /// that changed nothing semantic costs them one integer compare instead of
-    /// a full tree walk. See [`AppShell::semantics_snapshot_revision`].
     semantics_snapshot_revision: u64,
-    /// The app's display frame-rate preference, applied by platform backends
-    /// that own a native window. See [`FrameRatePreference`].
     frame_rate_preference: FrameRatePreference,
     layout_requested: bool,
     force_layout_pass: bool,
     scene_dirty: bool,
     scoped_layout_scene_nodes: Vec<NodeId>,
     is_dirty: bool,
-    /// Tracks which mouse buttons are currently pressed
     buttons_pressed: PointerButtons,
-    /// Device source (touch/mouse/stylus) of the most recent pointer sample,
-    /// set by the platform before dispatching and stamped onto every
-    /// `PointerEvent` the shell constructs. The pointer model is stateful
-    /// (`set_cursor` then `pointer_pressed`), so a single per-shell cell mirrors
-    /// the existing cursor/buttons state without churning every method signature.
     pointer_source: PointerSource,
-    /// Keyboard modifiers held during the most recent sample, set by the
-    /// platform and stamped onto every `PointerEvent` the shell constructs.
-    /// Mirrors `pointer_source` above: a single per-shell cell instead of
-    /// threading the value through every pointer method signature.
-    ///
-    /// `None` until a platform calls [`set_modifiers`](Self::set_modifiers) at
-    /// least once, which is honest for Android/iOS touch input: neither
-    /// platform's JNI/UIKit bridge currently reports keyboard modifier state
-    /// for a touch sample, so their pointer events keep reporting "unknown"
-    /// rather than a silently wrong "nothing held".
     modifiers: Option<Modifiers>,
-    /// Tracks which nodes were hit on PointerDown (by stable NodeId).
-    ///
-    /// This follows Jetpack Compose's HitPathTracker pattern:
-    /// - On Down: cache NodeIds, not geometry
-    /// - On Move/Up/Cancel: resolve fresh HitTargets from current scene
-    /// - Handler closures are preserved (same Rc), so internal state survives
     hit_path_tracker: HitPathTracker,
-    /// Tracks which nodes the pointer is currently hovering over.
-    /// Used to synthesize Enter/Exit events when the hover set changes.
     hovered_nodes: Vec<NodeId>,
-    /// Window-level rotary (crown/bezel) fallback handler.
-    ///
-    /// Invoked only when no modifier in the routed chain consumed the event, so
-    /// an app that draws everything into one canvas can read raw rotary deltas
-    /// without participating in focus. See
-    /// [`AppShell::set_on_rotary_scroll`](AppShell::set_on_rotary_scroll).
     on_rotary_scroll: Option<Rc<dyn Fn(RotaryScrollEvent) -> bool>>,
-    /// Pixels per rotary detent used when a platform reports the crown delta in
-    /// detents. Defaults to `DEFAULT_ROTARY_SCROLL_FACTOR_DP * density`.
     rotary_scroll_factor: f32,
-    /// Persistent clipboard for desktop (Linux X11 requires clipboard to stay alive)
     #[cfg(all(feature = "clipboard-native", target_os = "linux"))]
     clipboard: Option<arboard::Clipboard>,
-    /// Dev options for debugging and performance monitoring
     dev_options: DevOptions,
     dev_overlay_controls: Vec<DevOverlayControl>,
     dev_overlay_text: String,
@@ -525,11 +468,6 @@ where
         let app_context = cranpose_ui::AppContext::new_with_density(density);
         let runtime = StdRuntime::new();
         let mut composition = Composition::with_runtime(MemoryApplier::new(), runtime.runtime());
-        // Install the top-level overlay layer once, at the root, so every app
-        // gets `Popup`/selection-handle/context-menu support for free and the
-        // overlay is composed (and thus painted and hit-tested) last. The app's
-        // content is called through a shared handle so this wrapper can be
-        // re-created cheaply on every recomposition without moving `content`.
         let app_content = Rc::new(std::cell::RefCell::new(content));
         let mut build: Box<dyn FnMut()> = Box::new(move || {
             let app_content = Rc::clone(&app_content);
@@ -539,8 +477,6 @@ where
         });
         renderer.attach_app_context_services(&app_context);
         app_context.enter(|| {
-            // Route the selection menu's Copy/Cut/Paste through the OS clipboard
-            // on desktop; other platforms fall back to the in-process clipboard.
             #[cfg(all(
                 feature = "clipboard-native",
                 not(target_arch = "wasm32"),
@@ -693,13 +629,6 @@ where
             })
     }
 
-    /// Take a press on a dev-overlay pacing control, if it lands on one.
-    ///
-    /// Every pointer press runs through here before the composition sees it, so
-    /// the controls answer to whatever produced the press: a mouse, a finger,
-    /// or a robot injecting one. A platform shell that hit-tested the overlay
-    /// itself would only make the controls work for the one input path it owns
-    /// -- which is how they came to do nothing under a robot at all.
     pub(crate) fn dev_overlay_press(&mut self, x: f32, y: f32) -> bool {
         if !self.dev_options.frame_pacing_controls {
             return false;
@@ -779,14 +708,6 @@ where
         })
     }
 
-    /// The invalidations that mean the pixels on screen are stale.
-    ///
-    /// Every one of these ends in a scene rebuild, so every one of them is a
-    /// reason to put a new frame on the display. Deliberately *excludes*
-    /// [`Composition::should_render`]: an armed frame callback means the
-    /// composition owes the app a tick, which is not the same as owing the
-    /// display a frame, and conflating the two is what made
-    /// [`Self::needs_redraw`] indistinguishable from [`Self::needs_update`].
     fn has_stale_pixels_in_context(&self) -> bool {
         self.is_dirty
             || self.layout_requested
@@ -803,17 +724,8 @@ where
     }
 
     fn needs_ui_update_in_context(&self) -> bool {
-        // Stale pixels, a queued UI continuation (which wakes an update but
-        // must never schedule a frame - see `needs_redraw`), or a
-        // composition that wants to render.
         self.has_stale_pixels_in_context()
             || self.composition.runtime_handle().has_pending_ui()
-            // A semantics invalidation is work for the UI thread, not a reason
-            // to repaint: it is serviced by `run_dispatch_queues` and changes no
-            // pixel. It belongs here rather than in `has_stale_pixels_in_context`
-            // so that an app asleep on a still screen still wakes far enough to
-            // republish its tree for a screen reader, without that wake being
-            // counted as a frame the display owes.
             || has_pending_semantics_invalidations()
             || self.composition.should_render()
     }

@@ -1,18 +1,3 @@
-//! Robot test for SubcomposeLayout invalidation routing.
-//!
-//! This test validates that modifier invalidations in SubcomposeLayoutNode
-//! are properly routed to trigger re-renders (NOT swallowed).
-//!
-//! Test case:
-//! 1. Display a LazyColumn with colored items
-//! 2. Click a button that changes item background colors
-//! 3. Verify the colors actually change (proves Draw invalidation works)
-//!
-//! Run with:
-//! ```bash
-//! cargo run --package desktop-app --example robot_subcompose_invalidation --features robot-app
-//! ```
-
 use std::time::Duration;
 
 use cranpose::{AppLauncher, LazyItems};
@@ -21,11 +6,9 @@ use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope};
 use cranpose_testing::{find_button, find_in_semantics, find_text_in_semantics};
 use cranpose_ui::{widgets::*, Color, Modifier, SemanticsWidgetRole, TextStyle};
 
-/// Test UI that changes LazyColumn item colors on button click
 fn test_app() {
     use cranpose_ui::LinearArrangement;
 
-    // State to track color scheme
     let color_scheme = rememberMutableStateOf(|| 0u32);
     let list_state = rememberLazyListState();
 
@@ -36,7 +19,6 @@ fn test_app() {
             .background(Color(0.1, 0.1, 0.1, 1.0)),
         ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(10.0)),
         move || {
-            // Header
             Text(
                 "SubcomposeLayout Invalidation Test".to_string(),
                 Modifier::empty()
@@ -45,7 +27,6 @@ fn test_app() {
                 TextStyle::default(),
             );
 
-            // Color scheme indicator - proves state is changing
             let current_scheme = color_scheme.get();
             let scheme_name = match current_scheme {
                 0 => "Blue Theme",
@@ -61,7 +42,6 @@ fn test_app() {
                 TextStyle::default(),
             );
 
-            // Button to cycle colors
             Button(
                 Modifier::empty()
                     .padding(8.0)
@@ -83,7 +63,6 @@ fn test_app() {
                 },
             );
 
-            // LazyColumn using SubcomposeLayoutNode internally with colored items
             LazyColumn(
                 Modifier::empty()
                     .fill_max_width()
@@ -93,11 +72,10 @@ fn test_app() {
                 LazyColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(4.0)),
                 |scope| {
                     scope.items(LazyItems::new(5).key(|i: usize| i as u64), move |i| {
-                        // Colors that change based on scheme
                         let bg = match current_scheme {
-                            0 => Color(0.1, 0.15, 0.3 + (i as f32 * 0.05), 1.0), // Blue
-                            1 => Color(0.1, 0.3 + (i as f32 * 0.05), 0.15, 1.0), // Green
-                            2 => Color(0.3 + (i as f32 * 0.05), 0.1, 0.15, 1.0), // Red
+                            0 => Color(0.1, 0.15, 0.3 + (i as f32 * 0.05), 1.0),
+                            1 => Color(0.1, 0.3 + (i as f32 * 0.05), 0.15, 1.0),
+                            2 => Color(0.3 + (i as f32 * 0.05), 0.1, 0.15, 1.0),
                             _ => Color(0.2, 0.2, 0.2, 1.0),
                         };
 
@@ -136,7 +114,6 @@ fn main() {
         .with_size(800, 600)
         .with_headless(true)
         .with_test_driver(|robot| {
-            // Timeout after 30 seconds
             std::thread::spawn(|| {
                 std::thread::sleep(Duration::from_secs(30));
                 eprintln!("TIMEOUT: Test exceeded 30 seconds");
@@ -148,9 +125,6 @@ fn main() {
 
             let mut all_passed = true;
 
-            // =========================================================
-            // Step 1: Verify initial state (Blue Theme)
-            // =========================================================
             println!("--- Step 1: Verify initial Blue Theme ---");
 
             if find_text_in_semantics(&robot, "Blue Theme").is_some() {
@@ -160,7 +134,6 @@ fn main() {
                 all_passed = false;
             }
 
-            // Verify items show Scheme 0
             if find_text_in_semantics(&robot, "Scheme 0").is_some() {
                 println!("  ✓ Items show 'Scheme 0'");
             } else {
@@ -168,9 +141,6 @@ fn main() {
                 all_passed = false;
             }
 
-            // =========================================================
-            // Step 2: Click button to change to Green Theme
-            // =========================================================
             println!("\n--- Step 2: Click 'Change Colors' button ---");
 
             if let Some((x, y, w, h)) =
@@ -189,12 +159,8 @@ fn main() {
                 all_passed = false;
             }
 
-            // =========================================================
-            // Step 3: Verify Green Theme is now active
-            // =========================================================
             println!("\n--- Step 3: Verify Green Theme after button click ---");
 
-            // Wait for recomposition to complete with retry
             let mut found_green = false;
             for attempt in 0..10 {
                 std::thread::sleep(Duration::from_millis(100));
@@ -211,7 +177,6 @@ fn main() {
                 all_passed = false;
             }
 
-            // Verify items now show Scheme 1
             if find_text_in_semantics(&robot, "Scheme 1").is_some() {
                 println!("  ✓ Items updated to show 'Scheme 1'");
                 println!("    (Proves SubcomposeLayoutNode invalidation works!)");
@@ -221,9 +186,6 @@ fn main() {
                 all_passed = false;
             }
 
-            // =========================================================
-            // Step 4: Click again to verify second color change
-            // =========================================================
             println!("\n--- Step 4: Click button again for Red Theme ---");
 
             if let Some((x, y, w, h)) =
@@ -237,7 +199,6 @@ fn main() {
                 println!("  ✓ Clicked 'Change Colors' button again");
             }
 
-            // Wait for recomposition with retry
             let mut found_red = false;
             for attempt in 0..10 {
                 std::thread::sleep(Duration::from_millis(100));
@@ -260,9 +221,6 @@ fn main() {
                 all_passed = false;
             }
 
-            // =========================================================
-            // Summary
-            // =========================================================
             println!("\n=== Test Summary ===");
             if all_passed {
                 println!("✓ ALL TESTS PASSED");

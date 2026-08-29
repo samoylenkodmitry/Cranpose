@@ -4,7 +4,7 @@
 //! matching Jetpack Compose's `LazyColumn` and `LazyRow` APIs.
 
 #![allow(non_snake_case)]
-#![allow(dead_code)] // Some public widget entry points are exercised by downstream apps.
+#![allow(dead_code)]
 
 use std::{
     cell::{Cell, RefCell},
@@ -18,7 +18,6 @@ use cranpose_foundation::lazy::{
     LazyListState, SmallNodeVec, SmallOffsetVec, measure_lazy_list,
     measure_lazy_list_with_beyond_bounds_policy,
 };
-// Re-export from foundation - single source of truth
 pub use cranpose_foundation::lazy::{LazyListItemInfo, LazyListLayoutInfo};
 use cranpose_ui_layout::{Constraints, LinearArrangement, MeasureResult};
 use smallvec::SmallVec;
@@ -237,9 +236,6 @@ fn measure_lazy_list_item(
             .record_candidate_miss();
     }
 
-    // Only a user key is an identity: an index key names the position, which is
-    // exactly the identity that leaks per-item state onto the wrong row when the
-    // list shifts. See `crate::lazy_item`.
     let item_identity = key.is_user_key().then_some(key_slot_id);
     let Some(item_content) = inputs
         .content
@@ -440,24 +436,15 @@ fn measure_lazy_list_internal(
     measured_item_cache
         .borrow_mut()
         .retain_constraint_scope(is_vertical, cross_axis_size);
-    // Scroll position stability: if items were added/removed before the first visible,
-    // find the item by key and adjust scroll position (JC's updateScrollPositionIfTheFirstItemWasMoved)
     if items_count > 0 {
-        // Scroll position stability: try O(1) range search first, fall back to O(N) global search
-        // This matches the performance-optimal pattern: most items are found within the range
         let range = state.nearest_range();
         state.update_scroll_position_if_item_moved(items_count, |slot_id| {
             content
                 .get_index_by_slot_id_in_range(slot_id, range.clone())
                 .or_else(|| content.get_index_by_slot_id(slot_id))
         });
-        // Note: nearest range is automatically updated by scroll_position when index changes
     }
 
-    // Capture scroll delta for direction inference BEFORE measurement consumes it.
-    // This is more accurate than comparing first visible index, especially for:
-    // - Scrolling within the same item (partial scroll)
-    // - Variable height items where scroll offset changes without index change
     let scroll_delta_for_direction = state.peek_scroll_delta();
     let skipped_slots_recycled = Cell::new(false);
     let mut retained_measurement_batch = Vec::new();
@@ -469,7 +456,6 @@ fn measure_lazy_list_internal(
         measured_item_cache,
     };
 
-    // Run the lazy list measurement algorithm
     let measure_item = |index: usize| -> LazyListMeasuredItem {
         if !skipped_slots_recycled.get()
             && recycle_forward_skipped_active_slots(
@@ -541,24 +527,20 @@ fn measure_lazy_list_internal(
     let effective_viewport_size = result.viewport_size;
     overscroll.set_dimension(effective_viewport_size);
 
-    // Cache measured item sizes for better scroll estimation
     state.cache_item_sizes(
         result
             .visible_items
             .iter()
             .map(|item| (item.index, item.main_axis_size)),
     );
-    // Update stats: count only items WITHIN viewport, not beyond-bounds buffer
     let truly_visible_count = result
         .visible_items
         .iter()
         .filter(|item| {
-            // Item is visible if any part of it is within viewport bounds
             let item_end = item.offset + item.main_axis_size;
             item.offset < effective_viewport_size && item_end > 0.0
         })
         .count();
-    // Get reusable slot count from SubcomposeState (the single source of truth)
     let in_pool = scope.reusable_slots_count();
     state.update_stats(truly_visible_count, in_pool);
 
@@ -574,10 +556,6 @@ fn measure_lazy_list_internal(
         }
     };
 
-    // Report size that respects BOTH min and max constraints.
-    // - If content < min: expand to min (e.g., fillMaxSize)
-    // - If content > max: clamp to max (enables scrolling)
-    // - Otherwise: use content size (shrink-wrap)
     let width = if is_vertical {
         cross_axis_size
     } else {
@@ -919,15 +897,9 @@ fn push_lazy_list_placements(
             .unwrap_or(LinearArrangement::Start)
     };
 
-    // Check if we should apply arrangement:
-    // 1. All items are visible (visible_items.len() == total items)
-    // 2. Content is smaller than viewport (hasSpareSpace)
-    // 3. Arrangement is not sequential (Start or SpacedBy)
     let spacing = get_spacing(arrangement);
     let total_item_size: f32 = visible_items.iter().map(|i| i.main_axis_size).sum::<f32>()
         + (items_count.saturating_sub(1) as f32) * spacing;
-    // Account for content padding when checking spare space (JC pattern)
-    // Clamp to 0.0 to handle edge case where padding exceeds viewport
     let available_main_axis =
         (viewport_size - config.before_content_padding - config.after_content_padding).max(0.0);
     let has_spare_space =
@@ -939,8 +911,6 @@ fn push_lazy_list_placements(
         );
 
     if should_apply_arrangement {
-        // Apply arrangement to compute final positions
-        // JC: density.arrange(mainAxisLayoutSize, sizes, offsets)
         let content_offset = config.before_content_padding;
 
         let sizes: SmallVec<[f32; 32]> = visible_items.iter().map(|i| i.main_axis_size).collect();
@@ -971,7 +941,6 @@ fn push_lazy_list_placements(
             }
         }
     } else {
-        // Use sequential offsets from measurement (scrolling case)
         for item in visible_items {
             for (&nid, &child_offset) in item.node_ids.iter().zip(item.child_offsets.iter()) {
                 let node_id: NodeId = nid as NodeId;
@@ -999,8 +968,6 @@ fn push_lazy_list_placements(
 }
 
 fn lazy_list_state_identity(state: &LazyListState) -> usize {
-    // The remembered state stores its inner payload behind an `Rc`, so this allocation address
-    // remains stable for the lifetime of the live state handle and is safe to use as a list key.
     let state_ptr = state.inner_ptr();
     debug_assert!(
         !state_ptr.is_null(),
@@ -1025,8 +992,6 @@ fn LazyColumnImpl(
 ) -> NodeId {
     use std::cell::RefCell;
 
-    // Use remember to keep a shared RefCell for content that persists across recompositions
-    // This allows updating the content on each recomposition while reusing the same node/policy
     let content_cell =
         cranpose_core::remember(|| Rc::new(RefCell::new(LazyListContentHandle::empty())))
             .with(|cell| cell.clone());
@@ -1066,8 +1031,6 @@ fn LazyColumnImpl(
     });
     let overscroll = motion_context.overscroll();
 
-    // Create measure policy with stable identity using remember.
-    // The policy reads latest values via state references, so it can be memoized.
     let content_for_policy = content_cell.clone();
     let measured_item_cache_for_policy = measured_item_cache.clone();
     let overscroll_for_policy = overscroll.clone();
@@ -1099,14 +1062,12 @@ fn LazyColumnImpl(
     .with(|p| p.clone());
     let list_state_id = lazy_list_state_identity(&state);
 
-    // Apply clipping and scroll gesture handling to modifier
     let scroll_modifier = modifier.clip_to_bounds().lazy_vertical_scroll_with_context(
         state,
         spec.reverse_layout,
         motion_context,
     );
 
-    // Create and register the subcompose layout node with the composer
     let node_id = cranpose_core::with_current_composer(|composer| {
         composer.with_key(&(list_state_id, "LazyColumnNode"), |composer| {
             composer.emit_node({
@@ -1116,13 +1077,8 @@ fn LazyColumnImpl(
             })
         })
     });
-    // Items composed during measure inherit the call-site locals and source
-    // scope, keeping overlays wired and secondary callbacks lifetime-bound.
     let captured_context =
         cranpose_core::with_current_composer(|composer| composer.capture_composition_context());
-    // Read while the composition is still running, same as `Layout`: measurement
-    // happens after it and cannot reach a composition local. Reading here also
-    // subscribes, so a subtree given a different grid recomposes and re-captures.
     let composed_density = crate::density::density();
     if let Err(err) = cranpose_core::with_node_mut(node_id, |node: &mut SubcomposeLayoutNode| {
         let modifier_changed = !node.modifier().structural_eq(&scroll_modifier);
@@ -1155,7 +1111,6 @@ fn LazyRowImpl(
 ) -> NodeId {
     use std::cell::RefCell;
 
-    // Use remember to keep a shared RefCell for content that persists across recompositions
     let content_cell =
         cranpose_core::remember(|| Rc::new(RefCell::new(LazyListContentHandle::empty())))
             .with(|cell| cell.clone());
@@ -1195,7 +1150,6 @@ fn LazyRowImpl(
     });
     let overscroll = motion_context.overscroll();
 
-    // Create measure policy with stable identity using remember.
     let content_for_policy = content_cell.clone();
     let measured_item_cache_for_policy = measured_item_cache.clone();
     let overscroll_for_policy = overscroll.clone();
@@ -1227,12 +1181,10 @@ fn LazyRowImpl(
     .with(|p| p.clone());
     let list_state_id = lazy_list_state_identity(&state);
 
-    // Apply clipping and scroll gesture handling to modifier
     let scroll_modifier = modifier
         .clip_to_bounds()
         .lazy_horizontal_scroll_with_context(state, spec.reverse_layout, motion_context);
 
-    // Create and register the subcompose layout node with the composer
     let node_id = cranpose_core::with_current_composer(|composer| {
         composer.with_key(&(list_state_id, "LazyRowNode"), |composer| {
             composer.emit_node({
@@ -1244,9 +1196,6 @@ fn LazyRowImpl(
     });
     let captured_context =
         cranpose_core::with_current_composer(|composer| composer.capture_composition_context());
-    // Read while the composition is still running, same as `Layout`: measurement
-    // happens after it and cannot reach a composition local. Reading here also
-    // subscribes, so a subtree given a different grid recomposes and re-captures.
     let composed_density = crate::density::density();
     if let Err(err) = cranpose_core::with_node_mut(node_id, |node: &mut SubcomposeLayoutNode| {
         let modifier_changed = !node.modifier().structural_eq(&scroll_modifier);
@@ -1277,10 +1226,6 @@ fn LazyColumnNode(
 ) -> NodeId {
     cranpose_core::debug_label_current_scope("LazyColumnNode");
 
-    // Expose this list as the nearest scroll container so a focused descendant
-    // text field can scroll its caret above the soft keyboard. `report_window_rect`
-    // fills `viewport` with the list's window rect each layout pass; the responder
-    // maps a caret window rect to a scroll delta (pure `scroll_delta_to_reveal`).
     let viewport: Rc<Cell<cranpose_ui_graphics::Rect>> = cranpose_core::remember(|| {
         Rc::new(Cell::new(cranpose_ui_graphics::Rect {
             x: 0.0,
@@ -1301,10 +1246,6 @@ fn LazyColumnNode(
                 }
                 let delta = crate::bring_into_view::scroll_delta_to_reveal(caret, vp, ime_bottom);
                 if delta.abs() > 0.5 {
-                    // `scroll_delta_to_reveal` returns a positive delta to reveal
-                    // content lower down (scroll forward); `LazyListState` scrolls
-                    // forward on a NEGATIVE `dispatch_scroll_delta` (see
-                    // `pushing_forward = delta < 0`), so negate.
                     state.dispatch_scroll_delta(-delta);
                 }
             })

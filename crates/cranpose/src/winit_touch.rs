@@ -1,80 +1,32 @@
-//! Maps winit's per-finger [`FingerId`]s onto the shell's pointer id space.
-//!
-//! winit reports every finger of a multi-touch interaction as its own opaque
-//! [`FingerId`]. The shell has a single *primary* pointer (id `0`, driven by
-//! `set_cursor`/`pointer_pressed`/`pointer_released_at_position`) plus the
-//! `secondary_pointer_*` family for the additional fingers of a gesture. Without
-//! this mapping every finger collapses onto pointer `0`: `TransformGesture`
-//! never sees two pointers (so pinch is unreachable) and the scroll modifier's
-//! `event.id != 0` arbitration cannot tell a second finger from the first.
-//!
-//! The routing mirrors the Android ingress (`android::shell_pointer_id` and
-//! `push_pending_inputs_from_android_event`), which is the contract
-//! `AppShell::secondary_pointer_*` was written against:
-//!
-//! * the finger that starts the gesture drives the primary pointer,
-//! * every other finger gets a stable non-zero id for as long as it is down,
-//! * when the primary finger lifts the whole gesture ends — the remaining
-//!   secondaries are released first, then the primary — and the next finger
-//!   down starts a fresh gesture.
-//!
-//! Android can quote each finger's own coordinates when it closes the
-//! secondaries left over from a primary lift, because its `MotionEvent` carries
-//! the whole pointer set. winit delivers one finger per event, so the leftover
-//! secondaries are released at the lifting finger's position. Nothing consumes
-//! the position of a secondary `Up` (`TransformGesture` only drops the entry,
-//! and the scroll/zoom modifiers ignore non-zero ids there), so this costs
-//! nothing.
-
 use winit::event::{ButtonSource, FingerId, PointerKind, PointerSource as WinitPointerSource};
 
-/// Which shell pointer a winit pointer event drives.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TouchRoute {
-    /// The shell's primary pointer (id `0`).
     Primary,
-    /// An additional finger of a multi-touch gesture, with a stable non-zero id
-    /// for `AppShell::secondary_pointer_*`.
     Secondary(u64),
-    /// A finger the router is not tracking: it either arrived while another
-    /// gesture owned the primary pointer and has since been retired, or its
-    /// press was never seen. Dropping it keeps stray fingers from hijacking the
-    /// primary pointer mid-gesture.
     Untracked,
 }
 
-/// What a finger lifting has to dispatch, in order.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct TouchRelease {
-    /// Secondary pointer ids to release first, in ascending id order.
     pub(crate) secondaries: Vec<u64>,
-    /// Whether the shell's primary pointer is released afterwards.
     pub(crate) releases_primary: bool,
 }
 
-/// What a `PointerLeft` has to dispatch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TouchLeave {
-    /// Cancel the whole gesture (`AppShell::cancel_gesture`).
     CancelGesture,
-    /// Release just this secondary pointer; the primary gesture continues.
     ReleaseSecondary(u64),
-    /// Nothing to do — this finger's stream already ended.
     Ignore,
 }
 
-/// Tracks the fingers of the in-flight gesture and hands out shell pointer ids.
 #[derive(Debug, Default)]
 pub(crate) struct TouchPointerRouter {
-    /// The finger that started the gesture; drives the primary pointer.
     primary: Option<FingerId>,
-    /// Additional fingers currently down, with their assigned shell ids.
     secondaries: Vec<(FingerId, u64)>,
-    /// Next id to hand out. Reset with the gesture so ids stay small.
     next_secondary_id: u64,
 }
 
-/// The finger carried by a pointer event, when it is a touch.
 fn button_finger(button: &ButtonSource) -> Option<FingerId> {
     match button {
         ButtonSource::Touch { finger_id, .. } => Some(*finger_id),
@@ -97,7 +49,6 @@ fn kind_finger(kind: &PointerKind) -> Option<FingerId> {
 }
 
 impl TouchPointerRouter {
-    /// True while no finger of a gesture is tracked.
     fn is_idle(&self) -> bool {
         self.primary.is_none() && self.secondaries.is_empty()
     }
@@ -115,11 +66,6 @@ impl TouchPointerRouter {
         self.next_secondary_id = 0;
     }
 
-    /// Routes a pressed `PointerButton`.
-    ///
-    /// Non-touch buttons (mouse, stylus contact) always drive the primary
-    /// pointer — they are single-pointer devices as far as the shell is
-    /// concerned.
     pub(crate) fn press(&mut self, button: &ButtonSource) -> TouchRoute {
         let Some(finger) = button_finger(button) else {
             return TouchRoute::Primary;
@@ -143,8 +89,6 @@ impl TouchPointerRouter {
         }
     }
 
-    /// Routes a `PointerMoved`. Fingers that are not tracked are dropped rather
-    /// than moved onto the primary pointer.
     pub(crate) fn moved(&self, source: &WinitPointerSource) -> TouchRoute {
         let Some(finger) = source_finger(source) else {
             return TouchRoute::Primary;
@@ -158,7 +102,6 @@ impl TouchPointerRouter {
         }
     }
 
-    /// Routes a released `PointerButton`.
     pub(crate) fn release(&mut self, button: &ButtonSource) -> TouchRelease {
         let primary_only = TouchRelease {
             secondaries: Vec::new(),
@@ -169,8 +112,6 @@ impl TouchPointerRouter {
         };
 
         if self.primary == Some(finger) {
-            // The gesture is anchored to the primary pointer, so its lift ends
-            // the whole gesture: close the fingers still down, then the primary.
             let mut secondaries: Vec<u64> = self.secondaries.iter().map(|(_, id)| *id).collect();
             secondaries.sort_unstable();
             self.end_gesture();
@@ -188,10 +129,6 @@ impl TouchPointerRouter {
             };
         }
 
-        // An untracked finger. While a gesture is live it must not close it —
-        // that is the fingers-left-over-after-a-primary-lift case. With nothing
-        // tracked this is the ordinary trailing release, which still ends the
-        // shell's pointer stream (matching the Android `ACTION_UP` fallthrough).
         if self.is_idle() {
             primary_only
         } else {
@@ -199,13 +136,6 @@ impl TouchPointerRouter {
         }
     }
 
-    /// Routes a `PointerLeft`.
-    ///
-    /// iOS emits one of these per finger — after the matching release for a
-    /// normal lift, and *instead* of a release when the system cancels the
-    /// touch. Cancelling the whole gesture on every one of them (the previous
-    /// behaviour) tears down the primary gesture the moment a second finger
-    /// leaves, which is exactly what a pinch does.
     pub(crate) fn left(&mut self, kind: &PointerKind) -> TouchLeave {
         let Some(finger) = kind_finger(kind) else {
             self.end_gesture();
@@ -222,9 +152,6 @@ impl TouchPointerRouter {
             return TouchLeave::ReleaseSecondary(id);
         }
 
-        // Untracked: the trailing `PointerLeft` of a finger whose release was
-        // already dispatched. Only forward it as a cancel when no gesture is in
-        // flight, preserving the single-finger behaviour this replaced.
         if self.is_idle() {
             TouchLeave::CancelGesture
         } else {
@@ -257,9 +184,6 @@ mod tests {
         }
     }
 
-    /// The regression: iOS discarded the `FingerId`, so a second finger's Down
-    /// reached the shell as another primary press. Two Downs with DIFFERENT
-    /// finger ids must produce a primary AND a secondary pointer.
     #[test]
     fn two_touch_downs_with_different_finger_ids_produce_a_primary_and_a_secondary() {
         let mut router = TouchPointerRouter::default();
@@ -275,7 +199,6 @@ mod tests {
         router.press(&touch_button(11));
         assert_eq!(router.press(&touch_button(22)), TouchRoute::Secondary(1));
         assert_eq!(router.press(&touch_button(33)), TouchRoute::Secondary(2));
-        // Ids stay put for the life of the gesture.
         assert_eq!(
             router.moved(&touch_source(22)),
             TouchRoute::Secondary(1),
@@ -332,7 +255,6 @@ mod tests {
                 releases_primary: true,
             }
         );
-        // The gesture is over; the fingers still down are retired.
         assert_eq!(router.moved(&touch_source(22)), TouchRoute::Untracked);
     }
 

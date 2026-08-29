@@ -1,11 +1,3 @@
-//! The equalizer the desktop backend puts in front of the output device.
-//!
-//! Ten peaking biquads per channel on the standard octave centres, plus a
-//! preamp. The filters run in the source chain, which is a real-time path:
-//! nothing here allocates or locks per sample. A setting change is published
-//! into a shared cell and picked up by the next sample, so applying a curve
-//! never blocks the audio thread or interrupts what is playing.
-
 use std::{
     f32::consts::PI,
     sync::{
@@ -20,25 +12,16 @@ use parking_lot::Mutex;
 
 use crate::source::{ChannelCount, Sample, SampleRate, SampleSource, SeekError};
 
-/// The centres this backend's filters sit on. The contract's own set, so a
-/// curve saved on a desktop means the same thing in a browser.
 pub(crate) const BAND_CENTERS_HZ: [f32; 10] = OCTAVE_BAND_CENTERS_HZ;
 
-/// How far a band can lift or cut, in decibels.
 pub(crate) const BAND_RANGE_DB: f32 = 12.0;
 
-/// The Q of each peaking filter. One octave between centres works out at
-/// roughly this, which is what makes ten bands cover the spectrum evenly
-/// rather than leaving dips between them.
 const BAND_Q: f32 = 1.41;
 
-/// The bands this backend reports.
 pub(crate) fn bands() -> Vec<EqualizerBand> {
     cranpose_services::octave_equalizer_bands(BAND_RANGE_DB)
 }
 
-/// A peaking filter's coefficients, in the transposed direct form 2 the
-/// [`BiquadState`] below evaluates.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Biquad {
     b0: f32,
@@ -49,7 +32,6 @@ struct Biquad {
 }
 
 impl Biquad {
-    /// The identity filter: what a band set to 0 dB is.
     const PASSTHROUGH: Biquad = Biquad {
         b0: 1.0,
         b1: 0.0,
@@ -58,11 +40,6 @@ impl Biquad {
         a2: 0.0,
     };
 
-    /// A peaking EQ section, from the Audio EQ Cookbook.
-    ///
-    /// A centre at or above the Nyquist frequency has no filter to build — the
-    /// 16 kHz band on a 22 kHz recording, say — and passes through instead of
-    /// producing coefficients that would ring.
     fn peaking(center_hz: f32, sample_rate: f32, gain_db: f32) -> Biquad {
         if gain_db == 0.0 || sample_rate <= 0.0 || center_hz * 2.0 >= sample_rate {
             return Biquad::PASSTHROUGH;
@@ -82,7 +59,6 @@ impl Biquad {
     }
 }
 
-/// One filter's memory for one channel.
 #[derive(Clone, Copy, Default)]
 struct BiquadState {
     z1: f32,
@@ -99,7 +75,6 @@ impl BiquadState {
     }
 }
 
-/// A curve, resolved for one sample rate.
 #[derive(Clone, Debug, PartialEq)]
 struct Curve {
     preamp: f32,
@@ -129,17 +104,9 @@ impl Curve {
     }
 }
 
-/// The curve the source reads, and the switch that takes it out of circuit.
-///
-/// The curve is rebuilt whenever the setting or the sample rate changes, which
-/// happens on the UI thread; the audio thread only ever reads it.
 pub(crate) struct EqualizerTap {
     enabled: AtomicBool,
-    /// The setting as given, kept so a new item at a different sample rate can
-    /// rebuild the same curve for its own rate.
     setting: Mutex<(f32, Vec<f32>)>,
-    /// The rate the coefficients were built for. A new item can open at a
-    /// different one, and the same curve then means different filters.
     sample_rate: AtomicU32,
     curve: Mutex<Arc<Curve>>,
 }
@@ -154,16 +121,12 @@ impl EqualizerTap {
         })
     }
 
-    /// Applies a setting. Takes effect on the next sample of whatever is
-    /// already playing.
     pub(crate) fn set(&self, enabled: bool, preamp_db: f32, gains_db: &[f32]) {
         *self.setting.lock() = (preamp_db, gains_db.to_vec());
         self.enabled.store(enabled, Ordering::Release);
         self.rebuild();
     }
 
-    /// Rebuilds the curve for `sample_rate`. Called when an item opens, since
-    /// the coefficients depend on the rate the samples arrive at.
     pub(crate) fn prepare(&self, sample_rate: u32) {
         *self.curve.lock() = Arc::new(Curve::flat());
         self.sample_rate.store(sample_rate, Ordering::Release);
@@ -179,12 +142,6 @@ impl EqualizerTap {
         *self.curve.lock() = Arc::new(Curve::build(rate as f32, preamp_db, &gains));
     }
 
-    /// The curve to run now, or `None` when the equalizer is out of circuit.
-    ///
-    /// The outer `None` means the cell was being written and this call must
-    /// keep whatever it already had. `try_lock` rather than `lock` because the
-    /// caller is the audio thread: a curve that arrives one refresh interval
-    /// later is inaudible, and a blocked output callback is not.
     fn published_curve(&self) -> Option<Option<Arc<Curve>>> {
         if !self.enabled.load(Ordering::Acquire) {
             return Some(None);
@@ -192,14 +149,12 @@ impl EqualizerTap {
         self.curve.try_lock().map(|curve| Some(Arc::clone(&curve)))
     }
 
-    /// The same, for the thread that opens an item and can afford to wait.
     fn current_curve(&self) -> Option<Arc<Curve>> {
         self.enabled
             .load(Ordering::Acquire)
             .then(|| Arc::clone(&self.curve.lock()))
     }
 
-    /// Puts the equalizer in front of `inner`.
     pub(crate) fn wrap<S: SampleSource>(self: &Arc<Self>, inner: S) -> EqualizerSource<S> {
         let channels = inner.channels().get() as usize;
         self.prepare(inner.sample_rate().get());
@@ -215,12 +170,8 @@ impl EqualizerTap {
     }
 }
 
-/// How many samples pass between checks for a new curve. Reading the shared
-/// cell takes a lock, and a curve that arrives 512 samples (~11 ms) late is not
-/// something anyone hears; taking that lock per sample on the audio thread is.
 const CURVE_REFRESH_SAMPLES: u32 = 512;
 
-/// A source that runs the equalizer over what passes through it.
 pub(crate) struct EqualizerSource<S> {
     inner: S,
     tap: Arc<EqualizerTap>,
@@ -251,9 +202,6 @@ impl<S: SampleSource> Iterator for EqualizerSource<S> {
         if self.refresh >= CURVE_REFRESH_SAMPLES {
             self.refresh = 0;
             if let Some(next) = self.tap.published_curve() {
-                // Switching the equalizer in or out starts filters whose memory
-                // is from a signal that was not filtered the same way, which is
-                // a click. Clearing it costs one block of ramp instead.
                 if next.is_none() != self.curve.is_none() {
                     self.reset();
                 }
@@ -304,9 +252,6 @@ impl<S: SampleSource> SampleSource for EqualizerSource<S> {
     }
 
     fn try_seek(&mut self, position: Duration) -> Result<(), SeekError> {
-        // Filter memory is the tail of the samples that just played. Carrying
-        // it across a seek rings the first block of the new position with the
-        // old one, which is audible as a click.
         self.reset();
         self.inner.try_seek(position)
     }
@@ -317,7 +262,6 @@ mod tests {
     use super::*;
     use crate::source::SamplesBuffer;
 
-    /// A sine at `hz`, one channel, one second.
     fn tone(hz: f32, sample_rate: u32) -> SamplesBuffer {
         let frames = sample_rate as usize;
         let samples: Vec<f32> = (0..frames)
@@ -326,7 +270,6 @@ mod tests {
         SamplesBuffer::new(1, sample_rate, samples)
     }
 
-    /// Peak amplitude of the second half, so the filters have settled.
     fn settled_peak(samples: &[f32]) -> f32 {
         samples[samples.len() / 2..]
             .iter()
@@ -361,17 +304,13 @@ mod tests {
     #[test]
     fn lifting_a_band_lifts_the_frequency_it_is_centred_on() {
         let mut gains = [0.0f32; BAND_CENTERS_HZ.len()];
-        // The 1 kHz band.
         gains[5] = 12.0;
         let tap = EqualizerTap::new();
         tap.set(true, 0.0, &gains);
 
         let lifted = settled_peak(&run(&tap, 1_000.0, 44_100));
-        // +12 dB is a factor of ~4, and the source peaks at 1.0, so the output
-        // is clamped. What must be true is that it reached the ceiling.
         assert!(lifted > 0.98, "the centred band was not lifted: {lifted}");
 
-        // Three octaves down is outside this band's reach.
         let untouched = settled_peak(&run(&tap, 125.0, 44_100));
         assert!(
             untouched < 1.15,
@@ -395,7 +334,6 @@ mod tests {
         let tap = EqualizerTap::new();
         tap.set(true, -6.0, &[0.0; BAND_CENTERS_HZ.len()]);
         let peak = settled_peak(&run(&tap, 1_000.0, 44_100));
-        // -6 dB is a factor of ~0.5.
         assert!(
             (peak - 0.5).abs() < 0.03,
             "the preamp did not halve the level: {peak}"
@@ -404,8 +342,6 @@ mod tests {
 
     #[test]
     fn a_band_above_the_nyquist_frequency_is_left_alone() {
-        // 16 kHz on a 22.05 kHz recording is past what the samples can carry.
-        // Building coefficients for it produces a filter that rings.
         let filter = Biquad::peaking(16_000.0, 22_050.0, 12.0);
         assert_eq!(
             filter,
@@ -434,8 +370,6 @@ mod tests {
         gains[9] = 12.0;
         tap.set(true, 0.0, &gains);
 
-        // 16 kHz is a real band at 44.1 kHz and past Nyquist at 22.05 kHz, so
-        // the same setting must produce different filters for the two rates.
         tap.prepare(44_100);
         let wide = tap
             .current_curve()

@@ -18,8 +18,6 @@
 //! The current snapshot is stored in thread-local storage and automatically
 //! managed by the snapshot system.
 
-// All snapshot types use Arc with Cell/RefCell for single-threaded shared ownership.
-// This is safe because snapshots are thread-local and never cross thread boundaries.
 #![allow(clippy::arc_with_non_send_sync)]
 
 use std::{
@@ -384,7 +382,6 @@ impl AnySnapshot {
 }
 
 thread_local! {
-    // Thread-local storage for the current snapshot.
     static CURRENT_SNAPSHOT: RefCell<Option<AnySnapshot>> = const { RefCell::new(None) };
 }
 
@@ -395,7 +392,6 @@ pub fn current_snapshot() -> Option<AnySnapshot> {
         .unwrap_or(None)
 }
 
-/// Set the current snapshot (internal use only).
 pub(crate) fn set_current_snapshot(snapshot: Option<AnySnapshot>) {
     let _ = CURRENT_SNAPSHOT.try_with(|cell| {
         *cell.borrow_mut() = snapshot;
@@ -437,8 +433,6 @@ pub fn take_mutable_snapshot(
     read_observer: Option<ReadObserver>,
     write_observer: Option<WriteObserver>,
 ) -> AnyMutableSnapshot {
-    // Check if we're inside a mutable snapshot - if so, create nested
-    // This matches Kotlin's: (currentSnapshot() as? MutableSnapshot)?.takeNestedMutableSnapshot(...)
     match current_snapshot() {
         Some(AnySnapshot::Mutable(parent)) => AnyMutableSnapshot::Nested(
             parent.take_nested_mutable_snapshot(read_observer, write_observer),
@@ -446,7 +440,6 @@ pub fn take_mutable_snapshot(
         Some(AnySnapshot::NestedMutable(parent)) => AnyMutableSnapshot::Nested(
             parent.take_nested_mutable_snapshot(read_observer, write_observer),
         ),
-        // For Global, TransparentMutable, or no snapshot: create from global
         _ => AnyMutableSnapshot::Root(
             GlobalSnapshot::get_or_create()
                 .take_nested_mutable_snapshot(read_observer, write_observer),
@@ -469,12 +462,9 @@ pub fn take_transparent_observer_mutable_snapshot(
     let parent = current_snapshot();
     match parent {
         Some(AnySnapshot::TransparentMutable(transparent)) if transparent.can_reuse() => {
-            // Reuse the existing transparent snapshot
             transparent
         }
         _ => {
-            // Create a new transparent snapshot using the current snapshot's ID
-            // Transparent snapshots do NOT allocate new IDs!
             let current = current_snapshot()
                 .unwrap_or_else(|| AnySnapshot::Global(GlobalSnapshot::get_or_create()));
             let id = current.snapshot_id();
@@ -495,10 +485,6 @@ pub fn allocate_record_id() -> SnapshotId {
     runtime::allocate_record_id()
 }
 
-/// Get the next snapshot ID that will be allocated without incrementing the counter.
-///
-/// This is used for cleanup operations to determine the reuse limit.
-/// Mirrors Kotlin's `nextSnapshotId` field access.
 pub(crate) fn peek_next_snapshot_id() -> SnapshotId {
     runtime::peek_next_snapshot_id()
 }
@@ -531,19 +517,10 @@ thread_local! {
 }
 
 thread_local! {
-    // Thread-local last-writer registry used for conflict detection in v2.
-    //
-    // Maps a state object id to the snapshot id of the most recent successful apply
-    // that modified the object. This is a simplified conflict tracking mechanism
-    // for Phase 2.1 before full record-chain merging is implemented.
-    //
-    // Thread-local ensures test isolation - each test thread has its own registry.
     static LAST_WRITES: RefCell<HashMap<StateObjectId, SnapshotId>> = RefCell::new(HashMap::default());
 }
 
 thread_local! {
-    // Thread-local weak set of state objects with multiple records for periodic garbage collection.
-    // Mirrors Kotlin's `extraStateObjects` WeakSet.
     static EXTRA_STATE_OBJECTS: RefCell<crate::snapshot_weak_set::SnapshotWeakSet> = RefCell::new(crate::snapshot_weak_set::SnapshotWeakSet::new());
 }
 
@@ -630,9 +607,7 @@ impl Drop for ObserverHandle {
     }
 }
 
-/// Notify apply observers that a snapshot was applied.
 pub(crate) fn notify_apply_observers(modified: &[Arc<dyn StateObject>], snapshot_id: SnapshotId) {
-    // Copy observers so callbacks run outside the borrow
     APPLY_OBSERVERS.with(|cell| {
         let observers: Vec<ApplyObserver> = cell.borrow().values().cloned().collect();
         for observer in observers.into_iter() {
@@ -641,14 +616,12 @@ pub(crate) fn notify_apply_observers(modified: &[Arc<dyn StateObject>], snapshot
     });
 }
 
-/// Record the last successful writer snapshot id for a given object id.
 pub(crate) fn set_last_write(id: StateObjectId, snapshot_id: SnapshotId) {
     LAST_WRITES.with(|cell| {
         cell.borrow_mut().insert(id, snapshot_id);
     });
 }
 
-/// Clear all last write records (for testing).
 #[cfg(test)]
 pub(crate) fn clear_last_writes() {
     LAST_WRITES.with(|cell| {
@@ -656,19 +629,10 @@ pub(crate) fn clear_last_writes() {
     });
 }
 
-/// Check and overwrite unused records for all tracked state objects.
-///
-/// Mirrors Kotlin's `checkAndOverwriteUnusedRecordsLocked()`. This method:
-/// 1. Iterates through all state objects in `EXTRA_STATE_OBJECTS`
-/// 2. Calls `overwrite_unused_records()` on each
-/// 3. Removes states that no longer need tracking (down to 1 or fewer records)
-/// 4. Automatically cleans up dead weak references
 pub(crate) fn check_and_overwrite_unused_records_locked() {
     EXTRA_STATE_OBJECTS.with(|cell| {
-        cell.borrow_mut().remove_if(|state| {
-            // Returns true to keep, false to remove
-            state.overwrite_unused_records()
-        });
+        cell.borrow_mut()
+            .remove_if(|state| state.overwrite_unused_records());
     });
 }
 
@@ -723,7 +687,6 @@ pub(crate) fn optimistic_merges(
             None => continue,
         };
 
-        // Use applying snapshot's invalid set for previous (matching Kotlin)
         let (previous_opt, found_base) =
             mutable::find_previous_record(&head, base_parent_id, applying_invalid);
         let previous = previous_opt?;
@@ -794,29 +757,17 @@ pub fn merge_write_observers(
     }
 }
 
-/// Shared state for all snapshots.
 pub(crate) struct SnapshotState {
-    /// The snapshot ID.
     pub(crate) id: Cell<SnapshotId>,
-    /// Set of invalid snapshot IDs.
     pub(crate) invalid: RefCell<SnapshotIdSet>,
-    /// Pin handle to keep this snapshot alive.
     pub(crate) pin_handle: Cell<PinHandle>,
-    /// Whether this snapshot has been disposed.
     pub(crate) disposed: Cell<bool>,
-    /// Read observer, if any.
     pub(crate) read_observer: RefCell<Option<ReadObserver>>,
-    /// Write observer, if any.
     pub(crate) write_observer: RefCell<Option<WriteObserver>>,
-    /// Modified state objects.
     #[allow(clippy::type_complexity)]
-    // HashMap value is (Arc, SnapshotId) - reasonable for tracking state
     pub(crate) modified: RefCell<HashMap<StateObjectId, (Arc<dyn StateObject>, SnapshotId)>>,
-    /// Optional callback invoked once when disposed.
     on_dispose: RefCell<Option<Box<dyn FnOnce()>>>,
-    /// Whether this snapshot's lifecycle is tracked in the global runtime.
     runtime_tracked: bool,
-    /// Set of child snapshot ids that are still pending.
     pending_children: RefCell<HashSet<SnapshotId>>,
 }
 
@@ -838,10 +789,6 @@ impl SnapshotState {
         )
     }
 
-    /// Create a new SnapshotState with optional pinning control.
-    ///
-    /// Transparent snapshots should pass `should_pin: false` since they don't allocate
-    /// new IDs and shouldn't prevent garbage collection of old records.
     pub(crate) fn new_with_pinning(
         id: SnapshotId,
         invalid: SnapshotIdSet,
@@ -876,22 +823,18 @@ impl SnapshotState {
     }
 
     pub(crate) fn record_write(&self, state: Arc<dyn StateObject>, writer_id: SnapshotId) {
-        // Get the unique ID for this state object
         let state_id = state.object_id().as_usize();
 
         let mut modified = self.modified.borrow_mut();
 
-        // Only call observer on first write
         match modified.entry(state_id) {
             std::collections::hash_map::Entry::Vacant(e) => {
                 if let Some(observer) = self.write_observer.borrow().as_ref() {
                     observer(&*state);
                 }
-                // Store the Arc and writer id in the modified set
                 e.insert((state, writer_id));
             }
             std::collections::hash_map::Entry::Occupied(mut e) => {
-                // Update the writer id to reflect the most recent writer for this state.
                 e.insert((state, writer_id));
             }
         }
@@ -959,13 +902,13 @@ mod tests {
 
     #[test]
     fn test_apply_result_check_success() {
-        SnapshotApplyResult::Success.check(); // Should not panic
+        SnapshotApplyResult::Success.check();
     }
 
     #[test]
     #[should_panic(expected = "Snapshot apply failed")]
     fn test_apply_result_check_failure() {
-        SnapshotApplyResult::Failure.check(); // Should panic
+        SnapshotApplyResult::Failure.check();
     }
 
     #[test]
@@ -1022,7 +965,6 @@ mod tests {
         assert!(current_snapshot().is_none());
     }
 
-    // Test helper: Simple state object for testing
     struct TestStateObject {
         id: usize,
     }
@@ -1075,28 +1017,23 @@ mod tests {
     fn test_apply_observer_receives_correct_modified_objects() {
         use std::sync::Mutex;
 
-        // Setup: Track what the observer receives
         let received_count = Arc::new(Mutex::new(0));
         let received_snapshot_id = Arc::new(Mutex::new(0));
 
         let received_count_clone = received_count.clone();
         let received_snapshot_id_clone = received_snapshot_id.clone();
 
-        // Register observer
         let _handle = register_apply_observer(Rc::new(move |modified, snapshot_id| {
             *received_snapshot_id_clone.lock().unwrap() = snapshot_id;
             *received_count_clone.lock().unwrap() = modified.len();
         }));
 
-        // Create test objects
         let obj1: Arc<dyn StateObject> = TestStateObject::new(42);
         let obj2: Arc<dyn StateObject> = TestStateObject::new(99);
         let modified = vec![obj1, obj2];
 
-        // Notify observers
         notify_apply_observers(&modified, 123);
 
-        // Verify
         assert_eq!(*received_snapshot_id.lock().unwrap(), 123);
         assert_eq!(*received_count.lock().unwrap(), 2);
     }
@@ -1112,7 +1049,6 @@ mod tests {
             *received_id_clone.lock().unwrap() = snapshot_id;
         }));
 
-        // Notify with specific snapshot ID
         notify_apply_observers(&[], 456);
 
         assert_eq!(*received_id.lock().unwrap(), 456);
@@ -1130,7 +1066,6 @@ mod tests {
         let call_count2_clone = call_count2.clone();
         let call_count3_clone = call_count3.clone();
 
-        // Register three observers
         let _handle1 = register_apply_observer(Rc::new(move |_, _| {
             *call_count1_clone.lock().unwrap() += 1;
         }));
@@ -1143,18 +1078,14 @@ mod tests {
             *call_count3_clone.lock().unwrap() += 1;
         }));
 
-        // Notify observers
         notify_apply_observers(&[], 1);
 
-        // All three should have been called
         assert_eq!(*call_count1.lock().unwrap(), 1);
         assert_eq!(*call_count2.lock().unwrap(), 1);
         assert_eq!(*call_count3.lock().unwrap(), 1);
 
-        // Notify again
         notify_apply_observers(&[], 2);
 
-        // All should have been called twice
         assert_eq!(*call_count1.lock().unwrap(), 2);
         assert_eq!(*call_count2.lock().unwrap(), 2);
         assert_eq!(*call_count3.lock().unwrap(), 2);
@@ -1168,15 +1099,12 @@ mod tests {
         let call_count_clone = call_count.clone();
 
         let _handle = register_apply_observer(Rc::new(move |modified, _| {
-            // Observer should still be called, but with empty array
             *call_count_clone.lock().unwrap() += 1;
             assert_eq!(modified.len(), 0);
         }));
 
-        // Notify with no modifications
         notify_apply_observers(&[], 1);
 
-        // Observer should have been called
         assert_eq!(*call_count.lock().unwrap(), 1);
     }
 
@@ -1184,7 +1112,6 @@ mod tests {
     fn test_observer_handle_drop_removes_correct_observer() {
         use std::sync::Mutex;
 
-        // Register three observers that track their IDs
         let calls = Arc::new(Mutex::new(Vec::new()));
 
         let calls1 = calls.clone();
@@ -1202,7 +1129,6 @@ mod tests {
             calls3.lock().unwrap().push(3);
         }));
 
-        // All three should be called
         notify_apply_observers(&[], 1);
         let result = calls.lock().unwrap().clone();
         assert_eq!(result.len(), 3);
@@ -1211,10 +1137,8 @@ mod tests {
         assert!(result.contains(&3));
         calls.lock().unwrap().clear();
 
-        // Drop handle2 (middle one)
         drop(handle2);
 
-        // Only 1 and 3 should be called now
         notify_apply_observers(&[], 2);
         let result = calls.lock().unwrap().clone();
         assert_eq!(result.len(), 2);
@@ -1223,20 +1147,16 @@ mod tests {
         assert!(!result.contains(&2));
         calls.lock().unwrap().clear();
 
-        // Drop handle1
         drop(handle1);
 
-        // Only 3 should be called
         notify_apply_observers(&[], 3);
         let result = calls.lock().unwrap().clone();
         assert_eq!(result.len(), 1);
         assert!(result.contains(&3));
         calls.lock().unwrap().clear();
 
-        // Drop handle3
         drop(handle3);
 
-        // None should be called
         notify_apply_observers(&[], 4);
         assert_eq!(calls.lock().unwrap().len(), 0);
     }
@@ -1245,7 +1165,6 @@ mod tests {
     fn test_observer_handle_drop_in_different_orders() {
         use std::sync::Mutex;
 
-        // Test 1: Drop in reverse order (3, 2, 1)
         {
             let calls = Arc::new(Mutex::new(Vec::new()));
 
@@ -1282,7 +1201,6 @@ mod tests {
             assert_eq!(calls.lock().unwrap().len(), 0);
         }
 
-        // Test 2: Drop in forward order (1, 2, 3)
         {
             let calls = Arc::new(Mutex::new(Vec::new()));
 
@@ -1336,26 +1254,21 @@ mod tests {
             calls2.lock().unwrap().push((2, snapshot_id));
         }));
 
-        // Both work
         notify_apply_observers(&[], 100);
         assert_eq!(calls.lock().unwrap().len(), 2);
         calls.lock().unwrap().clear();
 
-        // Drop handle1
         drop(handle1);
 
-        // handle2 still works with new snapshot ID
         notify_apply_observers(&[], 200);
         assert_eq!(*calls.lock().unwrap(), vec![(2, 200)]);
         calls.lock().unwrap().clear();
 
-        // Register new observer after dropping handle1
         let calls3 = calls.clone();
         let _handle3 = register_apply_observer(Rc::new(move |_, snapshot_id| {
             calls3.lock().unwrap().push((3, snapshot_id));
         }));
 
-        // Both handle2 and handle3 work
         notify_apply_observers(&[], 300);
         let result = calls.lock().unwrap().clone();
         assert_eq!(result.len(), 2);
@@ -1373,9 +1286,6 @@ mod tests {
 
         let mut handles = Vec::new();
 
-        // Register 100 observers and track their IDs through side channel
-        // Since we can't directly access the ID from the handle, we'll verify
-        // uniqueness by ensuring all observers get called
         for i in 0..100 {
             let ids_clone = ids.clone();
             let handle = register_apply_observer(Rc::new(move |_, _| {
@@ -1384,16 +1294,13 @@ mod tests {
             handles.push(handle);
         }
 
-        // Notify once - all 100 should be called
         notify_apply_observers(&[], 1);
         assert_eq!(ids.lock().unwrap().len(), 100);
 
-        // Drop every other handle
         for i in (0..100).step_by(2) {
             handles.remove(i / 2);
         }
 
-        // Clear and notify again - only 50 should be called
         ids.lock().unwrap().clear();
         notify_apply_observers(&[], 2);
         assert_eq!(ids.lock().unwrap().len(), 50);
@@ -1403,7 +1310,6 @@ mod tests {
     fn test_state_object_storage_in_modified_set() {
         use crate::state::StateObject;
 
-        // Mock StateObject for testing
         struct TestState;
 
         impl StateObject for TestState {
@@ -1446,18 +1352,14 @@ mod tests {
 
         let state = SnapshotState::new(1, SnapshotIdSet::new(), None, None, false);
 
-        // Create Arc to state object
         let state_obj = Arc::new(TestState) as Arc<dyn StateObject>;
 
-        // Record write should store the Arc
         state.record_write(state_obj.clone(), 1);
 
-        // Verify it was stored in the modified set
         let modified = state.modified.borrow();
         assert_eq!(modified.len(), 1);
         assert!(modified.contains_key(&12345));
 
-        // Verify the Arc is the same object
         let (stored, writer_id) = modified.get(&12345).unwrap();
         assert_eq!(stored.object_id().as_usize(), 12345);
         assert_eq!(*writer_id, 1);
@@ -1510,11 +1412,9 @@ mod tests {
         let state = SnapshotState::new(1, SnapshotIdSet::new(), None, None, false);
         let state_obj = Arc::new(TestState) as Arc<dyn StateObject>;
 
-        // First write
         state.record_write(state_obj.clone(), 1);
         assert_eq!(state.modified.borrow().len(), 1);
 
-        // Second write to same object should not add a new entry but updates writer id
         state.record_write(state_obj.clone(), 2);
         let modified = state.modified.borrow();
         assert_eq!(modified.len(), 1);

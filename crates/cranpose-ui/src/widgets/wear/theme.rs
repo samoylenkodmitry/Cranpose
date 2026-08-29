@@ -69,8 +69,6 @@ pub struct WearColors {
 }
 
 impl Default for WearColors {
-    /// A plain dark scheme. It is not any app's palette — a caller with a
-    /// palette passes it in.
     fn default() -> Self {
         Self {
             primary: Color::from_rgb_u8(0xA8, 0xC7, 0xFA),
@@ -84,9 +82,6 @@ impl Default for WearColors {
             background: Color::from_rgb_u8(0x00, 0x00, 0x00),
             on_background: Color::from_rgb_u8(0xE3, 0xE3, 0xE3),
             content: Color::WHITE,
-            // Not written out: the scheme's own `on_background` through the
-            // rule below, so the default cannot say something the derivation
-            // does not.
             indicator_thumb: Color::WHITE,
             indicator_track: Color::WHITE,
         }
@@ -274,10 +269,6 @@ mod tests {
 
     #[test]
     fn the_indicator_colours_come_from_on_background_and_nothing_else() {
-        // Measured against the shipping Compose build with this palette: the
-        // thumb is (180, 202, 211) and the track (30, 51, 58). A Lab round trip
-        // agrees on the thumb and gives 31 of red on the track, so a scheme
-        // whose track lands on 30 is the one that read Wear's own rule.
         let colors = WearColors {
             on_background: Color::from_rgb_u8(0xDF, 0xF6, 0xFF),
             ..WearColors::default()
@@ -285,8 +276,6 @@ mod tests {
         .with_wear_scroll_indicator();
         assert_eq!(colors.indicator_thumb, Color::from_rgb_u8(180, 202, 211));
         assert_eq!(colors.indicator_track, Color::from_rgb_u8(30, 51, 58));
-        // And the default scheme is derived by the same rule rather than
-        // written out beside it.
         let default = WearColors::default();
         assert_eq!(default, default.with_wear_scroll_indicator());
     }
@@ -319,8 +308,6 @@ mod tests {
 
     #[test]
     fn overriding_the_size_keeps_the_line_height_it_inherited() {
-        // A 12sp glyph in an 18sp line box. Unifying the two is the quirk this
-        // exists to preserve.
         let small = WearTextStyle::BODY_LARGE.at_size(12.0);
         assert_eq!(small.size_sp, 12.0);
         assert_eq!(small.line_height_sp, 18.0);
@@ -330,8 +317,6 @@ mod tests {
 
     #[test]
     fn the_scale_itself_states_no_alignment_and_a_call_site_can() {
-        // Wear's tokens set no `textAlign`; `Text(textAlign = Center)` at the
-        // call site is what centres a credit line.
         for style in [
             WearTextStyle::TITLE_MEDIUM,
             WearTextStyle::LABEL_MEDIUM,
@@ -353,7 +338,6 @@ mod tests {
             centred.resolve(Color::WHITE).paragraph_style.text_align,
             TextAlign::Center
         );
-        // Aligning must not disturb the rest of the entry.
         assert_eq!(centred.size_sp, 12.0);
         assert_eq!(centred.line_height_sp, 16.0);
         assert_eq!(centred.weight, WearTextStyle::BODY_LARGE.weight);
@@ -361,10 +345,6 @@ mod tests {
 
     #[test]
     fn every_entry_names_a_family_so_its_text_has_a_face_to_draw_with() {
-        // A `TextStyle` with no family draws only if some face answers for the
-        // default. An app that registers the system fonts under their own
-        // families has none, and the text then measures, lays out and
-        // rasterises to nothing -- correct geometry, no glyphs.
         for style in [
             WearTextStyle::TITLE_MEDIUM,
             WearTextStyle::LABEL_MEDIUM,

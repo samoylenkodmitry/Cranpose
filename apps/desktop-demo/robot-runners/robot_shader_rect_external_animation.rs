@@ -1,8 +1,3 @@
-//! External X11 contract for Shader Rect animation cadence.
-//!
-//! This counts presented primary-window frames through desktop frame telemetry
-//! and uses the robot driver only for deterministic teardown.
-
 mod external_x11_frame_telemetry;
 mod output_paths;
 mod perf_contract;

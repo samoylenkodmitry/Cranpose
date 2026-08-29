@@ -102,11 +102,8 @@ pub fn resolve_selection_tap_count(
         raw_tap_count
     } else if tap_in_selection {
         if repeat_in_place {
-            // Keep climbing the granularity ladder at the same spot.
             previous_count.max(1).saturating_add(1)
         } else {
-            // First tap inside the selection (or a tap on a different word):
-            // grab the word under the finger.
             2
         }
     } else {
@@ -156,12 +153,9 @@ pub fn find_line_boundaries(text: &str, pos: usize) -> (usize, usize) {
 /// whole.
 pub fn find_paragraph_boundaries(text: &str, pos: usize) -> (usize, usize) {
     let pos = pos.min(text.len());
-    // Start: just after the last blank-line separator at or before `pos`.
     let start = text[..pos]
         .rfind("\n\n")
         .map(|i| {
-            // Skip the whole run of blank lines so the paragraph starts on its
-            // first non-empty line.
             let mut s = i + 1;
             while text[s..].starts_with('\n') {
                 s += 1;
@@ -169,7 +163,6 @@ pub fn find_paragraph_boundaries(text: &str, pos: usize) -> (usize, usize) {
             s
         })
         .unwrap_or(0);
-    // End: the next blank-line separator at or after `pos`.
     let end = text[pos..]
         .find("\n\n")
         .map(|i| pos + i)
@@ -216,10 +209,6 @@ pub fn caret_visual_line(
     let mut result = (0usize, 0usize);
     for (index, range) in ranges.iter().enumerate() {
         if range.start <= offset {
-            // A SHARED boundary (the previous line ends exactly where this one
-            // starts — soft wrap, no separator byte) belongs upstream to the
-            // upper line's end. A hard `\n` never shares (the ranges gap over
-            // the separator), and an empty upper line never captures.
             if affinity == LineAffinity::Upstream
                 && index > 0
                 && range.start == offset
@@ -263,11 +252,6 @@ pub struct HandleGrabOffset {
     start_y: f32,
     furthest_y: f32,
     drift_progress: f32,
-    /// The visibility drift only applies to handles whose dot hangs BELOW
-    /// the line (end/cursor): there the finger covers the content and the
-    /// handle floats clear of it. The start handle's dot rides ABOVE the
-    /// line — nothing is covered, so its drag follows the finger directly
-    /// (user-directed).
     drifts: bool,
 }
 
@@ -362,10 +346,6 @@ pub fn handle_path_data(
         format!("M {left} {top} L {right} {top} L {right} {bottom} L {left} {bottom} Z")
     };
     let dot = |cy: f32| {
-        // Sweep flag 1 keeps the circle CLOCKWISE like the stem rectangle:
-        // with the NonZero fill rule, same-direction subpaths union; opposite
-        // windings cancel where dot and stem overlap, punching a notch at
-        // the joint.
         format!(
             "M {x0} {cy} A {r} {r} 0 1 1 {x1} {cy} A {r} {r} 0 1 1 {x0} {cy} Z",
             x0 = anchor_x - r,
@@ -374,12 +354,10 @@ pub fn handle_path_data(
     };
     match kind {
         HandleKind::SelectionStart => {
-            // Dot on top: center a radius above the line top, minus the overlap.
             let cy = line_top - r + HANDLE_DOT_LINE_OVERLAP;
             format!("{} {}", stem(line_top, line_bottom), dot(cy))
         }
         HandleKind::SelectionEnd | HandleKind::Cursor => {
-            // Dot below: center a radius under the line bottom, minus overlap.
             let cy = line_bottom + r - HANDLE_DOT_LINE_OVERLAP;
             format!("{} {}", stem(line_top, line_bottom), dot(cy))
         }
@@ -420,7 +398,6 @@ pub fn selection_after_handle_drag(
             let end = dragged_offset.max(fixed + 1).min(text_len);
             (fixed, end)
         }
-        // The cursor handle just moves the collapsed caret.
         HandleKind::Cursor => (dragged_offset, dragged_offset),
     }
 }
@@ -440,8 +417,6 @@ mod tests {
             classify_tap_count(Some((2, 10.0, 10.0)), 100, 11.0, 12.0, 500, 24.0),
             3
         );
-        // A fourth in-place tap keeps counting up (the granularity mapping is
-        // what cycles, not the raw count).
         assert_eq!(
             classify_tap_count(Some((3, 10.0, 10.0)), 100, 11.0, 12.0, 500, 24.0),
             4
@@ -454,69 +429,49 @@ mod tests {
 
     #[test]
     fn tap_classification_resets_past_timeout_or_slop() {
-        // Too slow: restarts.
         assert_eq!(
             classify_tap_count(Some((1, 10.0, 10.0)), 600, 10.0, 10.0, 500, 24.0),
             1
         );
-        // Too far: restarts even though it is quick.
         assert_eq!(
             classify_tap_count(Some((1, 10.0, 10.0)), 50, 100.0, 10.0, 500, 24.0),
             1
         );
-        // A reset also applies from a higher count.
         assert_eq!(
             classify_tap_count(Some((3, 10.0, 10.0)), 600, 10.0, 10.0, 500, 24.0),
             1
         );
     }
 
-    /// The tap-inside-selection ladder (bug c): a lone tap inside an existing
-    /// selection grabs the word, and every further tap AT THE SAME SPOT grows
-    /// the granularity word → line → paragraph, then cycles back to word — even
-    /// when the taps arrive too slowly to count as a rapid multi-tap (the growth
-    /// is keyed on location, not the double-tap timeout). Tapping a NEW spot
-    /// resets to word.
     #[test]
     fn tap_inside_selection_cycles_word_line_paragraph_by_location() {
         use SelectionGranularity::*;
 
-        // Start: a lone (slow) tap inside a selection. raw_tap_count == 1
-        // (the timeout lapsed), but it still grabs the word.
         let mut count = resolve_selection_tap_count(1, 0, true, false);
         assert_eq!(count, 2);
         assert_eq!(tap_selection_granularity(count), Word);
 
-        // Same spot again, still slow (raw == 1): grow to the line.
         count = resolve_selection_tap_count(1, count, true, true);
         assert_eq!(count, 3);
         assert_eq!(tap_selection_granularity(count), Line);
 
-        // Same spot again: grow to the paragraph.
         count = resolve_selection_tap_count(1, count, true, true);
         assert_eq!(count, 4);
         assert_eq!(tap_selection_granularity(count), Paragraph);
 
-        // Same spot again: cycle back to the word.
         count = resolve_selection_tap_count(1, count, true, true);
         assert_eq!(count, 5);
         assert_eq!(tap_selection_granularity(count), Word);
 
-        // A tap at a NEW spot inside the selection resets to word.
         let reset = resolve_selection_tap_count(1, count, true, false);
         assert_eq!(reset, 2);
         assert_eq!(tap_selection_granularity(reset), Word);
     }
 
-    /// A genuine rapid multi-tap keeps using its own running count, so
-    /// [`resolve_selection_tap_count`] does not disturb the double→word,
-    /// triple→line ladder, and a lone tap outside a selection stays a caret.
     #[test]
     fn resolve_tap_count_preserves_rapid_multitap_and_caret() {
-        // Rapid multi-tap: pass the classify count straight through.
         assert_eq!(resolve_selection_tap_count(2, 1, false, false), 2);
         assert_eq!(resolve_selection_tap_count(3, 2, true, true), 3);
-        // Lone tap outside any selection: caret (count 1).
         assert_eq!(resolve_selection_tap_count(1, 4, false, true), 1);
     }
 
@@ -528,7 +483,6 @@ mod tests {
         assert_eq!(tap_selection_granularity(2), Word);
         assert_eq!(tap_selection_granularity(3), Line);
         assert_eq!(tap_selection_granularity(4), Paragraph);
-        // Fifth tap cycles back to word, then line, then paragraph again.
         assert_eq!(tap_selection_granularity(5), Word);
         assert_eq!(tap_selection_granularity(6), Line);
         assert_eq!(tap_selection_granularity(7), Paragraph);
@@ -538,13 +492,10 @@ mod tests {
     #[test]
     fn paragraph_boundaries_span_blank_line_delimited_blocks() {
         let text = "line one\nline two\n\nsecond para\nstill second\n\n\nthird";
-        // Inside the first paragraph (two lines).
         let (s, e) = find_paragraph_boundaries(text, 3);
         assert_eq!(&text[s..e], "line one\nline two");
-        // Inside the second paragraph.
         let (s, e) = find_paragraph_boundaries(text, 20);
         assert_eq!(&text[s..e], "second para\nstill second");
-        // Inside the third paragraph, after a run of THREE newlines.
         let (s, e) = find_paragraph_boundaries(text, text.len());
         assert_eq!(&text[s..e], "third");
     }
@@ -557,8 +508,6 @@ mod tests {
 
     #[test]
     fn paragraph_boundaries_are_unicode_aware() {
-        // Multi-byte characters must be spanned whole and offsets stay on char
-        // boundaries.
         let text = "\u{4e2d}\u{6587}\u{6bb5}\u{843d}\n\n\u{6b21}";
         let first = "\u{4e2d}\u{6587}\u{6bb5}\u{843d}";
         let (s, e) = find_paragraph_boundaries(text, 3);
@@ -569,21 +518,16 @@ mod tests {
     #[test]
     fn line_boundaries_span_between_newlines() {
         let text = "first line\nsecond line\nthird";
-        // Inside the second line.
         assert_eq!(find_line_boundaries(text, 15), (11, 22));
-        // Start of the first line.
         assert_eq!(find_line_boundaries(text, 0), (0, 10));
-        // Inside the last (newline-terminated-absent) line.
         assert_eq!(find_line_boundaries(text, 25), (23, text.len()));
     }
 
     #[test]
     fn line_boundaries_handle_unicode_and_empty_lines() {
         let text = "\u{00e9}\u{00e8}\n\n\u{4e2d}\u{6587}";
-        // Empty middle line: start == end at the byte after the first newline.
         let (start, end) = find_line_boundaries(text, "\u{00e9}\u{00e8}\n".len());
         assert_eq!(start, end);
-        // Last line spans the two CJK characters.
         let last = find_line_boundaries(text, text.len());
         assert_eq!(&text[last.0..last.1], "\u{4e2d}\u{6587}");
     }
@@ -601,22 +545,16 @@ mod tests {
                 .expect("handle path must be valid SVG");
             assert!(!path.is_empty(), "{kind:?} handle must have geometry");
             let bounds = path.bounds();
-            // The stem spans the line box, so the shape covers top..bottom.
             assert!(bounds.y <= top + 0.5, "{kind:?} must reach the line top");
             assert!(
                 bounds.y + bounds.height >= bottom - 0.5,
                 "{kind:?} must reach the line bottom"
             );
-            // Horizontally centered on the anchor, a dot-radius each way.
             assert!((bounds.x - (x - HANDLE_RADIUS)).abs() <= 0.5);
             assert!((bounds.x + bounds.width - (x + HANDLE_RADIUS)).abs() <= 0.5);
         }
     }
 
-    /// The reference lollipop orientation: the start handle's dot rides ON TOP
-    /// of the line (center ~a radius above the line top), the end and cursor
-    /// dots hang BELOW it, and every dot dips [`HANDLE_DOT_LINE_OVERLAP`] into
-    /// the line box so dot + stem read as one continuous shape.
     #[test]
     fn selection_handle_dots_sit_on_the_correct_side_of_the_line() {
         let (x, top, bottom, r) = (40.0_f32, 20.0_f32, 40.0_f32, HANDLE_RADIUS);
@@ -629,8 +567,6 @@ mod tests {
                 .bounds()
         };
 
-        // Start: the shape extends a dot-diameter ABOVE the line top (minus the
-        // overlap), and not below the line bottom.
         let start = bounds(HandleKind::SelectionStart);
         assert!(
             (start.y - (top - 2.0 * r + HANDLE_DOT_LINE_OVERLAP)).abs() <= eps,
@@ -643,8 +579,6 @@ mod tests {
             "start handle must not extend below the line box"
         );
 
-        // End and cursor: the shape extends a dot-diameter BELOW the line
-        // bottom (minus the overlap), and not above the line top.
         for kind in [HandleKind::SelectionEnd, HandleKind::Cursor] {
             let b = bounds(kind);
             assert!(
@@ -660,47 +594,34 @@ mod tests {
         }
     }
 
-    /// The wrap-aware caret line lookup (bug d): a caret on a wrapped line's
-    /// later visual line must resolve to that visual line (not the logical
-    /// line's first visual line), with the correct line-start byte so its x is
-    /// measured from the start of the visual line.
     #[test]
     fn caret_visual_line_resolves_wrapped_visual_lines() {
-        // "aaaa bbbb" wrapped into ["aaaa " (0..5), "bbbb" (5..9)], then a hard
-        // newline to a short line "cc" (10..12).
         let ranges = vec![0..5usize, 5..9, 10..12];
 
-        // Start of the first visual line.
         assert_eq!(
             caret_visual_line(&ranges, 0, LineAffinity::Downstream),
             (0, 0)
         );
-        // Middle of the first visual line.
         assert_eq!(
             caret_visual_line(&ranges, 3, LineAffinity::Downstream),
             (0, 0)
         );
-        // Start of the second (wrapped) visual line.
         assert_eq!(
             caret_visual_line(&ranges, 5, LineAffinity::Downstream),
             (1, 5)
         );
-        // Middle of the second visual line — must NOT resolve to line 0.
         assert_eq!(
             caret_visual_line(&ranges, 7, LineAffinity::Downstream),
             (1, 5)
         );
-        // End of the wrapped logical line.
         assert_eq!(
             caret_visual_line(&ranges, 9, LineAffinity::Downstream),
             (1, 5)
         );
-        // The line after the hard newline.
         assert_eq!(
             caret_visual_line(&ranges, 11, LineAffinity::Downstream),
             (2, 10)
         );
-        // End of text.
         assert_eq!(
             caret_visual_line(&ranges, 12, LineAffinity::Downstream),
             (2, 10)
@@ -709,9 +630,6 @@ mod tests {
 
     #[test]
     fn start_handle_grab_never_drifts() {
-        // The start handle's dot rides ABOVE the line: the finger covers
-        // nothing, so its drag follows the finger with the captured offset
-        // exactly — no visibility drift (user-directed).
         let mut grab = HandleGrabOffset::begin_for(108.0, 100.0, false);
         assert_eq!(grab.track(108.0), 8.0);
         assert_eq!(grab.track(160.0), 8.0, "no drift on long downward travel");
@@ -768,17 +686,10 @@ mod tests {
         assert_eq!(caret_visual_line(&[], 5, LineAffinity::Downstream), (0, 0));
     }
 
-    /// A soft-wrap boundary byte is BOTH the end of the upper visual line and
-    /// the start of the lower one. A finger dragging a selection END (or the
-    /// caret/cursor handle, or the loupe) along the upper line's right edge
-    /// produces exactly that byte — upstream affinity must keep the anchor on
-    /// the upper line's end instead of snapping one line down to the left
-    /// edge (the reported wrapped-multiline handle Y-offset bug).
     #[test]
     fn caret_visual_line_upstream_anchors_shared_wrap_boundary_to_upper_line() {
         let ranges = vec![0..5usize, 5..9, 10..12];
 
-        // The shared boundary resolves per affinity.
         assert_eq!(
             caret_visual_line(&ranges, 5, LineAffinity::Upstream),
             (0, 0)
@@ -788,7 +699,6 @@ mod tests {
             (1, 5)
         );
 
-        // Mid-line offsets are affinity-independent.
         assert_eq!(
             caret_visual_line(&ranges, 3, LineAffinity::Upstream),
             (0, 0)
@@ -798,14 +708,11 @@ mod tests {
             (1, 5)
         );
 
-        // A hard-newline boundary is NOT shared (the ranges gap over the
-        // separator): upstream must not pull the lower line's start up.
         assert_eq!(
             caret_visual_line(&ranges, 10, LineAffinity::Upstream),
             (2, 10)
         );
 
-        // End of text stays on the last line under either affinity.
         assert_eq!(
             caret_visual_line(&ranges, 12, LineAffinity::Upstream),
             (2, 10)
@@ -814,27 +721,22 @@ mod tests {
 
     #[test]
     fn handle_drag_keeps_edges_from_crossing() {
-        // Dragging the end handle left past the start clamps to start+1.
         assert_eq!(
             selection_after_handle_drag(HandleKind::SelectionEnd, 5, 2, 20),
             (5, 6)
         );
-        // Dragging the end handle right extends normally.
         assert_eq!(
             selection_after_handle_drag(HandleKind::SelectionEnd, 5, 12, 20),
             (5, 12)
         );
-        // Dragging the start handle right past the end clamps to end-1.
         assert_eq!(
             selection_after_handle_drag(HandleKind::SelectionStart, 8, 10, 20),
             (7, 8)
         );
-        // Dragging the start handle left extends normally.
         assert_eq!(
             selection_after_handle_drag(HandleKind::SelectionStart, 8, 3, 20),
             (3, 8)
         );
-        // The cursor handle moves a collapsed caret.
         assert_eq!(
             selection_after_handle_drag(HandleKind::Cursor, 4, 9, 20),
             (9, 9)

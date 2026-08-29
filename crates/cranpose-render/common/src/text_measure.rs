@@ -142,8 +142,6 @@ impl TextMetricsCache {
     where
         F: FnOnce(&str, f32) -> TextMetrics,
     {
-        // Note: Borrow<str> lookup doesn't work well with composite key.
-        // We construct key for lookup.
         let key = TextKey {
             text: Rc::from(text),
             font_size_bits: font_size.to_bits(),
@@ -176,7 +174,6 @@ impl CachedFontTextMeasurer {
     }
 }
 
-// Helper to resolve font size from style
 fn resolve_font_size(style: &cranpose_ui::text::TextStyle) -> f32 {
     style.resolve_font_size(14.0)
 }

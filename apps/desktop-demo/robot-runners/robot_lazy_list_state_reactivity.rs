@@ -1,24 +1,3 @@
-//! Robot test for LazyListState reactivity bug.
-//!
-//! This test verifies that `first_visible_item_index()` properly triggers recomposition
-//! when the scroll position changes. The bug is that LazyListState uses
-//! `MutableState<Rc<RefCell<Inner>>>` which is a "fake" mutable state - the snapshot
-//! system tracks the Rc pointer, but since it never changes (only the RefCell contents
-//! change), recomposition is never triggered.
-//!
-//! Test case:
-//! 1. Navigate to Lazy List tab
-//! 2. Verify initial "FirstIndex: 0" is displayed
-//! 3. Click "Jump to Middle" to scroll to item 50
-//! 4. Verify "FirstIndex: 50" is displayed (reactive update)
-//! 5. Click "Start" to scroll back to item 0
-//! 6. Verify "FirstIndex: 0" is displayed again
-//!
-//! Run with:
-//! ```bash
-//! ROBOT_SKIP_SCROLL=1 cargo run --package desktop-app --example robot_lazy_list_state_reactivity --features robot-app
-//! ```
-
 use std::time::Duration;
 
 use cranpose::AppLauncher;
@@ -35,7 +14,6 @@ fn main() {
         .with_size(1200, 800)
         .with_headless(true)
         .with_test_driver(|robot| {
-            // Timeout after 30 seconds
             std::thread::spawn(|| {
                 std::thread::sleep(Duration::from_secs(30));
                 eprintln!("TIMEOUT: Test exceeded 30 seconds");
@@ -48,9 +26,6 @@ fn main() {
 
             let mut all_passed = true;
 
-            // =========================================================
-            // Step 1: Navigate to Lazy List Tab
-            // =========================================================
             println!("--- Step 1: Navigate to 'Lazy List' tab ---");
             if let Some((x, y, w, h)) = find_button_in_semantics(&robot, "Lazy List") {
                 println!("  Found 'Lazy List' tab at ({:.1}, {:.1})", x, y);
@@ -64,9 +39,6 @@ fn main() {
                 std::process::exit(1);
             }
 
-            // =========================================================
-            // Step 2: Verify initial "FirstIndex: 0"
-            // =========================================================
             println!("--- Step 2: Verify initial 'FirstIndex: 0' ---");
             std::thread::sleep(Duration::from_millis(300));
             let _ = robot.wait_for_idle();
@@ -85,9 +57,6 @@ fn main() {
                 all_passed = false;
             }
 
-            // =========================================================
-            // Step 3: Click "Jump to Middle" button
-            // =========================================================
             println!("--- Step 3: Click 'Jump to Middle' button ---");
             if let Some((x, y, w, h)) = find_button_in_semantics(&robot, "Jump to Middle") {
                 println!("  Found 'Jump to Middle' button at ({:.1}, {:.1})", x, y);
@@ -100,14 +69,10 @@ fn main() {
                 all_passed = false;
             }
 
-            // =========================================================
-            // Step 4: Verify "FirstIndex: 50" (reactive update)
-            // =========================================================
             println!("--- Step 4: Verify 'FirstIndex: 50' after jump ---");
             std::thread::sleep(Duration::from_millis(500));
             let _ = robot.wait_for_idle();
 
-            // Debug: dump all text nodes
             println!("  Dumping semantics tree:");
             if let Ok(elements) = robot.get_semantics() {
                 cranpose_testing::print_semantics_with_bounds(&elements, 2);
@@ -116,7 +81,6 @@ fn main() {
             let after_jump_index = find_text_by_prefix_in_semantics(&robot, "FirstIndex:");
             if let Some((_, _, _, _, text)) = after_jump_index {
                 println!("\n  Found: '{}'", text);
-                // Extract the number
                 if let Some(num_str) = text.strip_prefix("FirstIndex:").map(|s| s.trim()) {
                     if let Ok(num) = num_str.parse::<usize>() {
                         if num == 50 {
@@ -128,7 +92,6 @@ fn main() {
                             println!("        UI shows stale data after scrolling.\n");
                             all_passed = false;
                         } else {
-                            // Close to 50 is acceptable due to scroll settling
                             if (45..=55).contains(&num) {
                                 println!("  PASS: FirstIndex is {} (close to 50)\n", num);
                             } else {
@@ -144,11 +107,7 @@ fn main() {
                 all_passed = false;
             }
 
-            // =========================================================
-            // Step 5: Click "Start" button to scroll back
-            // =========================================================
             println!("--- Step 5: Click 'Start' button ---");
-            // The button text is "⏫ Start" but semantics might just show "Start"
             let start_button = find_button_in_semantics(&robot, "Start")
                 .or_else(|| find_button_in_semantics(&robot, "⏫ Start"));
             if let Some((x, y, w, h)) = start_button {
@@ -162,9 +121,6 @@ fn main() {
                 all_passed = false;
             }
 
-            // =========================================================
-            // Step 6: Verify "FirstIndex: 0" after scrolling back
-            // =========================================================
             println!("--- Step 6: Verify 'FirstIndex: 0' after scrolling back ---");
             std::thread::sleep(Duration::from_millis(500));
             let _ = robot.wait_for_idle();
@@ -193,9 +149,6 @@ fn main() {
                 all_passed = false;
             }
 
-            // =========================================================
-            // Summary
-            // =========================================================
             println!("=== Test Summary ===");
             if all_passed {
                 println!(

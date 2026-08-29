@@ -1,14 +1,3 @@
-//! Android backends for the cranpose service registry: haptics, share sheet,
-//! notifications (with deep-links), network status, clipboard, window insets,
-//! and the launching intent's extras — the JNI counterparts of the capability
-//! hooks in `dev.cranpose.android.CranposeActivity`.
-//!
-//! Rust → Java goes through the activity over JNI (each Java method hops to
-//! the UI thread itself). Java → Rust arrives on the Android UI thread via
-//! the exported `Java_dev_cranpose_android_CranposeActivity_*` symbols below;
-//! those must not touch the composition (which lives on the native-activity
-//! thread), so they park values in atomics and wake the native loop, which
-//! applies them via [`apply_pending_platform_signals`].
 #![allow(unsafe_code)]
 
 use std::{
@@ -43,8 +32,6 @@ use crate::{
     android_launch_args::decode_launch_arguments,
 };
 
-// --- Cross-thread signal parking (UI thread → native loop) -------------------
-
 static NETWORK_ONLINE: AtomicBool = AtomicBool::new(true);
 static NETWORK_METERED: AtomicBool = AtomicBool::new(false);
 static NETWORK_CALLBACK_REGISTERED: AtomicBool = AtomicBool::new(false);
@@ -55,11 +42,8 @@ static INSETS_RIGHT_PX: AtomicI32 = AtomicI32::new(0);
 static INSETS_BOTTOM_PX: AtomicI32 = AtomicI32::new(0);
 static INSETS_CHANGED: AtomicBool = AtomicBool::new(false);
 
-/// Re-encoded intent extras parked by `onNewIntent`, waiting for the native
-/// loop to swap in the new snapshot.
 static PENDING_LAUNCH_ARGS: Mutex<Option<String>> = Mutex::new(None);
 
-/// Wakes the native event loop so parked signals are applied promptly.
 static LOOP_WAKER: OnceLock<Mutex<Option<android_activity::AndroidAppWaker>>> = OnceLock::new();
 
 fn loop_waker() -> &'static Mutex<Option<android_activity::AndroidAppWaker>> {
@@ -73,8 +57,6 @@ pub(crate) fn wake_native_loop() {
     }
 }
 
-/// Registers the Android service backends. Called once at startup with the
-/// activity handle.
 pub(crate) fn register(app: android_activity::AndroidApp) {
     let mut waker = loop_waker().lock().unwrap_or_else(PoisonError::into_inner);
     *waker = Some(app.create_waker());
@@ -98,26 +80,15 @@ pub(crate) fn register(app: android_activity::AndroidApp) {
     set_platform_bundled_assets(Arc::new(AndroidBundledAssets { app: app.clone() }));
     set_platform_app_updater(Arc::new(AndroidAppUpdater { app: app.clone() }));
     crate::android_camera::register(app.clone());
-    // The decoder is a feature: an application that plays nothing should not
-    // carry symphonia. Without it Android has no media backend at all, which
-    // the media service reports rather than papers over.
     #[cfg(feature = "media")]
     crate::android_media::register(app.clone());
-    // Pulled rather than pushed from `onCreate`: `getIntent()` is populated
-    // before the native thread starts, so reading it here is deterministic,
-    // whereas a push would race the thread that consumes it.
     set_platform_launch_args(Rc::new(read_launch_arguments(&app)));
     #[cfg(feature = "playbilling")]
     {
-        // Unlike audio, Play Billing needs the activity: the payment sheet is
-        // an activity result, so the backend keeps the handle and passes it to
-        // the Java bridge on every call.
         crate::android_purchases::register(app.clone());
     }
     #[cfg(feature = "audio")]
     {
-        // AAudio is a pure-NDK API, so the engine needs nothing from the
-        // activity. The output device itself opens on the first sound.
         cranpose_audio::install();
     }
 }
@@ -128,8 +99,6 @@ struct AndroidAppUpdater {
 
 impl AppUpdater for AndroidAppUpdater {
     fn capabilities(&self) -> AppUpdateCapabilities {
-        // Android is the one platform that both discovers a release and hands
-        // the package to a system installer.
         AppUpdateCapabilities {
             check: true,
             install: true,
@@ -167,9 +136,6 @@ impl AppUpdater for AndroidAppUpdater {
     }
 
     fn install(&self, package: &UpdatePackage) -> Result<(), AppUpdateError> {
-        // The digest travels in the `sha256:<hex>` form the release feed
-        // publishes, so the Java installer names the same algorithm to
-        // `MessageDigest` that this framework would name to its own hasher.
         let digest = package
             .digest
             .as_ref()
@@ -239,9 +205,6 @@ impl BundledAssets for AndroidBundledAssets {
     fn open(&self, path: &str) -> Result<Box<dyn BundledAssetReader>, BundledAssetError> {
         match self.asset_descriptor(path) {
             Some(reader) => Ok(Box::new(reader)),
-            // A compressed asset has no descriptor to hand out: the bytes only
-            // exist once inflated. Storing a large asset uncompressed in the
-            // APK is what buys the streaming path.
             None => Ok(Box::new(StreamingAssetReader::new(
                 path,
                 std::io::Cursor::new(self.read(path)?),
@@ -257,12 +220,6 @@ impl BundledAssets for AndroidBundledAssets {
 }
 
 impl AndroidBundledAssets {
-    /// A reader over the asset's own bytes inside the APK.
-    ///
-    /// `AAsset` is not thread-safe and the `ndk` crate marks it so, but the
-    /// descriptor it opens is an ordinary file descriptor into the package,
-    /// which a worker thread may own. Reading through the descriptor is what
-    /// lets a bundled model reach a loader without being materialised first.
     fn asset_descriptor(&self, path: &str) -> Option<StreamingAssetReader<std::fs::File>> {
         let manager = self.app.asset_manager();
         let name = std::ffi::CString::new(path).ok()?;
@@ -274,8 +231,6 @@ impl AndroidBundledAssets {
             std::io::SeekFrom::Start(descriptor.offset as u64),
         )
         .ok()?;
-        // The descriptor addresses the whole package, so the asset's end is a
-        // count rather than the end of the file.
         Some(StreamingAssetReader::with_length(
             path,
             file,
@@ -304,8 +259,6 @@ impl BackgroundActivity for AndroidBackgroundActivity {
             })
         });
         if let Err(error) = result {
-            // Swallowed, this failure reads as "the app never asked" when a
-            // backgrounded import later runs with no foreground service.
             log::warn!("Android background activity set_active({active}) failed: {error}");
         }
     }
@@ -391,11 +344,6 @@ impl PowerMonitor for AndroidPowerMonitor {
     }
 }
 
-/// Reads the launching intent's extras through `CranposeActivity`.
-///
-/// A launch without extras, or a host activity that is not a
-/// `CranposeActivity`, yields empty arguments rather than an error: the app
-/// still runs, it simply has nothing to read.
 fn read_launch_arguments(app: &android_activity::AndroidApp) -> LaunchArgs {
     match with_android_activity_env(app, |env, activity| {
         let payload = env
@@ -422,19 +370,12 @@ fn read_launch_arguments(app: &android_activity::AndroidApp) -> LaunchArgs {
     }) {
         Ok(payload) => decode_launch_arguments(&payload),
         Err(error) => {
-            // Worth a warning, not a debug line: an app whose debug/bench
-            // flags silently read as absent is measurably indistinguishable
-            // from one that ignores them, and that cost a device session once.
             log::warn!("Android launch arguments unavailable: {error}");
             LaunchArgs::default()
         }
     }
 }
 
-/// Applies signals parked by the UI-thread callbacks: window insets flow into
-/// the platform environment (safe area) and a replacement launch intent swaps
-/// in new launch arguments, forcing a root render when they changed. Called
-/// from the native event loop.
 pub(crate) fn apply_pending_platform_signals(
     density: f32,
     shell: &mut Option<cranpose_app_shell::AppShell<cranpose_render_wgpu::WgpuRenderer>>,
@@ -466,17 +407,8 @@ pub(crate) fn apply_pending_platform_signals(
     }
 }
 
-// --- Haptics ------------------------------------------------------------------
-
-/// Queue depth for the asynchronous dispatch. Small on purpose: at the
-/// profiled rate of about one waveform per frame the queue only ever holds
-/// what one slow binder call backs up, and past that waveforms coalesce.
 const HAPTIC_QUEUE_CAPACITY: usize = 8;
 
-/// Kill switch for the asynchronous dispatch: `CRANPOSE_ASYNC_HAPTICS=0`
-/// (reachable on a device as `debug.cranpose.async_haptics` through the
-/// property bridge in [`crate::android_frame_telemetry`]) keeps every
-/// vibrator call on the calling thread, the pre-queue behaviour.
 fn async_haptics_enabled() -> bool {
     match std::env::var("CRANPOSE_ASYNC_HAPTICS") {
         Ok(value) => !matches!(value.trim(), "0" | "false" | "off" | "no"),
@@ -484,29 +416,9 @@ fn async_haptics_enabled() -> bool {
     }
 }
 
-/// The Android vibrator, reached through `CranposeActivity`.
-///
-/// `perform` routes through `View.performHapticFeedback` so the OS's own
-/// feedback settings apply. The amplitude, waveform and predefined-effect
-/// paths address `Vibrator`/`VibrationEffect` directly, which is what a game
-/// designing its own set of distinct feels needs; each one is a single JNI
-/// call carrying primitives or a primitive array.
-///
-/// The vibrator methods run the `VibratorManagerService` binder call on the
-/// calling thread, and a watch profile measured that at 0.88 ms per frame on
-/// the render thread (946 waveform calls in 975 frames). Delivery therefore
-/// normally happens on the dedicated "cranpose-haptics" thread: the trait
-/// methods enqueue into `queue` and return immediately. When `queue` is
-/// `None` (kill switch, or the thread failed to start) every call delivers
-/// synchronously, exactly as before the queue existed.
 struct AndroidHaptics {
     app: android_activity::AndroidApp,
-    /// `Vibrator.hasAmplitudeControl()`, queried once and cached: the answer
-    /// cannot change for the life of the process, and the query costs a JNI
-    /// round trip that UI code should not repeat.
     amplitude_control: AtomicU8,
-    /// Handoff to the "cranpose-haptics" delivery thread, or `None` for the
-    /// synchronous path.
     queue: Option<Arc<HapticQueue>>,
 }
 
@@ -515,9 +427,6 @@ impl AndroidHaptics {
         let command = match &self.queue {
             Some(queue) => match queue.enqueue(command) {
                 Ok(()) => return,
-                // The delivery thread is gone (shutdown, or it panicked and
-                // its exit guard closed the queue); deliver on this thread so
-                // the call is not lost.
                 Err(command) => command,
             },
             None => command,
@@ -528,17 +437,12 @@ impl AndroidHaptics {
 
 impl Drop for AndroidHaptics {
     fn drop(&mut self) {
-        // Lets the delivery thread drain what it already accepted and exit
-        // cleanly. Not joined: drop runs on the render thread and the worker
-        // may be inside a binder call.
         if let Some(queue) = &self.queue {
             queue.shut_down();
         }
     }
 }
 
-/// Starts the "cranpose-haptics" delivery thread, returning the queue the
-/// backend enqueues into, or `None` when the thread could not start.
 fn spawn_haptics_thread(app: android_activity::AndroidApp) -> Option<Arc<HapticQueue>> {
     let queue = Arc::new(HapticQueue::new(HAPTIC_QUEUE_CAPACITY));
     let worker_queue = Arc::clone(&queue);
@@ -556,17 +460,7 @@ fn spawn_haptics_thread(app: android_activity::AndroidApp) -> Option<Arc<HapticQ
     }
 }
 
-/// Delivery loop for the "cranpose-haptics" thread.
-///
-/// The first `with_android_activity_env` call attaches the thread to the JVM
-/// once (`attach_current_thread` only checks a thread-local after that), and
-/// the attachment is released automatically when the thread exits after the
-/// queue shuts down and drains — so the render thread pays neither the attach
-/// nor the binder round trip.
 fn run_haptics_thread(app: android_activity::AndroidApp, queue: Arc<HapticQueue>) {
-    // Closes the queue even if delivery panics, so a caller blocked on a
-    // saturated queue is released (and falls back to synchronous delivery)
-    // instead of hanging the render thread forever.
     struct ShutDownOnExit(Arc<HapticQueue>);
     impl Drop for ShutDownOnExit {
         fn drop(&mut self) {
@@ -581,9 +475,6 @@ fn run_haptics_thread(app: android_activity::AndroidApp, queue: Arc<HapticQueue>
     log::debug!("cranpose-haptics thread exited after shutdown");
 }
 
-/// Forwards one haptic command to the activity — the single JNI path shared
-/// by the delivery thread and the synchronous fallback, so the two cannot
-/// drift apart.
 fn deliver_haptic_command(app: &android_activity::AndroidApp, command: &HapticCommand) {
     let what = match command {
         HapticCommand::Perform(_) => "haptic",
@@ -617,9 +508,6 @@ fn deliver_haptic_command(app: &android_activity::AndroidApp, command: &HapticCo
             duration_ms,
             amplitude,
         } => {
-            // `VibrationEffect.createOneShot` takes DEFAULT_AMPLITUDE (-1) or
-            // 1..=255; 0 means "device default" in the framework API, so it is
-            // translated here rather than rejected by the platform.
             let amplitude: jint = if *amplitude == 0 {
                 -1
             } else {
@@ -676,8 +564,6 @@ fn deliver_haptic_command(app: &android_activity::AndroidApp, command: &HapticCo
             Ok(())
         }
         HapticCommand::Effect(effect) => {
-            // Matches `VibrationEffect.EFFECT_*`, which the activity re-maps
-            // by name so the constants stay owned by the platform.
             let id: jint = match effect {
                 HapticEffect::Click => 0,
                 HapticEffect::DoubleClick => 1,
@@ -783,8 +669,6 @@ impl Haptics for AndroidHaptics {
     }
 }
 
-// --- Share sheet ----------------------------------------------------------------
-
 struct AndroidShareSheet {
     app: android_activity::AndroidApp,
 }
@@ -832,8 +716,6 @@ impl ShareSheet for AndroidShareSheet {
         true
     }
 }
-
-// --- Notifier -------------------------------------------------------------------
 
 struct AndroidNotifier {
     app: android_activity::AndroidApp,
@@ -924,8 +806,6 @@ impl Notifier for AndroidNotifier {
     }
 }
 
-// --- Network monitor --------------------------------------------------------------
-
 struct AndroidNetworkMonitor {
     app: android_activity::AndroidApp,
 }
@@ -961,9 +841,6 @@ impl NetworkMonitor for AndroidNetworkMonitor {
     }
 }
 
-// --- Clipboard ---------------------------------------------------------------------
-
-/// The Android system clipboard for the text-selection menu / `ClipboardManager`.
 pub(crate) struct AndroidClipboard {
     pub(crate) app: android_activity::AndroidApp,
 }
@@ -1013,8 +890,6 @@ impl cranpose_ui::clipboard_session::PlatformClipboard for AndroidClipboard {
         .filter(|text| !text.is_empty())
     }
 }
-
-// --- Java → Rust callbacks (Android UI thread) ---------------------------------------
 
 #[doc(hidden)]
 #[unsafe(no_mangle)]
@@ -1160,9 +1035,6 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAppUpd
             if total > 0 {
                 package = package.with_size(total as u64);
             }
-            // A digest the feed did not publish, or published in a form this
-            // framework cannot check, leaves the package unverifiable — which
-            // `install_app_update` refuses rather than installing blind.
             if let Some(digest) = PackageDigest::parse(&digest) {
                 package = package.with_digest(digest);
             }
@@ -1186,10 +1058,6 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAppUpd
     wake_native_loop();
 }
 
-/// A replacement launch intent arrived. The extras are parked and applied by
-/// the native loop, which is the thread that owns the launch-argument
-/// snapshot; the payload replaces the previous one wholesale, matching
-/// `setIntent` replacing what a Compose activity reads from `getIntent`.
 #[doc(hidden)]
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnLaunchArguments<

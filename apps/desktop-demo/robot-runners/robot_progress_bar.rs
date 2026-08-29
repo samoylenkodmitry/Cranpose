@@ -1,14 +1,3 @@
-//! Robot test for Async Runtime progress bar layout validation.
-//!
-//! This test renders only the Async Runtime tab content with static progress
-//! values and validates every semantic element rect along with the progress
-//! fill sizing.
-//!
-//! Run with:
-//! ```bash
-//! cargo run --package desktop-app --example robot_progress_bar --features robot-app
-//! ```
-
 use std::time::Duration;
 
 use cranpose::{AppLauncher, SemanticElement};

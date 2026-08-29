@@ -1,8 +1,3 @@
-//! Liquid UI showcase: the full glass component set over colorful scrolling
-//! content — buttons, toggle, slider, segmented control, chips, list cards,
-//! the floating tab bar with its liquid selection blob, the morphing menu,
-//! and a materials lab with live lens parameters.
-
 #![allow(non_snake_case)]
 
 use std::cell::RefCell;
@@ -101,7 +96,6 @@ fn tab_swipe_reference_tabs() -> Vec<LiquidTab> {
     ]
 }
 
-/// The reference destinations, declared into a tab bar's scope.
 fn tab_swipe_reference_bar(scope: &LiquidTabBarScope) {
     for tab in tab_swipe_reference_tabs() {
         scope.push(tab);
@@ -504,7 +498,6 @@ fn OpticalShaderPreview() {
     );
 }
 
-/// A vivid gradient block — the kind of backdrop glass is made for.
 #[composable]
 fn GradientStripe(colors: [Color; 2], height: f32) {
     Box(
@@ -933,14 +926,9 @@ fn StoreBottomBarExample(selected: usize, on_select: impl Fn(usize) + 'static) {
     );
 }
 
-/// The menu-expand reference composition: a deep-purple header hosting a
-/// bright magenta filter pill; tapping it opens a DARK sort/filter menu
-/// whose "Sort by" / "Filter" rows expand the container in place (the
-/// accordion morph from the 16-jul recording).
 #[composable]
 fn SortFilterStage(suggestion_offset: f32) {
     let menu_open = remember(|| mutableStateOf(false)).with(|s| *s);
-    // 0 = collapsed, 1 = "Sort by" expanded, 2 = "Filter" expanded.
     let section = remember(|| mutableStateOf(0usize)).with(|s| *s);
     let sort_choice = remember(|| mutableStateOf(0usize)).with(|s| *s);
     let filter_choice = remember(|| mutableStateOf(0usize)).with(|s| *s);
@@ -973,21 +961,12 @@ fn SortFilterStage(suggestion_offset: f32) {
                     Column(Modifier::empty().fill_max_size(), ColumnSpec::default(), {
                         move || {
                             let column_gesture = column_gesture.clone();
-                            // Header band: deep purple with the magenta pill.
                             let pill_open = menu_open;
                             Box(
-                                // Reference proportions (menu-expand f_001):
-                                // the header spans ~29% of the screen and the
-                                // opened panel's top third overlaps it.
                                 Modifier::empty()
                                     .fill_max_width()
                                     .height(120.0)
                                     .draw_behind(|scope| {
-                                        // Measured on menu-expand f_001: the
-                                        // header is nearly FLAT deep purple
-                                        // (53,13,54)..(58,17,58) — the old
-                                        // (30,4,28) top starved the panel's
-                                        // bloom curve of ~30% of its light.
                                         scope.draw_rect(Brush::linear_gradient_range(
                                             vec![
                                                 Color::from_rgb_u8(53, 13, 54),
@@ -1006,11 +985,6 @@ fn SortFilterStage(suggestion_offset: f32) {
                                     let pill_gesture = column_gesture.clone();
                                     move || {
                                         let pill_open = pill_open;
-                                        // Touched glass rises toward the user
-                                        // (reference lift) on a spring, and
-                                        // the same coordinate drives the HDR
-                                        // glow so light and geometry move as
-                                        // one.
                                         let pill_press = cranpose_animation::animateFloatAsState(
                                             if pill_gesture.is_pressed() { 1.0 } else { 0.0 },
                                             cranpose_animation::spring(1.0, 600.0),
@@ -1045,10 +1019,6 @@ fn SortFilterStage(suggestion_offset: f32) {
                                                 CornerRadii::uniform(20.0),
                                             );
                                         })
-                                        // Touched glass answers with its
-                                        // material: HDR-like highlight +
-                                        // saturation and the under-finger
-                                        // glow while the gesture is down.
                                         .glass_effect_with(
                                             Glass::clear()
                                                 .shape(LiquidShape::Capsule)
@@ -1093,17 +1063,6 @@ fn SortFilterStage(suggestion_offset: f32) {
                                             pill,
                                             BoxSpec::default().content_alignment(Alignment::CENTER),
                                             move || {
-                                                // Reference pill (menu-expand
-                                                // f_001): a dark capsule ringed
-                                                // by the magenta accent, not a
-                                                // solid magenta slab. The PRESS
-                                                // floods the face with that
-                                                // accent (open strip 200-366ms:
-                                                // the whole capsule blazes hot
-                                                // magenta while held) — the dark
-                                                // inner yields to the ring's
-                                                // light instead of painting a
-                                                // new color.
                                                 Box(
                                                     Modifier::empty()
                                                         .fill_max_size()
@@ -1153,8 +1112,6 @@ fn SortFilterStage(suggestion_offset: f32) {
                                     }
                                 },
                             );
-                            // Light page under the header: the two suggestion
-                            // tiles from the recording.
                             Box(
                                 Modifier::empty()
                                     .fill_max_width()
@@ -1190,7 +1147,6 @@ fn SortFilterStage(suggestion_offset: f32) {
                         }
                     });
 
-                    // The dark accordion menu out of the pill.
                     let dismiss_open = menu_open;
                     let dismiss_section = section;
                     LiquidMenu(
@@ -1223,7 +1179,6 @@ fn SortFilterFixtureStage() {
     SortFilterStage(104.0);
 }
 
-/// One white suggestion tile ("Later / 1 item") from the recording's page.
 #[composable]
 fn SuggestionTile(title: &'static str, subtitle: &'static str) {
     Box(
@@ -1270,8 +1225,6 @@ fn SuggestionTile(title: &'static str, subtitle: &'static str) {
     );
 }
 
-/// The List/Grid view menu's rows, shared by both reference stages that show
-/// it: each row both reports the current view and switches to its own.
 fn view_mode_menu_content(scope: &LiquidMenuScope, selection: MutableState<usize>) {
     scope.item(
         LiquidMenuItem::new("List")
@@ -1287,15 +1240,12 @@ fn view_mode_menu_content(scope: &LiquidMenuScope, selection: MutableState<usize
     );
 }
 
-/// The sort/filter accordion's rows: which section is unfolded decides which
-/// choices are declared, and each row carries the choice it makes.
 fn sort_filter_menu_content(
     scope: &LiquidMenuScope,
     section: MutableState<usize>,
     sort_choice: MutableState<usize>,
     filter_choice: MutableState<usize>,
 ) {
-    // An accordion header folds the section it names and unfolds itself.
     let fold =
         move |target: usize| move || section.set(if section.get() == target { 0 } else { target });
     scope.item(
@@ -1337,9 +1287,6 @@ fn sort_filter_menu_content(
     }
 }
 
-/// The reference `bar_headers_folded` composition: colored section headers
-/// whose bold white titles cross the floating bar's top edge, so the bar's
-/// fold renders them mirrored inside the glass.
 #[composable]
 fn StoreHeadersBarExample(selected: usize, on_select: impl Fn(usize) + 'static) {
     let on_select: std::rc::Rc<dyn Fn(usize)> = std::rc::Rc::new(on_select);
@@ -1414,8 +1361,6 @@ fn StoreHeadersBarExample(selected: usize, on_select: impl Fn(usize) + 'static) 
     );
 }
 
-/// One colored section-header block; the title sits low enough to cross the
-/// floating bar's top edge (the fold's subject).
 #[composable]
 fn HeaderBlock(modifier: Modifier, title: &'static str, start: Color, end: Color) {
     Box(
@@ -1474,9 +1419,6 @@ fn OnWhiteBottomBarExample(selected: usize, on_select: impl Fn(usize) + 'static)
                     let on_select = std::rc::Rc::clone(&on_select);
                     LiquidTabBar(
                         Modifier::empty().offset(5.0, -10.0),
-                        // Reference on-white recording: cell pitch 319px over a
-                        // 185px bar = 1.72x, i.e. 110dp cells against the 64dp
-                        // bar. Narrower cells squash the held oval circular.
                         LiquidTabBarSpec::new(110.0),
                         selected,
                         move |index| on_select(index),
@@ -1502,8 +1444,6 @@ fn SectionTitle(text: &'static str) {
     );
 }
 
-/// One WWDC-style session card: dark glyph thumbnail, bold title, gray
-/// subtitle — the list the reference floating tab bar hovers over.
 #[composable]
 fn SessionCard(icon: &'static str, title: &'static str, subtitle: &'static str) {
     LiquidCard(Modifier::empty().fill_max_width(), move || {
@@ -1564,10 +1504,6 @@ fn SessionCard(icon: &'static str, title: &'static str, subtitle: &'static str) 
     Box(Modifier::empty().height(12.0), BoxSpec::default(), || {});
 }
 
-/// The `menu-open` reference page block: the "Featured videos" header the
-/// iPhone menu droplet grows over, with the WWDC26 session rows beneath —
-/// the nav's filter/"..." circles sit directly above it at rest scroll, so
-/// the composed frame matches `example/target/menu-open`.
 #[composable]
 fn FeaturedVideosReferenceStage(
     menu_open: cranpose_core::MutableState<bool>,
@@ -1618,9 +1554,6 @@ fn FeaturedVideosReferenceCard(
             .padding(14.0),
         ColumnSpec::default(),
         move || {
-            // Reference header row: the title column with the filter and
-            // "..." circles inline at its right — the droplet grows from
-            // THIS anchor over the session rows below.
             let row_menu = menu_open;
             let row_gesture = menu_gesture.clone();
             let row_anchor = std::rc::Rc::clone(&anchor_sink);
@@ -1941,7 +1874,6 @@ pub fn LiquidReferenceFixture(case: LiquidReferenceFixtureCase) {
     );
 }
 
-/// The showcase page.
 #[composable]
 pub fn LiquidUiTab() {
     let dark = remember(|| mutableStateOf(false)).with(|s| *s);
@@ -1978,9 +1910,6 @@ pub fn LiquidUiTab() {
             super::TEST_LIQUID_SCROLL_STATE.with(|cell| {
                 *cell.borrow_mut() = Some(scroll);
             });
-            // The menu anchors to the REAL composited rects of the Featured
-            // videos card's trailing circles (window coords via
-            // report_window_rect) — never guessed offsets.
             let menu_anchor_rect = cranpose_core::remember(|| {
                 std::rc::Rc::new(std::cell::Cell::new(Rect {
                     x: 0.0,
@@ -2024,7 +1953,6 @@ pub fn LiquidUiTab() {
                     }),
                 cranpose::widgets::BoxSpec::default(),
                 move || {
-                    // ---- Scrollable content (slides under the bars) ----
                     let dark_for_chip = dark;
                     let toggle_a = toggle_a;
                     let toggle_b = toggle_b;
@@ -2072,8 +2000,6 @@ pub fn LiquidUiTab() {
                             TabSwipeReferenceBackdrop();
                             Box(Modifier::empty().height(12.0), BoxSpec::default(), || {});
 
-                            // WWDC-style sessions list: the content the
-                            // floating tab bar and morphing menu hover over.
                             for (icon, title, subtitle) in [
                                 (
                                     icons::GRID,
@@ -2122,7 +2048,6 @@ pub fn LiquidUiTab() {
                             });
                             Box(Modifier::empty().height(12.0), BoxSpec::default(), || {});
 
-                            // Vivid backdrop content for the glass to lens.
                             GradientStripe(
                                 [
                                     Color::from_rgb_u8(255, 94, 58),
@@ -2268,11 +2193,7 @@ pub fn LiquidUiTab() {
 
                             SectionTitle("SEGMENTED");
                             let seg = segment_state;
-                            // The reference segmented recording's exact labels
-                            // (Transfers page) so cheatsheet frames align.
                             LiquidSegmentedControl(
-                                // Reference control geometry: 900px over
-                                // 2.89 px/dp = 310dp, cells 103dp.
                                 Modifier::empty().width(310.0),
                                 seg.get(),
                                 move |index| seg.set(index),
@@ -2373,10 +2294,6 @@ pub fn LiquidUiTab() {
                         },
                     );
 
-                    // ---- Nav bar over the content ----
-                    // The menu's anchor circles live in the Featured videos
-                    // card header (the reference composition); the nav keeps
-                    // only the title.
                     LiquidNavBar(
                         Modifier::empty().fill_max_width(),
                         LiquidNavBarSpec::new("WWDC"),
@@ -2385,7 +2302,6 @@ pub fn LiquidUiTab() {
                         || {},
                     );
 
-                    // ---- Morphing menu ----
                     let menu_state = menu_open;
                     let menu_dismiss = menu_open;
                     let menu_selection = menu_mode;
@@ -2402,11 +2318,6 @@ pub fn LiquidUiTab() {
                                 36.0,
                                 icons::FILTER,
                             ),
-                            // The tapped "…" itself: its trigger backdrop
-                            // unmounts instantly, so without a replica the
-                            // glyph pops out within a frame — the reference
-                            // keeps it readable under the growing droplet
-                            // and ghosts it out gradually.
                             LiquidMenuAbsorbedSource::new(
                                 menu_anchor,
                                 GlassButtonSpec::glass(),
@@ -2419,7 +2330,6 @@ pub fn LiquidUiTab() {
                         move |scope| view_mode_menu_content(scope, menu_selection),
                     );
 
-                    // ---- Floating tab bar ----
                     let tab_state = selected_tab;
                     Box(
                         Modifier::empty().fill_max_size().padding_each(

@@ -70,6 +70,7 @@
 - do not use big models as subagents (opus, codex xhigh thinking, etc), only small fast & cheap to not waste tokens
 - no 'backwards compatibility' is allowed; we in a pre-alpha
 - no comments in style "now it is like that" - we are not writing history
+- code comments are forbidden; documentation of the public API surface is required. `///`/`//!` stay only on items reachable as `pub` from a crate root of a published crate; everything else, including doc comments on private or test-only items, is a comment and goes
 - duplicated code (10+ lines) without architecture is forbidden
 - 'legacy'/'old way' etc not allowed. we are in a pre-alpha, everything is fresh, clean, single instance
 - be aware of what you've done by looking at git status

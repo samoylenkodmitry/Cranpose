@@ -1,5 +1,3 @@
-//! Read-only snapshot implementation.
-
 use super::*;
 
 /// A read-only snapshot of state at a specific point in time.
@@ -41,7 +39,6 @@ impl ReadonlySnapshot {
     }
 
     pub fn root_readonly(&self) -> Arc<Self> {
-        // Readonly snapshots are always their own root
         ReadonlySnapshot::new(
             self.state.id.get(),
             self.state.invalid.borrow().clone(),
@@ -64,7 +61,7 @@ impl ReadonlySnapshot {
     }
 
     pub fn has_pending_changes(&self) -> bool {
-        false // Read-only snapshots never have changes
+        false
     }
 
     pub fn dispose(&self) {
@@ -83,7 +80,6 @@ impl ReadonlySnapshot {
         self.state.disposed.get()
     }
 
-    // Internal: set a callback to run when this snapshot is disposed.
     pub(crate) fn set_on_dispose<F>(&self, f: F)
     where
         F: FnOnce() + 'static,
@@ -103,7 +99,6 @@ mod tests {
         crate::state::StateRecord::new(PREEXISTING_SNAPSHOT_ID, (), None)
     }
 
-    // Mock StateObject for testing
     struct MockStateObject;
 
     impl StateObject for MockStateObject {
@@ -160,8 +155,8 @@ mod tests {
         let any_snapshot = AnySnapshot::Readonly(snapshot.clone());
         assert!(any_snapshot.is_valid(1));
         assert!(any_snapshot.is_valid(10));
-        assert!(!any_snapshot.is_valid(5)); // Invalid
-        assert!(!any_snapshot.is_valid(11)); // Future
+        assert!(!any_snapshot.is_valid(5));
+        assert!(!any_snapshot.is_valid(11));
     }
 
     #[test]
@@ -207,7 +202,7 @@ mod tests {
         let parent = ReadonlySnapshot::new(1, SnapshotIdSet::new(), None);
         let nested = parent.take_nested_snapshot(None);
 
-        assert_eq!(nested.snapshot_id(), 1); // Same ID
+        assert_eq!(nested.snapshot_id(), 1);
     }
 
     #[test]
@@ -251,7 +246,6 @@ mod tests {
 
         let mock_state = MockStateObject;
 
-        // Reading in nested snapshot should call both observers
         nested.record_read(&mock_state);
 
         assert_eq!(*parent_reads.lock().unwrap(), 1);

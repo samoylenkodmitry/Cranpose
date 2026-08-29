@@ -1,17 +1,3 @@
-//! Robot test for fling (momentum scroll) detection
-//!
-//! This test validates that:
-//! 1. Quick swipe gestures result in velocity detection
-//! 2. Velocity is logged when gesture ends (debug mode)
-//!
-//! Note: This test verifies velocity DETECTION. Full fling animation
-//! (scroll continuing after release) requires runtime integration.
-//!
-//! Run with:
-//! ```bash
-//! cargo run --package desktop-app --example robot_fling --features robot-app
-//! ```
-
 use std::time::Duration;
 
 use cranpose::AppLauncher;
@@ -33,7 +19,6 @@ fn main() {
         .with_size(800, 600)
         .with_headless(true)
         .with_test_driver(|robot| {
-            // Timeout safety
             std::thread::spawn(|| {
                 std::thread::sleep(Duration::from_secs(TEST_TIMEOUT_SECS));
                 println!("✗ Test timed out after {} seconds", TEST_TIMEOUT_SECS);
@@ -50,9 +35,6 @@ fn main() {
 
             let mut all_passed = true;
 
-            // =========================================================
-            // Navigate to Lazy List tab for scrollable content
-            // =========================================================
             println!("--- Navigating to Lazy List Tab ---");
 
             if let Some((x, y, w, h)) = find_button_in_semantics(&robot, "Lazy List") {
@@ -73,12 +55,8 @@ fn main() {
                 all_passed = false;
             }
 
-            // =========================================================
-            // TEST 1: Verify list content is visible
-            // =========================================================
             println!("--- Test 1: Verify List Content ---");
 
-            // Look for an item in the list (should have items like "Item 0", "Item 1", etc.)
             let has_list_item = find_in_semantics(&robot, |elem| find_text(elem, "Item 0"))
                 .is_some()
                 || find_in_semantics(&robot, |elem| find_text(elem, "Item 1")).is_some()
@@ -90,9 +68,6 @@ fn main() {
                 println!("  ? List content not found - looking for scrollable area\n");
             }
 
-            // =========================================================
-            // TEST 2: Perform quick swipe (fling gesture)
-            // =========================================================
             println!("--- Test 2: Quick Swipe (Fling Gesture) ---");
             println!("Performing fast downward swipe to trigger velocity detection...\n");
 
@@ -119,15 +94,13 @@ fn main() {
             let end_y = visible_bounds.1 + visible_bounds.3 * 0.2;
             let swipe_distance = (start_y - end_y).abs();
             let swipe_steps = 5;
-            let step_delay_ms = 10; // Fast swipe - 10ms between steps = ~900 px/sec
+            let step_delay_ms = 10;
 
-            // Reset velocity tracker before swipe
             if let Err(err) = robot.reset_last_fling_velocity() {
                 println!("  ✗ Failed to reset fling velocity: {err}\n");
                 all_passed = false;
             }
 
-            // Record scroll position before swipe (via an item we can track)
             let item_before = find_in_semantics(&robot, |elem| find_text(elem, "Item 5"));
             let before_y = item_before.map(|(_, y, _, _)| y);
 
@@ -135,13 +108,11 @@ fn main() {
                 println!("  Item 5 before swipe at Y={:.1}", y);
             }
 
-            // Perform the swipe
             let _ = robot.mouse_move(start_x, start_y);
             std::thread::sleep(Duration::from_millis(50));
             let _ = robot.mouse_down();
             std::thread::sleep(Duration::from_millis(20));
 
-            // Quick swipe upward (dragging content up = scrolling down)
             for i in 1..=swipe_steps {
                 let progress = i as f32 / swipe_steps as f32;
                 let new_y = start_y - (swipe_distance * progress);
@@ -149,14 +120,11 @@ fn main() {
                 std::thread::sleep(Duration::from_millis(step_delay_ms));
             }
 
-            // Release - this should trigger velocity calculation
             println!("  Releasing after {:.0}px swipe...", swipe_distance);
             let _ = robot.mouse_up();
 
-            // Wait for potential fling animation (even partial)
             std::thread::sleep(Duration::from_millis(300));
 
-            // Check if scroll position changed
             let item_after = find_in_semantics(&robot, |elem| find_text(elem, "Item 5"));
             let after_y = item_after.map(|(_, y, _, _)| y);
 
@@ -183,12 +151,8 @@ fn main() {
                 }
             }
 
-            // =========================================================
-            // TEST 3: Reverse swipe with velocity assertion
-            // =========================================================
             println!("--- Test 3: Reverse Swipe with Velocity Check ---");
 
-            // Reset velocity before the reverse swipe
             if let Err(err) = robot.reset_last_fling_velocity() {
                 println!("  ✗ Failed to reset fling velocity: {err}\n");
                 all_passed = false;
@@ -199,7 +163,6 @@ fn main() {
             let _ = robot.mouse_down();
             std::thread::sleep(Duration::from_millis(20));
 
-            // Quick swipe downward
             for i in 1..=swipe_steps {
                 let progress = i as f32 / swipe_steps as f32;
                 let new_y = end_y + (swipe_distance * progress);
@@ -210,7 +173,6 @@ fn main() {
             let _ = robot.mouse_up();
             std::thread::sleep(Duration::from_millis(300));
 
-            // Check velocity was detected
             let velocity = match robot.last_fling_velocity() {
                 Ok(value) => value,
                 Err(err) => {
@@ -234,9 +196,6 @@ fn main() {
                 all_passed = false;
             }
 
-            // =========================================================
-            // Summary
-            // =========================================================
             println!("\n=== Test Summary ===");
             if all_passed {
                 println!("✓ ALL TESTS PASSED");

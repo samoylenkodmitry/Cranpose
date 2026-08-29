@@ -1,18 +1,3 @@
-//! Runnable demo for "a wrapped paragraph paints the height it measured".
-//!
-//! ```text
-//! cargo run -p desktop-app --features robot-app --example text_wrap_repro
-//! ```
-//!
-//! Opens the repro screen and prints, for every paragraph on it, the height
-//! LAYOUT measured next to the height the renderer PAINTED. Fixed, the two
-//! agree and the run reports OK. Broken, the painted height is one line taller
-//! and the run reports the overrun and exits non-zero — so this is also usable
-//! as a check, not only as something to look at.
-//!
-//! Add `--` `headless=false` to watch it in a window instead of reading the
-//! numbers.
-
 use std::time::Duration;
 
 use cranpose::AppLauncher;
@@ -28,8 +13,6 @@ fn main() {
         .with_headless(headless)
         .with_test_driver(move |robot| {
             std::thread::sleep(Duration::from_millis(600));
-            // The paragraphs carry no semantics of their own; the screen's own
-            // copy is what confirms it composed at all.
             match robot.validate_content("Verdict") {
                 Ok(()) => println!("repro screen is up"),
                 Err(err) => {

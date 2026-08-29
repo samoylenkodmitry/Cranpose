@@ -1,11 +1,5 @@
-//! WGSL shaders for 2D rendering with GPU acceleration.
-
 pub const SHADER: &str = cranpose_ui_graphics::framework_shaders::SHAPE_WGSL;
 
-/// Trimmed-varying solid entries (`CRANPOSE_SOLID_TRIM_VARYINGS` opt-in):
-/// `shape_shader_source` appends this to [`SHADER`] when the trim is on, so
-/// the default build's modules stay byte-identical to the shipping text.
-/// Never compiled alone.
 pub const SOLID_TRIM_APPENDIX: &str =
     cranpose_ui_graphics::framework_shaders::SHAPE_SOLID_TRIM_WGSL;
 
@@ -13,36 +7,15 @@ pub const IMAGE_SHADER: &str = cranpose_ui_graphics::framework_shaders::IMAGE_WG
 
 pub const GLYPH_ATLAS_SHADER: &str = cranpose_ui_graphics::framework_shaders::GLYPH_ATLAS_WGSL;
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Shared WGSL snippets for post-process effects
-// ═══════════════════════════════════════════════════════════════════════════
-
-/// Fullscreen quad vertex shader preamble shared by all post-process effects.
-///
-/// Declares `VertexOutput` and `fullscreen_vs` — a vertex shader that generates
-/// a full-screen triangle pair from vertex ID (no vertex buffer needed).
-/// Output UV covers [0,1]×[0,1].
 pub const FULLSCREEN_QUAD_VS: &str =
     cranpose_ui_graphics::framework_shaders::FULLSCREEN_QUAD_VS_WGSL;
 
-/// SDF rounded-rectangle function shared by the main shape shader and blit shader.
 pub const SDF_ROUNDED_RECT_FN: &str =
     cranpose_ui_graphics::framework_shaders::SDF_ROUNDED_RECT_FN_WGSL;
 
 pub const COMPOSITE_SAMPLE_FN: &str =
     cranpose_ui_graphics::framework_shaders::COMPOSITE_SAMPLE_FN_WGSL;
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Composed post-process shaders
-// ═══════════════════════════════════════════════════════════════════════════
-
-/// Two-pass separable Gaussian blur post-process shader.
-///
-/// Uniforms (via push-style uniform buffer):
-/// - direction: vec2<f32> — (1,0) for horizontal, (0,1) for vertical
-/// - radius: vec2<f32> — blur radius in pixels (x,y)
-/// - texture_size: vec2<f32> — input texture dimensions in pixels
-/// - tile_mode: f32 — 0.0 = Clamp, 1.0 = Repeated, 2.0 = Mirror, 3.0 = Decal
 pub fn blur_shader() -> String {
     format!(
         "{FULLSCREEN_QUAD_VS}{}",
@@ -50,12 +23,6 @@ pub fn blur_shader() -> String {
     )
 }
 
-/// Fused vertical blur plus rounded-alpha-mask shader.
-///
-/// The horizontal blur has already been written to the input texture. This
-/// pass performs the vertical blur and applies the same rounded mask semantics
-/// as `rounded_alpha_mask_effect`, then composites directly into the caller's
-/// destination render target.
 pub fn blur_rounded_mask_shader() -> String {
     format!(
         "{FULLSCREEN_QUAD_VS}{}",
@@ -63,10 +30,6 @@ pub fn blur_rounded_mask_shader() -> String {
     )
 }
 
-/// Offset post-process shader.
-///
-/// Translates the source texture by the provided pixel offset. Pixels shifted
-/// outside the source texture become transparent.
 pub fn offset_shader() -> String {
     format!(
         "{FULLSCREEN_QUAD_VS}{}",
@@ -74,11 +37,6 @@ pub fn offset_shader() -> String {
     )
 }
 
-/// Simple fullscreen blit shader for compositing offscreen targets to the surface.
-///
-/// Renders the entire offscreen texture as a fullscreen quad with premultiplied alpha blending.
-/// Transparent regions contribute nothing, so only the effect-processed content
-/// is composited onto the existing surface.
 pub fn blit_shader() -> String {
     let mut shader = format!(
         "{FULLSCREEN_QUAD_VS}{SDF_ROUNDED_RECT_FN}{}",
@@ -102,9 +60,6 @@ mod tests {
 
     #[test]
     fn the_blit_shaders_are_complete_wgsl_with_a_fragment_entry_point() {
-        // A shader assembled from fragments is only a shader if every fragment
-        // landed: a missing `@fragment` entry point fails at pipeline creation,
-        // which on some drivers shows as a blank surface rather than an error.
         for (name, source) in [
             ("blit", blit_shader()),
             ("projective blit", projective_blit_shader()),
@@ -119,8 +74,6 @@ mod tests {
             );
         }
 
-        // They are two different pipelines and must not have been assembled
-        // from the same pieces.
         assert_ne!(blit_shader(), projective_blit_shader());
     }
 
@@ -211,13 +164,6 @@ mod tests {
         assert!(validate_wgsl_module(&super::offset_shader()).is_ok());
     }
 
-    // ── Shape shader (stroke + arc primitives) ──────────────────────────────
-    //
-    // The shape shader has to keep validating for BOTH WebGPU and WebGL/GLSL
-    // ES 3.00 after the stroke/arc additions. GLSL ES is the strict one: no
-    // unbounded loops, no dynamic indexing beyond what the gradient sampler
-    // already does. These tests are the guard.
-
     #[test]
     fn shape_shader_validates_for_webgpu() {
         if let Err(err) = validate_wgsl_module(super::SHADER) {
@@ -238,11 +184,6 @@ mod tests {
 
     #[test]
     fn trimmed_shape_shader_validates_for_webgpu_and_lowers_to_glsl() {
-        // The trimmed solid entries ride appended to the base text
-        // (`CRANPOSE_SOLID_TRIM_VARYINGS`). A desktop GL context with the
-        // flag set would lower exactly these two entry points at pipeline
-        // build, so the gap-preserving locations must survive the GLSL
-        // backend too, not just WebGPU validation.
         let source = format!("{}\n{}", super::SHADER, super::SOLID_TRIM_APPENDIX);
         if let Err(err) = validate_wgsl_module(&source) {
             panic!("shape.wgsl + shape_solid_trim.wgsl must validate for WebGPU: {err}");
@@ -258,9 +199,6 @@ mod tests {
 
     #[test]
     fn shape_shader_declares_the_stroke_and_arc_parameters() {
-        // Cheap structural guard: the Rust `ShapeData` mirror is `Pod` and
-        // uploaded by raw bytes, so a field that exists on one side only would
-        // shift every subsequent field without any compiler complaint.
         for needle in [
             "stroke_params: vec4<f32>",
             "arc_params: vec4<f32>",
@@ -276,8 +214,6 @@ mod tests {
 
     #[test]
     fn resized_shape_shader_still_validates_for_both_targets() {
-        // Native pipelines rewrite the uniform array lengths; the rewritten
-        // source is what actually gets compiled, so validate that shape too.
         let resized = super::SHADER
             .replace("array<ShapeData, 102>", "array<ShapeData, 409>")
             .replace("array<GradientStop, 256>", "array<GradientStop, 1024>");

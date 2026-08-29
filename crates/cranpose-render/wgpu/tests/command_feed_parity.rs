@@ -1,14 +1,3 @@
-//! Pixel parity for the identity-fed retained path.
-//!
-//! Drives the REAL recorder machinery — commands record into a
-//! `DrawScopeDefault`, a `CommandReplayState` verifies each frame, and the
-//! resulting `CommandReplayFrame` rides the graph — then renders the same
-//! frame sequence twice: once with the feed disabled (every primitive through
-//! the full pipeline) and once with `CRANPOSE_COMMAND_FEED=1` (retained spans
-//! drawn from identity-keyed slots). Frames must match pixel-for-pixel within
-//! blending noise, and the fed run must actually have retained — a silently
-//! fallen-back feed would pass parity vacuously.
-
 mod support;
 
 use cranpose_render_common::{
@@ -26,18 +15,8 @@ use cranpose_ui_graphics::{
 
 const SIZE: u32 = 408;
 const CENTER: f32 = 204.0;
-/// Enough frames for the twinkle alpha cycle (period 11, `record_frame`'s
-/// `% 11`) to wrap past the frame-1 capture: at frame 12 every twinkle
-/// returns EXACTLY to its captured color, which must reach the GPU as an
-/// explicit restore patch — a recorder that emits recolors only as
-/// diff-vs-snapshot emits nothing there, the slot's paint mirror keeps
-/// frame 11's colors, and the whole twinkle field renders stale. Eight
-/// frames never wrapped the cycle, which is how that defect hid.
 const FRAMES: usize = 13;
 
-/// One frame of the synthetic boss through the RECORDING path: rings
-/// rotating at distinct speeds under a breathing scale, churning sparks,
-/// recoloring twinkles, movers whose count changes every frame.
 fn record_frame(frame: usize) -> DrawScopeDefault {
     let mut scope =
         DrawScopeDefault::new(cranpose_ui_graphics::Size::new(SIZE as f32, SIZE as f32));
@@ -110,10 +89,6 @@ fn record_frame(frame: usize) -> DrawScopeDefault {
     scope
 }
 
-/// Records every frame once through one live `CommandReplayState`, exactly
-/// as the scene builder's verifier would, producing the graphs both render
-/// runs share. `bypass` decides per retained slot whether its records skip
-/// materialization — the production path consults renderer confirmations.
 fn build_sequence(bypass: &mut dyn FnMut(u32) -> bool) -> Vec<RenderGraph> {
     let mut state = CommandReplayState::default();
     let command = DrawCommandId {
@@ -127,9 +102,6 @@ fn build_sequence(bypass: &mut dyn FnMut(u32) -> bool) -> Vec<RenderGraph> {
             let outcome = state.advance(scope.recorded());
             let center = state.center();
             let (finished, replay) = scope.finish_replay(center, outcome, bypass);
-            // Each frame owns the recording it was built from, exactly as
-            // production attaches the published handle: a bypassed span's
-            // only rematerialization source rides WITH the frame.
             let fallback = std::rc::Rc::new(finished.recording);
             let replay = replay.map(|mut frame| {
                 frame.fallback = Some(fallback);
@@ -209,29 +181,13 @@ fn command_feed_matches_the_full_pipeline_pixel_for_pixel() {
         "the recorder should retain from the partition frame on, got {retained_frames}"
     );
 
-    // Baseline: everything through the full pipeline — no feed, no flat
-    // detector (its retention is not what this test compares against), and
-    // no retained arc meshes: this test documents the FEED's divergence
-    // envelope, so its captures stay on the plain quad expansion (the mesh
-    // adds its own interpolation noise, measured in arc_mesh_parity).
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ARC_MESH", Some("0"));
-    // The feed has defaulted ON since its parity was proven, so the
-    // baseline must say "0" explicitly: with the variable merely unset the
-    // baseline renders through the very retention path under test, and any
-    // stale-slot defect cancels out of the comparison — which is exactly
-    // how the mod-11 stale-recolor defect stayed invisible here.
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_COMMAND_FEED", Some("0"));
     let baseline = render_sequence(&mut renderer, &graphs);
 
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_COMMAND_FEED", Some("1"));
     let fed = render_sequence(&mut renderer, &graphs);
 
-    // The fed pass confirmed captured slots exactly as production does;
-    // rebuild the same deterministic sequence with the bypass consulting
-    // those confirmations, so retained records never materialize at all,
-    // and render it against the live slots. Confirmations are live only
-    // under the feed generation they were stamped with, so declare it for
-    // this build exactly as the production pipeline does per build.
     cranpose_render_common::scene_builder::set_retained_feed_epoch(Some(
         cranpose_render_wgpu::retained_feed_generation(),
     ));
@@ -263,9 +219,6 @@ fn command_feed_matches_the_full_pipeline_pixel_for_pixel() {
         "confirmed slots should have bypassed materialization \
          ({bypassed_primitives} of {full_primitives} still materialized)"
     );
-    // Isolation control: the same graphs the fed pass drew, rendered again
-    // from the current renderer state. Any drift here is pass-position
-    // state (the flat detector's snapshot/capture schedule), not bypass.
     let fed2 = render_sequence(&mut renderer, &graphs);
     for (frame, (a, b)) in fed.iter().zip(&fed2).enumerate() {
         let differing = a.iter().zip(b).filter(|(a, b)| a.abs_diff(**b) > 0).count();
@@ -317,16 +270,6 @@ fn command_feed_matches_the_full_pipeline_pixel_for_pixel() {
                 "frame {frame}: dynamic and capture frames are byte-exact"
             );
         } else {
-            // Retained frames deviate only at shape edges: a transformed
-            // capture quad crops the AA falloff slightly differently than a
-            // freshly computed tight quad. This is the envelope the flat
-            // detector has always shipped — the feed measures IDENTICAL
-            // per-frame counts on this scene (260..1815 channels of 666k
-            // across the 13 frames, growing with accumulated rotation until
-            // a recapture resets it). Wider divergence means a real defect:
-            // the shifted self-similar anchor pairing this test once
-            // caught, or the stale twinkle recolors at the frame-12 alpha
-            // wrap (11398 channels) that the restore patches now reset.
             assert!(
                 differing < 2500 && worst < 160,
                 "frame {frame}: {differing} channels diverged (worst {worst}) — beyond the\n                 flat detector's edge-AA envelope"
@@ -334,13 +277,6 @@ fn command_feed_matches_the_full_pipeline_pixel_for_pixel() {
         }
     }
 
-    // Bypassing changes what the CPU materializes, never what the GPU
-    // draws: the bypassed sequence must reproduce the control sequence
-    // byte-for-byte. The control is `fed2`, not `fed` — the flat detector
-    // renders the two pre-retention frames ≤2/255 differently once feed
-    // slots live in the renderer (a pass-position artifact of the detector
-    // that predates the feed and dies with it), and both `fed2` and the
-    // bypassed pass render from that same state.
     let mut deviated = false;
     for (frame, (control, bypassed)) in fed2.iter().zip(&bypassed).enumerate() {
         let differing = control

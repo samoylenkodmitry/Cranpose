@@ -1,11 +1,3 @@
-//! Web choosers backed by `rfd` (the browser file input) and the browser
-//! download for saving.
-//!
-//! Folder choosing on the web requires the File System Access API
-//! (`showDirectoryPicker`), which is Chromium-only and behind unstable
-//! bindings, so it is reported as unsupported here; native platforms (desktop,
-//! Android, iOS) provide system-provider folder choosing.
-
 use std::{cell::RefCell, rc::Rc};
 
 use wasm_bindgen::JsCast;
@@ -70,9 +62,6 @@ pub(super) fn pick_writable_folder(
     Box::pin(async { Err(FilePickerError::UnsupportedPlatform) })
 }
 
-/// "Saving" on the web is a browser download: the streamed bytes are buffered
-/// into a Blob object URL that a transient anchor clicks on
-/// [`ContentSink::finish`]. The browser owns the destination.
 pub(super) fn save_document(
     request: SaveDocumentRequest,
 ) -> PickerFuture<Result<Option<ContentSinkRef>, FilePickerError>> {

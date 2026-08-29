@@ -64,9 +64,7 @@ pub fn combine_layers(
             color_filter: compose_color_filters(current.color_filter, layer.color_filter),
             compositing_strategy: layer.compositing_strategy,
             blend_mode: layer.blend_mode,
-            // render_effect is NOT inherited — it applies only to this layer's subtree
             render_effect: layer.render_effect,
-            // backdrop_effect is NOT inherited — it applies only to this node's backdrop.
             backdrop_effect: layer.backdrop_effect,
         }
     } else {
@@ -126,11 +124,6 @@ pub fn compose_color_filters(
 }
 
 pub fn apply_layer_to_brush(brush: Brush, layer: &GraphicsLayer) -> Brush {
-    // The overwhelmingly common case — full-alpha layer, no filter, unit
-    // scale — leaves every brush's geometry untouched; a scene of thousands of
-    // shape draws per frame should not rebuild it to discover that. The
-    // colours are still snapped, because a colour reaches the framebuffer at
-    // eight bits whether or not a layer touched it on the way.
     if layer.alpha == 1.0
         && layer.color_filter.is_none()
         && layer_scale_x(layer) == 1.0
@@ -143,7 +136,6 @@ pub fn apply_layer_to_brush(brush: Brush, layer: &GraphicsLayer) -> Brush {
     })
 }
 
-/// Every colour a brush carries through `paint`, leaving its geometry alone.
 fn map_brush_colors(brush: Brush, paint: impl Fn(Color) -> Color) -> Brush {
     match brush {
         Brush::Solid(color) => Brush::solid(paint(color)),
@@ -185,7 +177,6 @@ fn map_brush_colors(brush: Brush, paint: impl Fn(Color) -> Color) -> Brush {
     }
 }
 
-/// A brush's geometry under this layer's scale, leaving its colours alone.
 fn scale_brush_geometry(brush: Brush, layer: &GraphicsLayer) -> Brush {
     let scale_x = layer_scale_x(layer);
     let scale_y = layer_scale_y(layer);
@@ -407,21 +398,10 @@ pub fn primitives_for_placement_verified(
     CommandRecording,
     Option<cranpose_ui_graphics::CommandReplayFrame>,
 ) {
-    // `markers` is the recording scope's own count of `Content` markers,
-    // maintained while the command records (`draw_content()` calls and pushed
-    // batches both keep it current), so it is authoritative: zero means the
-    // vector holds no marker and passes through untouched. On a watch-class
-    // core, re-streaming a fresh multi-thousand-primitive recording just to
-    // learn "no markers" is measurable frame time.
     let filter_content = |primitives: Vec<DrawPrimitive>, markers: u32| {
         if markers == 0 {
             return primitives;
         }
-        // `filter(...).collect()` reports a zero lower-bound size hint, so it
-        // grows the output through the whole doubling schedule; for an
-        // animated scene these vectors hold thousands of primitives and are
-        // rebuilt every frame. `Content` markers are rare, so the input
-        // length is the right capacity.
         let mut out = Vec::with_capacity(primitives.len());
         out.extend(
             primitives
@@ -467,8 +447,6 @@ pub fn primitives_for_placement_verified(
         out
     };
 
-    // The command records into a scope this consumer owns, so the marker
-    // count travels with the recording instead of through a side channel.
     fn record_into(
         func: &DrawCommandFn,
         size: Size,
@@ -488,9 +466,6 @@ pub fn primitives_for_placement_verified(
         let state = &mut *ctx.state;
         let outcome =
             state.advance_pooled(scope.recorded(), crate::scene_builder::verify_executor());
-        // Span counts are taken before `finish_replay` consumes the outcome
-        // (recolor patch lists move into the frame instead of being cloned
-        // every frame).
         let diag = if cranpose_core::env_flag!("CRANPOSE_COMMAND_REPLAY_DIAG") {
             if let cranpose_ui_graphics::ReplayOutcome::Spans(spans) = &outcome {
                 let (mut retained, mut dynamic) = (0usize, 0usize);
@@ -518,11 +493,6 @@ pub fn primitives_for_placement_verified(
         } else {
             None
         };
-        // Rate-limited engagement line, always on: the watch cannot take
-        // flag-gated diagnostics (its logcat is the only channel), and
-        // whether the pooled and prefix-commit fast paths engage on-device
-        // must be provable from a plain measurement window. warn level:
-        // the platform loggers filter info on desktop.
         if !state.segments().is_empty() {
             thread_local! {
                 static VERIFIED_FRAMES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
@@ -546,23 +516,8 @@ pub fn primitives_for_placement_verified(
             }
         }
         let center = state.center();
-        // Only spans whose retained buffer the renderer has confirmed may
-        // skip materialization: everything else must exist as primitives
-        // for this frame's ordinary path. A marker-bearing recording drops
-        // its frame after the split, so it must materialize whole.
         let markers = scope.content_marker_count();
         if ctx.stale_available && markers == 0 && state.collapsed_from_captured() {
-            // The transition frame: verification collapsed out of an
-            // established capture, so emitting `outcome` would materialize
-            // and re-encode the ENTIRE tape in one frame — 22-75 ms on a
-            // watch-class core against a ~17k-record scene, two to four
-            // missed vsyncs. The caller holds the previous frame's
-            // emission; serve that instead. Nothing materializes here, and
-            // the advance above already re-snapshotted, so re-convergence
-            // proceeds on the next frames exactly as if this frame had
-            // emitted its collapse. A marker-bearing recording never
-            // qualifies: its frame would have been dropped anyway, so
-            // there is no saved emission shape that matches it.
             ctx.serve_stale = true;
             if cranpose_core::env_flag!("CRANPOSE_COMMAND_REPLAY_DIAG") {
                 log::warn!(
@@ -617,8 +572,6 @@ pub fn primitives_for_placement_verified(
             )
         }
         (_, DrawCommand::WithContent(func)) => {
-            // Content splitting reindexes the vector; the frame's ranges
-            // would not survive it. No id means no bypass either.
             let (finished, _) = record_into(func, size, recording, storage, replay, None);
             (
                 split_with_content(finished.primitives, placement, finished.content_markers),
@@ -684,9 +637,6 @@ mod tests {
         assert_eq!(rect_xs(&overlay), [2.0]);
     }
 
-    /// Recording into a previously used buffer must be indistinguishable
-    /// from recording into a fresh one — for every placement, including the
-    /// marker-splitting paths.
     #[test]
     fn reused_storage_records_identically_to_fresh() {
         let command = DrawCommand::WithContent(recorded_command(|scope| {
@@ -697,7 +647,6 @@ mod tests {
         let size = Size::new(10.0, 10.0);
         for placement in [DrawPlacement::Behind, DrawPlacement::Overlay] {
             let fresh = primitives_for_placement(&command, placement, size);
-            // Junk in the reused buffer must not leak into the recording.
             let dirty = vec![DrawPrimitive::Content; 8];
             let reused = primitives_for_placement_reusing(&command, placement, size, dirty);
             assert_eq!(fresh, reused);
@@ -706,8 +655,6 @@ mod tests {
 
     #[test]
     fn pushed_batches_keep_marker_count_authoritative() {
-        // A pre-built vector enters through `push_recorded`, which counts the
-        // `Content` marker it carries; the filter path must then strip it.
         let command = DrawCommand::Behind(Rc::new(|scope: &mut DrawScopeDefault| {
             scope.push_recorded(vec![
                 DrawPrimitive::Rect {

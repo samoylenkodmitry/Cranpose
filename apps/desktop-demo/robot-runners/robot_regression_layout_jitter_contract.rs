@@ -1,5 +1,3 @@
-//! E2E regression contracts for value-change layout jitter in demo tabs.
-
 mod output_paths;
 mod text_showcase_external_helpers;
 mod visual_contract_metrics;
@@ -106,11 +104,6 @@ fn assert_animation_jitter(robot: &cranpose::Robot) {
         1040,
         38,
     );
-    // The row's alpha pulses, so its pixels sweep through any fixed color
-    // window. The pulse-invariant feature is GEOMETRY: the bar's top edge (a
-    // vertical luma derivative) sits at the same y whenever the row is
-    // visible at all. Frames where the row is too transparent to expose an
-    // edge are skipped — there is nothing to measure.
     let mut alpha_base_y = None;
     for frame in 0..12 {
         let _ = robot.wait_for_present_frame();
@@ -294,9 +287,6 @@ fn is_orange_box_pixel(pixel: [u8; 4]) -> bool {
         && red > blue.saturating_add(24)
 }
 
-/// Median y of the row's top edge: per column, the first vertical luma step
-/// of ≥ 14 scanning downward. `None` while the row is too transparent for an
-/// edge to exist (fewer than 200 columns yield one).
 fn row_top_edge_y(image: &image::RgbaImage, region: (u32, u32, u32, u32)) -> Option<f64> {
     let (left, top, width, height) = region;
     let right = left.saturating_add(width).min(image.width());

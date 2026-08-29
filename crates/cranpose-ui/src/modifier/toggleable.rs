@@ -71,8 +71,6 @@ mod tests {
     use super::*;
     use crate::modifier::{Point, collect_semantics_from_modifier, collect_slices_from_modifier};
 
-    /// A click on a real chain is a pointer down followed by a pointer up: the
-    /// click fires on the release, and only then.
     fn tap(modifier: &Modifier) {
         let slices = collect_slices_from_modifier(modifier);
         let handlers = slices.pointer_inputs();
@@ -113,11 +111,7 @@ mod tests {
             semantics.content_description.as_deref(),
             Some("Haptics, on")
         );
-        // The state is published, not left for the caller to spell into the
-        // description: a reader landing here can say the row is on.
         assert_eq!(semantics.toggled, Some(true));
-        // And no role unless one is asked for: a toggleable row could be a
-        // checkbox or a switch, which is why Compose's parameter is nullable.
         assert_eq!(semantics.role, None);
     }
 
@@ -131,7 +125,6 @@ mod tests {
         );
         let semantics = collect_semantics_from_modifier(&modifier).expect("semantics");
         assert_eq!(semantics.role, Some(SemanticsWidgetRole::Switch));
-        // And it does not displace anything the row already published.
         assert!(semantics.is_clickable);
         assert_eq!(semantics.toggled, Some(false));
         assert_eq!(

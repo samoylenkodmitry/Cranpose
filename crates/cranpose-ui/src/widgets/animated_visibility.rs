@@ -70,10 +70,6 @@ impl EnterTransition {
 impl std::ops::Add for EnterTransition {
     type Output = Self;
 
-    /// Combines two enter transitions, mirroring Compose's
-    /// `EnterTransition.plus`: the resulting transition applies every effect
-    /// of both operands. The left-hand animation spec wins when both sides
-    /// carry one.
     fn add(self, other: Self) -> Self {
         Self {
             fade: self.fade || other.fade,
@@ -131,10 +127,6 @@ impl ExitTransition {
 impl std::ops::Add for ExitTransition {
     type Output = Self;
 
-    /// Combines two exit transitions, mirroring Compose's
-    /// `ExitTransition.plus`: the resulting transition applies every effect
-    /// of both operands. The left-hand animation spec wins when both sides
-    /// carry one.
     fn add(self, other: Self) -> Self {
         Self {
             fade: self.fade || other.fade,
@@ -227,11 +219,7 @@ pub fn AnimatedVisibility<F>(
     } else {
         exit.animation()
     };
-    // First composition seeds the progress at the target so an initially
-    // visible content appears without an enter animation, like Compose.
     let progress_state = animate_float_with_initial(target, target, animation);
-    // Reading here subscribes this recompose scope: each animation frame
-    // re-evaluates whether the exiting content can leave the composition.
     let progress = progress_state.value();
 
     let composed = visible || progress > VISIBILITY_PROGRESS_EPSILON;

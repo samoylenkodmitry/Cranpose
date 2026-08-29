@@ -11,10 +11,6 @@ const QUAD_AXIS_ALIGNMENT_TOLERANCE: f32 = 1e-4;
 const COMPOSITE_DEST_SNAP_TOLERANCE: f32 = 1e-4;
 const DEVICE_SNAP_SUBPIXEL_STEPS: f64 = 16.0;
 
-/// Slack absorbed before the ceil, so a rect that already covers a whole
-/// number of device pixels cannot gain one to float error: `51.0 / 1.4 * 1.4`
-/// is `51.000004`, and a bare ceil turns that into 52. Orders of magnitude
-/// below any real sub-pixel coverage.
 const SURFACE_SIZE_CEIL_EPSILON: f32 = 1e-3;
 
 pub(crate) fn surface_target_size(rect: Rect, root_scale: f32, max_dim: u32) -> (u32, u32) {
@@ -28,22 +24,6 @@ pub(crate) fn surface_target_size(rect: Rect, root_scale: f32, max_dim: u32) -> 
     )
 }
 
-/// The surface rect that `width`x`height` device pixels cover exactly at
-/// `scale`.
-///
-/// `surface_target_size` CEILS each axis, but the composite maps the WHOLE
-/// texture onto the destination quad — `layer_surface_dest_quad` maps the
-/// surface's logical rect through the layer transform, so texture pixel
-/// `(width, height)` lands on the rect's far corner no matter where the
-/// content actually ended. A rect that is not a whole number of device pixels
-/// therefore has its ceil padding stretched across the quad, which compresses
-/// the content toward the quad's origin by up to half a device pixel.
-///
-/// Growing the rect to the pixels that were allocated anyway makes that
-/// mapping exact. The texture is unchanged — this only names the area it
-/// already covers — so nothing here spends memory. Only growth is allowed: a
-/// size clamped by the texture-dimension limit must not shrink the rect and
-/// clip the content off.
 pub(crate) fn device_pixel_exact_surface_rect(
     rect: Rect,
     scale: f32,
@@ -73,13 +53,6 @@ pub(crate) fn local_effect_pixel_rect(width: u32, height: u32) -> [f32; 4] {
     [0.0, 0.0, width as f32, height as f32]
 }
 
-/// The effect rect a runtime shader must receive: the LAYER's content rect
-/// in surface-local pixels. Effect surfaces are padded (blur reach, rim
-/// glow, shadow headroom) and may be clipped (viewport, scroll clips), so
-/// the surface bounds themselves are NOT the effect geometry — a glass
-/// shader handed the padded surface as its rect paints its optics into the
-/// padding band around the widget and scales its dp mapping by the padding
-/// ratio. `content_rect` and `surface_rect` share one logical space.
 #[track_caller]
 pub(crate) fn content_effect_pixel_rect(
     content_rect: Option<Rect>,
@@ -264,11 +237,6 @@ pub(crate) fn device_pixel_bounds_for_rect(
     })
 }
 
-/// Device-pixel bounds whose size depends only on the rect's size, never on its
-/// subpixel phase. Floor/ceil bounds grow or shrink by one pixel as content
-/// translates across the device-pixel grid, which would change raster cache
-/// keys on every scroll step; the +1 slack column/row covers the worst-case
-/// phase instead so one cached raster size serves every translation.
 pub(crate) fn translation_stable_anchored_device_pixel_bounds(
     rect: Rect,
     snap_anchor: Option<SnapAnchor>,
@@ -460,8 +428,6 @@ pub(crate) fn snap_motion_stable_dest_quad(
     dest_quad.map(|[x, y]| [x + delta_x, y + delta_y])
 }
 
-/// Translates an axis-aligned composite as one unit so its stable transform
-/// pivot lands exactly on the canonical device pixel selected for that pivot.
 pub(crate) fn snap_dest_quad_to_stable_point(
     dest_quad: [[f32; 2]; 4],
     stable_point: [f32; 2],
@@ -931,12 +897,8 @@ mod tests {
         );
     }
 
-    /// Raising a zoomed layer's surface density must stay inside the existing
-    /// 16 MB budget: `clamp_effect_surface_scale` only clamps downward, so the
-    /// larger desired scale is bounded, not honoured.
     #[test]
     fn zoom_raised_surface_scale_stays_inside_the_byte_budget() {
-        // A full-screen zoomable at 3x device scale pinched to 4x.
         let rect = Rect {
             x: 0.0,
             y: 0.0,
@@ -952,7 +914,6 @@ mod tests {
             clamped < desired_scale,
             "a full-screen layer is already budget-bound, so the zoom scale must be clamped"
         );
-        // `surface_target_size` ceils each axis, so allow that one row/column.
         let ceil_slack = ((width as u64) + (height as u64) + 1) * composition_bytes_per_pixel();
         assert!(
             offscreen_byte_size(width, height) <= MAX_EFFECT_LAYER_SURFACE_BYTES + ceil_slack,
@@ -961,8 +922,6 @@ mod tests {
         );
     }
 
-    /// The other side of the budget: a widget-sized zoomable does get the full
-    /// effective density, which is the whole point of the fix.
     #[test]
     fn zoom_raised_surface_scale_is_honoured_when_it_fits_the_budget() {
         let rect = Rect {
@@ -987,10 +946,6 @@ mod tests {
         );
     }
 
-    /// The composite maps the WHOLE texture onto the quad built from the
-    /// surface rect, so a rect that stops short of the ceil'd texture has its
-    /// padding stretched across the quad and its content compressed toward the
-    /// quad's origin. The rect must name the pixels that were allocated.
     #[test]
     fn surface_rect_covers_exactly_the_pixels_that_were_allocated() {
         let rect = Rect {
@@ -1015,8 +970,6 @@ mod tests {
         assert!(exact.width >= rect.width && exact.height >= rect.height);
     }
 
-    /// Padding the rect must not cost a byte: the texture it names is the one
-    /// `surface_target_size` already ceil'd to.
     #[test]
     fn padding_the_surface_rect_does_not_grow_the_texture() {
         let rect = Rect {
@@ -1037,8 +990,6 @@ mod tests {
         }
     }
 
-    /// A size the texture-dimension limit clamped is SMALLER than the rect
-    /// asked for; shrinking the rect to match would clip the content off.
     #[test]
     fn a_clamped_surface_size_never_shrinks_the_rect() {
         let rect = Rect {

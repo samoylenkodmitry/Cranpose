@@ -244,18 +244,7 @@ struct WearScalingListInner {
     items: Rc<RefCell<Vec<WearScalingItemInfo>>>,
     heights: Rc<RefCell<ItemHeights>>,
     indicator: Rc<RefCell<IndicatorState>>,
-    /// The frame callback closing an animated scroll, cancelled by the next
-    /// scroll of any kind so a finger always wins against a running animation.
     scroll_animation: RefCell<Option<FrameCallbackRegistration>>,
-    /// The facts about the list a screen reacts to, published on change rather
-    /// than every frame.
-    ///
-    /// The whole [`WearScalingLayoutInfo`] moves on every scroll frame, so a
-    /// screen that observed it would recompose sixty times a second to learn
-    /// things that did not change. These are written only when they actually
-    /// change, so "the list has 12 rows" or "there is nothing further down"
-    /// costs a recomposition when it becomes true and nothing while it stays
-    /// true.
     summary: MutableState<WearScalingListSummary>,
 }
 
@@ -297,19 +286,10 @@ struct IndicatorState {
     viewport: f32,
     before_padding: f32,
     after_padding: f32,
-    /// `currentSizeFraction`, which the adapter recomputes **only** when
-    /// `totalItemsCount` changes. It lives here rather than in the widget
-    /// because it belongs to one list, for as long as that list: a thumb
-    /// re-measured per frame breathes as tall rows scroll past, and Wear's does
-    /// not move at all.
     thumb: ThumbLength,
 }
 
 impl IndicatorState {
-    /// Forgets the window, for a list with nothing in it to describe.
-    ///
-    /// The measured thumb length survives, because [`ThumbLength`] keys itself
-    /// on the item count and an empty list is not a new length.
     fn clear(&mut self) {
         self.visible.clear();
         self.total = 0;
@@ -318,7 +298,6 @@ impl IndicatorState {
         self.after_padding = 0.0;
     }
 
-    /// Reads a measured window the way `ScalingLazyListLayoutInfo` reports one.
     fn record(
         &mut self,
         window: &[WindowedRow],
@@ -342,24 +321,14 @@ impl IndicatorState {
             window.iter().map(|row| (row.top, row.height)),
             &mut self.visible,
         );
-        // `scaling_list_items` numbers the rows it is handed from zero, and what
-        // it is handed here is a window that starts wherever the walk did.
         if let Some(base) = window.first().map(|row| row.index) {
             for item in &mut self.visible {
                 item.index += base;
             }
         }
-        // `beforeContentPadding + beforeAutoCenteringPadding`, and its mirror
-        // below. The content padding is the one THIS list was given: a widget
-        // that reaches for a number an app happens to use is right by
-        // coincidence and wrong the moment a second app calls it.
         let mut before = density.to_px(density.dp(spec.content_padding_top));
         let mut after = density.to_px(density.dp(spec.content_padding_bottom));
         if let Some(anchor) = spec.auto_centering {
-            // The spacers are stated against the auto-centring params, not
-            // against where the list has been scrolled to: they are two items
-            // Wear injects around the content once, and scrolling moves the
-            // content past them rather than resizing them.
             let index = anchor.index.min(count - 1);
             let spacing = density.dp(spec.item_spacing);
             let centre = (0..index)
@@ -400,7 +369,6 @@ struct ItemHeights {
 }
 
 impl ItemHeights {
-    /// How many items the list has, measured or not.
     fn len(&self) -> usize {
         self.known.len()
     }
@@ -428,7 +396,6 @@ impl ItemHeights {
         }
     }
 
-    /// The mean of the heights seen so far, or zero before anything is.
     fn estimate(&self) -> f32 {
         if self.count == 0 {
             0.0
@@ -629,8 +596,6 @@ impl WearScalingListState {
 
     fn step_scroll_animation(&self, index: usize, offset: f32) {
         let Some(runtime) = cranpose_core::current_runtime_handle() else {
-            // Without a runtime there are no frames to animate over; land on
-            // the row rather than doing nothing.
             self.scroll_to_item(index, offset);
             return;
         };
@@ -651,8 +616,6 @@ impl WearScalingListState {
             };
             let applied = state.scroll_by(step);
             if applied == 0.0 {
-                // The list will not move any further in that direction; the row
-                // is as close to the centre as this list can bring it.
                 return;
             }
             state.step_scroll_animation(index, offset);
@@ -722,9 +685,6 @@ fn re_anchor(anchor: CentreAnchor, delta: f32, info: WearScalingLayoutInfo) -> C
     if info.item_count == 0 {
         return anchor;
     }
-    // Clamp so the centre line stays between the first and last item's
-    // centres. Past either it is the auto-centring spacer's job to hold the
-    // list still, and a list that keeps counting travels away from its content.
     let travelled = info.scrolled() + delta;
     let travel = info.travel();
     if travelled < 0.0 {
@@ -886,11 +846,7 @@ pub struct WearScalingListScope {
 /// One declared row: what identifies it, what shape it is, and what it draws.
 #[derive(Clone)]
 pub(crate) struct WearScalingListItem {
-    /// The caller's key, or `None` to be keyed by position.
     pub(crate) key: Option<u64>,
-    /// Which rows may reuse each other's composition slots. Rows of the same
-    /// content type are interchangeable; rows of different types are not, and
-    /// reusing one as the other throws away the whole subtree.
     pub(crate) content_type: Option<u64>,
     pub(crate) content: Rc<dyn Fn()>,
 }
@@ -1257,11 +1213,6 @@ pub fn WearScalingLazyColumnNode(
     })
     .with(Rc::clone);
 
-    // Reading the anchor here is what makes a scroll re-measure the list. The
-    // per-item scale does NOT come back through composition — it rides the
-    // transform channel, which the scene build reads directly. What this body
-    // no longer does is compose the items: they are subcomposed inside the
-    // measure pass, so a scroll costs the window and not the list.
     let anchor = if spec.auto_centering.is_some() {
         state.anchor()
     } else {
@@ -1313,8 +1264,6 @@ pub fn WearScalingLazyColumnNode(
     .with(|policy| policy.clone());
 
     let modifier = wear_scaling_list_input(modifier, state, fling).clip_to_bounds();
-    // The state's layout cell is allocated once per remembered state and lives
-    // exactly as long as it, so its address is a stable identity for the node.
     let list_id = state.id();
     let node_id = cranpose_core::with_current_composer(|composer| {
         composer.with_key(&(list_id, "WearScalingLazyColumnNode"), |composer| {
@@ -1325,13 +1274,8 @@ pub fn WearScalingLazyColumnNode(
             })
         })
     });
-    // Items are composed during measure, so they need the call site's locals
-    // and source scope to reach them.
     let captured_context =
         cranpose_core::with_current_composer(|composer| composer.capture_composition_context());
-    // Read while the composition is still running, same as `Layout`: measurement
-    // happens after it and cannot reach a composition local. Reading here also
-    // subscribes, so a subtree given a different grid recomposes and re-captures.
     let composed_density = crate::density::density();
     if let Err(err) = cranpose_core::with_node_mut(node_id, |node: &mut SubcomposeLayoutNode| {
         if !node.modifier().structural_eq(&modifier) {
@@ -1352,15 +1296,9 @@ pub fn WearScalingLazyColumnNode(
 /// One item's place in the column, once it has been composed and measured.
 struct WindowedRow {
     index: usize,
-    /// The item's root nodes and where each sits inside the item.
     roots: Vec<(NodeId, f32, f32)>,
-    /// The outward walk's cursor for this row: the drawn edge of the row
-    /// between it and the anchor, plus the gap. Its full height is stated from
-    /// here, and the ramp is read off that box.
     top: f32,
-    /// Unscaled height, already on the pixel grid.
     height: f32,
-    /// Where the row is actually drawn, and by how much it shrank and faded.
     placed: PlacedRow,
 }
 
@@ -1374,8 +1312,6 @@ struct WearScalingMeasureOutputs {
 }
 
 impl WearScalingMeasureOutputs {
-    /// Records what the measure pass worked out, and republishes the observable
-    /// summary only where it differs from what a screen was last told.
     fn publish(&self, info: WearScalingLayoutInfo) {
         *self.layout.borrow_mut() = info;
         let travel = info.travel();
@@ -1412,8 +1348,6 @@ fn measure_wear_scaling_list(
     } = outputs;
     let spec = inputs.spec;
     let top_aligned = spec.auto_centering.is_none();
-    // The grid comes from the scope this measure pass is running with, not the
-    // host default -- a subtree given a different grid is measured on it.
     let scale = scope.density();
     let density = Density::new(scale, 1.0);
     let width = if constraints.max_width.is_finite() {
@@ -1421,11 +1355,6 @@ fn measure_wear_scaling_list(
     } else {
         constraints.min_width
     };
-    // Wear scales against the FULL component height: `calculateItemInfo`
-    // passes `viewPortStartPx = 0, viewPortEndPx = viewportHeightPx` and
-    // `viewportHeightPx` is `constraints.maxHeight`, with no padding taken
-    // off. A row near the top of the padded area is therefore already well
-    // down the ramp.
     let viewport = if constraints.max_height.is_finite() {
         constraints.max_height
     } else {
@@ -1460,8 +1389,6 @@ fn measure_wear_scaling_list(
             .layout_with_placement_builder(width, viewport, |placements| placements.clear());
     }
 
-    // Wear pools a slot per row and reuses it for whichever row needs it next;
-    // the limit is what keeps a long list from retaining every row it ever saw.
     scope.set_reusable_pool_limits(REUSABLE_SLOTS, REUSABLE_SLOTS);
 
     let anchor = inputs.anchor;
@@ -1482,28 +1409,6 @@ fn measure_wear_scaling_list(
         child_constraints,
     );
 
-    // Auto-centring absorbs the vertical content padding; a top-aligned
-    // list does not. Wear's `LazyColumn` places item 0 one
-    // `beforeContentPadding` down, and `ScalingLazyListState.scrollToItem`
-    // asks for `beforeContentPaddingPx - viewportCenterLinePx + size/2`,
-    // whose first term exists to take that back
-    // (`ScalingLazyListState.kt:499`). The auto-centring spacer is sized
-    // without seeing the padding, so it is exactly one padding short of
-    // holding the anchor on the centre line by itself -- but it is never
-    // the thing that decides, because the initial scroll is never clamped
-    // by it: the spacer is `centreLine - size/2` of content above the
-    // anchor and the scroll asks for `centreLine - padding - size/2`, which
-    // is less. So the anchored item's centre lands on the centre line, and
-    // the padding does not move the column at all.
-    //
-    // Measured on `sdk_gwear` at density 2, viewport 454, 34dp vertical
-    // padding: Settings' header row is [36,175]..[418,279] in both the
-    // framebuffer and the accessibility tree, centre 227 = 454/2, and
-    // Credits' `"Version 1.0.0-debug"` is [60,211]..[394,243], centre 227.
-    //
-    // The centred form drops the `slot.top` `centre_offset` would subtract and
-    // add straight back: every slot top is a whole number of device pixels, and
-    // `round_to_px` commutes with a whole pixel. See the module docs.
     let anchored_top = if top_aligned {
         density.dp(spec.content_padding_top)
     } else {
@@ -1513,11 +1418,6 @@ fn measure_wear_scaling_list(
         )
     };
     let anchored_height = anchored.height;
-    // The walk stacks the DRAWN boxes, which is what `layoutInfo` does and not
-    // what the `LazyColumn` underneath does: its cursor advances by
-    // `PlacedRow::reported_height`, the scaled size the layout reports, rather
-    // than by the row's full one. See `round_scaling_list`'s module docs. The
-    // anchored row is never scaled, so both accounts seed the walk identically.
     let place = |top: f32, height: f32| {
         place_row_with(spec.scaling, viewport, top, height, scale).unwrap_or(PlacedRow {
             top,
@@ -1536,9 +1436,6 @@ fn measure_wear_scaling_list(
         placed: anchored_placed,
     });
 
-    // Upward, until a row can no longer reach the top edge. A shrunken row is
-    // always inside the box its cursor gave it, so a box that misses the
-    // viewport draws nothing at all and the walk can stop on it.
     let mut edge = anchored_top;
     let mut budget = spec.beyond_bounds_item_count;
     let mut index = start;
@@ -1560,8 +1457,6 @@ fn measure_wear_scaling_list(
             &density,
             child_constraints,
         );
-        // The ramp is read off the row's FULL box hanging from `bottom`; the
-        // cursor then drops by only what the row was shrunk to.
         let top = bottom - item.height;
         let placed = place(top, item.height);
         edge = bottom - item.height;
@@ -1574,7 +1469,6 @@ fn measure_wear_scaling_list(
         });
     }
 
-    // Downward, the same walk against the bottom edge.
     let mut edge = anchored_top + anchored_height;
     let mut budget = spec.beyond_bounds_item_count;
     for index in (start + 1)..count {
@@ -1605,9 +1499,6 @@ fn measure_wear_scaling_list(
         });
     }
 
-    // The walk runs outward from the anchor; the tree is read in index order by
-    // hit testing, semantics and every golden that counts rows, so the window
-    // is put back in list order before anything is placed.
     window.sort_unstable_by_key(|row| row.index);
 
     let composed = window.len();
@@ -1627,10 +1518,6 @@ fn measure_wear_scaling_list(
                         alpha: row.alpha,
                     });
                 }
-                // Only the rows the viewport can see are placed. The beyond-bounds
-                // rows stay composed and measured — that is what they are for —
-                // but placing one costs an offscreen render target under
-                // `CompositingStrategy::Auto` for a rectangle the clip discards.
                 if row.top >= viewport || row.top + row.height <= 0.0 {
                     continue;
                 }
@@ -1705,9 +1592,6 @@ fn compose_and_measure_item(
         .unwrap_or_else(WearItemTransform::new);
     let strategy = inputs.spec.compositing_strategy;
     let item = inputs.content.items[index].clone();
-    // A user key names the item; without one the row is keyed by position. The
-    // two are tagged apart so a caller's key can never collide with an index,
-    // which is the same rule the flat lazy list follows.
     let key = match item.key {
         Some(key) => LazyLayoutKey::User(key),
         None => LazyLayoutKey::Index(index),
@@ -1732,9 +1616,6 @@ fn compose_and_measure_item(
         roots.push((placeable.node_id(), stacked, placeable.width()));
         stacked += placeable.height();
     }
-    // The slot height is ceiled to a whole device pixel, as Compose's integral
-    // layout does, before anything stacks on top of it. That is also what makes
-    // every slot top a whole pixel, which the anchored-top arithmetic relies on.
     let height = density.ceil(stacked);
     heights.borrow_mut().record(index, height);
     MeasuredItem { roots, height }
@@ -1772,8 +1653,6 @@ mod tests {
 
     #[test]
     fn travel_is_measured_between_the_first_and_last_centres() {
-        // A centring list holds its first and last rows on the centre line, so
-        // the content can only move as far as the gap between those centres.
         let info = info(3, 454.0, 227.0, 627.0);
         assert_eq!(info.travel(), 400.0);
         assert_eq!(info.scrolled(), 0.0, "at rest the first row is centred");
@@ -1840,8 +1719,6 @@ mod tests {
         assert!(scope.items.iter().all(|item| item.content_type.is_none()));
     }
 
-    /// A caller's key and an index can name the same number, and a slot table
-    /// that let them collide would hand one row's composition to another.
     #[test]
     fn a_user_key_and_an_index_never_name_the_same_slot() {
         assert_ne!(
@@ -1861,7 +1738,6 @@ mod tests {
 
     #[test]
     fn a_list_at_its_top_can_only_scroll_forward() {
-        // Viewport 200, first centre on the centre line: nothing scrolled yet.
         let (forward, backward) = summary_for(info(10, 200.0, 100.0, 500.0));
         assert!(forward);
         assert!(!backward);
@@ -1869,7 +1745,6 @@ mod tests {
 
     #[test]
     fn a_list_at_its_end_can_only_scroll_backward() {
-        // Last centre on the centre line: the whole travel is behind it.
         let (forward, backward) = summary_for(info(10, 200.0, -300.0, 100.0));
         assert!(!forward);
         assert!(backward);

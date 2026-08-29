@@ -1,5 +1,3 @@
-//! E2E regression contracts for Hacker News text sharpness and Markdown scrollbar initial state.
-
 mod markdown_fixture_client;
 mod output_paths;
 mod text_showcase_external_helpers;

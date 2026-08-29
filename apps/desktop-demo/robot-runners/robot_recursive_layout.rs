@@ -1,10 +1,3 @@
-//! Robot test for Recursive Layout tab - validates rects stay within the viewport.
-//!
-//! Run with:
-//! ```bash
-//! cargo run --package desktop-app --example robot_recursive_layout --features robot-app
-//! ```
-
 use std::time::Duration;
 
 use cranpose::{AppLauncher, SemanticElement};

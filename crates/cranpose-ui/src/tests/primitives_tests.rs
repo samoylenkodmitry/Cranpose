@@ -657,9 +657,7 @@ fn modifier_offset_translates_layout() {
         text_layout.node_id,
         text_id.borrow().as_ref().copied().expect("text node id")
     );
-    // Expected: 10 (padding) + 5 (offset) = 15
     assert!((text_layout.rect.x - 15.0).abs() < 1e-3);
-    // Expected: 10 (padding) + 7.5 (offset) = 17.5
     assert!((text_layout.rect.y - 17.5).abs() < 1e-3);
 }
 
@@ -1395,7 +1393,6 @@ fn test_fill_max_width_respects_parent_bounds() {
             let column_capture = Rc::clone(&column_id_render);
             let row_capture = Rc::clone(&row_id_render);
 
-            // Outer Column with padding(20.0) and fill_max_width to ensure it has a defined width
             *column_capture.borrow_mut() = Some(Column(
                 Modifier::empty()
                     .fill_max_width()
@@ -1403,7 +1400,6 @@ fn test_fill_max_width_respects_parent_bounds() {
                 ColumnSpec::default(),
                 move || {
                     let row_inner = Rc::clone(&row_capture);
-                    // Row with fill_max_width() and padding(8.0)
                     *row_inner.borrow_mut() = Some(Row(
                         Modifier::empty()
                             .fill_max_width()
@@ -1460,7 +1456,6 @@ fn test_fill_max_width_respects_parent_bounds() {
     let column_layout = find_layout(root_layout, column_node_id).expect("column layout");
     let row_layout = find_layout(root_layout, row_node_id).expect("row layout");
 
-    // Debug output
     println!("\n=== Layout Debug ===");
     println!(
         "Root: x={}, y={}, width={}, height={}",
@@ -1490,23 +1485,14 @@ fn test_fill_max_width_respects_parent_bounds() {
         column_layout.rect.x + column_layout.rect.width - 20.0
     );
 
-    // Expected:
-    // Window: 800px
-    // Column: 800px (fills window)
-    // Column has padding 40px (20 on each side)
-    // Column inner content area: 760px
-    // Row with fill_max_width() should fill the Column's inner width: 760px
-
     const EPSILON: f32 = 0.001;
 
-    // Row should be 760px wide (Column's inner width)
     assert!(
         (row_layout.rect.width - 760.0).abs() < EPSILON,
         "Row should be 760px wide (Column inner width): actual={}",
         row_layout.rect.width
     );
 
-    // Row's right edge should not exceed Column's right inner edge
     let row_right = row_layout.rect.x + row_layout.rect.width;
     let column_right_inner = column_layout.rect.x + column_layout.rect.width - 20.0;
 
@@ -1521,8 +1507,6 @@ fn test_fill_max_width_respects_parent_bounds() {
 #[test]
 fn test_fill_max_width_with_background_and_double_padding() {
     let _app_context = crate::render_state::app_context_test_scope();
-    // This test reproduces the exact structure from counter_app line 784:
-    // Row with fill_max_width() + padding + background + padding again
     let mut composition = Composition::new(MemoryApplier::new());
     let key = location_key(file!(), line!(), column!());
 
@@ -1540,21 +1524,17 @@ fn test_fill_max_width_with_background_and_double_padding() {
             let inner_capture = Rc::clone(&inner_column_render);
             let row_capture = Rc::clone(&row_render);
 
-            // Simulating counter_app structure:
-            // Outer Column with padding(32.0)
             *outer_capture.borrow_mut() = Some(Column(
                 Modifier::empty().padding(32.0),
                 ColumnSpec::default(),
                 move || {
                     let inner_cap2 = Rc::clone(&inner_capture);
                     let row_cap2 = Rc::clone(&row_capture);
-                    // Inner Column with width(360.0)
                     *inner_cap2.borrow_mut() = Some(Column(
                         Modifier::empty().width(360.0),
                         ColumnSpec::default(),
                         move || {
                             let row_cap3 = Rc::clone(&row_cap2);
-                            // Row with fill_max_width() + padding + background + padding
                             *row_cap3.borrow_mut() = Some(Row(
                                 Modifier::empty()
                                     .fill_max_width()
@@ -1649,21 +1629,18 @@ fn test_fill_max_width_with_background_and_double_padding() {
 
     const EPSILON: f32 = 0.001;
 
-    // Inner Column should be 360px wide (explicit width)
     assert!(
         (inner_layout.rect.width - 360.0).abs() < EPSILON,
         "Inner Column should be 360px: got {}",
         inner_layout.rect.width
     );
 
-    // Row should be 360px wide (fill_max_width inside 360px container)
     assert!(
         (row_layout.rect.width - 360.0).abs() < EPSILON,
         "Row should be 360px (Inner Column width): got {}",
         row_layout.rect.width
     );
 
-    // Row should NOT overflow Inner Column
     let row_right = row_layout.rect.x + row_layout.rect.width;
     let column_right = inner_layout.rect.x + inner_layout.rect.width;
     assert!(
@@ -1677,8 +1654,6 @@ fn test_fill_max_width_with_background_and_double_padding() {
 #[test]
 fn fill_max_width_tracks_bounded_parent_width() {
     let _app_context = crate::render_state::app_context_test_scope();
-    // Testing the issue where a child with fill_max_width() causes
-    // its parent (which should wrap content) to also fill parent
     let mut composition = Composition::new(MemoryApplier::new());
     let key = location_key(file!(), line!(), column!());
 
@@ -1696,7 +1671,6 @@ fn fill_max_width_tracks_bounded_parent_width() {
             let inner_cap = Rc::clone(&inner_render);
             let row_cap = Rc::clone(&row_render);
 
-            // Outer Column - no size modifier (should wrap content)
             *outer_cap.borrow_mut() = Some(Column(
                 Modifier::empty(),
                 ColumnSpec::default(),
@@ -1704,19 +1678,16 @@ fn fill_max_width_tracks_bounded_parent_width() {
                     let inner_cap2 = Rc::clone(&inner_cap);
                     let row_cap2 = Rc::clone(&row_cap);
 
-                    // Inner Column - no size modifier (should wrap content)
                     *inner_cap2.borrow_mut() = Some(Column(
                         Modifier::empty(),
                         ColumnSpec::default(),
                         move || {
                             let row_cap3 = Rc::clone(&row_cap2);
 
-                            // Row with fill_max_width() containing fixed-width content
                             *row_cap3.borrow_mut() = Some(Row(
                                 Modifier::empty().fill_max_width(),
                                 RowSpec::default(),
                                 move || {
-                                    // Fixed width content: 100px + 100px = 200px
                                     Spacer(Size {
                                         width: 100.0,
                                         height: 20.0,
@@ -2127,8 +2098,6 @@ fn fill_max_height_child_clamps_to_parent() {
 #[test]
 fn modifier_chain_text_with_padding() {
     let _app_context = crate::render_state::app_context_test_scope();
-    // Verify that text with padding modifier measures correctly
-    // This tests the core fix: padding should wrap text, not text wrap padding
     let mut composition = Composition::new(MemoryApplier::new());
     let key = location_key(file!(), line!(), column!());
 
@@ -2160,9 +2129,6 @@ fn modifier_chain_text_with_padding() {
     let text_node_id = text_id.borrow().expect("text node id");
     let text_layout = find_node_layout(layout_tree.root(), text_node_id).expect("text layout");
 
-    // Text "Hello" should measure to some size, let's say roughly 35x16
-    // With padding(10), the total size should be text_size + 20 (10 on each side)
-    // The key assertion: padding should be ADDED to text size, not ignored
     assert!(
         text_layout.rect.width > 35.0 && text_layout.rect.width < 100.0,
         "Text with padding width should be text_width + 20, got {:.3}",
@@ -2178,7 +2144,6 @@ fn modifier_chain_text_with_padding() {
 #[test]
 fn modifier_chain_size_enforcement() {
     let _app_context = crate::render_state::app_context_test_scope();
-    // Verify that size modifier enforces exact size
     let mut composition = Composition::new(MemoryApplier::new());
     let key = location_key(file!(), line!(), column!());
 
@@ -2187,7 +2152,6 @@ fn modifier_chain_size_enforcement() {
 
     composition
         .render(key, move || {
-            // Spacer wants 100x100, but size modifier should enforce 50x50
             *spacer_id_render.borrow_mut() = Some(Box(
                 Modifier::empty().size(Size {
                     width: 50.0,
@@ -2236,9 +2200,6 @@ fn modifier_chain_size_enforcement() {
 #[test]
 fn modifier_chain_padding_then_size() {
     let _app_context = crate::render_state::app_context_test_scope();
-    // Jetpack Compose behavior: padding(10).size(100, 80)
-    // Modifiers apply right-to-left: size is inner, padding is outer
-    // Result: padding adds to size, giving 120x100 (100+20, 80+20)
     let mut composition = Composition::new(MemoryApplier::new());
     let key = location_key(file!(), line!(), column!());
 
@@ -2279,7 +2240,6 @@ fn modifier_chain_padding_then_size() {
     let layout = find_node_layout(layout_tree.root(), layout_node_id).expect("layout");
 
     const EPSILON: f32 = 1e-3;
-    // Padding is outer modifier, so it adds 20 (10 on each side) to the size
     assert!(
         (layout.rect.width - 120.0).abs() < EPSILON,
         "padding(10).size(100, 80) should give width=120 (100+20), got {:.3}",
@@ -2295,9 +2255,6 @@ fn modifier_chain_padding_then_size() {
 #[test]
 fn modifier_chain_size_then_padding() {
     let _app_context = crate::render_state::app_context_test_scope();
-    // Jetpack Compose behavior: size(100, 80).padding(10)
-    // Modifiers apply right-to-left: padding is inner, size is outer
-    // Result: size constrains to 100x80 (padding is inside)
     let mut composition = Composition::new(MemoryApplier::new());
     let key = location_key(file!(), line!(), column!());
 
@@ -2340,7 +2297,6 @@ fn modifier_chain_size_then_padding() {
     let layout = find_node_layout(layout_tree.root(), layout_node_id).expect("layout");
 
     const EPSILON: f32 = 1e-3;
-    // Size is outer modifier, so it constrains final result to exactly 100x80
     assert!(
         (layout.rect.width - 100.0).abs() < EPSILON,
         "size(100, 80).padding(10) should give width=100, got {:.3}",
@@ -2426,9 +2382,6 @@ fn flow_row_widget_wraps_spacers_and_applies_spacing() {
         })
         .collect();
 
-    // Line 1 in a 100dp viewport: [0..40] and [50..90] (10dp gap); the third
-    // 40dp child would need 140dp, so it wraps below the tallest child (30)
-    // plus the 5dp cross-axis gap.
     assert_eq!(relative[0], (0.0, 0.0));
     assert_eq!(relative[1], (50.0, 0.0));
     assert_eq!(relative[2], (0.0, 35.0));

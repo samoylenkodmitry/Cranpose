@@ -57,15 +57,10 @@ use web_time::Instant;
 
 use crate::modifier::{Modifier, PointerEventKind};
 
-/// Scale factors closer to 1.0 than this are treated as "not zoomed".
 const SCALE_EPSILON: f32 = 1e-3;
 
-/// Maximum time between the taps of a double-tap, in milliseconds
-/// (matches Android's `ViewConfiguration` DOUBLE_TAP_TIMEOUT).
 const DOUBLE_TAP_TIMEOUT_MS: i64 = 300;
 
-/// Maximum distance between the taps of a double-tap, in dp
-/// (matches Android's `ViewConfiguration` doubleTapSlop).
 const DOUBLE_TAP_SLOP: f32 = 100.0;
 
 fn distance(a: Point, b: Point) -> f32 {
@@ -83,11 +78,7 @@ pub struct ZoomState {
 }
 
 struct ZoomStateInner {
-    /// Uniform content scale factor. Reactive so composables and lazy
-    /// graphics-layer closures re-evaluate when it changes.
     scale: OwnedMutableState<f32>,
-    /// Content translation in dp, applied after scaling about the top-left
-    /// origin: a content point `c` is displayed at `c * scale + offset`.
     offset_x: OwnedMutableState<f32>,
     offset_y: OwnedMutableState<f32>,
     min_scale: Cell<f32>,
@@ -235,8 +226,6 @@ impl ZoomState {
         let old_offset = self.offset_non_reactive();
 
         let new_offset = if new_scale <= 1.0 + SCALE_EPSILON {
-            // Not zoomed in: pan (finger delta AND focal-point correction)
-            // must not displace the content.
             Point { x: 0.0, y: 0.0 }
         } else {
             Point {
@@ -271,19 +260,12 @@ impl ZoomState {
     }
 }
 
-/// Per-modifier gesture bookkeeping for `zoomable`.
 struct ZoomGestureState {
     tracker: TransformGesture,
-    /// Whether the gesture crossed into actively transforming (consuming).
     active: bool,
-    /// Accumulated single-finger travel for the drag threshold.
     travel: f32,
-    /// Down position of a potential tap (single finger, in window coords).
     tap_down: Option<Point>,
-    /// Time and position of the previous completed tap, for double-tap
-    /// detection.
     last_tap: Option<(i64, Point)>,
-    /// Timestamp epoch for platforms whose events carry no input timestamps.
     fallback_epoch: Instant,
 }
 
@@ -301,13 +283,10 @@ impl Default for ZoomGestureState {
 }
 
 impl ZoomGestureState {
-    /// The event's own timestamp when the platform provides one (Android),
-    /// falling back to delivery time (desktop mouse, web).
     fn timestamp_ms(&self, time_ms: Option<i64>) -> i64 {
         time_ms.unwrap_or_else(|| self.fallback_epoch.elapsed().as_millis() as i64)
     }
 
-    /// Abandons any tap tracking (drag, pinch, cancel, foreign consumption).
     fn abandon_tap(&mut self) {
         self.tap_down = None;
         self.last_tap = None;
@@ -349,8 +328,6 @@ impl Modifier {
                                     }
                                 }
                                 PointerEventKind::Cancel => {
-                                    // Platforms cancel whole gestures, not
-                                    // individual pointers.
                                     let mut gs = gesture_state.borrow_mut();
                                     gs.tracker.reset();
                                     gs.active = false;
@@ -363,8 +340,6 @@ impl Modifier {
                                     let mut gs = gesture_state.borrow_mut();
 
                                     if event.is_consumed() {
-                                        // Another handler owns this pointer
-                                        // sequence; abandon the gesture.
                                         gs.tracker.reset();
                                         gs.active = false;
                                         gs.travel = 0.0;
@@ -372,27 +347,18 @@ impl Modifier {
                                         continue;
                                     }
 
-                                    // Track in window coordinates: they stay
-                                    // stable while our own layer transform
-                                    // changes mid-gesture.
                                     let tracked =
                                         event.copy_with_local_position(event.global_position);
                                     let step = gs.tracker.handle_event(&tracked);
 
                                     if event.kind == PointerEventKind::Down {
                                         if gs.tracker.pointer_count() >= 2 {
-                                            // Pinch begins: transform gestures
-                                            // own the sequence immediately.
                                             gs.active = true;
-                                            // A multi-finger gesture is never
-                                            // a tap.
                                             gs.tap_down = None;
                                         } else {
                                             gs.travel = 0.0;
                                             gs.tap_down = Some(event.global_position);
                                         }
-                                        // Secondary fingers are meaningless to
-                                        // single-pointer handlers; keep them.
                                         if event.id != 0 {
                                             event.consume();
                                         }
@@ -400,8 +366,6 @@ impl Modifier {
                                     }
 
                                     if event.kind == PointerEventKind::Up && event.id == 0 {
-                                        // Double-tap resets a transformed
-                                        // state back to identity.
                                         let now_ms = gs.timestamp_ms(event.time_ms);
                                         let up_position = event.global_position;
                                         let is_tap = !gs.active
@@ -442,10 +406,6 @@ impl Modifier {
                                             if pointer_count >= 2 {
                                                 gs.active = true;
                                             } else if !gs.active && state.is_zoomed_in() {
-                                                // One-finger pan only grabs the
-                                                // gesture while zoomed in
-                                                // (scale > 1), so unzoomed
-                                                // zoomables never steal scrolls.
                                                 gs.travel += (pan.x * pan.x + pan.y * pan.y).sqrt();
                                                 if gs.travel > DRAG_THRESHOLD {
                                                     gs.active = true;

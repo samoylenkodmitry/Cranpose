@@ -1,32 +1,5 @@
-//! The wire format that carries Cranpose's semantics into
-//! `CranposeActivity`'s `AccessibilityNodeProvider`.
-//!
-//! The whole visible tree crosses JNI as one `String` on the frames it
-//! changes, rather than one call per node, for the same reason the Play
-//! Billing snapshot does: a screen reader must never observe a half-built
-//! tree. Encoding lives here, in safe Rust, and is unit-tested on the host —
-//! the format is the contract between the two sides, and the Java parser
-//! rejects any record whose field count does not match.
-//!
-//! ```text
-//! <id>\t<role>\t<left>\t<top>\t<right>\t<bottom>\t<centerX>\t<centerY>
-//!      \t<clickable>\t<label>\t<value>\t<stateDescription>\t<clickLabel>
-//!      \t<selected>\t<toggled>\t<enabled>\t<customActions>
-//! ```
-//!
-//! Bounds are physical pixels (Java draws them into `Rect`s); the two centre
-//! coordinates stay logical because they are fed back through the pointer
-//! pipeline as a synthetic tap. `selected` and `toggled` are `-1` when the app
-//! said nothing, so "not a checkable control" is distinguishable from "off".
-//! Text uses the same `%09`/`%0A`/`%0D`/`%25` escaping as the launch-argument
-//! payload, plus `%1F` for the separator that packs custom action labels into
-//! one field, because every one of these strings is app-authored.
-
 use crate::accessibility::{AccessibilityElement, AccessibilityRole, element_ids};
 
-/// Separator between the custom action labels packed into one wire field.
-/// ASCII unit separator, escaped like every other delimiter so a label
-/// containing one cannot split the field.
 const ACTION_SEPARATOR: char = '\u{1f}';
 
 pub(crate) fn encode_elements(elements: &[AccessibilityElement], density: f32) -> String {
@@ -80,8 +53,6 @@ pub(crate) fn encode_elements(elements: &[AccessibilityElement], density: f32) -
         .join("\n")
 }
 
-/// `-1` when the app said nothing about the state, so Java can tell "this is
-/// not a checkable control" from "this switch is off".
 fn tristate(value: Option<bool>) -> i32 {
     match value {
         None => -1,
@@ -129,9 +100,6 @@ mod tests {
         assert_eq!(tristate(Some(true)), 1);
     }
 
-    /// The Java parser rejects a record whose field count is wrong, so the
-    /// count is part of the contract and is asserted here rather than left to
-    /// be discovered on a watch.
     #[test]
     fn every_encoded_record_carries_the_seventeen_fields_java_parses() {
         let elements = vec![
@@ -159,7 +127,6 @@ mod tests {
 
         let fields: Vec<_> = records[0].split('\t').collect();
         assert_eq!(fields[1], "5", "Switch should encode as role 5");
-        // Density 2.0 turns logical 1,2 .. 31,42 into physical pixels.
         assert_eq!(&fields[2..6], ["2", "4", "62", "84"]);
         assert_eq!(fields[9], "Haptics");
         assert_eq!(fields[11], "On");

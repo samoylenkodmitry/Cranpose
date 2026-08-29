@@ -1,35 +1,7 @@
-//! Semantics invalidations raised from outside composition.
-//!
-//! A `.semantics()` recorder is re-run whenever the tree is collected, so a
-//! recorder that reads live app state always reports the app's current answer.
-//! What it could not do until now is say *when* that answer changed: the tree is
-//! only re-collected when a node marks its semantics dirty, and the only things
-//! that did so were attaching a node, updating its modifier chain (which needs a
-//! recomposition) and a layout pass.
-//!
-//! An app whose screen is one `Canvas` has none of those. Its layout never
-//! changes and its frame loop drives draws rather than recompositions, so the
-//! semantics tree was published once — at boot, before there was anything on
-//! screen — and never again. Every later screen inherited whatever the tree
-//! happened to hold at the last pass, which for a screen reader means reading
-//! out controls the user is no longer looking at.
-//!
-//! This is the missing half, and it mirrors Jetpack Compose's
-//! `SemanticsModifierNode.invalidateSemantics()`: a node can be marked for
-//! re-collection directly, with no recomposition and no layout pass. The queue
-//! is drained by the app shell each frame with the applier in hand, which is
-//! where the dirty flag can actually be bubbled to the root that
-//! [`crate::tree_needs_semantics`] reads.
-//!
-//! Structured like [`crate::focus_dispatch`], for the same reason: the request
-//! arrives on the app's own thread at an arbitrary moment, and the tree may only
-//! be touched at a defined point in the frame.
-
 use std::{cell::RefCell, collections::HashSet};
 
 use cranpose_core::NodeId;
 
-/// Layout nodes whose semantics need re-collecting.
 struct SemanticsInvalidationManager {
     dirty_nodes: HashSet<NodeId>,
     is_processing: bool,

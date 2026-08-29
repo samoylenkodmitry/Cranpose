@@ -144,9 +144,6 @@ impl TextMenuItem {
 
 impl PartialEq for TextMenuItem {
     fn eq(&self, other: &Self) -> bool {
-        // Composable memoization identity: the label plus the action's
-        // allocation. Freshly captured closures compare unequal, which is
-        // correct - they may close over new state.
         self.label == other.label && Rc::ptr_eq(&self.action, &other.action)
     }
 }
@@ -177,10 +174,6 @@ pub(crate) fn menu_item_pointer_input(
         async move {
             scope
                 .await_pointer_event_scope(|await_scope| async move {
-                    // Only a release that follows a press *on this button* runs
-                    // the action; a stray release without a press is ignored. The
-                    // Down capture keeps the whole gesture on the button, so the
-                    // field never sees it.
                     let mut pressed = false;
                     loop {
                         let event = await_scope.await_pointer_event().await;
@@ -308,8 +301,6 @@ fn paginate(items: &[TextMenuItem], style: &TextStyle, max_width: f32) -> Vec<Ve
     if total <= max_width || items.len() <= 1 {
         return vec![(0..items.len()).collect()];
     }
-    // Overflow: every page reserves the disc (the chevron also pages BACK
-    // from the last page, wrapping — it is always present once paging).
     let disc = MENU_HEIGHT;
     let mut pages: Vec<Vec<usize>> = Vec::new();
     let mut page: Vec<usize> = Vec::new();
@@ -346,8 +337,6 @@ struct MenuMotion {
     was_visible: Cell<bool>,
     page: Cell<usize>,
     disc_pressed: Rc<Cell<bool>>,
-    /// Page-relative item index a live slide gesture hovers, and whether a
-    /// slide was in flight last frame (its release fires the hovered item).
     slide_hover: Cell<Option<usize>>,
     slide_live: Rc<Cell<bool>>,
 }
@@ -420,8 +409,6 @@ pub fn LiquidTextMenu(
     let page = &pages[page_index];
     let has_disc = pages.len() > 1;
 
-    // Capsule width from the measured labels (the same measurer the labels
-    // lay out with), for centering + clamping.
     let mut width: f32 = page
         .iter()
         .map(|&i| item_width(&items[i].label, &style))
@@ -447,10 +434,6 @@ pub fn LiquidTextMenu(
     let density = crate::current_density();
     let page_items: Vec<TextMenuItem> = page.iter().map(|&i| items[i].clone()).collect();
 
-    // Slide-to-fire: a still-down gesture (long-press claimed) feeds live
-    // window positions; the hovered item highlights, and the gesture's
-    // release fires it — no separate Down required (the reference menu
-    // selects under a continuous press).
     let slide_hover = match live_point {
         Some(point) => {
             motion.slide_live.set(true);
@@ -484,18 +467,9 @@ pub fn LiquidTextMenu(
                     width,
                     height: MENU_HEIGHT,
                 })
-                // The reference capsule floats on a soft elevation shadow
-                // (~a 45px halo). Knocked out of its own silhouette — glass
-                // samples the backdrop behind itself and must not refract
-                // its own shadow.
                 .drop_shadow(
                     LayerShape::Rounded(RoundedCornerShape::uniform(1.0e6)),
                     move |scope| {
-                        // A transient BRIGHT bloom while the pill
-                        // materializes (the reference's disc flash / glow),
-                        // gone at rest — the settled reference shows a flat
-                        // baseline right up to the rim, and a dark band is
-                        // invisible on the dark card anyway.
                         scope.radius = 16.0;
                         scope.spread = -2.0;
                         scope.offset.y = 0.0;
@@ -505,11 +479,6 @@ pub fn LiquidTextMenu(
                 )
                 .graphics_layer(move || GraphicsLayer {
                     alpha: p,
-                    // No material during the return-delay window (p≈0): a
-                    // composed backdrop blur ignores layer alpha and would
-                    // smear the content behind the pill a quarter-second
-                    // before anything fades in — the reference shows nothing
-                    // until the fade starts.
                     backdrop_effect: (p > 0.001).then(|| {
                         liquid_menu_glass_effect((width, MENU_HEIGHT), MENU_BLUR_DP * density, p)
                     }),
@@ -548,13 +517,8 @@ pub fn LiquidTextMenu(
                             Text(
                                 item.label.clone(),
                                 Modifier::empty()
-                                    // The glyphs sit low in this stack's line
-                                    // box; the reference centers them to a
-                                    // pixel, so bias 2dp onto the bottom.
                                     .padding_each(ITEM_PADDING, 0.0, ITEM_PADDING, 2.0)
                                     .draw_behind(move |scope| {
-                                        // Slide hover: the reference lights the
-                                        // item under the sliding finger.
                                         if slide_hovered {
                                             let hover = if on_light {
                                                 Color(0.0, 0.0, 0.0, 0.08)
@@ -576,8 +540,6 @@ pub fn LiquidTextMenu(
                             );
                         }
                         if page_count > 1 {
-                            // The lighter glass disc filling the end cap, with
-                            // the paging chevron; flashes white while pressed.
                             let pressed_now = disc_pressed.get();
                             let motion = Rc::clone(&motion);
                             let advance: Rc<dyn Fn()> = Rc::new(move || {
@@ -692,10 +654,6 @@ mod tests {
     use super::*;
     use crate::modifier::{ModifierNodeSlices, collect_slices_from_modifier};
 
-    /// Collects the button's live pointer-input handler. Returns the owning
-    /// [`ModifierNodeSlices`] too: it keeps the attached node (and its running
-    /// coroutine) alive — dropping it would cancel the gesture and swallow the
-    /// events.
     fn button_handler(modifier: &Modifier) -> (Rc<dyn Fn(PointerEvent)>, ModifierNodeSlices) {
         let slices = collect_slices_from_modifier(modifier);
         assert_eq!(
@@ -714,10 +672,6 @@ mod tests {
         PointerEvent::new(PointerEventKind::Up, Point { x, y }, Point { x, y })
     }
 
-    /// Bug 7: a tap (press then release) on a menu button consumes BOTH the
-    /// press and the release — so the tap can never fall through to the text
-    /// field below (which would collapse the selection) — and runs the action on
-    /// release.
     #[test]
     fn menu_button_consumes_the_tap_and_runs_the_action() {
         let _app_context = crate::render_state::app_context_test_scope();
@@ -746,8 +700,6 @@ mod tests {
         );
     }
 
-    /// A stray release with no preceding press on this button is still consumed
-    /// (never reaches the field) but does not run the action.
     #[test]
     fn menu_button_release_without_press_is_consumed_but_inert() {
         let _app_context = crate::render_state::app_context_test_scope();
@@ -786,8 +738,6 @@ mod tests {
         assert!(ran.get());
     }
 
-    /// The measured layout constants: a 44 dp capsule with 20 dp label
-    /// padding and 1×17 dp separators.
     #[test]
     fn menu_geometry_matches_the_reference() {
         assert_eq!(MENU_HEIGHT, 44.0);
@@ -798,15 +748,9 @@ mod tests {
         assert_eq!(MENU_SCREEN_MARGIN, 20.0);
     }
 
-    /// Pagination: everything fits on one page when there is room; a narrow
-    /// window splits into pages, each reserving the chevron disc, and every
-    /// page keeps at least one item.
     #[test]
     fn pagination_reserves_the_disc_only_when_overflowing() {
         let _app_context = crate::render_state::app_context_test_scope();
-        // Pagination is polarity-independent (ink color never enters
-        // item_width); reading the CompositionLocal here needs an active
-        // composer that a bare unit test does not have.
         let style = menu_text_style(false);
         let items: Vec<TextMenuItem> = ["Copy", "Cut", "Paste", "Select all"]
             .iter()

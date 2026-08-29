@@ -1,15 +1,3 @@
-//! Robot test for Hacker News tab single-pane scroll behavior.
-//!
-//! Validates:
-//! 1. The Hacker News list is constrained to the viewport (no infinite parent height).
-//! 2. The thread pane scrolls after opening the first story.
-//! 3. Returning via Back restores a scrollable story list instead of reopening the thread.
-//!
-//! Run with:
-//! ```bash
-//! ./run_robot_test.sh --sequential --example robot_hacker_news_scroll
-//! ```
-
 pub mod hacker_news_robot_support;
 
 use std::time::Duration;

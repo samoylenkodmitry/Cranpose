@@ -1,20 +1,3 @@
-//! Robot test for Advance Frame not working bug
-//!
-//! BUG: In Modifiers tab > Dynamic Modifiers section,
-//! the "Advance Frame" button doesn't advance the frame counter.
-//!
-//! Steps to reproduce:
-//! 1. Go to Modifiers tab
-//! 2. Click "Dynamic Modifiers" button
-//! 3. Note the current Frame counter value
-//! 4. Click "Advance Frame" button
-//! 5. Frame counter should increase (BUG: it doesn't)
-//!
-//! Run with:
-//! ```bash
-//! cargo run --package desktop-app --example robot_advance_frame_bug --features robot-app
-//! ```
-
 use std::time::Duration;
 
 use cranpose::AppLauncher;
@@ -49,14 +32,11 @@ fn main() {
 
             let mut all_passed = true;
 
-            // Helper to find frame counter value
             let get_frame_value = |robot: &cranpose::Robot| -> Option<i32> {
                 if let Ok(semantics) = robot.get_semantics() {
                     fn find_frame(elem: &cranpose::SemanticElement) -> Option<i32> {
                         if let Some(ref text) = elem.text {
-                            // Look for "Frame: N" or just a number that represents frame
                             if text.contains("Frame:") || text.contains("frame:") {
-                                // Extract number from "Frame: N" pattern
                                 if let Some(num_str) = text.split(':').nth(1) {
                                     if let Ok(n) = num_str.trim().parse::<i32>() {
                                         return Some(n);
@@ -80,9 +60,6 @@ fn main() {
                 None
             };
 
-            // =========================================================
-            // STEP 1: Navigate to Modifiers tab
-            // =========================================================
             println!("--- Step 1: Navigate to Modifiers tab ---");
 
             if let Some((x, y, w, h)) = find_button_in_semantics(&robot, "Modifiers Showcase") {
@@ -99,9 +76,6 @@ fn main() {
                 all_passed = false;
             }
 
-            // =========================================================
-            // STEP 2: Click "Dynamic Modifiers" button
-            // =========================================================
             println!("--- Step 2: Click 'Dynamic Modifiers' button ---");
 
             if let Some((x, y, w, h)) =
@@ -123,9 +97,6 @@ fn main() {
                 all_passed = false;
             }
 
-            // =========================================================
-            // STEP 3: Get current frame value
-            // =========================================================
             println!("--- Step 3: Get current frame value ---");
 
             let frame_before = get_frame_value(&robot);
@@ -133,7 +104,6 @@ fn main() {
                 println!("  Frame value before: {}\n", frame);
             } else {
                 println!("  Could not find Frame value in semantics");
-                // Try to find any text containing 'frame' or number patterns
                 if let Ok(semantics) = robot.get_semantics() {
                     fn dump_texts(elem: &cranpose::SemanticElement, prefix: &str) {
                         if let Some(ref text) = elem.text {
@@ -151,9 +121,6 @@ fn main() {
                 println!();
             }
 
-            // =========================================================
-            // STEP 4: Click "Advance Frame" button
-            // =========================================================
             println!("--- Step 4: Click 'Advance Frame' button ---");
 
             if let Some((x, y, w, h)) =
@@ -172,9 +139,6 @@ fn main() {
                 all_passed = false;
             }
 
-            // =========================================================
-            // STEP 5: Verify frame advanced
-            // =========================================================
             println!("--- Step 5: Verify frame advanced ---");
 
             let frame_after = get_frame_value(&robot);
@@ -202,16 +166,12 @@ fn main() {
                 (None, None) => {
                     println!("  Could not find Frame value\n");
                     println!("  Note: Looking for any visible frame-related text...");
-                    // Fallback: just check if 'Advance Frame' section is visible
                     if find_in_semantics(&robot, |elem| find_text(elem, "Dynamic")).is_some() {
                         println!("  Dynamic Modifiers section is visible\n");
                     }
                 }
             }
 
-            // =========================================================
-            // SUMMARY
-            // =========================================================
             println!("\n=== Test Summary ===");
             if all_passed {
                 println!("✓ ALL TESTS PASSED");

@@ -1,21 +1,3 @@
-//! Type-erased effect keys, compared by value.
-//!
-//! `LaunchedEffect`, `LaunchedEffectAsync` and `DisposableEffect` decide
-//! whether to re-run by comparing the key passed this recomposition against
-//! the one remembered from the last run — Jetpack Compose's
-//! `remember(key1) { ... }` contract, which is exact structural equality via
-//! `equals()`, not a hash comparison.
-//!
-//! The state remembered for a call site (`LaunchedEffectState`, ...) is a
-//! single concrete, non-generic Rust type, because the slot table stores one
-//! concrete Rust type per slot across recompositions. It cannot carry the
-//! caller's key type `K` as a generic parameter: if a generic effect wrapper
-//! were ever instantiated with a different `K` at the same composition
-//! position, the slot would be asked for two different concrete state types
-//! at the same slot. `EffectKey` erases `K` behind `Any` instead, so the
-//! state struct stays non-generic while the comparison stays by value. A key
-//! of a different type than the one remembered downcasts to `None` and
-//! therefore always counts as changed — never a panic, never a false match.
 use std::any::Any;
 
 trait ErasedKeyValue: Any {
@@ -36,7 +18,6 @@ impl<K: PartialEq + 'static> ErasedKeyValue for K {
     }
 }
 
-/// An effect key with its concrete type erased, compared by `PartialEq`.
 pub(crate) struct EffectKey(Box<dyn ErasedKeyValue>);
 
 impl EffectKey {
@@ -44,9 +25,6 @@ impl EffectKey {
         EffectKey(Box::new(key))
     }
 
-    /// Whether `self` (the key computed this recomposition) differs from
-    /// `previous` (the key remembered from the last run). Keys of different
-    /// concrete types always differ.
     pub(crate) fn differs_from(&self, previous: &EffectKey) -> bool {
         !self.0.eq_erased(previous.0.as_any())
     }

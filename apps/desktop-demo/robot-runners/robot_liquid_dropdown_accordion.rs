@@ -1,23 +1,3 @@
-//! A dropdown row that keeps its menu open must keep its menu open.
-//!
-//! `LiquidMenuItem::keeps_open()` marks an accordion header: tapping it runs
-//! its action and leaves the menu standing so the caller can swap the rows
-//! under it and let the surface morph to the new size. `LiquidMenu` honours
-//! that. `LiquidDropdownMenu` did not — it dismissed from its own `on_item`
-//! closure, unconditionally, on top of the dismissal `LiquidMenu` already
-//! performs for a row that is not `keeps_open`. Every accordion inside a
-//! dropdown therefore closed on the tap that was supposed to unfold it, and
-//! the second dismissal was invisible to anyone reading either function alone.
-//!
-//! This drives it the way a person does: open the dropdown, tap the accordion
-//! header, and require that the menu is still on screen with the rows the
-//! header just unfolded.
-//!
-//! Run with:
-//! ```bash
-//! cargo run --package desktop-app --example robot_liquid_dropdown_accordion --features desktop,robot-app
-//! ```
-
 use std::{
     process::ExitCode,
     sync::atomic::{AtomicBool, Ordering},
@@ -36,13 +16,8 @@ const WINDOW_WIDTH: u32 = 520;
 const WINDOW_HEIGHT: u32 = 520;
 const TRIGGER_LABEL: &str = "Options";
 const ACCORDION_HEADER: &str = "Sort by";
-/// A row the accordion header unfolds. Absent until the header is tapped, and
-/// absent again if the menu wrongly dismissed on that tap.
 const UNFOLDED_ROW: &str = "Newest to oldest";
-/// A plain row: tapping it *should* dismiss, which is the other half of the
-/// contract and the reason the fix is not "never dismiss".
 const PLAIN_ROW: &str = "Mark all read";
-/// The menu's open/close animation settles well inside this.
 const SETTLE_MS: u64 = 800;
 
 static FAILED: AtomicBool = AtomicBool::new(false);
@@ -84,8 +59,6 @@ fn main() -> ExitCode {
                 );
             }
 
-            // The tap under test. A `keeps_open` row runs its action and
-            // leaves the menu standing.
             tap(&robot, ACCORDION_HEADER, "tap the accordion header");
             settle(&robot, SETTLE_MS);
 
@@ -108,7 +81,6 @@ fn main() -> ExitCode {
             }
             println!("a `keeps_open` row kept its menu open and unfolded its section");
 
-            // The other half: an ordinary row still dismisses, exactly once.
             tap(&robot, PLAIN_ROW, "tap an ordinary row");
             settle(&robot, SETTLE_MS);
             if visible(&robot, ACCORDION_HEADER) {
@@ -120,8 +92,6 @@ fn main() -> ExitCode {
             }
             println!("an ordinary row dismissed the dropdown");
 
-            // And it reopens: a dismissal that ran twice can leave a menu
-            // unable to open again.
             tap(&robot, TRIGGER_LABEL, "reopen the dropdown");
             settle(&robot, SETTLE_MS);
             if !visible(&robot, ACCORDION_HEADER) {

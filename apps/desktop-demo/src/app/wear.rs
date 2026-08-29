@@ -1,21 +1,3 @@
-//! A round-watch settings screen, built from the Wear widget set.
-//!
-//! This replaces a 2675-line vendored copy of an app's own list, draw, font,
-//! layout and theme stack that used to live here as a frame-pacing fixture. The
-//! copy had drifted: it and the app it came from agreed with each other and
-//! disagreed with this framework's own golden-tested scroll-indicator arc by
-//! 3.90 degrees of sweep. What is left is the framework's widgets drawing the
-//! same screen.
-//!
-//! It keeps the fixture's purpose. The list still scrolls on its own, still by
-//! elapsed time rather than per frame — anything paced per frame travels faster
-//! the faster the app runs, which would make a frame-rate reading partly a
-//! measurement of itself — and it is still the heaviest text page a watch app
-//! draws. What has changed is the shape of the load: this is a widget tree with
-//! a graphics layer per row, where the old one was a single `Canvas` redrawing
-//! several hundred glyphs a frame. Comparing the two under the demo's pacing
-//! modes is the whole point of keeping it.
-
 use std::{cell::RefCell, rc::Rc};
 
 use cranpose::LazyItems;
@@ -31,17 +13,11 @@ use cranpose_ui::{
     Alignment, Box as CranposeBox, BoxSpec, Color, Modifier, Size, Text,
 };
 
-/// The display the screen is laid out for, in layout points.
 const WATCH: f32 = 454.0;
-/// The Settings screen's own side padding.
 const SIDE: f32 = 18.0;
-/// Both Wear screens' vertical content padding.
 const VERTICAL: f32 = 34.0;
-/// Points per second the list travels, so the workload is identical at every
-/// pacing mode.
 const POINTS_PER_SECOND: f32 = 260.0;
 
-/// The palette the widget geometry was measured against.
 fn colors() -> WearColors {
     WearColors {
         primary: Color::from_rgb_u8(0xB9, 0xF2, 0xFF),
@@ -75,9 +51,6 @@ enum Row {
 }
 
 impl Row {
-    /// Which rows may reuse each other's composition slots. A header reused as
-    /// a switch throws away the whole subtree, so the four shapes are pooled
-    /// apart.
     fn content_type(&self) -> u64 {
         match self {
             Row::Header(_) => 0,
@@ -150,8 +123,6 @@ impl WearState {
         }
     }
 
-    /// Walks the list up and down by elapsed time, reversing at both ends so a
-    /// measurement window of any length stays in motion.
     fn advance(&mut self, now_nanos: u64, list: &WearScalingListState) -> bool {
         let last = std::mem::replace(&mut self.last_nanos, now_nanos);
         if last == 0 || now_nanos <= last {

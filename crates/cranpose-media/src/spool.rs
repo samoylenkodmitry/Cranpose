@@ -1,34 +1,3 @@
-//! A seekable view over a stream that is not one.
-//!
-//! A document provider that streams — a cloud mount, a WebDAV share, an rclone
-//! remote — hands back a pipe, not a file. A decoder cannot probe a pipe: it
-//! reads the container's header, then wants to go back for the audio, and a
-//! pipe has no back. Reading the whole track into memory first is not an answer
-//! either; a media player that downloads before it makes a sound is not a media
-//! player.
-//!
-//! So the stream is spooled to a temporary file by a background thread and read
-//! from that file: playback starts at the front as soon as the first packets
-//! land, and a seek waits only until the target offset has been written. The
-//! spool is deleted when the last reader is dropped, which is the end of the
-//! track — so a terabyte-scale library costs one track's worth of disk, not a
-//! library's.
-//!
-//! The length is taken from the provider rather than discovered by reading to
-//! the end, so a container asking where the end is never waits on the whole
-//! download. It is not *reported* as the stream's length, though, and that
-//! distinction is the difference between a track that plays and one that does
-//! not: a decoder told how long a stream is treats it as random-access and
-//! reads the tail while probing — the trailing tags, the index — and the tail
-//! is the one part of a spool that arrives last. Observed as a 416 MB album
-//! that started instantly while the length was withheld and refused to start
-//! at all once it was published.
-//!
-//! And a wait that sees no new bytes at all for [`STALL_TIMEOUT`] gives up with
-//! an error, so an item whose provider stopped talking fails and says why
-//! instead of the decode thread hanging on a stream that will never deliver
-//! another byte.
-
 use std::{
     fs::File,
     io::{self, Read, Seek, SeekFrom, Write},
@@ -40,23 +9,12 @@ use std::{
     time::Duration,
 };
 
-/// How much is read from the stream at a time. Large enough that a provider
-/// serving over a network is not asked for a few bytes at a time.
 const CHUNK_BYTES: usize = 64 * 1024;
 
-/// How long a reader waits with nothing at all arriving before it calls the
-/// stream dead.
-///
-/// The clock restarts whenever a byte lands, so a slow provider is not cut off
-/// — only one that has stopped. Generous enough to ride out a network that
-/// stalls and recovers, short enough that a track which is never going to play
-/// says so rather than sitting there.
 const STALL_TIMEOUT: Duration = Duration::from_secs(20);
 
-/// What the downloader publishes and the reader waits on.
 struct Progress {
     downloaded: u64,
-    /// The stream's length, known only once it has been read to the end.
     total: Option<u64>,
     finished: bool,
     error: Option<String>,
@@ -67,25 +25,15 @@ struct Shared {
     ready: Condvar,
     cancel: AtomicBool,
     path: PathBuf,
-    /// How long a reader waits with nothing arriving before it calls the stream
-    /// dead. [`STALL_TIMEOUT`] in an application; short in the tests that
-    /// exercise a provider which stops talking.
     stall: Duration,
 }
 
-/// Stops a spool's readers waiting for bytes that are not coming.
-///
-/// The sink holds one for the item it is playing, so ending an item does not
-/// wait on a decode thread that is itself waiting on a provider which stopped
-/// talking. Cloneable and inert for an item that is not spooled at all.
 #[derive(Clone, Default)]
 pub(crate) struct SpoolCancel {
     shared: Option<Arc<Shared>>,
 }
 
 impl SpoolCancel {
-    /// Wakes every reader; each returns what it has, which the decoder reads as
-    /// the end of the stream.
     pub(crate) fn cancel(&self) {
         let Some(shared) = self.shared.as_ref() else {
             return;
@@ -96,12 +44,6 @@ impl SpoolCancel {
 }
 
 impl Shared {
-    /// Blocks until at least `wanted` bytes are on disk, the download ends, or
-    /// it is cancelled; returns how many bytes are available.
-    ///
-    /// A wait that sees nothing arrive for [`STALL_TIMEOUT`] gives up: a
-    /// provider whose descriptor stays open while it has stopped serving would
-    /// otherwise block this reader for the life of the process.
     fn wait_for(&self, wanted: u64) -> io::Result<u64> {
         let mut progress = self
             .progress
@@ -147,7 +89,6 @@ impl Shared {
     }
 }
 
-/// Stops the downloader and deletes the spool file once every reader is gone.
 struct Cleanup {
     shared: Arc<Shared>,
 }
@@ -160,29 +101,15 @@ impl Drop for Cleanup {
     }
 }
 
-/// A seekable reader over a stream being spooled to a temporary file.
 pub(crate) struct Spool {
     shared: Arc<Shared>,
     file: File,
     position: u64,
-    /// What the provider says the whole stream is, when it knows.
-    ///
-    /// Seeking from the end is answered from this rather than by waiting for
-    /// the download to finish. It is deliberately not what [`byte_len`] reports
-    /// — see the module comment.
-    ///
-    /// [`byte_len`]: symphonia::core::io::MediaSource::byte_len
     len: Option<u64>,
-    /// Deletes the spool when the last reader goes.
     _cleanup: Arc<Cleanup>,
 }
 
 impl Spool {
-    /// Starts spooling `source` and returns a reader over what has landed,
-    /// together with the handle that stops it waiting.
-    ///
-    /// Returns as soon as the file exists: nothing has been downloaded yet, and
-    /// the first read is what waits.
     pub(crate) fn start(
         source: Box<dyn Read + Send>,
         directory: &Path,
@@ -191,8 +118,6 @@ impl Spool {
         Spool::start_with(source, directory, len, STALL_TIMEOUT)
     }
 
-    /// As [`start`](Spool::start), for a caller that states its own tolerance
-    /// for a stream going quiet.
     pub(crate) fn start_with(
         source: Box<dyn Read + Send>,
         directory: &Path,
@@ -266,11 +191,6 @@ impl Seek for Spool {
 }
 
 impl Spool {
-    /// Where the stream ends.
-    ///
-    /// From the provider when it stated a length, which is the case that
-    /// matters: a container asking where the end is on the first seek would
-    /// otherwise have to wait for the whole track to arrive to be told.
     fn end(&self) -> io::Result<u64> {
         match self.len {
             Some(len) => Ok(len),
@@ -280,18 +200,10 @@ impl Spool {
 }
 
 impl symphonia::core::io::MediaSource for Spool {
-    /// The whole point: a stream that could not seek can, through the spool.
     fn is_seekable(&self) -> bool {
         true
     }
 
-    /// Nothing, whatever the provider stated.
-    ///
-    /// A length here is a promise of random access, and a decoder that believes
-    /// it reads the tail of the stream while probing — which on a spool means
-    /// waiting for the whole track before the first sample. The length is still
-    /// known and still used, for [`Seek::seek`] from the end; it is only this
-    /// answer that has to be "I cannot tell you". See the module comment.
     fn byte_len(&self) -> Option<u64> {
         None
     }
@@ -351,8 +263,6 @@ fn next_spool_name() -> String {
     format!("stream-{}-{sequence}.tmp", std::process::id())
 }
 
-/// Deletes spools a previous run left behind. Once per process: after that
-/// every file in the directory belongs to a track this process is playing.
 fn sweep_stale_spools(directory: &Path) {
     static SWEPT: std::sync::Once = std::sync::Once::new();
     SWEPT.call_once(|| {
@@ -377,9 +287,6 @@ mod tests {
         cranpose_core::test_scratch_dir(env!("CARGO_MANIFEST_DIR"), tag)
     }
 
-    /// A reader that yields its bytes a few at a time and cannot seek, which is
-    /// what a streaming provider hands back. `stall_after` reproduces the
-    /// provider that stops serving without ever closing its pipe.
     struct Trickle {
         bytes: Vec<u8>,
         position: usize,
@@ -420,7 +327,6 @@ mod tests {
         (0..=255u8).cycle().take(len).collect()
     }
 
-    /// The spool as a provider that states its length hands it over.
     fn spool(bytes: &[u8], tag: &str) -> (Spool, SpoolCancel) {
         Spool::start(
             trickle(bytes.to_vec()),
@@ -451,8 +357,6 @@ mod tests {
         assert_eq!(head, again);
     }
 
-    /// The case the whole file exists for: the decoder probes the header, then
-    /// asks for an offset the downloader has not reached yet, and gets it.
     #[test]
     fn a_seek_forward_waits_for_the_download_to_reach_it() {
         let source = payload(8192);
@@ -463,9 +367,6 @@ mod tests {
         assert_eq!(tail, source[8000..8016]);
     }
 
-    /// A container's first seek asks where the end is. Answering it from the
-    /// length the provider stated is what stops that question downloading the
-    /// whole track before a single seek can happen.
     #[test]
     fn seeking_from_a_stated_end_does_not_wait_for_the_download() {
         let source = payload(1_048_576);
@@ -480,9 +381,6 @@ mod tests {
         );
     }
 
-    /// A spool never states a length, however well it knows one: a decoder told
-    /// how long a stream is probes its tail, and on a spool the tail is what
-    /// arrives last. See the module comment.
     #[test]
     fn a_spool_never_reports_a_length_even_when_the_provider_stated_one() {
         let (spool, _cancel) = spool(&payload(4096), "no-stated-len");
@@ -494,8 +392,6 @@ mod tests {
         );
     }
 
-    /// A provider that states nothing still has to be read to the end to be
-    /// measured, and says so rather than pretending to a length.
     #[test]
     fn a_stream_with_no_stated_length_is_measured_by_reading_it() {
         let source = payload(1024);
@@ -520,8 +416,6 @@ mod tests {
         let path = spool.shared.path.clone();
         assert!(path.exists());
         drop(spool);
-        // The downloader may still be writing its last chunk when the reader
-        // goes; the deletion happens on the reader's thread either way.
         assert!(!path.exists(), "{} survived its reader", path.display());
     }
 
@@ -531,9 +425,6 @@ mod tests {
         assert!(spool.seek(SeekFrom::Current(-1)).is_err());
     }
 
-    /// A provider that stops serving without closing its descriptor must not
-    /// take the decode thread with it: the read fails, so the item fails and
-    /// says why.
     #[test]
     fn a_stream_that_stops_delivering_fails_instead_of_waiting_for_ever() {
         let stalled: Box<dyn Read + Send> = Box::new(Trickle {
@@ -549,14 +440,11 @@ mod tests {
             Duration::from_millis(200),
         )
         .expect("spool starts");
-        // Long enough to be past the stall, and past what will ever arrive.
         spool.seek(SeekFrom::Start(2048)).expect("seek");
         let error = spool.read(&mut [0u8; 16]).expect_err("the stream is dead");
         assert_eq!(error.kind(), io::ErrorKind::TimedOut);
     }
 
-    /// Cancelling is what lets a sink end an item without waiting on a decode
-    /// thread that is waiting on a provider.
     #[test]
     fn cancelling_ends_a_wait_that_would_otherwise_not_return() {
         let stalled: Box<dyn Read + Send> = Box::new(Trickle {
@@ -578,8 +466,6 @@ mod tests {
             cancel.cancel();
         });
         let started = Instant::now();
-        // Nothing is available at 2048, so the read ends the stream rather than
-        // waiting out the stall timeout.
         assert_eq!(spool.read(&mut [0u8; 16]).expect("cancelled"), 0);
         assert!(started.elapsed() < Duration::from_secs(30));
     }

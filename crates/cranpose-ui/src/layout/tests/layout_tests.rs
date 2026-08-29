@@ -203,8 +203,6 @@ impl MeasurePolicy for MutableLeafPolicy {
     }
 }
 
-/// Records the density its [`MeasureScope`] was measured with, so a test can
-/// tell which grid a subtree actually ran its measure pass on.
 #[derive(Clone)]
 struct RecordingDensityPolicy {
     recorded: Rc<Cell<f32>>,
@@ -245,11 +243,6 @@ impl MeasurePolicy for RecordingDensityPolicy {
     }
 }
 
-/// The whole point of threading a [`MeasureScope`] through `MeasurePolicy`:
-/// a subtree given a different grid through [`ProvideDensity`] must be
-/// measured on that grid, not on the host's. Before the scope existed there
-/// was no way for a measure pass to see anything but the process-wide
-/// density, so this behaviour could not exist -- and could not regress.
 #[test]
 fn a_subtree_given_a_different_density_is_measured_on_that_grid() -> Result<(), NodeError> {
     let host_seen = Rc::new(Cell::new(-1.0_f32));
@@ -314,11 +307,6 @@ fn a_subtree_given_a_different_density_is_measured_on_that_grid() -> Result<(), 
     Ok(())
 }
 
-/// The subcompose path's equivalent of
-/// `a_subtree_given_a_different_density_is_measured_on_that_grid`: a
-/// `SubcomposeLayout`'s measure policy must see the grid its composition was
-/// given, not whatever the host installed on the shell nor whatever composer
-/// the measuring thread happens to be inside.
 #[test]
 fn a_subcomposed_subtree_given_a_different_density_is_measured_on_that_grid()
 -> Result<(), NodeError> {
@@ -441,10 +429,6 @@ fn align_helpers_respect_available_space() {
     );
     assert_eq!(align_vertical(VerticalAlignment::Bottom, 50.0, 10.0), 40.0);
 }
-
-// ============================================================================
-// SELECTIVE MEASURE/LAYOUT TESTS
-// ============================================================================
 
 #[test]
 fn new_layout_node_starts_dirty() {
@@ -570,9 +554,6 @@ fn set_measure_policy_marks_dirty() {
 fn width_after_graphics_layer_constrains_measurement() -> Result<(), NodeError> {
     let _app_context = crate::render_state::app_context_test_scope();
     let mut applier = MemoryApplier::new();
-    // The liquid menu chains `.glass_effect_with(..)` (a graphics-layer
-    // resolver) BEFORE `.width(..)`. The size element must constrain the
-    // node's measurement regardless of its position in the chain.
     let root_id = applier.create(Box::new(LayoutNode::new(
         Modifier::empty()
             .graphics_layer(cranpose_ui_graphics::GraphicsLayer::default)
@@ -667,7 +648,6 @@ fn selective_measure_uses_cache_when_not_dirty() -> Result<(), NodeError> {
         max_height: 100.0,
     };
 
-    // First measure - should measure and cache
     let result1 = measure_layout(
         &mut applier,
         node_id,
@@ -678,13 +658,11 @@ fn selective_measure_uses_cache_when_not_dirty() -> Result<(), NodeError> {
     )?;
     let size1 = result1.root_size();
 
-    // Clear dirty flag to simulate no changes
     applier.with_node::<LayoutNode, _>(node_id, |node| {
         node.clear_needs_measure();
         node.clear_needs_layout();
     })?;
 
-    // Second measure - should use cache since not dirty
     let result2 = measure_layout(
         &mut applier,
         node_id,
@@ -706,7 +684,6 @@ fn selective_measure_remeasures_when_dirty() -> Result<(), NodeError> {
     let node = LayoutNode::new(Modifier::empty(), Rc::new(MaxSizePolicy));
     let node_id = applier.create(Box::new(node));
 
-    // First measure
     let result1 = measure_layout(
         &mut applier,
         node_id,
@@ -717,12 +694,10 @@ fn selective_measure_remeasures_when_dirty() -> Result<(), NodeError> {
     )?;
     let _size1 = result1.root_size();
 
-    // Mark as dirty by changing measure policy
     applier.with_node::<LayoutNode, _>(node_id, |node| {
         node.set_measure_policy(Rc::new(VerticalStackPolicy));
     })?;
 
-    // Second measure - should remeasure because dirty
     let _result2 = measure_layout(
         &mut applier,
         node_id,
@@ -732,7 +707,6 @@ fn selective_measure_remeasures_when_dirty() -> Result<(), NodeError> {
         },
     )?;
 
-    // Verify it was measured (by checking the dirty flag was cleared)
     let still_dirty = applier.with_node::<LayoutNode, _>(node_id, |node| node.needs_measure())?;
 
     assert!(!still_dirty, "Dirty flag should be cleared after measure");
@@ -746,7 +720,6 @@ fn cache_epoch_not_incremented_when_no_dirty_nodes() -> Result<(), NodeError> {
     let node = LayoutNode::new(Modifier::empty(), Rc::new(MaxSizePolicy));
     let node_id = applier.create(Box::new(node));
 
-    // First measure
     measure_layout(
         &mut applier,
         node_id,
@@ -756,7 +729,6 @@ fn cache_epoch_not_incremented_when_no_dirty_nodes() -> Result<(), NodeError> {
         },
     )?;
 
-    // Clear dirty flags
     applier.with_node::<LayoutNode, _>(node_id, |node| {
         node.clear_needs_measure();
         node.clear_needs_layout();
@@ -765,7 +737,6 @@ fn cache_epoch_not_incremented_when_no_dirty_nodes() -> Result<(), NodeError> {
     let epoch_before =
         applier.with_node::<LayoutNode, _>(node_id, |node| node.cache_handles().epoch())?;
 
-    // Second measure with no dirty nodes - epoch should not increment
     measure_layout(
         &mut applier,
         node_id,
@@ -792,7 +763,6 @@ fn cache_epoch_increments_when_nodes_dirty() -> Result<(), NodeError> {
     let node = LayoutNode::new(Modifier::empty(), Rc::new(MaxSizePolicy));
     let node_id = applier.create(Box::new(node));
 
-    // First measure
     measure_layout(
         &mut applier,
         node_id,
@@ -805,12 +775,10 @@ fn cache_epoch_increments_when_nodes_dirty() -> Result<(), NodeError> {
     let epoch_before =
         applier.with_node::<LayoutNode, _>(node_id, |node| node.cache_handles().epoch())?;
 
-    // Mark node as dirty
     applier.with_node::<LayoutNode, _>(node_id, |node| {
         node.mark_needs_measure();
     })?;
 
-    // Second measure with dirty node - epoch should increment
     measure_layout(
         &mut applier,
         node_id,
@@ -902,15 +870,6 @@ fn cache_epoch_is_isolated_by_app_context() -> Result<(), NodeError> {
 
 #[test]
 fn a_policy_that_only_pushes_placements_still_places_its_children() -> Result<(), NodeError> {
-    // `VerticalStackPolicy` states where its children go the way the contract
-    // asks: it pushes a `Placement` per child. It never calls the placeable's
-    // own `place`, which is the redundant second half of the same statement.
-    //
-    // Both halves must reach the RETAINED node state, because that — not the
-    // measured tree — is what the per-frame scene build walks in the app, and
-    // it culls every node whose `is_placed` is false. A whole widget set once
-    // shipped in exactly this shape: correct in every `LayoutTree` assertion,
-    // and an empty screen on the device.
     let _app_context = crate::render_state::app_context_test_scope();
     let mut applier = MemoryApplier::new();
 
@@ -962,7 +921,6 @@ fn selective_measure_with_tree_hierarchy() -> Result<(), NodeError> {
     let _app_context = crate::render_state::app_context_test_scope();
     let mut applier = MemoryApplier::new();
 
-    // Create a tree: root -> child_a, child_b
     let child_a = applier.create(Box::new(LayoutNode::new(
         Modifier::empty(),
         Rc::new(LeafMeasurePolicy::new(Size {
@@ -983,7 +941,6 @@ fn selective_measure_with_tree_hierarchy() -> Result<(), NodeError> {
     root.children.push(child_b);
     let root_id = applier.create(Box::new(root));
 
-    // First measure
     let result1 = measure_layout(
         &mut applier,
         root_id,
@@ -994,7 +951,6 @@ fn selective_measure_with_tree_hierarchy() -> Result<(), NodeError> {
     )?;
     assert_eq!(result1.root_size().height, 50.0);
 
-    // Clear all dirty flags
     applier.with_node::<LayoutNode, _>(root_id, |node| {
         node.clear_needs_measure();
         node.clear_needs_layout();
@@ -1003,7 +959,6 @@ fn selective_measure_with_tree_hierarchy() -> Result<(), NodeError> {
     let epoch_before =
         applier.with_node::<LayoutNode, _>(root_id, |node| node.cache_handles().epoch())?;
 
-    // Second measure - should use cache
     measure_layout(
         &mut applier,
         root_id,
@@ -1654,7 +1609,6 @@ fn dirty_child_triggers_parent_remeasure() -> Result<(), NodeError> {
     use super::bubble_layout_dirty;
     let mut applier = MemoryApplier::new();
 
-    // Create tree with child that can change
     let child = applier.create(Box::new(LayoutNode::new(
         Modifier::empty(),
         Rc::new(MaxSizePolicy),
@@ -1664,14 +1618,12 @@ fn dirty_child_triggers_parent_remeasure() -> Result<(), NodeError> {
     root.children.push(child);
     let root_id = applier.create(Box::new(root));
 
-    // Set up parent links
     applier.with_node::<LayoutNode, _>(root_id, |node| node.set_node_id(root_id))?;
     applier.with_node::<LayoutNode, _>(child, |node| {
         node.set_node_id(child);
         node.set_parent(root_id);
     })?;
 
-    // First measure
     measure_layout(
         &mut applier,
         root_id,
@@ -1681,13 +1633,11 @@ fn dirty_child_triggers_parent_remeasure() -> Result<(), NodeError> {
         },
     )?;
 
-    // Mark child as dirty and bubble to root
     applier.with_node::<LayoutNode, _>(child, |node| {
         node.mark_needs_measure();
     })?;
     bubble_layout_dirty(&mut applier, child);
 
-    // Check that root is now dirty (O(1) check)
     let root_needs_measure =
         applier.with_node::<LayoutNode, _>(root_id, |node| node.needs_layout())?;
     assert!(
@@ -1698,16 +1648,11 @@ fn dirty_child_triggers_parent_remeasure() -> Result<(), NodeError> {
     Ok(())
 }
 
-// ============================================================================
-// PARENT TRACKING AND DIRTY BUBBLING TESTS
-// ============================================================================
-
 #[test]
 fn parent_tracking_basic() -> Result<(), NodeError> {
     let _app_context = crate::render_state::app_context_test_scope();
     let mut applier = MemoryApplier::new();
 
-    // Create parent and child
     let child = applier.create(Box::new(LayoutNode::new(
         Modifier::empty(),
         Rc::new(MaxSizePolicy),
@@ -1717,7 +1662,6 @@ fn parent_tracking_basic() -> Result<(), NodeError> {
     parent.children.push(child);
     let parent_id = applier.create(Box::new(parent));
 
-    // Set IDs on nodes
     applier.with_node::<LayoutNode, _>(parent_id, |node| {
         node.set_node_id(parent_id);
     })?;
@@ -1725,12 +1669,10 @@ fn parent_tracking_basic() -> Result<(), NodeError> {
         node.set_node_id(child);
     })?;
 
-    // Set parent relationship
     applier.with_node::<LayoutNode, _>(child, |node| {
         node.set_parent(parent_id);
     })?;
 
-    // Verify parent is set correctly
     let child_parent = applier.with_node::<LayoutNode, _>(child, |node| node.parent())?;
 
     assert_eq!(
@@ -1749,7 +1691,6 @@ fn dirty_bubbling_to_root() -> Result<(), NodeError> {
 
     let mut applier = MemoryApplier::new();
 
-    // Create a three-level tree: root -> middle -> leaf
     let leaf = applier.create(Box::new(LayoutNode::new(
         Modifier::empty(),
         Rc::new(MaxSizePolicy),
@@ -1763,7 +1704,6 @@ fn dirty_bubbling_to_root() -> Result<(), NodeError> {
     root.children.push(middle_id);
     let root_id = applier.create(Box::new(root));
 
-    // Set up node IDs and parent relationships
     applier.with_node::<LayoutNode, _>(root_id, |node| node.set_node_id(root_id))?;
     applier.with_node::<LayoutNode, _>(middle_id, |node| {
         node.set_node_id(middle_id);
@@ -1774,7 +1714,6 @@ fn dirty_bubbling_to_root() -> Result<(), NodeError> {
         node.set_parent(middle_id);
     })?;
 
-    // Clear all dirty flags
     applier.with_node::<LayoutNode, _>(root_id, |node| {
         node.clear_needs_measure();
         node.clear_needs_layout();
@@ -1788,15 +1727,12 @@ fn dirty_bubbling_to_root() -> Result<(), NodeError> {
         node.clear_needs_layout();
     })?;
 
-    // Mark leaf dirty
     applier.with_node::<LayoutNode, _>(leaf, |node| {
         node.mark_needs_measure();
     })?;
 
-    // Bubble dirty flag
     bubble_layout_dirty(&mut applier, leaf);
 
-    // Check that middle and root are now marked as needing layout
     let middle_needs_layout =
         applier.with_node::<LayoutNode, _>(middle_id, |node| node.needs_layout())?;
     let root_needs_layout =
@@ -1821,7 +1757,6 @@ fn tree_needs_layout_api() -> Result<(), NodeError> {
 
     let mut applier = MemoryApplier::new();
 
-    // Create simple tree
     let child = applier.create(Box::new(LayoutNode::new(
         Modifier::empty(),
         Rc::new(MaxSizePolicy),
@@ -1831,20 +1766,17 @@ fn tree_needs_layout_api() -> Result<(), NodeError> {
     root.children.push(child);
     let root_id = applier.create(Box::new(root));
 
-    // Set up parent links
     applier.with_node::<LayoutNode, _>(root_id, |node| node.set_node_id(root_id))?;
     applier.with_node::<LayoutNode, _>(child, |node| {
         node.set_node_id(child);
         node.set_parent(root_id);
     })?;
 
-    // Initially dirty (new nodes)
     assert!(
         tree_needs_layout(&mut applier as &mut dyn Applier, root_id)?,
         "New tree should need layout"
     );
 
-    // Clear flags
     applier.with_node::<LayoutNode, _>(root_id, |node| {
         node.clear_needs_measure();
         node.clear_needs_layout();
@@ -1854,19 +1786,16 @@ fn tree_needs_layout_api() -> Result<(), NodeError> {
         node.clear_needs_layout();
     })?;
 
-    // Now clean
     assert!(
         !tree_needs_layout(&mut applier as &mut dyn Applier, root_id)?,
         "Clean tree should not need layout"
     );
 
-    // Mark child dirty and bubble to root
     applier.with_node::<LayoutNode, _>(child, |node| {
         node.mark_needs_measure();
     })?;
     bubble_layout_dirty(&mut applier, child);
 
-    // Should need layout again (root should be dirty now due to bubbling)
     assert!(
         tree_needs_layout(&mut applier as &mut dyn Applier, root_id)?,
         "Tree with dirty child should need layout"
@@ -1959,7 +1888,6 @@ fn bubbling_reaches_clean_ancestors_above_dirty_intermediate() -> Result<(), Nod
 
     let mut applier = MemoryApplier::new();
 
-    // Create tree: root -> middle -> leaf
     let leaf = applier.create(Box::new(LayoutNode::new(
         Modifier::empty(),
         Rc::new(MaxSizePolicy),
@@ -1973,7 +1901,6 @@ fn bubbling_reaches_clean_ancestors_above_dirty_intermediate() -> Result<(), Nod
     root.children.push(middle_id);
     let root_id = applier.create(Box::new(root));
 
-    // Set up relationships
     applier.with_node::<LayoutNode, _>(root_id, |node| node.set_node_id(root_id))?;
     applier.with_node::<LayoutNode, _>(middle_id, |node| {
         node.set_node_id(middle_id);
@@ -1984,26 +1911,20 @@ fn bubbling_reaches_clean_ancestors_above_dirty_intermediate() -> Result<(), Nod
         node.set_parent(middle_id);
     })?;
 
-    // Mark middle as already needing layout
     applier.with_node::<LayoutNode, _>(middle_id, |node| {
         node.mark_needs_layout();
     })?;
 
-    // Clear root
     applier.with_node::<LayoutNode, _>(root_id, |node| {
         node.clear_needs_measure();
         node.clear_needs_layout();
     })?;
 
-    // Mark leaf and bubble
     applier.with_node::<LayoutNode, _>(leaf, |node| {
         node.mark_needs_measure();
     })?;
     bubble_layout_dirty(&mut applier, leaf);
 
-    // Root must still become dirty even though the intermediate node was already dirty.
-    // Scoped layout repasses can strand a dirty node under clean ancestors until the next
-    // descendant invalidation reconnects the path.
     let root_needs_layout =
         applier.with_node::<LayoutNode, _>(root_id, |node| node.needs_layout())?;
 
@@ -2021,10 +1942,6 @@ fn property_change_bubbles_without_manual_call() -> Result<(), NodeError> {
     use super::bubble_layout_dirty;
     use crate::modifier::Modifier;
 
-    // This test proves that property changes (set_modifier, set_measure_policy) bubble
-    // to root WITHOUT needing manual bubbling calls in Layout() composable.
-    // The key is that pop_parent() checks if node is dirty and bubbles automatically.
-
     let mut applier = MemoryApplier::new();
     let root_id = applier.create(Box::new(LayoutNode::new(
         Modifier::empty(),
@@ -2039,7 +1956,6 @@ fn property_change_bubbles_without_manual_call() -> Result<(), NodeError> {
         Rc::new(MaxSizePolicy),
     )));
 
-    // Build tree structure
     applier.with_node::<LayoutNode, _>(root_id, |node| {
         node.set_node_id(root_id);
         node.children.push(child_id);
@@ -2054,7 +1970,6 @@ fn property_change_bubbles_without_manual_call() -> Result<(), NodeError> {
         node.set_parent(child_id);
     })?;
 
-    // Clear all dirty flags
     for id in [root_id, child_id, leaf_id] {
         applier.with_node::<LayoutNode, _>(id, |node| {
             node.clear_needs_measure();
@@ -2062,28 +1977,21 @@ fn property_change_bubbles_without_manual_call() -> Result<(), NodeError> {
         })?;
     }
 
-    // Verify tree is clean
     assert!(!applier.with_node::<LayoutNode, _>(root_id, |n| n.needs_layout())?);
     assert!(!applier.with_node::<LayoutNode, _>(child_id, |n| n.needs_layout())?);
     assert!(!applier.with_node::<LayoutNode, _>(leaf_id, |n| n.needs_layout())?);
 
-    // Change property on leaf (like set_modifier would do in Layout() composable)
-    // This marks the node dirty but doesn't bubble yet
     applier.with_node::<LayoutNode, _>(leaf_id, |node| {
         node.set_modifier(Modifier::empty().width(100.0));
     })?;
 
-    // Leaf should be dirty now
     assert!(applier.with_node::<LayoutNode, _>(leaf_id, |n| n.needs_layout())?);
 
-    // But parent and root are still clean (no manual bubble yet!)
     assert!(!applier.with_node::<LayoutNode, _>(child_id, |n| n.needs_layout())?);
     assert!(!applier.with_node::<LayoutNode, _>(root_id, |n| n.needs_layout())?);
 
-    // Now simulate pop_parent() bubbling - this is what happens in the composer
     bubble_layout_dirty(&mut applier, leaf_id);
 
-    // Now root should be dirty - proves bubbling worked
     assert!(
         applier.with_node::<LayoutNode, _>(root_id, |n| n.needs_layout())?,
         "Root should be dirty after property change bubbled from leaf"
@@ -2141,7 +2049,6 @@ fn semantics_tree_derives_roles_from_configuration() -> Result<(), NodeError> {
 
     let mut applier = MemoryApplier::new();
 
-    // Create a button via semantics modifier (not ButtonNode)
     let button_node = LayoutNode::new(
         Modifier::empty().semantics(|config| {
             config.role = Some(cranpose_foundation::SemanticsWidgetRole::Button);
@@ -2152,34 +2059,25 @@ fn semantics_tree_derives_roles_from_configuration() -> Result<(), NodeError> {
     );
     let button_id = applier.create(Box::new(button_node));
 
-    // Measure and build semantics tree
     let measurements = measure_layout(&mut applier, button_id, Size::new(100.0, 100.0))?;
     let semantics_tree = measurements
         .semantics_tree()
         .expect("expected semantics tree");
     let root = semantics_tree.root();
 
-    // Verify the tree role was derived from the semantics role
     assert!(matches!(root.role, SemanticsRole::Button));
 
-    // Verify click action was synthesized from is_clickable
     assert_eq!(root.actions.len(), 1);
     assert!(matches!(
         root.actions[0],
         crate::layout::SemanticsAction::Click { .. }
     ));
 
-    // Verify description
     assert_eq!(root.description.as_deref(), Some("My Button"));
 
     Ok(())
 }
 
-/// A canvas app republishes its controls by recording them again, so the
-/// semantics snapshot has to notice a recorder whose captured state moved.
-/// Nothing about the modifier's *shape* changes when a settings row flips from
-/// "On" to "Off" — only the closure does — and a screen reader that keeps
-/// reading the first frame's answer is worse than one that reads nothing.
 #[test]
 fn re_recording_semantics_reopens_the_snapshot() -> Result<(), NodeError> {
     let _app_context = crate::render_state::app_context_test_scope();
@@ -2234,9 +2132,6 @@ fn re_recording_semantics_reopens_the_snapshot() -> Result<(), NodeError> {
     Ok(())
 }
 
-/// The whole point of canvas semantics: an app that draws its controls has one
-/// layout node, and everything a screen reader needs has to survive the trip
-/// from the recorder closure into the semantics tree on that one node.
 #[test]
 fn semantics_tree_carries_the_controls_a_canvas_published() -> Result<(), NodeError> {
     let _app_context = crate::render_state::app_context_test_scope();
@@ -2299,9 +2194,6 @@ fn semantics_tree_carries_the_controls_a_canvas_published() -> Result<(), NodeEr
     assert_eq!(root.on_click_label.as_deref(), Some("Launch"));
     assert_eq!(root.selected, Some(true));
     assert!(root.enabled);
-    // A named click label declares the action on its own, exactly as Compose's
-    // `onClick(label = …)` does — the app should not also have to set
-    // `is_clickable`.
     assert_eq!(root.actions.len(), 1);
 
     assert_eq!(root.custom_actions.len(), 1);
@@ -2527,7 +2419,6 @@ fn semantics_configuration_merges_multiple_modifiers() -> Result<(), NodeError> 
     let _app_context = crate::render_state::app_context_test_scope();
     let mut applier = MemoryApplier::new();
 
-    // Chain multiple semantics modifiers
     let node = LayoutNode::new(
         Modifier::empty()
             .semantics(|config| {
@@ -2540,14 +2431,12 @@ fn semantics_configuration_merges_multiple_modifiers() -> Result<(), NodeError> 
     );
     let node_id = applier.create(Box::new(node));
 
-    // Measure and build semantics tree
     let measurements = measure_layout(&mut applier, node_id, Size::new(100.0, 100.0))?;
     let semantics_tree = measurements
         .semantics_tree()
         .expect("expected semantics tree");
     let root = semantics_tree.root();
 
-    // Both semantics should be merged
     assert_eq!(root.description.as_deref(), Some("first"));
     assert_eq!(root.actions.len(), 1);
 
@@ -2559,7 +2448,6 @@ fn semantics_only_updates_do_not_trigger_layout() -> Result<(), NodeError> {
     let _app_context = crate::render_state::app_context_test_scope();
     let mut applier = MemoryApplier::new();
 
-    // Create a node with semantics
     let node = LayoutNode::new(
         Modifier::empty().semantics(|config| {
             config.content_description = Some("original".into());
@@ -2568,13 +2456,10 @@ fn semantics_only_updates_do_not_trigger_layout() -> Result<(), NodeError> {
     );
     let node_id = applier.create(Box::new(node));
 
-    // Do initial measure
     let _ = measure_layout(&mut applier, node_id, Size::new(100.0, 100.0))?;
 
-    // Node should be clean after measure
     assert!(!applier.with_node::<LayoutNode, _>(node_id, |n| n.needs_layout())?);
 
-    // Update semantics (this would normally come from a modifier update)
     applier.with_node::<LayoutNode, _>(node_id, |node| {
         node.set_modifier(Modifier::empty().semantics(|config| {
             config.content_description = Some("updated".into());
@@ -2582,22 +2467,11 @@ fn semantics_only_updates_do_not_trigger_layout() -> Result<(), NodeError> {
         node.mark_needs_semantics();
     })?;
 
-    // Semantics dirty flag should be set
     assert!(applier.with_node::<LayoutNode, _>(node_id, |n| n.needs_semantics())?);
-
-    // But layout dirty flag should NOT be set (semantics-only update)
-    // Note: This currently bubbles layout due to modifier chain updates,
-    // but in a full implementation with finer-grained invalidation,
-    // semantics-only changes would not bubble layout dirty.
 
     Ok(())
 }
 
-// ============================================================================
-// APPLIER/SLOT GUARD PANIC RECOVERY TESTS
-// ============================================================================
-
-/// A measure policy that panics when invoked.
 #[derive(Clone)]
 struct PanickingMeasurePolicy;
 
@@ -2632,26 +2506,20 @@ fn measure_layout_panic_preserves_applier_and_slots() {
 
     let mut applier = MemoryApplier::new();
 
-    // Create a normal node first to populate the applier
     let normal_node = LayoutNode::new(Modifier::empty(), Rc::new(MaxSizePolicy));
     let normal_id = applier.create(Box::new(normal_node));
 
-    // Verify the applier has the node
     assert!(
         applier.get_mut(normal_id).is_ok(),
         "Applier should contain normal node before panic test"
     );
 
-    // Count nodes before panic
     let node_count_before = applier.len();
     assert!(node_count_before > 0, "Should have at least one node");
 
-    // Create the panicking node
     let panicking_node = LayoutNode::new(Modifier::empty(), Rc::new(PanickingMeasurePolicy));
     let panic_id = applier.create(Box::new(panicking_node));
 
-    // Attempt to measure the panicking node - this should panic but the RAII guard
-    // should restore the applier
     let result = catch_unwind(AssertUnwindSafe(|| {
         let _ = measure_layout(
             &mut applier,
@@ -2663,28 +2531,20 @@ fn measure_layout_panic_preserves_applier_and_slots() {
         );
     }));
 
-    // The panic should have been caught
     assert!(result.is_err(), "measure_layout should have panicked");
 
-    // CRITICAL: The applier should still be intact and usable
-    // This is what ApplierSlotGuard protects - without it, the applier would be
-    // left in an invalid state (replaced with an empty MemoryApplier::new())
-
-    // Check that we can still access the original node
     assert!(
         applier.get_mut(normal_id).is_ok(),
         "Applier should still contain original node after panic - ApplierSlotGuard worked!"
     );
 
-    // Check the node count is preserved
     let node_count_after = applier.len();
     assert_eq!(
-        node_count_before + 1, // +1 because we added the panicking node
+        node_count_before + 1,
         node_count_after,
         "All nodes should be preserved after panic"
     );
 
-    // Verify we can still perform layout on the normal node
     let result = measure_layout(
         &mut applier,
         normal_id,
@@ -2731,7 +2591,6 @@ fn measure_layout_error_preserves_applier_and_slots() -> Result<(), NodeError> {
     let _app_context = crate::render_state::app_context_test_scope();
     let mut applier = MemoryApplier::new();
 
-    // Create a valid tree with multiple nodes
     let child1 = applier.create(Box::new(LayoutNode::new(
         Modifier::empty(),
         Rc::new(LeafMeasurePolicy::new(Size {
@@ -2752,7 +2611,6 @@ fn measure_layout_error_preserves_applier_and_slots() -> Result<(), NodeError> {
     root.children.push(child2);
     let root_id = applier.create(Box::new(root));
 
-    // Perform a successful layout first
     let result = measure_layout(
         &mut applier,
         root_id,
@@ -2767,8 +2625,6 @@ fn measure_layout_error_preserves_applier_and_slots() -> Result<(), NodeError> {
         "Initial layout should succeed"
     );
 
-    // Now try to measure a non-existent node (will return an error)
-    // Use a large ID that definitely doesn't exist (we only created 3 nodes: 0, 1, 2)
     let fake_id: NodeId = 99999;
     let error_result = measure_layout(
         &mut applier,
@@ -2783,15 +2639,10 @@ fn measure_layout_error_preserves_applier_and_slots() -> Result<(), NodeError> {
         "Measuring non-existent node should error"
     );
 
-    // CRITICAL: After the error, we should still be able to use the applier
-    // The ApplierSlotGuard ensures the applier is restored even on Err paths
-
-    // Verify all original nodes are still accessible
     assert!(applier.get_mut(root_id).is_ok(), "Root should still exist");
     assert!(applier.get_mut(child1).is_ok(), "Child1 should still exist");
     assert!(applier.get_mut(child2).is_ok(), "Child2 should still exist");
 
-    // Verify we can still perform successful layout
     let result_after = measure_layout(
         &mut applier,
         root_id,

@@ -59,10 +59,6 @@ mod tests {
 
     #[test]
     fn a_pointer_event_carries_the_logical_position_as_both_of_its_points() {
-        // A physical position is scaled once, and the same logical point is
-        // used for the event's position and its global position: scaling one and
-        // not the other is how a pointer lands in the right place on a
-        // high-density display and the wrong place in a hit test.
         let platform = DesktopWinitPlatform::new(2.0);
         let event = platform.pointer_event(
             PointerEventKind::Move,

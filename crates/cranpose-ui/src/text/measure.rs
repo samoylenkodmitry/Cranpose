@@ -94,9 +94,6 @@ impl TextLinePrefixWidths {
         let mut width = 0.0f32;
         prefix_widths.push(width);
         for _ in 0..char_count {
-            // One letter space per character rather than per gap, matching
-            // Minikin's half-a-space-each-side rule, and nothing to drop at a
-            // line's leading edge because there is no kerning here.
             separator_before.push(0.0);
             width += char_width + letter_spacing;
             prefix_widths.push(width);
@@ -324,7 +321,7 @@ struct MonospacedTextMeasurer;
 
 impl MonospacedTextMeasurer {
     const DEFAULT_SIZE: f32 = 14.0;
-    const CHAR_WIDTH_RATIO: f32 = 0.6; // Width is 0.6 of Height
+    const CHAR_WIDTH_RATIO: f32 = 0.6;
 
     fn get_metrics(style: &TextStyle) -> (f32, f32) {
         let font_size = style.resolve_font_size(Self::DEFAULT_SIZE);
@@ -385,10 +382,6 @@ impl TextMeasurer for MonospacedTextMeasurer {
         line_range: Range<usize>,
         style: &TextStyle,
     ) -> Option<TextLinePrefixWidths> {
-        // `get_metrics` has already folded the tracking into its per-character
-        // advance, so hand the table the RAW width and let it add the spacing
-        // once. Passing both double-counted it, and the table's old n-1 rule
-        // then disagreed with `measure`'s n by a whole letter space.
         let font_size = style.resolve_font_size(Self::DEFAULT_SIZE);
         let letter_spacing = style.resolve_letter_spacing(Self::DEFAULT_SIZE);
         TextLinePrefixWidths::monospaced(
@@ -480,11 +473,6 @@ struct TextOptionsCacheKey {
     max_width_bits: Option<u32>,
 }
 
-/// Key for the prepared-layout cache. Prepared layouts carry the full visual
-/// style (color, brush, decoration, shadow), so unlike the metrics caches —
-/// which are keyed on measurement-affecting attributes only — this key must
-/// also distinguish visual attributes or a color-only restyle would be served
-/// a stale layout.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct TextPreparedCacheKey {
     base: TextOptionsCacheKey,
@@ -702,22 +690,6 @@ pub fn measure_text(text: &crate::text::AnnotatedString, style: &TextStyle) -> T
     })
 }
 
-/// Measures `text` at the sizes `style` literally carries — no system font
-/// scale applied.
-///
-/// Use this for a style that is already resolved, which on the drawing side
-/// means every style: a
-/// [`DrawScope`](cranpose_ui_graphics::DrawScope) text run is described by a
-/// flat [`cranpose_ui_graphics::TextStyle`] whose sizes are final, and a scene
-/// lowers that run with `style.resolved_font_size()` and nothing else. Scaling
-/// here would report a box the rasterizer never fills, and every wrap, centring
-/// and hit rect a caller derives from the measurement would be out by the
-/// setting — on the devices where it is not 1.0 and nowhere else.
-///
-/// The `Text` composable is the other case and keeps [`measure_text`]: its
-/// style carries real [`crate::text::TextUnit::Sp`] sizes, and its prepared
-/// layout hands the SCALED style on to the renderer, so both sides move
-/// together there.
 pub(crate) fn measure_resolved_text(
     text: &crate::text::AnnotatedString,
     style: &TextStyle,
@@ -725,20 +697,12 @@ pub(crate) fn measure_resolved_text(
     crate::render_state::with_text_service(|service| service.measure(None, text, style))
 }
 
-/// [`first_baseline`] for an already-resolved style — see
-/// [`measure_resolved_text`] for why the drawing side does not scale.
 pub(crate) fn resolved_first_baseline(style: &TextStyle) -> Option<f32> {
     crate::render_state::with_text_service(|service| {
         service.with_measurer(|m| m.first_baseline(style))
     })
 }
 
-/// [`TextMeasurer::line_box`] for an already-resolved style — see
-/// [`measure_resolved_text`] for why the drawing side does not scale.
-///
-/// Answers `None` rather than panicking when no app context owns the fonts:
-/// tooling and host tests ask a draw style for its line box outside a running
-/// app, and the drawing side already has a font-free estimate to fall back to.
 pub(crate) fn resolved_line_box(style: &TextStyle) -> Option<crate::text::LineBox> {
     crate::render_state::current_app_context()?;
     crate::render_state::with_text_service(|service| service.with_measurer(|m| m.line_box(style)))
@@ -941,7 +905,6 @@ fn wrapped_line_ranges_with_measurer<M: TextMeasurer + ?Sized>(
 ) -> Vec<Range<usize>> {
     let opts = options.normalized();
     let max_width = normalize_max_width(max_width);
-    // Mirror the wrap decision in `prepare_text_layout_with_measurer_for_node`.
     let wrap_width = (opts.soft_wrap && opts.overflow != TextOverflow::Visible)
         .then_some(max_width)
         .flatten();
@@ -1335,12 +1298,6 @@ fn span_style_needs_scaling(style: &crate::text::SpanStyle) -> bool {
         || style.shadow.is_some()
 }
 
-/// An `Sp` length resolved through the platform's own conversion.
-///
-/// Not `value * scale`: see [`crate::font_scale`] — above a threshold setting
-/// Android converts a size through a table instead of multiplying it, and a
-/// 13sp label is 1.5% wider than the multiplication says at the setting Wear
-/// calls large.
 fn scale_text_unit_sp(unit: crate::text::TextUnit, curve: FontScaleCurve) -> crate::text::TextUnit {
     match unit {
         crate::text::TextUnit::Sp(value) if value.is_finite() => {
@@ -1350,9 +1307,6 @@ fn scale_text_unit_sp(unit: crate::text::TextUnit, curve: FontScaleCurve) -> cra
     }
 }
 
-/// The same, for a size that may instead be stated relative to the one it
-/// inherits. An `Em` is a ratio, so it follows the setting itself rather than
-/// the table, which converts absolute sizes.
 fn scale_text_unit_sp_and_em(
     unit: crate::text::TextUnit,
     curve: FontScaleCurve,
@@ -1823,10 +1777,6 @@ fn wrap_line_greedy<M: TextMeasurer + ?Sized>(
             );
         }
 
-        // A break chosen at a word boundary leaves the space on the line it
-        // broke after, whether or not that boundary happened to be `best`. The
-        // space is not drawn and Compose does not count it towards the line's
-        // width, so leaving it in shifts a centred line half a space left.
         let broke_at_word_boundary = effective_wrap_idx > start_idx
             && line_text[boundaries[effective_wrap_idx - 1]..boundaries[effective_wrap_idx]]
                 .chars()
@@ -1987,13 +1937,6 @@ fn choose_wrap_break(
         return best;
     }
 
-    // `..=best`, not `..best`. `best` is the widest prefix that still fits, and
-    // when the character before it is a space that prefix ends on a word
-    // boundary: it is already the greedy break, and the right one. Excluding it
-    // sent the search back to the PREVIOUS space and dropped a word that fitted
-    // — "Designed and built for Wear / OS." came out "Designed and built for /
-    // Wear OS.". It bites whenever the trailing space fits and the next word's
-    // first glyph does not, which on a narrow watch column is most lines.
     for idx in (start_idx + 1..=best).rev() {
         let prev = &line[boundaries[idx - 1]..boundaries[idx]];
         if prev.chars().all(char::is_whitespace) {
@@ -2372,14 +2315,6 @@ mod tests {
 
     #[test]
     fn a_platform_curve_resolves_an_sp_where_the_platform_does_and_not_where_a_multiplier_would() {
-        // The defect this exists for: Wear Material 3 sets a Settings chip's
-        // secondary line in `labelSmall`, which is 13sp. On Android 14 at the
-        // font scale Wear calls large the platform resolves that to 16.36dp,
-        // not to 13 * 1.24 = 16.12 — measured on a Wear OS 5 emulator through
-        // both `TypedValue.applyDimension(COMPLEX_UNIT_SP, ..)` and
-        // `androidx.compose.ui.unit.Density(context)`, which agree exactly.
-        // 1.5% is small and it is the difference between the string
-        // `SOLID  next at 3 gold` taking one line and taking two.
         let _app_context = crate::render_state::app_context_test_scope();
         let text = crate::text::AnnotatedString::from("SOLID  next at 3 gold");
         let style = TextStyle {
@@ -2411,14 +2346,10 @@ mod tests {
             prepared.visual_style.span_style.font_size,
             TextUnit::Sp(16.36)
         );
-        // The tracking is below the first knot, where the platform's curve is
-        // the multiplication again, so it must NOT move off it.
         assert_eq!(
             prepared.visual_style.span_style.letter_spacing,
             TextUnit::Sp(0.4 * 1.24)
         );
-        // And the setting itself is still the setting, whatever the table then
-        // does with an individual size.
         assert_eq!(crate::current_font_scale(), 1.24);
 
         crate::set_font_scale(1.24);
@@ -3075,7 +3006,7 @@ mod tests {
             &crate::text::AnnotatedString::from("A B C D E F"),
             &style,
             options,
-            Some(24.0), // roughly 4 chars in monospaced fallback
+            Some(24.0),
         );
 
         assert!(prepared.did_overflow);
@@ -3553,13 +3484,6 @@ mod tests {
 
     #[test]
     fn a_word_that_fits_stays_on_the_line_when_the_space_after_it_fits_too() {
-        // The greedy break has to consider the widest prefix that fits as a
-        // break candidate in its own right. When that prefix ends on a space —
-        // the whole word fitted, and so did the space after it, and only the
-        // NEXT word's first glyph did not — breaking there is the greedy
-        // answer. Searching strictly before it threw the last word onto the
-        // next line: on the Wear Credits screen "Designed and built for Wear /
-        // OS." came out "Designed and built for / Wear OS.".
         let _app_context = crate::render_state::app_context_test_scope();
         let style = TextStyle {
             span_style: crate::text::SpanStyle {
@@ -3583,7 +3507,6 @@ mod tests {
             )
             .width
         };
-        // Wide enough for "aa bb " and not for "aa bb c" — the exact case.
         let fits = width_of("aa bb ");
         let overflows = width_of("aa bb c");
         assert!(overflows > fits, "the fixture needs a real gap here");

@@ -23,7 +23,7 @@ use cranpose_ui_graphics::{CornerRadii, Rect};
 use crate::scene::RasterScene;
 
 #[cfg(test)]
-#[allow(clippy::too_many_arguments)] // Render operations need all style and placement parameters
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn apply_draw_commands(
     commands: &[DrawCommand],
     placement: DrawPlacement,
@@ -54,9 +54,6 @@ pub(crate) fn apply_draw_commands(
                 scene,
                 blend_mode.or(Some(nested)),
             ),
-            // Shapes (fills, strokes and arcs) and text go through the one
-            // shared lowering in `cranpose_render_common::primitive_emit` so
-            // this test-only helper can never drift from the production path.
             shape_primitive @ (DrawPrimitive::Rect { .. }
             | DrawPrimitive::RoundRect { .. }
             | DrawPrimitive::Arc { .. }
@@ -105,8 +102,6 @@ pub(crate) fn apply_draw_commands(
                     blur_radius: _,
                     blend_mode: shadow_blend_mode,
                 } => {
-                    // Pixels renderer currently ignores blur radius and renders the base
-                    // shadow geometry directly.
                     emit_primitive(
                         *shape,
                         layer_bounds,

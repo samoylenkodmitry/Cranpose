@@ -1,11 +1,3 @@
-//! Robot test for the keyed conditional text in Counter App.
-//!
-//! Repro:
-//! 1. Start on Counter App
-//! 2. Increment to 3
-//! 3. Verify the odd branch text is present
-//! 4. Verify it stays above the main card instead of jumping below it
-
 mod regression_robot_support;
 
 use std::time::Duration;

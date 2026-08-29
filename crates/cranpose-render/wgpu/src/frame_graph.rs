@@ -14,11 +14,6 @@ use crate::{
 pub(crate) struct WgpuFrameGraphExecutor {
     transient_textures: TransientTexturePool,
     upload_allocators: FrameUploadAllocators,
-    /// `Some` while `CRANPOSE_GPU_PASS_TIMING` profiles the frame's passes.
-    /// It lives here, not on the renderer, because the executor is the one
-    /// value already moved out of the renderer before the frame closure
-    /// mutably borrows it — every recorder the executor builds can then carry
-    /// the timer without a second borrow of the renderer.
     pass_timer: Option<PassTimer>,
 }
 
@@ -405,19 +400,12 @@ impl WgpuFrameGraphExecutor {
         Self::default()
     }
 
-    /// Arms per-pass GPU timing when `CRANPOSE_GPU_PASS_TIMING` asks for it
-    /// and the device granted [`wgpu::Features::TIMESTAMP_QUERY`].
     pub(crate) fn init_pass_timing(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
         if crate::pass_timing::pass_timing_requested() {
             self.pass_timer = PassTimer::for_device(device, queue);
         }
     }
 
-    /// Resolves and reads back this frame's pass timestamps; prints the
-    /// aggregate on its own cadence. A no-op unless timing is armed. Call
-    /// once per frame, after the frame's submits — the resolve rides its own
-    /// submission, and submission order makes the timestamps it reads
-    /// complete.
     pub(crate) fn end_pass_timing_frame(&self, device: &wgpu::Device, queue: &wgpu::Queue) {
         let Some(timer) = &self.pass_timer else {
             return;
@@ -434,8 +422,6 @@ impl WgpuFrameGraphExecutor {
         timer.finish_frame();
     }
 
-    /// The timing aggregate of the current print window; empty when timing
-    /// is not armed.
     pub(crate) fn pass_timing_report(&self) -> GpuPassTimingReport {
         self.pass_timer
             .as_ref()
@@ -638,13 +624,6 @@ impl WgpuFrameGraphExecutor {
         queue.submit(std::iter::once(encoder.finish()))
     }
 
-    /// [`Self::submit`] with the `finish`/`submit` split reported separately.
-    ///
-    /// These are the two calls at the end of a frame that hand the recorded
-    /// commands to the driver, and on a translated backend they are where the
-    /// command stream is marshalled and the round trip is paid. Timing them
-    /// apart from the recording that produced them is what separates "the
-    /// renderer built too much work" from "the driver is expensive per frame".
     fn submit_with_timing(
         queue: &wgpu::Queue,
         encoder: wgpu::CommandEncoder,
@@ -679,12 +658,6 @@ impl WgpuFrameGraphExecutor {
 }
 
 std::thread_local! {
-    /// Individual `write_buffer`/`write_texture` calls issued since the last
-    /// submit on this thread. Many small writes carry per-call staging and
-    /// synchronization cost on tiler drivers even when total bytes are tiny,
-    /// and byte totals cannot distinguish one 64 KB write from a thousand
-    /// 64-byte ones — which is the difference a submit stall investigation
-    /// has to see.
     static UPLOAD_WRITE_CALLS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
@@ -697,13 +670,6 @@ fn take_upload_write_calls() -> u32 {
 }
 
 std::thread_local! {
-    /// Render passes begun since the last submit on this thread, counted per
-    /// pass label. On a tiler every pass is a tile load/store cycle whatever
-    /// its draw count, so the per-frame submit stall has to be attributable
-    /// to *which* passes ran, not just how long encoding took — the 60-frame
-    /// GPU stats cadence cannot be joined against a per-frame stall. Only
-    /// populated while the stage telemetry threshold is set; the label copy
-    /// is a diagnostic cost, not a shipping one.
     static RENDER_PASS_LABELS: std::cell::RefCell<Vec<(String, u32)>> =
         const { std::cell::RefCell::new(Vec::new()) };
 }
@@ -750,9 +716,6 @@ fn log_frame_graph_pass_timing(start: Instant, label: Option<&'static str>, pass
 
 pub(crate) trait FrameCommandRecorder {
     fn encoder(&mut self) -> &mut wgpu::CommandEncoder;
-    /// Begins a render pass with GPU pass timing attached when it is armed.
-    /// Every render pass the frame records must start here rather than on
-    /// [`Self::encoder`] directly, or it escapes the `[GPU-PASS]` profile.
     fn begin_timed_render_pass(
         &mut self,
         descriptor: &wgpu::RenderPassDescriptor<'_>,
@@ -1271,19 +1234,10 @@ pub(crate) struct UploadAllocator {
     usage: wgpu::BufferUsages,
     cursor: usize,
     slots: Vec<UploadSlot>,
-    /// Largest slot size any upload has asked for since the last
-    /// [`UploadAllocator::reset`].
     frame_peak_size: u64,
-    /// Slot size the allocator is willing to carry between frames. Tracks the
-    /// high-water mark upwards immediately and downwards only after a
-    /// [`OVERSIZED_SLOT_COLLAPSE_FACTOR`] collapse.
     retained_size: u64,
 }
 
-/// How far a frame's demand has to fall before an oversized upload slot is
-/// released. Matches the hysteresis the text scratch buffers use: a scene that
-/// needs a large slot needs it every frame, so releasing it at the end of each
-/// one just recreates the same buffer on the next.
 const OVERSIZED_SLOT_COLLAPSE_FACTOR: u64 = 4;
 
 impl UploadAllocator {
@@ -1330,13 +1284,6 @@ impl UploadAllocator {
 
     pub(crate) fn reset(&mut self) {
         self.cursor = 0;
-        // A scene that needs an oversized slot needs it on every frame, so
-        // releasing it at the end of each one only recreates the same buffer
-        // (and its bind group) on the next — a `vkCreateBuffer` /
-        // `vkDestroyBuffer` pair per slot per frame, which is dear on a
-        // translated driver. Follow the high-water mark up immediately and
-        // back down only once frames have collapsed to a quarter of it, so a
-        // one-off spike is still released without charging the steady state.
         if self.frame_peak_size > 0 {
             self.retained_size = if self
                 .frame_peak_size
@@ -1448,10 +1395,6 @@ impl UploadAllocator {
         ))
     }
 
-    /// Whether a slot survives [`UploadAllocator::reset`]. `retain_limit` is the
-    /// allocator's nominal size raised to its recent high-water mark, so slots
-    /// the current scene keeps asking for are kept and slots left over from a
-    /// larger past frame are released.
     fn should_retain_slot_size(retain_limit: u64, slot_size: u64) -> bool {
         slot_size <= retain_limit
     }
@@ -1495,7 +1438,6 @@ mod tests {
     #[test]
     fn upload_allocator_keeps_slots_a_steady_scene_asks_for_every_frame() {
         let mut allocator = UploadAllocator::uniform("test buffer", "test bind group", 64);
-        // Two frames that both need a 256-byte slot must not recreate it.
         allocator.frame_peak_size = 256;
         allocator.reset();
         assert!(UploadAllocator::should_retain_slot_size(
@@ -1513,7 +1455,6 @@ mod tests {
         allocator.frame_peak_size = 1024;
         allocator.reset();
         assert_eq!(allocator.retained_size, 1024);
-        // A quarter of the high-water mark is the point where it is given back.
         allocator.frame_peak_size = 256;
         allocator.reset();
         assert_eq!(allocator.retained_size, 256);

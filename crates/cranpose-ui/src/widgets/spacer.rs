@@ -32,9 +32,5 @@ use crate::{
 /// ```
 #[composable]
 pub fn Spacer(size: Size) -> NodeId {
-    Layout(
-        Modifier::empty(),
-        LeafMeasurePolicy::new(size),
-        || {}, // No children
-    )
+    Layout(Modifier::empty(), LeafMeasurePolicy::new(size), || {})
 }

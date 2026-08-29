@@ -1,67 +1,3 @@
-//! Pixel parity and gate engagement for the SIZE-GATED retained capture
-//! mesh (Stage 3 of the fill-reduction program), under the SPLIT draw walk
-//! (S3b): a meshed slot's mesh buffers hold band geometry only, and
-//! `encode_retained_op` alternates along the shape range — meshed runs
-//! through the mesh pipeline, everything else on the instanced-quad path
-//! it never left (with the suite's instanced pin OFF, the plain `vs_main`
-//! expansion — the identical entry point the quad arm uses, so passthrough
-//! shapes are not merely geometry-identical, they ride the same pipeline
-//! in both arms).
-//!
-//! The scene is the fill-truth top-slack dump made concrete: one big ring
-//! (the 86%-slack "quad 210000, lit 30000" shape class), a big
-//! stroked-circle rim (the 94%-slack rrect-stroke circles the dynamic
-//! `rim_mesh_band` path never sees because they are retained), and a brick
-//! wall of tiny arcs (the ~100-800 px² quads whose wholesale meshing
-//! measured 4-11 fps SLOWER on the Adreno 702). The bulk of the scene is
-//! byte-stable across frames, so the feed retains it and replays it at
-//! IDENTITY — bitwise identity: `arc_anchor_transform` on byte-identical
-//! content divides equal radii (exactly 1.0) and subtracts equal angles
-//! (exactly 0.0), and multiplying by those is exact under any fma
-//! contraction, so `arc_mesh_parity`'s rotated-frame vertex divergence is
-//! out of the picture and both arms rasterize bit-equal vertex positions.
-//! A trailing row of movers churns every frame so the command feed
-//! exercises its real retained-span machinery instead of a degenerate
-//! all-static command.
-//!
-//! THE MEASURED IDENTITY BAR. Bit-equal vertices do not make the two arms
-//! byte-equal wherever a band actually meshes: the fragment's `rect_pos`
-//! is interpolated from the `uv` ATTRIBUTE, whose per-triangle plane
-//! equations the rasterizer derives from each triangulation's own
-//! vertices, and a trapezoid's CPU-rounded uv over a ~10 px baseline
-//! carries an ulp of slope the 370 px quad does not. That is invisible
-//! until the SDF's smoothstep output sits within that ulp of a unorm8
-//! rounding boundary — single-level flips confined to a meshed band's own
-//! AA ring. Measured at identity on BOTH CI rasterizer families, same
-//! signature: Intel/ANV Vulkan 892 differing bytes, Metal 930, worst ±1
-//! everywhere, EVERY flip on the rim band's AA radii (the arc ring
-//! measured zero on both — welcome, but the bar does not depend on it:
-//! the annulus check admits both bands). So the asserted bar is: dynamic frames
-//! byte-exact; retained frames byte-exact at every pixel OUTSIDE the two
-//! meshed bands' dilated annuli (passthrough quads are geometry-identical
-//! and must not drift at all), and ±1 at most on the bands, count-capped
-//! at ~4x the measured ceiling.
-//!
-//! Three capture regimes over the same scene, each under its own command
-//! identity (the mesh is built at capture; flipping the environment after
-//! capture changes nothing):
-//!
-//! * quad arm (`CRANPOSE_ARC_MESH=0`) — plain quad expansion;
-//! * mesh arm (`CRANPOSE_ARC_MESH=1`, default gate) — asserts (a) the
-//!   identity bar above against the quad arm on same-position passes, (b)
-//!   the gate's exact engagement split (1 arc + 1 rim meshed, every brick
-//!   left instanced), (c) the rim acceptance actually engaged — a meshed
-//!   rim band, not an instanced quad — via the engagement counters;
-//! * gated arm (`CRANPOSE_RETAINED_MESH_PX2` at its clamp ceiling) — the
-//!   threshold rejects even the big shapes, the capture meshes nothing and
-//!   keeps no mesh buffers, and the engagement counters do not move.
-//!
-//! `CRANPOSE_STATIC_SPAN` is pinned OFF so the leading static shapes stay
-//! on the compared draw paths instead of collapsing into a span blit, and
-//! `CRANPOSE_INSTANCED_QUADS` is pinned OFF (latched at construction) so
-//! the quad arm draws through `vs_main`, the regime the identity byte-bar
-//! was measured under.
-
 mod support;
 
 use cranpose_render_common::{
@@ -82,18 +18,9 @@ const SIZE: u32 = 408;
 const CENTER: f32 = 204.0;
 const FRAMES: usize = 6;
 
-/// The big ring: a full annulus, band 140..160 about the center. Its
-/// bounding quad is ~322 px square (~104k px², far past the 16384 px²
-/// default gate) while its band covers only ~19k px² — the top-slack shape
-/// class.
 const RING_INNER: f32 = 140.0;
 const RING_OUTER: f32 = 160.0;
 
-/// The big rim: a stroked round-rect whose corner radius equals its
-/// geometry half-extent — a circle of radius 180 about the center, stroke
-/// 10. The emitted shape is the stroke-inflated 370 px box (~137k px²
-/// quad), and `rim_band_geometry` must accept it at capture even though the
-/// dynamic rim path never sees retained shapes.
 const RIM_RECT: Rect = Rect {
     x: 24.0,
     y: 24.0,
@@ -103,11 +30,6 @@ const RIM_RECT: Rect = Rect {
 const RIM_RADIUS: f32 = 180.0;
 const RIM_STROKE_WIDTH: f32 = 10.0;
 
-/// Tiny brick arcs on three inner orbits: every quad is well under the
-/// gate's 1024 px² clamp floor, so no threshold in the legal range ever
-/// meshes one — and together they push the recording past the 512-record
-/// floor (`MIN_REPLAY_COMMAND_RECORDS`) below which the feed retains
-/// nothing at all.
 const BRICK_ORBITS: usize = 3;
 const BRICKS_PER_ORBIT: usize = 180;
 const BRICK_COUNT: usize = BRICK_ORBITS * BRICKS_PER_ORBIT;
@@ -115,8 +37,6 @@ const BRICK_COUNT: usize = BRICK_ORBITS * BRICKS_PER_ORBIT;
 fn record_frame(frame: usize) -> DrawScopeDefault {
     let mut scope =
         DrawScopeDefault::new(cranpose_ui_graphics::Size::new(SIZE as f32, SIZE as f32));
-    // Static bulk first, movers last, so the byte-stable leading run stays
-    // contiguous for the feed's retained span.
     scope.draw_rect_at(
         Rect {
             x: 0.0,
@@ -158,8 +78,6 @@ fn record_frame(frame: usize) -> DrawScopeDefault {
             ..Default::default()
         },
     );
-    // Semi-transparent circles OVER both bands: a z-order mistake in the
-    // mesh replay changes blended bytes, not just AA fringes.
     for i in 0..5u32 {
         let angle = (i as f32 + 0.5) * (std::f32::consts::TAU / 5.0);
         scope.draw_circle(
@@ -179,8 +97,6 @@ fn record_frame(frame: usize) -> DrawScopeDefault {
             5.0,
         );
     }
-    // The churn: movers whose count and position change every frame, drawn
-    // last so the static leading run keeps retaining.
     for m in 0..(2 + frame % 3) {
         let x = 26.0 + frame as f32 * 9.0 + m as f32 * 15.0;
         scope.draw_circle(
@@ -192,9 +108,6 @@ fn record_frame(frame: usize) -> DrawScopeDefault {
     scope
 }
 
-/// Records every frame once through one live `CommandReplayState`, exactly
-/// as `arc_mesh_parity` does; `node_id` keys the command identity so each
-/// arm retains into its own slots.
 fn build_sequence(node_id: usize) -> Vec<RenderGraph> {
     let mut state = CommandReplayState::default();
     let command = DrawCommandId {
@@ -270,7 +183,6 @@ fn clear_env() {
 
 #[test]
 fn size_gated_retained_mesh_holds_identity_parity_and_gates_per_threshold() {
-    // Latched at construction — must be set before the renderer exists.
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_INSTANCED_QUADS", Some("0"));
     let mut renderer = match support::headless_renderer() {
         Ok(renderer) => renderer,
@@ -287,24 +199,16 @@ fn size_gated_retained_mesh_holds_identity_parity_and_gates_per_threshold() {
     let graphs_mesh = build_sequence(8);
     let graphs_gated = build_sequence(9);
 
-    // Warm passes: each arm captures its own slots under its own regime.
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ARC_MESH", Some("0"));
     let _capture_quad = render_sequence(&mut renderer, &graphs_quad);
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ARC_MESH", Some("1"));
     let _capture_mesh = render_sequence(&mut renderer, &graphs_mesh);
 
-    // Same-position control passes (the discipline `command_feed_parity`
-    // documents: never compare a pre-retention pass against a later one).
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ARC_MESH", Some("0"));
     let quad_frames = render_sequence(&mut renderer, &graphs_quad);
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ARC_MESH", Some("1"));
     let mesh_frames = render_sequence(&mut renderer, &graphs_mesh);
 
-    // (b) + (c): the gate's exact engagement. Only the mesh arm's slots
-    // hold a mesh, so the counters are its capture verbatim: exactly the
-    // big ring meshed as an arc band, exactly the big rim meshed as a rim
-    // band (the acceptance the dynamic path cannot provide), and every
-    // brick arc — small in the precise px² sense — left on the instanced path.
     let (mesh_slots, total_slots) = renderer.replay_slot_mesh_stats();
     let (arcs_meshed, rims_meshed, passthrough) = renderer.replay_slot_mesh_engagement();
     eprintln!(
@@ -326,10 +230,6 @@ fn size_gated_retained_mesh_holds_identity_parity_and_gates_per_threshold() {
         "every brick arc must stay instanced ({passthrough} instanced)"
     );
 
-    // The gated arm: at the clamp ceiling even the big shapes fall under
-    // the threshold, the capture meshes nothing, and a slot that meshed
-    // nothing keeps no mesh buffers — so neither the slot count nor the
-    // engagement counters move.
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_RETAINED_MESH_PX2", Some("262144"));
     let _capture_gated = render_sequence(&mut renderer, &graphs_gated);
     let _gated_frames = render_sequence(&mut renderer, &graphs_gated);
@@ -355,12 +255,6 @@ fn size_gated_retained_mesh_holds_identity_parity_and_gates_per_threshold() {
         "the pinned-off selection must have latched at construction"
     );
 
-    // (a) The identity bar (see the module docs): dynamic frames byte-exact;
-    // retained frames byte-exact everywhere OUTSIDE the meshed bands, with
-    // single-level flips admitted ON a band's dilated annulus only, capped
-    // at ~4x the measured ~900-byte ceiling. The radius is measured at the
-    // pixel center; the 4 px dilation covers the band's AA feather, its
-    // mesh margin and the half-pixel of the center offset with room over.
     let on_meshed_band = |index: usize| {
         let pixel = index / 4;
         let (x, y) = (pixel % SIZE as usize, pixel / SIZE as usize);

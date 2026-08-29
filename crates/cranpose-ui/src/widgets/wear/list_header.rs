@@ -57,11 +57,6 @@ impl Default for ListHeaderSpec {
     fn default() -> Self {
         Self {
             colors: WearColors::default(),
-            // `TITLE_MEDIUM` is `ListHeaderTokens`; the alignment is the
-            // `LocalTextConfiguration` the widget provides around it. It lives
-            // on the spec rather than being forced at the call site so a
-            // caller who overrides `text_style` overrides the alignment too,
-            // the way overriding `LocalTextConfiguration` does in Compose.
             text_style: WearTextStyle::TITLE_MEDIUM.aligned(TextAlign::Center),
             min_height: 48.0,
             padding_start: 14.0,
@@ -160,8 +155,6 @@ impl MeasurePolicy for ListHeaderMeasurePolicy {
             placeables.push(placeable);
         }
 
-        // `wrapContentSize()`: the header is as wide as its words plus its own
-        // padding, not as wide as the list.
         let width = density
             .ceil(content_width + horizontal)
             .clamp(constraints.min_width, constraints.max_width);
@@ -170,9 +163,6 @@ impl MeasurePolicy for ListHeaderMeasurePolicy {
             .dp(self.spec.min_height)
             .max(padded)
             .clamp(constraints.min_height, constraints.max_height);
-        // The floor wins over the padded content by a couple of pixels, and
-        // `wrapContentSize`'s default `Alignment.Center` re-centres inside the
-        // taller box rather than hanging the surplus off the bottom.
         let surplus = density.centre(height, padded);
         let top = density.dp(self.spec.padding_top) + surplus;
 
@@ -229,11 +219,6 @@ mod tests {
         assert_eq!(spec.padding_end, 14.0);
         assert_eq!(spec.padding_top, 16.0);
         assert_eq!(spec.padding_bottom, 12.0);
-        // The type token, plus the alignment the widget provides around it:
-        // Compose's ListHeader wraps its content in LocalTextConfiguration
-        // with TextAlign.Center, so the style an app actually gets is the
-        // centred one. Asserting the bare token here would pass while every
-        // real header wrapped its second line to the left.
         assert_eq!(
             spec.text_style,
             WearTextStyle::TITLE_MEDIUM.aligned(TextAlign::Center)

@@ -135,7 +135,7 @@ fn renderer_translates_draw_commands() {
     let scene = renderer.render(&layout);
 
     let behind: Vec<_> = scene.primitives_for(PaintLayer::Behind).collect();
-    assert_eq!(behind.len(), 3); // column background + column draw_behind + text draw_behind
+    assert_eq!(behind.len(), 3);
     let mut saw_translated = false;
     for primitive in behind {
         match primitive {

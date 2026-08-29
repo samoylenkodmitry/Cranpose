@@ -1,39 +1,12 @@
-//! Global runtime state for snapshot v2.
-//!
-//! This module implements a Rust translation of the core global state
-//! management that backs Jetpack Compose's snapshot system. The goal is
-//! to faithfully mirror the Kotlin implementation's behaviour for
-//! snapshot identifier allocation, open snapshot tracking, and global
-//! snapshot bookkeeping.
-//!
-//! At this stage the runtime focuses on:
-//! - Tracking the set of currently open snapshot IDs (used to seed the
-//!   `invalid` set for new snapshots).
-//! - Allocating monotonically increasing snapshot identifiers.
-//! - Recording the global snapshot identifier.
-//!
-//! Additional responsibilities such as pinning, double-index heaps, or
-//! observer dispatch will be translated in follow-up changes.
-
 use std::cell::{Cell, RefCell};
 
 use super::*;
 
-/// Snapshot identifiers less than or equal to this value are considered
-/// pre-existing. This mirrors `Snapshot.PreexistingSnapshotId` in the
-/// Kotlin runtime.
 const PREEXISTING_SNAPSHOT_ID: SnapshotId = 1;
 
-/// Initial snapshot identifier assigned to the global snapshot. The Kotlin
-/// runtime reserves snapshot id `0`, seeds `nextSnapshotId` with
-/// `PreexistingSnapshotId + 1`, and then immediately allocates the global
-/// snapshot. We replicate that ordering here.
 const INITIAL_GLOBAL_SNAPSHOT_ID: SnapshotId = PREEXISTING_SNAPSHOT_ID + 1;
 
 thread_local! {
-    // Snapshot runtime is per-thread because state objects and active snapshots
-    // are single-threaded. Independent UI threads must not share open-snapshot
-    // bookkeeping or they can invalidate each other's reads.
     static SNAPSHOT_RUNTIME: RefCell<Option<SnapshotRuntime>> = const { RefCell::new(None) };
 }
 
@@ -73,43 +46,30 @@ pub(crate) fn runtime_lock_depth() -> usize {
     RUNTIME_LOCK_DEPTH.with(|cell| cell.get())
 }
 
-/// Allocate a new snapshot identifier and return it along with the
-/// `invalid` set that should seed the snapshot.
 pub(crate) fn allocate_snapshot() -> (SnapshotId, SnapshotIdSet) {
     with_runtime(|runtime| runtime.allocate_snapshot())
 }
 
-/// Mark a snapshot identifier as closed.
 pub(crate) fn close_snapshot(id: SnapshotId) {
     with_runtime(|runtime| runtime.close_snapshot(id))
 }
 
-/// Allocate a fresh record identifier that does not correspond to an open snapshot.
 pub(crate) fn allocate_record_id() -> SnapshotId {
     with_runtime(|runtime| runtime.allocate_record_id())
 }
 
-/// Get the next snapshot ID that will be allocated.
-///
-/// This does not increment the counter and is used for cleanup operations.
 pub(crate) fn peek_next_snapshot_id() -> SnapshotId {
     with_runtime(|runtime| runtime.peek_next_snapshot_id())
 }
 
-/// Advance the global snapshot identifier and update the open set.
-///
-/// Returns the updated open snapshot set after the transition so callers can
-/// refresh any cached invalid views.
 pub(crate) fn advance_global_snapshot(new_id: SnapshotId) -> SnapshotIdSet {
     with_runtime(|runtime| runtime.advance_global_snapshot(new_id))
 }
 
-/// Snapshot of the currently open snapshot ids.
 pub(crate) fn open_snapshots() -> SnapshotIdSet {
     with_runtime(|runtime| runtime.open_snapshots())
 }
 
-/// Reset runtime state for deterministic testing.
 #[cfg(test)]
 pub(crate) struct TestRuntimeGuard;
 
@@ -122,17 +82,10 @@ pub(crate) fn reset_runtime_for_tests() -> TestRuntimeGuard {
     TestRuntimeGuard
 }
 
-/// Encapsulates global bookkeeping required by the snapshot runtime.
 #[derive(Debug)]
 pub(crate) struct SnapshotRuntime {
-    /// The next snapshot id to hand out. Always strictly greater than any id
-    /// that has been issued so far.
     next_snapshot_id: SnapshotId,
-    /// Set of snapshots that are currently open. New snapshots treat these as
-    /// invalid so they will not observe mutations performed by still-open
-    /// writers.
     open_snapshots: SnapshotIdSet,
-    /// The logical id of the global snapshot.
     global_snapshot_id: SnapshotId,
 }
 
@@ -147,17 +100,14 @@ impl SnapshotRuntime {
         }
     }
 
-    /// Returns the id assigned to the global snapshot.
     pub(crate) fn global_snapshot_id(&self) -> SnapshotId {
         self.global_snapshot_id
     }
 
-    /// Returns the set of currently open snapshots.
     pub(crate) fn open_snapshots(&self) -> SnapshotIdSet {
         self.open_snapshots.clone()
     }
 
-    /// Update the global snapshot id, adjusting the open set accordingly.
     pub(crate) fn advance_global_snapshot(&mut self, new_id: SnapshotId) -> SnapshotIdSet {
         let old_id = self.global_snapshot_id;
         if new_id <= old_id {
@@ -174,13 +124,6 @@ impl SnapshotRuntime {
         self.open_snapshots.clone()
     }
 
-    /// Allocate a new snapshot identifier and mark it open.
-    ///
-    /// The returned tuple mirrors the information produced by the Kotlin
-    /// runtime during `takeNewSnapshot`:
-    /// - The freshly allocated snapshot id.
-    /// - The `invalid` set to seed into the new snapshot (i.e. the open set
-    ///   prior to inserting the newly allocated id).
     pub(crate) fn allocate_snapshot(&mut self) -> (SnapshotId, SnapshotIdSet) {
         let invalid = self.open_snapshots.clone();
         let id = self.next_snapshot_id;
@@ -189,7 +132,6 @@ impl SnapshotRuntime {
         (id, invalid)
     }
 
-    /// Marks the given snapshot id as no longer open.
     pub(crate) fn close_snapshot(&mut self, id: SnapshotId) {
         self.open_snapshots = self.open_snapshots.clear(id);
     }
@@ -200,53 +142,35 @@ impl SnapshotRuntime {
         id
     }
 
-    /// Kotlin-style takeNewSnapshot: allocate child ID, then advance global.
-    ///
-    /// Returns (child_id, child_invalid, new_global_invalid).
-    /// - child_invalid: excludes old global so child can read global's records
-    /// - new_global_invalid: includes child (so global won't read child's uncommitted changes)
     pub(crate) fn take_new_snapshot_advancing_global(
         &mut self,
     ) -> (SnapshotId, SnapshotIdSet, SnapshotIdSet) {
         let old_global_id = self.global_snapshot_id;
 
-        // Child's invalid = openSnapshots - oldGlobalId (so child can read global)
         let child_invalid = self.open_snapshots.clear(old_global_id);
 
-        // Allocate child ID
         let child_id = self.next_snapshot_id;
         self.next_snapshot_id += 1;
         self.open_snapshots = self.open_snapshots.set(child_id);
 
-        // Allocate new global ID
         let new_global_id = self.next_snapshot_id;
         self.next_snapshot_id += 1;
 
-        // Clear old global from open snapshots
         self.open_snapshots = self.open_snapshots.clear(old_global_id);
 
-        // Update global snapshot ID tracking
         self.global_snapshot_id = new_global_id;
 
-        // Global's invalid = current openSnapshots (includes child, excludes old global)
         let new_global_invalid = self.open_snapshots.clone();
 
-        // Add new global to open snapshots
         self.open_snapshots = self.open_snapshots.set(new_global_id);
 
         (child_id, child_invalid, new_global_invalid)
     }
 
-    /// Get the next snapshot ID that will be allocated without incrementing the counter.
-    ///
-    /// This is used for cleanup operations to determine the reuse limit.
-    /// Mirrors Kotlin's `nextSnapshotId` field access.
     pub(crate) fn peek_next_snapshot_id(&self) -> SnapshotId {
         self.next_snapshot_id
     }
 
-    /// Reset the runtime to a clean state. This is primarily intended for
-    /// tests so they can make deterministic assertions about snapshot ids.
     #[cfg(test)]
     pub(crate) fn reset_for_tests(&mut self) {
         *self = SnapshotRuntime::new();

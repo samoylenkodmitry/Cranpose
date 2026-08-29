@@ -1,5 +1,3 @@
-//! Platform-neutral projection of Cranpose semantics into accessibility elements.
-
 use std::{borrow::Cow, fmt::Debug};
 
 use cranpose_app_shell::AppShell;
@@ -7,7 +5,6 @@ use cranpose_core::{NodeId, collections::map::HashMap};
 use cranpose_render_common::Renderer;
 use cranpose_ui::{LayoutBox, SemanticsAction, SemanticsNode, SemanticsRole, SemanticsWidgetRole};
 
-/// Logical bounds for a platform accessibility element.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct AccessibilityRect {
     pub(crate) x: f32,
@@ -40,11 +37,6 @@ impl AccessibilityRect {
     }
 }
 
-/// Role understood by native accessibility backends.
-///
-/// The first three are structural — what the node *is* in the tree. The rest
-/// are Compose `Role` values an app asked for explicitly, and a backend that
-/// understands them says so out loud ("radio button", "switch, on").
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AccessibilityRole {
     Button,
@@ -74,14 +66,9 @@ impl AccessibilityRole {
     }
 }
 
-/// A flattened native accessibility element with stable Cranpose identity.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct AccessibilityElement {
     pub(crate) node_id: NodeId,
-    /// Which drawn control inside `node_id` this element is, when it came from
-    /// a [`CanvasSemanticsNode`]. `None` means the element *is* the layout
-    /// node. Kept alongside `node_id` because an accessibility action arriving
-    /// from the platform has to be routed back to the exact publisher.
     pub(crate) canvas_key: Option<u64>,
     pub(crate) label: String,
     pub(crate) state_description: Option<String>,
@@ -93,10 +80,6 @@ pub(crate) struct AccessibilityElement {
     pub(crate) selected: Option<bool>,
     pub(crate) toggled: Option<bool>,
     pub(crate) enabled: bool,
-    /// Custom action labels in publication order. The index *is* the wire id:
-    /// the platform sends it back and [`perform_custom_action`] resolves it
-    /// against the live semantics tree, so the handler that runs is always the
-    /// current one even if the published snapshot is a frame stale.
     pub(crate) custom_actions: Vec<String>,
 }
 
@@ -120,10 +103,6 @@ impl Default for AccessibilityElement {
     }
 }
 
-/// Re-projects accessibility elements only when the shell's semantics revision
-/// moved since `seen_revision`. On an animation-only frame — the steady state
-/// of any game or transition — this is one integer compare, where the
-/// unconditional snapshot used to walk the full layout tree every frame.
 #[cfg(any(
     all(feature = "desktop-shell", feature = "renderer-wgpu"),
     all(feature = "android", feature = "renderer-wgpu", target_os = "android")
@@ -144,21 +123,15 @@ where
     Some(snapshot(shell))
 }
 
-/// Extracts the current semantics and layout snapshots from an app shell.
 #[cfg_attr(test, allow(dead_code))]
 pub(crate) fn snapshot<R>(shell: &mut AppShell<R>) -> Vec<AccessibilityElement>
 where
     R: Renderer,
     R::Error: Debug,
 {
-    // With semantics tracking off the projection is empty by definition, so
-    // don't pay for the layout walk that would only prove it.
     if !shell.semantics_active() {
         return Vec::new();
     }
-    // Borrowed rather than cloned: this runs on every frame that updates, and
-    // deep-copying the layout and semantics trees to read them dominated the
-    // accessibility cost.
     let mut bounds = HashMap::new();
     let has_layout = shell.with_layout_tree(|layout_tree| match layout_tree {
         Some(layout_tree) => {
@@ -187,19 +160,6 @@ fn collect_bounds(root: &LayoutBox, bounds: &mut HashMap<NodeId, AccessibilityRe
     }
 }
 
-/// Assigns the ids every platform backend addresses elements by — Android's
-/// virtual view ids, AccessKit's node ids, the iOS element map's keys.
-///
-/// A screen reader parks its cursor on an id, so the id has to be a function of
-/// *what the element is* rather than where it sits in the list — otherwise
-/// inserting a row above the focused one moves the cursor. That is why the id
-/// is derived from the publishing layout node plus the app's own canvas key,
-/// and why a collision is resolved by probing forward deterministically instead
-/// of by falling back to the index: the same element set always yields the same
-/// ids.
-///
-/// The result is a positive 31-bit value because Android's virtual view ids are
-/// `int` and `View.NO_ID` (-1) already means "the host".
 pub(crate) fn element_ids(elements: &[AccessibilityElement]) -> Vec<i32> {
     let mut assigned: Vec<i32> = Vec::with_capacity(elements.len());
     for element in elements {
@@ -214,17 +174,7 @@ pub(crate) fn element_ids(elements: &[AccessibilityElement]) -> Vec<i32> {
 
 fn element_id(node_id: NodeId, canvas_key: Option<u64>) -> i32 {
     let mixed = match canvas_key {
-        // A layout node keeps the identity it always had, so ids for the
-        // widgets Cranpose lays out do not move because canvas semantics now
-        // exist next to them.
         None => node_id as u64,
-        // Two odd multipliers, so both halves are bijections on `u64` and stay
-        // injective in the low 31 bits the id is cut from: two drawn controls
-        // on one node never collide, and neither do the same key on two nodes.
-        // The node half is rotated so that key 0 — the default, and the first
-        // index any app reaches for — does not land exactly on the node's own
-        // id, which would collide with the layout node's element every time and
-        // push some unrelated node off the id its cursor was parked on.
         Some(key) => {
             (node_id as u64)
                 .wrapping_mul(0x9e37_79b9_7f4a_7c15)
@@ -235,10 +185,6 @@ fn element_id(node_id: NodeId, canvas_key: Option<u64>) -> i32 {
     ((mixed & 0x7fff_ffff) as i32).max(1)
 }
 
-/// Maps an id the platform sent back to the element that owns it.
-///
-/// Recomputed from the published element list rather than remembered, because
-/// the list *is* the assignment: [`element_ids`] is a pure function of it.
 #[cfg(any(
     test,
     all(feature = "android", feature = "renderer-wgpu", target_os = "android")
@@ -317,11 +263,6 @@ fn project_node(
         });
     }
 
-    // Drawn controls come straight after the node that drew them, so a screen
-    // reader walks a canvas screen in the order the app published it. They are
-    // deliberately not subject to `suppress_static_text`: that rule exists so a
-    // button does not read its own inner `Text` twice, and a canvas child is
-    // never a duplicate of anything — it only exists because the app said so.
     project_canvas_children(node, rect, elements);
 
     let suppress_children = suppress_static_text || actionable;
@@ -336,8 +277,6 @@ fn project_canvas_children(
     elements: &mut Vec<AccessibilityElement>,
 ) {
     for child in &node.canvas_children {
-        // Canvas bounds are in the publishing node's own space, which is what a
-        // draw scope reports; the platform wants window coordinates.
         let rect = AccessibilityRect::new(
             owner.x + child.bounds.x,
             owner.y + child.bounds.y,
@@ -374,16 +313,6 @@ fn project_canvas_children(
     }
 }
 
-/// Runs the custom action a screen reader picked, resolving it against the
-/// *live* semantics tree rather than the published snapshot.
-///
-/// The snapshot exists to answer "has anything changed", and custom-action
-/// handlers are excluded from that comparison on purpose (a recorder closure is
-/// rebuilt every collection, so comparing handler identity would re-publish the
-/// whole tree over JNI every frame). The consequence is that the snapshot's
-/// handlers may be one collection old, so the action is looked up again here,
-/// by the identity the platform sent back: the owning node, which drawn control
-/// inside it, and the action's index in that control's list.
 #[cfg(any(
     test,
     all(feature = "desktop-shell", feature = "renderer-wgpu"),
@@ -428,9 +357,6 @@ fn find_semantics_node(node: &SemanticsNode, node_id: NodeId) -> Option<&Semanti
         .find_map(|child| find_semantics_node(child, node_id))
 }
 
-/// Borrows rather than clones: this runs for every semantics node on every
-/// updating frame, and only the few nodes that become elements need an owned
-/// label.
 fn node_label(node: &SemanticsNode) -> Option<&str> {
     node.description.as_deref().or(match &node.role {
         SemanticsRole::Text { value } => Some(value.as_str()),
@@ -504,12 +430,8 @@ mod tests {
         }
     }
 
-    /// Drawn controls need ids of their own, and they must not shift when the
-    /// app publishes a different set: a screen reader's cursor lives on the id.
     #[test]
     fn drawn_controls_get_distinct_ids_that_do_not_move_with_list_position() {
-        // Key 0 is deliberately included: it is `CanvasSemanticsNode`'s default
-        // and the first index an app reaches for.
         let rows: Vec<_> = (0..24).map(|key| element_with(7, Some(key))).collect();
         let ids = element_ids(&rows);
 
@@ -519,20 +441,15 @@ mod tests {
         assert_eq!(sorted.len(), ids.len(), "ids collided: {ids:?}");
         assert!(ids.iter().all(|id| *id > 0));
 
-        // Drop the first row: every surviving row keeps the id it had.
         let scrolled = element_ids(&rows[1..]);
         assert_eq!(scrolled, ids[1..]);
 
-        // The layout node itself is untouched by the drawn controls hanging off
-        // it — including by the one keyed 0, which must not land on the node's
-        // own id and probe an unrelated element off its cursor.
         assert_eq!(element_ids(&[element_with(7, None)]), vec![7]);
         assert!(
             !ids.contains(&7),
             "a drawn control took the layout node's id"
         );
 
-        // The same key on two nodes is two elements, not one.
         let across = element_ids(&[element_with(7, Some(3)), element_with(8, Some(3))]);
         assert_ne!(across[0], across[1]);
     }
@@ -613,9 +530,6 @@ mod tests {
         assert_eq!(projected[1].role, AccessibilityRole::StaticText);
     }
 
-    /// The case the whole canvas-semantics path exists for: a screen drawn as
-    /// one `Canvas` has exactly one layout node, so without this the screen
-    /// reader is offered one element for a list of controls.
     #[test]
     fn drawn_controls_become_elements_positioned_inside_their_canvas() {
         let canvas_id = 7;
@@ -637,7 +551,6 @@ mod tests {
                 .with_click_label("Reset")
                 .with_enabled(false),
         ];
-        // The canvas is inset, so a drawn rect at y=40 is at y=140 on screen.
         let bounds =
             HashMap::from_iter([(canvas_id, AccessibilityRect::new(20.0, 100.0, 200.0, 300.0))]);
 
@@ -661,16 +574,12 @@ mod tests {
         assert_eq!(projected[1].toggled, Some(true));
         assert_eq!(projected[1].state_description.as_deref(), Some("On"));
         assert!(projected[1].clickable);
-        // 20 + 0, 100 + 40 — the drawn rect translated into window space.
         assert_eq!(projected[1].bounds.center(), (120.0, 166.0));
 
         assert_eq!(projected[2].click_label.as_deref(), Some("Reset"));
         assert!(!projected[2].enabled);
     }
 
-    /// A drawn control with nothing to say is not a stop on the screen
-    /// reader's tour, and neither is one that was drawn to zero size (the
-    /// scrolled-off rows of a scaling list report exactly that).
     #[test]
     fn drawn_controls_without_a_label_or_a_size_are_not_published() {
         let canvas_id = 4;
@@ -695,9 +604,6 @@ mod tests {
         assert_eq!(projected[0].label, "Visible");
     }
 
-    /// The screen-level node keeps its own announcement (Compose's
-    /// `RadialChoiceScreen` reads title + state + hint as one node) and the
-    /// drawn options are published underneath it rather than instead of it.
     #[test]
     fn a_labelled_canvas_keeps_its_own_element_ahead_of_its_drawn_controls() {
         let canvas_id = 9;
@@ -797,8 +703,6 @@ mod tests {
         assert!(perform_custom_action(&root, arena_id, None, 0));
         assert!(perform_custom_action(&root, canvas_id, Some(42), 0));
 
-        // Nothing published these, so nothing may run: an unknown node, a
-        // drawn control that is not on that node, and an index past the end.
         assert!(!perform_custom_action(&root, 999, None, 0));
         assert!(!perform_custom_action(&root, canvas_id, Some(43), 0));
         assert!(!perform_custom_action(&root, arena_id, None, 1));
@@ -806,9 +710,6 @@ mod tests {
         assert_eq!(*fired.borrow(), vec!["pause", "toggle"]);
     }
 
-    /// A recorder closure is rebuilt on every collection, so if a custom action
-    /// compared by handler identity the Android bridge would decide the tree
-    /// changed and re-serialise it across JNI on every frame.
     #[test]
     fn rebuilding_a_custom_action_handler_is_not_a_published_change() {
         let arena_id = 3;

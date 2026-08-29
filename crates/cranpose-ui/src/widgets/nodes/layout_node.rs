@@ -298,43 +298,27 @@ pub struct LayoutNode {
     modifier_capabilities: NodeCapabilities,
     modifier_child_capabilities: NodeCapabilities,
     pub measure_policy: Rc<dyn MeasurePolicy>,
-    /// The device pixel grid this node was composed against.
-    ///
-    /// Measurement runs after composition and so cannot read a composition
-    /// local; the grid is captured here while the composition that owns this
-    /// node is still running, which is what lets a subtree be measured on a
-    /// grid of its own rather than on whatever the shell holds.
     density: crate::density::Density,
     /// The actual children of this node (folded view - includes virtual nodes as-is)
     pub children: Vec<NodeId>,
     cache: LayoutNodeCacheHandles,
-    // Dirty flags for selective measure/layout/render
     needs_measure: Cell<bool>,
     needs_layout: Cell<bool>,
     needs_semantics: Cell<bool>,
     needs_redraw: Cell<bool>,
     needs_pointer_pass: Cell<bool>,
     needs_focus_sync: Cell<bool>,
-    /// Parent for dirty flag bubbling (skips virtual nodes)
     parent: Cell<Option<NodeId>>,
-    /// Direct parent in the tree (may be virtual)
     folded_parent: Cell<Option<NodeId>>,
-    // Node's own ID (set by applier after creation)
     id: Cell<Option<NodeId>>,
     owner_context_id: Cell<Option<crate::render_state::AppContextId>>,
     debug_modifiers: Cell<bool>,
-    /// Virtual node flag - virtual nodes are transparent containers for subcomposition
-    /// Their children are flattened into the parent's children list for measurement
     is_virtual: bool,
-    /// Count of virtual children (for lazy unfolded children computation)
     virtual_children_count: Cell<usize>,
 
     modifier_slices_snapshot: RefCell<Rc<ModifierNodeSlices>>,
     modifier_slices_dirty: Cell<bool>,
 
-    /// Retained layout state (size, position) for this node.
-    /// Updated by measure/place and read by renderer.
-    /// Wrapped in Rc to ensure state is shared across clones (e.g. SubcomposeLayout usage).
     layout_state: Rc<RefCell<LayoutState>>,
     layout_runtime_state: Rc<RefCell<LayoutRuntimeState>>,
 }
@@ -399,15 +383,15 @@ impl LayoutNode {
             density: crate::density::Density::default(),
             children: Vec::new(),
             cache: LayoutNodeCacheHandles::default(),
-            needs_measure: Cell::new(true), // New nodes need initial measure
-            needs_layout: Cell::new(true),  // New nodes need initial layout
-            needs_semantics: Cell::new(true), // Semantics snapshot needs initial build
-            needs_redraw: Cell::new(true),  // First render should draw the node
+            needs_measure: Cell::new(true),
+            needs_layout: Cell::new(true),
+            needs_semantics: Cell::new(true),
+            needs_redraw: Cell::new(true),
             needs_pointer_pass: Cell::new(false),
             needs_focus_sync: Cell::new(false),
-            parent: Cell::new(None),        // Non-virtual parent for bubbling
-            folded_parent: Cell::new(None), // Direct parent (may be virtual)
-            id: Cell::new(None),            // ID set by applier after creation
+            parent: Cell::new(None),
+            folded_parent: Cell::new(None),
+            id: Cell::new(None),
             owner_context_id: Cell::new(None),
             debug_modifiers: Cell::new(false),
             is_virtual,
@@ -422,11 +406,6 @@ impl LayoutNode {
     }
 
     pub fn set_modifier(&mut self, modifier: Modifier) {
-        // Always sync the modifier chain because element equality is used for node
-        // matching/reuse, not for skipping updates. Closures may capture updated
-        // state values that need to be passed to nodes even when the Modifier
-        // compares as equal. This matches Jetpack Compose where update() is always
-        // called on matched nodes.
         let modifier_changed = !self.modifier.structural_eq(&modifier);
         self.modifier = modifier;
         self.sync_modifier_chain();
@@ -521,7 +500,6 @@ impl LayoutNode {
                     if has_capability(NodeCapabilities::POINTER_INPUT) {
                         self.mark_needs_pointer_pass();
                         crate::request_pointer_invalidation();
-                        // Schedule pointer repass for this node
                         if let Some(id) = self.id.get() {
                             crate::schedule_pointer_repass(id);
                         }
@@ -534,7 +512,6 @@ impl LayoutNode {
                     if has_capability(NodeCapabilities::FOCUS) {
                         self.mark_needs_focus_sync();
                         crate::request_focus_invalidation();
-                        // Schedule focus invalidation for this node
                         if let Some(id) = self.id.get() {
                             crate::schedule_focus_invalidation(id);
                         }
@@ -559,7 +536,6 @@ impl LayoutNode {
     }
 
     pub fn set_measure_policy(&mut self, policy: Rc<dyn MeasurePolicy>) {
-        // Only mark dirty if policy actually changed (pointer comparison)
         if !Rc::ptr_eq(&self.measure_policy, &policy) {
             self.measure_policy = policy;
             self.cache.clear();
@@ -605,7 +581,6 @@ impl LayoutNode {
         self.needs_semantics.set(true);
     }
 
-    /// Clear the semantics dirty flag after rebuilding semantics.
     pub(crate) fn clear_needs_semantics(&self) {
         self.needs_semantics.set(false);
     }
@@ -635,12 +610,10 @@ impl LayoutNode {
         }
     }
 
-    /// Clear the measure dirty flag after measuring.
     pub(crate) fn clear_needs_measure(&self) {
         self.needs_measure.set(false);
     }
 
-    /// Clear the layout dirty flag after laying out.
     pub(crate) fn clear_needs_layout(&self) {
         self.needs_layout.set(false);
     }
@@ -687,8 +660,6 @@ impl LayoutNode {
         self.owner_context_id.set(Some(owner_context_id));
         self.refresh_registry_state();
 
-        // Propagate the ID to the modifier chain. This triggers a lifecycle update
-        // for nodes that depend on the node ID for invalidation (e.g., ScrollNode).
         self.modifier_chain.set_node_id(Some(id));
         let invalidations = self.modifier_chain.take_invalidations();
         self.dispatch_modifier_invalidations_with_prev(&invalidations, NodeCapabilities::empty());
@@ -704,8 +675,6 @@ impl LayoutNode {
     /// Sets both folded_parent (direct) and parent (first non-virtual ancestor for bubbling).
     pub fn set_parent(&self, parent: NodeId) {
         self.folded_parent.set(Some(parent));
-        // For now, parent = folded_parent. Virtual parent skipping requires applier access.
-        // The actual virtual-skipping happens in bubble_measure_dirty via applier traversal.
         self.parent.set(Some(parent));
         self.refresh_registry_state();
     }
@@ -805,10 +774,6 @@ impl LayoutNode {
         self.modifier_slices_snapshot.borrow().clone()
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    // Retained Layout State API
-    // ═══════════════════════════════════════════════════════════════════════
-
     /// Returns a clone of the current layout state.
     pub fn layout_state(&self) -> LayoutState {
         self.layout_state.borrow().clone()
@@ -861,7 +826,6 @@ impl LayoutNode {
         crate::modifier::collect_semantics_from_chain(self.modifier_chain.chain())
     }
 
-    /// Returns a reference to the modifier chain for layout/draw pipeline integration.
     pub(crate) fn modifier_chain(&self) -> &ModifierChainHandle {
         &self.modifier_chain
     }
@@ -919,7 +883,6 @@ impl Clone for LayoutNode {
             virtual_children_count: Cell::new(self.virtual_children_count.get()),
             modifier_slices_snapshot: RefCell::new(Rc::default()),
             modifier_slices_dirty: Cell::new(true),
-            // Share the same layout state across clones
             layout_state: self.layout_state.clone(),
             layout_runtime_state: self.layout_runtime_state.clone(),
         };
@@ -940,7 +903,6 @@ impl Node for LayoutNode {
     }
 
     fn set_node_id(&mut self, id: NodeId) {
-        // Delegate to inherent method to ensure proper registration and chain updates
         LayoutNode::set_node_id(self, id);
     }
 
@@ -1039,10 +1001,6 @@ impl Node for LayoutNode {
         self.needs_semantics.get()
     }
 
-    /// Minimal parent setter for dirty flag bubbling.
-    /// Only sets the parent Cell without triggering registry updates.
-    /// This is used during SubcomposeLayout measurement where we need parent
-    /// pointers for bubble_measure_dirty but don't want full attachment side effects.
     fn set_parent_for_bubbling(&mut self, parent: NodeId) {
         self.parent.set(Some(parent));
     }
@@ -1590,9 +1548,6 @@ mod tests {
         node.clear_needs_pointer_pass();
         node.modifier_capabilities = NodeCapabilities::DRAW;
         node.modifier_child_capabilities = node.modifier_capabilities;
-        // Note: We don't assert on global take_pointer_invalidation() because
-        // it's shared across tests running in parallel and causes flakiness.
-        // The node's local state is sufficient to verify correct dispatch behavior.
 
         node.dispatch_modifier_invalidations(&[invalidation(InvalidationKind::PointerInput)]);
 
@@ -1606,9 +1561,6 @@ mod tests {
         node.clear_needs_pointer_pass();
         node.modifier_capabilities = NodeCapabilities::POINTER_INPUT;
         node.modifier_child_capabilities = node.modifier_capabilities;
-        // Note: We don't assert on global take_pointer_invalidation() because
-        // it's shared across tests running in parallel and causes flakiness.
-        // The node's local state is sufficient to verify correct dispatch behavior.
 
         node.dispatch_modifier_invalidations(&[invalidation(InvalidationKind::PointerInput)]);
 

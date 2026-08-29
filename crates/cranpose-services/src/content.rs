@@ -240,7 +240,6 @@ pub async fn collect_stream(stream: &ContentStreamRef) -> Result<Vec<ContentHand
     Ok(items)
 }
 
-/// Depth-first walk over a folder that enumerates eagerly.
 struct WalkStream {
     pending: RefCell<Vec<ContentFolderRef>>,
     ready: RefCell<VecDeque<ContentHandle>>,
@@ -638,12 +637,6 @@ fn hex_value(byte: u8) -> Option<u8> {
 #[cfg(test)]
 mod tests {
 
-    /// The two decoders answered differently across the codebase before they
-    /// were one pair: a strict one that refused what it could not decode and a
-    /// lossy one that substituted. Both behaviours are wanted -- a display name
-    /// should survive a bad byte, an identity must not -- so the split is
-    /// deliberate and pinned here rather than left to whichever copy a caller
-    /// happened to reach for.
     #[test]
     fn a_uri_that_cannot_be_decoded_exactly_is_refused_but_still_displays() {
         assert_eq!(
@@ -652,15 +645,12 @@ mod tests {
         );
         assert_eq!(percent_decode_lossy("Trip%20Photos"), "Trip Photos");
 
-        // %FF is a valid escape but not valid UTF-8 on its own.
         assert_eq!(percent_decode("bad%FFname"), None);
         assert_eq!(percent_decode_lossy("bad%FFname"), "bad\u{fffd}name");
 
-        // A truncated escape is malformed input, not data.
         assert_eq!(percent_decode("cut%4"), None);
         assert_eq!(percent_decode_lossy("cut%4"), "cut%4");
 
-        // A non-hexadecimal escape is passed through by the lossy form.
         assert_eq!(percent_decode("100%zz"), None);
         assert_eq!(percent_decode_lossy("100%zz"), "100%zz");
     }
@@ -692,9 +682,6 @@ mod tests {
         assert_eq!(metadata.modified_millis, Some(1_700_000_000_000));
         assert_eq!(metadata.identifier, "content://provider/17");
         assert_eq!(metadata.mime_type.as_deref(), Some("image/png"));
-        // A size or a timestamp a provider did not report stays unknown rather
-        // than becoming zero; an item with no provider-scoped identifier is
-        // identified by its name, which is the only handle there is on it.
         let bare = ContentMetadata::named("Scan.png");
         assert_eq!(bare.len, None);
         assert_eq!(bare.modified_millis, None);
@@ -710,7 +697,6 @@ mod tests {
         channel.close();
         assert!(channel.is_closed());
 
-        // A producer that has not noticed yet must not be able to reopen it.
         channel.push(BytesContent::named("late.bin", vec![1]).handle());
         channel.fail(ContentError::Unsupported("after close"));
         assert!(channel.is_closed());

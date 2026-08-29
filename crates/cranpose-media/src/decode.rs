@@ -1,18 +1,3 @@
-//! Decoding an item into the sample stream the sink plays.
-//!
-//! `symphonia` reads the container and the codec; this turns what it yields —
-//! a packet at a time, in whatever layout the codec produced — into one
-//! interleaved `f32` stream that satisfies [`SampleSource`].
-//!
-//! A packet decodes into many frames, so the decoded block is held and drained
-//! sample by sample. That is what lets the equalizer and the analysis tap stay
-//! plain iterator adapters instead of each having to understand packets.
-//!
-//! What is decoded is a URI, not a path. A local file is opened here; anything
-//! else — an Android `content://` document above all — is opened by the
-//! platform through [`cranpose_services::open_media_source`], and a stream that
-//! turns out not to seek is put behind [`Spool`] first.
-
 use std::{io::Seek, path::Path, time::Duration};
 
 use cranpose_services::MediaError;
@@ -32,12 +17,8 @@ use crate::{
     spool::{Spool, SpoolCancel},
 };
 
-/// Where a spooled stream is written. Under the application's own cache
-/// directory, so the platform reclaims it if the process dies without cleaning
-/// up and nothing here has to invent a path.
 const SPOOL_DIRECTORY: &str = "cranpose-media-spool";
 
-/// One item, open and decoding.
 pub(crate) struct Decoder {
     format: Box<dyn FormatReader>,
     decoder: Box<dyn AudioDecoder>,
@@ -45,30 +26,13 @@ pub(crate) struct Decoder {
     channels: ChannelCount,
     sample_rate: SampleRate,
     total_duration: Option<Duration>,
-    /// The last decoded packet, interleaved, and how far into it we have read.
     block: Vec<Sample>,
     read: usize,
-    /// Set once the container has no more packets, so a drained block ends the
-    /// stream instead of asking for another one.
     exhausted: bool,
-    /// Frames still to be thrown away after a seek.
-    ///
-    /// A container seeks to a packet, not to a frame, so it lands at or before
-    /// what was asked for and reports both timestamps. Dropping the difference
-    /// is what turns a packet-accurate seek into a frame-accurate one; without
-    /// it a seek silently plays from up to a packet early.
     skip_frames: u64,
 }
 
 impl Decoder {
-    /// Opens `uri` and prepares its first audio track.
-    ///
-    /// Nothing is decoded here beyond what the probe needs, so opening an item
-    /// costs the container's header rather than its audio — which for a
-    /// streamed document means the first few kilobytes, not the track.
-    /// Returns the handle that stops the spool as well as the decoder: an item
-    /// being ended must not wait on a decode thread that is waiting on a
-    /// provider which stopped talking.
     pub(crate) fn open(uri: &str) -> Result<(Decoder, SpoolCancel), MediaError> {
         let (media, cancel) = open_media(uri)?;
         Ok((Decoder::from_media(media, uri)?, cancel))
@@ -78,9 +42,6 @@ impl Decoder {
         let stream = MediaSourceStream::new(media, Default::default());
 
         let mut hint = Hint::new();
-        // Only a real path carries a usable extension. A `content://` document
-        // is named by the provider, so let the probe read the container instead
-        // of hinting it wrong.
         if let Some(extension) = cranpose_services::path_from_uri(uri)
             .as_deref()
             .and_then(Path::extension)
@@ -146,17 +107,7 @@ impl Decoder {
         })
     }
 
-    /// Reads the item's duration without keeping a decoder for it.
-    ///
-    /// Probing a playlist costs the header of each file and no audio at all,
-    /// which is what lets a long list show its times before anything plays.
     pub(crate) fn probe_duration(uri: &str) -> Option<Duration> {
-        // Only a path is probed. Anything the platform has to open on our
-        // behalf may be a document a provider fetches over a network, where
-        // opening the descriptor is itself the expensive part -- and a playlist
-        // asking two hundred of them how long they are would spend a connection
-        // per label. Those report no duration until they are opened to be
-        // played, which is what `MediaCapabilities::probing` allows for.
         let path = cranpose_services::path_from_uri(uri)?;
         let file = std::fs::File::open(path).ok()?;
         Decoder::from_media(Box::new(file), uri)
@@ -164,11 +115,6 @@ impl Decoder {
             .total_duration()
     }
 
-    /// Decodes packets until one yields samples, or the container ends.
-    ///
-    /// A packet that fails to decode is skipped rather than fatal: that is what
-    /// symphonia asks for, and one corrupt frame in the middle of a track
-    /// should cost that frame rather than the rest of the item.
     fn fill(&mut self) -> bool {
         loop {
             if self.exhausted {
@@ -213,7 +159,6 @@ impl Decoder {
 }
 
 impl Decoder {
-    /// Advances past the frames a seek landed before its target.
     fn drop_skipped_frames(&mut self) {
         if self.skip_frames == 0 {
             return;
@@ -226,10 +171,6 @@ impl Decoder {
     }
 }
 
-/// The item's length, preferring the frame count over the container's stated
-/// duration: the frame count excludes encoder delay and padding, which is what
-/// a seek bar should run to. Containers that state neither leave the duration
-/// unknown, and the transport shows a running position without an end.
 fn track_duration(
     num_frames: Option<u64>,
     sample_rate: SampleRate,
@@ -294,9 +235,6 @@ impl SampleSource for Decoder {
             .get()
             .saturating_sub(seeked.actual_ts.get())
             .max(0) as u64;
-        // The packets after a seek are discontinuous with the ones before it,
-        // so the decoder must forget what it was carrying and the block it
-        // already produced must not be played.
         self.decoder.reset();
         self.block.clear();
         self.read = 0;
@@ -305,13 +243,6 @@ impl SampleSource for Decoder {
     }
 }
 
-/// Opens `uri` as something the decoder can read out of order.
-///
-/// A real file seeks, so it is decoded in place. A provider that streams hands
-/// back a pipe instead, and [`seeks`] is the question that tells the two apart:
-/// a pipe goes behind [`Spool`], which is what makes it seekable. Without that
-/// the probe reads the header, cannot go back for the audio, and the item
-/// "loads" but never plays.
 fn open_media(uri: &str) -> Result<(Box<dyn MediaSource>, SpoolCancel), MediaError> {
     let handle = cranpose_services::open_media_source(uri).map_err(|error| {
         if error.kind() == std::io::ErrorKind::Unsupported {
@@ -336,8 +267,6 @@ fn open_media(uri: &str) -> Result<(Box<dyn MediaSource>, SpoolCancel), MediaErr
     Ok((Box::new(spool), cancel))
 }
 
-/// Whether the descriptor can be read out of order. A pipe answers `ESPIPE`,
-/// which is the whole distinction between a file and a stream.
 fn seeks(file: &mut std::fs::File) -> bool {
     file.stream_position().is_ok()
 }
@@ -362,12 +291,6 @@ mod tests {
         NonZeroU32::new(1_000).expect("a thousand")
     }
 
-    /// Writes a 16-bit PCM WAV of `frames` frames so the decoder can be driven
-    /// against a real container rather than against a mock of one.
-    ///
-    /// Sample `n` of channel `c` is `n * channels + c`, which makes an
-    /// out-of-order or dropped frame visible in the assertion rather than
-    /// merely making the totals wrong.
     fn write_wav(path: &std::path::Path, channels: u16, rate: u32, frames: u32) {
         let bytes_per_frame = u32::from(channels) * 2;
         let data_len = frames * bytes_per_frame;
@@ -376,7 +299,7 @@ mod tests {
         wav.extend_from_slice(&(36 + data_len).to_le_bytes());
         wav.extend_from_slice(b"WAVEfmt ");
         wav.extend_from_slice(&16u32.to_le_bytes());
-        wav.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        wav.extend_from_slice(&1u16.to_le_bytes());
         wav.extend_from_slice(&channels.to_le_bytes());
         wav.extend_from_slice(&rate.to_le_bytes());
         wav.extend_from_slice(&(rate * bytes_per_frame).to_le_bytes());
@@ -393,16 +316,10 @@ mod tests {
         std::fs::write(path, wav).expect("write wav");
     }
 
-    /// A directory under the workspace `target/test-output` for one fixture.
-    /// Never the system temporary directory, which is tmpfs on Linux — a
-    /// fixture written there is written to RAM and leaves nothing to inspect
-    /// after a failure.
     fn scratch(tag: &str) -> std::path::PathBuf {
         cranpose_core::test_scratch_dir(env!("CARGO_MANIFEST_DIR"), tag)
     }
 
-    /// A temporary file that removes itself, so a failing assertion does not
-    /// leave the next run reading a stale fixture.
     struct Fixture(std::path::PathBuf);
 
     impl Fixture {
@@ -412,7 +329,6 @@ mod tests {
             Fixture(path)
         }
 
-        /// What the decoder is actually given: an item's URI.
         fn uri(&self) -> String {
             cranpose_services::uri_for_path(&self.0)
         }
@@ -440,8 +356,6 @@ mod tests {
         let (decoder, _cancel) = Decoder::open(&fixture.uri()).expect("open");
         let samples: Vec<f32> = decoder.collect();
         assert_eq!(samples.len(), frames as usize * 2);
-        // 16-bit PCM arrives scaled into -1.0..1.0, so compare the ratios
-        // rather than the raw integers the fixture wrote.
         let unit = f32::from(i16::MAX);
         for (index, sample) in samples.iter().enumerate() {
             let expected = index as f32 / unit;
@@ -509,7 +423,6 @@ mod tests {
     fn the_frame_count_wins_over_the_stated_duration() {
         let rate = NonZeroU32::new(1_000).expect("rate");
         let time_base = TimeBase::new(one(), thousand());
-        // The container claims ten seconds; the playable frames are one.
         assert_eq!(
             track_duration(
                 Some(1_000),
@@ -521,16 +434,11 @@ mod tests {
         );
     }
 
-    /// A document URI is not probed at all: opening one may cost a network
-    /// connection, and a playlist asks about every entry it holds.
     #[test]
     fn a_document_uri_reports_no_duration_without_being_opened() {
         assert_eq!(Decoder::probe_duration("content://example/track"), None);
     }
 
-    /// A URI no platform can open is refused as unsupported rather than as a
-    /// failure, which is what tells an application it picked the wrong source
-    /// instead of that the source is broken.
     #[test]
     fn a_uri_with_no_platform_opener_is_unsupported() {
         assert!(matches!(

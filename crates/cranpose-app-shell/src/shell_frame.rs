@@ -184,17 +184,8 @@ where
     }
 
     fn run_layout_phase_in_context(&mut self) {
-        // Both scoped layout repasses (re-placement) and scoped measure repasses
-        // (re-sizing, e.g. a collapsing swipe-dismissed row) drive a layout pass.
         let has_scoped_repasses = cranpose_ui::has_pending_layout_repasses()
             || cranpose_ui::has_pending_measure_repasses();
-        // Both kinds carry the node they were scheduled for, and the scene
-        // phase scopes its graph update to exactly those nodes. Collecting only
-        // the layout ids silently dropped the measure ones, which is the path a
-        // scrolling `LazyColumn` takes: the scene phase then saw an empty dirty
-        // set with the scene marked dirty, read that as "everything changed",
-        // and rebuilt the graph from the composition root on every scrolled
-        // frame.
         let mut scoped_layout_nodes = if cranpose_ui::has_pending_layout_repasses() {
             cranpose_ui::pending_layout_repass_nodes_snapshot()
         } else {
@@ -208,9 +199,6 @@ where
             }
         }
 
-        // Global layout invalidation is reserved for app-wide inputs such as
-        // viewport, density, font-scale, or debug layout changes. Normal node
-        // updates should arrive through scoped repasses.
         let invalidation_requested = take_layout_invalidation();
         let global_layout_invalidation = invalidation_requested && !has_scoped_repasses;
         let force_layout_pass = self.force_layout_pass;
@@ -218,8 +206,6 @@ where
         if invalidation_requested && !has_scoped_repasses {
             cranpose_ui::layout::invalidate_all_layout_caches();
 
-            // Mark root as needing layout AND measure so tree_needs_layout() returns true
-            // and intrinsic sizes are recalculated (e.g., text field resizing on content change)
             if let Some(root) = self.composition.root() {
                 let mut applier = self.composition.applier_mut();
                 match applier.with_node::<LayoutNode, _>(root, |node| {
@@ -261,7 +247,7 @@ where
                         root,
                         err
                     );
-                    true // Assume dirty on error
+                    true
                 });
 
             let needs_layout =
@@ -278,7 +264,6 @@ where
             self.layout_requested = false;
             self.force_layout_pass = false;
 
-            // Ensure slots exist and borrow mutably (handled inside measure_layout via MemoryApplier)
             match cranpose_ui::measure_layout_with_options(
                 &mut applier,
                 root,
@@ -295,14 +280,6 @@ where
                     if self.semantics_enabled {
                         self.semantics_tree = None;
                     }
-                    // A frame runs this phase more than once — the initial pass
-                    // and again after post-layout recomposition — and the scene
-                    // phase consumes the ids once, at the end. Assigning here
-                    // let a later pass with nothing pending wipe the ids an
-                    // earlier one recorded, which is how a scrolling
-                    // `LazyColumn` reached the scene phase with an empty dirty
-                    // set and got a full rebuild. Accumulate instead; only an
-                    // app-wide relayout, where scoping means nothing, clears.
                     if global_layout_invalidation || force_layout_pass {
                         self.scoped_layout_scene_nodes.clear();
                         let _ = cranpose_ui::take_geometry_scene_nodes();
@@ -403,9 +380,6 @@ where
     }
 
     fn run_dispatch_queues(&mut self) {
-        // Process pointer input repasses
-        // Similar to Jetpack Compose's pointer input invalidation processing,
-        // we service nodes that need pointer input state updates without forcing layout/draw
         if has_pending_pointer_repasses() {
             let mut applier = self.composition.applier_mut();
             process_pointer_repasses(|node_id| {
@@ -429,9 +403,6 @@ where
             });
         }
 
-        // Process focus invalidations
-        // Mirrors Jetpack Compose's FocusInvalidationManager.invalidateNodes(),
-        // processing nodes that need focus state synchronization
         if has_pending_focus_invalidations() {
             let mut applier = self.composition.applier_mut();
             process_focus_invalidations(|node_id| {
@@ -455,14 +426,6 @@ where
             });
         }
 
-        // Process semantics invalidations raised from outside composition.
-        //
-        // Mirrors Compose's `SemanticsModifierNode.invalidateSemantics()`: an
-        // app whose recorder reads state the composition does not observe says
-        // so here, and the flag is bubbled to the root because
-        // `tree_needs_semantics` reads the root alone. Without this a screen
-        // that never relays out — a game drawn on one `Canvas` — publishes its
-        // semantics once and then keeps publishing that same stale tree.
         if has_pending_semantics_invalidations() {
             let mut applier = self.composition.applier_mut();
             process_semantics_invalidations(|node_id| {
@@ -526,9 +489,6 @@ where
     }
 
     fn run_render_phase_in_context(&mut self, recomposed_this_frame: bool) -> FrameUpdateResult {
-        // Tick cursor blink before the dirty sets are drained: a visibility
-        // flip schedules a scoped draw repass on the focused field plus a
-        // render invalidation, and both must land in THIS frame's take.
         cranpose_ui::tick_cursor_blink();
         let render_dirty = take_render_invalidation();
         let pointer_dirty = take_pointer_invalidation();
@@ -539,10 +499,6 @@ where
             draw_dirty_nodes = self.refresh_retained_redraw_nodes();
         }
         let layout_dirty_nodes = std::mem::take(&mut self.scoped_layout_scene_nodes);
-        // Parents whose child lists changed structurally this frame. A scoped
-        // scene update patches only the dirty subtrees, so every structural
-        // parent must be in scope or a removed subtree's layers stay in the
-        // persistent render graph and keep compositing (the cross-tab ghost).
         let structural_parents = if cranpose_core::env_flag!("CRANPOSE_DISABLE_STRUCTURAL_DIRT") {
             Vec::new()
         } else if let Some(root) = self.composition.root() {
@@ -562,17 +518,8 @@ where
         let layout_dirty_node_count = layout_dirty_nodes.len();
         let structural_dirty_node_count = structural_parents.len();
         let partial_dirty_node_count = partial_dirty_nodes.len();
-        // Detect a focused text field that left the composition this frame:
-        // the check clears the stale focus entry and asks the platform to
-        // hide its soft keyboard (no-op while focus is live or when no
-        // keyboard was requested).
         let _ = cranpose_ui::has_focused_field();
 
-        // A render invalidation with every tracked dirty set empty is a
-        // frame REQUEST, not a scene change: everything that alters recorded
-        // draws names its node (draw observations for snapshot reads, scoped
-        // repasses for caret/focus/press state). The retained scene is
-        // re-presented; nothing is re-recorded.
         let render_only_dirty = render_dirty
             && partial_dirty_nodes.is_empty()
             && !draw_repass_pending
@@ -620,11 +567,6 @@ where
                 },
             });
             self.scoped_layout_scene_nodes = layout_dirty_nodes;
-            // A pure frame request still presents: encode re-runs against the
-            // retained scene with fresh per-frame inputs (animated motion
-            // contexts, shader time), it just records no draws. The dev
-            // overlay must keep counting through such streams — an animation
-            // that never dirties a node would otherwise freeze its numbers.
             if render_only_dirty && self.dev_options.fps_counter {
                 let viewport_size = Size {
                     width: self.viewport.0,
@@ -648,7 +590,6 @@ where
             draw_only_partial_dirty && !partial_dirty_nodes.is_empty() && !full_scene_dirty;
         let structure_changed = !render_only_dirty && !visual_update_only;
 
-        // Use new direct traversal rendering
         if let Some(root) = self.composition.root() {
             let mut applier = self.composition.applier_mut();
             let use_partial_update =
@@ -701,7 +642,6 @@ where
                     .rebuild_scene_from_applier(&mut applier, root, viewport_size)
             };
             if let Err(err) = rebuild_result {
-                // Fallback to clearing scene on error
                 log::error!("renderer rebuild failed: {err:?}");
                 self.renderer.scene_mut().clear();
             }
@@ -712,7 +652,6 @@ where
             cranpose_ui::prune_draw_observations_to_nodes(&retained_nodes);
         }
 
-        // Draw FPS overlay if enabled (directly by renderer, no composition)
         if self.dev_options.fps_counter {
             self.refresh_dev_overlay_text_for_frame_at(viewport_size, Instant::now());
             let renderer = &mut self.renderer;

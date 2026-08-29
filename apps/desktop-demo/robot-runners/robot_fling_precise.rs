@@ -1,16 +1,3 @@
-//! Comprehensive robot test for scroll and fling behavior
-//!
-//! This test precisely validates:
-//! 1. Scroll positions before/after drag
-//! 2. Velocity detection consistency
-//! 3. Fling animation distance and duration
-//! 4. No jump-back behavior on new scroll
-//!
-//! Run with:
-//! ```bash
-//! cargo run --package desktop-app --example robot_fling_precise --features robot-app
-//! ```
-
 use std::time::Duration;
 
 use cranpose::{AppLauncher, Robot};
@@ -31,7 +18,6 @@ fn main() {
         .with_size(800, 600)
         .with_headless(true)
         .with_test_driver(|robot| {
-            // Timeout safety
             std::thread::spawn(|| {
                 std::thread::sleep(Duration::from_secs(TEST_TIMEOUT_SECS));
                 eprintln!("✗ Test timed out after {} seconds", TEST_TIMEOUT_SECS);
@@ -48,7 +34,6 @@ fn main() {
             let mut test_count = 0;
             let mut pass_count = 0;
 
-            // Helper to run a test
             macro_rules! test {
                 ($name:expr, $body:expr) => {{
                     test_count += 1;
@@ -67,9 +52,6 @@ fn main() {
                 }};
             }
 
-            // =========================================================
-            // Navigate to Lazy List tab
-            // =========================================================
             println!("--- Setup: Navigate to Lazy List Tab ---");
             if let Some((x, y, w, h)) = find_button_in_semantics(&robot, "Lazy List") {
                 let cx = x + w / 2.0;
@@ -109,15 +91,12 @@ fn main() {
             let lower_y = visible_bounds.1 + visible_bounds.3 * 0.8;
             let drag_distance = (lower_y - upper_y).max(80.0);
 
-            // Find item positions function
             fn find_item(robot: &Robot, item_text: &str) -> Option<(f32, f32)> {
                 find_in_semantics(robot, |elem| find_text(elem, item_text))
                     .map(|(x, y, w, h)| (x + w / 2.0, y + h / 2.0))
             }
 
-            // Find any "Item X" element
             fn find_any_item(robot: &Robot) -> Option<(f32, String)> {
-                // Try items 0-20
                 for i in 0..20 {
                     let item_text = format!("Item #{}", i);
                     if let Some((_, y)) = find_item(robot, &item_text) {
@@ -127,9 +106,6 @@ fn main() {
                 None
             }
 
-            // =========================================================
-            // TEST 1: Initial state - Item 0 should be visible in viewport
-            // =========================================================
             test!("Initial state - Item #0 visible", {
                 let item0 = find_item(&robot, "Item #0");
                 if item0.is_none() {
@@ -153,40 +129,32 @@ fn main() {
                 Ok(())
             });
 
-            // =========================================================
-            // TEST 2: Simple drag scroll - verify position changes
-            // =========================================================
             test!("Simple drag scroll - position changes", {
-                // Get Item #0 position before scroll
                 let before = find_item(&robot, "Item #0");
                 if before.is_none() {
                     return Err("Item #0 not found before scroll".to_string());
                 }
                 let (_, before_y) = before.unwrap();
 
-                // Perform a slow drag (below fling threshold)
                 let _ = robot.mouse_move(center_x, lower_y);
                 std::thread::sleep(Duration::from_millis(50));
                 let _ = robot.mouse_down();
                 std::thread::sleep(Duration::from_millis(100));
 
-                // Slow drag - 10 steps over 500ms
                 for i in 1..=10 {
                     let progress = i as f32 / 10.0;
                     let new_y = lower_y - (drag_distance * progress);
                     let _ = robot.mouse_move(center_x, new_y);
-                    std::thread::sleep(Duration::from_millis(50)); // 50ms per step = slow
+                    std::thread::sleep(Duration::from_millis(50));
                 }
 
                 let _ = robot.mouse_up();
                 std::thread::sleep(Duration::from_millis(200));
 
-                // Check Item #0 position after scroll
                 let after = find_item(&robot, "Item #0");
                 match after {
                     Some((_, after_y)) => {
                         let delta = after_y - before_y;
-                        // Item 0 should have moved up (negative Y delta) by roughly drag distance
                         if delta > -50.0 {
                             return Err(format!(
                                 "Item 0 delta {} (expected < -50, before={}, after={})",
@@ -195,23 +163,16 @@ fn main() {
                         }
                         Ok(())
                     }
-                    None => {
-                        // Item 0 scrolled off screen - that's also valid
-                        Ok(())
-                    }
+                    None => Ok(()),
                 }
             });
 
-            // =========================================================
-            // TEST 3: Scroll back to top for next tests
-            // =========================================================
             test!("Scroll back to top", {
                 let _ = robot.mouse_move(center_x, upper_y);
                 std::thread::sleep(Duration::from_millis(50));
                 let _ = robot.mouse_down();
                 std::thread::sleep(Duration::from_millis(50));
 
-                // Drag down to scroll back up
                 for i in 1..=10 {
                     let progress = i as f32 / 10.0;
                     let new_y = upper_y + (drag_distance * progress);
@@ -222,7 +183,6 @@ fn main() {
                 let _ = robot.mouse_up();
                 std::thread::sleep(Duration::from_millis(500));
 
-                // Verify Item #0 is visible again
                 let item0 = find_item(&robot, "Item #0");
                 if item0.is_none() {
                     return Err("Item #0 not found after scroll back".to_string());
@@ -230,15 +190,11 @@ fn main() {
                 Ok(())
             });
 
-            // =========================================================
-            // TEST 4: Fast swipe triggers fling (check console output)
-            // =========================================================
             test!("Fast swipe triggers fling", {
                 robot
                     .reset_last_fling_velocity()
                     .map_err(|err| format!("failed to reset fling velocity: {err}"))?;
 
-                // Get starting position
                 let before = find_item(&robot, "Item #0");
                 let before_y = before.map(|(_, y)| y).unwrap_or(100.0);
 
@@ -247,7 +203,6 @@ fn main() {
                 let _ = robot.mouse_down();
                 std::thread::sleep(Duration::from_millis(20));
 
-                // Fast swipe - 5 steps in 50ms = 10ms per step
                 for i in 1..=5 {
                     let progress = i as f32 / 5.0;
                     let new_y = lower_y - (drag_distance * progress);
@@ -255,14 +210,11 @@ fn main() {
                     std::thread::sleep(Duration::from_millis(10));
                 }
 
-                // Release
                 let _ = robot.mouse_up();
 
                 std::thread::sleep(Duration::from_millis(300));
                 let _ = robot.wait_for_idle();
 
-                // Check: Item 0 should have moved significantly more than just the drag distance
-                // (Because fling adds momentum)
                 let after = find_item(&robot, "Item #0");
                 match after {
                     Some((_, after_y)) => {
@@ -287,22 +239,15 @@ fn main() {
                         Ok(())
                     }
                     None => {
-                        // Item scrolled off screen - good, means significant movement
                         eprintln!("  (Item 0 scrolled off screen - good!)");
                         Ok(())
                     }
                 }
             });
 
-            // =========================================================
-            // TEST 5: Repeated scrolls don't cause jump-back
-            // =========================================================
             test!("Repeated scrolls no jump-back", {
-                // Wait for any animation to finish
                 let _ = robot.wait_for_idle();
 
-                // Find any visible item
-                // Do first scroll
                 let scroll_end_y = (lower_y - 50.0).max(upper_y);
 
                 let _ = robot.mouse_move(center_x, lower_y);
@@ -315,25 +260,20 @@ fn main() {
                 std::thread::sleep(Duration::from_millis(300));
                 let _ = robot.wait_for_idle();
 
-                // Record position after first scroll
                 let after_first = find_any_item(&robot);
                 let after_first_y = after_first.as_ref().map(|(y, _)| *y).unwrap_or(300.0);
 
-                // Do second scroll - START position should NOT jump back
                 let _ = robot.mouse_move(center_x, lower_y);
                 std::thread::sleep(Duration::from_millis(30));
                 let _ = robot.mouse_down();
                 std::thread::sleep(Duration::from_millis(30));
 
-                // Check: during second scroll start, position should be same as after first
                 let during_second = find_any_item(&robot);
                 let during_y = during_second.as_ref().map(|(y, _)| *y).unwrap_or(300.0);
 
-                // Cleanup
                 let _ = robot.mouse_up();
                 std::thread::sleep(Duration::from_millis(100));
 
-                // Position should NOT have jumped significantly on mouse down
                 let jump = (during_y - after_first_y).abs();
                 if jump > 50.0 {
                     return Err(format!(
@@ -345,9 +285,6 @@ fn main() {
                 Ok(())
             });
 
-            // =========================================================
-            // Summary
-            // =========================================================
             println!("\n=== Test Summary ===");
             println!("{} / {} tests passed", pass_count, test_count);
 

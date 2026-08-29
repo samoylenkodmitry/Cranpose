@@ -40,7 +40,6 @@ fn create_app() -> AppLauncher {
         .with_frame_pacing_controls(true)
 }
 
-/// Shared entry point for desktop
 #[cfg(all(
     feature = "desktop",
     feature = "renderer-wgpu",
@@ -65,9 +64,6 @@ use cranpose::{
 #[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
 use crate::fonts::DEMO_FONTS as IOS_DEMO_FONTS;
 
-/// iOS root: insets the demo by the system safe area (status bar, notch, home
-/// indicator) read from [`local_safe_area_insets`], which the iOS backend
-/// publishes from the live window.
 #[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
 #[cranpose::composable]
 fn ios_root() {
@@ -84,10 +80,6 @@ fn ios_root() {
     );
 }
 
-/// Shared entry point for iOS.
-///
-/// winit starts `UIApplicationMain`, so this is invoked directly from the app
-/// binary's `main`. The window is sized by UIKit, so no explicit size is set.
 #[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
 pub fn ios_entry_point() {
     if let Err(error) = IosAppLauncher::new()

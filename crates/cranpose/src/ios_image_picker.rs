@@ -1,13 +1,3 @@
-//! iOS photo-library picker built on `UIImagePickerController`.
-//!
-//! Registered as the platform image picker (see
-//! [`cranpose_services::set_platform_image_picker`]) by the iOS backend, so
-//! apps can import a photo from the user's library (where camera photos live)
-//! rather than only from Files via the document picker.
-//!
-//! The delegate callbacks run on the UIKit main thread, so the shared result
-//! slot mirrors `ios_file_picker` (no cross-thread marshaling). The chosen
-//! image is re-encoded to PNG bytes; the caller decodes it.
 #![allow(unsafe_code)]
 
 use std::{
@@ -33,7 +23,6 @@ use objc2_ui_kit::{
     UIImagePickerControllerSourceType, UINavigationControllerDelegate,
 };
 
-/// Installs the iOS photo picker as the platform image picker.
 pub(crate) fn register() {
     set_platform_image_picker(Arc::new(IosImagePicker));
 }
@@ -69,8 +58,6 @@ struct PickSlot {
 
 type SharedSlot = Rc<RefCell<PickSlot>>;
 
-/// Future resolved when the delegate reports a pick or cancellation. Holds the
-/// delegate alive (the controller keeps only a weak reference to it).
 struct PickFuture {
     slot: SharedSlot,
     _delegate: Retained<PickerDelegate>,
@@ -136,10 +123,7 @@ impl PickerDelegate {
     }
 }
 
-/// Encode the picked original image to PNG bytes.
 fn extract_png_bytes(info: &NSDictionary<UIImagePickerControllerInfoKey, AnyObject>) -> PickResult {
-    // SAFETY: `UIImagePickerControllerOriginalImage` is an immutable framework
-    // constant key.
     let key = unsafe { UIImagePickerControllerOriginalImage };
     let Some(object) = info.objectForKey(key) else {
         return Err(ImagePickerError::Failed("no image in picker result".into()));
@@ -161,12 +145,6 @@ fn dismiss(picker: &UIImagePickerController) {
     picker.dismissViewControllerAnimated_completion(true, None);
 }
 
-// `UIImagePickerController` is deprecated in favor of `PHPickerViewController`,
-// but its delegate delivers the chosen `UIImage` synchronously on the main
-// thread, matching `ios_file_picker`'s slot+waker model. PHPicker loads data
-// asynchronously on a background queue, which needs cross-thread waker
-// marshaling; adopt it once that path is verified on a device. The picker still
-// works and is the pragmatic photo-library source today.
 #[allow(deprecated)]
 fn present(source: ImageSource, mtm: MainThreadMarker) -> Result<PickFuture, ImagePickerError> {
     let root = crate::ios_file_picker::root_view_controller(mtm).ok_or_else(|| {
@@ -177,7 +155,6 @@ fn present(source: ImageSource, mtm: MainThreadMarker) -> Result<PickFuture, Ima
         ImageSource::PhotoLibrary => UIImagePickerControllerSourceType::PhotoLibrary,
         ImageSource::Camera => UIImagePickerControllerSourceType::Camera,
     };
-    // The camera is unavailable on the Simulator (and if the user denied access).
     if !UIImagePickerController::isSourceTypeAvailable(source_type, mtm) {
         return Err(ImagePickerError::Unsupported);
     }
@@ -187,9 +164,6 @@ fn present(source: ImageSource, mtm: MainThreadMarker) -> Result<PickFuture, Ima
 
     let slot: SharedSlot = Rc::new(RefCell::new(PickSlot::default()));
     let delegate = PickerDelegate::new(slot.clone(), mtm);
-    // SAFETY: the delegate conforms to both delegate protocols the picker needs;
-    // `setDelegate` takes the untyped `id` and holds it weakly (the returned
-    // future keeps the delegate alive).
     unsafe { picker.setDelegate(Some(&*delegate)) };
     root.presentViewController_animated_completion(&picker, true, None);
 

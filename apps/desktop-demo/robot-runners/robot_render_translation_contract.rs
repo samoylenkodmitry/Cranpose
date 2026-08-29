@@ -1,9 +1,3 @@
-//! Robot regression for rigid subtree motion in the real desktop demo.
-//!
-//! This covers two renderer invariants with measurable app-level checks:
-//! - same scroll offset must render identically before and after pointer release
-//! - lazy-list item subtree stability under fractional wheel motion
-
 mod output_paths;
 
 use std::{path::Path, time::Duration};
@@ -28,8 +22,6 @@ const TEXT_MAX_DIFFERING_PIXELS: usize = 0;
 const TEXT_MAX_PIXEL_DIFFERENCE: u32 = 0;
 const LAZY_MAX_DIFFERING_PIXELS: usize = 24;
 const LAZY_MAX_PIXEL_DIFFERENCE: u32 = 56;
-// Direct text now translates smoothly through fractional scroll positions, so a normalized
-// text-only crop can retain a few per-pixel differences even when the row itself moves rigidly.
 const LAZY_TEXT_MAX_DIFFERING_PIXELS: usize = 24;
 const LAZY_TEXT_MAX_PIXEL_DIFFERENCE: u32 = 72;
 const LAZY_SCROLL_DELTA_Y: f32 = -21.5;

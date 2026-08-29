@@ -133,8 +133,6 @@ impl SoftwareTextFont {
 
         let mut font =
             FontVec::try_from_vec(bytes).map_err(|_| SoftwareTextFontError::InvalidFont)?;
-        // Two instances of one variable file draw different outlines, so the
-        // axis values have to reach `content_hash` — it is the glyph atlas key.
         let variations = apply_declared_variations(&mut font, weight, style);
         for (tag, value) in &variations {
             tag.hash(&mut hasher);
@@ -142,11 +140,6 @@ impl SoftwareTextFont {
         }
         let content_hash = hasher.finish();
 
-        // Read the kerning at the SAME axis position the outlines were
-        // instanced at. Roboto's GPOS pair values carry `VariationIndex`
-        // deltas worth up to 136 font units between wght 400 and wght 700, so
-        // a table read at the default instance would kern a Medium run as if
-        // it were Regular.
         let kerning = KernedFont::read_kerning(font.font_data(), &variations);
 
         let font = FontArc::from(font);
@@ -371,20 +364,10 @@ fn default_font_index(fonts: &[SoftwareTextFont]) -> usize {
     best.map(|(index, _)| index).unwrap_or(0)
 }
 
-/// How a `TextStyle`'s font family narrows the faces a resolve may pick from.
-///
-/// Both measurement and rasterization go through `SoftwareTextFontSet::resolve`,
-/// so deriving the constraint here is what keeps the two from disagreeing.
 #[derive(Clone, Copy)]
 enum FontFamilyRequest<'a> {
-    /// No family was named, or a generic family nothing was registered under.
-    /// Every face is eligible and weight/style alone decide, which is the
-    /// behaviour generic families had before app-supplied fonts existed.
     Any,
-    /// A face qualifies by carrying `name` in its `name` table, or by having
-    /// been registered under `FontFamily::Named(name)`.
     Named { name: &'a str, key: FontFamilyKey },
-    /// Only faces registered under exactly this family value qualify.
     Registered(FontFamilyKey),
 }
 
@@ -400,9 +383,6 @@ impl<'a> FontFamilyRequest<'a> {
                 Self::Registered(FontFamilyKey::of(family))
             }
             Some(family) => {
-                // Generic families (`SansSerif`, `Serif`, …) only constrain the
-                // set once an app has registered a face for one; otherwise they
-                // would strip the weight matching they used to allow.
                 let key = FontFamilyKey::of(family);
                 if registered.contains(&key) {
                     Self::Registered(key)
@@ -451,20 +431,11 @@ fn font_family_matches(font: &SoftwareTextFont, requested: &str) -> bool {
         .any(|family| family.eq_ignore_ascii_case(requested))
 }
 
-/// Instance a variable face at the weight and slant the app declared for it.
-///
-/// Returns the axis values actually applied so they can join the face's content
-/// hash: two instances of one file share bytes but not outlines, and
-/// `content_hash` is what keys the glyph mask cache and the glyph atlas.
 fn apply_declared_variations(
     font: &mut FontVec,
     weight: FontWeight,
     style: FontStyle,
 ) -> Vec<([u8; 4], f32)> {
-    // Faces spell italic either as `ital` (0..1) or as `slnt`, a counter-
-    // clockwise angle where a right-leaning oblique is negative. The angle
-    // matches the slant `TextStyleSynthesis` would shear in, so a face that
-    // carries the axis lands where a synthesized one would.
     const OBLIQUE_DEGREES: f32 = -12.0;
 
     let mut applied = Vec::new();
@@ -694,15 +665,6 @@ fn line_prefix_widths_key(
     })
 }
 
-/// A glyph's advance, in font units.
-///
-/// Font units rather than pixels, because everything ab_glyph reports for a
-/// scaled font is the unscaled value times one horizontal scale factor. Caching
-/// the scaled number buys nothing and costs the key: the font size has to join
-/// it, and text whose size moves -- a scaling list, a zoom, a spring on a font
-/// size -- then misses on every glyph of every frame and re-reads the font
-/// tables for all of them. In font units such a page pays for each glyph once
-/// and multiplies from then on.
 #[derive(Clone, Copy, Debug)]
 struct CachedGlyphMetrics {
     glyph_id: GlyphId,
@@ -754,8 +716,6 @@ impl SoftwareTextGlyphMetricsCache {
         self.stats
     }
 
-    /// Glyph id and advance in font units. Multiply the advance by the run's
-    /// horizontal scale factor, which is what ab_glyph would have done.
     fn glyph_metrics<F, S>(
         &mut self,
         font: &SoftwareTextFont,
@@ -785,8 +745,6 @@ impl SoftwareTextGlyphMetricsCache {
         metrics
     }
 
-    /// Kerning between two glyphs in font units, scaled by the caller like the
-    /// advance beside it.
     fn kern<F, S>(
         &mut self,
         font: &SoftwareTextFont,
@@ -912,8 +870,6 @@ impl TextMeasurer for SoftwareTextMeasurer {
         let metrics = crate::font_layout::vertical_metrics(&font.font, font_size);
         let asked = line_height_for_render_style(style, font_size);
         let resolved = line_box_for(style, metrics, asked, measure_grid());
-        // Glyph rows sit in the slot the line box gives them; the tight box is
-        // the font's own ascent+descent extent, clamped to the slot.
         let height = metrics.natural_line_height.min(resolved.height).max(1.0);
         Some((((resolved.height - height) * 0.5).max(0.0), height))
     }
@@ -925,15 +881,8 @@ impl TextMeasurer for SoftwareTextMeasurer {
     fn line_box(&self, style: &TextStyle) -> Option<cranpose_ui::text::LineBox> {
         let font = self.fonts.resolve(style)?;
         let font_size = resolve_font_size(style);
-        // Metrics must be read at the font's own px size, not the logical one:
-        // this is the very expression `collect_text_segment_solid_atlas_glyphs`
-        // places glyph origins with, so a baseline-anchored draw lands on the
-        // row the rasterizer will use. (`glyph_line_box` deliberately keeps its
-        // own, coarser box for selection chrome.)
         let metrics =
             crate::font_layout::vertical_metrics(&font.font, font.ab_glyph_px_size(font_size));
-        // A measurer works in layout points, so the line box rounds on the
-        // device grid the app is running at rather than on whole points.
         Some(line_box_for(
             style,
             metrics,
@@ -1295,27 +1244,6 @@ impl TextWeightSynthesis {
         }
     }
 
-    /// Minikin's `computeFakery`: semibold or darker, **and** at least two
-    /// grades above the face that answered.
-    ///
-    /// ```text
-    /// bool isFakeBold = wanted.weight() >= 600 && (wanted.weight() - actual.weight()) >= 200;
-    /// ```
-    ///
-    /// — `frameworks/minikin/libs/minikin/FontFamily.cpp`. Both halves matter.
-    /// Synthesising for *any* positive gap fabricates weights the platform
-    /// never draws: Wear Material 3 asks `sans-serif` for body 450 against a
-    /// family declared in hundreds, Android resolves that to the 400 face and
-    /// applies no fakery at all, while a proportional rule emboldens the 50
-    /// units of shortfall. That divergence is invisible in a screenshot of one
-    /// app and obvious next to every other app on the device.
-    ///
-    /// It also moves centred text. Only the measure paths scale advances by
-    /// [`Self::advance_scale`] — the glyph layout loops do not — so a run that
-    /// synthesises measures wider than it draws, and `TextAlign::Center`
-    /// offsets it by half that difference. On Wear's Credits screen a 450
-    /// request measured 231.16 px against 228.14 px drawn and every line sat
-    /// left of Kotlin's.
     const FAKE_BOLD_MIN_WEIGHT: u16 = 600;
     const FAKE_BOLD_MIN_DELTA: u16 = 200;
 
@@ -1476,7 +1404,6 @@ impl StyledTextRef<'_> {
         self.text.is_empty()
     }
 
-    /// Mirrors [`AnnotatedString::span_boundaries`].
     fn span_boundaries(&self) -> Vec<usize> {
         let mut boundaries = vec![0, self.text.len()];
         for span in self.span_styles {
@@ -1510,19 +1437,6 @@ impl<'a> From<&'a RenderString> for StyledTextRef<'a> {
     }
 }
 
-/// The x each line of an annotated block starts at, relative to the block's
-/// left edge, once `TextAlign` has had its say.
-///
-/// The block's own offset inside its parent is the scene builder's job; this
-/// is the other half, and Compose needs both — a `TextAlign` applies to every
-/// line of the paragraph, so a wrapped continuation line is centred in its own
-/// right and does not simply start where the first line started. See
-/// `scene_builder::text_align_fraction` for why the two telescope.
-///
-/// This walks the same span/newline segmentation the collectors below walk,
-/// and adds up advances with the same kern-plus-letter-spacing rule the glyph
-/// loops use, so the widths it aligns against are the widths that get drawn.
-/// `None` when there is nothing to do: start-aligned, or a single line.
 fn annotated_line_alignment_offsets(
     text: &StyledTextRef<'_>,
     style: &TextStyle,
@@ -1574,8 +1488,6 @@ fn annotated_line_alignment_offsets(
     )
 }
 
-/// Where an annotated block changes style or breaks a line — every offset the
-/// collectors below cut a segment at.
 fn annotated_segment_boundaries(text: &StyledTextRef<'_>) -> Vec<usize> {
     let mut boundaries = text.span_boundaries();
     for (offset, ch) in text.text.char_indices() {
@@ -1590,7 +1502,6 @@ fn annotated_segment_boundaries(text: &StyledTextRef<'_>) -> Vec<usize> {
     boundaries
 }
 
-/// One line's advance, walked exactly as the glyph loops walk it.
 fn segment_advance_px(
     font: &impl Font,
     content: &str,
@@ -1605,7 +1516,6 @@ fn segment_advance_px(
         if let Some(previous_id) = previous {
             caret += scaled_font.kern(previous_id, glyph_id);
         }
-        // One letter space PER CHARACTER, not per gap -- see `run_tracking`.
         caret += letter_spacing + scaled_font.h_advance(glyph_id);
         previous = Some(glyph_id);
     }
@@ -1676,8 +1586,6 @@ pub fn rasterize_annotated_text_to_image_with_glyph_cache<'a>(
     let mut canvas = vec![0_u8; (width as usize) * (height as usize) * 4];
     let base_line_height = line_height_for_render_style(style, font_size);
     let mut current_line_height = base_line_height;
-    // Each line of the block is aligned in its own right; see
-    // `annotated_line_alignment_offsets`.
     let line_offsets = annotated_line_alignment_offsets(&text, style, font_size, scale, fonts);
     let mut line_idx = 0usize;
     let mut cursor_x = rect.x + line_offset(&line_offsets, 0);
@@ -1761,8 +1669,6 @@ pub fn collect_solid_text_atlas_glyphs(
 
     let base_line_height = line_height_for_render_style(style, font_size);
     let mut current_line_height = base_line_height;
-    // Each line of the block is aligned in its own right; see
-    // `annotated_line_alignment_offsets`.
     let line_offsets = annotated_line_alignment_offsets(
         &StyledTextRef::from(text),
         style,
@@ -1884,8 +1790,6 @@ pub fn collect_cached_solid_text_atlas_placements(
 
     let base_line_height = line_height_for_render_style(style, font_size);
     let mut current_line_height = base_line_height;
-    // Each line of the block is aligned in its own right; see
-    // `annotated_line_alignment_offsets`.
     let line_offsets = annotated_line_alignment_offsets(
         &StyledTextRef::from(text),
         style,
@@ -2008,8 +1912,6 @@ pub fn collect_solid_text_atlas_run<'a>(
 
     let base_line_height = line_height_for_render_style(style, font_size);
     let mut current_line_height = base_line_height;
-    // Each line of the block is aligned in its own right; see
-    // `annotated_line_alignment_offsets`.
     let line_offsets = annotated_line_alignment_offsets(&text, style, font_size, scale, fonts);
     let mut line_idx = 0usize;
     let mut cursor_x = rect.x + line_offset(&line_offsets, 0);
@@ -2507,8 +2409,6 @@ fn rasterize_text_to_image_impl(
     let weight_synthesis = TextWeightSynthesis::for_style(style, font_ref.weight, font_size, scale);
     let style_synthesis = TextStyleSynthesis::for_style(style, font_ref.style, font_size, scale);
     let metrics = vertical_metrics(font, font_px_size);
-    // Everything here is already in raster device pixels, so the line
-    // box rounds on a grid of 1.
     let line_box = line_box_for(
         style,
         metrics,
@@ -2690,8 +2590,6 @@ fn draw_text_segment_solid_to_rgba(
     let weight_synthesis = TextWeightSynthesis::for_style(style, font.weight(), font_size, scale);
     let style_synthesis = TextStyleSynthesis::for_style(style, font.style(), font_size, scale);
     let metrics = vertical_metrics(&font.font, font_px_size);
-    // Everything here is already in raster device pixels, so the line
-    // box rounds on a grid of 1.
     let line_box = line_box_for(
         style,
         metrics,
@@ -2768,8 +2666,6 @@ fn collect_text_segment_solid_atlas_glyphs(
     let weight_synthesis = TextWeightSynthesis::for_style(style, font.weight(), font_size, scale);
     let style_synthesis = TextStyleSynthesis::for_style(style, font.style(), font_size, scale);
     let metrics = vertical_metrics(&font.font, font_px_size);
-    // Everything here is already in raster device pixels, so the line
-    // box rounds on a grid of 1.
     let line_box = line_box_for(
         style,
         metrics,
@@ -2864,8 +2760,6 @@ fn collect_text_segment_cached_solid_atlas_placements(
     let weight_synthesis = TextWeightSynthesis::for_style(style, font.weight(), font_size, scale);
     let style_synthesis = TextStyleSynthesis::for_style(style, font.style(), font_size, scale);
     let metrics = vertical_metrics(&font.font, font_px_size);
-    // Everything here is already in raster device pixels, so the line
-    // box rounds on a grid of 1.
     let line_box = line_box_for(
         style,
         metrics,
@@ -2949,8 +2843,6 @@ fn collect_text_segment_solid_atlas_run(
     let weight_synthesis = TextWeightSynthesis::for_style(style, font.weight(), font_size, scale);
     let style_synthesis = TextStyleSynthesis::for_style(style, font.style(), font_size, scale);
     let metrics = vertical_metrics(&font.font, font_px_size);
-    // Everything here is already in raster device pixels, so the line
-    // box rounds on a grid of 1.
     let line_box = line_box_for(
         style,
         metrics,
@@ -3010,16 +2902,6 @@ fn resolve_font_size(style: &TextStyle) -> f32 {
     style.resolve_font_size(14.0)
 }
 
-/// The line box a style asks for, in the unit `metrics` and `line_height` are
-/// already in.
-///
-/// `grid` is how many device pixels one of those units is worth — `1.0` on the
-/// raster paths, where everything has already been multiplied by the render
-/// scale, and the density on the measure paths, which work in layout points.
-///
-/// A style that leaves `line_height_style` unset — every style in the framework
-/// but the Wear ones — comes back through the same arithmetic this function
-/// used before it took a style at all.
 fn line_box_for(
     style: &TextStyle,
     metrics: crate::font_layout::FontVerticalMetrics,
@@ -3034,12 +2916,6 @@ fn line_box_for(
     )
 }
 
-/// The device grid a measurement in layout points rounds on.
-///
-/// A measurer runs inside an app context in the running app, but the offline
-/// raster paths and this file's own tests call it without one, and asking for
-/// the ambient density there is a panic rather than a default. Those callers
-/// are all working at one pixel per point by definition.
 fn measure_grid() -> f32 {
     if cranpose_ui::has_current_app_context() {
         cranpose_ui::current_density()
@@ -3061,33 +2937,10 @@ fn resolve_letter_spacing(style: &TextStyle, font_size: f32) -> f32 {
     style.resolve_letter_spacing(14.0)
 }
 
-/// How much width `char_count` characters of tracking add to a run.
-///
-/// **A run of `n` characters carries `n` letter spaces, not `n - 1`.** Android
-/// resolves `letterSpacing` in Minikin, which distributes it as HALF a letter
-/// space on each side of every cluster: `LayoutCore.cpp` adds
-/// `letterSpaceHalf` to the pen before the first glyph of a script run, a full
-/// `letterSpace` at each cluster boundary, and `letterSpaceHalf` again after
-/// the last glyph. Every character therefore ends up carrying exactly one
-/// letter space in `mAdvances[]`, which is what `StaticLayout` sums to get a
-/// line's width. (Compose reaches that code by putting the value on the paint:
-/// `LetterSpacingSpanPx` divides the px value by `textSize * textScaleX` and
-/// assigns `TextPaint.letterSpacing`, and `TextPaintExtensions.android.kt`
-/// does the same for a paragraph-level `Sp` tracking.)
-///
-/// The trailing half is real on the platform this is measured against — the
-/// `sdk_gwear` emulator runs Android 14, whose `Layout.cpp` has no letter
-/// spacing code at all. The edge-trimming that removes the two half spaces
-/// (`adjustAdvanceLetterSpacingEdge`) only arrives in Android 15, and is
-/// opt-in per run there.
-///
-/// An empty run carries none: the loop that adds them never runs.
 fn run_tracking(char_count: usize, letter_spacing: f32) -> f32 {
     char_count as f32 * letter_spacing
 }
 
-/// The lead-in before a run's first glyph: half a letter space, or nothing at
-/// all for an empty run. See [`run_tracking`].
 fn run_lead_in(char_count: usize, letter_spacing: f32) -> f32 {
     if char_count == 0 {
         0.0
@@ -3137,8 +2990,6 @@ fn fallback_cursor_x_for_offset(text: &str, style: &TextStyle, offset: usize) ->
     let clamped = clamp_to_char_boundary(text, offset.min(text.len()));
     let line_start = text[..clamped].rfind('\n').map_or(0, |index| index + 1);
     let char_count = text[line_start..clamped].chars().count();
-    // The caret after `k` characters sits at the sum of their advances, and
-    // every character's advance carries a whole letter space (`run_tracking`).
     let spacing = run_tracking(char_count, resolve_letter_spacing(style, font_size));
     char_count as f32 * fallback_char_width(font_size) + spacing
 }
@@ -3259,8 +3110,6 @@ fn cached_line_advance_width(
     glyph_metrics: &mut SoftwareTextGlyphMetricsCache,
 ) -> f32 {
     let scaled_font = font.font.as_scaled(PxScale::from(glyph_font_size));
-    // One scale factor for the whole run: the cache keeps font units, and this
-    // is the multiply ab_glyph would have applied per lookup.
     let h_scale = scaled_font.h_scale_factor();
     let mut width = 0.0f32;
     let mut previous = None;
@@ -3369,16 +3218,10 @@ fn append_font_prefix_width_segment_cached(
         .max(style_synthesis.visual_overhang_px());
 
     let mut previous = None;
-    // One scale factor for the whole run: the cache keeps font units.
     let h_scale = scaled_font.h_scale_factor();
 
     for (index, ch) in segment.chars().enumerate() {
         let metrics = cache.glyph_metrics.glyph_metrics(font, &scaled_font, ch);
-        // `separator_before` is the KERN alone. The letter space belongs to
-        // the character rather than to the gap before it (`run_tracking`), so
-        // it goes into `width` unconditionally -- and a line that starts
-        // mid-string, which drops `separator_before[start]`, still keeps one
-        // letter space for every character it contains.
         let separator = if index == 0 {
             0.0
         } else {
@@ -3411,8 +3254,6 @@ fn append_fallback_prefix_width_segment(
     let char_width = fallback_char_width(font_size);
     let letter_spacing = resolve_letter_spacing(style, font_size);
     for _ in segment.chars() {
-        // No kerning in the fallback, so nothing is dropped at a line's
-        // leading edge; the letter space rides the character (`run_tracking`).
         sink.separator_before.push(0.0);
         sink.width += letter_spacing + char_width;
         sink.prefix_widths.push(sink.width.max(0.0));
@@ -3748,13 +3589,6 @@ fn effective_style_for_range(
     effective
 }
 
-/// The line advance a style asks for on a given font, in layout points.
-///
-/// A style that asks for a line-height policy needs the font's real ascent and
-/// descent, so the font is carried in rather than dropped: reading the metrics
-/// at the font's own pixel size is what makes them em-relative rather than a
-/// restated `font_size`. The flat `font_size * 1.4` below is only the fallback
-/// for a style that asks for nothing.
 fn line_height_for_style(style: &TextStyle, font_size: f32, font: &SoftwareTextFont) -> f32 {
     let asked = resolve_line_height(style, font_size * 1.4);
     if style.paragraph_style.line_height_style.is_none() {
@@ -3874,22 +3708,6 @@ fn cached_static_glyph_mask(
     .map(|(_, mask)| mask)
 }
 
-/// Where each line of a paragraph starts, relative to the block's own left
-/// edge, once `TextAlign` has had its say.
-///
-/// A `TextAlign` is a property of the paragraph and it applies to **every
-/// line**: Compose centres each line in the paragraph's width. Every glyph
-/// loop below used to start each line at `origin_x`, which centres a
-/// single-line paragraph correctly — the scene builder offsets the whole block
-/// — and leaves every wrapped continuation line jammed under the start of the
-/// first. On the Credits screen that is the difference between
-/// `"Designed and built for Wear" / "OS."` centred and `"OS."` hard against
-/// the left of the block.
-///
-/// The offsets are measured against the widest line rather than against the
-/// parent's width, because the block offset already covers the rest; see
-/// `scene_builder::text_align_fraction`. `None` for the start-aligned case, so
-/// the common path does not measure anything twice.
 fn line_alignment_offsets<F: Font, S: ScaleFont<F>>(
     scaled_font: &S,
     text: &str,
@@ -3909,10 +3727,6 @@ fn line_alignment_offsets<F: Font, S: ScaleFont<F>>(
                 if let Some(previous_id) = previous {
                     advance += scaled_font.kern(previous_id, glyph_id);
                 }
-                // One letter space PER CHARACTER -- see `run_tracking`. An
-                // empty line gets none, which is why a blank line between two
-                // tracked paragraphs no longer aligns as though it were a
-                // character wide.
                 advance += letter_spacing + scaled_font.h_advance(glyph_id);
                 previous = Some(glyph_id);
             }
@@ -3960,8 +3774,6 @@ fn visit_text_glyph_masks(
     let mut max_advance = 0.0f32;
     for (line_idx, line) in text.split('\n').enumerate() {
         let baseline_y = first_baseline_y + line_idx as f32 * line_height + origin_y;
-        // Half a letter space of lead-in before the first glyph, and half
-        // again after the last -- see `run_tracking`.
         let lead_in = run_lead_in(line.chars().count(), letter_spacing);
         let mut caret_x = origin_x + line_offset(&line_offsets, line_idx) + lead_in;
         let mut previous = None;
@@ -4036,8 +3848,6 @@ fn visit_text_glyph_masks_with_key(
     let mut max_advance = 0.0f32;
     for (line_idx, line) in text.split('\n').enumerate() {
         let baseline_y = first_baseline_y + line_idx as f32 * line_height + origin_y;
-        // Half a letter space of lead-in before the first glyph, and half
-        // again after the last -- see `run_tracking`.
         let lead_in = run_lead_in(line.chars().count(), letter_spacing);
         let mut caret_x = origin_x + line_offset(&line_offsets, line_idx) + lead_in;
         let mut previous = None;
@@ -4097,8 +3907,6 @@ fn visit_cached_text_glyph_atlas_placements(
     let mut max_advance = 0.0f32;
     for (line_idx, line) in text.split('\n').enumerate() {
         let baseline_y = first_baseline_y + line_idx as f32 * line_height + origin_y;
-        // Half a letter space of lead-in before the first glyph, and half
-        // again after the last -- see `run_tracking`.
         let lead_in = run_lead_in(line.chars().count(), letter_spacing);
         let mut caret_x = origin_x + line_offset(&line_offsets, line_idx) + lead_in;
         let mut previous = None;
@@ -4165,8 +3973,6 @@ fn visit_text_glyph_atlas_run(
     let mut run_metrics_cache: Vec<(GlyphMaskCacheKey, CachedAtlasGlyphMetrics)> = Vec::new();
     for (line_idx, line) in text.split('\n').enumerate() {
         let baseline_y = first_baseline_y + line_idx as f32 * line_height + origin_y;
-        // Half a letter space of lead-in before the first glyph, and half
-        // again after the last -- see `run_tracking`.
         let lead_in = run_lead_in(line.chars().count(), letter_spacing);
         let mut caret_x = origin_x + line_offset(&line_offsets, line_idx) + lead_in;
         let mut previous = None;
@@ -5949,8 +5755,6 @@ mod tests {
 
     #[test]
     fn a_named_family_resolves_the_face_registered_under_it() {
-        // The file's own `name` table says Noto Sans; the app filed it as
-        // "Game UI", and asking for that has to find it.
         let family = FontFamily::named("Game UI");
         let fonts = SoftwareTextFontSet::from_faces(vec![
             unregistered_face(),
@@ -6011,8 +5815,6 @@ mod tests {
             ..Default::default()
         };
 
-        // Nothing claims `sans-serif`, so weight matching still runs over the
-        // whole set the way it did before app-supplied families existed.
         let unclaimed = software_text_font_set_from_fonts_or_default(&[
             include_bytes!("../assets/NotoSansMerged.ttf"),
             include_bytes!("../assets/NotoSansBold.ttf"),
@@ -6025,8 +5827,6 @@ mod tests {
             FontWeight::BOLD
         );
 
-        // Once a face is filed under `sans-serif` it wins, because that is what
-        // the app said the alias means.
         let claimed = SoftwareTextFontSet::from_faces(vec![
             SoftwareTextFont::from_bytes(include_bytes!("../assets/NotoSansBold.ttf").to_vec())
                 .expect("bold test face"),
@@ -6076,13 +5876,9 @@ mod tests {
             ..Default::default()
         };
 
-        // One size to fill the cache with this string's glyphs and pairs.
         let first = measurer.measure(&text, &sized(14.0));
         let after_first = measurer.lock_cache().glyph_metrics.stats();
 
-        // A scaling list re-draws the same rows at a new size every frame. Font
-        // metrics are linear in the size, so nothing here is new work: what the
-        // cache holds is font units, and only the multiply changes.
         for step in 0..120 {
             let size = 14.0 + step as f32 * 0.137;
             let measured = measurer.measure(&text, &sized(size));
@@ -6092,9 +5888,6 @@ mod tests {
             );
         }
 
-        // Hits climb, which is the point. What must not move is the misses:
-        // every one of those is a font-table read, and keying by size made them
-        // grow with every frame a scaling list drew.
         let after_scaling = measurer.lock_cache().glyph_metrics.stats();
         assert_eq!(
             (after_scaling.glyph_misses, after_scaling.kern_misses),
@@ -6106,7 +5899,6 @@ mod tests {
             "the scaled measurements must have come from the cache"
         );
 
-        // And the scaling stays honest: twice the size is twice the advance.
         let single = measurer.measure(&AnnotatedString::from("W"), &sized(20.0));
         let double = measurer.measure(&AnnotatedString::from("W"), &sized(40.0));
         let ratio = double.width / single.width.max(f32::EPSILON);
@@ -6371,8 +6163,6 @@ mod tests {
     #[test]
     fn rasterized_gradient_text_shows_color_transition() {
         let font = test_font();
-        // Use a gradient sized to the rendered text width so left=red, right=blue.
-        // We first do a plain measurement pass to know the text width.
         let plain_style = TextStyle::default();
         let probe = rasterize_text_to_image_with_font(
             "MMMMMMMM",
@@ -6712,7 +6502,6 @@ mod line_alignment_tests {
 
     use super::*;
 
-    /// The x range of every non-transparent pixel on the rows a line occupies.
     fn ink_columns(image: &ImageBitmap, rows: std::ops::Range<u32>) -> Option<(u32, u32)> {
         let width = image.width();
         let pixels = image.pixels();
@@ -6742,14 +6531,6 @@ mod line_alignment_tests {
 
     #[test]
     fn a_wrapped_list_header_centres_both_its_lines() {
-        // The style an app actually gets, not one assembled for the test:
-        // `ListHeader` owns its text style, so if the alignment is not on the
-        // spec then nothing downstream can put it back. Compose provides
-        // `LocalTextConfiguration(TextAlign.Center)` around the header's
-        // content -- `ListHeaderKt` in compose-material3-1.6.2.aar -- and the
-        // Credits screen is where that shows: `ORBIT BREAKER` wraps, and with
-        // a block-only centring `ORBIT` sat 25 px left of the `BREAKER` under
-        // it.
         let font = default_software_text_font().expect("bundled default font");
         let style = cranpose_ui::widgets::wear::list_header::ListHeaderSpec::default()
             .text_style
@@ -6783,11 +6564,6 @@ mod line_alignment_tests {
 
     #[test]
     fn a_wrapped_line_is_centred_under_the_one_above_it_not_left_under_it() {
-        // `TextAlign` is a paragraph property and Compose applies it to every
-        // line. The scene builder centres the block; without a per-line offset
-        // as well, the short second line sits hard against the left of the
-        // block -- which is exactly what the Credits screen's
-        // "Designed and built for Wear / OS." showed.
         let font = default_software_text_font().expect("bundled default font");
         let rect = Rect {
             x: 0.0,
@@ -6823,13 +6599,6 @@ mod line_alignment_tests {
 
     #[test]
     fn the_atlas_run_centres_each_line_of_a_wrapped_block() {
-        // The path an app on wgpu actually takes. It cuts the block into
-        // segments at span boundaries AND at newlines and drives its own
-        // cursor, so the per-line offset has to be applied there and not
-        // inside the glyph loop -- a segment handed to the glyph loop never
-        // contains a newline, so a rule written there never fires. This test
-        // is the difference between the two: it was green against the glyph
-        // loop and the watch still drew "OS." hard left.
         let font = default_software_text_font().expect("bundled default font");
         let fonts = SoftwareTextFontSet::from_font(font);
         let mut cache = SoftwareGlyphRasterCache::with_capacity_at_least_one(256);

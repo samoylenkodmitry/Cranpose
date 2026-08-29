@@ -1,16 +1,7 @@
-//! Reading-order padding and the keyboard's platform-shaped modifier key.
-//!
-//! Two rules that only misbehave somewhere the author was not looking: a
-//! padding that is correct in English and mirrored in Arabic, and a shortcut
-//! that works on Linux and not on a Mac.
-
 use cranpose_ui::{LayoutDirection, Modifier, Modifiers, widgets::scaffold::PaddingValues};
 
 #[test]
 fn relative_padding_mirrors_with_the_reading_order() {
-    // Start-and-end padding exists precisely so that a right-to-left layout
-    // does not need its own values. If both directions produce the same
-    // modifier, that mirroring is not happening.
     let padding = PaddingValues::new(8.0, 0.0, 0.0, 0.0);
     let ltr = padding.apply_to_in(Modifier::empty(), LayoutDirection::Ltr);
     let rtl = padding.apply_to_in(Modifier::empty(), LayoutDirection::Rtl);

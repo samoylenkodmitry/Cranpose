@@ -1,18 +1,3 @@
-//! The software mixer that runs on the platform's real-time audio thread.
-//!
-//! Everything the mixer needs is allocated before the stream starts: a fixed
-//! clip table, a fixed voice table, and the two rings it shares with the UI
-//! thread. [`Mixer::render`] therefore performs no allocation, takes no lock,
-//! logs nothing, and calls into no operating-system service. Its only inputs
-//! are commands popped from a wait-free queue.
-//!
-//! A clip whose slot is overwritten or released cannot be dropped here — the
-//! deallocation would run on the audio thread — so the mixer pushes it back to
-//! the UI thread through the `retired` ring instead.
-
-// The mixer is platform-independent and always compiled, so its tests run on
-// every host. A build with no output device compiled in has nothing that
-// constructs one, which is the single configuration where that is expected.
 #![cfg_attr(
     not(any(
         test,
@@ -40,7 +25,6 @@ pub const MAX_CLIPS: usize = 256;
 /// is stolen, which is what a listener expects when a cue storm arrives.
 pub const MAX_VOICES: usize = 32;
 
-/// How many mix buses exist. Mirrors `cranpose_services::AudioBus`.
 pub const BUS_COUNT: usize = 2;
 
 /// How long the output keeps running with nothing to play before the mixer
@@ -74,14 +58,10 @@ pub enum RenderStatus {
     Idle,
 }
 
-/// Decoded PCM as the audio thread sees it.
 #[derive(Clone)]
 pub struct ClipData {
-    /// Interleaved samples.
     pub samples: Arc<[f32]>,
-    /// 1 or 2.
     pub channels: u8,
-    /// The clip's recorded rate in Hz.
     pub sample_rate: u32,
 }
 
@@ -101,110 +81,62 @@ impl std::fmt::Debug for ClipData {
     }
 }
 
-/// Work the UI thread hands to the mixer. Every variant is small and `Send`.
 #[derive(Debug)]
 pub enum Command {
-    /// Installs a clip in `slot`, replacing whatever was there.
     LoadClip {
-        /// Index into the clip table.
         slot: u32,
-        /// The clip to install.
         clip: ClipData,
     },
-    /// Releases a slot and silences its voices.
     UnloadClip {
-        /// Index into the clip table.
         slot: u32,
     },
-    /// Starts a voice.
     Play {
-        /// The voice handle the UI thread allocated.
         voice: u64,
-        /// Index into the clip table.
         slot: u32,
-        /// Left channel gain, volume and pan already folded in.
         gain_left: f32,
-        /// Right channel gain, volume and pan already folded in.
         gain_right: f32,
-        /// Playback rate relative to the clip's recorded pitch.
         rate: f32,
-        /// Which bus the voice mixes into.
         bus: u8,
-        /// Whether the voice restarts at the end.
         looping: bool,
     },
-    /// Changes a running voice's gain and rate.
     RetuneVoice {
-        /// The voice to change.
         voice: u64,
-        /// New left channel gain.
         gain_left: f32,
-        /// New right channel gain.
         gain_right: f32,
-        /// New playback rate.
         rate: f32,
     },
-    /// Silences one voice.
     StopVoice {
-        /// The voice to silence.
         voice: u64,
     },
-    /// Silences every voice playing a clip.
     StopClip {
-        /// Index into the clip table.
         slot: u32,
     },
-    /// Silences every voice.
     StopAll,
-    /// Sets the gain applied to every bus.
     SetMaster(f32),
-    /// Sets one bus's gain.
     SetBusVolume {
-        /// Bus index.
         bus: u8,
-        /// New gain.
         volume: f32,
     },
-    /// Mutes or unmutes one bus without stopping its voices.
     SetBusEnabled {
-        /// Bus index.
         bus: u8,
-        /// Whether the bus is audible.
         enabled: bool,
     },
 }
 
-/// The two ring ends and the shared counters a [`Mixer`] is built from.
 pub struct MixerSeed {
-    /// Commands arriving from the UI thread.
     pub commands: Consumer<Command>,
-    /// Clips handed back for the UI thread to drop.
     pub retired: Producer<ClipData>,
-    /// Incremented when a retired clip could not be handed back.
     pub leaked_clips: Arc<AtomicU32>,
-    /// Incremented when the output ran with no room to grow, for diagnostics.
     pub underruns: Arc<AtomicU32>,
-    /// Whether the output stream is producing audio.
-    ///
-    /// The mixer clears it when it gives the stream up for want of anything to
-    /// play; the engine sets it again when it starts the stream back up. It is
-    /// the only piece of mixer state the UI thread reads, which is why it is
-    /// an atomic rather than a call into [`Mixer`] — walking the voice table
-    /// from the UI thread would race the render that owns it.
     pub streaming: Arc<AtomicBool>,
 }
 
 #[derive(Clone, Copy)]
 struct Voice {
-    /// 0 means the slot is free.
     id: u64,
     slot: usize,
-    /// Fractional read position in frames.
     position: f64,
-    /// Frames advanced per output frame.
     step: f64,
-    /// Requested rate, kept so the step can be recomputed if the device rate
-    /// turns out to differ from the one the mixer was built with.
     rate: f32,
     gain_left: f32,
     gain_right: f32,
@@ -226,7 +158,6 @@ impl Voice {
     };
 }
 
-/// The real-time mixer. Owned by the platform sink, driven from its callback.
 pub struct Mixer {
     commands: Consumer<Command>,
     retired: Producer<ClipData>,
@@ -240,16 +171,11 @@ pub struct Mixer {
     bus_enabled: [bool; BUS_COUNT],
     device_sample_rate: f32,
     device_channels: usize,
-    /// Output frames rendered since the last one that had a voice in it.
     idle_frames: u64,
-    /// [`IDLE_GRACE_SECONDS`] at the device's rate, so the check below is an
-    /// integer compare rather than a multiply per callback.
     idle_grace_frames: u64,
 }
 
 impl Mixer {
-    /// Builds a mixer for a device running at `sample_rate` with `channels`
-    /// output channels. Every buffer it will ever touch is allocated here.
     pub fn new(seed: MixerSeed, sample_rate: f32, channels: usize) -> Mixer {
         let mut clips = Vec::with_capacity(MAX_CLIPS);
         clips.resize_with(MAX_CLIPS, || None);
@@ -271,10 +197,6 @@ impl Mixer {
         }
     }
 
-    /// Re-reads the device format. AAudio only reports the negotiated rate once
-    /// the stream is open, so the first callback corrects the assumption the
-    /// mixer was built with; running voices keep their pitch. A backend that
-    /// knows the format up front (cpal) calls it once, before the stream runs.
     pub fn set_device_format(&mut self, sample_rate: f32, channels: usize) {
         let sample_rate = sample_rate.max(1.0);
         let channels = channels.max(1);
@@ -298,24 +220,16 @@ impl Mixer {
         }
     }
 
-    /// The device sample rate the mixer is currently resampling to.
     #[allow(dead_code)]
     pub fn device_sample_rate(&self) -> f32 {
         self.device_sample_rate
     }
 
-    /// How many voices are sounding. Diagnostics only; not called from the
-    /// audio callback.
     #[allow(dead_code)]
     pub fn active_voices(&self) -> usize {
         self.voices.iter().filter(|voice| voice.id != 0).count()
     }
 
-    /// Fills `out` with `out.len() / channels` interleaved output frames, and
-    /// reports whether the device still has a reason to run.
-    ///
-    /// This is the real-time entry point: it allocates nothing, locks nothing
-    /// and logs nothing.
     pub fn render(&mut self, out: &mut [f32]) -> RenderStatus {
         self.drain_commands();
 
@@ -347,10 +261,6 @@ impl Mixer {
             },
         ];
 
-        // How many voices put samples into this buffer. Counted here rather
-        // than by `active_voices`, which walks the whole voice table and is
-        // documented as diagnostics only: the loop below already visits every
-        // voice, so the idle test costs one increment.
         let mut sounding = 0usize;
         let clips = &self.clips;
         for voice in self.voices.iter_mut() {
@@ -373,19 +283,11 @@ impl Mixer {
             let mut position = voice.position;
             let step = voice.step;
             let length = frames as f64;
-            // Whether this voice puts anything into this buffer. A one-shot
-            // that had already run out contributes nothing; every other voice
-            // renders at least the first frame. Judging by whether the voice
-            // is still alive afterwards would miss a cue that starts and ends
-            // inside one callback — a tap in a menu, exactly the thing the
-            // grace period exists to sit through.
             let audible = voice.looping || position < length;
 
             for frame in 0..out_frames {
                 if position >= length {
                     if voice.looping {
-                        // A loop point is a subtraction, not a modulo: rates
-                        // are bounded so one wrap is always enough.
                         position -= length;
                         if position < 0.0 || position >= length {
                             position = 0.0;
@@ -447,16 +349,6 @@ impl Mixer {
         self.settle(sounding, out_frames)
     }
 
-    /// Decides whether the device is still earning its keep.
-    ///
-    /// The handshake with the UI thread is the delicate part. A `play` there
-    /// pushes its command and *then* reads `streaming`; this publishes the
-    /// stop and *then* re-reads the queue. A fence on each side puts both
-    /// pairs into one order, so every interleaving leaves one side responsible:
-    /// either the push is visible below and the stream keeps running, or the
-    /// cleared flag is visible to the engine and it starts the stream again.
-    /// Neither side can decide the other will handle it, which is the failure
-    /// that would strand a queued sound behind a stopped stream.
     fn settle(&mut self, sounding: usize, frames: usize) -> RenderStatus {
         if sounding > 0 {
             self.idle_frames = 0;
@@ -592,8 +484,6 @@ impl Mixer {
         }
     }
 
-    /// Picks the voice slot a new voice goes into: a free one if there is one,
-    /// otherwise the oldest one-shot, otherwise the oldest voice of any kind.
     fn claim_voice(&mut self) -> usize {
         let mut oldest_one_shot: Option<(usize, u64)> = None;
         let mut oldest_any: Option<(usize, u64)> = None;
@@ -614,12 +504,6 @@ impl Mixer {
             .unwrap_or(0)
     }
 
-    /// Hands a clip back to the UI thread to drop.
-    ///
-    /// Dropping it here would call the allocator on the real-time thread. When
-    /// the return ring is full the clip is deliberately leaked and counted
-    /// instead — the UI thread drains that ring on every audio call, so a full
-    /// ring means the app stopped talking to the engine entirely.
     fn retire(&mut self, clip: ClipData) {
         if let Err(clip) = self.retired.push(clip) {
             std::mem::forget(clip);
@@ -628,7 +512,6 @@ impl Mixer {
     }
 }
 
-/// [`IDLE_GRACE_SECONDS`] measured in output frames at `sample_rate`.
 fn grace_frames(sample_rate: f32) -> u64 {
     (f64::from(sample_rate.max(1.0)) * f64::from(IDLE_GRACE_SECONDS)) as u64
 }
@@ -667,8 +550,6 @@ mod tests {
     }
 
     impl Harness {
-        /// Renders `frames` of output in device-sized bursts, the way a real
-        /// callback arrives, and reports the last burst's verdict.
         fn run(&mut self, frames: usize) -> RenderStatus {
             let burst = 128;
             let channels = self.mixer.device_channels;
@@ -812,8 +693,6 @@ mod tests {
 
         let mut out = vec![0.0f32; 4];
         h.mixer.render(&mut out);
-        // Reading twice as fast means output frame n is clip frame 2n, and the
-        // ramp makes that value exactly 2n/64.
         for (frame, sample) in out.iter().enumerate() {
             let expected = (2 * frame) as f32 / 64.0;
             assert!(
@@ -836,8 +715,6 @@ mod tests {
         let mut out = vec![0.0f32; 8];
         h.mixer.render(&mut out);
         assert_eq!(h.mixer.active_voices(), 1);
-        // A 24 kHz clip on a 48 kHz device advances half a frame per output
-        // frame, so 1024 frames last 2048 output frames.
         for _ in 0..255 {
             h.mixer.render(&mut out);
         }
@@ -995,7 +872,6 @@ mod tests {
                 clip: clip(vec![1.0; 4096], 1, 48_000),
             })
             .expect("queued");
-        // One looping voice, then fill every remaining slot with one-shots.
         h.commands
             .push(Command::Play {
                 voice: 1,
@@ -1014,7 +890,6 @@ mod tests {
         h.mixer.render(&mut out);
         assert_eq!(h.mixer.active_voices(), MAX_VOICES);
 
-        // The next play steals a one-shot; the loop survives.
         h.commands
             .push(play(MAX_VOICES as u64 + 1, 0))
             .expect("queued");
@@ -1213,7 +1088,6 @@ mod tests {
             .expect("queued");
         h.commands.push(play(1, 0)).expect("queued");
 
-        // One second of clip, then all but the last burst of the grace period.
         let grace = grace_frames(48_000.0) as usize;
         assert_eq!(h.run(48_000 + grace - 128), RenderStatus::Continue);
         assert_eq!(h.run(128), RenderStatus::Idle);
@@ -1272,9 +1146,6 @@ mod tests {
             })
             .expect("queued");
 
-        // Muting is the "music off" toggle, not a stop: the voice keeps its
-        // position so unmuting resumes mid-track, which it could not do if the
-        // device had been given up underneath it.
         let grace = grace_frames(48_000.0) as usize;
         assert_eq!(h.run(grace + 128), RenderStatus::Continue);
     }
@@ -1285,10 +1156,6 @@ mod tests {
         assert_eq!(h.run(grace_frames(48_000.0) as usize), RenderStatus::Idle);
         assert!(!h.streaming.load(Ordering::SeqCst));
 
-        // The second half of the handover with the UI thread: a command pushed
-        // after this callback drained the queue, in the window before the
-        // engine reads the flag, has to be caught by the re-check rather than
-        // stranded behind a stopped stream.
         h.commands.push(Command::StopAll).expect("queued");
         assert_eq!(h.mixer.settle(0, 128), RenderStatus::Continue);
         assert!(h.streaming.load(Ordering::SeqCst));

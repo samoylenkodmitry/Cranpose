@@ -314,8 +314,6 @@ pub fn dispatch_lifecycle_state(to: LifecycleState) {
     dispatch_lifecycle(LifecycleEvent { from, to });
 }
 
-// ---- Observable lifecycle ------------------------------------------------
-
 /// The `CompositionLocal` carrying the host's current lifecycle state.
 ///
 /// [`ProvideLifecycle`] installs it; descendants read it and recompose on every
@@ -371,8 +369,6 @@ pub fn ProvideLifecycle(content: impl FnOnce()) {
         content();
     });
 }
-
-// ---- Durable saves -------------------------------------------------------
 
 /// What became of the durable saves the host asked for.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -474,8 +470,6 @@ pub fn run_durable_saves(deadline: std::time::Duration) -> DurableSaveOutcome {
                 }
             });
         if spawned.is_err() {
-            // A host that cannot spawn threads is a host under real pressure;
-            // counting the save down keeps the wait from hanging on it.
             log::warn!("cranpose: a durable save could not be started");
             if outstanding.fetch_sub(1, Ordering::AcqRel) == 1 {
                 let (done, wake) = &*finished;
@@ -589,9 +583,6 @@ mod tests {
 
     #[test]
     fn durable_saves_run_and_report_completion() {
-        // A durable save holds a background-work lease while it runs, and that
-        // count is one number for the process, so tests that take or read it
-        // take turns.
         let _services = crate::registry::test_service_guard();
         let _guard = test_lock();
         let ran = Arc::new(std::sync::atomic::AtomicUsize::new(0));

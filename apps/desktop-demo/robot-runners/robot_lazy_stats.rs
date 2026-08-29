@@ -1,10 +1,3 @@
-//! Robot test to validate visible stats display in LazyList
-//!
-//! Run with:
-//! ```bash
-//! cargo run --package desktop-app --example robot_lazy_stats --features robot-app
-//! ```
-
 use std::time::Duration;
 
 use cranpose::AppLauncher;
@@ -24,7 +17,6 @@ fn main() {
             std::thread::sleep(Duration::from_millis(500));
             let _ = robot.wait_for_idle();
 
-            // Step 1: Navigate to LazyList tab
             println!("\n--- Step 1: Navigate to 'Lazy List' tab ---");
             if let Some((x, y, w, h)) = find_button_in_semantics(&robot, "Lazy List") {
                 println!("  Found 'Lazy List' tab at ({:.1}, {:.1})", x, y);
@@ -37,21 +29,17 @@ fn main() {
             }
             let _ = robot.wait_for_idle();
 
-            // Step 2: Find and print ALL text nodes
             println!("\n--- Step 2: Dump all text nodes ---");
             if let Ok(elements) = robot.get_semantics() {
                 cranpose_testing::print_semantics_with_bounds(&elements, 0);
             }
 
-            // Step 3: Look for "Visible:" text
-            // Stats are now reactive - they should show non-zero without any interaction
             println!("\n--- Step 3: Check 'Visible:' stats ---");
 
             let visible_text = find_text_by_prefix_in_semantics(&robot, "Visible:");
             if let Some((x, y, _w, _h, text)) = visible_text {
                 println!("  Found: '{}' at ({:.1}, {:.1})", text, x, y);
 
-                // Extract the number
                 if let Some(num_str) = text.strip_prefix("Visible:").map(|s| s.trim()) {
                     if let Ok(num) = num_str.parse::<usize>() {
                         if num > 0 {
@@ -71,7 +59,6 @@ fn main() {
                 std::process::exit(1);
             }
 
-            // Step 4: Also check Cached:
             println!("\n--- Step 5: Check 'Cached:' stats ---");
             if let Some((_, _, _, _, text)) = find_text_by_prefix_in_semantics(&robot, "Cached:") {
                 println!("  Found: '{}'", text);

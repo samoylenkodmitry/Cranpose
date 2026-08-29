@@ -1,10 +1,3 @@
-//! How a lazy list finds an item again after the data underneath it moves.
-//!
-//! Scroll stability rests entirely on these lookups: the list remembers the key
-//! of whatever was at the scroll position and asks where that key is now. A
-//! lookup that answers the wrong index scrolls the user somewhere they did not
-//! ask to be, and a lookup that answers `None` throws the position away.
-
 use cranpose_foundation::lazy::{LazyItems, LazyLayoutKey, LazyListIntervalContent, LazyListScope};
 
 fn keyed(count: usize) -> LazyListIntervalContent {
@@ -23,8 +16,6 @@ fn a_user_key_and_an_index_key_are_told_apart() {
         !LazyLayoutKey::Index(3).is_user_key(),
         "a positional key claimed to be one the caller named"
     );
-    // A caller's key 3 and the third item's positional key must not collide,
-    // or a keyed list and an unkeyed one would confuse each other's items.
     assert_ne!(LazyLayoutKey::User(3), LazyLayoutKey::Index(3));
     assert_ne!(
         LazyLayoutKey::User(3).to_slot_id(),
@@ -72,8 +63,6 @@ fn a_key_is_found_at_the_index_it_sits_at() {
 
 #[test]
 fn a_key_lookup_is_the_same_answer_above_and_below_the_cache_threshold() {
-    // Small lists search linearly and large ones build a map. Both have to give
-    // the same answer, or scroll stability would depend on list length.
     for count in [8usize, 200] {
         let content = keyed(count);
         let target = count - 2;
@@ -102,7 +91,6 @@ fn a_ranged_key_lookup_only_looks_inside_its_range() {
 fn a_ranged_lookup_clamps_a_range_that_runs_past_the_list() {
     let content = keyed(10);
     let key = LazyLayoutKey::User(90);
-    // A stale range from a previous, longer list must not index out of bounds.
     assert_eq!(content.get_index_by_key_in_range(key, 0..10_000), Some(9));
     assert_eq!(content.get_index_by_key_in_range(key, 50..10_000), None);
 }

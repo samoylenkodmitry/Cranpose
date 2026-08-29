@@ -161,9 +161,7 @@ pub trait Renderer {
     /// The text is drawn directly by the renderer without affecting composition.
     ///
     /// Default implementation does nothing.
-    fn draw_dev_overlay(&mut self, _text: &str, _viewport: Size) {
-        // Default: no-op
-    }
+    fn draw_dev_overlay(&mut self, _text: &str, _viewport: Size) {}
 
     /// Returns whether renderer-side cache materialization needs a visible follow-up frame.
     fn needs_frame_warmup(&self) -> bool {

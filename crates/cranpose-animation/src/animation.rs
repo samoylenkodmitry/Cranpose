@@ -75,7 +75,6 @@ pub fn advance_spring(
     let displacement = value - target;
 
     if (zeta - 1.0).abs() < 1e-4 {
-        // Critically damped: x(t) = (c1 + c2·t)·e^(−ωt)
         let c1 = displacement;
         let c2 = velocity + omega * displacement;
         let decay = (-omega * dt).exp();
@@ -83,7 +82,6 @@ pub fn advance_spring(
         let next_velocity = (c2 - omega * (c1 + c2 * dt)) * decay;
         (target + next_displacement, next_velocity)
     } else if zeta < 1.0 {
-        // Underdamped: decaying oscillation at ω_d = ω·√(1−ζ²).
         let omega_d = omega * (1.0 - zeta * zeta).sqrt();
         let decay = (-zeta * omega * dt).exp();
         let (sin, cos) = (omega_d * dt).sin_cos();
@@ -94,7 +92,6 @@ pub fn advance_spring(
             * ((b * omega_d - a * zeta * omega) * cos - (a * omega_d + b * zeta * omega) * sin);
         (target + next_displacement, next_velocity)
     } else {
-        // Overdamped: sum of two decaying exponentials.
         let root = (zeta * zeta - 1.0).sqrt();
         let r1 = -omega * (zeta - root);
         let r2 = -omega * (zeta + root);
@@ -196,9 +193,6 @@ fn cubic_bezier(x1: f32, y1: f32, x2: f32, y2: f32, fraction: f32) -> f32 {
         (3.0 * a * t + 2.0 * b) * t + c
     }
 
-    // Use Newton-Raphson iterations to solve for the parametric value `t`
-    // corresponding to the provided x fraction. Clamp to [0, 1] to keep the
-    // solution within bounds.
     let mut t = fraction;
     let mut newton_success = false;
     for _ in 0..8 {
@@ -215,7 +209,6 @@ fn cubic_bezier(x1: f32, y1: f32, x2: f32, y2: f32, fraction: f32) -> f32 {
     }
 
     if !newton_success {
-        // Fall back to a binary subdivision if Newton-Raphson did not converge.
         let mut t0 = 0.0;
         let mut t1 = 1.0;
         t = fraction;
@@ -820,15 +813,11 @@ struct AnimatableInner<T: SpringScalar + 'static> {
     state: OwnedMutableState<T>,
     runtime: RuntimeHandle,
     current: T,
-    /// Per-dimension velocity in value units per second. Preserved across
-    /// retargets so interrupted springs keep their physical motion.
     velocity: [f32; SPRING_MAX_DIMENSIONS],
     start: T,
     target: T,
     animation_type: AnimationType,
     start_time_nanos: Option<u64>,
-    /// Previous spring frame timestamp; springs integrate the inter-frame
-    /// delta (tweens use `start_time_nanos` progress instead).
     last_frame_nanos: Option<u64>,
     registration: Option<FrameCallbackRegistration>,
 }
@@ -871,7 +860,6 @@ impl<T: SpringScalar + 'static> Animatable<T> {
             let mut inner = self.inner.borrow_mut();
             let previous_animation = inner.animation_type;
 
-            // Cancel existing animation
             if let Some(registration) = inner.registration.take() {
                 registration.cancel();
             }
@@ -895,14 +883,6 @@ impl<T: SpringScalar + 'static> Animatable<T> {
                     inner.velocity = [0.0; SPRING_MAX_DIMENSIONS];
                 }
             }
-            // The spring frame chain (`last_frame_nanos`) survives a
-            // retarget: a mid-flight spring keeps integrating real frame
-            // deltas toward the new target. Clearing it made the first
-            // frame after every retarget a dt=0 clock-set — under
-            // continuous per-move retargeting (gesture tracking) that
-            // starved the spring to a standstill. Tweens read only
-            // `start_time_nanos`, which does reset. A settled or fresh
-            // animatable enters with `last_frame_nanos == None` anyway.
         }
 
         Self::schedule_frame(&self.inner);
@@ -1037,10 +1017,6 @@ impl<T: SpringScalar + 'static> Animatable<T> {
                         inner.last_frame_nanos = Some(start_time.saturating_add(delay_nanos));
                         schedule_next = true;
                     } else {
-                        // Damped harmonic oscillator advanced per dimension in
-                        // VALUE space using the closed-form solution (exact for
-                        // any frame delta — no integration drift at low frame
-                        // rates). Velocity carries across frames and retargets.
                         let last = inner.last_frame_nanos.replace(frame_time_nanos);
                         let dt = last
                             .map(|last| {
@@ -1071,7 +1047,6 @@ impl<T: SpringScalar + 'static> Animatable<T> {
                             inner.current = T::from_dimensions(position);
                             inner.state.set_value(inner.current.clone());
 
-                            // Settled when every dimension is at rest near the target.
                             let settled = (0..dimensions).all(|index| {
                                 inner.velocity[index].abs() < spec.velocity_threshold
                                     && (position[index] - inner.target.dimension(index)).abs()

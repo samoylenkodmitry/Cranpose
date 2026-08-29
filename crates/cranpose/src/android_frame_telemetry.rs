@@ -1,26 +1,3 @@
-//! Per-stage frame telemetry for the Android event loop.
-//!
-//! Desktop has `CRANPOSE_DESKTOP_FRAME_TELEMETRY_MS`, which splits a frame into
-//! update / acquire / render / present and is what settles "are we compute bound
-//! or present bound?". Android had no equivalent, and a `NativeActivity` cannot
-//! be handed an environment variable, so the switches here are system properties
-//! read once per process:
-//!
-//! * `debug.cranpose.frame_telemetry` — frames per reported window (`1` means
-//!   the default of 120). Unset or `0` disables everything in this module.
-//! * `debug.cranpose.vsync_probe` — when set, an `AChoreographer` callback keeps
-//!   a running vsync anchor so every frame can report its phase offset from the
-//!   most recent vsync. This is the measurement that distinguishes "the loop is
-//!   out of phase with the display" from "the work does not fit".
-//! * `debug.cranpose.present_mode` / `debug.cranpose.frame_latency` — swapchain
-//!   A/B knobs, read by [`crate::present_mode`] and [`crate::android`].
-//!
-//! The rest of the workspace gates its diagnostics on environment variables,
-//! which a `NativeActivity` cannot be handed either. [`PROPERTY_BACKED_ENV_VARS`]
-//! lists the ones that are reachable through a system property instead;
-//! [`seed_env_from_system_properties`] copies them across at startup.
-//!
-//! Set them with `adb shell setprop` before launching the activity.
 #![allow(unsafe_code)]
 
 use std::{
@@ -28,17 +5,12 @@ use std::{
     sync::atomic::{AtomicBool, AtomicI64, Ordering},
 };
 
-/// Frames aggregated into one report when `debug.cranpose.frame_telemetry=1`.
 const DEFAULT_WINDOW_FRAMES: usize = 120;
-/// `PROP_VALUE_MAX` from `<sys/system_properties.h>`.
 const PROP_VALUE_MAX: usize = 92;
 
-/// Reads an Android system property, returning `None` when unset or empty.
 pub(crate) fn system_property(name: &str) -> Option<String> {
     let name = CString::new(name).ok()?;
     let mut buffer = [0u8; PROP_VALUE_MAX];
-    // SAFETY: `name` is a valid NUL-terminated C string and `buffer` has room
-    // for `PROP_VALUE_MAX` bytes, which is the documented maximum written.
     let length = unsafe {
         libc::__system_property_get(name.as_ptr(), buffer.as_mut_ptr().cast::<libc::c_char>())
     };
@@ -58,23 +30,6 @@ fn property_flag(name: &str) -> bool {
     }
 }
 
-/// Diagnostics that the rest of the workspace reads from the environment, and
-/// the system property that stands in for each one on Android.
-///
-/// The renderer and the app shell gate their stage telemetry on environment
-/// variables, which is the natural switch for the desktop and web hosts. A
-/// `NativeActivity` is launched by `zygote` and inherits nothing an operator can
-/// set, so on Android those switches were unreachable and the only per-stage
-/// numbers available on device were this module's own. Mirroring a short
-/// allowlist of properties into the environment closes that gap without giving
-/// either side a new configuration format to learn.
-///
-/// Property names are capped at 32 bytes by `PROP_NAME_MAX` on pre-O Android,
-/// which is why they are abbreviations rather than the full variable name.
-/// (Since Android O the cap is gone — `__system_property_get` takes names of
-/// any length — so a name may run right up to or past that pre-O limit, as
-/// `debug.cranpose.retained_mesh_px2` does; every deployment target is far
-/// past O.)
 const PROPERTY_BACKED_ENV_VARS: [(&str, &str); 43] = [
     ("debug.cranpose.root_direct", "CRANPOSE_ROOT_DIRECT_DIAG"),
     (
@@ -184,12 +139,6 @@ const PROPERTY_BACKED_ENV_VARS: [(&str, &str); 43] = [
     ),
 ];
 
-/// Copies the [`PROPERTY_BACKED_ENV_VARS`] properties that are set into the
-/// process environment, so the workspace's existing environment-gated
-/// diagnostics can be switched on with `adb shell setprop`.
-///
-/// Must be called before the render loop starts. An explicit environment entry
-/// always wins, so a host that already exports one of these keeps it.
 pub(crate) fn seed_env_from_system_properties() {
     for (property, variable) in PROPERTY_BACKED_ENV_VARS {
         if std::env::var_os(variable).is_some() {
@@ -198,9 +147,6 @@ pub(crate) fn seed_env_from_system_properties() {
         let Some(value) = system_property(property) else {
             continue;
         };
-        // SAFETY: called from `android_main` before the frame loop, the render
-        // thread or any worker pool exists, so no other thread can be reading
-        // the environment concurrently.
         unsafe {
             std::env::set_var(variable, &value);
         }
@@ -208,15 +154,6 @@ pub(crate) fn seed_env_from_system_properties() {
     }
 }
 
-/// `CLOCK_MONOTONIC` in nanoseconds — the same clock `AChoreographer` frame
-/// times use, so the two can be subtracted directly.
-// `timespec` fields are `i64` on the 64-bit ABIs and `i32` on armeabi-v7a and
-// x86. The widening is mandatory on 32-bit and is a no-op on 64-bit, and there
-// is no spelling that satisfies both: `as i64` trips `unnecessary_cast` on
-// 64-bit, `i64::from` trips `useless_conversion` there instead. Keeping
-// `i64::from` and allowing the 64-bit complaint is the honest resolution — it
-// states the widening intent, and dropping it to silence the lint would make
-// this a type error on the two 32-bit ABIs that CI ships.
 #[allow(
     clippy::useless_conversion,
     reason = "identity on 64-bit ABIs, required widening on armeabi-v7a and x86"
@@ -226,43 +163,20 @@ pub(crate) fn monotonic_nanos() -> i64 {
         tv_sec: 0,
         tv_nsec: 0,
     };
-    // SAFETY: `now` is a live, correctly sized `timespec`.
     unsafe {
         libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut now);
     }
-    // `timespec` fields are `i64` on 64-bit ABIs and `i32` on armeabi-v7a and
-    // x86, so this has to widen on 32-bit and must not look like a redundant
-    // cast on 64-bit. `i64::from` is both: infallible widening where the types
-    // differ, identity where they do not, and no `unnecessary_cast` either way.
     i64::from(now.tv_sec) * 1_000_000_000 + i64::from(now.tv_nsec)
 }
 
 static VSYNC_LAST_NS: AtomicI64 = AtomicI64::new(0);
 static VSYNC_PERIOD_NS: AtomicI64 = AtomicI64::new(0);
 static VSYNC_PROBE_RUNNING: AtomicBool = AtomicBool::new(false);
-/// Set once the display itself reported its period, which outranks any estimate
-/// derived from callback deltas.
 static DISPLAY_PERIOD_KNOWN: AtomicBool = AtomicBool::new(false);
 
-/// Plausible range for a single display period (250 Hz … 25 Hz). Longer gaps
-/// mean the callback was starved and must not pollute the period estimate.
 const MIN_VSYNC_PERIOD_NS: i64 = 4_000_000;
 const MAX_VSYNC_PERIOD_NS: i64 = 40_000_000;
 
-/// Starts the `AChoreographer` vsync anchor if `debug.cranpose.vsync_probe` is
-/// set.
-///
-/// The probe runs on its own thread with its own `ALooper`, and **must not** be
-/// hosted on `android_main`. `AChoreographer` delivers frame callbacks by waking
-/// the looper of the thread that registered them, so a probe registered on the
-/// app's looper wakes the frame loop once per vsync and paces the very thing it
-/// is meant to observe: with the probe on `android_main`, Fifo and Mailbox
-/// measure identically to within 0.03 ms on every stage (both pinned to 60 fps),
-/// while with the probe off the same build free-runs at 230 fps under Mailbox.
-/// That made the probe useless for exactly the comparison it exists to support.
-///
-/// On its own thread the callbacks wake only that thread, and the frame loop
-/// reads the results out of the atomics below.
 pub(crate) fn start_vsync_probe_if_enabled() {
     if !property_flag("debug.cranpose.vsync_probe") {
         return;
@@ -280,21 +194,12 @@ pub(crate) fn start_vsync_probe_if_enabled() {
 }
 
 fn run_vsync_probe() {
-    // SAFETY: `ALooper_prepare` is being called on this freshly spawned thread,
-    // which owns the looper it creates and is the only thread that polls it.
     let looper = unsafe { ndk_sys::ALooper_prepare(0) };
     if looper.is_null() {
         VSYNC_PROBE_RUNNING.store(false, Ordering::Relaxed);
         log::warn!("[android-frame] ALooper_prepare returned null; vsync probe not started");
         return;
     }
-    // The period must come from the display, not from the gap between two
-    // callbacks: when a frame overruns, consecutive callbacks land two or three
-    // vsyncs apart and any averaging of those deltas converges on the *frame*
-    // period rather than the *display* period — which would then make every
-    // phase-modulo meaningless.
-    // SAFETY: this thread owns a prepared looper, and the callback is a
-    // `'static` function taking null user data.
     unsafe {
         let choreographer = ndk_sys::AChoreographer_getInstance();
         if choreographer.is_null() {
@@ -307,7 +212,6 @@ fn run_vsync_probe() {
     post_vsync_callback();
     log::info!("[android-frame] vsync probe started on its own looper");
     while VSYNC_PROBE_RUNNING.load(Ordering::Relaxed) {
-        // SAFETY: this thread prepared the looper it is polling.
         let result = unsafe {
             ndk_sys::ALooper_pollOnce(
                 -1,
@@ -324,15 +228,6 @@ fn run_vsync_probe() {
     }
 }
 
-/// Registers for display refresh-rate updates when the platform can deliver
-/// them.
-///
-/// `AChoreographer_registerRefreshRateCallback` appeared in API 30, and it was
-/// the only post-29 symbol in the whole library — referenced strongly, it made
-/// `dlopen` fail on Android 10 with an `UnsatisfiedLinkError`, killing the app
-/// before `main` for the sake of a telemetry probe. Resolved at runtime
-/// instead: on an older device the probe simply never learns the display
-/// period, which every consumer already handles as the pre-probe state.
 fn register_refresh_rate_callback(choreographer: *mut ndk_sys::AChoreographer) {
     type RegisterRefreshRateCallback = unsafe extern "C" fn(
         *mut ndk_sys::AChoreographer,
@@ -352,9 +247,6 @@ fn register_refresh_rate_callback(choreographer: *mut ndk_sys::AChoreographer) {
         );
         return;
     }
-    // SAFETY: the symbol was just resolved from the loaded libandroid.so and
-    // has the NDK-documented signature; the callback is a `'static` function
-    // taking null user data.
     unsafe {
         let register: RegisterRefreshRateCallback = std::mem::transmute(symbol);
         register(choreographer, Some(on_refresh_rate), std::ptr::null_mut());
@@ -368,13 +260,10 @@ unsafe extern "C" fn on_refresh_rate(vsync_period_ns: i64, _data: *mut c_void) {
     }
 }
 
-/// Measured display period, in nanoseconds.
 pub(crate) fn vsync_period_ns() -> i64 {
     VSYNC_PERIOD_NS.load(Ordering::Relaxed)
 }
 
-/// Phase of `now_ns` inside the display period: `0` means "exactly on a vsync",
-/// `period - 1` means "one nanosecond before the next one".
 fn vsync_offset_ns(now_ns: i64) -> Option<i64> {
     let last = VSYNC_LAST_NS.load(Ordering::Relaxed);
     let period = VSYNC_PERIOD_NS.load(Ordering::Relaxed);
@@ -391,9 +280,6 @@ fn vsync_offset_ns(now_ns: i64) -> Option<i64> {
 unsafe extern "C" fn on_vsync(frame_time_ns: i64, _data: *mut c_void) {
     let previous = VSYNC_LAST_NS.swap(frame_time_ns, Ordering::Relaxed);
     if previous > 0 && !DISPLAY_PERIOD_KNOWN.load(Ordering::Relaxed) {
-        // Fallback when the refresh-rate callback never fires. Every callback
-        // delta is an integer multiple of the true period, so the running
-        // minimum converges on it; an average does not.
         let delta = frame_time_ns - previous;
         if (MIN_VSYNC_PERIOD_NS..=MAX_VSYNC_PERIOD_NS).contains(&delta) {
             let previous_period = VSYNC_PERIOD_NS.load(Ordering::Relaxed);
@@ -406,8 +292,6 @@ unsafe extern "C" fn on_vsync(frame_time_ns: i64, _data: *mut c_void) {
 }
 
 fn post_vsync_callback() {
-    // SAFETY: called on the looper-owning thread; the callback pointer is a
-    // `'static` function and the user data is null.
     unsafe {
         let choreographer = ndk_sys::AChoreographer_getInstance();
         if choreographer.is_null() {
@@ -423,16 +307,11 @@ fn post_vsync_callback() {
     }
 }
 
-/// Timestamps collected across one presented frame. `0` marks a stage that did
-/// not run (a frame that never reached the swapchain, say).
 #[derive(Clone, Copy, Default)]
 pub(crate) struct FrameTimings {
     pub(crate) iteration_start_ns: i64,
     pub(crate) after_poll_ns: i64,
     pub(crate) after_update_ns: i64,
-    /// After accessibility/host-window syncing, which sits between the update
-    /// and the swapchain acquire. Kept separate so `acquire` measures only
-    /// `get_current_texture` and cannot be mistaken for a vsync wait.
     pub(crate) after_sync_ns: i64,
     pub(crate) after_acquire_ns: i64,
     pub(crate) after_render_ns: i64,
@@ -448,13 +327,9 @@ struct Sample {
     acquire_us: i32,
     render_us: i32,
     present_us: i32,
-    /// Phase of the frame's first instruction relative to the previous vsync,
-    /// or `-1` when the probe is off.
     vsync_offset_us: i32,
 }
 
-/// Rolling per-stage frame recorder. Disabled (and free) unless
-/// `debug.cranpose.frame_telemetry` is set.
 pub(crate) struct AndroidFrameTelemetry {
     enabled: bool,
     window_frames: usize,
@@ -488,12 +363,10 @@ impl AndroidFrameTelemetry {
         }
     }
 
-    /// Timestamp helper that compiles to nothing when telemetry is off.
     pub(crate) fn now(&self) -> i64 {
         if self.enabled { monotonic_nanos() } else { 0 }
     }
 
-    /// A loop iteration that woke up but presented nothing.
     pub(crate) fn note_idle_iteration(&mut self) {
         if self.enabled {
             self.idle_iterations = self.idle_iterations.saturating_add(1);
@@ -531,7 +404,6 @@ impl AndroidFrameTelemetry {
     }
 
     fn flush(&mut self) {
-        // The first sample has no previous present to measure a period against.
         let window_ns = self.last_present_ns - self.window_start_ns;
         let frames = self.samples.len();
         if frames < 2 || window_ns <= 0 {
@@ -551,7 +423,6 @@ impl AndroidFrameTelemetry {
         self.report("acquire", |sample| sample.acquire_us);
         self.report("render ", |sample| sample.render_us);
         self.report("present", |sample| sample.present_us);
-        // Everything that is not the blocking swapchain acquire.
         self.report("cpu    ", |sample| {
             sample.update_us + sample.sync_us + sample.render_us + sample.present_us
         });
@@ -559,10 +430,6 @@ impl AndroidFrameTelemetry {
         self.reset();
     }
 
-    /// Splits the frame-start phase by whether the frame that followed took more
-    /// than one display period. Hypothesis "the loop is simply out of phase with
-    /// vsync" predicts that the late frames concentrate at large offsets; a loop
-    /// whose work does not fit predicts the two distributions look alike.
     fn report_vsync_phase(&self) {
         let period_us = us(vsync_period_ns());
         if period_us <= 0
@@ -573,7 +440,6 @@ impl AndroidFrameTelemetry {
         {
             return;
         }
-        // One display period of slack before a frame counts as late.
         let late_threshold_us = period_us + period_us / 2;
         let (mut on_time, mut late) = (Vec::new(), Vec::new());
         for sample in &self.samples {

@@ -414,11 +414,6 @@ fn TallCachedLazyTextList(body: Rc<String>) {
     );
 }
 
-/// A `LazyColumn` whose single item hosts a horizontally scrollable `Row`.
-///
-/// This mirrors the on-device shape that froze: the inner scroll container is a
-/// direct root child of the lazy item's slot, so a scroll-driven *layout-only*
-/// repass has to survive the item's measurement cache.
 #[composable]
 #[allow(non_snake_case)]
 fn LazyItemWithScrollableRow() {
@@ -966,12 +961,6 @@ fn cached_lazy_item_keeps_unbounded_child_measurement_when_placed() {
 
 #[test]
 fn scrolling_a_row_inside_a_cached_lazy_item_moves_its_rendered_children() {
-    // Regression: a scrollable Row nested in a LazyColumn item updated its
-    // ScrollState but never moved on screen. `dispatch_raw_delta` bubbles
-    // *layout* dirtiness only, and the lazy item's cache-reuse gate consulted
-    // `needs_measure` alone, so the cached measurement (with the stale offset)
-    // was replayed forever. Assert rendered geometry, not state: asserting
-    // `value_non_reactive()` is exactly what let this ship green.
     let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     composition
@@ -1448,7 +1437,6 @@ fn scroll_to_item_updates_child_indicator_scope() {
     );
 }
 
-/// A lazy item that grows a second *root* child when `show_extra` flips.
 #[composable]
 #[allow(non_snake_case)]
 fn GrowingRootChildLazyItemList(show_extra: MutableState<bool>) {
@@ -1478,11 +1466,6 @@ fn GrowingRootChildLazyItemList(show_extra: MutableState<bool>) {
 
 #[test]
 fn recomposed_lazy_item_places_a_newly_emitted_root_child() {
-    // Regression: `activate_exact_retained_slot_with_known_children` reported
-    // `children_match = true` straight from the CACHED id list whenever the slot
-    // was still active, without ever asking the applier what the slot's live
-    // roots were. A root child added by recomposition was therefore invisible to
-    // the lazy item's reuse gate and never got measured or placed.
     let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();

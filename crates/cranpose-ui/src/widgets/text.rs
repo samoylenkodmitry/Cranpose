@@ -159,18 +159,11 @@ fn compose_basic_text_group(
 
     let options = options.normalized();
 
-    // Create a text modifier element that will add TextModifierNode to the chain
-    // TextModifierNode handles measurement, drawing, and semantics
     let text_element = modifier_element(TextModifierElement::new(current, style, options));
     let final_modifier = Modifier::from_parts(vec![text_element]);
     let combined_modifier = modifier.then(final_modifier);
 
-    // text_modifier is inclusive of layout effects
-    Layout(
-        combined_modifier,
-        EmptyMeasurePolicy,
-        || {}, // No children
-    )
+    Layout(combined_modifier, EmptyMeasurePolicy, || {})
 }
 
 #[composable]

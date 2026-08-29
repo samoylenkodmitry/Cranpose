@@ -1,29 +1,3 @@
-//! Display clip region cull: byte-exactness is defined over VISIBLE pixels.
-//!
-//! The platform (stood in for here by `set_display_visible_region`) tells
-//! the renderer which region of the surface the panel physically shows;
-//! the renderer culls everything outside it on the full-frame pass. The
-//! suite is parameterized by [`DisplayVisibleRegion`] — the round display
-//! is the first provider (`InscribedCircle`), and a future region variant
-//! joins by extending `CULLABLE_REGIONS`. The contract pinned per region:
-//!
-//! 1. Every pixel the region shows is bitwise identical with the cull on
-//!    and off, for a scene that crosses the region boundary with solid
-//!    shapes, AA arc edges and gradients.
-//! 2. The occluder is conservative: with the cull on, a full-frame opaque
-//!    fill still reaches every visible pixel — the occluder never covers
-//!    one.
-//! 3. Pixels outside the region may differ (that is the cull working),
-//!    and at least one must: an arm that fails to engage would silently
-//!    prove nothing.
-//! 4. `CRANPOSE_ROUND_CULL=0` (the kill switch keeps its first provider's
-//!    name) restores whole-buffer bitwise identity even while the
-//!    platform reports a cullable region.
-//!
-//! Every other suite runs with the cull structurally off (no test surface
-//! declares a region), which this file's default-`Full` arm doubles as
-//! evidence for.
-
 mod support;
 
 use cranpose_render_common::{
@@ -37,20 +11,11 @@ use cranpose_render_common::{
 use cranpose_render_wgpu::{DisplayVisibleRegion, display_clip_pixel_is_visible};
 use cranpose_ui_graphics::{Brush, Color, DrawScope, DrawScopeDefault, GraphicsLayer, Point, Rect};
 
-/// Watch-like square surface: the inscribed circle has radius 204
-/// centered at (204, 204), leaving ~35 kpx of corners outside it.
 const SIZE: u32 = 408;
 const CENTER: f32 = 204.0;
 
-/// Every cullable region the framework currently implements. A new
-/// provider's region joins this list and inherits the whole suite.
 const CULLABLE_REGIONS: [DisplayVisibleRegion; 1] = [DisplayVisibleRegion::InscribedCircle];
 
-/// A scene that deliberately straddles the visible-region boundary for
-/// every region under test: a full-frame background (edges and corners
-/// included), arc rings crossing the inscribed circle, corner-hugging
-/// circles, a gradient sweep across the top-left corner, and a stroked
-/// rect across the right edge.
 fn record_scene(scope: &mut DrawScopeDefault) {
     scope.draw_rect_at(
         Rect {
@@ -154,9 +119,6 @@ fn graph_from(record: impl FnOnce(&mut DrawScopeDefault)) -> RenderGraph {
     })
 }
 
-/// Warm pass (never compared), then two controls asserted byte-stable; the
-/// second control is the arm's frame — the discipline every parity suite
-/// here follows.
 fn render_arm(renderer: &mut support::LockedRenderer, graph: &RenderGraph) -> Vec<u8> {
     let mut passes = Vec::new();
     for _ in 0..3 {
@@ -174,14 +136,10 @@ fn render_arm(renderer: &mut support::LockedRenderer, graph: &RenderGraph) -> Ve
     passes.pop().unwrap()
 }
 
-/// The reference predicate for one region: whether the display shows the
-/// pixel — the set over which the cull promises bitwise identity.
 fn visible(region: DisplayVisibleRegion, x: u32, y: u32) -> bool {
     display_clip_pixel_is_visible(region, SIZE, SIZE, x, y)
 }
 
-/// Splits a full-buffer diff into (differing visible pixels, differing
-/// invisible pixels), reporting the first visible offender.
 fn diff_by_region(
     region: DisplayVisibleRegion,
     flat: &[u8],
@@ -219,14 +177,9 @@ fn cull_is_bitwise_invisible_on_every_pixel_the_region_shows() {
     };
     let graph = graph_from(record_scene);
 
-    // Arm A: the full region — the structural default every other suite
-    // runs under.
     let flat = render_arm(&mut renderer, &graph);
 
     for region in CULLABLE_REGIONS {
-        // Arm B: the platform reports a cullable visible region. The cull is
-        // opt-in while the on-device abort is under investigation, so the
-        // active arms opt in the way a device build would.
         renderer.set_display_visible_region(region);
         cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ROUND_CULL", Some("1"));
         let culled = render_arm(&mut renderer, &graph);
@@ -251,10 +204,6 @@ fn cull_is_bitwise_invisible_on_every_pixel_the_region_shows() {
     }
 }
 
-/// Conservative containment, checked through the renderer itself: a
-/// full-frame opaque white fill with the cull ON must still reach every
-/// pixel the region shows. Any visible pixel that is not white was
-/// covered by the occluder.
 #[test]
 fn occluder_never_covers_a_pixel_the_region_shows() {
     let mut renderer = match support::headless_renderer() {
@@ -316,8 +265,6 @@ fn occluder_never_covers_a_pixel_the_region_shows() {
     }
 }
 
-/// The kill switch: `CRANPOSE_ROUND_CULL=0` restores whole-buffer bitwise
-/// identity even while the platform reports a cullable region.
 #[test]
 fn kill_switch_disables_the_cull_bitwise() {
     let mut renderer = match support::headless_renderer() {

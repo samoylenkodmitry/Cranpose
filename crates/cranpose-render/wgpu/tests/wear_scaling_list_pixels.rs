@@ -1,14 +1,3 @@
-//! The Wear scaling list, counted in framebuffer pixels.
-//!
-//! This is the assertion the widget set shipped without. Every test it had
-//! stopped at the `LayoutTree`, which a measure policy fills by returning
-//! `Placement`s; the app draws from the retained node state instead, and the
-//! scene build drops anything that state does not mark placed. A list can
-//! therefore measure every row to the pixel and put none of them on the glass.
-//!
-//! So this runs the whole path an app runs — compose, `AppShell::update`,
-//! scene build, wgpu — and counts what lit up.
-
 mod support;
 
 use cranpose_app_shell::AppShell;
@@ -24,8 +13,6 @@ use cranpose_ui::{
     },
 };
 
-/// A 454x454 watch, rendered one framebuffer pixel per layout point so the
-/// count below is in the same units the screen is specified in.
 const SIZE: u32 = 454;
 
 const HEADERS: [&str; 3] = ["ALPHA", "BRAVO", "CHARLIE"];
@@ -77,8 +64,6 @@ fn a_wear_scaling_list_puts_its_rows_on_the_glass() {
                 scope.items(
                     LazyItems::new(HEADERS.len() + 1)
                         .key(|index: usize| index as u64)
-                        // A header and a row are different shapes; keeping them
-                        // in separate pools stops one being reused as the other.
                         .content_type(|index: usize| u64::from(index >= HEADERS.len())),
                     |index| {
                         if index < HEADERS.len() {
@@ -109,10 +94,6 @@ fn a_wear_scaling_list_puts_its_rows_on_the_glass() {
         .expect("frame capture should succeed");
     let lit = lit_pixel_count(&frame);
 
-    // Four rows of text on a black watch face. The number is a floor, not a
-    // golden: what it rules out is the failure this test exists for, where the
-    // list measured every row and drew none of them and the frame came back
-    // black. A single row's worth of glyphs already clears it.
     assert!(
         lit > 1_000,
         "a four-row Wear list drew {lit} lit pixels into a {SIZE}x{SIZE} frame; the rows never \

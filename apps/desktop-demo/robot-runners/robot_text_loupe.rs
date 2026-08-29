@@ -1,15 +1,3 @@
-//! Text-selection loupe capture runner: replays the reference recording's
-//! choreography (grab the end handle ON the line → loupe grows in → slow drag
-//! → release → loupe deflates; then a dot-grab drag that must show NO loupe)
-//! against a scene matching `example/target/text-selection/` (dark warm
-//! backdrop, white two-line text, pink accent), and saves screenshots at the
-//! measured keyframes for the strict visual judges.
-//!
-//! Run with:
-//! `cargo run --package desktop-app --example robot_text_loupe --features robot-app`
-//!
-//! Screenshots land in `ROBOT_SHOT_DIR` (default `target/text-loupe`).
-
 use std::{
     path::{Path, PathBuf},
     process::ExitCode,
@@ -31,8 +19,6 @@ use image::RgbaImage;
 const WINDOW_WIDTH: u32 = 460;
 const WINDOW_HEIGHT: u32 = 340;
 
-/// The reference scene colors: warm near-black backdrop, white text, the
-/// recording's pink accent.
 const BACKDROP: Color = Color(0.149, 0.129, 0.125, 1.0);
 const TEXT_COLOR: Color = Color(0.94, 0.92, 0.90, 1.0);
 const ACCENT: Color = Color(0.965, 0.208, 0.557, 1.0);
@@ -50,9 +36,6 @@ fn text_style() -> TextStyle {
     let mut style = TextStyle::default();
     style.span_style.color = Some(TEXT_COLOR);
     style.span_style.font_size = TextUnit::Sp(16.0);
-    // The reference line pitch is 24pt for 16pt text; the default Noto pitch
-    // (~21dp) leaked the next line into the loupe's interior where the
-    // reference shows the inter-line gap.
     style.paragraph_style.line_height = TextUnit::Sp(24.0);
     style
 }
@@ -75,7 +58,6 @@ fn main() -> ExitCode {
             std::thread::sleep(Duration::from_millis(600));
             let _ = robot.wait_for_idle();
 
-            // Measured text geometry (the same measurer the field uses).
             let style = text_style();
             let width_of = |s: &str| -> f32 {
                 robot
@@ -102,8 +84,6 @@ fn main() -> ExitCode {
                 .expect("composed scene must publish its first wrap boundary");
             let wrap_boundary_x = FIELD_X + width_of(&TEXT[..first_wrap_boundary]);
 
-            // Focus with a touch tap, then a second tap on the same word to
-            // select it (touch is what arms the finger handles).
             robot
                 .drag(melody_center, line1_mid, melody_center, line1_mid)
                 .expect("tap 1");
@@ -112,9 +92,6 @@ fn main() -> ExitCode {
                 .drag(melody_center, line1_mid, melody_center, line1_mid)
                 .expect("tap 2");
             settle(&robot, 700);
-            // The taps ride wall-clock timing: VERIFY the selection armed
-            // (the start handle's dot floats above the line) and retry the
-            // pair on a race — everything downstream grabs that handle.
             let start_x = FIELD_X + width_of("Silence. ");
             for attempt in 0..3 {
                 let probe = robot.screenshot_with_scale(1.0).expect("selection probe");
@@ -144,20 +121,16 @@ fn main() -> ExitCode {
             let idle = robot.screenshot_with_scale(3.0).expect("idle");
             save(&idle, &shot_dir, "01-idle-selection");
 
-            // ---- Grow-in keyframes: one grab, exact clock steps. The
-            // on-white recording exposes the whole shell birth at 60 fps: a
-            // narrow handle-attached capsule appears on the first beat and
-            // reaches the raised steady pose in roughly 200 ms.
             robot.touch_down(end_x, line1_mid).expect("grab end handle");
             let grow_steps = [
                 (0.0, false),
                 (1.0, false),
-                (16.0, true),  // +17
-                (33.0, true),  // +50
-                (50.0, true),  // +100
-                (50.0, true),  // +150
-                (50.0, true),  // +200
-                (100.0, true), // +300
+                (16.0, true),
+                (33.0, true),
+                (50.0, true),
+                (50.0, true),
+                (50.0, true),
+                (100.0, true),
             ];
             let grow_names = [
                 "02-birth-017ms",
@@ -178,16 +151,8 @@ fn main() -> ExitCode {
             if !region_has_structure(shots.last().expect("settled grow frame"), loupe_region_at(end_x)) {
                 fail(&robot, "the loupe never reached its raised steady pose");
             }
-            // The exact-clock steps ran the animation clock ahead of
-            // wall time; let wall catch up so the real-time drag below
-            // animates normally (updates clamp to the advanced clock until
-            // then).
             std::thread::sleep(Duration::from_millis(420));
 
-            // Direct-manipulation contract: pointer coordinates are never an
-            // animation target. Step the held pointer by a large amount and
-            // inspect the very next rendered frame; a chase spring leaves the
-            // bubble at its source for one or more frames and fails here.
             let held = robot.screenshot_with_scale(3.0).expect("held loupe");
             let held_center = loupe_top_rim_center_x(&held)
                 .unwrap_or_else(|| fail(&robot, "held loupe top rim was not measurable"));
@@ -204,10 +169,6 @@ fn main() -> ExitCode {
             println!(
                 "loupe direct follow held={held_center:.2} pointer={jump_x:.2} frame={jumped_center:.2}"
             );
-            // Reference physics (text-selection README): the bubble trails
-            // the touch with a measured 20-35px lag at drag speed and
-            // converges with no overshoot — an abrupt step must neither
-            // teleport the bubble in the same frame nor leave it stalled.
             let step = jump_x - end_x;
             let moved = jumped_center - held_center;
             if moved < -2.0 || moved > step * 0.75 {
@@ -239,7 +200,6 @@ fn main() -> ExitCode {
                 .expect("restore follow choreography");
             settle(&robot, 320);
 
-            // ---- Slow drag right: the bubble follows every input frame ----
             let steps = 30;
             for i in 1..=steps {
                 let t = i as f32 / steps as f32;
@@ -268,20 +228,18 @@ fn main() -> ExitCode {
                 "08-steady",
             );
 
-            // ---- Release: the bubble follows the reverse path into the
-            // handle over roughly 200 ms, then the menu rematerializes.
             robot.touch_up(drag_to_x, line1_mid).expect("release");
             let dissolve_steps = [
                 (0.0, false),
                 (1.0, false),
-                (32.0, true),  // +33
-                (50.0, true),  // +83
-                (50.0, true),  // +133
-                (50.0, true),  // +183
-                (50.0, true),  // +233
-                (37.0, true),  // +270: gone
-                (80.0, true),  // +350
-                (100.0, true), // +450
+                (32.0, true),
+                (50.0, true),
+                (50.0, true),
+                (50.0, true),
+                (50.0, true),
+                (37.0, true),
+                (80.0, true),
+                (100.0, true),
             ];
             let dissolve_names = [
                 "09-collapse-033ms",
@@ -312,16 +270,12 @@ fn main() -> ExitCode {
             let after = robot.screenshot_with_scale(3.0).expect("after");
             save(&after, &shot_dir, "12-menu-returned");
 
-            // ---- Dot-grab drag: the loupe rises for EVERY handle touch ----
             let end2_x = FIELD_X + width_of("Silence. Melody. Then");
-            let dot_y = line1_bottom + 6.0; // end dot center
+            let dot_y = line1_bottom + 6.0;
             robot.touch_down(end2_x, dot_y).expect("grab end dot");
             std::thread::sleep(Duration::from_millis(240));
             let dot_drag = robot.screenshot_with_scale(3.0).expect("dot drag");
             save(&dot_drag, &shot_dir, "13-dot-grab-loupe");
-            // A dot grab below the line floats the magnifier like any other
-            // handle touch (user-directed rule): the band above the grabbed
-            // line must show the bubble's structure.
             let dot_loupe_region = (
                 end2_x - 70.0,
                 line1_mid - 120.0,
@@ -358,9 +312,6 @@ fn main() -> ExitCode {
             robot
                 .touch_up(wrap_boundary_x, dot_y)
                 .expect("dot release at soft-wrap boundary");
-            // No later assertion reads the scene. Give the collapse a bounded
-            // frame window without asking idle detection to classify the
-            // field's continuous cursor blink.
             std::thread::sleep(Duration::from_millis(400));
 
             println!("PASS: text loupe contract");
@@ -399,10 +350,6 @@ fn content(wrap_boundary: Arc<Mutex<Option<usize>>>) {
             .background(BACKDROP),
         BoxSpec::default(),
         || {
-            // Page content BEHIND the edit menu's anchor band (like the
-            // reference's toolbar row): the menu's glass body must show it
-            // ghosting through — a flat empty backdrop would make the
-            // material's transparency unjudgeable.
             let ghost_style = {
                 let mut style = TextStyle::default();
                 style.span_style.color = Some(Color(0.62, 0.58, 0.56, 1.0));
@@ -468,9 +415,6 @@ fn region_has_structure(shot: &cranpose::RobotScreenshot, region: (f32, f32, f32
     hi.saturating_sub(lo) > 26 * 3
 }
 
-/// Center of the loupe's bright top rim in logical coordinates. The sampled
-/// band is above both the text and edit menu, so every bright pixel belongs to
-/// the bubble silhouette.
 fn loupe_top_rim_center_x(shot: &cranpose::RobotScreenshot) -> Option<f32> {
     let scale = shot.width as f32 / WINDOW_WIDTH as f32;
     let y0 = (45.0 * scale) as u32;
@@ -531,8 +475,6 @@ fn count_accent_pixels(shot: &cranpose::RobotScreenshot, region: (f32, f32, f32,
 fn fail(robot: &cranpose::Robot, message: &str) -> ! {
     println!("FATAL: {message}");
     FAILED.store(true, Ordering::Relaxed);
-    // Give the harness a beat to flush output, then hard-exit if the clean
-    // shutdown hangs (never race the GPU teardown with process::exit).
     std::thread::spawn(|| {
         std::thread::sleep(Duration::from_secs(15));
         std::process::exit(1);

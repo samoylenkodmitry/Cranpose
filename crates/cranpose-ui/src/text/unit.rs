@@ -17,12 +17,9 @@ impl TextUnit {
 
     pub fn value(&self) -> f32 {
         match self {
-            TextUnit::Unspecified => f32::NAN, // Or panic? Kotlin returns value from packed bits.
+            TextUnit::Unspecified => f32::NAN,
             TextUnit::Sp(v) => *v,
             TextUnit::Em(v) => *v,
         }
     }
 }
-
-// Implement basic arithmetic ops that panic on unspecified (matching Kotlin checks) or return invalid?
-// Kotlin checks pre-conditions.

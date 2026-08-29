@@ -10,7 +10,6 @@ use super::*;
 fn count_nodes_with_capability(chain: &ModifierNodeChain, capability: NodeCapabilities) -> usize {
     let mut count = 0;
     chain.for_each_forward_matching(capability, |_node_ref| {
-        // for_each_forward_matching only visits non-sentinel nodes, so we always count
         count += 1;
     });
     count
@@ -312,8 +311,6 @@ fn element_equality_controls_node_reuse() {
         first_ptr, reused_ptr,
         "nodes should be reused when elements are equal"
     );
-    // update() is skipped for matched nodes when element is equal and always_update is false.
-    // This is the optimization we wanted to restore.
     assert_eq!(updates.get(), 0, "update is skipped for equal elements");
 
     let different = vec![modifier_element(EqualityElement {
@@ -368,8 +365,6 @@ fn equality_matching_prefers_identical_elements_over_type_matches() {
     ];
     chain.update_from_slice(&reordered, &mut context);
 
-    // update() is skipped for usage of element with value 2 (exact match),
-    // but called for usage of element with value 3 (type match only).
     assert_eq!(
         updates.get(),
         1,
@@ -716,7 +711,6 @@ impl ModifierNode for InvalidationNode {
     fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
         context.invalidate(InvalidationKind::Layout);
         context.invalidate(InvalidationKind::Draw);
-        // Duplicate invalidations should be coalesced.
         context.invalidate(InvalidationKind::Layout);
         context.request_update();
     }
@@ -756,7 +750,6 @@ fn basic_context_records_invalidations_and_updates() {
     assert!(context.take_update_requested());
     assert!(!context.update_requested());
 
-    // Detach the existing chain to force new nodes on the next update.
     chain.detach_all();
 
     context.clear_invalidations();
@@ -774,7 +767,6 @@ fn basic_context_records_invalidations_and_updates() {
     );
 }
 
-// Test for specialized node traits
 #[derive(Debug)]
 struct TestLayoutNode {
     measure_count: Cell<usize>,
@@ -1223,7 +1215,6 @@ fn chain_tracks_node_capabilities() {
         NodeCapabilities::LAYOUT | NodeCapabilities::DRAW
     );
 
-    // Verify we can iterate over layout and draw nodes separately
     assert_eq!(
         count_nodes_with_capability(&chain, NodeCapabilities::LAYOUT),
         1
@@ -1321,7 +1312,6 @@ fn sentinel_links_follow_chain_order() {
     assert!(!first.is_sentinel());
     assert!(first.parent().unwrap().is_head());
 
-    // Verify first node is layout using with_node closure
     let is_layout = first
         .with_node(|node| node.as_any().downcast_ref::<TestLayoutNode>().is_some())
         .unwrap_or(false);
@@ -1329,7 +1319,6 @@ fn sentinel_links_follow_chain_order() {
 
     let second = first.child().expect("first should link to draw node");
 
-    // Verify second node is draw using with_node closure
     let is_draw = second
         .with_node(|node| node.as_any().downcast_ref::<TestDrawNode>().is_some())
         .unwrap_or(false);
@@ -1537,7 +1526,6 @@ fn delegate_parent_links_owner() {
         host.delegate() as *const dyn ModifierNode as *const ()
     };
 
-    // Find delegate by comparing pointers since we can't hold the reference
     let delegate_ref = chain
         .head_to_tail()
         .find(|node_ref| {
@@ -1637,7 +1625,6 @@ fn chain_can_find_node_refs() {
     let layout_ref = chain
         .find_node_ref(&*layout_node_guard as &dyn ModifierNode)
         .expect("should resolve layout node ref");
-    // Use entry_index() for navigation
     assert_eq!(layout_ref.entry_index(), Some(0));
 
     let draw_ref = chain
@@ -1727,8 +1714,6 @@ fn walking_a_chain_backward_visits_every_node_in_reverse_order() {
         &mut context,
     );
 
-    // A backward walk is what an invalidation uses to find the nearest
-    // enclosing node, so it has to see every node and see them tail-first.
     let mut seen = 0usize;
     chain.for_each_backward(|_node| seen += 1);
     assert_eq!(seen, chain.len());
@@ -1761,8 +1746,6 @@ fn a_chain_updated_from_a_reference_iterator_matches_one_updated_from_a_slice() 
 
     let mut from_refs = ModifierNodeChain::new();
     let mut ref_context = TestContext::default();
-    // The reference form exists so a caller with elements it does not own can
-    // update without cloning them; it must build the same chain.
     from_refs.update_from_ref_iter(elements.iter(), &mut ref_context);
 
     assert_eq!(from_refs.len(), from_slice.len());
@@ -1788,9 +1771,6 @@ fn descendants_and_ancestors_walk_the_same_chain_from_opposite_ends() {
         &mut context,
     );
 
-    // `head()` is a sentinel rather than a node, so a walk down from it reaches
-    // the whole chain and `include_self` adds nothing: a sentinel is never
-    // handed to the visitor.
     let mut below = 0usize;
     chain.head().visit_descendants(false, |_node| below += 1);
     assert_eq!(
@@ -1808,7 +1788,6 @@ fn descendants_and_ancestors_walk_the_same_chain_from_opposite_ends() {
         "the head sentinel was handed to the visitor as if it were a node"
     );
 
-    // From a real node, `include_self` does add one: itself.
     let mut from_first = 0usize;
     chain
         .head_to_tail()
@@ -1827,7 +1806,6 @@ fn descendants_and_ancestors_walk_the_same_chain_from_opposite_ends() {
         "including self must add exactly the node it was asked from"
     );
 
-    // A walk up from the tail sentinel reaches every node the same way.
     let mut ancestors = 0usize;
     chain
         .tail()

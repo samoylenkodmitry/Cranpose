@@ -1,13 +1,3 @@
-//! Fused-pass viewport contract: a runtime-shader composite must not leak
-//! its sub-viewport into subsequent draws of the same fused render pass.
-//!
-//! Regression: `draw_prepared_shader_src_over` left the pass viewport at the
-//! composite's dest rect, so any text/shape drawn after a shader composite in
-//! the same segment chunk (the "SDF Halo Border" header after the fire boxes)
-//! was remapped into that sub-rect and vanished at most scroll offsets. Also
-//! guards the scrolled-tab-switch path against ghost pixels of the previous
-//! tab (a squeezed first frame leaves stale pixels uncovered).
-
 use std::{
     path::{Path, PathBuf},
     time::Duration,
@@ -21,12 +11,6 @@ use image::RgbaImage;
 const WINDOW_WIDTH: u32 = 900;
 const WINDOW_HEIGHT: u32 = 800;
 
-/// The bottom edge of the tab strip, measured rather than assumed.
-///
-/// Anything above this line is behind the chrome and cannot be expected to
-/// have rendered, whatever the chrome happens to contain. A literal here
-/// silently becomes wrong the moment the strip changes height -- which is
-/// what a source-view toggle above the tab content did to five robot tests.
 fn chrome_bottom(robot: &cranpose::Robot) -> f32 {
     let measured = DEMO_TABS
         .iter()
@@ -55,14 +39,10 @@ fn main() {
         .with_robot_app_hook(set_tab_hook)
         .with_test_driver(move |robot| {
             std::thread::sleep(Duration::from_millis(700));
-            // The default Liquid tab owns a perpetual animation, so waiting
-            // for global idleness before switching to the contract's target
-            // tab can never be a valid synchronization point.
             robot
                 .pump_frames(2)
                 .expect("initial Liquid frames should advance");
 
-            // --- Case 1: ShaderRect "SDF Halo Border" visibility across scroll.
             robot
                 .invoke_app_hook("set-tab", "shaderrect")
                 .expect("select shaderrect tab");
@@ -122,11 +102,6 @@ fn main() {
                 println!("{line}");
             }
 
-            // --- Case 2: ghost of the scrolled Liquid page behind other tabs.
-            // The liquid page hosts backdrop-glass components; switching away
-            // while they are on screen must not leave any of them behind.
-            // Sweep scroll offsets (glass controls in view / mid page / very
-            // bottom) x target tabs (animated shaders page, static markdown).
             for (target, threshold) in [("shaders", 600usize), ("markdown", 220usize)] {
                 robot
                     .invoke_app_hook("set-tab", target)
@@ -170,7 +145,6 @@ fn main() {
                             ),
                         );
                     }
-                    // Reset the liquid scroll for the next iteration.
                     robot
                         .invoke_app_hook("set-tab", "liquid")
                         .expect("select liquid tab");
@@ -193,7 +167,6 @@ fn fail(robot: &cranpose::Robot, message: &str) -> ! {
 }
 
 fn count_ink(shot: &cranpose::RobotScreenshot, x: f32, y: f32, w: f32, h: f32) -> usize {
-    // Semantic bounds are logical; the capture is physical pixels.
     let sx = shot.width as f32 / shot.logical_width.max(1.0);
     let sy = shot.height as f32 / shot.logical_height.max(1.0);
     let (x, y, w, h) = (x * sx, y * sy, w * sx, h * sy);
@@ -206,7 +179,6 @@ fn count_ink(shot: &cranpose::RobotScreenshot, x: f32, y: f32, w: f32, h: f32) -
         for xx in x0..x1 {
             let i = (yy * shot.width as usize + xx) * 4;
             let (r, g, b) = (shot.pixels[i], shot.pixels[i + 1], shot.pixels[i + 2]);
-            // demo shader pages are dark; headers are light text
             if r > 150 && g > 150 && b > 150 {
                 ink += 1;
             }

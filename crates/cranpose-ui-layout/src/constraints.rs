@@ -157,8 +157,6 @@ mod tests {
         assert!(bounds().has_bounded_width());
         assert!(bounds().has_bounded_height());
 
-        // A scrolling parent measures its child with no limit along the scroll
-        // axis, which is what an infinite maximum means.
         let scrolling = bounds().copy_with_height(0.0, f32::INFINITY);
         assert!(scrolling.has_bounded_width());
         assert!(!scrolling.has_bounded_height());
@@ -177,8 +175,6 @@ mod tests {
         assert!(tight.has_tight_height());
         assert!(tight.is_tight());
 
-        // One axis at a time: a row gives its children a tight height and lets
-        // them choose their width.
         let row_child = loose.tighten_height(100.0);
         assert!(!row_child.has_tight_width());
         assert!(row_child.has_tight_height());
@@ -219,8 +215,6 @@ mod tests {
         assert_eq!(inner.min_height, 2.0);
         assert_eq!(inner.max_height, 92.0);
 
-        // Padding wider than the space it is in leaves nothing, not a negative
-        // width that would measure a child at an impossible size.
         let squeezed = Constraints::tight(10.0, 10.0).deflate(40.0, 40.0);
         assert_eq!(squeezed.min_width, 0.0);
         assert_eq!(squeezed.max_width, 0.0);
@@ -230,8 +224,6 @@ mod tests {
 
     #[test]
     fn loosening_drops_the_minimums_and_keeps_the_maximums() {
-        // What a parent does when it will place a child that measured smaller
-        // than the space rather than stretching it.
         let loosened = Constraints::tight(200.0, 100.0).loosen();
         assert_eq!(loosened.min_width, 0.0);
         assert_eq!(loosened.min_height, 0.0);

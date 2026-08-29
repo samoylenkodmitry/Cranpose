@@ -1,7 +1,3 @@
-//! Robot test for backdrop-effect draggable overlays in the Shaders tab.
-//!
-//! Validates that "Blur" and "Glass" overlays produce visible pixel movement after drag.
-
 mod output_paths;
 mod perf_contract;
 
@@ -417,7 +413,6 @@ fn main() {
             std::thread::sleep(Duration::from_millis(300));
             let _ = robot.wait_for_idle();
 
-            // Wait for shader screen content to appear.
             let mut ready = false;
             for _ in 0..20 {
                 if find_text_in_semantics(&robot, "Interactive Effects (drag the rects!)").is_some() {
@@ -460,7 +455,6 @@ fn main() {
                 std::process::exit(1);
             };
 
-            // Regression: nested child backdrop blur must visibly affect pixels.
             let nested_parent = set_visible_slider_fraction(
                 &robot,
                 nested_controls.parent_slider,
@@ -550,7 +544,6 @@ fn main() {
                 std::process::exit(1);
             }
 
-            // Return to the upper area for the draggable Blur/Glass regression checks.
             for _ in 0..4 {
                 scroll_up(&robot);
             }
@@ -573,8 +566,6 @@ fn main() {
                 glass_before.1
             );
 
-            // Semantic bounds do not include graphics-layer translation yet; offset by
-            // the known initial state used by InteractiveEffectsDemo to hit the visual rect.
             let blur_start_x = blur_cx + 16.0;
             let blur_start_y = blur_cy + 16.0;
 
@@ -618,7 +609,6 @@ fn main() {
             }
             assert_effect_drag_performance(&robot, "Blur drag", blur_render_stats);
 
-            // Glass starts at (244,164) in local area coordinates.
             let glass_start_x = glass_cx + 244.0;
             let glass_start_y = glass_cy + 164.0;
 
@@ -662,10 +652,6 @@ fn main() {
             }
             assert_effect_drag_performance(&robot, "Glass drag", glass_render_stats);
 
-            // Regression check for clipping against the tab row:
-            // 1) Scroll the shader content
-            // 2) Drag Blur rect up toward the top edge of its clipped area
-            // 3) Verify tab strip pixels do not change significantly
             let _ = robot.drag(610.0, 670.0, 610.0, 220.0);
             std::thread::sleep(Duration::from_millis(250));
             let _ = robot.wait_for_idle();
@@ -711,8 +697,6 @@ fn main() {
             std::thread::sleep(Duration::from_millis(250));
             let _ = robot.wait_for_idle();
 
-            // Move pointer away from the tab strip before taking the "after"
-            // screenshot to avoid hover-highlight false positives.
             let safe_x = blur_scroll_start_x.clamp(32.0, logical_width - 32.0);
             let safe_y =
                 (tab_strip_bottom + 120.0).clamp(tab_strip_bottom + 20.0, logical_height - 32.0);
@@ -733,9 +717,6 @@ fn main() {
                 tab_strip_diff, raw_tab_strip_diff, baseline_tab_strip_diff, tab_strip_bottom
             );
 
-            // In headless WGPU runs we still observe non-deterministic tab-strip deltas
-            // from gesture-side effects (hover/scroll feedback). Keep this threshold
-            // high enough to avoid flakiness while still catching obvious overflow.
             if tab_strip_diff > 15_000 {
                 println!(
                     "✗ Tab strip changed too much after dragging shader rect upward (delta={} raw={} baseline={})",

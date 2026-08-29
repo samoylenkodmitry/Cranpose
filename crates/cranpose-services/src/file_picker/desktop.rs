@@ -1,9 +1,3 @@
-//! Desktop choosers backed by `rfd` (native dialogs).
-//!
-//! On Linux the `xdg-portal` backend surfaces mounted locations served by the
-//! desktop portal, including GVFS/WebDAV shares, so a chosen folder may live on
-//! a remote provider just like on mobile.
-
 use super::{FilePickerError, FilePickerOptions, PickerFuture, SaveDocumentRequest};
 use crate::content::{
     ContentFolderRef, ContentHandle, ContentSinkRef, FileSink, file_content, file_folder,
@@ -72,8 +66,6 @@ pub(super) fn save_document(
     })
 }
 
-/// A desktop writable folder is just a directory the app keeps writing to, so
-/// its durable handle is the path itself.
 pub(super) fn pick_writable_folder(
     options: FilePickerOptions,
 ) -> PickerFuture<Result<Option<String>, FilePickerError>> {

@@ -164,10 +164,6 @@ fn build_drop_shadow_primitives(
         return Vec::new();
     };
 
-    // Knockout for translucent surfaces: erase the element's own (unoffset,
-    // unspread) shape from the silhouette so the blurred shadow exists only
-    // outside it — a backdrop-sampling material must not refract its own
-    // shadow.
     let cutout = if scope.cutout {
         let element_rect = Rect {
             x: 0.0,

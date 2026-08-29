@@ -1,25 +1,3 @@
-//! The stale-transition serve, end to end through the production seam.
-//!
-//! A mid-sequence content flip collapses a command's replay verification,
-//! and the collapse frame otherwise re-materializes and re-encodes the
-//! whole tape at once — the 22-75 ms transition stall on a watch-class
-//! core. With `CRANPOSE_STALE_TRANSITION` set, the collapse frame instead
-//! re-emits the PREVIOUS build's emission, byte-for-byte, and only that
-//! one frame; everything else must render exactly as the flag-off build
-//! does, and re-convergence must proceed on the frames after the flip.
-//!
-//! Sequences are built through `draw_command_nodes_for_tests` — the real
-//! `draw_nodes` path (acquire, record, verify, publish, save/serve) —
-//! so the graphs carry exactly what production would ship, then rendered
-//! on the same headless harness as `command_feed_parity`.
-//!
-//! ENV HYGIENE: this file deliberately holds a single test. It toggles
-//! process-global `CRANPOSE_*` variables between runs (the flag is read
-//! fresh per build, like `CRANPOSE_COMMAND_FEED`, precisely so one
-//! process can A/B it), and `cargo test` threads share the environment —
-//! a second test in this binary could race the toggles. Integration test
-//! binaries are separate processes, so other test files are unaffected.
-
 mod support;
 
 use std::rc::Rc;
@@ -42,15 +20,8 @@ use cranpose_ui_graphics::{
 const SIZE: u32 = 408;
 const CENTER: f32 = 204.0;
 const FRAMES: usize = 13;
-/// The content flip: every generator constant changes, so nothing
-/// survives verification and the frame collapses to `AllDynamic`.
 const FLIP: usize = 8;
 
-/// One frame of ring-plus-twinkle content. `variant` selects a disjoint
-/// constant set — radii, bands, sweeps, counts, twinkle orbits — so a
-/// capture of one variant dies whole against another, while frames within
-/// a variant move by per-ring rotations and per-frame recolors exactly
-/// like the game scene the recorder was built for.
 fn record_content(scope: &mut DrawScopeDefault, frame: usize, variant: usize) {
     scope.draw_rect_at(
         Rect {
@@ -109,11 +80,6 @@ fn record_content(scope: &mut DrawScopeDefault, frame: usize, variant: usize) {
     }
 }
 
-/// Builds one sequence through the production `draw_nodes` seam. Each
-/// frame is one build: the recording generation advances, the command
-/// re-records under its stable identity, verification runs, and the
-/// stale-transition save/serve engages exactly as it would in an app.
-/// `flips` lists the frames at which the content variant advances.
 fn build_graphs(node_id: usize, flips: &[usize]) -> Vec<RenderGraph> {
     (0..FRAMES)
         .map(|frame| {
@@ -171,16 +137,12 @@ fn run_of(graph: &RenderGraph) -> &DrawRunNode {
     }
 }
 
-/// What one frame's render moved in the renderer's lifetime feed stats:
-/// live slot count, recolor patches, remat misses.
 struct FeedStatsDelta {
     slots: i64,
     patches: i64,
     remat: i64,
 }
 
-/// Renders the sequence, returning per-frame pixels and the feed-stats
-/// delta each frame's render produced.
 fn render_sequence(
     renderer: &mut support::LockedRenderer,
     graphs: &[RenderGraph],
@@ -220,8 +182,6 @@ fn worst_diff(a: &[u8], b: &[u8]) -> u8 {
 
 #[test]
 fn a_collapse_frame_re_serves_the_previous_emission_exactly_once() {
-    // Plain quad expansion, as in command_feed_parity: this test documents
-    // the serve's byte-level contract, not the arc mesh's interpolation.
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ARC_MESH", Some("0"));
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_STALE_TRANSITION", None);
     let mut renderer = match support::headless_renderer() {
@@ -232,32 +192,23 @@ fn a_collapse_frame_re_serves_the_previous_emission_exactly_once() {
         }
     };
 
-    // Feed-free baseline graphs: no declared epoch means no verification
-    // at all; rendered later (warm) with CRANPOSE_COMMAND_FEED=0 so the
-    // renderer stays on the full pipeline.
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_COMMAND_FEED", Some("0"));
     set_retained_feed_epoch(None);
     let baseline_graphs = build_graphs(11, &[FLIP]);
 
-    // Everything below is the fed configuration production ships.
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_COMMAND_FEED", Some("1"));
     set_retained_feed_epoch(Some(cranpose_render_wgpu::retained_feed_generation()));
 
-    // Flag OFF, twice: pins current behavior and the determinism floor.
     let off_graphs = build_graphs(12, &[FLIP]);
     let off2_graphs = build_graphs(13, &[FLIP]);
     let off3_graphs = build_graphs(15, &[FLIP, FLIP + 1]);
     let off4_graphs = build_graphs(17, &[FLIP, FLIP + 1]);
 
-    // Flag ON: the single-flip sequence and the consecutive-collapse one.
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_STALE_TRANSITION", Some("1"));
     let on_graphs = build_graphs(14, &[FLIP]);
     let on2_graphs = build_graphs(16, &[FLIP, FLIP + 1]);
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_STALE_TRANSITION", Some("0"));
 
-    // Scenario validity before believing any pixel number: flag off, the
-    // flip frame collapsed to AllDynamic (no replay frame rides the run);
-    // the frames around it verified or recaptured (replay frames present).
     assert!(
         run_of(&off_graphs[FLIP - 1]).replay.is_some(),
         "the frame before the flip must be verified"
@@ -270,9 +221,6 @@ fn a_collapse_frame_re_serves_the_previous_emission_exactly_once() {
         run_of(&off_graphs[FLIP + 1]).replay.is_some(),
         "the frame after the flip must re-partition"
     );
-    // Flag on, the flip frame carries the SERVED frame instead: the
-    // previous build's primitives handle (aliased, not copied) and its
-    // sanitized spans — no capture re-queues, no recolor patches.
     let served = run_of(&on_graphs[FLIP]);
     let served_frame = served
         .replay
@@ -294,8 +242,6 @@ fn a_collapse_frame_re_serves_the_previous_emission_exactly_once() {
             FrameSpan::Dynamic { .. } => {}
         }
     }
-    // Re-convergence in the graphs: the capture right after the flip, and
-    // retained (non-capture) spans within three frames of it.
     let recaptured = run_of(&on_graphs[FLIP + 1])
         .replay
         .as_ref()
@@ -322,13 +268,6 @@ fn a_collapse_frame_re_serves_the_previous_emission_exactly_once() {
         "retained spans must reappear within 3 frames of the flip"
     );
 
-    // Two discarded warmup passes: the renderer's first passes over a
-    // scene render its heavy ordinary frames up to 2/255 differently from
-    // every later pass — the same pass-position artifact
-    // command_feed_parity documents (it compares against its `fed2`
-    // control, not its first fed run; measured here, the artifact settles
-    // from the third pass on). Every compared run below starts from the
-    // settled state.
     let _ = render_sequence(&mut renderer, &off_graphs);
     let _ = render_sequence(&mut renderer, &off_graphs);
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_COMMAND_FEED", Some("0"));
@@ -355,8 +294,6 @@ fn a_collapse_frame_re_serves_the_previous_emission_exactly_once() {
         );
     }
 
-    // Determinism floor: two flag-off runs of the same sequence must be
-    // byte-identical, or nothing below can be read as a measurement.
     for (frame, (a, b)) in off.iter().zip(&off2).enumerate() {
         assert_eq!(
             differing(a, b),
@@ -364,16 +301,11 @@ fn a_collapse_frame_re_serves_the_previous_emission_exactly_once() {
             "frame {frame}: two flag-off runs must render identically"
         );
     }
-    // The content genuinely moved at the flip — the stale assertion below
-    // cannot pass vacuously.
     assert!(
         differing(&off[FLIP], &off[FLIP - 1]) > 0,
         "the flip must change the rendered frame"
     );
 
-    // THE assertion: flag on, the flip frame is byte-identical to the
-    // PREVIOUS frame's fed render — the emission was re-served, not
-    // rebuilt — and genuinely differs from what a fresh emission draws.
     assert_eq!(
         differing(&on[FLIP], &on[FLIP - 1]),
         0,
@@ -383,8 +315,6 @@ fn a_collapse_frame_re_serves_the_previous_emission_exactly_once() {
         differing(&on[FLIP], &off[FLIP]) > 0,
         "the served frame must differ from the fresh collapse frame"
     );
-    // Every other frame is untouched by the flag: byte-identical to the
-    // flag-off run, including the re-convergence frames after the flip.
     for frame in (0..FRAMES).filter(|&frame| frame != FLIP) {
         assert_eq!(
             differing(&on[frame], &off[frame]),
@@ -392,9 +322,6 @@ fn a_collapse_frame_re_serves_the_previous_emission_exactly_once() {
             "frame {frame}: the flag must only touch the collapse frame"
         );
     }
-    // The serve queues nothing into the frame's ops: zero recolor patches,
-    // zero new feed slots, zero remat misses — while an ordinary verified
-    // frame right before it does push recolor patches.
     let serve = &on_deltas[FLIP];
     assert_eq!(serve.patches, 0, "a served frame must patch no colors");
     assert_eq!(serve.slots, 0, "a served frame must confirm no new slots");
@@ -404,14 +331,6 @@ fn a_collapse_frame_re_serves_the_previous_emission_exactly_once() {
         "the twinkle recolors must flow as patches on ordinary frames"
     );
 
-    // Kill-switch pin: flag off, the collapse frame IS today's behavior —
-    // the whole tape re-materializes through the full pipeline. Against
-    // the feed-free baseline only the ≤2/255 pass-position artifact may
-    // remain (command_feed_parity documents the same artifact on its
-    // pre-retention frames): a frame that had regressed to serving
-    // retained content instead would sit at the fed envelope, two orders
-    // of magnitude above (worst ~150), and its graph would carry a replay
-    // frame — asserted None above.
     assert!(
         worst_diff(&off[FLIP], &baseline[FLIP]) <= 2,
         "flag off, the collapse frame must render the full fresh pipeline \
@@ -420,13 +339,6 @@ fn a_collapse_frame_re_serves_the_previous_emission_exactly_once() {
         differing(&off[FLIP], &baseline[FLIP]),
     );
 
-    // The one-frame cap, end to end: consecutive collapses (content flips
-    // at FLIP and FLIP+1) serve stale exactly once. The second collapse
-    // finds the saved emission consumed and renders fresh — structurally
-    // (no replay frame rides the run, where a serve always carries one)
-    // and on pixels, where only the ≤2/255 pass-position artifact remains
-    // (the frame BEFORE it renders differently in the two runs — served
-    // vs fresh — which is exactly the state the artifact tracks).
     assert!(
         run_of(&on2_graphs[FLIP]).replay.is_some(),
         "the first of two consecutive collapses must serve"

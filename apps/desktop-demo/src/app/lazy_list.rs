@@ -1,7 +1,3 @@
-//! Lazy List Demo Tab - demonstrates LazyColumn virtualization
-//!
-//! This module contains the lazy list demonstration for the desktop-demo app.
-
 use cranpose::LazyItems;
 use cranpose_core::{DisposableEffect, DisposableEffectResult, MutableState};
 use cranpose_foundation::{
@@ -73,13 +69,9 @@ fn LifecycleStatsDisplay(stats: MutableState<LifecycleStats>) {
     );
 }
 
-/// Displays the visible and cached item counts from LazyListState.
-/// This is in its own composable scope to isolate stats() reactivity.
-/// The reactive read happens INSIDE this function, not at the call site.
 #[allow(non_snake_case)]
 #[composable]
 fn LazyListStatsDisplay(list_state: cranpose_foundation::lazy::LazyListState) {
-    // Reactive read happens here - isolated from parent scope
     let stats = list_state.stats();
     let visible = stats.items_in_use;
     let cached = stats.items_in_pool;
@@ -108,13 +100,9 @@ fn LazyListStatsDisplay(list_state: cranpose_foundation::lazy::LazyListState) {
     );
 }
 
-/// Displays the first visible item index from LazyListState.
-/// This is in its own composable scope to isolate first_visible_item_index() reactivity.
-/// The reactive read happens INSIDE this function, not at the call site.
 #[allow(non_snake_case)]
 #[composable]
 fn FirstVisibleIndexDisplay(list_state: cranpose_foundation::lazy::LazyListState) {
-    // Reactive read happens here - isolated from parent scope
     let first_index = list_state.first_visible_item_index();
     Text(
         format!("FirstIndex: {}", first_index),
@@ -185,25 +173,23 @@ fn LifecycleListItem(index: usize, stats: MutableState<LifecycleStats>) {
                 TextStyle::default(),
             );
 
-            // Add i%5 colored boxes to visualize content type groups
             let box_count = index % 5;
             Row(
                 Modifier::empty(),
                 RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(4.0)),
                 move || {
                     let colors = [
-                        Color(0.9, 0.3, 0.3, 1.0), // Red
-                        Color(0.3, 0.9, 0.3, 1.0), // Green
-                        Color(0.3, 0.3, 0.9, 1.0), // Blue
-                        Color(0.9, 0.9, 0.3, 1.0), // Yellow
-                        Color(0.9, 0.3, 0.9, 1.0), // Magenta
+                        Color(0.9, 0.3, 0.3, 1.0),
+                        Color(0.3, 0.9, 0.3, 1.0),
+                        Color(0.3, 0.3, 0.9, 1.0),
+                        Color(0.9, 0.9, 0.3, 1.0),
+                        Color(0.9, 0.3, 0.9, 1.0),
                     ];
                     for i in 0..box_count {
                         Spacer(Size {
                             width: 12.0,
                             height: 12.0,
                         });
-                        // Color each box based on its position
                         let color = colors[i % colors.len()];
                         Text(
                             "■",
@@ -383,7 +369,6 @@ pub fn lazy_list_example() {
                 height: 16.0,
             });
 
-            // The actual LazyColumn with virtualization using the DSL
             let count = clamp_demo_item_count(item_count.get());
             let list_container_modifier = Modifier::empty()
                 .semantics(|config: &mut SemanticsConfiguration| {
@@ -402,8 +387,6 @@ pub fn lazy_list_example() {
                     {
                         move |scope| {
                             scope.items(
-                                // Keys come from the index; the content type
-                                // matches the five height groups.
                                 LazyItems::new(count)
                                     .content_type(|index: usize| (index % 5) as u64),
                                 move |index| {

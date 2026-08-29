@@ -43,13 +43,6 @@ fn close_rel(a: f32, b: f32) -> bool {
 
 fn close_angle(a: f32, b: f32) -> bool {
     use std::f32::consts::TAU;
-    // `%` on f32 is a libm `fmodf` CALL on armv7 — real per-record cost in
-    // the contiguous verify loops. For |a - b| < TAU the remainder is the
-    // identity (fmod returns its numerator exactly when it is smaller in
-    // magnitude than the divisor), so the wrap below computes the identical
-    // boolean without the call; only unbounded deltas take the slow path.
-    // NaN falls through both fast-path comparisons to the fmod arm and
-    // lands false there, as before.
     let d = a - b;
     if d.abs() < TAU {
         let wrapped = if d > TAU * 0.5 {
@@ -87,10 +80,6 @@ mod close_angle_equivalence {
         d.abs() <= ABS_EPS
     }
 
-    /// The fast path must agree with the fmod form on every input class:
-    /// tiny deltas, exact and near half-turn boundaries, just under and
-    /// past a full turn (both fixup directions), multi-turn magnitudes,
-    /// signed zero, and NaN/infinite inputs.
     #[test]
     fn fast_path_matches_the_fmod_form() {
         use std::f32::consts::{PI, TAU};
@@ -134,7 +123,6 @@ mod close_angle_equivalence {
                 );
             }
         }
-        // Dense sweep across four turns of deltas at several anchors.
         for anchor in [-500.0_f32, -6.0, 0.0, 6.0, 500.0] {
             for i in -2520..=2520 {
                 let d = i as f32 * 0.01;
@@ -149,10 +137,6 @@ mod close_angle_equivalence {
 }
 
 fn close_point(a: Point, b: Point) -> bool {
-    // `&`, not `&&`: both comparisons are pure, so evaluating the second
-    // unconditionally cannot change the result — it removes a branch from
-    // the hot contiguous-run match loops. NaN anywhere makes its `close_rel`
-    // false regardless of evaluation order.
     close_rel(a.x, b.x) & close_rel(a.y, b.y)
 }
 
@@ -278,8 +262,6 @@ pub fn circle_view(record: &SolidRoundRectRecord) -> Option<(Point, f32)> {
 /// Whether corner radii + extents describe a circle.
 pub fn is_circle(rect: Rect, radii: CornerRadii) -> bool {
     let half = rect.width * 0.5;
-    // `&`, not `&&`: every term is a pure comparison, so unconditional
-    // evaluation is result-identical and keeps the hot run loops branch-light.
     close_rel(rect.width, rect.height)
         & close_rel(radii.top_left, half)
         & close_rel(radii.top_right, half)
@@ -481,8 +463,6 @@ fn view_at_slices(
     let entry = tape[i];
     match entry.kind() {
         RecordKind::SolidArc => Some(ReplayView::Arc(entry.index())),
-        // Non-circular round rects cannot survive rotation about an
-        // external pivot; they stay dynamic.
         RecordKind::SolidRoundRect => circle_view(&round_rects[entry.index()])
             .is_some()
             .then_some(ReplayView::RoundRect(entry.index())),
@@ -552,8 +532,6 @@ fn align_recordings(
         }
         events += 1;
         if events > MAX_RESYNC_EVENTS {
-            // Not churn — the structure is gone. An empty alignment makes
-            // the caller restart from a fresh snapshot.
             aligned.fill(None);
             return;
         }
@@ -838,54 +816,16 @@ pub struct CommandReplayState {
     next_slot_id: u32,
     lifetime_deaths: u64,
     lifetime_splits: u64,
-    /// Fraction of the tape the capture covered when it was taken. Dead
-    /// segments never come back on their own, so coverage eroding well
-    /// below this watermark means stable content sits unwatched — worth
-    /// paying a recapture for.
     capture_coverage: f32,
     frames_since_capture: u32,
-    /// Frames the pooled fast path fully committed — diagnostics for
-    /// judging how often verification actually parallelizes.
     optimistic_commits: u64,
-    /// Frames where the pooled pass committed a non-empty strict prefix of
-    /// the segments and the serial walk ran only from the first failure —
-    /// diagnostics for the churn frames (a brick hit) that used to redo the
-    /// whole tape serially.
     prefix_commits: u64,
-    /// Reusable per-job result slots for the pooled fast path — one slot
-    /// per segment, grown once, recolor capacity retained across frames.
-    /// The Mutex is uncontended (each job writes only its own slot once);
-    /// what this kills is the per-frame allocation of the results vector,
-    /// its mutexes, and every job's recolors vector. Each committed span —
-    /// the whole frame, or the prefix before the first failure —
-    /// `mem::take`s its slot's recolors: the buffer walks into the graph
-    /// and the slot re-grows next frame (accepted: emitting spans do real
-    /// work). Uncommitted slots keep their buffers warm.
     verify_results: Vec<std::sync::Mutex<SpanResultSlot>>,
-    /// The serial walk's recolor buffer, refilled by every `match_span`
-    /// commit attempt. An emitted span `mem::take`s the contents and the
-    /// scratch re-grows on the next attempt — same accepted emit-cost as
-    /// the pooled slots.
     recolor_scratch: Vec<(u32, Color)>,
-    /// The best-prefix recolors during the serial walk's candidate scan,
-    /// swapped with `recolor_scratch` whenever a longer prefix turns up.
     best_recolor_scratch: Vec<(u32, Color)>,
-    /// Serial-walk segment queues, persistent so their buffers keep their
-    /// high-water capacity; refilled per verified frame.
     verify_pending: std::collections::VecDeque<CommandSegment>,
     verify_survivors: Vec<CommandSegment>,
-    /// [`align_recordings`]' alignment buffer, persistent so the partition
-    /// after every collapse reuses one ~tape-length allocation instead of
-    /// growing a fresh one per convergence cycle.
     align_scratch: Vec<Option<usize>>,
-    /// Whether the LAST advance collapsed out of an established capture —
-    /// the `Captured`-phase coverage collapse in [`Self::finish_verify`].
-    /// That is the frame whose emission re-materializes and re-encodes the
-    /// whole tape at once, and therefore the only frame the
-    /// stale-transition serve (scene builder) may replace. Bootstrap
-    /// `AllDynamic` frames (idle snapshot, short tape, retirement) never
-    /// set it: they are not transitions out of retention, so there is
-    /// nothing cheaper to substitute. Cleared at every advance.
     collapsed_from_captured: bool,
 }
 
@@ -1003,22 +943,12 @@ impl CommandReplayState {
     }
 
     fn take_snapshot(&mut self, current: &CommandRecording, center: Point) {
-        // `clone_from` semantics: the previous snapshot's buffers are
-        // reused, not reallocated — this runs twice per convergence cycle
-        // on the heavy scenes' ~17k-record tapes.
         self.snapshot.clone_records_from(current);
         self.center = center;
         self.segments.clear();
         self.phase = CommandReplayPhase::Snapshotted;
     }
 
-    /// Splits the recording into maximal chains of consecutive entries that
-    /// moved from the snapshot by one shared similarity transform, then
-    /// re-snapshots at the current values so verification always compares
-    /// against the capture frame. The returned spans carry the capture
-    /// content itself (`capture: true`, identity transform): the snapshot
-    /// IS this frame, so what the renderer retains equals what later
-    /// transforms move.
     fn partition(&mut self, current: &CommandRecording, center: Point) -> ReplayOutcome {
         align_recordings(current, &self.snapshot, &mut self.align_scratch);
         let mut chains: Vec<(usize, usize)> = Vec::new();
@@ -1031,7 +961,6 @@ impl CommandReplayState {
                 i += 1;
                 continue;
             };
-            // A chain anchor must pin rotation itself.
             let Some((t, true)) =
                 pair_transform(current, view, &self.snapshot, snapshot_view, self.center)
             else {
@@ -1085,8 +1014,6 @@ impl CommandReplayState {
             self.take_snapshot(current, center);
             return ReplayOutcome::AllDynamic;
         }
-        // Re-snapshot at current values: chain ranges are current-tape
-        // ranges, which the fresh snapshot preserves verbatim.
         self.take_snapshot(current, center);
         self.segments = chains
             .into_iter()
@@ -1099,7 +1026,6 @@ impl CommandReplayState {
                     tape_start: range.0,
                     tape_end: range.1,
                     bounds: range_bounds(&self.snapshot, range),
-                    // A fresh capture IS the snapshot: nothing recolored.
                     prev_recolors: Vec::new(),
                 }
             })
@@ -1143,16 +1069,6 @@ impl CommandReplayState {
         ReplayOutcome::Spans(spans)
     }
 
-    /// Verifies this frame's recording against the capture. Each segment
-    /// re-locates its anchor by searching forward from the cursor within
-    /// [`RESYNC_WINDOW`] — dynamic spans between segments change length
-    /// freely — probing a few entries under each candidate transform before
-    /// committing to a full-span verification (a wrong candidate from a
-    /// different ring fails the probe on its radii). A mismatch mid-span
-    /// splits the segment: the matched prefix stays retained, the record
-    /// that changed goes dynamic, and the suffix re-enters the location
-    /// queue as its own segment — churn costs the records it touched, not
-    /// the whole capture. Eroded coverage re-snapshots for the next frame.
     fn verify(
         &mut self,
         current: &CommandRecording,
@@ -1160,10 +1076,7 @@ impl CommandReplayState {
     ) -> ReplayOutcome {
         let mut spans: Vec<ReplaySpan> = Vec::new();
         let mut retained_records = 0usize;
-        // Current-tape position covered so far.
         let mut cursor = 0usize;
-        // Leading segments the pooled pass already committed; the serial
-        // walk below runs only from this point on.
         let mut committed = 0usize;
         if let Some(pool) = pool
             && self.segments.len() >= 2
@@ -1173,12 +1086,6 @@ impl CommandReplayState {
                 self.optimistic_commits += 1;
                 return self.finish_verify(current, commit.spans, commit.retained_records);
             }
-            // Prefix-commit: the pooled spans for every segment before
-            // the first failure are equal by construction to what the
-            // serial walk would produce for them (see
-            // [`Self::verify_optimistic`]), so they are kept and the
-            // serial machinery below is seeded from the failure point
-            // instead of redoing the whole tape.
             if commit.committed > 0 {
                 self.prefix_commits += 1;
             }
@@ -1187,36 +1094,17 @@ impl CommandReplayState {
             cursor = commit.cursor;
             committed = commit.committed;
         }
-        // Segments awaiting location this frame, tape order. A split pushes
-        // the suffix back onto the front so it is located before the next
-        // original segment. Both queues are persistent fields refilled per
-        // frame, so their buffers keep their high-water capacity.
         self.verify_pending.clear();
         self.verify_pending.extend(self.segments.drain(committed..));
         self.verify_survivors.clear();
-        // A committed segment matched whole, so it survives unchanged — in
-        // emission order, ahead of whatever the serial walk keeps.
         self.verify_survivors.append(&mut self.segments);
         while let Some(segment) = self.verify_pending.pop_front() {
             let len = segment.tape_end - segment.tape_start;
             let search_end = (cursor + RESYNC_WINDOW)
                 .min(current.tape.len().saturating_sub(len - 1))
                 .max(cursor);
-            // Candidates run LEFT TO RIGHT from the cursor, never by
-            // proximity to an expected position: within a self-similar
-            // ring, every pairing shifted right of the true anchor passes
-            // probes (recolor-tolerant matching even repaints the color
-            // pattern) with a sub-tolerance angle residual — the one
-            // pairing a distance heuristic must never be allowed to reach
-            // first. The true anchor is always the LEFTMOST compatible
-            // candidate, exactly the order the flat detector proved out.
             let candidates = cursor..search_end;
             let mut located: Option<(usize, RecordTransform)> = None;
-            // The longest cleanly matched prefix among failed commits:
-            // (start, transform); its length and the recolors within it
-            // live in `best_prefix_len` / `best_recolor_scratch`. A genuine
-            // mid-span change surfaces here — the right anchor matches far
-            // more than any mislocated one.
             let mut best_prefix: Option<(usize, RecordTransform)> = None;
             let mut best_prefix_len = 0usize;
             let mut attempts = 0usize;
@@ -1231,9 +1119,6 @@ impl CommandReplayState {
                 ) else {
                     continue;
                 };
-                // Committed: verify the whole span. A failure may still be a
-                // mislocated anchor (self-similar rings), so the search
-                // resumes — a bounded number of times.
                 let matched = match_span(
                     TypedRecords::from(current),
                     TypedRecords::from(&self.snapshot),
@@ -1248,18 +1133,8 @@ impl CommandReplayState {
                     if matched > best_prefix_len {
                         best_prefix_len = matched;
                         best_prefix = Some((start, t));
-                        // Keep the best prefix's recolors without an
-                        // allocation: the two scratches trade places.
                         std::mem::swap(&mut self.recolor_scratch, &mut self.best_recolor_scratch);
                     }
-                    // Only failures with a substantial matched prefix
-                    // consume the commit budget: those are genuine split
-                    // candidates, and re-verifying long spans is the cost
-                    // being bounded. A short-prefix failure is just a wrong
-                    // anchor (a dead predecessor's entries, a cross-ring
-                    // pairing) that the scan must be free to step past —
-                    // charging those burned the budget before the true
-                    // anchor and killed healthy segments.
                     if matched >= MIN_SEGMENT_RECORDS {
                         attempts += 1;
                         if attempts >= MAX_COMMIT_ATTEMPTS {
@@ -1271,16 +1146,6 @@ impl CommandReplayState {
                 located = Some((start, t));
                 break;
             }
-            // A failed segment splits around the record that changed: the
-            // matched prefix is retained now, the suffix re-enters the
-            // queue to locate itself past whatever churn displaced it. Only
-            // a prefix long enough to prove the anchor was right earns a
-            // split — a segment with no solid prefix dies whole, or a weak
-            // wrong-anchor prefix would shed one record and re-fail across
-            // the whole span. The emitted span `mem::take`s its recolors
-            // out of the owning scratch — the buffer walks into the graph
-            // and the scratch re-grows on the next attempt (accepted:
-            // emitting spans do real work).
             let (span_start, t, mut recolors, span_len) = match located {
                 Some((start, t)) => (start, t, std::mem::take(&mut self.recolor_scratch), len),
                 None => {
@@ -1293,12 +1158,6 @@ impl CommandReplayState {
                     if segment.tape_end > suffix_start
                         && segment.tape_end - suffix_start >= MIN_SEGMENT_RECORDS
                     {
-                        // The suffix addresses the SAME captured content,
-                        // just deeper in: no recapture, only an offset. It
-                        // inherits its share of the previous frame's
-                        // recolor memory re-based to its own start; the
-                        // split record itself leaves retained drawing, so
-                        // its offset needs no restore anywhere.
                         let rebase = (best_prefix_len + 1) as u32;
                         let cut = segment.prev_recolors.partition_point(|&p| p < rebase);
                         self.verify_pending.push_front(CommandSegment {
@@ -1325,10 +1184,6 @@ impl CommandReplayState {
             let mut survivor = if span_len == len {
                 segment
             } else {
-                // The prefix keeps its capture identity — it addresses the
-                // same slot content from the same offset, just shorter. It
-                // carries the whole recolor memory: offsets past the span
-                // are skipped by the merge and cleared by its roll-forward.
                 CommandSegment {
                     slot: segment.slot,
                     slot_offset: segment.slot_offset,
@@ -1375,14 +1230,10 @@ impl CommandReplayState {
             });
         }
 
-        // Survivors become the live table; swapping (the table was drained
-        // above) lets the two buffers ping-pong, both keeping capacity.
         std::mem::swap(&mut self.segments, &mut self.verify_survivors);
         self.finish_verify(current, spans, retained_records)
     }
 
-    /// The verification epilogue shared by the serial and pooled paths:
-    /// coverage bookkeeping and the collapse/erosion re-snapshot decision.
     fn finish_verify(
         &mut self,
         current: &CommandRecording,
@@ -1399,13 +1250,8 @@ impl CommandReplayState {
         let collapsed = retained_records == 0 || coverage < MIN_COVERAGE_FRACTION;
         let eroded = coverage + RECAPTURE_EROSION < self.capture_coverage
             && self.frames_since_capture >= RECAPTURE_COOLDOWN_FRAMES;
-        // Only the collapse marks the frame as servable-stale: an eroded
-        // frame still emits high-coverage spans and costs an ordinary
-        // frame, so replacing it would trade nothing for a frame of lag.
         self.collapsed_from_captured = collapsed;
         if collapsed || eroded {
-            // Re-snapshot so the next two frames re-partition. Collapse pays
-            // immediately; mere erosion waits out the capture cooldown.
             let center = self.center;
             self.take_snapshot(current, center);
             if retained_records == 0 {
@@ -1415,28 +1261,6 @@ impl CommandReplayState {
         ReplayOutcome::Spans(spans)
     }
 
-    /// The pooled fast path: locates segments serially with cheap probes
-    /// only (identical candidate order to the serial walk — leftmost from
-    /// the cursor), then fans the expensive full-span matching across
-    /// `pool` and commits the longest prefix of segments whose bodies
-    /// matched whole.
-    ///
-    /// Each committed span is EQUAL BY CONSTRUCTION to the serial walk's:
-    /// the serial walk commits a segment at the first candidate that both
-    /// passes [`probe_anchor`] and matches its whole body under
-    /// [`match_span`]; for a committed segment here, the first
-    /// probe-passing candidate matched whole, no earlier candidate even
-    /// probe-passes, and both functions are deterministic over the same
-    /// inputs — so anchor, transform, tape range, recolors and bounds all
-    /// coincide, as does the cursor both walks carry forward
-    /// (`start + len`, by induction from a shared start of zero). The
-    /// commit therefore ends at the first failure — a segment with no
-    /// probe-passing candidate in its window, or a body that matched short
-    /// (a genuine change, or a mislocated anchor on a self-similar ring):
-    /// from that segment on, only the serial walk's candidate-scan budget
-    /// and split/death machinery can decide the frame, starting from the
-    /// identical cursor. Uncommitted result slots are left untouched so
-    /// their recolor buffers stay warm.
     fn verify_optimistic(
         &mut self,
         current: &CommandRecording,
@@ -1469,10 +1293,6 @@ impl CommandReplayState {
                     break;
                 }
             }
-            // No probe-passing candidate: the serial walk would scan these
-            // same candidates, find none, and kill the segment — machinery
-            // this pass does not carry. Job collection stops here; the
-            // jobs already collected are still worth their pooled bodies.
             let Some((start, t)) = found else {
                 break;
             };
@@ -1492,9 +1312,6 @@ impl CommandReplayState {
                 cursor: 0,
             };
         }
-        // One reusable result slot per job, grown once and kept across
-        // frames; every job writes only its own slot, filling the slot's
-        // own recolor buffer in place via the out-param.
         if self.verify_results.len() < jobs.len() {
             self.verify_results
                 .resize_with(jobs.len(), Default::default);
@@ -1521,9 +1338,6 @@ impl CommandReplayState {
                 );
             });
         }
-        // The commit ends at the first body that matched short. Slots from
-        // that job on are not taken, so their recolor buffers stay warm
-        // for the serial rerun and later frames.
         let mut committed = jobs.len();
         for (i, (job, result)) in jobs.iter().zip(&self.verify_results).enumerate() {
             if result.lock().expect("verify span job lock").matched < job.len {
@@ -1540,14 +1354,8 @@ impl CommandReplayState {
             .zip(jobs.iter().zip(&self.verify_results))
             .take(committed)
         {
-            // Committing: each emitted span takes its slot's buffer — the
-            // capacity walks into the graph and the slot re-grows next
-            // frame (accepted: emitting spans do real work).
             let mut recolors =
                 std::mem::take(&mut result.lock().expect("verify span job lock").recolors);
-            // A committed body matched WHOLE, so this is the same restore
-            // merge the serial walk performs for a whole-span commit —
-            // equality by construction extends to the restore patches.
             merge_color_restores(
                 &self.snapshot,
                 segment.tape_start,
@@ -1574,8 +1382,6 @@ impl CommandReplayState {
             });
             cursor = job.start + job.len;
         }
-        // The trailing dynamic span belongs to whichever path covers the
-        // tape's tail: this one only when every segment committed.
         if committed == self.segments.len() && cursor < current.tape.len() {
             spans.push(ReplaySpan::Dynamic {
                 tape_start: cursor,
@@ -1600,9 +1406,7 @@ impl CommandReplayState {
 struct PooledCommit {
     spans: Vec<ReplaySpan>,
     retained_records: usize,
-    /// Leading segments committed exactly as the serial walk would have.
     committed: usize,
-    /// Current-tape position after the last committed span.
     cursor: usize,
 }
 
@@ -1712,11 +1516,6 @@ impl<'a> From<&'a CommandRecording> for TypedRecords<'a> {
 }
 
 impl TypedRecords<'_> {
-    /// [`view_at`] over the POD slices — the same [`view_at_slices`]
-    /// implementation, so eligibility cannot drift between the two forms.
-    /// The shipping span match no longer decodes per entry (it walks
-    /// contiguous per-store runs); only the tests' naive reference walk
-    /// still reads entries this way.
     #[cfg(test)]
     fn view_at(&self, i: usize) -> Option<ReplayView> {
         view_at_slices(self.tape, self.round_rects, i)
@@ -1738,8 +1537,6 @@ impl TypedRecords<'_> {
 fn typed_run_len(tape: &[TapeRef], at: usize) -> usize {
     let rest = &tape[at..];
     let base = rest[0].raw() as u64;
-    // Invariant: the predicate holds for every d < lo and fails for every
-    // d >= hi. P(0) is trivially true; the run is the first failing d.
     let mut lo = 1usize;
     let mut hi = rest.len();
     while lo < hi {
@@ -1752,48 +1549,6 @@ fn typed_run_len(tape: &[TapeRef], at: usize) -> usize {
     }
     lo
 }
-
-// ---------------------------------------------------------------------------
-// Lane-shaped verify kernels for the contiguous run loops.
-//
-// [`match_arc`] and [`match_round_rect`] stay the semantically authoritative
-// comparisons — probes, partition, and alignment call them per pair. The run
-// loops below run these lane-shaped twins instead, pinned to the scalar
-// authorities verdict-for-verdict and recolor-for-recolor by the exhaustive
-// `lane_kernel_equivalence` corpus at the bottom of this file (tolerance
-// edges both directions per field, stroke shape mismatches, NaN in every
-// field, infinities, denormals, cross-paired records, degenerate
-// transforms).
-//
-// The shaping argument, in lieu of inspecting generated code: each kernel
-// gathers its independent tolerance checks into FIXED-SIZE arrays and folds
-// them with `&` — constant trip count, no early exit inside the lane block,
-// no cross-lane data flow — which is the shape LLVM's SLP vectorizer can
-// lift onto 4-wide SIMD as-is: the per-lane chains (sub, abs, abs, abs,
-// max, mul, add, cmp) are isomorphic across lanes and need no
-// reassociation and no fast-math relaxation to run 4-wide. Every lane IS a
-// [`close_rel`] call — the exact scalar expression
-// `(a - b).abs() <= ABS_EPS + REL_EPS * a.abs().max(b.abs())` — so any
-// speedup comes from lane-parallelism, never from rewriting a float
-// expression, and the verdict cannot depend on whether the vectorizer
-// fires (the on-device A/B is what judges that). [`close_angle`] stays
-// scalar: its bounded-wrap branch does not lane-parallelize.
-//
-// Where the lanes can actually widen, measured against the target specs,
-// not assumed: `armv7-linux-androideabi` — the Wear armeabi-v7a slice —
-// carries `-neon` in its rustc feature string (the ABI's floor is
-// VFPv3-D16), so THERE the lanes compile to scalar VFP either way; the
-// shape costs nothing scalar (the checks were unconditional and
-// independent before) and hands the in-order pipeline deeper independent
-// chains, but 4-wide needs the app to build the `thumbv7neon` triple.
-// aarch64 (`arm64-v8a`, ASIMD always on) and the x86_64 hosts vectorize
-// as-is. Where NEON does apply on 32-bit ARM it flushes single-precision
-// denormals to zero while scalar VFP keeps them; that cannot flip a lane
-// here — a denormal `|a - b|` sits below ABS_EPS (2e-2) whether flushed or
-// not, and a denormal `REL_EPS * max` term vanishes into the `ABS_EPS + x`
-// rounding either way — the boolean is identical under either denormal
-// mode.
-// ---------------------------------------------------------------------------
 
 /// The exact [`close_rel`] verdict for `N` independent lane pairs, folded
 /// with `&`. Fixed-size arrays, a constant trip count, and a branch-free
@@ -1894,8 +1649,6 @@ fn match_round_rect_lanes(
     sin: f32,
     cos: f32,
 ) -> RecordMatch {
-    // circle_view(current) / circle_view(retained), exactly: half from the
-    // width, center from rect origin + half extents, diameter = width.
     let half_now = current.rect.width * 0.5;
     let half_then = retained.rect.width * 0.5;
     let c_now = Point::new(
@@ -2063,9 +1816,6 @@ fn match_span(
                     recolors,
                 )
             }
-            // Rects, `Other`s, and cross-kind pairings are exactly what the
-            // eligibility rule rejects: the joint run's first record is a
-            // mismatch.
             _ => 0,
         };
         offset += matched;
@@ -2182,8 +1932,6 @@ mod tests {
             RecordMatch::Exact
         );
 
-        // An unscaled stroke under a scaling segment is a real change: 2%
-        // of 5px is well past the noise tolerance.
         let mut stale = current;
         stale.stroke = Some(Stroke::new(5.0));
         assert_eq!(
@@ -2219,7 +1967,7 @@ mod tests {
     #[test]
     fn non_circular_round_rect_never_matches() {
         let mut retained = circle(304.0, 204.0, 10.0, Color::WHITE);
-        retained.rect.width = 14.0; // no longer a circle
+        retained.rect.width = 14.0;
         assert_eq!(
             match_round_rect(&retained, &retained, CENTER, RecordTransform::IDENTITY),
             RecordMatch::Mismatch
@@ -2257,9 +2005,6 @@ mod tests {
         geometry::{DrawScopeDefault, Size},
     };
 
-    /// Records one MEGA-shaped frame: `rings` rings of `per_ring` arcs, each
-    /// ring rotated by its own step × `frame`, breathing scale applied to
-    /// every radius, plus `tail` dynamic circles whose count varies.
     fn ring_frame(rings: usize, per_ring: usize, frame: usize, tail: usize) -> CommandRecording {
         let mut scope = DrawScopeDefault::new(Size::new(408.0, 408.0));
         let scale = 0.9994f32.powi(frame as i32);
@@ -2280,7 +2025,6 @@ mod tests {
             }
         }
         for i in 0..tail {
-            // Dynamic entities: different positions every frame.
             let x = 40.0 + (frame * 17 + i * 31) as f32 % 300.0;
             scope.draw_circle(Brush::solid(Color::RED), Point::new(x, 50.0), 3.0);
         }
@@ -2294,8 +2038,6 @@ mod tests {
             state.advance(&ring_frame(3, 300, 0, 10)),
             ReplayOutcome::AllDynamic
         ));
-        // The partition frame itself emits the capture: snapshot == current,
-        // so every span is capture:true under an identity transform.
         let ReplayOutcome::Spans(capture_spans) = state.advance(&ring_frame(3, 300, 1, 10)) else {
             panic!("partition frame should emit the capture");
         };
@@ -2315,13 +2057,11 @@ mod tests {
             .filter(|span| matches!(span, ReplaySpan::Retained { .. }))
             .count();
         assert!(retained >= 3, "each ring retains, got {spans:?}");
-        // The tail circles are dynamic.
         assert!(
             spans
                 .iter()
                 .any(|span| matches!(span, ReplaySpan::Dynamic { .. }))
         );
-        // Retained spans carry the per-ring rotations, not a shared one.
         let transforms: Vec<RecordTransform> = spans
             .iter()
             .filter_map(|span| match span {
@@ -2332,9 +2072,6 @@ mod tests {
         assert!(transforms.windows(2).any(|w| w[0].angle != w[1].angle));
     }
 
-    /// A ring scene sharing nothing with [`ring_frame`] — different radii,
-    /// band ratio, sweep, counts — so a state captured on one collapses
-    /// whole when fed the other.
     fn flipped_ring_frame(frame: usize) -> CommandRecording {
         let mut scope = DrawScopeDefault::new(Size::new(408.0, 408.0));
         for ring in 0..4 {
@@ -2358,38 +2095,28 @@ mod tests {
     #[test]
     fn only_a_collapse_out_of_capture_sets_the_transition_flag() {
         let mut state = CommandReplayState::default();
-        // Bootstrap frames never flag: the idle snapshot...
         assert!(matches!(
             state.advance(&ring_frame(3, 300, 0, 10)),
             ReplayOutcome::AllDynamic
         ));
         assert!(!state.collapsed_from_captured());
-        // ...the partition/capture frame...
         assert!(matches!(
             state.advance(&ring_frame(3, 300, 1, 10)),
             ReplayOutcome::Spans(_)
         ));
         assert!(!state.collapsed_from_captured());
-        // ...and an ordinary verified frame.
         assert!(matches!(
             state.advance(&ring_frame(3, 300, 2, 10)),
             ReplayOutcome::Spans(_)
         ));
         assert!(!state.collapsed_from_captured());
-        // The content flip: nothing survives verification, the frame
-        // collapses out of the established capture — the flag's one
-        // trigger, and the frame whose emission would re-materialize the
-        // whole tape.
         assert!(matches!(
             state.advance(&flipped_ring_frame(3)),
             ReplayOutcome::AllDynamic
         ));
         assert!(state.collapsed_from_captured());
-        // The next advance clears it: re-convergence frames are ordinary.
         let _ = state.advance(&flipped_ring_frame(4));
         assert!(!state.collapsed_from_captured());
-        // A short tape retires the state — a bootstrap path, never a
-        // collapse, even straight after retention.
         let _ = state.advance(&flipped_ring_frame(5));
         let short = ring_frame(1, 40, 0, 0);
         assert!(short.len() < MIN_REPLAY_COMMAND_RECORDS);
@@ -2401,7 +2128,7 @@ mod tests {
     fn entity_churn_between_frames_still_retains_rings() {
         let mut state = CommandReplayState::default();
         state.advance(&ring_frame(2, 400, 0, 8));
-        state.advance(&ring_frame(2, 400, 1, 13)); // tail length changed
+        state.advance(&ring_frame(2, 400, 1, 13));
         let ReplayOutcome::Spans(spans) = state.advance(&ring_frame(2, 400, 2, 5)) else {
             panic!("churned tail must not break ring retention");
         };
@@ -2419,7 +2146,6 @@ mod tests {
     fn recolors_are_patches_not_mismatches() {
         let recolored_frame = |frame: usize| {
             let mut recording = ring_frame(1, 600, frame, 0);
-            // Twinkle: 40 dots change color every frame, geometry untouched.
             for i in (0..recording.arcs.len()).step_by(15) {
                 recording.arcs[i].color = if frame.is_multiple_of(2) {
                     Color::rgb(1.0, 0.5, 0.1)
@@ -2451,7 +2177,6 @@ mod tests {
         state.advance(&ring_frame(3, 300, 0, 0));
         state.advance(&ring_frame(3, 300, 1, 0));
         let mut broken = ring_frame(3, 300, 2, 0);
-        // A brick hit: one entry in the middle ring changes sweep.
         broken.arcs[450].sweep_angle *= 3.0;
         let ReplayOutcome::Spans(spans) = state.advance(&broken) else {
             panic!("one changed entry must not drop the whole command");
@@ -2504,9 +2229,6 @@ mod tests {
             2,
             "prefix and suffix both retain: {spans:?}"
         );
-        // Both pieces address the SAME captured slot — a split never
-        // recaptures, it re-addresses: the suffix starts one record past
-        // the prefix within the capture.
         assert_eq!(retained[0].0, retained[1].0);
         assert_eq!(retained[0].1, 0);
         assert_eq!(retained[1].1, 451);
@@ -2514,8 +2236,6 @@ mod tests {
         assert_eq!(dynamic, 1, "only the changed record goes dynamic");
         assert_eq!(state.stats(), (0, 1), "one split, no deaths");
 
-        // The pieces keep retaining on later frames, the changed record's
-        // slot staying dynamic between them.
         let ReplayOutcome::Spans(spans) = state.advance(&ring_frame(1, 900, 3, 0)) else {
             panic!("split pieces must keep retaining");
         };
@@ -2531,8 +2251,6 @@ mod tests {
         let mut state = CommandReplayState::default();
         state.advance(&ring_frame(3, 300, 0, 0));
         state.advance(&ring_frame(3, 300, 1, 0));
-        // The middle ring changes shape permanently: its segment dies, and
-        // only a recapture can watch the new shape.
         let mutated = |frame: usize| {
             let mut recording = ring_frame(3, 300, frame, 0);
             for arc in &mut recording.arcs[300..600] {
@@ -2584,10 +2302,6 @@ mod tests {
         assert!(state.segments().is_empty());
     }
 
-    /// The naive per-entry walk [`match_span`] replaced: decode both
-    /// sides' views at every offset, dispatch on the pair, decode again for
-    /// a recolor's color. Kept verbatim as the reference the run-decomposed
-    /// path is checked against, verdict for verdict, recolor for recolor.
     #[allow(clippy::too_many_arguments)]
     fn match_span_reference(
         current: TypedRecords<'_>,
@@ -2629,17 +2343,6 @@ mod tests {
         len
     }
 
-    /// One mixed frame, in tape order: a run of arcs, a non-circular round
-    /// rect, a solid rect, a gradient rect (an `Other` entry), a run of
-    /// circles, a second run of arcs, and a closing pair of circles — every
-    /// run-breaking shape on one tape, PLUS matchable runs that directly
-    /// follow another matchable run (circles→arcs and arcs→circles). Those
-    /// adjacencies matter: a span entered mid-tape reaches its second run
-    /// at a non-zero span offset, so a recolor there catches any confusion
-    /// between run-relative and span-relative offsets. `t` moves the
-    /// movable content so a span match under `t` sees Exact/Recolor
-    /// entries, not wall-to-wall mismatches; `recolored` repaints one entry
-    /// in each matchable run.
     fn mixed_frame(t: RecordTransform, recolored: bool) -> CommandRecording {
         let mut scope = DrawScopeDefault::new(Size::new(408.0, 408.0));
         for slot in 0..8 {
@@ -2745,9 +2448,6 @@ mod tests {
             ],
             "run decomposition must cut exactly at kind transitions"
         );
-        // A run read from the middle is that run's remainder, and a kind
-        // that leaves and returns starts a NEW run — index continuity
-        // across the gap must not fuse the two stretches.
         assert_eq!(typed_run_len(tape, 3), 5);
         assert_eq!(typed_run_len(tape, 8), 1);
         assert_eq!(typed_run_len(tape, 12), 2);
@@ -2763,9 +2463,6 @@ mod tests {
         };
         let snapshot_rec = mixed_frame(RecordTransform::IDENTITY, false);
         let mut current_rec = mixed_frame(t, true);
-        // A genuine geometry change inside the second arc run, and a
-        // NaN-carrying record right after it: both must fail through both
-        // paths at the same offset.
         current_rec.arcs[11].sweep_angle *= 3.0;
         current_rec.arcs[12].start_angle = f32::NAN;
         let current = TypedRecords::from(&current_rec);
@@ -2775,9 +2472,6 @@ mod tests {
         assert_eq!(n, 22);
         let mut fast: Vec<(u32, Color)> = Vec::new();
         let mut naive: Vec<(u32, Color)> = Vec::new();
-        // Every (start, seg_start) pairing — aligned, shifted into other
-        // runs, cross-kind — at several lengths including the longest one
-        // both sides can carry.
         for start in 0..n {
             for seg_start in 0..n {
                 let longest = n - start.max(seg_start);
@@ -2799,15 +2493,6 @@ mod tests {
                 }
             }
         }
-        // The sweep must actually exercise the positive paths, not agree
-        // on wall-to-wall mismatches: the aligned leading arc run matches
-        // whole with its recolor, the aligned circles with theirs, and a
-        // span crossing circles into the second arc run carries recolors
-        // from BOTH runs — the arc one at span offset 4 (run offset 1), the
-        // pairing any run-relative recolor bookkeeping would get wrong —
-        // then stops exactly at the changed record. A span crossing the
-        // last arc into the closing circles pins the same offset arithmetic
-        // for the round-rect loop.
         let matched = match_span(current, snapshot, CENTER, 0, 0, 8, t, &mut fast);
         assert_eq!(
             (matched, fast.as_slice()),
@@ -2861,9 +2546,6 @@ mod tests {
                 RecordMatch::Mismatch
             );
         }
-        // A NaN circle, both as a poisoned position (still circle-eligible,
-        // fails the point comparison) and as poisoned extents (loses circle
-        // eligibility itself).
         let good = circle(304.0, 204.0, 10.0, Color::WHITE);
         let poisoned_circles: [fn(&mut SolidRoundRectRecord); 2] =
             [|r| r.rect.x = f32::NAN, |r| r.rect.width = f32::NAN];
@@ -2879,9 +2561,6 @@ mod tests {
                 RecordMatch::Mismatch
             );
         }
-        // And at span level: the poisoned record ends the clean prefix at
-        // the same offset through the run-decomposed path and the naive
-        // walk.
         let snapshot_rec = mixed_frame(RecordTransform::IDENTITY, false);
         let mut current_rec = mixed_frame(RecordTransform::IDENTITY, false);
         current_rec.arcs[4].sweep_angle = f32::NAN;
@@ -2895,9 +2574,6 @@ mod tests {
         assert_eq!((matched, &fast), (reference, &naive));
     }
 
-    /// A real multi-threaded executor for the equivalence test: lane 0 is
-    /// the caller, the rest are scoped threads, jobs stride across lanes —
-    /// the same distribution the renderer's frame pool uses.
     struct ThreadedExec {
         lanes: usize,
     }
@@ -2926,13 +2602,6 @@ mod tests {
     #[test]
     fn pooled_verification_matches_serial_exactly() {
         let exec = ThreadedExec { lanes: 3 };
-        // Every verification path in one long churning sequence: multi-ring
-        // retention under rotation, tail churn, twinkle recolors, brick-hit
-        // single-record changes (the pooled pass commits the segments
-        // before the failure and hands the serial machinery the failure
-        // point), a multi-segment change, whole-ring deaths behind a
-        // committed prefix, and coverage collapses that force re-snapshots
-        // and fresh partitions mid-sequence.
         let frame = |f: usize| -> CommandRecording {
             let tail = [10usize, 13, 5, 8, 11, 6, 9, 12][f % 8];
             let mut recording = ring_frame(3, 300, f, tail);
@@ -2947,42 +2616,26 @@ mod tests {
             }
             match f {
                 5 => {
-                    // A brick hit: one record inside the middle ring. The
-                    // pooled pass fails there, commits the ring before it,
-                    // and the serial machinery splits from the failure.
                     recording.arcs[450].sweep_angle = 0.15;
                 }
                 8 => {
-                    // Changes in the first and last rings at once: the
-                    // first segment fails, so the pooled prefix is empty
-                    // and the serial walk decides the whole frame.
                     recording.arcs[100].sweep_angle = 0.15;
                     recording.arcs[750].sweep_angle = 0.15;
                 }
                 12 => {
-                    // A hit inside a segment created by the frame-5 split.
                     recording.arcs[500].sweep_angle = 0.15;
                 }
                 16..=39 => {
-                    // The last ring changes shape wholesale and stays
-                    // changed: its segment dies (no candidate even
-                    // probes) behind the still-committing leading rings,
-                    // and whatever coverage bookkeeping decides — death or
-                    // collapse into a re-snapshot — both paths must agree.
                     for arc in &mut recording.arcs[600..900] {
                         arc.sweep_angle = 0.06;
                     }
                 }
                 40..=45 => {
-                    // Nearly everything changes: coverage collapses below
-                    // the floor, the state re-snapshots and re-partitions
-                    // mid-sequence, then retains the changed shape.
                     for arc in &mut recording.arcs[150..900] {
                         arc.sweep_angle = 0.08;
                     }
                 }
                 52 => {
-                    // A brick hit against the post-collapse capture.
                     recording.arcs[450].sweep_angle = 0.15;
                 }
                 _ => {}
@@ -3055,22 +2708,6 @@ mod tests {
     }
 }
 
-/// The lane kernels ([`match_arc_lanes`], [`match_round_rect_lanes`]) and
-/// the run loops built on them, checked against the scalar authorities
-/// ([`match_arc`], [`match_round_rect`]) record-for-record. The corpus
-/// pushes every field just inside and just outside its tolerance in both
-/// directions — at 10% margins whose side is asserted, and at knife-edge
-/// deltas bracketing the exact f32 threshold, which keep the equivalence
-/// assertion sensitive to sub-tolerance arithmetic drift the asserted
-/// margins would forgive — mismatches the stroke shapes both ways, wraps
-/// the angle through full turns, and poisons every field with NaN, both
-/// infinities, and a denormal on either and both sides. Then every corpus
-/// record is cross-paired with every other under several transforms
-/// (identity, the nominal motion, a large rotation, a NaN transform, an
-/// infinite scale), and the run loops are replayed from every start offset
-/// with recolor lists compared BIT-FOR-BIT (a NaN color both paths
-/// produced identically must not fail the comparison, and no color
-/// difference may hide).
 #[cfg(test)]
 mod lane_kernel_equivalence {
     use std::f32::consts::TAU;
@@ -3078,10 +2715,6 @@ mod lane_kernel_equivalence {
     use super::*;
     use crate::{Color, Stroke};
 
-    /// Knife-edge margin around the exact threshold. Well below every
-    /// tolerance in play (ABS_EPS is 2e-2), so a lane operand drifting by
-    /// more than ~5e-4 flips one of the bracketing cases on the side the
-    /// drift approaches — this is what the sabotage check leans on.
     const KNIFE: f32 = 5.0e-4;
 
     const PIVOT: Point = Point { x: 204.0, y: 204.0 };
@@ -3089,7 +2722,6 @@ mod lane_kernel_equivalence {
         scale: 0.9994,
         angle: 0.0123,
     };
-    /// A denormal: the smallest positive normal f32 is ~1.18e-38.
     const DENORMAL: f32 = 1.0e-40;
     const POISONS: [f32; 4] = [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, DENORMAL];
 
@@ -3112,9 +2744,6 @@ mod lane_kernel_equivalence {
         ]
     }
 
-    /// Recolor lists compared as bit patterns: the contract is bitwise
-    /// identity, and `Color`'s `PartialEq` would spuriously fail a NaN
-    /// color that BOTH paths produced identically.
     fn bits(recolors: &[(u32, Color)]) -> Vec<(u32, [u32; 4])> {
         recolors
             .iter()
@@ -3128,14 +2757,8 @@ mod lane_kernel_equivalence {
         label: String,
         current: R,
         retained: R,
-        /// The scalar authority's verdict under [`T`], asserted where the
-        /// case exists to prove a specific edge falls on a specific side —
-        /// so the corpus provably exercises what it claims. `None` for
-        /// poison cases, whose verdict the scalar function itself defines.
         expected: Option<RecordMatch>,
     }
-
-    // ---- arcs ----
 
     fn arc_base(stroke: Option<f32>) -> SolidArcRecord {
         SolidArcRecord {
@@ -3149,8 +2772,6 @@ mod lane_kernel_equivalence {
         }
     }
 
-    /// `retained` moved by exactly [`T`] — the same products and sum the
-    /// scalar comparison forms on its own side, so the pair is Exact.
     fn arc_moved(retained: &SolidArcRecord) -> SolidArcRecord {
         SolidArcRecord {
             center: retained.center,
@@ -3209,10 +2830,6 @@ mod lane_kernel_equivalence {
         let matched = arc_moved(&retained);
         for (name, get, set) in arc_fields() {
             let base = get(&matched);
-            // close_angle's tolerance is the flat ABS_EPS; close_rel's
-            // grows with the operands. 0.9/1.1 margins keep the nudge on
-            // the intended side even where it feeds several lanes (the
-            // center feeds two) or shifts its own threshold's `max`.
             let tolerance = if name == "start_angle" {
                 ABS_EPS
             } else {
@@ -3253,8 +2870,6 @@ mod lane_kernel_equivalence {
                     retained: poisoned,
                     expected: None,
                 });
-                // The same poison on BOTH sides: infinities subtract to
-                // NaN, denormal pairs sit inside every tolerance.
                 let mut both_current = matched;
                 set(&mut both_current, poison);
                 corpus.push(Case {
@@ -3264,13 +2879,6 @@ mod lane_kernel_equivalence {
                     expected: None,
                 });
             }
-            // Knife edges: deltas of threshold - KNIFE, the threshold
-            // itself, and threshold + KNIFE, both directions. Which side
-            // the dead-on case rounds to is the scalar authority's call
-            // (`expected: None`); what these buy is sensitivity — an
-            // operand off by more than KNIFE in either implementation
-            // flips one of them, where the 10% margins above would
-            // forgive it.
             for knife in [tolerance - KNIFE, tolerance, tolerance + KNIFE] {
                 for sign in [1.0_f32, -1.0] {
                     let mut edge = matched;
@@ -3285,8 +2893,6 @@ mod lane_kernel_equivalence {
             }
         }
 
-        // Full-turn wraps take close_angle's paths the tolerance nudges
-        // above cannot reach.
         for (label, delta, expected) in [
             ("start_angle +TAU", TAU, RecordMatch::Exact),
             ("start_angle -TAU", -TAU, RecordMatch::Exact),
@@ -3312,7 +2918,6 @@ mod lane_kernel_equivalence {
             });
         }
 
-        // Stroke shapes and width edges.
         let stroked = arc_base(Some(5.0));
         let moved_stroked = arc_moved(&stroked);
         let mut some_vs_none = matched;
@@ -3378,8 +2983,6 @@ mod lane_kernel_equivalence {
             });
         }
 
-        // A NaN color on matching geometry: `==` is false, so BOTH paths
-        // must call it a Recolor carrying the NaN color.
         let mut nan_color = matched;
         nan_color.color = Color(f32::NAN, 0.5, 0.5, 1.0);
         corpus.push(Case {
@@ -3461,11 +3064,7 @@ mod lane_kernel_equivalence {
         }
     }
 
-    // ---- round rects ----
-
     fn rr_base(stroke: Option<f32>) -> SolidRoundRectRecord {
-        // A circle of diameter 10 at (304, 204) — off-pivot, so rotation
-        // moves it.
         SolidRoundRectRecord {
             rect: Rect {
                 x: 299.0,
@@ -3479,9 +3078,6 @@ mod lane_kernel_equivalence {
         }
     }
 
-    /// `retained` moved by exactly [`T`]: the center through the very
-    /// `apply` arithmetic the scalar comparison uses, the extents through
-    /// its exact products.
     fn rr_moved(retained: &SolidRoundRectRecord) -> SolidRoundRectRecord {
         let (c_then, d_then) = circle_view(retained).expect("the base is a circle");
         let c_now = T.apply(PIVOT, c_then);
@@ -3604,8 +3200,6 @@ mod lane_kernel_equivalence {
                     expected: None,
                 });
             }
-            // Knife edges, exactly as in the arc corpus: sub-tolerance
-            // sensitivity for the equivalence assertion.
             for knife in [tolerance - KNIFE, tolerance, tolerance + KNIFE] {
                 for sign in [1.0_f32, -1.0] {
                     let mut edge = matched;
@@ -3620,10 +3214,6 @@ mod lane_kernel_equivalence {
             }
         }
 
-        // Non-circles: the scalar path fails circle_view's `let ... else`,
-        // the lane path its is_circle lanes — including a retained
-        // non-circle behind a pristine current, and a non-circle paired
-        // with ITSELF (which must still be a Mismatch).
         let mut squashed = matched;
         squashed.rect.height = squashed.rect.width * 2.0;
         corpus.push(Case {
@@ -3647,7 +3237,6 @@ mod lane_kernel_equivalence {
             expected: Some(RecordMatch::Mismatch),
         });
 
-        // Stroke shapes and width edges.
         let stroked = rr_base(Some(3.0));
         let moved_stroked = rr_moved(&stroked);
         let mut some_vs_none = matched;
@@ -3787,12 +3376,6 @@ mod lane_kernel_equivalence {
         }
     }
 
-    // ---- arbitrary bit patterns ----
-
-    /// A deterministic xorshift over raw bit patterns — half the values
-    /// squashed into a plausible coordinate range, half left as arbitrary
-    /// bits (NaN payloads, infinities, denormals, huge magnitudes) — so the
-    /// kernels meet float shapes no hand-written corpus anticipates.
     struct XorShift(u32);
 
     impl XorShift {

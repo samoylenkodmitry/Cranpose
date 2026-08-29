@@ -1,12 +1,3 @@
-//! Variable fonts registered at several weights.
-//!
-//! Android backs `sans-serif` with one variable `Roboto-Regular.ttf` and
-//! describes every weight of the family as a `wght` axis position on it, so a
-//! family that instances a single file has to produce genuinely different
-//! outlines per weight — otherwise a Compose port asking for Medium draws
-//! Regular. The demo bundles a variable face, which is what this exercises;
-//! `cranpose-render-common` ships only static faces of its own.
-
 use std::path::PathBuf;
 
 use cranpose_render_common::{
@@ -31,8 +22,6 @@ fn variable_font_path() -> String {
         .into_owned()
 }
 
-/// One variable file declared at three weights — the shape
-/// `register_system_family` produces for Android's `sans-serif`.
 fn instanced_family() -> FontFamily {
     let path = variable_font_path();
     FontFamily::file_backed(vec![
@@ -63,9 +52,6 @@ fn font_set(family: &FontFamily) -> SoftwareTextFontSet {
     registry.into_font_set_or_default(&[])
 }
 
-/// Total glyph coverage of a run — the signal that outlines actually got
-/// heavier, which is what a monospaced variable face changes without changing
-/// its advances.
 fn ink_area(fonts: &SoftwareTextFontSet, text: &str, style: &TextStyle) -> usize {
     let metrics =
         SoftwareTextMeasurer::from_font_set(fonts.clone(), 64).measure(&text.into(), style);
@@ -132,8 +118,6 @@ fn instances_of_one_variable_file_do_not_share_glyph_cache_entries() {
     );
 }
 
-/// A directory shaped like `/system/fonts`, holding the variable file under the
-/// name Android's `sans-serif` names.
 struct SystemFontDir(PathBuf);
 
 impl SystemFontDir {
@@ -163,12 +147,6 @@ fn system_font_set(dir: &SystemFontDir, weight: FontWeight) -> SoftwareTextFontS
     registry.into_font_set_or_default(&[])
 }
 
-/// The defect this guards against: Wear Material 3 asks `sans-serif` for body
-/// 450 and title 550, `/system/etc/fonts.xml` declares the family only in
-/// hundreds, and Minikin resolves both to the hundred below. A registry that
-/// instead instanced the `wght` axis at 450 drew a face the platform cannot
-/// draw — measured at +12.3% ink per glyph at 24 px on a Wear device, text that
-/// measures and lays out perfectly and is simply heavier than every other app.
 #[test]
 fn a_system_weight_the_font_config_does_not_declare_draws_the_declared_face() {
     let dir = SystemFontDir::new("sans-serif");
@@ -184,7 +162,6 @@ fn a_system_weight_the_font_config_does_not_declare_draws_the_declared_face() {
         "Weighted",
         &style_for(&family, FontWeight::MEDIUM),
     );
-    // Asked for off-grid; must draw exactly what the platform's matcher returns.
     let off_grid = ink_area(
         &system_font_set(&dir, FontWeight(450)),
         "Weighted",
@@ -202,9 +179,6 @@ fn a_system_weight_the_font_config_does_not_declare_draws_the_declared_face() {
     );
 }
 
-/// The same request against an app's own file must keep instancing freely — a
-/// variable axis belongs to the font, and only the platform's aliases are
-/// limited to the platform's declared entries.
 #[test]
 fn an_app_supplied_variable_face_still_instances_an_arbitrary_weight() {
     let path = variable_font_path();
@@ -232,10 +206,6 @@ fn an_app_supplied_variable_face_still_instances_an_arbitrary_weight() {
 
 #[test]
 fn a_static_face_declared_at_a_weight_it_does_not_have_keeps_its_own_outlines() {
-    // No `wght` axis to instance, so the declaration only affects matching —
-    // the outlines are whatever the file holds, and synthesis takes over from
-    // there. Registering the same static file twice must therefore reuse one
-    // set of glyph masks rather than duplicating the atlas.
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("assets/leetcodedaily/fonts/DejaVuSans.ttf")
         .to_string_lossy()

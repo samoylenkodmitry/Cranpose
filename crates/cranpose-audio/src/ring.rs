@@ -33,37 +33,20 @@ use std::{
 struct Ring<T> {
     slots: Box<[UnsafeCell<MaybeUninit<T>>]>,
     mask: usize,
-    /// Index of the next element to read. Written only by the consumer.
     head: AtomicUsize,
-    /// Index of the next slot to write. Written only by the producer.
     tail: AtomicUsize,
 }
 
-// SAFETY: the ring hands out exactly one Producer and one Consumer, each of
-// which requires `&mut self` to touch a slot. The producer only writes slots in
-// `[tail, head + capacity)` and publishes them with a release store to `tail`;
-// the consumer only reads slots in `[head, tail)` after an acquire load of
-// `tail`, and releases them by advancing `head`. The two index ranges are
-// disjoint at all times, so no slot is ever aliased. `T: Send` is required
-// because values cross the thread boundary.
 unsafe impl<T: Send> Send for Ring<T> {}
-// SAFETY: see the `Send` invariant above. `&Ring<T>` exposes no way to read or
-// write a slot on its own; the halves do, and each lives on one thread.
 unsafe impl<T: Send> Sync for Ring<T> {}
 
 impl<T> Drop for Ring<T> {
     fn drop(&mut self) {
-        // Both halves are gone by now, so the indices are stable and every slot
-        // in `[head, tail)` still holds an initialized value that must be
-        // dropped.
         let head = self.head.load(Ordering::Relaxed);
         let tail = self.tail.load(Ordering::Relaxed);
         let mut index = head;
         while index != tail {
             let slot = &self.slots[index & self.mask];
-            // SAFETY: `index` is in `[head, tail)`, the range the producer has
-            // published and the consumer has not yet taken, so this slot holds
-            // an initialized `T` that nothing else will read.
             unsafe { slot.get().read().assume_init() };
             index = index.wrapping_add(1);
         }
@@ -112,9 +95,6 @@ impl<T> Producer<T> {
             return Err(value);
         }
         let slot = &ring.slots[tail & ring.mask];
-        // SAFETY: the slot at `tail` is outside `[head, tail)`, so the consumer
-        // never touches it, and this `&mut self` method is the only writer.
-        // Writing before the release store below is what publishes the value.
         unsafe { slot.get().write(MaybeUninit::new(value)) };
         ring.tail.store(tail.wrapping_add(1), Ordering::Release);
         Ok(())
@@ -136,11 +116,6 @@ impl<T> Consumer<T> {
             return None;
         }
         let slot = &ring.slots[head & ring.mask];
-        // Reading moves ownership out; the release store below is what lets the
-        // producer reuse the slot afterwards.
-        // SAFETY: `head != tail` means the producer published this slot with a
-        // release store that the acquire load above synchronizes with, so the
-        // slot holds an initialized `T` that no one else reads.
         let value = unsafe { slot.get().read().assume_init() };
         ring.head.store(head.wrapping_add(1), Ordering::Release);
         Some(value)

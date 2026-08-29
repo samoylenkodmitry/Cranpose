@@ -295,8 +295,6 @@ fn text_glyph_atlas_reuses_identical_content_across_node_ids() {
     );
 }
 
-/// A shader whose only job is to paint uniform 0 into the red channel, so a
-/// frame that failed to re-run it is visible as a pixel that did not move.
 const ANIMATED_SHADER_WGSL: &str = r#"
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -323,8 +321,6 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
 }
 "#;
 
-/// A clipped, cacheable container -- the shape a `vertical_scroll` produces --
-/// wrapping a layer whose render effect is an animated runtime shader.
 fn shader_inside_cached_container_graph(time: f32) -> RenderGraph {
     let shaded_bounds = Rect {
         x: 0.0,
@@ -354,8 +350,6 @@ fn shader_inside_cached_container_graph(time: f32) -> RenderGraph {
     shaded.graphics_layer.render_effect =
         Some(cranpose_ui_graphics::RenderEffect::runtime_shader(shader));
 
-    // The container clips, which is what makes it isolated and therefore
-    // raster-cacheable -- exactly how a scroll container ends up cached.
     let mut container = test_layer(
         Some(30_000),
         CachePolicy::Auto,
@@ -387,14 +381,6 @@ fn shader_inside_cached_container_graph(time: f32) -> RenderGraph {
 
 #[test]
 fn an_animated_shader_keeps_animating_inside_a_cacheable_container() {
-    // A runtime shader's own layer is never raster-cached -- its uniforms
-    // change every frame, so the cache would only fill with stale textures.
-    // That skip stops at the shader's own layer, and an ancestor that caches
-    // (any clipped container: every scroll is one) hashes its content from
-    // each child's `effect_hash`, which deliberately excludes the uniforms.
-    // The ancestor is then a cache hit forever and replays a texture with the
-    // shader baked in at t=0: the effect is frozen, at zero changed pixels,
-    // while an identical one outside the container animates.
     let mut renderer = match support::headless_renderer() {
         Ok(renderer) => renderer,
         Err(err) => {

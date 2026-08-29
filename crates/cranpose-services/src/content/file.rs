@@ -1,9 +1,3 @@
-//! Filesystem-backed [`Content`], [`ContentFolder`] and [`ContentSink`].
-//!
-//! Every non-web provider that can name a real path — the desktop picker, the
-//! iOS security-scoped picker, bundled asset installs, writable folders — hands
-//! back these types rather than re-implementing chunked reads.
-
 use std::{
     cell::RefCell,
     fs::File,

@@ -53,13 +53,8 @@ pub const LOUPE_HEIGHT: f32 = 82.0;
 pub const LOUPE_RISE: f32 = 75.0;
 /// Magnification of the lens (uniform; measured on the reference).
 pub const LOUPE_MAGNIFICATION: f32 = 1.25;
-// The reference loupe deflates into the line over ~100 ms (loupe-dissolve
-// frames b_024..b_036 at native 120 fps).
 const LOUPE_COLLAPSE_MS: u64 = 120;
 fn loupe_grow_spring() -> AnimationType {
-    // The reference birth carries ENERGY: the bubble overshoots and wobbles
-    // a beat before settling (target loupe-grow frames) — underdamped on
-    // purpose.
     spring(0.55, 320.0)
 }
 
@@ -142,14 +137,8 @@ fn smoothstep01(value: f32) -> f32 {
 /// shape, rise, and optical opacity in both directions.
 struct LoupeState {
     progress: RefCell<Animatable<f32>>,
-    /// The bubble's center x trails the touch on the animation clock: a
-    /// non-oscillating spring calibrated to the reference's measured trail
-    /// (20-35px at ~356px/s => stiffness ~650 critically damped). The live
-    /// TRAIL is the drag force: it drives the droplet's stretch.
     follow_x: RefCell<Animatable<f32>>,
-    /// The last target shown; kept while the bubble deflates after release.
     shown: RefCell<Option<LoupeTarget>>,
-    /// Whether the loupe was active on the previous recomposition.
     was_active: Cell<bool>,
 }
 
@@ -210,21 +199,11 @@ pub fn SelectionLoupe(target: Option<LoupeTarget>) {
     );
     let optic = loupe_optical_activity(p);
 
-    // Droplet physics: the bubble CENTER trails the touch on the
-    // animation clock (non-oscillating spring; the reference measures a
-    // 20-35px trail at ~356px/s and convergence with no overshoot), and
-    // the live trail IS the drag force — it stretches the bubble along
-    // travel and contracts it orthogonally, AREA CONSERVED
-    // (w*s * h/s = w*h).
     {
         let mut follow_anim = state.follow_x.borrow_mut();
         if !follow_anim.state().value().is_finite() {
             follow_anim.snapTo(shown.focus_x);
         } else if (follow_anim.target() - shown.focus_x).abs() > f32::EPSILON {
-            // Retarget on every move, carrying velocity: springs keep their
-            // frame chain across retargets, so this is a true continuous
-            // tracker (steady-state trail 2v/omega, ~22dp at the reference's
-            // 356dp/s drag).
             let velocity = follow_anim.velocity();
             follow_anim.animate_to_with_velocity(shown.focus_x, velocity, spring(1.0, 1050.0));
         }
@@ -236,8 +215,6 @@ pub fn SelectionLoupe(target: Option<LoupeTarget>) {
     let height = LOUPE_HEIGHT * pose.height_frac / stretch;
     let center_x = follow;
     let center_y = shown.line_mid_y - LOUPE_RISE * pose.rise_frac;
-    // The lens looks at the line (the focus), which sits below the risen
-    // center.
     let focus_offset_y = shown.line_mid_y - center_y;
 
     let corner_radius = 0.5 * width.min(height);
@@ -280,17 +257,13 @@ mod tests {
     fn loupe_rises_for_every_handle_interaction() {
         let line_bottom = 100.0;
         let line_height = 20.0;
-        // Finger on the line: loupe up, focused on the line mid.
         let on_line = loupe_target_for_drag(Point { x: 40.0, y: 95.0 }, line_bottom, line_height)
             .expect("a finger on the line raises the loupe");
         assert_eq!(on_line.focus_x, 40.0);
         assert_eq!(on_line.line_mid_y, 90.0);
-        // Finger on the dot below the line: the loupe STILL rises, focused
-        // on the grabbed line (any handle touch floats the magnifier).
         let on_dot = loupe_target_for_drag(Point { x: 40.0, y: 106.0 }, line_bottom, line_height)
             .expect("a dot grab raises the loupe too");
         assert_eq!(on_dot.line_mid_y, 90.0);
-        // Finger above the line (the start handle's dot): loupe up.
         assert!(
             loupe_target_for_drag(Point { x: 40.0, y: 70.0 }, line_bottom, line_height).is_some()
         );
@@ -331,9 +304,6 @@ mod tests {
 
     #[test]
     fn grow_carries_energy_and_release_uses_the_measured_clock() {
-        // No value pins while the look is still being matched by vision —
-        // only the BEHAVIOR: the birth must be an underdamped spring (the
-        // reference bubble overshoots and wobbles a beat).
         let AnimationType::Spring(grow) = loupe_grow_spring() else {
             panic!("loupe grow must use a spring");
         };
@@ -394,14 +364,12 @@ mod tests {
         );
         assert_eq!(u[81], 0.0, "focus x on the bubble center");
         assert!((u[82] - 75.0).abs() < 1e-6, "focus 75dp below the center");
-        // Geometry: explicit-rect capsule covering the node, in dp.
         assert_eq!(
             &u[0..2],
             &[LOUPE_WIDTH, LOUPE_HEIGHT],
             "container = node dp"
         );
         assert_eq!(u[6], -1.0, "capsule sentinel");
-        // The capture must reach the offset focus area.
         assert!(
             shader.input_padding() >= 75.0,
             "capture must cover the offset focus, got {}",

@@ -1,8 +1,3 @@
-//! Per-frame GPU render counters.
-//!
-//! Counters are always collected so tests and perf harnesses can assert them.
-//! Setting `CRANPOSE_GPU_STATS=1` prints a summary line every 60 frames to stderr.
-
 use std::cell::{Cell, RefCell};
 
 use cranpose_core::NodeId;
@@ -33,10 +28,6 @@ pub struct LayerSurfaceReasons {
 }
 
 impl LayerSurfaceReasons {
-    /// Returns true if any isolating requirement is set.
-    /// Delegates to `SurfaceRequirementSet::has_isolating_requirement` to
-    /// keep the semantics in sync (e.g. `mixed_direct_content` alone does
-    /// not count as isolating).
     pub fn has_any(self) -> bool {
         self.explicit_offscreen
             || self.effect
@@ -349,8 +340,6 @@ impl FrameStatsSnapshot {
     }
 }
 
-/// Per-frame debug counters for GPU work instrumentation.
-/// Uses `Cell` fields so counters can be bumped through shared references.
 #[derive(Default)]
 pub(crate) struct FrameStats {
     pub submits: Cell<u32>,
@@ -392,7 +381,6 @@ pub(crate) struct FrameStats {
     pub text_glyph_atlas_hits: Cell<u32>,
     pub text_glyph_atlas_misses: Cell<u32>,
     pub text_glyph_atlas_miss_pixels: Cell<u64>,
-    // Pool/cache sizes snapshotted at end of frame
     pub offscreen_pool_size: Cell<u32>,
     pub offscreen_pool_bytes: Cell<u64>,
     pub text_pool_size: Cell<u32>,
@@ -403,14 +391,6 @@ pub(crate) struct FrameStats {
     top_isolated_layers: RefCell<[Option<IsolatedLayerStat>; TOP_ISOLATED_LAYER_LIMIT]>,
     top_isolated_layer_count: Cell<usize>,
     shadow_shape_cache_miss_log_count: Cell<u32>,
-    /// Keys the layer cache was probed for and did not hold, this frame.
-    ///
-    /// A miss is only ever worth paying once: the render that follows it
-    /// stores the surface under the key that missed, so the next frame hits.
-    /// A miss on a key the render path never stores under is a miss that
-    /// repeats forever, and the counters alone cannot tell the two apart --
-    /// which is how issue #478 survived. `LayerSurfaceCache::finish_frame`
-    /// checks this list against what it actually stored.
     #[cfg(debug_assertions)]
     missed_layer_cache_keys: RefCell<Vec<LayerRasterCacheKey>>,
 }
@@ -526,10 +506,6 @@ impl FrameStats {
         );
     }
 
-    /// Hands over the keys that missed this frame, leaving the list empty.
-    ///
-    /// Only [`crate::layer_surface_cache::LayerSurfaceCache`] can judge them:
-    /// it is the side that knows which keys were stored against those misses.
     #[cfg(debug_assertions)]
     pub fn take_missed_layer_cache_keys(&self) -> Vec<LayerRasterCacheKey> {
         self.missed_layer_cache_keys.take()
@@ -540,9 +516,6 @@ impl FrameStats {
             .set(self.layer_cache_evictions.get().saturating_add(1));
     }
 
-    /// One cached-shadow composite landed; `composited_pixels` is the area
-    /// its scissored bands actually fill — the fill-rate cost — not the
-    /// cached surface's own size.
     pub fn record_shadow_shape_cache_hit(&self, composited_pixels: u64) {
         self.shadow_shape_cache_hits
             .set(self.shadow_shape_cache_hits.get().saturating_add(1));
@@ -553,8 +526,6 @@ impl FrameStats {
         );
     }
 
-    /// A converted shadow whose opaque caster occludes every visible pixel of
-    /// its coverage: nothing composites, the draw item is dropped outright.
     pub fn record_shadow_fully_occluded(&self) {
         self.shadow_fully_occluded_composites.set(
             self.shadow_fully_occluded_composites
@@ -627,9 +598,6 @@ impl FrameStats {
         self.image_passes.set(self.image_passes.get() + 1);
     }
 
-    /// Records `count` `draw`/`draw_indexed` calls. Call sites bump this once
-    /// per batch with the batch's draw count rather than once per draw, so the
-    /// counter costs one `Cell` update per batch rather than one per primitive.
     pub fn add_draw_calls(&self, count: u32) {
         self.draw_calls
             .set(self.draw_calls.get().saturating_add(count));
@@ -846,22 +814,6 @@ pub(crate) fn gpu_stats_enabled() -> bool {
         .unwrap_or(false)
 }
 
-/// Prints the backend allocator's block/allocation report on the same cadence
-/// as the per-frame counters.
-///
-/// The other counters measure what the renderer *asked for*; this one measures
-/// what the driver is actually holding. Vulkan and D3D12 sub-allocate every
-/// buffer and texture out of large device-memory blocks whose size comes from
-/// `wgpu::MemoryHints`, so a renderer that has asked for a couple of megabytes
-/// can still be sitting on a block tens of megabytes wide. That reserved-but-
-/// unused remainder is invisible to every other counter here and to
-/// `wgpu::Device`'s own `Counters`, but it is exactly what Android's
-/// `gpu_mem`/`dumpsys meminfo` attribute to the process — so when the two
-/// disagree, this line is the one that explains the gap.
-///
-/// `generate_allocator_report()` returns `None` on backends that do not
-/// sub-allocate through `gpu-allocator` (GL, Metal, WebGPU), where the blocks
-/// this line exists to expose do not exist either.
 pub(crate) fn print_gpu_memory_report(device: &wgpu::Device, frame_count: u64) {
     let Some(report) = device.generate_allocator_report() else {
         return;

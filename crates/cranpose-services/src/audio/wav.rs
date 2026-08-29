@@ -1,28 +1,13 @@
-//! RIFF/WAVE decoding for [`AudioClip`](super::AudioClip).
-//!
-//! Game cue banks ship as uncompressed WAV, so the framework decodes that
-//! container itself instead of pulling a codec crate into every build. The
-//! decoder is pure arithmetic over a byte slice: no allocation beyond the
-//! sample buffer it produces, no panics on malformed input, and every length
-//! is checked before it is used.
-//!
-//! Supported: PCM 8/16/24/32-bit integer and IEEE 32/64-bit float, any sample
-//! rate, any channel count (three or more channels are downmixed to mono).
-//! Compressed payloads (ADPCM, MP3-in-WAV) are reported as
-//! [`AudioError::UnsupportedFormat`](super::AudioError::UnsupportedFormat).
-
 use super::{AudioClip, AudioError};
 
 const FORMAT_PCM: u16 = 1;
 const FORMAT_IEEE_FLOAT: u16 = 3;
 const FORMAT_EXTENSIBLE: u16 = 0xfffe;
 
-/// Whether `bytes` opens with the RIFF/WAVE magic this decoder understands.
 pub(super) fn is_wav(bytes: &[u8]) -> bool {
     bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WAVE"
 }
 
-/// Decodes a RIFF/WAVE byte stream into interleaved `f32` samples.
 pub(super) fn decode(bytes: &[u8]) -> Result<AudioClip, AudioError> {
     if !is_wav(bytes) {
         return Err(AudioError::UnsupportedFormat(
@@ -47,7 +32,6 @@ pub(super) fn decode(bytes: &[u8]) -> Result<AudioClip, AudioError> {
             data = Some(body);
         }
 
-        // Chunks are word aligned: an odd payload is followed by a pad byte.
         let advance = size.saturating_add(size & 1);
         match body_start.checked_add(advance) {
             Some(next) if next > offset => offset = next,
@@ -66,7 +50,6 @@ pub(super) fn decode(bytes: &[u8]) -> Result<AudioClip, AudioError> {
     )
 }
 
-/// Mono and stereo stay as recorded; three or more channels fold to mono.
 fn output_channels(channels: u16) -> u16 {
     if channels > 2 { 1 } else { channels }
 }
@@ -93,7 +76,6 @@ fn parse_format(body: &[u8]) -> Result<WaveFormat, AudioError> {
                 "WAVE extensible fmt chunk is truncated".into(),
             ));
         }
-        // The extension's sub-format GUID starts with the real format tag.
         tag = read_u16(body, 24)?;
     }
 
@@ -157,8 +139,6 @@ fn decode_samples(format: &WaveFormat, data: &[u8]) -> Result<Vec<f32>, AudioErr
         return Err(AudioError::Decode("WAVE data chunk holds no frames".into()));
     }
 
-    // Three or more channels are folded to mono: a surround cue mixed into a
-    // game's stereo bus wants every channel audible, not the first two.
     let out_channels = usize::from(output_channels(format.channels));
     let mut samples = Vec::with_capacity(frames * out_channels);
     for frame in 0..frames {
@@ -199,7 +179,6 @@ fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, AudioError> {
 mod tests {
     use super::*;
 
-    /// Builds a minimal 16-bit PCM WAVE stream around `frames` interleaved samples.
     fn wav_pcm16(channels: u16, sample_rate: u32, frames: &[i16]) -> Vec<u8> {
         let data: Vec<u8> = frames.iter().flat_map(|s| s.to_le_bytes()).collect();
         let mut out = Vec::new();
@@ -242,7 +221,6 @@ mod tests {
     #[test]
     fn skips_unknown_chunks() {
         let mut bytes = wav_pcm16(1, 8_000, &[100, -100]);
-        // Splice a LIST chunk with an odd payload between `fmt ` and `data`.
         let data_at = bytes
             .windows(4)
             .position(|w| w == b"data")
@@ -278,7 +256,6 @@ mod tests {
     #[test]
     fn rejects_compressed_payloads() {
         let mut bytes = wav_pcm16(1, 8_000, &[1, 2]);
-        // Rewrite the format tag to IMA ADPCM.
         bytes[20] = 0x11;
         bytes[21] = 0x00;
         assert!(matches!(

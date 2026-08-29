@@ -1,38 +1,3 @@
-//! Pixel parity for instanced ordinary-shape quads (P1b part B).
-//!
-//! Renders the same churning retained scene as `command_feed_parity` twice —
-//! once with `CRANPOSE_INSTANCED_QUADS=0` (the six-vertex `vs_main`
-//! expansion) and once with the default-ON instanced path
-//! (`vs_shape_instanced`, four vertices through the static quad index
-//! buffer, shape index from `instance_index`) — and compares same-position
-//! passes. The selection is LATCHED per `GpuRenderer` construction (cached
-//! retained bundles encode it), so the arms bracket a `reinit_gpu`: the
-//! renderer is rebuilt on a fresh headless device between them, exactly the
-//! Android surface-recreation path.
-//!
-//! THE PARITY BAR: ZERO differing bytes, every frame. The instanced entry
-//! point is expression-for-expression identical to `vs_main` and its index
-//! pattern (0, 1, 2)(2, 1, 3) reproduces the six-slot corner order exactly,
-//! so at the IDENTITY similarity byte-exactness is guaranteed (multiplying
-//! by 1.0 and adding 0.0 is exact regardless of fma contraction) — that
-//! covers the pre-retention frames, which draw every shape through the
-//! fresh-batch path at identity. Retained frames replay under ROTATING
-//! similarities, where the P1a lesson warned that two entry points may
-//! compile with different fma contraction (P1a's isolation run measured
-//! ≤ 27 single-ulp channels per rotated frame for the vs_main/vs_mesh
-//! split). MEASURED HERE: zero differing bytes on all eight frames,
-//! rotated retained replays included — with the entry bodies textually
-//! identical (unlike vs_mesh, whose vertex-buffer input struct changes the
-//! function signature), this Metal compiler contracts both identically. The
-//! bar is therefore pinned at ZERO, the strongest possible tripwire: if a
-//! toolchain update ever splits the contraction, this suite fails loudly
-//! with a handful of ±1 bytes and the envelope gets re-measured and
-//! documented, exactly the arc_mesh_parity discipline.
-//!
-//! Same-position-control discipline (documented in `command_feed_parity`):
-//! pass 1 of each arm warms every slot and is never compared; passes 2 and 3
-//! must byte-equal each other before the cross-arm compare means anything.
-
 mod support;
 
 use cranpose_render_common::{
@@ -52,9 +17,6 @@ const SIZE: u32 = 408;
 const CENTER: f32 = 204.0;
 const FRAMES: usize = 8;
 
-/// One frame of the synthetic boss through the RECORDING path: rings
-/// rotating at distinct speeds under a breathing scale, churning sparks,
-/// recoloring twinkles, movers whose count changes every frame.
 fn record_frame(frame: usize) -> DrawScopeDefault {
     let mut scope =
         DrawScopeDefault::new(cranpose_ui_graphics::Size::new(SIZE as f32, SIZE as f32));
@@ -111,15 +73,6 @@ fn record_frame(frame: usize) -> DrawScopeDefault {
             }
         }
     }
-    // A moving DstOut punch mid-scene splits the fused shape chunk into
-    // SrcOver / DstOut / SrcOver batches, so this suite covers BOTH
-    // instanced blend pipelines AND a draw whose `vertex_start > 0` — on
-    // the instanced arm that is `draw_indexed` with `first_instance > 0`,
-    // the exact GL-hazard/native-guarantee point the design flags: byte
-    // parity here proves `instance_index` includes `first_instance` on the
-    // native backend (an off-by-`first_instance` shape index would shatter
-    // every pixel of the trailing batch). It moves non-similarly so it
-    // always rides the fresh-batch path.
     scope.draw_circle_blend(
         Brush::solid(Color(0.0, 0.0, 0.0, 0.6)),
         Point::new(CENTER + frame as f32 * 3.0, CENTER + 140.0),
@@ -142,9 +95,6 @@ fn record_frame(frame: usize) -> DrawScopeDefault {
     scope
 }
 
-/// Records every frame once through one live `CommandReplayState`, exactly
-/// as the scene builder's verifier would. `node_id` keys the command
-/// identity, so this test's slots stay distinct from other suites'.
 fn build_sequence(node_id: usize) -> Vec<RenderGraph> {
     let mut state = CommandReplayState::default();
     let command = DrawCommandId {
@@ -222,9 +172,6 @@ fn assert_byte_exact(label: &str, a: &[Vec<u8>], b: &[Vec<u8>]) {
     }
 }
 
-/// One arm: warm pass plus two same-position control passes, byte-equality
-/// of the controls asserted, second control returned for the cross-arm
-/// compare.
 fn render_arm(
     label: &str,
     renderer: &mut support::LockedRenderer,
@@ -239,10 +186,6 @@ fn render_arm(
 
 #[test]
 fn instanced_quads_match_the_six_vertex_expansion() {
-    // Both flags must be in place BEFORE the renderer exists: the instanced
-    // selection latches at GpuRenderer construction. The arc mesh stays out
-    // of this suite entirely (its own envelope lives in arc_mesh_parity) so
-    // every retained draw rides the quad path under measurement.
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_INSTANCED_QUADS", Some("0"));
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ARC_MESH", Some("0"));
     let mut renderer = match support::headless_renderer() {
@@ -264,9 +207,6 @@ fn instanced_quads_match_the_six_vertex_expansion() {
     );
     let six_vertex_frames = render_arm("six-vertex-control", &mut renderer, &graphs);
 
-    // Arm B: re-latch ON through the renderer-replacement path (fresh
-    // device, retired slots — the same lifecycle a real surface recreation
-    // runs), then warm and control exactly like arm A.
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_INSTANCED_QUADS", Some("1"));
     if let Err(err) = support::reinit_gpu(&mut renderer) {
         cranpose_render_wgpu::set_debug_toggle("CRANPOSE_INSTANCED_QUADS", None);
@@ -303,13 +243,6 @@ fn instanced_quads_match_the_six_vertex_expansion() {
             }
         }
         eprintln!("frame {frame}: differing {differing} (beyond ±1: {beyond_one}) worst {worst}");
-        // Measured ZERO on every frame — identity fresh batches by
-        // construction, rotated retained replays empirically (see the module
-        // docs). A failure here with a handful of ±1 bytes on frames >= 2
-        // means the compiler started contracting the two entry points
-        // differently: re-measure and pin the envelope per the module docs.
-        // Anything larger is a real defect (wrong instance range, flipped
-        // diagonal, corner/uv mismatch).
         assert_eq!(
             differing, 0,
             "frame {frame}: {differing} bytes diverged ({beyond_one} beyond ±1, \

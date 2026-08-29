@@ -1,8 +1,3 @@
-//! Mutable text buffer for editing text content.
-//!
-//! Matches Jetpack Compose's `TextFieldBuffer` from
-//! `compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/text/input/TextFieldBuffer.kt`.
-
 use super::TextRange;
 
 /// A mutable text buffer that can be edited.
@@ -30,13 +25,9 @@ use super::TextRange;
 /// ```
 #[derive(Debug, Clone)]
 pub struct TextFieldBuffer {
-    /// The text content
     text: String,
-    /// Current selection (cursor when collapsed)
     selection: TextRange,
-    /// IME composition range, if any
     composition: Option<TextRange>,
-    /// Track whether changes have been made
     has_changes: bool,
 }
 
@@ -101,8 +92,6 @@ impl TextFieldBuffer {
         self.has_changes
     }
 
-    // ========== Text Modification ==========
-
     /// Replaces text in the given range with new text.
     ///
     /// The selection is adjusted based on the replacement:
@@ -112,14 +101,11 @@ impl TextFieldBuffer {
         let min = range.min().min(self.text.len());
         let max = range.max().min(self.text.len());
 
-        // Perform the replacement
         self.text.replace_range(min..max, replacement);
 
-        // Adjust selection
         let new_end = min + replacement.len();
         self.selection = TextRange::cursor(new_end);
 
-        // Clear composition on edit
         self.composition = None;
         self.has_changes = true;
     }
@@ -127,10 +113,8 @@ impl TextFieldBuffer {
     /// Inserts text at the current cursor position (or replaces selection).
     pub fn insert(&mut self, text: &str) {
         if self.has_selection() {
-            // Replace selection with new text
             self.replace(self.selection, text);
         } else {
-            // Insert at cursor position
             let pos = self.selection.start.min(self.text.len());
             self.text.insert_str(pos, text);
             self.selection = TextRange::cursor(pos + text.len());
@@ -153,11 +137,8 @@ impl TextFieldBuffer {
     /// Deletes the character before the cursor (backspace).
     pub fn delete_before_cursor(&mut self) {
         if self.has_selection() {
-            // Delete selection
             self.delete(self.selection);
         } else if self.selection.start > 0 {
-            // Delete one character before cursor
-            // Find the previous character boundary
             let pos = self.selection.start;
             let prev_pos = self.prev_char_boundary(pos);
             self.delete(TextRange::new(prev_pos, pos));
@@ -275,8 +256,6 @@ impl TextFieldBuffer {
         self.has_changes = true;
     }
 
-    // ========== Cursor/Selection Manipulation ==========
-
     /// Places the cursor at the end of the text.
     pub fn place_cursor_at_end(&mut self) {
         self.selection = TextRange::cursor(self.text.len());
@@ -337,9 +316,6 @@ impl TextFieldBuffer {
         self.composition = range.map(|r| r.coerce_in(self.text.len()));
     }
 
-    // ========== Helper Methods ==========
-
-    /// Finds the previous character boundary from a byte index.
     fn prev_char_boundary(&self, from: usize) -> usize {
         let mut pos = from.saturating_sub(1);
         while pos > 0 && !self.text.is_char_boundary(pos) {
@@ -348,7 +324,6 @@ impl TextFieldBuffer {
         pos
     }
 
-    /// Finds the next character boundary from a byte index.
     fn next_char_boundary(&self, from: usize) -> usize {
         let mut pos = from + 1;
         while pos < self.text.len() && !self.text.is_char_boundary(pos) {
@@ -372,10 +347,6 @@ impl TextFieldBuffer {
             self.next_char_boundary(from)
         }
     }
-
-    // ========== Clipboard Operations ==========
-    // Note: Actual system clipboard access is handled at the platform layer (AppShell).
-    // These methods just provide the text content for clipboard operations.
 
     /// Returns the selected text for copy operations.
     /// Returns None if no selection.
@@ -438,7 +409,7 @@ mod tests {
     #[test]
     fn delete_selection() {
         let mut buffer = TextFieldBuffer::new("Hello World");
-        buffer.select(TextRange::new(5, 11)); // " World"
+        buffer.select(TextRange::new(5, 11));
         buffer.delete(buffer.selection());
         assert_eq!(buffer.text(), "Hello");
     }
@@ -461,7 +432,7 @@ mod tests {
     #[test]
     fn replace_selection() {
         let mut buffer = TextFieldBuffer::new("Hello World");
-        buffer.select(TextRange::new(6, 11)); // "World"
+        buffer.select(TextRange::new(6, 11));
         buffer.insert("Rust");
         assert_eq!(buffer.text(), "Hello Rust");
     }
@@ -485,8 +456,8 @@ mod tests {
     #[test]
     fn delete_surrounding_collapsed_cursor() {
         let mut buffer = TextFieldBuffer::new("abcdef");
-        buffer.place_cursor_before_char(3); // cursor between c and d
-        buffer.delete_surrounding(2, 2); // remove b..e
+        buffer.place_cursor_before_char(3);
+        buffer.delete_surrounding(2, 2);
         assert_eq!(buffer.text(), "af");
         assert_eq!(buffer.selection(), TextRange::cursor(1));
     }
@@ -495,7 +466,7 @@ mod tests {
     fn delete_surrounding_preserves_composition() {
         let mut buffer = TextFieldBuffer::new("abcdef");
         buffer.place_cursor_before_char(3);
-        buffer.set_composition(Some(TextRange::new(2, 4))); // "cd"
+        buffer.set_composition(Some(TextRange::new(2, 4)));
         buffer.delete_surrounding(3, 3);
         assert_eq!(buffer.text(), "cd");
         assert_eq!(buffer.selection(), TextRange::cursor(1));

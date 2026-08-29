@@ -1,21 +1,3 @@
-//! Text field modifier node for editable text input.
-//!
-//! This module implements the modifier node for `BasicTextField`, following
-//! Jetpack Compose's `CoreTextFieldNode` architecture.
-//!
-//! The node handles:
-//! - **Layout**: Measures text content and returns appropriate size
-//! - **Draw**: Renders text, cursor, and selection highlights
-//! - **Pointer Input**: Handles tap to position cursor, drag for selection
-//! - **Semantics**: Provides text content for accessibility
-//!
-//! # Architecture
-//!
-//! Unlike display-only `TextModifierNode`, this node:
-//! - References a `TextFieldState` for mutable text
-//! - Tracks focus state for cursor visibility
-//! - Handles pointer events for cursor positioning
-
 use std::{
     cell::{Cell, RefCell},
     hash::{Hash, Hasher},
@@ -32,35 +14,19 @@ use cranpose_foundation::{
 };
 use cranpose_ui_graphics::{Brush, Color, Point};
 
-/// Live geometry a `BasicTextField` needs to place and drive its selection
-/// handles: whether the field is focused and is under direct manipulation, its
-/// on-screen origin (window coordinates) and the metrics that map a window
-/// position back to a text offset.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct TextFieldHandleMetrics {
     pub focused: bool,
-    /// A primary pointer has interacted with the focused field. Mouse, touch,
-    /// and pen all expose the same draggable selection mechanics.
     pub direct_manipulation: bool,
-    /// Field node's top-left in window coordinates.
     pub node_origin: Point,
     pub padding_left: f32,
     pub padding_top: f32,
     pub scroll_offset: f32,
     pub line_height: f32,
-    /// Tight glyph box `(top_offset, height)` inside each line slot — what
-    /// the caret, highlight and finger handles anchor to (the reference
-    /// selection chrome rides the glyphs, not the paragraph slot).
     pub glyph_box: (f32, f32),
-    /// Width the field wrapped its text at (`None` for single-line fields).
-    /// Lets the handles resolve the same visual (wrapped) lines the caret does.
     pub wrap_width: Option<f32>,
 }
 
-/// Shared channel by which a `TextFieldModifierNode` publishes its live handle
-/// [`TextFieldHandleMetrics`] to the `BasicTextField` composable that renders
-/// the handles. Reads subscribe reactively (backed by a revision `MutableState`)
-/// so the composable recomposes when the field's focus/geometry changes.
 #[derive(Clone)]
 pub struct TextFieldHandleController {
     inner: Rc<TextFieldHandleControllerInner>,
@@ -75,19 +41,11 @@ impl PartialEq for TextFieldHandleController {
 struct TextFieldHandleControllerInner {
     metrics: Cell<Option<TextFieldHandleMetrics>>,
     revision: MutableState<u64>,
-    /// The field node's gesture-claim flag, adopted at publish time so the
-    /// widget's long-press watcher can take over the live pointer (the node
-    /// then stops drag-selecting under it).
     gesture_claim: RefCell<Option<Rc<Cell<bool>>>>,
-    /// The field node's reactive primary-pointer stream. This stays separate
-    /// from draw-published geometry so every move reaches composables without
-    /// waiting for a render pass.
     press_track: Cell<Option<MutableState<Option<PointerPressTrack>>>>,
 }
 
 impl TextFieldHandleController {
-    /// Creates a controller. Must run with an active runtime (i.e. inside a
-    /// composition, via `remember`).
     pub fn new() -> Self {
         Self {
             inner: Rc::new(TextFieldHandleControllerInner {
@@ -99,8 +57,6 @@ impl TextFieldHandleController {
         }
     }
 
-    /// Publishes fresh metrics, waking any reader only when they actually
-    /// changed (so a resting frame does not spin recomposition).
     pub(crate) fn publish(&self, metrics: TextFieldHandleMetrics) {
         if self.inner.metrics.get() != Some(metrics) {
             self.inner.metrics.set(Some(metrics));
@@ -110,14 +66,11 @@ impl TextFieldHandleController {
         }
     }
 
-    /// Reads the latest metrics, subscribing the current recompose scope to
-    /// future changes.
     pub fn metrics(&self) -> Option<TextFieldHandleMetrics> {
         let _ = self.inner.revision.value();
         self.inner.metrics.get()
     }
 
-    /// Adopts the field node's gesture-claim flag (idempotent).
     pub(crate) fn adopt_gesture_claim(&self, claim: &Rc<Cell<bool>>) {
         let mut slot = self.inner.gesture_claim.borrow_mut();
         let adopted = slot.as_ref().is_some_and(|held| Rc::ptr_eq(held, claim));
@@ -135,20 +88,16 @@ impl TextFieldHandleController {
         }
     }
 
-    /// Reads the active primary-pointer stream reactively.
     pub fn press(&self) -> Option<PointerPressTrack> {
         self.inner.press_track.get().and_then(|state| state.get())
     }
 
-    /// Claims the active press gesture for the widget layer: the node stops
-    /// drag-selecting and the press stream drives the menu slide instead.
     pub fn claim_gesture(&self) {
         if let Some(claim) = self.inner.gesture_claim.borrow().as_ref() {
             claim.set(true);
         }
     }
 
-    /// Whether the active press gesture is claimed by the widget layer.
     pub fn gesture_claimed(&self) -> bool {
         self.inner
             .gesture_claim
@@ -164,28 +113,14 @@ impl Default for TextFieldHandleController {
     }
 }
 
-/// Default cursor color (white - visible on dark backgrounds)
 const DEFAULT_CURSOR_COLOR: Color = Color(1.0, 1.0, 1.0, 1.0);
 
-/// Default selection highlight color (light blue with transparency)
 const DEFAULT_SELECTION_COLOR: Color = Color(0.0, 0.5, 1.0, 0.3);
 
-/// Default line height for empty text fields
 const DEFAULT_LINE_HEIGHT: f32 = 20.0;
 
-/// Cursor width in pixels
 const CURSOR_WIDTH: f32 = 2.0;
 
-/// Computes the horizontal scroll (pan) offset that keeps the cursor visible
-/// inside the viewport of a single-line text field.
-///
-/// Mirrors Jetpack Compose's `TextFieldScrollerPosition.coerceOffset` behavior:
-/// - the offset only changes when the cursor would leave the viewport,
-/// - the offset is clamped so the text never detaches from the left edge and
-///   never scrolls further than needed to show the end of the text (plus the
-///   cursor width, so a cursor at the end of the text stays visible).
-///
-/// All values are in px within the field's content coordinate space.
 pub(crate) fn compute_horizontal_scroll_offset(
     current_offset: f32,
     cursor_x: f32,
@@ -199,19 +134,13 @@ pub(crate) fn compute_horizontal_scroll_offset(
     let mut offset = current_offset.clamp(0.0, max_offset);
     let visible_end = offset + viewport_width - CURSOR_WIDTH;
     if cursor_x > visible_end {
-        // Cursor ran past the right edge: pan so it sits at the right edge.
         offset = cursor_x - viewport_width + CURSOR_WIDTH;
     } else if cursor_x < offset {
-        // Cursor ran past the left edge: pan so it sits at the left edge.
         offset = cursor_x;
     }
     offset.clamp(0.0, max_offset)
 }
 
-/// Intersects `rect` with `bounds`, returning `None` when nothing remains.
-///
-/// Used to clip selection/cursor/composition primitives to the field's
-/// viewport so they never draw outside the field bounds.
 pub(crate) fn intersect_rect(
     rect: cranpose_ui_graphics::Rect,
     bounds: cranpose_ui_graphics::Rect,
@@ -232,15 +161,6 @@ pub(crate) fn intersect_rect(
 /// text field given the current content viewport width in px.
 pub type TextPanResolver = Rc<dyn Fn(f32) -> f32>;
 
-/// Resolves the caret's visual `(line_index, line_start_byte)` for byte
-/// `offset`.
-///
-/// For a wrapping (multi-line) field this lays the text out at the same wrap
-/// width the field measured and returns the VISUAL line the caret sits on, so
-/// the drawn caret lands on the same glyph the renderer draws. For a
-/// non-wrapping field (single line, or when no wrap width is known yet) it falls
-/// back to counting logical `\n` lines. Shared by the in-content caret and the
-/// overlay selection handles so both agree.
 pub(crate) fn caret_visual_line_for_offset(
     text: &str,
     style: &TextStyle,
@@ -263,8 +183,6 @@ pub(crate) fn caret_visual_line_for_offset(
             crate::text_selection::caret_visual_line(&ranges, offset, affinity)
         }
         _ => {
-            // Logical `\n` lines never share a boundary byte (the separator
-            // sits between them), so affinity cannot change the result here.
             let before = &text[..offset];
             let line_index = before.matches('\n').count();
             let line_start = before.rfind('\n').map(|i| i + 1).unwrap_or(0);
@@ -273,16 +191,6 @@ pub(crate) fn caret_visual_line_for_offset(
     }
 }
 
-/// Window-space (pre-clip) rects covering byte range `start..end`, one per
-/// VISUAL (wrapped) line the range touches, each spanning the full
-/// `line_height`.
-///
-/// Shared by the selection highlight and the composition-preedit underline so
-/// both track soft-wrapping exactly as the renderer and caret do. Splitting on
-/// logical `\n` alone draws the rect on the wrong line whenever a line above
-/// the range soft-wraps (the x stays right, the y lands one visual line too
-/// high). Iterating the same wrapped ranges the renderer lays out keeps them in
-/// sync.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn range_visual_line_rects(
     text: &str,
@@ -343,69 +251,32 @@ pub(crate) fn range_visual_line_rects(
     rects
 }
 
-/// Shared references for text field input handling.
-///
-/// This struct bundles the shared state references passed to the pointer input handler,
-/// reducing the argument count for `create_handler` from 8 individual `Rc` parameters
-/// to a single struct (fixing clippy::too_many_arguments).
 #[derive(Clone)]
 pub(crate) struct TextFieldRefs {
-    /// Whether this field is currently focused
     pub is_focused: Rc<RefCell<bool>>,
-    /// Content offset from left (padding) for accurate click positioning
     pub content_offset: Rc<Cell<f32>>,
-    /// Content offset from top (padding) for cursor Y positioning
     pub content_y_offset: Rc<Cell<f32>>,
-    /// Drag anchor position (byte offset) for click-drag selection
     pub drag_anchor: Rc<Cell<Option<usize>>>,
-    /// Last click time for double/triple-click detection
     pub last_click_time: Rc<Cell<Option<web_time::Instant>>>,
-    /// Last click screen position, for multi-tap slop gating
     pub last_click_pos: Rc<Cell<Option<(f32, f32)>>>,
-    /// Click count (1=single, 2=double, 3=triple)
     pub click_count: Rc<Cell<u8>>,
-    /// Node ID for scoped layout invalidation
     pub node_id: Rc<Cell<Option<cranpose_core::NodeId>>>,
-    /// Horizontal scroll (pan) offset in px for single-line fields.
-    /// Keeps the cursor visible when the text is wider than the field.
     pub scroll_offset: Rc<Cell<f32>>,
-    /// Whether the focused field has been entered through a primary pointer.
-    /// This is source-independent: desktop mouse, touch, and pen share the
-    /// same direct-manipulation selection UI.
     pub direct_manipulation: Rc<Cell<bool>>,
-    /// Field node's top-left in window coordinates, derived from the most recent
-    /// pointer event (`global_position - position`). Used to place selection
-    /// handles in the top-level overlay, which is in window space.
     pub node_origin: Rc<Cell<Point>>,
-    /// Line height from the last measurement. Shared with the node's
-    /// `measured_line_height` so the pointer handler maps a tap's `y` to the
-    /// correct VISUAL (wrapped) line.
     pub line_height: Rc<Cell<f32>>,
-    /// Wrap width the last measurement laid the text out at (`None` for
-    /// single-line fields). Shared with the node's `measured_wrap_width` so the
-    /// pointer handler resolves the same wrapped lines the renderer draws.
     pub wrap_width: Rc<Cell<Option<f32>>>,
-    /// Live primary-pointer press on the text surface (window space), for the
-    /// widget layer's long-press → slide-to-menu gesture.
     pub press_track: MutableState<Option<PointerPressTrack>>,
-    /// Set by the widget when its long-press watcher claims the active
-    /// gesture: the node then stops drag-selecting on Move and the press
-    /// positions feed the menu slide instead.
     pub gesture_claimed: Rc<Cell<bool>>,
 }
 
-/// A live primary-pointer press on the text surface, published by the field node
-/// for the widget layer (window coordinates).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PointerPressTrack {
-    /// Where the press went down.
     pub start: Point,
-    /// The press's current position.
     pub position: Point,
 }
 
 impl TextFieldRefs {
-    /// Creates a new set of shared references.
     pub fn new() -> Self {
         Self {
             is_focused: Rc::new(RefCell::new(false)),
@@ -427,54 +298,24 @@ impl TextFieldRefs {
     }
 }
 
-/// Modifier node for editable text fields.
-///
-/// This node is the core of `BasicTextField`, handling:
-/// - Text measurement and layout
-/// - Cursor and selection rendering
-/// - Pointer input for cursor positioning
-use crate::text::TextStyle; // Add import
+use crate::text::TextStyle;
 
 pub struct TextFieldModifierNode {
-    /// The text field state (shared)
     state: TextFieldState,
-    /// Shared references for input handling
     refs: TextFieldRefs,
-    /// Text style
-    style: TextStyle, // Add style
-    /// Cursor brush color
+    style: TextStyle,
     cursor_brush: Brush,
-    /// Selection highlight brush
     selection_brush: Brush,
-    /// Line limits configuration
     line_limits: TextFieldLineLimits,
-    /// Cached text value for change detection
     cached_text: String,
-    /// Cached selection for change detection
     cached_selection: TextRange,
-    /// Node state for delegation
     node_state: NodeState,
-    /// Measured size cache (shared with the draw closure as the pan viewport)
     measured_size: Rc<Cell<Size>>,
-    /// Cached line height from last measurement (shared with draw closure)
     measured_line_height: Rc<Cell<f32>>,
-    /// Wrap width the last measurement laid the text out at (`None` for
-    /// single-line fields, which pan instead of wrapping). Shared with the draw
-    /// closure so the caret and selection handles resolve the same *visual*
-    /// (wrapped) lines the renderer draws, instead of counting only logical
-    /// `\n` lines.
     measured_wrap_width: Rc<Cell<Option<f32>>>,
-    /// Cached pointer input handler
     cached_handler: Rc<dyn Fn(PointerEvent)>,
-    /// Cached horizontal pan resolver (recomputes + stores the scroll offset)
     cached_pan_resolver: TextPanResolver,
-    /// Channel to publish live handle metrics to the `BasicTextField`
-    /// composable that renders the finger selection handles. `None` when the
-    /// field is used without handle support.
     handle_controller: Option<TextFieldHandleController>,
-    /// The [`crate::modal::local_modal_depth`] this field was composed at,
-    /// forwarded to every focus request so a field behind an open dialog is
-    /// refused focus (see `crate::text_field_focus::request_focus`).
     modal_depth: usize,
 }
 
@@ -488,7 +329,6 @@ impl std::fmt::Debug for TextFieldModifierNode {
     }
 }
 
-// Re-export from extracted module
 use crate::text_field_handler::TextFieldHandler;
 
 impl TextFieldModifierNode {
@@ -518,9 +358,6 @@ impl TextFieldModifierNode {
                 width: 0.0,
                 height: 0.0,
             })),
-            // Alias the refs cells so the pointer handler reads the same live
-            // line-height / wrap-width the layout writes here — a tap's `y` must
-            // resolve to the same VISUAL line the renderer draws.
             measured_line_height: refs_line_height,
             measured_wrap_width: refs_wrap_width,
             cached_handler,
@@ -537,14 +374,6 @@ impl TextFieldModifierNode {
         self
     }
 
-    /// Rebuilds the closures that capture how this field is configured.
-    ///
-    /// The pointer handler and the pan resolver capture state, style, line
-    /// limits and modal depth by value, so changing any of those leaves a
-    /// closure describing the configuration the node no longer has. One place
-    /// rebuilds both from the node's own fields, and every path that changes
-    /// them ends here — a field configured while it is being constructed and
-    /// one reconfigured by a recomposition arrive at the same node.
     fn rebuild_cached_closures(&mut self) {
         self.cached_handler = Self::create_handler(
             self.state,
@@ -567,13 +396,6 @@ impl TextFieldModifierNode {
         self
     }
 
-    /// Creates the horizontal pan resolver closure.
-    ///
-    /// The resolver takes the content viewport width (px) and returns the
-    /// horizontal scroll offset that keeps the cursor visible, storing the
-    /// result in `refs.scroll_offset` so pointer input and rendering agree.
-    /// It recomputes from the live state so layout, the render scene builder,
-    /// and the draw closure all observe the same value within a frame.
     fn create_pan_resolver(
         state: TextFieldState,
         refs: TextFieldRefs,
@@ -582,7 +404,6 @@ impl TextFieldModifierNode {
     ) -> TextPanResolver {
         Rc::new(move |viewport_width: f32| {
             if !line_limits.is_single_line() {
-                // Multi-line fields do not pan horizontally.
                 refs.scroll_offset.set(0.0);
                 return 0.0;
             }
@@ -629,16 +450,13 @@ impl TextFieldModifierNode {
         self.line_limits
     }
 
-    /// Creates the pointer input handler closure.
     fn create_handler(
         state: TextFieldState,
         refs: TextFieldRefs,
         line_limits: TextFieldLineLimits,
-        style: TextStyle, // Add style
+        style: TextStyle,
         modal_depth: usize,
     ) -> Rc<dyn Fn(PointerEvent)> {
-        // Tap-count classification plus word/line/paragraph boundaries drive the
-        // multi-tap selection granularity gestures.
         use crate::{
             text_selection::{
                 MULTI_TAP_SLOP_PX, MULTI_TAP_TIMEOUT_MS, SelectionGranularity, classify_tap_count,
@@ -649,29 +467,17 @@ impl TextFieldModifierNode {
         };
 
         Rc::new(move |event: PointerEvent| {
-            // Seed the field node's window-space origin from this pointer event
-            // so the very first handle placement after a tap has a value even
-            // before the next layout pass runs. The layout pass
-            // (`window_origin_sink`) is the authoritative source that keeps it
-            // fresh as the field scrolls; both agree (`global - local` equals
-            // the composited window origin at rest).
             refs.node_origin.set(Point {
                 x: event.global_position.x - event.position.x,
                 y: event.global_position.y - event.position.y,
             });
 
-            // Account for content padding offsets and the horizontal pan
-            // offset (single-line fields pan to keep the cursor visible, so
-            // clicks must map back into text space).
             let click_x =
                 (event.position.x - refs.content_offset.get() + refs.scroll_offset.get()).max(0.0);
             let click_y = (event.position.y - refs.content_y_offset.get()).max(0.0);
 
             match event.kind {
                 PointerEventKind::Down => {
-                    // Direct selection mechanics are source-independent:
-                    // mouse, touch and pen all expose handles and the same
-                    // continuous long-press → slide-to-menu gesture.
                     refs.direct_manipulation.set(true);
                     refs.press_track.set(Some(PointerPressTrack {
                         start: event.global_position,
@@ -679,10 +485,6 @@ impl TextFieldModifierNode {
                     }));
                     refs.gesture_claimed.set(false);
 
-                    // Request focus with O(1) handler, passing node_id and line
-                    // limits for key handling plus the live geometry cells the
-                    // layout keeps fresh, so coordinate-based platform text input
-                    // (iOS caret positioning) can read the caret's window rect.
                     let handler = TextFieldHandler::new(
                         state,
                         refs.node_id.get(),
@@ -713,10 +515,6 @@ impl TextFieldModifierNode {
                         click_y,
                     );
 
-                    // Classify the press into a 1-based tap count by both the
-                    // time since and the distance from the previous press (a tap
-                    // far from the last one starts a fresh single tap, matching
-                    // Android's double-tap slop).
                     let previous = refs.last_click_pos.get().and_then(|(px, py)| {
                         let count = refs.click_count.get();
                         (count > 0).then_some((count, px, py))
@@ -735,18 +533,9 @@ impl TextFieldModifierNode {
                         MULTI_TAP_SLOP_PX,
                     );
 
-                    // A lone tap that lands INSIDE an existing (non-collapsed)
-                    // selection selects the word under the finger (Android/iOS
-                    // "tap the selection to re-grab a word"). Tapping the SAME
-                    // spot again grows the granularity word → line → paragraph →
-                    // word …, keyed on location so it keeps escalating even when
-                    // the taps arrive too slowly to count as a rapid multi-tap.
-                    // A lone tap elsewhere just places the caret.
                     let selection = state.selection();
                     let tap_in_selection =
                         !selection.collapsed() && pos >= selection.min() && pos <= selection.max();
-                    // Same-spot repeat, independent of the multi-tap timeout:
-                    // within slop of the previous press.
                     let repeat_in_place = refs
                         .last_click_pos
                         .get()
@@ -765,7 +554,6 @@ impl TextFieldModifierNode {
 
                     match tap_selection_granularity(effective_count) {
                         SelectionGranularity::Paragraph => {
-                            // Fourth tap: grow to the whole paragraph.
                             let (start, end) = find_paragraph_boundaries(&text, pos);
                             state.edit(|buffer| {
                                 buffer.select(TextRange::new(start, end));
@@ -773,7 +561,6 @@ impl TextFieldModifierNode {
                             refs.drag_anchor.set(Some(start));
                         }
                         SelectionGranularity::Line => {
-                            // Triple tap: select the line.
                             let (line_start, line_end) = find_line_boundaries(&text, pos);
                             state.edit(|buffer| {
                                 buffer.select(TextRange::new(line_start, line_end));
@@ -781,8 +568,6 @@ impl TextFieldModifierNode {
                             refs.drag_anchor.set(Some(line_start));
                         }
                         SelectionGranularity::Word => {
-                            // Double tap (or a tap inside an existing selection):
-                            // select the word.
                             let (word_start, word_end) = find_word_boundaries(&text, pos);
                             state.edit(|buffer| {
                                 buffer.select(TextRange::new(word_start, word_end));
@@ -790,7 +575,6 @@ impl TextFieldModifierNode {
                             refs.drag_anchor.set(Some(word_start));
                         }
                         SelectionGranularity::Caret => {
-                            // Single tap: place the cursor.
                             refs.drag_anchor.set(Some(pos));
                             state.edit(|buffer| {
                                 buffer.place_cursor_before_char(pos);
@@ -805,10 +589,6 @@ impl TextFieldModifierNode {
                     event.consume();
                 }
                 PointerEventKind::Move => {
-                    // Keep the live press stream fresh for the widget layer.
-                    // The press reaches the contextual menu through metrics
-                    // published while this field draws, and no observation
-                    // tracks the cell — the repass names the stale node.
                     if let Some(mut track) = refs.press_track.get() {
                         track.position = event.global_position;
                         refs.press_track.set(Some(track));
@@ -817,13 +597,10 @@ impl TextFieldModifierNode {
                         }
                         crate::request_render_invalidation();
                     }
-                    // A claimed gesture belongs to the widget's menu slide:
-                    // the node must not keep drag-selecting under it.
                     if refs.gesture_claimed.get() {
                         event.consume();
                         return;
                     }
-                    // If we have a drag anchor, extend selection during drag
                     if let Some(anchor) = refs.drag_anchor.get()
                         && *refs.is_focused.borrow()
                     {
@@ -838,25 +615,17 @@ impl TextFieldModifierNode {
                             click_y,
                         );
 
-                        // Update selection directly (without undo stack push)
                         state.set_selection(TextRange::new(anchor, current_pos));
 
-                        // Selection change only needs redraw, not layout
                         crate::request_render_invalidation();
 
                         event.consume();
                     }
                 }
                 PointerEventKind::Up => {
-                    // Clear drag anchor on mouse up
                     refs.drag_anchor.set(None);
                     refs.press_track.set(None);
                     refs.gesture_claimed.set(false);
-                    // The contextual menu reads the live press through metrics
-                    // published during drawing. Ensure the release reaches that
-                    // channel even when no visual state changed in the field
-                    // itself, so a continuous hold, slide, and release can run
-                    // the hovered menu action.
                     if let Some(node_id) = refs.node_id.get() {
                         crate::schedule_draw_repass(node_id);
                     }
@@ -905,18 +674,6 @@ impl TextFieldModifierNode {
         *self.refs.is_focused.borrow()
     }
 
-    /// Returns the shared cell the field's composited window origin is written
-    /// into (window coordinates of the field node's top-left).
-    ///
-    /// The layout pass writes the field's TRUE on-screen origin here every frame
-    /// — resolved through all ancestor placements (a scrolling `LazyColumn` /
-    /// `vertical_scroll` offsets its items via placement, which the layout tree
-    /// bakes into each node's absolute rect) plus ancestor graphics-layer
-    /// translations. The draw closure reads it back to publish handle metrics,
-    /// so the finger selection/cursor handles anchor at (and their window→offset
-    /// inverse mapping agrees with) the field's real glyphs even while the list
-    /// scrolls. Without this the origin was only ever sampled from the last
-    /// pointer event and went stale the moment the field scrolled.
     pub(crate) fn window_origin_sink(&self) -> Rc<Cell<Point>> {
         self.refs.node_origin.clone()
     }
@@ -982,22 +739,11 @@ impl TextFieldModifierNode {
         self.refs.content_y_offset.set(offset);
     }
 
-    /// The wrap width a multi-line field lays its text out at, or `None` when
-    /// the text must not wrap (single-line fields pan horizontally instead).
-    ///
-    /// Multi-line fields wrap at the available content width exactly like the
-    /// render scene builder, so the measured height reflects every wrapped line
-    /// and the field grows to fit its content instead of clipping it.
     fn wrap_width(&self, available_width: f32) -> Option<f32> {
         (!self.line_limits.is_single_line() && available_width.is_finite() && available_width > 0.0)
             .then_some(available_width)
     }
 
-    /// Measures the text content using node-identity-based caching.
-    ///
-    /// `wrap_width` bounds the layout width so multi-line text wraps; `None`
-    /// measures the natural single-line width (single-line fields, intrinsic
-    /// width queries).
     fn measure_text_content(&self, wrap_width: Option<f32>) -> Size {
         let text = self.state.text();
         let node_id = self.refs.node_id.get();
@@ -1019,7 +765,6 @@ impl TextFieldModifierNode {
         }
     }
 
-    /// Updates cached state and returns true if changed.
     fn update_cached_state(&mut self) -> bool {
         let value = self.state.value();
         let text_changed = value.text != self.cached_text;
@@ -1034,10 +779,6 @@ impl TextFieldModifierNode {
 
         text_changed || selection_changed
     }
-
-    // NOTE: Key event handling is done via TextFieldHandler::handle_key() which is
-    // registered with the focus system for O(1) dispatch. DO NOT add a handle_key_event()
-    // method here - it would be duplicate code that never gets called.
 }
 
 impl DelegatableNode for TextFieldModifierNode {
@@ -1048,7 +789,6 @@ impl DelegatableNode for TextFieldModifierNode {
 
 impl ModifierNode for TextFieldModifierNode {
     fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
-        // Store node_id for scoped layout invalidation (avoids O(app) global invalidation)
         self.refs.node_id.set(context.node_id());
 
         context.invalidate(InvalidationKind::Layout);
@@ -1096,23 +836,16 @@ impl LayoutModifierNode for TextFieldModifierNode {
         _measurable: &dyn Measurable,
         constraints: Constraints,
     ) -> cranpose_ui_layout::LayoutModifierMeasureResult {
-        // Measure the text content, wrapping multi-line fields at the available
-        // width so the field grows to fit every wrapped line instead of
-        // clipping content past the first line.
         let wrap_width = self.wrap_width(constraints.max_width);
-        // Remember the wrap width so the draw closure can resolve the same
-        // visual (wrapped) lines when placing the caret and selection handles.
         self.measured_wrap_width.set(wrap_width);
         let text_size = self.measure_text_content(wrap_width);
 
-        // Add minimum height for empty text (cursor needs space)
         let min_height = if text_size.height < 1.0 {
             DEFAULT_LINE_HEIGHT
         } else {
             text_size.height
         };
 
-        // Constrain to provided constraints
         let width = text_size
             .width
             .max(constraints.min_width)
@@ -1124,8 +857,6 @@ impl LayoutModifierNode for TextFieldModifierNode {
         let size = Size { width, height };
         self.measured_size.set(size);
 
-        // Refresh the horizontal pan offset so it is up to date for pointer
-        // input and rendering even before the next draw pass runs.
         let _ = (self.cached_pan_resolver)(size.width);
 
         cranpose_ui_layout::LayoutModifierMeasureResult::with_size(size)
@@ -1152,9 +883,6 @@ impl LayoutModifierNode for TextFieldModifierNode {
     }
 }
 
-/// Content viewport (excludes padding), falling back to the node size when
-/// measurement has not run yet. Shared by the field's behind (selection
-/// highlight) and overlay (caret, IME underline) draw closures.
 fn content_viewport(
     measured: cranpose_ui_graphics::Size,
     size: cranpose_foundation::Size,
@@ -1175,18 +903,13 @@ fn content_viewport(
 }
 
 impl DrawModifierNode for TextFieldModifierNode {
-    fn draw(&self, _draw_scope: &mut dyn DrawScope) {
-        // No-op: Cursor and selection are rendered via create_draw_closure() which
-        // creates DrawPrimitive::Rect directly. This enables draw-time evaluation
-        // of focus state and cursor blink timing.
-    }
+    fn draw(&self, _draw_scope: &mut dyn DrawScope) {}
 
     fn create_draw_closure(
         &self,
     ) -> Option<Rc<dyn Fn(&mut cranpose_ui_graphics::DrawScopeDefault)>> {
         use cranpose_ui_graphics::{DrawPrimitive, DrawScope as _};
 
-        // Capture state via Rc clone (cheap) for draw-time evaluation
         let is_focused = self.refs.is_focused.clone();
         let state = self.state;
         let content_offset = self.refs.content_offset.clone();
@@ -1206,10 +929,7 @@ impl DrawModifierNode for TextFieldModifierNode {
 
         Some(Rc::new(move |scope| {
             let size = scope.size();
-            // Check focus at DRAW time
             if !*is_focused.borrow() {
-                // Publish an unfocused snapshot so the composable clears any
-                // finger handles when the field loses focus.
                 if let Some(controller) = &handle_controller {
                     controller.publish(TextFieldHandleMetrics {
                         focused: false,
@@ -1232,17 +952,12 @@ impl DrawModifierNode for TextFieldModifierNode {
             let selection = state.selection();
             let padding_left = content_offset.get();
             let padding_top = content_y_offset.get();
-            // Reuse line_height from the most recent layout measurement
-            // instead of re-measuring the full text.
             let line_height = cached_line_height.get();
 
             let (viewport_width, viewport_height) =
                 content_viewport(measured_size.get(), size, padding_left, padding_top);
-            // Horizontal pan that keeps the cursor visible (0 for multi-line).
             let pan = pan_resolver(viewport_width);
 
-            // Publish live geometry so the `BasicTextField` composable can place
-            // and drive the finger selection handles.
             if let Some(controller) = &handle_controller {
                 controller.adopt_gesture_claim(&gesture_claimed);
                 controller.adopt_press_track(press_track);
@@ -1258,9 +973,6 @@ impl DrawModifierNode for TextFieldModifierNode {
                     wrap_width: measured_wrap_width.get(),
                 });
             }
-            // Everything the field draws (selection, IME underline, cursor)
-            // is clipped to the content viewport so primitives never extend
-            // outside the field bounds.
             let clip_bounds = cranpose_ui_graphics::Rect {
                 x: padding_left,
                 y: padding_top,
@@ -1268,25 +980,16 @@ impl DrawModifierNode for TextFieldModifierNode {
                 height: viewport_height,
             };
 
-            // (The selection highlight renders BEHIND the glyphs — see
-            // create_behind_draw_closure; a translucent fill over the text
-            // tinted the selected glyphs.)
-
-            // Draw composition (IME preedit) underline
-            // This shows the user which text is being composed by the input method
             if let Some(comp_range) = state.composition() {
                 let comp_start = comp_range.min();
                 let comp_end = comp_range.max();
 
                 if comp_start < comp_end && comp_end <= text.len() {
-                    // Underline color: slightly transparent white/gray
                     let underline_brush = cranpose_ui_graphics::Brush::solid(
                         cranpose_ui_graphics::Color(0.8, 0.8, 0.8, 0.8),
                     );
                     let underline_height: f32 = 2.0;
 
-                    // Per-visual-line rects, shrunk to a strip at the bottom of
-                    // each line — same wrap-aware layout as the selection.
                     for line_rect in range_visual_line_rects(
                         &text,
                         &style,
@@ -1316,21 +1019,8 @@ impl DrawModifierNode for TextFieldModifierNode {
                 }
             }
 
-            // Draw cursor - check visibility at DRAW time for blinking. The
-            // caret exists only for a collapsed selection: with a range
-            // selected the edges are marked by the finger handles, and a
-            // caret drawn at the range start just thickens the start
-            // handle's stem.
             if selection.collapsed() && crate::cursor_animation::is_cursor_visible() {
                 let pos = selection.start.min(text.len());
-                // Resolve the caret's VISUAL (wrapped) line so it lands on the
-                // same glyph the renderer draws — the field wraps long lines, and
-                // counting only logical `\n` lines would draw the caret on the
-                // wrong line (and, with the full logical-line-prefix width, off
-                // the right edge) while typing/the magnifier stay correct.
-                // Upstream affinity: a caret placed by a finger at a wrapped
-                // line's right edge draws at that line's end, not one line
-                // down at the left edge (matching the cursor handle's anchor).
                 let (line_index, line_start) = caret_visual_line_for_offset(
                     &text,
                     &style,
@@ -1346,8 +1036,6 @@ impl DrawModifierNode for TextFieldModifierNode {
                 .width
                     + padding_left
                     - pan;
-                // The caret spans the tight glyph box, not the paragraph
-                // slot — the reference caret's ends ride the glyph extents.
                 let (box_off, box_h) = crate::text::glyph_line_box(&style, line_height);
                 let cursor_y = padding_top + line_index as f32 * line_height + box_off;
 
@@ -1411,13 +1099,7 @@ impl DrawModifierNode for TextFieldModifierNode {
                 height: viewport_height,
             };
 
-            // Highlight per VISUAL (wrapped) line so it lands on the same
-            // glyphs the renderer draws — BENEATH them (the reference keeps
-            // selected glyphs unblended white over the tint).
             let mut primitives = Vec::new();
-            // Highlight rects hug the tight glyph box of each line — the
-            // reference selection shows GAPS between lines when the
-            // paragraph line height exceeds the natural text height.
             let (box_off, box_h) = crate::text::glyph_line_box(&style, line_height);
             for sel_rect in range_visual_line_rects(
                 &text,
@@ -1464,34 +1146,18 @@ impl PointerInputNode for TextFieldModifierNode {
         _context: &mut dyn ModifierNodeContext,
         _event: &PointerEvent,
     ) -> bool {
-        // No-op: All pointer handling is done via pointer_input_handler() closure.
-        // This follows Jetpack Compose's delegation pattern where the node simply
-        // forwards to a delegated pointer input handler (see TextFieldDecoratorModifier.kt:741-747).
-        //
-        // The cached_handler closure handles:
-        // - Focus request on Down
-        // - Cursor positioning
-        // - Double-click word selection
-        // - Triple-click select all
-        // - Drag selection
         false
     }
 
     fn hit_test(&self, x: f32, y: f32) -> bool {
-        // Check if point is within measured bounds
         let size = self.measured_size.get();
         x >= 0.0 && x <= size.width && y >= 0.0 && y <= size.height
     }
 
     fn pointer_input_handler(&self) -> Option<Rc<dyn Fn(PointerEvent)>> {
-        // Return cached handler for pointer input dispatch
         Some(self.cached_handler.clone())
     }
 }
-
-// ============================================================================
-// TextFieldElement - Creates and updates TextFieldModifierNode
-// ============================================================================
 
 /// Element that creates and updates `TextFieldModifierNode` instances.
 ///
@@ -1501,18 +1167,11 @@ impl PointerInputNode for TextFieldModifierNode {
 /// - Declaring capabilities (LAYOUT | DRAW | SEMANTICS)
 #[derive(Clone)]
 pub struct TextFieldElement {
-    /// The text field state
     state: TextFieldState,
-    /// Text style
     style: TextStyle,
-    /// Cursor color
     cursor_color: Color,
-    /// Line limits configuration
     line_limits: TextFieldLineLimits,
-    /// Channel the node publishes live handle metrics to (finger selection
-    /// handles). `None` disables handle support.
     handle_controller: Option<TextFieldHandleController>,
-    /// The [`crate::modal::local_modal_depth`] this field was composed at.
     modal_depth: usize,
 }
 
@@ -1567,10 +1226,7 @@ impl std::fmt::Debug for TextFieldElement {
 
 impl Hash for TextFieldElement {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        // Hash by state Rc pointer identity - matches PartialEq
-        // This ensures equal elements hash equal (correctness requirement)
         self.state.id().hash(state);
-        // Hash cursor color
         self.cursor_color.0.to_bits().hash(state);
         self.cursor_color.1.to_bits().hash(state);
         self.cursor_color.2.to_bits().hash(state);
@@ -1583,9 +1239,6 @@ impl Hash for TextFieldElement {
 
 impl PartialEq for TextFieldElement {
     fn eq(&self, other: &Self) -> bool {
-        // Compare by state identity (same Rc), cursor color, and line limits
-        // This ensures node reuse when same state is passed, while detecting
-        // actual changes that require updates
         self.state == other.state
             && self.style == other.style
             && self.cursor_color == other.cursor_color
@@ -1612,7 +1265,6 @@ impl ModifierNodeElement for TextFieldElement {
     }
 
     fn update(&self, node: &mut Self::Node) {
-        // Update the state reference
         node.state = self.state;
         node.style = self.style.clone();
         node.cursor_brush = Brush::solid(self.cursor_color);
@@ -1621,11 +1273,7 @@ impl ModifierNodeElement for TextFieldElement {
         node.modal_depth = self.modal_depth;
         node.rebuild_cached_closures();
 
-        // Check if content changed and update cache
-        if node.update_cached_state() {
-            // Content changed - node will need layout/draw invalidation
-            // This happens automatically through the modifier reconciliation
-        }
+        if node.update_cached_state() {}
     }
 
     fn capabilities(&self) -> NodeCapabilities {
@@ -1636,7 +1284,6 @@ impl ModifierNodeElement for TextFieldElement {
     }
 
     fn always_update(&self) -> bool {
-        // Always update to capture new state/handler while preserving focus state
         true
     }
 }
@@ -1650,7 +1297,6 @@ mod tests {
     use super::*;
     use crate::text::TextStyle;
 
-    /// Sets up a test runtime and keeps it alive for the duration of the test.
     fn with_test_runtime<T>(f: impl FnOnce() -> T) -> T {
         let _runtime = Runtime::new(Arc::new(DefaultScheduler));
         f()
@@ -1667,21 +1313,13 @@ mod tests {
         });
     }
 
-    // Regression: a selection (or preedit) whose logical line sits *below* a
-    // soft-wrapped line must highlight on the correct VISUAL line. The old
-    // logical-`\n` split placed it one line too high whenever a line above
-    // wrapped — the reported "correct x, wrong y line" iOS selection bug.
     #[test]
     fn selection_rects_follow_wrapped_visual_lines() {
         let _app_context = crate::render_state::app_context_test_scope();
-        // Monospaced test measurer: 14.0 * 0.6 = 8.4 px per char. Wrap width 30
-        // fits 3 chars (25.2) but not 4 (33.6), so "aaaaa" wraps to "aaa"/"aa".
         let text = "aaaaa\nbb";
         let style = TextStyle::default();
         let line_height = 10.0_f32;
 
-        // Select "bb" — logical line 1, but VISUAL line 2 (two visual lines
-        // above it: "aaa", "aa").
         let rects = range_visual_line_rects(
             text,
             &style,
@@ -1702,8 +1340,6 @@ mod tests {
         );
         assert!(rects[0].width > 0.0);
 
-        // A selection spanning the wrap boundary produces one rect per visual
-        // line, at consecutive y positions.
         let spanning = range_visual_line_rects(
             text,
             &style,
@@ -1721,21 +1357,13 @@ mod tests {
         assert_eq!(spanning[1].y, line_height);
     }
 
-    // Regression: a finger tap must resolve to the byte offset on the VISUAL
-    // (wrapped) line under the finger. The measurer's plain get_offset_for_position
-    // maps `y` through logical `\n` lines only, so on wrapped text the caret
-    // landed below the finger — the reported "taps miss the y coordinate" bug.
     #[test]
     fn tap_resolves_offset_on_wrapped_visual_line() {
         let _app_context = crate::render_state::app_context_test_scope();
-        // Same fixture: wrap width 30 splits "aaaaa" into "aaa"/"aa"; "bb" is the
-        // third visual line. line_height 10 → line 2 spans y in [20, 30).
         let text = "aaaaa\nbb";
         let style = TextStyle::default();
         let line_height = 10.0_f32;
 
-        // Tap on visual line 2 ("bb") must land in bytes 6..=8, not in the
-        // wrapped first logical line.
         let off = crate::text::offset_for_position_wrapped(
             text,
             &style,
@@ -1750,8 +1378,6 @@ mod tests {
             "tap on visual line 'bb' resolved to {off}, expected 6..=8"
         );
 
-        // Tap on visual line 1 (the "aa" continuation of the first logical line)
-        // must land in bytes 3..=5.
         let off1 = crate::text::offset_for_position_wrapped(
             text,
             &style,
@@ -1766,7 +1392,6 @@ mod tests {
             "tap on wrapped 'aa' resolved to {off1}, expected 3..=5"
         );
 
-        // Single-line (no wrap width): degrades to the one logical line.
         let off2 = crate::text::offset_for_position_wrapped(
             "hello",
             &style,
@@ -1807,10 +1432,6 @@ mod tests {
         });
     }
 
-    /// End-to-end guard for source-independent direct manipulation through the
-    /// real pointer handler and draw closure. Keyboard-only focus keeps a clean
-    /// caret; touch, mouse, and stylus presses publish handles and a continuous
-    /// press stream for long-press → slide-to-menu.
     #[test]
     fn every_primary_pointer_source_publishes_direct_manipulation_metrics() {
         use cranpose_foundation::{PointerEvent, PointerEventKind, PointerSource};
@@ -1822,7 +1443,6 @@ mod tests {
             let controller = TextFieldHandleController::new();
             let mut node = TextFieldModifierNode::new(state, TextStyle::default())
                 .with_handle_controller(controller.clone());
-            // Give the field a measured size so the draw closure has geometry.
             node.measured_size.set(Size {
                 width: 120.0,
                 height: 20.0,
@@ -1839,8 +1459,6 @@ mod tests {
                 width: 120.0,
                 height: 20.0,
             };
-            // The closure records into a caller-provided scope; the test only
-            // cares about the metrics side effects, so the recording is dropped.
             let run_draw = || {
                 let mut scope = crate::draw::command_draw_scope(size);
                 draw(&mut scope);
@@ -1907,13 +1525,6 @@ mod tests {
         });
     }
 
-    /// A double tap on a word must select that word. This regressed after
-    /// selection handles began appearing inside `LazyColumn` items in 0.1.39:
-    /// the cursor handle shown by the first tap overlapped the text line and
-    /// consumed the second tap. The field's own gesture classification (proven
-    /// here) is correct — two quick taps at the same spot escalate to a word
-    /// selection — so the fix is geometric (keep the handle's touch box off the
-    /// text line; see `selection_handle::handle_shape`).
     #[test]
     fn double_tap_selects_the_word_under_the_finger() {
         use cranpose_foundation::{PointerEvent, PointerEventKind, PointerSource};
@@ -1931,8 +1542,6 @@ mod tests {
                 .pointer_input_handler()
                 .expect("field exposes a pointer handler");
 
-            // Two touch taps at the same spot, back to back (well within the
-            // multi-tap timeout and slop): near the start of "hello".
             let at = Point { x: 2.0, y: 8.0 };
             handler(
                 PointerEvent::new(PointerEventKind::Down, at, at).with_source(PointerSource::Touch),
@@ -1956,9 +1565,6 @@ mod tests {
         });
     }
 
-    /// The multi-tap selection granularity ladder (bug 8): repeated in-place taps
-    /// escalate word → line → paragraph, then cycle back to word. Mirrors mature
-    /// editors (Android `TextView`, iOS, VS Code).
     #[test]
     fn repeated_taps_escalate_word_line_paragraph_then_cycle() {
         use cranpose_foundation::{PointerEvent, PointerEventKind, PointerSource};
@@ -1966,8 +1572,6 @@ mod tests {
 
         let _app_context = crate::render_state::app_context_test_scope();
         with_test_runtime(|| {
-            // Two lines in the first paragraph, a blank line, then a second
-            // paragraph — so line and paragraph selections differ.
             let text = "alpha beta\ngamma delta\n\nsecond para";
             let state = TextFieldState::new(text);
             let node = TextFieldModifierNode::new(state, TextStyle::default()).with_line_limits(
@@ -1984,7 +1588,6 @@ mod tests {
                 .pointer_input_handler()
                 .expect("field exposes a pointer handler");
 
-            // Tap in place on the first line ("alpha").
             let at = Point { x: 2.0, y: 4.0 };
             let tap = || {
                 handler(
@@ -1997,23 +1600,23 @@ mod tests {
                 state.text()[s.min()..s.max()].to_string()
             };
 
-            tap(); // 1 → caret
+            tap();
             assert!(state.selection().collapsed(), "first tap places the caret");
-            tap(); // 2 → word
+            tap();
             assert_eq!(selected(&state), "alpha", "double tap selects the word");
-            tap(); // 3 → line
+            tap();
             assert_eq!(
                 selected(&state),
                 "alpha beta",
                 "triple tap selects the line"
             );
-            tap(); // 4 → paragraph
+            tap();
             assert_eq!(
                 selected(&state),
                 "alpha beta\ngamma delta",
                 "fourth tap grows to the paragraph"
             );
-            tap(); // 5 → cycles back to word
+            tap();
             assert_eq!(
                 selected(&state),
                 "alpha",
@@ -2024,9 +1627,6 @@ mod tests {
         });
     }
 
-    /// A single tap that lands inside an existing selection re-grabs the word
-    /// under the finger (Android/iOS behaviour), rather than collapsing to a
-    /// caret (bug 8).
     #[test]
     fn single_tap_inside_selection_selects_the_word() {
         use cranpose_foundation::{PointerEvent, PointerEventKind, PointerSource};
@@ -2044,12 +1644,9 @@ mod tests {
                 .pointer_input_handler()
                 .expect("field exposes a pointer handler");
 
-            // Pre-existing broad selection over the whole text.
             state.edit(|buffer| buffer.select(TextRange::new(0, 11)));
             assert!(!state.selection().collapsed());
 
-            // A lone tap over "hello" (fresh tap count) must select that word,
-            // not drop the selection.
             let at = Point { x: 2.0, y: 8.0 };
             handler(
                 PointerEvent::new(PointerEventKind::Down, at, at).with_source(PointerSource::Touch),
@@ -2070,13 +1667,6 @@ mod tests {
         });
     }
 
-    /// Bug (c) at the handler level: repeated taps at the SAME spot inside an
-    /// existing selection climb the granularity ladder word → line → paragraph →
-    /// word even when each tap arrives after the multi-tap timeout has lapsed
-    /// (the growth is keyed on location, not the double-tap timer). Forcing a
-    /// timeout between taps (clearing `last_click_time`) makes the raw tap count
-    /// reset to 1 each time, so this exercises the location-based path rather
-    /// than the rapid-multi-tap path.
     #[test]
     fn slow_taps_inside_selection_cycle_word_line_paragraph_by_location() {
         use cranpose_foundation::{PointerEvent, PointerEventKind, PointerSource};
@@ -2100,7 +1690,6 @@ mod tests {
                 .pointer_input_handler()
                 .expect("field exposes a pointer handler");
 
-            // A broad pre-existing selection over the whole text.
             state.edit(|buffer| buffer.select(TextRange::new(0, text.len())));
 
             let at = Point { x: 2.0, y: 4.0 };
@@ -2108,8 +1697,6 @@ mod tests {
                 let s = state.selection();
                 state.text()[s.min()..s.max()].to_string()
             };
-            // Each call forces the multi-tap timer to look expired, so the raw
-            // tap count resets to 1 while the tap position stays put.
             let slow_tap = || {
                 node.refs.last_click_time.set(None);
                 handler(
@@ -2118,25 +1705,25 @@ mod tests {
                 );
             };
 
-            slow_tap(); // inside selection → word
+            slow_tap();
             assert_eq!(
                 selected(&state),
                 "alpha",
                 "tap inside selection grabs the word"
             );
-            slow_tap(); // same spot → line
+            slow_tap();
             assert_eq!(
                 selected(&state),
                 "alpha beta",
                 "same-spot tap grows to the line even after the timeout"
             );
-            slow_tap(); // same spot → paragraph
+            slow_tap();
             assert_eq!(
                 selected(&state),
                 "alpha beta\ngamma delta",
                 "same-spot tap grows to the paragraph"
             );
-            slow_tap(); // same spot → cycles back to word
+            slow_tap();
             assert_eq!(
                 selected(&state),
                 "alpha",
@@ -2152,14 +1739,12 @@ mod tests {
         let _app_context = crate::render_state::app_context_test_scope();
         with_test_runtime(|| {
             let state1 = TextFieldState::new("Hello");
-            let state2 = TextFieldState::new("Hello"); // Different Rc, same text
+            let state2 = TextFieldState::new("Hello");
 
             let elem1 = TextFieldElement::new(state1, TextStyle::default());
-            let elem2 = TextFieldElement::new(state1, TextStyle::default()); // Same state (Rc identity)
-            let elem3 = TextFieldElement::new(state2, TextStyle::default()); // Different state
+            let elem2 = TextFieldElement::new(state1, TextStyle::default());
+            let elem3 = TextFieldElement::new(state2, TextStyle::default());
 
-            // Elements are equal only when they share the same state Rc
-            // This ensures proper Eq/Hash contract compliance
             assert_eq!(elem1, elem2, "Same state should be equal");
             assert_ne!(elem1, elem3, "Different states should not be equal");
         });
@@ -2189,15 +1774,11 @@ mod tests {
         });
     }
 
-    /// A multi-line field must measure the *wrapped* height at the available
-    /// width, so a long transcript grows the field instead of being clipped to
-    /// a single line. Regression for the "edits only appear after focus loss"
-    /// bug where a wrapped OCR transcript rendered only its first line.
     #[test]
     fn multiline_field_measures_wrapped_height() {
         let _app_context = crate::render_state::app_context_test_scope();
         with_test_runtime(|| {
-            let long = "abcd ".repeat(40); // ~200 chars, no explicit newlines
+            let long = "abcd ".repeat(40);
             let state = TextFieldState::new(&long);
             let node = TextFieldModifierNode::new(state, TextStyle::default());
             assert!(
@@ -2217,8 +1798,6 @@ mod tests {
         });
     }
 
-    /// Single-line fields pan horizontally instead of wrapping, so they never
-    /// derive a wrap width even under a narrow constraint.
     #[test]
     fn single_line_field_never_wraps() {
         let _app_context = crate::render_state::app_context_test_scope();
@@ -2234,19 +1813,12 @@ mod tests {
         });
     }
 
-    /// Test that cursor draw command position is calculated correctly.
-    ///
-    /// This test verifies that when we measure text width for cursor position:
-    /// 1. The cursor x position = width of text before cursor
-    /// 2. For text at cursor end, x = full text width
     #[test]
     fn test_cursor_x_position_calculation() {
         let _app_context = crate::render_state::app_context_test_scope();
         with_test_runtime(|| {
-            // Test that text measurement works correctly for cursor positioning
             let style = crate::text::TextStyle::default();
 
-            // Empty text - cursor should be at x=0
             let empty_width =
                 crate::text::measure_text(&crate::text::AnnotatedString::from(""), &style).width;
             assert!(
@@ -2255,7 +1827,6 @@ mod tests {
                 empty_width
             );
 
-            // Non-empty text - cursor at end should be at text width
             let hi_width =
                 crate::text::measure_text(&crate::text::AnnotatedString::from("Hi"), &style).width;
             assert!(
@@ -2264,7 +1835,6 @@ mod tests {
                 hi_width
             );
 
-            // Partial text - cursor after 'H' should be at width of 'H'
             let h_width =
                 crate::text::measure_text(&crate::text::AnnotatedString::from("H"), &style).width;
             assert!(h_width > 0.0, "Text 'H' should have positive width");
@@ -2275,7 +1845,6 @@ mod tests {
                 hi_width
             );
 
-            // Verify TextFieldState selection tracks cursor correctly
             let state = TextFieldState::new("Hi");
             assert_eq!(
                 state.selection().start,
@@ -2283,13 +1852,11 @@ mod tests {
                 "Cursor should be at position 2 (end of 'Hi')"
             );
 
-            // The text before cursor at position 2 in "Hi" is "Hi" itself
             let text = state.text();
             let cursor_pos = state.selection().start;
             let text_before_cursor = &text[..cursor_pos.min(text.len())];
             assert_eq!(text_before_cursor, "Hi");
 
-            // So cursor x = width of "Hi"
             let cursor_x = crate::text::measure_text(
                 &crate::text::AnnotatedString::from(text_before_cursor),
                 &style,
@@ -2304,7 +1871,6 @@ mod tests {
         });
     }
 
-    /// Test cursor is created when focused node is in slices.
     #[test]
     fn test_focused_node_creates_cursor() {
         let _app_context = crate::render_state::app_context_test_scope();
@@ -2313,17 +1879,13 @@ mod tests {
             let element = TextFieldElement::new(state, TextStyle::default());
             let node = element.create();
 
-            // Initially not focused
             assert!(!node.is_focused());
 
-            // Set focus
             *node.refs.is_focused.borrow_mut() = true;
             assert!(node.is_focused());
 
-            // Verify the node has correct text
             assert_eq!(node.text(), "Test");
 
-            // Verify selection is at end
             assert_eq!(node.selection().start, 4);
         });
     }

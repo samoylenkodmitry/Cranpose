@@ -1,17 +1,3 @@
-//! Pipeline step 7b: the present runtime's depth-one protocol. Credit
-//! gates packet building (backpressure BEFORE lowering), an invalidating
-//! control message cancels the waiting packet and sends its returns
-//! BEFORE it is acknowledged, a dead surface refuses packets with their
-//! buffers intact, the recycled ack-confirmations buffer rides the next
-//! packet back to the store, the store's replay ack leaves on its own
-//! channel ahead of the frame's returns, and the producer's warmup read
-//! is the present thread's atomic snapshot — never the renderer.
-//!
-//! Most tests drive the state machine INLINE (no thread) through
-//! `init_gpu_inline_for_tests`, pumping the message queue by hand so
-//! every ordering is deterministic; one smoke test runs the real spawned
-//! thread end to end.
-
 mod support;
 
 use std::{
@@ -79,8 +65,6 @@ fn rect_primitive(rect: Rect, color: Color) -> RenderNode {
     })
 }
 
-/// A direct-eligible root: its packets carry a `PacketRoot::Direct` scene,
-/// which is what the cancel/recycle assertions observe.
 fn direct_graph() -> RenderGraph {
     RenderGraph::new(test_layer(
         Some(7_700),
@@ -96,8 +80,6 @@ fn direct_graph() -> RenderGraph {
     ))
 }
 
-/// A root whose CHILD carries a shadow: the first render must miss the
-/// shadow shape cache, which is one of the warmup triggers.
 fn shadowed_child_graph() -> RenderGraph {
     let mut child = test_layer(Some(7_701), vec![]);
     child.local_bounds = Rect {
@@ -134,9 +116,6 @@ fn surface_config(width: u32, height: u32) -> wgpu::SurfaceConfiguration {
     }
 }
 
-/// An UNINITIALIZED renderer plus the device/queue the test hands to the
-/// runtime itself (unlike `support::headless_renderer`, which claims them
-/// for a sync `init_gpu`).
 #[allow(clippy::type_complexity)]
 fn threaded_parts() -> Result<
     (
@@ -178,8 +157,6 @@ fn threaded_parts() -> Result<
     ))
 }
 
-/// Inline runtime with the offscreen surrogate target attached, so the
-/// full validate → render path runs headlessly.
 macro_rules! inline_runtime_or_skip {
     ($name:literal) => {{
         match threaded_parts() {
@@ -200,16 +177,6 @@ fn drain_outcomes(renderer: &mut WgpuRenderer) -> Vec<(u64, PresentOutcome)> {
     outcomes
 }
 
-/// The black-screen invariant this runtime exists to protect on the
-/// Android threaded path: the instant a surface (or, headlessly, the
-/// offscreen surrogate) is installed, a placeholder frame must already be
-/// on it — acknowledged only after the clear, so a caller that waits for
-/// the ack (the real `ReplaceSurface`/`present_replace_surface` path)
-/// never observes a configured-but-blank surface. This holds regardless
-/// of whether a single content `PassPipeline` has finished compiling,
-/// because the placeholder touches none. `placeholder_frames` is counted
-/// separately from `presented_frames` (real content packets only), so
-/// this also proves the two are never conflated.
 #[test]
 fn a_surface_never_sits_configured_with_nothing_presented_to_it() {
     let (_lock, mut renderer, device, queue, backend, downlevel) =
@@ -250,9 +217,6 @@ fn a_surface_never_sits_configured_with_nothing_presented_to_it() {
         "the placeholder must not be counted as a real content frame"
     );
 
-    // A real content frame afterward still counts on its own side of the
-    // ledger — the two counters track genuinely different events, not the
-    // same one under two names.
     renderer.scene_mut().graph = Some(direct_graph());
     assert_eq!(
         renderer.publish_frame(WIDTH, HEIGHT),
@@ -270,10 +234,6 @@ fn a_surface_never_sits_configured_with_nothing_presented_to_it() {
     );
 }
 
-/// 7b-1: depth-one credit — one packet rendering AND one waiting. Two
-/// publishes fit (that pair is what lets the producer lower N+1 while the
-/// present thread draws N); the THIRD reports `NoCredit` WITHOUT lowering
-/// a packet, and credit returns as frames drain.
 #[test]
 fn depth_one_credit_gates_publish_before_lowering() {
     let (_lock, mut renderer, device, queue, backend, downlevel) =
@@ -346,9 +306,6 @@ fn depth_one_credit_gates_publish_before_lowering() {
     assert_eq!(renderer.last_published_frame_id(), 3);
 }
 
-/// 7b-2: invalidation before republish. With a packet waiting in the
-/// slot, a `Reconfigure` cancels it — its returns are sent BEFORE the ack
-/// fires — and a packet published under the new epoch renders.
 #[test]
 fn reconfigure_cancels_waiting_packet_before_ack() {
     let (_lock, mut renderer, device, queue, backend, downlevel) =
@@ -371,8 +328,6 @@ fn reconfigure_cancels_waiting_packet_before_ack() {
         renderer.publish_frame(WIDTH, HEIGHT),
         PublishOutcome::Published
     );
-    // Producer-side resize while frame 1 waits: epoch bump first, then
-    // the control message stamped with the new epoch.
     renderer.note_surface_reconfigured();
     let ack = renderer
         .send_reconfigure_unacked_for_tests(surface_config(WIDTH * 2, HEIGHT * 2))
@@ -382,9 +337,6 @@ fn reconfigure_cancels_waiting_packet_before_ack() {
         "no ack may fire before the runtime processed the invalidation"
     );
 
-    // One pump: the runtime stashes the waiting packet, processes the
-    // queued Reconfigure against it (cancel + returns + ack, in that
-    // order), and has nothing left to consume.
     runtime.pump();
     assert_eq!(
         drain_outcomes(&mut renderer),
@@ -398,8 +350,6 @@ fn reconfigure_cancels_waiting_packet_before_ack() {
         "the cancelled packet's scene must return to the producer pool"
     );
 
-    // The producer republishes under the new epoch at the new size and
-    // the frame renders.
     assert_eq!(
         renderer.publish_frame(WIDTH * 2, HEIGHT * 2),
         PublishOutcome::Published
@@ -412,13 +362,6 @@ fn reconfigure_cancels_waiting_packet_before_ack() {
     );
 }
 
-/// 7b-3: `DropSurface` with a packet waiting. The packet cannot render at
-/// all: it cancels — pinned: `Cancelled(SurfaceUnavailable)`, the runtime
-/// cancels it directly without touching the GPU — with its scene AND its
-/// replay plan returned (planner re-queue proof, like 7a's). A packet
-/// published after the drop cancels too (`SurfaceEpoch`: the producer's
-/// bump outran the runtime's copy, which `DropSurface` — carrying no
-/// epoch — never updates).
 #[test]
 fn drop_surface_cancels_waiting_packet_with_buffers_returned() {
     let (_lock, mut renderer, device, queue, backend, downlevel) =
@@ -445,7 +388,6 @@ fn drop_surface_cancels_waiting_packet_with_buffers_returned() {
     let (_, awaiting) = cranpose_render_wgpu::planner_replay_queue_stats_for_tests();
     assert_eq!(awaiting, 1, "the packet's plan must carry the capture");
 
-    // TerminateWindow flow: epoch bump, then the surface dies.
     renderer.note_surface_reconfigured();
     let ack = renderer
         .send_drop_surface_unacked_for_tests()
@@ -476,7 +418,6 @@ fn drop_surface_cancels_waiting_packet_with_buffers_returned() {
         "the cancelled batch's capture buffer must recycle with capacity intact"
     );
 
-    // Publishing against the dead surface refuses the packet whole too.
     assert_eq!(
         renderer.publish_frame(WIDTH, HEIGHT),
         PublishOutcome::Published
@@ -491,10 +432,6 @@ fn drop_surface_cancels_waiting_packet_with_buffers_returned() {
     assert!(renderer.has_retained_direct_scene_for_tests());
 }
 
-/// 7b-4: the confirmations capacity round-trip. In threaded mode the
-/// planner-drained ack confirmations vec cannot return to the store
-/// synchronously; it rides the NEXT packet and the store adopts it as its
-/// ack backing buffer — capacity preserved, no per-frame allocation.
 #[test]
 fn confirmations_capacity_rides_next_packet_back_to_store() {
     let (_lock, mut renderer, device, queue, backend, downlevel) =
@@ -513,13 +450,9 @@ fn confirmations_capacity_rides_next_packet_back_to_store() {
     ack.try_recv().expect("attach must ack after the pump");
     renderer.scene_mut().graph = Some(direct_graph());
 
-    // A previous frame's drained ack buffer, parked with real capacity
-    // (seeded: producing a genuinely confirmed capture requires the
-    // multi-frame verification heuristics, which are not this contract).
     const SEEDED_CAPACITY: usize = 7;
     renderer.seed_recycled_confirmations_for_tests(SEEDED_CAPACITY);
 
-    // The publish carries the parked buffer into the packet...
     assert_eq!(
         renderer.publish_frame(WIDTH, HEIGHT),
         PublishOutcome::Published
@@ -529,19 +462,12 @@ fn confirmations_capacity_rides_next_packet_back_to_store() {
         None,
         "the packet must take the parked buffer with it"
     );
-    // ...the store adopts it, and the SAME frame's ack immediately takes
-    // it back out as its confirmations buffer (the store holds the
-    // capacity only between adoption and consumption — afterwards its
-    // backing slot is the taken-out empty)...
     runtime.pump();
     assert_eq!(
         runtime.store_ack_confirmations_capacity(),
         0,
         "the frame's ack must have taken the adopted buffer out of the store"
     );
-    // ...and the drain parks it producer-side again. Capacity arriving
-    // back here is THE proof of the full revolution: without the store
-    // adoption the ack would have carried a fresh zero-capacity vec.
     assert_eq!(renderer.drain_present_returns(), 1);
     assert_eq!(
         renderer.pending_recycled_confirmations_capacity_for_tests(),
@@ -550,7 +476,6 @@ fn confirmations_capacity_rides_next_packet_back_to_store() {
          through store adoption and the planner drain — no per-frame alloc"
     );
 
-    // Second revolution: the cycle is self-sustaining.
     assert_eq!(
         renderer.publish_frame(WIDTH, HEIGHT),
         PublishOutcome::Published
@@ -567,14 +492,6 @@ fn confirmations_capacity_rides_next_packet_back_to_store() {
     );
 }
 
-/// 7b-7: the early replay ack. The store answers a Direct packet's replay
-/// plan on the ack channel BEFORE the frame draws (pre-acquire in the
-/// threaded runtime) — the confirmation-latency fix that makes depth-one
-/// overlap pay: the producer folds the ack in ahead of its next planning,
-/// the same one-frame latency the synchronous path has. Pinned here as
-/// protocol shape: the ack is drainable while the frame's returns are
-/// still queued, arrives exactly once, and the returns no longer carry
-/// an ack to double-apply.
 #[test]
 fn early_replay_ack_precedes_returns() {
     let (_lock, mut renderer, device, queue, backend, downlevel) =
@@ -593,9 +510,6 @@ fn early_replay_ack_precedes_returns() {
     ack.try_recv().expect("attach must ack after the pump");
     renderer.scene_mut().graph = Some(direct_graph());
 
-    // Seeded capacity is the tracer: it can only come back to the
-    // producer inside the frame's ReplayAck (store adoption → ack buffer
-    // → planner drain), so its arrival IS the ack's arrival.
     const SEEDED_CAPACITY: usize = 5;
     renderer.seed_recycled_confirmations_for_tests(SEEDED_CAPACITY);
     assert_eq!(
@@ -631,10 +545,6 @@ fn early_replay_ack_precedes_returns() {
     );
 }
 
-/// 7b-5: the warmup snapshot. The present thread mirrors
-/// `needs_frame_warmup` into the shared atomic after every consumed
-/// packet, and the producer's `Renderer` trait read reports exactly that
-/// atomic — there is no `GpuRenderer` on the producer side to consult.
 #[test]
 fn needs_frame_warmup_reads_present_thread_atomic() {
     let (_lock, mut renderer, device, queue, backend, downlevel) =
@@ -657,8 +567,6 @@ fn needs_frame_warmup_reads_present_thread_atomic() {
         "before any frame the snapshot must read false"
     );
 
-    // A first shadow render misses the shadow shape cache — one of the
-    // warmup triggers — so the present thread must raise the atomic.
     renderer.scene_mut().graph = Some(shadowed_child_graph());
     assert_eq!(
         renderer.publish_frame(WIDTH, HEIGHT),
@@ -680,8 +588,6 @@ fn needs_frame_warmup_reads_present_thread_atomic() {
         "the producer trait read must be exactly the atomic"
     );
 
-    // Warmup frames decay as the caches stop missing; the trait read must
-    // follow the atomic down without ever touching present state.
     for _ in 0..4 {
         if !renderer.needs_frame_warmup() {
             break;
@@ -703,11 +609,6 @@ fn needs_frame_warmup_reads_present_thread_atomic() {
     );
 }
 
-/// 7b-6: real-thread smoke. The spawned runtime constructs its renderer
-/// on its own thread, refuses a surfaceless packet with buffers returned,
-/// acknowledges controls across the thread boundary, renders against the
-/// offscreen surrogate, wakes the producer through the injected waker,
-/// and shuts down joinable.
 #[test]
 fn real_thread_runtime_smoke() {
     let (_lock, mut renderer, device, queue, backend, downlevel) =
@@ -728,8 +629,6 @@ fn real_thread_runtime_smoke() {
         .expect("present thread must spawn");
     renderer.scene_mut().graph = Some(direct_graph());
 
-    // No surface attached: the packet must come back cancelled, buffers
-    // intact, and the waker must have fired.
     assert_eq!(
         renderer.publish_frame(WIDTH, HEIGHT),
         PublishOutcome::Published
@@ -748,8 +647,6 @@ fn real_thread_runtime_smoke() {
     );
     assert!(renderer.has_retained_direct_scene_for_tests());
 
-    // Control ack round-trips across the thread; a publish under the new
-    // epoch against the offscreen target renders for real.
     renderer.note_surface_reconfigured();
     assert!(
         renderer.present_reconfigure(surface_config(WIDTH, HEIGHT)),
@@ -781,8 +678,6 @@ fn real_thread_runtime_smoke() {
     );
 }
 
-/// Polls the returns channel until `count` returns arrived or a generous
-/// deadline passed — the real-thread test's only nondeterminism absorber.
 fn drain_with_timeout(renderer: &mut WgpuRenderer, count: usize) -> Vec<(u64, PresentOutcome)> {
     let deadline = Instant::now() + Duration::from_secs(10);
     let mut outcomes = Vec::new();

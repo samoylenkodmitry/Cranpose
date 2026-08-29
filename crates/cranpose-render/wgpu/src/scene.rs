@@ -28,10 +28,6 @@ impl SnapAnchor {
     }
 }
 
-/// A pending solid recolor of one retained replay shape: a bare 16-byte
-/// color write into the slot's paint mirror. Planned producer-side, applied
-/// by the present-side replay store; crosses the frame boundary inside
-/// [`ReplayFrameOps`](crate::frame_packet::ReplayFrameOps).
 #[derive(Clone, Copy)]
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct ColorPatch {
@@ -40,10 +36,6 @@ pub(crate) struct ColorPatch {
     pub color: [f32; 4],
 }
 
-/// A capture request from the identity feed: the shape range this frame's
-/// ordinary emission pushed for one capture-marked span. Planned
-/// producer-side, honored by the present-side replay store; crosses the
-/// frame boundary inside [`ReplayFrameOps`](crate::frame_packet::ReplayFrameOps).
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct PendingFeedCapture {
     pub key: (cranpose_render_common::graph::DrawCommandId, u32),
@@ -51,30 +43,15 @@ pub(crate) struct PendingFeedCapture {
     pub shape_count: usize,
     pub fingerprint: u64,
     pub capture_clip: Option<Rect>,
-    /// Frame ordinal at queue time. The store honors a capture only against
-    /// that same frame's scene — its shape indices are meaningless in any
-    /// other, and capturing there would retain wrong content under a
-    /// confirmed identity.
     pub frame: u64,
 }
 
-/// A shape's paint, in the form the scene stores: solid colors inline, the
-/// rare gradient as an index into the owning [`CompositorScene::brushes`]
-/// table. `Copy` on purpose — it is what lets a frame's `Vec<DrawShape>`
-/// clear by truncation instead of walking ~17k `Brush` destructors, and what
-/// keeps every per-shape copy on the emit path free of clone/drop glue.
-/// Handles never outlive their scene's frame: the table is rebuilt with the
-/// scene each collect, so a stale index cannot exist by construction.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum SceneBrush {
     Solid(Color),
-    /// Index into the owning scene's `brushes` table (non-solid brushes
-    /// only).
     Gradient(u32),
 }
 
-/// [`CompositorScene::intern_brush`] against a bare table — shadow draws
-/// carry their own.
 pub(crate) fn intern_brush_into(table: &mut Vec<Brush>, brush: ResolvedBrush) -> SceneBrush {
     match brush {
         ResolvedBrush::Solid(color) => SceneBrush::Solid(color),
@@ -87,8 +64,6 @@ pub(crate) fn intern_brush_into(table: &mut Vec<Brush>, brush: ResolvedBrush) ->
 }
 
 impl SceneBrush {
-    /// The full `Brush` view, for consumers that need gradient payloads.
-    /// `brushes` must be the owning scene's table.
     pub fn resolve<'a>(&self, brushes: &'a [Brush]) -> std::borrow::Cow<'a, Brush> {
         match *self {
             SceneBrush::Solid(color) => std::borrow::Cow::Owned(Brush::Solid(color)),
@@ -96,9 +71,6 @@ impl SceneBrush {
         }
     }
 
-    /// The same value [`cranpose_ui_graphics::RenderHash`] produces for the
-    /// `Brush` this stands for — cache keys must not change because the
-    /// scene's storage form did.
     pub fn render_hash(&self, brushes: &[Brush]) -> u64 {
         use cranpose_ui_graphics::RenderHash as _;
         match *self {
@@ -116,11 +88,7 @@ pub(crate) struct DrawShape {
     pub snap_anchor: Option<SnapAnchor>,
     pub brush: SceneBrush,
     pub shape: Option<RoundedCornerShape>,
-    /// `Some` strokes the outline of `local_rect`/`shape` instead of filling
-    /// it. `local_rect` and `quad` are already inflated by half the width.
     pub stroke: Option<Stroke>,
-    /// `Some` replaces the rect geometry with a circular band, in `local_rect`
-    /// units. Mutually exclusive with `stroke`/`shape`.
     pub arc: Option<ArcGeometry>,
     pub z_index: usize,
     pub clip: Option<Rect>,
@@ -129,7 +97,6 @@ pub(crate) struct DrawShape {
 }
 
 impl DrawShape {
-    /// A shape that needs the analytic stroke or arc path in the shader.
     #[cfg(test)]
     pub fn has_stroke_or_arc(&self) -> bool {
         self.stroke.is_some() || self.arc.is_some()
@@ -142,9 +109,6 @@ pub(crate) struct TextDraw {
     pub rect: Rect,
     pub snap_anchor: Option<SnapAnchor>,
     pub translated_content_context: bool,
-    /// The render view of the node's text — content, styles and link identity,
-    /// no link handlers — so the lowered scene payload is `Send`. `Arc` keeps
-    /// the clones into shadow draws and retained scenes cheap.
     pub text: std::sync::Arc<cranpose_ui::text::RenderString>,
     pub color: Color,
     pub text_style: TextStyle,
@@ -155,9 +119,6 @@ pub(crate) struct TextDraw {
     pub clip: Option<Rect>,
 }
 
-/// How many `AnnotatedString` → `RenderString` conversions each thread keeps.
-/// Matches the annotated-string hash cache in `render_paths.rs`: a scene has
-/// at most a few hundred distinct strings, and entries die with their `Rc`.
 const RENDER_STRING_MEMO_CAPACITY: usize = 2048;
 
 thread_local! {
@@ -171,16 +132,6 @@ struct RenderStringMemoEntry {
     render: std::sync::Arc<cranpose_ui::text::RenderString>,
 }
 
-/// Returns the shared [`cranpose_ui::text::RenderString`] for an
-/// `AnnotatedString` about to be lowered into a [`TextDraw`], reusing the
-/// conversion made on an earlier frame when the same `Rc` lowers again.
-///
-/// Steady-state scenes lower the same graph strings (and the same pooled
-/// draw-scope strings) every frame; without this memo each frame would
-/// re-clone every string's content and styles once per emitted draw. Entries
-/// are weak-keyed by `Rc` identity — a dead entry can never validate, because
-/// the `Weak` pins the allocation, so a pointer match plus a live strong
-/// count proves it is the same string.
 pub(crate) fn render_string_for(
     text: &Rc<cranpose_ui::text::AnnotatedString>,
 ) -> std::sync::Arc<cranpose_ui::text::RenderString> {
@@ -225,24 +176,16 @@ pub(crate) struct ImageDraw {
     pub z_index: usize,
     pub clip: Option<Rect>,
     pub blend_mode: BlendMode,
-    /// Source sub-region in image-pixel coordinates. `None` means full image.
     pub src_rect: Option<Rect>,
     pub motion_context_animated: bool,
 }
 
-/// CPU mirror of the shader's per-batch `SimilarityTransform`: rotate by the
-/// angle whose (cos, sin) is `rot` and scale by `scale`, about `center`, in
-/// device pixels. Freshly converted batches bind [`Self::IDENTITY`] through a
-/// buffer shared renderer-wide; replayed batches bind their own value.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub(crate) struct SimilarityTransform {
     pub(crate) center: [f32; 2],
     pub(crate) rot: [f32; 2],
     pub(crate) scale: f32,
-    /// 1.0 makes the storage-mode shader read shape colors from the slot's
-    /// retained paint buffer instead of `ShapeData.color`; 0.0 (identity,
-    /// every fresh batch) keeps the in-record color.
     paint_select: f32,
     _pad: [f32; 2],
 }
@@ -267,9 +210,6 @@ impl SimilarityTransform {
         }
     }
 
-    /// This transform with the retained paint buffer selected. Staged for
-    /// replay draws only — recolor patches rewrite the slot's paint buffer,
-    /// so its colors are live where the captured `ShapeData` ones are stale.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn with_retained_paint(mut self) -> Self {
         self.paint_select = 1.0;
@@ -277,21 +217,12 @@ impl SimilarityTransform {
     }
 }
 
-/// One replayed shape batch: GPU slots captured from an earlier frame's
-/// converted shapes, drawn this frame under `transform`. The heavy per-shape
-/// pipeline (emit, walk, convert, upload) never sees these shapes again —
-/// this one op stands in for what would otherwise be thousands of shape ops.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct RetainedDraw {
-    /// Renderer-side replay slot holding the retained buffers and bind group.
     pub slot: u32,
     pub transform: SimilarityTransform,
-    /// Screen-space bounds of the transformed batch, for visibility checks.
     pub bounds: Rect,
-    /// First shape drawn within the slot's capture — draws sharing a slot
-    /// after a segment split cover disjoint ranges of it.
     pub first_shape: u32,
-    /// How many shapes the retained batch draws (6 vertices each).
     pub shape_count: u32,
 }
 
@@ -301,7 +232,6 @@ pub(crate) enum DrawOpKind {
     Image(usize),
     Text(usize),
     Shadow(usize),
-    /// Index into [`CompositorScene::retained_draws`].
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     Retained(usize),
 }
@@ -312,55 +242,30 @@ pub(crate) struct DrawOp {
     pub kind: DrawOpKind,
 }
 
-/// A shadow that requires GPU blur processing.
 #[derive(Clone)]
 pub(crate) struct ShadowDraw {
-    /// Shapes to render to offscreen target before blur.
-    /// Each shape carries its own blend mode (SrcOver for fill, DstOut for cutout).
     pub shapes: Vec<(DrawShape, BlendMode)>,
-    /// The table this draw's [`SceneBrush::Gradient`] handles index. A
-    /// shadow travels between scenes whole (window builds, retained
-    /// captures), so it carries its own — empty for the usual solid-color
-    /// casters, so no per-frame allocation in the common case.
     pub brushes: Vec<Brush>,
-    /// Texts to render to offscreen target before blur.
     pub texts: Vec<TextDraw>,
-    /// Gaussian blur radius in pixels.
     pub blur_radius: f32,
-    /// Optional clip rect applied when compositing (inner shadows clip to element bounds).
     pub clip: Option<Rect>,
-    /// The region the caster provably paints over this shadow: its footprint
-    /// inset to the largest rectangle inside its rounded outline. Composites
-    /// skip it — the reference platform's `drawShadow` assumes an opaque
-    /// occluder the same way — so it is only set for an axis-aligned caster
-    /// whose layer is fully opaque.
     pub occluder: Option<Rect>,
-    /// Z-index for correct draw ordering.
     pub z_index: usize,
 }
 
-/// A scene span that should be rendered into an isolated surface.
 #[derive(Clone)]
 pub(crate) struct EffectLayer {
     pub rect: Rect,
     pub clip: Option<Rect>,
     pub snap_anchor: Option<SnapAnchor>,
-    /// Optional effect to apply to the offscreen subtree.
-    /// `None` means isolate/composite only (no post-effect shader).
     pub effect: Option<RenderEffect>,
-    /// Blend mode used when compositing the offscreen subtree back to the parent.
     pub blend_mode: BlendMode,
-    /// Alpha applied when compositing the offscreen subtree back to the parent.
     pub composite_alpha: f32,
-    /// Z-index of the first draw item in this effect layer's subtree.
     pub z_start: usize,
-    /// Z-index one past the last draw item in this effect layer's subtree.
     pub z_end: usize,
-    /// Surface requirements that determine target scale and composite policy.
     pub requirements: SurfaceRequirementSet,
 }
 
-/// A backdrop effect applied to already-rendered content behind a node.
 #[derive(Clone)]
 pub(crate) struct BackdropLayer {
     pub node_id: Option<NodeId>,
@@ -368,16 +273,11 @@ pub(crate) struct BackdropLayer {
     pub clip: Option<Rect>,
     pub snap_anchor: Option<SnapAnchor>,
     pub effect: RenderEffect,
-    /// Z-index at which this backdrop effect should be applied.
     pub z_index: usize,
 }
 
 pub(crate) struct CompositorScene {
     pub shapes: Vec<DrawShape>,
-    /// Non-solid brushes referenced by [`SceneBrush::Gradient`] handles in
-    /// this scene's shapes (shadow-draw shapes included). Rebuilt with the
-    /// scene every frame; a handle is only meaningful against the table of
-    /// the scene that owns the shape.
     pub brushes: Vec<Brush>,
     pub images: Vec<ImageDraw>,
     pub texts: Vec<TextDraw>,
@@ -389,10 +289,6 @@ pub(crate) struct CompositorScene {
     pub next_z: usize,
 }
 
-/// Last frame's element counts, used to pre-size the next frame's scene Vecs.
-/// A fully animated scene re-collects every primitive each frame; growing the
-/// Vecs from empty re-copies roughly twice the final payload through the
-/// doubling schedule, which is pure overhead once the sizes are known.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct SceneCapacityHint {
     pub shapes: usize,
@@ -404,10 +300,6 @@ pub(crate) struct SceneCapacityHint {
     pub backdrop_layers: usize,
 }
 
-/// How many dropped scenes' buffers each thread keeps for reuse. Scenes are
-/// collected fresh every frame (root plus one per composited child layer);
-/// for a heavy animated frame the draw vectors are megabytes, big enough
-/// that dropping and reallocating them round-trips through mmap each frame.
 const SCENE_BUFFER_POOL_LIMIT: usize = 4;
 
 thread_local! {
@@ -415,7 +307,6 @@ thread_local! {
         const { std::cell::RefCell::new(Vec::new()) };
 }
 
-/// The emptied-but-still-allocated vectors of a dropped [`CompositorScene`].
 struct SceneBuffers {
     shapes: Vec<DrawShape>,
     brushes: Vec<Brush>,
@@ -429,13 +320,6 @@ struct SceneBuffers {
 
 impl Drop for CompositorScene {
     fn drop(&mut self) {
-        // Pooling only — correctness never depends on it, so both
-        // fallible steps stay fallible. This drop also runs during unwind
-        // (a panicking frame drops its scene), where `with` on a
-        // torn-down TLS or `borrow_mut` on a pool the panicking frame
-        // still holds would panic a second time — and a panic inside an
-        // unwind aborts the process, eating the original message. An
-        // unavailable pool just lets the buffers deallocate.
         let _ = SCENE_BUFFER_POOL.try_with(|pool| {
             let Ok(mut pool) = pool.try_borrow_mut() else {
                 return;
@@ -517,7 +401,6 @@ impl CompositorScene {
         self.next_z = 0;
     }
 
-    /// Pushes one retained-batch draw at the next z position and returns it.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn push_retained_draw(&mut self, draw: RetainedDraw) {
         if std::env::var_os("CRANPOSE_RETAINED_DIAG").is_some() {
@@ -546,9 +429,6 @@ impl CompositorScene {
         });
     }
 
-    /// Stores a layer-resolved brush in this scene's form: solid colors
-    /// inline, anything else appended to the `brushes` table behind a
-    /// handle. Gradient handles are only valid against this scene.
     pub fn intern_brush(&mut self, brush: ResolvedBrush) -> SceneBrush {
         intern_brush_into(&mut self.brushes, brush)
     }
@@ -792,12 +672,6 @@ use crate::rect_to_quad;
 mod tests {
     use super::*;
 
-    /// The double-panic half of the survive-GPU-errors work: a
-    /// `CompositorScene` dropped while the buffer pool is unavailable —
-    /// here, mutably borrowed, as it is when the borrowing frame itself
-    /// panics and unwinds — must skip pooling, not panic. A panic in
-    /// this drop during a real unwind aborts the process and eats the
-    /// original error.
     #[test]
     fn scene_drop_skips_pooling_when_the_pool_is_held() {
         let scene = CompositorScene::new();

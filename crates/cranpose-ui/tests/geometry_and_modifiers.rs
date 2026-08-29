@@ -1,11 +1,3 @@
-//! Modifier builders, the round-list geometry, the Wear grid and the colour
-//! solver.
-//!
-//! These are the rules the widgets above them obey. Each is pure arithmetic or
-//! a builder that records an option, so each can be stated exactly — which is
-//! the point: a spacer that is half a pixel out, or a modifier that quietly
-//! drops what it was handed, is invisible in a screenshot and obvious here.
-
 use cranpose_ui::{
     Modifier,
     density::Density,
@@ -17,31 +9,22 @@ use cranpose_ui::{
 
 #[test]
 fn the_leading_spacer_pushes_the_anchor_onto_the_centre_line() {
-    // A 200pt viewport centres at 100. An anchor whose centre sits 30 into the
-    // content needs 70 of spacer above it to land there.
     assert_eq!(leading_auto_centring_spacer(200.0, 30.0, 0.0), 70.0);
 
-    // An explicit offset moves the centre line, and the spacer follows.
     assert_eq!(leading_auto_centring_spacer(200.0, 30.0, 20.0), 50.0);
 
-    // Content that already reaches past the centre line needs no spacer at all,
-    // and must never be given a negative one.
     assert_eq!(leading_auto_centring_spacer(200.0, 300.0, 0.0), 0.0);
 }
 
 #[test]
 fn the_trailing_spacer_leaves_half_the_last_row_below_the_centre_line() {
-    // 200 - floor(100) - 40/2 = 80.
     assert_eq!(trailing_auto_centring_spacer(200.0, 40.0), 80.0);
 
-    // A last row taller than the viewport cannot ask for negative space.
     assert_eq!(trailing_auto_centring_spacer(200.0, 1000.0), 0.0);
 }
 
 #[test]
 fn an_odd_viewport_floors_its_centre_line_the_same_way_for_both_spacers() {
-    // The two spacers plus the anchor's own height have to add back up to the
-    // viewport, which only holds if both floor the half the same way.
     let viewport = 201.0;
     let height = 40.0;
     let leading = leading_auto_centring_spacer(viewport, height * 0.5, 0.0);
@@ -74,8 +57,6 @@ fn a_wear_grid_takes_a_font_scale_curve_rather_than_a_bare_multiplier() {
 
 #[test]
 fn the_colour_solver_answers_grey_for_a_request_with_no_chroma() {
-    // With no chroma the hue cannot matter: every hue has to land on the same
-    // neutral, or a palette's greys drift with whatever hue produced them.
     let first = hct_solve(0.0, 0.0, 50.0);
     let second = hct_solve(180.0, 0.0, 50.0);
     assert_eq!(first, second);
@@ -99,9 +80,6 @@ fn the_colour_solver_answers_a_brighter_colour_for_a_higher_lightness() {
 
 #[test]
 fn a_modifier_records_the_locals_it_provides_and_consumes() {
-    // Both halves build a chain; what is asserted is that neither drops the
-    // callback it was handed, which would leave a consumer silently reading a
-    // default forever.
     run_test_composition(|| {
         let key = cranpose_ui::ModifierLocalKey::new(|| 0u32);
         let modifier = Modifier::empty()
@@ -157,9 +135,6 @@ fn safe_area_padding_is_recorded_on_the_chain() {
 fn window_insets_are_readable_inside_a_composition() {
     run_test_composition(|| {
         let insets = cranpose_ui::safe_area::window_insets();
-        // With no host reporting insets every edge is zero; what must not
-        // happen is a negative inset, which would grow the content past the
-        // window rather than inside it.
         let edges = insets.combined();
         assert!(edges.top >= 0.0 && edges.bottom >= 0.0);
         assert!(edges.left >= 0.0 && edges.right >= 0.0);

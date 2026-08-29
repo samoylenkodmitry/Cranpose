@@ -18,26 +18,17 @@ thread_local! {
 
 fn expected_layout_counts(depth: usize, horizontal: bool) -> (usize, usize) {
     if depth <= 1 {
-        // At depth 1: Column contains only Text (no inner container).
-        // Text is now LayoutNodeKind::Layout, so it's 1 layout child.
-        // Column has 1 child, not 2, so two_child_count = 0.
         return (1, 0);
     }
     let (left_total, left_two) = expected_layout_counts(depth - 1, !horizontal);
     let (right_total, right_two) = expected_layout_counts(depth - 1, !horizontal);
     if horizontal {
-        // Structure: Column { Text, Row { child, child } }
-        // Column has 2 layout children: Text + Row
-        // Row has 2 layout children: 2 recursive children
-        let total = 1 + 1 + left_total + right_total; // column + row + children
-        let two = 1 + 1 + left_two + right_two; // column has 2 children, row has 2 children
+        let total = 1 + 1 + left_total + right_total;
+        let two = 1 + 1 + left_two + right_two;
         (total, two)
     } else {
-        // Structure: Column { Text, Column { child, child } }
-        // Outer Column has 2 layout children: Text + inner Column
-        // Inner Column has 2 layout children: 2 recursive children
-        let total = 1 + left_total + right_total; // outer column only (inner column counted in children)
-        let two = 1 + 1 + left_two + right_two; // outer column has 2 children, inner column has 2 children
+        let total = 1 + left_total + right_total;
+        let two = 1 + 1 + left_two + right_two;
         (total, two)
     }
 }
@@ -525,7 +516,6 @@ fn tab_switching_layout_pass_handles_conditional_nodes() {
         .render(key, &mut render)
         .expect("initial render");
 
-    // Collapse the conditional branch, then switch tabs.
     progress.set_value(0.0);
     composition
         .process_invalid_scopes()
@@ -536,7 +526,6 @@ fn tab_switching_layout_pass_handles_conditional_nodes() {
         .render(key, &mut render)
         .expect("render inactive summary tab");
 
-    // Update progress while the tab is hidden, simulating async state changes.
     progress.set_value(0.55);
     composition
         .process_invalid_scopes()
@@ -547,7 +536,6 @@ fn tab_switching_layout_pass_handles_conditional_nodes() {
         .render(key, &mut render)
         .expect("render progress tab again");
 
-    // Layout should succeed without missing node errors.
     let root = composition
         .root()
         .expect("composition should have a root node");
@@ -940,7 +928,6 @@ fn tab_switching_node_vec_does_not_grow_unboundedly() {
     let key = location_key(file!(), line!(), column!());
     let mut render = make_tab_renderer(active_tab, progress);
 
-    // Initial render + warmup cycle
     composition.render(key, &mut render).expect("initial");
     active_tab.set_value(1);
     while composition.process_invalid_scopes().expect("switch") {}
@@ -951,7 +938,6 @@ fn tab_switching_node_vec_does_not_grow_unboundedly() {
     let baseline_capacity = composition.applier_mut().capacity();
     let baseline_slots = composition.debug_dump_slot_entries().len();
 
-    // Run many cycles
     for _ in 0..50 {
         active_tab.set_value(1);
         while composition.process_invalid_scopes().expect("to tab 1") {}
@@ -967,7 +953,6 @@ fn tab_switching_node_vec_does_not_grow_unboundedly() {
         baseline_active, final_active,
         "active node count should be stable across tab cycles"
     );
-    // Node capacity should not grow more than 2x from baseline
     assert!(
         final_capacity <= baseline_capacity * 2,
         "node vec capacity grew from {} to {} ({:.1}x) over 50 cycles - indicates unbounded growth",
@@ -975,7 +960,6 @@ fn tab_switching_node_vec_does_not_grow_unboundedly() {
         final_capacity,
         final_capacity as f64 / baseline_capacity as f64,
     );
-    // Slot count should not grow significantly
     assert!(
         final_slots <= baseline_slots + 10,
         "slot count grew from {} to {} over 50 cycles - indicates unbounded slot growth",

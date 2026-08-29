@@ -1,10 +1,3 @@
-//! Regression test for pointer-driven gradient after tab switching.
-//!
-//! Scenario:
-//! 1. Switch to CompositionLocal tab and back to Counter App.
-//! 2. Move cursor over the pointer-reactive area.
-//! 3. Ensure the "Pointer:" coordinates update after moves.
-
 use std::time::Duration;
 
 use cranpose::{AppLauncher, Robot};

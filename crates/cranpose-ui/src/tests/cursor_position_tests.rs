@@ -1,5 +1,3 @@
-//! Tests for cursor draw command position in text fields.
-
 use std::{
     hash::{Hash, Hasher},
     sync::Arc,
@@ -22,8 +20,6 @@ fn with_test_runtime<T>(f: impl FnOnce() -> T) -> T {
     f()
 }
 
-/// Records a draw command into a fresh consumer-owned scope, the way the
-/// renderers do, and returns what it recorded.
 fn record(
     func: &crate::draw::DrawCommandFn,
     size: crate::modifier::Size,
@@ -93,7 +89,6 @@ fn text_field_semantics_expose_editable_selection_state() {
     });
 }
 
-/// Test that cursor draw command is created when text field is focused.
 #[test]
 fn cursor_draw_command_created_when_focused() {
     let _app_context = crate::render_state::app_context_test_scope();
@@ -102,10 +97,8 @@ fn cursor_draw_command_created_when_focused() {
         let style = TextStyle::default();
         let chain = focused_text_field_chain(state, style);
 
-        // Collect slices - this should create cursor draw command
         let slices = collect_modifier_slices(&chain);
 
-        // There should be at least one draw command (the cursor)
         assert!(
             !slices.draw_commands().is_empty(),
             "Expected cursor draw command when text field is focused"
@@ -113,13 +106,11 @@ fn cursor_draw_command_created_when_focused() {
     });
 }
 
-/// Test that cursor x position matches the width of text before cursor.
 #[test]
 fn cursor_x_position_matches_text_width() {
     let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
         let state = TextFieldState::new("Hello");
-        // Cursor should be at end (position 5)
         assert_eq!(state.selection().start, 5);
 
         let style = TextStyle::default();
@@ -127,7 +118,6 @@ fn cursor_x_position_matches_text_width() {
 
         let slices = collect_modifier_slices(&chain);
 
-        // Execute the draw command to get the primitives
         let size = crate::modifier::Size {
             width: 200.0,
             height: 40.0,
@@ -135,9 +125,6 @@ fn cursor_x_position_matches_text_width() {
         let draw_commands = slices.draw_commands();
         assert!(!draw_commands.is_empty());
 
-        // Execute the field's OVERLAY command (the caret layer): the field
-        // now also registers a Behind command for the selection highlight,
-        // so pick the overlay explicitly instead of assuming index 0.
         let primitives = draw_commands
             .iter()
             .find_map(|command| match command {
@@ -148,13 +135,11 @@ fn cursor_x_position_matches_text_width() {
 
         assert!(!primitives.is_empty(), "Expected cursor primitive");
 
-        // Get the cursor rect
         let cursor_rect = match &primitives[0] {
             cranpose_ui_graphics::DrawPrimitive::Rect { rect, .. } => rect,
             _ => panic!("Expected Rect primitive for cursor"),
         };
 
-        // Expected cursor x = width of "Hello"
         let expected_x =
             crate::text::measure_text(&crate::text::AnnotatedString::from("Hello"), &style).width;
 
@@ -167,7 +152,6 @@ fn cursor_x_position_matches_text_width() {
     });
 }
 
-/// Test that cursor position is 0 for empty text.
 #[test]
 fn cursor_at_start_for_empty_text() {
     let _app_context = crate::render_state::app_context_test_scope();
@@ -204,7 +188,6 @@ fn cursor_at_start_for_empty_text() {
     });
 }
 
-/// Test that selection draw command is created when text is selected.
 #[test]
 fn selection_draw_command_created_when_selected() {
     let _app_context = crate::render_state::app_context_test_scope();
@@ -226,7 +209,6 @@ fn selection_draw_command_created_when_selected() {
             height: 40.0,
         };
 
-        // Get the Behind command (selection)
         let primitives = match &draw_commands[0] {
             crate::DrawCommand::Behind(func) => record(func, size),
             crate::DrawCommand::Overlay(func) => record(func, size),
@@ -235,7 +217,6 @@ fn selection_draw_command_created_when_selected() {
 
         assert!(!primitives.is_empty(), "Expected selection primitive");
 
-        // Selection width should match width of "Hello"
         let expected_width =
             crate::text::measure_text(&crate::text::AnnotatedString::from("Hello"), &style).width;
         let selection_rect = primitives.iter().find_map(|primitive| {
@@ -256,7 +237,6 @@ fn selection_draw_command_created_when_selected() {
     });
 }
 
-/// Test that cursor Y position is at 0 without any padding.
 #[test]
 fn cursor_y_position_at_zero_without_padding() {
     let _app_context = crate::render_state::app_context_test_scope();
@@ -271,7 +251,6 @@ fn cursor_y_position_at_zero_without_padding() {
             height: 40.0,
         };
 
-        // Get last command which should be cursor
         let cursor_cmd = slices.draw_commands().last().unwrap();
         let primitives = match cursor_cmd {
             crate::DrawCommand::Overlay(func) => record(func, size),
@@ -280,7 +259,6 @@ fn cursor_y_position_at_zero_without_padding() {
         };
 
         if primitives.is_empty() {
-            // Cursor might be in blink-off phase, that's ok
             return;
         }
 
@@ -289,7 +267,6 @@ fn cursor_y_position_at_zero_without_padding() {
             _ => panic!("Expected Rect"),
         };
 
-        // Without padding, Y should be at 0
         assert!(
             cursor_rect.y.abs() < 0.1,
             "Cursor y should be 0 without padding, got {}",
@@ -297,10 +274,6 @@ fn cursor_y_position_at_zero_without_padding() {
         );
     });
 }
-
-// ============================================================================
-// Horizontal pan (single-line cursor-follow scrolling) and clipping tests
-// ============================================================================
 
 use crate::text_field_modifier_node::{compute_horizontal_scroll_offset, intersect_rect};
 
@@ -324,9 +297,6 @@ fn focused_single_line_chain(state: TextFieldState, style: TextStyle) -> Modifie
     chain
 }
 
-/// Tap-count classification drives the selection through the real pointer
-/// handler: one tap places the cursor, two select the word under the tap, and
-/// three select its line/paragraph.
 #[test]
 fn tap_count_selects_cursor_word_and_line() {
     use cranpose_foundation::{
@@ -346,7 +316,6 @@ fn tap_count_selects_cursor_word_and_line() {
             .pointer_input_handler()
             .expect("pointer handler");
 
-        // Tap at the x of the middle of "world" so the offset lands inside it.
         let tap_x =
             crate::text::measure_text(&crate::text::AnnotatedString::from("hello wor"), &style)
                 .width;
@@ -359,7 +328,6 @@ fn tap_count_selects_cursor_word_and_line() {
             ));
         };
 
-        // Single tap: collapsed cursor inside "world".
         tap();
         let single = state.selection();
         assert!(single.collapsed(), "single tap must collapse the selection");
@@ -368,11 +336,9 @@ fn tap_count_selects_cursor_word_and_line() {
             "single tap must land inside 'world', got {single:?}"
         );
 
-        // Second tap (same spot, immediately): selects the word "world".
         tap();
         assert_eq!(state.selection(), TextRange::new(6, 11));
 
-        // Third tap: selects the whole first line (up to the newline).
         tap();
         assert_eq!(state.selection(), TextRange::new(0, 11));
 
@@ -397,13 +363,11 @@ fn run_field_draw(
         .collect()
 }
 
-/// Pan-offset math keeps the cursor in view at both ends of the text.
 #[test]
 fn horizontal_scroll_offset_math_keeps_cursor_visible() {
     let viewport = 100.0;
     let text_width = 400.0;
 
-    // Cursor past the right edge: pan so the cursor sits at the right edge.
     let offset = compute_horizontal_scroll_offset(0.0, 400.0, text_width, viewport);
     assert!(
         (offset - (400.0 - viewport + CURSOR_WIDTH)).abs() < 0.01,
@@ -412,11 +376,9 @@ fn horizontal_scroll_offset_math_keeps_cursor_visible() {
     let cursor_in_viewport = 400.0 - offset;
     assert!(cursor_in_viewport >= 0.0 && cursor_in_viewport + CURSOR_WIDTH <= viewport);
 
-    // Cursor within the visible window: offset must not move.
     let stable = compute_horizontal_scroll_offset(offset, 350.0, text_width, viewport);
     assert_eq!(stable, offset, "offset must be stable while cursor visible");
 
-    // Cursor moved left of the visible window: pan back so it sits at the left edge.
     let left = compute_horizontal_scroll_offset(offset, 50.0, text_width, viewport);
     assert!(
         (left - 50.0).abs() < 0.01,
@@ -424,29 +386,23 @@ fn horizontal_scroll_offset_math_keeps_cursor_visible() {
     );
     assert!((50.0 - left) >= 0.0 && (50.0 - left) + CURSOR_WIDTH <= viewport);
 
-    // Cursor at the very start: offset returns to zero.
     let start = compute_horizontal_scroll_offset(left, 0.0, text_width, viewport);
     assert_eq!(start, 0.0, "cursor at text start must fully pan back");
 
-    // Text narrower than the viewport: never pans.
     assert_eq!(
         compute_horizontal_scroll_offset(37.0, 40.0, 60.0, viewport),
         0.0
     );
 
-    // Offset clamps to the scrollable range even from a stale value.
     let clamped = compute_horizontal_scroll_offset(1000.0, 200.0, text_width, viewport);
     assert!(clamped <= text_width + CURSOR_WIDTH - viewport + 0.01);
 
-    // Degenerate viewport is a no-op.
     assert_eq!(
         compute_horizontal_scroll_offset(10.0, 50.0, 400.0, 0.0),
         0.0
     );
 }
 
-/// Dragging a selection handle past the visible window auto-pans the field so
-/// the dragged edge stays in view, reusing the same cursor-follow pan resolver.
 #[test]
 fn handle_drag_auto_pans_to_keep_dragged_edge_visible() {
     use crate::text_selection::{HandleKind, selection_after_handle_drag};
@@ -454,8 +410,6 @@ fn handle_drag_auto_pans_to_keep_dragged_edge_visible() {
     let viewport = 100.0;
     let text_width = 400.0;
 
-    // Drag the end handle to a text offset whose x sits well past the right
-    // edge: the pan advances so the dragged edge lands at the right edge.
     let dragged_edge_x = 360.0;
     let panned = compute_horizontal_scroll_offset(0.0, dragged_edge_x, text_width, viewport);
     let edge_in_viewport = dragged_edge_x - panned;
@@ -464,11 +418,9 @@ fn handle_drag_auto_pans_to_keep_dragged_edge_visible() {
         "dragged edge must be visible after auto-pan, got {edge_in_viewport}"
     );
 
-    // The selection math keeps the fixed (start) edge and extends to the drag.
     let (min, max) = selection_after_handle_drag(HandleKind::SelectionEnd, 2, 40, 64);
     assert_eq!((min, max), (2, 40));
 
-    // Dragging the same handle back before the visible window pans back to it.
     let back_edge_x = 20.0;
     let panned_back = compute_horizontal_scroll_offset(panned, back_edge_x, text_width, viewport);
     assert!(
@@ -485,7 +437,6 @@ fn intersect_rect_clips_to_bounds() {
         width: 100.0,
         height: 40.0,
     };
-    // Fully inside: unchanged.
     let inner = cranpose_ui_graphics::Rect {
         x: 10.0,
         y: 5.0,
@@ -493,7 +444,6 @@ fn intersect_rect_clips_to_bounds() {
         height: 10.0,
     };
     assert_eq!(intersect_rect(inner, bounds), Some(inner));
-    // Overhanging the right edge: clamped.
     let overhang = cranpose_ui_graphics::Rect {
         x: 90.0,
         y: 0.0,
@@ -503,7 +453,6 @@ fn intersect_rect_clips_to_bounds() {
     let clipped = intersect_rect(overhang, bounds).expect("clipped rect");
     assert_eq!(clipped.x, 90.0);
     assert_eq!(clipped.width, 10.0);
-    // Fully outside: dropped.
     let outside = cranpose_ui_graphics::Rect {
         x: 150.0,
         y: 0.0,
@@ -513,8 +462,6 @@ fn intersect_rect_clips_to_bounds() {
     assert_eq!(intersect_rect(outside, bounds), None);
 }
 
-/// A single-line field with text wider than the viewport pans so the cursor
-/// (at the end of the text) stays visible at the right edge.
 #[test]
 fn single_line_field_pans_to_keep_cursor_visible() {
     let _app_context = crate::render_state::app_context_test_scope();
@@ -531,7 +478,6 @@ fn single_line_field_pans_to_keep_cursor_visible() {
             "test precondition: text must be wider than the field"
         );
 
-        // Cursor is placed at the end of the text by default.
         let state = TextFieldState::new(LONG_TEXT);
         let chain = focused_single_line_chain(state, style);
         let primitives = run_field_draw(&chain, size);
@@ -548,8 +494,6 @@ fn single_line_field_pans_to_keep_cursor_visible() {
             })
             .expect("cursor rect must be drawn");
 
-        // The cursor must sit at the right edge of the viewport, not at
-        // text_width (which lies far outside the field).
         assert!(
             cursor_rect.x + cursor_rect.width <= size.width + 0.01,
             "cursor must stay inside the field, got x={}",
@@ -562,7 +506,6 @@ fn single_line_field_pans_to_keep_cursor_visible() {
             size.width
         );
 
-        // The node reports the pan offset that renderers use to shift glyphs.
         let node = chain
             .node::<TextFieldModifierNode>(0)
             .expect("text field node");
@@ -574,7 +517,6 @@ fn single_line_field_pans_to_keep_cursor_visible() {
     });
 }
 
-/// Moving the cursor back to the start pans the text fully back.
 #[test]
 fn single_line_field_pans_back_when_cursor_moves_to_start() {
     let _app_context = crate::render_state::app_context_test_scope();
@@ -587,7 +529,6 @@ fn single_line_field_pans_back_when_cursor_moves_to_start() {
         let state = TextFieldState::new(LONG_TEXT);
         let chain = focused_single_line_chain(state, style);
 
-        // First draw: cursor at end, field pans right.
         let _ = run_field_draw(&chain, size);
         {
             let node = chain
@@ -596,7 +537,6 @@ fn single_line_field_pans_back_when_cursor_moves_to_start() {
             assert!(node.scroll_offset() > 0.0, "expected initial pan");
         }
 
-        // Move the cursor to the start and draw again.
         state.edit(|buffer| buffer.place_cursor_at_start());
         let primitives = run_field_draw(&chain, size);
 
@@ -624,8 +564,6 @@ fn single_line_field_pans_back_when_cursor_moves_to_start() {
     });
 }
 
-/// Selecting text that extends beyond the viewport must not draw selection
-/// rectangles outside the field bounds.
 #[test]
 fn selection_primitives_clipped_to_field_bounds() {
     let _app_context = crate::render_state::app_context_test_scope();
@@ -635,8 +573,6 @@ fn selection_primitives_clipped_to_field_bounds() {
             width: 80.0,
             height: 40.0,
         };
-        // Select the entire long text; unclipped, the highlight would extend
-        // far past the field's right edge.
         let state = TextFieldState::with_selection(LONG_TEXT, TextRange::new(0, LONG_TEXT.len()));
         let chain = focused_single_line_chain(state, style);
         let primitives = run_field_draw(&chain, size);
@@ -659,8 +595,6 @@ fn selection_primitives_clipped_to_field_bounds() {
     });
 }
 
-/// Multi-line fields do not pan; only single-line fields expose a pan
-/// resolver for the renderer to shift text glyphs.
 #[test]
 fn only_single_line_fields_expose_pan_resolver() {
     let _app_context = crate::render_state::app_context_test_scope();
@@ -672,8 +606,6 @@ fn only_single_line_fields_expose_pan_resolver() {
         let resolver = single_slices
             .text_pan_resolver()
             .expect("single-line field exposes a pan resolver");
-        // The resolver reports the offset for a given viewport width and
-        // keeps the node's stored offset in sync.
         let offset = resolver(80.0);
         assert!(offset > 0.0, "long text must pan, got {offset}");
 

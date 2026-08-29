@@ -1,6 +1,3 @@
-//! A popup menu that morphs out of its anchor: the glass bubble springs from
-//! the anchor corner while its items fade in (the WWDC "Show" menu).
-
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
@@ -132,7 +129,6 @@ impl LiquidDropdownMenuSpec {
     }
 }
 
-/// One row a menu declares: what it draws, and what a tap on it does.
 #[derive(Clone)]
 struct LiquidMenuEntry {
     item: LiquidMenuItem,
@@ -180,7 +176,6 @@ impl LiquidMenuScope {
     }
 }
 
-/// Runs `content` and returns the rows it declared.
 fn collect_entries(content: impl FnOnce(&LiquidMenuScope)) -> Vec<LiquidMenuEntry> {
     ScopeContent::collect(
         |entries| LiquidMenuScope {
@@ -234,10 +229,6 @@ impl LiquidMenuSpec {
 }
 
 const MENU_WIDTH: f32 = 250.0;
-/// Headroom around the glass node for the card's drop shadow: the shadow
-/// renders inside the node surface, so without this pad its blur cuts to
-/// a hard-edged block at the node bounds (user-circled at the collapse's
-/// 2275ms).
 const MENU_SHADOW_PAD: f32 = 48.0;
 const MENU_RADIUS: f32 = 32.0;
 const MENU_GROW_DELAY: f32 = 0.050;
@@ -245,10 +236,6 @@ const MENU_SOURCE_SEPARATE_END: f32 = 0.06;
 const MENU_CARD_WIDTH_GROW_START: f32 = 0.16;
 const MENU_CARD_HEIGHT_GROW_START: f32 = 0.12;
 const MENU_OVERSHOOT_SCALE: f32 = 0.30;
-// Spring clocks timed against the menu-open sheet: the reference droplet is
-// still circular at 166 ms, a soft blur at 400 ms and crisp near 533-600 ms;
-// 120/50 had ours fully crisp by ~300-400 ms (~1.4x fast — spring time goes
-// as 1/sqrt(k), so both halve).
 const MENU_GROW_STIFFNESS: f32 = 62.0;
 const MENU_REVEAL_STIFFNESS: f32 = 26.0;
 const MENU_WIDTH_EASE_POWER: f32 = 4.5;
@@ -259,18 +246,11 @@ const MENU_VERTICAL_REBOUND: f32 = 18.0;
 const MENU_VERTICAL_REBOUND_END: f32 = 0.70;
 const MENU_SOURCE_HEIGHT_RATIO: f32 = 0.86;
 const MENU_SOURCE_TARGET_Y_PROGRESS: f32 = 0.0;
-/// How far the card's top edge sits below the anchor's top: the settled menu
-/// swallows the anchor button ENTIRELY (the reference "…" disappears under
-/// the glass, reading as a smudge; only mid-flight does its bump ride the
-/// droplet edge).
 const ANCHOR_OVERLAP: f32 = 0.0;
 const ROW_PADDING_X: f32 = 20.0;
 const ROW_PADDING_Y: f32 = 9.25;
-/// Horizontal inset of the expanded accordion header's chip from the panel
-/// edges (menu-expand f_045).
 const CHIP_INSET_X: f32 = 10.0;
 const MENU_CONTENT_INSET_Y: f32 = 9.5;
-/// Width reserved for the leading checkmark column when any item is checkable.
 const CHECK_COLUMN: f32 = 24.0;
 const ICON_SIZE: f32 = 24.0;
 const ICON_GAP: f32 = 12.0;
@@ -651,19 +631,11 @@ fn menu_morph_geometry(
         interpolate_menu_shape(start, target, phase.width, phase.height)
     };
     if expanded && phase.path >= MENU_SOURCE_SEPARATE_END {
-        // The droplet stays PINNED at its birth anchor while it swells
-        // (reference 66-166ms: the blob grows on the filter button) and
-        // only then descends to the panel position — a linear descent had
-        // it drifting low from the first frames.
         let descent = smoothstep(0.10, 0.90, phase.path);
         primary.center_y = source.center_y + (target.center_y - source.center_y) * descent;
         primary.center_y += menu_vertical_rebound(phase.path);
     }
     let blob_radius = primary.height * 0.5;
-    // The reference droplet keeps its capsule-fat corners through most of
-    // the growth (menu-open f_043..f_055: corners ~40-50% of height, edges
-    // bowed) and squares off only near settle — squaring at mid-path read
-    // as "just a rounded rectangle" (user feedback items 2/6b).
     let squareness = smoothstep(0.55, 0.88, phase.path);
     primary.radius = if !expanded {
         blob_radius
@@ -681,9 +653,6 @@ fn menu_morph_geometry(
 }
 
 fn menu_ellipse_blend(path: f32) -> f32 {
-    // The organic bow (SDF blended toward an ellipse) rides the WHOLE
-    // growth and releases only as the panel squares for settle — dying at
-    // 0.62 dropped the droplet into a rounded rectangle mid-flight.
     0.5 * smoothstep(0.06, 0.22, path) * (1.0 - smoothstep(0.62, 0.88, path))
 }
 
@@ -722,15 +691,8 @@ fn menu_absorbed_visual_phase(appear: f32, path: f32) -> MenuAbsorbedVisualPhase
     let shrink = smoothstep(0.0, 0.24, path);
     let base_scale = 1.0 - 0.25 * shrink;
     let stretch = smoothstep(0.30, 0.56, path);
-    // The neighbor stays fully readable past ~100ms of the open (menu-open
-    // sheet: the reference "…" is crisp at 66-100ms), dims to a ghost as
-    // the droplet thickens over it (~150-250ms on the grow spring), and
-    // melts away by ~350ms.
     let handoff = smoothstep(0.30, 0.55, appear);
     let readable_alpha = 1.0 + (0.40 - 1.0) * handoff;
-    // Once swallowed, the source is a chip-sized smudge the droplet's own
-    // frost dissolves — the reference shows only a faint ghost of the blue
-    // chip through the growing glass, never a hot stretched orb.
     MenuAbsorbedVisualPhase {
         foreground_alpha: readable_alpha * (1.0 - smoothstep(0.45, 0.85, path)),
         backdrop_alpha: 0.62 * smoothstep(0.45, 0.85, path),
@@ -763,8 +725,6 @@ fn menu_surface_phase(expanded: bool, appear: f32, path: f32) -> MenuSurfacePhas
     }
     if expanded {
         return MenuSurfacePhase {
-            // The primary is the anchor lobe. Adding a second full anchor at
-            // the same coordinates masks the recoil and makes it look static.
             anchor_presence: 0.0,
             glue: 0.0,
             wobble: 0.08 * activity,
@@ -1135,9 +1095,6 @@ pub fn LiquidMenu(
     let entries = Rc::new(collect_entries(content));
     let items: Vec<LiquidMenuItem> = entries.iter().map(|entry| entry.item.clone()).collect();
     let menu_width = spec.width;
-    // The menu outlives `expanded` by one collapse animation: dismissing
-    // deflates the droplet back into the anchor (the reference close morph)
-    // before the popup unmounts.
     let visible = remember(|| mutableStateOf(false)).with(|s| *s);
     if expanded && !visible.get() {
         visible.set(true);
@@ -1157,10 +1114,6 @@ pub fn LiquidMenu(
     let gesture_hover = (gesture_snapshot.active && gesture_snapshot.claimed)
         .then(|| gesture.item_at(gesture_snapshot.position, &items))
         .flatten();
-    // A continuous gesture HOLDING on an accordion row expands it without
-    // releasing (the reference single-gesture submenu): a dwell gate arms
-    // while the claimed gesture rests on a keeps-open row and fires its
-    // action once, keeping the stream alive.
     let dwell_gate = remember(|| {
         let runtime = cranpose_core::with_current_composer(|composer| composer.runtime_handle());
         Rc::new(RefCell::new(cranpose_animation::Animatable::new(
@@ -1211,11 +1164,6 @@ pub fn LiquidMenu(
         }
     }
 
-    // The droplet spring: opening uses the bouncy morph spring (visible size
-    // overshoot, the reference menu swells a few percent past its final width
-    // and relaxes); closing is a faster, non-bouncy suck-back.
-    // Open ≈400ms press→crisp with a soft overshoot (timed against the
-    // reference recording); close is a faster suck-back (~200ms).
     let grow = cranpose_animation::animate_float_as_state_with_initial(
         0.0,
         if expanded { 1.0 } else { 0.0 },
@@ -1226,9 +1174,6 @@ pub fn LiquidMenu(
         },
         "menu-grow",
     );
-    // Content reveal has its own critically damped clock: rows begin as
-    // smudges during growth and finish sharpening no later than shape settle.
-    // Closing snaps the blur back on fast.
     let reveal_anim = cranpose_animation::animate_float_as_state_with_initial(
         0.0,
         if expanded { 1.0 } else { 0.0 },
@@ -1239,9 +1184,6 @@ pub fn LiquidMenu(
         },
         "menu-reveal",
     );
-    // Body-level read: each animation frame recomposes this menu, which
-    // re-registers fresh popup content (see `Popup`), driving the morph.
-    // NOT clamped at 1 — the spring's overshoot is the size overshoot.
     let appear = grow.get().max(0.0);
     let reveal = reveal_anim.get().clamp(0.0, 1.0);
     if !expanded && appear < 0.02 {
@@ -1249,15 +1191,9 @@ pub fn LiquidMenu(
         return;
     }
 
-    // The node spans from the anchor's top; ANCHOR_OVERLAP places the card's
-    // top edge so the settled glass swallows the anchor button entirely.
     let anchor_zone = anchor.height * ANCHOR_OVERLAP;
     let node_size =
         remember(|| Rc::new(Cell::new(cranpose_ui_graphics::Size::ZERO))).with(Rc::clone);
-    // Accordion: swapping `items` while the menu is open morphs the surface
-    // to its new measured size in place (the reference expand grows the
-    // container with overshoot while the incoming rows materialize). The
-    // resize spring runs 0 -> 1 from the previous measured height.
     let resize_anim = remember(|| {
         let runtime = cranpose_core::with_current_composer(|composer| composer.runtime_handle());
         Rc::new(RefCell::new(cranpose_animation::Animatable::new(
@@ -1296,12 +1232,6 @@ pub fn LiquidMenu(
         }
     }
     let resize_state = resize_anim.borrow().state();
-    // Right-align the card under the anchor (menus morph out of trailing
-    // buttons), staying on-screen for anchors near the right edge. The host
-    // renders the outside-tap scrim only while the menu is interactive. The
-    // visual popup outlives `expanded` for its close morph, but its modal hit
-    // surface must disappear immediately or a suspended screen can restore an
-    // invisible scrim that absorbs the user's next action.
     let scrim_dismiss = Rc::clone(&on_dismiss);
     PopupDismissableWhen(
         expanded,
@@ -1320,10 +1250,6 @@ pub fn LiquidMenu(
             let node_size = Rc::clone(&node_size);
             let gesture = gesture.clone();
             move || {
-                // Shapeshift (the WWDC menu-open keyframes): the anchor
-                // bubble inflates into the menu card as one droplet. The
-                // anchor starts as its birth lobe and melts flat into the
-                // settled edge.
                 let anchor_center = (
                     menu_width - anchor.width * 0.5 + MENU_SHADOW_PAD,
                     anchor.height * 0.5 + MENU_SHADOW_PAD,
@@ -1343,45 +1269,14 @@ pub fn LiquidMenu(
                     .filter_map(|source| MenuShape::from_window_rect(source.rect, node_origin))
                     .collect();
                 let morph_size = Rc::clone(&node_size);
-                // Muted vibrancy: the absorbed button must read as a soft
-                // smudge beneath the glass, not a hot saturated orb.
-                // Scheme-aware body. The dark reference menu is NOT a heavy
-                // dark tint: measured on menu-expand f_020, deep purple
-                // (58,17,58) beneath reads (155,76,154) and the white page
-                // reads (189) through the same panel — a strong tone
-                // compression toward a bright pivot (out=(in-0.60)*0.37+0.60)
-                // with vibrancy, so dark saturated backdrops BLOOM while
-                // light ones dim. The old 205-alpha tint painted that band
-                // instead of transmitting it.
                 let glass = Glass::regular()
                     .shape(LiquidShape::RoundedRect(MENU_RADIUS))
-                    // The frost foreground must be THIS menu's label color:
-                    // glass_effect_with re-resolves the theme inside the
-                    // popup content closure, which executes under the HOST
-                    // theme — a dark menu on a light app inherited the
-                    // light label (17,17,20) and the black-on-black
-                    // protection lifted the panel over its dark purple
-                    // header (+0.47 luma — the mauve band that defied every
-                    // tone calibration; identity-material probe matched the
-                    // frost arithmetic to 4 gray levels).
-                    // Strength 0.18: the reference body holds luma ~0.51
-                    // under white rows (menu-expand f_020 mid); 0.65 dimmed
-                    // it to 0.32.
                     .adaptive_frost(colors.label, 0.18)
-                    // iOS-scale frost: the reference panel smears the bright
-                    // magenta pill beneath into a full-width bloom band
-                    // (menu-expand f_020 top third) and washes mid-phase
-                    // backdrop text into uniform haze (menu-open T166) — a
-                    // 12dp blur kept both as localized ghosts.
                     .blur_radius(30.0)
                     .saturation(if colors.is_dark { 1.90 } else { 1.55 })
                     .lift(if colors.is_dark { 0.10 } else { 0.58 })
                     .highlight(0.14);
                 let glass = if colors.is_dark {
-                    // Two-point solve on menu-expand f_045: face over the
-                    // dark header (128,83,132) and over the white page
-                    // (90,81,91) — our slope matched but both endpoints sat
-                    // ~+45 luma; the absorption tint carries the drop.
                     glass
                         .contrast(0.37)
                         .tint(Color::from_rgba_u8(34, 10, 34, 146))
@@ -1390,10 +1285,6 @@ pub fn LiquidMenu(
                 };
                 let glass = glass
                     .shadow_style(GlassShadow::new(
-                        // Measured on menu-expand f_045: the page 15dp from
-                        // the panel edge falls 254 -> ~85 (alpha ~0.65) and
-                        // recovers fully ~150dp out — the dark presentation
-                        // carries a strong, wide ambient, not a card hint.
                         Color::BLACK.with_alpha(if colors.is_dark { 0.60 } else { 0.11 }),
                         if colors.is_dark { 32.0 } else { 26.0 },
                         if colors.is_dark { 10.0 } else { 8.0 },
@@ -1401,20 +1292,10 @@ pub fn LiquidMenu(
                     ))
                     .no_clip();
                 let resize_from = Rc::clone(&resize_from_h);
-                // The hovered/drag-through row lights the SURFACE via the
-                // touch glow (saturation + soft light under the finger),
-                // not just a flat recolor: composition publishes the active
-                // row's center; the glass reads it per frame.
                 let glow_point: Rc<Cell<Option<(f32, f32)>>> =
                     remember(|| Rc::new(Cell::new(None))).with(Rc::clone);
                 let glow_for_glass = Rc::clone(&glow_point);
                 let glass_node_origin = node_origin;
-                // The birth droplet reads as a FROSTED blob, not clear
-                // glass: the dark menu births bright gray-white milk
-                // (menu-expand 400-466ms), the light menu a cool frosted
-                // near-white so the droplet has presence over the white
-                // list content (menu-open f_043..f_055 is a distinct
-                // frosted blob, not transparent).
                 let birth_milk = Some(if colors.is_dark {
                     Color::from_rgba_u8(208, 204, 214, 240)
                 } else {
@@ -1429,9 +1310,6 @@ pub fn LiquidMenu(
                         let size = morph_size.get();
                         let measured_h =
                             (size.height - anchor_zone - MENU_SHADOW_PAD * 2.0).max(24.0);
-                        // Accordion resize: spring from the previous measured
-                        // height toward the new one; damping 0.78 gives the
-                        // reference's visible size overshoot.
                         let resize_t = resize_state.get();
                         let from_h =
                             (resize_from.get() - anchor_zone - MENU_SHADOW_PAD * 2.0).max(24.0);
@@ -1440,9 +1318,6 @@ pub fn LiquidMenu(
                         } else {
                             measured_h
                         };
-                        // Pillowy settled corners (the reference menu's radius
-                        // is ~0.26 of its height — far rounder than a desktop
-                        // popup).
                         let settle_radius = (menu_h * 0.32).clamp(26.0, MENU_RADIUS);
                         let target = MenuShape {
                             center_x: menu_width * 0.5 + MENU_SHADOW_PAD,
@@ -1467,8 +1342,6 @@ pub fn LiquidMenu(
                         };
                         let target = geometry.target;
                         let surface = menu_surface_phase(expanded, appear, t);
-                        // Growth direction from the anchor toward the card
-                        // center (node coords, y down).
                         let dir_x = target.center_x - start.center_x;
                         let dir_y = target.center_y - start.center_y;
                         let mut bulge_dir = dir_y.atan2(dir_x);
@@ -1499,20 +1372,8 @@ pub fn LiquidMenu(
                         }
                         let glue = surface.glue;
                         let activity = if expanded {
-                            // MILKY BIRTH: the droplet births as bright
-                            // frosted milk and the panel material matures in
-                            // as it grows (menu-expand target 400-533ms: a
-                            // gray-white blob first, the purple panel after;
-                            // menu-open births translucent). The old ramp
-                            // reached full material within ~30ms of the
-                            // touch, so the dark menu was born already dark.
                             smoothstep(0.0, 0.42, t)
                         } else {
-                            // The closing panel keeps its full dark material
-                            // until the geometry actually collapses (height
-                            // eases with pow 14, so the size only moves in
-                            // the last ~15% of the path). Draining from 0.65
-                            // left a full-size pale ghost through the close.
                             smoothstep(0.0, 0.12, t)
                         };
                         GlassDynamics {
@@ -1538,8 +1399,6 @@ pub fn LiquidMenu(
                     .width(menu_width + MENU_SHADOW_PAD * 2.0);
 
                 let has_checks = items.iter().any(|item| item.checked);
-                // Finger/pointer sliding through the menu highlights the row
-                // under it (release selects) — the iOS drag-through-menu.
                 let hovered = remember(|| mutableStateOf(Option::<usize>::None)).with(|s| *s);
                 let glow_row = gesture_hover.or(hovered.get());
                 glow_point.set(glow_row.map(|index| {
@@ -1580,23 +1439,10 @@ pub fn LiquidMenu(
                                         BoxSpec::default(),
                                         || {},
                                     );
-                                    // The card's drop shadow belongs to the menu rect
-                                    // only (the glass node also spans the anchor zone).
-                                    // Soft and wide: the reference menu shadow is a
-                                    // whisper. Content is absent on the initial stretch,
-                                    // appears as a smudge during growth, and sharpens by
-                                    // settle. While closing it rides the fast glass clock
-                                    // so it contracts with the panel.
                                     let content = menu_content_progress(expanded, appear, reveal);
-                                    // During an accordion resize the rows dip back
-                                    // into the smudge and re-materialize as the
-                                    // growth settles (reference expand frames).
                                     let resize_t = resize_state.get().clamp(0.0, 1.0);
                                     let content =
                                         content * (0.45 + 0.55 * smoothstep(0.35, 1.0, resize_t));
-                                    // Rows materialize from behind the glass and scale with
-                                    // the droplet from the anchor corner; the content lives
-                                    // on the growing surface instead of fading at full size.
                                     let content_scale = menu_content_scale(content);
                                     let content_blur = menu_content_blur(content);
                                     let content_translation_y = if expanded {
@@ -1648,9 +1494,6 @@ pub fn LiquidMenu(
                                                             items.iter().enumerate()
                                                         {
                                                             if item.section_start && index > 0 {
-                                                                // Whisper-subtle: the
-                                                                // reference surface reads
-                                                                // nearly seamless.
                                                                 let separator =
                                                                     colors.separator.with_alpha(
                                                                         colors.separator.a() * 0.22,
@@ -1681,11 +1524,6 @@ pub fn LiquidMenu(
                                                                 );
                                                                 continue;
                                                             }
-                                                            // An accordion header with its children
-                                                            // present is EXPANDED: the reference lifts
-                                                            // it onto an inset rounded chip
-                                                            // (menu-expand f_045: chip 145,120,146
-                                                            // over body 90,81,91 — white ~0.33).
                                                             let expanded_header = item.keeps_open
                                                                 && items
                                                                     .get(index + 1)
@@ -1775,14 +1613,6 @@ pub fn LiquidDropdownMenu<A>(
     );
 }
 
-/// What a tap on a row does, wherever the tap came from.
-///
-/// A row can be committed two ways: its own pointer handler sees the release,
-/// or a press that started on the trigger slides through the menu and lets go
-/// over it. Both mean the same thing — run the row's action, and dismiss
-/// unless the row asked to stay open — so both go through here. Written twice,
-/// the two paths can disagree about whether a `keeps_open` row closes the menu,
-/// which is precisely how a menu ends up dismissing a row that asked to stay.
 fn commit_menu_row(
     index: usize,
     keeps_open: bool,
@@ -1795,7 +1625,6 @@ fn commit_menu_row(
     }
 }
 
-/// Gray non-interactive section header, aligned with the icon column.
 fn menu_header_row(
     item: &LiquidMenuItem,
     typography: &crate::theme::LiquidTypography,
@@ -1820,7 +1649,6 @@ fn menu_header_row(
     });
 }
 
-/// One interactive menu row: [check][icon][label].
 #[allow(non_snake_case)]
 #[allow(clippy::too_many_arguments)]
 fn menu_item_row(
@@ -1894,18 +1722,7 @@ fn menu_item_row(
         })
         .draw_behind(move |scope| {
             if expanded_header {
-                // The expanded accordion header rides an inset chip: white
-                // lift over the panel body (and over the header bleed at the
-                // panel top it lands on the reference's muted lavender
-                // instead of raw gradient heat).
                 let chip = if colors.is_dark {
-                    // Brighter chip: the reference active header is a light
-                    // lavender band (menu-expand expand f_040 = 160,121,160);
-                    // 0.30 left it a dark 85,55,89. The active/expanded
-                    // header is a touched-up surface — it reads HDR-brighter.
-                    // Light MAGENTA-white (not neutral): a pure-white chip
-                    // read lavender (G too high); the reference band holds
-                    // its magenta (160,121,160).
                     Color::from_rgb_u8(255, 224, 248).with_alpha(0.52)
                 } else {
                     Color::BLACK.with_alpha(0.08)
@@ -1942,8 +1759,6 @@ fn menu_item_row(
             let label = label.clone();
             let subtitle = subtitle.clone();
             if has_checks {
-                // Leading checkmark column, reserved on every row so icons
-                // and labels align (the reference "Show" menu).
                 Box(
                     Modifier::empty().width(CHECK_COLUMN),
                     BoxSpec::default(),
@@ -1967,8 +1782,6 @@ fn menu_item_row(
                 ..typography.body.clone()
             };
             if let Some(subtitle) = subtitle {
-                // Two-line row: the reference sort/filter headers describe
-                // their current state in a gray second line.
                 let subtitle_style = TextStyle {
                     span_style: SpanStyle {
                         color: Some(secondary),
@@ -2102,9 +1915,6 @@ mod tests {
         assert!((104.0..=106.0).contains(&overshoot.height));
         assert_eq!(MENU_RADIUS, 32.0);
         assert!((0.045..=0.055).contains(&MENU_GROW_DELAY));
-        // Sheet-timed: the reference droplet is still circular at 166 ms and
-        // crisp near 533-600 ms — stiffness 120 had the panel formed by
-        // ~300 ms.
         assert!((55.0..=70.0).contains(&MENU_GROW_STIFFNESS));
     }
 
@@ -2143,8 +1953,6 @@ mod tests {
         for appear in [0.199_019, 0.296_780, 0.412_956, 0.539_174] {
             let geometry = menu_morph_geometry(true, appear, anchor, &absorbed, target);
             let phase = menu_geometry_phase(true, appear);
-            // The body descends on the eased path (pinned at the birth
-            // anchor while swelling), plus the shared rebound.
             let descent = smoothstep(0.10, 0.90, phase.path);
             let interpolated_y = source.center_y + (target.center_y - source.center_y) * descent;
             let expected_y = interpolated_y + menu_vertical_rebound(phase.path);
@@ -2206,8 +2014,6 @@ mod tests {
         assert!(menu_content_blur(birth) > 13.0);
         assert!((7.0..8.0).contains(&menu_content_blur(mid)));
         assert!(menu_content_blur(settle) < 0.5);
-        // Sheet-timed with the grow spring: rows sharpen no earlier than the
-        // reference's ~533-600 ms crisp point.
         assert!((20.0..=32.0).contains(&MENU_REVEAL_STIFFNESS));
         assert!((0.34..=0.37).contains(&menu_content_alpha(0.10)));
         assert!((0.79..=0.82).contains(&menu_content_alpha(0.62)));
@@ -2274,16 +2080,12 @@ mod tests {
         assert_eq!(source.foreground_alpha, 1.0);
         assert_eq!(source.backdrop_alpha, 0.0);
 
-        // Fully readable past ~100ms of the open (reference "…" is crisp
-        // at 66-100ms; the grow spring puts appear ~0.25 there).
         let crisp = menu_absorbed_visual_phase(0.20, 0.20);
         assert_eq!(crisp.foreground_alpha, 1.0);
         assert_eq!(crisp.backdrop_alpha, 0.0);
         assert_eq!(crisp.foreground_blur, 0.0);
         assert!((0.76..=0.78).contains(&crisp.scale_x));
         assert!((0.76..=0.78).contains(&crisp.scale_y));
-        // Ghosted to the resting 0.40 once the droplet thickens over it,
-        // before the melt band (path 0.45+) begins.
         let dimmed = menu_absorbed_visual_phase(0.60, 0.30);
         assert!((0.38..=0.42).contains(&dimmed.foreground_alpha));
 
@@ -2293,14 +2095,11 @@ mod tests {
         assert!((0.92..=0.97).contains(&melt.scale_y));
         assert!((0.87..=0.905).contains(&melt.scale_x));
 
-        // Mid-melt: the ghost is still fading (measured 220/255 glyph-min
-        // at 250ms on the 2x capture) and the backdrop smudge is rising.
         let smear = menu_absorbed_visual_phase(0.72, 0.69);
         assert!((0.94..=0.98).contains(&smear.scale_y));
         assert!((0.89..=0.91).contains(&smear.scale_x));
         assert!((0.10..=0.18).contains(&smear.foreground_alpha));
         assert!((0.36..=0.44).contains(&smear.backdrop_alpha));
-        // Early growth: readable ghost, no smudge yet.
         let transition = menu_absorbed_visual_phase(0.42, 0.382);
         assert!((0.60..=0.75).contains(&transition.foreground_alpha));
         assert_eq!(transition.backdrop_alpha, 0.0);
@@ -2361,7 +2160,6 @@ mod tests {
         let released = gesture.snapshot();
         assert!(!released.active);
         assert_eq!(released.release, Some((1, Point::new(40.0, 65.0))));
-        // A second lift without a new press cannot synthesize another action.
         gesture.release(Point::new(40.0, 65.0));
         assert_eq!(gesture.snapshot().release, released.release);
     }
@@ -2396,10 +2194,6 @@ mod tests {
 
     #[test]
     fn a_row_is_committed_exactly_once_per_tap() {
-        // Both ways a row can be committed — its own pointer handler, and a
-        // press that slid through the menu — run this one function, so a tap
-        // can dismiss at most once. Two copies of the rule are what let a
-        // dropdown dismiss on top of the menu's own dismissal.
         let dismissals = Rc::new(Cell::new(0usize));
         let on_item: Rc<dyn Fn(usize)> = Rc::new(|_| {});
         let on_dismiss: Rc<dyn Fn()> = {

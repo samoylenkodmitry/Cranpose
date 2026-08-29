@@ -9,12 +9,10 @@ use cranpose_ui::{
 fn test_lazy_column_reverse_layout() {
     let mut robot = create_headless_robot_test(800, 600, || {
         let state = rememberLazyListState();
-        // Enable reverse_layout
         let spec = LazyColumnSpec::default().reverse_layout(true);
 
         LazyColumn(Modifier::empty(), state, spec, |scope| {
             scope.items(3, |i| {
-                // Items: "Item 0", "Item 1", "Item 2"
                 Text(
                     format!("Item {}", i),
                     Modifier::empty(),
@@ -24,23 +22,8 @@ fn test_lazy_column_reverse_layout() {
         });
     });
 
-    // In a normal column:
-    // Item 0 is at Top
-    // Item 1 is below Item 0
-    // Item 2 is below Item 1
-
-    // In a reverse_layout column:
-    // Item 0 should be at Bottom
-    // Item 1 should be above Item 0
-    // Item 2 should be above Item 1
-
-    // Wait for layout
     robot.wait_for_idle();
 
-    // Robot finder API usage might need adjustment based on RobotTestRule
-    // robot.find_text("Item 0") -> robot.find_by_text("Item 0")
-
-    // Verify items exist and get current bounds sequentially to avoid multiple mutable borrows
     let rect0 = {
         let mut finder = robot.find_by_text("Item 0");
         finder.assert_exists();
@@ -62,10 +45,6 @@ fn test_lazy_column_reverse_layout() {
     println!("Item 0: {:?}", rect0);
     println!("Item 1: {:?}", rect1);
     println!("Item 2: {:?}", rect2);
-
-    // Verification: Item 0 (start of list) should be visually below Item 1
-    // Because "reverse" means the list starts from the bottom/end.
-    // So index 0 should have the largest Y coordinate (or be at the bottom).
 
     assert!(
         rect0.y > rect1.y,

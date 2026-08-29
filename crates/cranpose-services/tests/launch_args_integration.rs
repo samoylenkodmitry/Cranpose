@@ -60,8 +60,6 @@ fn integration_a_replacement_snapshot_is_observed_by_the_next_render() {
     set_platform_launch_args(debug_launch());
     assert_eq!(launch_args().int("ob_level"), Some(7));
 
-    // What Android's onNewIntent does: the whole snapshot is swapped, so the
-    // previous launch's arguments do not linger.
     set_platform_launch_args(Rc::new(LaunchArgs::new(
         [("ob_level".to_string(), LaunchArgValue::Int(9))],
         true,

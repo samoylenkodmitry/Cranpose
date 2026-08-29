@@ -1,10 +1,3 @@
-//! The audio and haptics surfaces as an application sees them: through the
-//! crate's public re-exports, inside a real composition.
-//!
-//! The unit tests inside the modules cover behaviour. These cover reachability
-//! — that every type an app needs is exported, and that an app with no backend
-//! installed composes and runs without panicking.
-
 use std::{cell::RefCell, rc::Rc};
 
 use cranpose_core::{Composition, MemoryApplier, location_key};
@@ -22,7 +15,6 @@ fn run_test_composition(build: impl FnMut()) {
         .expect("initial render succeeds");
 }
 
-/// A one-frame mono WAVE stream, so the bank has something real to decode.
 fn tiny_wav() -> Vec<u8> {
     let data = 0i16.to_le_bytes();
     let mut out = Vec::new();
@@ -115,7 +107,6 @@ fn integration_haptics_waveform_surface_is_reachable() {
     clear_platform_haptics();
     let haptics = default_haptics();
 
-    // The 21-distinct-feels case: short waveforms, each its own shape.
     let feels = [
         HapticPattern::new(&[0, 8], &[0, 60]).expect("light tick"),
         HapticPattern::new(&[0, 12, 8, 12], &[0, 180, 0, 90]).expect("double tap"),
@@ -130,7 +121,6 @@ fn integration_haptics_waveform_surface_is_reachable() {
     haptics.cancel();
     assert!(!haptics.has_amplitude_control());
 
-    // Mismatched lengths are an error, not a panic, and never reach a platform.
     assert_eq!(
         HapticPattern::new(&[0, 20, 40], &[0, 255]),
         Err(HapticError::LengthMismatch {

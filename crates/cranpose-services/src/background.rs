@@ -102,9 +102,6 @@ mod tests {
 
     #[test]
     fn registration_round_trips() {
-        // The lease count is one number for the process, and the media service
-        // takes a lease of its own while it plays. Tests that read it take
-        // turns, or each sees the other's leases as its own.
         let _services = crate::registry::test_service_guard();
         clear_platform_background_activity();
         struct Rec(AtomicBool);

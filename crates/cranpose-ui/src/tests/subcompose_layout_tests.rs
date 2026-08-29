@@ -104,18 +104,6 @@ fn measure_once(
     result
 }
 
-/// `SubcomposeMeasureScopeImpl::density()`/`font_scale()` used to read
-/// `composer_context::with_composer`, which panics with "no active composer"
-/// unless the thread-local composer stack was entered by `Composer::install`.
-/// The single production construction site happens to sit inside that install
-/// call, which is why the bug never surfaced there -- but nothing about the
-/// type made a second, non-installed construction site safe.
-///
-/// This constructs the scope directly, deliberately outside of
-/// `Composer::install`/`subcompose_slot_with_context`, and reads `density()`
-/// and `font_scale()` from it. Pre-fix this panics; post-fix it is a plain
-/// field read of the `Density` the scope was built with, so it cannot depend
-/// on -- or require -- an ambient composer.
 #[test]
 fn density_and_font_scale_do_not_require_an_active_composer() {
     assert!(

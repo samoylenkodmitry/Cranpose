@@ -63,7 +63,7 @@ fn animate_float_as_state_interpolates_over_time() {
         if !composition.should_render() {
             break;
         }
-        frame_time += 16_666_667; // ~60 FPS
+        frame_time += 16_666_667;
         runtime.drain_frame_callbacks(frame_time);
         let _ = composition
             .process_invalid_scopes()
@@ -222,10 +222,6 @@ fn remember_infinite_transition_retains_label() {
     assert_eq!(label, "demo_label");
 }
 
-/// Content that appears has to enter from somewhere. `animateFloatAsState`
-/// seeds itself at the target, so the first frame is already there and nothing
-/// animates; the with-initial form seeds at `initial` and animates toward the
-/// target, which is what makes a fade-in a fade rather than a pop.
 #[test]
 fn an_animation_with_an_initial_value_enters_from_it_rather_than_snapping() {
     let mut composition = Composition::new(MemoryApplier::new());
@@ -273,9 +269,6 @@ fn an_animation_with_an_initial_value_enters_from_it_rather_than_snapping() {
     );
 }
 
-/// `animateValue` is `animateFloat` for anything that interpolates. A control
-/// that pulses a colour or a size must not be made to drive a float and convert
-/// it by hand, which is where the two ends of the animation drift apart.
 #[test]
 fn infinite_transition_animates_any_interpolable_value() {
     let mut composition = Composition::new(MemoryApplier::new());
@@ -490,9 +483,6 @@ fn animation_type_delay_updates_tween_and_spring_specs() {
     ));
 }
 
-/// Drives an [`Animatable`] against a standalone composition's frame clock at
-/// ~60 FPS and samples the value after every frame. Returns (time_ns, value)
-/// pairs including the initial state at t=0.
 fn drive_spring(
     animatable: &Animatable<f32>,
     composition: &Composition<MemoryApplier>,
@@ -509,17 +499,12 @@ fn drive_spring(
     samples
 }
 
-/// A snap is what a control does when the value changed for a reason that is
-/// not motion — a list scrolled to a new item, a state restored, a gesture
-/// taking over. It has to land exactly, stop the animation that was running,
-/// and leave no velocity for the next one to inherit.
 #[test]
 fn snapping_lands_exactly_and_cancels_the_animation_that_was_running() {
     let composition: Composition<MemoryApplier> = Composition::new(MemoryApplier::new());
     let mut animatable = Animatable::new(0.0f32, composition.runtime_handle());
     animatable.animateTo(100.0, AnimationType::Spring(SpringSpec::default_spring()));
 
-    // Mid-flight, so there is something to cancel.
     let mid = drive_spring(&animatable, &composition, 3);
     let before = mid.last().expect("samples").1;
     assert!(
@@ -531,7 +516,6 @@ fn snapping_lands_exactly_and_cancels_the_animation_that_was_running() {
     assert_eq!(animatable.state().get(), 42.0);
     assert_eq!(animatable.target(), 42.0);
 
-    // Frames keep arriving; a cancelled animation must not move the value.
     let after = drive_spring(&animatable, &composition, 10);
     for (time, value) in after {
         assert_eq!(value, 42.0, "a snapped value moved at {time}ns");
@@ -546,9 +530,6 @@ fn spring_integrates_per_frame_delta_not_total_elapsed() {
 
     let samples = drive_spring(&animatable, &composition, 30);
 
-    // Critically damped, k=1500 (ω≈38.7): analytically x(50ms) ≈ 57.6 and
-    // x(100ms) ≈ 89.8. The old integrator re-simulated the TOTAL elapsed time
-    // every frame (compounding), reaching ≈90+ by the third frame.
     let at_50ms = samples
         .iter()
         .find(|(t, _)| *t >= 50_000_000)
@@ -568,8 +549,6 @@ fn spring_integrates_per_frame_delta_not_total_elapsed() {
 
 #[test]
 fn spring_retarget_preserves_value_space_velocity() {
-    // A soft spring (ω = √50 ≈ 7 rad/s) keeps its momentum phase long enough
-    // to observe across whole frames after the retarget.
     let soft = SpringSpec::new(1.0, 50.0);
     let composition: Composition<MemoryApplier> = Composition::new(MemoryApplier::new());
     let mut animatable = Animatable::new(0.0f32, composition.runtime_handle());
@@ -582,7 +561,6 @@ fn spring_retarget_preserves_value_space_velocity() {
         "mid-flight spring should carry substantial velocity, got {velocity_before}"
     );
 
-    // Retarget mid-flight: the physical velocity must carry over exactly.
     animatable.animateTo(-50.0, AnimationType::Spring(soft));
     let velocity_after = animatable.velocity();
     assert_eq!(
@@ -590,9 +568,6 @@ fn spring_retarget_preserves_value_space_velocity() {
         "retargeting must not rescale the in-flight velocity"
     );
 
-    // With positive carried velocity the value keeps rising briefly even
-    // though the new target lies below — the droplet overshoot that makes
-    // interrupted springs feel physical.
     let value_at_retarget = animatable.state().get();
     let runtime = composition.runtime_handle();
     runtime.drain_frame_callbacks(5 * 16_666_667);
@@ -607,11 +582,6 @@ fn spring_retarget_preserves_value_space_velocity() {
 
 #[test]
 fn spring_retargeted_every_frame_tracks_a_moving_target() {
-    // Continuous-gesture tracking: the target is retargeted before EVERY
-    // frame (a pointer move per frame). The spring must keep integrating
-    // real frame deltas across retargets — resetting the frame chain on
-    // retarget makes every frame a dt=0 no-op and the value freezes until
-    // the finger stops (the live loupe-follow bug).
     let spec = SpringSpec::new(1.0, 1050.0);
     let composition: Composition<MemoryApplier> = Composition::new(MemoryApplier::new());
     let mut animatable = Animatable::new(0.0f32, composition.runtime_handle());
@@ -620,7 +590,7 @@ fn spring_retargeted_every_frame_tracks_a_moving_target() {
     let mut frame_time = 0u64;
     let mut target = 0.0f32;
     for _ in 0..30 {
-        target += 10.0; // 600 units/s ramp
+        target += 10.0;
         let velocity = animatable.velocity();
         animatable.animate_to_with_velocity(target, velocity, AnimationType::Spring(spec));
         frame_time += 16_666_667;
@@ -628,14 +598,11 @@ fn spring_retargeted_every_frame_tracks_a_moving_target() {
     }
 
     let tracked = animatable.state().get();
-    // Steady-state ramp lag for critical damping is 2v/ω ≈ 37 units here;
-    // anything close to zero means the spring never integrated.
     assert!(
         tracked > target - 80.0,
         "spring must track a per-frame-retargeted ramp (target {target}, got {tracked})"
     );
 
-    // And once the target stops, it must settle there.
     let velocity = animatable.velocity();
     animatable.animate_to_with_velocity(target, velocity, AnimationType::Spring(spec));
     for _ in 0..60 {
@@ -654,9 +621,6 @@ fn animate_to_with_velocity_seeds_gesture_handoff() {
     let composition: Composition<MemoryApplier> = Composition::new(MemoryApplier::new());
     let mut animatable = Animatable::new(0.0f32, composition.runtime_handle());
 
-    // Fling released at 800 units/sec toward a spring anchored at 0: the value
-    // must first travel past the anchor (analytic peak v₀/(ω·e) ≈ 20.8 for
-    // ω = √200), then be pulled back.
     animatable.animate_to_with_velocity(
         0.0,
         800.0,
@@ -742,9 +706,6 @@ fn an_animatable_reports_the_spec_currently_driving_it() {
     let runtime = composition.runtime_handle();
     let mut animatable = Animatable::new(0.0f32, runtime);
 
-    // Whatever it was built with is what it reports until something else
-    // drives it. A stale answer here sends a caller's `animateTo` through the
-    // wrong physics.
     assert_eq!(animatable.animation_type(), AnimationType::default());
 
     let spring = AnimationType::Spring(SpringSpec::default());

@@ -1,10 +1,3 @@
-//! Composition tests for `LazyRow`, mirroring the coverage
-//! `lazy_list_viewport_tests.rs`/`lazy_list_recompose_tests.rs` give
-//! `LazyColumn`: items composed and measured against the viewport, item
-//! count driving scroll bounds through recomposition, and — the behavior
-//! unique to the horizontal orientation — rendered items actually moving
-//! along the x axis (not y) when the list is scrolled.
-
 use std::cell::RefCell;
 
 use cranpose_core::{Composition, MemoryApplier, MutableState, NodeId, location_key};
@@ -251,9 +244,6 @@ fn lazy_row_gesture_scroll_moves_rendered_items_along_the_horizontal_axis() {
     let initial_item_0_x = text_x(&initial_records, "Item 0");
     let initial_item_0_y = text_y(&initial_records, "Item 0");
 
-    // A delta smaller than one item's span (48px width + 8px spacing) keeps
-    // item 0 within the retained/composed window, so the assertion below
-    // exercises axis-correctness rather than virtualization edge cases.
     let list_state = LAST_LAZY_ROW_STATE.with(|cell| (*cell.borrow()).expect("state captured"));
     list_state.dispatch_scroll_delta(-40.0);
     measure_root(&mut composition, root, viewport);

@@ -996,9 +996,6 @@ impl Composer {
         self.apply_pending_commands()
     }
 
-    /// Thin monomorphic shim: the group machinery lives in
-    /// [`Self::with_group_in_active_pass_dyn`] so it is compiled once instead
-    /// of once per composable call site (real apps have thousands).
     fn with_group_in_active_pass<R>(
         &self,
         key: crate::slot::GroupKeySeed,
@@ -1013,9 +1010,6 @@ impl Composer {
         result.expect("group body must run exactly once")
     }
 
-    /// `inline(never)`: with fat LTO this single-caller body would otherwise
-    /// be inlined back into every monomorphic shim, recreating the per-call-site
-    /// code explosion this split exists to prevent.
     #[inline(never)]
     fn with_group_in_active_pass_dyn(
         &self,
@@ -1217,9 +1211,6 @@ impl Composer {
         parent_scope: Option<ScopeId>,
         subtree: crate::slot::DetachedSubtree,
     ) -> Result<(), NodeError> {
-        // Retention and disposal must preserve the slot lifecycle contract in
-        // docs/SLOT_TABLE_LIFECYCLE.md across the slot table, applier, and scope
-        // registry.
         let Some(root_key) = subtree.root_key_checked() else {
             log::error!("retention rejected detached subtree without a root group");
             self.dispose_detached_subtree_in_host(slots_host, subtree)?;
@@ -1350,10 +1341,6 @@ impl Composer {
         self.remember_at(crate::caller_location_key(), init)
     }
 
-    /// [`Composer::remember`] with an explicit source key, for hook wrappers
-    /// whose closures sever the `#[track_caller]` chain: capture
-    /// [`caller_location_key`](crate::caller_location_key) at the wrapper's
-    /// entry and pass it here, so every caller keeps its own slot.
     #[doc(hidden)]
     pub fn remember_at<T: 'static>(
         &self,
@@ -1799,9 +1786,6 @@ impl Composer {
         self.set_recompose_callback_boxed(Box::new(callback));
     }
 
-    /// Monomorphic core (`inline(never)` so fat LTO keeps one copy). The
-    /// generic entry point above would otherwise re-instantiate this observer
-    /// wiring for every composable call site.
     #[inline(never)]
     fn set_recompose_callback_boxed(&self, mut callback: Box<dyn FnMut(&Composer)>) {
         if let Some(scope) = self.current_recompose_scope() {
@@ -1837,9 +1821,6 @@ impl Composer {
         if provided.is_empty() {
             return f(self);
         }
-        // Only the last provider for a local is readable, so only it gets an
-        // entry: applying shadowed ones would leave same-identity siblings
-        // whose slots adopt each other when the list shrinks.
         let mut context = LocalContext::default();
         for value in provided.into_iter().rev() {
             if context.values.contains_key(value.key()) {
