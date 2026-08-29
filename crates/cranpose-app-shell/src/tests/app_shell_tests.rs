@@ -18,8 +18,8 @@ use cranpose_macros::composable;
 use cranpose_ui::{
     Alignment, BlendMode, Box, BoxSpec, Brush, Button, ButtonSpec, Color, Column, ColumnSpec,
     CornerRadii, HeadlessRenderer, IntrinsicSize, LazyColumn, LazyColumnSpec, LinearArrangement,
-    Modifier, PointerInputScope, Rect, RenderOp, Row, RowSpec, ScrollState, Size, Spacer, Text,
-    TextStyle, VerticalAlignment,
+    Modifier, PointerInputScope, Rect, RenderOp, Row, RowSpec, ScrollState, Size, Spacer,
+    SubcomposeLayoutScope, SubcomposeMeasureScope, Text, TextStyle, VerticalAlignment,
 };
 use cranpose_ui_graphics::{
     CompositingStrategy, DrawPrimitive, GraphicsLayer, Point, RenderEffect, RoundedCornerShape,
@@ -5164,6 +5164,127 @@ fn a_self_referential_size_report_panics_in_debug_instead_of_livelocking() {
     for _ in 0..200 {
         shell.update();
     }
+}
+
+thread_local! {
+    static CLEAN_SLOT_LIST_STATE: RefCell<Option<LazyListState>> = const { RefCell::new(None) };
+    static CLEAN_SLOT_COMPOSE_COUNT: Cell<u32> = const { Cell::new(0) };
+    static CLEAN_SLOT_MEASURE_COUNT: Cell<u32> = const { Cell::new(0) };
+}
+
+#[composable]
+fn app_shell_clean_slot_scroll_probe() {
+    cranpose_ui::SubcomposeLayout(
+        Modifier::empty().fill_max_size(),
+        move |scope, constraints| {
+            CLEAN_SLOT_MEASURE_COUNT.with(|count| count.set(count.get() + 1));
+            let width = constraints.max_width.max(constraints.min_width);
+            let height = constraints.max_height.max(constraints.min_height);
+            let nodes = scope.subcompose(cranpose_core::SlotId::new(0), move || {
+                CLEAN_SLOT_COMPOSE_COUNT.with(|count| count.set(count.get() + 1));
+                let list_state = rememberLazyListState();
+                CLEAN_SLOT_LIST_STATE.with(|slot| {
+                    *slot.borrow_mut() = Some(list_state);
+                });
+                LazyColumn(
+                    Modifier::empty().fill_max_size(),
+                    list_state,
+                    LazyColumnSpec::new(),
+                    |scope| {
+                        scope.items(80, |index| {
+                            Text(
+                                format!("Clean slot row {index}"),
+                                Modifier::empty().height(48.0),
+                                TextStyle::default(),
+                            );
+                        });
+                    },
+                );
+            });
+            let mut placements = Vec::with_capacity(nodes.len());
+            for node in nodes {
+                let placeable =
+                    scope.measure(node, cranpose_ui::Constraints::tight(width, height));
+                placements.push(cranpose_ui::Placement::new(placeable.node_id(), 0.0, 0.0, 0));
+            }
+            scope.layout(width, height, placements)
+        },
+    );
+}
+
+#[test]
+fn a_scroll_measure_repass_does_not_recompose_a_subcompose_slot_that_read_no_scrolled_state() {
+    let _guard = test_guard();
+    CLEAN_SLOT_LIST_STATE.with(|slot| slot.borrow_mut().take());
+    CLEAN_SLOT_COMPOSE_COUNT.with(|count| count.set(0));
+    CLEAN_SLOT_MEASURE_COUNT.with(|count| count.set(0));
+
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(
+        TestRenderer::default(),
+        root_key,
+        app_shell_clean_slot_scroll_probe,
+    );
+    shell.set_buffer_size(320, 480);
+    shell.set_viewport(320.0, 480.0);
+    for _ in 0..5 {
+        shell.update();
+        if !shell.needs_redraw() && !shell.composition.should_recompose() {
+            break;
+        }
+    }
+    let settled_composes = CLEAN_SLOT_COMPOSE_COUNT.with(Cell::get);
+    let settled_measures = CLEAN_SLOT_MEASURE_COUNT.with(Cell::get);
+    assert!(
+        settled_composes >= 1 && settled_measures >= 1,
+        "instrument dead: the probe never composed ({settled_composes}) or \
+         measured ({settled_measures}) its slot while settling"
+    );
+
+    let list_state = CLEAN_SLOT_LIST_STATE
+        .with(|slot| slot.borrow().as_ref().copied())
+        .expect("probe must expose its lazy list state");
+
+    for target in [4usize, 8, 12] {
+        list_state.scroll_to_item(target, 0.0);
+        for _ in 0..4 {
+            shell.update();
+            if !shell.needs_redraw() && !shell.has_active_animations() {
+                break;
+            }
+        }
+    }
+
+    let measures_after = CLEAN_SLOT_MEASURE_COUNT.with(Cell::get);
+    assert!(
+        measures_after > settled_measures,
+        "liveness: scrolling the list inside the slot must re-run the \
+         subcompose measure policy (settled at {settled_measures}, still \
+         {measures_after} after three scrolls) — if this fails the test no \
+         longer exercises the measure repass at all"
+    );
+    let layout_texts = layout_tree_texts(shell.layout_tree().expect("layout tree"));
+    assert!(
+        layout_texts.iter().any(|text| text == "Clean slot row 12"),
+        "liveness: the scroll must actually reach row 12 in the layout tree, \
+         got {layout_texts:?}"
+    );
+
+    let composes_after = CLEAN_SLOT_COMPOSE_COUNT.with(Cell::get);
+    assert_eq!(
+        composes_after, settled_composes,
+        "a scroll-driven measure repass recomposed a subcompose slot whose \
+         composition read none of the scrolled state: the slot content \
+         closure ran {} extra times for {} extra measure passes. Every such \
+         run is the per-pass compose walk over the slot's retained \
+         composition (measured at ~0.3ms per body-sized slot per pass on a \
+         Kirin 980, and paid by whichever layer owns the slot — see \
+         docs/subcompose_measure_cost.md). A measure pass over a slot with \
+         no invalidated scopes must reuse the retained slot roots without \
+         composing",
+        composes_after - settled_composes,
+        measures_after - settled_measures,
+    );
 }
 
 fn graph_scene_solid_rect_y(
