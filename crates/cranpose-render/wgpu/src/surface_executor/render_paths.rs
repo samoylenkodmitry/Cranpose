@@ -3848,13 +3848,14 @@ fn direct_shader_layer_composite(
 
 fn pending_shader_layer_composite_batch_items(
     pending: &[PendingShaderLayerComposite],
-) -> Vec<(usize, ShaderCompositeBatchItem<'_>)> {
+) -> Vec<(usize, usize, ShaderCompositeBatchItem<'_>)> {
     pending
         .iter()
         .map(|pending| {
             let source = pending.surface.target.target();
             (
                 pending.z_index,
+                pending.seq,
                 ShaderCompositeBatchItem {
                     source,
                     shader: &pending.shader,
@@ -3877,7 +3878,7 @@ fn shader_layer_composite_batch_items(
 ) -> Vec<ShaderCompositeBatchItem<'_>> {
     pending_shader_layer_composite_batch_items(pending)
         .into_iter()
-        .map(|(_, item)| item)
+        .map(|(_, _, item)| item)
         .collect()
 }
 
@@ -3958,12 +3959,13 @@ fn layer_surface_composite_batch_item(
 
 fn pending_layer_composite_batch_items(
     pending: &[PendingLayerComposite],
-) -> Vec<(usize, CompositeBatchItem<'_>)> {
+) -> Vec<(usize, usize, CompositeBatchItem<'_>)> {
     pending
         .iter()
         .map(|pending| {
             (
                 pending.z_index,
+                pending.seq,
                 layer_surface_composite_batch_item(pending)
                     .expect("pending layer composite must be batchable"),
             )
@@ -4101,7 +4103,7 @@ fn flush_pending_layer_composites<B: SurfaceExecutionBackend>(
         let load_op = pending_load_op.take().unwrap_or(*next_load_op);
         let batch_items: Vec<_> = pending_layer_composite_batch_items(pending)
             .into_iter()
-            .map(|(_, item)| item)
+            .map(|(_, _, item)| item)
             .collect();
         if !batch_items.is_empty() {
             backend.composite_surface_batch_to_view(target_view, viewport, load_op, &batch_items);
@@ -4207,9 +4209,9 @@ fn flush_pending_composite_queues_fused<B: SurfaceExecutionBackend>(
             .iter()
             .map(|&(_, _, is_shader, index)| {
                 if is_shader {
-                    FusedCompositeItem::Shader(shader_items[index].1)
+                    FusedCompositeItem::Shader(shader_items[index].2)
                 } else {
-                    FusedCompositeItem::Blit(blit_items[index].1)
+                    FusedCompositeItem::Blit(blit_items[index].2)
                 }
             })
             .collect();

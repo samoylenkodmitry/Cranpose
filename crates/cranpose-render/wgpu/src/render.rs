@@ -8648,8 +8648,8 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
         z_start: usize,
         z_end: usize,
         effect_z_ranges: &[Range<usize>],
-        composites: &[(usize, CompositeBatchItem<'_>)],
-        shader_composites: &[(usize, ShaderCompositeBatchItem<'_>)],
+        composites: &[(usize, usize, CompositeBatchItem<'_>)],
+        shader_composites: &[(usize, usize, ShaderCompositeBatchItem<'_>)],
         width: u32,
         height: u32,
         root_scale: f32,
@@ -8697,13 +8697,15 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
             composites
                 .iter()
                 .enumerate()
-                .map(|(index, (z_index, _))| (*z_index, SegmentDrawItem::Composite(index))),
+                .map(|(index, (z_index, _, _))| (*z_index, SegmentDrawItem::Composite(index))),
         );
         ordered_items.extend(
             shader_composites
                 .iter()
                 .enumerate()
-                .map(|(index, (z_index, _))| (*z_index, SegmentDrawItem::ShaderComposite(index))),
+                .map(|(index, (z_index, _, _))| {
+                    (*z_index, SegmentDrawItem::ShaderComposite(index))
+                }),
         );
         // A converted shadow contributes one composite entry PER band, all at
         // the shadow's own z; the first band replaces the shadow's ordered
@@ -8756,18 +8758,42 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
         ordered_items.extend(extra_band_items);
         let mut merged_composites =
             Vec::with_capacity(composites.len().saturating_add(flattened_band_count));
-        merged_composites.extend(composites.iter().copied());
+        merged_composites.extend(
+            composites
+                .iter()
+                .map(|(z_index, _, item)| (*z_index, *item)),
+        );
         for (z_index, composite) in &cached_shadow_composites {
             for item in composite.band_items() {
                 merged_composites.push((*z_index, item));
             }
         }
-        // Z indices are unique — the scene hands every op its own `next_z` — so an
-        // unstable sort cannot reorder anything a stable one wouldn't, and it skips
-        // the stable sort's scratch allocation, paid here once per segment per frame.
-        // The one exception is a banded shadow: its bands share the shadow's z, and
-        // being disjoint scissored strips of one composite they commute freely.
-        ordered_items.sort_unstable_by_key(|(z_index, _)| *z_index);
+        // Z indices are NOT unique here, and a tie's order decides what the
+        // user sees: a backdrop glass queues its optical tail (a shader
+        // composite) and its own body (a blit composite) at the element's
+        // one z, and the tail MUST draw first or the body smears into the
+        // blur — the Mate 20 X shipped a build whose nav bar was unreadable
+        // because this sort was unstable on exactly that tie. Every queued
+        // composite therefore carries its push sequence, and the key is
+        // total wherever a tie is real: scene draws tie-break 0 (their z's
+        // are unique by `next_z`), queued composites 1 + push-seq, and a
+        // banded shadow's strips 1 + item index (bands of one shadow share
+        // its z and must stay in band order).
+        let composite_tie = |item_index: usize| -> usize {
+            if item_index < composites.len() {
+                1 + composites[item_index].1
+            } else {
+                1 + item_index
+            }
+        };
+        ordered_items.sort_by_key(|(z_index, item)| {
+            let tie = match item {
+                SegmentDrawItem::Composite(index) => composite_tie(*index),
+                SegmentDrawItem::ShaderComposite(index) => 1 + shader_composites[*index].1,
+                _ => 0,
+            };
+            (*z_index, tie)
+        });
         #[cfg(not(target_arch = "wasm32"))]
         maybe_print_segment_diag(
             z_start..z_end,
@@ -8784,6 +8810,10 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
             },
             self.renderer.shape_batch_limits,
         );
+        let shader_items: Vec<(usize, ShaderCompositeBatchItem<'_>)> = shader_composites
+            .iter()
+            .map(|(z_index, _, item)| (*z_index, *item))
+            .collect();
         let result = if ordered_items.is_empty() {
             Ok(SegmentCommandEncodeOutcome { first_batch: true })
         } else {
@@ -8792,7 +8822,7 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
                 target_view,
                 &ordered_items,
                 &merged_composites,
-                shader_composites,
+                &shader_items,
                 shapes,
                 brushes,
                 images,
