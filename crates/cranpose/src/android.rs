@@ -1752,8 +1752,8 @@ pub fn run(
         };
 
         app.poll_events(poll_duration, |event| {
-            match event {
-                PollEvent::Main(main_event) => match main_event {
+            if let PollEvent::Main(main_event) = event {
+                match main_event {
                     MainEvent::InitWindow { .. } => {
                         log::info!("Window initialized, setting up rendering");
 
@@ -2035,8 +2035,6 @@ pub fn run(
                         apply_display_visible_region(&app, &mut app_shell);
                     }
                     _ => {}
-                },
-                _ => {
                 }
             }
         });

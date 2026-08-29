@@ -465,10 +465,10 @@ fn capture_photo() -> Option<CameraStill> {
     }
 
     let jpeg = receiver.recv_timeout(Duration::from_secs(5)).ok().flatten();
-    if jpeg.is_none() {
-        if let Ok(mut result) = photo_result_slot().lock() {
-            *result = None;
-        }
+    if jpeg.is_none()
+        && let Ok(mut result) = photo_result_slot().lock()
+    {
+        *result = None;
     }
     drop(delegate);
     jpeg.map(|jpeg| CameraStill { jpeg })
