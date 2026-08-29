@@ -154,19 +154,30 @@ pub async fn run(
     let scale_factor = window.device_pixel_ratio();
 
     // Keep the requested desktop-sized viewport as an upper bound while
-    // fitting phones and narrow browser windows without horizontal scrolling.
+    // fitting phones and narrow browser windows without horizontal scrolling,
+    // unless the app asked the canvas to fill the browser viewport instead.
     let requested_width = settings.initial_width;
     let requested_height = settings.initial_height;
     if let Some(html_element) = canvas.dyn_ref::<web_sys::HtmlElement>() {
         let style = html_element.style();
-        style.set_property(
-            "width",
-            &format!("min({requested_width}px, calc(100vw - 36px))"),
-        )?;
-        style.set_property(
-            "height",
-            &format!("min({requested_height}px, calc(100vh - 36px))"),
-        )?;
+        if settings.web_fill_viewport {
+            style.set_property("width", "100vw")?;
+            // `100dvh` accounts for a mobile browser's collapsing address
+            // bar; older browsers that do not parse the `dvh` unit keep the
+            // `100vh` set just before it, since an unparsable value is a
+            // no-op rather than a reset.
+            style.set_property("height", "100vh")?;
+            style.set_property("height", "100dvh")?;
+        } else {
+            style.set_property(
+                "width",
+                &format!("min({requested_width}px, calc(100vw - 36px))"),
+            )?;
+            style.set_property(
+                "height",
+                &format!("min({requested_height}px, calc(100vh - 36px))"),
+            )?;
+        }
         style.set_property("touch-action", "none")?;
     }
     let width = canvas.client_width().max(1) as u32;
