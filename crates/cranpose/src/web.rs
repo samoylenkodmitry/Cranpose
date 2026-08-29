@@ -16,7 +16,10 @@ use web_sys::{HtmlCanvasElement, PointerEvent, WheelEvent};
 
 use crate::{
     app_launcher::AppSettings,
-    wgpu_surface::{SurfaceFrame, current_surface_texture, surface_present_required},
+    wgpu_surface::{
+        SurfaceFrame, current_surface_texture, present_initial_placeholder_frame,
+        surface_present_required,
+    },
 };
 
 /// The `requestAnimationFrame` callback, rebuilt once at startup and swapped
@@ -267,11 +270,28 @@ pub async fn run(
     let mut surface_config = surface_config;
     let (actual_width, actual_height, effective_scale) =
         if adapter_info.backend == wgpu::Backend::BrowserWebGpu {
+            // Closes the black-screen gap at its root: the canvas must
+            // never show whatever the swapchain held right after
+            // `configure` for however long this page's first real frame
+            // takes to reach the screen (its shape/text pipelines may
+            // still be compiling).
+            present_initial_placeholder_frame(
+                &surface,
+                &device,
+                &queue,
+                surface_format,
+                "web initial present",
+            );
             (surface_config.width, surface_config.height, render_scale)
         } else {
             // WebGL backends can cap the swapchain below the requested size.
             // Probe the actual surface once so layout and root scale match the
-            // real render target instead of the requested CSS size.
+            // real render target instead of the requested CSS size. The probe
+            // frame is real swapchain content, so it is cleared to the
+            // framework's default background before presenting — the same
+            // black-screen fix the WebGPU branch above gets from
+            // `present_initial_placeholder_frame`, just folded into the
+            // probe this backend already needed.
             let probe = match current_surface_texture(&surface, "web probe") {
                 SurfaceFrame::Ready(probe) => probe,
                 SurfaceFrame::Reconfigure => {
@@ -285,6 +305,11 @@ pub async fn run(
             };
             let actual_width = probe.texture.width();
             let actual_height = probe.texture.height();
+            let probe_view = probe.texture.create_view(&wgpu::TextureViewDescriptor {
+                format: Some(surface_format.remove_srgb_suffix()),
+                ..Default::default()
+            });
+            cranpose_render_wgpu::clear_to_default_background(&device, &queue, &probe_view);
             probe.present();
             let effective_scale =
                 if actual_width < surface_config.width || actual_height < surface_config.height {
