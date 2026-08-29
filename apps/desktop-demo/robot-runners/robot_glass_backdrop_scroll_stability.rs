@@ -137,6 +137,9 @@ fn main() {
                 .expect("settle scroll past empty content padding");
             std::thread::sleep(Duration::from_millis(500));
             let _ = robot.wait_for_idle();
+            // The baseline capture must also reflect an actually-presented
+            // frame, for the same reason as the per-step captures below.
+            let _ = robot.wait_for_present_frame();
 
             // A receipt subtitle ("Receipt #NNNN — 12 items") is unique per
             // row, unlike the six recycled card titles, so once discovered
@@ -212,7 +215,16 @@ fn main() {
                     ScrollStepDriver::PointerWheel,
                 );
                 std::thread::sleep(Duration::from_millis(SETTLE_AFTER_SCROLL_EXTRA_MS));
-                let _ = robot.wait_for_idle();
+                // `wait_for_idle` confirms CPU/composition quiescence, not
+                // that software present has actually drained this frame to
+                // the window — under Xvfb's software presenter a screenshot
+                // taken on CPU-idle alone can show a still-queued frame,
+                // which would read as the backdrop lagging then catching up
+                // as the queue drains, and converging once the settle above
+                // exhausts the backlog. That shape is otherwise
+                // indistinguishable from a real compositor defect, so the
+                // capture must wait for actual presentation instead.
+                let _ = robot.wait_for_present_frame();
 
                 let step_path = output_dir.join(format!("glass_step{:02}.png", step + 1));
                 capture_x11_window_screenshot(
