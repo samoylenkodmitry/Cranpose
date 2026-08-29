@@ -70,6 +70,13 @@ const REFERENCE_TAB: &str = "Shader Rect";
 /// The previous occupant of this tab measured 2x against the same reference
 /// with `recomps=0`: a `Canvas` redrawing on a frame clock recomposes nothing.
 /// Comparing the two numbers across the replacement is meaningless.
+///
+/// A cheaper *reference* also raises the ratio: the present-retained and
+/// scroll-translate work moved the no-text page 0.036 → 0.031 ms on the CI
+/// box (wear flat at 0.22-0.24 ms across six same-box reps), which is 6.5x
+/// → 7.5x with no text regression anywhere. The bound has to leave room for
+/// the denominator improving, and the two-sided reference below keeps
+/// thermal drift from spending that room.
 const MAX_WORK_RATIO: f32 = 12.0;
 
 struct Measured {
@@ -126,21 +133,46 @@ fn main() -> ExitCode {
 
             click_tab(&robot, REFERENCE_TAB);
             measure(&robot, "shader-rect-warmup", WARMUP_FOR);
-            let reference = measure(&robot, "shader-rect", MEASURE_FOR);
+            let reference_before = measure(&robot, "shader-rect", MEASURE_FOR);
 
             click_tab(&robot, WEAR_TAB);
             measure(&robot, "wear-warmup", WARMUP_FOR);
             let wear = measure(&robot, "wear", MEASURE_FOR);
 
-            let work_ratio = wear.work_avg_ms / reference.work_avg_ms.max(f32::EPSILON);
+            // The reference again, on the far side of the wear stage. The
+            // stages run in sequence on a box whose clock is allowed to sag
+            // as it heats, so a single leading reference is measured at the
+            // run's coolest moment and the wear stage at its hottest — a CI
+            // box at 70°C read the reference 1.5x slower than a cool run
+            // while the same binary's wear stage read 2.8x slower, and the
+            // ratio blew through the bound with no code regression at all.
+            //
+            // Wear runs *between* the two references, so the midpoint
+            // estimates the reference at wear's own thermal state. Not the
+            // slower endpoint: that is the post-wear, hottest sample, and
+            // dividing by it flips the bias from false alarms (loud,
+            // investigated) to false passes (silent) — a real text
+            // regression would be absorbed by the flattered denominator.
+            click_tab(&robot, REFERENCE_TAB);
+            let reference_after = measure(&robot, "shader-rect-after", MEASURE_FOR);
+            let reference_ms = (reference_before.work_avg_ms + reference_after.work_avg_ms) * 0.5;
+            // Drift magnitude: near 1.0 the box was thermally stable and the
+            // ratio is trustworthy; well above it the run itself says it
+            // should be retried rather than believed.
+            let reference_drift =
+                reference_after.work_avg_ms / reference_before.work_avg_ms.max(f32::EPSILON);
+
+            let work_ratio = wear.work_avg_ms / reference_ms.max(f32::EPSILON);
             println!(
-                "wear_fps summary wear={:.1}fps shader_rect={:.1}fps fps_ratio={:.2} \
-                 wear_work_ms={:.3} shader_rect_work_ms={:.3} work_ratio={:.2}",
+                "robot-metric: wear_fps summary wear={:.1}fps shader_rect={:.1}fps \
+                 fps_ratio={:.2} wear_work_ms={:.3} shader_rect_work_ms={:.3} \
+                 ref_drift={:.2} work_ratio={:.2}",
                 wear.fps,
-                reference.fps,
-                wear.fps / reference.fps.max(1.0),
+                reference_before.fps,
+                wear.fps / reference_before.fps.max(1.0),
                 wear.work_avg_ms,
-                reference.work_avg_ms,
+                reference_ms,
+                reference_drift,
                 work_ratio,
             );
             robot.exit().ok();
@@ -152,7 +184,7 @@ fn main() -> ExitCode {
                      {MAX_WORK_RATIO:.0}x. Something in the text pipeline, or in the per-row \
                      layer tree the scaling list builds, is re-deriving per frame what it should \
                      be reusing.",
-                    wear.work_avg_ms, reference.work_avg_ms,
+                    wear.work_avg_ms, reference_ms,
                 );
                 FAILED.store(true, Ordering::SeqCst);
                 return;
