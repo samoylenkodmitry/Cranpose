@@ -928,6 +928,7 @@ impl SubcomposeLayoutNode {
     pub fn mark_needs_measure(&self) {
         self.needs_measure.set(true);
         self.needs_layout.set(true);
+        self.cache_handles.clear();
     }
 
     /// Mark this node as needing layout (but not necessarily measure).
@@ -1207,6 +1208,7 @@ impl cranpose_core::Node for SubcomposeLayoutNode {
     fn mark_needs_measure(&self) {
         self.needs_measure.set(true);
         self.needs_layout.set(true); // Measure implies layout
+        self.cache_handles.clear();
     }
 
     fn needs_measure(&self) -> bool {

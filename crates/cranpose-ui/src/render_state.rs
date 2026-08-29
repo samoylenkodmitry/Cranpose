@@ -430,11 +430,6 @@ pub(crate) fn invalidate_layout_cache_epoch() {
     context.layout_cache_epoch.fetch_add(1, Ordering::Relaxed);
 }
 
-pub(crate) fn next_layout_cache_epoch() -> u64 {
-    let context = require_current_app_context("layout cache epoch access");
-    context.layout_cache_epoch.fetch_add(1, Ordering::Relaxed)
-}
-
 pub(crate) fn current_layout_cache_epoch() -> u64 {
     let context = require_current_app_context("layout cache epoch access");
     context.layout_cache_epoch.load(Ordering::Relaxed)

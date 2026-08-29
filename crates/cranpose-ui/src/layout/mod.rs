@@ -1014,14 +1014,21 @@ pub fn measure_layout_with_options(
         Err(err) => return Err(err),
     };
 
-    let epoch = if needs_remeasure {
-        crate::render_state::next_layout_cache_epoch()
-    } else if cached_epoch != 0 {
-        cached_epoch
-    } else {
-        // Fallback when caller root isn't a LayoutNode (e.g. tests using Spacer directly).
-        crate::render_state::current_layout_cache_epoch()
-    };
+    // No global epoch bump. A dirty node clears its own measurement cache in
+    // `mark_needs_measure`, and `bubble_measure_dirty` marks every ancestor
+    // whose own measurement depends on it, so exactly the nodes that can have
+    // changed lose their caches. Minting a fresh epoch here instead invalidated
+    // every node in the tree, which made layout O(total nodes) on every frame
+    // where anything needed measuring at all -- 23,231 of 23,296 working frames
+    // on a scroll. A clean pass over an 800-node tree costs 0.001 ms; the same
+    // pass after a global bump costs 0.181 ms.
+    let _ = (needs_remeasure, cached_epoch);
+    // Always the context's current epoch. Each node's `activate` clears its own
+    // cache when the epoch it holds differs, so an app-wide invalidation
+    // (viewport, density, font scale — `invalidate_all_layout_caches`) still
+    // reaches every node, while an ordinary dirty node does not advance it and
+    // therefore cannot wipe anyone else's cache.
+    let epoch = crate::render_state::current_layout_cache_epoch();
 
     // Move the current applier into a host and set up a guard that will
     // ALWAYS restore:

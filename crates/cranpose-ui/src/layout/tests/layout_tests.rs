@@ -785,47 +785,70 @@ fn cache_epoch_not_incremented_when_no_dirty_nodes() -> Result<(), NodeError> {
     Ok(())
 }
 
+/// Marking a node dirty must clear THAT node's measurement cache and leave
+/// every other node's alone.
+///
+/// This used to work the other way round: a dirty node reaching the root minted
+/// a fresh global cache epoch, which wiped the cached measurement of every node
+/// in the app. That made a layout pass O(total nodes) on any frame where
+/// anything needed measuring — 23,231 of 23,296 working frames on a scroll —
+/// while a pass with nothing dirty costs 0.001 ms at any tree size.
 #[test]
-fn cache_epoch_increments_when_nodes_dirty() -> Result<(), NodeError> {
+fn a_dirty_node_clears_its_own_cache_and_spares_its_siblings() -> Result<(), NodeError> {
     let _app_context = crate::render_state::app_context_test_scope();
     let mut applier = MemoryApplier::new();
-    let node = LayoutNode::new(Modifier::empty(), Rc::new(MaxSizePolicy));
-    let node_id = applier.create(Box::new(node));
+    let parent_id = applier.create(Box::new(LayoutNode::new(
+        Modifier::empty(),
+        Rc::new(MaxSizePolicy),
+    )));
+    let dirty_id = applier.create(Box::new(LayoutNode::new(
+        Modifier::empty(),
+        Rc::new(MaxSizePolicy),
+    )));
+    let clean_id = applier.create(Box::new(LayoutNode::new(
+        Modifier::empty(),
+        Rc::new(MaxSizePolicy),
+    )));
+    applier.with_node::<LayoutNode, _>(parent_id, |node| {
+        node.insert_child(dirty_id);
+        node.insert_child(clean_id);
+    })?;
 
-    // First measure
-    measure_layout(
-        &mut applier,
-        node_id,
-        Size {
-            width: 100.0,
-            height: 100.0,
-        },
-    )?;
+    let viewport = Size {
+        width: 100.0,
+        height: 100.0,
+    };
+    measure_layout(&mut applier, parent_id, viewport)?;
 
     let epoch_before =
-        applier.with_node::<LayoutNode, _>(node_id, |node| node.cache_handles().epoch())?;
+        applier.with_node::<LayoutNode, _>(parent_id, |node| node.cache_handles().epoch())?;
+    let clean_cached_before =
+        applier.with_node::<LayoutNode, _>(clean_id, |node| node.cache_handles().epoch())?;
+    assert_ne!(
+        clean_cached_before, 0,
+        "the sibling must hold a live cache entry before the dirty mark"
+    );
 
-    // Mark node as dirty
-    applier.with_node::<LayoutNode, _>(node_id, |node| {
+    applier.with_node::<LayoutNode, _>(dirty_id, |node| {
         node.mark_needs_measure();
     })?;
 
-    // Second measure with dirty node - epoch should increment
-    measure_layout(
-        &mut applier,
-        node_id,
-        Size {
-            width: 100.0,
-            height: 100.0,
-        },
-    )?;
+    assert_eq!(
+        applier.with_node::<LayoutNode, _>(dirty_id, |node| node.cache_handles().epoch())?,
+        0,
+        "the dirty node must drop its own cached measurement"
+    );
+    assert_eq!(
+        applier.with_node::<LayoutNode, _>(clean_id, |node| node.cache_handles().epoch())?,
+        clean_cached_before,
+        "an untouched sibling must keep its cached measurement"
+    );
 
-    let epoch_after =
-        applier.with_node::<LayoutNode, _>(node_id, |node| node.cache_handles().epoch())?;
-
-    assert!(
-        epoch_after > epoch_before,
-        "Cache epoch should increment when nodes are dirty"
+    measure_layout(&mut applier, parent_id, viewport)?;
+    assert_eq!(
+        applier.with_node::<LayoutNode, _>(parent_id, |node| node.cache_handles().epoch())?,
+        epoch_before,
+        "measuring a dirty subtree must not advance the global cache epoch"
     );
     Ok(())
 }
@@ -861,9 +884,9 @@ fn cache_epoch_is_isolated_by_app_context() -> Result<(), NodeError> {
             Rc::new(MaxSizePolicy),
         )));
         for _ in 0..4 {
-            second_applier.with_node::<LayoutNode, _>(second_node, |node| {
-                node.mark_needs_measure();
-            })?;
+            // Only an app-wide invalidation advances the epoch now; a dirty
+            // node clears its own cache instead.
+            crate::layout::invalidate_all_layout_caches();
             measure_layout(
                 &mut second_applier,
                 second_node,
@@ -877,9 +900,7 @@ fn cache_epoch_is_isolated_by_app_context() -> Result<(), NodeError> {
     })?;
 
     first_context.enter(|| {
-        first_applier.with_node::<LayoutNode, _>(first_node, |node| {
-            node.mark_needs_measure();
-        })?;
+        crate::layout::invalidate_all_layout_caches();
         measure_layout(
             &mut first_applier,
             first_node,

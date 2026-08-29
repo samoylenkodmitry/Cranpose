@@ -519,6 +519,12 @@ impl LayoutNode {
     pub fn mark_needs_measure(&self) {
         self.needs_measure.set(true);
         self.needs_layout.set(true);
+        // A node that needs measuring must not serve a cached measurement for
+        // the constraints it is about to be asked about again. Clearing here is
+        // what lets the layout pass drop the global cache epoch: the epoch
+        // existed only to cover this case, and it covered it by wiping every
+        // node in the tree rather than the ones that changed.
+        self.cache.clear();
     }
 
     /// Mark this node as needing layout (but not necessarily measure).
@@ -969,6 +975,7 @@ impl Node for LayoutNode {
     fn mark_needs_measure(&self) {
         self.needs_measure.set(true);
         self.needs_layout.set(true);
+        self.cache.clear();
     }
 
     fn needs_measure(&self) -> bool {
