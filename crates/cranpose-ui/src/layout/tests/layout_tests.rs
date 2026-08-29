@@ -586,7 +586,7 @@ fn width_after_graphics_layer_constrains_measurement() -> Result<(), NodeError> 
     measure_layout(&mut applier, root_id, Size::new(800.0, 600.0))?;
 
     let size = applier
-        .with_node::<LayoutNode, _>(root_id, |node| node.layout_state().size)
+        .with_node::<LayoutNode, _>(root_id, |node| node.layout_state().size())
         .expect("root layout state");
     assert_eq!(
         size.width, 50.0,

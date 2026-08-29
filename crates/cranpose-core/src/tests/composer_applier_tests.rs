@@ -2078,12 +2078,31 @@ fn reparenting_records_a_structural_change_on_both_parents() {
     );
 }
 
-#[derive(Default)]
 struct DirtyFlagNode {
     children: Vec<NodeId>,
     parent: Option<NodeId>,
     needs_measure: Cell<bool>,
     needs_layout: Cell<bool>,
+    // True by default, like production nodes: a real LayoutNode starts
+    // semantics-dirty and stays so until a semantics tree is built, which
+    // never happens while semantics are off. Any re-attach logic that treats
+    // "child is semantics-dirty" as a reason to walk ancestors therefore
+    // walks on EVERY no-op re-attach of a steady scroll.
+    needs_semantics: Cell<bool>,
+    semantics_marks: Cell<usize>,
+}
+
+impl Default for DirtyFlagNode {
+    fn default() -> Self {
+        Self {
+            children: Vec::new(),
+            parent: None,
+            needs_measure: Cell::new(false),
+            needs_layout: Cell::new(false),
+            needs_semantics: Cell::new(true),
+            semantics_marks: Cell::new(0),
+        }
+    }
 }
 
 impl Node for DirtyFlagNode {
@@ -2131,6 +2150,15 @@ impl Node for DirtyFlagNode {
 
     fn needs_layout(&self) -> bool {
         self.needs_layout.get()
+    }
+
+    fn mark_needs_semantics(&self) {
+        self.needs_semantics.set(true);
+        self.semantics_marks.set(self.semantics_marks.get() + 1);
+    }
+
+    fn needs_semantics(&self) -> bool {
+        self.needs_semantics.get()
     }
 }
 
@@ -2214,15 +2242,26 @@ fn reattaching_a_clean_child_bubbles_nothing() {
         ("grandparent", grandparent),
         ("child", child),
     ] {
-        let (measure, layout) = applier
+        let (measure, layout, semantics_marks) = applier
             .with_node::<DirtyFlagNode, _>(id, |node| {
-                (node.needs_measure.get(), node.needs_layout.get())
+                (
+                    node.needs_measure.get(),
+                    node.needs_layout.get(),
+                    node.semantics_marks.get(),
+                )
             })
             .expect("tree node exists");
         assert!(
             !measure && !layout,
             "{label} must stay clean when an already-present, clean child \
              re-attaches: bubbling a no-op re-measures the tree every frame"
+        );
+        assert_eq!(
+            semantics_marks, 0,
+            "{label} must take no semantics walk either: production nodes are \
+             semantics-dirty by default while semantics are off, so keying a \
+             re-attach bubble on that flag walks ancestors on every no-op \
+             re-attach of a steady scroll"
         );
     }
 }

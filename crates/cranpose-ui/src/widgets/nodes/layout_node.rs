@@ -77,12 +77,20 @@ fn log_layout_invalidation_dispatch(
 /// LayoutTree reconstruction.
 #[derive(Clone, Debug)]
 pub struct LayoutState {
-    /// The measured size of this node (width, height).
-    pub size: Size,
-    /// Position relative to parent's content origin.
-    pub position: Point,
+    /// The measured size of this node (width, height). Private: every write
+    /// must go through [`Self::set_size`], which self-reports actual changes
+    /// to the scene phase — a node resized or moved by a SIBLING's growth
+    /// recomposes nothing and raises no repass, so the write is the only
+    /// place that fact exists. Field privacy makes a bypass fail to compile.
+    size: Size,
+    /// Position relative to parent's content origin. Private for the same
+    /// reason as `size`: writes go through [`Self::place`].
+    position: Point,
     /// True if this node has been placed in the current layout pass.
-    pub is_placed: bool,
+    is_placed: bool,
+    /// The id this state belongs to, for the geometry self-report. `None`
+    /// only before the node is mounted (no scene exists to go stale then).
+    node_id: Option<NodeId>,
     /// The constraints used for the last measurement.
     pub measurement_constraints: Constraints,
     /// Offset of the content box relative to the node origin (e.g. due to padding).
@@ -95,6 +103,7 @@ impl Default for LayoutState {
             size: Size::default(),
             position: Point::default(),
             is_placed: false,
+            node_id: None,
             measurement_constraints: Constraints {
                 min_width: 0.0,
                 max_width: f32::INFINITY,
@@ -103,6 +112,52 @@ impl Default for LayoutState {
             },
             content_offset: Point::default(),
         }
+    }
+}
+
+impl LayoutState {
+    pub fn size(&self) -> Size {
+        self.size
+    }
+
+    pub fn position(&self) -> Point {
+        self.position
+    }
+
+    pub fn is_placed(&self) -> bool {
+        self.is_placed
+    }
+
+    pub(crate) fn set_node_id(&mut self, node_id: NodeId) {
+        self.node_id = Some(node_id);
+    }
+
+    /// Writes the measured size, self-reporting an actual change to the
+    /// scene phase.
+    pub fn set_size(&mut self, size: Size) {
+        if self.size != size {
+            if let Some(id) = self.node_id {
+                crate::render_state::record_geometry_scene_node(id);
+            }
+            self.size = size;
+        }
+    }
+
+    /// Writes the placed position and marks the node placed, self-reporting
+    /// an actual move to the scene phase.
+    pub fn place(&mut self, position: Point) {
+        if self.position != position {
+            if let Some(id) = self.node_id {
+                crate::render_state::record_geometry_scene_node(id);
+            }
+            self.position = position;
+        }
+        self.is_placed = true;
+    }
+
+    /// Clears the placed flag at the start of a layout pass.
+    pub fn clear_placed(&mut self) {
+        self.is_placed = false;
     }
 }
 
@@ -627,6 +682,7 @@ impl LayoutNode {
         {
             unregister_layout_node(owner_context_id, existing);
         }
+        self.layout_state.borrow_mut().set_node_id(id);
         let owner_context_id = register_layout_node(id, self);
         self.owner_context_id.set(Some(owner_context_id));
         self.refresh_registry_state();
@@ -774,34 +830,16 @@ impl LayoutNode {
     }
 
     /// Updates the measured size of this node. Called during measurement.
-    ///
-    /// An actual change self-reports to the scene phase: a node resized by a
-    /// sibling's growth never recomposes, so this record is the only way the
-    /// scoped scene update learns its layer is stale.
+    /// [`LayoutState::set_size`] self-reports actual changes to the scene
+    /// phase.
     pub fn set_measured_size(&self, size: Size) {
-        let mut state = self.layout_state.borrow_mut();
-        if state.size != size {
-            if let Some(id) = self.id.get() {
-                crate::render_state::record_geometry_scene_node(id);
-            }
-            state.size = size;
-        }
+        self.layout_state.borrow_mut().set_size(size);
     }
 
     /// Updates the position of this node. Called during placement.
-    ///
-    /// An actual move self-reports to the scene phase, for the same reason as
-    /// [`Self::set_measured_size`]: siblings pushed by another node's growth
-    /// raise no dirt of their own.
+    /// [`LayoutState::place`] self-reports actual moves to the scene phase.
     pub fn set_position(&self, position: Point) {
-        let mut state = self.layout_state.borrow_mut();
-        if state.position != position {
-            if let Some(id) = self.id.get() {
-                crate::render_state::record_geometry_scene_node(id);
-            }
-            state.position = position;
-        }
-        state.is_placed = true;
+        self.layout_state.borrow_mut().place(position);
     }
 
     /// Records the constraints used for measurement. Used for relayout optimization.

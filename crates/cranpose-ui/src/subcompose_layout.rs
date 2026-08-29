@@ -878,39 +878,21 @@ impl SubcomposeLayoutNode {
     }
 
     /// Updates the position of this node. Called during placement.
-    ///
-    /// An actual move self-reports to the scene phase: a node moved by a
-    /// sibling's growth never recomposes and raises no repass of its own, so
-    /// this record is the only way the scoped scene update learns its layer
-    /// is stale.
+    /// [`LayoutState::place`] self-reports actual moves to the scene phase.
     pub fn set_position(&self, position: Point) {
-        let mut state = self.layout_state.borrow_mut();
-        if state.position != position {
-            if let Some(id) = self.id.get() {
-                crate::render_state::record_geometry_scene_node(id);
-            }
-            state.position = position;
-        }
-        state.is_placed = true;
+        self.layout_state.borrow_mut().place(position);
     }
 
     /// Updates the measured size of this node. Called during measurement.
-    ///
-    /// An actual change self-reports to the scene phase, for the same reason
-    /// as [`Self::set_position`].
+    /// [`LayoutState::set_size`] self-reports actual changes to the scene
+    /// phase.
     pub fn set_measured_size(&self, size: Size) {
-        let mut state = self.layout_state.borrow_mut();
-        if state.size != size {
-            if let Some(id) = self.id.get() {
-                crate::render_state::record_geometry_scene_node(id);
-            }
-            state.size = size;
-        }
+        self.layout_state.borrow_mut().set_size(size);
     }
 
     /// Clears the is_placed flag. Called at the start of a layout pass.
     pub fn clear_placed(&self) {
-        self.layout_state.borrow_mut().is_placed = false;
+        self.layout_state.borrow_mut().clear_placed();
     }
 
     /// Returns the modifier slices snapshot for rendering.
@@ -1204,6 +1186,7 @@ impl cranpose_core::Node for SubcomposeLayoutNode {
 
     fn set_node_id(&mut self, id: NodeId) {
         self.id.set(Some(id));
+        self.layout_state.borrow_mut().set_node_id(id);
         self.inner.borrow_mut().modifier_chain.set_node_id(Some(id));
         self.update_modifier_slices_cache();
     }

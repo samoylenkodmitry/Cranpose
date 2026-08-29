@@ -756,19 +756,19 @@ pub fn build_layout_tree_from_applier(
         let Some((state, child_ids)) = snapshot(applier, node_id)? else {
             return Ok(None);
         };
-        if !state.is_placed {
+        if !state.is_placed() {
             return Ok(None);
         }
 
         let top_left = Point {
-            x: parent_content_origin.x + state.position.x,
-            y: parent_content_origin.y + state.position.y,
+            x: parent_content_origin.x + state.position().x,
+            y: parent_content_origin.y + state.position().y,
         };
         let rect = GeometryRect {
             x: top_left.x,
             y: top_left.y,
-            width: state.size.width,
-            height: state.size.height,
+            width: state.size().width,
+            height: state.size().height,
         };
         let info = runtime_metadata_for(applier, node_id)?;
         let kind = layout_kind_from_metadata(node_id, &info);
@@ -808,15 +808,15 @@ pub fn build_layout_tree_from_applier(
             sink.set(GeometryRect {
                 x: top_left.x + layer_translation.x,
                 y: top_left.y + layer_translation.y,
-                width: state.size.width,
-                height: state.size.height,
+                width: state.size().width,
+                height: state.size().height,
             });
         }
 
         // Publish this node's resolved size to its `pointer_input` handlers so
         // `PointerInputScope::size()` reports the node's real dimensions (the
         // box the dispatched event positions are local to), not `0x0`.
-        modifier_slices.publish_pointer_input_size(state.size);
+        modifier_slices.publish_pointer_input_size(state.size());
 
         let data = LayoutNodeData::new(modifier, resolved_modifiers, modifier_slices, kind);
         let child_origin = Point {
@@ -857,7 +857,7 @@ pub fn build_semantics_tree_from_applier(
     ) -> Result<Option<SemanticsNode>, NodeError> {
         match applier.with_node::<LayoutNode, _>(node_id, |layout| {
             let state = layout.layout_state();
-            if !state.is_placed {
+            if !state.is_placed() {
                 return None;
             }
             let role = role_from_modifier_slices(&layout.modifier_slices_snapshot());
@@ -884,7 +884,7 @@ pub fn build_semantics_tree_from_applier(
 
         match applier.with_node::<SubcomposeLayoutNode, _>(node_id, |subcompose| {
             let state = subcompose.layout_state();
-            if !state.is_placed {
+            if !state.is_placed() {
                 return None;
             }
             let config = collect_semantics_from_modifier(&subcompose.modifier());
@@ -1387,7 +1387,7 @@ impl LayoutBuilderState {
 
         if let Some(layout_state) = data.layout_state {
             let mut layout_state = layout_state.borrow_mut();
-            layout_state.size = measured.size;
+            layout_state.set_size(measured.size);
             layout_state.measurement_constraints = constraints;
             drop(layout_state);
             let _ = applier.with_node::<LayoutNode, _>(node_id, |node| {
@@ -2805,9 +2805,7 @@ impl LayoutChildMeasureState {
     fn place_retained(&self, position: Point) {
         self.set_last_position(position);
         if let Some(layout_state) = self.layout_state() {
-            let mut layout_state = layout_state.borrow_mut();
-            layout_state.position = position;
-            layout_state.is_placed = true;
+            layout_state.borrow_mut().place(position);
             return;
         }
         let Some(applier) = self.applier() else {
@@ -2965,7 +2963,7 @@ impl Measurable for LayoutChildMeasurable {
 
         if let Some(layout_state) = state.layout_state() {
             let mut layout_state = layout_state.borrow_mut();
-            layout_state.size = measured_size;
+            layout_state.set_size(measured_size);
             layout_state.measurement_constraints = constraints;
         } else if let Some(applier) = state.applier() {
             let Ok(mut applier) = applier.try_borrow_typed() else {
