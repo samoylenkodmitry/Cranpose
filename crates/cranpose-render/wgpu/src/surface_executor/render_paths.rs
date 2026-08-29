@@ -5293,11 +5293,20 @@ fn render_layer_surface_uncached<B: SurfaceExecutionBackend>(
             } else {
                 estimated_surface_rect
             };
-        if cache_candidate
-            .as_ref()
-            .is_some_and(|(_, logical_rect)| *logical_rect != surface_rect)
-        {
-            cache_candidate = None;
+        if let Some((_, candidate_logical_rect)) = cache_candidate.as_ref() {
+            let stale = *candidate_logical_rect != surface_rect;
+            if backdrop_diag_enabled() {
+                eprintln!(
+                    "[backdrop-diag] motion-stable node={:?} has_backdrop={} candidate={candidate_logical_rect:?} surface_rect={surface_rect:?} snap_anchor={:?} content_hash={} stale={stale}",
+                    child.node_id,
+                    child.backdrop.is_some(),
+                    child.snap_anchor,
+                    child.target_content_hash,
+                );
+            }
+            if stale {
+                cache_candidate = None;
+            }
         }
         let max_dim = backend.max_texture_dim() as f32;
         if effective_requirements.contains(SurfaceRequirement::MotionStableCapture)
@@ -5934,8 +5943,15 @@ fn prepare_cached_backdrop_layer_composite<B: SurfaceExecutionBackend>(
         return Ok(None);
     };
 
-    let target_texture = if let Some((cached_target, _)) = backend.cached_layer_surface(&cache_key)
+    let target_texture = if let Some((cached_target, cached_capture_rect)) =
+        backend.cached_layer_surface(&cache_key)
     {
+        if diag {
+            eprintln!(
+                "[backdrop-diag] prepare HIT node={:?} capture={capture_rect:?} cached_capture={cached_capture_rect:?} layer_rect={layer_rect:?} content_hash={:?} effect_hash={materialized_effect_hash}",
+                layer.node_id, input_content_hash,
+            );
+        }
         LayerSurfaceTexture::Cached(cached_target)
     } else {
         record_layer_cache_miss(
