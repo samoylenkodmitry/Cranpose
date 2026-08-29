@@ -4207,14 +4207,18 @@ fn scoped_recompose_after_root_replay_does_not_self_parent_root() {
             self.raw_parent = None;
         }
 
-        fn insert_child(&mut self, child: NodeId) {
-            if !self.children.contains(&child) {
-                self.children.push(child);
+        fn insert_child(&mut self, child: NodeId) -> bool {
+            if self.children.contains(&child) {
+                return false;
             }
+            self.children.push(child);
+            true
         }
 
-        fn remove_child(&mut self, child: NodeId) {
+        fn remove_child(&mut self, child: NodeId) -> bool {
+            let before = self.children.len();
             self.children.retain(|&id| id != child);
+            self.children.len() < before
         }
 
         fn children(&self) -> Vec<NodeId> {

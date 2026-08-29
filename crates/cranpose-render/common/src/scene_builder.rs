@@ -55,10 +55,50 @@ struct SnapshotNodeData {
     children: Vec<NodeId>,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// Why a scoped scene update could not be applied, forcing the caller to throw
+/// the render graph away and build it again from the applier.
+///
+/// The reason has to travel with the outcome because the shell picks the
+/// scoped path from the shape of the dirty set, before this code runs, and
+/// logs that choice. A frame that chose the scoped path and then rebuilt the
+/// whole scene is the expensive case, and in the log it reads exactly like a
+/// cheap patch -- so the fallback says so itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GraphRebuildReason {
+    /// The root was dirty and its replacement layer could not be built.
+    RootLayerUnavailable,
+    /// A dirty subtree's replacement layer could not be built.
+    DirtyLayerUnavailable,
+    /// This many dirty nodes own no layer in the render graph, so the scoped
+    /// walk never reached them. A node enters the graph only as a `LayerNode`;
+    /// a dirty node that never produced one -- or whose layer left the graph
+    /// this frame -- cannot be patched in place.
+    UnmatchedDirtyNodes(usize),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GraphUpdate {
+    Patched,
+    NeedsRebuild(GraphRebuildReason),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GraphUpdateReport {
-    pub applied: bool,
+    pub update: GraphUpdate,
     pub hit_graph_dirty: bool,
+}
+
+impl GraphUpdateReport {
+    pub fn applied(self) -> bool {
+        matches!(self.update, GraphUpdate::Patched)
+    }
+
+    pub fn rebuild_reason(self) -> Option<GraphRebuildReason> {
+        match self.update {
+            GraphUpdate::Patched => None,
+            GraphUpdate::NeedsRebuild(reason) => Some(reason),
+        }
+    }
 }
 
 // Counts full layer lowerings so tests can assert what a scoped update did
@@ -108,7 +148,7 @@ pub fn update_graph_from_applier(
     dirty_nodes: &[NodeId],
     scale: f32,
 ) -> bool {
-    update_graph_from_applier_report(applier, graph, dirty_nodes, scale).applied
+    update_graph_from_applier_report(applier, graph, dirty_nodes, scale).applied()
 }
 
 pub fn update_graph_from_applier_report(
@@ -128,9 +168,34 @@ pub fn update_graph_from_applier_report_into(
     scale: f32,
     changed_nodes: &mut Vec<NodeId>,
 ) -> GraphUpdateReport {
+    let report = update_graph_from_applier_report_into_inner(
+        applier,
+        graph,
+        dirty_nodes,
+        scale,
+        changed_nodes,
+    );
+    if let GraphUpdate::NeedsRebuild(reason) = report.update
+        && cranpose_core::env_flag!("CRANPOSE_SCENE_UPDATE_DIAG")
+    {
+        eprintln!(
+            "[scene-update-diag] scoped update abandoned, whole scene rebuilt: {reason:?} dirty={}",
+            dirty_nodes.len()
+        );
+    }
+    report
+}
+
+fn update_graph_from_applier_report_into_inner(
+    applier: &mut MemoryApplier,
+    graph: &mut RenderGraph,
+    dirty_nodes: &[NodeId],
+    scale: f32,
+    changed_nodes: &mut Vec<NodeId>,
+) -> GraphUpdateReport {
     if dirty_nodes.is_empty() {
         return GraphUpdateReport {
-            applied: true,
+            update: GraphUpdate::Patched,
             hit_graph_dirty: false,
         };
     }
@@ -159,7 +224,7 @@ pub fn update_graph_from_applier_report_into(
         ) {
             if remaining_dirty_nodes.is_empty() {
                 return GraphUpdateReport {
-                    applied: true,
+                    update: GraphUpdate::Patched,
                     hit_graph_dirty: true,
                 };
             }
@@ -172,15 +237,14 @@ pub fn update_graph_from_applier_report_into(
                 false,
                 changed_nodes,
             );
-            let applied = walked.is_some() && remaining_dirty_nodes.is_empty();
             return GraphUpdateReport {
-                applied,
+                update: classify_walk(walked.is_some(), &remaining_dirty_nodes),
                 hit_graph_dirty: true,
             };
         }
         let Some(root) = build_layer_node_from_applier(applier, root_id, scale, false) else {
             return GraphUpdateReport {
-                applied: false,
+                update: GraphUpdate::NeedsRebuild(GraphRebuildReason::RootLayerUnavailable),
                 hit_graph_dirty: true,
             };
         };
@@ -190,7 +254,7 @@ pub fn update_graph_from_applier_report_into(
         graph.root.recompute_raster_cache_hashes();
         collect_layer_node_ids(&graph.root, changed_nodes);
         return GraphUpdateReport {
-            applied: true,
+            update: GraphUpdate::Patched,
             hit_graph_dirty,
         };
     }
@@ -207,22 +271,37 @@ pub fn update_graph_from_applier_report_into(
         Some(report) => report,
         None => {
             return GraphUpdateReport {
-                applied: false,
+                update: GraphUpdate::NeedsRebuild(GraphRebuildReason::DirtyLayerUnavailable),
                 hit_graph_dirty: true,
             };
         }
     };
 
-    if !remaining_dirty_nodes.is_empty() {
-        return GraphUpdateReport {
-            applied: false,
+    match classify_walk(true, &remaining_dirty_nodes) {
+        GraphUpdate::Patched => GraphUpdateReport {
+            update: GraphUpdate::Patched,
+            hit_graph_dirty: report.hit_graph_dirty,
+        },
+        update => GraphUpdateReport {
+            update,
             hit_graph_dirty: true,
-        };
+        },
     }
+}
 
-    GraphUpdateReport {
-        applied: true,
-        hit_graph_dirty: report.hit_graph_dirty,
+/// Both scoped walks end the same way: the walk either failed outright, or it
+/// succeeded and left dirty nodes it could not find a layer for. Either way the
+/// caller rebuilds the whole scene, and the reason is the only thing that says
+/// which.
+fn classify_walk(walked: bool, remaining_dirty_nodes: &HashSet<NodeId>) -> GraphUpdate {
+    if !walked {
+        GraphUpdate::NeedsRebuild(GraphRebuildReason::DirtyLayerUnavailable)
+    } else if !remaining_dirty_nodes.is_empty() {
+        GraphUpdate::NeedsRebuild(GraphRebuildReason::UnmatchedDirtyNodes(
+            remaining_dirty_nodes.len(),
+        ))
+    } else {
+        GraphUpdate::Patched
     }
 }
 
@@ -2897,7 +2976,11 @@ mod tests {
         let report = update_graph_from_applier_report(&mut applier, &mut graph, &[child_id], 1.0);
         applier.clear_runtime_handle();
 
-        assert!(report.applied, "dirty child update should apply in place");
+        assert!(
+            report.applied(),
+            "dirty child update should apply in place, got {:?}",
+            report.update
+        );
         assert_dirty_hash_road_matches_full_walk(&graph);
     }
 
@@ -2976,7 +3059,11 @@ mod tests {
         let report = update_graph_from_applier_report(&mut applier, &mut graph, &[column_id], 1.0);
         applier.clear_runtime_handle();
 
-        assert!(report.applied, "structural update should apply in place");
+        assert!(
+            report.applied(),
+            "structural update should apply in place, got {:?}",
+            report.update
+        );
         let mut labels = Vec::new();
         collect_text_labels(&graph.root, &mut labels);
         assert!(
@@ -3083,7 +3170,7 @@ mod tests {
         assert_eq!(
             report,
             GraphUpdateReport {
-                applied: false,
+                update: GraphUpdate::NeedsRebuild(GraphRebuildReason::DirtyLayerUnavailable),
                 hit_graph_dirty: true,
             },
             "dirty child graph updates must not report success when the replacement cannot be rebuilt"
@@ -3178,7 +3265,11 @@ mod tests {
         let report = update_graph_from_applier_report(&mut applier, &mut graph, &dirty_nodes, 1.0);
         applier.clear_runtime_handle();
 
-        assert!(report.applied, "scroll update should apply in place");
+        assert!(
+            report.applied(),
+            "scroll update should apply in place, got {:?}",
+            report.update
+        );
         assert_dirty_hash_road_matches_full_walk(&graph);
     }
 
@@ -3247,7 +3338,11 @@ mod tests {
         let report = update_graph_from_applier_report(&mut applier, &mut graph, &dirty_nodes, 1.0);
         applier.clear_runtime_handle();
 
-        assert!(report.applied, "scroll graph update should apply in place");
+        assert!(
+            report.applied(),
+            "scroll graph update should apply in place, got {:?}",
+            report.update
+        );
         let updated_target_top =
             find_text_top(&graph.root, "scroll target").expect("updated target text");
         assert!(
@@ -3355,7 +3450,11 @@ mod tests {
         let report = update_graph_from_applier_report(&mut applier, &mut graph, &dirty_nodes, 1.0);
         applier.clear_runtime_handle();
 
-        assert!(report.applied, "chain update should apply in place");
+        assert!(
+            report.applied(),
+            "chain update should apply in place, got {:?}",
+            report.update
+        );
         let lowered = lowered_layer_count();
         assert_eq!(
             lowered, 0,
@@ -3450,7 +3549,11 @@ mod tests {
         let report = update_graph_from_applier_report(&mut applier, &mut graph, &dirty_nodes, 1.0);
         applier.clear_runtime_handle();
 
-        assert!(report.applied, "scroll update should apply in place");
+        assert!(
+            report.applied(),
+            "scroll update should apply in place, got {:?}",
+            report.update
+        );
         let lowered = lowered_layer_count();
         assert_eq!(
             lowered, 0,
@@ -3550,7 +3653,11 @@ mod tests {
         let report = update_graph_from_applier_report(&mut applier, &mut graph, &dirty_nodes, 1.0);
         applier.clear_runtime_handle();
 
-        assert!(report.applied, "the boundary frame must apply in place");
+        assert!(
+            report.applied(),
+            "the boundary frame must apply in place, got {:?}",
+            report.update
+        );
         let lowered = lowered_layer_count();
         assert!(
             lowered > 0,
@@ -3667,7 +3774,11 @@ mod tests {
         let report = update_graph_from_applier_report(&mut applier, &mut graph, &[child_id], 1.0);
         applier.clear_runtime_handle();
 
-        assert!(report.applied, "dirty child graph update should apply");
+        assert!(
+            report.applied(),
+            "dirty child graph update should apply, got {:?}",
+            report.update
+        );
         let updated = find_layer_by_node_id(&graph.root, child_id).expect("updated child layer");
         assert_eq!(
             updated.transform_to_parent, scrolled_transform,
@@ -3814,7 +3925,11 @@ mod tests {
         let report = update_graph_from_applier_report(&mut applier, &mut graph, &[overlay_id], 1.0);
         applier.clear_runtime_handle();
 
-        assert!(report.applied, "dirty overlay graph update should apply");
+        assert!(
+            report.applied(),
+            "dirty overlay graph update should apply, got {:?}",
+            report.update
+        );
         let updated_underlay_origin =
             find_layer_origin(&graph.root, underlay_id).expect("updated underlay origin");
         let updated_overlay_origin =
@@ -3887,8 +4002,9 @@ mod tests {
         applier.set_runtime_handle(handle);
         let report = update_graph_from_applier_report(&mut applier, &mut graph, &[node_id], 1.0);
         assert!(
-            report.applied,
-            "dirty graphics layer should be replaceable from retained applier state"
+            report.applied(),
+            "dirty graphics layer should be replaceable from retained applier state, got {:?}",
+            report.update
         );
         assert!(
             !report.hit_graph_dirty,
@@ -3963,8 +4079,9 @@ mod tests {
         applier.clear_runtime_handle();
 
         assert!(
-            report.applied,
-            "dirty clickable graphics layer should be replaceable from retained applier state"
+            report.applied(),
+            "dirty clickable graphics layer should be replaceable from retained applier state, got {:?}",
+            report.update
         );
         assert!(
             report.hit_graph_dirty,

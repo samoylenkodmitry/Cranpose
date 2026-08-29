@@ -2066,7 +2066,7 @@ pub(crate) fn update_from_applier(
         render_from_applier(applier, root, scene, scale);
         return SceneUpdateOutcome::Rebuilt;
     };
-    if !update_report.applied {
+    if !update_report.applied() {
         scene.clear();
         render_from_applier(applier, root, scene, scale);
         return SceneUpdateOutcome::Rebuilt;

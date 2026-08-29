@@ -1454,7 +1454,7 @@ mod carried_plan_tests {
             &mut changed_nodes,
         );
         applier.clear_runtime_handle();
-        assert!(report.applied, "the patch should apply in place");
+        assert!(report.applied(), "the patch should apply in place");
 
         for node_id in &changed_nodes {
             cache.remove(node_id);
@@ -1559,7 +1559,10 @@ mod carried_plan_structure_tests {
             &mut changed_nodes,
         );
         applier.clear_runtime_handle();
-        assert!(report.applied, "the structural patch should apply in place");
+        assert!(
+            report.applied(),
+            "the structural patch should apply in place"
+        );
 
         for node_id in &changed_nodes {
             cache.remove(node_id);

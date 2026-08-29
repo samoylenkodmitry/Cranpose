@@ -1126,28 +1126,31 @@ impl cranpose_core::Node for SubcomposeLayoutNode {
             .detach_nodes();
     }
 
-    fn insert_child(&mut self, child: NodeId) {
+    fn insert_child(&mut self, child: NodeId) -> bool {
         let mut inner = self.inner.borrow_mut();
         if inner.children.contains(&child) {
-            return;
+            return false;
         }
         if is_virtual_node(child) {
             let count = self.virtual_children_count.get();
             self.virtual_children_count.set(count + 1);
         }
         inner.children.push(child);
+        true
     }
 
-    fn remove_child(&mut self, child: NodeId) {
+    fn remove_child(&mut self, child: NodeId) -> bool {
         let mut inner = self.inner.borrow_mut();
         let before = inner.children.len();
         inner.children.retain(|&id| id != child);
-        if inner.children.len() < before && is_virtual_node(child) {
+        let removed = inner.children.len() < before;
+        if removed && is_virtual_node(child) {
             let count = self.virtual_children_count.get();
             if count > 0 {
                 self.virtual_children_count.set(count - 1);
             }
         }
+        removed
     }
 
     fn move_child(&mut self, from: usize, to: usize) {
