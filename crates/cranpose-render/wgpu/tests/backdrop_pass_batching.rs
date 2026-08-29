@@ -207,12 +207,14 @@ fn scrolled_pass_counts(glass_count: usize) -> Vec<u32> {
 }
 
 /// Each extra disjoint fixed glass pays exactly its own small-target work —
-/// the separable blur pair plus the materialize pass that produces its
-/// cacheable surface — and NOTHING on the root target: its capture is a
-/// copy, not a pass, and its composite rides the shared batch. Before the
-/// pre-capture flushes were dependency-gated, every capture flushed the
-/// whole pending batch, so each glass also fragmented the composites into
-/// its own root-target pass (issue #500, cause 2).
+/// the separable blur pair, nothing more — and NOTHING on the root target:
+/// its capture is a copy, not a pass, the blur's second tap writes the
+/// cacheable surface directly, and its optical shader tail defers into the
+/// shared batched shader composite. Before the pre-capture flushes were
+/// dependency-gated, every capture flushed the whole pending batch, so each
+/// glass also fragmented the composites into its own root-target pass
+/// (issue #500, cause 2); before the tail deferred, each glass also paid a
+/// materialize pass baking per-frame shader dynamics into its cache key.
 #[test]
 fn each_extra_fixed_glass_adds_only_its_blur_chain() {
     let single: Vec<u32> = scrolled_pass_counts(1);
@@ -229,10 +231,10 @@ fn each_extra_fixed_glass_adds_only_its_blur_chain() {
     );
     assert_eq!(
         triple_steady,
-        single_steady + 6,
-        "two extra fixed glasses must add exactly their blur pairs and \
-         materialize passes (3 small-target passes each), with every \
-         composite riding the shared batch: single={single:?} triple={triple:?}"
+        single_steady + 4,
+        "two extra fixed glasses must add exactly their blur pairs (2 \
+         small-target passes each), with the shader tails and composites \
+         riding the shared batches: single={single:?} triple={triple:?}"
     );
 }
 
