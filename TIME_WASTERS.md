@@ -350,3 +350,25 @@ Signature → cause → what to do. One lesson per line, no incident history.
   the END of the run, which over-samples whatever phase ran last. Check
   line counts against expected frame counts before believing any logcat
   capture, and keep per-frame switches to the one being read.
+
+- **A diagnostic environment variable without a `debug.cranpose.*` seeding
+  entry can only ever be read on desktop.** Android apps inherit nothing an
+  operator can set; the only bridge is `PROPERTY_BACKED_ENV_VARS` in
+  `android_frame_telemetry.rs`. `CRANPOSE_LAYOUT_MEASURE_TELEMETRY_MS` sat
+  unreachable on device — where the layout gap it measures actually lives —
+  until it got an entry. When adding a diagnostic env knob, add the seeding
+  entry in the same commit or accept that the device is blind to it. Two
+  more traps in the same instrument: the bare presence flag defaults the
+  threshold to 4.0 ms, which prints nothing at a 1.65 ms device layout and
+  reads exactly like "layout is free"; and threshold 0 turns on the
+  PER-NODE log sharing the same threshold, a warn storm inside the phase
+  being timed.
+- **A property name of 32 bytes reads back empty through the legacy
+  `__system_property_get` on the Mate 20 X's bionic while `adb getprop`
+  shows the value fine.** `debug.cranpose.layout_measure_ms` (32 bytes)
+  seeded nothing with no error anywhere: prop set, app silent, instrument
+  dark. `debug.cranpose.layout_ms` (24) works. The in-tree comment claiming
+  the pre-O name cap is gone was tested against `adb getprop`, not against
+  the legacy reader the app actually uses. Keep `debug.cranpose.*` names at
+  31 bytes or fewer, and when a prop-backed knob stays silent, suspect the
+  NAME before the plumbing.

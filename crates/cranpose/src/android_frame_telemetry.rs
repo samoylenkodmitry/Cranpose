@@ -134,9 +134,11 @@ const PROPERTY_BACKED_ENV_VARS: [(&str, &str); 43] = [
         "debug.cranpose.frame_stage_ms",
         "CRANPOSE_FRAME_STAGE_TELEMETRY_MS",
     ),
-    // 24 bytes: the legacy `__system_property_get` this module reads with
-    // silently fails on some vendor bionics past 31-byte names, and this
-    // knob's first candidate name was exactly 32.
+    // 24 bytes, comfortably under the pre-O 31-byte name cap the legacy
+    // `__system_property_get` documents. The first candidate name was
+    // exactly 32 and was never proven readable or unreadable — the build
+    // carrying it failed to compile and a stale lib masked the failure —
+    // so the short name stays as the conservative choice.
     (
         "debug.cranpose.layout_ms",
         "CRANPOSE_LAYOUT_MEASURE_TELEMETRY_MS",
