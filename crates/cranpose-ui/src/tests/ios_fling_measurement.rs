@@ -37,8 +37,10 @@ use crate::{
 
 /// `scrollViewDidScroll` samples (t_ms since release, contentOffset.y) for a
 /// single fling: release at offsetY=400, decelerationRate=.normal (0.998),
-/// vy=480.8336647166092 (points/ms, from
-/// `scrollViewWillEndDragging`) — targetY was 635.33333.
+/// vy=480.8336647166092 points/sec (the same release as `TARGET_OFFSET_SAMPLES`'s
+/// first row, whose raw `scrollViewWillEndDragging` value of 0.480834 points/ms
+/// is converted here by x1000 to match `start_fling`'s points/sec convention)
+/// — targetY was 635.33333.
 const NORMAL_RATE_TRACE: (f32, f32, &[(f32, f32)]) = (
     400.0,
     480.833_66,
