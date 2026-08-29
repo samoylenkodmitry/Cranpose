@@ -219,10 +219,7 @@ fn main() {
                     zero_steps.push(step);
                 }
 
-                prev_shot = curr_shot;
-            }
-
-            if !zero_steps.is_empty() || min_changed < MIN_CHANGED_PIXELS_PER_STEP {
+            if !failures.is_empty() {
                 fail(
                     &robot,
                     &format!(
@@ -232,6 +229,10 @@ fn main() {
                         output_dir.display()
                     ),
                 );
+            }
+
+            for path in &capture_paths {
+                let _ = std::fs::remove_file(path);
             }
 
             println!(
