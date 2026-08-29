@@ -202,3 +202,63 @@ Signature → cause → what to do. One lesson per line, no incident history.
 - **Test the accept path: a predicate that only ever holds is indistinguishable from a working one until the day it needs to fire.** A CI gate ran `gh pr view <n> --json statusCheckRollup --jq -c '<filter>'`, but `--jq` takes exactly one argument, so `-c` became the filter and the real filter a second positional — `accepts at most 1 arg(s), received 2`. gh exited non-zero and the rollup was empty on every poll for hours, across two arms. It had been tested against seven synthetic *bad* inputs and held on all of them, which is why it was trusted; the one untested input was a genuinely green rollup, the only one that ever had to pass. Corollary on reporting: when that gate first ended with an empty rollup it was described as the guard correctly holding — a bug narrated as the system working as designed. Watch for that shape in your own summaries. Corollary on stderr: suppressing it converts a broken command into a plausible measurement. Both failures above were loud — `accepts at most 1 arg(s)` on every call — and silent only because `2>/dev/null` discarded the one line that named them. A dead command does not read as "no data"; it reads as evidence, and two people drew two different confident conclusions from one that never ran.
 - **Never let absence be the success signal.** Four failures in one day shared one shape: a check that concluded something had *succeeded* because an expected symptom was *missing*. A waiter grepped for "pending" and read the word's absence as the run finishing, so a transient error ended the wait like completion. A rollup test accepted a partial list of registered checks because none of the four present were failing, while the slowest job had not been created yet. A merge was reported done because nothing objected, when the exit status said 1 and only the tree said otherwise. And a command that never ran returned nothing, which was taken as a measurement rather than as a broken command. State the success condition positively and require it to be present: a literal `true` from the predicate, every expected check named and accounted for, the commit reachable from `origin/main`, a non-empty parse with stderr left visible. Absence is what you get when the question was never asked.
 - **A headless scroll harness that scrolls nowhere still hits every cache, and every counter assertion built on it lies green.** `LazyListState::dispatch_scroll_delta(+12.0)` in an `AppShell` test clamps silently at offset zero — content scrolls with *negative* deltas — so six "scrolled" frames were byte-identical stills: `blur=0, cache_miss=0`, pass counts steady, and a fixed-glass batching test was being written against a scene where nothing moved. Before trusting any scroll-driven counter in `capture_frame` harnesses, prove motion first: sum the captured frame's bytes across two frames and require the sums to differ (`backdrop_pass_batching.rs` grew that check as an eprintln probe; two lines, caught it immediately). The device-side twin of this trap is `idle_iters`; the headless twin is a pixel sum.
+- **Fill-pixel counters rank GPU work; only time attribution sizes it.** A device profile showed cached shadow composites filling 4.9–5.2 MP a frame against a 2.4 MP screen — the largest single number on the page — and a full fill-reduction change (occluder banding, 35% fewer shadow pixels) was designed, tested and device-measured off that ranking. The ablation then showed all shadows together cost 2–5 fps, and the banding's fps delta drowned in run-to-run noise: on a tiler with AFBC, megapixels of flat translucent black are far cheaper per pixel than the counter implies. Counters say *what* is drawn; before writing a fix, get *time* — GPU timestamp queries per pass — or ablate. Two corollaries from the same afternoon: an ablation must not change the pass structure it measures (skipping shadow *encodes* left their items splitting batch passes, 13→25, and "shadows off" measured slower than on), and back-to-back device runs drift thermally, so alternate A/B/A/B and log the battery temperature into the same output as the fps.
+- **The desktop demo's retained-feed replay bypasses the shadow-composite path entirely, so a desktop fps A/B of shadow work measures nothing.** A `shadowed_cards_scroll` perf-harness scenario of opaque elevated cards ran at 145 fps with `avg_composite_passes=0, avg_blur_passes=0, cache hits/misses 0` — 99.25% lazy reuse replayed retained commands and no shadow composite ever executed, while the same scene shape on Android runs 11–12 shadow composites a frame. Desktop iteration is excellent for pass-structure and fill contracts (headless `capture_frame` tests, seconds per cycle) but a desktop wall-clock number only transfers to Android for paths the desktop actually executes; check the counters before trusting the fps.
+
+- The Mate 20 X keyguard is secure (face/PIN): `wm dismiss-keyguard`, MENU, and
+  swipe all bounce, `screencap` returns 0 bytes against it, and an activity
+  `am start`ed behind it comes up resumed but surfaceless — the process is
+  alive, renders nothing, and prints no telemetry, which reads exactly like a
+  broken build. Never end a device script with `KEYCODE_SLEEP`; it locks every
+  later round out until a human unlocks the phone. Check
+  `dumpsys window policy | grep showing` before trusting an empty logcat.
+
+- **A `$var` inside `ssh host 'bash -lc "..."` belongs to the remote LOGIN
+  shell, not to the script.** `for rev in a b; do git checkout $rev; ...` ran
+  a three-commit bisect where every arm silently tested the SAME tree: the
+  remote outer shell expanded `$rev` to empty before `bash -lc` ever parsed
+  the loop, `git checkout -q` with no argument is a no-op that exits 0, and
+  the loop's own `echo === $rev ===` printed `===  ===` — the tell was in the
+  output and still easy to read past. Escape as `\$rev` (and `\$PATH`), or
+  scp a script file. Related self-kill: `pkill -f <pattern>` where the
+  pattern also appears in the calling shell's own command line (it always
+  does when you just typed it) matches the parent `bash -lc` and kills the
+  session with exit 255 and zero output.
+
+- **samarch-1's real display (DISPLAY=:0) fails three robot tests that xvfb
+  CI passes, on main itself** — robot_counter_button_release_external_visual
+  ("Increment click did not update counter"), robot_regression_shader_visual
+  _contract ("glass/blur overlap lost backdrop detail in the right half",
+  byte-identical pixel counts across runs), and robot_markdown_full_demo_
+  code_block_visual_contract (wheel input or blank code block, varies).
+  Verified at origin/main f1b4ce58: all three FAIL on :0 and pass in CI's
+  xvfb run of the same commits. Before attributing an X0 robot failure to a
+  branch, run the same test at origin/main on :0 first; conversely a real-
+  display-only failure is invisible to CI, so a green board does not clear
+  it. The suites' authoritative environment is the one CI runs. And before
+  blaming the display at all, rerun the same binary with `TZ=UTC`: cranscan's
+  nightly suite-wide red turned out to be UTC-stored dates grouped against
+  the LOCAL calendar day (every run between local midnight and UTC midnight
+  grew an extra date header and shifted all content ~26 px), which reads
+  exactly like an environment failure and follows the clock, not the box.
+
+- **`std::thread::available_parallelism()` reports the calling thread's
+  affinity mask, not the machine** — after `sched_setaffinity` restricted a
+  thread to 4 of 8 cores, every later parallelism read on that thread (and
+  its children, which inherit the mask) answered 4. On the Mate 20 X this
+  silently flipped the ≥6-core present-thread class and the pipeline ran
+  single-threaded; the affinity readback listing one frame thread where the
+  unpinned arm had two was the only visible symptom, and it cost a full APK
+  rebuild + device A/B round to discover. Read machine-topology facts
+  before any affinity call, and treat any capacity decision made after a
+  pin as suspect.
+
+- **Heavy ssh builds on samarch-1 can kill a CI job running on the same
+  box** — a `cargo test` over ssh while `samarch-1-cranpose` had a job
+  broke the job's sccache server ("Server startup failed: Address in use"
+  at job start, then "server shut down unexpectedly" + connection resets
+  mid-job), failing the job with infra "could not compile" errors on
+  crates.io deps that compile everywhere. The "validate on samarch before
+  CI" advice needs a check first: if the runner is mid-job, wait or use the
+  second checkout with its own SCCACHE_DIR/port, or skip sccache
+  (`SCCACHE_DISABLE=1`/unset RUSTC_WRAPPER) for the validation build.

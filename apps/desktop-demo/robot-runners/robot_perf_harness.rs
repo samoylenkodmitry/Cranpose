@@ -65,6 +65,7 @@ enum PerfScenario {
     BackdropBlur,
     OpaqueScene,
     GlassLazyScroll,
+    ShadowedCardsScroll,
 }
 
 impl PerfScenario {
@@ -78,6 +79,7 @@ impl PerfScenario {
             "backdrop_blur" => Some(Self::BackdropBlur),
             "opaque_scene" => Some(Self::OpaqueScene),
             "glass_lazy_scroll" => Some(Self::GlassLazyScroll),
+            "shadowed_cards_scroll" => Some(Self::ShadowedCardsScroll),
             _ => None,
         }
     }
@@ -100,6 +102,7 @@ impl PerfScenario {
             Self::BackdropBlur => "backdrop_blur",
             Self::OpaqueScene => "opaque_scene",
             Self::GlassLazyScroll => "glass_lazy_scroll",
+            Self::ShadowedCardsScroll => "shadowed_cards_scroll",
         }
     }
 
@@ -113,6 +116,7 @@ impl PerfScenario {
             Self::BackdropBlur => "Backdrop Blur Panel",
             Self::OpaqueScene => "Opaque Scene",
             Self::GlassLazyScroll => "Glass Lazy Scroll",
+            Self::ShadowedCardsScroll => "Shadowed Cards Scroll",
         }
     }
 
@@ -126,6 +130,7 @@ impl PerfScenario {
             Self::BackdropBlur => 220,
             Self::OpaqueScene => 260,
             Self::GlassLazyScroll => 400,
+            Self::ShadowedCardsScroll => 260,
         }
     }
 
@@ -147,6 +152,7 @@ impl PerfScenario {
             Self::BackdropBlur => Color(0.72, 0.86, 0.98, 0.24),
             Self::OpaqueScene => Color(0.3, 0.36, 0.44, 1.0),
             Self::GlassLazyScroll => Color(0.72, 0.84, 0.98, 0.9),
+            Self::ShadowedCardsScroll => Color(0.35, 0.4, 0.5, 0.9),
         }
     }
 
@@ -307,7 +313,40 @@ fn PerfScenarioItem(index: usize, scenario: PerfScenario) {
         PerfScenario::BackdropBlur => BackdropRow(index),
         PerfScenario::OpaqueScene => OpaqueRow(index),
         PerfScenario::GlassLazyScroll => GlassRow(index),
+        PerfScenario::ShadowedCardsScroll => ShadowedCardRow(index),
     }
+}
+
+/// The document-list shape a scanner app scrolls all day: an opaque
+/// elevated rounded card. Every visible card composites an ambient and a
+/// spot shadow from the shape-shadow cache, which a device profile put at
+/// twice the screen's own pixels per frame before the composites were
+/// banded to the caster's visible ring.
+#[composable]
+#[allow(non_snake_case)]
+fn ShadowedCardRow(index: usize) {
+    let card = if index.is_multiple_of(2) {
+        Color(0.98, 0.98, 0.99, 1.0)
+    } else {
+        Color(0.94, 0.95, 0.97, 1.0)
+    };
+    Box(
+        Modifier::empty()
+            .fill_max_width()
+            .height(112.0)
+            .rounded_corners(12.0)
+            .shadow(6.0)
+            .background(card)
+            .padding(14.0),
+        BoxSpec::new(),
+        move || {
+            Text(
+                format!("Receipt {}", index),
+                Modifier::empty(),
+                TextStyle::default(),
+            );
+        },
+    );
 }
 
 #[composable]

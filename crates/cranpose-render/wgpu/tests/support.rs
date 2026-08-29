@@ -143,6 +143,22 @@ pub fn headless_renderer_parts() -> Result<(MutexGuard<'static, ()>, WgpuRendere
 /// Re-initializes an already-initialized renderer's GPU on a fresh headless
 /// device — the same `init_gpu`-over-live-renderer replacement semantics as
 /// Android's surface recreation path (`renderer_needs_init`).
+/// [`headless_renderer_parts`], with `configure` run under the GPU-test lock
+/// before the renderer is constructed. This is the only safe window for
+/// flipping a global debug toggle that renderer construction reads: parallel
+/// tests build their renderers under the same lock, so a toggle set outside
+/// it leaks into whichever renderer happens to be constructing. The
+/// configured value is returned so a guard can outlive the renderer and
+/// restore the toggle on drop.
+pub fn headless_renderer_parts_configured<T>(
+    configure: impl FnOnce() -> T,
+) -> Result<(MutexGuard<'static, ()>, T, WgpuRenderer), String> {
+    let lock = lock_gpu_test();
+    let configured = configure();
+    let renderer = create_headless_renderer()?;
+    Ok((lock, configured, renderer))
+}
+
 pub fn reinit_gpu(renderer: &mut LockedRenderer) -> Result<(), String> {
     let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
     instance_descriptor.backends = wgpu::Backends::all();
@@ -155,7 +171,7 @@ pub fn reinit_gpu(renderer: &mut LockedRenderer) -> Result<(), String> {
     .map_err(|err| format!("adapter request failed: {err:?}"))?;
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("Replacement Contract Test Device"),
-        required_features: wgpu::Features::empty(),
+        required_features: cranpose_render_wgpu::optional_device_features(&adapter),
         required_limits: wgpu::Limits::default(),
         experimental_features: wgpu::ExperimentalFeatures::disabled(),
         memory_hints: wgpu::MemoryHints::default(),
@@ -206,7 +222,7 @@ fn create_headless_renderer_with_format(
     .map_err(|err| format!("adapter request failed: {err:?}"))?;
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("Shared Render Contract Test Device"),
-        required_features: wgpu::Features::empty(),
+        required_features: cranpose_render_wgpu::optional_device_features(&adapter),
         required_limits: wgpu::Limits::default(),
         experimental_features: wgpu::ExperimentalFeatures::disabled(),
         memory_hints: wgpu::MemoryHints::default(),

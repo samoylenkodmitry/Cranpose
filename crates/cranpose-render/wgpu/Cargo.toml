@@ -37,6 +37,7 @@ bytemuck = { version = "1.25", features = ["derive"] }
 log = "0.4"
 naga = { version = "29.0.3", features = ["wgsl-in"] }
 web-time = { workspace = true }
+smallvec = "1.15.1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # Substrate for the stage executor: vetted scoped parallelism so the frame
@@ -52,6 +53,11 @@ wgpu = { version = "29.0", default-features = false, features = [
     "vulkan",
     "wgsl",
 ] }
+
+# Fast-core affinity for the frame-critical threads (`fast_cores`): safe
+# sched_setaffinity, so the big.LITTLE placement fix needs no local unsafe.
+[target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
+rustix = { version = "1.1", features = ["thread"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 wgpu = { version = "29.0", default-features = false, features = [

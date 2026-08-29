@@ -2796,6 +2796,12 @@ pub struct MemoryApplier {
     /// Parents whose child lists changed structurally since the last drain
     /// (see [`Applier::record_structural_change`]).
     structural_change_parents: Vec<NodeId>,
+    /// Nodes inserted with a pre-assigned id ([`Applier::insert_with_id`]) —
+    /// subcompose slot wrappers. They never appear in the render graph, so a
+    /// structural change recorded against one is reported as its nearest
+    /// non-virtual ancestor (the node whose graph child set the change
+    /// actually altered).
+    virtual_node_ids: HashSet<NodeId>,
 }
 
 struct RemovalFrame {
@@ -2927,6 +2933,7 @@ impl MemoryApplier {
             fresh_recyclable_creations: HashMap::default(),
             recycled_node_prototypes: HashMap::default(),
             structural_change_parents: Vec::new(),
+            virtual_node_ids: HashSet::default(),
         }
     }
 
@@ -2936,16 +2943,39 @@ impl MemoryApplier {
 
     /// Drains the parents recorded via [`Applier::record_structural_change`],
     /// keeping only nodes still attached to `root` (a parent that was itself
-    /// removed is covered by its own surviving ancestor's record).
+    /// removed is covered by its own surviving ancestor's record). A virtual
+    /// parent — a subcompose slot wrapper the render graph never contains —
+    /// is reported as its nearest non-virtual ancestor: that is the node
+    /// whose graph child set the change altered, and an id the graph cannot
+    /// resolve would force the scoped scene update to give up and rebuild.
     pub fn take_structural_change_parents_attached_to(&mut self, root: NodeId) -> Vec<NodeId> {
         let recorded = std::mem::take(&mut self.structural_change_parents);
         let mut attached = Vec::with_capacity(recorded.len());
         for parent_id in recorded {
+            let Some(parent_id) = self.first_non_virtual_ancestor(parent_id) else {
+                continue;
+            };
             if self.is_attached_to(parent_id, root) && !attached.contains(&parent_id) {
                 attached.push(parent_id);
             }
         }
         attached
+    }
+
+    fn first_non_virtual_ancestor(&mut self, node_id: NodeId) -> Option<NodeId> {
+        let mut current = node_id;
+        // Parent chains are tree-shaped; the guard only bounds a corrupted
+        // cyclic chain so the walk cannot spin forever.
+        for _ in 0..100_000 {
+            if !self.virtual_node_ids.contains(&current) {
+                return Some(current);
+            }
+            match self.get_mut(current) {
+                Ok(node) => current = node.parent()?,
+                Err(_) => return None,
+            }
+        }
+        None
     }
 
     fn is_attached_to(&mut self, node_id: NodeId, root: NodeId) -> bool {
@@ -3511,6 +3541,7 @@ impl MemoryApplier {
     }
 
     fn remove_node_storage(&mut self, node_id: NodeId) -> Result<(), NodeError> {
+        self.virtual_node_ids.remove(&node_id);
         if self.high_id_nodes.contains_key(&node_id) {
             if let Some(mut node) = self.high_id_nodes.remove(&node_id)
                 && let Some(key) = node.recycle_key()
@@ -3679,6 +3710,7 @@ impl Applier for MemoryApplier {
             return Err(NodeError::AlreadyExists { id });
         }
         self.insert_available_with_id(id, node);
+        self.virtual_node_ids.insert(id);
         Ok(())
     }
 

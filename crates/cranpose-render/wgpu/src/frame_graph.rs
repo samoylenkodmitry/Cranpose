@@ -5,12 +5,21 @@ use std::{
 
 use web_time::Instant;
 
-use crate::offscreen::OffscreenTarget;
+use crate::{
+    offscreen::OffscreenTarget,
+    pass_timing::{GpuPassTimingReport, PassTimer},
+};
 
 #[derive(Default)]
 pub(crate) struct WgpuFrameGraphExecutor {
     transient_textures: TransientTexturePool,
     upload_allocators: FrameUploadAllocators,
+    /// `Some` while `CRANPOSE_GPU_PASS_TIMING` profiles the frame's passes.
+    /// It lives here, not on the renderer, because the executor is the one
+    /// value already moved out of the renderer before the frame closure
+    /// mutably borrows it — every recorder the executor builds can then carry
+    /// the timer without a second borrow of the renderer.
+    pass_timer: Option<PassTimer>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -336,6 +345,7 @@ pub(crate) struct PassContext<'pass> {
     transient_texture_bytes: &'pass mut u64,
     staged_upload_cursor: &'pass mut u64,
     pass_count: u32,
+    pass_timer: Option<&'pass PassTimer>,
 }
 
 pub(crate) fn texture_format_bytes_per_pixel(format: wgpu::TextureFormat) -> u64 {
@@ -395,6 +405,44 @@ impl WgpuFrameGraphExecutor {
         Self::default()
     }
 
+    /// Arms per-pass GPU timing when `CRANPOSE_GPU_PASS_TIMING` asks for it
+    /// and the device granted [`wgpu::Features::TIMESTAMP_QUERY`].
+    pub(crate) fn init_pass_timing(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        if crate::pass_timing::pass_timing_requested() {
+            self.pass_timer = PassTimer::for_device(device, queue);
+        }
+    }
+
+    /// Resolves and reads back this frame's pass timestamps; prints the
+    /// aggregate on its own cadence. A no-op unless timing is armed. Call
+    /// once per frame, after the frame's submits — the resolve rides its own
+    /// submission, and submission order makes the timestamps it reads
+    /// complete.
+    pub(crate) fn end_pass_timing_frame(&self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        let Some(timer) = &self.pass_timer else {
+            return;
+        };
+        let _ = device.poll(wgpu::PollType::Poll);
+        timer.harvest_completed();
+        if let Some(resolve) = timer.frame_resolve() {
+            let mut encoder =
+                Self::create_command_encoder(device, Some("Pass Timing Resolve Encoder"));
+            resolve.encode(&mut encoder);
+            Self::submit(queue, encoder);
+            resolve.arm_readback();
+        }
+        timer.finish_frame();
+    }
+
+    /// The timing aggregate of the current print window; empty when timing
+    /// is not armed.
+    pub(crate) fn pass_timing_report(&self) -> GpuPassTimingReport {
+        self.pass_timer
+            .as_ref()
+            .map(PassTimer::report)
+            .unwrap_or_default()
+    }
+
     pub(crate) fn retained_texture_count(&self) -> usize {
         self.transient_textures.len()
     }
@@ -416,6 +464,7 @@ impl WgpuFrameGraphExecutor {
         size: wgpu::Extent3d,
     ) -> FrameCommandStats {
         queue.write_texture(destination, data, data_layout, size);
+        note_upload_write();
         FrameCommandStats {
             upload_bytes: data.len() as u64,
             ..FrameCommandStats::default()
@@ -433,6 +482,7 @@ impl WgpuFrameGraphExecutor {
             return FrameCommandStats::default();
         }
         queue.write_buffer(buffer, offset, data);
+        note_upload_write();
         FrameCommandStats {
             upload_bytes: data.len() as u64,
             ..FrameCommandStats::default()
@@ -453,6 +503,7 @@ impl WgpuFrameGraphExecutor {
             transient_releases: PendingTransientReleases::new(&mut self.transient_textures),
             transient_texture_bytes: 0,
             pass_count: 0,
+            pass_timer: self.pass_timer.as_ref(),
         }
     }
 
@@ -568,6 +619,7 @@ impl WgpuFrameGraphExecutor {
             transient_texture_bytes,
             staged_upload_cursor,
             pass_count: 0,
+            pass_timer: self.pass_timer.as_ref(),
         };
         let recorded_pass_count = pass.encode(pass_index, &mut context)?;
         log_frame_graph_pass_timing(pass_start, pass_label, pass_index);
@@ -582,6 +634,7 @@ impl WgpuFrameGraphExecutor {
     }
 
     fn submit(queue: &wgpu::Queue, encoder: wgpu::CommandEncoder) -> wgpu::SubmissionIndex {
+        let _ = take_upload_write_calls();
         queue.submit(std::iter::once(encoder.finish()))
     }
 
@@ -607,13 +660,32 @@ impl WgpuFrameGraphExecutor {
 
         let finish_ms = submit_start.duration_since(finish_start).as_secs_f64() * 1000.0;
         let submit_ms = submit_end.duration_since(submit_start).as_secs_f64() * 1000.0;
+        let upload_writes = take_upload_write_calls();
         if finish_ms + submit_ms >= threshold_ms {
             log::warn!(
-                "[wgpu-render-stage:submit] finish_ms={finish_ms:.3} submit_ms={submit_ms:.3}"
+                "[wgpu-render-stage:submit] finish_ms={finish_ms:.3} submit_ms={submit_ms:.3} upload_writes={upload_writes}"
             );
         }
         submission
     }
+}
+
+std::thread_local! {
+    /// Individual `write_buffer`/`write_texture` calls issued since the last
+    /// submit on this thread. Many small writes carry per-call staging and
+    /// synchronization cost on tiler drivers even when total bytes are tiny,
+    /// and byte totals cannot distinguish one 64 KB write from a thousand
+    /// 64-byte ones — which is the difference a submit stall investigation
+    /// has to see.
+    static UPLOAD_WRITE_CALLS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+fn note_upload_write() {
+    UPLOAD_WRITE_CALLS.with(|calls| calls.set(calls.get().saturating_add(1)));
+}
+
+fn take_upload_write_calls() -> u32 {
+    UPLOAD_WRITE_CALLS.with(|calls| calls.replace(0))
 }
 
 fn frame_graph_pass_telemetry_threshold_ms() -> Option<f64> {
@@ -639,6 +711,13 @@ fn log_frame_graph_pass_timing(start: Instant, label: Option<&'static str>, pass
 
 pub(crate) trait FrameCommandRecorder {
     fn encoder(&mut self) -> &mut wgpu::CommandEncoder;
+    /// Begins a render pass with GPU pass timing attached when it is armed.
+    /// Every render pass the frame records must start here rather than on
+    /// [`Self::encoder`] directly, or it escapes the `[GPU-PASS]` profile.
+    fn begin_timed_render_pass(
+        &mut self,
+        descriptor: &wgpu::RenderPassDescriptor<'_>,
+    ) -> wgpu::RenderPass<'_>;
     fn upload_uniform(
         &mut self,
         id: UploadAllocatorId,
@@ -679,6 +758,13 @@ pub(crate) trait FrameCommandRecorder {
 impl FrameCommandRecorder for PassContext<'_> {
     fn encoder(&mut self) -> &mut wgpu::CommandEncoder {
         self.encoder
+    }
+
+    fn begin_timed_render_pass(
+        &mut self,
+        descriptor: &wgpu::RenderPassDescriptor<'_>,
+    ) -> wgpu::RenderPass<'_> {
+        crate::pass_timing::begin_timed_render_pass(self.pass_timer, self.encoder, descriptor)
     }
 
     fn upload_uniform(
@@ -754,6 +840,7 @@ pub(crate) struct WgpuFrameEncoder<'a> {
     transient_releases: PendingTransientReleases<'a>,
     transient_texture_bytes: u64,
     pass_count: u32,
+    pass_timer: Option<&'a PassTimer>,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -839,6 +926,13 @@ impl Drop for PendingTransientReleases<'_> {
 impl FrameCommandRecorder for WgpuFrameEncoder<'_> {
     fn encoder(&mut self) -> &mut wgpu::CommandEncoder {
         Self::encoder(self)
+    }
+
+    fn begin_timed_render_pass(
+        &mut self,
+        descriptor: &wgpu::RenderPassDescriptor<'_>,
+    ) -> wgpu::RenderPass<'_> {
+        crate::pass_timing::begin_timed_render_pass(self.pass_timer, &mut self.encoder, descriptor)
     }
 
     fn upload_uniform(
@@ -1290,6 +1384,7 @@ impl UploadAllocator {
             self.slots[index] = self.create_slot(device, required_size);
         }
         queue.write_buffer(&self.slots[index].buffer, 0, bytes);
+        note_upload_write();
         uploaded_bytes.set(uploaded_bytes.get().saturating_add(bytes.len() as u64));
         index
     }

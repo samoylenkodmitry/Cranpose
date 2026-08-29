@@ -42,6 +42,7 @@ use cranpose_ui_graphics::{
     BlendMode, Brush, Color, ColorFilter, FxHasher, ImageBitmap, ImageSampling, Point, Rect,
     RenderEffect, RenderHash, RuntimeShader, StrokeCap, StrokeJoin, TileMode,
 };
+use smallvec::SmallVec;
 use web_time::Instant;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -97,7 +98,7 @@ use crate::{
     layer_surface_cache::LayerSurfaceCache,
     lazy_resource::PassPipeline,
     normalized_scene::{ChildLayerComposite, CollectedLayer, translate_quad},
-    offscreen::{COMPOSITION_FORMAT, OffscreenTarget, composition_bytes_per_pixel},
+    offscreen::{OffscreenTarget, composition_bytes_per_pixel, composition_format},
     output_conversion::OutputConverter,
     pipeline::push_layer_shadow,
     rect_to_quad,
@@ -282,6 +283,17 @@ const MAX_SHADOW_SURFACE_CACHE_ITEMS: usize = 512;
 // ~10-15 rasters of 4-12MB each; a 64MB budget made the large entries evict
 // each other every frame during scroll, re-blurring tens of megapixels.
 const MAX_SHADOW_SURFACE_CACHE_BYTES: u64 = 384 * 1024 * 1024;
+
+/// Ablation switch for shadow fill: `CRANPOSE_SKIP_SHADOWS=1` (on Android,
+/// `debug.cranpose.skip_shadows`) drops every drop-shadow encode and
+/// composite for the frame. Shadow composites measured as the largest fill
+/// on a device profile — this toggle is how that cost is isolated on real
+/// hardware before and after fill-reduction work.
+fn skip_shadow_draws() -> bool {
+    crate::debug_toggles::debug_toggle("CRANPOSE_SKIP_SHADOWS")
+        .map(|v| matches!(v.as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false)
+}
 const MAX_TEXT_IMAGE_CACHE_ITEMS: usize = 1024;
 const MAX_TEXT_GLYPH_MASK_CACHE_ITEMS: usize = 8192;
 const MAX_TEXT_GLYPH_ATLAS_ITEMS: usize = 8192;
@@ -530,23 +542,200 @@ struct CachedShadowSurface {
 
 struct CachedShadowComposite {
     source: Rc<OffscreenTarget>,
-    scissor: Option<(u32, u32, u32, u32)>,
+    /// The scissored strips the composite actually fills: the shadow's
+    /// coverage minus the caster's occluded interior. One full-coverage band
+    /// when the caster occludes nothing.
+    bands: SmallVec<[(u32, u32, u32, u32); 4]>,
     rounded_mask: Option<RoundedCompositeMask>,
     dest_viewport: Option<(f32, f32, f32, f32)>,
 }
 
 impl CachedShadowComposite {
-    fn batch_item(&self) -> CompositeBatchItem<'_> {
-        CompositeBatchItem {
+    fn band_items(&self) -> impl Iterator<Item = CompositeBatchItem<'_>> + '_ {
+        self.bands.iter().map(move |band| CompositeBatchItem {
             source: &self.source,
             alpha: 1.0,
-            scissor: self.scissor,
+            scissor: Some(*band),
             rounded_mask: self.rounded_mask,
             blend_mode: BlendMode::SrcOver,
             dest_viewport: self.dest_viewport,
             source_viewport: None,
             sample_mode: CompositeSampleMode::Nearest,
+        })
+    }
+
+    fn banded_pixels(&self) -> u64 {
+        self.bands
+            .iter()
+            .map(|(_, _, w, h)| u64::from(*w) * u64::from(*h))
+            .sum()
+    }
+}
+
+/// A shadow composite's true fill region: the dest-viewport quad the draw
+/// covers, intersected with its scissor when one is set.
+fn shadow_composite_coverage(
+    dest_viewport: (f32, f32, f32, f32),
+    scissor: Option<(u32, u32, u32, u32)>,
+    target: (u32, u32),
+) -> (u32, u32, u32, u32) {
+    let (dx, dy, dw, dh) = dest_viewport;
+    let left = dx.floor().max(0.0) as u32;
+    let top = dy.floor().max(0.0) as u32;
+    let right = (((dx + dw).ceil()).max(0.0) as u32).min(target.0);
+    let bottom = (((dy + dh).ceil()).max(0.0) as u32).min(target.1);
+    let quad = (
+        left,
+        top,
+        right.saturating_sub(left),
+        bottom.saturating_sub(top),
+    );
+    let Some((sx, sy, sw, sh)) = scissor else {
+        return quad;
+    };
+    let left = quad.0.max(sx);
+    let top = quad.1.max(sy);
+    let right = (quad.0 + quad.2).min(sx.saturating_add(sw));
+    let bottom = (quad.1 + quad.3).min(sy.saturating_add(sh));
+    (
+        left,
+        top,
+        right.saturating_sub(left),
+        bottom.saturating_sub(top),
+    )
+}
+
+/// The scissored strips left of a shadow composite's coverage after the
+/// caster's occluded interior is carved out: top and bottom bands span the
+/// full coverage width, left and right bands fill the remaining sides. The
+/// occluder is shrunk to whole pixels (ceil/floor inward) so no partially
+/// covered pixel is ever skipped; a coverage the occluder misses comes back
+/// as the single original rect.
+fn shadow_band_scissors(
+    coverage: (u32, u32, u32, u32),
+    occluder: Option<Rect>,
+    root_scale: f32,
+) -> SmallVec<[(u32, u32, u32, u32); 4]> {
+    let mut bands = SmallVec::new();
+    let (cx, cy, cw, ch) = coverage;
+    if cw == 0 || ch == 0 {
+        return bands;
+    }
+    let (c_left, c_top) = (cx, cy);
+    let (c_right, c_bottom) = (cx.saturating_add(cw), cy.saturating_add(ch));
+    let occluded = occluder.and_then(|rect| {
+        let left = ((rect.x * root_scale).ceil().max(0.0) as u32).max(c_left);
+        let top = ((rect.y * root_scale).ceil().max(0.0) as u32).max(c_top);
+        let right = (((rect.x + rect.width) * root_scale).floor().max(0.0) as u32).min(c_right);
+        let bottom = (((rect.y + rect.height) * root_scale).floor().max(0.0) as u32).min(c_bottom);
+        (left < right && top < bottom).then_some((left, top, right, bottom))
+    });
+    let Some((o_left, o_top, o_right, o_bottom)) = occluded else {
+        bands.push(coverage);
+        return bands;
+    };
+    if o_top > c_top {
+        bands.push((c_left, c_top, cw, o_top - c_top));
+    }
+    if o_bottom < c_bottom {
+        bands.push((c_left, o_bottom, cw, c_bottom - o_bottom));
+    }
+    if o_left > c_left {
+        bands.push((c_left, o_top, o_left - c_left, o_bottom - o_top));
+    }
+    if o_right < c_right {
+        bands.push((o_right, o_top, c_right - o_right, o_bottom - o_top));
+    }
+    bands
+}
+
+#[cfg(test)]
+mod shadow_band_tests {
+    use super::{Rect, shadow_band_scissors};
+
+    fn area(bands: &[(u32, u32, u32, u32)]) -> u64 {
+        bands
+            .iter()
+            .map(|(_, _, w, h)| u64::from(*w) * u64::from(*h))
+            .sum()
+    }
+
+    fn disjoint(bands: &[(u32, u32, u32, u32)]) -> bool {
+        for (i, a) in bands.iter().enumerate() {
+            for b in bands.iter().skip(i + 1) {
+                let x_overlap = a.0 < b.0 + b.2 && b.0 < a.0 + a.2;
+                let y_overlap = a.1 < b.1 + b.3 && b.1 < a.1 + a.3;
+                if x_overlap && y_overlap {
+                    return false;
+                }
+            }
         }
+        true
+    }
+
+    #[test]
+    fn an_interior_occluder_leaves_four_disjoint_bands_that_tile_the_ring() {
+        let occluder = Rect {
+            x: 20.0,
+            y: 30.0,
+            width: 60.0,
+            height: 40.0,
+        };
+        let bands = shadow_band_scissors((10, 20, 80, 60), Some(occluder), 1.0);
+        assert_eq!(bands.len(), 4);
+        assert!(disjoint(&bands));
+        assert_eq!(area(&bands), 80 * 60 - 60 * 40);
+    }
+
+    #[test]
+    fn an_occluder_outside_the_coverage_changes_nothing() {
+        let occluder = Rect {
+            x: 500.0,
+            y: 500.0,
+            width: 40.0,
+            height: 40.0,
+        };
+        let bands = shadow_band_scissors((10, 20, 80, 60), Some(occluder), 1.0);
+        assert_eq!(bands.as_slice(), &[(10, 20, 80, 60)]);
+    }
+
+    #[test]
+    fn an_occluder_swallowing_the_coverage_leaves_nothing_to_draw() {
+        let occluder = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 200.0,
+            height: 200.0,
+        };
+        let bands = shadow_band_scissors((10, 20, 80, 60), Some(occluder), 1.0);
+        assert!(bands.is_empty());
+    }
+
+    #[test]
+    fn a_fractional_occluder_shrinks_inward_so_no_covered_pixel_is_skipped() {
+        let occluder = Rect {
+            x: 20.4,
+            y: 30.6,
+            width: 59.9,
+            height: 39.9,
+        };
+        let bands = shadow_band_scissors((10, 20, 80, 60), Some(occluder), 1.0);
+        // ceil(20.4)=21, ceil(30.6)=31, floor(80.3)=80, floor(70.5)=70: the
+        // excluded rect is strictly inside the true occluder.
+        assert_eq!(area(&bands), 80 * 60 - (80u64 - 21) * (70 - 31));
+        assert!(disjoint(&bands));
+    }
+
+    #[test]
+    fn the_root_scale_maps_a_logical_occluder_into_device_pixels() {
+        let occluder = Rect {
+            x: 10.0,
+            y: 15.0,
+            width: 30.0,
+            height: 20.0,
+        };
+        let bands = shadow_band_scissors((0, 0, 200, 200), Some(occluder), 2.0);
+        assert_eq!(area(&bands), 200 * 200 - 60 * 40);
     }
 }
 
@@ -6310,7 +6499,7 @@ impl GpuRenderer {
         #[cfg(target_arch = "wasm32")]
         let _ = store_feed_generation;
         let display_format = surface_format;
-        let composition_format = COMPOSITION_FORMAT;
+        let composition_format = composition_format();
         // Construction time is worth a line of its own. Before pipelines were
         // built lazily this call linked every pipeline the frontend could ever
         // need, and on a GL device each link ended in a blocking
@@ -6671,6 +6860,8 @@ impl GpuRenderer {
         let output_converter = OutputConverter::new(&device, display_format);
         let screenshot_converter = OutputConverter::new(&device, wgpu::TextureFormat::Rgba8Unorm);
         let effects_ms = instant_ms(effects_started, Instant::now());
+        let mut frame_graph_executor = WgpuFrameGraphExecutor::new();
+        frame_graph_executor.init_pass_timing(&device, &queue);
 
         let renderer = Self {
             device,
@@ -6780,7 +6971,7 @@ impl GpuRenderer {
             scratch_effect_ranges: Vec::new(),
             scratch_layer_events: Vec::new(),
             staged_uploads: StagedBufferUploads::default(),
-            frame_graph_executor: WgpuFrameGraphExecutor::new(),
+            frame_graph_executor,
             deferred_offscreen_releases: Vec::new(),
             effect_renderer,
             layer_surface_cache: LayerSurfaceCache::new(),
@@ -7131,7 +7322,7 @@ impl GpuRenderer {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn segment_capture_pipeline(&self, kind: RetainedPipelineKind) -> &wgpu::RenderPipeline {
-        let format = COMPOSITION_FORMAT;
+        let format = composition_format();
         match kind {
             RetainedPipelineKind::Mesh => {
                 self.segment_capture_pipelines
@@ -7443,7 +7634,7 @@ impl GpuRenderer {
         let max_texture_dim = self.max_texture_dim();
         OffscreenTarget::new(
             &self.device,
-            COMPOSITION_FORMAT,
+            composition_format(),
             width.min(max_texture_dim).max(1),
             height.min(max_texture_dim).max(1),
         )
@@ -7517,7 +7708,11 @@ impl GpuRenderer {
         height: u32,
         root_scale: f32,
     ) -> Option<CachedShadowComposite> {
-        if shadow.blur_radius <= 0.0 || shadow.shapes.is_empty() || !shadow.texts.is_empty() {
+        if shadow.blur_radius <= 0.0
+            || shadow.shapes.is_empty()
+            || !shadow.texts.is_empty()
+            || skip_shadow_draws()
+        {
             return None;
         }
 
@@ -7539,15 +7734,29 @@ impl GpuRenderer {
         )?;
         let cached = self.cached_shadow_surface(&key)?;
         let viewport_offset = [plan.source_device_bounds.x, plan.source_device_bounds.y];
-        self.frame_stats.record_shadow_shape_cache_hit(
-            plan.source_device_bounds.width,
-            plan.source_device_bounds.height,
-        );
 
         let clip_scissor = shadow
             .clip
             .and_then(|clip| scissor_rect_for_rect(clip, root_scale, width, height));
         let scissor = clip_scissor.or(plan.processing_scissor);
+        let coverage = shadow_composite_coverage(
+            (
+                viewport_offset[0],
+                viewport_offset[1],
+                plan.source_device_bounds.width as f32,
+                plan.source_device_bounds.height as f32,
+            ),
+            scissor,
+            (width, height),
+        );
+        let bands = shadow_band_scissors(coverage, shadow.occluder, root_scale);
+        if cranpose_core::env_flag!("CRANPOSE_SHADOW_BAND_DIAG") {
+            eprintln!(
+                "[shadow-band-diag] bands={} coverage={coverage:?} occluder={:?} scale={root_scale} scissor={scissor:?}",
+                bands.len(),
+                shadow.occluder,
+            );
+        }
         let rounded_mask = inner_shadow_composite_mask(shadow, root_scale).map(|mut mask| {
             mask.rect[0] -= viewport_offset[0];
             mask.rect[1] -= viewport_offset[1];
@@ -7560,12 +7769,15 @@ impl GpuRenderer {
             plan.source_device_bounds.height as f32,
         ));
 
-        Some(CachedShadowComposite {
+        let composite = CachedShadowComposite {
             source: cached,
-            scissor,
+            bands,
             rounded_mask,
             dest_viewport,
-        })
+        };
+        self.frame_stats
+            .record_shadow_shape_cache_hit(composite.banded_pixels());
+        Some(composite)
     }
 
     fn insert_cached_shadow_surface(
@@ -8357,8 +8569,7 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
         {
             let _clear = self
                 .recorder
-                .encoder()
-                .begin_render_pass(&wgpu::RenderPassDescriptor {
+                .begin_timed_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("Layer Event Clear Pass"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                         view: target_view,
@@ -8370,9 +8581,7 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
                         },
                     })],
                     depth_stencil_attachment: None,
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                    multiview_mask: None,
+                    ..Default::default()
                 });
         }
         self.recorder.record_pass();
@@ -8469,6 +8678,13 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
         );
         #[cfg(target_arch = "wasm32")]
         let _ = culled_shadow_items;
+        // The ablation switch removes the items themselves: a shadow item
+        // that merely encoded nothing would still split the segment's batch
+        // passes, and the measurement would charge shadows for pass breaks
+        // they no longer cause.
+        if skip_shadow_draws() {
+            ordered_items.retain(|(_, item)| !matches!(item, SegmentDrawItem::Shadow(_)));
+        }
         let mut cached_shadow_composites: Vec<(usize, CachedShadowComposite)> = Vec::new();
         ordered_items.extend(
             composites
@@ -8482,6 +8698,18 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
                 .enumerate()
                 .map(|(index, (z_index, _))| (*z_index, SegmentDrawItem::ShaderComposite(index))),
         );
+        // A converted shadow contributes one composite entry PER band, all at
+        // the shadow's own z; the first band replaces the shadow's ordered
+        // item in place and the rest append behind it for the sort to gather.
+        // A composite with NO bands is a fully occluded shadow — the opaque
+        // caster covers every visible pixel of its coverage (a bottom bar
+        // whose shadow only reaches past the screen edge, at some scales).
+        // Its item must vanish outright: converting it would hand the plan a
+        // composite index with nothing behind it, aliasing the next entry or
+        // running off the end of the prepared command buffer.
+        let mut extra_band_items: Vec<(usize, SegmentDrawItem)> = Vec::new();
+        let mut fully_occluded_zs: SmallVec<[usize; 4]> = SmallVec::new();
+        let mut flattened_band_count = 0usize;
         for (z_index, item) in &mut ordered_items {
             let SegmentDrawItem::Shadow(shadow_index) = *item else {
                 continue;
@@ -8494,24 +8722,44 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
             ) else {
                 continue;
             };
-            let composite_index = composites.len() + cached_shadow_composites.len();
+            let band_count = composite.bands.len();
+            if band_count == 0 {
+                self.renderer.frame_stats.record_shadow_fully_occluded();
+                fully_occluded_zs.push(*z_index);
+                continue;
+            }
+            let first_band_index = composites.len() + flattened_band_count;
+            flattened_band_count += band_count;
             cached_shadow_composites.push((*z_index, composite));
-            *item = SegmentDrawItem::Composite(composite_index);
+            *item = SegmentDrawItem::Composite(first_band_index);
+            for band in 1..band_count {
+                extra_band_items.push((
+                    *z_index,
+                    SegmentDrawItem::Composite(first_band_index + band),
+                ));
+            }
         }
-        let mut merged_composites = Vec::with_capacity(
-            composites
-                .len()
-                .saturating_add(cached_shadow_composites.len()),
-        );
+        if !fully_occluded_zs.is_empty() {
+            // Z indices are unique per ordered item, so the z alone names the
+            // dropped shadow.
+            ordered_items.retain(|(z_index, item)| {
+                !(matches!(item, SegmentDrawItem::Shadow(_)) && fully_occluded_zs.contains(z_index))
+            });
+        }
+        ordered_items.extend(extra_band_items);
+        let mut merged_composites =
+            Vec::with_capacity(composites.len().saturating_add(flattened_band_count));
         merged_composites.extend(composites.iter().copied());
-        merged_composites.extend(
-            cached_shadow_composites
-                .iter()
-                .map(|(z_index, composite)| (*z_index, composite.batch_item())),
-        );
+        for (z_index, composite) in &cached_shadow_composites {
+            for item in composite.band_items() {
+                merged_composites.push((*z_index, item));
+            }
+        }
         // Z indices are unique — the scene hands every op its own `next_z` — so an
         // unstable sort cannot reorder anything a stable one wouldn't, and it skips
         // the stable sort's scratch allocation, paid here once per segment per frame.
+        // The one exception is a banded shadow: its bands share the shadow's z, and
+        // being disjoint scissored strips of one composite they commute freely.
         ordered_items.sort_unstable_by_key(|(z_index, _)| *z_index);
         #[cfg(not(target_arch = "wasm32"))]
         maybe_print_segment_diag(
@@ -9216,6 +9464,8 @@ impl GpuRenderer {
         if self.gpu_stats_enabled && self.frame_count.is_multiple_of(60) {
             gpu_stats::print_gpu_memory_report(&self.device, self.frame_count);
         }
+        self.frame_graph_executor
+            .end_pass_timing_frame(&self.device, &self.queue);
         self.frame_stats.reset();
         let after_stats = Instant::now();
         if let Some(total_ms) = should_log_wgpu_render_stage(render_start, after_stats) {
@@ -9292,6 +9542,10 @@ impl GpuRenderer {
 
     pub fn last_frame_stats(&self) -> Option<gpu_stats::FrameStatsSnapshot> {
         self.last_frame_stats
+    }
+
+    pub fn gpu_pass_timings(&self) -> crate::pass_timing::GpuPassTimingReport {
+        self.frame_graph_executor.pass_timing_report()
     }
 
     pub fn needs_frame_warmup(&self) -> bool {
@@ -9500,7 +9754,7 @@ impl GpuRenderer {
                         }
                         .encode(
                             &self.device,
-                            frame_encoder.encoder(),
+                            frame_encoder,
                             output_view,
                             bind_group,
                             self.adapter_backend,
@@ -9557,7 +9811,7 @@ impl GpuRenderer {
                     }
                     .encode(
                         &self.device,
-                        frame_encoder.encoder(),
+                        &mut frame_encoder,
                         output_view,
                         bind_group,
                         self.adapter_backend,
@@ -9937,7 +10191,7 @@ impl GpuRenderer {
                 SegmentRenderCommand::Shadow(index) => {
                     if first_batch && matches!(initial_load_op, wgpu::LoadOp::Clear(_)) {
                         {
-                            let _clear = frame_encoder.encoder().begin_render_pass(
+                            let _clear = frame_encoder.begin_timed_render_pass(
                                 &wgpu::RenderPassDescriptor {
                                     label: Some("Shadow Pre-Clear"),
                                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -9950,9 +10204,7 @@ impl GpuRenderer {
                                         },
                                     })],
                                     depth_stencil_attachment: None,
-                                    timestamp_writes: None,
-                                    occlusion_query_set: None,
-                                    multiview_mask: None,
+                                    ..Default::default()
                                 },
                             );
                         }
@@ -10638,27 +10890,23 @@ impl GpuRenderer {
                     continue;
                 };
                 let mut capture_pass =
-                    frame_encoder
-                        .encoder()
-                        .begin_render_pass(&wgpu::RenderPassDescriptor {
-                            label: Some("Segment Surface Capture Pass"),
-                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                view: &entry.texture.view,
-                                resolve_target: None,
-                                depth_slice: None,
-                                ops: wgpu::Operations {
-                                    // Transparent clear: the surface holds
-                                    // the span's premultiplied flattening
-                                    // and nothing else.
-                                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                                    store: wgpu::StoreOp::Store,
-                                },
-                            })],
-                            depth_stencil_attachment: None,
-                            timestamp_writes: None,
-                            occlusion_query_set: None,
-                            multiview_mask: None,
-                        });
+                    frame_encoder.begin_timed_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("Segment Surface Capture Pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &entry.texture.view,
+                            resolve_target: None,
+                            depth_slice: None,
+                            ops: wgpu::Operations {
+                                // Transparent clear: the surface holds
+                                // the span's premultiplied flattening
+                                // and nothing else.
+                                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: None,
+                        ..Default::default()
+                    });
                 let draws = self.encode_retained_op(
                     slot,
                     job.first,
@@ -10698,38 +10946,34 @@ impl GpuRenderer {
             let mut retained_encode_ms = 0.0_f64;
             {
                 let mut render_pass =
-                    frame_encoder
-                        .encoder()
-                        .begin_render_pass(&wgpu::RenderPassDescriptor {
-                            label: Some("Fused Segment Draw Pass"),
-                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                view: target_view,
-                                resolve_target: None,
-                                depth_slice: None,
-                                ops: wgpu::Operations {
-                                    load: load_op,
-                                    store: wgpu::StoreOp::Store,
-                                },
-                            })],
-                            // Clear + Discard: the display-clip depth
-                            // buffer is born and dies inside this pass — on
-                            // tiled GPUs it never leaves GMEM.
-                            depth_stencil_attachment: display_clip_depth_view.as_ref().map(
-                                |view| wgpu::RenderPassDepthStencilAttachment {
-                                    view,
-                                    depth_ops: Some(wgpu::Operations {
-                                        load: wgpu::LoadOp::Clear(
-                                            crate::display_clip::DISPLAY_CLIP_DEPTH_CLEAR,
-                                        ),
-                                        store: wgpu::StoreOp::Discard,
-                                    }),
-                                    stencil_ops: None,
-                                },
-                            ),
-                            timestamp_writes: None,
-                            occlusion_query_set: None,
-                            multiview_mask: None,
-                        });
+                    frame_encoder.begin_timed_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("Fused Segment Draw Pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: target_view,
+                            resolve_target: None,
+                            depth_slice: None,
+                            ops: wgpu::Operations {
+                                load: load_op,
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        // Clear + Discard: the display-clip depth
+                        // buffer is born and dies inside this pass — on
+                        // tiled GPUs it never leaves GMEM.
+                        depth_stencil_attachment: display_clip_depth_view.as_ref().map(|view| {
+                            wgpu::RenderPassDepthStencilAttachment {
+                                view,
+                                depth_ops: Some(wgpu::Operations {
+                                    load: wgpu::LoadOp::Clear(
+                                        crate::display_clip::DISPLAY_CLIP_DEPTH_CLEAR,
+                                    ),
+                                    store: wgpu::StoreOp::Discard,
+                                }),
+                                stencil_ops: None,
+                            }
+                        }),
+                        ..Default::default()
+                    });
 
                 // The cached span composite replaces the frame's leading
                 // draws, so it goes down before every fused batch — same
@@ -10921,24 +11165,20 @@ impl GpuRenderer {
                 };
                 {
                     let mut capture_pass =
-                        frame_encoder
-                            .encoder()
-                            .begin_render_pass(&wgpu::RenderPassDescriptor {
-                                label: Some("Static Span Capture Pass"),
-                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                    view: &texture.view,
-                                    resolve_target: None,
-                                    depth_slice: None,
-                                    ops: wgpu::Operations {
-                                        load: wgpu::LoadOp::Clear(clear),
-                                        store: wgpu::StoreOp::Store,
-                                    },
-                                })],
-                                depth_stencil_attachment: None,
-                                timestamp_writes: None,
-                                occlusion_query_set: None,
-                                multiview_mask: None,
-                            });
+                        frame_encoder.begin_timed_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("Static Span Capture Pass"),
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view: &texture.view,
+                                resolve_target: None,
+                                depth_slice: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Clear(clear),
+                                    store: wgpu::StoreOp::Store,
+                                },
+                            })],
+                            depth_stencil_attachment: None,
+                            ..Default::default()
+                        });
                     // `has_gradient` is the LIVE first batch's whole-batch
                     // flag: it selects the same fs_solid/gradient pipeline
                     // variant the live path draws the span through.
@@ -11114,7 +11354,7 @@ impl GpuRenderer {
                             upload_offset,
                         );
                         {
-                            let mut render_pass = frame_encoder.encoder().begin_render_pass(
+                            let mut render_pass = frame_encoder.begin_timed_render_pass(
                                 &wgpu::RenderPassDescriptor {
                                     label: Some("Segment Shape Pass"),
                                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -11127,9 +11367,7 @@ impl GpuRenderer {
                                         },
                                     })],
                                     depth_stencil_attachment: None,
-                                    timestamp_writes: None,
-                                    occlusion_query_set: None,
-                                    multiview_mask: None,
+                                    ..Default::default()
                                 },
                             );
                             self.draw_prepared_shapes(
@@ -11187,7 +11425,7 @@ impl GpuRenderer {
                             upload_offset,
                         );
                         let draw_result = {
-                            let mut render_pass = frame_encoder.encoder().begin_render_pass(
+                            let mut render_pass = frame_encoder.begin_timed_render_pass(
                                 &wgpu::RenderPassDescriptor {
                                     label: Some("Segment Image Pass"),
                                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -11200,9 +11438,7 @@ impl GpuRenderer {
                                         },
                                     })],
                                     depth_stencil_attachment: None,
-                                    timestamp_writes: None,
-                                    occlusion_query_set: None,
-                                    multiview_mask: None,
+                                    ..Default::default()
                                 },
                             );
                             self.draw_prepared_images(
@@ -11243,7 +11479,7 @@ impl GpuRenderer {
                                 upload_offset,
                             );
                             {
-                                let mut render_pass = frame_encoder.encoder().begin_render_pass(
+                                let mut render_pass = frame_encoder.begin_timed_render_pass(
                                     &wgpu::RenderPassDescriptor {
                                         label: Some("Segment Text Glyph Atlas Pass"),
                                         color_attachments: &[Some(
@@ -11258,9 +11494,7 @@ impl GpuRenderer {
                                             },
                                         )],
                                         depth_stencil_attachment: None,
-                                        timestamp_writes: None,
-                                        occlusion_query_set: None,
-                                        multiview_mask: None,
+                                        ..Default::default()
                                     },
                                 );
                                 self.draw_prepared_glyphs(&mut render_pass, &prepared_glyphs)?;
@@ -11290,7 +11524,7 @@ impl GpuRenderer {
                                 upload_offset,
                             );
                             {
-                                let mut render_pass = frame_encoder.encoder().begin_render_pass(
+                                let mut render_pass = frame_encoder.begin_timed_render_pass(
                                     &wgpu::RenderPassDescriptor {
                                         label: Some("Segment Text Pass"),
                                         color_attachments: &[Some(
@@ -11305,9 +11539,7 @@ impl GpuRenderer {
                                             },
                                         )],
                                         depth_stencil_attachment: None,
-                                        timestamp_writes: None,
-                                        occlusion_query_set: None,
-                                        multiview_mask: None,
+                                        ..Default::default()
                                     },
                                 );
                                 self.draw_prepared_images(
@@ -11436,7 +11668,7 @@ impl GpuRenderer {
                                 upload_offset,
                             );
                             {
-                                let mut render_pass = frame_encoder.encoder().begin_render_pass(
+                                let mut render_pass = frame_encoder.begin_timed_render_pass(
                                     &wgpu::RenderPassDescriptor {
                                         label: Some("Segment Retained Pass"),
                                         color_attachments: &[Some(
@@ -11451,9 +11683,7 @@ impl GpuRenderer {
                                             },
                                         )],
                                         depth_stencil_attachment: None,
-                                        timestamp_writes: None,
-                                        occlusion_query_set: None,
-                                        multiview_mask: None,
+                                        ..Default::default()
                                     },
                                 );
                                 for (_, item) in &ordered_items[start..end] {
@@ -11742,7 +11972,7 @@ impl GpuRenderer {
         height: u32,
         root_scale: f32,
     ) {
-        if shadow.shapes.is_empty() && shadow.texts.is_empty() {
+        if shadow.shapes.is_empty() && shadow.texts.is_empty() || skip_shadow_draws() {
             return;
         }
 
@@ -11849,7 +12079,7 @@ impl GpuRenderer {
                             upload_offset,
                         );
                         let draw_result = {
-                            let mut render_pass = frame_encoder.encoder().begin_render_pass(
+                            let mut render_pass = frame_encoder.begin_timed_render_pass(
                                 &wgpu::RenderPassDescriptor {
                                     label: Some("Zero Blur Shadow Text Image Pass"),
                                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -11862,9 +12092,7 @@ impl GpuRenderer {
                                         },
                                     })],
                                     depth_stencil_attachment: None,
-                                    timestamp_writes: None,
-                                    occlusion_query_set: None,
-                                    multiview_mask: None,
+                                    ..Default::default()
                                 },
                             );
                             self.draw_prepared_images(
@@ -11987,8 +12215,8 @@ impl GpuRenderer {
                         upload_offset,
                     );
                     let draw_result = {
-                        let mut render_pass = frame_encoder.encoder().begin_render_pass(
-                            &wgpu::RenderPassDescriptor {
+                        let mut render_pass =
+                            frame_encoder.begin_timed_render_pass(&wgpu::RenderPassDescriptor {
                                 label: Some("Shadow Source Text Image Pass"),
                                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                                     view: &source.view,
@@ -12000,11 +12228,8 @@ impl GpuRenderer {
                                     },
                                 })],
                                 depth_stencil_attachment: None,
-                                timestamp_writes: None,
-                                occlusion_query_set: None,
-                                multiview_mask: None,
-                            },
-                        );
+                                ..Default::default()
+                            });
                         self.draw_prepared_images(
                             &mut render_pass,
                             &prepared_images,
@@ -12163,24 +12388,20 @@ impl GpuRenderer {
 
             {
                 let mut render_pass =
-                    frame_encoder
-                        .encoder()
-                        .begin_render_pass(&wgpu::RenderPassDescriptor {
-                            label: Some("Shadow Source Shape Pass"),
-                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                view: source_view,
-                                resolve_target: None,
-                                depth_slice: None,
-                                ops: wgpu::Operations {
-                                    load: *next_load_op,
-                                    store: wgpu::StoreOp::Store,
-                                },
-                            })],
-                            depth_stencil_attachment: None,
-                            timestamp_writes: None,
-                            occlusion_query_set: None,
-                            multiview_mask: None,
-                        });
+                    frame_encoder.begin_timed_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("Shadow Source Shape Pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: source_view,
+                            resolve_target: None,
+                            depth_slice: None,
+                            ops: wgpu::Operations {
+                                load: *next_load_op,
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: None,
+                        ..Default::default()
+                    });
                 self.draw_prepared_shapes(
                     &mut render_pass,
                     blend_mode,
@@ -12243,12 +12464,20 @@ impl GpuRenderer {
 
         if let Some(key) = cache_key {
             if let Some(cached) = self.cached_shadow_surface(&key) {
-                self.frame_stats
-                    .record_shadow_shape_cache_hit(bounds_w, bounds_h);
                 let clip_scissor = shadow
                     .clip
                     .and_then(|clip| scissor_rect_for_rect(clip, root_scale, width, height));
                 let scissor = clip_scissor.or(processing_scissor);
+                let coverage = shadow_composite_coverage(
+                    (
+                        viewport_offset[0],
+                        viewport_offset[1],
+                        bounds_w as f32,
+                        bounds_h as f32,
+                    ),
+                    scissor,
+                    (width, height),
+                );
                 let rounded_mask =
                     inner_shadow_composite_mask(shadow, root_scale).map(|mut mask| {
                         mask.rect[0] -= viewport_offset[0];
@@ -12261,24 +12490,28 @@ impl GpuRenderer {
                     bounds_w as f32,
                     bounds_h as f32,
                 ));
-                {
-                    self.effect_renderer
-                        .encode_composite_to_view_scissored_with_alpha_and_mask_and_blend_mode(
-                            frame_encoder,
-                            &self.device,
-                            &cached,
-                            target_view,
-                            1.0,
-                            wgpu::LoadOp::Load,
-                            scissor,
-                            rounded_mask,
-                            BlendMode::SrcOver,
-                            dest_viewport,
-                            CompositeSampleMode::Nearest,
-                        );
+                let composite = CachedShadowComposite {
+                    source: cached,
+                    bands: shadow_band_scissors(coverage, shadow.occluder, root_scale),
+                    rounded_mask,
+                    dest_viewport,
+                };
+                self.frame_stats
+                    .record_shadow_shape_cache_hit(composite.banded_pixels());
+                let band_items: SmallVec<[CompositeBatchItem<'_>; 4]> =
+                    composite.band_items().collect();
+                if !band_items.is_empty() {
+                    self.effect_renderer.encode_composite_batch_to_view_pass(
+                        frame_encoder,
+                        &self.device,
+                        target_view,
+                        (width, height),
+                        wgpu::LoadOp::Load,
+                        &band_items,
+                    );
+                    frame_encoder.record_pass();
+                    self.effect_renderer.record_composite_pass();
                 }
-                frame_encoder.record_pass();
-                self.effect_renderer.record_composite_pass();
                 return true;
             }
             self.frame_stats
@@ -12360,32 +12593,44 @@ impl GpuRenderer {
             mask.rect[1] -= viewport_offset[1];
             mask
         });
-        let dest_viewport = Some((
+        let dest_viewport = (
             viewport_offset[0],
             viewport_offset[1],
             bounds_w as f32,
             bounds_h as f32,
-        ));
-        {
-            self.effect_renderer
-                .encode_composite_to_view_scissored_with_alpha_and_mask_and_blend_mode(
-                    frame_encoder,
-                    &device,
-                    &source,
-                    target_view,
-                    1.0,
-                    wgpu::LoadOp::Load,
-                    scissor,
-                    rounded_mask,
-                    BlendMode::SrcOver,
-                    dest_viewport,
-                    CompositeSampleMode::Nearest,
-                );
+        );
+        // The filling frame bands exactly like every cache-hit frame after
+        // it, so hit and miss render the same pixels.
+        let coverage = shadow_composite_coverage(dest_viewport, scissor, (width, height));
+        let bands = shadow_band_scissors(coverage, shadow.occluder, root_scale);
+        let band_items: SmallVec<[CompositeBatchItem<'_>; 4]> = bands
+            .iter()
+            .map(|band| CompositeBatchItem {
+                source: &source,
+                alpha: 1.0,
+                scissor: Some(*band),
+                rounded_mask,
+                blend_mode: BlendMode::SrcOver,
+                dest_viewport: Some(dest_viewport),
+                source_viewport: None,
+                sample_mode: CompositeSampleMode::Nearest,
+            })
+            .collect();
+        if !band_items.is_empty() {
+            self.effect_renderer.encode_composite_batch_to_view_pass(
+                frame_encoder,
+                &device,
+                target_view,
+                (width, height),
+                wgpu::LoadOp::Load,
+                &band_items,
+            );
+            frame_encoder.record_pass();
+            self.effect_renderer.record_composite_pass();
         }
-        frame_encoder.record_pass();
+        drop(band_items);
 
         self.effect_renderer.record_blur_pass();
-        self.effect_renderer.record_composite_pass();
         frame_encoder.release_transient_offscreen(scratch_descriptor, scratch);
         if let Some(key) = cache_key {
             self.insert_cached_shadow_surface(key, source);
@@ -14169,25 +14414,20 @@ impl GpuRenderer {
             frame_encoder.allocate_staged_upload_bytes(staged_uploads.bytes.len() as u64);
         self.flush_staged_uploads_at(frame_encoder.encoder(), &staged_uploads, upload_offset);
         self.restore_staged_uploads(staged_uploads);
-        let mut render_pass =
-            frame_encoder
-                .encoder()
-                .begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("Shape Pass"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: target_view,
-                        resolve_target: None,
-                        depth_slice: None,
-                        ops: wgpu::Operations {
-                            load: load_op,
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                    multiview_mask: None,
-                });
+        let mut render_pass = frame_encoder.begin_timed_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Shape Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target_view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: load_op,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            ..Default::default()
+        });
         self.draw_prepared_shapes(&mut render_pass, blend_mode, batch, width, height, &[]);
     }
 
@@ -18457,6 +18697,7 @@ mod tests {
             texts: vec![],
             blur_radius: 8.0,
             clip: None,
+            occluder: None,
             z_index: 0,
         }
     }
@@ -18769,6 +19010,7 @@ mod tests {
             shadow_clip: None,
             hit_test: None,
             has_hit_targets: false,
+            has_origin_sinks: false,
             isolation: IsolationReasons::default(),
             cache_policy: CachePolicy::None,
             cache_hashes: LayerRasterCacheHashes::default(),
@@ -18886,6 +19128,7 @@ mod tests {
             shadow_clip: None,
             hit_test: None,
             has_hit_targets: false,
+            has_origin_sinks: false,
             isolation: IsolationReasons::default(),
             cache_policy: CachePolicy::None,
             cache_hashes: LayerRasterCacheHashes::default(),
@@ -19135,6 +19378,7 @@ mod tests {
             shadow_clip: None,
             hit_test: None,
             has_hit_targets: false,
+            has_origin_sinks: false,
             isolation: IsolationReasons::default(),
             cache_policy: CachePolicy::None,
             cache_hashes: LayerRasterCacheHashes::default(),
@@ -22471,6 +22715,7 @@ mod tests {
             texts: Vec::new(),
             blur_radius: 8.0,
             clip: None,
+            occluder: None,
             z_index: 1,
         }];
         let mut ordered_items = vec![
@@ -22522,6 +22767,7 @@ mod tests {
             texts: Vec::new(),
             blur_radius: 8.0,
             clip: None,
+            occluder: None,
             z_index: 1,
         }];
         let mut ordered_items = vec![(1, SegmentDrawItem::Shadow(0))];

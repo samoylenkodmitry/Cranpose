@@ -86,9 +86,29 @@ fn new_draw_observer() -> SnapshotStateObserver {
     observer
 }
 
+thread_local! {
+    /// The node whose draw closure is being recorded right now, so a
+    /// draw-phase animation can name itself (see
+    /// [`request_current_draw_redraw`]).
+    static CURRENT_DRAW_NODE: std::cell::Cell<Option<NodeId>> = const { std::cell::Cell::new(None) };
+}
+
+struct CurrentDrawNodeGuard {
+    previous: Option<NodeId>,
+}
+
+impl Drop for CurrentDrawNodeGuard {
+    fn drop(&mut self) {
+        CURRENT_DRAW_NODE.with(|current| current.set(self.previous));
+    }
+}
+
 pub(crate) fn observe_draw_reads<R>(scope: DrawObservationScope, block: impl FnOnce() -> R) -> R {
     let context = require_current_app_context("draw observer access");
     let context_id = context.id;
+    let _guard = CurrentDrawNodeGuard {
+        previous: CURRENT_DRAW_NODE.with(|current| current.replace(Some(scope.node_id))),
+    };
     context.draw_observer.observe_reads(
         scope,
         move |scope| {
@@ -96,6 +116,19 @@ pub(crate) fn observe_draw_reads<R>(scope: DrawObservationScope, block: impl FnO
         },
         block,
     )
+}
+
+/// The draw-phase animation contract: a draw closure that advances its own
+/// spring or clock (a Cell no observation can see) must schedule the next
+/// frame's re-record of ITS OWN node — a bare render invalidation only
+/// re-presents the retained scene, which would freeze the animation
+/// mid-flight. Callable only from inside a recording draw closure; anywhere
+/// else it degrades to a plain frame request.
+pub fn request_current_draw_redraw() {
+    if let Some(node_id) = CURRENT_DRAW_NODE.with(std::cell::Cell::get) {
+        schedule_draw_repass(node_id);
+    }
+    request_render_invalidation();
 }
 
 pub(crate) fn clear_draw_observations_for_node(node_id: NodeId) {
@@ -1047,6 +1080,36 @@ mod tests {
 
     use super::*;
     use crate::text::{AnnotatedString, TextLayoutResult, TextMeasurer, TextMetrics, TextStyle};
+
+    /// A draw-phase animation (the selection handle's glide spring) advances
+    /// a Cell no observation can see and must name its own node for the next
+    /// frame's re-record; robot_selection_vertical_grab froze exactly when a
+    /// bare render invalidation stopped rebuilding the scene.
+    #[test]
+    fn a_draw_closure_can_name_its_own_node_for_the_next_frame() {
+        let _scope = app_context_test_scope();
+        let _ = take_draw_repass_nodes();
+        let _ = take_render_invalidation();
+
+        observe_draw_reads(DrawObservationScope::new(33, 0), || {
+            request_current_draw_redraw();
+        });
+        assert_eq!(
+            take_draw_repass_nodes(),
+            vec![33],
+            "the recording node must be scheduled for re-record"
+        );
+        assert!(
+            take_render_invalidation(),
+            "the next frame must be requested"
+        );
+
+        // Outside a recording there is no node to name: a plain frame
+        // request, nothing scheduled.
+        request_current_draw_redraw();
+        assert!(take_draw_repass_nodes().is_empty());
+        assert!(take_render_invalidation());
+    }
 
     struct TestTextMeasurer;
 

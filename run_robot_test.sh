@@ -965,6 +965,11 @@ for example in "${RUN_EXAMPLES[@]}"; do
         result=$(cat "$result_file")
         if [ "$result" = "PASS" ]; then
             echo "  [PASS] $example" | tee -a "$LOG_FILE"
+            # Threshold gates print their measurements as `robot-metric:`
+            # lines. Surface them on pass as well: a gate whose inputs only
+            # appear in the failure dump cannot be trended, and the first
+            # number anyone sees is the one already over the bound.
+            grep -h '^robot-metric:' "$output_file" 2>/dev/null | sed 's/^/    /'
             ((PASSED++))
         else
             reason="${result#FAIL:}"

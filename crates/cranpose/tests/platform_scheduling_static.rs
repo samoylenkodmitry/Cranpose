@@ -115,7 +115,7 @@ fn ci_architecture_budget_runs_required_gates() {
             && justfile.contains("--package isolated-demo")
             && justfile.contains("--bin isolated-demo")
             && justfile.contains("--profile release-small")
-            && justfile.contains("--max-bytes 15728640"),
+            && justfile.contains("--max-bytes 16777216"),
         "the budgets recipe should enforce the accessibility-enabled release-small binary size ceiling"
     );
     assert!(

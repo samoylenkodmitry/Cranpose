@@ -1418,10 +1418,7 @@ fn create_android_gpu_resources(
 
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("Android Device"),
-        // The pipeline cache feature where the driver offers it (Vulkan) —
-        // see `pipeline_disk_cache` in the renderer. The intersection stays
-        // empty on adapters without it, so nothing else changes.
-        required_features: adapter.features() & wgpu::Features::PIPELINE_CACHE,
+        required_features: cranpose_render_wgpu::optional_device_features(&adapter),
         required_limits: crate::gpu_limits::mobile_device_limits(adapter.limits()),
         experimental_features: wgpu::ExperimentalFeatures::disabled(),
         memory_hints: crate::gpu_limits::mobile_memory_hints(),
@@ -1526,6 +1523,56 @@ mod frame_latency_tests {
         for mistyped in ["0", "4", "two", ""] {
             assert_eq!(android_frame_latency(Some(mistyped)), 3, "{mistyped:?}");
         }
+    }
+}
+
+/// Whether the threaded present runtime runs, from the override and the
+/// core count.
+///
+/// Both sides of the default's boundary are device measurements. Pixel
+/// Watch 3 (4x in-order A53, CPU already saturated by the stage-executor
+/// pool): 38.7/38.4 fps threaded against 53.5 sync — a thread adds no
+/// cores, so the overlap buys context switches and cache pressure. Mate
+/// 20 X (Kirin 980, 8-core big.LITTLE, alternating A/B rounds with temps
+/// logged): +4-7 fps from the thread alone, everything else held constant,
+/// because idle cores run the present half. Six cores splits the measured
+/// classes; a new class earns its side with an A/B, not arithmetic.
+fn resolve_present_thread(requested: Option<&str>, available_cores: usize) -> bool {
+    match requested.map(str::trim) {
+        Some("1") | Some("true") | Some("on") => true,
+        Some("0") | Some("false") | Some("off") => false,
+        _ => available_cores >= 6,
+    }
+}
+
+#[cfg(test)]
+mod present_thread_tests {
+    use super::resolve_present_thread;
+
+    #[test]
+    fn a_phone_with_idle_cores_overlaps_by_default() {
+        assert!(resolve_present_thread(None, 8));
+        assert!(resolve_present_thread(None, 6));
+    }
+
+    #[test]
+    fn a_small_saturated_part_stays_synchronous() {
+        assert!(!resolve_present_thread(None, 4));
+        assert!(!resolve_present_thread(None, 1));
+    }
+
+    #[test]
+    fn the_override_wins_in_both_directions_on_any_core_count() {
+        assert!(resolve_present_thread(Some("1"), 4));
+        assert!(resolve_present_thread(Some("on"), 1));
+        assert!(!resolve_present_thread(Some("0"), 8));
+        assert!(!resolve_present_thread(Some(" off "), 8));
+    }
+
+    #[test]
+    fn an_unparsable_override_falls_back_to_the_core_default() {
+        assert!(resolve_present_thread(Some("maybe"), 8));
+        assert!(!resolve_present_thread(Some(""), 4));
     }
 }
 
@@ -1811,6 +1858,21 @@ pub fn run(
     // environment-gated telemetry is reachable on device.
     crate::android_frame_telemetry::seed_env_from_system_properties();
 
+    // The machine's core count, read before the fast-core pin below:
+    // `available_parallelism` reports the calling thread's *eligible* set,
+    // so after the pin it would answer 4 on an 8-core big.LITTLE phone and
+    // silently flip the present-thread class — measured on the Mate 20 X
+    // as the present thread never spawning at all.
+    let machine_parallelism = std::thread::available_parallelism()
+        .map(std::num::NonZeroUsize::get)
+        .unwrap_or(1);
+
+    // After the property seeding (`debug.cranpose.core_pin` must be
+    // readable), before the renderer exists: in the non-threaded present
+    // mode the GPU driver's workers spawn from this thread and inherit
+    // the mask. The threaded mode's present thread pins itself.
+    cranpose_render_wgpu::pin_current_thread_to_fast_cores("producer");
+
     // Give the renderer's pipeline disk cache a writable home. Only the
     // directory is decided here — the blob's file name is keyed by adapter
     // identity, which is not known until device setup composes
@@ -1827,29 +1889,29 @@ pub fn run(
         );
     }
 
-    // Threaded present runtime (pipeline step 7b), default OFF: the frame
-    // is split at the packet boundary and acquire/encode/submit/present
-    // move to a dedicated present thread, overlapping with the producer's
-    // update/lowering of the next frame. Kill switch CRANPOSE_PRESENT_THREAD
-    // (`adb shell setprop debug.cranpose.present_thread 1`); read once —
-    // the mode must not change while a renderer is live.
+    // Threaded present runtime (pipeline step 7b): the frame is split at
+    // the packet boundary and acquire/encode/submit/present move to a
+    // dedicated present thread, overlapping with the producer's
+    // update/lowering of the next frame. CRANPOSE_PRESENT_THREAD
+    // (`adb shell setprop debug.cranpose.present_thread 1`/`0`) overrides
+    // in either direction; read once — the mode must not change while a
+    // renderer is live.
     //
-    // OPT-IN by measurement, and expect it to stay off on small saturated
-    // parts: on the Pixel Watch 3 (4x in-order A53, CPU already 100-108%
-    // with the stage-executor pool fanned out) the overlap measured
-    // 38.7/38.4 fps vs 53.5 sync on a cool watch — a dedicated thread adds
-    // no cores, so depth-one just buys context switches and cache pressure
-    // there, even with the replay ack shipped pre-acquire. The regime it
-    // exists for is a part with idle cores to run the present half — a
-    // big.LITTLE phone with the producer pinned little and cores to spare.
-    // Earn any default flip with an A/B on that class, never by the
-    // arithmetic alone (the arithmetic said 60 here; the cores said no).
-    let present_thread = matches!(
-        std::env::var("CRANPOSE_PRESENT_THREAD").as_deref(),
-        Ok("1") | Ok("true") | Ok("on")
+    // The default is decided by core count, and both sides of the boundary
+    // are measurements, not arithmetic. Pixel Watch 3 (4x in-order A53,
+    // CPU already 100-108% with the stage-executor pool fanned out):
+    // 38.7/38.4 fps threaded vs 53.5 sync — a dedicated thread adds no
+    // cores, so depth-one just buys context switches and cache pressure.
+    // Mate 20 X (Kirin 980, 8-core big.LITTLE, alternating A/B rounds,
+    // temps logged): +4-7 fps from the thread alone with everything else
+    // held constant, because the phone has idle cores to run the present
+    // half. Six cores splits the measured classes.
+    let present_thread = resolve_present_thread(
+        std::env::var("CRANPOSE_PRESENT_THREAD").ok().as_deref(),
+        machine_parallelism,
     );
     if present_thread {
-        log::info!("[present-runtime] threaded present enabled (CRANPOSE_PRESENT_THREAD)");
+        log::info!("[present-runtime] threaded present enabled");
     }
 
     // Register the SAF document picker as the platform file picker. Requires the

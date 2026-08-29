@@ -52,6 +52,14 @@ pub struct ImeCaretGeometry {
 /// Handler trait for focused text field operations.
 /// Stored in focus module for O(1) key/clipboard dispatch.
 pub trait FocusedTextFieldHandler {
+    /// The composition node whose recorded draws show this field's caret and
+    /// selection. Focus changes and caret-blink flips schedule a scoped draw
+    /// repass on it — that state lives outside the draw-observation system,
+    /// so nothing else can name the stale node. `None` only for handlers with
+    /// no scene presence (test doubles, the platform no-op handler).
+    fn node_id(&self) -> Option<cranpose_core::NodeId> {
+        None
+    }
     /// Handle a key event. Returns true if consumed.
     fn handle_key(&self, event: &KeyEvent) -> bool;
     /// Insert pasted text.
@@ -292,9 +300,20 @@ pub fn request_focus(
         return;
     }
 
+    // The caret is drawn from focus state no draw observation can see: both
+    // the field losing focus and the one gaining it must re-record their
+    // draws, and only a scoped repass on each keeps that off the
+    // whole-scene rebuild path.
+    let previous_field = focused_field_node();
+    let gaining_field = handler.node_id();
+
     crate::render_state::with_text_field_focus(|state| {
         state.request_focus(is_focused, handler, modal_depth)
     });
+
+    for node_id in [previous_field, gaining_field].into_iter().flatten() {
+        crate::schedule_draw_repass(node_id);
+    }
 
     // Start cursor blink animation (timer-based, not continuous redraw)
     crate::cursor_animation::start_cursor_blink();
@@ -303,8 +322,8 @@ pub fn request_focus(
     // request on purpose - see text_input_session module docs).
     crate::text_input_session::notify_text_input_focus_gained();
 
-    // Only render invalidation needed - cursor is drawn via create_draw_closure()
-    // which checks focus at draw time. No layout change occurs on focus.
+    // Cursor is drawn via create_draw_closure() which checks focus at draw
+    // time. No layout change occurs on focus.
     crate::request_render_invalidation();
 }
 
@@ -323,6 +342,11 @@ pub(crate) fn clear_focus_for_closed_modal(depth: usize) {
 
 /// Clears focus from the currently focused text field.
 pub fn clear_focus() {
+    // The unfocused field's caret and selection must leave its recorded
+    // draws; capture its node before the registry forgets it.
+    if let Some(node_id) = focused_field_node() {
+        crate::schedule_draw_repass(node_id);
+    }
     crate::render_state::with_text_field_focus(|state| state.clear_focus());
 
     // Stop cursor blink animation
@@ -332,6 +356,16 @@ pub fn clear_focus() {
     crate::text_input_session::notify_text_input_focus_lost();
 
     crate::request_render_invalidation();
+}
+
+/// Returns the composition node of the currently focused text field, if a
+/// field is focused and its handler knows its node.
+pub fn focused_field_node() -> Option<cranpose_core::NodeId> {
+    crate::render_state::with_text_field_focus(|state| {
+        state
+            .focused_handler()
+            .and_then(|handler| handler.node_id())
+    })
 }
 
 /// Returns true if any text field currently has focus.
@@ -458,6 +492,82 @@ mod tests {
 
     fn mock_handler() -> Rc<dyn FocusedTextFieldHandler> {
         Rc::new(MockHandler)
+    }
+
+    // A handler that knows which node draws its caret, like the production
+    // text field handler does.
+    struct NodeBackedHandler(cranpose_core::NodeId);
+    impl FocusedTextFieldHandler for NodeBackedHandler {
+        fn node_id(&self) -> Option<cranpose_core::NodeId> {
+            Some(self.0)
+        }
+        fn handle_key(&self, _: &KeyEvent) -> bool {
+            false
+        }
+        fn insert_text(&self, _: &str) {}
+        fn delete_surrounding(&self, _: usize, _: usize) {}
+        fn copy_selection(&self) -> Option<String> {
+            None
+        }
+        fn cut_selection(&self) -> Option<String> {
+            None
+        }
+        fn set_composition(&self, _: &str, _: Option<(usize, usize)>) {}
+    }
+
+    /// Caret and focus state live outside the draw-observation system, so a
+    /// focus transition must name the stale nodes itself: both the field
+    /// losing the caret and the field gaining it get a scoped draw repass —
+    /// never a whole-scene rebuild.
+    #[test]
+    fn focus_transitions_schedule_scoped_draw_repasses_on_both_fields() {
+        let _app_context = crate::render_state::app_context_test_scope();
+        let _ = crate::render_state::take_draw_repass_nodes();
+
+        let first = Rc::new(RefCell::new(false));
+        request_focus(first.clone(), Rc::new(NodeBackedHandler(7)), 0);
+        assert!(
+            crate::render_state::take_draw_repass_nodes().contains(&7),
+            "gaining focus must re-record the gaining field's draws"
+        );
+
+        let second = Rc::new(RefCell::new(false));
+        request_focus(second.clone(), Rc::new(NodeBackedHandler(9)), 0);
+        let repasses = crate::render_state::take_draw_repass_nodes();
+        assert!(
+            repasses.contains(&7) && repasses.contains(&9),
+            "a focus hand-off must re-record both fields, got {repasses:?}"
+        );
+
+        clear_focus();
+        assert!(
+            crate::render_state::take_draw_repass_nodes().contains(&9),
+            "losing focus must re-record the field that had the caret"
+        );
+    }
+
+    /// A caret blink flip repaints exactly one node. The tick schedules a
+    /// scoped draw repass on the focused field so the frame takes the
+    /// ordinary dirty-node path.
+    #[test]
+    fn a_blink_transition_schedules_a_scoped_repass_on_the_focused_field() {
+        let _app_context = crate::render_state::app_context_test_scope();
+        let focus = Rc::new(RefCell::new(false));
+        request_focus(focus.clone(), Rc::new(NodeBackedHandler(21)), 0);
+        let _ = crate::render_state::take_draw_repass_nodes();
+
+        let past_interval = web_time::Instant::now()
+            + crate::cursor_animation::CursorAnimationState::BLINK_INTERVAL
+            + std::time::Duration::from_millis(1);
+        assert!(
+            crate::cursor_animation::tick_cursor_blink_at(past_interval),
+            "the tick past the interval must flip visibility"
+        );
+        assert!(
+            crate::render_state::take_draw_repass_nodes().contains(&21),
+            "the flip must re-record the focused field's draws"
+        );
+        clear_focus();
     }
 
     #[test]

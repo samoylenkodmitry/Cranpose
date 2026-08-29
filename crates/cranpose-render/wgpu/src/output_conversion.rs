@@ -1,4 +1,4 @@
-use crate::lazy_resource::LazyGpuResource;
+use crate::{frame_graph::FrameCommandRecorder, lazy_resource::LazyGpuResource};
 
 const OUTPUT_CONVERSION_SHADER: &str = r#"
 struct VertexOutput {
@@ -121,15 +121,15 @@ impl OutputConverter {
         })
     }
 
-    pub(crate) fn encode(
+    pub(crate) fn encode<C: FrameCommandRecorder>(
         &self,
         device: &wgpu::Device,
-        encoder: &mut wgpu::CommandEncoder,
+        recorder: &mut C,
         destination: &wgpu::TextureView,
         bind_group: &wgpu::BindGroup,
         backend: wgpu::Backend,
     ) {
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        let mut pass = recorder.begin_timed_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Output Conversion Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: destination,

@@ -1159,26 +1159,24 @@ impl EffectRenderer {
             &self.debug_upload_bytes,
         );
         self.note_offscreen_fill(scissor, None, dest_size);
-        let mut pass = recorder
-            .encoder()
-            .begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some(if horizontal {
-                    "Blur Horizontal Pass"
-                } else {
-                    "Blur Vertical Pass"
-                }),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: dest_view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: load_op,
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                ..Default::default()
-            });
+        let mut pass = recorder.begin_timed_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some(if horizontal {
+                "Blur Horizontal Pass"
+            } else {
+                "Blur Vertical Pass"
+            }),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: dest_view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: load_op,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            ..Default::default()
+        });
         pass.set_pipeline(self.blur_pipeline(device));
         pass.set_bind_group(0, source_bind_group, &[]);
         pass.set_bind_group(1, &uniform_bind_group, &[]);
@@ -1376,22 +1374,20 @@ impl EffectRenderer {
             &self.debug_upload_bytes,
         );
         self.note_composite_fill(scissor, Some(dest_viewport), (source.width, source.height));
-        let mut pass = recorder
-            .encoder()
-            .begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Blur Rounded Mask Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: dest_view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: load_op,
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                ..Default::default()
-            });
+        let mut pass = recorder.begin_timed_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Blur Rounded Mask Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: dest_view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: load_op,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            ..Default::default()
+        });
         pass.set_pipeline(self.blur_rounded_mask_pipeline(device));
         pass.set_bind_group(0, scratch_bind_group, &[]);
         pass.set_bind_group(1, &uniform_bind_group, &[]);
@@ -1434,22 +1430,20 @@ impl EffectRenderer {
         );
         self.note_offscreen_fill(None, None, (source.width, source.height));
 
-        let mut pass = recorder
-            .encoder()
-            .begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Offset Effect Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: dest_view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                ..Default::default()
-            });
+        let mut pass = recorder.begin_timed_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Offset Effect Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: dest_view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            ..Default::default()
+        });
 
         pass.set_pipeline(self.offset_pipeline(device));
         pass.set_bind_group(0, texture_bind_group, &[]);
@@ -1531,22 +1525,20 @@ impl EffectRenderer {
             return false;
         };
 
-        let mut pass = recorder
-            .encoder()
-            .begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Batched Shader Effect Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: dest_view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: load_op,
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                ..Default::default()
-            });
+        let mut pass = recorder.begin_timed_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Batched Shader Effect Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: dest_view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: load_op,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            ..Default::default()
+        });
 
         for draw in &prepared {
             self.draw_prepared_shader_src_over(device, &mut pass, viewport, draw, false);
@@ -1730,22 +1722,20 @@ impl EffectRenderer {
             &self.effect_linear_sampler,
         );
 
-        let mut pass = recorder
-            .encoder()
-            .begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Shader Effect Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: dest_view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: options.load_op,
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                ..Default::default()
-            });
+        let mut pass = recorder.begin_timed_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Shader Effect Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: dest_view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: options.load_op,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            ..Default::default()
+        });
 
         pass.set_pipeline(pipeline);
         pass.set_bind_group(0, texture_bind_group, &[]);
@@ -1958,22 +1948,20 @@ impl EffectRenderer {
             (source.width, source.height),
         );
 
-        let mut pass = recorder
-            .encoder()
-            .begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Blit Composite Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: dest_view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: options.load_op,
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                ..Default::default()
-            });
+        let mut pass = recorder.begin_timed_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Blit Composite Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: dest_view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: options.load_op,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            ..Default::default()
+        });
 
         pass.set_pipeline(self.blit_pipeline(device, options.blend_mode, false));
         pass.set_bind_group(0, texture_bind_group, &[]);
@@ -1999,22 +1987,20 @@ impl EffectRenderer {
 
         let prepared = self.prepare_composite_batch_draws(recorder, device, load_op, items, false);
 
-        let mut pass = recorder
-            .encoder()
-            .begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Batched Blit Composite Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: dest_view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: load_op,
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                ..Default::default()
-            });
+        let mut pass = recorder.begin_timed_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Batched Blit Composite Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: dest_view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: load_op,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            ..Default::default()
+        });
 
         for draw in &prepared {
             self.draw_prepared_composite(&mut pass, viewport, draw, false);
@@ -2340,22 +2326,20 @@ impl EffectRenderer {
             bytemuck::bytes_of(&uniforms),
             &self.debug_upload_bytes,
         );
-        let mut pass = recorder
-            .encoder()
-            .begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Projective Blit Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: dest_view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: load_op,
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                ..Default::default()
-            });
+        let mut pass = recorder.begin_timed_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Projective Blit Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: dest_view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: load_op,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            ..Default::default()
+        });
         pass.set_pipeline(self.projective_blit_pipeline(device, blend_mode, false));
         pass.set_bind_group(0, texture_bind_group, &[]);
         pass.set_bind_group(1, &uniform_bind_group, &[]);

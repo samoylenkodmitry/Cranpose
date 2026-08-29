@@ -4339,7 +4339,7 @@ impl ApplicationHandler for App {
         let (device, queue) =
             match pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
                 label: Some("Main Device"),
-                required_features: wgpu::Features::empty(),
+                required_features: cranpose_render_wgpu::optional_device_features(&adapter),
                 required_limits: wgpu::Limits::default(),
                 experimental_features: wgpu::ExperimentalFeatures::disabled(),
                 memory_hints: wgpu::MemoryHints::default(),

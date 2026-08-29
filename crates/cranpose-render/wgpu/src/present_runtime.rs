@@ -711,6 +711,10 @@ impl PresentHandle {
         let thread = std::thread::Builder::new()
             .name("cranpose-present".to_string())
             .spawn(move || {
+                // Before the renderer exists: the GPU driver's worker
+                // threads are spawned during device setup below and must
+                // inherit the fast-core mask (see `fast_cores`).
+                crate::fast_cores::pin_current_thread_to_fast_cores("present");
                 PresentState::new(init, returns_tx, acks_tx, thread_status, waker).run(msg_rx);
             })
             .map_err(|error| format!("failed to spawn present thread: {error}"))?;

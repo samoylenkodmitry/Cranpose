@@ -41,17 +41,23 @@ impl CursorAnimationState {
 
     /// Starts the blink animation (called when a text field gains focus).
     /// Resets cursor to visible and schedules the first transition.
-    pub fn start(&self) {
+    /// Returns `true` when the caret's visibility changed (redraw needed).
+    pub fn start(&self) -> bool {
+        let flipped = !self.is_visible();
         self.cursor_alpha.set(1.0);
         self.next_blink_time
             .set(Some(Instant::now() + Self::BLINK_INTERVAL));
+        flipped
     }
 
     /// Stops the blink animation (called when text field loses focus).
     /// Resets cursor to visible for next focus.
-    pub fn stop(&self) {
+    /// Returns `true` when the caret's visibility changed (redraw needed).
+    pub fn stop(&self) -> bool {
+        let flipped = !self.is_visible();
         self.cursor_alpha.set(1.0); // Reset to visible for next focus
         self.next_blink_time.set(None);
+        flipped
     }
 
     /// Returns whether blinking is active.
@@ -99,13 +105,28 @@ impl CursorAnimationState {
 /// Starts the active context's cursor blink animation.
 /// Called when a text field gains focus.
 pub fn start_cursor_blink() {
-    crate::render_state::with_cursor_animation(|state| state.start());
+    if crate::render_state::with_cursor_animation(|state| state.start()) {
+        invalidate_focused_caret();
+    }
 }
 
 /// Stops the active context's cursor blink animation.
 /// Called when no text field is focused.
 pub fn stop_cursor_blink() {
-    crate::render_state::with_cursor_animation(|state| state.stop());
+    if crate::render_state::with_cursor_animation(|state| state.stop()) {
+        invalidate_focused_caret();
+    }
+}
+
+/// The caret is drawn from this module's timer state, which no draw
+/// observation can see — so every visibility flip must name the node whose
+/// recorded draws went stale. A scoped draw repass re-records just the
+/// focused field; without it the flip would need a whole-scene rebuild.
+fn invalidate_focused_caret() {
+    if let Some(node_id) = crate::text_field_focus::focused_field_node() {
+        crate::schedule_draw_repass(node_id);
+    }
+    crate::request_render_invalidation();
 }
 
 /// Resets cursor to visible and restarts the blink timer.
@@ -119,9 +140,9 @@ pub fn reset_cursor_blink() {
 /// never blinks. Call [`reset_cursor_blink`] on release to restart a clean
 /// blink cycle.
 pub fn suspend_cursor_blink() {
-    crate::render_state::with_cursor_animation(|state| {
-        state.stop();
-    });
+    if crate::render_state::with_cursor_animation(|state| state.stop()) {
+        invalidate_focused_caret();
+    }
 }
 
 /// Returns whether the cursor should be visible right now.
@@ -130,9 +151,19 @@ pub fn is_cursor_visible() -> bool {
 }
 
 /// Advances the cursor blink state if needed.
-/// Returns `true` if a redraw is needed.
+/// Returns `true` if a redraw is needed. A transition schedules a scoped
+/// draw repass on the focused field, so the caller only has to run the
+/// ordinary dirty-node paths — no whole-scene work.
 pub fn tick_cursor_blink() -> bool {
-    crate::render_state::with_cursor_animation(|state| state.tick(Instant::now()))
+    tick_cursor_blink_at(Instant::now())
+}
+
+pub(crate) fn tick_cursor_blink_at(now: Instant) -> bool {
+    let flipped = crate::render_state::with_cursor_animation(|state| state.tick(now));
+    if flipped {
+        invalidate_focused_caret();
+    }
+    flipped
 }
 
 /// Returns the next cursor blink transition time, if any.
