@@ -241,6 +241,11 @@ Signature → cause → what to do. One lesson per line, no incident history.
   the LOCAL calendar day (every run between local midnight and UTC midnight
   grew an extra date header and shifted all content ~26 px), which reads
   exactly like an environment failure and follows the clock, not the box.
+  Cheaper still than the rerun: the red window is exactly local midnight to
+  UTC midnight (00:00-02:00 CEST), so the FIRST question on such a red is
+  the failed run's wall-clock time — inside the window the branch is not
+  the suspect, and the same commit goes green after 02:00 with no fix
+  aboard (measured across four cranscan PRs in one night).
 
 - **`std::thread::available_parallelism()` reports the calling thread's
   affinity mask, not the machine** — after `sched_setaffinity` restricted a
