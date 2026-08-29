@@ -89,7 +89,7 @@ fn main() -> ExitCode {
             save(&rest, &shot_dir, "0-rest.png");
             let scale = rest.width as f32 / rest.logical_width;
 
-            let press_index = 1usize;
+            let press_index = 0usize;
             let cell_cx = BAR_LEFT + TAB_WIDTH * (press_index as f32 + 0.5);
             let cell_cy = BAR_TOP + BAR_HEIGHT * 0.5;
             let off_glyph = (cell_cx + OFF_GLYPH_OFFSET, cell_cy);
@@ -143,17 +143,21 @@ fn main() -> ExitCode {
             }
 
             // Sanity: the fix must not have disabled ink_recolor outright —
-            // the glyph itself should still move markedly toward the accent
-            // once pressed, versus its honest resting color.
-            const GLYPH_SHOULD_MOVE_FLOOR: f32 = 40.0;
-            let glyph_movement = distance(glyph_rest, glyph_pressed);
-            if glyph_movement < GLYPH_SHOULD_MOVE_FLOOR {
+            // the glyph itself should still read close to the accent while
+            // pressed. (It is drawn in the accent at rest too, since this is
+            // the already-selected tab, so this checks an absolute color
+            // rather than movement from rest.)
+            const GLYPH_SHOULD_READ_AS_ACCENT_CEILING: f32 = 40.0;
+            let glyph_pressed_distance = distance(glyph_pressed, accent_rgb);
+            if glyph_pressed_distance > GLYPH_SHOULD_READ_AS_ACCENT_CEILING {
                 fail(
                     &robot,
                     &format!(
-                        "the glyph under the pressed lens barely changed (moved {glyph_movement:.1} \
-                         < {GLYPH_SHOULD_MOVE_FLOOR}): rest={glyph_rest:?} pressed={glyph_pressed:?}. \
-                         ink_recolor should still be recoloring the glyph it rides over."
+                        "the glyph under the pressed lens does not read as the accent color \
+                         (distance {glyph_pressed_distance:.1} > \
+                         {GLYPH_SHOULD_READ_AS_ACCENT_CEILING}): {glyph_pressed:?} against accent \
+                         {accent_rgb:?}. ink_recolor should still be recoloring the glyph it \
+                         rides over."
                     ),
                 );
             }

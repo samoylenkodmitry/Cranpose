@@ -891,7 +891,16 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     if ink_recolor_strength > 0.0 {
         let ink_color = vec3<f32>(get_float(124u), get_float(125u), get_float(126u));
         let transmitted_luma = dot(rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
-        let ink_mask = 1.0 - smoothstep(0.30, 0.62, transmitted_luma);
+        // Ink is content close to the THEME'S OWN glyph luma (uniform 97:
+        // near-black on a light scheme, near-white on a dark one) rather
+        // than content below a fixed absolute cutoff. An absolute cutoff
+        // means "dark", which only glyphs are on a light bar; on a dark
+        // scheme the whole backdrop behind the bar is dark too, not only
+        // the glyphs, so it classified almost everything as ink and
+        // recolored the lens solid instead of just the glyph it rides over.
+        let foreground_luma = clamp(get_float(97u), 0.0, 1.0);
+        let ink_departure = abs(transmitted_luma - foreground_luma);
+        let ink_mask = 1.0 - smoothstep(0.18, 0.50, ink_departure);
         rgb = mix(rgb, ink_color, ink_mask * ink_recolor_strength);
     }
     var outer_rgb = plain_path.rgb;
