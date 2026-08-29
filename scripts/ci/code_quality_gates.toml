@@ -1,0 +1,28 @@
+# Thresholds for the diff-scoped complexity and duplication gates.
+#
+# Both gates are `just` recipes (`complexity-gate`, `duplication-gate`); CI
+# calls them the same way a developer does. Scope is new or modified code
+# only -- see scripts/ci/gate_diff.py for how "changed" is derived from the
+# PR's merge base. Neither gate requires the existing codebase to pass.
+
+[complexity]
+# Cyclomatic complexity above this, in a function the diff adds or modifies,
+# fails the gate. Measured with `rust-code-analysis-cli` (parses, does not
+# compile, so this runs in milliseconds against only the changed files).
+#
+# Calibrated 2026-08-29 against the full workspace (crates, apps, xtask;
+# 34,658 functions): p50=1, p90=5, p95=8, p99=19, p99.9=49, max=221 (a
+# generated wasm-bindgen match and a winit event-loop dispatch, both
+# necessarily large single `match` bodies). 20 sits just above the p99 line
+# of the codebase's own existing functions, so it accepts what the best 99%
+# of today's code already looks like and flags new work that falls outside
+# that norm.
+max_cyclomatic = 20
+
+[duplication]
+# A cloned block at or above this many lines fails the gate when at least one
+# copy falls inside the diff -- matches AGENTS.md's "duplicated code (10+
+# lines) without architecture is forbidden". Measured with `jscpd`.
+min_lines = 10
+min_tokens = 50
+ignore_globs = ["**/target/**", "**/pkg/**", "**/node_modules/**"]

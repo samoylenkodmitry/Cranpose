@@ -65,6 +65,15 @@ jobs:
       - name: Spell check
         run: just typos
 
+      - name: Test the quality gates' diff-scoping logic
+        run: just test-quality-gates
+
+      - name: Check cyclomatic complexity of changed functions
+        run: just complexity-gate
+
+      - name: Check for duplicated code in the diff
+        run: just duplication-gate
+
       - name: Run workspace tests
         run: just test
 
