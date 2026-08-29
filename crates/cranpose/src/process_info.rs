@@ -68,6 +68,13 @@ fn darwin_resident_memory_bytes() -> Option<u64> {
 
     let mut info = mach_task_basic_info::default();
     let mut count = MACH_TASK_BASIC_INFO_COUNT;
+    // SAFETY: `mach_task_self` returns this process's own task port, a plain
+    // integer with no ownership to release. `task_info` writes into `info`
+    // through the pointer and length this call gives it; the pointer is a
+    // live, correctly sized local (`count` names its capacity in the same
+    // `natural_t` words the call measures in) and `count` is read back
+    // afterwards to confirm it wrote the whole struct before any field of
+    // `info` is used.
     let result = unsafe {
         task_info(
             mach_task_self(),
@@ -84,12 +91,21 @@ fn darwin_resident_memory_bytes() -> Option<u64> {
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn page_size_bytes() -> u64 {
+    // SAFETY: `sysconf` takes an integer name and returns a long. It reads
+    // process-wide configuration, touches no memory the caller owns, and is
+    // safe to call from any thread at any time. A non-positive return means
+    // the name is unsupported, which is checked rather than cast.
     let size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
     if size > 0 { size as u64 } else { 4096 }
 }
 
 fn process_cpu_time() -> Option<Duration> {
+    // SAFETY: `getrusage` fills the caller's `rusage`. `zeroed` is a valid bit
+    // pattern for it beforehand — it is plain integers and `timeval`s — and
+    // the call initializes it on success.
     let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
+    // SAFETY: `RUSAGE_SELF` is a valid `who`, and the pointer is to a live,
+    // correctly typed local the call writes at most once.
     if unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut usage) } != 0 {
         return None;
     }
@@ -106,6 +122,11 @@ fn available_memory_bytes() -> Option<u64> {
         unsafe extern "C" {
             fn os_proc_available_memory() -> usize;
         }
+        // SAFETY: a nullary call into libSystem returning a byte count. It
+        // reads this process's memory accounting and touches nothing the
+        // caller owns. Zero means the call is unavailable — it is not, in an
+        // app extension — which is reported as unknown rather than as "no
+        // memory left".
         let available = unsafe { os_proc_available_memory() };
         (available > 0).then_some(available as u64)
     }
@@ -122,6 +143,9 @@ fn release_free_memory() -> bool {
         unsafe extern "C" {
             fn mallopt(param: libc::c_int, value: libc::c_int) -> libc::c_int;
         }
+        // SAFETY: two integers in, one out. `M_PURGE` asks the allocator to
+        // release its own free pages; it frees nothing the caller holds a
+        // pointer to, and an unrecognized parameter is a no-op returning zero.
         unsafe { mallopt(M_PURGE, 0) };
         true
     }

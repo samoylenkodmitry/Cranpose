@@ -11,6 +11,8 @@ const PROP_VALUE_MAX: usize = 92;
 pub(crate) fn system_property(name: &str) -> Option<String> {
     let name = CString::new(name).ok()?;
     let mut buffer = [0u8; PROP_VALUE_MAX];
+    // SAFETY: `name` is a valid NUL-terminated C string and `buffer` has room
+    // for `PROP_VALUE_MAX` bytes, which is the documented maximum written.
     let length = unsafe {
         libc::__system_property_get(name.as_ptr(), buffer.as_mut_ptr().cast::<libc::c_char>())
     };
@@ -147,6 +149,9 @@ pub(crate) fn seed_env_from_system_properties() {
         let Some(value) = system_property(property) else {
             continue;
         };
+        // SAFETY: called from `android_main` before the frame loop, the render
+        // thread or any worker pool exists, so no other thread can be reading
+        // the environment concurrently.
         unsafe {
             std::env::set_var(variable, &value);
         }
@@ -163,6 +168,7 @@ pub(crate) fn monotonic_nanos() -> i64 {
         tv_sec: 0,
         tv_nsec: 0,
     };
+    // SAFETY: `now` is a live, correctly sized `timespec`.
     unsafe {
         libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut now);
     }
@@ -194,12 +200,16 @@ pub(crate) fn start_vsync_probe_if_enabled() {
 }
 
 fn run_vsync_probe() {
+    // SAFETY: `ALooper_prepare` is being called on this freshly spawned thread,
+    // which owns the looper it creates and is the only thread that polls it.
     let looper = unsafe { ndk_sys::ALooper_prepare(0) };
     if looper.is_null() {
         VSYNC_PROBE_RUNNING.store(false, Ordering::Relaxed);
         log::warn!("[android-frame] ALooper_prepare returned null; vsync probe not started");
         return;
     }
+    // SAFETY: this thread owns a prepared looper, and the callback is a
+    // `'static` function taking null user data.
     unsafe {
         let choreographer = ndk_sys::AChoreographer_getInstance();
         if choreographer.is_null() {
@@ -212,6 +222,7 @@ fn run_vsync_probe() {
     post_vsync_callback();
     log::info!("[android-frame] vsync probe started on its own looper");
     while VSYNC_PROBE_RUNNING.load(Ordering::Relaxed) {
+        // SAFETY: this thread prepared the looper it is polling.
         let result = unsafe {
             ndk_sys::ALooper_pollOnce(
                 -1,
@@ -247,6 +258,9 @@ fn register_refresh_rate_callback(choreographer: *mut ndk_sys::AChoreographer) {
         );
         return;
     }
+    // SAFETY: the symbol was just resolved from the loaded libandroid.so and
+    // has the NDK-documented signature; the callback is a `'static` function
+    // taking null user data.
     unsafe {
         let register: RegisterRefreshRateCallback = std::mem::transmute(symbol);
         register(choreographer, Some(on_refresh_rate), std::ptr::null_mut());
@@ -292,6 +306,8 @@ unsafe extern "C" fn on_vsync(frame_time_ns: i64, _data: *mut c_void) {
 }
 
 fn post_vsync_callback() {
+    // SAFETY: called on the looper-owning thread; the callback pointer is a
+    // `'static` function and the user data is null.
     unsafe {
         let choreographer = ndk_sys::AChoreographer_getInstance();
         if choreographer.is_null() {

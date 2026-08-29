@@ -27,6 +27,9 @@ impl UriHandler for IosUriHandler {
 
         let app = UIApplication::sharedApplication(mtm);
         let options: Retained<NSDictionary<NSString, AnyObject>> = NSDictionary::new();
+        // SAFETY: opening a URL with empty options and no completion handler on
+        // the main thread; the system routes it to the owning app (Safari for
+        // http/https).
         unsafe { app.openURL_options_completionHandler(&url, &options, None) };
         Ok(())
     }

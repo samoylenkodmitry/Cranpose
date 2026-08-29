@@ -34,6 +34,9 @@ pub(crate) fn request_wake_at_next_vsync() -> bool {
     if CALLBACK_POSTED.swap(true, Ordering::AcqRel) {
         return true;
     }
+    // SAFETY: called on `android_main`, which `android-activity` runs on a
+    // prepared looper; the callback is a `'static` function and takes no user
+    // data.
     unsafe {
         let choreographer = ndk_sys::AChoreographer_getInstance();
         if choreographer.is_null() {

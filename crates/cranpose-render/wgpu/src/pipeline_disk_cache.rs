@@ -30,6 +30,8 @@ pub(crate) fn load(device: &wgpu::Device) -> Option<wgpu::PipelineCache> {
         }
     });
     let loaded = data.as_ref().map(Vec::len);
+    // SAFETY: `data` is `persist`'s own `get_data` output, and `fallback:
+    // true` has wgpu validate the header and fall back to an empty cache.
     #[allow(unsafe_code)]
     let cache = unsafe {
         device.create_pipeline_cache(&wgpu::PipelineCacheDescriptor {

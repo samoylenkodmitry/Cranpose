@@ -15,12 +15,17 @@ pub(crate) fn display_is_round(app: &android_activity::AndroidApp) -> bool {
         if symbol.is_null() {
             return None;
         }
+        // SAFETY: the symbol, when present, is libandroid's
+        // `AConfiguration_getScreenRound`, whose C signature is exactly
+        // `int32_t (AConfiguration*)`.
         Some(unsafe { std::mem::transmute::<*mut libc::c_void, GetScreenRound>(symbol) })
     });
     let Some(getter) = getter else {
         return false;
     };
     let config = app.config().copy();
+    // SAFETY: `ptr()` is the snapshot's valid AConfiguration; the getter
+    // only reads it.
     let round = unsafe { getter(config.ptr().as_ptr()) };
     round == ndk_sys::ACONFIGURATION_SCREENROUND_YES as libc::c_int
 }

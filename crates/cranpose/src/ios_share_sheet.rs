@@ -38,6 +38,8 @@ impl ShareSheet for IosShareSheet {
             None => NSArray::from_slice(&[url_item]),
         };
 
+        // SAFETY: presenting a standard activity controller with no custom
+        // application activities, on the main thread.
         let controller = unsafe {
             UIActivityViewController::initWithActivityItems_applicationActivities(
                 UIActivityViewController::alloc(mtm),

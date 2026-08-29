@@ -513,6 +513,9 @@ impl AndroidSink {
             if fd < 0 {
                 return Err(ContentError::PermissionDenied(self.uri.clone()));
             }
+            // SAFETY: `cranposeOpenUriWrite` detaches the descriptor from its
+            // `ParcelFileDescriptor`, transferring ownership to this process;
+            // the `File` closes it on drop.
             *slot = Some(unsafe { File::from_raw_fd(fd) });
         }
         Ok(slot)
@@ -758,6 +761,9 @@ pub fn open_content_uri(uri: &str) -> io::Result<File> {
             "ContentResolver returned no descriptor for {uri}"
         )));
     }
+    // SAFETY: `cranposeOpenUri` detaches the descriptor from its
+    // `ParcelFileDescriptor`, transferring ownership to this process; the
+    // returned `File` closes it on drop.
     Ok(unsafe { File::from_raw_fd(fd) })
 }
 

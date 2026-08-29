@@ -86,6 +86,9 @@ impl WritableFolderStore for AndroidWritableFolder {
         if fd < 0 {
             return Err(FolderError::NotFound(name.to_string()));
         }
+        // SAFETY: the Java side detaches the descriptor from its
+        // `ParcelFileDescriptor`, transferring ownership to this process; the
+        // `File` closes it on drop.
         Ok(Box::new(AndroidFolderReader {
             file: Some(unsafe { File::from_raw_fd(fd) }),
         }))
@@ -98,6 +101,7 @@ impl WritableFolderStore for AndroidWritableFolder {
         if fd < 0 {
             return Err(FolderError::ReadOnly);
         }
+        // SAFETY: as above — ownership of the detached descriptor moves here.
         Ok(Box::new(AndroidFolderWriter {
             tree: self.tree.clone(),
             staging,

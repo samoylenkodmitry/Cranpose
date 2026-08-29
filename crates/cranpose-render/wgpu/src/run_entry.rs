@@ -46,5 +46,11 @@ fn admitted_payloads_are_sync() {
     ok::<BlendMode>();
 }
 
+// SAFETY: `new` is the only producer and admits only the `Rect`, `RoundRect`
+// and `Arc` variants, whose payloads are all `Sync` (proven above); the `Rc`
+// carried by other `DrawPrimitive` variants is never reachable through an
+// entry. Shared access from the frame worker pool therefore never touches
+// non-`Sync` data, and the barrier in `FrameWorkerPool::run` ends all worker
+// access before the borrow does.
 unsafe impl Send for ShapeRunEntry<'_> {}
 unsafe impl Sync for ShapeRunEntry<'_> {}

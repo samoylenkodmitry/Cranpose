@@ -45,6 +45,8 @@ define_class!(
     #[ivars = AccessibilityElementIvars]
     struct NativeAccessibilityElement;
 
+    // SAFETY: The class inherits NSObject protocol conformance from
+    // UIAccessibilityElement and adds only Rust-owned ivars and one override.
     unsafe impl NSObjectProtocol for NativeAccessibilityElement {}
 
     impl NativeAccessibilityElement {
@@ -77,6 +79,8 @@ impl NativeAccessibilityElement {
             pending_activations,
             wake_proxy,
         });
+        // SAFETY: `container` is the retained winit root UIView and implements
+        // the UIAccessibilityContainer informal protocol.
         unsafe { msg_send![super(this), initWithAccessibilityContainer: container] }
     }
 
@@ -202,11 +206,15 @@ impl IosAccessibilityBridge {
             .collect();
         let array = NSArray::from_retained_slice(&ordered);
         let host_object: &NSObject = self.host_view.as_ref();
+        // SAFETY: Every array member is a retained UIAccessibilityElement and
+        // both informal-container properties accept NSArray<id>.
         unsafe {
             host_object.setAccessibilityElements(Some(&array), mtm);
             host_object.setAutomationElements(Some(&array), mtm);
         }
 
+        // SAFETY: UIKit owns both immutable notification constants; a null
+        // argument asks the accessibility service to retain its current focus.
         unsafe {
             let notification = if self.published_once {
                 UIAccessibilityLayoutChangedNotification
@@ -242,6 +250,8 @@ fn update_native_element(
         CGPoint::new(element.bounds.x as f64, element.bounds.y as f64),
         CGSize::new(element.bounds.width as f64, element.bounds.height as f64),
     ));
+    // SAFETY: UIKit accessibility trait constants are immutable process-wide
+    // values exported by the linked framework.
     let mut traits = unsafe {
         match element.role {
             AccessibilityRole::Button
@@ -256,6 +266,7 @@ fn update_native_element(
             AccessibilityRole::Dialog => UIAccessibilityTraitHeader,
         }
     };
+    // SAFETY: as above — immutable framework constants.
     unsafe {
         if element.selected == Some(true) {
             traits |= UIAccessibilityTraitSelected;

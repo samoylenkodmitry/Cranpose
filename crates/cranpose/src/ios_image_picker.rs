@@ -124,6 +124,8 @@ impl PickerDelegate {
 }
 
 fn extract_png_bytes(info: &NSDictionary<UIImagePickerControllerInfoKey, AnyObject>) -> PickResult {
+    // SAFETY: `UIImagePickerControllerOriginalImage` is an immutable framework
+    // constant key.
     let key = unsafe { UIImagePickerControllerOriginalImage };
     let Some(object) = info.objectForKey(key) else {
         return Err(ImagePickerError::Failed("no image in picker result".into()));
@@ -164,6 +166,9 @@ fn present(source: ImageSource, mtm: MainThreadMarker) -> Result<PickFuture, Ima
 
     let slot: SharedSlot = Rc::new(RefCell::new(PickSlot::default()));
     let delegate = PickerDelegate::new(slot.clone(), mtm);
+    // SAFETY: the delegate conforms to both delegate protocols the picker needs;
+    // `setDelegate` takes the untyped `id` and holds it weakly (the returned
+    // future keeps the delegate alive).
     unsafe { picker.setDelegate(Some(&*delegate)) };
     root.presentViewController_animated_completion(&picker, true, None);
 

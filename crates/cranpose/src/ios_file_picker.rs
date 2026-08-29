@@ -218,6 +218,8 @@ fn present(
 
 fn present_open(kind: Kind, multiple: bool) -> PickerFuture<PickResult> {
     present(move |mtm| {
+        // SAFETY: `UTTypeItem`/`UTTypeDirectory` are immutable framework
+        // constants.
         let ty: &UTType = match kind {
             Kind::File => unsafe { UTTypeItem },
             Kind::Folder => unsafe { UTTypeDirectory },

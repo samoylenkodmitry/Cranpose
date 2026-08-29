@@ -20,6 +20,11 @@ macro_rules! android_main {
         /// `#[unsafe(no_mangle)]` is what makes the name findable from Java, and is the
         /// only reason this item needs an `unsafe_code` allowance; the body is
         /// ordinary safe Rust.
+        // SAFETY: exporting an unmangled symbol is sound as long as no other
+        // symbol in the final library claims the same name. `android_main` is
+        // the name `NativeActivity` looks up, so exactly one crate in an
+        // application defines it — the one whose `cdylib` the APK packages —
+        // and it is defined here rather than by hand in each of them.
         #[cfg(target_os = "android")]
         #[doc(hidden)]
         #[allow(unsafe_code)]

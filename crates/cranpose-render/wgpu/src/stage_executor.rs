@@ -192,6 +192,13 @@ mod spare_fill {
         committed: bool,
     }
 
+    // SAFETY: a shared `SpareFill` exposes only `fill_chunk`, whose writes
+    // land in claim-guarded disjoint slot ranges of a buffer this type
+    // exclusively borrows; every written `O` later crosses back to the
+    // vec-owning thread (commit) or is dropped on it (unwind), so `O: Send`
+    // is exactly the bound that transfer needs. `commit` and `drop` take
+    // the value or `&mut self`, so they cannot overlap any `fill_chunk`
+    // borrow.
     unsafe impl<O: Send> Sync for SpareFill<'_, O> {}
 
     impl<'v, O> SpareFill<'v, O> {
@@ -226,6 +233,11 @@ mod spare_fill {
             let watermark = &self.watermarks[chunk];
             for index in start..end {
                 let value = produce(index);
+                // SAFETY: the claim above makes this call the only writer
+                // of slots `start..end`, which lie inside the capacity
+                // `new` reserved and beyond the vec's (zero) length —
+                // uninitialized memory this type exclusively borrows, so a
+                // plain write is correct and drops nothing.
                 unsafe { self.base.add(index).write(value) };
                 watermark.store(index - start + 1, Ordering::Release);
             }
@@ -243,6 +255,8 @@ mod spare_fill {
                     }),
                 "commit before every chunk finished"
             );
+            // SAFETY: every chunk ran to completion, so slots `0..len` all
+            // hold initialized values inside capacity `new` reserved.
             unsafe { self.out.set_len(self.len) };
             self.committed = true;
         }
@@ -257,6 +271,11 @@ mod spare_fill {
                 let initialized = watermark.load(Ordering::Acquire);
                 let start = chunk * self.chunk_len;
                 for index in start..start + initialized {
+                    // SAFETY: `fill_chunk` fully wrote slots
+                    // `start..start + initialized` (the watermark bumps
+                    // only after a write), wrote each exactly once (the
+                    // claim), and the vec never adopted them (len 0), so
+                    // each value drops here exactly once.
                     unsafe { std::ptr::drop_in_place(self.base.add(index)) };
                 }
             }

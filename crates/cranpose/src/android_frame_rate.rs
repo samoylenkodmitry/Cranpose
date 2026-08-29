@@ -28,24 +28,30 @@ unsafe fn resolve_native_window_symbol(name: &std::ffi::CStr) -> *mut c_void {
 
 fn vote_symbol() -> &'static VoteSymbol {
     static SYMBOL: OnceLock<VoteSymbol> = OnceLock::new();
-    SYMBOL.get_or_init(|| unsafe {
-        let with_strategy =
-            resolve_native_window_symbol(c"ANativeWindow_setFrameRateWithChangeStrategy");
-        if !with_strategy.is_null() {
-            return VoteSymbol::WithStrategy(std::mem::transmute::<
-                *mut c_void,
-                SetFrameRateWithChangeStrategyFn,
-            >(with_strategy));
-        }
-        let plain = resolve_native_window_symbol(c"ANativeWindow_setFrameRate");
-        if !plain.is_null() {
-            return VoteSymbol::Plain(std::mem::transmute::<*mut c_void, SetFrameRateFn>(plain));
-        }
-        log::info!(
-            "[android-frame-rate] ANativeWindow_setFrameRate needs API 30; \
+    SYMBOL.get_or_init(|| {
+        // SAFETY: symbols come from the loaded libnativewindow.so; the
+        // transmutes target the NDK-documented signatures.
+        unsafe {
+            let with_strategy =
+                resolve_native_window_symbol(c"ANativeWindow_setFrameRateWithChangeStrategy");
+            if !with_strategy.is_null() {
+                return VoteSymbol::WithStrategy(std::mem::transmute::<
+                    *mut c_void,
+                    SetFrameRateWithChangeStrategyFn,
+                >(with_strategy));
+            }
+            let plain = resolve_native_window_symbol(c"ANativeWindow_setFrameRate");
+            if !plain.is_null() {
+                return VoteSymbol::Plain(std::mem::transmute::<*mut c_void, SetFrameRateFn>(
+                    plain,
+                ));
+            }
+            log::info!(
+                "[android-frame-rate] ANativeWindow_setFrameRate needs API 30; \
                  frame-rate votes are disabled on this device"
-        );
-        VoteSymbol::Absent
+            );
+            VoteSymbol::Absent
+        }
     })
 }
 
@@ -137,6 +143,8 @@ impl FrameRateVoter {
         if self.last == Some(key) {
             return;
         }
+        // SAFETY: `window` keeps the ANativeWindow alive across the call; the
+        // symbols carry their NDK signatures.
         let status = unsafe {
             match symbol {
                 VoteSymbol::WithStrategy(set) => set(

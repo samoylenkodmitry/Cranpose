@@ -112,6 +112,9 @@ fn open_stream(
                     return AudioCallbackResult::Continue;
                 }
                 let data = audio_data.cast::<f32>();
+                // SAFETY: AAudio guarantees `data` points at `frames *
+                // channelCount` writable float samples for this call only, and
+                // the stream is verified as 32-bit float before it is started.
                 let out = unsafe { std::slice::from_raw_parts_mut(data, samples) };
                 match renderer.render(out) {
                     RenderStatus::Continue => AudioCallbackResult::Continue,

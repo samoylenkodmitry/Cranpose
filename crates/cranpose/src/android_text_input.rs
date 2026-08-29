@@ -106,6 +106,9 @@ fn release_ime_queue_handle_raw(handle: jlong) {
     if handle == 0 {
         return;
     }
+    // SAFETY: handles are created by `retain_ime_queue_handle` (Arc::into_raw)
+    // and released exactly once: by the Java helper when the session is
+    // disposed, or by Rust when `show` failed to transfer ownership.
     unsafe {
         drop(Arc::from_raw(
             handle as usize as *const AndroidImeEventQueue,
@@ -118,6 +121,9 @@ fn push_ime_event_for_handle(handle: jlong, event: AndroidImeEvent) {
         log::warn!("dropped Android IME event because the Java callback carried no queue handle");
         return;
     }
+    // SAFETY: the Java helper stores a handle retained from an
+    // Arc<AndroidImeEventQueue> and releases it only when the session is
+    // disposed on the Android UI thread; callbacks check `disposed` first.
     let Some(queue) = (unsafe { (handle as usize as *const AndroidImeEventQueue).as_ref() }) else {
         log::warn!("dropped Android IME event because the queue handle was invalid");
         return;

@@ -20,6 +20,8 @@ pub(crate) struct PerfHintSession {
     target_ns: i64,
 }
 
+// SAFETY: the session pointer is used and closed only from the frame-loop
+// thread that owns this value; the NDK object itself is thread-safe.
 unsafe impl Send for PerfHintSession {}
 
 fn enabled() -> bool {
@@ -27,6 +29,8 @@ fn enabled() -> bool {
 }
 
 unsafe fn resolve(name: &std::ffi::CStr) -> *mut c_void {
+    // SAFETY: dlsym/dlopen with a static NUL-terminated name; libandroid.so
+    // is always loadable by an app process and never closed here.
     unsafe {
         let direct = libc::dlsym(libc::RTLD_DEFAULT, name.as_ptr());
         if !direct.is_null() {
@@ -45,6 +49,10 @@ impl PerfHintSession {
         if !enabled() || target_ns <= 0 {
             return None;
         }
+        // SAFETY: symbols come from libandroid.so and the transmutes target
+        // the NDK-documented APerformanceHint signatures; null checks gate
+        // every call; gettid names the calling thread, which is the thread
+        // the session is created for.
         unsafe {
             let get_manager = resolve(c"APerformanceHint_getManager");
             let create_session = resolve(c"APerformanceHint_createSession");
@@ -100,6 +108,7 @@ impl PerfHintSession {
         if actual_ns <= 0 {
             return;
         }
+        // SAFETY: session is the live pointer `open` created on this thread.
         unsafe {
             if target_ns > 0
                 && (target_ns - self.target_ns).abs() > self.target_ns / 64
@@ -114,6 +123,8 @@ impl PerfHintSession {
 
 impl Drop for PerfHintSession {
     fn drop(&mut self) {
+        // SAFETY: closes the pointer `open` created; dropped on the same
+        // thread, after which it is never touched.
         unsafe { (self.api.close_session)(self.session) }
     }
 }

@@ -25,6 +25,9 @@ where
         .map_err(|error| format!("Android JavaVM is not available on android_main: {error}"))?;
     vm.attach_current_thread(|env| -> jni::errors::Result<Result<T, String>> {
         let raw_activity_global = app.activity_as_ptr() as jni::sys::jobject;
+        // SAFETY: android-activity owns this unowned global Activity reference for the
+        // AndroidApp lifetime. The cast borrows it without taking deletion ownership;
+        // new_local_ref creates the scoped local reference used by this JNI call chain.
         let activity_global = unsafe { env.as_cast_raw::<JObject>(&raw_activity_global)? };
         let activity = env.new_local_ref(activity_global.as_ref())?;
         Ok(f(env, activity))
@@ -89,6 +92,8 @@ pub(crate) fn native_window_from_surface(
     env: &mut Env<'_>,
     surface: JObject<'_>,
 ) -> Result<NativeWindow, String> {
+    // SAFETY: The Java overlay helper calls this with the current JNI
+    // environment and a live android.view.Surface from SurfaceHolder.
     unsafe { NativeWindow::from_surface(env.get_raw().cast(), surface.as_raw()) }.ok_or_else(|| {
         clear_pending_android_jni_exception(env);
         "Android overlay Surface did not provide an ANativeWindow".to_string()
@@ -104,6 +109,9 @@ fn release_android_overlay_event_queue_handle_raw(handle: jlong) {
         return;
     }
 
+    // SAFETY: AndroidOverlayEventQueueHandle values are created by
+    // Arc::into_raw in android_overlay_window and released exactly once by the
+    // Java overlay helper or by Rust when show() did not transfer ownership.
     unsafe {
         drop(Arc::from_raw(
             handle as usize as *const AndroidOverlayEventQueue,
@@ -119,6 +127,9 @@ fn push_overlay_event_for_handle(handle: jlong, event: AndroidOverlayWindowEvent
         return;
     }
 
+    // SAFETY: The Java overlay helper stores a handle retained from an
+    // Arc<AndroidOverlayEventQueue> and releases it only after the overlay is
+    // disposed on the Android UI thread. Callbacks are ignored after disposal.
     let Some(queue) = (unsafe { (handle as usize as *const AndroidOverlayEventQueue).as_ref() })
     else {
         log::warn!("dropped Android overlay event because the queue handle was invalid");
