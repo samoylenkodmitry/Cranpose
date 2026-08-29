@@ -1171,8 +1171,21 @@ pub trait Node: Any {
     fn mount(&mut self) {}
     fn update(&mut self) {}
     fn unmount(&mut self) {}
-    fn insert_child(&mut self, _child: NodeId) {}
-    fn remove_child(&mut self, _child: NodeId) {}
+    /// Adds `child` to this node's child list, returning whether the list
+    /// actually changed. A node that already holds the child returns `false`:
+    /// callers record a structural change from this answer, and a structural
+    /// change re-lowers the whole subtree, so claiming one for a no-op costs a
+    /// full rebuild per call.
+    fn insert_child(&mut self, _child: NodeId) -> bool {
+        false
+    }
+    /// Removes `child` from this node's child list, returning whether the list
+    /// actually changed. Only this node can answer that: a caller inspecting
+    /// the child's parent pointer gets it wrong when the child was reparented
+    /// while still listed here.
+    fn remove_child(&mut self, _child: NodeId) -> bool {
+        false
+    }
     fn move_child(&mut self, _from: usize, _to: usize) {}
     fn update_children(&mut self, _children: &[NodeId]) {}
     fn children(&self) -> Vec<NodeId> {
@@ -2486,26 +2499,27 @@ fn insert_child_with_reparenting(applier: &mut dyn Applier, parent_id: NodeId, c
     if let Some(old_parent_id) = old_parent
         && old_parent_id != parent_id
     {
-        if let Ok(old_parent_node) = applier.get_mut(old_parent_id) {
-            old_parent_node.remove_child(child_id);
-        }
+        let removed = applier
+            .get_mut(old_parent_id)
+            .is_ok_and(|old_parent_node| old_parent_node.remove_child(child_id));
         if let Ok(child_node) = applier.get_mut(child_id) {
             child_node.on_removed_from_parent();
         }
         bubble_layout_dirty(applier, old_parent_id);
         bubble_measure_dirty(applier, old_parent_id);
-        note_structural("reparent-detach", old_parent_id, child_id);
-        applier.record_structural_change(old_parent_id);
+        if removed {
+            note_structural("reparent-detach", old_parent_id, child_id);
+            applier.record_structural_change(old_parent_id);
+        }
     }
 
-    // `insert_child` returns early when the child is already in this parent's
-    // list, so re-inserting it changes nothing -- and a structural change
-    // recorded for it costs a full re-lowering of the parent's subtree.
-    let already_attached_here = old_parent == Some(parent_id);
-    if let Ok(parent_node) = applier.get_mut(parent_id) {
-        parent_node.insert_child(child_id);
-    }
-    if !already_attached_here {
+    // Only record a structural change if the list actually gained the child.
+    // Re-attaching a child to the parent it already has is a no-op, and a
+    // structural change re-lowers the parent's whole subtree.
+    let inserted = applier
+        .get_mut(parent_id)
+        .is_ok_and(|parent_node| parent_node.insert_child(child_id));
+    if inserted {
         note_structural("attach", parent_id, child_id);
         applier.record_structural_change(parent_id);
     }
@@ -2537,22 +2551,17 @@ fn detach_child_from_parent(
     parent_id: NodeId,
     child_id: NodeId,
 ) -> Result<(), NodeError> {
-    // A child that is not this parent's child cannot be removed from it: the
-    // `remove_child` below is then a no-op, and the checks further down bail
-    // out for exactly that case. Decide here, before the record, or a repeated
-    // detach of an already-detached child marks the parent structurally dirty
-    // every frame and re-lowers its whole subtree for nothing.
-    let was_attached_here = applier
-        .get_mut(child_id)
-        .ok()
-        .and_then(|node| node.parent())
-        == Some(parent_id);
-    if let Ok(parent_node) = applier.get_mut(parent_id) {
-        parent_node.remove_child(child_id);
-    }
+    // Ask the parent whether its list changed rather than inferring it from the
+    // child's parent pointer: a child reparented while still listed here must
+    // still count, or its layers stay in the render graph as a ghost. A repeat
+    // detach of an already-detached child removes nothing and must not count,
+    // or the parent is structurally dirty every frame for nothing.
+    let removed = applier
+        .get_mut(parent_id)
+        .is_ok_and(|parent_node| parent_node.remove_child(child_id));
     bubble_layout_dirty(applier, parent_id);
     bubble_measure_dirty(applier, parent_id);
-    if was_attached_here {
+    if removed {
         note_structural("detach", parent_id, child_id);
         applier.record_structural_change(parent_id);
     }

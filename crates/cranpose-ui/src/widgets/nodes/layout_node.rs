@@ -888,9 +888,9 @@ impl Node for LayoutNode {
         LayoutNode::set_node_id(self, id);
     }
 
-    fn insert_child(&mut self, child: NodeId) {
+    fn insert_child(&mut self, child: NodeId) -> bool {
         if self.children.contains(&child) {
-            return;
+            return false;
         }
         if is_virtual_node(child) {
             let count = self.virtual_children_count.get();
@@ -899,12 +899,14 @@ impl Node for LayoutNode {
         self.children.push(child);
         self.cache.clear();
         self.mark_needs_measure();
+        true
     }
 
-    fn remove_child(&mut self, child: NodeId) {
+    fn remove_child(&mut self, child: NodeId) -> bool {
         let before = self.children.len();
         self.children.retain(|&id| id != child);
-        if self.children.len() < before {
+        let removed = self.children.len() < before;
+        if removed {
             if is_virtual_node(child) {
                 let count = self.virtual_children_count.get();
                 if count > 0 {
@@ -914,6 +916,7 @@ impl Node for LayoutNode {
             self.cache.clear();
             self.mark_needs_measure();
         }
+        removed
     }
 
     fn move_child(&mut self, from: usize, to: usize) {

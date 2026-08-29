@@ -469,14 +469,23 @@ impl Node for RecordingNode {
         self.children.clone()
     }
 
-    fn insert_child(&mut self, child: NodeId) {
+    fn insert_child(&mut self, child: NodeId) -> bool {
+        if self.children.contains(&child) {
+            return false;
+        }
         self.children.push(child);
         self.operations.push(Operation::Insert(child));
+        true
     }
 
-    fn remove_child(&mut self, child: NodeId) {
+    fn remove_child(&mut self, child: NodeId) -> bool {
+        let before = self.children.len();
         self.children.retain(|&c| c != child);
-        self.operations.push(Operation::Remove(child));
+        let removed = self.children.len() < before;
+        if removed {
+            self.operations.push(Operation::Remove(child));
+        }
+        removed
     }
 
     fn move_child(&mut self, from: usize, to: usize) {
@@ -540,12 +549,18 @@ impl Node for UnmountTrackingNode {
         self.unmounts.set(self.unmounts.get() + 1);
     }
 
-    fn insert_child(&mut self, child: NodeId) {
+    fn insert_child(&mut self, child: NodeId) -> bool {
+        if self.children.contains(&child) {
+            return false;
+        }
         self.children.push(child);
+        true
     }
 
-    fn remove_child(&mut self, child: NodeId) {
+    fn remove_child(&mut self, child: NodeId) -> bool {
+        let before = self.children.len();
         self.children.retain(|&id| id != child);
+        self.children.len() < before
     }
 
     fn children(&self) -> Vec<NodeId> {
