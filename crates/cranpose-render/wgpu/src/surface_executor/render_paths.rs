@@ -2323,26 +2323,6 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
                     effect: backdrop,
                     z_index: child.z_index,
                 };
-                if let Some(dependency_rect) = backdrop_dependency_rect(
-                    resolved_child.backdrop_rect,
-                    child.visual_clip,
-                    &backdrop_layer.effect,
-                    root_scale,
-                    (width, height),
-                ) {
-                    flush_pending_queues_for_backdrop_capture(
-                        backend,
-                        &mut pending_composites,
-                        &mut pending_composite_load_op,
-                        &mut pending_shader_composites,
-                        &mut pending_shader_load_op,
-                        surface_view,
-                        (width, height),
-                        &mut next_load_op,
-                        dependency_rect,
-                        root_scale,
-                    )?;
-                }
                 let child_backdrop_capture_rect = visible_backdrop_capture_rect(
                     resolved_child.backdrop_rect,
                     child.visual_clip,
@@ -2368,6 +2348,22 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
                     root_scale,
                     Some(backdrop_input_hash),
                     true,
+                    |backend| {
+                        flush_for_backdrop_dependencies(
+                            backend,
+                            &mut pending_composites,
+                            &mut pending_composite_load_op,
+                            &mut pending_shader_composites,
+                            &mut pending_shader_load_op,
+                            surface_view,
+                            (width, height),
+                            &mut next_load_op,
+                            resolved_child.backdrop_rect,
+                            child.visual_clip,
+                            &backdrop_layer.effect,
+                            root_scale,
+                        )
+                    },
                 )? {
                     let PreparedBackdropComposite {
                         surface: prepared_surface,
@@ -2421,6 +2417,20 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
                         next_load_op = wgpu::LoadOp::Load;
                     }
                 } else {
+                    flush_for_backdrop_dependencies(
+                        backend,
+                        &mut pending_composites,
+                        &mut pending_composite_load_op,
+                        &mut pending_shader_composites,
+                        &mut pending_shader_load_op,
+                        surface_view,
+                        (width, height),
+                        &mut next_load_op,
+                        resolved_child.backdrop_rect,
+                        child.visual_clip,
+                        &backdrop_layer.effect,
+                        root_scale,
+                    )?;
                     apply_backdrop_layer_to_target(
                         backend,
                         root_target,
@@ -4079,6 +4089,43 @@ fn flush_pending_queues_for_backdrop_capture<B: SurfaceExecutionBackend>(
     Ok(())
 }
 
+/// The dependency-gated capture flush, packaged for the two backdrop
+/// sites: lands every pending write that the backdrop's capture-or-output
+/// region depends on, plus the frame clear a snapshot copy cannot apply.
+#[allow(clippy::too_many_arguments)]
+fn flush_for_backdrop_dependencies<B: SurfaceExecutionBackend>(
+    backend: &mut B,
+    pending_composites: &mut Vec<PendingLayerComposite>,
+    pending_composite_load_op: &mut Option<wgpu::LoadOp<wgpu::Color>>,
+    pending_shader_composites: &mut Vec<PendingShaderLayerComposite>,
+    pending_shader_load_op: &mut Option<wgpu::LoadOp<wgpu::Color>>,
+    target_view: &wgpu::TextureView,
+    viewport: (u32, u32),
+    next_load_op: &mut wgpu::LoadOp<wgpu::Color>,
+    effect_rect: Rect,
+    clip: Option<Rect>,
+    effect: &RenderEffect,
+    root_scale: f32,
+) -> Result<(), String> {
+    if let Some(dependency_rect) =
+        backdrop_dependency_rect(effect_rect, clip, effect, root_scale, viewport)
+    {
+        flush_pending_queues_for_backdrop_capture(
+            backend,
+            pending_composites,
+            pending_composite_load_op,
+            pending_shader_composites,
+            pending_shader_load_op,
+            target_view,
+            viewport,
+            next_load_op,
+            dependency_rect,
+            root_scale,
+        )?;
+    }
+    Ok(())
+}
+
 fn dest_quad_intersects_rect(dest_quad: [[f32; 2]; 4], rect: Rect) -> bool {
     axis_aligned_quad_rect(dest_quad)
         .or_else(|| quad_bounds_rect(dest_quad))
@@ -4917,26 +4964,6 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
         }
 
         if let Some(backdrop) = &child_surface.backdrop {
-            if let Some(dependency_rect) = backdrop_dependency_rect(
-                resolved_child.backdrop_rect,
-                child.visual_clip,
-                backdrop,
-                target_scale,
-                (width, height),
-            ) {
-                flush_pending_queues_for_backdrop_capture(
-                    backend,
-                    &mut pending_composites,
-                    &mut pending_composite_load_op,
-                    &mut pending_shader_composites,
-                    &mut pending_shader_load_op,
-                    &target.view,
-                    (width, height),
-                    &mut next_load_op,
-                    dependency_rect,
-                    target_scale,
-                )?;
-            }
             let backdrop_layer = BackdropLayer {
                 node_id: child.node_id,
                 rect: resolved_child.backdrop_rect,
@@ -4978,6 +5005,22 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
                 target_scale,
                 Some(backdrop_input_hash),
                 false,
+                |backend| {
+                    flush_for_backdrop_dependencies(
+                        backend,
+                        &mut pending_composites,
+                        &mut pending_composite_load_op,
+                        &mut pending_shader_composites,
+                        &mut pending_shader_load_op,
+                        &target.view,
+                        (width, height),
+                        &mut next_load_op,
+                        resolved_child.backdrop_rect,
+                        child.visual_clip,
+                        &backdrop_layer.effect,
+                        target_scale,
+                    )
+                },
             )? {
                 if pending_composites.is_empty() {
                     pending_composite_load_op = Some(next_load_op);
@@ -4991,6 +5034,20 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
                 });
                 next_load_op = wgpu::LoadOp::Load;
             } else {
+                flush_for_backdrop_dependencies(
+                    backend,
+                    &mut pending_composites,
+                    &mut pending_composite_load_op,
+                    &mut pending_shader_composites,
+                    &mut pending_shader_load_op,
+                    &target.view,
+                    (width, height),
+                    &mut next_load_op,
+                    resolved_child.backdrop_rect,
+                    child.visual_clip,
+                    &backdrop_layer.effect,
+                    target_scale,
+                )?;
                 apply_backdrop_layer_to_target(
                     backend,
                     &target,
@@ -5811,6 +5868,11 @@ pub(crate) fn render_effect_layer_to_target<B: SurfaceExecutionBackend>(
     Ok(())
 }
 
+/// `capture_flush` runs exactly once, immediately before the miss path
+/// first reads `target` — a cache HIT reads nothing and composites from
+/// the retained surface, so the caller's pending queues stay batched
+/// across it. The fused flush makes that safe: the hit's composite joins
+/// the queue and draws in painter's order with everything already there.
 #[allow(clippy::too_many_arguments)]
 fn prepare_cached_backdrop_layer_composite<B: SurfaceExecutionBackend>(
     backend: &mut B,
@@ -5822,6 +5884,7 @@ fn prepare_cached_backdrop_layer_composite<B: SurfaceExecutionBackend>(
     root_scale: f32,
     input_content_hash: Option<u64>,
     allow_deferred_tail: bool,
+    capture_flush: impl FnOnce(&mut B) -> Result<(), String>,
 ) -> Result<Option<PreparedBackdropComposite>, String> {
     let diag = backdrop_diag_enabled();
     let (layer_rect, layer_clip) = snapped_backdrop_geometry(layer, root_scale);
@@ -5943,6 +6006,7 @@ fn prepare_cached_backdrop_layer_composite<B: SurfaceExecutionBackend>(
             backdrop_width,
             backdrop_height,
         );
+        capture_flush(backend)?;
         let effect_target = backend.acquire_retained_surface(backdrop_width, backdrop_height);
         if let Some(effect) = materialized_effect {
             let snapshot = backend.acquire_frame_surface(backdrop_width, backdrop_height);
@@ -6105,6 +6169,9 @@ pub(crate) fn apply_backdrop_layer_to_target<B: SurfaceExecutionBackend>(
         root_scale,
         input_content_hash,
         false,
+        // The immediate-composite path holds no pending queues: every
+        // caller lands its own dependency flush before entering here.
+        |_| Ok(()),
     )? {
         if backdrop_diag_enabled() {
             eprintln!(

@@ -278,6 +278,39 @@ fn each_extra_fixed_glass_adds_only_its_blur_chain() {
     );
 }
 
+fn resting_pass_counts(glass_count: usize) -> Vec<u32> {
+    let (_lock, renderer) = support::headless_renderer_parts().expect("headless renderer");
+    let mut harness = Harness::new(renderer, glass_count, false, false);
+    for _ in 0..WARMUP_FRAMES {
+        harness.frame(-12.0);
+    }
+    // Two settle frames: the first still frame misses every glass cache
+    // (the last scroll changed the content under it); from the second on
+    // the captures hit.
+    harness.frame(0.0);
+    harness.frame(0.0);
+    (0..MEASURED_FRAMES)
+        .map(|_| harness.frame(0.0).pass_count)
+        .collect()
+}
+
+/// A resting frame serves every glass from its cache (hits only, no blur
+/// work) and pins its pass budget: the captures read nothing back, so
+/// nothing may split the frame's composites.
+#[test]
+fn a_resting_glass_hit_leaves_the_frame_unsplit() {
+    let resting = resting_pass_counts(3);
+    let steady = *resting.last().expect("resting passes");
+    assert!(
+        resting.iter().all(|passes| *passes == steady),
+        "resting frames must settle to a steady pass count: {resting:?}"
+    );
+    assert_eq!(
+        steady, 4,
+        "triple-glass resting frame pass budget moved: {resting:?}"
+    );
+}
+
 /// The most device-like headless scene — elevation-shadowed list cards
 /// under fixed glass — pins its scrolled pass budget exactly. Shadow
 /// draws interleave between queued composites here, so this is the scene

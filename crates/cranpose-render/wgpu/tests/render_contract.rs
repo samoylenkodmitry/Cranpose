@@ -548,13 +548,30 @@ fn first_child_composite_consumes_pending_clear_load_op() {
         .map(|offset| nested_underlay_start + offset)
         .expect("nested underlay capture should follow target initialization");
     let nested_underlay_body = &source[nested_underlay_start..nested_underlay_end];
-    let backdrop_body = block_after(&source, "if let Some(backdrop) = &child_surface.backdrop");
     let shadow_body = block_after(&source, "if !resolved_child.shadow_draws.is_empty()");
     assert!(
         nested_underlay_body.contains("flush_pending_clear")
-            && backdrop_body.contains("flush_pending_queues_for_backdrop_capture")
             && shadow_body.contains("flush_pending_clear"),
-        "target readers such as underlays, backdrop snapshots, and shadow draws must still initialize the target before reading/compositing"
+        "target readers such as underlays and shadow draws must still initialize the target before reading/compositing"
+    );
+    // A backdrop MISS reads the target through its snapshot copy, so the
+    // dependency-gated flush must land inside the miss arm BEFORE that
+    // first read. A HIT reads nothing and must not flush — the fused
+    // composite queue keeps painter's order across the skipped flush.
+    let miss_flush = source
+        .find("capture_flush(backend)?;")
+        .expect("the backdrop miss path must invoke the caller's capture flush");
+    let miss_read = source
+        .find("let copied_snapshot = copy_plan.is_some_and(")
+        .expect("the backdrop miss path must copy through the shared plan");
+    assert!(
+        miss_flush < miss_read,
+        "the backdrop miss path must flush pending queues before its first target read"
+    );
+    assert!(
+        source.contains("fn flush_for_backdrop_dependencies")
+            && source.matches("flush_for_backdrop_dependencies(").count() >= 4,
+        "both backdrop sites must route their capture flush through the shared dependency helper, on the miss path and ahead of the immediate-apply fallback"
     );
     let capture_flush_start = source
         .find("fn flush_pending_queues_for_backdrop_capture")
