@@ -883,6 +883,11 @@ path = "robot-runners/robot_liquid_tab_bar_pill_containment.rs"
 required-features = ["desktop", "robot-app"]
 
 [[example]]
+name = "robot_liquid_round_glass_edge_refraction"
+path = "robot-runners/robot_liquid_round_glass_edge_refraction.rs"
+required-features = ["desktop", "robot-app"]
+
+[[example]]
 name = "robot_liquid_tab_flight_dark_scheme_ink_recolor"
 path = "robot-runners/robot_liquid_tab_flight_dark_scheme_ink_recolor.rs"
 required-features = ["desktop", "robot-app"]
