@@ -164,6 +164,24 @@ impl Modifier {
             crate::modifier_nodes::SizeReporterElement::new(sink),
         ))
     }
+
+    /// Publishes this node's measured size into observable state, so an
+    /// actual size change schedules recomposition — size-reactive topology
+    /// without a `BoxWithConstraints` subcompose boundary. Writes are
+    /// equality-gated by `MutableState::set`, so a pass that re-measures the
+    /// node at its current size schedules nothing and a threshold-style use
+    /// (state feeds the CONTENT, the node's own size does not depend on it)
+    /// settles in one extra pass. Content whose measured size depends on the
+    /// reported size can still oscillate — the same self-referential hazard
+    /// as Compose's `onSizeChanged`, and no gate can decide it for you.
+    pub fn report_size_state(
+        self,
+        sink: cranpose_core::MutableState<cranpose_ui_graphics::Size>,
+    ) -> Self {
+        self.then(Modifier::with_element(
+            crate::modifier_nodes::SizeReporterElement::from_state(sink),
+        ))
+    }
 }
 
 #[cfg(test)]
