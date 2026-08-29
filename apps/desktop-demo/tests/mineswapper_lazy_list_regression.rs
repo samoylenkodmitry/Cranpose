@@ -743,6 +743,17 @@ fn async_runtime_to_other_tabs_after_second_forward_pass_preserves_content() {
     let registered = TEST_ACTIVE_TAB_STATE.with(|cell| cell.borrow().is_some());
     assert!(registered, "active tab state was not registered");
 
+    // One real measure pass before the leak-detection loop below: the app
+    // shell picks compact-vs-desktop chrome off `Modifier::report_size_state`,
+    // which is unset (0x0, so "compact") until the first measurement, and
+    // this harness's first measurement is otherwise the loop's own
+    // `slots_before_wait_dump` capture. Composing that one-time, real,
+    // width-driven chrome swap inside the very window this loop measures
+    // reads as a leak by slot count alone; a real window is already laid
+    // out long before a person can switch tabs, so warming up here matches
+    // that and leaves the loop measuring only per-frame animation cost.
+    let _ = composition_layout_texts(&mut composition);
+
     let tab_markers = [
         (DemoTab::Animations, "Animations Showcase"),
         (DemoTab::TextInput, "Text Input Demo"),

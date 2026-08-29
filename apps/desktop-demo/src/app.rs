@@ -640,19 +640,18 @@ pub fn combined_app_with_startup(startup: StartupSelection) {
             .report_size_state(window_size),
         ColumnSpec::default(),
         move || {
-            if window_size.get().width < COMPACT_WIDTH_BREAKPOINT {
+            let is_compact = window_size.get().width < COMPACT_WIDTH_BREAKPOINT;
+
+            // Only the nav chrome depends on `is_compact`. `TabContent` below
+            // keeps one call site regardless of which chrome is showing, so a
+            // width crossing the breakpoint mid-animation swaps the header
+            // without tearing down (and leaking the effects of) whichever
+            // tab is live — the failure mode a wider conditional had: two
+            // `TabContent` call sites, one per branch, are two composition
+            // groups, and Compose disposes a group's remembered state when
+            // the frame it was in stops being the one composed.
+            if is_compact {
                 CompactAppBar(active_tab, picker_open, showing_source);
-                if picker_open.get() {
-                    CompactTabPicker(active_tab, picker_open);
-                } else {
-                    TabContent(
-                        active_tab,
-                        startup,
-                        winamp_tab_state,
-                        showing_source,
-                        content_modifier.clone(),
-                    );
-                }
             } else {
                 TabBarHorizontal(active_tab, showing_source);
 
@@ -660,7 +659,11 @@ pub fn combined_app_with_startup(startup: StartupSelection) {
                     width: 0.0,
                     height: 12.0,
                 });
+            }
 
+            if is_compact && picker_open.get() {
+                CompactTabPicker(active_tab, picker_open);
+            } else {
                 TabContent(
                     active_tab,
                     startup,
