@@ -1895,8 +1895,13 @@ impl Command {
                 child_id,
                 bubble,
             } => {
-                insert_child_with_reparenting(applier, parent_id, child_id);
-                bubble.apply(applier, parent_id);
+                // Bubbling marks every ancestor up to the root as needing
+                // measure, and re-measuring a tree that did not change is the
+                // most expensive way to do nothing. Only an insert that
+                // actually changed the child list has anything to invalidate.
+                if insert_child_with_reparenting(applier, parent_id, child_id) {
+                    bubble.apply(applier, parent_id);
+                }
                 Ok(())
             }
             Self::InsertChild {
@@ -2483,13 +2488,17 @@ fn update_typed_node<N: Node + 'static>(node: &mut dyn Node, id: NodeId) -> Resu
     Ok(())
 }
 
-fn insert_child_with_reparenting(applier: &mut dyn Applier, parent_id: NodeId, child_id: NodeId) {
+fn insert_child_with_reparenting(
+    applier: &mut dyn Applier,
+    parent_id: NodeId,
+    child_id: NodeId,
+) -> bool {
     if parent_id == child_id {
         debug_assert_ne!(
             parent_id, child_id,
             "a node cannot be attached as its own child"
         );
-        return;
+        return false;
     }
 
     let old_parent = applier
@@ -2505,9 +2514,9 @@ fn insert_child_with_reparenting(applier: &mut dyn Applier, parent_id: NodeId, c
         if let Ok(child_node) = applier.get_mut(child_id) {
             child_node.on_removed_from_parent();
         }
-        bubble_layout_dirty(applier, old_parent_id);
-        bubble_measure_dirty(applier, old_parent_id);
         if removed {
+            bubble_layout_dirty(applier, old_parent_id);
+            bubble_measure_dirty(applier, old_parent_id);
             note_structural("reparent-detach", old_parent_id, child_id);
             applier.record_structural_change(old_parent_id);
         }
@@ -2526,6 +2535,7 @@ fn insert_child_with_reparenting(applier: &mut dyn Applier, parent_id: NodeId, c
     if let Ok(child_node) = applier.get_mut(child_id) {
         child_node.on_attached_to_parent(parent_id);
     }
+    inserted
 }
 
 fn apply_remove_child(
@@ -2559,9 +2569,9 @@ fn detach_child_from_parent(
     let removed = applier
         .get_mut(parent_id)
         .is_ok_and(|parent_node| parent_node.remove_child(child_id));
-    bubble_layout_dirty(applier, parent_id);
-    bubble_measure_dirty(applier, parent_id);
     if removed {
+        bubble_layout_dirty(applier, parent_id);
+        bubble_measure_dirty(applier, parent_id);
         note_structural("detach", parent_id, child_id);
         applier.record_structural_change(parent_id);
     }
