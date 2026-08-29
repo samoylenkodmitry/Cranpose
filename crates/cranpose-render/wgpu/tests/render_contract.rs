@@ -1213,6 +1213,19 @@ fn gpu_stats_env_flag_is_not_process_cached() {
         !gpu_stats_source.contains("OnceLock") && !gpu_stats_source.contains("static ENABLED"),
         "GPU stats env flag must not be latched in a process-global cache"
     );
+
+    // A cache does not have to be process-global to latch the toggle: a
+    // renderer that copies the answer into a struct field at construction
+    // freezes `debug.cranpose.gpu_stats` for its lifetime, while this test's
+    // name promises the opposite. The flag is read where it is used — once
+    // per sixty frames, so there is nothing to cache.
+    let render_source = std::fs::read_to_string(crate_dir.join("src/render.rs"))
+        .expect("failed to read WGPU renderer source");
+    assert!(
+        !render_source.contains("gpu_stats_enabled:"),
+        "GPU stats env flag must not be latched in a renderer field either — \
+         read gpu_stats_enabled() at the use site"
+    );
 }
 
 #[test]
