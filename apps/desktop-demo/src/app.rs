@@ -642,14 +642,13 @@ pub fn combined_app_with_startup(startup: StartupSelection) {
         move || {
             let is_compact = window_size.get().width < COMPACT_WIDTH_BREAKPOINT;
 
-            // Only the nav chrome depends on `is_compact`. `TabContent` below
-            // keeps one call site regardless of which chrome is showing, so a
-            // width crossing the breakpoint mid-animation swaps the header
-            // without tearing down (and leaking the effects of) whichever
-            // tab is live — the failure mode a wider conditional had: two
-            // `TabContent` call sites, one per branch, are two composition
-            // groups, and Compose disposes a group's remembered state when
-            // the frame it was in stops being the one composed.
+            // Only the nav chrome depends on `is_compact`; `TabContent` below
+            // keeps one call site regardless of which chrome is showing. Two
+            // `TabContent` call sites (one per branch) would be two
+            // composition groups, and switching branches disposes the group
+            // that stopped being composed — a width crossing the breakpoint
+            // would tear down and rebuild whichever tab is live instead of
+            // leaving it running under the new header.
             if is_compact {
                 CompactAppBar(active_tab, picker_open, showing_source);
             } else {
