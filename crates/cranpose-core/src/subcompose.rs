@@ -685,20 +685,22 @@ impl SubcomposeState {
     }
 
     /// Returns the node that previously rendered this slot, if it is still
-    /// considered reusable. Content-type buckets narrow the candidate set, then
-    /// the reuse policy makes the final compatibility decision.
+    /// considered reusable, and whether it was REBOUND — taken from another
+    /// slot, so its retained subtree is about to show different content. An
+    /// exact-slot reactivation hands the same item its own subtree back and
+    /// is not a rebinding.
     ///
     /// Lookup order:
-    /// 1. Exact slot match in the appropriate pool
+    /// 1. Exact slot match in the appropriate pool (not a rebinding)
     /// 2. Any policy-compatible node from the same content-type pool
     /// 3. Fallback to untyped pool with policy compatibility check
-    pub fn take_node_from_reusables(&mut self, slot_id: SlotId) -> Option<NodeId> {
+    pub fn take_node_from_reusables(&mut self, slot_id: SlotId) -> Option<(NodeId, bool)> {
         if let Some(nodes) = self.mapping.get_nodes(&slot_id) {
             let first_node = nodes.first().copied();
             if let Some(node_id) = first_node {
                 let _ = self.remove_from_reusable_pools(node_id);
                 self.exact_reactivation_slots.remove(&slot_id);
-                return Some(node_id);
+                return Some((node_id, false));
             }
         }
 
@@ -709,7 +711,7 @@ impl SubcomposeState {
         {
             self.decrement_reusable_slot(old_slot);
             self.move_node_to_slot(node_id, old_slot, slot_id);
-            return Some(node_id);
+            return Some((node_id, true));
         }
 
         let exact_reactivation_slots = &self.exact_reactivation_slots;
@@ -727,7 +729,7 @@ impl SubcomposeState {
         {
             self.decrement_reusable_slot(old_slot);
             self.move_node_to_slot(node_id, old_slot, slot_id);
-            return Some(node_id);
+            return Some((node_id, true));
         }
 
         None

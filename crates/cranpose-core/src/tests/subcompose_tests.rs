@@ -68,7 +68,11 @@ fn exact_reuse_wins() {
     state.dispose_or_reuse_starting_from_index(0);
     assert_eq!(state.reusable(), &[10]);
     let reused = state.take_node_from_reusables(SlotId::new(1));
-    assert_eq!(reused, Some(10));
+    assert_eq!(
+        reused,
+        Some((10, false)),
+        "exact-slot reuse is not a rebinding"
+    );
 }
 
 #[test]
@@ -78,7 +82,11 @@ fn policy_based_compatibility() {
     state.dispose_or_reuse_starting_from_index(0);
     assert_eq!(state.reusable(), &[42]);
     let reused = state.take_node_from_reusables(SlotId::new(4));
-    assert_eq!(reused, Some(42));
+    assert_eq!(
+        reused,
+        Some((42, true)),
+        "cross-slot reuse rebinds the subtree"
+    );
 }
 
 #[test]
@@ -136,7 +144,7 @@ fn reordering_keyed_children_preserves_nodes() {
     let reordered = [SlotId::new(3), SlotId::new(1), SlotId::new(2)];
     let mut reused_nodes = Vec::new();
     for slot in reordered {
-        let node = state
+        let (node, _rebound) = state
             .take_node_from_reusables(slot)
             .expect("expected node for reordered slot");
         reused_nodes.push(node);
@@ -455,7 +463,11 @@ fn content_type_policy_reuses_untyped_slots_in_subcompose_state() {
     state.register_active(SlotId::new(1), &[10], &[]);
     state.dispose_or_reuse_starting_from_index(0);
 
-    assert_eq!(state.take_node_from_reusables(SlotId::new(2)), Some(10));
+    assert_eq!(
+        state.take_node_from_reusables(SlotId::new(2)),
+        Some((10, true)),
+        "an untyped cross-slot reuse rebinds the subtree"
+    );
     assert_eq!(state.reusable_count, 0);
 }
 
@@ -474,7 +486,7 @@ fn cross_slot_reuse_moves_slot_host_and_callback_holder() {
     state.register_active(old_slot, &[10], &[]);
     state.dispose_or_reuse_starting_from_index(0);
 
-    assert_eq!(state.take_node_from_reusables(new_slot), Some(10));
+    assert_eq!(state.take_node_from_reusables(new_slot), Some((10, true)));
     let new_host = state.get_or_create_slots(new_slot);
     assert!(std::rc::Rc::ptr_eq(&old_host, &new_host));
 
@@ -508,8 +520,8 @@ fn content_type_reuse_in_subcompose_state() {
     let reused = state.take_node_from_reusables(SlotId::new(3));
     assert_eq!(
         reused,
-        Some(10),
-        "Should reuse node across slots with same content type"
+        Some((10, true)),
+        "Should reuse node across slots with same content type, as a rebinding"
     );
 }
 
@@ -591,7 +603,7 @@ fn moving_last_reusable_node_transfers_slot_composition() {
     assert_eq!(state.reusable_count, 1);
 
     let reused = state.take_node_from_reusables(slot_b);
-    assert_eq!(reused, Some(10));
+    assert_eq!(reused, Some((10, true)));
     let transferred_host = state.get_or_create_slots(slot_b);
     assert!(std::rc::Rc::ptr_eq(&host, &transferred_host));
     assert!(!state.slot_compositions.contains_key(&slot_a));
