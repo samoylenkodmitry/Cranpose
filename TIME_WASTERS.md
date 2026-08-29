@@ -399,17 +399,71 @@ Signature → cause → what to do. One lesson per line, no incident history.
   well past any empty/uniform region before starting a continuity
   measurement, or "held" just means "nothing there to change yet."
 
-- **The offscreen synchronous `capture_frame` path and the real windowed
-  threaded present path are different renderers for backdrop-continuity
-  purposes** — the same glass-over-scrolling-list scene, driven the same
-  way, shows perfect one-pixel continuity through `WgpuRenderer::init_gpu`
-  (`capture_frame`/`render_to_rgba_pixels`, used by every wgpu crate
-  integration test) and a hard freeze (glass_changed_pixels=0 across a
-  1500ms idle wait with no further input) through
-  `init_gpu_threaded`/`AppLauncher`'s real event loop. A wgpu-crate
-  integration test proving the compositor's cache-key math is
-  position-sensitive does not prove the interactive app is bug-free: the
-  present-runtime's depth-one credit/confirmation-ack protocol
-  (`present_runtime.rs`) is exercised only by the threaded backend, and a
-  bug living there needs a robot test (`AppLauncher` + real scroll events)
-  or the `init_gpu_inline_for_tests` harness, never the sync capture path.
+- **CORRECTED — see below, do not trust the original wording of this
+  entry**: an earlier version of this entry claimed the desktop app runs
+  `init_gpu_threaded` and that a "hard freeze" reproduced there. Neither
+  half held up. `desktop.rs` calls `init_gpu` (the sync backend)
+  unconditionally; `init_gpu_threaded`/`publish_frame`/`present_runtime.rs`
+  have no non-test caller outside `android.rs`. The "hard freeze" was a
+  second false positive from sampling the app's own tab-bar strip instead
+  of the glass chrome (see the "number that never moves" entry below). The
+  real structural gap this investigation actually found is: headless robot
+  mode (`with_headless(true)`) never calls `redraw_native_window` at all —
+  `primary_surface_redraw_drives_app = primary_window_visible && !headless`
+  is always false when headless, so every headless frame comes from
+  `update_declaration_host_frame` (composition only, no GPU render) plus
+  `capture_frame_with_scale` (a brand-new offscreen texture every call).
+  144+ render-level tests, and every headless robot test, therefore never
+  render twice into the same view — the one thing the real windowed
+  present path does on every frame via a rotating swapchain pool. Any
+  rendering bug that only exists when a target is reused across frames is
+  invisible to this project's entire automated suite; catching one needs a
+  windowed (`with_headless(false)`) run against the real swapchain, not a
+  faster/threaded harness.
+
+- **A number that never moves reads as "frozen" whether or not the pixels
+  under it are the ones you think they are** — this exact investigation hit
+  it twice. First, a `capture_frame` sweep sampled a still-empty
+  content-padding region and read the blur's natural non-change as a stale
+  cache. Second, a robot test's `GLASS_PATCH` rect sampled the app's own
+  tab-bar strip (drawn above the tab content, never depending on the tab's
+  scroll state) and read that as the glass backdrop frozen. Both times the
+  fix was the same one step, done too late: dump the actual captured frame
+  to a PNG and look at it before trusting a diff count. A `changed=false`
+  assertion is only evidence once you have seen, by eye, that the rectangle
+  it measures is the thing you meant to measure.
+
+- **A cargo-built binary run directly is not a foreground app, and the
+  windowed present path needs one** — `redraw_native_window` only ever
+  gets a real drawable when `wgpu::CurrentSurfaceTexture::Occluded` is
+  false, and macOS reports every window of a bare `cargo build` binary as
+  occluded, whether it is launched directly or via a hand-wrapped `.app`
+  bundle executed in place — `open MyApp.app` (going through
+  LaunchServices) is what actually registers the process as a normal,
+  foreground-eligible app; a direct `exec` of the same binary from inside
+  the bundle does not, even though `System Events` and `ps` both show it
+  running. Confirm which is which with `osascript -e 'tell application
+  "System Events" to get name of every process whose background only is
+  false'` before spending time on any other theory. But a `.app` +
+  `open` is necessary, not sufficient: if the physical display is asleep,
+  the console session is locked, or (as here) the "display" is actually a
+  TV that is off or on another input, `wgpu` reports occluded regardless
+  of app identity, and no in-process code change can produce a real frame.
+  Confirm this class of blocker independently of app plumbing with
+  `screencapture -x /tmp/x.png` — "could not create image from display"
+  means nothing will render anywhere right now, on any window, so stop
+  debugging the app and go check the physical screen first.
+
+- **A denied automation consent is not a puzzle to route around** — asked
+  to control a freshly-built test binary via computer-use so a scroll
+  reproduction could be captured with the real screen, the human denied
+  it. The correct response was to stop asking that tool to touch that
+  app and find a path that needs no screen/input automation at all: drive
+  scrolling through the app's own in-process robot channel (already used
+  by every other robot test) and read back the literal texture handed to
+  `present()` from inside the renderer (`WgpuRenderer::
+  debug_readback_texture_rgba`, gated by
+  `CRANPOSE_DEBUG_SWAPCHAIN_DUMP_DIR`) instead of capturing the screen.
+  That path is real, committed, and needs zero consent of any kind — it
+  was the display-off/occluded problem above, not the consent boundary,
+  that ultimately blocked getting a frame out of it this session.

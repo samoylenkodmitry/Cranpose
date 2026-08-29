@@ -2735,6 +2735,58 @@ impl App {
         }
     }
 
+    /// Diagnostic only, gated by `CRANPOSE_DEBUG_SWAPCHAIN_DUMP_DIR`: dump the
+    /// literal texture about to be handed to `present()` as a numbered PPM.
+    ///
+    /// Exists to answer one question directly, without any OS-level screen
+    /// capture or window automation: does the real swapchain-backed present
+    /// path ever show different content than the fresh-offscreen-texture
+    /// path every robot/screenshot test already uses? Unset, this costs one
+    /// env lookup per frame.
+    fn dump_swapchain_texture_if_requested(
+        renderer: &mut WgpuRenderer,
+        texture: &wgpu::Texture,
+        width: u32,
+        height: u32,
+    ) {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+        let Ok(dir) = std::env::var("CRANPOSE_DEBUG_SWAPCHAIN_DUMP_DIR") else {
+            return;
+        };
+        let pixels = match renderer.debug_readback_texture_rgba(texture, width, height) {
+            Ok(pixels) => pixels,
+            Err(error) => {
+                log::error!("swapchain debug readback failed: {error:?}");
+                return;
+            }
+        };
+        let index = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path = std::path::Path::new(&dir).join(format!("swapchain_{index:05}.ppm"));
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let mut file = match std::fs::File::create(&path) {
+            Ok(file) => file,
+            Err(error) => {
+                log::error!("swapchain debug dump: cannot create {path:?}: {error}");
+                return;
+            }
+        };
+        use std::io::Write;
+        if let Err(error) = write!(file, "P6\n{width} {height}\n255\n") {
+            log::error!("swapchain debug dump: cannot write header for {path:?}: {error}");
+            return;
+        }
+        let mut rgb = Vec::with_capacity(pixels.len() / 4 * 3);
+        for chunk in pixels.as_chunks::<4>().0 {
+            rgb.extend_from_slice(&chunk[..3]);
+        }
+        if let Err(error) = file.write_all(&rgb) {
+            log::error!("swapchain debug dump: cannot write body for {path:?}: {error}");
+        }
+    }
+
     fn redraw_native_window(
         native: &mut NativeWindowSurface,
         registry: &Rc<native_window::NativeWindowRegistry>,
@@ -2784,6 +2836,13 @@ impl App {
             return;
         }
         let after_render = Instant::now();
+
+        Self::dump_swapchain_texture_if_requested(
+            native.app.renderer(),
+            &output.texture,
+            native.surface_config.width,
+            native.surface_config.height,
+        );
 
         native.window.pre_present_notify();
         output.present();
@@ -3166,7 +3225,12 @@ fn surface_config_for_window(
     frame_pacing_mode: FramePacingMode,
 ) -> Result<wgpu::SurfaceConfiguration, LaunchError> {
     Ok(wgpu::SurfaceConfiguration {
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        // COPY_SRC is only needed for the `CRANPOSE_DEBUG_SWAPCHAIN_DUMP_DIR`
+        // diagnostic readback in `redraw_native_window` (investigating
+        // whether the real swapchain-backed present path ever disagrees with
+        // the fresh-offscreen-texture path every automated test uses). It
+        // costs nothing when the env var is unset.
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
         format: surface_format,
         width,
         height,

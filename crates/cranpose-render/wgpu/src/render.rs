@@ -9779,16 +9779,32 @@ impl GpuRenderer {
             Some(&output_view),
         )?;
 
+        self.read_texture_to_rgba(&output_texture, width, height)
+    }
+
+    /// Copy an already-rendered GPU texture into an RGBA8 CPU buffer.
+    ///
+    /// Shared by `render_to_rgba_pixels`, which renders into a fresh offscreen
+    /// texture first, and `debug_readback_texture_rgba`, which reads back a
+    /// texture the caller already rendered into (e.g. the literal surface
+    /// texture about to be handed to `present()`). The source texture must
+    /// carry `TextureUsages::COPY_SRC`.
+    fn read_texture_to_rgba(
+        &mut self,
+        texture: &wgpu::Texture,
+        width: u32,
+        height: u32,
+    ) -> Result<Vec<u8>, String> {
         let bytes_per_pixel = 4u32;
         let unpadded_bytes_per_row = width
             .checked_mul(bytes_per_pixel)
-            .ok_or_else(|| "Screenshot row byte size overflow".to_string())?;
+            .ok_or_else(|| "Texture readback row byte size overflow".to_string())?;
         let padded_bytes_per_row =
             align_to(unpadded_bytes_per_row, wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
         let output_buffer_size = padded_bytes_per_row as u64 * height as u64;
 
         let output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Screenshot Readback Buffer"),
+            label: Some("Texture Readback Buffer"),
             size: output_buffer_size,
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
@@ -9796,32 +9812,37 @@ impl GpuRenderer {
 
         let device = self.device.clone();
         let queue = self.queue.clone();
-        let mut graph = WgpuFrameGraph::new(Some("Screenshot Copy Encoder"));
-        let source = graph.import_surface("screenshot-copy-source");
-        graph.add_fallible_command_pass(Some("Screenshot Copy Pass"), &[source], &[], |context| {
-            context.encoder.copy_texture_to_buffer(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &output_texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::TexelCopyBufferInfo {
-                    buffer: &output_buffer,
-                    layout: wgpu::TexelCopyBufferLayout {
-                        offset: 0,
-                        bytes_per_row: Some(padded_bytes_per_row),
-                        rows_per_image: Some(height),
+        let mut graph = WgpuFrameGraph::new(Some("Texture Readback Copy Encoder"));
+        let source = graph.import_surface("texture-readback-copy-source");
+        graph.add_fallible_command_pass(
+            Some("Texture Readback Copy Pass"),
+            &[source],
+            &[],
+            |context| {
+                context.encoder.copy_texture_to_buffer(
+                    wgpu::TexelCopyTextureInfo {
+                        texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
                     },
-                },
-                wgpu::Extent3d {
-                    width,
-                    height,
-                    depth_or_array_layers: 1,
-                },
-            );
-            Ok(())
-        });
+                    wgpu::TexelCopyBufferInfo {
+                        buffer: &output_buffer,
+                        layout: wgpu::TexelCopyBufferLayout {
+                            offset: 0,
+                            bytes_per_row: Some(padded_bytes_per_row),
+                            rows_per_image: Some(height),
+                        },
+                    },
+                    wgpu::Extent3d {
+                        width,
+                        height,
+                        depth_or_array_layers: 1,
+                    },
+                );
+                Ok(())
+            },
+        );
         let mut executor = std::mem::take(&mut self.frame_graph_executor);
         let execution = executor.execute_recorded_graph(&device, &queue, graph);
         self.frame_graph_executor = executor;
@@ -9844,8 +9865,8 @@ impl GpuRenderer {
 
         match rx.recv_timeout(Duration::from_secs(3)) {
             Ok(Ok(())) => {}
-            Ok(Err(err)) => return Err(format!("Screenshot map_async failed: {err:?}")),
-            Err(err) => return Err(format!("Screenshot readback timed out: {err}")),
+            Ok(Err(err)) => return Err(format!("Texture readback map_async failed: {err:?}")),
+            Err(err) => return Err(format!("Texture readback timed out: {err}")),
         }
 
         let mapped = buffer_slice.get_mapped_range();
@@ -9863,6 +9884,23 @@ impl GpuRenderer {
         output_buffer.unmap();
 
         self.convert_surface_pixels_to_rgba(&pixels)
+    }
+
+    /// Diagnostic-only: read back a texture the caller has already rendered
+    /// into, without rendering anything itself. Used to compare the literal
+    /// texture about to be presented against the same scene captured through
+    /// the normal fresh-offscreen-texture screenshot path, to check whether
+    /// the two code paths ever disagree.
+    pub fn debug_readback_texture_rgba(
+        &mut self,
+        texture: &wgpu::Texture,
+        width: u32,
+        height: u32,
+    ) -> Result<Vec<u8>, String> {
+        if width == 0 || height == 0 {
+            return Err("Texture readback size must be non-zero".to_string());
+        }
+        self.read_texture_to_rgba(texture, width, height)
     }
 
     fn render_graph(

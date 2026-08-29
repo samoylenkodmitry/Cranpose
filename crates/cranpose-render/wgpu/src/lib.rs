@@ -774,6 +774,28 @@ impl WgpuRenderer {
         })
     }
 
+    /// Diagnostic-only: read back a texture the caller already rendered
+    /// into (e.g. the literal surface texture handed to
+    /// `render_surface_texture` just before `present()`), without rendering
+    /// anything new. Sync backend only. Requires the texture to carry
+    /// `TextureUsages::COPY_SRC`.
+    pub fn debug_readback_texture_rgba(
+        &mut self,
+        texture: &wgpu::Texture,
+        width: u32,
+        height: u32,
+    ) -> Result<Vec<u8>, WgpuRendererError> {
+        let gpu_renderer = self.sync_gpu_renderer_mut().ok_or_else(|| {
+            WgpuRendererError::Wgpu(
+                "GPU renderer not initialized for synchronous rendering. Call init_gpu() first."
+                    .to_string(),
+            )
+        })?;
+        gpu_renderer
+            .debug_readback_texture_rgba(texture, width, height)
+            .map_err(WgpuRendererError::Wgpu)
+    }
+
     /// Threaded mode: whether the depth-one slot has room for a packet.
     /// The Android loop checks this BEFORE `shell.update()` so
     /// backpressure lands before the expensive update/lowering work.

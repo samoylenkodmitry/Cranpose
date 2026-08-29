@@ -853,6 +853,11 @@ path = "robot-runners/robot_liquid_backdrop_feedback.rs"
 required-features = ["desktop", "robot-app"]
 
 [[example]]
+name = "robot_glass_swapchain_readback"
+path = "robot-runners/robot_glass_swapchain_readback.rs"
+required-features = ["desktop", "robot-app"]
+
+[[example]]
 name = "robot_liquid_scroll_exact_external_contract"
 path = "robot-runners/robot_liquid_scroll_exact_external_contract.rs"
 required-features = ["desktop", "robot-app"]
