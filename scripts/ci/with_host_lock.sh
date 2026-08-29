@@ -30,17 +30,24 @@ set -euo pipefail
 # descriptor (script exits, errors out, or is killed by a cancelled job)
 # releases it immediately. There is no PID file to go stale and no cleanup
 # step that a crash can skip.
+#
+# Plain flock is not enough by itself, though: it only ever checks locks
+# *currently held*, never ones merely queued, so a continuous stream of new
+# --shared requests is granted ahead of an already-waiting --exclusive one
+# forever. scripts/dev_build_common.sh's host_capacity_turnstile_* functions
+# close that gap; see the comment there for the experiment that proved it and
+# the fix's shape. This wrapper and run_robot_test.sh's own two-phase
+# acquisition both call the same functions rather than each hand-rolling this
+# logic -- a second copy is exactly the kind of drift that let the two
+# diverge in the first place (this file did not take the lock at all for the
+# exclusive side; run_robot_test.sh had already grown its own copy).
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/../dev_build_common.sh"
 
-readonly lock_file="/tmp/cranpose-host-capacity.lock"
 # Long enough for a neighbour's Android or wasm build to finish, short enough
-# to stay inside the robot job's 90-minute cap. On expiry the command runs
-# anyway: a gate that will not start is worse than one that starts late, and
-# the line printed here is what makes the resulting numbers questionable
-# rather than mysterious.
+# to stay inside the robot job's 90-minute cap.
 readonly max_wait_seconds="${CRANPOSE_HOST_LOCK_MAX_WAIT_SECS:-2700}"
 
 mode=""
@@ -60,7 +67,7 @@ fi
 
 # macOS has no flock(1), and the machine this protects is the Linux one. A
 # host that cannot lock runs the command rather than pretending it waited.
-if ! command -v flock >/dev/null 2>&1; then
+if ! host_capacity_lock_available; then
   echo "with_host_lock: no flock on this host; running without the $mode lock"
   exec "$@"
 fi
@@ -69,9 +76,9 @@ fi
 # run a build (`--shared`) or a measurement (`--exclusive`) underneath it,
 # and that command is frequently `cargo`. sccache's server is a long-lived
 # daemon that cargo spawns lazily on the first wrapped rustc call, and a
-# daemon spawned while fd 9 is open inherits a copy of it that it then holds
-# for as long as it lives -- which is indefinite. Since flock's shared and
-# exclusive modes are enforced across every open file description on the
+# daemon spawned while a lock fd is open inherits a copy of it that it then
+# holds for as long as it lives -- which is indefinite. Since flock's shared
+# and exclusive modes are enforced across every open file description on the
 # file, not just the one this script itself still holds, that inherited copy
 # alone is enough to block every later exclusive acquire, even long after
 # this script has exited. See run_robot_test.sh for the reproduction; the
@@ -79,29 +86,35 @@ fi
 # `--shared` builds instead of the robot suite's own build step.
 enable_local_sccache
 
-exec 9>"$lock_file"
-
 flock_mode="-s"
-[[ "$mode" == "exclusive" ]] && flock_mode="-x"
-
-if flock -n "$flock_mode" 9; then
-  echo "with_host_lock: took the $mode lock on $lock_file immediately"
+fail_on_timeout=0
+if [[ "$mode" == "exclusive" ]]; then
+  flock_mode="-x"
+  fail_on_timeout=1
+  host_capacity_turnstile_hold
 else
-  echo "with_host_lock: $lock_file is busy -- waiting for the $mode lock..."
-  wait_started_at=$(date +%s)
-  if flock -w "$max_wait_seconds" "$flock_mode" 9; then
-    echo "with_host_lock: took the $mode lock after $(( $(date +%s) - wait_started_at ))s"
-  else
-    echo "with_host_lock: gave up waiting for the $mode lock after ${max_wait_seconds}s" \
-         "and started anyway. TREAT ANY TIMING RESULT BELOW AS UNMEASURED."
-  fi
+  host_capacity_turnstile_pass
 fi
 
-# 8>&- 9>&-: never let the wrapped command inherit this lock's fd. If
-# sccache's server is not already running (enable_local_sccache above failed
-# or found nothing to start), the command spawning it here -- directly, or
-# indirectly by execing further into another script -- must not hand it a
-# copy of the lock to hold open forever. fd 8 is not opened by this script,
-# but closing it too costs nothing and matches the same guard everywhere else
-# this lock file is touched.
-exec "$@" 8>&- 9>&-
+exec 9>"$HOST_CAPACITY_LOCK_FILE"
+
+if ! host_capacity_flock_wait 9 "$flock_mode" "$max_wait_seconds" \
+    "the $mode lock on $HOST_CAPACITY_LOCK_FILE" "$fail_on_timeout"; then
+  exit 1
+fi
+
+[[ "$mode" == "exclusive" ]] && host_capacity_turnstile_release
+
+# Not `exec`: this process has to stay alive holding fd 9 for as long as the
+# wrapped command actually runs, or the lock's real duration is however long
+# bash takes to set up a redirect, not however long the build or measurement
+# takes. `exec "$@" 9>&-` replaces this process with $@ AS PART OF applying
+# this exec's own redirections, and those are applied -- fd 9 closed -- before
+# $@'s image loads, releasing the flock immediately. Proved on samarch-1:
+# `exec sleep 5 9>&-` released a held exclusive lock in 0.00s, four seconds
+# before the sleep it was supposedly still protecting finished. `"$@" 9>&-`
+# as a plain foreground command instead forks $@ as a child with fd 9 (and 7,
+# 8) closed in that CHILD ONLY -- so nothing it spawns, sccache's daemon
+# included, can inherit a copy either -- while this process keeps fd 9 open
+# until the child actually exits, then exits with its status.
+"$@" 7>&- 8>&- 9>&-
