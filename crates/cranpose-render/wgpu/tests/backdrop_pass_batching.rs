@@ -294,6 +294,52 @@ fn a_shadowed_list_under_glass_holds_its_scrolled_pass_budget() {
     );
 }
 
+/// The glass element's OWN foreground must stay on top of its optical
+/// tail on every drain path. The tail (a shader-queue item) and the body
+/// (a blit-queue item) share the element's z index, and the fused segment
+/// path used to break that tie by insertion order — blits first — so the
+/// tail composited OVER the body and the white pill smeared into the
+/// blur. On the Mate 20 X this read as an unreadable nav bar and empty
+/// glass chips, flickering with whichever drain path the frame took.
+/// Pass counts and frame times were identical on the broken build; only
+/// pixels see this.
+#[test]
+fn a_glass_elements_own_content_stays_legible_on_a_scrolled_frame() {
+    let (_lock, renderer) = support::headless_renderer_parts().expect("headless renderer");
+    let mut harness = Harness::new(renderer, 1, false, false);
+    for _ in 0..WARMUP_FRAMES {
+        harness.frame(-12.0);
+    }
+    let frame = harness.captured_frame(-12.0);
+
+    // The glass sits at (24,24), pads 12, and its first child is a white
+    // pill 90x16 — interior sample well inside the pill's edges.
+    let pixel = |x: u32, y: u32| {
+        let offset = ((y * frame.width + x) * 4) as usize;
+        [
+            frame.pixels[offset],
+            frame.pixels[offset + 1],
+            frame.pixels[offset + 2],
+        ]
+    };
+    let mut legible = 0usize;
+    let mut total = 0usize;
+    for y in 40..48u32 {
+        for x in 44..118u32 {
+            total += 1;
+            let [r, g, b] = pixel(x, y);
+            if r.min(g).min(b) > 170 {
+                legible += 1;
+            }
+        }
+    }
+    assert!(
+        legible * 10 >= total * 8,
+        "the glass pill must render on top of the optical tail: only \
+         {legible}/{total} sampled pixels are pill-bright"
+    );
+}
+
 /// Deferring the optical composites must never let a capture read stale
 /// content: when a second glass genuinely overlaps the first, its capture
 /// depends on the first's composited output, so the pending batch has to
