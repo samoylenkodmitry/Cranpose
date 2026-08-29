@@ -5602,6 +5602,118 @@ fn a_measure_computed_capture_reaches_slot_content_through_the_subcompose_key() 
     );
 }
 
+thread_local! {
+    static CAROUSEL_SCROLL_STATE: RefCell<Option<ScrollState>> = const { RefCell::new(None) };
+}
+
+#[composable]
+fn app_shell_lazy_carousel_probe() {
+    let list_state = rememberLazyListState();
+    LazyColumn(
+        Modifier::empty().fill_max_size(),
+        list_state,
+        LazyColumnSpec::new(),
+        |scope| {
+            scope.items(20, |index| {
+                if index == 0 {
+                    let inner =
+                        cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| *state);
+                    CAROUSEL_SCROLL_STATE.with(|slot| {
+                        *slot.borrow_mut() = Some(inner);
+                    });
+                    Row(
+                        Modifier::empty()
+                            .fill_max_width()
+                            .height(60.0)
+                            .horizontal_scroll(inner, false),
+                        RowSpec::new(),
+                        || {
+                            Text(
+                                "carousel start",
+                                Modifier::empty().width(160.0),
+                                TextStyle::default(),
+                            );
+                            Spacer(Size {
+                                width: 600.0,
+                                height: 0.0,
+                            });
+                            Text(
+                                "carousel end",
+                                Modifier::empty().width(160.0),
+                                TextStyle::default(),
+                            );
+                        },
+                    );
+                } else {
+                    Text(
+                        format!("plain row {index}"),
+                        Modifier::empty().height(48.0),
+                        TextStyle::default(),
+                    );
+                }
+            });
+        },
+    );
+}
+
+#[test]
+fn a_horizontal_scroll_inside_a_lazy_item_still_moves_when_its_measurement_is_cached() {
+    let _guard = test_guard();
+    CAROUSEL_SCROLL_STATE.with(|slot| slot.borrow_mut().take());
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(
+        TestRenderer::default(),
+        root_key,
+        app_shell_lazy_carousel_probe,
+    );
+    shell.set_buffer_size(320, 480);
+    shell.set_viewport(320.0, 480.0);
+    for _ in 0..5 {
+        shell.update();
+        if !shell.needs_redraw() && !shell.composition.should_recompose() {
+            break;
+        }
+    }
+    let initial_x = find_layout_box_with_text(
+        shell.layout_tree().expect("layout tree").root(),
+        "carousel start",
+    )
+    .expect("carousel start in layout tree")
+    .rect
+    .x;
+
+    let inner = CAROUSEL_SCROLL_STATE
+        .with(|slot| slot.borrow().as_ref().copied())
+        .expect("probe must expose the inner scroll state");
+    shell.app_context().clone().enter(|| inner.scroll_to(80.0));
+    for _ in 0..4 {
+        shell.update();
+        if !shell.needs_redraw() && !shell.composition.should_recompose() {
+            break;
+        }
+    }
+    let offset = inner.value_non_reactive();
+    assert!(
+        offset > 0.0,
+        "instrument dead: the inner scroll state never moved ({offset})"
+    );
+    let scrolled_x = find_layout_box_with_text(
+        shell.layout_tree().expect("layout tree").root(),
+        "carousel start",
+    )
+    .expect("carousel start after scroll")
+    .rect
+    .x;
+    assert!(
+        scrolled_x < initial_x - 40.0,
+        "a placement-only repass (schedule_layout_repass from a scroll offset) \
+         was swallowed: the inner row still sits at x={scrolled_x} after \
+         scrolling to offset {offset} (was x={initial_x}). The cached-measure \
+         gate must reject a needs_layout child instead of serving the cached \
+         measurement and clearing the flag"
+    );
+}
+
 fn graph_scene_solid_rect_y(
     scene: &cranpose_render_common::graph_scene::Scene,
     color: cranpose_ui::Color,
