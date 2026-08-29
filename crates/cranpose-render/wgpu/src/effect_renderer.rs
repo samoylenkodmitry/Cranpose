@@ -2434,8 +2434,9 @@ fn composite_sampling_mode_value(sample_mode: CompositeSampleMode) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{BlurUniforms, direct_tail_intermediate_size, projective_dest_bounds_rect};
     use cranpose_ui_graphics::{RenderEffect, RuntimeShader};
+
+    use super::{BlurUniforms, direct_tail_intermediate_size, projective_dest_bounds_rect};
 
     #[test]
     fn a_frost_chain_tail_intermediate_shrinks_to_the_blur_scratch() {

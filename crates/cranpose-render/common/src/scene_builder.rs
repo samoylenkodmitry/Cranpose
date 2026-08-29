@@ -3789,7 +3789,7 @@ mod tests {
             reset_lowered_layer_count();
             let report =
                 update_graph_from_applier_report(&mut applier, &mut graph, &dirty_nodes, 1.0);
-            assert!(report.applied, "delta {delta}: boundary frame must apply");
+            assert!(report.applied(), "delta {delta}: boundary frame must apply");
             // The rebound-slot recording must stay proportional to real
             // content change: a scroll the beyond-bounds buffer absorbs
             // rebinds nothing and must lower nothing — the recording
