@@ -168,16 +168,39 @@ impl TextFieldFocusState {
     }
 
     fn has_focused_field(&self) -> bool {
-        let mut current = self.focused_field.borrow_mut();
-        if let Some(ref weak) = *current {
-            if weak.upgrade().is_some() {
-                return true;
-            }
-            *current = None;
-            *self.focused_handler.borrow_mut() = None;
-            crate::cursor_animation::stop_cursor_blink();
+        if self.focused_field_is_live() {
+            return true;
         }
+        self.clear_stale_focus();
         false
+    }
+
+    /// Whether the registered field's weak handle still resolves to a live field.
+    fn focused_field_is_live(&self) -> bool {
+        self.focused_field
+            .borrow()
+            .as_ref()
+            .is_some_and(|weak| weak.upgrade().is_some())
+    }
+
+    /// Drops a registration whose field was torn down without going through
+    /// [`Self::clear_focus`] (e.g. composition removed the node). A no-op
+    /// when nothing is registered.
+    fn clear_stale_focus(&self) {
+        let stale_node = self
+            .focused_handler
+            .borrow()
+            .as_ref()
+            .and_then(|handler| handler.node_id());
+        let had_entry = self.focused_field.borrow_mut().take().is_some();
+        if !had_entry {
+            return;
+        }
+        self.focused_handler.borrow_mut().take();
+        if let Some(node_id) = stale_node {
+            crate::schedule_draw_repass(node_id);
+        }
+        crate::cursor_animation::stop_cursor_blink();
     }
 
     fn focused_handler(&self) -> Option<Rc<dyn FocusedTextFieldHandler>> {
@@ -698,6 +721,51 @@ mod tests {
             handler.total_calls(),
             0,
             "stale focused-field handlers must not receive input"
+        );
+    }
+
+    #[test]
+    fn stale_focus_cleanup_after_hidden_blink_does_not_reenter_the_focus_registry_borrow() {
+        let _app_context = crate::render_state::app_context_test_scope();
+
+        let focus = Rc::new(RefCell::new(false));
+        request_focus(focus.clone(), Rc::new(NodeBackedHandler(3)), 0);
+
+        let past_interval = web_time::Instant::now()
+            + crate::cursor_animation::CursorAnimationState::BLINK_INTERVAL
+            + std::time::Duration::from_millis(1);
+        assert!(
+            crate::cursor_animation::tick_cursor_blink_at(past_interval),
+            "the blink must already have toggled to hidden, matching the real \
+             timing where the bug's stop_cursor_blink() call is a visibility \
+             change and therefore reaches invalidate_focused_caret()"
+        );
+
+        drop(focus);
+
+        assert!(
+            !has_focused_field(),
+            "a field dropped without clear_focus must read back as unfocused \
+             instead of panicking on a reentrant borrow of focused_field"
+        );
+    }
+
+    #[test]
+    fn stale_focus_cleanup_repasses_the_node_that_lost_its_caret() {
+        let _app_context = crate::render_state::app_context_test_scope();
+        let _ = crate::render_state::take_draw_repass_nodes();
+
+        let focus = Rc::new(RefCell::new(false));
+        request_focus(focus.clone(), Rc::new(NodeBackedHandler(11)), 0);
+        let _ = crate::render_state::take_draw_repass_nodes();
+
+        drop(focus);
+
+        assert!(!has_focused_field());
+        assert!(
+            crate::render_state::take_draw_repass_nodes().contains(&11),
+            "discovering a stale field lazily must repass its node just like \
+             an explicit clear_focus does, or its caret is left stale on screen"
         );
     }
 
