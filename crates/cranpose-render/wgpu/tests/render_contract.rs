@@ -576,24 +576,60 @@ fn screenshot_readback_copy_is_explicit_command_pass() {
     let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let render_source = std::fs::read_to_string(crate_dir.join("src/render.rs"))
         .expect("failed to read WGPU renderer source");
-    let start = render_source
+
+    // `render_to_rgba_pixels` (the screenshot path) and
+    // `debug_readback_texture_rgba` (the diagnostic swapchain-texture
+    // readback) share one copy-and-map implementation, `read_texture_to_rgba`
+    // — confirm the screenshot path actually delegates to it rather than
+    // inlining its own copy.
+    let render_to_rgba_start = render_source
         .find("pub fn render_to_rgba_pixels(")
         .expect("screenshot/readback render path must exist");
-    let end = render_source[start..]
-        .find("fn convert_surface_pixels_to_rgba")
-        .map(|offset| start + offset)
-        .expect("pixel conversion helper must follow screenshot capture");
-    let body = &render_source[start..end];
+    let render_to_rgba_end = render_source[render_to_rgba_start..]
+        .find("fn read_texture_to_rgba(")
+        .map(|offset| render_to_rgba_start + offset)
+        .expect("the shared texture readback helper must follow screenshot capture");
+    let render_to_rgba_body = &render_source[render_to_rgba_start..render_to_rgba_end];
+    assert!(
+        render_to_rgba_body.contains("self.read_texture_to_rgba(&output_texture, width, height)"),
+        "the screenshot path must delegate its copy-and-map to the shared texture readback helper"
+    );
+
+    // The shared helper itself must be the explicit recorded command pass
+    // with counted submit stats — checked once here rather than per caller.
+    let helper_start = render_to_rgba_end;
+    let helper_end = render_source[helper_start..]
+        .find(
+            "
+pub fn debug_readback_texture_rgba",
+        )
+        .or_else(|| {
+            render_source[helper_start..].find(
+                "
+    pub fn ",
+            )
+        })
+        .or_else(|| {
+            render_source[helper_start..].find(
+                "
+    fn ",
+            )
+        })
+        .map(|offset| helper_start + offset)
+        .expect("the texture readback helper must be followed by another item");
+    let helper_body = &render_source[helper_start..helper_end];
 
     assert!(
-        body.contains("let mut graph = WgpuFrameGraph::new(Some(\"Screenshot Copy Encoder\"));")
-            && body.contains("screenshot-copy-source")
-            && body.contains("graph.add_fallible_command_pass(")
-            && body.contains("executor.execute_recorded_graph(&device, &queue, graph)")
-            && body.contains("let execution = execution.map_err(|error| error.to_string())?;")
-            && body.contains("let submission_index = execution.submission;")
-            && body.contains("let copy_stats = execution.stats;"),
-        "screenshot readback must be an explicit recorded command pass with counted submit stats"
+        helper_body.contains(
+            "let mut graph = WgpuFrameGraph::new(Some(\"Texture Readback Copy Encoder\"));"
+        ) && helper_body.contains("texture-readback-copy-source")
+            && helper_body.contains("graph.add_fallible_command_pass(")
+            && helper_body.contains("executor.execute_recorded_graph(&device, &queue, graph)")
+            && helper_body
+                .contains("let execution = execution.map_err(|error| error.to_string())?;")
+            && helper_body.contains("let submission_index = execution.submission;")
+            && helper_body.contains("let copy_stats = execution.stats;"),
+        "texture readback must be an explicit recorded command pass with counted submit stats"
     );
     assert!(
         !render_source.contains("execute_renderer_pass_with_submission_stats"),
