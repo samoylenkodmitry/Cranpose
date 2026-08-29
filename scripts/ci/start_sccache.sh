@@ -47,18 +47,22 @@ wait_for_server() {
 
 "$sccache_bin" --start-server >/dev/null 2>&1 || true
 
+# Nothing here stops a server it did not start. An earlier version of this
+# script reclaimed the port -- `--stop-server` then `--start-server` -- when the
+# wait timed out, on the theory that a foreign-version daemon was squatting it.
+# That daemon no longer exists (the host's second sccache was retired the same
+# evening), but the reclaim outlived its reason and killed two builds:
+#
+#   sccache: warning: The server looks like it shut down unexpectedly,
+#   compiling locally instead
+#
+# A shared server under concurrent load is exactly what fails to answer inside
+# a fixed timeout while being perfectly alive and mid-compile for another job,
+# so a recovery path keyed on that timeout is a guard that lies under load. If
+# the server will not answer, say so and stop; do not shoot it.
 if ! wait_for_server; then
-    # Either nothing came up, or the port is held by a daemon this binary will
-    # not talk to -- a host that has accumulated a second sccache of another
-    # version is exactly how this failure was found. Take the port back once,
-    # rather than leaving every later job to lose the same race.
-    echo "sccache did not answer; reclaiming the port" >&2
-    "$sccache_bin" --stop-server >/dev/null 2>&1 || true
-    "$sccache_bin" --start-server >/dev/null 2>&1 || true
-    if ! wait_for_server; then
-        echo "sccache still did not answer; refusing to compile without it" >&2
-        exit 1
-    fi
+    echo "sccache did not answer within 30s; refusing to compile without it" >&2
+    exit 1
 fi
 
 "$sccache_bin" --version
