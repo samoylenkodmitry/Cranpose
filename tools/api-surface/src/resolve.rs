@@ -1,8 +1,3 @@
-//! Computes, for one crate's source tree, exactly which items are
-//! "reachable via an unbroken chain of plain `pub` from the crate root,
-//! excluding `#[doc(hidden)]` and `cfg(test)`" -- the same definition of
-//! public API surface `cargo doc` uses, derived directly from the syntax
-//! tree instead of from a compiled crate.
 use std::{
     cell::Cell,
     collections::HashMap,
@@ -14,13 +9,8 @@ use anyhow::{Context, Result};
 use quote::ToTokens;
 use syn::{Attribute, Fields, ImplItem, Item, TraitItem, Type, UseTree, Visibility};
 
-/// Longest rendered signature kept on a [`MemberItem`] or [`NamedItem`];
-/// longer renderings are truncated with a trailing marker so one oversized
-/// enum or struct cannot dominate a generated report.
 pub const MAX_SIGNATURE_LEN: usize = 400;
 
-/// Truncates `s` to [`MAX_SIGNATURE_LEN`] bytes at a UTF-8 char boundary,
-/// appending a trailing marker when truncation happened.
 pub fn truncate_signature(mut s: String) -> String {
     if s.len() > MAX_SIGNATURE_LEN {
         let mut cut = MAX_SIGNATURE_LEN;
@@ -41,29 +31,17 @@ fn is_composable_attr(attrs: &[Attribute]) -> bool {
     attrs.iter().any(|a| a.path().is_ident("composable"))
 }
 
-/// A module path as a sequence of segment names from the crate root; the
-/// crate root itself is the empty path.
 pub type ModPath = Vec<String>;
 
-/// A field, enum variant, trait item, or impl item: everything whose own
-/// reachability is derived from its parent [`NamedItem`] rather than
-/// computed independently.
 #[derive(Debug)]
 pub struct MemberItem {
     pub is_pub: bool,
     pub excluded: bool,
     pub reachable: Cell<bool>,
-    /// Field, variant, trait item, or impl item name; the field's index
-    /// (as a string) for an anonymous tuple-struct field.
     pub name: String,
-    /// Best-effort rendered signature: a field or const's type, or a
-    /// method's full `fn` signature without a body.
     pub signature: String,
 }
 
-/// A `fn`, `struct`, `enum`, `union`, `trait`, `trait_alias`, `const`,
-/// `static`, `type`, or `macro_rules!` item declared directly inside a
-/// module (as opposed to inside an `impl` block; see [`DeferredImpl`]).
 #[derive(Debug)]
 pub struct NamedItem {
     pub ident: String,
@@ -71,28 +49,14 @@ pub struct NamedItem {
     pub is_pub: bool,
     pub doc_hidden: bool,
     pub excluded: bool,
-    /// Set for a `#[macro_export]` `macro_rules!`, which is reachable at
-    /// the crate root regardless of the module it is declared in.
     pub always_reachable: bool,
     pub reachable: Cell<bool>,
-    /// `fn`, `struct`, `enum`, `union`, `trait`, `trait_alias`, `const`,
-    /// `static`, `type`, or `macro`.
     pub kind: String,
-    /// Best-effort rendered signature; a function's body is always elided,
-    /// other kinds keep their declaration (fields, variants, trait items)
-    /// up to [`MAX_SIGNATURE_LEN`].
     pub signature: String,
-    /// Whether a `#[composable]` attribute is present on this item.
     pub composable: bool,
-    /// A trait's methods/consts/types, a struct/union's fields, or an
-    /// enum's variants (and the fields nested inside a struct- or
-    /// tuple-style variant).
     pub sub_items: Vec<MemberItem>,
 }
 
-/// An `impl` block, resolved against its `Self` type's reachability once
-/// every named item's own reachability is known (hence "deferred": an
-/// `impl` can appear before the type it targets in source order).
 #[derive(Debug)]
 pub struct DeferredImpl {
     pub module_path: ModPath,
@@ -102,17 +66,12 @@ pub struct DeferredImpl {
     pub reachable: Cell<bool>,
 }
 
-/// One `pub use` target: either a single renamed/plain import
-/// (`target_ident` set) or a glob import (`target_ident` `None`).
 #[derive(Debug)]
 pub struct UseEdge {
     pub target_module: ModPath,
     pub target_ident: Option<String>,
 }
 
-/// One source file's worth of directly-declared items: its own
-/// reachability, its `pub use` re-export edges, and every `use` item (for
-/// re-export bookkeeping).
 #[derive(Debug)]
 pub struct ModuleNode {
     pub is_pub: bool,
@@ -122,9 +81,6 @@ pub struct ModuleNode {
     pub use_items: Vec<MemberItem>,
 }
 
-/// Everything collected while loading one crate: every module, every
-/// directly-declared named item, every deferred `impl`, plus any loader
-/// warnings.
 #[derive(Default)]
 pub struct CrateTree {
     pub modules: HashMap<ModPath, ModuleNode>,
@@ -185,14 +141,6 @@ fn module_dir(file: &Path) -> PathBuf {
     }
 }
 
-/// The directory this file's own plain `mod x;` children are searched in.
-/// Ordinarily that is derived from the file's own name (`module_dir`), but
-/// the caller forces a different directory in two cases: a file reached
-/// through `#[path = "..."]` keeps the *file's own* parent directory
-/// rather than a subdirectory named after the arbitrarily-chosen `#[path]`
-/// target, and an inline `mod x { .. }` block nests its children one level
-/// under the *enclosing* file's own directory, named after `x`, regardless
-/// of that file's name.
 fn children_dir_for(file: &Path, forced_dir_for_children: Option<PathBuf>) -> PathBuf {
     forced_dir_for_children.unwrap_or_else(|| module_dir(file))
 }
@@ -362,10 +310,6 @@ fn fields_to_members(fields: &Fields, force_pub: bool, excluded: bool) -> Vec<Me
     }
 }
 
-/// An enum variant's own entry, plus (for a struct- or tuple-style variant)
-/// its fields. Rust gives variant fields no visibility keyword of their
-/// own -- they are exactly as visible as the variant, which is exactly as
-/// visible as the enum -- so every entry here is forced reachable-if-parent.
 fn variant_to_members(v: &syn::Variant, excluded: bool) -> Vec<MemberItem> {
     let signature = render_tokens(&v.fields);
     let mut out = vec![member_from_attrs(
@@ -395,10 +339,6 @@ fn member_from_attrs(
     }
 }
 
-/// Parses one crate's source tree, following `mod` declarations to their
-/// files, and collects every module, named item, and deferred `impl` --
-/// without yet deciding what is reachable; call [`compute_reachability`]
-/// once loading finishes.
 pub struct Loader {
     pub tree: CrateTree,
 }
@@ -745,11 +685,6 @@ impl Loader {
     }
 }
 
-/// Phase B + C + D: propagate reachability from the crate root through
-/// `pub` module chains, then through `pub use` re-exports (to a fixpoint,
-/// since a re-export can itself point at something only reachable through
-/// another re-export), then resolve deferred `impl` blocks against their
-/// now-final `Self` type reachability.
 pub fn compute_reachability(tree: &CrateTree) {
     let mut module_paths: Vec<&ModPath> = tree.modules.keys().collect();
     module_paths.sort_by_key(|p| p.len());
@@ -1130,13 +1065,6 @@ mod tests {
         assert_eq!(loader.tree.named_items.len(), 1);
     }
 
-    /// A `#[path]`-redirected file's own plain `mod child;` resolves next
-    /// to the redirected file itself (`tests/child.rs`), not under a
-    /// subdirectory named after the redirected file's own basename
-    /// (`tests/main_tests/child.rs`) -- confirmed against real `rustc`
-    /// before writing this resolver's rule, since this is the exact shape
-    /// `#[cfg(test)] #[path = "tests/main_tests.rs"] mod tests;` takes in
-    /// Cranpose's own `apps/desktop-demo`.
     #[test]
     fn path_attr_child_module_resolves_next_to_the_redirected_file() {
         let dir = tmp_crate("path_attr_child");
@@ -1152,10 +1080,6 @@ mod tests {
         assert_eq!(loader.tree.named_items.len(), 1);
     }
 
-    /// An inline `mod outer { mod inner; }` nests `inner`'s file under a
-    /// directory named after `outer`, relative to the *enclosing* file's
-    /// own directory -- not relative to that enclosing file unchanged.
-    /// Confirmed against real `rustc` before writing this resolver's rule.
     #[test]
     fn inline_mod_block_nests_child_file_under_its_own_name() {
         let dir = tmp_crate("inline_mod_nesting");

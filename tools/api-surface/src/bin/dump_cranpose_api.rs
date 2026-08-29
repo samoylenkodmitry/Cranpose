@@ -1,7 +1,3 @@
-//! Dumps the reachable public API surface of every publishable crate in the
-//! Cranpose workspace, as JSON. Crate discovery goes through `cargo
-//! metadata` rather than a hardcoded crate list, so a new or renamed crate
-//! is picked up automatically. See `docs/compose_api_parity.md`.
 use std::{
     path::{Path, PathBuf},
     process::Command,
@@ -66,10 +62,6 @@ fn cargo_metadata_json(workspace_root: &Path) -> Result<Value> {
     serde_json::from_slice(&output.stdout).context("cargo metadata did not return valid JSON")
 }
 
-/// A package is treated as part of the public surface when it can be
-/// published to some registry: `"publish": null` means "any registry" and
-/// is the common case, `["registry"]` is a restricted allow-list, and `[]`
-/// is the explicit opt-out this filters on.
 fn is_publishable(pkg: &Value) -> bool {
     match pkg.get("publish") {
         None | Some(Value::Null) => true,
@@ -78,11 +70,6 @@ fn is_publishable(pkg: &Value) -> bool {
     }
 }
 
-/// Cranpose's public library surface lives under `crates/`; `apps/` holds
-/// demo binaries that happen to also expose a `lib` target for their own
-/// integration tests, not a surface meant for outside consumers, so they
-/// are out of scope for a Compose-API comparison regardless of what their
-/// `Cargo.toml` says about publishing.
 fn is_library_crate(manifest_path: &Path, workspace_root: &Path) -> bool {
     manifest_path
         .strip_prefix(workspace_root)
@@ -303,11 +290,6 @@ mod tests {
         ));
     }
 
-    /// `cranpose-macros` is a proc-macro crate: `cargo metadata` reports its
-    /// library target kind as `"proc-macro"`, not `"lib"`/`"rlib"`. Losing
-    /// this crate from discovery silently drops the `#[composable]` macro
-    /// -- the one item most load-bearing for the whole Compose comparison
-    /// -- out of the generated surface without any error.
     #[test]
     fn proc_macro_target_kind_is_discovered() {
         let metadata = json!({
