@@ -9220,6 +9220,13 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
     }
 
     fn record_layer_cache_miss(&self, key: &LayerRasterCacheKey, width: u32, height: u32) {
+        // Whole key on purpose: two consecutive frames' misses for the same
+        // stable id show WHICH field moved (content hash, bounds, size),
+        // which is the difference between "content legitimately changed"
+        // and "the key is position-poisoned".
+        if cranpose_core::env_flag!("CRANPOSE_LAYER_RENDER_DIAG") {
+            log::warn!("[layer-cache-miss] {width}x{height} {key:?}");
+        }
         self.renderer
             .frame_stats
             .record_layer_cache_miss(key, width, height);
