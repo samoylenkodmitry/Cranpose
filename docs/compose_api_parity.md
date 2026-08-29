@@ -1,5 +1,13 @@
 # Jetpack Compose <-> Cranpose API Parity
 
+> **The Compose side of this doc is a mid-2023 snapshot (~Compose 1.5.0-beta),
+> not current Compose (1.10.6 stable / 1.12 in dev as of this writing,
+> August 2026).** Every "Absent" verdict below needs reading as "absent from that
+> 2023 snapshot," not "absent from Compose" -- see **How stale, and what it
+> hides** under Sources for a quantified accounting, including one whole
+> widely-used feature area (shared element transitions) this pass cannot see
+> at all because it postdates the snapshot by over a year.
+
 No prior version of this document existed. `docs/capability_parity.md` was
 checked first and is a different thing entirely: a per-platform capability
 matrix (file picker, haptics, clipboard, ...), not a Compose-API-to-Cranpose
@@ -91,14 +99,52 @@ metalava signature format.
 **This checkout is stale relative to today's Jetpack Compose.** Its
 `current.txt` files reflect an in-progress `1.5.0-beta01`-era snapshot; the
 last commit touching `compose/foundation/foundation/api/current.txt` is
-`be18a1188a13a253d2a6784f812815c88454775c`, dated **2023-06-26**. Anything
-Compose shipped in 1.6/1.7/1.8+ (pull-to-refresh, shared-element
-transitions, `LookaheadScope` becoming stable, newer `Modifier.Node`
-additions, etc.) is invisible to this comparison and will read as "absent
-from Compose" here when it is really just absent from this old snapshot.
-Re-cloning `androidx/androidx` at a current tag before the next refresh
-would fix this; it was out of scope for this pass (a multi-GB clone on a
-loaded CI host).
+`be18a1188a13a253d2a6784f812815c88454775c`, dated **2023-06-26**. Current
+Jetpack Compose, as of this writing (2026-08-29), is at 1.10.6 stable /
+1.12 in the dev channel -- roughly three years and seven-to-eight minor
+versions past this snapshot.
+
+#### How stale, and what it hides
+
+Every "Absent" verdict in this doc means "absent from the 2023-06-26
+snapshot," not "absent from Compose" -- and the gap between those two is
+not small. Rather than re-deriving this from a second full API dump (which
+would need re-cloning `androidx/androidx` -- see cost note below), this
+was bounded from Google's own published release notes
+(`developer.android.com/jetpack/androidx/releases/compose-{foundation,ui,runtime,animation}`),
+reading every "New Feature" entry from 1.5.0 through the latest listed
+version and counting headline API additions (composables, modifier
+functions, new types) while ignoring bug fixes and internal-only changes.
+That is necessarily an undercount of the true diff (minor overloads and
+undocumented additions don't get their own changelog bullet), but it
+bounds the *shape* of the blind spot, not just its rough size:
+
+| Module | ~New public APIs since 1.5.0 (changelog-derived) | Biggest addition this doc cannot see |
+|---|---:|---|
+| `compose-ui` | ~68 | Variable/downloadable fonts, wide-color-gamut support, mesh gradients, several semantics/accessibility properties |
+| `compose-foundation` | ~60-80 | `Grid` and `FlexBox` layout composables (2D CSS-Grid-style layout), scroll indicators, the `Style` API |
+| `compose-animation`/`animation-core` | ~45-55 | **`SharedTransitionLayout` / `Modifier.sharedElement()`** (shipped 1.7.0, mid-2024) -- shared-element transitions are a widely-reached-for feature with no trace in this snapshot at all, not a narrower version of something present |
+| `compose-runtime` | ~27-35 | The `retain()` API family (`RetainScope`, `RetainedEffect`, ...; 1.10.0) and a rewritten internal slot table (1.11.0) |
+
+That is on the order of **200-250 new public API elements** across just
+these four modules -- comparable in scale to `cranpose-animation`'s entire
+82-item surface. Every one of them will show up as "Absent" or simply
+missing from the Curated correspondence tables below, indistinguishable
+from a genuine Cranpose gap unless the reader already knows this snapshot
+predates them. `SharedTransitionLayout` specifically deserves calling out
+by name: it is not in the Animation table above because this snapshot has
+never heard of it, not because Cranpose was checked against it and found
+wanting.
+
+**Cost of fixing this properly:** the `androidx/androidx` monorepo is not
+sparse-checkout-friendly for just `compose/`, and a fresh full clone is
+multi-gigabyte and multi-minute-to-multi-hour depending on shallow-depth
+choices -- not something to start on `samarch-1` unscheduled, since that
+host is the CI runner pool and its jobs are documented to die above load 7.
+A `git fetch` of just the newer commits into the *existing* checkout
+(rather than a fresh clone) would be far cheaper if `upstream/androidx-main`
+already has the newer history reachable, but that still needs someone to
+run and verify it on that host rather than assume it from here.
 
 `tools/api-surface/dump-compose-api` parses every `api/current.txt` under a
 given root (auto-discovered by directory name, not a hardcoded module
@@ -329,6 +375,13 @@ by symbol, per the Scope decision above.
 
 ## Findings
 
+The two findings below are the ones worth reading closely: both are
+**same name, different semantics** -- the API a Compose developer would
+reach for first, under a name that matches, behaving differently enough
+to bite. Everything after them is either an outright absence or a
+deliberate divergence, which are lower-risk because nothing about them
+looks familiar enough to trust on sight.
+
 ### Same name, different semantics: `Modifier.clickable`
 
 The single most consequential finding. Compose's
@@ -355,18 +408,6 @@ skimming Compose docs and assuming `clickable`'s accessibility parameters
 information gets no default anywhere they'd expect one from Compose
 experience.
 
-### `testTag` has no equivalent -- semantics-driven testing is not available
-
-Compose's `Modifier.testTag("x")` + `onNodeWithTag("x")` is the standard,
-locale-independent way to address a specific UI element in a test.
-`cranpose-testing`'s finders (`TextMatcher`, `FinderQuery`,
-`find_bounds_by_text`) work by matched text and geometry instead. This
-works until UI text changes or is localized, at which point tests written
-against text break where a `testTag`-based Compose test would not. Given
-how central `testTag` is to Compose's own testing guidance, this is worth
-treating as a real gap rather than a stylistic difference, not something
-to close inside this doc, but worth a spawned follow-up.
-
 ### `remember` returns a wrapper type, not the value
 
 `cranpose_core::hooks::remember` returns `Owned<T>`, a thin wrapper around
@@ -381,6 +422,18 @@ of the rest of the runtime layer is -- flagging it because same-name-
 different-shape is exactly the kind of thing this doc exists to catch, and
 `remember` is the single most common Compose function, so its wrapper
 widens on every call site that uses it.
+
+### `testTag` has no equivalent -- semantics-driven testing is not available
+
+Compose's `Modifier.testTag("x")` + `onNodeWithTag("x")` is the standard,
+locale-independent way to address a specific UI element in a test.
+`cranpose-testing`'s finders (`TextMatcher`, `FinderQuery`,
+`find_bounds_by_text`) work by matched text and geometry instead. This
+works until UI text changes or is localized, at which point tests written
+against text break where a `testTag`-based Compose test would not. Given
+how central `testTag` is to Compose's own testing guidance, this is worth
+treating as a real gap rather than a stylistic difference, not something
+to close inside this doc, but worth a spawned follow-up.
 
 ### `LaunchedEffect`/`DisposableEffect` are macros; `remember` is not, for no evidenced reason
 
