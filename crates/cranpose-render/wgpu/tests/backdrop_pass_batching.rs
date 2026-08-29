@@ -65,9 +65,37 @@ fn ScrollRow(index: usize) {
     );
 }
 
+/// The device list shape: every card carries an elevation shadow, so the
+/// frame interleaves shadow draws between the queued composites.
 #[composable]
 #[allow(non_snake_case)]
-fn FixedGlassScene(list_state: LazyListState, glass_count: usize, overlap: bool) {
+fn ShadowedScrollRow(index: usize) {
+    let fill = match index % 4 {
+        0 => Color(0.85, 0.25, 0.25, 1.0),
+        1 => Color(0.20, 0.55, 0.90, 1.0),
+        2 => Color(0.25, 0.75, 0.40, 1.0),
+        _ => Color(0.90, 0.75, 0.20, 1.0),
+    };
+    Box(
+        Modifier::empty()
+            .fill_max_width()
+            .height(72.0)
+            .background(fill)
+            .rounded_corners(12.0)
+            .shadow(4.0),
+        BoxSpec::new(),
+        || {},
+    );
+}
+
+#[composable]
+#[allow(non_snake_case)]
+fn FixedGlassScene(
+    list_state: LazyListState,
+    glass_count: usize,
+    overlap: bool,
+    shadowed_rows: bool,
+) {
     Box(
         Modifier::empty()
             .size_points(FRAME_WIDTH as f32, FRAME_HEIGHT as f32)
@@ -79,7 +107,14 @@ fn FixedGlassScene(list_state: LazyListState, glass_count: usize, overlap: bool)
                 list_state,
                 LazyColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(10.0)),
                 move |scope| {
-                    scope.items(LazyItems::new(60).key(|i: usize| i as u64), ScrollRow);
+                    if shadowed_rows {
+                        scope.items(
+                            LazyItems::new(60).key(|i: usize| i as u64),
+                            ShadowedScrollRow,
+                        );
+                    } else {
+                        scope.items(LazyItems::new(60).key(|i: usize| i as u64), ScrollRow);
+                    }
                 },
             );
             // Fixed glass chrome: disjoint elements stacked down the left
@@ -136,6 +171,7 @@ impl Harness {
         renderer: cranpose_render_wgpu::WgpuRenderer,
         glass_count: usize,
         overlap: bool,
+        shadowed_rows: bool,
     ) -> Self {
         let root_key = location_key(file!(), line!(), column!());
         let list_state: Rc<RefCell<Option<LazyListState>>> = Rc::new(RefCell::new(None));
@@ -143,7 +179,7 @@ impl Harness {
         let mut shell = AppShell::new(renderer, root_key, move || {
             let state = rememberLazyListState();
             *list_state_for_app.borrow_mut() = Some(state);
-            FixedGlassScene(state, glass_count, overlap);
+            FixedGlassScene(state, glass_count, overlap, shadowed_rows);
         });
         shell.set_viewport(FRAME_WIDTH as f32, FRAME_HEIGHT as f32);
         shell.set_buffer_size(FRAME_WIDTH, FRAME_HEIGHT);
@@ -196,8 +232,12 @@ const WARMUP_FRAMES: usize = 4;
 const MEASURED_FRAMES: usize = 6;
 
 fn scrolled_pass_counts(glass_count: usize) -> Vec<u32> {
+    scrolled_pass_counts_with_rows(glass_count, false)
+}
+
+fn scrolled_pass_counts_with_rows(glass_count: usize, shadowed_rows: bool) -> Vec<u32> {
     let (_lock, renderer) = support::headless_renderer_parts().expect("headless renderer");
-    let mut harness = Harness::new(renderer, glass_count, false);
+    let mut harness = Harness::new(renderer, glass_count, false, shadowed_rows);
     for _ in 0..WARMUP_FRAMES {
         harness.frame(-12.0);
     }
@@ -238,6 +278,22 @@ fn each_extra_fixed_glass_adds_only_its_blur_chain() {
     );
 }
 
+/// The most device-like headless scene — elevation-shadowed list cards
+/// under fixed glass — pins its scrolled pass budget exactly. Shadow
+/// draws interleave between queued composites here, so this is the scene
+/// where an ordering or flush change fragments passes first (the
+/// shadow-encode ablation once took a 13-pass frame to 25 by splitting
+/// exactly these batches).
+#[test]
+fn a_shadowed_list_under_glass_holds_its_scrolled_pass_budget() {
+    let single = scrolled_pass_counts_with_rows(1, true);
+    let single_steady = *single.last().expect("single-glass passes");
+    assert_eq!(
+        single_steady, 6,
+        "shadowed-rows single-glass scrolled frame pass budget moved: {single:?}"
+    );
+}
+
 /// Deferring the optical composites must never let a capture read stale
 /// content: when a second glass genuinely overlaps the first, its capture
 /// depends on the first's composited output, so the pending batch has to
@@ -247,7 +303,7 @@ fn each_extra_fixed_glass_adds_only_its_blur_chain() {
 fn an_overlapping_capture_still_sees_the_glass_below_it() {
     let overlap_pixels = {
         let (_lock, renderer) = support::headless_renderer_parts().expect("headless renderer");
-        let mut harness = Harness::new(renderer, 2, true);
+        let mut harness = Harness::new(renderer, 2, true, false);
         for _ in 0..WARMUP_FRAMES {
             harness.frame(-12.0);
         }
@@ -255,7 +311,7 @@ fn an_overlapping_capture_still_sees_the_glass_below_it() {
     };
     let solo_pixels = {
         let (_lock, renderer) = support::headless_renderer_parts().expect("headless renderer");
-        let mut harness = Harness::new(renderer, 1, true);
+        let mut harness = Harness::new(renderer, 1, true, false);
         for _ in 0..WARMUP_FRAMES {
             harness.frame(-12.0);
         }

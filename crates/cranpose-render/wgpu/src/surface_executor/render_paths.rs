@@ -27,8 +27,8 @@ use super::{
 };
 use crate::{
     effect_renderer::{
-        CompositeBatchItem, CompositeSampleMode, ProjectiveSurfaceComposite, RoundedCompositeMask,
-        ShaderCompositeBatchItem,
+        CompositeBatchItem, CompositeSampleMode, FusedCompositeItem, ProjectiveSurfaceComposite,
+        RoundedCompositeMask, ShaderCompositeBatchItem,
     },
     layer_events::{LayerEventKind, collect_effect_ranges, collect_layer_events},
     layer_surface_cache::{MAX_LAYER_SURFACE_CACHE_BYTES, MAX_SCENE_RANGE_CACHE_ENTRY_BYTES},
@@ -2153,6 +2153,7 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
         let mut pending_composite_load_op = None;
         let mut pending_shader_composites = Vec::new();
         let mut pending_shader_load_op = None;
+        let mut composite_seq = 0usize;
         let mut prior_child_contributions = Vec::new();
         for mut child in child_layers {
             if cursor_z < child.z_index {
@@ -2209,6 +2210,7 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
                         height,
                         root_scale,
                         &mut pending_composites,
+                        &mut composite_seq,
                         &mut pending_composite_load_op,
                         &mut pending_shader_composites,
                         &mut pending_shader_load_op,
@@ -2380,6 +2382,7 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
                         match direct_shader_layer_composite(
                             prepared_surface,
                             child.z_index,
+                            next_composite_seq(&mut composite_seq),
                             prepared_dest_quad,
                             prepared_scissor,
                         ) {
@@ -2410,6 +2413,7 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
                         }
                         pending_composites.push(PendingLayerComposite {
                             z_index: child.z_index,
+                            seq: next_composite_seq(&mut composite_seq),
                             surface: prepared_surface,
                             dest_quad: prepared_dest_quad,
                             scissor: prepared_scissor,
@@ -2433,22 +2437,16 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
                 }
             }
             if child_backdrop_reads_target && !resolved_child.shadow_draws.is_empty() {
-                flush_pending_shader_layer_composites(
-                    backend,
-                    &mut pending_shader_composites,
-                    surface_view,
-                    (width, height),
-                    &mut pending_shader_load_op,
-                    &mut next_load_op,
-                )?;
-                flush_pending_layer_composites(
+                flush_pending_composite_queues_fused(
                     backend,
                     &mut pending_composites,
+                    &mut pending_composite_load_op,
+                    &mut pending_shader_composites,
+                    &mut pending_shader_load_op,
                     surface_view,
                     (width, height),
-                    &mut pending_composite_load_op,
                     &mut next_load_op,
-                );
+                )?;
                 flush_pending_clear(backend, surface_view, &mut next_load_op);
                 for shadow in &resolved_child.shadow_draws {
                     backend.render_shadow_draw(surface_view, shadow, width, height, root_scale);
@@ -2480,6 +2478,7 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
                 }
                 pending_composites.push(PendingLayerComposite {
                     z_index: child.z_index,
+                    seq: next_composite_seq(&mut composite_seq),
                     surface: child_surface,
                     dest_quad,
                     scissor,
@@ -2489,6 +2488,7 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
                 match direct_shader_layer_composite(
                     child_surface,
                     child.z_index,
+                    next_composite_seq(&mut composite_seq),
                     dest_quad,
                     scissor,
                 ) {
@@ -2588,6 +2588,7 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
                     height,
                     root_scale,
                     &mut pending_composites,
+                    &mut composite_seq,
                     &mut pending_composite_load_op,
                     &mut pending_shader_composites,
                     &mut pending_shader_load_op,
@@ -3775,8 +3776,18 @@ fn hash_snap_anchor<H: Hasher>(anchor: Option<SnapAnchor>, state: &mut H) {
     }
 }
 
+fn next_composite_seq(counter: &mut usize) -> usize {
+    let seq = *counter;
+    *counter += 1;
+    seq
+}
+
 struct PendingLayerComposite {
     z_index: usize,
+    /// Push order across BOTH pending queues: z indices tie whenever a
+    /// backdrop and its own child body queue at the same z, and only the
+    /// push sequence says which one draws first in a fused flush.
+    seq: usize,
     surface: LayerSurface,
     dest_quad: [[f32; 2]; 4],
     scissor: Option<(u32, u32, u32, u32)>,
@@ -3790,6 +3801,9 @@ struct PreparedBackdropComposite {
 
 struct PendingShaderLayerComposite {
     z_index: usize,
+    /// Push order across BOTH pending queues; see
+    /// [`PendingLayerComposite::seq`].
+    seq: usize,
     surface: LayerSurface,
     shader: RuntimeShader,
     dest_quad: [[f32; 2]; 4],
@@ -3801,6 +3815,7 @@ struct PendingShaderLayerComposite {
 fn direct_shader_layer_composite(
     surface: LayerSurface,
     z_index: usize,
+    seq: usize,
     dest_quad: [[f32; 2]; 4],
     scissor: Option<(u32, u32, u32, u32)>,
 ) -> Result<PendingShaderLayerComposite, LayerSurface> {
@@ -3822,6 +3837,7 @@ fn direct_shader_layer_composite(
     }
     Ok(PendingShaderLayerComposite {
         z_index,
+        seq,
         surface,
         shader,
         dest_quad,
@@ -4048,22 +4064,16 @@ fn flush_pending_queues_for_backdrop_capture<B: SurfaceExecutionBackend>(
     }) || pending_load_op_holds_clear(pending_composite_load_op)
         || pending_load_op_holds_clear(pending_shader_load_op);
     if must_flush {
-        flush_pending_shader_layer_composites(
-            backend,
-            pending_shader_composites,
-            target_view,
-            viewport,
-            pending_shader_load_op,
-            next_load_op,
-        )?;
-        flush_pending_layer_composites(
+        flush_pending_composite_queues_fused(
             backend,
             pending_composites,
+            pending_composite_load_op,
+            pending_shader_composites,
+            pending_shader_load_op,
             target_view,
             viewport,
-            pending_composite_load_op,
             next_load_op,
-        );
+        )?;
     }
     flush_pending_clear(backend, target_view, next_load_op);
     Ok(())
@@ -4128,6 +4138,122 @@ fn take_ordered_pending_composite_load_op(
         (None, Some(_)) => shader_load_op.unwrap_or(next_load_op),
         (None, None) => next_load_op,
     }
+}
+
+/// Flush BOTH pending queues in painter's order through one fused render
+/// pass. This replaces the shader-then-blit flush pair, which spent an
+/// extra pass boundary AND always drew the whole shader batch below every
+/// queued blit regardless of z. When only one queue holds items, the
+/// single-kind flush runs exactly as before. When a shader pipeline fails
+/// validation, every item composites individually — still in painter's
+/// order.
+#[allow(clippy::too_many_arguments)]
+fn flush_pending_composite_queues_fused<B: SurfaceExecutionBackend>(
+    backend: &mut B,
+    pending_composites: &mut Vec<PendingLayerComposite>,
+    pending_composite_load_op: &mut Option<wgpu::LoadOp<wgpu::Color>>,
+    pending_shader_composites: &mut Vec<PendingShaderLayerComposite>,
+    pending_shader_load_op: &mut Option<wgpu::LoadOp<wgpu::Color>>,
+    target_view: &wgpu::TextureView,
+    viewport: (u32, u32),
+    next_load_op: &mut wgpu::LoadOp<wgpu::Color>,
+) -> Result<(), String> {
+    if pending_shader_composites.is_empty() {
+        flush_pending_layer_composites(
+            backend,
+            pending_composites,
+            target_view,
+            viewport,
+            pending_composite_load_op,
+            next_load_op,
+        );
+        return Ok(());
+    }
+    if pending_composites.is_empty() {
+        return flush_pending_shader_layer_composites(
+            backend,
+            pending_shader_composites,
+            target_view,
+            viewport,
+            pending_shader_load_op,
+            next_load_op,
+        );
+    }
+
+    let load_op = take_ordered_pending_composite_load_op(
+        pending_composites,
+        pending_composite_load_op,
+        pending_shader_composites,
+        pending_shader_load_op,
+        *next_load_op,
+    );
+    let mut order: Vec<(usize, usize, bool, usize)> = pending_composites
+        .iter()
+        .enumerate()
+        .map(|(index, pending)| (pending.z_index, pending.seq, false, index))
+        .chain(
+            pending_shader_composites
+                .iter()
+                .enumerate()
+                .map(|(index, pending)| (pending.z_index, pending.seq, true, index)),
+        )
+        .collect();
+    order.sort_by_key(|&(z_index, seq, _, _)| (z_index, seq));
+
+    let encoded = {
+        let blit_items = pending_layer_composite_batch_items(pending_composites);
+        let shader_items = pending_shader_layer_composite_batch_items(pending_shader_composites);
+        let items: Vec<FusedCompositeItem<'_>> = order
+            .iter()
+            .map(|&(_, _, is_shader, index)| {
+                if is_shader {
+                    FusedCompositeItem::Shader(shader_items[index].1)
+                } else {
+                    FusedCompositeItem::Blit(blit_items[index].1)
+                }
+            })
+            .collect();
+        backend.fused_composite_batch_to_view(target_view, viewport, load_op, &items)
+    };
+    if encoded {
+        release_pending_layer_composites(backend, pending_composites);
+        release_pending_shader_layer_composites(backend, pending_shader_composites);
+        *next_load_op = wgpu::LoadOp::Load;
+        return Ok(());
+    }
+
+    let mut blits: Vec<Option<PendingLayerComposite>> = std::mem::take(pending_composites)
+        .into_iter()
+        .map(Some)
+        .collect();
+    let mut shaders: Vec<Option<PendingShaderLayerComposite>> =
+        std::mem::take(pending_shader_composites)
+            .into_iter()
+            .map(Some)
+            .collect();
+    let mut load_op = load_op;
+    for &(_, _, is_shader, index) in &order {
+        let (surface, dest_quad, scissor) = if is_shader {
+            let pending = shaders[index].take().expect("shader pending drawn once");
+            (pending.surface, pending.dest_quad, pending.scissor)
+        } else {
+            let pending = blits[index].take().expect("blit pending drawn once");
+            (pending.surface, pending.dest_quad, pending.scissor)
+        };
+        composite_layer_surface_to_view(
+            backend,
+            &surface,
+            target_view,
+            viewport,
+            dest_quad,
+            load_op,
+            scissor,
+        )?;
+        load_op = wgpu::LoadOp::Load;
+        backend.release_layer_surface_target(surface.target);
+    }
+    *next_load_op = wgpu::LoadOp::Load;
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4405,6 +4531,7 @@ fn queue_cached_direct_scene_range<B: SurfaceExecutionBackend>(
     root_scale: f32,
     snapped_bounds: Option<Rect>,
     pending_composites: &mut Vec<PendingLayerComposite>,
+    composite_seq: &mut usize,
     pending_composite_load_op: &mut Option<wgpu::LoadOp<wgpu::Color>>,
     next_load_op: &mut wgpu::LoadOp<wgpu::Color>,
 ) -> Result<bool, String> {
@@ -4433,6 +4560,7 @@ fn queue_cached_direct_scene_range<B: SurfaceExecutionBackend>(
     );
     pending_composites.push(PendingLayerComposite {
         z_index: z_start,
+        seq: next_composite_seq(composite_seq),
         surface,
         dest_quad,
         scissor: None,
@@ -4452,6 +4580,7 @@ fn render_direct_scene_range_with_pending_composites<B: SurfaceExecutionBackend>
     height: u32,
     root_scale: f32,
     pending_composites: &mut Vec<PendingLayerComposite>,
+    composite_seq: &mut usize,
     pending_composite_load_op: &mut Option<wgpu::LoadOp<wgpu::Color>>,
     pending_shader_composites: &mut Vec<PendingShaderLayerComposite>,
     pending_shader_load_op: &mut Option<wgpu::LoadOp<wgpu::Color>>,
@@ -4511,6 +4640,7 @@ fn render_direct_scene_range_with_pending_composites<B: SurfaceExecutionBackend>
                 root_scale,
                 chunk_bounds,
                 pending_composites,
+                composite_seq,
                 pending_composite_load_op,
                 next_load_op,
             )?
@@ -4602,6 +4732,7 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
     let mut pending_composite_load_op = None;
     let mut pending_shader_composites = Vec::new();
     let mut pending_shader_load_op = None;
+    let mut composite_seq = 0usize;
     let mut prior_child_contributions = Vec::new();
     for mut child in child_layers {
         if cursor_z < child.z_index {
@@ -4705,22 +4836,16 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
             continue;
         }
         if child.needs_nested_underlay {
-            flush_pending_shader_layer_composites(
-                backend,
-                &mut pending_shader_composites,
-                &target.view,
-                (width, height),
-                &mut pending_shader_load_op,
-                &mut next_load_op,
-            )?;
-            flush_pending_layer_composites(
+            flush_pending_composite_queues_fused(
                 backend,
                 &mut pending_composites,
+                &mut pending_composite_load_op,
+                &mut pending_shader_composites,
+                &mut pending_shader_load_op,
                 &target.view,
                 (width, height),
-                &mut pending_composite_load_op,
                 &mut next_load_op,
-            );
+            )?;
             flush_pending_clear(backend, &target.view, &mut next_load_op);
         }
         let child_translation_context = TranslationRenderContext {
@@ -4778,22 +4903,16 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
         });
 
         if !resolved_child.shadow_draws.is_empty() {
-            flush_pending_shader_layer_composites(
-                backend,
-                &mut pending_shader_composites,
-                &target.view,
-                (width, height),
-                &mut pending_shader_load_op,
-                &mut next_load_op,
-            )?;
-            flush_pending_layer_composites(
+            flush_pending_composite_queues_fused(
                 backend,
                 &mut pending_composites,
+                &mut pending_composite_load_op,
+                &mut pending_shader_composites,
+                &mut pending_shader_load_op,
                 &target.view,
                 (width, height),
-                &mut pending_composite_load_op,
                 &mut next_load_op,
-            );
+            )?;
             flush_pending_clear(backend, &target.view, &mut next_load_op);
         }
 
@@ -4865,6 +4984,7 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
                 }
                 pending_composites.push(PendingLayerComposite {
                     z_index: child.z_index,
+                    seq: next_composite_seq(&mut composite_seq),
                     surface: prepared.surface,
                     dest_quad: prepared.dest_quad,
                     scissor: prepared.scissor,
@@ -4933,6 +5053,7 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
             }
             pending_composites.push(PendingLayerComposite {
                 z_index: child.z_index,
+                seq: next_composite_seq(&mut composite_seq),
                 surface: child_surface,
                 dest_quad,
                 scissor,
@@ -4947,7 +5068,13 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
                 &mut pending_composite_load_op,
                 &mut next_load_op,
             );
-            match direct_shader_layer_composite(child_surface, child.z_index, dest_quad, scissor) {
+            match direct_shader_layer_composite(
+                child_surface,
+                child.z_index,
+                next_composite_seq(&mut composite_seq),
+                dest_quad,
+                scissor,
+            ) {
                 Ok(pending) => {
                     if pending_shader_composites.is_empty() {
                         pending_shader_load_op = Some(next_load_op);
@@ -4987,15 +5114,7 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
     }
 
     if cursor_z < local_scene.next_z {
-        flush_pending_shader_layer_composites(
-            backend,
-            &mut pending_shader_composites,
-            &target.view,
-            (width, height),
-            &mut pending_shader_load_op,
-            &mut next_load_op,
-        )?;
-        if !pending_composites.is_empty()
+        if (!pending_composites.is_empty() || !pending_shader_composites.is_empty())
             && !range_contains_layer_events(
                 &local_scene.effect_layers,
                 &local_scene.backdrop_layers,
@@ -5003,8 +5122,16 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
                 local_scene.next_z,
             )
         {
-            let load_op = pending_composite_load_op.take().unwrap_or(next_load_op);
+            let load_op = take_ordered_pending_composite_load_op(
+                &pending_composites,
+                &mut pending_composite_load_op,
+                &pending_shader_composites,
+                &mut pending_shader_load_op,
+                next_load_op,
+            );
             let composite_items = pending_layer_composite_batch_items(&pending_composites);
+            let shader_composite_items =
+                pending_shader_layer_composite_batch_items(&pending_shader_composites);
             backend.render_non_effect_segment_with_composites(
                 &target.view,
                 &local_scene.shapes,
@@ -5018,22 +5145,25 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
                 local_scene.next_z,
                 &[],
                 &composite_items,
-                &[],
+                &shader_composite_items,
                 width,
                 height,
                 target_scale,
                 load_op,
             )?;
             release_pending_layer_composites(backend, &mut pending_composites);
+            release_pending_shader_layer_composites(backend, &mut pending_shader_composites);
         } else {
-            flush_pending_layer_composites(
+            flush_pending_composite_queues_fused(
                 backend,
                 &mut pending_composites,
+                &mut pending_composite_load_op,
+                &mut pending_shader_composites,
+                &mut pending_shader_load_op,
                 &target.view,
                 (width, height),
-                &mut pending_composite_load_op,
                 &mut next_load_op,
-            );
+            )?;
             let local_backdrop_hashes = scene_backdrop_input_hashes(
                 local_scene,
                 &prior_child_contributions,
@@ -5065,22 +5195,16 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
     } else if matches!(next_load_op, wgpu::LoadOp::Clear(_)) {
         backend.clear_target_view_with_load_op(&target.view, next_load_op);
     } else {
-        flush_pending_shader_layer_composites(
-            backend,
-            &mut pending_shader_composites,
-            &target.view,
-            (width, height),
-            &mut pending_shader_load_op,
-            &mut next_load_op,
-        )?;
-        flush_pending_layer_composites(
+        flush_pending_composite_queues_fused(
             backend,
             &mut pending_composites,
+            &mut pending_composite_load_op,
+            &mut pending_shader_composites,
+            &mut pending_shader_load_op,
             &target.view,
             (width, height),
-            &mut pending_composite_load_op,
             &mut next_load_op,
-        );
+        )?;
     }
 
     Ok(target)
