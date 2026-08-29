@@ -7,7 +7,9 @@ use std::{
     rc::Rc,
 };
 
-use cranpose_animation::{ExponentialDecaySpec, FloatDecayAnimationSpec, IOS_DECELERATION_RATE_NORMAL};
+use cranpose_animation::{
+    ExponentialDecaySpec, FloatDecayAnimationSpec, IOS_DECELERATION_RATE_NORMAL,
+};
 use cranpose_core::{
     RuntimeHandle,
     internal::{FrameCallbackRegistration, FrameClock},
