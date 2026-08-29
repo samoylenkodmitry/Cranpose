@@ -100,6 +100,17 @@ const SHIFT_TOLERANCE_PX: i32 = 1;
 /// into whatever clips items out near the fixed chrome's lower edge.
 const RECEIPT_ANCHOR_SKIP_FROM_TOP: usize = 2;
 
+/// Times `wait_for_present_frame` and prints the elapsed duration, so a
+/// suspiciously-fast call (a few microseconds) is visible as evidence the
+/// call returned without actually waiting for anything, rather than being
+/// silently trusted just because the call succeeded.
+fn time_present_wait(robot: &cranpose::Robot, label: &str) {
+    let started = std::time::Instant::now();
+    let result = robot.wait_for_present_frame();
+    let elapsed = started.elapsed();
+    println!("{label}: wait_for_present_frame took {elapsed:?} result={result:?}");
+}
+
 fn fail(robot: &cranpose::Robot, message: &str) -> ! {
     println!("FATAL: {message}");
     let _ = robot.exit();
@@ -135,11 +146,13 @@ fn main() {
             robot
                 .mouse_scroll_and_wait_for_frame(0.0, SETTLE_SCROLL)
                 .expect("settle scroll past empty content padding");
+            // wait_for_present_frame only actually waits when a redraw is
+            // still pending; called after a long sleep it is a proven
+            // no-op (see the per-step timing print below), so it must run
+            // BEFORE anything gives the frame time to drain on its own.
+            time_present_wait(&robot, "baseline");
             std::thread::sleep(Duration::from_millis(500));
             let _ = robot.wait_for_idle();
-            // The baseline capture must also reflect an actually-presented
-            // frame, for the same reason as the per-step captures below.
-            let _ = robot.wait_for_present_frame();
 
             // A receipt subtitle ("Receipt #NNNN — 12 items") is unique per
             // row, unlike the six recycled card titles, so once discovered
@@ -214,17 +227,26 @@ fn main() {
                     "glass-step",
                     ScrollStepDriver::PointerWheel,
                 );
-                std::thread::sleep(Duration::from_millis(SETTLE_AFTER_SCROLL_EXTRA_MS));
-                // `wait_for_idle` confirms CPU/composition quiescence, not
-                // that software present has actually drained this frame to
-                // the window — under Xvfb's software presenter a screenshot
-                // taken on CPU-idle alone can show a still-queued frame,
-                // which would read as the backdrop lagging then catching up
-                // as the queue drains, and converging once the settle above
-                // exhausts the backlog. That shape is otherwise
-                // indistinguishable from a real compositor defect, so the
-                // capture must wait for actual presentation instead.
-                let _ = robot.wait_for_present_frame();
+                // Immediately, before anything gives the just-scrolled frame
+                // time to drain on its own — `wait_for_present_frame` only
+                // blocks while a redraw is genuinely still pending
+                // (crates/cranpose/src/desktop.rs, RobotCommand::
+                // WaitForPresentFrame: it checks robot_visible_surface_dirty
+                // || app.needs_redraw() first and returns immediately if
+                // neither holds), so calling it after a long settle sleep,
+                // as the first version of this fix did, is a proven no-op:
+                // by then the app has already gone idle on its own and
+                // there is nothing left to wait for. `wait_for_idle`
+                // confirms CPU/composition quiescence, not that software
+                // present has actually drained this frame to the window —
+                // under Xvfb's software presenter a screenshot taken on
+                // CPU-idle alone can show a still-queued frame, which would
+                // read as the backdrop lagging then catching up as the
+                // queue drains. That shape is otherwise indistinguishable
+                // from a real compositor defect, so the capture must wait
+                // for actual presentation, called where it can still catch
+                // one.
+                time_present_wait(&robot, &format!("step {step:02}"));
 
                 let step_path = output_dir.join(format!("glass_step{:02}.png", step + 1));
                 capture_x11_window_screenshot(
@@ -234,6 +256,15 @@ fn main() {
                     WINDOW_HEIGHT as f32,
                 );
                 capture_paths.push(step_path);
+
+                // Momentum settle for the NEXT scroll event, not this
+                // capture: consecutive scroll events accumulate fling
+                // velocity under the current physics, so this has to sit
+                // between "capture this step" and "fire the next scroll",
+                // not between "fire this scroll" and "capture this step"
+                // (which is where it would defeat the present-frame wait
+                // above by giving the frame time to drain before asking).
+                std::thread::sleep(Duration::from_millis(SETTLE_AFTER_SCROLL_EXTRA_MS));
             }
 
             let crop = CompareCrop {
