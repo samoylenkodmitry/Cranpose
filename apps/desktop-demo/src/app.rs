@@ -74,13 +74,7 @@ use xkcd::xkcd_tab;
 const DEMO_PAGE_PADDING: f32 = 20.0;
 const DEMO_TAB_BAR_PADDING: f32 = 8.0;
 
-/// Below this measured window width, the 25-entry tab row (which needs a
-/// horizontally-scrolling strip even on a 1200px desktop window) gives way to
-/// a single current-tab button that opens a full-height picker list. Chosen
-/// at the Material window-size-class compact/medium boundary, comfortably
-/// above every phone width the demo runs at and comfortably below every
-/// windowed-desktop width the existing scroll-contract robot tests pin.
-const COMPACT_WIDTH_BREAKPOINT: f32 = 600.0;
+const COMPACT_WINDOW_SIZE_CLASS_MAX_WIDTH: f32 = 600.0;
 
 thread_local! {
     pub static TEST_COMPOSITION_LOCAL_COUNTER: RefCell<Option<MutableState<i32>>> = const { RefCell::new(None) };
@@ -519,13 +513,6 @@ fn CompactAppBar(
     );
 }
 
-/// A phone-width tab switcher: one row per [`DemoTab`], full-width so every
-/// row is a comfortable tap target, replacing the content pane while open.
-///
-/// [`TabButton`] is the desktop equivalent, but its modifier chain ends in
-/// `.padding(...)` — appending `fill_max_width()` after that would size the
-/// padded content box, not the tap target, so this keeps its own small
-/// (non-scrolling-row) layout rather than bolting phone sizing onto it.
 #[allow(non_snake_case)]
 #[composable]
 fn CompactTabPicker(
@@ -640,15 +627,8 @@ pub fn combined_app_with_startup(startup: StartupSelection) {
             .report_size_state(window_size),
         ColumnSpec::default(),
         move || {
-            let is_compact = window_size.get().width < COMPACT_WIDTH_BREAKPOINT;
+            let is_compact = window_size.get().width < COMPACT_WINDOW_SIZE_CLASS_MAX_WIDTH;
 
-            // Only the nav chrome depends on `is_compact`; `TabContent` below
-            // keeps one call site regardless of which chrome is showing. Two
-            // `TabContent` call sites (one per branch) would be two
-            // composition groups, and switching branches disposes the group
-            // that stopped being composed — a width crossing the breakpoint
-            // would tear down and rebuild whichever tab is live instead of
-            // leaving it running under the new header.
             if is_compact {
                 CompactAppBar(active_tab, picker_open, showing_source);
             } else {

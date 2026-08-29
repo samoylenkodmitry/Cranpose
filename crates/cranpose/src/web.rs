@@ -110,6 +110,13 @@ impl PlatformFrameDriver for WebPlatformFrameDriver<'_> {
     }
 }
 
+fn set_height_to_dynamic_viewport_height_with_static_fallback(
+    style: &web_sys::CssStyleDeclaration,
+) -> Result<(), JsValue> {
+    style.set_property("height", "100vh")?;
+    style.set_property("height", "100dvh")
+}
+
 /// Runs a web Compose application with wgpu rendering.
 ///
 /// Called by `AppLauncher::run_web()`. This is the framework-level
@@ -153,21 +160,13 @@ pub async fn run(
     // Get device pixel ratio for proper scaling
     let scale_factor = window.device_pixel_ratio();
 
-    // Keep the requested desktop-sized viewport as an upper bound while
-    // fitting phones and narrow browser windows without horizontal scrolling,
-    // unless the app asked the canvas to fill the browser viewport instead.
     let requested_width = settings.initial_width;
     let requested_height = settings.initial_height;
     if let Some(html_element) = canvas.dyn_ref::<web_sys::HtmlElement>() {
         let style = html_element.style();
         if settings.web_fill_viewport {
             style.set_property("width", "100vw")?;
-            // `100dvh` accounts for a mobile browser's collapsing address
-            // bar; older browsers that do not parse the `dvh` unit keep the
-            // `100vh` set just before it, since an unparsable value is a
-            // no-op rather than a reset.
-            style.set_property("height", "100vh")?;
-            style.set_property("height", "100dvh")?;
+            set_height_to_dynamic_viewport_height_with_static_fallback(&style)?;
         } else {
             style.set_property(
                 "width",
