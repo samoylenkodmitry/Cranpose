@@ -120,6 +120,9 @@ fn main() {
                 .expect("settle scroll past empty content padding");
             std::thread::sleep(Duration::from_millis(300));
             let _ = robot.wait_for_idle();
+            // The baseline capture must also reflect an actually-presented
+            // frame, for the same reason as the per-step captures below.
+            let _ = robot.wait_for_present_frame();
 
             // A receipt subtitle ("Receipt #NNNN — 12 items") is unique per
             // row, unlike the six recycled card titles, so once discovered
@@ -190,14 +193,26 @@ fn main() {
                 baseline_path.display()
             );
 
-            let mut min_changed = usize::MAX;
-            let mut zero_steps = Vec::new();
-            for step in 1..=STEP_COUNT {
-                robot
-                    .mouse_scroll_and_wait_for_frame(0.0, -1.0)
-                    .expect("one-pixel scroll");
-                std::thread::sleep(Duration::from_millis(120));
-                let _ = robot.wait_for_idle();
+            for step in 0..STEP_COUNT {
+                previous_bounds = scroll_once_and_expect_target_delta(
+                    &robot,
+                    step_config,
+                    previous_bounds,
+                    step,
+                    "glass-step",
+                    ScrollStepDriver::PointerWheel,
+                );
+                std::thread::sleep(Duration::from_millis(SETTLE_AFTER_SCROLL_EXTRA_MS));
+                // `wait_for_idle` confirms CPU/composition quiescence, not
+                // that software present has actually drained this frame to
+                // the window — under Xvfb's software presenter a screenshot
+                // taken on CPU-idle alone can show a still-queued frame,
+                // which would read as the backdrop lagging then catching up
+                // as the queue drains, and converging once the settle above
+                // exhausts the backlog. That shape is otherwise
+                // indistinguishable from a real compositor defect, so the
+                // capture must wait for actual presentation instead.
+                let _ = robot.wait_for_present_frame();
 
                 let shot_path = output_dir.join(format!("step_{step:02}_full.png"));
                 let curr_shot = capture_x11_window_screenshot(
