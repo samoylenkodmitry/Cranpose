@@ -3786,9 +3786,22 @@ mod tests {
             dirty_nodes.extend(applier.take_structural_change_parents_attached_to(root));
             dirty_nodes.sort_unstable();
             dirty_nodes.dedup();
+            reset_lowered_layer_count();
             let report =
                 update_graph_from_applier_report(&mut applier, &mut graph, &dirty_nodes, 1.0);
             assert!(report.applied, "delta {delta}: boundary frame must apply");
+            // The rebound-slot recording must stay proportional to real
+            // content change: a scroll the beyond-bounds buffer absorbs
+            // rebinds nothing and must lower nothing — the recording
+            // firing on steady-state frames would re-lower unchanged rows
+            // on every scrolled frame.
+            if delta == -30.0 {
+                assert_eq!(
+                    lowered_layer_count(),
+                    0,
+                    "a buffer-absorbed scroll must not lower any layer"
+                );
+            }
 
             let fresh =
                 build_graph_from_applier(&mut applier, root, 1.0).expect("fresh comparison graph");
