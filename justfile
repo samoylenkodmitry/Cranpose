@@ -285,7 +285,8 @@ robot-gpu:
       --sequential \
       --skip robot_underline_screenshot \
       --skip robot_text_strikeout_presented \
-      --skip robot_leetcodedaily_full_layout_scroll_stability
+      --skip robot_leetcodedaily_full_layout_scroll_stability \
+      --skip robot_glass_backdrop_scroll_stability
 
 # CI's software-present half: exactly the three captures excluded above.
 robot-captures:
@@ -294,7 +295,8 @@ robot-captures:
       --sequential \
       --example robot_underline_screenshot \
       --example robot_text_strikeout_presented \
-      --example robot_leetcodedaily_full_layout_scroll_stability
+      --example robot_leetcodedaily_full_layout_scroll_stability \
+      --example robot_glass_backdrop_scroll_stability
 
 # Render the liquid-glass cheatsheet montages.
 cheatsheets:
