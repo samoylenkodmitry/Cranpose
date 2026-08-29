@@ -65,8 +65,7 @@
 - not "if you want to"; should be "the proper fix for production-grade ui-framework"; not "I WANT"; should be "this is wrong, this is right, this is the cause, this has to be re-architectured and be rewritten"
 - for non-trivial bugs: explore → document findings → rank suspicions with evidence → propose re-architecture options → implement → diagnostic verify → iterate until confirmed fixed. no one-shot guessing.
 - confirm a suspected cause by REMOVING it and re-running, before writing the fix. (binary search by cutting half of the code until the only thin cause left)
-- for a UI bug that reproduces on a device, write the robot e2e test FIRST.
-- a test that has only ever been green is decoration: prove it red first (force the failure mode, see it fail, then remove the forcing) before trusting a pass.
+- for a UI bug that reproduces on a device, write the robot e2e test FIRST -- and prove it can fail before trusting it green: force the failure mode, see it fail, then remove the forcing. A test that has only ever been green is decoration.
 - device testing on the Pixel Watch over adb: the watch dozes between commands and silently drops injected input, and a dozing screen captures as black PNG. Send `input keyevent KEYCODE_WAKEUP` before every step and check `dumpsys power | grep mWakefulness` before believing a screenshot. The rotary crown is `adb shell input rotaryencoder scroll --axis SCROLL,<n>`, and ring menus also take taps on the screen edge.
 - `gh` has more than one account here and the active one flips. When a repo starts 404ing or a rerun says "must have admin rights", run  `gh auth switch --user samoylenkodmitry` 
 - should never workaround bugs instead of fixing the root issue
