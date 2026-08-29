@@ -75,18 +75,19 @@ impl ScrollStabilityConfig {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ScrollStepDriver<'a> {
+pub(crate) enum ScrollStepDriver<'a> {
     PointerWheel,
+    #[allow(dead_code)]
     AppHook(&'a str),
 }
 
 #[derive(Clone, Copy, Debug)]
-struct CompareCrop {
-    trim_top_px: u32,
-    trim_bottom_px: u32,
-    trim_left_px: u32,
-    trim_right_px: u32,
-    logical_window_space: bool,
+pub(crate) struct CompareCrop {
+    pub(crate) trim_top_px: u32,
+    pub(crate) trim_bottom_px: u32,
+    pub(crate) trim_left_px: u32,
+    pub(crate) trim_right_px: u32,
+    pub(crate) logical_window_space: bool,
 }
 
 #[derive(Debug)]
@@ -371,7 +372,7 @@ pub(crate) fn run_internal_scroll_stability_capture(
     compare_ok
 }
 
-fn scroll_once_and_expect_target_delta(
+pub(crate) fn scroll_once_and_expect_target_delta(
     robot: &cranpose::Robot,
     config: ExactScrollStepConfig,
     previous_bounds: (f32, f32, f32, f32),
@@ -845,7 +846,7 @@ fn compare_script_path() -> PathBuf {
     path
 }
 
-fn run_compare_script(
+pub(crate) fn run_compare_script(
     capture_paths: &[PathBuf],
     crop: CompareCrop,
     config: ScrollStabilityConfig,
