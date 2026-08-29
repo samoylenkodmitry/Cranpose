@@ -743,16 +743,7 @@ fn async_runtime_to_other_tabs_after_second_forward_pass_preserves_content() {
     let registered = TEST_ACTIVE_TAB_STATE.with(|cell| cell.borrow().is_some());
     assert!(registered, "active tab state was not registered");
 
-    // One real measure pass before the leak-detection loop below: the app
-    // shell picks compact-vs-desktop chrome off `Modifier::report_size_state`,
-    // which is unset (0x0, so "compact") until the first measurement, and
-    // this harness's first measurement is otherwise the loop's own
-    // `slots_before_wait_dump` capture. Composing that one-time, real,
-    // width-driven chrome swap inside the very window this loop measures
-    // reads as a leak by slot count alone; a real window is already laid
-    // out long before a person can switch tabs, so warming up here matches
-    // that and leaves the loop measuring only per-frame animation cost.
-    let _ = composition_layout_texts(&mut composition);
+    settle_breakpoint_transition_before_measuring(&mut composition);
 
     let tab_markers = [
         (DemoTab::Animations, "Animations Showcase"),
@@ -798,6 +789,65 @@ fn async_runtime_to_other_tabs_after_second_forward_pass_preserves_content() {
                 "after switching away from Async Runtime during second forward pass to {:?}",
                 target_tab
             ),
+        );
+    }
+}
+
+fn settle_breakpoint_transition_before_measuring(composition: &mut Composition<MemoryApplier>) {
+    let _ = composition_layout_texts(composition);
+}
+
+fn measure_composition_at(composition: &mut Composition<MemoryApplier>, width: f32, height: f32) {
+    let root = composition.root().expect("composition root");
+    let handle = composition.runtime_handle();
+    let mut applier = composition.applier_mut();
+    applier.set_runtime_handle(handle);
+    let _ = measure_layout_with_options(
+        &mut applier,
+        root,
+        Size::new(width, height),
+        MeasureLayoutOptions {
+            collect_semantics: false,
+            build_layout_tree: true,
+        },
+    )
+    .expect("measure layout for breakpoint-crossing regression");
+    applier.clear_runtime_handle();
+}
+
+#[test]
+fn repeated_breakpoint_crossings_settle_instead_of_leaking() {
+    let (_app_context, _app_context_scope) = app_context_scope();
+    TEST_ACTIVE_TAB_STATE.with(|cell| cell.borrow_mut().take());
+
+    let mut composition = Composition::new(MemoryApplier::new());
+    let key = location_key(file!(), line!(), column!());
+    composition
+        .render(key, combined_app)
+        .expect("install combined app content");
+    drain_all(&mut composition).expect("initial drain");
+
+    const COMPACT_WIDTH: f32 = 400.0;
+    const DESKTOP_WIDTH: f32 = 1200.0;
+    const ROUND_TRIPS: usize = 12;
+
+    let mut counts_after_each_round_trip = Vec::with_capacity(ROUND_TRIPS);
+    for _ in 0..ROUND_TRIPS {
+        measure_composition_at(&mut composition, COMPACT_WIDTH, 800.0);
+        drain_all(&mut composition).expect("drain after compact-width measure");
+        measure_composition_at(&mut composition, DESKTOP_WIDTH, 800.0);
+        drain_all(&mut composition).expect("drain after desktop-width measure");
+        counts_after_each_round_trip.push(composition.debug_dump_slot_entries().len());
+    }
+
+    let first_round_trip = counts_after_each_round_trip[0];
+    for (round, &count) in counts_after_each_round_trip.iter().enumerate() {
+        assert_eq!(
+            count, first_round_trip,
+            "breakpoint round trip {round} left the slot table at {count} \
+             instead of settling back to {first_round_trip}: {counts_after_each_round_trip:?} \
+             — a departing compact/desktop branch is not fully disposing on \
+             each crossing"
         );
     }
 }
