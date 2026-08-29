@@ -124,7 +124,10 @@ fn ProbeApp() {
                     for probe in probes() {
                         scope.draw_circle(
                             Brush::solid(MARKER),
-                            Point { x: probe.center.0, y: probe.center.1 },
+                            Point {
+                                x: probe.center.0,
+                                y: probe.center.1,
+                            },
                             MARKER_RADIUS,
                         );
                     }

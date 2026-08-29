@@ -40,7 +40,10 @@ fn ProbeApp() {
                 scope.draw_rect(Brush::solid(BACKDROP));
                 scope.draw_circle(
                     Brush::solid(MARKER),
-                    cranpose::Point { x: CENTER, y: CENTER },
+                    cranpose::Point {
+                        x: CENTER,
+                        y: CENTER,
+                    },
                     MARKER_RADIUS,
                 );
             }),
@@ -121,9 +124,11 @@ fn main() {
                 );
             }
             println!("closest_rim_sample_to_marker_color = {worst:.1}");
-            let image = image::RgbaImage::from_raw(shot.width, shot.height, shot.pixels)
-                .expect("decode");
-            image.save(shot_dir.join("round-glass-probe.png")).expect("save");
+            let image =
+                image::RgbaImage::from_raw(shot.width, shot.height, shot.pixels).expect("decode");
+            image
+                .save(shot_dir.join("round-glass-probe.png"))
+                .expect("save");
             robot.exit().expect("exit");
         })
         .run(ProbeApp);
