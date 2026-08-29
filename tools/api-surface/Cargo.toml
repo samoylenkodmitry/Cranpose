@@ -1,0 +1,29 @@
+[package]
+name = "cranpose-api-surface"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+description = "Dumps the reachable public API surface of the Cranpose workspace crates and of an AndroidX Compose checkout, for docs/compose_api_parity.md"
+
+[dependencies]
+anyhow = "1"
+proc-macro2 = { version = "1", features = ["span-locations"] }
+quote = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+syn = { version = "3", features = ["full", "extra-traits", "visit", "parsing", "printing", "clone-impls"] }
+
+[[bin]]
+name = "dump-cranpose-api"
+path = "src/bin/dump_cranpose_api.rs"
+
+[[bin]]
+name = "dump-compose-api"
+path = "src/bin/dump_compose_api.rs"
+
+[[bin]]
+name = "match-api"
+path = "src/bin/match_api.rs"
+
+[workspace]

@@ -27,7 +27,14 @@
 - all tests should pass, its never *not yours*
 - zero warnings on all build/clippy/test commands, never *was pre-existing*
 - the #[cfg(feature = "robot-app")] is forbidden
-- reference JC kt repo /media/huge/composerepo/
+- reference JC kt repo (androidx/androidx, the actual Jetpack Compose source) on
+  samarch-1 at /media/huge/projects/android/androidx -- NOT /media/huge/composerepo/,
+  which does not exist and misdirected an earlier session. It is a fork (`origin` =
+  samoylenkodmitry/androidx, `upstream` = androidx/androidx) on branch androidx-main,
+  and it is STALE: as of 2026-08-29 its compose/*/api/current.txt is still at commit
+  be18a1188a13a253d2a6784f812815c88454775c, dated 2023-06-26 (~Compose 1.5.0-beta era).
+  Treat anything read from it as true as of mid-2023, not current, until someone
+  re-syncs it -- see docs/compose_api_parity.md for what that staleness costs.
 - use samarch-1 or the mac by ssh for builds where possible: `ssh samarch-1`
   (Linux, Android SDK at /home/s/develop/sdk, X11 for the robot suite) and
   `ssh macm3` (macOS, Apple toolchains). They are faster than this machine and
