@@ -347,7 +347,7 @@ fn measure_subcomposes_content() {
     let recorded_capture = Rc::clone(&recorded);
     let policy: Rc<MeasurePolicy> = Rc::new(move |scope, constraints| {
         assert_eq!(constraints, Constraints::tight(0.0, 0.0));
-        let measurables = scope.subcompose(SlotId::new(1), || {
+        let measurables = scope.subcompose(SlotId::new(1), (), || {
             cranpose_core::with_current_composer(|composer| {
                 composer.emit_node(|| DummyNode);
             });
@@ -389,7 +389,7 @@ fn subcompose_reuses_nodes_across_measures() {
     let recorded = Rc::new(RefCell::new(Vec::new()));
     let recorded_capture = Rc::clone(&recorded);
     let policy: Rc<MeasurePolicy> = Rc::new(move |scope, _constraints| {
-        let measurables = scope.subcompose(SlotId::new(99), || {
+        let measurables = scope.subcompose(SlotId::new(99), (), || {
             cranpose_core::with_current_composer(|composer| {
                 composer.emit_node(|| DummyNode);
             });
@@ -461,7 +461,7 @@ fn inactive_slots_move_to_reusable_pool() {
     let toggle_capture = toggle;
     let policy: Rc<MeasurePolicy> = Rc::new(move |scope, _constraints| {
         if toggle_capture.value() {
-            scope.subcompose(SlotId::new(1), || {
+            scope.subcompose(SlotId::new(1), (), || {
                 cranpose_core::with_current_composer(|composer| {
                     composer.emit_node(|| DummyNode);
                 });

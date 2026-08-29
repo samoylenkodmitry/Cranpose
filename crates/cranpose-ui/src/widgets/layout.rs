@@ -126,7 +126,7 @@ pub fn SubcomposeLayout(
         node.set_captured_context(captured_context.clone());
         node.set_density(composed_density);
         if policy_captures_changed {
-            node.request_measure_recompose();
+            node.invalidate_subcomposition();
         }
     }) {
         debug_assert!(false, "failed to update SubcomposeLayout node: {err}");
@@ -150,7 +150,7 @@ where
         let scope_for_content = scope_impl;
         let measurables = {
             let content_ref = Rc::clone(&content_ref);
-            scope.subcompose(SlotId::new(0), move || {
+            scope.subcompose(SlotId::new(0), constraints, move || {
                 cranpose_core::debug_label_current_scope("BoxWithConstraints.slot(0)");
                 let mut content = content_ref.borrow_mut();
                 content(scope_for_content);

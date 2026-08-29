@@ -1341,7 +1341,7 @@ pub fn WearScalingLazyColumnNode(
         node.set_captured_context(captured_context);
         node.set_density(composed_density);
         if inputs_changed {
-            node.request_measure_recompose();
+            node.invalidate_subcomposition();
         }
     }) {
         debug_assert!(false, "failed to update WearScalingLazyColumn node: {err}");
@@ -1716,7 +1716,7 @@ fn compose_and_measure_item(
     let identity = item.key.map(|_| key.to_slot_id());
     scope.update_content_type(slot_id, item.content_type);
     let content = Rc::clone(&item.content);
-    let children: Vec<SubcomposeChild> = scope.subcompose(slot_id, move || {
+    let children: Vec<SubcomposeChild> = scope.subcompose(slot_id, (), move || {
         let content = Rc::clone(&content);
         crate::lazy_item::ProvideLazyItemKey(identity, || {
             WearScalingItem(Modifier::empty(), transform.clone(), strategy, move || {

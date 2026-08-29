@@ -491,6 +491,19 @@ pub struct CapturedCompositionContext {
     owner_scope: Option<Weak<RecomposeScopeInner>>,
 }
 
+impl CapturedCompositionContext {
+    /// Total deactivations along the capturing scope's owner chain right now;
+    /// see [`crate::RecomposeScope::owner_chain_deactivation_epoch`]. Zero
+    /// when the context has no owner scope or it is gone.
+    pub fn owner_chain_deactivation_epoch(&self) -> u64 {
+        self.owner_scope
+            .as_ref()
+            .and_then(Weak::upgrade)
+            .map(|inner| crate::RecomposeScope { inner }.owner_chain_deactivation_epoch())
+            .unwrap_or(0)
+    }
+}
+
 fn take_subcompose_frame(core: &ComposerCore, operation: &str) -> SubcomposeFrame {
     match core.subcompose_stack.borrow_mut().pop() {
         Some(frame) => frame,

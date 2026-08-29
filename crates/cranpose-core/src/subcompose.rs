@@ -6,7 +6,7 @@
 //! exact match exists, the [`SlotReusePolicy`] is consulted to determine whether
 //! a node produced for another slot is compatible with the requested slot.
 
-use std::{collections::VecDeque, fmt, rc::Rc};
+use std::{any::Any, collections::VecDeque, fmt, rc::Rc};
 
 use smallvec::SmallVec;
 
@@ -268,6 +268,12 @@ impl NodeSlotMapping {
             .is_some_and(|scopes| scopes.iter().any(RecomposeScope::is_invalid))
     }
 
+    fn slot_has_inactive_scopes(&self, slot: SlotId) -> bool {
+        self.slot_to_scopes
+            .get(&slot)
+            .is_some_and(|scopes| scopes.iter().any(|scope| !scope.is_active()))
+    }
+
     fn deactivate_slot(&self, slot: SlotId) {
         if let Some(scopes) = self.slot_to_scopes.get(&slot) {
             for scope in scopes {
@@ -320,6 +326,32 @@ pub struct SubcomposeState {
     /// Whether the last slot registered via register_active was reused.
     /// Set during register_active, read via was_last_slot_reused().
     last_slot_reused: Option<bool>,
+    /// Capture key stored at the last composition of each slot. A retained
+    /// slot may skip recomposition on a measure pass only while the caller
+    /// presents an equal key (see `retained_capture_key_matches`).
+    retained_capture_keys: HashMap<SlotId, RetainedCaptureKey>,
+    /// Bumped by `invalidate_scopes`; slots must re-compose once per bump
+    /// before clean-slot reuse may skip them again.
+    content_generation: std::cell::Cell<u64>,
+    /// The (content generation, owner-chain deactivation epoch) each slot
+    /// last composed under.
+    slot_composed_generation: HashMap<SlotId, (u64, u64)>,
+}
+
+/// Type-erased capture key recorded when a slot composes. Values that flow
+/// into slot content from the measure policy itself (a scaffold's computed
+/// padding, a box's constraints) never invalidate a recompose scope when they
+/// change, so slot reuse must compare them explicitly.
+struct RetainedCaptureKey {
+    value: Box<dyn Any>,
+    eq: fn(&dyn Any, &dyn Any) -> bool,
+}
+
+fn retained_capture_key_eq<K: PartialEq + 'static>(stored: &dyn Any, candidate: &dyn Any) -> bool {
+    match (stored.downcast_ref::<K>(), candidate.downcast_ref::<K>()) {
+        (Some(stored), Some(candidate)) => stored == candidate,
+        _ => false,
+    }
 }
 
 impl fmt::Debug for SubcomposeState {
@@ -376,6 +408,9 @@ impl SubcomposeState {
             max_reusable_per_type: DEFAULT_MAX_REUSABLE_PER_TYPE,
             max_reusable_untyped: DEFAULT_MAX_REUSABLE_UNTYPED,
             last_slot_reused: None,
+            retained_capture_keys: HashMap::default(),
+            content_generation: std::cell::Cell::new(0),
+            slot_composed_generation: HashMap::default(),
         }
     }
 
@@ -512,12 +547,14 @@ impl SubcomposeState {
     pub fn activate_current_active_slot(&mut self, slot_id: SlotId) -> Option<Vec<NodeId>> {
         if self.current_pass_active_slots.contains(&slot_id)
             || self.exact_reactivation_slots.contains(&slot_id)
+            || self.reusable_node_counts.contains_key(&slot_id)
             || self
                 .active_order
                 .get(self.current_index)
                 .copied()
                 .is_none_or(|active_slot| active_slot != slot_id)
             || self.mapping.slot_has_invalid_scopes(slot_id)
+            || self.mapping.slot_has_inactive_scopes(slot_id)
         {
             return None;
         }
@@ -528,6 +565,37 @@ impl SubcomposeState {
         self.current_pass_active_slots.insert(slot_id);
         self.current_index += 1;
         Some(nodes)
+    }
+
+    /// Whether precomposed nodes are waiting to be consumed for this slot.
+    /// A pending precomposition means the retained mapping is about to be
+    /// superseded, so clean-slot reuse must reject and compose.
+    pub fn has_pending_precompositions(&self, slot_id: SlotId) -> bool {
+        self.precomposed_nodes.contains_key(&slot_id)
+    }
+
+    /// Whether the slot's stored capture key equals `key`. A missing key never
+    /// matches: a slot must compose at least once under the key discipline
+    /// before it may skip.
+    pub fn retained_capture_key_matches<K: PartialEq + 'static>(
+        &self,
+        slot_id: SlotId,
+        key: &K,
+    ) -> bool {
+        self.retained_capture_keys
+            .get(&slot_id)
+            .is_some_and(|retained| (retained.eq)(retained.value.as_ref(), key))
+    }
+
+    /// Records the capture key the slot is being composed under.
+    pub fn store_retained_capture_key<K: PartialEq + 'static>(&mut self, slot_id: SlotId, key: K) {
+        self.retained_capture_keys.insert(
+            slot_id,
+            RetainedCaptureKey {
+                value: Box::new(key),
+                eq: retained_capture_key_eq::<K>,
+            },
+        );
     }
 
     #[doc(hidden)]
@@ -678,6 +746,8 @@ impl SubcomposeState {
         self.slot_compositions.remove(&slot_id);
         self.slot_callbacks.remove(&slot_id);
         self.slot_content_types.remove(&slot_id);
+        self.retained_capture_keys.remove(&slot_id);
+        self.slot_composed_generation.remove(&slot_id);
         self.policy.remove_content_type(slot_id);
         if let Some(nodes) = self.precomposed_nodes.remove(&slot_id) {
             self.precomposed_count = self.precomposed_count.saturating_sub(nodes.len());
@@ -808,6 +878,10 @@ impl SubcomposeState {
         self.exact_reactivation_slots.remove(&old_slot);
         self.mapping.add_node(new_slot, node_id);
         self.slot_content_types.remove(&old_slot);
+        self.retained_capture_keys.remove(&old_slot);
+        self.retained_capture_keys.remove(&new_slot);
+        self.slot_composed_generation.remove(&old_slot);
+        self.slot_composed_generation.remove(&new_slot);
         self.policy.remove_content_type(old_slot);
         if let Some(slots) = self.slot_compositions.remove(&old_slot) {
             self.slot_compositions.insert(new_slot, slots);
@@ -952,8 +1026,45 @@ impl SubcomposeState {
     /// Hosts should call this when parent-captured inputs change without directly invalidating
     /// the child scopes themselves. The next subcompose pass will then re-run active slot
     /// content instead of skipping with stale captures.
+    /// Invalidating scopes alone is not a reliable "recompose on next
+    /// measure" signal: the recomposer drains invalid scopes before measure
+    /// runs, re-executing the RETAINED slot callbacks — parent-captured
+    /// values baked into a replaced closure never flow in, yet the scopes
+    /// come back valid. The generation bump is the unlaunderable half: only
+    /// a measure-time compose of the slot brings it current, so clean-slot
+    /// reuse stays blocked until the new content actually landed.
     pub fn invalidate_scopes(&self) {
         self.mapping.invalidate_scopes();
+        self.content_generation
+            .set(self.content_generation.get() + 1);
+    }
+
+    /// Advances the content generation without invalidating scopes: every
+    /// slot must re-compose once before clean-slot reuse may skip it again.
+    /// Called when the owning node leaves its parent — a retained subtree
+    /// that comes back from the reuse pool restarts its effects only if its
+    /// slots actually recompose, and scope flags carry no durable trace of
+    /// the detach (deactivation walks stop at nested slot-host boundaries).
+    pub fn bump_content_generation(&self) {
+        self.content_generation
+            .set(self.content_generation.get() + 1);
+    }
+
+    /// Whether the slot last composed under the current content generation
+    /// and owner-chain deactivation epoch. False after any
+    /// [`Self::invalidate_scopes`], and false after any composition up the
+    /// owner chain was deactivated, until a measure-time compose of this
+    /// slot runs.
+    pub fn slot_content_generation_current(&self, slot_id: SlotId, owner_epoch: u64) -> bool {
+        self.slot_composed_generation.get(&slot_id).copied()
+            == Some((self.content_generation.get(), owner_epoch))
+    }
+
+    /// Records that the slot just composed under the current generation and
+    /// the given owner-chain deactivation epoch.
+    pub fn mark_slot_composed_current(&mut self, slot_id: SlotId, owner_epoch: u64) {
+        self.slot_composed_generation
+            .insert(slot_id, (self.content_generation.get(), owner_epoch));
     }
 
     /// Returns whether the last slot registered via [`Self::register_active`] was reused.

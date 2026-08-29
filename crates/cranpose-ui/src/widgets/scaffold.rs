@@ -270,7 +270,7 @@ fn ScaffoldImpl(modifier: Modifier, spec: ScaffoldSpec, slots: ScaffoldSlots) ->
         let loose = Constraints::loose(width, height);
 
         let top_content = Rc::clone(&top_bar);
-        let top_nodes = scope.subcompose(SlotId::new(0), move || top_content());
+        let top_nodes = scope.subcompose(SlotId::new(0), (), move || top_content());
         let mut top_height = 0.0_f32;
         let mut top_placements = Vec::with_capacity(top_nodes.len());
         for node in top_nodes {
@@ -280,7 +280,7 @@ fn ScaffoldImpl(modifier: Modifier, spec: ScaffoldSpec, slots: ScaffoldSlots) ->
         }
 
         let bottom_content = Rc::clone(&bottom_bar);
-        let bottom_nodes = scope.subcompose(SlotId::new(1), move || bottom_content());
+        let bottom_nodes = scope.subcompose(SlotId::new(1), (), move || bottom_content());
         let mut bottom_height = 0.0_f32;
         let mut bottom_placeables = Vec::with_capacity(bottom_nodes.len());
         for node in bottom_nodes {
@@ -293,7 +293,8 @@ fn ScaffoldImpl(modifier: Modifier, spec: ScaffoldSpec, slots: ScaffoldSlots) ->
         // pushed past whichever is larger rather than past both.
         let padding = window_padding.max(PaddingValues::new(0.0, top_height, 0.0, bottom_height));
         let content_slot = Rc::clone(&content);
-        let content_nodes = scope.subcompose(SlotId::new(2), move || content_slot(padding));
+        let content_nodes =
+            scope.subcompose(SlotId::new(2), padding, move || content_slot(padding));
 
         let mut placements = Vec::with_capacity(
             top_placements.len() + bottom_placeables.len() + content_nodes.len() + 1,
@@ -315,7 +316,7 @@ fn ScaffoldImpl(modifier: Modifier, spec: ScaffoldSpec, slots: ScaffoldSlots) ->
         // The floating action sits above everything, inside the bottom bar and
         // the window insets, on the reading-order end side.
         let floating_content = Rc::clone(&floating_action);
-        let floating_nodes = scope.subcompose(SlotId::new(3), move || floating_content());
+        let floating_nodes = scope.subcompose(SlotId::new(3), (), move || floating_content());
         for node in floating_nodes {
             let placeable = scope.measure(node, loose);
             let bottom_gap = padding.bottom + FLOATING_ACTION_MARGIN;

@@ -1377,7 +1377,18 @@ impl LayoutBuilderState {
         let Some(data) = Self::layout_child_measure_data(applier, node_id)? else {
             return Ok(None);
         };
-        if data.needs_measure || data.cache.epoch() == 0 {
+        // needs_layout without needs_measure is a pending placement-only
+        // repass (scroll offsets, text panning): the cached SIZE may be
+        // right, but the subtree still has placement work to run, so serving
+        // the cache here — let alone clearing the flag — swallows the repass.
+        // The epoch must be CURRENT: invalidate_all_layout_caches advances
+        // the global epoch precisely so entries cached before it stop being
+        // served, and this gate reads the node's cache without activating it.
+        if data.needs_measure
+            || data.needs_layout
+            || data.cache.epoch() == 0
+            || data.cache.epoch() != crate::render_state::current_layout_cache_epoch()
+        {
             return Ok(None);
         }
 
@@ -1389,18 +1400,9 @@ impl LayoutBuilderState {
             let mut layout_state = layout_state.borrow_mut();
             layout_state.set_size(measured.size);
             layout_state.measurement_constraints = constraints;
-            drop(layout_state);
-            let _ = applier.with_node::<LayoutNode, _>(node_id, |node| {
-                if data.needs_layout {
-                    node.clear_needs_layout();
-                }
-            });
         } else {
             let _ = applier.with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
                 node.set_measured_size(measured.size);
-                if data.needs_layout {
-                    node.clear_needs_layout();
-                }
             });
         }
 
