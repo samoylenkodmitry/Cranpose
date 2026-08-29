@@ -65,6 +65,15 @@
   regenerable by definition, so removing them is safe -- but never remove a
   worktree's source or anything uncommitted, and check `df -h /` before starting
   a large build
+- `scripts/ci/with_host_lock.sh` gates samarch-1's CPU: `--shared` for a
+  build (any number concurrently), `--exclusive` for a measurement or a robot
+  suite (one at a time, nothing else running beside it). It is flock-based, so
+  a crash or a cancelled job releases it immediately -- no stale PID file, no
+  cleanup step to skip. This applies to work done by `ssh samarch-1` exactly
+  as much as to CI; it is the same machine and the same two runners either
+  way. Take the lock rather than watching load and waiting for a quiet
+  moment -- the lock queues you, and waiting for quiet on a shared host is
+  polling for a moment that may never arrive.
 - perf scripts are perf*.sh at project root
 - e2e robot headless tests is `just robot` (should all pass)
 - do not use big models as subagents (opus, codex xhigh thinking, etc), only small fast & cheap to not waste tokens
