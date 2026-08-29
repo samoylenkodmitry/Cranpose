@@ -1,11 +1,13 @@
-//! The demo's heaviest text page must not cost a multiple of a page with none.
+//! The demo's heaviest text page must not become pathologically expensive.
 //!
 //! Wear (watch) is the densest text in the demo: a scaling list of wrapped
 //! rows on a 454dp round display, every row its own layer, scrolling
 //! continuously so nothing settles into a still frame. Shader Rect is the same
-//! renderer and the same loop with almost no text, so the ratio between them
-//! is the text pipeline's per-frame cost with the rest of the frame divided
-//! out.
+//! renderer and the same loop with almost no text. Both pages are judged
+//! against ABSOLUTE per-frame CPU-work ceilings; their ratio is printed as a
+//! diagnostic but never judged, because a ratio of two sub-millisecond
+//! timings fails perf improvements (a cheaper baseline raises it) and fails
+//! hot shared hosts (the two stages do not scale together under load).
 //!
 //! The verdict is **CPU work per frame**, not the frame rate: work is what the
 //! framework controls, and it means the same thing on a machine that presents
@@ -52,32 +54,31 @@ const MEASURE_FOR: Duration = Duration::from_millis(2000);
 const WARMUP_FOR: Duration = Duration::from_millis(2000);
 const WEAR_TAB: &str = "Wear (watch)";
 const REFERENCE_TAB: &str = "Shader Rect";
-/// How much more CPU work per frame the demo's heaviest text page may cost
-/// than a page with none.
+/// Absolute ceiling on the heaviest text page's CPU work per frame.
 ///
-/// Measured at 7.8x on this machine (0.504ms against 0.064ms), and the reason
-/// is legible in the same reading: the page reports ~1799 recompositions a
-/// second against ~1764 frames, so the list recomposes once per frame while it
-/// scrolls. The reference page reports zero. Virtualising the list — composing
-/// the rows it can show rather than the rows it has — moved this by less than
-/// the host noise (7.67x before, 7.83x after), which is the tell that the cost
-/// is the per-frame recomposition rather than the row count. The bound
-/// sits above that with room for host noise rather than at it — this guards
-/// against a text pipeline or a per-row layer tree that starts costing a
-/// multiple of what it costs today, not against the scroll's own recomposition,
-/// which is a known property of the widget set and is being raised separately.
+/// This was a ratio bound (wear over the no-text reference, 12x) until the
+/// ratio failed two perf PRs in one morning for succeeding: it divides two
+/// sub-millisecond numbers, so removing per-frame overhead shrinks the
+/// denominator faster than the numerator and a genuine improvement pushes
+/// the ratio UP — the present-retained work alone moved it 6.5x → 7.5x with
+/// no text regression anywhere. On a shared box under load the two stages
+/// do not scale together either (79°C, load 12/12 read the reference 1.5x
+/// slow and wear 2.8x slow in one run). Two absolute ceilings keep the
+/// property the ratio protected — text must not become pathologically
+/// expensive — while surviving both the baseline getting cheaper and the
+/// box being hot.
 ///
-/// The previous occupant of this tab measured 2x against the same reference
-/// with `recomps=0`: a `Canvas` redrawing on a frame clock recomposes nothing.
-/// Comparing the two numbers across the replacement is meaningless.
-///
-/// A cheaper *reference* also raises the ratio: the present-retained and
-/// scroll-translate work moved the no-text page 0.036 → 0.031 ms on the CI
-/// box (wear flat at 0.22-0.24 ms across six same-box reps), which is 6.5x
-/// → 7.5x with no text regression anywhere. The bound has to leave room for
-/// the denominator improving, and the two-sided reference below keeps
-/// thermal drift from spending that room.
-const MAX_WORK_RATIO: f32 = 12.0;
+/// Samples: 0.22-0.24 ms across six same-box CI reps, 0.504 ms on a dev
+/// machine, 0.786 ms on the CI box at load 72. The defect class this
+/// guards (per-frame glyph re-measure/cache scans, a per-row layer tree
+/// gone quadratic) costs an order of magnitude, not tens of percent, so
+/// the ceiling sits at ~10x the quiet-box reading and ~3x the worst
+/// load-inflated sample ever observed.
+const MAX_WEAR_WORK_MS: f32 = 2.5;
+/// Absolute ceiling on the no-text reference page, so the baseline itself
+/// cannot silently regress now that nothing divides by it. Samples:
+/// 0.031-0.064 ms quiet, 1.5x that at 70°C.
+const MAX_REFERENCE_WORK_MS: f32 = 0.5;
 
 struct Measured {
     fps: f32,
@@ -177,22 +178,33 @@ fn main() -> ExitCode {
             );
             robot.exit().ok();
 
-            if work_ratio >= MAX_WORK_RATIO {
+            if wear.work_avg_ms >= MAX_WEAR_WORK_MS {
                 println!(
-                    "FAIL: the demo's heaviest text page costs {work_ratio:.1}x the CPU work \
-                     per frame of a page with none ({:.3}ms against {:.3}ms), over a bound of \
-                     {MAX_WORK_RATIO:.0}x. Something in the text pipeline, or in the per-row \
-                     layer tree the scaling list builds, is re-deriving per frame what it should \
-                     be reusing.",
+                    "FAIL: the demo's heaviest text page costs {:.3}ms of CPU work per frame, \
+                     over a ceiling of {MAX_WEAR_WORK_MS}ms. Something in the text pipeline, or \
+                     in the per-row layer tree the scaling list builds, is re-deriving per frame \
+                     what it should be reusing. (no-text reference: {:.3}ms, ratio {work_ratio:.1}x \
+                     — printed for diagnosis, not judged)",
                     wear.work_avg_ms, reference_ms,
+                );
+                FAILED.store(true, Ordering::SeqCst);
+                return;
+            }
+            if reference_ms >= MAX_REFERENCE_WORK_MS {
+                println!(
+                    "FAIL: the no-text reference page costs {reference_ms:.3}ms of CPU work per \
+                     frame, over a ceiling of {MAX_REFERENCE_WORK_MS}ms. The baseline frame loop \
+                     itself regressed — this page draws one shader rect."
                 );
                 FAILED.store(true, Ordering::SeqCst);
                 return;
             }
 
             println!(
-                "PASS: the heaviest text page costs {work_ratio:.1}x a page with no text \
-                 (bound {MAX_WORK_RATIO:.0}x)"
+                "PASS: the heaviest text page costs {:.3}ms (ceiling {MAX_WEAR_WORK_MS}ms) and \
+                 the no-text page {reference_ms:.3}ms (ceiling {MAX_REFERENCE_WORK_MS}ms); \
+                 ratio {work_ratio:.1}x printed for trend only",
+                wear.work_avg_ms,
             );
         })
         .try_run(desktop_app::app::DesktopApp)
