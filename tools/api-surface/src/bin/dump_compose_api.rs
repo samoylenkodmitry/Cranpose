@@ -89,6 +89,8 @@ const CLASS_MODIFIERS: &[&str] = &[
     "suspend",
     "companion",
     "data",
+    "exhaustive",
+    "nonexhaustive",
 ];
 
 fn match_class_decl(stripped: &str) -> Option<(String, String)> {
@@ -111,6 +113,28 @@ fn match_class_decl(stripped: &str) -> Option<(String, String)> {
         .unwrap_or(raw_name)
         .to_string();
     Some((kind.to_string(), name))
+}
+
+/// A `typealias` is a single-line, package-level declaration -- unlike
+/// `class`/`interface`/`enum`, it never opens a `{ ... }` block, so a match
+/// here must not become the parser's `cur_class`.
+fn match_typealias(stripped: &str) -> Option<String> {
+    let tokens: Vec<&str> = stripped.trim().split(' ').collect();
+    let mut i = 0;
+    while i < tokens.len() && CLASS_MODIFIERS.contains(&tokens[i]) {
+        i += 1;
+    }
+    if tokens.get(i) != Some(&"typealias") {
+        return None;
+    }
+    let raw_name = tokens.get(i + 1)?;
+    Some(
+        raw_name
+            .split(['<', ','])
+            .next()
+            .unwrap_or(raw_name)
+            .to_string(),
+    )
 }
 
 fn member_name(kind: &str, rest: &str) -> String {
@@ -169,8 +193,11 @@ fn parse_file(path: &Path) -> Result<(Vec<Entry>, Vec<UnmatchedLine>)> {
         if line.trim().is_empty() || line.starts_with("// Signature") {
             continue;
         }
-        if let Some(rest) = line.strip_prefix("package ") {
-            if let Some(name) = rest.trim().strip_suffix(" {") {
+        if line.starts_with("package ") {
+            let stripped_pkg = strip_annotations(line);
+            if let Some(rest) = stripped_pkg.strip_prefix("package ")
+                && let Some(name) = rest.trim().strip_suffix(" {")
+            {
                 package = name.to_string();
             }
             continue;
@@ -185,6 +212,23 @@ fn parse_file(path: &Path) -> Result<(Vec<Entry>, Vec<UnmatchedLine>)> {
         let stripped = strip_annotations(line);
         let had_annotation = stripped != line;
 
+        if cur_class.is_none()
+            && line.starts_with("  ")
+            && let Some(name) = match_typealias(&stripped)
+        {
+            entries.push(Entry {
+                package: package.clone(),
+                class: name.clone(),
+                class_kind: "typealias".to_string(),
+                member_kind: "class_decl".to_string(),
+                name,
+                raw: line.trim().to_string(),
+                is_static: false,
+                deprecated: line.contains("@Deprecated"),
+                experimental: had_annotation && line.contains("Experimental"),
+            });
+            continue;
+        }
         if cur_class.is_none()
             && line.starts_with("  ")
             && let Some((kind, name)) = match_class_decl(&stripped)
@@ -333,6 +377,14 @@ mod tests {
             Some(("class".to_string(), "Modifier.Node".to_string()))
         );
         assert_eq!(
+            match_class_decl("public abstract sealed nonexhaustive class Group"),
+            Some(("class".to_string(), "Group".to_string()))
+        );
+        assert_eq!(
+            match_class_decl("public sealed exhaustive interface GridTrackSpec"),
+            Some(("interface".to_string(), "GridTrackSpec".to_string()))
+        );
+        assert_eq!(
             match_class_decl("public static final value class StartOffset"),
             Some(("class".to_string(), "StartOffset".to_string()))
         );
@@ -348,6 +400,15 @@ mod tests {
             match_class_decl("public final class Animatable<T, V>"),
             Some(("class".to_string(), "Animatable".to_string()))
         );
+    }
+
+    #[test]
+    fn match_typealias_reads_the_alias_name_and_does_not_open_a_block() {
+        assert_eq!(
+            match_typealias("public typealias CompositeKeyHashCode = long"),
+            Some("CompositeKeyHashCode".to_string())
+        );
+        assert_eq!(match_typealias("public final class Foo"), None);
     }
 
     #[test]
