@@ -1897,10 +1897,22 @@ impl Command {
             } => {
                 // Bubbling marks every ancestor up to the root as needing
                 // measure, and re-measuring a tree that did not change is the
-                // most expensive way to do nothing. Only an insert that
-                // actually changed the child list has anything to invalidate.
+                // most expensive way to do nothing. An insert that changed the
+                // child list has something to invalidate — and so does a
+                // re-attach of a child that carries pending measure or layout
+                // dirt: an unchanged list says nothing about unchanged
+                // geometry, and the attach-time bubble is the only road that
+                // child's dirt has to the root. Swallowing it strands a grown
+                // subtree at its old geometry until an unrelated pass runs.
                 if insert_child_with_reparenting(applier, parent_id, child_id) {
                     bubble.apply(applier, parent_id);
+                } else if let Ok(child) = applier.get_mut(child_id) {
+                    let dirty_bubble = DirtyBubble {
+                        layout: child.needs_layout(),
+                        measure: child.needs_measure(),
+                        semantics: child.needs_semantics(),
+                    };
+                    dirty_bubble.apply(applier, parent_id);
                 }
                 Ok(())
             }
