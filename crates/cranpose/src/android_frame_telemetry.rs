@@ -134,6 +134,10 @@ const PROPERTY_BACKED_ENV_VARS: [(&str, &str); 42] = [
         "debug.cranpose.frame_stage_ms",
         "CRANPOSE_FRAME_STAGE_TELEMETRY_MS",
     ),
+    (
+        "debug.cranpose.layout_measure_ms",
+        "CRANPOSE_LAYOUT_MEASURE_TELEMETRY_MS",
+    ),
     ("debug.cranpose.layer_diag", "CRANPOSE_LAYER_RENDER_DIAG"),
     ("debug.cranpose.segment_diag", "CRANPOSE_SEGMENT_DIAG"),
     (
