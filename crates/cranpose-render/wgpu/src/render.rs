@@ -9127,6 +9127,54 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
         )
     }
 
+    fn materialize_effect_direct(
+        &mut self,
+        source: &OffscreenTarget,
+        effect: &RenderEffect,
+        effect_rect: [f32; 4],
+        target: &OffscreenTarget,
+    ) -> Result<bool, String> {
+        // encode_effect emits its result at the destination view's own
+        // resolution, so a size mismatch would silently rescale the output.
+        if target.width != source.width || target.height != source.height {
+            return Ok(false);
+        }
+        let device = self.renderer.device.clone();
+        let effect_scratch_targets = self
+            .renderer
+            .effect_renderer
+            .acquire_recorded_effect_scratch_targets(
+                self.recorder,
+                &device,
+                effect,
+                source.width,
+                source.height,
+                self.renderer.composition_format,
+            );
+        let effect_passes = {
+            let mut effect_scratch_refs = effect_scratch_targets.refs();
+            self.renderer
+                .effect_renderer
+                .encode_effect(
+                    self.recorder,
+                    &device,
+                    source,
+                    &target.view,
+                    effect,
+                    effect_rect,
+                    &mut effect_scratch_refs,
+                )
+                .and_then(|pass_count| {
+                    effect_scratch_refs.assert_consumed()?;
+                    Ok(pass_count)
+                })
+        };
+        effect_scratch_targets.release_into(self.recorder);
+        let effect_passes = effect_passes?;
+        self.recorder.record_passes(effect_passes);
+        Ok(true)
+    }
+
     fn apply_shader_and_composite_to_view(
         &mut self,
         source: &OffscreenTarget,

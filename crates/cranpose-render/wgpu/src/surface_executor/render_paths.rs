@@ -2365,17 +2365,57 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
                     height,
                     root_scale,
                     Some(backdrop_input_hash),
+                    true,
                 )? {
-                    if pending_composites.is_empty() {
-                        pending_composite_load_op = Some(next_load_op);
+                    let PreparedBackdropComposite {
+                        surface: prepared_surface,
+                        dest_quad: prepared_dest_quad,
+                        scissor: prepared_scissor,
+                    } = prepared;
+                    if prepared_surface.deferred_effect.is_some() {
+                        // The capture flush above landed every pending write
+                        // that touches this backdrop's output rect, so the
+                        // shader queue's earlier flush slot cannot be overdrawn
+                        // by a blit queued before this glass.
+                        match direct_shader_layer_composite(
+                            prepared_surface,
+                            child.z_index,
+                            prepared_dest_quad,
+                            prepared_scissor,
+                        ) {
+                            Ok(pending) => {
+                                if pending_shader_composites.is_empty() {
+                                    pending_shader_load_op = Some(next_load_op);
+                                }
+                                pending_shader_composites.push(pending);
+                                next_load_op = wgpu::LoadOp::Load;
+                            }
+                            Err(prepared_surface) => {
+                                composite_layer_surface_to_view(
+                                    backend,
+                                    &prepared_surface,
+                                    surface_view,
+                                    (width, height),
+                                    prepared_dest_quad,
+                                    next_load_op,
+                                    prepared_scissor,
+                                )?;
+                                next_load_op = wgpu::LoadOp::Load;
+                                backend.release_layer_surface_target(prepared_surface.target);
+                            }
+                        }
+                    } else {
+                        if pending_composites.is_empty() {
+                            pending_composite_load_op = Some(next_load_op);
+                        }
+                        pending_composites.push(PendingLayerComposite {
+                            z_index: child.z_index,
+                            surface: prepared_surface,
+                            dest_quad: prepared_dest_quad,
+                            scissor: prepared_scissor,
+                        });
+                        next_load_op = wgpu::LoadOp::Load;
                     }
-                    pending_composites.push(PendingLayerComposite {
-                        z_index: child.z_index,
-                        surface: prepared.surface,
-                        dest_quad: prepared.dest_quad,
-                        scissor: prepared.scissor,
-                    });
-                    next_load_op = wgpu::LoadOp::Load;
                 } else {
                     apply_backdrop_layer_to_target(
                         backend,
@@ -2882,6 +2922,17 @@ fn materialize_render_effect_to_target<B: SurfaceExecutionBackend>(
         return Ok(());
     }
 
+    // An effect without a shader tail encodes straight into the target:
+    // the generic composite route below would bounce it through a scratch
+    // surface and spend an extra render pass presenting a 1:1 opaque copy.
+    // Shader-tailed chains stay on the generic route — its direct-tail path
+    // owns the shrunk-intermediate fill optimization.
+    if split_backdrop_effect(effect).1.is_none()
+        && backend.materialize_effect_direct(source, effect, layer_pixel_rect, target)?
+    {
+        return Ok(());
+    }
+
     backend.apply_effect_and_composite_to_view(
         source,
         effect,
@@ -3032,6 +3083,7 @@ fn backdrop_prefix_child_contribution(
     }
 }
 
+#[cfg(test)]
 fn backdrop_effect_cache_key(
     layer: &BackdropLayer,
     input_content_hash: u64,
@@ -3039,14 +3091,48 @@ fn backdrop_effect_cache_key(
     pixel_size: (u32, u32),
     root_scale: f32,
 ) -> Option<LayerRasterCacheKey> {
-    Some(LayerRasterCacheKey::backdrop_effect(
-        layer.node_id,
+    backdrop_effect_cache_key_for_effect_hash(
+        layer,
         input_content_hash,
         retained_render_effect_hash(&layer.effect),
         visible_rect,
         pixel_size,
+        root_scale,
+    )
+}
+
+fn backdrop_effect_cache_key_for_effect_hash(
+    layer: &BackdropLayer,
+    input_content_hash: u64,
+    effect_hash: u64,
+    visible_rect: Rect,
+    pixel_size: (u32, u32),
+    root_scale: f32,
+) -> Option<LayerRasterCacheKey> {
+    Some(LayerRasterCacheKey::backdrop_effect(
+        layer.node_id,
+        input_content_hash,
+        effect_hash,
+        visible_rect,
+        pixel_size,
         ScaleBucket::from_scale(root_scale),
     ))
+}
+
+/// Splits a backdrop effect into the part worth materializing into the
+/// cached surface and a runtime-shader tail worth deferring to the
+/// composite batch. The tail's pass then folds into the batched composite
+/// that already runs, and — because the tail's uniforms leave the cache
+/// key — per-frame glass dynamics stop invalidating the blurred capture.
+fn split_backdrop_effect(effect: &RenderEffect) -> (Option<&RenderEffect>, Option<&RuntimeShader>) {
+    match effect {
+        RenderEffect::Shader { shader } => (None, Some(shader)),
+        RenderEffect::Chain { first, second } => match second.as_ref() {
+            RenderEffect::Shader { shader } => (Some(first.as_ref()), Some(shader)),
+            _ => (Some(effect), None),
+        },
+        _ => (Some(effect), None),
+    }
 }
 
 fn retained_render_effect_hash(effect: &RenderEffect) -> u64 {
@@ -4772,6 +4858,7 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
                 height,
                 target_scale,
                 Some(backdrop_input_hash),
+                false,
             )? {
                 if pending_composites.is_empty() {
                     pending_composite_load_op = Some(next_load_op);
@@ -5610,6 +5697,7 @@ fn prepare_cached_backdrop_layer_composite<B: SurfaceExecutionBackend>(
     height: u32,
     root_scale: f32,
     input_content_hash: Option<u64>,
+    allow_deferred_tail: bool,
 ) -> Result<Option<PreparedBackdropComposite>, String> {
     let diag = backdrop_diag_enabled();
     let (layer_rect, layer_clip) = snapped_backdrop_geometry(layer, root_scale);
@@ -5687,15 +5775,29 @@ fn prepare_cached_backdrop_layer_composite<B: SurfaceExecutionBackend>(
     let (backdrop_width, backdrop_height) = copy_plan.map(|plan| plan.size).unwrap_or_else(|| {
         surface_target_size(capture_rect, backdrop_scale, backend.max_texture_dim())
     });
+    // The runtime-shader tail defers to the batched composite when the
+    // caller runs one: its pass folds into the batch, and its uniforms
+    // leave the cache key so per-frame glass dynamics stop invalidating
+    // the blurred capture. The materialized part alone names the cache
+    // content.
+    let (materialized_effect, deferred_tail) = if allow_deferred_tail {
+        split_backdrop_effect(&layer.effect)
+    } else {
+        (Some(&layer.effect), None)
+    };
+    let materialized_effect_hash = materialized_effect
+        .map(retained_render_effect_hash)
+        .unwrap_or(0);
     let Some(cache_key) = input_content_hash.and_then(|hash| {
         (backdrop_underlay.is_none()
             && backend.is_render_effect_supported(&layer.effect)
             && offscreen_byte_size(backdrop_width, backdrop_height)
                 <= MAX_LAYER_SURFACE_CACHE_BYTES)
             .then(|| {
-                backdrop_effect_cache_key(
+                backdrop_effect_cache_key_for_effect_hash(
                     layer,
                     hash,
+                    materialized_effect_hash,
                     capture_rect,
                     (backdrop_width, backdrop_height),
                     root_scale,
@@ -5717,53 +5819,87 @@ fn prepare_cached_backdrop_layer_composite<B: SurfaceExecutionBackend>(
             backdrop_width,
             backdrop_height,
         );
-        let snapshot = backend.acquire_frame_surface(backdrop_width, backdrop_height);
-        let copied_snapshot = copy_plan.is_some_and(|plan| {
-            backend.copy_texture_region_to_target(target, plan.source_origin, &snapshot, plan.size)
-        });
-        if !copied_snapshot {
-            copy_projective_backdrop_inputs_to_view(
-                backend,
-                None,
-                target,
-                capture_rect,
-                &snapshot.view,
-                (backdrop_width, backdrop_height),
-                backdrop_scale,
-            )?;
-        }
-
         let effect_target = backend.acquire_retained_surface(backdrop_width, backdrop_height);
-        if diag {
-            eprintln!(
-                "[backdrop-diag] prepare MISS copied={} plan={:?} backdrop_size=({},{}) scale={}",
-                copied_snapshot,
-                copy_plan.map(|plan| (plan.source_origin, plan.size, plan.effect_pixel_rect)),
-                backdrop_width,
-                backdrop_height,
-                backdrop_scale,
-            );
+        if let Some(effect) = materialized_effect {
+            let snapshot = backend.acquire_frame_surface(backdrop_width, backdrop_height);
+            let copied_snapshot = copy_plan.is_some_and(|plan| {
+                backend.copy_texture_region_to_target(
+                    target,
+                    plan.source_origin,
+                    &snapshot,
+                    plan.size,
+                )
+            });
+            if !copied_snapshot {
+                copy_projective_backdrop_inputs_to_view(
+                    backend,
+                    None,
+                    target,
+                    capture_rect,
+                    &snapshot.view,
+                    (backdrop_width, backdrop_height),
+                    backdrop_scale,
+                )?;
+            }
+            if diag {
+                eprintln!(
+                    "[backdrop-diag] prepare MISS copied={} plan={:?} backdrop_size=({},{}) scale={}",
+                    copied_snapshot,
+                    copy_plan.map(|plan| (plan.source_origin, plan.size, plan.effect_pixel_rect)),
+                    backdrop_width,
+                    backdrop_height,
+                    backdrop_scale,
+                );
+            }
+            materialize_render_effect_to_target(
+                backend,
+                &snapshot,
+                effect,
+                &effect_target,
+                copy_plan
+                    .map(|plan| plan.effect_pixel_rect)
+                    .unwrap_or_else(|| {
+                        let capture = surface_pixel_rect(capture_rect, backdrop_scale);
+                        let effect = surface_pixel_rect(layer_rect, backdrop_scale);
+                        [
+                            effect.x - capture.x,
+                            effect.y - capture.y,
+                            effect.width,
+                            effect.height,
+                        ]
+                    }),
+                CompositeSampleMode::Linear,
+            )?;
+            backend.release_frame_surface(snapshot);
+        } else {
+            // The whole effect is a deferred shader tail: the cached surface
+            // is the capture itself — a texture copy when the 1:1 plan holds,
+            // never a materialize pass.
+            let copied_capture = copy_plan.is_some_and(|plan| {
+                backend.copy_texture_region_to_target(
+                    target,
+                    plan.source_origin,
+                    &effect_target,
+                    plan.size,
+                )
+            });
+            if !copied_capture {
+                copy_projective_backdrop_inputs_to_view(
+                    backend,
+                    None,
+                    target,
+                    capture_rect,
+                    &effect_target.view,
+                    (backdrop_width, backdrop_height),
+                    backdrop_scale,
+                )?;
+            }
+            if diag {
+                eprintln!(
+                    "[backdrop-diag] prepare MISS copied={copied_capture} deferred-tail capture backdrop_size=({backdrop_width},{backdrop_height}) scale={backdrop_scale}"
+                );
+            }
         }
-        materialize_render_effect_to_target(
-            backend,
-            &snapshot,
-            &layer.effect,
-            &effect_target,
-            copy_plan
-                .map(|plan| plan.effect_pixel_rect)
-                .unwrap_or_else(|| {
-                    let capture = surface_pixel_rect(capture_rect, backdrop_scale);
-                    let effect = surface_pixel_rect(layer_rect, backdrop_scale);
-                    [
-                        effect.x - capture.x,
-                        effect.y - capture.y,
-                        effect.width,
-                        effect.height,
-                    ]
-                }),
-            CompositeSampleMode::Linear,
-        )?;
-        backend.release_frame_surface(snapshot);
         LayerSurfaceTexture::Cached(backend.insert_cached_layer_surface(
             cache_key,
             effect_target,
@@ -5771,19 +5907,44 @@ fn prepare_cached_backdrop_layer_composite<B: SurfaceExecutionBackend>(
         ))
     };
 
+    let (surface_logical_rect, deferred_effect, effect_content_rect) = match deferred_tail {
+        Some(shader) => {
+            // The composite must address the surface texels exactly as the
+            // copy plan laid them down: the plan spans
+            // floor(origin)..ceil(origin+extent), up to a texel wider than
+            // the capture rect, and the tail shader's dp mapping keys off
+            // this window.
+            let window = copy_plan
+                .map(|plan| Rect {
+                    x: plan.source_origin.0 as f32 / root_scale,
+                    y: plan.source_origin.1 as f32 / root_scale,
+                    width: plan.size.0 as f32 / root_scale,
+                    height: plan.size.1 as f32 / root_scale,
+                })
+                .unwrap_or(capture_rect);
+            (
+                window,
+                Some(RenderEffect::Shader {
+                    shader: shader.clone(),
+                }),
+                Some(layer_rect),
+            )
+        }
+        None => (capture_rect, None, None),
+    };
     Ok(Some(PreparedBackdropComposite {
         surface: LayerSurface {
             target: target_texture,
-            logical_rect: capture_rect,
+            logical_rect: surface_logical_rect,
             composite_alpha: 1.0,
             blend_mode: BlendMode::SrcOver,
             rounded_clip: None,
             backdrop: None,
-            deferred_effect: None,
-            effect_content_rect: None,
+            deferred_effect,
+            effect_content_rect,
             sample_mode: CompositeSampleMode::Linear,
         },
-        dest_quad: scaled_quad(crate::rect_to_quad(capture_rect), root_scale),
+        dest_quad: scaled_quad(crate::rect_to_quad(surface_logical_rect), root_scale),
         scissor: Some(scissor),
     }))
 }
@@ -5819,6 +5980,7 @@ pub(crate) fn apply_backdrop_layer_to_target<B: SurfaceExecutionBackend>(
         height,
         root_scale,
         input_content_hash,
+        false,
     )? {
         if backdrop_diag_enabled() {
             eprintln!(
@@ -6242,16 +6404,17 @@ mod tests {
         MAX_MOTION_SENSITIVE_DIRECT_SCENE_CACHE_DRAW_BYTES, MIN_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS,
         SceneBrush, anchored_composite_dest_quad, axis_aligned_backdrop_copy_region,
         axis_aligned_backdrop_snapshot_copy_plan, backdrop_effect_cache_key,
-        backdrop_scene_prefix_hash, backdrop_underlay_is_covered_by_local_content,
-        child_composite_visible, composite_dest_viewport, dest_quad_intersects_rect,
-        direct_scene_range_cache_chunk_end, direct_scene_range_cache_enabled_for_policy,
-        direct_scene_range_cache_key, direct_scene_range_chunk_fits_cache_entry,
-        direct_scene_range_snapped_bounds, exact_translation_sample_mode, layer_source_cache_key,
+        backdrop_effect_cache_key_for_effect_hash, backdrop_scene_prefix_hash,
+        backdrop_underlay_is_covered_by_local_content, child_composite_visible,
+        composite_dest_viewport, dest_quad_intersects_rect, direct_scene_range_cache_chunk_end,
+        direct_scene_range_cache_enabled_for_policy, direct_scene_range_cache_key,
+        direct_scene_range_chunk_fits_cache_entry, direct_scene_range_snapped_bounds,
+        exact_translation_sample_mode, layer_source_cache_key,
         layer_source_uses_external_backdrop_underlay, layer_surface_dest_quad,
         layer_surface_translation_context, minimum_surface_scale_for_composite, quad_bounds_rect,
         rects_intersect, render_string_scene_hash, retained_render_effect_hash,
         rounded_fill_covers_rect, scene_backdrop_input_hashes, snapped_backdrop_geometry,
-        surface_target_size, underlay_fill_scissor, underlay_sample_rect,
+        split_backdrop_effect, surface_target_size, underlay_fill_scissor, underlay_sample_rect,
         visible_backdrop_capture_rect,
     };
     use crate::{
@@ -6737,6 +6900,79 @@ mod tests {
             retained_render_effect_hash(&RenderEffect::runtime_shader(first)),
             retained_render_effect_hash(&RenderEffect::runtime_shader(second)),
             "retained backdrop cache keys must distinguish runtime shader uniforms"
+        );
+    }
+
+    #[test]
+    fn a_bare_shader_backdrop_defers_entirely_and_materializes_nothing() {
+        let effect = RenderEffect::runtime_shader(RuntimeShader::new("// lens"));
+        let (materialized, tail) = split_backdrop_effect(&effect);
+        assert!(materialized.is_none(), "a lens caches the raw capture");
+        assert!(tail.is_some(), "the lens shader must defer to the batch");
+    }
+
+    #[test]
+    fn a_frost_chain_materializes_the_blur_and_defers_the_shader_tail() {
+        let effect = RenderEffect::blur(12.0).then(RenderEffect::runtime_shader(
+            RuntimeShader::new("// frost tail"),
+        ));
+        let (materialized, tail) = split_backdrop_effect(&effect);
+        assert!(
+            matches!(materialized, Some(RenderEffect::Blur { .. })),
+            "the blur prefix alone names the cached surface"
+        );
+        assert!(tail.is_some(), "the frost tail must defer to the batch");
+    }
+
+    #[test]
+    fn an_effect_without_a_shader_tail_materializes_whole() {
+        let bare_blur = RenderEffect::blur(8.0);
+        let (materialized, tail) = split_backdrop_effect(&bare_blur);
+        assert_eq!(materialized, Some(&bare_blur));
+        assert!(tail.is_none());
+
+        let blur_chain = RenderEffect::blur(8.0).then(RenderEffect::blur(4.0));
+        let (materialized, tail) = split_backdrop_effect(&blur_chain);
+        assert_eq!(
+            materialized,
+            Some(&blur_chain),
+            "a chain that does not end in a shader stays intact"
+        );
+        assert!(tail.is_none());
+    }
+
+    #[test]
+    fn deferring_the_tail_keys_the_cache_off_the_prefix_not_the_dynamics() {
+        let layer_rect = Rect {
+            x: 10.0,
+            y: 10.0,
+            width: 60.0,
+            height: 40.0,
+        };
+        let mut morning = RuntimeShader::new("// frost tail");
+        morning.set_float(0, 0.25);
+        let mut evening = RuntimeShader::new("// frost tail");
+        evening.set_float(0, 0.75);
+        let key_for = |tail: RuntimeShader| {
+            let effect = RenderEffect::blur(12.0).then(RenderEffect::runtime_shader(tail));
+            let layer = BackdropLayer {
+                effect,
+                ..test_backdrop_layer(layer_rect)
+            };
+            let (materialized, _) = split_backdrop_effect(&layer.effect);
+            backdrop_effect_cache_key_for_effect_hash(
+                &layer,
+                7,
+                materialized.map(retained_render_effect_hash).unwrap_or(0),
+                layer.rect,
+                (60, 40),
+                1.0,
+            )
+        };
+        assert_eq!(
+            key_for(morning),
+            key_for(evening),
+            "per-frame tail uniforms must not invalidate the blurred capture"
         );
     }
 
