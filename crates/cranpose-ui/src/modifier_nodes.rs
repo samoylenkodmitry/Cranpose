@@ -1,65 +1,3 @@
-//! Concrete implementations of modifier nodes for common modifiers.
-//!
-//! This module provides node-backed implementations of layout and draw modifiers
-//! following Jetpack Compose's Modifier.Node architecture. All modifiers are now
-//! node-based, achieving complete parity with Kotlin's modifier system.
-//!
-//! # Overview
-//!
-//! The Modifier.Node system provides excellent performance through:
-//! - **Node reuse** — Node instances are reused across recompositions (zero allocations when stable)
-//! - **Targeted invalidation** — Only affected phases (layout/draw/pointer/focus) are invalidated
-//! - **Lifecycle hooks** — `on_attach`, `on_detach`, `update` for efficient state management
-//! - **Capability-driven dispatch** — Nodes declare capabilities via `NodeCapabilities` bits
-//!
-//! # Example Usage
-//!
-//! ```text
-//! use cranpose_foundation::{modifier_element, ModifierNodeChain, BasicModifierNodeContext};
-//! use cranpose_ui::{PaddingElement, EdgeInsets};
-//!
-//! let mut chain = ModifierNodeChain::new();
-//! let mut context = BasicModifierNodeContext::new();
-//!
-//! // Create a padding modifier element
-//! let elements = vec![modifier_element(PaddingElement::new(EdgeInsets::uniform(16.0)))];
-//!
-//! // Reconcile the chain (attaches new nodes, reuses existing)
-//! chain.update_from_slice(&elements, &mut context);
-//!
-//! // Update with different padding - reuses the same node instance
-//! let elements = vec![modifier_element(PaddingElement::new(EdgeInsets::uniform(24.0)))];
-//! chain.update_from_slice(&elements, &mut context);
-//! // Zero allocations on this update!
-//! ```
-//!
-//! # Available Nodes
-//!
-//! ## Layout Modifiers
-//! - [`PaddingNode`] / [`PaddingElement`]: Adds padding around content
-//! - [`SizeNode`] / [`SizeElement`]: Enforces specific dimensions
-//! - [`FillNode`] / [`FillElement`]: Fills available space with optional fractions
-//! - [`OffsetNode`] / [`OffsetElement`]: Translates content by offset
-//! - [`WeightNode`] / [`WeightElement`]: Proportional sizing in flex containers
-//! - [`AlignmentNode`] / [`AlignmentElement`]: Alignment within parent
-//! - [`IntrinsicSizeNode`] / [`IntrinsicSizeElement`]: Intrinsic measurement
-//!
-//! ## Draw Modifiers
-//! - [`BackgroundNode`] / [`BackgroundElement`]: Draws a background color
-//! - [`AlphaNode`] / [`AlphaElement`]: Applies alpha transparency
-//! - [`CornerShapeNode`] / [`CornerShapeElement`]: Rounded corner clipping
-//! - [`GraphicsLayerNode`] / [`GraphicsLayerElement`]: Advanced transformations
-//!
-//! ## Input Modifiers
-//! - [`ClickableNode`] / [`ClickableElement`]: Handles click/tap interactions (pointer input)
-//!
-//! # Architecture Notes
-//!
-//! This is the **only** modifier implementation — there is no alternate "value-based" system.
-//! All modifier factories in `Modifier` return `ModifierNodeElement` instances that create
-//! these nodes. The system achieves complete 1:1 parity with Jetpack Compose's modifier
-//! architecture.
-
 use std::{
     cell::Cell,
     hash::{Hash, Hasher},
@@ -220,10 +158,6 @@ fn hash_alignment<H: Hasher>(state: &mut H, alignment: Alignment) {
     hash_vertical_alignment(state, alignment.vertical);
 }
 
-// ============================================================================
-// Padding Modifier Node
-// ============================================================================
-
 /// Node that adds padding around its content.
 #[derive(Debug)]
 pub struct PaddingNode {
@@ -271,11 +205,9 @@ impl LayoutModifierNode for PaddingNode {
         measurable: &dyn Measurable,
         constraints: Constraints,
     ) -> cranpose_ui_layout::LayoutModifierMeasureResult {
-        // Convert padding to floating point values
         let horizontal_padding = self.padding.horizontal_sum();
         let vertical_padding = self.padding.vertical_sum();
 
-        // Subtract padding from available space
         let inner_constraints = Constraints {
             min_width: (constraints.min_width - horizontal_padding).max(0.0),
             max_width: (constraints.max_width - horizontal_padding).max(0.0),
@@ -283,7 +215,6 @@ impl LayoutModifierNode for PaddingNode {
             max_height: (constraints.max_height - vertical_padding).max(0.0),
         };
 
-        // Measure the wrapped content
         let inner_placeable = measurable.measure(inner_constraints);
         let inner_width = inner_placeable.width();
         let inner_height = inner_placeable.height();
@@ -293,11 +224,10 @@ impl LayoutModifierNode for PaddingNode {
             inner_height + vertical_padding,
         );
 
-        // Return size with padding added, and placement offset to position child inside padding
         cranpose_ui_layout::LayoutModifierMeasureResult::new(
             Size { width, height },
-            self.padding.left, // Place child offset by left padding
-            self.padding.top,  // Place child offset by top padding
+            self.padding.left,
+            self.padding.top,
         )
     }
 
@@ -369,10 +299,6 @@ impl ModifierNodeElement for PaddingElement {
     }
 }
 
-// ============================================================================
-// Background Modifier Node
-// ============================================================================
-
 /// Node that draws a background behind its content.
 #[derive(Debug)]
 pub struct BackgroundNode {
@@ -420,9 +346,7 @@ impl ModifierNode for BackgroundNode {
 }
 
 impl DrawModifierNode for BackgroundNode {
-    fn draw(&self, _draw_scope: &mut dyn DrawScope) {
-        // Scene building consumes the retained background node directly.
-    }
+    fn draw(&self, _draw_scope: &mut dyn DrawScope) {}
 }
 
 /// Element that creates and updates background nodes.
@@ -463,10 +387,6 @@ impl ModifierNodeElement for BackgroundElement {
         NodeCapabilities::DRAW
     }
 }
-
-// ============================================================================
-// Size Modifier Node
-// ============================================================================
 
 /// Node that tracks the latest rounded corner shape.
 #[derive(Debug)]
@@ -552,11 +472,6 @@ impl ModifierNodeElement for CornerShapeElement {
     }
 }
 
-// ============================================================================
-// GraphicsLayer Modifier Node
-// ============================================================================
-
-/// Node that stores graphics layer state for resolved modifiers.
 pub struct GraphicsLayerNode {
     layer: GraphicsLayer,
     layer_resolver: Option<Rc<dyn Fn() -> GraphicsLayer>>,
@@ -660,7 +575,6 @@ impl std::fmt::Debug for GraphicsLayerNode {
     }
 }
 
-/// Element that creates and updates graphics layer nodes.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GraphicsLayerElement {
     layer: GraphicsLayer,
@@ -694,7 +608,6 @@ impl ModifierNodeElement for GraphicsLayerElement {
     }
 }
 
-/// Element that evaluates a graphics layer lazily during render data collection.
 #[derive(Clone)]
 pub struct LazyGraphicsLayerElement {
     layer_resolver: Rc<dyn Fn() -> GraphicsLayer>,
@@ -753,10 +666,6 @@ impl ModifierNodeElement for LazyGraphicsLayerElement {
     }
 }
 
-// ============================================================================
-// Size Modifier Node
-// ============================================================================
-
 /// Node that enforces size constraints on its content.
 ///
 /// Matches Kotlin: `SizeNode` in foundation-layout/src/commonMain/kotlin/androidx/compose/foundation/layout/Size.kt
@@ -788,7 +697,6 @@ impl SizeNode {
         }
     }
 
-    /// Helper to build target constraints from element parameters
     fn target_constraints(&self) -> Constraints {
         let max_width = self.max_width.map(|v| v.max(0.0)).unwrap_or(f32::INFINITY);
         let max_height = self.max_height.map(|v| v.max(0.0)).unwrap_or(f32::INFINITY);
@@ -876,7 +784,6 @@ impl LayoutModifierNode for SizeNode {
         let target = self.target_constraints();
 
         let wrapped_constraints = if self.enforce_incoming {
-            // Constrain target constraints by incoming constraints
             Constraints {
                 min_width: target
                     .min_width
@@ -896,7 +803,6 @@ impl LayoutModifierNode for SizeNode {
                     .max(constraints.min_height),
             }
         } else {
-            // Required size: use target, but preserve incoming if target is unspecified
             let resolved_min_width = if self.min_width.is_some() {
                 target.min_width
             } else {
@@ -930,16 +836,6 @@ impl LayoutModifierNode for SizeNode {
         let measured_width = placeable.width();
         let measured_height = placeable.height();
 
-        // Return the target size when both min==max (fixed size), but only if it satisfies
-        // the wrapped constraints we passed down. Otherwise return measured size.
-        // This handles the case where enforce_incoming=true and incoming constraints are tighter.
-        //
-        // With enforce_incoming=false (`required_size`) the node measures AND
-        // reports the required size: draw rects and effect bounds derive from
-        // the node box, so oversized overlay content (selection magnifier
-        // line, interaction lenses) must keep its full box. Hosts that must
-        // not grow pin their own size (a fixed-size ancestor wins over a
-        // wrap-content one).
         let result_width = if self.min_width.is_some()
             && self.max_width.is_some()
             && self.min_width == self.max_width
@@ -962,7 +858,6 @@ impl LayoutModifierNode for SizeNode {
             measured_height
         };
 
-        // SizeNode doesn't offset placement - child is placed at (0, 0) relative to this node
         cranpose_ui_layout::LayoutModifierMeasureResult::with_size(Size {
             width: result_width,
             height: result_height,
@@ -1121,27 +1016,15 @@ impl ModifierNodeElement for SizeElement {
     }
 }
 
-// ============================================================================
-// Clickable Modifier Node
-// ============================================================================
-
 use std::cell::RefCell;
 
-/// Node that handles click/tap interactions.
-// Drag threshold is now shared via cranpose_foundation::DRAG_THRESHOLD
 use cranpose_foundation::DRAG_THRESHOLD;
-
-// Press position is stored per-node via Rc<RefCell> for sharing with handler closure
-// Node reuse is ensured by ClickableElement implementing key() to return a stable key
-// The handler closure is cached to ensure the same closure (and press_position state) is returned
 
 pub struct ClickableNode {
     on_press: Option<Rc<dyn Fn(Point)>>,
     on_click: Rc<dyn Fn(Point)>,
     state: NodeState,
-    /// Shared press position for drag detection (per-node state, accessible by handler closure)
     press_position: Rc<RefCell<Option<Point>>>,
-    /// Cached handler closure - created once, returned on every pointer_input_handler() call
     cached_handler: Rc<dyn Fn(PointerEvent)>,
 }
 
@@ -1179,22 +1062,17 @@ impl ClickableNode {
         press_position: Rc<RefCell<Option<Point>>>,
     ) -> Rc<dyn Fn(PointerEvent)> {
         Rc::new(move |event: PointerEvent| {
-            // Clicks track the primary pointer only; secondary pointers of a
-            // multi-touch gesture (e.g. a pinch) must never fire clicks.
             if event.id != 0 {
                 return;
             }
 
-            // Check if event was consumed by scroll or other gesture handlers
             if event.is_consumed() {
-                // Clear press state if event was consumed
                 *press_position.borrow_mut() = None;
                 return;
             }
 
             match event.kind {
                 PointerEventKind::Down => {
-                    // Store global press position for drag detection on Up
                     *press_position.borrow_mut() = Some(Point {
                         x: event.global_position.x,
                         y: event.global_position.y,
@@ -1203,11 +1081,8 @@ impl ClickableNode {
                         on_press(event.position);
                     }
                 }
-                PointerEventKind::Move => {
-                    // Move events are tracked via press_position for drag detection
-                }
+                PointerEventKind::Move => {}
                 PointerEventKind::Up => {
-                    // Check if this is a click (Up near Down) or a drag (Up far from Down)
                     let press_pos_value = *press_position.borrow();
 
                     let should_click = if let Some(press_pos) = press_pos_value {
@@ -1216,13 +1091,9 @@ impl ClickableNode {
                         let distance = (dx * dx + dy * dy).sqrt();
                         distance <= DRAG_THRESHOLD
                     } else {
-                        // No Down was tracked - fire click anyway
-                        // This preserves the original behavior for cases where Down
-                        // was handled by a different mechanism
                         true
                     };
 
-                    // Reset press position
                     *press_position.borrow_mut() = None;
 
                     if should_click {
@@ -1234,7 +1105,6 @@ impl ClickableNode {
                     }
                 }
                 PointerEventKind::Cancel => {
-                    // Clear press state on cancel
                     *press_position.borrow_mut() = None;
                 }
                 PointerEventKind::Scroll
@@ -1242,9 +1112,7 @@ impl ClickableNode {
                 | PointerEventKind::RotaryScrollPre
                 | PointerEventKind::RotaryScroll
                 | PointerEventKind::Enter
-                | PointerEventKind::Exit => {
-                    // These events don't affect click press state.
-                }
+                | PointerEventKind::Exit => {}
             }
         })
     }
@@ -1280,20 +1148,15 @@ impl PointerInputNode for ClickableNode {
         _context: &mut dyn ModifierNodeContext,
         event: &PointerEvent,
     ) -> bool {
-        // Delegate to the cached handler - single source of truth for click logic
-        // This avoids duplicating the press position tracking and threshold checking
         (self.cached_handler)(event.clone());
         event.is_consumed()
     }
 
     fn hit_test(&self, _x: f32, _y: f32) -> bool {
-        // Always participate in hit testing
         true
     }
 
     fn pointer_input_handler(&self) -> Option<Rc<dyn Fn(PointerEvent)>> {
-        // Return the cached handler - this ensures the same closure (with its press_position state)
-        // is used across multiple calls to pointer_input_handler()
         Some(self.cached_handler.clone())
     }
 }
@@ -1336,9 +1199,6 @@ impl std::fmt::Debug for ClickableElement {
 
 impl PartialEq for ClickableElement {
     fn eq(&self, _other: &Self) -> bool {
-        // Type matching is sufficient - node will be updated via update() method
-        // This matches JC behavior where nodes are reused for same-type elements,
-        // preserving press_position state for proper drag detection
         true
     }
 }
@@ -1347,7 +1207,6 @@ impl Eq for ClickableElement {}
 
 impl Hash for ClickableElement {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        // Consistent hash for type-based matching
         "clickable".hash(state);
     }
 }
@@ -1359,17 +1218,9 @@ impl ModifierNodeElement for ClickableElement {
         ClickableNode::with_handlers(self.on_press.clone(), self.on_click.clone())
     }
 
-    // Note: key() is deliberately NOT implemented (returns None by default)
-    // This enables type-based node reuse: the same ClickableNode instance is
-    // reused across recompositions, preserving the cached_handler and its
-    // captured press_position state for proper drag detection.
-
     fn update(&self, node: &mut Self::Node) {
-        // Update the handler - the cached_handler needs to be recreated
-        // with the new on_click while preserving press_position
         node.on_press = self.on_press.clone();
         node.on_click = self.on_click.clone();
-        // Recreate the cached handler with the same press_position but new click handler
         node.cached_handler = ClickableNode::create_handler(
             node.on_press.clone(),
             node.on_click.clone(),
@@ -1382,14 +1233,9 @@ impl ModifierNodeElement for ClickableElement {
     }
 
     fn always_update(&self) -> bool {
-        // Always update to capture new closure while preserving node state
         true
     }
 }
-
-// ============================================================================
-// Alpha Modifier Node
-// ============================================================================
 
 /// Node that applies alpha transparency to its content.
 #[derive(Debug)]
@@ -1470,11 +1316,6 @@ impl ModifierNodeElement for AlphaElement {
     }
 }
 
-// ============================================================================
-// Clip-To-Bounds Modifier Node
-// ============================================================================
-
-/// Node that marks the subtree for clipping during rendering.
 #[derive(Debug)]
 pub struct ClipToBoundsNode {
     state: NodeState,
@@ -1512,7 +1353,6 @@ impl DrawModifierNode for ClipToBoundsNode {
     fn draw(&self, _draw_scope: &mut dyn DrawScope) {}
 }
 
-/// Element that creates clip-to-bounds nodes.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ClipToBoundsElement;
 
@@ -1536,15 +1376,6 @@ impl ModifierNodeElement for ClipToBoundsElement {
     }
 }
 
-// ============================================================================
-// Window Rect Reporter Modifier Node
-// ============================================================================
-
-/// Node that publishes its layout node's composited window rect into a shared
-/// cell. The layout `place` pass writes the node's true on-screen rect (window
-/// coordinates, resolved through ancestor scroll placement + graphics-layer
-/// translation) here every pass. Scroll containers use it to expose their
-/// viewport bounds to a `BringIntoViewResponder`. Draws nothing.
 pub trait WindowRectSink {
     fn set(&self, rect: cranpose_ui_graphics::Rect);
 }
@@ -1576,7 +1407,6 @@ impl WindowRectReporterNode {
         }
     }
 
-    /// The cell the layout pass writes this node's window rect into.
     pub(crate) fn window_rect_sink(&self) -> Rc<dyn WindowRectSink> {
         self.sink.clone()
     }
@@ -1599,9 +1429,6 @@ impl ModifierNode for WindowRectReporterNode {
 }
 
 impl LayoutModifierNode for WindowRectReporterNode {
-    /// Transparent pass-through: measure the wrapped content with the same
-    /// constraints and place it at the origin. The reporter only exists so the
-    /// layout `place` pass can publish this node's window rect into its sink.
     fn measure(
         &self,
         _context: &mut dyn ModifierNodeContext,
@@ -1620,8 +1447,6 @@ impl LayoutModifierNode for WindowRectReporterNode {
     }
 }
 
-/// Element that creates [`WindowRectReporterNode`] instances. Reuses the node
-/// across recompositions, swapping the sink cell when it changes.
 #[derive(Clone)]
 pub struct WindowRectReporterElement {
     sink: Rc<dyn WindowRectSink>,
@@ -1675,15 +1500,6 @@ impl ModifierNodeElement for WindowRectReporterElement {
     }
 }
 
-// ============================================================================
-// Size Reporter Modifier Node
-// ============================================================================
-
-/// Where a [`SizeReporterNode`] publishes its measured size. A plain `Cell`
-/// is invisible to composition; the `MutableState` sink schedules
-/// recomposition on an actual change (`MutableState::set` is
-/// equality-gated), which is what makes size-reactive topology settle: a
-/// re-measure that produces the same size writes nothing and cannot loop.
 pub trait SizeSink {
     fn set(&self, size: Size);
 }
@@ -1702,21 +1518,9 @@ impl SizeSink for StateSizeSink {
     }
 }
 
-/// Node that publishes its measured size (logical px) into its sink on
-/// every measure pass — the Compose `onSizeChanged` seam for consumers that
-/// need their node's resolved size outside layout (e.g. shader morph
-/// geometry expressed in node-local pixels). Transparent for layout, draws
-/// nothing.
 pub struct SizeReporterNode {
     sink: Rc<dyn SizeSink>,
     state: NodeState,
-    /// Debug-only oscillation detector: (last, second_last, alternations).
-    /// A self-referential size — content whose measured size depends on the
-    /// size this node reports — presents as a cross-frame livelock (one
-    /// recomposition per frame, forever) with no diagnostic. Exact A-B-A
-    /// alternation is that loop's signature and matches no animation, which
-    /// moves monotonically or along a curve rather than flipping between two
-    /// identical values.
     #[cfg(debug_assertions)]
     oscillation: Cell<(Size, Size, u32)>,
 }
@@ -1790,7 +1594,6 @@ impl LayoutModifierNode for SizeReporterNode {
     }
 }
 
-/// Element for [`SizeReporterNode`]; reuses the node, swapping the sink.
 #[derive(Clone)]
 pub struct SizeReporterElement {
     sink: Rc<dyn SizeSink>,
@@ -1801,8 +1604,6 @@ impl SizeReporterElement {
         Self { sink }
     }
 
-    /// Publishes into observable state, so an actual size change schedules
-    /// recomposition — the sink for size-reactive topology.
     pub fn from_state(sink: cranpose_core::MutableState<Size>) -> Self {
         Self {
             sink: Rc::new(StateSizeSink(sink)),
@@ -1844,11 +1645,6 @@ impl ModifierNodeElement for SizeReporterElement {
     }
 }
 
-// ============================================================================
-// Draw Command Modifier Node
-// ============================================================================
-
-/// Node that stores draw commands emitted by draw modifiers.
 pub struct DrawCommandNode {
     commands: Vec<DrawCommand>,
     node_id: Cell<Option<NodeId>>,
@@ -1949,7 +1745,6 @@ fn draw_command_closure_identity(cmd: &DrawCommand) -> *const () {
     }
 }
 
-/// Element that wires draw commands into the modifier node chain.
 #[derive(Clone)]
 pub struct DrawCommandElement {
     commands: Vec<DrawCommand>,
@@ -2019,10 +1814,6 @@ impl ModifierNodeElement for DrawCommandElement {
     }
 }
 
-// ============================================================================
-// Offset Modifier Node
-// ============================================================================
-
 /// Node that offsets its content by a fixed (x, y) amount.
 ///
 /// Matches Kotlin: `OffsetNode` in foundation-layout/src/commonMain/kotlin/androidx/compose/foundation/layout/Offset.kt
@@ -2083,17 +1874,15 @@ impl LayoutModifierNode for OffsetNode {
         measurable: &dyn Measurable,
         constraints: Constraints,
     ) -> cranpose_ui_layout::LayoutModifierMeasureResult {
-        // Offset doesn't affect measurement, just placement
         let placeable = measurable.measure(constraints);
 
-        // Return child size unchanged, but specify the offset for placement
         cranpose_ui_layout::LayoutModifierMeasureResult::new(
             Size {
                 width: placeable.width(),
                 height: placeable.height(),
             },
-            self.x, // Place child offset by x
-            self.y, // Place child offset by y
+            self.x,
+            self.y,
         )
     }
 
@@ -2162,10 +1951,6 @@ impl ModifierNodeElement for OffsetElement {
     }
 }
 
-// ============================================================================
-// Fractional Offset Modifier Node
-// ============================================================================
-
 /// Node that offsets its content by a fraction of its own measured size.
 ///
 /// There is no direct Jetpack Compose modifier equivalent; Compose's slide
@@ -2224,8 +2009,6 @@ impl LayoutModifierNode for FractionalOffsetNode {
         measurable: &dyn Measurable,
         constraints: Constraints,
     ) -> cranpose_ui_layout::LayoutModifierMeasureResult {
-        // Offset doesn't affect measurement, just placement. The placement
-        // offset is resolved against the measured content size.
         let placeable = measurable.measure(constraints);
 
         cranpose_ui_layout::LayoutModifierMeasureResult::new(
@@ -2302,10 +2085,6 @@ impl ModifierNodeElement for FractionalOffsetElement {
     }
 }
 
-// ============================================================================
-// Fill Modifier Node
-// ============================================================================
-
 /// Direction for fill modifiers (horizontal, vertical, or both).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FillDirection {
@@ -2369,7 +2148,6 @@ impl LayoutModifierNode for FillNode {
         measurable: &dyn Measurable,
         constraints: Constraints,
     ) -> cranpose_ui_layout::LayoutModifierMeasureResult {
-        // Calculate the fill size based on constraints
         let (fill_width, child_min_width, child_max_width) = if self.direction
             != FillDirection::Vertical
             && constraints.max_width != f32::INFINITY
@@ -2377,7 +2155,6 @@ impl LayoutModifierNode for FillNode {
             let width = (constraints.max_width * self.fraction)
                 .round()
                 .clamp(constraints.min_width, constraints.max_width);
-            // Tight constraint for child on this axis
             (width, width, width)
         } else {
             (
@@ -2394,7 +2171,6 @@ impl LayoutModifierNode for FillNode {
             let height = (constraints.max_height * self.fraction)
                 .round()
                 .clamp(constraints.min_height, constraints.max_height);
-            // Tight constraint for child on this axis
             (height, height, height)
         } else {
             (
@@ -2413,9 +2189,6 @@ impl LayoutModifierNode for FillNode {
 
         let placeable = measurable.measure(fill_constraints);
 
-        // Return the FILL size, not the child size.
-        // The child is measured within tight constraints on the fill axis,
-        // but we report the fill size to our parent.
         let result_width = if self.direction != FillDirection::Vertical
             && constraints.max_width != f32::INFINITY
         {
@@ -2513,11 +2286,6 @@ impl ModifierNodeElement for FillElement {
     }
 }
 
-// ============================================================================
-// Weight Modifier Node
-// ============================================================================
-
-/// Node that records flex weight data for Row/Column parents.
 #[derive(Debug)]
 pub struct WeightNode {
     weight: f32,
@@ -2554,7 +2322,6 @@ impl ModifierNode for WeightNode {
     }
 }
 
-/// Element that creates and updates weight nodes.
 #[derive(Debug, Clone, PartialEq)]
 pub struct WeightElement {
     weight: f32,
@@ -2593,11 +2360,6 @@ impl ModifierNodeElement for WeightElement {
     }
 }
 
-// ============================================================================
-// Alignment Modifier Node
-// ============================================================================
-
-/// Node that records alignment preferences for Box/Row/Column scopes.
 #[derive(Debug)]
 pub struct AlignmentNode {
     box_alignment: Option<Alignment>,
@@ -2645,7 +2407,6 @@ impl ModifierNode for AlignmentNode {
     }
 }
 
-/// Element that creates and updates alignment nodes.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AlignmentElement {
     box_alignment: Option<Alignment>,
@@ -2730,17 +2491,12 @@ impl ModifierNodeElement for AlignmentElement {
     }
 }
 
-// ============================================================================
-// Intrinsic Size Modifier Node
-// ============================================================================
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum IntrinsicAxis {
     Width,
     Height,
 }
 
-/// Node that records intrinsic sizing requests.
 #[derive(Debug)]
 pub struct IntrinsicSizeNode {
     axis: IntrinsicAxis,
@@ -2778,7 +2534,6 @@ impl ModifierNode for IntrinsicSizeNode {
     }
 }
 
-/// Element that creates and updates intrinsic size nodes.
 #[derive(Debug, Clone, PartialEq)]
 pub struct IntrinsicSizeElement {
     axis: IntrinsicAxis,

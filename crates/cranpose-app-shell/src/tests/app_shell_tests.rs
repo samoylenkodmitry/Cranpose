@@ -4938,12 +4938,6 @@ fn AppShellSizeReactiveTopology() {
     );
 }
 
-/// The correctness test for replacing a `BoxWithConstraints` wrapper with
-/// `report_size_state`: the work the wrapper was doing is switching composed
-/// topology when the available size crosses a threshold, so THAT is what the
-/// replacement must be shown to still do — and a resize must SETTLE, because
-/// an unconditional state write during measure would recompose, re-measure
-/// and loop, a frame-rate collapse no pixel assertion sees.
 #[test]
 fn size_reactive_topology_switches_on_resize_and_settles() {
     let _guard = test_guard();
@@ -5003,10 +4997,6 @@ fn size_reactive_topology_switches_on_resize_and_settles() {
 #[allow(non_snake_case)]
 fn AppShellSelfReferentialSize() {
     let size = rememberMutableStateOf(cranpose_ui::Size::default);
-    // The onSizeChanged self-reference hazard, on purpose: the reported size
-    // decides the content's height, so the node's own measured size flips
-    // between two values forever — a cross-frame livelock no equality gate
-    // can decide, because every write IS a genuine change.
     let height = if size.get().height < 100.0 {
         200.0
     } else {
@@ -5025,10 +5015,6 @@ fn AppShellSelfReferentialSize() {
     );
 }
 
-/// The class the settle test cannot see: self-referential sizing is a
-/// livelock of genuine changes, one recomposition per frame forever, with no
-/// diagnostic in release. The debug ceiling converts it into a panic naming
-/// the two alternating sizes.
 #[test]
 #[cfg_attr(
     not(debug_assertions),
