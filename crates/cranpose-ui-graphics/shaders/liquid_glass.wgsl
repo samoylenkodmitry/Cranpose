@@ -493,7 +493,17 @@ fn scene_sdf(
 @fragment
 fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let uv = input.uv;
-    let tex_size = vec2<f32>(textureDimensions(input_texture));
+    // Renderer-reserved slot 252/253: the LOGICAL pixel extent the input
+    // texture represents, injected when it is rasterized smaller than that
+    // (a blur chain's scratch-size intermediate). Pixel-calibrated offsets
+    // divide by the logical extent — dividing by the physical dimensions of
+    // a quarter-scale texture would inflate every displacement fourfold.
+    // Zero means the input is at its logical size.
+    let logical_size = get_vec2(252u);
+    var tex_size = vec2<f32>(textureDimensions(input_texture));
+    if (logical_size.x > 0.5 && logical_size.y > 0.5) {
+        tex_size = logical_size;
+    }
     let material_activity = clamp(get_float(111u), 0.0, 1.0);
 
     // Effect layer pixel rect injected by the renderer at uniform slot 62
