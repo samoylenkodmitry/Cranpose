@@ -7275,6 +7275,37 @@ mod tests {
         );
     }
 
+    /// The pair above moves the prior child by 60px, which passing a coarse
+    /// "does it ever invalidate" check would not rule out a dead zone
+    /// smaller than that. Continuity means every single one-pixel step
+    /// changes the key, not just a distant before/after pair.
+    #[test]
+    fn backdrop_cache_key_changes_at_every_single_pixel_of_prior_child_motion() {
+        let scene = scene_with_prefix_shape(Color::BLACK);
+        let layer = test_backdrop_layer(Rect {
+            x: 10.0,
+            y: 10.0,
+            width: 60.0,
+            height: 40.0,
+        });
+        let key_at = |x: f32| {
+            let child = [child_prefix_contribution(0, x)];
+            let prefix = backdrop_scene_prefix_hash(&scene, &child, 1, layer.rect, (200, 120), 1.0);
+            backdrop_effect_cache_key(&layer, prefix, layer.rect, (60, 40), 1.0)
+        };
+        let keys: Vec<_> = (0..30).map(|step| key_at(20.0 + step as f32)).collect();
+        for (step, pair) in keys.windows(2).enumerate() {
+            assert_ne!(
+                pair[0],
+                pair[1],
+                "prior child x={} and x={} (one pixel apart, step {step}) produced the \
+                 same backdrop cache key",
+                20.0 + step as f32,
+                21.0 + step as f32
+            );
+        }
+    }
+
     #[test]
     fn backdrop_cache_key_ignores_prior_child_motion_outside_capture_rect() {
         let scene = scene_with_prefix_shape(Color::BLACK);

@@ -385,3 +385,31 @@ Signature → cause → what to do. One lesson per line, no incident history.
   counts its internal fallback as a rebuild. Both greens looked like proof
   and proved nothing; both were caught only by severing the mechanism and
   demanding the red first.
+
+- **A backdrop-continuity probe that samples before content ever reaches
+  the sampled rect reads as a stale cache, and is not one** — a
+  `capture_frame` sweep sampled a fixed-glass chrome's footprint starting
+  at scroll offset 0, where the region above row 0 (content padding) is
+  still bare background; blurring a uniform background naturally does not
+  change for several pixels of scroll, and the blur radius's own reach
+  (~8-10px) is what finally lets row 0's color bleed in and "unstick" the
+  reading. That produced a completely convincing but entirely synthetic
+  "8-pixel dead zone" that vanished the moment the sweep settled deep into
+  established, continuously-varying content before measuring. Always scroll
+  well past any empty/uniform region before starting a continuity
+  measurement, or "held" just means "nothing there to change yet."
+
+- **The offscreen synchronous `capture_frame` path and the real windowed
+  threaded present path are different renderers for backdrop-continuity
+  purposes** — the same glass-over-scrolling-list scene, driven the same
+  way, shows perfect one-pixel continuity through `WgpuRenderer::init_gpu`
+  (`capture_frame`/`render_to_rgba_pixels`, used by every wgpu crate
+  integration test) and a hard freeze (glass_changed_pixels=0 across a
+  1500ms idle wait with no further input) through
+  `init_gpu_threaded`/`AppLauncher`'s real event loop. A wgpu-crate
+  integration test proving the compositor's cache-key math is
+  position-sensitive does not prove the interactive app is bug-free: the
+  present-runtime's depth-one credit/confirmation-ack protocol
+  (`present_runtime.rs`) is exercised only by the threaded backend, and a
+  bug living there needs a robot test (`AppLauncher` + real scroll events)
+  or the `init_gpu_inline_for_tests` harness, never the sync capture path.

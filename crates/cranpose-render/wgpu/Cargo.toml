@@ -105,6 +105,10 @@ naga = { version = "29.0.3", features = ["wgsl-in", "glsl-out"] }
 [dev-dependencies]
 # Path-only dev-deps: stripped from the published manifest (publish order ignores dev edges).
 cranpose-app-shell = { path = "../../cranpose-app-shell", features = ["test-support"] }
+# The production glass material (blur-then-shader chain), so the pixel-level
+# backdrop continuity test renders the actual `GlassSurface`/`Glass::regular()`
+# widget the demo apps use, not a bare-blur stand-in.
+cranpose-liquid = { path = "../../cranpose-liquid" }
 # Unit tests exercise the embedded fallback font and GL portability validation
 # on every platform, independent of the production feature set.
 cranpose-render-common = { path = "../common", features = ["embedded-default-font"] }

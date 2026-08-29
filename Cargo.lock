@@ -1123,6 +1123,7 @@ dependencies = [
  "cranpose-app-shell",
  "cranpose-core",
  "cranpose-foundation",
+ "cranpose-liquid",
  "cranpose-render-common",
  "cranpose-ui",
  "cranpose-ui-graphics",
