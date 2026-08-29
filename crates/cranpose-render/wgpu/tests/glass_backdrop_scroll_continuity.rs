@@ -9,13 +9,16 @@
 //! (a blur-then-shader effect chain), not a bare blur, so this pins the
 //! compositor's own key/hash math (`backdrop_effect_cache_key`,
 //! `backdrop_scene_prefix_hash`) as innocent for the real widget. This test
-//! passes: it drives `WgpuRenderer::init_gpu`'s offscreen synchronous
-//! `capture_frame` path, which the desktop app never uses interactively. The
-//! actual reported continuity bug lives in the threaded/present pipeline
-//! (`init_gpu_threaded`, driven by `AppLauncher`'s real event loop) and is
-//! reproduced by
-//! `apps/desktop-demo/robot-runners/robot_glass_scroll_continuity.rs`
-//! instead — see that file and `TIME_WASTERS.md` for the pipeline split.
+//! passes, but that is not evidence the compositor is innocent overall: it
+//! drives `WgpuRenderer::init_gpu`'s offscreen synchronous `capture_frame`
+//! path, which renders into a brand-new offscreen texture every call and so
+//! never exercises a target reused across frames — the one thing the real
+//! windowed present path (`redraw_native_window`, a rotating swapchain pool)
+//! does on every frame. The reported continuity bug is reproduced instead by
+//! `apps/desktop-demo/robot-runners/robot_glass_backdrop_scroll_stability.rs`,
+//! a non-headless robot test asserting each scroll step's backdrop shift
+//! individually — see `TIME_WASTERS.md` for why a headless/offscreen render
+//! path structurally cannot catch this class of bug.
 
 mod support;
 
