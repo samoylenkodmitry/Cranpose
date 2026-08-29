@@ -49,6 +49,22 @@ Signature → cause → what to do. One lesson per line, no incident history.
 - **`codex exec "<prompt>"` reads *additional* stdin when stdin is not a tty** and hangs at "Reading additional input from stdin..." forever (ten hours, once). Always `< /dev/null` it in detached launchers, and write the exit sentinel unconditionally — under `set -e` a non-zero exit kills the script before the sentinel and the waiter polls an orphan log forever.
 - **`git grep` reads the index, so it cannot see files the branch just added.** A 278-site rename silently skipped three new crates and the build failed on an import the rename reported success over. Drive tree-wide renames from `find`, or `git add -A` first, and always re-grep for the OLD name afterwards.
 - **A single `ps` snapshot is not liveness.** Liveness = two CPU samples spaced apart AND newest-artifact mtime advancing AND the output file growing. Give every wait loop a staleness deadline (~10 min without new artifacts → investigate/kill). Check for orphaned Xvfb/app/cargo processes after any background session.
+- **A shared checkout's branch can change under you mid-session.** The main
+  `/Users/s/develop/projects/Cranpose` working copy is used by many
+  concurrent agent sessions; it was on `main` at session start and had
+  silently moved to an unrelated feature branch (`git branch --show-current`)
+  46 commits behind `origin/main` by the time a diagnosis ran there — a
+  task brief's "PR #549 merged as `<sha>`" was true upstream but absent
+  locally, and `git show <sha>` still succeeds for a commit reachable from
+  *any* ref, so it looks like proof the working tree has it. An hour went
+  into "reproducing" a rendering ghost that was really this stale
+  `has_focused_field` panic path, plus a second false alarm from a
+  copy-pasted pixel-color heuristic (tuned for a different fixture) matching
+  a button's anti-aliased label text. Before trusting file contents for
+  diagnosis: `git branch --show-current` and `git merge-base --is-ancestor
+  <claimed-sha> HEAD`, not just `git show <claimed-sha>`. Do real diagnostic
+  work in a dedicated `git worktree add ... origin/main`, never in the
+  shared root.
 - **Two actors building the same cargo target race on `target/<profile>/<bin>`** — a "verified" capture can be the other build's. `cp` to a distinct scratch name before running whenever concurrent builds are possible. Editing macro/core sources mid-run hands later crates a different macro than earlier ones compiled against: freeze sources or relaunch on the warm target.
 - **`{ cd base && cargo bench; cargo bench }` benches base twice** — the `cd` survives the arm. Use absolute paths in both arms; a suspiciously clean reversal means checking which binary ran.
 - **Remote validation dirs must be source-exact.** Copying only `git ls-files` into a reused checkout leaves untracked runners behind — three stale ones grew a 140-test suite to 143 and produced an impossible failure. Matching hashes for tracked files does not catch it. Create a fresh source dir (or diff its inventory against `git ls-files`), share build artifacts through an explicit target dir, and preserve old dirs under an `_old` name. Never combine an excluded `target` with `rsync --delete-excluded` — that deletes the cache it appears to protect. Sync each file to its exact destination path; one directory destination for files from several sources plants a plausible stray `mod.rs`.

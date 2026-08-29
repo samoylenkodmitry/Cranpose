@@ -263,6 +263,11 @@ path = "robot-runners/robot_drag_selection.rs"
 required-features = ["robot-app"]
 
 [[example]]
+name = "robot_text_handle_survives_tab_switch"
+path = "robot-runners/robot_text_handle_survives_tab_switch.rs"
+required-features = ["robot-app"]
+
+[[example]]
 name = "robot_selection_vertical_grab"
 path = "robot-runners/robot_selection_vertical_grab.rs"
 required-features = ["robot-app"]
