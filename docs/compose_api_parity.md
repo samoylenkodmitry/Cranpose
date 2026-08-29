@@ -106,19 +106,27 @@ found it), so nothing here does a `git checkout`, `reset`, `pull`, or
 `merge` against it. Instead:
 
 1. `git fetch --depth=1 --filter=blob:none upstream androidx-main:refs/heads/compose-parity-snapshot`,
-   run under `scripts/ci/with_host_lock.sh --shared` from the CI runner's
-   own Cranpose checkout (`/home/s/actions-runner-cranpose/_work/Cranpose/Cranpose`)
-   so this shares the host the same way any other build does rather than
-   competing with a measurement. `--depth=1` + `--filter=blob:none` fetch
-   only the *tip* commit's tree and commit objects, not three years of
-   history or blob content -- `.git` grew by ~33 MB (831 MB to 864 MB), not
-   the multi-gigabyte full-history clone a plain `git fetch` of a monorepo
-   this size would cost. Blobs (the actual file content) are fetched lazily,
-   one small text file at a time, only when something asks to read one.
-   This created one new local ref (`compose-parity-snapshot`) and updated
-   the `upstream/androidx-main` remote-tracking ref; the checked-out branch,
-   its HEAD, and its dirty working tree were all confirmed unchanged
-   afterward (same commit, same 311 modified-file count).
+   invoked through `scripts/ci/with_host_lock.sh --shared` from the CI
+   runner's own Cranpose checkout
+   (`/home/s/actions-runner-cranpose/_work/Cranpose/Cranpose`). **That
+   wrapper turned out not to actually hold the lock**: it closed the lock's
+   file descriptors as part of the same `exec` that launched the wrapped
+   command, before the command's image loaded, so the lock was released in
+   milliseconds every time it ran (fix pending in #552) -- this fetch ran
+   unlocked, and that claim should not be repeated until #552 lands. What
+   actually made it safe here was the operation's own shape, not the lock:
+   `--depth=1` + `--filter=blob:none` fetch only the *tip* commit's tree
+   and commit objects, not three years of history or blob content --
+   `.git` grew by ~33 MB (831 MB to 864 MB), not the multi-gigabyte
+   full-history clone a plain `git fetch` of a monorepo this size would
+   cost. Blobs (the actual file content) are fetched lazily, one small
+   text file at a time, only when something asks to read one. This
+   created one new local ref (`compose-parity-snapshot`) and updated the
+   `upstream/androidx-main` remote-tracking ref; the checked-out branch,
+   its HEAD, and its dirty working tree were verified unchanged
+   afterward (same commit, same 311 modified-file count) -- that
+   verification, not the lock, is what backs the "nothing else's state
+   changed" claim below.
 2. `androidx/androidx` has **no release git tags** (`git ls-remote --tags
    upstream` returns nothing) -- androidx versions its Maven artifacts
    without tagging the monorepo, so "pick a released ref" means picking a
@@ -204,9 +212,15 @@ exercised -- `nonexhaustive`/`exhaustive` sealed-class modifiers and
 metalava output since 2023 -- and added a `typealias` entry kind, all with
 regression tests (`tools/api-surface/src/bin/dump_compose_api.rs`).
 
-To refresh again later, from a host with the androidx checkout (do not run
-this on `samarch-1` without the host lock, and re-derive step 2 above for
-whatever the current highest frozen version is by then):
+To refresh again later, from a host with the androidx checkout: confirm
+`scripts/ci/with_host_lock.sh` actually holds the lock for the duration of
+the command before relying on it again (#552 fixes a real bug where it
+released immediately on `exec`; verify the fix landed, don't just check
+the wrapper is present), and re-derive step 2 above for whatever the
+current highest frozen version is by then. Regardless of the lock, verify
+`git status`/`git log -1` on the checkout are unchanged before and after,
+the way this refresh did -- that check is what actually establishes
+nothing else's state moved:
 
 ```
 ssh samarch-1 "cd /home/s/actions-runner-cranpose/_work/Cranpose/Cranpose && ./scripts/ci/with_host_lock.sh --shared git -C /media/huge/projects/android/androidx fetch --depth=1 --filter=blob:none upstream androidx-main:refs/heads/compose-parity-snapshot"
