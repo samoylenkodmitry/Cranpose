@@ -8018,6 +8018,7 @@ impl<C: FrameCommandRecorder> RecordingSurfaceBackend<'_, '_, C> {
                     load_op,
                     scissor,
                     viewport,
+                    None,
                 );
             if shader_applied {
                 self.renderer
@@ -8169,10 +8170,16 @@ impl<C: FrameCommandRecorder> RecordingSurfaceBackend<'_, '_, C> {
         dest_viewport: (f32, f32, f32, f32),
     ) -> Result<bool, String> {
         let device = self.renderer.device.clone();
+        let (intermediate_width, intermediate_height) =
+            crate::effect_renderer::direct_tail_intermediate_size(
+                first_effect,
+                source.width,
+                source.height,
+            );
         let intermediate_descriptor = self.renderer.transient_offscreen_descriptor(
             "Render Effect Direct Shader Tail Intermediate",
-            source.width,
-            source.height,
+            intermediate_width,
+            intermediate_height,
         );
         let intermediate = self
             .recorder
@@ -8226,6 +8233,8 @@ impl<C: FrameCommandRecorder> RecordingSurfaceBackend<'_, '_, C> {
                 load_op,
                 scissor,
                 dest_viewport,
+                ((intermediate_width, intermediate_height) != (source.width, source.height))
+                    .then_some((source.width as f32, source.height as f32)),
             );
         self.recorder
             .record_passes(first_passes.saturating_add(u32::from(shader_applied)));
@@ -9220,6 +9229,13 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
     }
 
     fn record_layer_cache_miss(&self, key: &LayerRasterCacheKey, width: u32, height: u32) {
+        // Whole key on purpose: two consecutive frames' misses for the same
+        // stable id show WHICH field moved (content hash, bounds, size),
+        // which is the difference between "content legitimately changed"
+        // and "the key is position-poisoned".
+        if cranpose_core::env_flag!("CRANPOSE_LAYER_RENDER_DIAG") {
+            log::warn!("[layer-cache-miss] {width}x{height} {key:?}");
+        }
         self.renderer
             .frame_stats
             .record_layer_cache_miss(key, width, height);
@@ -9451,6 +9467,24 @@ impl GpuRenderer {
             .merge_and_reset_debug_counters(&self.frame_stats);
         self.frame_graph_executor.reset_upload_allocators();
         let snapshot = self.frame_stats.snapshot();
+        // The eprintln-based 60-frame stats never reach logcat on devices
+        // whose stdio pump forwards nothing (Mate 20 X measured zero pump
+        // lines), so the per-frame surface/cache counters ride the stage
+        // telemetry switch through the logger, where the submit line
+        // carrying the pass split already arrives.
+        if crate::frame_graph::frame_graph_pass_telemetry_threshold_ms().is_some() {
+            log::warn!(
+                "[wgpu-render-stage:frame-stats] layer_hit={} layer_miss={} miss_px={} \
+                 offscreen_acq={} offscreen_new={} isolated={} draws={}",
+                snapshot.layer_cache_hits,
+                snapshot.layer_cache_misses,
+                snapshot.layer_cache_miss_pixels,
+                snapshot.offscreen_acquires,
+                snapshot.offscreen_news,
+                snapshot.isolated_layer_renders,
+                snapshot.draw_calls,
+            );
+        }
         self.last_frame_stats = Some(snapshot);
         PRESENTED_FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         update_frame_warmup_budget(&mut self.pending_frame_warmup_frames, &snapshot);

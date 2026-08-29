@@ -531,6 +531,7 @@ impl SubcomposeScrollFixture {
     fn next_node_for_slot(&mut self, slot_id: SlotId) -> usize {
         self.state
             .take_node_from_reusables(slot_id)
+            .map(|(node_id, _rebound)| node_id)
             .unwrap_or_else(|| {
                 let node_id = self.next_node_id;
                 self.next_node_id += 1;

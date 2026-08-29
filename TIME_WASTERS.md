@@ -241,6 +241,11 @@ Signature → cause → what to do. One lesson per line, no incident history.
   the LOCAL calendar day (every run between local midnight and UTC midnight
   grew an extra date header and shifted all content ~26 px), which reads
   exactly like an environment failure and follows the clock, not the box.
+  Cheaper still than the rerun: the red window is exactly local midnight to
+  UTC midnight (00:00-02:00 CEST), so the FIRST question on such a red is
+  the failed run's wall-clock time — inside the window the branch is not
+  the suspect, and the same commit goes green after 02:00 with no fix
+  aboard (measured across four cranscan PRs in one night).
 
 - **`std::thread::available_parallelism()` reports the calling thread's
   affinity mask, not the machine** — after `sched_setaffinity` restricted a
@@ -336,3 +341,12 @@ Signature → cause → what to do. One lesson per line, no incident history.
   the ancestors were already marked by something else, so marking them again
   cost the walk and nothing more. Count the work you remove, then measure the
   time, and believe the second number.
+
+- **logcat's ring evicts the head of a capture, and the surviving tail
+  reads as a result** — a 24-frame remnant of a triple-telemetry round
+  (three per-frame stage switches spamming the ring) said "scene stage
+  unchanged post-fix"; the full 225-line single-switch rerun showed p50
+  moved 2.0 -> 1.18ms. The bias is systematic, not noise: the ring keeps
+  the END of the run, which over-samples whatever phase ran last. Check
+  line counts against expected frame counts before believing any logcat
+  capture, and keep per-frame switches to the one being read.

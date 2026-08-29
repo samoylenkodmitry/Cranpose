@@ -3677,6 +3677,146 @@ mod tests {
         assert_dirty_hash_road_matches_full_walk(&graph);
     }
 
+    /// Every visible text with its mapped top, for whole-scene content
+    /// comparison between a patched graph and a from-scratch build.
+    fn collect_text_tops(layer: &LayerNode) -> std::collections::BTreeMap<String, i64> {
+        fn walk(
+            layer: &LayerNode,
+            transform: ProjectiveTransform,
+            out: &mut std::collections::BTreeMap<String, i64>,
+        ) {
+            for child in &layer.children {
+                match child {
+                    RenderNode::Primitive(primitive) => {
+                        if let PrimitiveNode::Text(text) = &primitive.node {
+                            let quad = transform.map_rect(text.rect);
+                            let top = quad
+                                .iter()
+                                .map(|point| point[1])
+                                .fold(f32::INFINITY, f32::min);
+                            if top.is_finite() {
+                                // Tenth-of-a-point buckets: parity, not
+                                // float-identical arithmetic.
+                                out.insert(text.text.text.clone(), (top * 10.0).round() as i64);
+                            }
+                        }
+                    }
+                    RenderNode::Layer(child_layer) => {
+                        let child_transform = child_layer.transform_to_parent.then(transform);
+                        walk(child_layer, child_transform, out);
+                    }
+                    RenderNode::DrawRun(_) => {}
+                }
+            }
+        }
+        let mut out = std::collections::BTreeMap::new();
+        walk(layer, ProjectiveTransform::identity(), &mut out);
+        out
+    }
+
+    #[test]
+    fn a_lazy_jump_of_any_distance_patches_to_what_a_fresh_build_shows() {
+        // Lowered-layer counts do not scale with scroll distance (a 300pt
+        // jump lowers fewer than a 96pt nudge), because a large jump lands
+        // every entering row in a recycled, already-dirty slot that rebuilds
+        // through the ordinary dirty path instead of the translate path's
+        // entering-row lowering. That accounting is fine ONLY if the patched
+        // scene's content is indistinguishable from a from-scratch build at
+        // every distance — which is what this pins, text by text.
+        for delta in [-30.0f32, -60.0, -96.0, -180.0, -300.0] {
+            let state_holder: Rc<RefCell<Option<LazyListState>>> = Rc::new(RefCell::new(None));
+            let state_holder_for_comp = state_holder.clone();
+            let mut composition = cranpose_ui::run_test_composition(move || {
+                let list_state = rememberLazyListState();
+                *state_holder_for_comp.borrow_mut() = Some(list_state);
+                LazyColumn(
+                    Modifier::empty().size_points(240.0, 320.0),
+                    list_state,
+                    LazyColumnSpec::default(),
+                    |scope| {
+                        scope.items(60, |index| {
+                            cranpose_ui::Box(
+                                Modifier::empty()
+                                    .size_points(240.0, 60.0)
+                                    .background(Color(0.9, 0.9, 0.92, 1.0)),
+                                cranpose_ui::BoxSpec::default(),
+                                move || {
+                                    Text(
+                                        format!("row {index}"),
+                                        Modifier::empty(),
+                                        TextStyle::default(),
+                                    );
+                                },
+                            );
+                        });
+                    },
+                );
+            });
+
+            let root = composition.root().expect("composition root");
+            let viewport = Size {
+                width: 240.0,
+                height: 320.0,
+            };
+            let handle = composition.runtime_handle();
+            let mut applier = composition.applier_mut();
+            applier.set_runtime_handle(handle);
+            applier
+                .compute_layout(root, viewport)
+                .expect("initial lazy layout");
+            let mut graph =
+                build_graph_from_applier(&mut applier, root, 1.0).expect("initial graph");
+            graph.root.recompute_raster_cache_hashes();
+            let _ = applier.take_structural_change_parents_attached_to(root);
+            applier.clear_runtime_handle();
+            drop(applier);
+
+            let list_state = (*state_holder.borrow()).expect("list state should be captured");
+            let consumed = list_state.dispatch_scroll_delta(delta);
+            assert!(consumed != 0.0, "delta {delta}: the scroll must consume");
+            let mut dirty_nodes = cranpose_ui::pending_layout_repass_nodes_snapshot();
+            dirty_nodes.extend(cranpose_ui::pending_measure_repass_nodes_snapshot());
+
+            let handle = composition.runtime_handle();
+            let mut applier = composition.applier_mut();
+            applier.set_runtime_handle(handle);
+            applier
+                .compute_layout(root, viewport)
+                .expect("scrolled lazy layout");
+            dirty_nodes.extend(applier.take_structural_change_parents_attached_to(root));
+            dirty_nodes.sort_unstable();
+            dirty_nodes.dedup();
+            reset_lowered_layer_count();
+            let report =
+                update_graph_from_applier_report(&mut applier, &mut graph, &dirty_nodes, 1.0);
+            assert!(report.applied(), "delta {delta}: boundary frame must apply");
+            // The rebound-slot recording must stay proportional to real
+            // content change: a scroll the beyond-bounds buffer absorbs
+            // rebinds nothing and must lower nothing — the recording
+            // firing on steady-state frames would re-lower unchanged rows
+            // on every scrolled frame.
+            if delta == -30.0 {
+                assert_eq!(
+                    lowered_layer_count(),
+                    0,
+                    "a buffer-absorbed scroll must not lower any layer"
+                );
+            }
+
+            let fresh =
+                build_graph_from_applier(&mut applier, root, 1.0).expect("fresh comparison graph");
+            applier.clear_runtime_handle();
+
+            let patched_texts = collect_text_tops(&graph.root);
+            let fresh_texts = collect_text_tops(&fresh.root);
+            assert_eq!(
+                patched_texts, fresh_texts,
+                "delta {delta}: the patched scene must show exactly what a \
+                 fresh build shows (dirty={dirty_nodes:?})"
+            );
+        }
+    }
+
     #[test]
     fn update_graph_from_applier_keeps_parent_content_offset_for_dirty_scroll_child() {
         let label_holder: Rc<RefCell<Option<cranpose_core::MutableState<String>>>> =

@@ -258,10 +258,13 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
         let telemetry_start = subcompose_telemetry_enabled().then(Instant::now);
         let mut inner = self.parent_handle.inner.borrow_mut();
 
-        // Reuse or create virtual node
-        let (virtual_node_id, is_reused) =
-            if let Some(node_id) = self.state.take_node_from_reusables(slot_id) {
-                (node_id, true)
+        // Reuse or create virtual node. `rebound` narrows `reused`: an
+        // exact-slot reactivation gives the same item its own subtree back,
+        // while a rebound node's retained subtree is about to recompose to a
+        // DIFFERENT item's content.
+        let (virtual_node_id, is_rebound) =
+            if let Some((node_id, rebound)) = self.state.take_node_from_reusables(slot_id) {
+                (node_id, rebound)
             } else {
                 let id = allocate_virtual_node_id();
                 let node = LayoutNode::new_virtual();
@@ -324,11 +327,14 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
         // NOT from inner.virtual_nodes. The Applier's copy received insert_child calls
         // during subcomposition, while inner.virtual_nodes is an out-of-sync clone.
         let children = self.composer.get_node_children(virtual_node_id).to_vec();
+        if is_rebound {
+            self.composer.record_rebound_slot_children(&children);
+        }
         if let Some(start) = telemetry_start {
             log::warn!(
                 "[subcompose-telemetry] slot={} reused={} children={} subcompose_ms={:.2}",
                 slot_id.raw(),
-                is_reused,
+                is_rebound,
                 children.len(),
                 start.elapsed().as_secs_f64() * 1000.0
             );

@@ -376,6 +376,7 @@ pub(crate) fn begin_timed_render_pass<'encoder>(
     encoder: &'encoder mut wgpu::CommandEncoder,
     descriptor: &wgpu::RenderPassDescriptor<'_>,
 ) -> wgpu::RenderPass<'encoder> {
+    crate::frame_graph::note_render_pass(descriptor.label);
     let timing = pass_timer.and_then(|timer| {
         timer
             .begin_pass(descriptor.label.unwrap_or("<unlabeled pass>"))
