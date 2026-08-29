@@ -308,11 +308,6 @@ path = "robot-runners/robot_lazy_wheel_backtrack.rs"
 required-features = ["robot-app"]
 
 [[example]]
-name = "robot_glass_scroll_continuity"
-path = "robot-runners/robot_glass_scroll_continuity.rs"
-required-features = ["robot-app"]
-
-[[example]]
 name = "robot_subcompose_lazy"
 path = "robot-runners/robot_subcompose_lazy.rs"
 required-features = ["robot-app"]
