@@ -95,18 +95,8 @@ impl ScrollMetrics {
 /// half-faded.
 pub type ScrollSettlePolicy = Rc<dyn Fn(f32, f32) -> f32>;
 
-/// `UIScrollView`'s rubber-band constant. Matches the published WebKit/UIKit
-/// value (0.55) and was independently reproduced by least-squares fit
-/// against a drag-past-the-top-edge trace recorded on the iOS 26.5 Simulator
-/// (fit c=0.5499, residual <=0.18pt) — see `ios_fling_measurement.rs`.
 const RUBBER_BAND_COEFFICIENT: f32 = 0.55;
 
-/// Maps a raw (unresisted) pull `x` past the edge to the on-screen overscroll
-/// offset via `UIScrollView`'s rubber-band curve, `f(x) = x*d*c/(d+c*x)`,
-/// where `d` is the scrollable viewport's main-axis extent and `c` is
-/// [`RUBBER_BAND_COEFFICIENT`]. This asymptotically approaches `d` as `x`
-/// grows rather than hard-clamping, matching the measured curve exactly
-/// (unlike a linear-resistance-then-clamp model).
 fn rubber_band(raw: f32, dimension: f32) -> f32 {
     if !dimension.is_finite() || dimension <= 0.0 {
         return raw;
@@ -116,12 +106,6 @@ fn rubber_band(raw: f32, dimension: f32) -> f32 {
     (x * dimension * c / (dimension + c * x)).copysign(raw)
 }
 
-/// Inverse of [`rubber_band`]: recovers the raw pull that produced a given
-/// on-screen `visible` offset. Used to keep the raw accumulator consistent
-/// whenever something other than [`OverscrollEffect::apply_drag_delta`]
-/// writes the visible offset directly (the settle/bounce-back animation), so
-/// a drag resuming right after an interrupted settle composes smoothly
-/// instead of jumping.
 fn rubber_band_inverse(visible: f32, dimension: f32) -> f32 {
     if !dimension.is_finite() || dimension <= 0.0 {
         return visible;
@@ -137,13 +121,8 @@ pub(crate) struct OverscrollEffect {
 }
 
 struct OverscrollEffectInner {
-    /// Cumulative raw (unresisted) pull past the edge; the single source of
-    /// truth `visible` is derived from via [`rubber_band`].
     raw: Cell<f32>,
-    /// What's actually rendered as the overscroll translation.
     visible: Cell<f32>,
-    /// The scrollable viewport's main-axis extent, i.e. `d` in the
-    /// rubber-band formula.
     dimension: Cell<f32>,
     invalidate_callbacks: RefCell<HashMap<u64, Rc<dyn Fn()>>>,
     next_callback_id: Cell<u64>,

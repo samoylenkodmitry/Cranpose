@@ -1,30 +1,3 @@
-//! Pins Cranpose's fling/overscroll physics against traces recorded from a
-//! real `UIScrollView` in the iOS 26.5 Simulator (iPhone 17 Pro Max).
-//!
-//! Recording method: an ad-hoc UIKit app (`FlingMeasure`, not checked into
-//! this repo) instrumented `scrollViewDidScroll`,
-//! `scrollViewWillEndDragging(_:withVelocity:targetContentOffset:)`, and the
-//! scroll view's own `panGestureRecognizer`, logging every sample to a JSONL
-//! file readable directly from the simulator's on-host container (no jailbreak
-//! or device needed — simulator app containers are plain directories on the
-//! Mac). Touches were injected via the simulator's synthetic touch/swipe
-//! input; release velocities were whatever UIKit's own gesture recognizer
-//! measured for each injected path, not a requested target, so the recorded
-//! numbers are exactly what real `UIScrollView` produced for real (if
-//! synthetic) touches.
-//!
-//! Each trace below is annotated with which UIKit fields it came from, so
-//! the numbers can be re-derived without rerunning the simulator.
-//!
-//! Each trace here was checked against the pre-existing Android
-//! `SplineBasedDecaySpec`/`FlingCalculator` port and its linear-resistance
-//! overscroll before that code was replaced (reconstructed standalone, since
-//! the port is gone from this tree): the decay law put the fling-trajectory
-//! trace up to 211pt off (density-dependent; tried 2.0 and 3.0) against a
-//! 10pt tolerance, the linear-resistance-then-clamp rubber band put the drag
-//! trace 14.9pt off against a 0.5pt tolerance, and the critically-damped
-//! (stiffness 300) spring put the bounce-back trace 17.9pt off against a
-//! 5pt tolerance — 20-30x over each tolerance asserted below.
 
 use std::{cell::Cell, rc::Rc, sync::Arc};
 
@@ -35,12 +8,6 @@ use crate::{
     scroll::OverscrollEffect,
 };
 
-/// `scrollViewDidScroll` samples (t_ms since release, contentOffset.y) for a
-/// single fling: release at offsetY=400, decelerationRate=.normal (0.998),
-/// vy=480.8336647166092 points/sec (the same release as `TARGET_OFFSET_SAMPLES`'s
-/// first row, whose raw `scrollViewWillEndDragging` value of 0.480834 points/ms
-/// is converted here by x1000 to match `start_fling`'s points/sec convention)
-/// — targetY was 635.33333.
 const NORMAL_RATE_TRACE: (f32, f32, &[(f32, f32)]) = (
     400.0,
     480.833_66,
@@ -68,17 +35,6 @@ const NORMAL_RATE_TRACE: (f32, f32, &[(f32, f32)]) = (
     ],
 );
 
-/// The trajectory-replay tolerance. The two recorded iOS delegate callbacks
-/// (`scrollViewWillEndDragging`, whose velocity/offset set t=0 here, and
-/// `scrollViewDidScroll`, which produced every other sample) are timestamped
-/// from two different call sites in the same measurement app; the first
-/// `scrollViewDidScroll` sample is consistently ~1 frame (16ms, ~8pt at this
-/// velocity) ahead of what a t=0-at-release model predicts, an artifact of
-/// that timestamp correlation rather than of the decay law (shifting every
-/// sample by a single ~16ms constant collapses the residual to <0.5pt across
-/// the whole 1.9s trace). 10pt safely covers that artifact with headroom
-/// while remaining far tighter than a differently-shaped decay curve could
-/// accidentally satisfy.
 const TRAJECTORY_TOLERANCE_PT: f32 = 10.0;
 
 #[test]
@@ -99,9 +55,6 @@ fn fling_animation_trajectory_matches_recorded_ios_trace() {
         },
         || {},
     );
-    // The driver's first callback only records its time baseline (t=0 here,
-    // matching `scrollViewWillEndDragging`'s release instant) and moves
-    // nothing; every recorded sample is genuinely after release.
     handle.drain_frame_callbacks(0);
 
     let mut max_abs_error = 0.0f32;
@@ -121,20 +74,7 @@ fn fling_animation_trajectory_matches_recorded_ios_trace() {
     );
 }
 
-/// `scrollViewWillEndDragging`'s own `targetContentOffset`, the exact
-/// prediction UIKit itself commits to at release, for a spread of measured
-/// velocities and both `decelerationRate`s (`.normal`=0.998, `.fast`=0.99),
-/// spanning ~260-6000pt/s. This is the "answer key" the task calls for: no
-/// curve fitting, just UIKit's own stated target compared to Cranpose's.
-/// Four boundary-clamped samples (where the natural target would exceed the
-/// scrollable range) were excluded — iOS clamps `targetContentOffset` to
-/// valid content bounds there, a separate, already-correct mechanism in
-/// Cranpose (unconsumed scroll delta flows into overscroll instead).
-///
-/// Residual across the 24 free-flight samples: max 5.16pt (4.09%, at the
-/// slowest/smallest-distance sample), mean 3.96pt (0.85%).
 const TARGET_OFFSET_SAMPLES: &[(f32, f32, f32, f32)] = &[
-    // (decel_rate, offset, velocity_pt_per_ms, ios_target)
     (0.998, 400.00, 0.480_834, 635.333_3),
     (0.998, 1244.67, 0.495_222, 1487.0),
     (0.998, 1755.67, 0.307_760, 1_904.333_4),
@@ -167,10 +107,6 @@ fn decay_spec_target_matches_recorded_ios_target_content_offset_both_rates() {
     }
 }
 
-/// [`crate::fling_animation::fling_rest_position`] is the public API scroll
-/// gestures actually call; it always uses `.normal` (there is no exposed
-/// `.fast` mode in Cranpose's scroll API today), so it's pinned separately
-/// against just the `.normal`-rate samples above.
 #[test]
 fn fling_rest_position_matches_recorded_ios_target_content_offset() {
     use crate::fling_animation::{MIN_FLING_VELOCITY, fling_rest_position};
@@ -181,12 +117,6 @@ fn fling_rest_position_matches_recorded_ios_target_content_offset() {
         }
         let velocity_pt_per_sec = velocity_pt_per_ms * 1000.0;
         if velocity_pt_per_sec.abs() < MIN_FLING_VELOCITY {
-            // This sample (262.6pt/s) sits inside the noisy boundary band
-            // where real iOS itself inconsistently starts a fling (see
-            // `fling_animation.rs`'s `MIN_FLING_VELOCITY` doc); below
-            // Cranpose's threshold, `fling_rest_position` correctly reports
-            // "no fling" rather than reproducing this one recording's
-            // particular outcome.
             continue;
         }
         let target = fling_rest_position(offset, velocity_pt_per_sec);
@@ -198,11 +128,6 @@ fn fling_rest_position_matches_recorded_ios_target_content_offset() {
     }
 }
 
-/// Raw finger translation (`UIPanGestureRecognizer.translation(in:)`) vs.
-/// the resulting `contentOffset.y` while dragging past the top edge of a
-/// `UIScrollView` (boundsHeight=681.6666666666666, content already at
-/// offset=0). Recorded continuously within one drag gesture, so this is
-/// the actual resistance curve, not fitted samples.
 const RUBBER_BAND_DIMENSION_PT: f32 = 681.666_7;
 const RUBBER_BAND_TRACE: &[(f32, f32)] = &[
     (15.00, 8.0000),
@@ -236,13 +161,6 @@ const RUBBER_BAND_TRACE: &[(f32, f32)] = &[
     (435.00, 177.0000),
 ];
 
-/// Least-squares fit of `c` in `f(x)=x*d*c/(d+c*x)` against this exact trace
-/// gave c=0.5499 with max residual 0.177pt — this tolerance leaves ~3x
-/// headroom over that fit residual while sitting nowhere near what the old
-/// linear-resistance-then-clamp model produced for the same inputs: Euler-
-/// integrating `resistance=(1-offset/limit).clamp(0.12,1)*0.5` (limit=340.83,
-/// half the viewport) over this trace's 29 15pt drag steps lands at 162.06pt
-/// where iOS recorded 177pt, a 14.9pt divergence — 30x this tolerance.
 const RUBBER_BAND_TOLERANCE_PT: f32 = 0.5;
 
 #[test]
@@ -266,11 +184,6 @@ fn overscroll_rubber_band_matches_recorded_ios_drag_trace() {
     assert!(max_abs_error > 0.05, "trace is not exercising resistance");
 }
 
-/// `scrollViewDidScroll` samples for the bounce-back after a drag past the
-/// top edge was held until its `UIPanGestureRecognizer` velocity decayed to
-/// zero, then released (`scrollViewWillEndDragging` reported vy=-0.000455,
-/// offsetY=-177 at t=0 here). No fling was in flight; this isolates the
-/// pure recoil animation.
 const BOUNCE_START_OFFSET: f32 = -177.0;
 const BOUNCE_TRACE: &[(f32, f32)] = &[
     (16.235, -157.3333),
@@ -311,12 +224,6 @@ const BOUNCE_TRACE: &[(f32, f32)] = &[
     (666.808, -0.3333),
 ];
 
-/// [`SpringParams::OVERSCROLL_BOUNCE`] was least-squares fit to this exact
-/// trace: max residual 2.91pt, mean 0.79pt, against a 177pt swing. This
-/// tolerance leaves ~1.7x headroom over that fit. The spring this replaced —
-/// critically damped at stiffness 300 (`SpringParams::SETTLE_POLICY`, still
-/// used for settle-policy remapping elsewhere) — misses this same trace by
-/// up to 17.9pt, over 3x this tolerance.
 const BOUNCE_TOLERANCE_PT: f32 = 5.0;
 
 #[test]
@@ -337,8 +244,6 @@ fn overscroll_bounce_back_matches_recorded_ios_release_trace() {
         },
         |_| {},
     );
-    // Establishes the t=0 baseline (release instant); see the identical
-    // comment above in the fling trajectory test.
     handle.drain_frame_callbacks(0);
 
     let mut max_abs_error = 0.0f32;
@@ -355,9 +260,6 @@ fn overscroll_bounce_back_matches_recorded_ios_release_trace() {
     assert!(max_abs_error > 0.05, "trace is not exercising the spring");
 }
 
-/// `UIScrollView.DecelerationRate.normal`/`.fast`, read directly at runtime
-/// on the iOS 26.5 Simulator — ground truth for the decay constant, not
-/// fitted. Matches Apple's documented values exactly.
 #[test]
 fn measured_decay_rates_match_apple_documented_constants() {
     assert_eq!(cranpose_animation::IOS_DECELERATION_RATE_NORMAL, 0.998);

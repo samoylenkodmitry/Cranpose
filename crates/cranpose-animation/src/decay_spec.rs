@@ -50,9 +50,6 @@ pub trait FloatDecayAnimationSpec {
     fn get_target_value(&self, initial_value: f32, initial_velocity: f32) -> f32;
 }
 
-/// Velocity magnitude, in points/sec, below which a decaying fling is
-/// considered visually at rest. Points move less than a tenth of a point
-/// per second below this, imperceptible at any real screen density.
 const REST_VELOCITY_PTS_PER_SEC: f64 = 0.1;
 
 /// Exponential decay animation spec matching `UIScrollView`'s deceleration.
@@ -64,8 +61,6 @@ const REST_VELOCITY_PTS_PER_SEC: f64 = 0.1;
 /// `scrollViewWillEndDragging(_:withVelocity:targetContentOffset:)` use.
 #[derive(Debug, Clone, Copy)]
 pub struct ExponentialDecaySpec {
-    /// Per-millisecond multiplicative decay constant
-    /// (`UIScrollView.DecelerationRate`).
     rate: f32,
 }
 
@@ -185,12 +180,6 @@ mod tests {
         assert!(fast.get_duration_nanos(0.0, velocity) < normal.get_duration_nanos(0.0, velocity));
     }
 
-    /// Ground truth from `scrollViewWillEndDragging`'s own `targetContentOffset`,
-    /// recorded on the iOS 26.5 Simulator (iPhone 17 Pro Max) at v=480.8 pt/s,
-    /// offset=400, rate=.normal: iOS predicted target 635.33. This model
-    /// predicts 640.18, a 4.85pt (2.06%) residual — see
-    /// `cranpose-ui/src/tests/ios_fling_measurement.rs` for the full sweep
-    /// (24 free-flight samples, mean 0.85% / 3.96pt, max 4.09% / 5.16pt).
     #[test]
     fn target_matches_recorded_ios_target_content_offset_within_measured_tolerance() {
         let spec = ExponentialDecaySpec::new(IOS_DECELERATION_RATE_NORMAL);
