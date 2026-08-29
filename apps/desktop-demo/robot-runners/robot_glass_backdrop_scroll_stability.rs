@@ -289,10 +289,6 @@ fn main() {
                 }
             }
 
-            for path in &capture_paths {
-                let _ = std::fs::remove_file(path);
-            }
-
             if !failures.is_empty() {
                 fail(
                     &robot,
@@ -302,6 +298,10 @@ fn main() {
                         output_dir.display()
                     ),
                 );
+            }
+
+            for path in &capture_paths {
+                let _ = std::fs::remove_file(path);
             }
 
             println!(
