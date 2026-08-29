@@ -1643,6 +1643,10 @@ impl Renderer for ScopedUpdateCountingRenderer {
             )
         });
         if !updated {
+            // A failed scoped update falls back to a whole-scene rebuild, and
+            // that IS a rebuild: tests asserting `rebuilds == 0` mean "the
+            // scoped path carried it", so the fallback must not hide here.
+            self.rebuilds.set(self.rebuilds.get() + 1);
             self.scene.clear();
             if let Some(graph) =
                 cranpose_render_common::scene_builder::build_graph_from_applier(applier, root, 1.0)
@@ -1671,6 +1675,10 @@ impl Renderer for ScopedUpdateCountingRenderer {
             )
         });
         if !updated {
+            // A failed scoped update falls back to a whole-scene rebuild, and
+            // that IS a rebuild: tests asserting `rebuilds == 0` mean "the
+            // scoped path carried it", so the fallback must not hide here.
+            self.rebuilds.set(self.rebuilds.get() + 1);
             self.scene.clear();
             if let Some(graph) =
                 cranpose_render_common::scene_builder::build_graph_from_applier(applier, root, 1.0)
@@ -4915,6 +4923,423 @@ fn rendered_text_values(scene: &cranpose_ui::RecordedRenderScene) -> Vec<String>
             _ => None,
         })
         .collect()
+}
+
+thread_local! {
+    static APP_SHELL_EXPANSION_STATE: RefCell<Option<MutableState<bool>>> =
+        const { RefCell::new(None) };
+}
+
+#[composable]
+#[allow(non_snake_case)]
+fn AppShellGrowingFirstRow() {
+    let expanded = rememberMutableStateOf(|| false);
+    APP_SHELL_EXPANSION_STATE.with(|slot| *slot.borrow_mut() = Some(expanded));
+    let list_state = rememberLazyListState();
+    // A lazy list, not a plain Column: each item composes in its own scope, so
+    // growing item 0 recomposes NOTHING in its siblings — exactly the
+    // isolation that makes the moved sibling invisible to compose-derived
+    // dirt. A plain Column would recompose the whole body and hide the hole.
+    LazyColumn(
+        Modifier::empty().fill_max_size(),
+        list_state,
+        LazyColumnSpec::default(),
+        |scope| {
+            // Each item wraps its content in its own Column, like a real list
+            // row: the strip's attach then lands on item 0's wrapper, not on
+            // the lazy container, so no structural dirt reaches the node whose
+            // re-lowering would refresh the siblings.
+            scope.items(3, move |index| {
+                Column(Modifier::empty(), ColumnSpec::default(), move || {
+                    if index == 0 {
+                        Text(
+                            "grower".to_string(),
+                            Modifier::empty().height(24.0),
+                            TextStyle::default(),
+                        );
+                        if expanded.get() {
+                            Text(
+                                "strip".to_string(),
+                                Modifier::empty().height(40.0),
+                                TextStyle::default(),
+                            );
+                        }
+                    } else if index == 1 {
+                        Text(
+                            "sibling".to_string(),
+                            Modifier::empty().height(24.0),
+                            TextStyle::default(),
+                        );
+                    } else {
+                        Text(
+                            "tail".to_string(),
+                            Modifier::empty().height(24.0),
+                            TextStyle::default(),
+                        );
+                    }
+                });
+            });
+        },
+    );
+}
+
+thread_local! {
+    static APP_SHELL_GROWER_STATE: RefCell<Option<MutableState<bool>>> =
+        const { RefCell::new(None) };
+}
+
+#[composable]
+#[allow(non_snake_case)]
+fn AppShellGrowerBox() {
+    let grown = rememberMutableStateOf(|| false);
+    APP_SHELL_GROWER_STATE.with(|slot| *slot.borrow_mut() = Some(grown));
+    let height = if grown.get() { 64.0 } else { 24.0 };
+    Text(
+        "grower".to_string(),
+        Modifier::empty().height(height),
+        TextStyle::default(),
+    );
+}
+
+const ORDINARY_SIBLING_COLOR: cranpose_ui::Color = cranpose_ui::Color(0.9, 0.05, 0.55, 1.0);
+
+#[composable]
+#[allow(non_snake_case)]
+fn AppShellOrdinaryColumnSiblings() {
+    // A plain Column, NOT a lazy list: ordinary children are placed through
+    // the layout engine's direct `LayoutState` handle, not through the node
+    // setters. The growth state is read inside the grower's own scope, so the
+    // siblings recompose nothing when it flips. The moved sibling is a solid
+    // Box, NOT a Text: re-measuring a text re-shapes it and schedules a draw
+    // repass, which sneaks the row into the scene scope and hides a missing
+    // geometry record — a plain box has no such rescue.
+    Column(
+        Modifier::empty().fill_max_size(),
+        ColumnSpec::default(),
+        move || {
+            AppShellGrowerBox();
+            cranpose_ui::Box(
+                Modifier::empty()
+                    .size(cranpose_ui::Size::new(120.0, 24.0))
+                    .background(ORDINARY_SIBLING_COLOR),
+                cranpose_ui::BoxSpec::default(),
+                || {},
+            );
+        },
+    );
+}
+
+fn graph_scene_solid_rect_y(
+    scene: &cranpose_render_common::graph_scene::Scene,
+    color: cranpose_ui::Color,
+) -> Option<f32> {
+    fn brush_matches(brush: &cranpose_ui_graphics::Brush, color: cranpose_ui::Color) -> bool {
+        matches!(brush, cranpose_ui_graphics::Brush::Solid(c) if (c.0 - color.0).abs() < 0.01
+            && (c.1 - color.1).abs() < 0.01
+            && (c.2 - color.2).abs() < 0.01)
+    }
+
+    fn walk(
+        layer: &cranpose_render_common::graph::LayerNode,
+        offset_y: f32,
+        color: cranpose_ui::Color,
+    ) -> Option<f32> {
+        let base = offset_y
+            + layer
+                .transform_to_parent
+                .map_point(cranpose_ui_graphics::Point { x: 0.0, y: 0.0 })
+                .y
+            + layer.content_offset.y;
+        for child in &layer.children {
+            match child {
+                cranpose_render_common::graph::RenderNode::Layer(child_layer) => {
+                    if let Some(y) = walk(child_layer, base, color) {
+                        return Some(y);
+                    }
+                }
+                cranpose_render_common::graph::RenderNode::Primitive(entry) => {
+                    if let cranpose_render_common::graph::PrimitiveNode::Draw(draw) = &entry.node {
+                        match &draw.primitive {
+                            cranpose_ui_graphics::DrawPrimitive::Rect { rect, brush, .. }
+                            | cranpose_ui_graphics::DrawPrimitive::RoundRect {
+                                rect, brush, ..
+                            } if brush_matches(brush, color) => {
+                                return Some(base + rect.y);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                cranpose_render_common::graph::RenderNode::DrawRun(run) => {
+                    for primitive in run.primitives.iter() {
+                        match primitive {
+                            cranpose_ui_graphics::DrawPrimitive::Rect { rect, brush, .. }
+                            | cranpose_ui_graphics::DrawPrimitive::RoundRect {
+                                rect, brush, ..
+                            } if brush_matches(brush, color) => {
+                                return Some(base + rect.y);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    let graph = scene.graph.as_ref()?;
+    walk(&graph.root, 0.0, color)
+}
+
+/// Finding 1 of the #538 review: ordinary (non-lazy) children are placed by
+/// writing the shared `LayoutState` directly, bypassing the instrumented node
+/// setters — so a sibling moved by an ordinary row's growth recorded nothing
+/// and kept stale scene geometry exactly like the lazy case this branch
+/// already fixes.
+#[test]
+fn sibling_in_an_ordinary_column_moves_in_the_scene_when_a_row_grows() {
+    let _guard = test_guard();
+    APP_SHELL_GROWER_STATE.with(|slot| slot.borrow_mut().take());
+    let root_key = location_key(file!(), line!(), column!());
+    let rebuilds = Rc::new(Cell::new(0));
+    let updates = Rc::new(Cell::new(0));
+    let last_dirty_nodes = Rc::new(RefCell::new(Vec::new()));
+
+    let mut shell = AppShell::new(
+        ScopedUpdateCountingRenderer::new(
+            Rc::clone(&rebuilds),
+            Rc::clone(&updates),
+            Rc::clone(&last_dirty_nodes),
+        ),
+        root_key,
+        AppShellOrdinaryColumnSiblings,
+    );
+    shell.set_buffer_size(320, 240);
+    shell.set_viewport(320.0, 240.0);
+    shell.update();
+
+    let grown = APP_SHELL_GROWER_STATE
+        .with(|slot| *slot.borrow())
+        .expect("grower probe should expose its state");
+    let resting_sibling_y =
+        graph_scene_solid_rect_y(shell.renderer.scene(), ORDINARY_SIBLING_COLOR)
+            .expect("resting scene should contain the sibling box");
+
+    rebuilds.set(0);
+    updates.set(0);
+
+    grown.set_value(true);
+    shell.update();
+
+    let moved_sibling_y = graph_scene_solid_rect_y(shell.renderer.scene(), ORDINARY_SIBLING_COLOR)
+        .expect("grown scene should still contain the sibling box");
+    assert!(
+        moved_sibling_y >= resting_sibling_y + 39.0,
+        "an ordinary column's sibling must move in the SCENE when the row \
+         above grows 24->64: resting y={resting_sibling_y}, after growth \
+         y={moved_sibling_y}"
+    );
+    assert_eq!(
+        rebuilds.get(),
+        0,
+        "the moved sibling must reach the SCOPED update; a whole-scene rebuild \
+         hides the missing geometry channel and pays O(app) for one grown row"
+    );
+    assert!(
+        updates.get() >= 1,
+        "the growth frame must run at least one scoped update"
+    );
+}
+
+#[composable]
+#[allow(non_snake_case)]
+fn AppShellGrowerAboveNestedLazy() {
+    Column(
+        Modifier::empty().fill_max_size(),
+        ColumnSpec::default(),
+        move || {
+            AppShellGrowerBox();
+            let nested_state = rememberLazyListState();
+            LazyColumn(
+                Modifier::empty().fill_max_width().height(120.0),
+                nested_state,
+                LazyColumnSpec::default(),
+                |scope| {
+                    scope.items(3, move |index| {
+                        Text(
+                            format!("nested {index}"),
+                            Modifier::empty().height(24.0),
+                            TextStyle::default(),
+                        );
+                    });
+                },
+            );
+        },
+    );
+}
+
+/// The mutation this pins: strip the recording from ONLY the
+/// SubcomposeLayoutNode setters and every other test in this diff stays
+/// green, because they move ordinary rows inside a stationary lazy list.
+/// Here the moving node IS a SubcomposeLayoutNode — a nested LazyColumn
+/// pushed down by an ordinary sibling's growth — so its content drifts if
+/// that half of the recorder disappears.
+#[test]
+fn a_nested_lazy_list_moves_in_the_scene_when_the_row_above_grows() {
+    let _guard = test_guard();
+    APP_SHELL_GROWER_STATE.with(|slot| slot.borrow_mut().take());
+    APP_SHELL_LAZY_LIST_STATE.with(|slot| slot.borrow_mut().take());
+    let root_key = location_key(file!(), line!(), column!());
+    let rebuilds = Rc::new(Cell::new(0));
+    let updates = Rc::new(Cell::new(0));
+    let last_dirty_nodes = Rc::new(RefCell::new(Vec::new()));
+
+    let mut shell = AppShell::new(
+        ScopedUpdateCountingRenderer::new(
+            Rc::clone(&rebuilds),
+            Rc::clone(&updates),
+            Rc::clone(&last_dirty_nodes),
+        ),
+        root_key,
+        AppShellGrowerAboveNestedLazy,
+    );
+    shell.set_buffer_size(320, 240);
+    shell.set_viewport(320.0, 240.0);
+    shell.update();
+
+    let grown = APP_SHELL_GROWER_STATE
+        .with(|slot| *slot.borrow())
+        .expect("grower probe should expose its state");
+    let resting_nested_y = graph_scene_text_y(shell.renderer.scene(), "nested 0")
+        .expect("resting scene should contain the nested list's first row");
+
+    rebuilds.set(0);
+    updates.set(0);
+
+    grown.set_value(true);
+    shell.update();
+
+    let moved_nested_y = graph_scene_text_y(shell.renderer.scene(), "nested 0")
+        .expect("grown scene should still contain the nested list's first row");
+    assert!(
+        moved_nested_y >= resting_nested_y + 39.0,
+        "a nested lazy list must move in the SCENE when the row above grows \
+         24->64: resting y={resting_nested_y}, after growth y={moved_nested_y}"
+    );
+    assert_eq!(
+        rebuilds.get(),
+        0,
+        "the moved nested list must reach the SCOPED update, not ride a \
+         whole-scene rebuild"
+    );
+}
+
+fn graph_scene_text_y(
+    scene: &cranpose_render_common::graph_scene::Scene,
+    needle: &str,
+) -> Option<f32> {
+    fn walk(
+        layer: &cranpose_render_common::graph::LayerNode,
+        offset_y: f32,
+        needle: &str,
+    ) -> Option<f32> {
+        // A layer's position lives in its transform (pure translation in this
+        // scene); local_bounds always starts at the origin.
+        let base = offset_y
+            + layer
+                .transform_to_parent
+                .map_point(cranpose_ui_graphics::Point { x: 0.0, y: 0.0 })
+                .y
+            + layer.content_offset.y;
+        for child in &layer.children {
+            match child {
+                cranpose_render_common::graph::RenderNode::Layer(child_layer) => {
+                    if let Some(y) = walk(child_layer, base, needle) {
+                        return Some(y);
+                    }
+                }
+                cranpose_render_common::graph::RenderNode::Primitive(entry) => {
+                    if let cranpose_render_common::graph::PrimitiveNode::Text(text) = &entry.node
+                        && text.text.text == needle
+                    {
+                        return Some(base + text.rect.y);
+                    }
+                }
+                cranpose_render_common::graph::RenderNode::DrawRun(_) => {}
+            }
+        }
+        None
+    }
+
+    let graph = scene.graph.as_ref()?;
+    walk(&graph.root, 0.0, needle)
+}
+
+/// One wrong assumption implemented twice: "the child list did not change,
+/// therefore there is nothing to invalidate". A child can grow without any
+/// membership changing, and a sibling pushed down by that growth recomposes
+/// nothing and raises no repass of its own — the only party that knows it
+/// moved is the layout pass that moved it. This is the scene-side enforcement
+/// point of that invariant (the core-side one is
+/// `reattaching_a_dirty_child_still_bubbles_to_ancestors`): the moved
+/// sibling's geometry must reach the scoped scene update, without the rescue
+/// of a full rebuild.
+#[test]
+fn sibling_moved_by_another_rows_growth_reaches_the_scoped_scene_update() {
+    let _guard = test_guard();
+    APP_SHELL_EXPANSION_STATE.with(|slot| slot.borrow_mut().take());
+    let root_key = location_key(file!(), line!(), column!());
+    let rebuilds = Rc::new(Cell::new(0));
+    let updates = Rc::new(Cell::new(0));
+    let last_dirty_nodes = Rc::new(RefCell::new(Vec::new()));
+
+    let mut shell = AppShell::new(
+        ScopedUpdateCountingRenderer::new(
+            Rc::clone(&rebuilds),
+            Rc::clone(&updates),
+            Rc::clone(&last_dirty_nodes),
+        ),
+        root_key,
+        AppShellGrowingFirstRow,
+    );
+    shell.set_buffer_size(320, 240);
+    shell.set_viewport(320.0, 240.0);
+    shell.update();
+
+    let expanded = APP_SHELL_EXPANSION_STATE
+        .with(|slot| *slot.borrow())
+        .expect("expansion probe should expose its state");
+    let resting_sibling_y = graph_scene_text_y(shell.renderer.scene(), "sibling")
+        .expect("resting scene should contain the sibling row");
+
+    rebuilds.set(0);
+    updates.set(0);
+
+    expanded.set_value(true);
+    shell.update();
+
+    let strip_y = graph_scene_text_y(shell.renderer.scene(), "strip")
+        .expect("expanded scene should contain the strip");
+    let moved_sibling_y = graph_scene_text_y(shell.renderer.scene(), "sibling")
+        .expect("expanded scene should still contain the sibling row");
+    assert!(
+        moved_sibling_y > resting_sibling_y + 1.0,
+        "the sibling below a grown row must move down in the SCENE, not only in \
+         layout: resting y={resting_sibling_y}, after growth y={moved_sibling_y}, \
+         strip y={strip_y}"
+    );
+    assert!(
+        strip_y < moved_sibling_y,
+        "the strip must sit above the pushed sibling: strip y={strip_y}, \
+         sibling y={moved_sibling_y}"
+    );
+    assert_eq!(
+        rebuilds.get(),
+        0,
+        "the moved sibling must reach the SCOPED update; a full rebuild hides \
+         the missing geometry channel and pays O(whole app) for one grown row"
+    );
 }
 
 fn graph_scene_text_values(scene: &cranpose_render_common::graph_scene::Scene) -> Vec<String> {

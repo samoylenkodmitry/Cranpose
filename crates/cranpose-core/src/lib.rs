@@ -1897,10 +1897,28 @@ impl Command {
             } => {
                 // Bubbling marks every ancestor up to the root as needing
                 // measure, and re-measuring a tree that did not change is the
-                // most expensive way to do nothing. Only an insert that
-                // actually changed the child list has anything to invalidate.
+                // most expensive way to do nothing. An insert that changed the
+                // child list has something to invalidate — and so does a
+                // re-attach of a child that carries pending measure or layout
+                // dirt: an unchanged list says nothing about unchanged
+                // geometry, and the attach-time bubble is the only road that
+                // child's dirt has to the root. Swallowing it strands a grown
+                // subtree at its old geometry until an unrelated pass runs.
                 if insert_child_with_reparenting(applier, parent_id, child_id) {
                     bubble.apply(applier, parent_id);
+                } else if let Ok(child) = applier.get_mut(child_id) {
+                    // Semantics stays out of this bubble: attach never bubbled
+                    // it (LAYOUT_AND_MEASURE carries semantics: false), and
+                    // production nodes START semantics-dirty until a semantics
+                    // tree is built — with semantics off, "is the child
+                    // semantics-dirty" is always yes, which would turn every
+                    // clean re-attach on a steady scroll into an ancestor walk.
+                    let dirty_bubble = DirtyBubble {
+                        layout: child.needs_layout(),
+                        measure: child.needs_measure(),
+                        semantics: false,
+                    };
+                    dirty_bubble.apply(applier, parent_id);
                 }
                 Ok(())
             }
@@ -2989,6 +3007,16 @@ impl MemoryApplier {
     /// is reported as its nearest non-virtual ancestor: that is the node
     /// whose graph child set the change altered, and an id the graph cannot
     /// resolve would force the scoped scene update to give up and rebuild.
+    /// Resolves a scene-scope candidate the way structural records are
+    /// resolved: to its nearest non-virtual ancestor, and only while still
+    /// attached to `root`. A node detached after recording must not reach the
+    /// scoped scene update — an id the graph cannot resolve forces it to give
+    /// up and rebuild the whole scene.
+    pub fn scene_node_attached_to(&mut self, node_id: NodeId, root: NodeId) -> Option<NodeId> {
+        let resolved = self.first_non_virtual_ancestor(node_id)?;
+        self.is_attached_to(resolved, root).then_some(resolved)
+    }
+
     pub fn take_structural_change_parents_attached_to(&mut self, root: NodeId) -> Vec<NodeId> {
         let recorded = std::mem::take(&mut self.structural_change_parents);
         let mut attached = Vec::with_capacity(recorded.len());

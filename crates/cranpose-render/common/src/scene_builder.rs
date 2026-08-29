@@ -502,9 +502,9 @@ fn try_translate_scrolled_layer(
         resolved_modifiers: _,
         children: fresh_children,
     } = data;
-    if !layout_state.is_placed
-        || layout_state.size.width != container.local_bounds.width
-        || layout_state.size.height != container.local_bounds.height
+    if !layout_state.is_placed()
+        || layout_state.size().width != container.local_bounds.width
+        || layout_state.size().height != container.local_bounds.height
     {
         return translate_bail("container unplaced or resized");
     }
@@ -560,7 +560,7 @@ fn try_translate_scrolled_layer(
         let Ok(state) = state else {
             continue;
         };
-        if !state.is_placed {
+        if !state.is_placed() {
             continue;
         }
         placed_fresh.push((*child_id, state));
@@ -580,8 +580,8 @@ fn try_translate_scrolled_layer(
         if layer.has_origin_sinks {
             return translate_bail("child subtree publishes window origins");
         }
-        if state.size.width != layer.local_bounds.width
-            || state.size.height != layer.local_bounds.height
+        if state.size().width != layer.local_bounds.width
+            || state.size().height != layer.local_bounds.height
         {
             return translate_bail("child resized");
         }
@@ -595,8 +595,8 @@ fn try_translate_scrolled_layer(
         .map(|layer| (layer.translation_x, layer.translation_y))
         .unwrap_or((0.0, 0.0));
     let top_left = Point {
-        x: parent_abs.content_origin.x + layout_state.position.x,
-        y: parent_abs.content_origin.y + layout_state.position.y,
+        x: parent_abs.content_origin.x + layout_state.position().x,
+        y: parent_abs.content_origin.y + layout_state.position().y,
     };
     let layer_translation = Point {
         x: parent_abs.layer_translation.x + translation_x,
@@ -662,7 +662,7 @@ fn try_translate_scrolled_layer(
     // computes for each field.
     let mut transform = layer_transform_to_parent(
         container.local_bounds,
-        layout_state.position,
+        layout_state.position(),
         &graphics_layer,
     );
     if parent_content_offset != Point::default() {
@@ -689,8 +689,8 @@ fn try_translate_scrolled_layer(
         sink.set(Rect {
             x: window_origin.x,
             y: window_origin.y,
-            width: layout_state.size.width,
-            height: layout_state.size.height,
+            width: layout_state.size().width,
+            height: layout_state.size().height,
         });
     }
     container.scene_children_origin = child_origin;
@@ -721,7 +721,7 @@ fn try_translate_scrolled_layer(
             if !dirty_nodes.contains(child_id) {
                 let mut child_transform = layer_transform_to_parent(
                     layer.local_bounds,
-                    state.position,
+                    state.position(),
                     &layer.graphics_layer,
                 );
                 if content_offset != Point::default() {
@@ -732,8 +732,8 @@ fn try_translate_scrolled_layer(
                 }
                 layer.transform_to_parent = child_transform;
                 let new_children_origin = Point {
-                    x: child_origin.x + state.position.x + layer.content_offset.x,
-                    y: child_origin.y + state.position.y + layer.content_offset.y,
+                    x: child_origin.x + state.position().x + layer.content_offset.x,
+                    y: child_origin.y + state.position().y + layer.content_offset.y,
                 };
                 let origin_delta = Point {
                     x: new_children_origin.x - layer.scene_children_origin.x,
@@ -1093,23 +1093,23 @@ fn build_layer_node_from_data(
         resolved_modifiers,
         children,
     } = data;
-    if !layout_state.is_placed {
+    if !layout_state.is_placed() {
         return None;
     }
 
     let local_bounds = Rect {
         x: 0.0,
         y: 0.0,
-        width: layout_state.size.width,
-        height: layout_state.size.height,
+        width: layout_state.size().width,
+        height: layout_state.size().height,
     };
     if cranpose_core::env_flag!("CRANPOSE_SCENE_UPDATE_DIAG") {
         eprintln!(
             "[scene-update-diag] build layer node={node_id:?} size=({:.2},{:.2}) pos=({:.2},{:.2})",
-            layout_state.size.width,
-            layout_state.size.height,
-            layout_state.position.x,
-            layout_state.position.y,
+            layout_state.size().width,
+            layout_state.size().height,
+            layout_state.position().x,
+            layout_state.position().y,
         );
     }
     let clip_to_bounds = modifier_slices.clip_to_bounds();
@@ -1120,7 +1120,7 @@ fn build_layer_node_from_data(
         local_bounds,
     );
     let transform_to_parent =
-        layer_transform_to_parent(local_bounds, layout_state.position, &graphics_layer);
+        layer_transform_to_parent(local_bounds, layout_state.position(), &graphics_layer);
     let isolation = isolation_reasons(&graphics_layer);
     let cache_policy = if isolation.has_any() {
         CachePolicy::Auto
@@ -1143,7 +1143,7 @@ fn build_layer_node_from_data(
     // only pass that runs in the app runtime, and it runs before the frame's
     // pointer dispatch, so handlers see the current size (and track resizes)
     // whether or not an event has arrived yet.
-    modifier_slices.publish_pointer_input_size(layout_state.size);
+    modifier_slices.publish_pointer_input_size(layout_state.size());
 
     let node_motion_context_animated =
         inherited_motion_context_animated || modifier_slices.motion_context_animated();
@@ -1174,8 +1174,8 @@ fn build_layer_node_from_data(
             .map(|layer| (layer.translation_x, layer.translation_y))
             .unwrap_or((0.0, 0.0));
         let top_left = Point {
-            x: parent.content_origin.x + layout_state.position.x,
-            y: parent.content_origin.y + layout_state.position.y,
+            x: parent.content_origin.x + layout_state.position().x,
+            y: parent.content_origin.y + layout_state.position().y,
         };
         let layer_translation = Point {
             x: parent.layer_translation.x + tx,
@@ -1195,8 +1195,8 @@ fn build_layer_node_from_data(
             sink.set(Rect {
                 x: window_origin.x,
                 y: window_origin.y,
-                width: layout_state.size.width,
-                height: layout_state.size.height,
+                width: layout_state.size().width,
+                height: layout_state.size().height,
             });
         }
     }
@@ -1219,7 +1219,7 @@ fn build_layer_node_from_data(
         node_id,
         modifier_slices.draw_commands(),
         DrawPlacement::Behind,
-        layout_state.size,
+        layout_state.size(),
         PrimitivePhase::BeforeChildren,
     );
     if let Some(text) = text_node_from_parts(TextNodeParts {
@@ -1268,7 +1268,7 @@ fn build_layer_node_from_data(
         node_id,
         modifier_slices.draw_commands(),
         DrawPlacement::Overlay,
-        layout_state.size,
+        layout_state.size(),
         PrimitivePhase::AfterChildren,
     ));
     let has_hit_targets = hit_test.is_some()
@@ -5069,7 +5069,7 @@ mod tests {
                 if let Ok(summary) = applier.with_node::<LayoutNode, _>(child_id, |node| {
                     format!(
                         "layout#{child_id} placed={} text={:?} children={:?}",
-                        node.layout_state().is_placed,
+                        node.layout_state().is_placed(),
                         node.modifier_slices_snapshot()
                             .text_content()
                             .map(str::to_string),
@@ -5081,7 +5081,7 @@ mod tests {
                     applier.with_node::<SubcomposeLayoutNode, _>(child_id, |node| {
                         format!(
                             "subcompose#{child_id} placed={} active_children={:?}",
-                            node.layout_state().is_placed,
+                            node.layout_state().is_placed(),
                             node.active_children()
                         )
                     })

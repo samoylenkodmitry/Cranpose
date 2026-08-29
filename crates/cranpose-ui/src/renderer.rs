@@ -342,19 +342,19 @@ impl HeadlessRenderer {
         let (layout_state, modifier_slices, children) = node_data;
 
         // Skip nodes that weren't placed
-        if !layout_state.is_placed {
+        if !layout_state.is_placed() {
             return;
         }
 
         // Calculate absolute position
-        let abs_x = parent_offset.x + layout_state.position.x;
-        let abs_y = parent_offset.y + layout_state.position.y;
+        let abs_x = parent_offset.x + layout_state.position().x;
+        let abs_y = parent_offset.y + layout_state.position().y;
 
         let rect = Rect {
             x: abs_x,
             y: abs_y,
-            width: layout_state.size.width,
-            height: layout_state.size.height,
+            width: layout_state.size().width,
+            height: layout_state.size().height,
         };
 
         let size = Size {
