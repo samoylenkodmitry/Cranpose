@@ -43,7 +43,6 @@ fn sd_ellipse_approx(p: vec2<f32>, half_size: vec2<f32>) -> f32 {
 }
 
 struct OpticalSample {
-    source_displacement: vec2<f32>,
     interior: f32,
     edge_light: f32,
     face_light: f32,
@@ -265,11 +264,9 @@ fn sample_wcksrd_reflection_path(
 
 fn wcksrd_optics(
     local_position: vec2<f32>,
-    sampling_position: vec2<f32>,
     half_size: vec2<f32>,
     distance: f32,
     refraction_depth: f32,
-    refraction_curve: f32,
     gradient_extent: f32,
     edge_extent: f32,
     edge_sharpness: f32,
@@ -277,13 +274,6 @@ fn wcksrd_optics(
     let inradius = max(min(half_size.x, half_size.y), 1.0);
     let lens_refraction = max(inradius * refraction_depth, 0.001);
     let interior = clamp(-distance / lens_refraction, 0.0, 1.0);
-    let lens_scale = sin(pow(interior, refraction_curve) * 1.57);
-    let source_displacement = sampling_position * (lens_scale - 1.0);
-    let outer_interior = clamp(
-        -(distance - edge_extent) / lens_refraction,
-        0.0,
-        1.0,
-    );
     // The border line's ramp spans lens_refraction/edge_sharpness px.
     let border_ramp = floored_band_width(lens_refraction / max(edge_sharpness, 1.0));
     let border = clamp(-(distance - edge_extent) / border_ramp, 0.0, 1.0)
@@ -296,12 +286,7 @@ fn wcksrd_optics(
     let source_y = -local_position.y / max(half_size.y, 1.0) * 0.29;
     let face_light = 0.5 * clamp(clamp(source_y, 0.0, 0.2) + 0.1, 0.0, 1.0)
         + 0.5 * clamp(clamp(-source_y, -1.0, 0.2) * gradient_band + 0.1, 0.0, 1.0);
-    return OpticalSample(
-        source_displacement,
-        interior,
-        border,
-        face_light,
-    );
+    return OpticalSample(interior, border, face_light);
 }
 
 // One wavelength's walk through the SAME continuous lens field: the
@@ -339,7 +324,22 @@ fn channel_lens_displacement(
     // anchor, ringing the lens with the content's compressed line
     // uniformly instead of starving the trailing cap and overshooting the
     // leading one.
-    let optical_position = sampling_position - zoom_anchor;
+    //
+    // The pull's REACH is capped to lens_refraction, the same depth that
+    // already sizes the identity-to-compressed band. Left uncapped, the
+    // reach grows with the raw distance from the axis, which on a highly
+    // curved boundary (a full circle, or a capsule's rounded cap) is large
+    // and sweeps through a wide arc of directions over a short arc length —
+    // a whole stretch of boundary content folds down toward one interior
+    // point, reading as a pinwheel instead of a smooth meniscus. A flat
+    // edge has no such sweep (neighbouring points pull in nearly the same
+    // direction regardless of reach), so capping the reach changes nothing
+    // there.
+    var optical_position = sampling_position - zoom_anchor;
+    let optical_reach = length(optical_position);
+    if optical_reach > lens_refraction {
+        optical_position = optical_position * (lens_refraction / optical_reach);
+    }
     var displacement = optical_position * (lens_scale - 1.0)
         * transmission_refraction;
     if optical_zoom > 1.0 && loupe_mode <= 0.5 {
@@ -708,11 +708,9 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     }
     let optical_sample = wcksrd_optics(
         p,
-        sampling_position,
         half_size,
         d,
         refraction_depth,
-        refraction_curve,
         gradient_extent,
         edge_extent,
         edge_sharpness,
