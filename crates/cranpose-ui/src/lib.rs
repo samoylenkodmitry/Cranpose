@@ -203,7 +203,7 @@ pub use semantics_dispatch::{
 };
 pub use subcompose_layout::{
     Constraints, MeasureResult, Placement, SubcomposeLayoutNode, SubcomposeLayoutScope,
-    SubcomposeMeasureScope, SubcomposeMeasureScopeImpl,
+    SubcomposeMeasureScope, SubcomposeMeasureScopeImpl, clean_slot_skip_count,
 };
 pub use text::{
     LinkAnnotation, ParagraphStyle, PlatformParagraphStyle, PlatformSpanStyle, PlatformTextStyle,

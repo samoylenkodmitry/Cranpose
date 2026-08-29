@@ -334,7 +334,7 @@ fn renderer_renders_subcompose_background() {
             SubcomposeLayout(
                 Modifier::empty().background(Color(0.4, 0.4, 0.4, 1.0)),
                 |scope, constraints| {
-                    let children = scope.subcompose(SlotId::new(0), || {
+                    let children = scope.subcompose(SlotId::new(0), (), || {
                         Text(
                             "Subcomposed".to_string(),
                             Modifier::empty(),

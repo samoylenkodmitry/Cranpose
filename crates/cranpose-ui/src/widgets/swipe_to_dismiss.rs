@@ -889,7 +889,7 @@ where
         let background = background.clone();
         let content = Rc::clone(&content);
         let controller_for_row = Rc::clone(&controller_for_layout);
-        let measurables = scope.subcompose(SlotId::new(0), move || {
+        let measurables = scope.subcompose(SlotId::new(0), (), move || {
             // The row itself: a `BoxWithConstraints` (so it can read its own
             // width for the dismiss threshold) carrying the user modifier + the
             // swipe pointer handler, overlaying the optional background and the

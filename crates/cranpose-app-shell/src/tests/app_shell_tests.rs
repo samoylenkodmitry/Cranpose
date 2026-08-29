@@ -5142,6 +5142,10 @@ fn AppShellSelfReferentialSize() {
 /// diagnostic in release. The debug ceiling converts it into a panic naming
 /// the two alternating sizes.
 #[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "the oscillation ceiling that converts this livelock into a panic only exists in debug builds"
+)]
 #[should_panic(expected = "size-reactive feedback loop")]
 fn a_self_referential_size_report_panics_in_debug_instead_of_livelocking() {
     let _guard = test_guard();
@@ -5180,7 +5184,7 @@ fn app_shell_clean_slot_scroll_probe() {
             CLEAN_SLOT_MEASURE_COUNT.with(|count| count.set(count.get() + 1));
             let width = constraints.max_width.max(constraints.min_width);
             let height = constraints.max_height.max(constraints.min_height);
-            let nodes = scope.subcompose(cranpose_core::SlotId::new(0), move || {
+            let nodes = scope.subcompose(cranpose_core::SlotId::new(0), (), move || {
                 CLEAN_SLOT_COMPOSE_COUNT.with(|count| count.set(count.get() + 1));
                 let list_state = rememberLazyListState();
                 CLEAN_SLOT_LIST_STATE.with(|slot| {
@@ -5203,9 +5207,13 @@ fn app_shell_clean_slot_scroll_probe() {
             });
             let mut placements = Vec::with_capacity(nodes.len());
             for node in nodes {
-                let placeable =
-                    scope.measure(node, cranpose_ui::Constraints::tight(width, height));
-                placements.push(cranpose_ui::Placement::new(placeable.node_id(), 0.0, 0.0, 0));
+                let placeable = scope.measure(node, cranpose_ui::Constraints::tight(width, height));
+                placements.push(cranpose_ui::Placement::new(
+                    placeable.node_id(),
+                    0.0,
+                    0.0,
+                    0,
+                ));
             }
             scope.layout(width, height, placements)
         },
@@ -5235,6 +5243,7 @@ fn a_scroll_measure_repass_does_not_recompose_a_subcompose_slot_that_read_no_scr
     }
     let settled_composes = CLEAN_SLOT_COMPOSE_COUNT.with(Cell::get);
     let settled_measures = CLEAN_SLOT_MEASURE_COUNT.with(Cell::get);
+    let settled_skips = cranpose_ui::clean_slot_skip_count();
     assert!(
         settled_composes >= 1 && settled_measures >= 1,
         "instrument dead: the probe never composed ({settled_composes}) or \
@@ -5270,20 +5279,326 @@ fn a_scroll_measure_repass_does_not_recompose_a_subcompose_slot_that_read_no_scr
          got {layout_texts:?}"
     );
 
-    let composes_after = CLEAN_SLOT_COMPOSE_COUNT.with(Cell::get);
-    assert_eq!(
-        composes_after, settled_composes,
+    let skips_after = cranpose_ui::clean_slot_skip_count();
+    assert!(
+        skips_after >= settled_skips + (measures_after - settled_measures) as u64,
         "a scroll-driven measure repass recomposed a subcompose slot whose \
-         composition read none of the scrolled state: the slot content \
-         closure ran {} extra times for {} extra measure passes. Every such \
-         run is the per-pass compose walk over the slot's retained \
-         composition (measured at ~0.3ms per body-sized slot per pass on a \
-         Kirin 980, and paid by whichever layer owns the slot — see \
+         composition read none of the scrolled state: only {} of the {} \
+         extra measure passes reused the retained slot. Every non-reused \
+         pass is the compose walk over the slot's retained composition \
+         (measured at ~0.3ms per body-sized slot per pass on a Kirin 980, \
+         and paid by whichever layer owns the slot — see \
          docs/subcompose_measure_cost.md). A measure pass over a slot with \
          no invalidated scopes must reuse the retained slot roots without \
          composing",
-        composes_after - settled_composes,
+        skips_after - settled_skips,
         measures_after - settled_measures,
+    );
+
+    // Debug builds shadow-compose every skipped slot to catch stale
+    // non-reactive reads, so the closure legitimately re-runs there; the
+    // no-recompose guarantee on the closure itself is release behavior.
+    #[cfg(not(debug_assertions))]
+    {
+        let composes_after = CLEAN_SLOT_COMPOSE_COUNT.with(Cell::get);
+        assert_eq!(
+            composes_after, settled_composes,
+            "the release skip path must not run the slot content closure at all"
+        );
+    }
+}
+
+thread_local! {
+    static SLOT_STATE_HANDLE: RefCell<Option<MutableState<i32>>> = const { RefCell::new(None) };
+}
+
+#[composable]
+fn app_shell_slot_reads_state_probe() {
+    let value = rememberMutableStateOf(|| 1);
+    SLOT_STATE_HANDLE.with(|slot| {
+        *slot.borrow_mut() = Some(value);
+    });
+    cranpose_ui::SubcomposeLayout(
+        Modifier::empty().fill_max_size(),
+        move |scope, constraints| {
+            let width = constraints.max_width.max(constraints.min_width);
+            let height = constraints.max_height.max(constraints.min_height);
+            let nodes = scope.subcompose(cranpose_core::SlotId::new(0), (), move || {
+                Text(
+                    format!("slot value {}", value.get()),
+                    Modifier::empty(),
+                    TextStyle::default(),
+                );
+            });
+            let mut placements = Vec::with_capacity(nodes.len());
+            for node in nodes {
+                let placeable = scope.measure(node, cranpose_ui::Constraints::tight(width, height));
+                placements.push(cranpose_ui::Placement::new(
+                    placeable.node_id(),
+                    0.0,
+                    0.0,
+                    0,
+                ));
+            }
+            scope.layout(width, height, placements)
+        },
+    );
+}
+
+#[test]
+fn a_state_write_reaches_slot_content_without_any_concurrent_layout_dirt() {
+    let _guard = test_guard();
+    SLOT_STATE_HANDLE.with(|slot| slot.borrow_mut().take());
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(
+        TestRenderer::default(),
+        root_key,
+        app_shell_slot_reads_state_probe,
+    );
+    shell.set_buffer_size(320, 240);
+    shell.set_viewport(320.0, 240.0);
+    for _ in 0..5 {
+        shell.update();
+        if !shell.needs_redraw() && !shell.composition.should_recompose() {
+            break;
+        }
+    }
+    let layout_texts = layout_tree_texts(shell.layout_tree().expect("layout tree"));
+    assert!(
+        layout_texts.iter().any(|text| text == "slot value 1"),
+        "instrument dead: initial slot text missing, got {layout_texts:?}"
+    );
+
+    let value = SLOT_STATE_HANDLE
+        .with(|slot| slot.borrow().as_ref().cloned())
+        .expect("probe must expose its state");
+    value.set(2);
+    assert!(
+        shell.composition.should_recompose(),
+        "the load-bearing claim of slot retention: a write to state read only \
+         inside a measure-time slot composition must invalidate that slot's \
+         recompose scope BEFORE any measure pass runs. Slot reads ride \
+         scope-level state subscriptions, not the per-pass measure observer \
+         (which is constructed fresh, never started, and dies with the pass); \
+         if this fails, nothing can carry 'still clean' across passes and \
+         clean-slot reuse is unsound"
+    );
+    for _ in 0..5 {
+        shell.update();
+        if !shell.needs_redraw() && !shell.composition.should_recompose() {
+            break;
+        }
+    }
+    let layout_texts = layout_tree_texts(shell.layout_tree().expect("layout tree"));
+    assert!(
+        layout_texts.iter().any(|text| text == "slot value 2"),
+        "a state write read only by subcompose slot content must reach the \
+         screen without any concurrent layout dirt; the slot still shows \
+         {layout_texts:?}. If this regresses, slot read-subscriptions are \
+         dying with the per-pass measure observer and nothing else schedules \
+         the remeasure"
+    );
+}
+
+thread_local! {
+    static UNKEYED_CELL: Cell<u32> = const { Cell::new(0) };
+    static KEYED_HEIGHT_STATE: RefCell<Option<MutableState<f32>>> = const { RefCell::new(None) };
+}
+
+#[composable]
+fn app_shell_unkeyed_cell_slot_probe() {
+    cranpose_ui::SubcomposeLayout(
+        Modifier::empty().fill_max_size(),
+        move |scope, constraints| {
+            let width = constraints.max_width.max(constraints.min_width);
+            let height = constraints.max_height.max(constraints.min_height);
+            let poison = UNKEYED_CELL.with(Cell::get);
+            let mut placements = Vec::new();
+            let nodes = scope.subcompose(cranpose_core::SlotId::new(0), (), move || {
+                for row in 0..=poison.min(3) {
+                    Text(
+                        format!("poisoned row {row}"),
+                        Modifier::empty().height(20.0),
+                        TextStyle::default(),
+                    );
+                }
+            });
+            for node in nodes {
+                let placeable = scope.measure(node, cranpose_ui::Constraints::loose(width, height));
+                placements.push(cranpose_ui::Placement::new(
+                    placeable.node_id(),
+                    0.0,
+                    0.0,
+                    1,
+                ));
+            }
+            let list_nodes = scope.subcompose(cranpose_core::SlotId::new(1), (), move || {
+                let list_state = rememberLazyListState();
+                CLEAN_SLOT_LIST_STATE.with(|slot| {
+                    *slot.borrow_mut() = Some(list_state);
+                });
+                LazyColumn(
+                    Modifier::empty().fill_max_size(),
+                    list_state,
+                    LazyColumnSpec::new(),
+                    |scope| {
+                        scope.items(80, |index| {
+                            Text(
+                                format!("driver row {index}"),
+                                Modifier::empty().height(48.0),
+                                TextStyle::default(),
+                            );
+                        });
+                    },
+                );
+            });
+            for node in list_nodes {
+                let placeable = scope.measure(node, cranpose_ui::Constraints::tight(width, height));
+                placements.push(cranpose_ui::Placement::new(
+                    placeable.node_id(),
+                    0.0,
+                    0.0,
+                    0,
+                ));
+            }
+            scope.layout(width, height, placements)
+        },
+    );
+}
+
+#[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "the shadow oracle that converts this staleness into a panic only exists in debug builds"
+)]
+#[should_panic(expected = "clean-slot skip diverged")]
+fn a_slot_reading_a_changed_cell_outside_the_key_panics_in_debug_instead_of_going_stale() {
+    let _guard = test_guard();
+    UNKEYED_CELL.with(|cell| cell.set(0));
+    CLEAN_SLOT_LIST_STATE.with(|slot| slot.borrow_mut().take());
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(
+        TestRenderer::default(),
+        root_key,
+        app_shell_unkeyed_cell_slot_probe,
+    );
+    shell.set_buffer_size(320, 480);
+    shell.set_viewport(320.0, 480.0);
+    for _ in 0..5 {
+        shell.update();
+        if !shell.needs_redraw() && !shell.composition.should_recompose() {
+            break;
+        }
+    }
+    UNKEYED_CELL.with(|cell| cell.set(2));
+    let list_state = CLEAN_SLOT_LIST_STATE
+        .with(|slot| slot.borrow().as_ref().copied())
+        .expect("probe must expose its lazy list state");
+    list_state.scroll_to_item(6, 0.0);
+    for _ in 0..4 {
+        shell.update();
+    }
+}
+
+#[composable]
+fn app_shell_keyed_measure_input_probe() {
+    let height = rememberMutableStateOf(|| 40.0f32);
+    KEYED_HEIGHT_STATE.with(|slot| {
+        *slot.borrow_mut() = Some(height);
+    });
+    cranpose_ui::SubcomposeLayout(
+        Modifier::empty().fill_max_size(),
+        move |scope, constraints| {
+            let width = constraints.max_width.max(constraints.min_width);
+            let total_height = constraints.max_height.max(constraints.min_height);
+            let bar_nodes = scope.subcompose(cranpose_core::SlotId::new(0), (), move || {
+                Box(
+                    Modifier::empty().height(height.get()),
+                    BoxSpec::default(),
+                    || {},
+                );
+            });
+            let mut bar_height = 0.0f32;
+            let mut placements = Vec::new();
+            for node in bar_nodes {
+                let placeable =
+                    scope.measure(node, cranpose_ui::Constraints::loose(width, total_height));
+                bar_height = bar_height.max(placeable.height());
+                placements.push(cranpose_ui::Placement::new(
+                    placeable.node_id(),
+                    0.0,
+                    0.0,
+                    1,
+                ));
+            }
+            let padding = bar_height;
+            let content_nodes =
+                scope.subcompose(cranpose_core::SlotId::new(1), padding, move || {
+                    Text(
+                        format!("content top pad {padding}"),
+                        Modifier::empty(),
+                        TextStyle::default(),
+                    );
+                });
+            for node in content_nodes {
+                let placeable = scope.measure(
+                    node,
+                    cranpose_ui::Constraints::tight(width, total_height - padding),
+                );
+                placements.push(cranpose_ui::Placement::new(
+                    placeable.node_id(),
+                    0.0,
+                    padding,
+                    0,
+                ));
+            }
+            scope.layout(width, total_height, placements)
+        },
+    );
+}
+
+#[test]
+fn a_measure_computed_capture_reaches_slot_content_through_the_subcompose_key() {
+    let _guard = test_guard();
+    KEYED_HEIGHT_STATE.with(|slot| slot.borrow_mut().take());
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(
+        TestRenderer::default(),
+        root_key,
+        app_shell_keyed_measure_input_probe,
+    );
+    shell.set_buffer_size(320, 240);
+    shell.set_viewport(320.0, 240.0);
+    for _ in 0..5 {
+        shell.update();
+        if !shell.needs_redraw() && !shell.composition.should_recompose() {
+            break;
+        }
+    }
+    let layout_texts = layout_tree_texts(shell.layout_tree().expect("layout tree"));
+    assert!(
+        layout_texts.iter().any(|text| text == "content top pad 40"),
+        "instrument dead: initial keyed padding missing, got {layout_texts:?}"
+    );
+
+    let height = KEYED_HEIGHT_STATE
+        .with(|slot| slot.borrow().as_ref().cloned())
+        .expect("probe must expose its bar height state");
+    height.set(72.0);
+    for _ in 0..5 {
+        shell.update();
+        if !shell.needs_redraw() && !shell.composition.should_recompose() {
+            break;
+        }
+    }
+    let layout_texts = layout_tree_texts(shell.layout_tree().expect("layout tree"));
+    assert!(
+        layout_texts.iter().any(|text| text == "content top pad 72"),
+        "a value computed inside the measure policy (a scaffold's padding) \
+         never invalidates a recompose scope, so the subcompose KEY is its \
+         only path into retained slot content; the slot still shows \
+         {layout_texts:?}. If this fails, clean-slot reuse is skipping on a \
+         stale capture key"
     );
 }
 

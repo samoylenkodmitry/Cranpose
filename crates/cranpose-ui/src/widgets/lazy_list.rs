@@ -252,7 +252,7 @@ fn measure_lazy_list_item(
     else {
         return LazyListMeasuredItem::new(index, key_slot_id, content_type, 1.0, 0.0);
     };
-    let root_children = scope.subcompose(slot_id, item_content);
+    let root_children = scope.subcompose(slot_id, (), item_content);
 
     let was_reused = scope.was_last_slot_reused().unwrap_or(false);
     inputs.state.record_composition(was_reused);
@@ -1134,7 +1134,7 @@ fn LazyColumnImpl(
         node.set_density(composed_density);
         if refresh_content || config_changed || modifier_changed {
             measured_item_cache.borrow_mut().clear();
-            node.request_measure_recompose();
+            node.invalidate_subcomposition();
         }
     }) {
         debug_assert!(false, "failed to update LazyColumn node: {err}");
@@ -1258,7 +1258,7 @@ fn LazyRowImpl(
         node.set_density(composed_density);
         if refresh_content || config_changed || modifier_changed {
             measured_item_cache.borrow_mut().clear();
-            node.request_measure_recompose();
+            node.invalidate_subcomposition();
         }
     }) {
         debug_assert!(false, "failed to update LazyRow node: {err}");

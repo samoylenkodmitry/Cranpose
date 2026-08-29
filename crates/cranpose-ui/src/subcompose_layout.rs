@@ -127,8 +127,28 @@ pub trait SubcomposeLayoutScope: cranpose_ui_layout::MeasureScope {
 
 /// Public trait exposed to measure policies for subcomposition.
 pub trait SubcomposeMeasureScope: SubcomposeLayoutScope {
-    fn subcompose<Content>(&mut self, slot_id: SlotId, content: Content) -> Vec<SubcomposeChild>
+    /// Composes `content` into the slot, or reuses the retained composition
+    /// when it is provably current.
+    ///
+    /// `key` must carry every value that flows into `content` from the
+    /// measure policy itself rather than from reactive state — a scaffold's
+    /// computed padding, a box's constraints. Such values never invalidate a
+    /// recompose scope when they change, so an equal key is the caller's
+    /// promise that the retained composition is not stale on that channel.
+    /// Values read from reactive state inside `content` need no key entry:
+    /// their writes invalidate the slot's scopes and block reuse. Content
+    /// must not read a non-reactive container (`Cell`, `RefCell`) for a value
+    /// that changes between measure passes unless that value is part of
+    /// `key`; debug builds recompose skipped slots and panic when the
+    /// retained topology diverges from a fresh composition.
+    fn subcompose<K, Content>(
+        &mut self,
+        slot_id: SlotId,
+        key: K,
+        content: Content,
+    ) -> Vec<SubcomposeChild>
     where
+        K: PartialEq + 'static,
         Content: FnMut() + 'static;
 
     /// Measures a subcomposed child with the given constraints.
@@ -158,6 +178,23 @@ pub struct SubcomposeMeasureScopeImpl<'a> {
     cached_measure_missing_scratch: Vec<NodeId>,
     registered_measurement_node_ids: Vec<NodeId>,
     pending_commands_applied: bool,
+    #[cfg(debug_assertions)]
+    shadow_stash: Option<(Vec<NodeId>, Vec<NodeId>)>,
+}
+
+thread_local! {
+    static CLEAN_SLOT_SKIPS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+fn record_clean_slot_skip() {
+    CLEAN_SLOT_SKIPS.with(|count| count.set(count.get() + 1));
+}
+
+/// Number of subcompose measure passes on this thread that reused a retained
+/// slot without a compose walk. Diagnostic surface for tests and telemetry;
+/// see [`SubcomposeMeasureScope::subcompose`] for when a slot may skip.
+pub fn clean_slot_skip_count() -> u64 {
+    CLEAN_SLOT_SKIPS.with(std::cell::Cell::get)
 }
 
 struct SubcomposeMeasureScopeInit<'a> {
@@ -195,6 +232,8 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
             cached_measure_missing_scratch: Vec::new(),
             registered_measurement_node_ids: Vec::new(),
             pending_commands_applied: false,
+            #[cfg(debug_assertions)]
+            shadow_stash: None,
         }
     }
 
@@ -228,6 +267,16 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
             eprintln!("[SubcomposeLayout] Error suppressed: {:?}", err);
             *slot = Some(err);
         }
+    }
+
+    fn owner_chain_deactivation_epoch(&self) -> u64 {
+        self.parent_handle
+            .inner
+            .borrow()
+            .captured_context
+            .as_ref()
+            .map(cranpose_core::CapturedCompositionContext::owner_chain_deactivation_epoch)
+            .unwrap_or(0)
     }
 
     fn ensure_pending_commands_applied(&mut self) -> bool {
@@ -299,6 +348,31 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
 
         drop(inner);
 
+        let children = self.compose_into_slot(slot_id, virtual_node_id, content);
+        if is_rebound {
+            self.composer.record_rebound_slot_children(&children);
+        }
+        if let Some(start) = telemetry_start {
+            log::warn!(
+                "[subcompose-telemetry] slot={} reused={} children={} subcompose_ms={:.2}",
+                slot_id.raw(),
+                is_rebound,
+                children.len(),
+                start.elapsed().as_secs_f64() * 1000.0
+            );
+        }
+        children
+    }
+
+    fn compose_into_slot<Content>(
+        &mut self,
+        slot_id: SlotId,
+        virtual_node_id: NodeId,
+        content: Content,
+    ) -> Vec<NodeId>
+    where
+        Content: FnMut() + 'static,
+    {
         let content_holder = self.state.callback_holder(slot_id);
         content_holder.update(content);
 
@@ -320,26 +394,103 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
             .unwrap_or_default();
         self.pending_commands_applied = false;
 
+        let owner_epoch = self.owner_chain_deactivation_epoch();
         self.state
             .register_active(slot_id, &[virtual_node_id], &scopes);
+        self.state.mark_slot_composed_current(slot_id, owner_epoch);
 
         // CRITICAL FIX: Read children from the Applier's copy of the virtual node,
         // NOT from inner.virtual_nodes. The Applier's copy received insert_child calls
         // during subcomposition, while inner.virtual_nodes is an out-of-sync clone.
-        let children = self.composer.get_node_children(virtual_node_id).to_vec();
-        if is_rebound {
-            self.composer.record_rebound_slot_children(&children);
+        self.composer.get_node_children(virtual_node_id).to_vec()
+    }
+
+    /// The clean-slot fast path: reuse the retained slot roots without a
+    /// compose walk. Every rejection falls back to the compose path, so this
+    /// may only return `Some` when the retained composition is provably
+    /// current: the caller's capture key matched, no scope in the slot is
+    /// invalidated, the slot sits exactly where the pass expects it, no
+    /// precomposition is pending, and all queued commands are applied. The
+    /// returned children are read live from the applier, never from a cache —
+    /// a recomposer heal between passes changes the retained roots, and the
+    /// live read is what makes that visible.
+    fn activate_clean_retained_slot(&mut self, slot_id: SlotId) -> Option<Vec<NodeId>> {
+        if self.state.has_pending_precompositions(slot_id) {
+            return None;
         }
-        if let Some(start) = telemetry_start {
-            log::warn!(
-                "[subcompose-telemetry] slot={} reused={} children={} subcompose_ms={:.2}",
-                slot_id.raw(),
-                is_rebound,
-                children.len(),
-                start.elapsed().as_secs_f64() * 1000.0
-            );
+        if !self
+            .state
+            .slot_content_generation_current(slot_id, self.owner_chain_deactivation_epoch())
+        {
+            return None;
         }
-        children
+        if !self.ensure_pending_commands_applied() {
+            return None;
+        }
+        let virtual_node_ids = self.state.activate_current_active_slot(slot_id)?;
+
+        {
+            let inner = self.parent_handle.inner.borrow();
+            for virtual_node_id in &virtual_node_ids {
+                self.composer.record_subcompose_child(*virtual_node_id);
+                if let Some(v_node) = inner.virtual_nodes.get(virtual_node_id) {
+                    v_node.set_parent(self.root_id);
+                }
+            }
+        }
+        for virtual_node_id in &virtual_node_ids {
+            let _ = self
+                .composer
+                .with_node_mut::<LayoutNode, _>(*virtual_node_id, |node| {
+                    node.set_parent(self.root_id);
+                });
+        }
+
+        let mut children = Vec::new();
+        for virtual_node_id in &virtual_node_ids {
+            children.extend(self.composer.get_node_children(*virtual_node_id));
+        }
+        record_clean_slot_skip();
+
+        #[cfg(debug_assertions)]
+        {
+            self.shadow_stash = Some((virtual_node_ids, children.clone()));
+        }
+
+        Some(children)
+    }
+
+    /// Debug-only equivalence oracle for the clean-slot skip: recompose the
+    /// slot content anyway and require the same root children the skip
+    /// returned. A divergence means the content read a value with no
+    /// invalidation path (a captured Cell/RefCell, an untracked environment
+    /// read) — release builds would show stale content silently, so debug
+    /// builds refuse loudly instead. Attribute-only changes on an unchanged
+    /// topology are below this oracle's resolution; the `subcompose` API doc
+    /// states that invariant.
+    #[cfg(debug_assertions)]
+    fn shadow_verify_clean_slot<Content>(&mut self, slot_id: SlotId, content: Content)
+    where
+        Content: FnMut() + 'static,
+    {
+        let Some((virtual_node_ids, skipped_children)) = self.shadow_stash.take() else {
+            return;
+        };
+        if virtual_node_ids.len() != 1 {
+            return;
+        }
+        let composed = self.compose_into_slot(slot_id, virtual_node_ids[0], content);
+        assert!(
+            composed == skipped_children,
+            "clean-slot skip diverged for slot {:?}: recomposing produced root \
+             children {:?} but the retained slot held {:?}. The slot content \
+             read a value that changed between measure passes without any \
+             invalidation path — make that value reactive state, or part of \
+             the subcompose capture key",
+            slot_id,
+            composed,
+            skipped_children,
+        );
     }
 
     pub(crate) fn activate_exact_retained_slot_with_known_children(
@@ -471,10 +622,24 @@ impl cranpose_ui_layout::MeasureScope for SubcomposeMeasureScopeImpl<'_> {
 }
 
 impl<'a> SubcomposeMeasureScope for SubcomposeMeasureScopeImpl<'a> {
-    fn subcompose<Content>(&mut self, slot_id: SlotId, content: Content) -> Vec<SubcomposeChild>
+    fn subcompose<K, Content>(
+        &mut self,
+        slot_id: SlotId,
+        key: K,
+        content: Content,
+    ) -> Vec<SubcomposeChild>
     where
+        K: PartialEq + 'static,
         Content: FnMut() + 'static,
     {
+        if self.state.retained_capture_key_matches(slot_id, &key)
+            && let Some(children) = self.activate_clean_retained_slot(slot_id)
+        {
+            #[cfg(debug_assertions)]
+            self.shadow_verify_clean_slot(slot_id, content);
+            return children.into_iter().map(SubcomposeChild::new).collect();
+        }
+        self.state.store_retained_capture_key(slot_id, key);
         let nodes = self.perform_subcompose(slot_id, content);
         nodes.into_iter().map(SubcomposeChild::new).collect()
     }
@@ -1197,6 +1362,7 @@ impl cranpose_core::Node for SubcomposeLayoutNode {
 
     fn on_removed_from_parent(&mut self) {
         self.parent.set(None);
+        self.inner.borrow().state.bump_content_generation();
     }
 
     fn parent(&self) -> Option<NodeId> {

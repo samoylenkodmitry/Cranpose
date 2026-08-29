@@ -499,6 +499,7 @@ pub(crate) struct RecomposeScopeInner {
     invalid: Cell<bool>,
     enqueued: Cell<bool>,
     active: Cell<bool>,
+    deactivations: Cell<u64>,
     composed_once: Cell<bool>,
     pending_recompose: Cell<bool>,
     force_reuse: Cell<bool>,
@@ -523,6 +524,7 @@ impl RecomposeScopeInner {
             invalid: Cell::new(false),
             enqueued: Cell::new(false),
             active: Cell::new(true),
+            deactivations: Cell::new(0),
             composed_once: Cell::new(false),
             pending_recompose: Cell::new(false),
             force_reuse: Cell::new(false),
@@ -614,6 +616,27 @@ impl RecomposeScope {
 
     pub fn is_active(&self) -> bool {
         self.inner.active.get()
+    }
+
+    /// Total deactivations along this scope's owner chain. A retained slot
+    /// composition records this at compose time; a later mismatch means some
+    /// enclosing composition was deactivated (its owned effects cancelled)
+    /// since the slot last composed, so the retained content must recompose
+    /// once to restart them — no flag on the slot's own scopes carries that
+    /// trace, because deactivation walks stop at slot-host boundaries.
+    pub fn owner_chain_deactivation_epoch(&self) -> u64 {
+        let mut total = 0u64;
+        let mut current = Some(self.clone());
+        while let Some(scope) = current {
+            total = total.wrapping_add(scope.inner.deactivations.get());
+            let structural_parent = scope.inner.parent_scope.borrow().clone();
+            let lifetime_owner = scope.inner.lifetime_owner_scope.borrow().clone();
+            let next = structural_parent.or(lifetime_owner);
+            current = next
+                .and_then(|parent| parent.upgrade())
+                .map(|inner| RecomposeScope { inner });
+        }
+        total
     }
 
     pub(crate) fn is_effectively_active(&self) -> bool {
@@ -815,6 +838,9 @@ impl RecomposeScope {
         if !self.inner.active.replace(false) {
             return;
         }
+        self.inner
+            .deactivations
+            .set(self.inner.deactivations.get() + 1);
         if self.inner.enqueued.replace(false) {
             self.inner.runtime.mark_scope_recomposed(self.id());
         }
