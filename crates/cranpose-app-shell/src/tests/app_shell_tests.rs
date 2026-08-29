@@ -5029,6 +5029,143 @@ fn AppShellOrdinaryColumnSiblings() {
     );
 }
 
+#[composable]
+#[allow(non_snake_case)]
+fn AppShellSizeReactiveTopology() {
+    let size = rememberMutableStateOf(cranpose_ui::Size::default);
+    cranpose_ui::Box(
+        Modifier::empty().fill_max_size().report_size_state(size),
+        cranpose_ui::BoxSpec::default(),
+        move || {
+            if size.get().width < 700.0 {
+                Text(
+                    "compact".to_string(),
+                    Modifier::empty(),
+                    TextStyle::default(),
+                );
+            } else {
+                Text("wide".to_string(), Modifier::empty(), TextStyle::default());
+            }
+        },
+    );
+}
+
+/// The correctness test for replacing a `BoxWithConstraints` wrapper with
+/// `report_size_state`: the work the wrapper was doing is switching composed
+/// topology when the available size crosses a threshold, so THAT is what the
+/// replacement must be shown to still do — and a resize must SETTLE, because
+/// an unconditional state write during measure would recompose, re-measure
+/// and loop, a frame-rate collapse no pixel assertion sees.
+#[test]
+fn size_reactive_topology_switches_on_resize_and_settles() {
+    let _guard = test_guard();
+    let root_key = location_key(file!(), line!(), column!());
+    let rebuilds = Rc::new(Cell::new(0));
+    let updates = Rc::new(Cell::new(0));
+    let last_dirty_nodes = Rc::new(RefCell::new(Vec::new()));
+
+    let mut shell = AppShell::new(
+        ScopedUpdateCountingRenderer::new(
+            Rc::clone(&rebuilds),
+            Rc::clone(&updates),
+            Rc::clone(&last_dirty_nodes),
+        ),
+        root_key,
+        AppShellSizeReactiveTopology,
+    );
+    shell.set_buffer_size(320, 240);
+    shell.set_viewport(320.0, 240.0);
+    for _ in 0..5 {
+        shell.update();
+        if !shell.needs_redraw() {
+            break;
+        }
+    }
+    let labels = graph_scene_text_values(shell.renderer.scene());
+    assert!(
+        labels.iter().any(|l| l == "compact") && !labels.iter().any(|l| l == "wide"),
+        "at 320dp the size-reactive topology must be compact: {labels:?}"
+    );
+
+    shell.set_buffer_size(900, 600);
+    shell.set_viewport(900.0, 600.0);
+    let mut settle_frames = 0;
+    for _ in 0..5 {
+        shell.update();
+        settle_frames += 1;
+        if !shell.needs_redraw() && !shell.composition.should_recompose() {
+            break;
+        }
+    }
+    assert!(
+        !shell.needs_redraw() && !shell.composition.should_recompose(),
+        "a single resize must settle within 5 frames; a pending recomposition \
+         here is the unconditional-write feedback loop (a size write during \
+         measure that is not equality-gated recomposes forever)"
+    );
+    let labels = graph_scene_text_values(shell.renderer.scene());
+    assert!(
+        labels.iter().any(|l| l == "wide") && !labels.iter().any(|l| l == "compact"),
+        "crossing 700dp must switch the composed topology to wide within \
+         {settle_frames} settle frames: {labels:?}"
+    );
+}
+
+#[composable]
+#[allow(non_snake_case)]
+fn AppShellSelfReferentialSize() {
+    let size = rememberMutableStateOf(cranpose_ui::Size::default);
+    // The onSizeChanged self-reference hazard, on purpose: the reported size
+    // decides the content's height, so the node's own measured size flips
+    // between two values forever — a cross-frame livelock no equality gate
+    // can decide, because every write IS a genuine change.
+    let height = if size.get().height < 100.0 {
+        200.0
+    } else {
+        50.0
+    };
+    cranpose_ui::Box(
+        Modifier::empty().fill_max_width().report_size_state(size),
+        cranpose_ui::BoxSpec::default(),
+        move || {
+            cranpose_ui::Box(
+                Modifier::empty().size(cranpose_ui::Size::new(80.0, height)),
+                cranpose_ui::BoxSpec::default(),
+                || {},
+            );
+        },
+    );
+}
+
+/// The class the settle test cannot see: self-referential sizing is a
+/// livelock of genuine changes, one recomposition per frame forever, with no
+/// diagnostic in release. The debug ceiling converts it into a panic naming
+/// the two alternating sizes.
+#[test]
+#[should_panic(expected = "size-reactive feedback loop")]
+fn a_self_referential_size_report_panics_in_debug_instead_of_livelocking() {
+    let _guard = test_guard();
+    let root_key = location_key(file!(), line!(), column!());
+    let rebuilds = Rc::new(Cell::new(0));
+    let updates = Rc::new(Cell::new(0));
+    let last_dirty_nodes = Rc::new(RefCell::new(Vec::new()));
+
+    let mut shell = AppShell::new(
+        ScopedUpdateCountingRenderer::new(
+            Rc::clone(&rebuilds),
+            Rc::clone(&updates),
+            Rc::clone(&last_dirty_nodes),
+        ),
+        root_key,
+        AppShellSelfReferentialSize,
+    );
+    shell.set_buffer_size(320, 240);
+    shell.set_viewport(320.0, 240.0);
+    for _ in 0..200 {
+        shell.update();
+    }
+}
+
 fn graph_scene_solid_rect_y(
     scene: &cranpose_render_common::graph_scene::Scene,
     color: cranpose_ui::Color,

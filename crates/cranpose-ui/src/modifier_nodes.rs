@@ -1679,22 +1679,79 @@ impl ModifierNodeElement for WindowRectReporterElement {
 // Size Reporter Modifier Node
 // ============================================================================
 
-/// Node that publishes its measured size (logical px) into a shared cell on
+/// Where a [`SizeReporterNode`] publishes its measured size. A plain `Cell`
+/// is invisible to composition; the `MutableState` sink schedules
+/// recomposition on an actual change (`MutableState::set` is
+/// equality-gated), which is what makes size-reactive topology settle: a
+/// re-measure that produces the same size writes nothing and cannot loop.
+pub trait SizeSink {
+    fn set(&self, size: Size);
+}
+
+impl SizeSink for Cell<Size> {
+    fn set(&self, size: Size) {
+        Cell::set(self, size);
+    }
+}
+
+struct StateSizeSink(cranpose_core::MutableState<Size>);
+
+impl SizeSink for StateSizeSink {
+    fn set(&self, size: Size) {
+        self.0.set(size);
+    }
+}
+
+/// Node that publishes its measured size (logical px) into its sink on
 /// every measure pass — the Compose `onSizeChanged` seam for consumers that
 /// need their node's resolved size outside layout (e.g. shader morph
 /// geometry expressed in node-local pixels). Transparent for layout, draws
 /// nothing.
 pub struct SizeReporterNode {
-    sink: Rc<Cell<Size>>,
+    sink: Rc<dyn SizeSink>,
     state: NodeState,
+    /// Debug-only oscillation detector: (last, second_last, alternations).
+    /// A self-referential size — content whose measured size depends on the
+    /// size this node reports — presents as a cross-frame livelock (one
+    /// recomposition per frame, forever) with no diagnostic. Exact A-B-A
+    /// alternation is that loop's signature and matches no animation, which
+    /// moves monotonically or along a curve rather than flipping between two
+    /// identical values.
+    #[cfg(debug_assertions)]
+    oscillation: Cell<(Size, Size, u32)>,
 }
 
 impl SizeReporterNode {
-    pub fn new(sink: Rc<Cell<Size>>) -> Self {
+    pub fn new(sink: Rc<dyn SizeSink>) -> Self {
         Self {
             sink,
             state: NodeState::new(),
+            #[cfg(debug_assertions)]
+            oscillation: Cell::new((Size::default(), Size::default(), 0)),
         }
+    }
+
+    #[cfg(debug_assertions)]
+    fn check_oscillation(&self, size: Size) {
+        const ALTERNATION_CEILING: u32 = 64;
+        let (last, second_last, count) = self.oscillation.get();
+        let count = if size == second_last && size != last {
+            count + 1
+        } else if size == last {
+            count
+        } else {
+            0
+        };
+        assert!(
+            count <= ALTERNATION_CEILING,
+            "size-reactive feedback loop: this node's measured size has \
+             alternated between {last:?} and {size:?} for {count} passes — \
+             its content's size depends on the size it reports (the \
+             onSizeChanged self-reference hazard). Break the cycle by making \
+             the reported size feed only content that does not change this \
+             node's own measured size."
+        );
+        self.oscillation.set((size, last, count));
     }
 }
 
@@ -1726,6 +1783,8 @@ impl LayoutModifierNode for SizeReporterNode {
             width: placeable.width(),
             height: placeable.height(),
         };
+        #[cfg(debug_assertions)]
+        self.check_oscillation(size);
         self.sink.set(size);
         cranpose_ui_layout::LayoutModifierMeasureResult::new(size, 0.0, 0.0)
     }
@@ -1734,12 +1793,20 @@ impl LayoutModifierNode for SizeReporterNode {
 /// Element for [`SizeReporterNode`]; reuses the node, swapping the sink.
 #[derive(Clone)]
 pub struct SizeReporterElement {
-    sink: Rc<Cell<Size>>,
+    sink: Rc<dyn SizeSink>,
 }
 
 impl SizeReporterElement {
     pub fn new(sink: Rc<Cell<Size>>) -> Self {
         Self { sink }
+    }
+
+    /// Publishes into observable state, so an actual size change schedules
+    /// recomposition — the sink for size-reactive topology.
+    pub fn from_state(sink: cranpose_core::MutableState<Size>) -> Self {
+        Self {
+            sink: Rc::new(StateSizeSink(sink)),
+        }
     }
 }
 
@@ -1751,13 +1818,13 @@ impl std::fmt::Debug for SizeReporterElement {
 
 impl PartialEq for SizeReporterElement {
     fn eq(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.sink, &other.sink)
+        std::ptr::addr_eq(Rc::as_ptr(&self.sink), Rc::as_ptr(&other.sink))
     }
 }
 
 impl Hash for SizeReporterElement {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        (Rc::as_ptr(&self.sink) as usize).hash(state);
+        (Rc::as_ptr(&self.sink) as *const () as usize).hash(state);
     }
 }
 
