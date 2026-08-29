@@ -467,3 +467,34 @@ Signature → cause → what to do. One lesson per line, no incident history.
   That path is real, committed, and needs zero consent of any kind — it
   was the display-off/occluded problem above, not the consent boundary,
   that ultimately blocked getting a frame out of it this session.
+
+- **A "changed=0" result can mean the test's own threshold is wrong, not
+  that nothing changed** — third variant of the same lesson, this time not
+  about coordinates. `robot_glass_backdrop_scroll_stability`'s coordinates
+  were correct (verified by eye) and it still failed, because
+  `channel_threshold=6` called a real ~1-2-unit-per-channel swing "no
+  change." Confirmed by an independent raw Python pixel diff of the actual
+  captured PNGs, outside the test's own comparison code: every one of 20
+  consecutive one-pixel scroll steps changed 59-327 of 7000 sampled
+  pixels, never zero. Before concluding a continuity check's `FAIL` means
+  a freeze, diff the raw captures yourself with a different tool and a
+  looser (or zero) threshold — a "looks frozen" number is only real once
+  something outside the test's own math agrees with it.
+
+- **`Xvfb` + real GPU on this project's CI host cannot present a window at
+  all — `DRI3` is missing.** `MESA: info: vulkan: No DRI3 support detected
+  - required for presentation` appears in the log the instant a real
+  Vulkan/GL-hardware-backed app tries to get a presentable surface under
+  `xvfb-run` on samarch-1, and `redraw_native_window` then never fires —
+  zero presented frames, confirmed with `RUST_LOG=error` showing no silent
+  readback errors either. This is exactly why `robot_underline_screenshot`,
+  `robot_text_strikeout_presented`, and
+  `robot_leetcodedaily_full_layout_scroll_stability` (and now
+  `robot_glass_backdrop_scroll_stability`) all run under `just
+  robot-captures` with `WGPU_BACKEND=gl LIBGL_ALWAYS_SOFTWARE=1` instead of
+  `just robot-gpu`: software present is not a style choice for those four
+  tests, it is the only way any of them get a single real pixel under this
+  host's Xvfb. It also means this project cannot currently test the real
+  GPU-driver-backed windowed present path in CI at all, under any
+  environment variable or flag — that needs a machine with an actual
+  attached display, which is a hardware decision, not a test-authoring one.
