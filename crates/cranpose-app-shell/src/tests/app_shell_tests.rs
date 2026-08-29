@@ -5111,6 +5111,61 @@ fn size_reactive_topology_switches_on_resize_and_settles() {
     );
 }
 
+#[composable]
+#[allow(non_snake_case)]
+fn AppShellSelfReferentialSize() {
+    let size = rememberMutableStateOf(cranpose_ui::Size::default);
+    // The onSizeChanged self-reference hazard, on purpose: the reported size
+    // decides the content's height, so the node's own measured size flips
+    // between two values forever — a cross-frame livelock no equality gate
+    // can decide, because every write IS a genuine change.
+    let height = if size.get().height < 100.0 {
+        200.0
+    } else {
+        50.0
+    };
+    cranpose_ui::Box(
+        Modifier::empty().fill_max_width().report_size_state(size),
+        cranpose_ui::BoxSpec::default(),
+        move || {
+            cranpose_ui::Box(
+                Modifier::empty().size(cranpose_ui::Size::new(80.0, height)),
+                cranpose_ui::BoxSpec::default(),
+                || {},
+            );
+        },
+    );
+}
+
+/// The class the settle test cannot see: self-referential sizing is a
+/// livelock of genuine changes, one recomposition per frame forever, with no
+/// diagnostic in release. The debug ceiling converts it into a panic naming
+/// the two alternating sizes.
+#[test]
+#[should_panic(expected = "size-reactive feedback loop")]
+fn a_self_referential_size_report_panics_in_debug_instead_of_livelocking() {
+    let _guard = test_guard();
+    let root_key = location_key(file!(), line!(), column!());
+    let rebuilds = Rc::new(Cell::new(0));
+    let updates = Rc::new(Cell::new(0));
+    let last_dirty_nodes = Rc::new(RefCell::new(Vec::new()));
+
+    let mut shell = AppShell::new(
+        ScopedUpdateCountingRenderer::new(
+            Rc::clone(&rebuilds),
+            Rc::clone(&updates),
+            Rc::clone(&last_dirty_nodes),
+        ),
+        root_key,
+        AppShellSelfReferentialSize,
+    );
+    shell.set_buffer_size(320, 240);
+    shell.set_viewport(320.0, 240.0);
+    for _ in 0..200 {
+        shell.update();
+    }
+}
+
 fn graph_scene_solid_rect_y(
     scene: &cranpose_render_common::graph_scene::Scene,
     color: cranpose_ui::Color,

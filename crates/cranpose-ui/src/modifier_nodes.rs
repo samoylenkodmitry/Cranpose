@@ -1710,6 +1710,15 @@ impl SizeSink for StateSizeSink {
 pub struct SizeReporterNode {
     sink: Rc<dyn SizeSink>,
     state: NodeState,
+    /// Debug-only oscillation detector: (last, second_last, alternations).
+    /// A self-referential size — content whose measured size depends on the
+    /// size this node reports — presents as a cross-frame livelock (one
+    /// recomposition per frame, forever) with no diagnostic. Exact A-B-A
+    /// alternation is that loop's signature and matches no animation, which
+    /// moves monotonically or along a curve rather than flipping between two
+    /// identical values.
+    #[cfg(debug_assertions)]
+    oscillation: Cell<(Size, Size, u32)>,
 }
 
 impl SizeReporterNode {
@@ -1717,7 +1726,32 @@ impl SizeReporterNode {
         Self {
             sink,
             state: NodeState::new(),
+            #[cfg(debug_assertions)]
+            oscillation: Cell::new((Size::default(), Size::default(), 0)),
         }
+    }
+
+    #[cfg(debug_assertions)]
+    fn check_oscillation(&self, size: Size) {
+        const ALTERNATION_CEILING: u32 = 64;
+        let (last, second_last, count) = self.oscillation.get();
+        let count = if size == second_last && size != last {
+            count + 1
+        } else if size == last {
+            count
+        } else {
+            0
+        };
+        assert!(
+            count <= ALTERNATION_CEILING,
+            "size-reactive feedback loop: this node's measured size has \
+             alternated between {last:?} and {size:?} for {count} passes — \
+             its content's size depends on the size it reports (the \
+             onSizeChanged self-reference hazard). Break the cycle by making \
+             the reported size feed only content that does not change this \
+             node's own measured size."
+        );
+        self.oscillation.set((size, last, count));
     }
 }
 
@@ -1749,6 +1783,8 @@ impl LayoutModifierNode for SizeReporterNode {
             width: placeable.width(),
             height: placeable.height(),
         };
+        #[cfg(debug_assertions)]
+        self.check_oscillation(size);
         self.sink.set(size);
         cranpose_ui_layout::LayoutModifierMeasureResult::new(size, 0.0, 0.0)
     }
