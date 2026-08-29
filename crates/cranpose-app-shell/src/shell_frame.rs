@@ -305,8 +305,22 @@ where
                     // app-wide relayout, where scoping means nothing, clears.
                     if global_layout_invalidation || force_layout_pass {
                         self.scoped_layout_scene_nodes.clear();
-                    } else if has_scoped_repasses {
-                        for node in scoped_layout_nodes {
+                        let _ = cranpose_ui::take_geometry_scene_nodes();
+                    } else {
+                        if has_scoped_repasses {
+                            for node in scoped_layout_nodes {
+                                if !self.scoped_layout_scene_nodes.contains(&node) {
+                                    self.scoped_layout_scene_nodes.push(node);
+                                }
+                            }
+                        }
+                        // Nodes the pass actually moved or resized. Repass ids
+                        // only say where invalidation STARTED; a sibling pushed
+                        // down by another row's growth starts nothing, and a
+                        // scoped scene update that never hears about it keeps
+                        // drawing it at the old geometry until the next full
+                        // pass.
+                        for node in cranpose_ui::take_geometry_scene_nodes() {
                             if !self.scoped_layout_scene_nodes.contains(&node) {
                                 self.scoped_layout_scene_nodes.push(node);
                             }
@@ -321,6 +335,7 @@ where
                     self.semantics_snapshot_revision =
                         self.semantics_snapshot_revision.wrapping_add(1);
                     self.scoped_layout_scene_nodes.clear();
+                    let _ = cranpose_ui::take_geometry_scene_nodes();
                     self.scene_dirty = true;
                 }
             }
@@ -330,6 +345,7 @@ where
             self.semantics_tree = None;
             self.semantics_snapshot_revision = self.semantics_snapshot_revision.wrapping_add(1);
             self.scoped_layout_scene_nodes.clear();
+            let _ = cranpose_ui::take_geometry_scene_nodes();
             self.scene_dirty = true;
             self.layout_requested = false;
             self.force_layout_pass = false;

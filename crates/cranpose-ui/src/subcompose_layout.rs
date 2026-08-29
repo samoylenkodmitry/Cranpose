@@ -878,16 +878,34 @@ impl SubcomposeLayoutNode {
     }
 
     /// Updates the position of this node. Called during placement.
+    ///
+    /// An actual move self-reports to the scene phase: a node moved by a
+    /// sibling's growth never recomposes and raises no repass of its own, so
+    /// this record is the only way the scoped scene update learns its layer
+    /// is stale.
     pub fn set_position(&self, position: Point) {
         let mut state = self.layout_state.borrow_mut();
-        state.position = position;
+        if state.position != position {
+            if let Some(id) = self.id.get() {
+                crate::render_state::record_geometry_scene_node(id);
+            }
+            state.position = position;
+        }
         state.is_placed = true;
     }
 
     /// Updates the measured size of this node. Called during measurement.
+    ///
+    /// An actual change self-reports to the scene phase, for the same reason
+    /// as [`Self::set_position`].
     pub fn set_measured_size(&self, size: Size) {
         let mut state = self.layout_state.borrow_mut();
-        state.size = size;
+        if state.size != size {
+            if let Some(id) = self.id.get() {
+                crate::render_state::record_geometry_scene_node(id);
+            }
+            state.size = size;
+        }
     }
 
     /// Clears the is_placed flag. Called at the start of a layout pass.
