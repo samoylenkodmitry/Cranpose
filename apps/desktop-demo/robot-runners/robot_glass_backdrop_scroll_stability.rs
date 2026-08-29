@@ -43,38 +43,45 @@ const WINDOW_TITLE: &str = "Robot Glass Backdrop Scroll Stability";
 /// continuity probe that samples before content ever reaches the sampled
 /// rect reads as a stale cache, and is not one").
 const SETTLE_SCROLL: f32 = -400.0;
-const STEP_COUNT: usize = 20;
-/// Interior of the "Library" glass `TopBar`. NOT derived analytically this
-/// time — the first version of this constant (160, 20, 200, 30) was an
-/// analytic guess from `glass_feed.rs`'s layout constants that turned out
-/// wrong: it landed squarely in the outer, unrelated, always-static
-/// tab-bar strip (`combined_app`'s "Shaders / Shader Rect / ..." row sits
-/// above `TabContent`, so the real chrome starts well below y=20 once that
-/// row's own height and padding are counted). Caught by dumping
-/// `step_00_full.png`, annotating both rectangles, and looking — the same
-/// rule this investigation has needed twice before. These coordinates are
-/// pixel-sampled directly from that capture: a smoothly-varying blurred-
-/// content band confirmed to sit inside the purple glass bar, clear of the
-/// "Library" text (ends well before x=120) and the round icon button
-/// (starts after x=780).
-const GLASS_REGION: (f32, f32, f32, f32) = (300.0, 125.0, 200.0, 35.0);
-/// A single logical-pixel scroll's effect on a heavily blurred patch is
-/// genuinely small: an independent per-pixel diff of the real captures (not
-/// this test's own comparison code) measured a true, real, per-step swing
-/// of exactly 1-2 per channel at every one of 20 consecutive steps here —
-/// never zero. A `channel_threshold=6` first version of this test called
-/// that a freeze; it was measuring its own threshold, not the backdrop.
-/// Zero tolerance here means "any byte differs at all" counts as changed,
-/// which is the right question for a continuity check: real rendering
-/// noise from a software rasterizer still lands on the correct pixels
-/// consistently across a fixed scene, so `MIN_CHANGED_PIXELS_PER_STEP`
-/// below is what actually guards against a coincidentally-identical frame.
-const CHANGE_CHANNEL_THRESHOLD: u8 = 0;
-/// The real measured range across 20 steps (see above) was 59-327 changed
-/// pixels out of the region's 7000. This floor sits well under the
-/// smallest observed real value, so it still fails hard on an actual
-/// freeze (0 changed pixels) without being brittle to normal variation.
-const MIN_CHANGED_PIXELS_PER_STEP: usize = 20;
+const SCROLL_DELTA_Y: f32 = -1.0;
+const STEP_COUNT: usize = 10;
+const STEP_EPSILON: f32 = 0.05;
+/// Consecutive scroll events accumulate velocity under the current fling
+/// physics, so back-to-back one-pixel input events do not produce
+/// one-pixel steps: measured per-step diffs growing 18k to 77k until
+/// settling 1.6s between events. `scroll_once_and_expect_target_delta`
+/// already sleeps 150ms and re-checks the exact delta via semantics; this
+/// adds the rest of the margin on top without touching that shared function.
+const SETTLE_AFTER_SCROLL_EXTRA_MS: u64 = 1_500;
+/// Search radius for the reused shift-search engine. Must comfortably
+/// exceed the final step's expected cumulative shift (`STEP_COUNT` px).
+const COMPARE_SEARCH_OFFSET_PX: u32 = 16;
+/// Small: the sampled glass patch is only ~90px tall, and the reused
+/// engine's fractional-alignment guard grows with the largest measured
+/// shift (up to ~`STEP_COUNT` px here), which must still leave a positive
+/// crop height.
+const COMPARE_STABILIZED_GUARD_PX: u32 = 4;
+/// Interior of the "Library" glass `TopBar`
+/// (`apps/desktop-demo/src/app/glass_feed.rs`). Confirmed against this
+/// window size's own semantics dump: the bar's outer box is
+/// (28, 103.6, 744, 56), its icon button occupies x=[680,756], so
+/// x=[150,650] y=[105,157] sits inside the bar with margin, clear of
+/// both the "Library" text and the button. Also verified by eye
+/// against this run's own `glass_step00.png` before trusting any
+/// number from it — sampling the wrong rectangle has cost this
+/// investigation twice already (see TIME_WASTERS.md). Height is capped
+/// by the reused compare script's fractional-shift guard, which grows
+/// with the largest measured shift (~STEP_COUNT px) and must leave a
+/// positive crop height.
+const GLASS_REGION: (f32, f32, f32, f32) = (150.0, 105.0, 500.0, 52.0);
+/// A best-fit shift within this many pixels of the expected cumulative
+/// shift counts as tracking correctly. Must be well under 1 step's worth
+/// of motion or it cannot tell "frozen" from "on time" at step 1.
+const SHIFT_TOLERANCE_PX: i32 = 1;
+/// Skip this many of the topmost visible receipt subtitles when picking a
+/// tracking anchor, so a 20-step, 1px-per-step upward walk never pushes it
+/// into whatever clips items out near the fixed chrome's lower edge.
+const RECEIPT_ANCHOR_SKIP_FROM_TOP: usize = 2;
 
 fn fail(robot: &cranpose::Robot, message: &str) -> ! {
     println!("FATAL: {message}");
@@ -114,8 +121,63 @@ fn main() {
             std::thread::sleep(Duration::from_millis(300));
             let _ = robot.wait_for_idle();
 
-            let baseline_path = output_dir.join("step_00_full.png");
-            let mut prev_shot = capture_x11_window_screenshot(
+            // A receipt subtitle ("Receipt #NNNN — 12 items") is unique per
+            // row, unlike the six recycled card titles, so once discovered
+            // it is an unambiguous anchor for the rest of the run. The
+            // topmost visible one is a bad choice: it starts close to
+            // whatever clips items out once they scroll under the fixed
+            // chrome, and a 20-step upward walk pushed it there mid-run
+            // ("target text must stay visible" at step 13, first attempt).
+            // Pick one with real headroom instead.
+            let semantics = robot.get_semantics().expect("query semantics");
+            let mut receipt_matches = Vec::new();
+            for root in &semantics {
+                collect_receipt_subtitles(root, &mut receipt_matches);
+            }
+            receipt_matches.sort_by(|a, b| a.1.partial_cmp(&b.1).expect("finite y"));
+            let anchor_text = receipt_matches
+                .get(RECEIPT_ANCHOR_SKIP_FROM_TOP)
+                .map(|(text, _)| text.clone())
+                .unwrap_or_else(|| {
+                    fail(
+                        &robot,
+                        &format!(
+                            "expected at least {} visible receipt subtitles after settle, found {}",
+                            RECEIPT_ANCHOR_SKIP_FROM_TOP + 1,
+                            receipt_matches.len()
+                        ),
+                    )
+                });
+            println!(
+                "tracking content anchor: {anchor_text:?} (of {} visible: {:?})",
+                receipt_matches.len(),
+                receipt_matches
+            );
+            let anchor_text: &'static str = Box::leak(anchor_text.into_boxed_str());
+
+            let mut previous_bounds = find_in_semantics(&robot, |elem| {
+                find_text_exact(elem, anchor_text)
+            })
+            .unwrap_or_else(|| fail(&robot, "content anchor should be visible after settle"));
+
+            let window_id = find_window_id(WINDOW_TITLE);
+
+            let step_config = ExactScrollStepConfig {
+                target_text: anchor_text,
+                window_width: WINDOW_WIDTH,
+                window_height: WINDOW_HEIGHT,
+                scroll_steps: STEP_COUNT,
+                scroll_delta_y: SCROLL_DELTA_Y,
+                step_epsilon: STEP_EPSILON,
+                fallback_trim_top_px: GLASS_REGION.1.round() as u32,
+                fallback_trim_bottom_px: (WINDOW_HEIGHT as f32
+                    - (GLASS_REGION.1 + GLASS_REGION.3))
+                    .round() as u32,
+            };
+
+            let mut capture_paths = Vec::with_capacity(STEP_COUNT + 1);
+            let baseline_path = output_dir.join("glass_step00.png");
+            capture_x11_window_screenshot(
                 &window_id,
                 &baseline_path,
                 WINDOW_WIDTH as f32,
@@ -178,6 +240,66 @@ fn main() {
             robot.exit().expect("exit");
         })
         .run(app::combined_app);
+}
+
+/// `frozen`: the backdrop did not move while the content (confirmed via
+/// semantics) did. `lagging`: it moved, the right way, but not enough yet —
+/// the user's "caterpillar" symptom, a per-step shortfall that later steps
+/// may or may not catch up on. `wrong`: it moved further than tracking
+/// explains, or the wrong way entirely.
+fn classify(actual: i32, expected: i32) -> Option<&'static str> {
+    if expected == 0 {
+        return None;
+    }
+    if actual == 0 {
+        return Some("frozen");
+    }
+    if actual.signum() == expected.signum() && actual.abs() < expected.abs() - SHIFT_TOLERANCE_PX {
+        return Some("lagging");
+    }
+    if (actual - expected).abs() > SHIFT_TOLERANCE_PX {
+        return Some("wrong");
+    }
+    None
+}
+
+/// Parse `step=00->NN anchor_dy=D ...` lines from the reused compare
+/// script's `fractional_alignment_report.txt`, in step order.
+fn parse_anchor_dys(report: &str, expected_len: usize) -> Vec<i32> {
+    let mut anchor_dys = Vec::with_capacity(expected_len);
+    for line in report.lines() {
+        let Some(rest) = line.strip_prefix("step=00->") else {
+            continue;
+        };
+        let Some(dy_field) = rest.split_whitespace().nth(1) else {
+            continue;
+        };
+        let Some(value) = dy_field.strip_prefix("anchor_dy=") else {
+            continue;
+        };
+        anchor_dys.push(
+            value
+                .parse()
+                .unwrap_or_else(|err| panic!("anchor_dy {value:?} did not parse: {err}")),
+        );
+    }
+    assert_eq!(
+        anchor_dys.len(),
+        expected_len,
+        "expected one anchor_dy per captured frame; report:\n{report}"
+    );
+    anchor_dys
+}
+
+fn collect_receipt_subtitles(elem: &cranpose::SemanticElement, out: &mut Vec<(String, f32)>) {
+    if let Some(text) = elem.text.as_deref() {
+        if text.starts_with("Receipt #") {
+            out.push((text.to_string(), elem.bounds.y));
+        }
+    }
+    for child in &elem.children {
+        collect_receipt_subtitles(child, out);
+    }
 }
 
 fn open_receipts_tab(robot: &cranpose::Robot) {
