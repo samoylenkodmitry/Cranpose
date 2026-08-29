@@ -311,3 +311,12 @@ Signature → cause → what to do. One lesson per line, no incident history.
   sequence was the evidence; no aggregate over it could have been. When a
   counter says "this fires constantly", print the identities before theorising
   about the cause.
+
+- **logcat's ring evicts the head of a capture, and the surviving tail
+  reads as a result** — a 24-frame remnant of a triple-telemetry round
+  (three per-frame stage switches spamming the ring) said "scene stage
+  unchanged post-fix"; the full 225-line single-switch rerun showed p50
+  moved 2.0 -> 1.18ms. The bias is systematic, not noise: the ring keeps
+  the END of the run, which over-samples whatever phase ran last. Check
+  line counts against expected frame counts before believing any logcat
+  capture, and keep per-frame switches to the one being read.
