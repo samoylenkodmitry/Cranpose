@@ -22,6 +22,8 @@
 //! trusting a pixel-diff number over an image, so this probe does not
 //! compute a diff or a verdict at all.
 
+mod output_paths;
+
 use std::time::Duration;
 
 use cranpose::AppLauncher;
@@ -39,8 +41,10 @@ fn main() {
     let _ = env_logger::try_init();
 
     let dump_dir = std::env::var("CRANPOSE_DEBUG_SWAPCHAIN_DUMP_DIR").unwrap_or_else(|_| {
-        let dir =
-            std::env::temp_dir().join(format!("cranpose-glass-swapchain-{}", std::process::id()));
+        let dir = output_paths::diagnostic_path(&format!(
+            "cranpose-glass-swapchain-{}",
+            std::process::id()
+        ));
         std::env::set_var("CRANPOSE_DEBUG_SWAPCHAIN_DUMP_DIR", &dir);
         dir.to_string_lossy().into_owned()
     });
