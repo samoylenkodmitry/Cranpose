@@ -125,6 +125,79 @@ fn robot_runners_do_not_hardcode_tmpfs_output_paths() {
     );
 }
 
+/// `wait_for_idle` returns `Err` on its own timeout while the app is still
+/// mid-animation (`crates/cranpose/src/desktop.rs`'s `wait_for_idle`
+/// handler) -- discarding that `Err` right before reading a position and
+/// trusting it as a delta assertion's ground truth lets a timeout under
+/// host load masquerade as "settled", silently measuring an unsettled
+/// frame instead of failing loudly. `scroll_stability_external_helpers.rs`
+/// backs the glass-backdrop scroll test and the whole
+/// `_exact_external_contract` family with exactly this measurement, so its
+/// two ground-truth-read call sites must route through
+/// `expect_idle_before_measurement` (which asserts the result) rather than
+/// discard it directly. Its third `wait_for_idle` call, inside
+/// `find_text_with_timeout`'s bounded polling loop, is deliberately exempt:
+/// a timeout there is the loop's normal "not found yet, try again" control
+/// flow, not a masked defect, so it is not scanned by name below.
+#[test]
+fn scroll_stability_helpers_do_not_discard_wait_for_idle_before_a_ground_truth_read() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("robot-runners");
+    let source_path = root.join("scroll_stability_external_helpers.rs");
+    let source = fs::read_to_string(&source_path)
+        .unwrap_or_else(|err| panic!("failed to read {source_path:?}: {err}"));
+
+    for function_signature in [
+        "pub(crate) fn scroll_once_and_expect_target_delta(",
+        "fn scroll_once(",
+    ] {
+        let body = function_body_by_brace_matching(&source, function_signature)
+            .unwrap_or_else(|| {
+                panic!(
+                    "{}: expected to find `{function_signature}` with a matching, brace-balanced body",
+                    source_path.display()
+                )
+            });
+        assert!(
+            !body.contains("let _ = ") || !body.contains("wait_for_idle()"),
+            "{}: `{function_signature}` must not discard wait_for_idle()'s Result before reading a ground-truth position -- route it through expect_idle_before_measurement instead",
+            source_path.display()
+        );
+        assert!(
+            body.contains("expect_idle_before_measurement("),
+            "{}: `{function_signature}` must confirm idle via expect_idle_before_measurement before trusting a ground-truth read",
+            source_path.display()
+        );
+    }
+}
+
+/// Slices exactly one function's body out of `source` by counting braces
+/// from its first `{` back to depth zero, rather than guessing where the
+/// next item starts from a text pattern -- a module-level function
+/// followed by a struct, or a sole method in its `impl` block followed by
+/// another module-level function, both defeat a "find the next `fn`"
+/// heuristic by either stopping too early or (as discovered while writing
+/// this test) running on far past the function's real end and silently
+/// sweeping in an unrelated, deliberately-exempt call site from deep in
+/// the same file.
+fn function_body_by_brace_matching<'a>(source: &'a str, signature: &str) -> Option<&'a str> {
+    let start = source.find(signature)?;
+    let open_brace = start + source[start..].find('{')?;
+    let mut depth: i32 = 0;
+    for (offset, ch) in source[open_brace..].char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(&source[start..open_brace + offset + 1]);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 #[test]
 fn leetcodedaily_robot_checks_initial_presented_frame_health() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));

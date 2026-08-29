@@ -407,7 +407,7 @@ pub(crate) fn scroll_once_and_expect_target_delta(
         }
     }
     std::thread::sleep(Duration::from_millis(150));
-    let _ = robot.wait_for_idle();
+    expect_idle_before_measurement(robot, "the per-step ground-truth delta read");
 
     let current_bounds = find_exact_target_in_semantics(robot, config.target_text)
         .unwrap_or_else(|| fail_with_semantics(robot, "target text must stay visible"));
@@ -540,7 +540,7 @@ impl ActiveFrameRun<'_> {
                 .expect("settle frame pump should succeed");
         }
         std::thread::sleep(Duration::from_millis(150));
-        let _ = self.robot.wait_for_idle();
+        expect_idle_before_measurement(self.robot, "the per-step ground-truth delta read");
 
         let current_bounds = find_exact_target_in_semantics(self.robot, config.target_text)
             .unwrap_or_else(|| fail_with_semantics(self.robot, "target text must stay visible"));
@@ -807,6 +807,35 @@ fn find_text_exact_local(
         }
     }
     None
+}
+
+/// `wait_for_idle` returning `Err` means it hit its own timeout while the
+/// app was still mid-animation (see `RobotResponse::Error` in
+/// `crates/cranpose/src/desktop.rs`'s `wait_for_idle` handler) -- under host
+/// load this can happen while a fling is still genuinely carrying the
+/// scroll position forward. Discarding that `Err` (as this helper used to,
+/// via `let _ = robot.wait_for_idle();`) let a ground-truth read that
+/// follows treat a still-moving position as settled, silently measuring an
+/// unsettled frame. Every call site that reads a position and trusts it as
+/// the ground truth for a delta assertion must route through this, not
+/// discard the result directly -- enforced by
+/// `scroll_stability_helpers_do_not_discard_wait_for_idle_before_a_ground_truth_read`
+/// in `apps/desktop-demo/tests/source_hygiene_aliases.rs`.
+///
+/// (`find_text_with_timeout`'s own internal `wait_for_idle` call, further
+/// down this file, is a different case: it sits inside a bounded polling
+/// loop whose "not found yet, try again" already tolerates a slow settle by
+/// construction, so a timeout there is expected control flow, not a masked
+/// defect, and is left as a plain discard.)
+fn expect_idle_before_measurement(robot: &cranpose::Robot, context: &str) {
+    if let Err(error) = robot.wait_for_idle() {
+        fail_with_semantics(
+            robot,
+            &format!(
+                "wait_for_idle did not converge before {context}, so it would measure an unsettled frame: {error}"
+            ),
+        );
+    }
 }
 
 fn fail_with_semantics(robot: &cranpose::Robot, message: &str) -> ! {
