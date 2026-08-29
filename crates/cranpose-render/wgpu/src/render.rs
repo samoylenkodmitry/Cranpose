@@ -6159,7 +6159,6 @@ pub struct GpuRenderer {
     last_frame_stats: Option<gpu_stats::FrameStatsSnapshot>,
     pending_frame_warmup_frames: u8,
     frame_count: u64,
-    gpu_stats_enabled: bool,
     warning_state: RendererWarningState,
     #[cfg(not(target_arch = "wasm32"))]
     replay_upload_stats: ReplayUploadStats,
@@ -6986,7 +6985,6 @@ impl GpuRenderer {
             last_frame_stats: None,
             pending_frame_warmup_frames: 0,
             frame_count: 0,
-            gpu_stats_enabled: gpu_stats_enabled(),
             warning_state: RendererWarningState::default(),
             #[cfg(not(target_arch = "wasm32"))]
             replay_upload_stats: ReplayUploadStats::default(),
@@ -9456,12 +9454,13 @@ impl GpuRenderer {
         self.last_frame_stats = Some(snapshot);
         PRESENTED_FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         update_frame_warmup_budget(&mut self.pending_frame_warmup_frames, &snapshot);
-        self.frame_stats.maybe_print_snapshot(
-            snapshot,
-            &mut self.frame_count,
-            self.gpu_stats_enabled,
-        );
-        if self.gpu_stats_enabled && self.frame_count.is_multiple_of(60) {
+        // Read at the use site, not latched at construction: the toggle is a
+        // debug.cranpose.* property that must respond to setprop on a live
+        // app like every other entry in the table. Once per frame is free.
+        let gpu_stats_on = gpu_stats_enabled();
+        self.frame_stats
+            .maybe_print_snapshot(snapshot, &mut self.frame_count, gpu_stats_on);
+        if gpu_stats_on && self.frame_count.is_multiple_of(60) {
             gpu_stats::print_gpu_memory_report(&self.device, self.frame_count);
         }
         self.frame_graph_executor
