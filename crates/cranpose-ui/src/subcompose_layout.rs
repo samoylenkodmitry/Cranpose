@@ -324,6 +324,9 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
         // NOT from inner.virtual_nodes. The Applier's copy received insert_child calls
         // during subcomposition, while inner.virtual_nodes is an out-of-sync clone.
         let children = self.composer.get_node_children(virtual_node_id).to_vec();
+        if is_reused {
+            self.composer.record_rebound_slot_children(&children);
+        }
         if let Some(start) = telemetry_start {
             log::warn!(
                 "[subcompose-telemetry] slot={} reused={} children={} subcompose_ms={:.2}",

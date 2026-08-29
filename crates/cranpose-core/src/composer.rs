@@ -833,6 +833,23 @@ impl Composer {
         self.core.applier.borrow_dyn()
     }
 
+    /// Records nodes whose retained subtrees a reused subcompose slot just
+    /// rebound to new content.
+    ///
+    /// The rebinding recomposes inline during measure, so every repass it
+    /// schedules is consumed by the layout pass already running — nothing
+    /// else survives to tell the scoped scene update these subtrees changed,
+    /// and a translate-only update would keep their stale layers (measured:
+    /// a 60pt lazy scroll presented the old row's text at the new row's
+    /// position). The structural-change set is the one channel drained
+    /// after layout, so the rebound children ride it.
+    pub fn record_rebound_slot_children(&self, children: &[NodeId]) {
+        let mut applier = self.borrow_applier();
+        for &child in children {
+            applier.record_structural_change(child);
+        }
+    }
+
     /// Registers a virtual node in the Applier.
     ///
     /// This is used by SubcomposeLayoutNode to register virtual container nodes
