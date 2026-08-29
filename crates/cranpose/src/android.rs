@@ -1858,6 +1858,15 @@ pub fn run(
     // environment-gated telemetry is reachable on device.
     crate::android_frame_telemetry::seed_env_from_system_properties();
 
+    // The machine's core count, read before the fast-core pin below:
+    // `available_parallelism` reports the calling thread's *eligible* set,
+    // so after the pin it would answer 4 on an 8-core big.LITTLE phone and
+    // silently flip the present-thread class — measured on the Mate 20 X
+    // as the present thread never spawning at all.
+    let machine_parallelism = std::thread::available_parallelism()
+        .map(std::num::NonZeroUsize::get)
+        .unwrap_or(1);
+
     // After the property seeding (`debug.cranpose.core_pin` must be
     // readable), before the renderer exists: in the non-threaded present
     // mode the GPU driver's workers spawn from this thread and inherit
@@ -1899,9 +1908,7 @@ pub fn run(
     // half. Six cores splits the measured classes.
     let present_thread = resolve_present_thread(
         std::env::var("CRANPOSE_PRESENT_THREAD").ok().as_deref(),
-        std::thread::available_parallelism()
-            .map(std::num::NonZeroUsize::get)
-            .unwrap_or(1),
+        machine_parallelism,
     );
     if present_thread {
         log::info!("[present-runtime] threaded present enabled");
