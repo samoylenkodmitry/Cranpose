@@ -3602,9 +3602,6 @@ fn next_composite_seq(counter: &mut usize) -> usize {
 
 struct PendingLayerComposite {
     z_index: usize,
-    /// Push order across BOTH pending queues: z indices tie whenever a
-    /// backdrop and its own child body queue at the same z, and only the
-    /// push sequence says which one draws first in a fused flush.
     seq: usize,
     surface: LayerSurface,
     dest_quad: [[f32; 2]; 4],
@@ -3619,8 +3616,6 @@ struct PreparedBackdropComposite {
 
 struct PendingShaderLayerComposite {
     z_index: usize,
-    /// Push order across BOTH pending queues; see
-    /// [`PendingLayerComposite::seq`].
     seq: usize,
     surface: LayerSurface,
     shader: RuntimeShader,
@@ -3945,13 +3940,6 @@ fn take_ordered_pending_composite_load_op(
     }
 }
 
-/// Flush BOTH pending queues in painter's order through one fused render
-/// pass. This replaces the shader-then-blit flush pair, which spent an
-/// extra pass boundary AND always drew the whole shader batch below every
-/// queued blit regardless of z. When only one queue holds items, the
-/// single-kind flush runs exactly as before. When a shader pipeline fails
-/// validation, every item composites individually — still in painter's
-/// order.
 #[allow(clippy::too_many_arguments)]
 fn flush_pending_composite_queues_fused<B: SurfaceExecutionBackend>(
     backend: &mut B,

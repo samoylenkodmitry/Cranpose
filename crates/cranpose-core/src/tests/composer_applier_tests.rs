@@ -1987,11 +1987,6 @@ struct DirtyFlagNode {
     parent: Option<NodeId>,
     needs_measure: Cell<bool>,
     needs_layout: Cell<bool>,
-    // True by default, like production nodes: a real LayoutNode starts
-    // semantics-dirty and stays so until a semantics tree is built, which
-    // never happens while semantics are off. Any re-attach logic that treats
-    // "child is semantics-dirty" as a reason to walk ancestors therefore
-    // walks on EVERY no-op re-attach of a steady scroll.
     needs_semantics: Cell<bool>,
     semantics_marks: Cell<usize>,
 }
@@ -2083,15 +2078,6 @@ fn dirty_flag_tree(applier: &mut MemoryApplier) -> (NodeId, NodeId, NodeId) {
     (grandparent, parent, child)
 }
 
-/// One wrong assumption implemented twice: "the child list did not change,
-/// therefore there is nothing to invalidate". A child can grow without
-/// membership changing. This is the core-side enforcement point of that
-/// invariant (the scene-side one is the app shell's
-/// `sibling_moved_by_another_rows_growth_reaches_the_scoped_scene_update`):
-/// re-attaching a child that carries pending measure or layout dirt must
-/// still bubble, because the attach-time bubble is the only road that dirt
-/// has to the root's layout gate — swallow it and the grown subtree keeps its
-/// old geometry until an unrelated pass runs.
 #[test]
 fn reattaching_a_dirty_child_still_bubbles_to_ancestors() {
     let mut applier = test_applier();
@@ -2123,9 +2109,6 @@ fn reattaching_a_dirty_child_still_bubbles_to_ancestors() {
     }
 }
 
-/// The guard the test above must not undo: a re-attach of a CLEAN child is
-/// the steady-state scroll pattern, and bubbling it re-measures the whole
-/// tree every frame for nothing (#534's win).
 #[test]
 fn reattaching_a_clean_child_bubbles_nothing() {
     let mut applier = test_applier();

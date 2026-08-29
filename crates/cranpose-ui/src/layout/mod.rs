@@ -33,10 +33,6 @@ use crate::{
     widgets::nodes::{IntrinsicKind, LayoutNode, LayoutNodeCacheHandles, LayoutState},
 };
 
-/// Runtime context for modifier nodes during measurement.
-///
-/// Unlike `BasicModifierNodeContext`, this context accumulates invalidations
-/// that can be processed after measurement to set dirty flags on the LayoutNode.
 #[derive(Default)]
 pub(crate) struct LayoutNodeContext {
     invalidations: Vec<InvalidationKind>,
@@ -74,28 +70,6 @@ impl ModifierNodeContext for LayoutNodeContext {
     }
 }
 
-/// Forces all layout caches to be invalidated on the next measure by incrementing the epoch.
-///
-/// # ⚠️ Internal Use Only - NOT Public API
-///
-/// **This function is hidden from public documentation and MUST NOT be called by external code.**
-///
-/// Only `cranpose-app-shell` may call this for rare global events:
-/// - Window/viewport resize
-/// - Global font scale or density changes
-/// - Debug toggles that affect all layout
-///
-/// **This is O(entire app size) - extremely expensive!**
-///
-/// # For Local Changes
-///
-/// **Do NOT use this for scroll, single-node mutations, or any local layout change.**
-/// Instead, use the scoped repass mechanism:
-/// ```text
-/// cranpose_ui::schedule_layout_repass(node_id);
-/// ```
-///
-/// The scoped path bubbles dirty flags without invalidating all caches, giving you O(subtree) instead of O(app).
 #[doc(hidden)]
 pub fn invalidate_all_layout_caches() {
     crate::render_state::invalidate_layout_cache_epoch();
@@ -218,36 +192,17 @@ fn log_node_measure_telemetry(
     );
 }
 
-/// RAII guard that:
-/// - moves the current MemoryApplier into a ConcreteApplierHost
-/// - holds a shared handle to the `SlotTable` used by `LayoutBuilder`
-/// - on Drop, always:
-///   * restores slots into the host from the shared handle
-///   * moves the original MemoryApplier back into the Composition
-///
-/// This makes `measure_layout` panic/Err-safe wrt both the applier and slots.
-/// The key invariant: guard and builder share the same `Rc<RefCell<SlotTable>>`,
-/// so the guard never loses access to the authoritative slots even on panic.
 struct ApplierSlotGuard<'a> {
-    /// The `MemoryApplier` inside the Composition::applier that we must restore into.
     target: &'a mut MemoryApplier,
-    /// Host that owns the original MemoryApplier while layout is running.
     host: Rc<ConcreteApplierHost<MemoryApplier>>,
-    /// Shared handle to the slot table. Both the guard and the builder hold a clone.
-    /// On Drop, we write whatever is in this handle back into the applier.
     slots: Rc<RefCell<SlotTable>>,
 }
 
 impl<'a> ApplierSlotGuard<'a> {
-    /// Creates a new guard:
-    /// - moves the current MemoryApplier out of `target` into a host
-    /// - takes the current slots out of the host and wraps them in a shared handle
     fn new(target: &'a mut MemoryApplier) -> Self {
-        // Move the original applier into a host; leave `target` with a fresh one
         let original_applier = std::mem::replace(target, MemoryApplier::new());
         let host = Rc::new(ConcreteApplierHost::new(original_applier));
 
-        // Take slots from the host into a shared handle
         let slots = {
             let mut applier_ref = host.borrow_typed();
             std::mem::take(applier_ref.slots())
@@ -261,13 +216,10 @@ impl<'a> ApplierSlotGuard<'a> {
         }
     }
 
-    /// Rc to pass into LayoutBuilder::new_with_epoch
     fn host(&self) -> Rc<ConcreteApplierHost<MemoryApplier>> {
         Rc::clone(&self.host)
     }
 
-    /// Returns the shared handle to slots for the builder to use.
-    /// The builder clones this Rc, so both guard and builder share the same slots.
     fn slots_handle(&self) -> Rc<RefCell<SlotTable>> {
         Rc::clone(&self.slots)
     }
@@ -275,30 +227,22 @@ impl<'a> ApplierSlotGuard<'a> {
 
 impl Drop for ApplierSlotGuard<'_> {
     fn drop(&mut self) {
-        // 1) Restore slots into the host's MemoryApplier from the shared handle.
-        // This works correctly whether we're on the success path or panic/error path,
-        // because we always have the shared handle.
         {
             let mut applier_ref = self.host.borrow_typed();
             *applier_ref.slots() = std::mem::take(&mut *self.slots.borrow_mut());
         }
 
-        // 2) Move the original MemoryApplier (with restored/updated slots) back into `target`
         {
             let mut applier_ref = self.host.borrow_typed();
             let original_applier = std::mem::take(&mut *applier_ref);
             let _ = std::mem::replace(self.target, original_applier);
         }
-        // No Rc::try_unwrap in Drop → no "panic during panic" risk.
     }
 }
 
-/// Result of measuring through the modifier node chain.
 struct ModifierChainMeasurement {
     size: Size,
-    /// Content offset for scroll/inner transforms - NOT padding semantics
     content_offset: Point,
-    /// Node's own offset (from OffsetNode, affects position in parent)
     offset: Point,
 }
 
@@ -746,11 +690,6 @@ pub fn build_layout_tree_from_applier(
         applier: &mut MemoryApplier,
         node_id: NodeId,
         parent_content_origin: Point,
-        // Accumulated ancestor graphics-layer translation (window px). A node's
-        // drawn content is offset by every ancestor layer's translation on top
-        // of its layout position, so a text field's true on-screen origin must
-        // add this. Scroll offsets are already baked into `parent_content_origin`
-        // via placement; this carries the extra translation-transform component.
         parent_layer_translation: Point,
     ) -> Result<Option<LayoutBox>, NodeError> {
         let Some((state, child_ids)) = snapshot(applier, node_id)? else {
@@ -779,10 +718,6 @@ pub fn build_layout_tree_from_applier(
             ..
         } = info;
 
-        // Add this node's own graphics-layer translation to the accumulated
-        // ancestor translation: it shifts where this node (and its subtree) is
-        // drawn relative to its layout box. (Scale/rotation are not folded in —
-        // handle positioning under a zoom/rotation layer is a documented gap.)
         let layer_translation = match modifier_slices.graphics_layer() {
             Some(layer) => Point {
                 x: parent_layer_translation.x + layer.translation_x,
@@ -791,9 +726,6 @@ pub fn build_layout_tree_from_applier(
             None => parent_layer_translation,
         };
 
-        // Publish the field's TRUE composited window origin for its selection
-        // handles: layout position (scroll already baked in) + accumulated layer
-        // translation. Re-read every layout pass so handles track live scrolling.
         if let Some(sink) = modifier_slices.text_field_window_origin() {
             sink.set(Point {
                 x: top_left.x + layer_translation.x,
@@ -801,9 +733,6 @@ pub fn build_layout_tree_from_applier(
             });
         }
 
-        // Publish a scroll container's composited viewport rect (window
-        // coordinates) for its `BringIntoViewResponder`, so a focused
-        // descendant field can be scrolled above the soft keyboard.
         if let Some(sink) = modifier_slices.viewport_window_rect() {
             sink.set(GeometryRect {
                 x: top_left.x + layer_translation.x,
@@ -813,9 +742,6 @@ pub fn build_layout_tree_from_applier(
             });
         }
 
-        // Publish this node's resolved size to its `pointer_input` handlers so
-        // `PointerInputScope::size()` reports the node's real dimensions (the
-        // box the dispatched event positions are local to), not `0x0`.
         modifier_slices.publish_pointer_input_size(state.size());
 
         let data = LayoutNodeData::new(modifier, resolved_modifiers, modifier_slices, kind);
@@ -951,7 +877,6 @@ pub fn tree_needs_semantics(applier: &mut dyn Applier, root: NodeId) -> Result<b
     Ok(applier.get_mut(root)?.needs_semantics())
 }
 
-/// Test helper: bubbles layout dirty flag to root.
 #[cfg(test)]
 pub(crate) fn bubble_layout_dirty(applier: &mut MemoryApplier, node_id: NodeId) {
     cranpose_core::bubble_layout_dirty(applier as &mut dyn Applier, node_id);
@@ -983,20 +908,10 @@ pub fn measure_layout_with_options(
         max_height: max_size.height,
     };
 
-    // Selective measure: only increment epoch if something needs MEASURING (not just layout)
-    // O(1) check - just look at root's dirty flag (bubbling ensures correctness)
-    //
-    // CRITICAL: We check needs_MEASURE, not needs_LAYOUT!
-    // - needs_measure: size may change, caches must be invalidated
-    // - needs_layout: position may change but size is cached (e.g., scroll)
-    //
-    // Scroll operations bubble needs_layout to ancestors, but NOT needs_measure.
-    // Using needs_layout here would wipe ALL caches on every scroll frame, causing
-    // O(N) full remeasurement instead of O(changed nodes).
     let (needs_remeasure, _needs_semantics, cached_epoch) = match applier
         .with_node::<LayoutNode, _>(root, |node| {
             (
-                node.needs_measure(), // CORRECT: check needs_measure, not needs_layout
+                node.needs_measure(),
                 node.needs_semantics(),
                 node.cache_handles().epoch(),
             )
@@ -1004,9 +919,6 @@ pub fn measure_layout_with_options(
         Ok(tuple) => tuple,
         Err(NodeError::TypeMismatch { .. }) => {
             let node = applier.get_mut(root)?;
-            // Non-LayoutNode roots still expose Node dirty flags.
-            // Use needs_measure here so layout-only subtree repasses can reuse
-            // the existing cache epoch instead of invalidating the whole tree.
             let measure_dirty = node.needs_measure();
             let semantics_dirty = node.needs_semantics();
             (measure_dirty, semantics_dirty, 0)
@@ -1019,24 +931,14 @@ pub fn measure_layout_with_options(
     } else if cached_epoch != 0 {
         cached_epoch
     } else {
-        // Fallback when caller root isn't a LayoutNode (e.g. tests using Spacer directly).
         crate::render_state::current_layout_cache_epoch()
     };
 
-    // Move the current applier into a host and set up a guard that will
-    // ALWAYS restore:
-    // - the MemoryApplier back into `applier`
-    // - the SlotTable back into that MemoryApplier
-    //
-    // IMPORTANT: Declare the guard *before* the builder so the builder
-    // is dropped first (both on Ok and on unwind).
     let guard = ApplierSlotGuard::new(applier);
     let applier_host = guard.host();
     let slots_handle = guard.slots_handle();
     let after_guard = Instant::now();
 
-    // Give the builder the shared slots handle - both guard and builder
-    // now share access to the same SlotTable via Rc<RefCell<_>>.
     let frame_arena = crate::render_state::take_layout_frame_arena();
     let mut builder = LayoutBuilder::new_with_epoch(
         Rc::clone(&applier_host),
@@ -1046,16 +948,9 @@ pub fn measure_layout_with_options(
     );
     let after_builder = Instant::now();
 
-    // ---- Measurement -------------------------------------------------------
-    // If measurement fails, the guard will restore slots from the shared handle
-    // on drop - this is safe because the handle always contains valid slots.
-
     let measured = builder.measure_node(root, normalize_constraints(constraints))?;
     let after_measure = Instant::now();
 
-    // Root node has no parent to place it, so we must explicitly place it at (0,0).
-    // This ensures is_placed=true, allowing the renderer to traverse the tree.
-    // Handle both LayoutNode and SubcomposeLayoutNode as potential roots.
     if let Ok(mut applier) = applier_host.try_borrow_typed()
         && applier
             .with_node::<LayoutNode, _>(root, |node| {
@@ -1091,13 +986,9 @@ pub fn measure_layout_with_options(
     };
     let after_aux = Instant::now();
 
-    // Drop builder before guard - slots are already in the shared handle.
-    // Guard's Drop will write them back to the applier.
     drop(builder);
     let after_builder_drop = Instant::now();
 
-    // DO NOT manually unwrap `applier_host` or replace `applier` here.
-    // `ApplierSlotGuard::drop` will restore everything when this function returns.
     drop(guard);
     let after_guard_drop = Instant::now();
 
@@ -1133,8 +1024,6 @@ fn process_pending_layout_repasses(
             }
         }
     }
-    // Measure repasses re-*size* a subtree (and its ancestors), so an enclosing
-    // LazyColumn re-measures the node instead of reusing its cached item slot.
     let measure_repass_nodes = crate::take_measure_repass_nodes();
     let repass_nodes = crate::take_layout_repass_nodes();
     if measure_repass_nodes.is_empty() && repass_nodes.is_empty() {
@@ -1199,8 +1088,6 @@ impl Drop for LayoutBuilder {
 struct LayoutBuilderState {
     applier: Rc<ConcreteApplierHost<MemoryApplier>>,
     runtime_handle: Option<RuntimeHandle>,
-    /// Shared handle to the slot table. This is shared with ApplierSlotGuard
-    /// to ensure panic-safety: even if we panic, the guard can restore slots.
     slots: Rc<RefCell<SlotTable>>,
     cache_epoch: u64,
     frame_arena: FrameLayoutArena,
@@ -1249,7 +1136,6 @@ impl LayoutBuilderState {
             Rc::clone(&state.applier)
         };
 
-        // Try to borrow - if already borrowed (nested call), return None
         let Ok(mut applier) = host.try_borrow_typed() else {
             return None;
         };
@@ -1269,8 +1155,6 @@ impl LayoutBuilderState {
         })
     }
 
-    /// Clears the is_placed flag for a node at the start of measurement.
-    /// This ensures nodes that drop out of placement won't render with stale geometry.
     fn clear_node_placed(state_rc: &Rc<RefCell<Self>>, node_id: NodeId) {
         let host = {
             let state = state_rc.borrow();
@@ -1279,7 +1163,6 @@ impl LayoutBuilderState {
         let Ok(mut applier) = host.try_borrow_typed() else {
             return;
         };
-        // Try LayoutNode first, then SubcomposeLayoutNode
         if applier
             .with_node::<LayoutNode, _>(node_id, |node| {
                 node.clear_placed();
@@ -1298,12 +1181,8 @@ impl LayoutBuilderState {
         constraints: Constraints,
     ) -> Result<Rc<MeasuredNode>, NodeError> {
         let telemetry_start = Instant::now();
-        // Clear is_placed at the start of measurement.
-        // Nodes that are placed will have is_placed set to true via Placeable::place().
-        // Nodes that drop out of placement (not placed this pass) will remain is_placed=false.
         Self::clear_node_placed(&state_rc, node_id);
 
-        // Try SubcomposeLayoutNode first
         if let Some(subcompose) =
             Self::try_measure_subcompose(Rc::clone(&state_rc), node_id, constraints)?
         {
@@ -1318,7 +1197,6 @@ impl LayoutBuilderState {
             return Ok(subcompose);
         }
 
-        // Try LayoutNode (the primary modern path)
         if let Some(result) = Self::try_with_applier_result(&state_rc, |applier| {
             match applier.with_node::<LayoutNode, _>(node_id, |layout_node| {
                 LayoutNodeSnapshot::from_layout_node(layout_node)
@@ -1327,35 +1205,26 @@ impl LayoutBuilderState {
                 Err(NodeError::TypeMismatch { .. }) | Err(NodeError::Missing { .. }) => Ok(None),
                 Err(err) => Err(err),
             }
-        }) {
-            // Applier was available, process the result
-            if let Some(snapshot) = result? {
-                let measured = Self::measure_layout_node(
-                    Rc::clone(&state_rc),
-                    node_id,
-                    snapshot,
-                    constraints,
-                )?;
-                log_node_measure_telemetry(
-                    "layout",
-                    node_id,
-                    constraints,
-                    measured.size,
-                    measured.children.len(),
-                    telemetry_start,
-                );
-                return Ok(measured);
-            }
+        }) && let Some(snapshot) = result?
+        {
+            let measured =
+                Self::measure_layout_node(Rc::clone(&state_rc), node_id, snapshot, constraints)?;
+            log_node_measure_telemetry(
+                "layout",
+                node_id,
+                constraints,
+                measured.size,
+                measured.children.len(),
+                telemetry_start,
+            );
+            return Ok(measured);
         }
-        // If applier was busy (None) or snapshot was None, fall through to fallback
 
-        // No alternate fallbacks - all widgets use LayoutNode or SubcomposeLayoutNode
-        // If we reach here, it's an unknown node type (shouldn't happen in normal use)
         let measured = Rc::new(MeasuredNode::new(
             node_id,
             Size::default(),
             Point { x: 0.0, y: 0.0 },
-            Point::default(), // No content offset for fallback nodes
+            Point::default(),
             Vec::new(),
         ));
         log_node_measure_telemetry(
@@ -1420,7 +1289,6 @@ impl LayoutBuilderState {
         };
 
         let (node_handle, resolved_modifiers) = {
-            // Try to borrow - if already borrowed (nested measurement), return None
             let Ok(mut applier) = applier_host.try_borrow_typed() else {
                 return Ok(None);
             };
@@ -1443,11 +1311,10 @@ impl LayoutBuilderState {
 
         let runtime_handle = {
             let mut state = state_rc.borrow_mut();
-            if state.runtime_handle.is_none() {
-                // Try to borrow - if already borrowed, we can't get runtime handle
-                if let Ok(applier) = applier_host.try_borrow_typed() {
-                    state.runtime_handle = applier.runtime_handle();
-                }
+            if state.runtime_handle.is_none()
+                && let Ok(applier) = applier_host.try_borrow_typed()
+            {
+                state.runtime_handle = applier.runtime_handle();
             }
             state
                 .runtime_handle
@@ -1587,9 +1454,6 @@ impl LayoutBuilderState {
             return Err(err);
         }
 
-        // NOTE: Children are now managed by the composer via insert_child commands
-        // (from parent_stack initialization with root). set_active_children is no longer used.
-
         let cranpose_ui_layout::MeasureResult {
             size: measured_size,
             placements,
@@ -1618,7 +1482,6 @@ impl LayoutBuilderState {
         let mut children = Vec::with_capacity(placements.len());
         let mut measured_children_by_id = measured_children.borrow_mut();
 
-        // Update the SubcomposeLayoutNode's size (position will be set by parent's placement)
         if let Ok(mut applier) = applier_host.try_borrow_typed() {
             let _ = applier.with_node::<SubcomposeLayoutNode, _>(node_id, |parent_node| {
                 parent_node.set_measured_size(Size { width, height });
@@ -1631,35 +1494,17 @@ impl LayoutBuilderState {
             let child = if let Some(measured) = measured_children_by_id.remove(&placement.node_id) {
                 measured
             } else {
-                // Policies may place subcomposed children without calling `measure()` first
-                // (for example, when they only need a slot's rendered content). Keep the
-                // existing fallback for that case, but preserve the policy-time measurement
-                // whenever it exists so we don't silently remeasure lazy items with the
-                // container's tighter constraints.
                 Self::measure_node(Rc::clone(&state_rc), placement.node_id, inner_constraints)?
             };
             let policy_position = Point {
                 x: padding.left + placement.x,
                 y: padding.top + placement.y,
             };
-            // Subcompose policies return raw placements and bypass the
-            // child's `Placeable::place`, which normally adds the modifier
-            // chain's node offset. Retained rendering reads the live node
-            // position, so it must receive that same final coordinate. The
-            // measured-tree edge keeps the raw policy position because
-            // `build_layout_tree` applies `child.offset` itself.
             let retained_position = Point {
                 x: policy_position.x + child.offset.x,
                 y: policy_position.y + child.offset.y,
             };
 
-            // Critical: Update the child's retained placement state.
-            // Standard layouts do this via Placeable::place(), but SubcomposeLayout
-            // logic bypasses Placeables and returns raw Placements. A subcomposed
-            // child can itself be a SubcomposeLayout (e.g. a `BoxWithConstraints`
-            // inside a `LazyColumn` item), so both node kinds must be positioned
-            // and marked placed; otherwise the applier-traversal render, layout,
-            // and semantics builds cull the child's whole subtree (issue #305).
             if let Ok(mut applier) = applier_host.try_borrow_typed()
                 && applier
                     .with_node::<LayoutNode, _>(placement.node_id, |node| {
@@ -1678,7 +1523,6 @@ impl LayoutBuilderState {
             });
         }
 
-        // Update the SubcomposeLayoutNode's active children for rendering
         node_handle.set_active_children(children.iter().map(|c| c.node.node_id));
         node_handle.recycle_placement_scratch(placements);
 
@@ -1686,15 +1530,10 @@ impl LayoutBuilderState {
             node_id,
             Size { width, height },
             offset,
-            Point::default(), // Subcompose nodes: content_offset handled by child layout
+            Point::default(),
             children,
         ))))
     }
-    /// Measures through the layout modifier coordinator chain using reconciled modifier nodes.
-    /// Iterates through LayoutModifierNode instances from the ModifierNodeChain and calls
-    /// their measure() methods through the retained coordinator chain.
-    ///
-    /// Always succeeds, measuring either directly or through retained layout modifier nodes.
     fn measure_through_modifier_chain(
         state_rc: &Rc<RefCell<Self>>,
         node_id: NodeId,
@@ -1706,7 +1545,6 @@ impl LayoutBuilderState {
     ) -> ModifierChainMeasurement {
         use cranpose_foundation::NodeCapabilities;
 
-        // Collect layout node information from the modifier chain
         layout_node_data.clear();
         let mut offset = Point::default();
         let mut density = crate::density::Density::default();
@@ -1723,19 +1561,14 @@ impl LayoutBuilderState {
                     return;
                 }
 
-                // Collect indices and node Rc clones for layout modifier nodes
                 chain_handle.chain().for_each_forward_matching(
                     NodeCapabilities::LAYOUT,
                     |node_ref| {
                         if let Some(index) = node_ref.entry_index() {
-                            // Get the Rc clone for this node
                             if let Some(node_rc) = chain_handle.chain().get_node_rc(index) {
                                 layout_node_data.push((index, Rc::clone(&node_rc)));
                             }
 
-                            // Extract offset from OffsetNode for the node's own position
-                            // The coordinator chain handles placement_offset (for children),
-                            // but the node's offset affects where IT is positioned in the parent
                             node_ref.with_node(|node| {
                                 if let Some(offset_node) =
                                     node.as_any()
@@ -1754,8 +1587,6 @@ impl LayoutBuilderState {
 
         let scope = crate::density::DensityMeasureScope::new(density);
 
-        // Fast path: if there are no layout modifiers, measure directly without the
-        // retained coordinator chain frame.
         if layout_node_data.is_empty() {
             let final_size = measure_policy.measure_into(
                 &scope,
@@ -1779,7 +1610,6 @@ impl LayoutBuilderState {
             placements,
         );
 
-        // Measure through the complete coordinator chain
         let placeable = runtime_state
             .coordinator_chain()
             .measure_from(0, &frame, constraints);
@@ -1788,27 +1618,19 @@ impl LayoutBuilderState {
             height: placeable.height(),
         };
 
-        // Get accumulated content offset from the placeable (computed during measure)
         let content_offset = placeable.content_offset();
         let all_placement_offset = Point {
             x: content_offset.0,
             y: content_offset.1,
         };
 
-        // The content_offset for scroll/inner transforms is the accumulated placement offset
-        // MINUS the node's own offset (which affects its position in the parent, not content position).
-        // This properly separates: node position (offset) vs inner content position (content_offset).
         let content_offset = Point {
             x: all_placement_offset.x - offset.x,
             y: all_placement_offset.y - offset.y,
         };
 
-        // offset was already extracted from OffsetNode above
-
-        // Process any invalidations requested during measurement
         let invalidations = frame.take_invalidations();
         if !invalidations.is_empty() {
-            // Mark the LayoutNode as needing the appropriate passes
             Self::with_applier_result(state_rc, |applier| {
                 applier.with_node::<LayoutNode, _>(node_id, |layout_node| {
                     for kind in invalidations {
@@ -1883,26 +1705,18 @@ impl LayoutBuilderState {
         } = snapshot;
         cache.activate(cache_epoch);
 
-        if needs_measure {
-            // Node has needs_measure=true
-        }
-
-        // Only check cache when the node is fully clean.
-        // needs_layout=true means either the node itself or one of its descendants
-        // must be revisited even if the node's own measured size can stay cached.
-        if !needs_measure && !needs_layout {
-            // Check cache for current constraints
-            if let Some(cached) = cache.get_measurement(constraints) {
-                // Clear dirty flag after successful cache hit
-                Self::with_applier_result(&state_rc, |applier| {
-                    applier.with_node::<LayoutNode, _>(node_id, |node| {
-                        node.clear_needs_measure();
-                        node.clear_needs_layout();
-                    })
+        if !needs_measure
+            && !needs_layout
+            && let Some(cached) = cache.get_measurement(constraints)
+        {
+            Self::with_applier_result(&state_rc, |applier| {
+                applier.with_node::<LayoutNode, _>(node_id, |node| {
+                    node.clear_needs_measure();
+                    node.clear_needs_layout();
                 })
-                .ok();
-                return Ok(cached);
-            }
+            })
+            .ok();
+            return Ok(cached);
         }
 
         let (runtime_handle, applier_host) = {
@@ -1988,11 +1802,8 @@ impl LayoutBuilderState {
             )
         };
 
-        // Modifier chain always succeeds - use the node-driven measurement.
         let (width, height, content_offset, offset) = {
             let result = modifier_chain_result;
-            // The size is already correct from the modifier chain (modifiers like SizeNode
-            // have already enforced their constraints), so we use it directly.
             if let Some(err) = error.borrow_mut().take() {
                 return Err(err);
             }
@@ -2015,26 +1826,6 @@ impl LayoutBuilderState {
                         x: placement.x,
                         y: placement.y,
                     });
-                // A measure policy says where a child goes ONCE, by pushing a
-                // `Placement`. Apply that here to the child's retained state,
-                // so the two consumers of a layout pass are filled from the one
-                // statement: the measured tree `build_layout_tree` walks, and
-                // the applier state the per-frame scene build walks (which
-                // culls anything with `is_placed == false`).
-                //
-                // Calling the placeable's own `place` is the redundant second
-                // half of the same statement, and every built-in policy does
-                // both. A policy that did only one of the two used to lay out
-                // correctly in every `LayoutTree` test and draw NOTHING in the
-                // app — the whole Wear widget set was in exactly that state.
-                // The subcompose path already applied its placements this way
-                // for the same reason (issue #305); this is the other half.
-                //
-                // `measured.offset` is the child's own modifier-chain offset,
-                // which `place` folds in — the value written here is the same
-                // one `place` writes, so a policy doing both is idempotent. The
-                // PARENT's `content_offset` is deliberately excluded: retained
-                // consumers apply it themselves, from the parent node.
                 if let Some(raw) = placed {
                     record.state.place_retained(Point {
                         x: raw.x + measured.offset.x,
@@ -2044,7 +1835,6 @@ impl LayoutBuilderState {
                 let base_position = placed
                     .or_else(|| record.state.last_position())
                     .unwrap_or(Point { x: 0.0, y: 0.0 });
-                // Apply content_offset (from scroll/transforms) to child positioning
                 let position = Point {
                     x: content_offset.x + base_position.x,
                     y: content_offset.y + base_position.y,
@@ -2066,7 +1856,6 @@ impl LayoutBuilderState {
 
         cache.store_measurement(constraints, Rc::clone(&measured));
 
-        // Clear dirty flags and update derived state
         Self::with_applier_result(&state_rc, |applier| {
             applier.with_node::<LayoutNode, _>(node_id, |node| {
                 node.clear_needs_measure();
@@ -2088,18 +1877,11 @@ struct LayoutChildMeasureData {
     needs_measure: bool,
 }
 
-/// Snapshot of a LayoutNode's data for measuring.
-/// This is a temporary copy used during the measure phase, not a live node.
-///
-/// Note: We capture `needs_measure` here because it's checked during measure to enable
-/// selective measure optimization at the individual node level. Even if the tree is partially
-/// dirty (some nodes changed), clean nodes can skip measure and use cached results.
 struct LayoutNodeSnapshot {
     measure_policy: Rc<dyn MeasurePolicy>,
     cache: LayoutNodeCacheHandles,
     layout_runtime_state: Rc<RefCell<LayoutRuntimeState>>,
     needs_layout: bool,
-    /// Whether this specific node needs to be measured (vs using cached measurement)
     needs_measure: bool,
 }
 
@@ -2115,7 +1897,6 @@ impl LayoutNodeSnapshot {
     }
 }
 
-// Helper types for accessing subsets of LayoutBuilderState
 struct VecPools {
     state: Rc<RefCell<LayoutBuilderState>>,
     records: Vec<(NodeId, ChildRecord)>,
@@ -2144,7 +1925,7 @@ impl VecPools {
         }
     }
 
-    #[allow(clippy::type_complexity)] // Returns internal Vec references for layout operations
+    #[allow(clippy::type_complexity)]
     fn parts(
         &mut self,
     ) -> (
@@ -2245,9 +2026,7 @@ impl LayoutMeasureHandle {
 pub(crate) struct MeasuredNode {
     node_id: NodeId,
     size: Size,
-    /// Node's position offset relative to parent (from OffsetNode etc.)
     offset: Point,
-    /// Content offset for scroll/inner transforms (NOT node position)
     content_offset: Point,
     children: Vec<MeasuredChild>,
 }
@@ -2795,15 +2574,6 @@ impl LayoutChildMeasureState {
         self.last_position.set(Some(position));
     }
 
-    /// Writes this child's placement into its retained node state: the position
-    /// relative to the parent's content box, and the `is_placed` flag that the
-    /// applier-driven passes — scene build, hit test, semantics — cull on.
-    ///
-    /// The single place that fact is recorded. `Placeable::place` routes here,
-    /// and so does the engine's own application of a policy's `Placement`s, so
-    /// a policy that does both writes the same value twice rather than two
-    /// different ones. A child can itself be a `SubcomposeLayout` (a
-    /// `BoxWithConstraints` inside a list item), so both node kinds are tried.
     fn place_retained(&self, position: Point) {
         self.set_last_position(position);
         if let Some(layout_state) = self.layout_state() {
@@ -3168,10 +2938,6 @@ fn runtime_metadata_for(
     applier: &mut MemoryApplier,
     node_id: NodeId,
 ) -> Result<RuntimeNodeMetadata, NodeError> {
-    // Try LayoutNode (the primary modern path)
-    // IMPORTANT: We use with_node (reference) instead of try_clone because cloning
-    // LayoutNode creates a NEW ModifierChainHandle with NEW nodes and NEW handlers,
-    // which would lose gesture state like press_position.
     if let Ok(meta) = applier.with_node::<LayoutNode, _>(node_id, |layout| {
         let modifier = layout.modifier.clone();
         let resolved_modifiers = layout.resolved_modifiers();
@@ -3189,7 +2955,6 @@ fn runtime_metadata_for(
         return Ok(meta);
     }
 
-    // Try SubcomposeLayoutNode
     if let Ok((modifier, resolved_modifiers, modifier_slices)) = applier
         .with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
             (
@@ -3262,9 +3027,6 @@ fn semantics_node_from_parts(
         if config.role == Some(SemanticsWidgetRole::Button) {
             role = SemanticsRole::Button;
         }
-        // A named click label is how Compose declares `onClick`, so it carries
-        // the action with it; an app should not have to set `is_clickable` as
-        // well to be activatable.
         if config.is_activatable() {
             node.actions.push(SemanticsAction::Click {
                 handler: SemanticsCallback::new(node_id),
@@ -3376,16 +3138,8 @@ fn build_layout_tree(
         applier: &mut MemoryApplier,
         node: &MeasuredNode,
         origin: Point,
-        // Accumulated ancestor graphics-layer translation (window px): a node's
-        // drawn content is shifted by every ancestor layer's translation on top
-        // of its layout position, so a text field's TRUE on-screen origin adds
-        // this. Scroll offsets are already baked into `origin` via placement;
-        // this carries the extra translation-transform component. Scale/rotation
-        // are not folded in (handle placement under a zoom layer is a documented
-        // gap).
         parent_layer_translation: Point,
     ) -> Result<LayoutBox, NodeError> {
-        // Include the node's own offset (from OffsetNode) in its position
         let top_left = Point {
             x: origin.x + node.offset.x,
             y: origin.y + node.offset.y,
@@ -3413,11 +3167,6 @@ fn build_layout_tree(
             None => parent_layer_translation,
         };
 
-        // Publish the field's TRUE composited window origin for its finger
-        // selection handles: layout position (ancestor scroll already baked in
-        // via placement) + accumulated graphics-layer translation. Re-read every
-        // layout pass so the handles (and their window→offset inverse mapping)
-        // track the field live as an enclosing list scrolls.
         if let Some(sink) = modifier_slices.text_field_window_origin() {
             sink.set(Point {
                 x: top_left.x + layer_translation.x,
@@ -3425,8 +3174,6 @@ fn build_layout_tree(
             });
         }
 
-        // Publish a scroll container's composited viewport rect (window
-        // coordinates) for its `BringIntoViewResponder`.
         if let Some(sink) = modifier_slices.viewport_window_rect() {
             sink.set(GeometryRect {
                 x: top_left.x + layer_translation.x,
@@ -3436,8 +3183,6 @@ fn build_layout_tree(
             });
         }
 
-        // Publish this node's resolved size to its `pointer_input` handlers so
-        // `PointerInputScope::size()` reports the node's real dimensions.
         modifier_slices.publish_pointer_input_size(node.size);
 
         let data = LayoutNodeData::new(modifier, resolved_modifiers, modifier_slices, kind);
@@ -3507,12 +3252,7 @@ fn layout_kind_from_metadata(_node_id: NodeId, info: &RuntimeNodeMetadata) -> La
     match &info.role {
         SemanticsRole::Layout => LayoutNodeKind::Layout,
         SemanticsRole::Subcompose => LayoutNodeKind::Subcompose,
-        SemanticsRole::Text { .. } => {
-            // Text content is now handled via TextModifierNode in the modifier chain
-            // and collected in modifier_slices.text_content(). LayoutNodeKind should
-            // reflect the layout policy (EmptyMeasurePolicy), not the content type.
-            LayoutNodeKind::Layout
-        }
+        SemanticsRole::Text { .. } => LayoutNodeKind::Layout,
         SemanticsRole::Spacer => LayoutNodeKind::Spacer,
         SemanticsRole::Button => {
             let handler = info
@@ -3604,8 +3344,6 @@ fn resolve_dimension(
             }
         }
         DimensionConstraint::Unspecified => base,
-        // Intrinsic sizing is resolved at a higher level where we have access to children.
-        // At this point we just use the base size as a fallback.
         DimensionConstraint::Intrinsic(_) => base,
     };
 

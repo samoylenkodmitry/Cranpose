@@ -77,19 +77,9 @@ fn log_layout_invalidation_dispatch(
 /// LayoutTree reconstruction.
 #[derive(Clone, Debug)]
 pub struct LayoutState {
-    /// The measured size of this node (width, height). Private: every write
-    /// must go through [`Self::set_size`], which self-reports actual changes
-    /// to the scene phase — a node resized or moved by a SIBLING's growth
-    /// recomposes nothing and raises no repass, so the write is the only
-    /// place that fact exists. Field privacy makes a bypass fail to compile.
     size: Size,
-    /// Position relative to parent's content origin. Private for the same
-    /// reason as `size`: writes go through [`Self::place`].
     position: Point,
-    /// True if this node has been placed in the current layout pass.
     is_placed: bool,
-    /// The id this state belongs to, for the geometry self-report. `None`
-    /// only before the node is mounted (no scene exists to go stale then).
     node_id: Option<NodeId>,
     /// The constraints used for the last measurement.
     pub measurement_constraints: Constraints,

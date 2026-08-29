@@ -284,8 +284,6 @@ where
                         self.scoped_layout_scene_nodes.clear();
                         let _ = cranpose_ui::take_geometry_scene_nodes();
                     } else {
-                        // HashSet dedup: a big pass can move thousands of
-                        // nodes, and Vec::contains per id is quadratic.
                         let mut seen: HashSet<NodeId> =
                             self.scoped_layout_scene_nodes.iter().copied().collect();
                         if has_scoped_repasses {
@@ -295,15 +293,6 @@ where
                                 }
                             }
                         }
-                        // Nodes the pass actually moved or resized. Repass ids
-                        // only say where invalidation STARTED; a sibling pushed
-                        // down by another row's growth starts nothing, and a
-                        // scoped scene update that never hears about it keeps
-                        // drawing it at the old geometry until the next full
-                        // pass. Each id is resolved the way structural records
-                        // are — nearest non-virtual ancestor, still attached —
-                        // because an id the graph cannot resolve forces the
-                        // scoped update to give up and rebuild the whole scene.
                         for node in cranpose_ui::take_geometry_scene_nodes() {
                             let Some(node) = applier.scene_node_attached_to(node, root) else {
                                 continue;

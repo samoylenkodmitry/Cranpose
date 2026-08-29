@@ -20,11 +20,6 @@ struct RenderState {
     measure_repasses: Mutex<LayoutRepassManager>,
     draw_repasses: Mutex<DrawRepassManager>,
     modifier_slice_repasses: Mutex<LayoutRepassManager>,
-    /// Nodes whose position or size actually changed in the current layout
-    /// pass. The scene phase folds these into its scoped graph update: a node
-    /// moved by a *sibling's* growth never recomposes and raises no repass of
-    /// its own, so without this channel the scoped update patches only the
-    /// grown subtree and keeps drawing the moved node at its old geometry.
     geometry_scene_nodes: Mutex<LayoutRepassManager>,
     render_invalidated: AtomicBool,
     pointer_invalidated: AtomicBool,
@@ -817,10 +812,6 @@ pub(crate) fn take_modifier_slice_repass_nodes() -> Vec<NodeId> {
     })
 }
 
-/// Records that the current layout pass gave `node_id` a new position or size.
-///
-/// Called from the retained geometry setters, so only an actual change lands
-/// here — a pass that re-places a node where it already was records nothing.
 pub(crate) fn record_geometry_scene_node(node_id: NodeId) {
     with_render_state(|state| {
         lock_repass_manager(&state.geometry_scene_nodes).schedule_repass(node_id);

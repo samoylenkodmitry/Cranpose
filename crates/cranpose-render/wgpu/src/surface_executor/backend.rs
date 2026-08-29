@@ -257,10 +257,6 @@ pub(crate) trait SurfaceExecutionBackend {
         load_op: wgpu::LoadOp<wgpu::Color>,
         composites: &[ShaderCompositeBatchItem<'_>],
     ) -> bool;
-    /// Draw blits and runtime-shader composites interleaved in the items'
-    /// own order inside ONE render pass. Returns false when a shader
-    /// pipeline fails validation; nothing is drawn and the caller flushes
-    /// the items individually instead.
     fn fused_composite_batch_to_view(
         &mut self,
         dest_view: &wgpu::TextureView,

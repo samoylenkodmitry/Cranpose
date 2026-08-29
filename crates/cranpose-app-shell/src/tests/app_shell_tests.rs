@@ -1628,9 +1628,6 @@ impl Renderer for ScopedUpdateCountingRenderer {
             )
         });
         if !updated {
-            // A failed scoped update falls back to a whole-scene rebuild, and
-            // that IS a rebuild: tests asserting `rebuilds == 0` mean "the
-            // scoped path carried it", so the fallback must not hide here.
             self.rebuilds.set(self.rebuilds.get() + 1);
             self.scene.clear();
             if let Some(graph) =
@@ -1660,9 +1657,6 @@ impl Renderer for ScopedUpdateCountingRenderer {
             )
         });
         if !updated {
-            // A failed scoped update falls back to a whole-scene rebuild, and
-            // that IS a rebuild: tests asserting `rebuilds == 0` mean "the
-            // scoped path carried it", so the fallback must not hide here.
             self.rebuilds.set(self.rebuilds.get() + 1);
             self.scene.clear();
             if let Some(graph) =
@@ -4845,19 +4839,11 @@ fn AppShellGrowingFirstRow() {
     let expanded = rememberMutableStateOf(|| false);
     APP_SHELL_EXPANSION_STATE.with(|slot| *slot.borrow_mut() = Some(expanded));
     let list_state = rememberLazyListState();
-    // A lazy list, not a plain Column: each item composes in its own scope, so
-    // growing item 0 recomposes NOTHING in its siblings — exactly the
-    // isolation that makes the moved sibling invisible to compose-derived
-    // dirt. A plain Column would recompose the whole body and hide the hole.
     LazyColumn(
         Modifier::empty().fill_max_size(),
         list_state,
         LazyColumnSpec::default(),
         |scope| {
-            // Each item wraps its content in its own Column, like a real list
-            // row: the strip's attach then lands on item 0's wrapper, not on
-            // the lazy container, so no structural dirt reaches the node whose
-            // re-lowering would refresh the siblings.
             scope.items(3, move |index| {
                 Column(Modifier::empty(), ColumnSpec::default(), move || {
                     if index == 0 {
@@ -4915,13 +4901,6 @@ const ORDINARY_SIBLING_COLOR: cranpose_ui::Color = cranpose_ui::Color(0.9, 0.05,
 #[composable]
 #[allow(non_snake_case)]
 fn AppShellOrdinaryColumnSiblings() {
-    // A plain Column, NOT a lazy list: ordinary children are placed through
-    // the layout engine's direct `LayoutState` handle, not through the node
-    // setters. The growth state is read inside the grower's own scope, so the
-    // siblings recompose nothing when it flips. The moved sibling is a solid
-    // Box, NOT a Text: re-measuring a text re-shapes it and schedules a draw
-    // repass, which sneaks the row into the scene scope and hides a missing
-    // geometry record — a plain box has no such rescue.
     Column(
         Modifier::empty().fill_max_size(),
         ColumnSpec::default(),
@@ -5686,11 +5665,6 @@ fn graph_scene_solid_rect_y(
     walk(&graph.root, 0.0, color)
 }
 
-/// Finding 1 of the #538 review: ordinary (non-lazy) children are placed by
-/// writing the shared `LayoutState` directly, bypassing the instrumented node
-/// setters — so a sibling moved by an ordinary row's growth recorded nothing
-/// and kept stale scene geometry exactly like the lazy case this branch
-/// already fixes.
 #[test]
 fn sibling_in_an_ordinary_column_moves_in_the_scene_when_a_row_grows() {
     let _guard = test_guard();
@@ -5773,12 +5747,6 @@ fn AppShellGrowerAboveNestedLazy() {
     );
 }
 
-/// The mutation this pins: strip the recording from ONLY the
-/// SubcomposeLayoutNode setters and every other test in this diff stays
-/// green, because they move ordinary rows inside a stationary lazy list.
-/// Here the moving node IS a SubcomposeLayoutNode — a nested LazyColumn
-/// pushed down by an ordinary sibling's growth — so its content drifts if
-/// that half of the recorder disappears.
 #[test]
 fn a_nested_lazy_list_moves_in_the_scene_when_the_row_above_grows() {
     let _guard = test_guard();
@@ -5838,8 +5806,6 @@ fn graph_scene_text_y(
         offset_y: f32,
         needle: &str,
     ) -> Option<f32> {
-        // A layer's position lives in its transform (pure translation in this
-        // scene); local_bounds always starts at the origin.
         let base = offset_y
             + layer
                 .transform_to_parent
@@ -5870,15 +5836,6 @@ fn graph_scene_text_y(
     walk(&graph.root, 0.0, needle)
 }
 
-/// One wrong assumption implemented twice: "the child list did not change,
-/// therefore there is nothing to invalidate". A child can grow without any
-/// membership changing, and a sibling pushed down by that growth recomposes
-/// nothing and raises no repass of its own — the only party that knows it
-/// moved is the layout pass that moved it. This is the scene-side enforcement
-/// point of that invariant (the core-side one is
-/// `reattaching_a_dirty_child_still_bubbles_to_ancestors`): the moved
-/// sibling's geometry must reach the scoped scene update, without the rescue
-/// of a full rebuild.
 #[test]
 fn sibling_moved_by_another_rows_growth_reaches_the_scoped_scene_update() {
     let _guard = test_guard();

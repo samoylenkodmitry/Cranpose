@@ -1,5 +1,3 @@
-//! GPU rendering implementation using WGPU
-
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{
@@ -124,10 +122,6 @@ use crate::{
     surface_requirements::SurfaceRequirementSet,
 };
 
-/// Must equal the `array<ShapeData, N>` literal in `shape.wgsl`: on wasm the
-/// shader source is used verbatim, so a larger batch cap here would index past
-/// the declared array. 102 x 160-byte ShapeData = 16320 bytes, the most that
-/// fits WebGL's 16 KiB uniform-binding floor.
 #[cfg(target_arch = "wasm32")]
 const MAX_SHAPES_PER_BATCH: usize = 102;
 #[cfg(not(target_arch = "wasm32"))]
@@ -137,36 +131,14 @@ const MAX_GRADIENT_STOPS: usize = 256;
 #[cfg(not(target_arch = "wasm32"))]
 const MAX_GRADIENT_STOPS: usize = 1024;
 
-/// Per-pass ceilings when the shape and gradient arrays live in storage
-/// buffers instead of uniforms. These are not hardware limits — storage
-/// bindings are hundreds of megabytes everywhere — they bound worst-case
-/// buffer growth: 65 536 shapes is a 7 MiB shape buffer and a 12 MiB vertex
-/// buffer, far past any real scene, while still forcing a batch split before
-/// a pathological one can ask for gigabytes.
 #[cfg(not(target_arch = "wasm32"))]
 const MAX_SHAPES_PER_STORAGE_BATCH: usize = 1 << 16;
 #[cfg(not(target_arch = "wasm32"))]
 const MAX_GRADIENT_STOPS_PER_STORAGE_BATCH: usize = 1 << 16;
 
-/// How many shapes/stops the storage-mode buffers start out sized for. In
-/// uniform mode the initial capacity must equal the cap (a uniform binding
-/// smaller than the shader's fixed-length array fails validation), but a
-/// runtime-sized storage array binds at any size, so start small and let
-/// `ensure_capacity` double toward the cap as scenes demand.
 #[cfg(not(target_arch = "wasm32"))]
 const INITIAL_STORAGE_BATCH_CAPACITY: usize = 1024;
 
-/// Shape/gradient batch capacities derived from the actual device limits.
-///
-/// Where storage buffers are available (any real Vulkan/Metal/D3D device, and
-/// GL only when it exposes SSBOs to fragment shaders) the arrays are bound as
-/// read-only storage and a whole scene fits one batch. Otherwise they fall
-/// back to uniform arrays: the compile-time `MAX_*` constants assume
-/// desktop-class 64 KiB uniform bindings, while Android downlevel and
-/// GLES-class devices may only offer the 16 KiB spec minimum; sizing the
-/// buffers (and the matching WGSL array lengths) past
-/// `max_uniform_buffer_binding_size` makes the very first "Shape Bind Group"
-/// fail validation and aborts the app.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ShapeBatchLimits {
     max_shapes_per_batch: usize,
@@ -179,34 +151,9 @@ impl ShapeBatchLimits {
         Self::select(&device.limits(), downlevel)
     }
 
-    /// Storage mode or uniform mode, from the two things that decide it.
-    ///
-    /// Split out from `for_device` because the interesting case cannot be
-    /// reached with a device in hand: it needs an adapter that reports storage
-    /// buffers and no vertex-stage access, which is every ARM Mali GLES driver
-    /// and no desktop.
     fn select(limits: &wgpu::Limits, _downlevel: wgpu::DownlevelFlags) -> Self {
         #[cfg(not(target_arch = "wasm32"))]
         if limits.max_storage_buffers_per_shader_stage >= 2
-            // `max_storage_buffers_per_shader_stage` alone is NOT the question,
-            // even though its name reads like a per-stage minimum. On ARM's
-            // GLES driver it comes back non-zero off the fragment stage while
-            // the vertex stage has no storage at all, so the check passed, the
-            // storage layout was built, and binding 0 -- the shape array, which
-            // is VERTEX_FRAGMENT because `vs_main` pulls quad corners out of it
-            // -- failed validation the moment the layout was created:
-            //
-            //   In Device::create_bind_group_layout, label = 'Shape Bind Group
-            //   Layout'; Binding 0 entry is invalid; Downlevel flags
-            //   DownlevelFlags(VERTEX_STORAGE) are required but not supported
-            //   on the device.
-            //
-            // wgpu treats that as fatal, so the renderer thread panicked and
-            // the app dropped back to the launcher on Mali-G76 (r18p0, 2019)
-            // and Mali-G715 (r54p3, 2024) alike -- driver age is not the
-            // variable. Adreno 650 and Adreno 702 have the flag and are
-            // unaffected. `VERTEX_STORAGE` is the flag that actually answers
-            // the question the layout asks, so ask it.
             && _downlevel.contains(wgpu::DownlevelFlags::VERTEX_STORAGE)
         {
             return Self::for_storage_binding_size(limits.max_storage_buffer_binding_size);
@@ -277,18 +224,10 @@ impl ShapeBatchLimits {
     }
 }
 #[cfg(target_arch = "wasm32")]
-const HARD_MAX_BUFFER_MB: usize = 64; // Maximum 64MB per buffer (image vertex/index only)
+const HARD_MAX_BUFFER_MB: usize = 64;
 const MAX_SHADOW_SURFACE_CACHE_ITEMS: usize = 512;
-// Sized for HiDPI: a 4K fractional-scale screen full of shadowed panels needs
-// ~10-15 rasters of 4-12MB each; a 64MB budget made the large entries evict
-// each other every frame during scroll, re-blurring tens of megapixels.
 const MAX_SHADOW_SURFACE_CACHE_BYTES: u64 = 384 * 1024 * 1024;
 
-/// Ablation switch for shadow fill: `CRANPOSE_SKIP_SHADOWS=1` (on Android,
-/// `debug.cranpose.skip_shadows`) drops every drop-shadow encode and
-/// composite for the frame. Shadow composites measured as the largest fill
-/// on a device profile — this toggle is how that cost is isolated on real
-/// hardware before and after fill-reduction work.
 fn skip_shadow_draws() -> bool {
     crate::debug_toggles::debug_toggle("CRANPOSE_SKIP_SHADOWS")
         .map(|v| matches!(v.as_str(), "1" | "true" | "yes"))
@@ -310,17 +249,6 @@ const MAX_OFFSCREEN_TEXT_GLYPH_PREWARM_CANDIDATES: usize = 2;
 const MAX_OFFSCREEN_TEXT_GLYPH_PREWARM_UNCACHED_CHARS: usize = 160;
 #[cfg(not(target_arch = "wasm32"))]
 const MAX_OFFSCREEN_TEXT_GLYPH_PREWARM_CACHED_GLYPHS: usize = 160;
-/// Side length the glyph atlas starts at, and the one it doubles towards.
-///
-/// The atlas is square and `R8Unorm`, so the maximum is a 16 MiB texture. That
-/// was also the starting size until it became the single largest resource the
-/// renderer allocated: a 454x454 watch face draws a couple of hundred distinct
-/// glyphs and needs well under a megabyte of them, but paid the full 16 MiB at
-/// renderer construction, before a single glyph had been rastered. Starting at
-/// `MIN` and doubling on overflow (see `TextGlyphAtlas::reset`) costs at most
-/// three extra resets for a workload that genuinely needs the large atlas —
-/// which then behaves exactly as the fixed 4096 atlas did — and costs a
-/// text-light screen 256 KiB instead of 16 MiB, permanently.
 const TEXT_GLYPH_ATLAS_MIN_SIZE: u32 = 512;
 const TEXT_GLYPH_ATLAS_MAX_SIZE: u32 = 4096;
 const TEXT_GLYPH_ATLAS_PADDING: u32 = 1;
@@ -339,9 +267,6 @@ const INITIAL_UPLOAD_BUFFER_BYTES: u64 = 4 * 1024;
 #[cfg(not(target_arch = "wasm32"))]
 const INITIAL_RETAINED_GLYPH_UNIFORM_SLOTS: usize = 128;
 const MAX_TEXTURE_CACHE_ITEMS: usize = 256;
-/// Byte ceiling for `image_texture_cache` (see `CachedImageTexture::bytes`).
-/// Generous enough for a screenful of full-page images plus thumbnails;
-/// small enough that a camera preview stream can never pin gigabytes.
 const MAX_IMAGE_TEXTURE_CACHE_BYTES: usize = 256 * 1024 * 1024;
 const RETAINED_STAGED_UPLOAD_BYTES: usize = 256 * 1024;
 const RETAINED_STAGED_UPLOAD_COPIES: usize = 128;
@@ -349,8 +274,6 @@ pub(crate) const RETAINED_LAYER_REQUIREMENTS_CAPACITY: usize = 512;
 const DEFAULT_WGPU_RENDER_STAGE_TELEMETRY_THRESHOLD_MS: f64 = 4.0;
 #[cfg(not(target_arch = "wasm32"))]
 static SEGMENT_DIAG_LINES: AtomicUsize = AtomicUsize::new(0);
-// Reclaim oversized text scratch allocations only after a meaningful 4x collapse
-// from a previously large frame; smaller swings are left alone to avoid churn.
 
 fn wgpu_render_stage_telemetry_threshold_ms() -> Option<f64> {
     static THRESHOLD_MS: std::sync::OnceLock<Option<f64>> = std::sync::OnceLock::new();
@@ -542,9 +465,6 @@ struct CachedShadowSurface {
 
 struct CachedShadowComposite {
     source: Rc<OffscreenTarget>,
-    /// The scissored strips the composite actually fills: the shadow's
-    /// coverage minus the caster's occluded interior. One full-coverage band
-    /// when the caster occludes nothing.
     bands: SmallVec<[(u32, u32, u32, u32); 4]>,
     rounded_mask: Option<RoundedCompositeMask>,
     dest_viewport: Option<(f32, f32, f32, f32)>,
@@ -572,8 +492,6 @@ impl CachedShadowComposite {
     }
 }
 
-/// A shadow composite's true fill region: the dest-viewport quad the draw
-/// covers, intersected with its scissor when one is set.
 fn shadow_composite_coverage(
     dest_viewport: (f32, f32, f32, f32),
     scissor: Option<(u32, u32, u32, u32)>,
@@ -605,12 +523,6 @@ fn shadow_composite_coverage(
     )
 }
 
-/// The scissored strips left of a shadow composite's coverage after the
-/// caster's occluded interior is carved out: top and bottom bands span the
-/// full coverage width, left and right bands fill the remaining sides. The
-/// occluder is shrunk to whole pixels (ceil/floor inward) so no partially
-/// covered pixel is ever skipped; a coverage the occluder misses comes back
-/// as the single original rect.
 fn shadow_band_scissors(
     coverage: (u32, u32, u32, u32),
     occluder: Option<Rect>,
@@ -720,8 +632,6 @@ mod shadow_band_tests {
             height: 39.9,
         };
         let bands = shadow_band_scissors((10, 20, 80, 60), Some(occluder), 1.0);
-        // ceil(20.4)=21, ceil(30.6)=31, floor(80.3)=80, floor(70.5)=70: the
-        // excluded rect is strictly inside the true occluder.
         assert_eq!(area(&bands), 80 * 60 - (80u64 - 21) * (70 - 31));
         assert!(disjoint(&bands));
     }
@@ -827,41 +737,17 @@ struct ShapeShadowSurfacePlan {
     pixel_radius: f32,
 }
 
-/// Shared record of the device's uncaptured errors (validation, OOM,
-/// internal), written by the handler [`GpuRenderer::new`] installs via
-/// `Device::on_uncaptured_error` and read at the head of every
-/// [`GpuRenderer::render`].
-///
-/// wgpu's default handler panics on the reporting thread. Mid-encode that
-/// unwind runs the drop glue of live pass/encoder objects, whose own error
-/// reports re-enter the same panicking handler — a second panic inside the
-/// first's unwind aborts the process, and the tombstone carries neither
-/// message (a real device's validation failure was lost exactly this way).
-/// This handler never panics: it counts, logs the full error, and poisons;
-/// the render path answers with one cancelled packet per poisoning — the
-/// acquire path's give-up-this-frame semantics, not a latch.
-/// `CRANPOSE_SURVIVE_GPU_ERRORS=0` restores the fatal default
-/// ([`survive_gpu_errors_enabled`]).
 #[derive(Default)]
 struct DeviceErrorSentry {
-    /// Lifetime uncaptured errors on this device.
     errors: std::sync::atomic::AtomicU64,
-    /// Set by the handler, taken (cleared) by the next frame's gate.
     poisoned: std::sync::atomic::AtomicBool,
 }
 
 impl DeviceErrorSentry {
-    /// Never panics: this runs where the default handler would have
-    /// aborted the process (see the type doc).
     fn record(&self, error: &wgpu::Error) {
         use std::sync::atomic::Ordering;
         self.poisoned.store(true, Ordering::Release);
         let count = self.errors.fetch_add(1, Ordering::Relaxed) + 1;
-        // The full error every time it prints; rate-limited by count
-        // because one broken frame reports a follow-up error per
-        // subsequent encoder call. Power-of-two occurrences (1, 2, 4,
-        // 8, …) keep the first reports verbatim and decay the repeats
-        // without a clock; the count carries the volume.
         if count.is_power_of_two() {
             log::error!("[gpu-device] uncaptured wgpu error #{count}: {error}");
         }
@@ -1037,8 +923,6 @@ fn text_raster_geometry_for_draw(
         .map(|anchor| snap_delta_for_anchor(anchor, root_scale))
         .unwrap_or_default();
     let logical_rect = text_draw.rect.translate(snap_delta.x, snap_delta.y);
-    // Clips are resolved in scene space from their own layer ancestry. A draw
-    // item's raster snap must never move a fixed ancestor clip.
     let clip = text_draw.clip;
     let mut raster_rect = Rect {
         x: logical_rect.x * root_scale,
@@ -1141,9 +1025,6 @@ fn shape_draw_is_visible_in_viewport(
     shape_draw_is_visible_in_rect(shape, viewport_rect, root_scale)
 }
 
-/// The viewport in logical units, or `None` for a degenerate scale — the
-/// four divides are loop-invariant at every filter call site, so the hot
-/// paths derive this once per batch and test shapes against the result.
 fn viewport_rect_in_logical(viewport: ViewportUniformParams, root_scale: f32) -> Option<Rect> {
     if !root_scale.is_finite() || root_scale <= 0.0 {
         return None;
@@ -1156,8 +1037,6 @@ fn viewport_rect_in_logical(viewport: ViewportUniformParams, root_scale: f32) ->
     })
 }
 
-/// [`shape_draw_is_visible_in_viewport`] with the logical viewport rect
-/// already derived: identical decision, none of the per-shape divides.
 fn shape_draw_is_visible_in_rect(shape: &DrawShape, viewport_rect: Rect, root_scale: f32) -> bool {
     let snap_delta = shape
         .snap_anchor
@@ -1346,10 +1225,6 @@ fn text_draws_for_ordered_range<'a>(
     }))
 }
 
-/// Shadow geometry is hashed in device pixels quantized to 1/16 px so rigid
-/// translations reuse the cached blurred raster. The cached surface is
-/// composited one-to-one with texel-exact sampling; translation may not change
-/// either the blur or its sampling phase.
 const SHADOW_CACHE_DEVICE_QUANT: f32 = 16.0;
 
 fn hash_shadow_device_offset<H: Hasher>(value: f32, origin: f32, root_scale: f32, state: &mut H) {
@@ -1419,10 +1294,6 @@ fn shape_shadow_content_hash(
     root_scale: f32,
 ) -> u64 {
     let mut hasher = FxHasher::default();
-    // Anchor the hash to the shapes' own (unfloored) bounds so rigid translation
-    // cancels out exactly. Anchoring to floored device-pixel bounds would leak
-    // the device subpixel phase into the hash and defeat the cache at
-    // fractional display scales.
     let origin = shape_shadow_bounds(shapes).unwrap_or(Rect {
         x: 0.0,
         y: 0.0,
@@ -1618,13 +1489,6 @@ fn gradient_tile_mode_value(tile_mode: TileMode) -> u32 {
     }
 }
 
-/// The base text the shape rewrites below start from: `shape.wgsl` alone, or
-/// — under `CRANPOSE_SOLID_TRIM_VARYINGS` — `shape.wgsl` with the trimmed
-/// solid entries appended. Appending happens BEFORE the storage/array
-/// rewrites so the paint-select injection and the batch-limit resizes land
-/// in the trimmed entries exactly as they land in `vs_main` (the
-/// substitution tests pin five landings); with the trim off the text is the
-/// borrowed shipping constant, byte-identical to what always compiled.
 fn shape_shader_base(solid_trim: bool) -> Cow<'static, str> {
     if solid_trim {
         return Cow::Owned(format!(
@@ -1639,9 +1503,6 @@ fn shape_shader_base(solid_trim: bool) -> Cow<'static, str> {
 #[cfg(not(target_arch = "wasm32"))]
 fn shape_shader_source(batch_limits: ShapeBatchLimits, solid_trim: bool) -> Cow<'static, str> {
     let base = shape_shader_base(solid_trim);
-    // These literals must stay in sync with `shape.wgsl`; a mismatch makes
-    // the substitution silently no-op and leaves the shader sized for the
-    // downlevel floor.
     if batch_limits.storage {
         return Cow::Owned(
             base.replace(
@@ -1650,12 +1511,6 @@ fn shape_shader_source(batch_limits: ShapeBatchLimits, solid_trim: bool) -> Cow<
             )
             .replace(
                 "var<uniform> gradient_stops: array<GradientStop, 256>;",
-                // Also inject the retained-paint array here: one mutable
-                // color per shape, read when `similarity.paint_select`
-                // is set, so recolor patches upload 16-byte colors
-                // instead of whole ShapeData records. The base text
-                // never declares it — uniform-mode devices cannot bind
-                // storage and never host retained slots.
                 "var<storage, read> gradient_stops: array<GradientStop>;\n\n\
                      @group(1) @binding(3)\n\
                      var<storage, read> paint: array<vec4<f32>>;",
@@ -1681,16 +1536,9 @@ fn shape_shader_source(batch_limits: ShapeBatchLimits, solid_trim: bool) -> Cow<
 
 #[cfg(target_arch = "wasm32")]
 fn shape_shader_source(_batch_limits: ShapeBatchLimits, solid_trim: bool) -> Cow<'static, str> {
-    // wasm keeps the downlevel array lengths verbatim. The trim flag is
-    // env-driven and a browser has no environment to set it in, but the arm
-    // stays honest for any embedder that reaches it.
     shape_shader_base(solid_trim)
 }
 
-/// Runs one `create_render_pipeline` call under a timer and logs the result.
-/// First-use creation happens on the render thread behind `get_or_init`,
-/// where a driver backend compile is whole missed frames on slow devices;
-/// the tag names the permutation so a stalled launch names its pipelines.
 pub(crate) fn create_render_pipeline_logged<'a>(
     device: &wgpu::Device,
     cache: Option<&'a wgpu::PipelineCache>,
@@ -1707,8 +1555,6 @@ pub(crate) fn create_render_pipeline_logged<'a>(
     pipeline
 }
 
-/// `CRANPOSE_PIPELINE_PREWARM=0` (property `debug.cranpose.pipeline_prewarm`)
-/// keeps first-use creation as the only compile path.
 #[cfg(not(target_arch = "wasm32"))]
 fn pipeline_prewarm_enabled() -> bool {
     crate::debug_toggles::debug_toggle("CRANPOSE_PIPELINE_PREWARM").as_deref() != Some("0")
@@ -1731,18 +1577,6 @@ struct PipelinePrewarmInputs {
     glyph_atlas_pipeline: SharedPassPipeline,
 }
 
-/// Fills the flat (non-depth) slot of every `PassPipeline` a first frame
-/// reaches for — off the render thread, racing the render thread's own
-/// first-use `get_or_init` on the SAME `OnceLock`. Whichever side gets
-/// there first wins; the other blocks on `OnceLock`'s own wait instead of
-/// compiling a redundant pipeline (measured on a Pixel Watch 3: 661 + 496 +
-/// 552 ms for the three shape pipelines alone, each one a swallowed frame).
-/// Racing a shared slot — rather than building a throwaway pipeline that
-/// only pays off through a device-level `wgpu::PipelineCache` — is what lets
-/// this run on every backend: `cache` is `Some` on Vulkan and `None` on GL,
-/// Metal, DX12 and wasm's WebGL/WebGPU (wgpu grants
-/// `Features::PIPELINE_CACHE` on Vulkan only), and prewarming still removes
-/// the compile from the frame-critical path either way.
 #[cfg(not(target_arch = "wasm32"))]
 fn spawn_pipeline_prewarm(inputs: PipelinePrewarmInputs) {
     if !pipeline_prewarm_enabled() {
@@ -1907,8 +1741,6 @@ fn create_shape_pipeline(
                 module: &shader,
                 entry_point: Some(vertex_entry),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
-                // No vertex buffer: `vs_main` (and its trimmed twin `vs_solid`)
-                // pulls quad corners from ShapeData by `vertex_index`.
                 buffers: &[],
             },
             fragment: Some(wgpu::FragmentState {
@@ -1938,12 +1770,6 @@ fn create_shape_pipeline(
     )
 }
 
-/// Storage-mode pipeline for retained slots that captured a conservative arc
-/// mesh: `vs_mesh` consumes `{position, uv, shape_idx}` vertices instead of
-/// expanding six corners per shape. Fragment stage, bind group layouts
-/// (including the dynamic-offset similarity binding and the retained paint
-/// binding) and the SrcOver blend are exactly the ones the quad-expansion retained
-/// path uses — only the vertex fetch differs.
 #[cfg(not(target_arch = "wasm32"))]
 fn create_mesh_shape_pipeline(
     device: &wgpu::Device,
@@ -1956,8 +1782,6 @@ fn create_mesh_shape_pipeline(
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("Shape Mesh Shader"),
-        // Mesh slots may carry gradients, so this family always compiles the
-        // full interface — the trimmed entries never pair with `vs_mesh`.
         source: wgpu::ShaderSource::Wgsl(display_clip::with_content_z(
             shape_shader_source(batch_limits, false),
             depth,
@@ -2010,13 +1834,6 @@ fn create_mesh_shape_pipeline(
     )
 }
 
-/// Storage-mode pipeline for ordinary shape batches drawn as instanced
-/// indexed quads (`vs_shape_instanced`): four vertex executions per shape
-/// through the static `[0, 1, 2, 2, 1, 3]` index buffer instead of six
-/// unindexed corner expansions. Everything but the vertex entry point is
-/// exactly `create_shape_pipeline` — same fragment stage, same layouts,
-/// same blend per mode — so a draw-time fallback to `vs_main` (the
-/// `CRANPOSE_INSTANCED_QUADS=0` kill switch) changes nothing else.
 #[cfg(not(target_arch = "wasm32"))]
 #[allow(clippy::too_many_arguments)]
 fn create_instanced_shape_pipeline(
@@ -2057,9 +1874,6 @@ fn create_instanced_shape_pipeline(
                 module: &shader,
                 entry_point: Some(vertex_entry),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
-                // No vertex buffer: like `vs_main`, the corners come from
-                // ShapeData; only the shape index source differs
-                // (`instance_index` instead of `vertex_index / 6`).
                 buffers: &[],
             },
             fragment: Some(wgpu::FragmentState {
@@ -2214,13 +2028,6 @@ fn create_glyph_atlas_pipeline(
     )
 }
 
-/// Pipeline for the display-clip occluder — the tessellated complement
-/// of the visible region — the first draw of a culled
-/// fused pass: depth write ON at the near plane, color writes fully masked
-/// off, trivial fragment stage with no discard — exactly the shape early-Z
-/// and LRZ hardware accepts as an occluder. The color target must still be
-/// declared (the pass has a color attachment), which is what the empty
-/// write mask is for.
 #[cfg(not(target_arch = "wasm32"))]
 fn create_display_clip_occluder_pipeline(
     device: &wgpu::Device,
@@ -2323,39 +2130,24 @@ struct Uniforms {
     viewport_offset: [f32; 2],
 }
 
-/// Mirror of `struct ShapeData` in `shape.wgsl`. Field order and sizes must
-/// match exactly: 10 x 16 bytes = 160 bytes, every member 16-byte aligned as
-/// the uniform address space requires. The quad corners and vertex color ride
-/// in here because the shape pipeline has no vertex buffer: the vertex shader
-/// pulls all six corners of a shape straight from this struct.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 struct ShapeData {
-    rect: [f32; 4], // x, y, width, height
-    /// Rects: top_left, top_right, bottom_left, bottom_right corner radii.
-    /// Arcs: (sin, cos) of the mid angle and of the half sweep — the shader's
-    /// per-shape trig, precomputed so `sdf_arc_band` needs none per fragment.
+    rect: [f32; 4],
     radii: [f32; 4],
-    gradient_params: [f32; 4], // linear: start.xy,end.xy; radial: center.xy,radius,unused
-    clip_rect: [f32; 4],       // clip_x, clip_y, clip_width, clip_height (0,0,0,0 = no clip)
-    /// stroke width, packed flags (see [`pack_shape_flags`]), arc outer radius,
-    /// arc inner radius. All zero for a plain fill.
+    gradient_params: [f32; 4],
+    clip_rect: [f32; 4],
     stroke_params: [f32; 4],
-    /// arc center.xy, start angle, sweep angle (radians, 0 = +X, clockwise).
     arc_params: [f32; 4],
-    /// Device-space quad corners 0 (xy) and 1 (zw).
     quad01: [f32; 4],
-    /// Device-space quad corners 2 (xy) and 3 (zw).
     quad23: [f32; 4],
-    /// Vertex color: the solid brush color, or the first gradient stop.
     color: [f32; 4],
-    brush_type: u32,         // 0=solid, 1=linear_gradient, 2=radial_gradient
-    gradient_start: u32,     // Starting index in gradient buffer
-    gradient_count: u32,     // Number of gradient stops
-    gradient_tile_mode: u32, // 0=Clamp, 1=Repeated, 2=Mirror, 3=Decal
+    brush_type: u32,
+    gradient_start: u32,
+    gradient_count: u32,
+    gradient_tile_mode: u32,
 }
 
-/// Shape kinds understood by `shape.wgsl`.
 const SHAPE_KIND_FILL: u32 = 0;
 const SHAPE_KIND_STROKE: u32 = 1;
 const SHAPE_KIND_ARC: u32 = 2;
@@ -2376,22 +2168,10 @@ fn stroke_join_code(join: StrokeJoin) -> u32 {
     }
 }
 
-/// Packs kind/cap/join into the single float `ShapeData::stroke_params[1]`.
-///
-/// Three 2-bit fields fit in one f32 exactly (integers below 2^24 are exact),
-/// which keeps `ShapeData` a slot smaller than it would be if each field got
-/// its own float — batch capacity is set by this size on uniform backends.
 fn pack_shape_flags(kind: u32, cap: StrokeCap, join: StrokeJoin) -> f32 {
     ((kind & 3) | (stroke_cap_code(cap) << 2) | (stroke_join_code(join) << 4)) as f32
 }
 
-/// Whether a batch conversion fans out is decided by measurement — see
-/// [`crate::cost_tuner::CostTuner`]. The floor of 256 matters: a device
-/// whose uniform binding caps batches at ~409 shapes never crossed the old
-/// fixed threshold of 512, so conversion ran serial on exactly the class of
-/// hardware (watch-grade in-order cores) where fanning out pays most. The
-/// 400 µs cheap floor keeps a big phone core, which clears such a batch in
-/// well under that, from ever paying for a spawn wave.
 #[cfg(not(target_arch = "wasm32"))]
 static SHAPE_CONVERT_TUNER: crate::cost_tuner::CostTuner =
     crate::cost_tuner::CostTuner::new("shape-convert", 256, 400_000);
@@ -2404,9 +2184,6 @@ pub(crate) fn shape_convert_worker_count() -> usize {
             .map(|count| count.get())
             .unwrap_or(1);
         let workers = cpus.clamp(1, 4);
-        // One line per process: on devices whose scheduler confines the
-        // process (affinity masks, cpusets), this is the number that
-        // explains why fan-out stages stayed serial.
         log::info!("[shape-convert] fan-out width {workers} (available parallelism {cpus})");
         workers
     })
@@ -2429,10 +2206,6 @@ fn shape_gradient_stop_count(shape: &DrawShape, brushes: &[Brush]) -> usize {
     }
 }
 
-/// Converts one [`DrawShape`] into its GPU representation, writing into
-/// pre-sized slots so a batch can convert in parallel across disjoint
-/// sub-slices. `gradient_start` is the shape's global offset into the batch
-/// gradient buffer; `gradient_out` is exactly its span of that buffer.
 fn convert_shape_into_slots(
     shape: &DrawShape,
     brushes: &[Brush],
@@ -2447,8 +2220,6 @@ fn convert_shape_into_slots(
         .unwrap_or_default();
     let local_rect = shape.local_rect.translate(snap_delta.x, snap_delta.y);
     let quad = translate_quad(shape.quad, snap_delta);
-    // Clips are resolved in scene space from their own layer ancestry. A draw
-    // item's raster snap must never move a fixed ancestor clip.
     let clip = shape.clip;
     let canonicalize = shape.snap_anchor.is_some();
     let device_local_rect = if canonicalize {
@@ -2474,7 +2245,6 @@ fn convert_shape_into_slots(
         }
     };
 
-    // Clip rect (scaled to physical pixels)
     let clip_rect = if let Some(clip) = clip {
         let device_clip = if canonicalize {
             canonicalized_scaled_rect(clip, root_scale)
@@ -2496,7 +2266,6 @@ fn convert_shape_into_slots(
         [0.0, 0.0, 0.0, 0.0]
     };
 
-    // Gradient parameters
     let mut fill_gradient_entries = |colors: &[Color], stops: Option<&[f32]>| {
         let count = colors.len();
         let explicit_stops = stops.filter(|values| values.len() == count);
@@ -2587,10 +2356,6 @@ fn convert_shape_into_slots(
         },
     };
 
-    // A stroked rect/round-rect was emitted with `local_rect` already
-    // inflated by half the stroke width, so corner radii must resolve
-    // against the geometry that was actually asked for, not the
-    // inflated box. The shader shrinks `half_size` by the same amount.
     let stroke_outset = shape
         .stroke
         .map(|stroke| stroke.half_width())
@@ -2599,15 +2364,6 @@ fn convert_shape_into_slots(
     let geometry_height = (local_rect.height - stroke_outset * 2.0).max(0.0);
 
     let radii = if let Some(arc) = shape.arc {
-        // Arcs never carry corner radii, so this slot ships the shader's
-        // per-shape trig instead: (sin, cos) of the sweep's mid angle and of
-        // the half sweep. Computing these here — once per shape — is what
-        // lets `sdf_arc_band` run without a single transcendental per
-        // fragment. A full ring is the common case (dots, particles) and
-        // `ArcGeometry::new` normalizes it to start 0 / sweep TAU, whose
-        // values are exact constants; the half-sweep sine is pinned to
-        // non-negative just like the shader used to, so a closed ring keeps
-        // its seam-free (0, -1) form.
         if arc.sweep_angle >= cranpose_ui_graphics::TAU && arc.start_angle == 0.0 {
             [0.0, -1.0, 0.0, -1.0]
         } else {
@@ -2635,9 +2391,6 @@ fn convert_shape_into_slots(
         device_local_rect.height,
     ];
 
-    // Stroke/arc parameters ride in the same ShapeData and the same
-    // pipeline as fills, so a stroked or arc shape never splits a
-    // batch.
     let (stroke_params, arc_params) = match (shape.arc, shape.stroke) {
         (Some(arc), _) => (
             [
@@ -2715,22 +2468,11 @@ fn convert_shape_into_slots(
     };
 }
 
-/// `CRANPOSE_QUAD_AREA_DIAG=1` prints, per shape batch, how many device
-/// pixels the emitted quads cover — split into arc quads, the true arc band
-/// coverage inside them, and everything else. Fill cost is the product of
-/// fragment count and shader cost, and this is the fragment-count half: it
-/// is how the MEGA scene's ~10x overdraw (and the ~50% of arc-quad area that
-/// the SDF discards) was measured.
 fn quad_area_diag_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED.get_or_init(|| std::env::var_os("CRANPOSE_QUAD_AREA_DIAG").is_some())
 }
 
-/// Converts a batch of shapes into pre-sized output slices, fanning the work
-/// across scoped threads when the batch is large enough to pay for spawns.
-/// The outputs may be scratch vectors or mapped GPU staging memory; each
-/// shape writes only its own disjoint slots, so chunked `split_at_mut`
-/// hand-off keeps the parallel path free of any synchronization.
 fn convert_shapes_into_outputs(
     shape_refs: &[&DrawShape],
     brushes: &[Brush],
@@ -2747,7 +2489,6 @@ fn convert_shapes_into_outputs(
         SHAPE_CONVERT_TUNER.choose_parallel(shape_count) && shape_convert_worker_count() > 1;
     if quad_area_diag_enabled() {
         let quad_area = |q: [[f32; 2]; 4]| {
-            // Shoelace over the quad polygon TL, TR, BR, BL (corners 0,1,3,2).
             let poly = [q[0], q[1], q[3], q[2]];
             let mut twice = 0.0f64;
             for i in 0..4 {
@@ -2757,14 +2498,12 @@ fn convert_shapes_into_outputs(
             }
             twice.abs() * 0.5
         };
-        let mut arc_quad = 0.0f64; // quad px of arc shapes
-        let mut arc_band = 0.0f64; // true band coverage of those arcs
+        let mut arc_quad = 0.0f64;
+        let mut arc_band = 0.0f64;
         let mut arc_count = 0usize;
         let mut ring_count = 0usize;
         let mut other_quad = 0.0f64;
         let mut other_count = 0usize;
-        // Largest non-arc quads: (area, index) so the tail of the diag can
-        // name what the aggregate "other" fill actually is.
         let mut top_other: Vec<(f64, usize)> = Vec::new();
         for (index, shape) in shape_refs.iter().enumerate() {
             let area = quad_area(shape.quad);
@@ -2884,9 +2623,6 @@ fn convert_shapes_into_outputs(
                 }
             };
             if chunk_end == shape_count {
-                // The caller would only block at the scope join; converting
-                // the final chunk inline puts that time to work and saves a
-                // spawn.
                 convert_chunk();
             } else {
                 scope.spawn(convert_chunk);
@@ -2909,108 +2645,36 @@ struct GradientStop {
     position: [f32; 4],
 }
 
-/// How many replay slots the shared transform buffer holds. Each slot's
-/// transform lives at `slot * REPLAY_TRANSFORM_STRIDE`, aligned for the
-/// strictest uniform-offset requirement any backend reports.
 #[cfg(not(target_arch = "wasm32"))]
 const MAX_REPLAY_SLOTS: u32 = 128;
 #[cfg(not(target_arch = "wasm32"))]
 const REPLAY_TRANSFORM_STRIDE: u64 = 256;
 
-/// One retained replay batch: converted shape slots captured on an earlier
-/// frame, kept on the GPU and re-drawn each frame under the similarity
-/// transform staged at `transform_offset`.
-///
-/// The immutable `ShapeData` and gradient buffers hold no handle here:
-/// nothing addresses them after capture, and `bind_group` keeps them alive.
 #[cfg(not(target_arch = "wasm32"))]
 struct ReplaySlot {
-    /// One `vec4<f32>` color per shape — the mutable paint the shader reads
-    /// under `paint_select`, split out so recolor patches upload 16 bytes
-    /// per shape while the 160-byte `ShapeData` stays immutable on the GPU
-    /// from capture to release.
     paint_buffer: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
     shape_count: u32,
-    /// CPU mirror of the paint buffer. Recolor patches apply here first
-    /// and upload as one contiguous span per slot per frame — MEGA's
-    /// twinkle field recolors ~1.7k dots a frame, and that many individual
-    /// copy commands stall a mobile GPU for longer than the spans' extra
-    /// bytes ever could.
     paint_mirror: Vec<[f32; 4]>,
-    /// Conservative capture-space arc/ring mesh, built once at capture.
-    /// `None` when the kill switch is off, the slot meshed no shapes (none
-    /// over the size gate), or the vertex budget overflowed — those slots
-    /// replay through the quad-expansion six-vertices-per-shape path.
     mesh: Option<ReplaySlotMesh>,
-    /// Which capture created this slot's buffers, from the store's global
-    /// monotone counter. Retained bundle keys carry it so a slot id that is
-    /// released and recaptured — new bind group, new buffers, same id — can
-    /// never be drawn through a bundle recorded against the old capture.
     capture_epoch: u64,
-    /// Whether any captured shape carries gradient stops. False routes the
-    /// slot's quad-expansion draws through the `fs_solid` pipelines; fixed
-    /// for the life of the capture, so bundle keys need nothing beyond the
-    /// capture epoch they already carry.
     has_gradient: bool,
-    /// Per-shape capture-space fill records for the `CRANPOSE_FILL_DIAG`
-    /// instrument (`shape_count` entries): submitted area (mesh triangles
-    /// when this slot replays its arc mesh, bounding quads otherwise),
-    /// analytic lit area, opacity class and quad AABB. Empty when the
-    /// diagnostic is off.
     fill_diag_shapes: Vec<FillDiagShapeRecord>,
-    /// Per-shape capture-space quad AABBs (`[min_x, min_y, max_x, max_y]`,
-    /// `shape_count` entries) — the segment-surface cache's geometry
-    /// source. Always computed (one min/max pass over corners already in
-    /// cache at capture), so a slot captured while that cache was off still
-    /// serves it after an opt-in flip.
     shape_aabbs: Vec<[f32; 4]>,
-    /// Running quad-area prefix sum (`shape_count + 1` entries): shape
-    /// range `a..b` submits `area_prefix[b] - area_prefix[a]` device px²
-    /// of quads at capture scale.
     area_prefix: Vec<f32>,
-    /// Ratio of actually-submitted pixels to plain quad pixels when this
-    /// slot replays its arc mesh (1.0 unmeshed) — the segment-surface
-    /// economics gate prices the direct path by what it truly rasterizes.
     submitted_area_scale: f32,
 }
 
-/// Band geometry a retained slot replays for its MESHED shapes only: arc
-/// and stroked-circle rim bands over the size gate get trapezoid strips
-/// covering their antialiasing footprint, while every other shape stays on
-/// the latched instanced-quad path — the draw walk alternates between the
-/// two along the shape range ([`GpuRenderer::encode_retained_op`]). The
-/// buffers never hold passthrough quads: routing them through per-vertex
-/// `MeshVertex` attributes instead of instancing's shared storage reads is
-/// what the watch A/B measured as a 2-5 fps LOSS (see
-/// [`arc_mesh_enabled`]). See [`build_arc_mesh_vertices`].
 #[cfg(not(target_arch = "wasm32"))]
 struct ReplaySlotMesh {
     vertex_buffer: wgpu::Buffer,
-    /// `u32` triangle-list indices into `vertex_buffer`: band-boundary
-    /// vertices are emitted once and shared by both adjacent trapezoids, so
-    /// per-arc vertex-shader work drops from ~30 executions to the unique
-    /// boundary vertices (~10-14) — the amplification that made the
-    /// non-indexed mesh SLOWER than plain quads on the watch's Adreno 702.
     index_buffer: wgpu::Buffer,
-    /// Prefix table, `shape_count + 1` entries: shape `i`'s triangles occupy
-    /// indices `index_prefix[i]..index_prefix[i + 1]`; an EMPTY range marks
-    /// a shape the draw walk keeps instanced. A run of meshed shapes draws
-    /// as one `draw_indexed` over its combined range — identical shape
-    /// order, z untouched.
     index_prefix: Vec<u32>,
-    /// Capture engagement counts for the test/diagnostic view
-    /// ([`GpuRenderer::replay_slot_mesh_engagement`]): shapes meshed as arc
-    /// bands, shapes meshed as stroked-circle rim bands, and shapes that
-    /// stayed on the instanced-quad path (gate-rejected or non-band).
     meshed_arcs: usize,
     meshed_rims: usize,
     passthrough: usize,
 }
 
-/// Vertex of a retained slot's conservative arc mesh: capture-device-space
-/// position, the uv reproducing `vs_main`'s affine rect map at that position,
-/// and the shape index standing in for `vertex_index / 6`.
 #[cfg(not(target_arch = "wasm32"))]
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
@@ -3034,44 +2698,17 @@ impl MeshVertex {
     }
 }
 
-/// Kill switch, mirroring `command_feed_enabled`: default ON,
-/// `CRANPOSE_ARC_MESH=0` (or the `debug.cranpose.arc_mesh` property on
-/// Android) makes the next capture skip mesh building entirely, so a device
-/// A/B needs no rebuild. Read per capture — captures are rare.
 #[cfg(not(target_arch = "wasm32"))]
 fn arc_mesh_enabled() -> bool {
-    // OPT-IN by measurement, size gate and all: alternating watch pairs
-    // (Adreno 702, mega scene, gate at its 16384 px² default — 2 shapes
-    // meshed, ~550 passthrough per slot) read mesh ON 48.7/43.5 fps vs
-    // OFF 53.7/45.2 — both pairs lose. The earlier all-arcs regime lost
-    // 4-11 fps; the gate shrank the loss, never crossed zero. The likely
-    // mechanism is structural: a slot holding a mesh leaves the latched
-    // instanced-quad path for EVERY shape in the slot, so its passthrough
-    // quads pay per-vertex attribute bandwidth where the instanced path
-    // paid shared storage reads — on a bandwidth-bound part that swamps
-    // the meshed shapes' fill recovery (fill-truth: 0.45 Mpx/frame of
-    // retained slack, 86-94% in a handful of huge ring/rim shapes). The
-    // measured WIN regime stays the DYNAMIC transient rim mesh
-    // ([`rim_mesh_band`], +9 fps, default on). A retry that could earn
-    // default-on: split a meshed slot's draw so passthrough shapes stay
-    // instanced and only gate-passing shapes take the mesh.
     matches!(
         crate::debug_toggles::debug_toggle("CRANPOSE_ARC_MESH").as_deref(),
         Some("1")
     )
 }
 
-/// Dilation applied to the band's half-thickness before meshing, in capture
-/// device pixels. The fragment SDF feathers over ±0.5 px
-/// (`smoothstep(-0.5, 0.5, dist)`), so every pixel the shader keeps sits
-/// within 0.5 px of the band; the other 0.5 px absorbs f32 slop between this
-/// builder's trig and the converted shape's precomputed (sin, cos) pairs.
 #[cfg(not(target_arch = "wasm32"))]
 const ARC_MESH_MARGIN: f32 = 1.0;
 
-/// Chord overshoot budget in pixels: the segment count is chosen so pushing
-/// outer edges tangent-outside the dilated outer circle overshoots it by
-/// about this much at the chord ends.
 #[cfg(not(target_arch = "wasm32"))]
 const ARC_MESH_OVERSHOOT: f32 = 2.0;
 
@@ -3080,75 +2717,24 @@ const ARC_MESH_MIN_SEGMENTS: usize = 4;
 #[cfg(not(target_arch = "wasm32"))]
 const ARC_MESH_MAX_SEGMENTS: usize = 64;
 
-/// Per-slot geometry budget in BYTES: 48 vertex-equivalents (~1 KB) per
-/// shape, floored for tiny slots so a single huge ring still fits. The
-/// non-indexed mesh spent this entirely on 20-byte vertices; the indexed
-/// mesh counts vertices AND 4-byte indices against the same byte ceiling,
-/// which indexed geometry fits with more headroom (MEGA's retained arcs
-/// drop from ~30 vertices ≈ 600 B to ~12 unique vertices + ~30 indices
-/// ≈ 360 B). Overflow falls back to whole-slot passthrough WITH a warning —
-/// truncating silently would break the containment invariant.
 #[cfg(not(target_arch = "wasm32"))]
 const ARC_MESH_BUDGET_BYTES_PER_SHAPE: usize = 48 * std::mem::size_of::<MeshVertex>();
 #[cfg(not(target_arch = "wasm32"))]
 const ARC_MESH_BUDGET_FLOOR_BYTES: usize = 4096 * std::mem::size_of::<MeshVertex>();
 
-/// The budget-relevant size of an indexed mesh: what the GPU buffers will
-/// actually hold.
 #[cfg(not(target_arch = "wasm32"))]
 fn arc_mesh_bytes(vertices: usize, indices: usize) -> usize {
     vertices * std::mem::size_of::<MeshVertex>() + indices * std::mem::size_of::<u32>()
 }
 
-/// Ceiling on a capture's maximal runs of consecutive meshed shapes
-/// ([`ArcMeshBuild::meshed_stretches`]). The draw walk alternates between
-/// the mesh pipeline and the instanced-quad pipeline along the shape range,
-/// so every meshed stretch costs an op that covers it two pipeline switches
-/// plus an index-buffer rebind; a slot whose meshed shapes interleave
-/// pathologically with passthrough ones would trade the fill win for
-/// switch thrash. Past this cap the capture keeps NO mesh and the whole
-/// slot stays on the instanced path — a structural property of the
-/// captured content, not of any app. Eight stretches bound an op at
-/// seventeen draws; the measured scene's slots hold two.
 #[cfg(not(target_arch = "wasm32"))]
 const MESH_SLOT_MAX_STRETCHES: usize = 8;
 
-/// Default size gate for the retained capture mesh, in capture-space px² of
-/// a shape's bounding quad: shapes below it take the passthrough quad even
-/// when they qualify geometrically.
-///
-/// The default follows from the trade's own economics, not from any one
-/// scene. A band mesh costs a roughly shape-size-independent overhead — up
-/// to [`ARC_MESH_MAX_SEGMENTS`] trapezoids of vertex work plus the extra
-/// primitives' setup and bin-list traffic on a tiling GPU — while what it
-/// can recover scales with the shape's quad area times its discard-slack
-/// fraction (an arc or ring band fills only O(perimeter x thickness) of
-/// its box, so the slack fraction RISES with size: big bands are almost
-/// all slack, tiny ones barely any). Fixed cost against area-proportional
-/// benefit crosses zero at some quad size; 16384 px² (a 128 px square)
-/// puts the gate an order of magnitude above the measured loss regime and
-/// an order below the measured win regime, so it is margin, not tuning:
-/// on the Adreno 702 meshing ~14k retained ~100-800 px² shapes lost
-/// 4-11 fps, while the same mesher over only large shapes wins on the same
-/// GPU (the shipping [`rim_mesh_band`] path, gated at 65536 px²), and
-/// fill-truth's top retained slack sits at ~19k px² and up (86-94% slack).
-/// Any app whose retained content mixes the two populations lands on the
-/// same split; a device where the crossover measurably differs A/Bs the
-/// threshold through the override below without a rebuild.
 #[cfg(not(target_arch = "wasm32"))]
 const RETAINED_MESH_MIN_PX2_DEFAULT: usize = 16384;
-/// Clamp for the `CRANPOSE_RETAINED_MESH_PX2` override: below ~1k px² the
-/// tiny-mesh amplification regime demonstrably returns, and above 256k px²
-/// the gate exceeds a whole 512x512 quad — both ends are "you no longer
-/// mean the size gate", not useful A/B settings.
 #[cfg(not(target_arch = "wasm32"))]
 const RETAINED_MESH_MIN_PX2_RANGE: std::ops::RangeInclusive<usize> = 1024..=262144;
 
-/// The retained capture mesh's size gate in px², default
-/// [`RETAINED_MESH_MIN_PX2_DEFAULT`], overridable for device A/Bs via
-/// `CRANPOSE_RETAINED_MESH_PX2` (the `debug.cranpose.retained_mesh_px2`
-/// property on Android), clamped to [`RETAINED_MESH_MIN_PX2_RANGE`]. Read
-/// per capture like [`arc_mesh_enabled`] — captures are rare.
 #[cfg(not(target_arch = "wasm32"))]
 fn retained_mesh_min_px2() -> f64 {
     parse_retained_mesh_min_px2(
@@ -3169,10 +2755,6 @@ fn parse_retained_mesh_min_px2(value: Option<&str>) -> f64 {
         .unwrap_or(RETAINED_MESH_MIN_PX2_DEFAULT) as f64
 }
 
-/// Band parameters of a captured arc that qualifies for a conservative mesh:
-/// solid brush, no clip, and a quad that is exactly — tolerance zero — the
-/// axis-aligned box of its rect. Everything else returns `None` and passes
-/// through as today's two quad triangles.
 #[cfg(not(target_arch = "wasm32"))]
 struct ArcMeshBand {
     center: [f32; 2],
@@ -3184,21 +2766,13 @@ struct ArcMeshBand {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn arc_mesh_band(shape: &ShapeData) -> Option<ArcMeshBand> {
-    // Mirror the fragment shader's flag decode (`u32(max(x, 0.0))`).
     let flags = shape.stroke_params[1].max(0.0) as u32;
     if flags & 3 != SHAPE_KIND_ARC {
         return None;
     }
-    // Solid brushes only: gradients also derive from `rect_pos` and would
-    // mesh in principle, but the hot retained scenes are solid and a narrow
-    // gate keeps the byte-exactness surface small.
     if shape.brush_type != 0 {
         return None;
     }
-    // A live clip is a hard `world_pos` comparison in the fragment shader.
-    // Meshed arcs interpolate `world_pos` across different triangles than
-    // the quad would, and one ulp of difference at the clip boundary flips
-    // whole pixels — clipped arcs pass through untouched.
     if shape.clip_rect[2] > 0.0 && shape.clip_rect[3] > 0.0 {
         return None;
     }
@@ -3206,13 +2780,6 @@ fn arc_mesh_band(shape: &ShapeData) -> Option<ArcMeshBand> {
     if !(w > 0.0 && h > 0.0) {
         return None;
     }
-    // The quad must be an axis-aligned box, tolerance zero: the mesh is
-    // clipped to the quad's own corners, so as long as the quad IS a box its
-    // rasterized pixel set equals the mesh clip region and the tight-AABB
-    // tangent-point crop is reproduced exactly. (Comparing against `rect`
-    // instead is an over-tight gate: under a non-dyadic root scale
-    // `(x + w) * s` differs from `x * s + w * s` by an ulp and every arc
-    // fell back to passthrough — observed on the Huawei at scale 2.75.)
     let [left, top, right, _] = shape.quad01;
     let [bl_x, bottom, br_x, br_y] = shape.quad23;
     let axis_aligned = shape.quad01[3] == top
@@ -3247,14 +2814,6 @@ fn arc_mesh_band(shape: &ShapeData) -> Option<ArcMeshBand> {
     })
 }
 
-/// Kill switch for the transient rim band mesh, mirroring
-/// [`arc_mesh_enabled`]'s property bridge: `CRANPOSE_RIM_MESH=0` (or the
-/// `debug.cranpose.rim_mesh` property on Android) makes the fused shape
-/// prepare skip rim detection entirely, so a device A/B needs no rebuild.
-/// Default ON — the rim path only ever meshed a handful of huge shapes per
-/// frame, which is the regime that WINS on the watch GPU (and the proof the
-/// retained mesh's size gate is built on; see [`arc_mesh_enabled`]).
-/// Read once per fused-chunk prepare (cheap), not per shape.
 #[cfg(not(target_arch = "wasm32"))]
 fn rim_mesh_enabled() -> bool {
     !matches!(
@@ -3263,25 +2822,11 @@ fn rim_mesh_enabled() -> bool {
     )
 }
 
-/// Fixed capacity of the per-frame transient rim mesh vertex buffer, in
-/// vertices. The buffers are never recreated mid-frame — draws are encoded
-/// before submit, so a reallocation would orphan already-encoded rims — and
-/// overflow means "skip the rim, draw it as a quad", never truncation.
-/// MEGA's arena meshes 2-3 rims per frame at ~80 vertices each (measured on
-/// the Pixel Watch 3 via the emit log below), so ~100 rims of headroom; the
-/// rate-limited warn below is the tell if a scene ever exceeds it.
 #[cfg(not(target_arch = "wasm32"))]
 const RIM_MESH_VERTEX_CAPACITY: usize = 8192;
-/// Fixed capacity of the per-frame transient rim mesh index buffer, in
-/// `u32` indices.
 #[cfg(not(target_arch = "wasm32"))]
 const RIM_MESH_INDEX_CAPACITY: usize = 32768;
 
-/// A dynamic shape inside a fused chunk that draws as a band mesh instead of
-/// its full bounding quad: `shape_index` is the shape's position within the
-/// whole fused upload (the index `vs_mesh` reads into the storage shape
-/// array), `first_index..first_index + index_count` its span of the frame's
-/// transient rim index buffer.
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 #[derive(Clone, Copy, Debug)]
 struct RimDraw {
@@ -3290,9 +2835,6 @@ struct RimDraw {
     index_count: u32,
 }
 
-/// Rate-limited overflow warning: silent skipping would hide a scene whose
-/// rims permanently miss the fast path, while warning every frame would
-/// flood the watch's logcat.
 #[cfg(not(target_arch = "wasm32"))]
 fn rim_mesh_capacity_warn() {
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -3307,49 +2849,15 @@ fn rim_mesh_capacity_warn() {
     }
 }
 
-/// Band parameters of a stroked round-rect whose outline is geometrically a
-/// circle — an arena "rim". Everything else returns `None` and rasterizes
-/// through the ordinary quad expansion. Two callers, each behind its own
-/// size gate: the DYNAMIC fused path via [`rim_mesh_band`], and the
-/// retained capture builder ([`build_arc_mesh_vertices`]) via
-/// [`retained_mesh_min_px2`] — retained slots hold big static ring circles
-/// the dynamic path never sees.
-///
-/// Derivation: `ShapeData::rect` for a stroked shape is the stroke-inflated
-/// box (geometry plus half the stroke width on each side), so the geometry
-/// half-extent is `geom_half = (rect.w - stroke_width) / 2`. When the corner
-/// radius equals that half-extent the outline is a circle of radius
-/// `geom_half`, and `sdf_stroked_rounded_rect` degenerates exactly to an
-/// annulus: its outer offset rounded-rect (`half_size` = `geom_half + hw`,
-/// radius `geom_half + hw`) is the circle of radius `geom_half + sw/2`, its
-/// inner offset the circle of radius `geom_half - sw/2` — centerline
-/// `geom_half`, half-width `sw/2`. The bevel-join chamfer plane can only CUT
-/// pixels from that annulus (`max(dist, chamfer)`), never add any, so for
-/// every join style the shader's kept set is a subset of the annulus band.
-/// [`emit_arc_band_mesh`] adds its own `ARC_MESH_MARGIN`, treats
-/// `sweep >= TAU` as closed, and clips to the quad box, so containment
-/// (mesh ⊇ every pixel with `|dist| < 0.5`, mesh ⊆ quad box) follows from
-/// the same argument the retained arc mesh documents.
-///
-/// The CIRCLE gate is what keeps this correct: a false positive on a rounded
-/// SQUARE ring would under-cover its flat spans and damage pixels, so the
-/// radius must match `geom_half` to within 0.01 px (a deviation that small
-/// stays inside the mesh margin's 0.5 px float-slop budget).
 #[cfg(not(target_arch = "wasm32"))]
 fn rim_band_geometry(shape: &ShapeData) -> Option<ArcMeshBand> {
-    // Mirror the fragment shader's flag decode (`u32(max(x, 0.0))`).
     let flags = shape.stroke_params[1].max(0.0) as u32;
     if flags & 3 != SHAPE_KIND_STROKE {
         return None;
     }
-    // Solid brushes only — same narrow byte-exactness surface as
-    // `arc_mesh_band`.
     if shape.brush_type != 0 {
         return None;
     }
-    // A live clip is a hard `world_pos` comparison in the fragment shader;
-    // meshed rims interpolate `world_pos` across different triangles and one
-    // ulp at the clip boundary flips whole pixels.
     if shape.clip_rect[2] > 0.0 && shape.clip_rect[3] > 0.0 {
         return None;
     }
@@ -3357,10 +2865,6 @@ fn rim_band_geometry(shape: &ShapeData) -> Option<ArcMeshBand> {
     if !(w > 0.0 && h > 0.0) {
         return None;
     }
-    // The quad must be an axis-aligned box, tolerance zero — the identical
-    // check `arc_mesh_band` makes (compare quad corners against each other,
-    // never against `rect`, which differs by an ulp under non-dyadic root
-    // scales).
     let [left, top, right, _] = shape.quad01;
     let [bl_x, bottom, br_x, br_y] = shape.quad23;
     let axis_aligned = shape.quad01[3] == top
@@ -3372,11 +2876,9 @@ fn rim_band_geometry(shape: &ShapeData) -> Option<ArcMeshBand> {
     if !axis_aligned {
         return None;
     }
-    // A circle's box is square, bitwise.
     if w.to_bits() != h.to_bits() {
         return None;
     }
-    // All four corner radii bitwise equal, finite and positive.
     let [r0, r1, r2, r3] = shape.radii;
     if r0.to_bits() != r1.to_bits() || r0.to_bits() != r2.to_bits() || r0.to_bits() != r3.to_bits()
     {
@@ -3389,8 +2891,6 @@ fn rim_band_geometry(shape: &ShapeData) -> Option<ArcMeshBand> {
     if !sw.is_finite() || sw <= 0.0 {
         return None;
     }
-    // Finiteness before the circle gate: with every operand finite the
-    // radius comparison below cannot see a NaN.
     let geom_half = (w - sw) * 0.5;
     let center = [x + w * 0.5, y + h * 0.5];
     let inner = geom_half - sw * 0.5;
@@ -3400,7 +2900,6 @@ fn rim_band_geometry(shape: &ShapeData) -> Option<ArcMeshBand> {
     if !finite || outer <= 0.0 {
         return None;
     }
-    // The circle gate (see the doc comment).
     if (r0 - geom_half).abs() > 0.01 {
         return None;
     }
@@ -3413,9 +2912,6 @@ fn rim_band_geometry(shape: &ShapeData) -> Option<ArcMeshBand> {
     })
 }
 
-/// [`rim_band_geometry`] behind the DYNAMIC path's size gate. Big shapes
-/// only: the win is proportional to the discarded quad area, and small
-/// quads are cheaper than the extra pipeline switches.
 #[cfg(not(target_arch = "wasm32"))]
 fn rim_mesh_band(shape: &ShapeData) -> Option<ArcMeshBand> {
     let [_, _, w, h] = shape.rect;
@@ -3425,12 +2921,6 @@ fn rim_mesh_band(shape: &ShapeData) -> Option<ArcMeshBand> {
     rim_band_geometry(shape)
 }
 
-/// Kill switch for the opaque static leading-span cache, mirroring
-/// [`rim_mesh_enabled`]'s property bridge: `CRANPOSE_STATIC_SPAN=0` (or the
-/// `debug.cranpose.static_span` property on Android) makes the fused
-/// partition never skip, capture, or blit — a device A/B needs no rebuild.
-/// Default ON. Read once per engagement attempt (once per frame), so the
-/// cost is one `env::var` per frame.
 #[cfg(not(target_arch = "wasm32"))]
 fn static_span_enabled() -> bool {
     !matches!(
@@ -3439,113 +2929,33 @@ fn static_span_enabled() -> bool {
     )
 }
 
-/// Upper bound on how many leading shapes one span may cover. The target
-/// span (full-screen background rect + vignette disc) is 2 shapes; the cap
-/// only bounds the per-frame memcmp (16 x 160 B) and the prev-frame copy.
 #[cfg(not(target_arch = "wasm32"))]
 const STATIC_SPAN_MAX_SHAPES: usize = 16;
 
-/// Consecutive stable frames an EXTENSION of an already-valid span must
-/// show before an upgrade recapture — see the hysteresis comment in
-/// [`StaticSpanCache::engage`].
 #[cfg(not(target_arch = "wasm32"))]
 const STATIC_SPAN_UPGRADE_FRAMES: u32 = 30;
 
-/// What the engagement check decided for this frame's leading fused
-/// partition.
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum StaticSpanDecision {
-    /// Not engaged: draw everything live, capture nothing.
     Pass,
-    /// The cached span image is valid: skip the first `skip` shapes of the
-    /// first batch and draw the cached full-target blit before everything.
     Hit { skip: usize },
-    /// The leading `len` shapes were byte-stable across the last two frames
-    /// but the cache does not match: draw live, then re-capture the span.
     Capture { len: usize, clear: wgpu::Color },
 }
 
-/// Cache of the frame's leading static span — the opaque full-screen
-/// background rect plus whatever byte-stable draws sit directly on top of it
-/// (MEGA: the ~176k-px radial-gradient vignette disc) — as one composited
-/// full-target texture that replaces those draws with a single blit.
-///
-/// Byte-exactness by construction, no tolerance anywhere:
-///
-/// * The engaged partition is the frame's first content (`load_op` is the
-///   frame `Clear`, gated to alpha == 1.0), so what the live path would put
-///   under the span is exactly the opaque clear color — and the capture
-///   pass clears its offscreen with the SAME color before drawing the SAME
-///   shape range through the IDENTICAL pipelines (same `ShapeData` bytes,
-///   same gradient stop bytes, same viewport uniforms, same blend state,
-///   same `has_gradient` pipeline variant, same surface format, identity
-///   similarity offset 0). Deterministic pipelines on identical inputs give
-///   identical bytes, so the cached image IS the bytes the live span render
-///   would produce this frame.
-/// * With an opaque clear below and SrcOver-only draws above, every texel of
-///   that composite has alpha exactly 255: each blend step computes
-///   `a_out = a_src + (1 - a_src) * 1.0`, whose float error is far inside
-///   the half-level the unorm8 quantizer absorbs, and 255 reads back as
-///   exactly 1.0 for the next step. The replacement blit then draws SrcOver
-///   texels whose `1 - src.a` dst factor is exactly zero — the
-///   fixed-function blender computes `1*src + 0*dst`, a replace-write — and
-///   an unorm8 texel survives the sample/write round trip bit-exact
-///   (`CompositeSampleMode::Nearest` is a `textureLoad`, `alpha` is 1.0).
-///   Hence `over(rest, over(span, clear)) == over(rest, SPAN_IMAGE)`
-///   bitwise, whatever `rest` is.
-/// * Gradient dither cannot diverge between capture and screen: `shape.wgsl`
-///   keys its ordered-dither matrix off `world_pos` — the device coordinate
-///   interpolated from the `ShapeData` quad corners, deliberately not
-///   `@builtin(position)` — so the dither phase is a pure function of the
-///   memcmp'd bytes (see `gradient_dither` in `shape.wgsl`).
-/// * Rim-mesh candidates ([`rim_mesh_band`] Some) end the span: the live
-///   path may draw them through the band-mesh pipeline while the capture
-///   pass draws plain instanced quads, and this cache refuses to depend on
-///   that pair being byte-equal.
-///
-/// Validity is a memcmp: the leading K converted `ShapeData` records plus
-/// their gradient stop payloads against the cached copy, ~160 B x few
-/// shapes, sub-microsecond. The span length K itself comes from a two-frame
-/// stability probe (`prev_shapes`): a capture only happens once the leading
-/// run has already repeated byte-identically across two consecutive frames,
-/// so churning scenes never pay the extra capture pass every frame — and
-/// only when the span carries at least one gradient record, so scenes whose
-/// leading static draws are all solid (cheap fill the blit cannot beat)
-/// never engage at all.
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Default)]
 struct StaticSpanCache {
-    /// The captured span composite, same size and format as the frame
-    /// target. Held out of the offscreen pool across frames; released back
-    /// through the deferred-release path on resize.
     texture: Option<OffscreenTarget>,
-    /// Validity key: the span's converted `ShapeData` records at capture.
     key_shapes: Vec<ShapeData>,
-    /// Validity key: the span's gradient stop payload at capture.
     key_gradients: Vec<GradientStop>,
     key_width: u32,
     key_height: u32,
-    /// The frame clear color the capture pass cleared with — pixels the
-    /// span shapes do not fully cover composite against it, so a different
-    /// clear invalidates the image even when every shape byte matches.
     key_clear: [u64; 4],
-    /// The live first batch's whole-batch `has_gradient` flag at capture:
-    /// it selects the `fs_solid` vs gradient pipeline variant for every
-    /// shape in the batch, so the capture is only valid while the live
-    /// batch would draw the span through the same variant.
     key_has_gradient: bool,
-    /// Last frame's leading records — the two-frame stability probe that
-    /// decides the span length at capture time.
     prev_shapes: Vec<ShapeData>,
     prev_gradients: Vec<GradientStop>,
-    /// Consecutive hit frames whose stable leading run extended past the
-    /// current key — the upgrade hysteresis counter.
     extension_stable_frames: u32,
-    /// Set once per frame by [`GpuRenderer::render`], consumed by the first
-    /// fused partition that carries the frame's opaque clear, so offscreen
-    /// layer or shadow renders (transparent clears) can never engage and a
-    /// frame engages at most once.
     armed: bool,
     hits: u64,
     recaptures: u64,
@@ -3553,11 +2963,6 @@ struct StaticSpanCache {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl StaticSpanCache {
-    /// One engagement attempt per frame, at fused-partition time.
-    /// `first_batch` is the chunk's first batch when it is a shape batch:
-    /// (shape count, blend mode, whole-batch has_gradient). `shapes` /
-    /// `gradients` are the partition's freshly converted scratch buffers,
-    /// whose leading records belong to the first batch.
     fn engage(
         &mut self,
         load_op: wgpu::LoadOp<wgpu::Color>,
@@ -3573,9 +2978,6 @@ impl StaticSpanCache {
         let wgpu::LoadOp::Clear(clear) = load_op else {
             return StaticSpanDecision::Pass;
         };
-        // The frame's leading clear is the only opaque one a frame stream
-        // carries (layer and shadow sources clear transparent); engagement
-        // happens here or not at all this frame.
         if clear.a != 1.0 {
             return StaticSpanDecision::Pass;
         }
@@ -3584,8 +2986,6 @@ impl StaticSpanCache {
             self.forget_observation();
             return StaticSpanDecision::Pass;
         };
-        // SrcOver only: the alpha == 255 argument above is an SrcOver
-        // property.
         if blend_mode != BlendMode::SrcOver || batch_len == 0 {
             self.forget_observation();
             return StaticSpanDecision::Pass;
@@ -3599,8 +2999,6 @@ impl StaticSpanCache {
             self.forget_observation();
             return StaticSpanDecision::Pass;
         }
-        // The span ends at the first shape the capture pass could not
-        // reproduce through the plain instanced arm (rim-mesh candidates).
         let mut eligible = 1;
         while eligible < leading.len() && rim_mesh_band(&leading[eligible]).is_none() {
             eligible += 1;
@@ -3628,9 +3026,6 @@ impl StaticSpanCache {
                 gradients,
             );
 
-        // Stability probe, shared by miss-capture and hit-upgrade: the
-        // longest leading run whose record AND gradient bytes repeat from
-        // last frame.
         let mut stable = 0;
         while stable < leading.len()
             && stable < self.prev_shapes.len()
@@ -3646,17 +3041,6 @@ impl StaticSpanCache {
         self.remember_observation(leading, gradients);
 
         if valid {
-            // Upgrade hysteresis: a valid span may EXTEND (a partial
-            // invalidation — say a vignette-only palette change — shrank an
-            // earlier capture, and the tail has stabilized again) only after
-            // the extension repeats for a full window of consecutive
-            // frames. Without it, a leading shape animating with a period
-            // of a few frames would alternate upgrade-capture and
-            // shrink-capture forever — capture-churn instead of caching.
-            // The initial capture below takes no window because the whole
-            // span stabilizing at once is the cold-start common case. No
-            // gradient gate here: the stable prefix contains the key, and
-            // every stored key carries a gradient record.
             if stable > key_len {
                 self.extension_stable_frames += 1;
                 if self.extension_stable_frames >= STATIC_SPAN_UPGRADE_FRAMES {
@@ -3681,21 +3065,12 @@ impl StaticSpanCache {
         }
 
         self.extension_stable_frames = 0;
-        // Engagement economics: a candidate span with no gradient records
-        // would replace the cheapest fill there is (solid quads) with a
-        // same-size texture blit — a wash at best on a mobile GPU, plus a
-        // held full-target texture and a capture pass. The fill this stage
-        // chases is the gradient+dither span, so a capture must carry at
-        // least one gradient record. This also keeps solid-background-only
-        // frames (most non-game screens) from ever paying an offscreen
-        // acquire.
         if stable == 0 || span_gradient_len(&leading[..stable]) == 0 {
             return StaticSpanDecision::Pass;
         }
         StaticSpanDecision::Capture { len: stable, clear }
     }
 
-    /// Stores this frame's leading run for next frame's stability probe.
     fn remember_observation(&mut self, leading: &[ShapeData], gradients: &[GradientStop]) {
         self.prev_shapes.clear();
         self.prev_shapes.extend_from_slice(leading);
@@ -3711,8 +3086,6 @@ impl StaticSpanCache {
         self.extension_stable_frames = 0;
     }
 
-    /// Adopts a freshly captured span as the validity key. The caller has
-    /// already encoded the capture pass into `texture`.
     #[allow(clippy::too_many_arguments)]
     fn store_key(
         &mut self,
@@ -3752,20 +3125,11 @@ impl StaticSpanCache {
     }
 }
 
-/// Total gradient stops a leading span consumes. The span is a prefix of
-/// the fused upload, so its stop payload is exactly the leading
-/// `sum(gradient_count)` entries of the scratch gradient buffer.
 #[cfg(not(target_arch = "wasm32"))]
 fn span_gradient_len(span: &[ShapeData]) -> usize {
     span.iter().map(|shape| shape.gradient_count as usize).sum()
 }
 
-/// Byte equality of two span record runs INCLUDING their gradient stop
-/// payloads. Each record's stops live at
-/// `gradient_start..gradient_start + gradient_count` in its frame's leading
-/// gradient buffer; `gradient_start`/`gradient_count` are part of the
-/// memcmp'd record bytes, so matching records address matching stop ranges
-/// in both buffers.
 #[cfg(not(target_arch = "wasm32"))]
 fn span_records_equal(
     expected: &[ShapeData],
@@ -3793,14 +3157,6 @@ fn span_records_equal(
     true
 }
 
-/// Whether a converted record is the full-screen opaque base the span
-/// mechanism keys on: a plain solid fill (no stroke, no arc, no gradient,
-/// no clip, no corner rounding) whose axis-aligned quad covers the whole
-/// `width` x `height` target with alpha exactly 1.0. Soundness does not
-/// strictly need full coverage — the opaque clear already makes the
-/// composite alpha 255 — but requiring the measured scene shape keeps the
-/// cache from engaging on frames whose leading draw is not the static
-/// background this stage was built for.
 #[cfg(not(target_arch = "wasm32"))]
 fn static_span_fullscreen_opaque(shape: &ShapeData, width: u32, height: u32) -> bool {
     if shape.brush_type != 0 || shape.gradient_count != 0 {
@@ -3812,8 +3168,6 @@ fn static_span_fullscreen_opaque(shape: &ShapeData, width: u32, height: u32) -> 
     if shape.clip_rect != [0.0; 4] || shape.stroke_params != [0.0; 4] || shape.radii != [0.0; 4] {
         return false;
     }
-    // Same corner layout as `rim_mesh_band`: quad01 = TL.xy, TR.xy;
-    // quad23 = BL.xy, BR.xy.
     let [left, top, right, top_right_y] = shape.quad01;
     let [bl_x, bottom, br_x, br_y] = shape.quad23;
     let axis_aligned = top_right_y == top
@@ -3825,16 +3179,6 @@ fn static_span_fullscreen_opaque(shape: &ShapeData, width: u32, height: u32) -> 
     axis_aligned && left <= 0.0 && top <= 0.0 && right >= width as f32 && bottom >= height as f32
 }
 
-/// One Sutherland–Hodgman pass against an axis-aligned half-plane.
-///
-/// Two properties the byte-exactness bar depends on:
-/// * the clipped coordinate is set to `bound` EXACTLY rather than recomputed
-///   through `p + t * (q - p)`, so every clipped polygon's boundary lies
-///   bitwise on the clip line;
-/// * the intersection is computed on the lexicographically ordered endpoint
-///   pair, so the shared radial edge of two adjacent trapezoids — traversed
-///   in opposite directions — clips to bitwise-identical points, keeping the
-///   strip watertight (no pixel shaded twice or missed along the seam).
 #[cfg(not(target_arch = "wasm32"))]
 fn clip_polygon_axis(
     input: &[[f32; 2]],
@@ -3877,40 +3221,6 @@ fn clip_polygon_axis(
     }
 }
 
-/// Emits the conservative trapezoid-strip mesh for one qualifying arc band.
-///
-/// CONTAINMENT INVARIANT (the byte-exactness bar): the union of emitted
-/// triangles is a superset of `{ p in the capture quad's box :
-/// sdf_arc_band(p) <= 0.5 }` — every pixel the fragment shader would keep.
-/// Over-inclusion is free (the SDF discards those pixels identically to
-/// today's quad); only under-inclusion can diverge, and
-/// `arc_mesh_contains_every_band_pixel` checks it never happens.
-///
-/// Geometry: outer vertices ride at `Ro / cos(step / 2)` so every chord is
-/// tangent-outside the dilated outer circle; inner vertices ride at the
-/// dilated inner radius, whose chords lie inside the hole. Cap coverage is
-/// bounded by the round-cap disc about the band endpoint (butt/square caps
-/// only cut that disc with planes — see `sdf_arc_band`), so padding the
-/// angular range by the disc's angular half-extent contains every cap. Each
-/// trapezoid is clipped to the quad box and fan-triangulated IN INDEX SPACE:
-/// a trapezoid the clipper left untouched shares its two boundary vertices
-/// with each neighbor through the index list (closed rings wrap the sharing
-/// modulo the boundary count), so the strip is watertight by construction —
-/// the seam edge is one vertex pair, not two bitwise-equal copies — and the
-/// per-arc vertex count collapses from three-per-triangle to the unique
-/// boundary vertices. Clipped trapezoids cannot share boundary vertices (the
-/// clipper rewrote them), so their fan vertices are appended PRIVATELY after
-/// the shared block and indexed directly; seams against neighbors still hold
-/// because a boundary edge either survives the clip on both sides
-/// bitwise-identically (same input edge, same planes, same float ops — see
-/// `clip_polygon_axis`) or is cut on both sides identically. Triangles are
-/// emitted in exact segment order either way, so the indexed mesh's
-/// primitive stream is triangle-for-triangle the one the non-indexed
-/// emitter produced.
-///
-/// Returns the emitted segment count, or `None` when the mesh came out empty
-/// — the caller emits the passthrough quad instead (never risk
-/// under-coverage).
 #[cfg(not(target_arch = "wasm32"))]
 fn emit_arc_band_mesh(
     shape: &ShapeData,
@@ -3933,8 +3243,6 @@ fn emit_arc_band_mesh(
         let pad = if rb_m < ra {
             (rb_m / ra).asin() + 0.05
         } else {
-            // The cap disc wraps the center; such shapes are tiny, take the
-            // whole circle.
             std::f32::consts::PI
         };
         let padded = band.sweep + pad + pad;
@@ -3952,9 +3260,6 @@ fn emit_arc_band_mesh(
     let step = range / segments as f32;
     let rc = ro / (step * 0.5).cos();
 
-    // Boundary vertices are computed once and shared by both adjacent
-    // trapezoids: bitwise-equal edge endpoints are what let the rasterizer's
-    // fill rule shade each seam exactly once.
     let boundary_count = if closed { segments } else { segments + 1 };
     let mut boundaries = Vec::with_capacity(boundary_count);
     for j in 0..boundary_count {
@@ -3968,17 +3273,12 @@ fn emit_arc_band_mesh(
     let quad_min = [shape.quad01[0], shape.quad01[1]];
     let quad_max = [shape.quad23[2], shape.quad23[3]];
 
-    /// One trapezoid's clip outcome (see the function docs): `Shared` means
-    /// the clip output is bitwise the input quad, so its corners index the
-    /// shared boundary block; `Fan` carries the clipped polygon for private
-    /// fan triangulation; `Empty` was clipped away entirely.
     enum SegmentGeometry {
         Shared,
         Fan(Vec<[f32; 2]>),
         Empty,
     }
 
-    // Phase 1: clip every trapezoid and classify it.
     let mut polygon: Vec<[f32; 2]> = Vec::with_capacity(8);
     let mut scratch: Vec<[f32; 2]> = Vec::with_capacity(8);
     let mut segment_geometry = Vec::with_capacity(segments);
@@ -3993,8 +3293,6 @@ fn emit_arc_band_mesh(
         clip_polygon_axis(&scratch, 0, quad_max[0], true, &mut polygon);
         clip_polygon_axis(&polygon, 1, quad_min[1], false, &mut scratch);
         clip_polygon_axis(&scratch, 1, quad_max[1], true, &mut polygon);
-        // Collapse exact duplicates (an `Ri == 0` pie wedge duplicates the
-        // center) before fanning.
         scratch.clear();
         for &point in polygon.iter() {
             if scratch.last() != Some(&point) {
@@ -4028,8 +3326,6 @@ fn emit_arc_band_mesh(
         index
     };
 
-    // Shared block: every boundary referenced by a surviving whole trapezoid
-    // gets its (inner, outer) vertex pair exactly once, in boundary order.
     let mut boundary_vertex = vec![[0u32; 2]; boundary_count];
     for (j, used) in boundary_used.iter().enumerate() {
         if *used {
@@ -4038,8 +3334,6 @@ fn emit_arc_band_mesh(
         }
     }
 
-    // Phase 2: indices in exact segment order — the primitive stream matches
-    // the non-indexed emitter triangle for triangle.
     let start_len = indices.len();
     for (j, geometry) in segment_geometry.iter().enumerate() {
         match geometry {
@@ -4048,9 +3342,6 @@ fn emit_arc_band_mesh(
                 let jb = (j + 1) % boundary_count;
                 let [in_a, out_a] = boundary_vertex[j];
                 let [in_b, out_b] = boundary_vertex[jb];
-                // The fan the non-indexed emitter produced for an untouched
-                // trapezoid: (in_a, out_a, out_b)(in_a, out_b, in_b) — the
-                // same quad diagonal.
                 indices.extend_from_slice(&[in_a, out_a, out_b, in_a, out_b, in_b]);
             }
             SegmentGeometry::Fan(points) => {
@@ -4070,8 +3361,6 @@ fn emit_arc_band_mesh(
     Some(segments)
 }
 
-/// Unsigned shoelace area of an emitted indexed triangle list, for
-/// telemetry.
 #[cfg(not(target_arch = "wasm32"))]
 fn triangles_shoelace_area(vertices: &[MeshVertex], indices: &[u32]) -> f64 {
     indices
@@ -4091,8 +3380,6 @@ fn triangles_shoelace_area(vertices: &[MeshVertex], indices: &[u32]) -> f64 {
         .sum()
 }
 
-/// Unsigned area of the two triangles the quad-expansion path would rasterize for
-/// this shape, for telemetry.
 #[cfg(not(target_arch = "wasm32"))]
 fn quad_shoelace_area(shape: &ShapeData) -> f64 {
     let corners = [
@@ -4107,10 +3394,6 @@ fn quad_shoelace_area(shape: &ShapeData) -> f64 {
     tri(corners[0], corners[1], corners[2]) + tri(corners[2], corners[1], corners[3])
 }
 
-/// `CRANPOSE_FILL_DIAG` (`debug.cranpose.fill_diag` on Android): per-frame
-/// CPU-side accounting of the fill area the renderer submits, in device px².
-/// Off by default; any set value except "0" enables. Read once per process,
-/// so a disabled hot path pays one static load and a branch.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn fill_area_diag_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -4119,19 +3402,12 @@ pub(crate) fn fill_area_diag_enabled() -> bool {
     )
 }
 
-/// Rendered frames aggregated into one `[fill-diag]` report line.
 #[cfg(not(target_arch = "wasm32"))]
 const FILL_DIAG_WINDOW_FRAMES: u32 = 120;
 
 #[cfg(not(target_arch = "wasm32"))]
 const FILL_DIAG_BUCKETS: usize = 9;
 
-/// Opacity class of a shape's fill for the `[fill-truth]` histogram, decided
-/// from the CONVERTED record: a solid brush with vertex alpha exactly 1.0 is
-/// opaque, any other solid is translucent, and every gradient counts as
-/// non-solid (its stops can each carry their own alpha). Retained shapes are
-/// classified from their capture-time colors — a later recolor patch through
-/// the slot's paint buffer is not re-classified.
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FillOpacityClass {
@@ -4151,10 +3427,6 @@ fn fill_opacity_class(shape: &ShapeData) -> FillOpacityClass {
     }
 }
 
-/// The fill-diag bucket of a batched shape quad, decoded from the packed
-/// flags the way the fragment shader decodes them (`u32(max(x, 0.0)) & 3`).
-/// Fills keep real corner radii in `radii` (arcs reuse the field for trig,
-/// but they take the arc arm first).
 #[cfg(not(target_arch = "wasm32"))]
 fn fill_diag_bucket(shape: &ShapeData) -> usize {
     match shape.stroke_params[1].max(0.0) as u32 & 3 {
@@ -4181,26 +3453,6 @@ fn fill_diag_bucket_name(bucket: usize) -> &'static str {
     }
 }
 
-/// Analytic covered area of a shape in device px² — the pixels the SDF will
-/// actually keep, as opposed to the bounding quad it is rasterized with —
-/// decoded from the same converted `ShapeData` fields the classifier and the
-/// band-mesh builders read. Deliberately closed-form per class:
-///
-/// * arc / annular sector: `sweep · r_mid · thickness` plus the endcap area
-///   (two half-discs for round caps; square caps rasterize the same pixel
-///   measure — `sdf_arc_band` cuts the endpoint disc at `plane − rb`, which
-///   removes nothing but the tangent point; butt caps add nothing; a closed
-///   ring has no caps).
-/// * stroked round-rect: centerline perimeter × stroke width — exact while
-///   every corner radius ≥ half the stroke width (the offset-band identity);
-///   miter corner spurs at sharp corners are not modeled.
-/// * round-rect / circle fill: `w·h − (1 − π/4)·Σ rᵢ²`, radii clamped to the
-///   half-extent (a circle degenerates to exactly `π r²`).
-/// * plain rect: the submitted quad IS the covered set — priced at the quad
-///   area by the caller, this function returns `w·h` (equal under any
-///   similarity).
-///
-/// Clips and viewport scissors are not modeled, same as the quad accounting.
 #[cfg(not(target_arch = "wasm32"))]
 fn analytic_covered_area(shape: &ShapeData) -> f64 {
     let flags = shape.stroke_params[1].max(0.0) as u32;
@@ -4216,9 +3468,6 @@ fn analytic_covered_area(shape: &ShapeData) -> f64 {
                 0.0
             } else {
                 match (flags >> 2) & 3 {
-                    // Round and square: two half-discs of radius t/2 — the
-                    // shader's square cap keeps the endpoint disc's measure
-                    // (see the doc comment).
                     1 | 2 => std::f64::consts::PI * (thickness * 0.5) * (thickness * 0.5),
                     _ => 0.0,
                 }
@@ -4227,7 +3476,6 @@ fn analytic_covered_area(shape: &ShapeData) -> f64 {
         }
         SHAPE_KIND_STROKE => {
             let stroke_width = f64::from(shape.stroke_params[0]).max(0.0);
-            // `rect` for a stroked shape is the stroke-inflated box.
             let geom_w = (f64::from(shape.rect[2]) - stroke_width).max(0.0);
             let geom_h = (f64::from(shape.rect[3]) - stroke_width).max(0.0);
             let max_radius = geom_w.min(geom_h) * 0.5;
@@ -4257,11 +3505,6 @@ fn analytic_covered_area(shape: &ShapeData) -> f64 {
     }
 }
 
-/// Antialiasing allowance added on top of [`analytic_covered_area`]: the SDF
-/// feathers over roughly one pixel of boundary, so ~1 px × the covered set's
-/// perimeter approximates the partially-lit fringe. Plain rects get none
-/// (their quad is exact); a stroked shape has two boundary curves, whose
-/// perimeters sum to twice the centerline perimeter for a convex outline.
 #[cfg(not(target_arch = "wasm32"))]
 fn aa_perimeter_allowance(shape: &ShapeData) -> f64 {
     let flags = shape.stroke_params[1].max(0.0) as u32;
@@ -4307,15 +3550,11 @@ fn aa_perimeter_allowance(shape: &ShapeData) -> f64 {
     }
 }
 
-/// Analytic lit area: covered pixels plus the AA fringe allowance. Callers
-/// clamp it to the shape's submitted area — the shader cannot light pixels
-/// its quad never rasterizes.
 #[cfg(not(target_arch = "wasm32"))]
 fn analytic_lit_area(shape: &ShapeData) -> f64 {
     analytic_covered_area(shape) + aa_perimeter_allowance(shape)
 }
 
-/// Device-space AABB of a shape's submitted quad: min x, min y, max x, max y.
 #[cfg(not(target_arch = "wasm32"))]
 fn quad_aabb(shape: &ShapeData) -> [f64; 4] {
     let xs = [
@@ -4341,20 +3580,9 @@ fn quad_aabb(shape: &ShapeData) -> [f64; 4] {
     ]
 }
 
-/// Vertical strips of the midpoint rule used by
-/// [`area_outside_inscribed_circle`]. 32 strips keep the chord error under
-/// ~0.5% for a full-viewport quad — plenty for a corner-waste ratio.
 #[cfg(not(target_arch = "wasm32"))]
 const CORNER_FILL_STRIPS: usize = 32;
 
-/// Area of an axis-aligned box lying inside the viewport but OUTSIDE the
-/// inscribed circle (diameter `min(w, h)`, centered) — the pixels a round
-/// watch display physically cannot show. Approximations, deliberate: the
-/// submitted quad is replaced by its AABB (exact for the axis-aligned quads
-/// that dominate full-frame scenes), and the circle chord is integrated with
-/// [`CORNER_FILL_STRIPS`] midpoint strips instead of closed-form segments.
-/// On a non-square viewport the side bands beyond the circle count as
-/// outside too, which is the honest answer for a round display.
 #[cfg(not(target_arch = "wasm32"))]
 fn area_outside_inscribed_circle(aabb: [f64; 4], viewport: (u32, u32)) -> f64 {
     let viewport_w = f64::from(viewport.0);
@@ -4389,28 +3617,16 @@ fn area_outside_inscribed_circle(aabb: [f64; 4], viewport: (u32, u32)) -> f64 {
     outside
 }
 
-/// Per-shape fill-diag record a replay slot retains at capture, so retained
-/// draws can be priced per range without re-deriving anything per frame.
-/// Only built while `CRANPOSE_FILL_DIAG` is on.
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy, Debug)]
 struct FillDiagShapeRecord {
-    /// Capture-space area actually submitted for this shape: band-mesh
-    /// triangle area when the slot replays THIS shape's band, bounding-quad
-    /// area otherwise (instanced passthrough or meshless slot).
     drawn_px2: f64,
-    /// Analytic lit area ([`analytic_lit_area`]), clamped to `drawn_px2`.
     lit_px2: f64,
-    /// SDF-class bucket ([`fill_diag_bucket`]), for the top-slack dump.
     bucket: usize,
     opacity: FillOpacityClass,
-    /// Capture-space AABB of the submitted quad, for the corner counter.
     aabb: [f64; 4],
 }
 
-/// Builds a capture's fill-diag records. `mesh` carries the kept arc mesh's
-/// `(vertices, indices, index_prefix)` when the slot will replay it, so each
-/// shape is priced by its true triangle area.
 #[cfg(not(target_arch = "wasm32"))]
 fn fill_diag_capture_records(
     shape_data: &[ShapeData],
@@ -4421,9 +3637,6 @@ fn fill_diag_capture_records(
         .enumerate()
         .map(|(index, shape)| {
             let drawn_px2 = match mesh {
-                // An empty index range is a shape the draw walk keeps on the
-                // instanced-quad path — priced at its bounding quad, exactly
-                // what that path submits.
                 Some((vertices, indices, index_prefix))
                     if index_prefix[index + 1] > index_prefix[index] =>
                 {
@@ -4444,8 +3657,6 @@ fn fill_diag_capture_records(
         .collect()
 }
 
-/// One entry of the once-per-process top-slack dump: a retained shape whose
-/// submitted area most exceeds its lit area.
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy, Debug)]
 struct FillDiagSlackEntry {
@@ -4459,74 +3670,19 @@ struct FillDiagSlackEntry {
 #[cfg(not(target_arch = "wasm32"))]
 const FILL_DIAG_SLACK_TOP: usize = 10;
 
-/// Submitted-fill-area accounting behind [`fill_area_diag_enabled`]. The
-/// watch's GPU counters are sepolicy-blocked, but the renderer knows every
-/// quad it emits, so summing their areas per bucket says where the fragment
-/// work goes; the point is the RATIO between buckets, and several are
-/// deliberately approximate where exactness would cost the hot path:
-///
-/// * `arc` / `rrect-stroke` / `rrect-fill` / `rect` — batched shape quads by
-///   decoded SDF class: exact shoelace area of the submitted quads, from the
-///   fused screen pass and the offscreen layer/shadow-source passes alike.
-///   Scissors and the SDF's own discards are not modeled. The latched
-///   instanced-quad path draws these same quads (one instance per shape), so
-///   instanced draws live in these buckets rather than a separate one.
-/// * `mesh` — transient rim band meshes: exact triangle area, replacing the
-///   rim's bounding quad (which is subtracted back out of `rrect-stroke`).
-/// * `retained` — replay-slot draws: exact capture-space area of the drawn
-///   shape range (mesh triangles when the slot replays its arc mesh, quads
-///   otherwise) times the draw's similarity scale squared.
-/// * `img+glyph` — image quads exactly; glyph atlas quads as width x height.
-///   A retained glyph run counts every quad of its cached buffer (the
-///   shared path's per-quad viewport cull is not re-run for it).
-/// * `effect-comp` — effect-renderer draws into a caller-supplied view:
-///   composites/blits (incl. batched, projective and masked variants) and
-///   src-over runtime shader passes. Priced per pass at the dest viewport
-///   area, clamped by the scissor when one is set (min of the two areas
-///   stands in for their exact intersection).
-/// * `offscr-src` — passes rendering INTO offscreen chain textures: blur
-///   ping-pong axis passes, offset passes, replace-mode shader passes, and
-///   the shadow-source target passes of `encode_shadow_shape_source_passes`
-///   (the whole bounds-sized target per pass — its load/store round trip —
-///   on top of the shape quads it draws, which the SDF-class buckets price
-///   as usual).
-///
-/// The `[fill-truth]` line splits every bucket into analytic lit vs slack
-/// (`lit` per [`analytic_lit_area`], `slack = submitted − lit`, clamped
-/// non-negative; effect passes are all-lit by definition), histograms lit
-/// pixels by [`FillOpacityClass`] (shape buckets only — image/glyph and
-/// effect fill has no CPU-known alpha and is excluded), and prices the
-/// full-frame corner waste per [`area_outside_inscribed_circle`]. The corner
-/// counter covers full-frame shape batches and identity-transform retained
-/// draws; meshed rims stay priced by their bounding AABB there (documented
-/// overcount), and image/glyph quads are excluded.
-///
-/// Not counted: frame-graph layer clears/attachments outside the effect
-/// renderer's own draw sites.
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Default)]
 struct FillAreaDiag {
-    /// Current frame's per-bucket submitted area, device px². `Cell`s
-    /// because draw encoding accumulates through `&self`, the same pattern
-    /// as [`gpu_stats::FrameStats`].
     frame: [std::cell::Cell<f64>; FILL_DIAG_BUCKETS],
-    /// Current frame's per-bucket analytic lit area, ≤ the submitted area.
     frame_lit: [std::cell::Cell<f64>; FILL_DIAG_BUCKETS],
-    /// Current frame's lit area by [`FillOpacityClass`], shape buckets only.
     frame_opacity: [std::cell::Cell<f64>; 3],
-    /// Current frame's full-frame fill outside the inscribed circle.
     frame_corner: std::cell::Cell<f64>,
-    /// The frame's surface size, latched by [`Self::reset_frame`] — the
-    /// full-frame-pass gate and the inscribed circle both derive from it.
     viewport: std::cell::Cell<(u32, u32)>,
-    /// Window totals, folded once per frame by [`Self::finish_frame`].
     window: [f64; FILL_DIAG_BUCKETS],
     window_lit: [f64; FILL_DIAG_BUCKETS],
     window_opacity: [f64; 3],
     window_corner: f64,
     window_frames: u32,
-    /// Worst retained shapes by slack, collected at slot capture and dumped
-    /// once with the first report window that has any (then dropped).
     slack_top: Vec<FillDiagSlackEntry>,
     slack_dumped: bool,
 }
@@ -4557,9 +3713,6 @@ impl FillAreaDiag {
         self.frame_corner.set(self.frame_corner.get() + px2);
     }
 
-    /// Whether a batch's viewport IS this frame's surface — the gate for the
-    /// corner counter (offscreen shadow/layer passes carry their own bounds
-    /// viewport and never qualify).
     fn is_full_frame(&self, viewport: ViewportUniformParams) -> bool {
         let (width, height) = self.viewport.get();
         width > 0
@@ -4569,10 +3722,6 @@ impl FillAreaDiag {
             && viewport.offset == [0.0, 0.0]
     }
 
-    /// Splits a freshly converted batch's quads by SDF class
-    /// ([`fill_diag_bucket`]), alongside each bucket's analytic lit area,
-    /// the opacity histogram and — for full-frame passes — the corner
-    /// counter.
     fn add_shape_quads(&self, shapes: &[ShapeData], viewport: ViewportUniformParams) {
         let full_frame = self.is_full_frame(viewport);
         let frame_viewport = self.viewport.get();
@@ -4609,14 +3758,6 @@ impl FillAreaDiag {
         }
     }
 
-    /// A leading-span cache hit replaced these already-counted quads with
-    /// one cached-texture blit: subtract their submitted, lit and
-    /// opacity-class areas back out — those pixels now arrive through the
-    /// blit, an effect-renderer composite that the effect-comp bucket
-    /// prices at its own draw site and the opacity histogram excludes by
-    /// design (no CPU-known alpha). The corner counter stays as priced at
-    /// batch prepare: the full-target blit writes the very same corner
-    /// pixels, so the waste that counter exists to expose is unchanged.
     fn note_static_span_skip(&self, shapes: &[ShapeData]) {
         for shape in shapes {
             let bucket = fill_diag_bucket(shape);
@@ -4629,12 +3770,6 @@ impl FillAreaDiag {
         }
     }
 
-    /// A transient rim replaced its bounding quad with a band mesh: move the
-    /// quad's area and lit (already counted at batch prepare) out of the
-    /// stroke bucket and count the mesh triangles instead. The opacity
-    /// histogram and corner counter stay as priced at batch prepare — the
-    /// same pixels light up either way, and the corner counter deliberately
-    /// keeps the quad AABB (documented overcount for meshed rims).
     fn note_rim_mesh(&self, shape: &ShapeData, mesh_px2: f64) {
         let quad = quad_shoelace_area(shape);
         let lit = analytic_lit_area(shape).clamp(0.0, quad);
@@ -4644,11 +3779,6 @@ impl FillAreaDiag {
         self.add_lit(Self::MESH, lit.min(mesh_px2));
     }
 
-    /// One retained replay draw over `first..last` of a slot's capture:
-    /// capture-space records times the draw's similarity scale squared. The
-    /// corner counter only accumulates for identity-transform draws (rot 0,
-    /// scale 1 — the static background/rings case it exists for), because a
-    /// moved batch's capture-space AABBs no longer say where it lands.
     fn add_retained_range(
         &self,
         records: &[FillDiagShapeRecord],
@@ -4685,9 +3815,6 @@ impl FillAreaDiag {
         }
     }
 
-    /// Collects top-slack candidates from a fresh capture, keeping the
-    /// [`FILL_DIAG_SLACK_TOP`] worst across all captures until the first
-    /// report window dumps them.
     fn note_retained_capture(&mut self, slot: u32, records: &[FillDiagShapeRecord]) {
         if self.slack_dumped {
             return;
@@ -4709,9 +3836,6 @@ impl FillAreaDiag {
         self.slack_top.truncate(FILL_DIAG_SLACK_TOP);
     }
 
-    /// Area of an image or text-image quad from its four device-space
-    /// corners (TL, TR, BL, BR — the shared `(0, 1, 2)(2, 1, 3)` pattern).
-    /// Textures light every pixel of their quad, so lit == submitted.
     fn add_image_quad(&self, quad: &[[f32; 2]; 4]) {
         let corner = |index: usize| [f64::from(quad[index][0]), f64::from(quad[index][1])];
         let tri = |a: [f64; 2], b: [f64; 2], c: [f64; 2]| {
@@ -4723,16 +3847,12 @@ impl FillAreaDiag {
         self.add_lit(Self::IMAGE_GLYPH, area);
     }
 
-    /// One glyph atlas quad, axis-aligned by construction.
     fn add_glyph_quad(&self, quad: &CachedTextGlyphQuad) {
         let area = quad.width as f64 * quad.height as f64;
         self.add(Self::IMAGE_GLYPH, area);
         self.add_lit(Self::IMAGE_GLYPH, area);
     }
 
-    /// Effect-renderer pass fill drained once per frame from the effect
-    /// renderer's own counters. Full-target draws: every counted pixel is
-    /// shaded, so lit == submitted and slack is zero by construction.
     fn add_effect_fill(&self, composite_px2: f64, offscreen_px2: f64) {
         if composite_px2 > 0.0 {
             self.add(Self::EFFECT_COMPOSITE, composite_px2);
@@ -4744,11 +3864,6 @@ impl FillAreaDiag {
         }
     }
 
-    /// One render pass targeting an offscreen source texture (shadow source
-    /// passes): the whole target area counts — its clear/load/store round
-    /// trip — on top of the shape quads the pass draws, which
-    /// [`Self::add_shape_quads`] prices separately under the pass's own
-    /// bounds viewport.
     fn add_offscreen_target_fill(&self, px2: f64) {
         if px2 > 0.0 {
             self.add(Self::OFFSCREEN_SOURCE, px2);
@@ -4756,9 +3871,6 @@ impl FillAreaDiag {
         }
     }
 
-    /// Restarts the frame counters and latches the surface size — called
-    /// from the same per-frame reset point as the transient rim mesh
-    /// scratch.
     fn reset_frame(&self, width: u32, height: u32) {
         for cell in &self.frame {
             cell.set(0.0);
@@ -4773,10 +3885,6 @@ impl FillAreaDiag {
         self.viewport.set((width, height));
     }
 
-    /// Folds the frame into the window and, every
-    /// [`FILL_DIAG_WINDOW_FRAMES`] rendered frames, emits the `[fill-diag]`
-    /// bucket line, the `[fill-truth]` lit/slack + opacity + corner line,
-    /// and — once per process — the retained top-slack dump.
     fn finish_frame(&mut self, width: u32, height: u32) {
         for (total, cell) in self.window.iter_mut().zip(&self.frame) {
             *total += cell.get();
@@ -4819,9 +3927,6 @@ impl FillAreaDiag {
             overdraw,
             screen_mega,
         );
-        // Lit vs slack per bucket: lit per [`analytic_lit_area`], slack the
-        // remainder of the submitted area (clamped — negatives are rim-mesh
-        // rounding, not information).
         let lit = |bucket: usize| self.window_lit[bucket] / frames / 1e6;
         let slack = |bucket: usize| (mega(bucket) - lit(bucket)).max(0.0);
         let truth = |bucket: usize| format!("{:.2}|{:.2}", lit(bucket), slack(bucket));
@@ -4873,41 +3978,17 @@ impl FillAreaDiag {
 #[cfg(not(target_arch = "wasm32"))]
 struct ArcMeshBuild {
     vertices: Vec<MeshVertex>,
-    /// Triangle-list indices into `vertices`; see [`ReplaySlotMesh`].
     indices: Vec<u32>,
-    /// `shape_count + 1` entries; shape `i` owns triangles
-    /// `indices[index_prefix[i]..index_prefix[i + 1]]`. An EMPTY range is a
-    /// shape that did not mesh: the draw walk keeps it on the latched
-    /// instanced-quad path (see [`GpuRenderer::encode_retained_op`]) — the
-    /// mesh buffers hold band geometry only, never passthrough quads.
     index_prefix: Vec<u32>,
     meshed_arcs: usize,
     meshed_rims: usize,
     meshed_segments: usize,
     passthrough: usize,
-    /// Maximal runs of CONSECUTIVE meshed shapes. Each stretch costs the
-    /// draw walk two pipeline switches per op that covers it, so the
-    /// capture site refuses meshes past [`MESH_SLOT_MAX_STRETCHES`].
     meshed_stretches: usize,
     quad_area: f64,
-    /// Capture-space area the new encoding actually submits: band-mesh
-    /// triangles for meshed shapes, bounding quads for everything else.
     mesh_area: f64,
 }
 
-/// Builds a slot's conservative indexed mesh: arc bands and stroked-circle
-/// rims whose bounding quad reaches `min_mesh_px2` become vertex-sharing
-/// trapezoid strips; every other shape — including gate-rejected small arcs
-/// — contributes NO geometry, only an empty `index_prefix` range, and stays
-/// on the instanced-quad path at draw time. (Putting passthrough quads in
-/// the mesh buffers was the S3 mistake the watch measured: every quad paid
-/// per-vertex `MeshVertex` attribute bandwidth where the latched instanced
-/// path pays shared storage reads, and ~550 passthrough quads per slot
-/// swamped the two meshed shapes' fill recovery — mesh ON 48.7/43.5 fps vs
-/// OFF 53.7/45.2 on the Adreno 702.) Returns `None` when the byte budget
-/// overflows — the caller warns and the whole slot replays through the
-/// quad-expansion path (silent truncation would break the containment
-/// invariant).
 #[cfg(not(target_arch = "wasm32"))]
 fn build_arc_mesh_vertices(shape_data: &[ShapeData], min_mesh_px2: f64) -> Option<ArcMeshBuild> {
     let budget_bytes =
@@ -4929,14 +4010,6 @@ fn build_arc_mesh_vertices(shape_data: &[ShapeData], min_mesh_px2: f64) -> Optio
     for (index, shape) in shape_data.iter().enumerate() {
         let start = build.indices.len();
         let quad_px2 = quad_shoelace_area(shape);
-        // THE SIZE GATE (see [`arc_mesh_enabled`] for the measured history):
-        // only shapes whose submitted quad is big enough to carry real
-        // fill-truth slack are worth a mesh; below the gate the trapezoid
-        // strip's vertex and binning amplification costs the watch GPU more
-        // than the discarded fragments ever did. The two band shapes are
-        // mutually exclusive by kind bits (`SHAPE_KIND_ARC` vs
-        // `SHAPE_KIND_STROKE`), so the `or_else` never shadows one with the
-        // other.
         let band = if quad_px2 >= min_mesh_px2 {
             arc_mesh_band(shape)
                 .map(|band| (band, false))
@@ -4984,16 +4057,11 @@ fn build_arc_mesh_vertices(shape_data: &[ShapeData], min_mesh_px2: f64) -> Optio
     Some(build)
 }
 
-/// The renderer's registry of live replay slots. The replay cache (scene
-/// side) owns slot LIFECYCLE decisions; this store owns the GPU resources.
 #[cfg(not(target_arch = "wasm32"))]
 struct ReplaySlotStore {
     slots: std::collections::HashMap<u32, ReplaySlot, cranpose_ui_graphics::FxBuildHasher>,
     transform_buffer: wgpu::Buffer,
     free_ids: Vec<u32>,
-    /// Global capture counter feeding [`ReplaySlot::capture_epoch`]: bumped
-    /// on every capture, never reused, so an epoch identifies one capture's
-    /// buffers for the renderer's whole lifetime.
     next_capture_epoch: u64,
 }
 
@@ -5002,12 +4070,6 @@ impl ReplaySlotStore {
     fn new(device: &wgpu::Device) -> Self {
         let transform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Replay Transform Buffer"),
-            // The trailing SEGMENT_CAPTURE_SLOTS strides are reserved for
-            // segment-surface capture passes: each capture binds its
-            // similarity (the span's own transform, retained paint
-            // selected) at `(MAX_REPLAY_SLOTS + capture_index) * stride`,
-            // past every per-draw slot, so captures can never clobber a
-            // frame's staged draw transforms.
             size: (MAX_REPLAY_SLOTS + SEGMENT_CAPTURE_SLOTS) as u64 * REPLAY_TRANSFORM_STRIDE,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
@@ -5021,101 +4083,37 @@ impl ReplaySlotStore {
     }
 }
 
-/// Kill switch for cached retained render bundles, mirroring
-/// `command_feed_enabled`: default ON, `CRANPOSE_RETAINED_BUNDLES=0` (or the
-/// `debug.cranpose.retained_bundles` property on Android) drops the fused
-/// retained arms back to direct per-op encoding, so a device A/B needs no
-/// rebuild. Read per partition — the parity harness flips it between passes.
 #[cfg(not(target_arch = "wasm32"))]
 fn retained_bundles_enabled() -> bool {
     crate::debug_toggles::debug_toggle("CRANPOSE_RETAINED_BUNDLES").as_deref() != Some("0")
 }
 
-/// Kill switch for instanced ordinary-shape quads: default ON,
-/// `CRANPOSE_INSTANCED_QUADS=0` (or the `debug.cranpose.instanced_quads`
-/// property on Android) reverts every ordinary shape draw to the six-vertex
-/// `vs_main` expansion. Unlike the per-partition bundle flag this is read
-/// ONCE per [`GpuRenderer`] construction into a field: cached retained
-/// bundles encode the selected pipeline, so a flag that moved per draw would
-/// let a cached bundle replay a selection the direct path no longer makes.
 #[cfg(not(target_arch = "wasm32"))]
 fn instanced_quads_enabled() -> bool {
     crate::debug_toggles::debug_toggle("CRANPOSE_INSTANCED_QUADS").as_deref() != Some("0")
 }
 
-/// Trimmed-varying solid pipelines: default OFF, `CRANPOSE_SOLID_TRIM_VARYINGS=1`
-/// (or the `debug.cranpose.solid_trim` property on Android) opts in. When on,
-/// the two `fs_solid` pipeline families compile `vs_solid` /
-/// `vs_solid_instanced` + `fs_solid_trim` — the inter-stage interface without
-/// the eight gradient scalars `fs_solid` never reads (see
-/// `shape_solid_trim.wgsl` for the location discipline). Read at pipeline
-/// build like every lazy pipeline — the property is seeded into the
-/// environment before the render loop starts, and the `PassPipeline` slots
-/// cache the first build, so retained bundles and direct draws always encode
-/// the same selection. Kill switch first: the previous attempt (16a5d312,
-/// reverted in 371dd06a) died on a watch undiagnosed, so the trim ships dark
-/// until a Vulkan-validated device session clears it.
 fn solid_trim_varyings_enabled() -> bool {
     crate::debug_toggles::debug_toggle("CRANPOSE_SOLID_TRIM_VARYINGS").as_deref() == Some("1")
 }
 
-/// Kill switch for surviving uncaptured device errors: default ON,
-/// `CRANPOSE_SURVIVE_GPU_ERRORS=0` (or the
-/// `debug.cranpose.survive_gpu_errors` property on Android) restores
-/// wgpu's fatal default handler, which panics with the error message on
-/// the reporting thread — the pre-fix behavior, kept reachable so a
-/// debugging session can die loudly at the first error instead of
-/// logging past it. Read once, at [`GpuRenderer`] construction, where the
-/// handler is installed; it changes nothing off the error path.
 fn survive_gpu_errors_enabled() -> bool {
     crate::debug_toggles::debug_toggle("CRANPOSE_SURVIVE_GPU_ERRORS").as_deref() != Some("0")
 }
 
-/// Kill switch for the display clip region cull: default ON wherever the
-/// platform reports a cullable visible region
-/// (`set_display_visible_region`), and `CRANPOSE_ROUND_CULL` (or the
-/// `debug.cranpose.round_cull` property on Android) gates it — the
-/// switch keeps the name of the capability's first provider, the round
-/// display. Read per frame — the parity harness flips it between passes.
-/// While the region is `Full` the variable is never consulted: the cull
-/// is structurally off.
-///
-/// OPT-IN (=1), not default-on, by measurement: with the span-capture
-/// depth-leak fixed, the on-watch A/B (Pixel Watch 3, Adreno 702, mega
-/// scene, alternating pairs) read cull ON 47.0/46.9 fps vs OFF 48.6/46.9 —
-/// a small loss to a tie, never a win, despite the cull masking 35723 px
-/// (21% of the buffer). The shape fragment shaders discard, which defeats
-/// LRZ/early-Z on this GPU: corner fragments still execute, so the depth
-/// attachment and occluder are pure overhead. The capability stays for
-/// displays and drivers where early rejection survives discard — a device
-/// A/B is one env flip, no rebuild — but earning default-on takes a
-/// measured win on some device class, not an assumption.
 #[cfg(not(target_arch = "wasm32"))]
 fn display_clip_cull_enabled() -> bool {
     crate::debug_toggles::debug_toggle("CRANPOSE_ROUND_CULL").as_deref() == Some("1")
 }
 
-/// The index pattern of one instanced quad: the exact triangle pair
-/// `vs_main`'s six-slot corner mapping produces — (0, 1, 2)(2, 1, 3), same
-/// diagonal, same winding — shared by every instance.
 #[cfg(not(target_arch = "wasm32"))]
 const INSTANCED_QUAD_INDICES: [u16; 6] = [0, 1, 2, 2, 1, 3];
 
-/// The latched instanced-quad selection: `Some` exactly when the renderer
-/// was constructed in storage mode with [`instanced_quads_enabled`]. Both
-/// blend variants exist because ordinary batches draw SrcOver and DstOut;
-/// the `vs_main` pipelines coexist untouched so the `=0` revert (and the
-/// uniform-mode path) still has its six-vertex draws.
 #[cfg(not(target_arch = "wasm32"))]
 struct InstancedQuadPipelines {
     pipeline: SharedPassPipeline,
     pipeline_dst_out: SharedPassPipeline,
-    /// `fs_solid` twin of `pipeline` (SrcOver only): chosen for draws whose
-    /// shapes carry no gradient stops, which is nearly every draw of an
-    /// arc-heavy scene.
     pipeline_solid: SharedPassPipeline,
-    /// Static `[0, 1, 2, 2, 1, 3]` u16 index buffer, created once and shared
-    /// by every instanced draw.
     index_buffer: wgpu::Buffer,
 }
 
@@ -5138,51 +4136,21 @@ enum RetainedPipelineKind {
     InstancedSolid,
 }
 
-/// One command of a retained op's draw walk, emitted by
-/// [`GpuRenderer::encode_retained_op`] — the SINGLE place the walk exists.
-/// The two sinks (the fused pass on the direct path, a
-/// `RenderBundleEncoder` on the cached path) each translate these
-/// mechanically, one match arm per variant, so the bundle-parity bar ("a
-/// bundle replays the IDENTICAL command sequence") holds by construction:
-/// only the translation is duplicated, never the sequence logic. A shared
-/// generic encoder (`wgpu::util::RenderEncoder`) cannot express this
-/// instead: `&mut RenderPass<'p>` is invariant in `'p`, so unifying the
-/// resource lifetime with the pass's would freeze `self` immutably
-/// borrowed for the whole pass.
 #[cfg(not(target_arch = "wasm32"))]
 enum RetainedCmd<'r> {
     Pipeline(RetainedPipelineKind),
-    /// Bind group 0, no dynamic offsets.
     Uniforms(&'r wgpu::BindGroup),
-    /// Bind group 1 with the retained draw's dynamic transform offset.
     SlotBindings(&'r wgpu::BindGroup, u32),
-    /// The slot mesh's vertex buffer at slot 0.
     MeshVertices(&'r wgpu::Buffer),
     Index(&'r wgpu::Buffer, wgpu::IndexFormat),
-    /// `draw(vertices, 0..1)`.
     Draw(Range<u32>),
-    /// `draw_indexed(indices, 0, instances)`.
     DrawIndexed(Range<u32>, Range<u32>),
 }
 
-/// Everything that decides the commands one retained op contributes to a
-/// cached bundle. Equal op keys imply identical encoded commands:
-/// `capture_epoch` pins the slot's bind group, buffers AND its mesh's
-/// meshed/instanced stretch structure to one capture (the alternating walk
-/// of [`GpuRenderer::encode_retained_op`] is a pure function of the
-/// capture-fixed `index_prefix` and `first..last`, so no per-stretch state
-/// belongs in the key), `has_mesh` pins whether that walk runs at all,
-/// `first..last` is the clamped draw range, and `retained_index` is the
-/// dynamic transform offset. Transforms and paints are NOT here — they are
-/// data-buffer contents the bundle reads at execution.
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct RetainedBundleOpKey {
     slot: u32,
-    /// The slot's capture epoch at key time, `None` while the slot is absent
-    /// from the store (the op encodes nothing). Epochs are globally unique
-    /// per capture, so a recaptured slot reusing its id can never satisfy a
-    /// key recorded against the previous capture's buffers.
     capture_epoch: Option<u64>,
     first: u32,
     last: u32,
@@ -5190,16 +4158,9 @@ struct RetainedBundleOpKey {
     has_mesh: bool,
 }
 
-/// Key of one maximal consecutive retained stretch: the op keys in draw
-/// order. Any reorder, count change, range change, recapture, or slot
-/// release changes the key and forces a rebuild.
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 struct RetainedBundleKey {
-    /// Whether the stretch was encoded for the display-clip culled pass:
-    /// such a bundle declares the depth attachment and records
-    /// depth-variant pipelines, so it must never replay into a flat pass
-    /// (or vice versa) — the flag keys the cache apart.
     depth: bool,
     ops: Vec<RetainedBundleOpKey>,
 }
@@ -5210,14 +4171,6 @@ struct RetainedBundleCacheEntry<B> {
     last_used_frame: u64,
 }
 
-/// Cache of encoded render bundles for retained stretches, generic over the
-/// bundle payload so the reuse/invalidation/eviction logic is unit-testable
-/// without a GPU. The full [`RetainedBundleKey`] is the map key — a fresh
-/// key can only ever build a fresh bundle, never alias a stale one.
-///
-/// The surface format and the group-0 uniform bind group are deliberately
-/// not part of the key: both are fixed for a `GpuRenderer`'s lifetime (a
-/// surface reconfigure builds a new renderer, and with it an empty cache).
 #[cfg(not(target_arch = "wasm32"))]
 struct RetainedBundleCacheImpl<B> {
     entries: HashMap<RetainedBundleKey, RetainedBundleCacheEntry<B>>,
@@ -5244,8 +4197,6 @@ impl<B> RetainedBundleCacheImpl<B> {
         }
     }
 
-    /// True when a bundle for `key` is cached; marks it used this frame and
-    /// counts a cached execute.
     fn hit(&mut self, key: &RetainedBundleKey) -> bool {
         let frame = self.frame;
         match self.entries.get_mut(key) {
@@ -5259,7 +4210,6 @@ impl<B> RetainedBundleCacheImpl<B> {
         }
     }
 
-    /// Stores a freshly built bundle, counting a rebuild.
     fn insert(&mut self, key: RetainedBundleKey, bundle: B) {
         self.rebuilds += 1;
         self.window_rebuilds += 1;
@@ -5276,26 +4226,15 @@ impl<B> RetainedBundleCacheImpl<B> {
         self.entries.get(key).map(|entry| &entry.bundle)
     }
 
-    /// Drops every cached bundle. Called whenever a replay slot is released:
-    /// the key compare already makes stale entries unreachable (their epochs
-    /// can never recur), so this only releases the dropped capture's GPU
-    /// resources promptly instead of one frame later via eviction.
     fn clear(&mut self) {
         self.entries.clear();
     }
 
-    /// Frame boundary: evicts entries the frame did not use — a bundle
-    /// holds references on its slot's buffers, so unused entries must not
-    /// accumulate — and emits the rate-limited rebuild/execute telemetry.
     fn end_frame(&mut self) {
         let frame = self.frame;
         self.entries
             .retain(|_, entry| entry.last_used_frame >= frame);
         self.frame = self.frame.wrapping_add(1);
-        // Always-on at a cadence that cannot spam; every perf window (120
-        // frames) under the replay diagnostics flag so short A/B runs see
-        // the counts. log::warn because log::info is invisible on the
-        // desktop console.
         let due = self.frame.is_multiple_of(1024)
             || (cranpose_core::env_flag!("CRANPOSE_COMMAND_REPLAY_DIAG")
                 && self.frame.is_multiple_of(120));
@@ -5312,7 +4251,6 @@ impl<B> RetainedBundleCacheImpl<B> {
         }
     }
 
-    /// Lifetime (rebuilds, cached executes) for tests and diagnostics.
     fn stats(&self) -> (u64, u64) {
         (self.rebuilds, self.cached_executes)
     }
@@ -5323,12 +4261,6 @@ struct CachedImageTexture {
     _view: wgpu::TextureView,
     nearest_bind_group: wgpu::BindGroup,
     linear_bind_group: wgpu::BindGroup,
-    /// GPU bytes this entry pins (w×h×4): the cache is bounded by BYTES as
-    /// well as count. A live camera publishes a new multi-MB bitmap id every
-    /// frame; 256 count-slots of those is ~1.5GB of dead preview textures —
-    /// which on iOS unified memory counts straight against the process's
-    /// jetsam limit (measured: the app died mid-scan under an open camera
-    /// with exactly that ballast).
     bytes: usize,
 }
 
@@ -5349,12 +4281,6 @@ struct GlyphAtlasEntry {
     height: u32,
 }
 
-/// Side length the glyph atlas should be rebuilt at after it overflowed at
-/// `current`: one doubling, never past `max`.
-///
-/// Doubling (rather than jumping straight to `max`) is what makes the atlas
-/// cost track the workload: an app that overflows once needs a little more
-/// room, not sixteen times more.
 fn next_glyph_atlas_size(current: u32, max: u32) -> u32 {
     current.saturating_mul(2).clamp(1, max.max(1))
 }
@@ -5365,15 +4291,7 @@ struct TextGlyphAtlas {
     bind_group: wgpu::BindGroup,
     entries: BoundedLruCache<SoftwareGlyphAtlasKey, GlyphAtlasEntry>,
     generation: u64,
-    /// Side length of `texture`, between `TEXT_GLYPH_ATLAS_MIN_SIZE` and the
-    /// device's ceiling. Every UV is normalised against it, so it has to travel
-    /// with the atlas rather than be read back off a constant.
     size: u32,
-    /// Largest side length this atlas may grow to: the smaller of
-    /// `TEXT_GLYPH_ATLAS_MAX_SIZE` and what the device grants. Mobile devices
-    /// are requested `downlevel_defaults()` limits raised by `using_resolution`,
-    /// so a device that only offers 2048 would otherwise fail to create the
-    /// texture outright.
     max_size: u32,
     cursor_x: u32,
     cursor_y: u32,
@@ -5438,21 +4356,6 @@ impl TextGlyphAtlas {
         })
     }
 
-    /// Throws every cached glyph away and starts over on a texture one doubling
-    /// larger, up to [`TextGlyphAtlas::max_size`].
-    ///
-    /// `allocate` is a one-way shelf cursor with no compaction, so the only
-    /// recovery from a full atlas is to start again — and starting again at the
-    /// same size makes a workload whose live glyph set genuinely does not fit
-    /// re-raster every glyph every frame. Treating each overflow as the signal
-    /// to double means the atlas converges on the size the workload actually
-    /// needs: a text-heavy screen reaches the old fixed 4096 after at most three
-    /// resets and behaves identically from then on, while a watch face that
-    /// never overflows never pays for space it will not use.
-    ///
-    /// Bumping the generation is what invalidates the cached glyph runs, whose
-    /// UVs are normalised against the previous size and would otherwise sample
-    /// the wrong part of the new texture.
     fn reset(
         &mut self,
         device: &wgpu::Device,
@@ -5636,12 +4539,6 @@ struct ImageUvRect {
     sample_bounds: [f32; 4],
 }
 
-// Text raster cache is owned by GpuRenderer and backed by software text images
-// between measurement and rendering to eliminate duplicate text shaping
-
-/// Persistent GPU buffers for batched shape rendering. There is no vertex or
-/// index buffer: the shape shader pulls quad corners straight out of
-/// `ShapeData` by `vertex_index`, so the batch is drawn unindexed.
 struct ShapeBatchBuffers {
     shape_buffer: wgpu::Buffer,
     gradient_buffer: wgpu::Buffer,
@@ -5682,11 +4579,8 @@ enum UploadTarget {
     ImageIndex,
     #[cfg(not(target_arch = "wasm32"))]
     RetainedGlyphUniform,
-    /// The shared replay-transform buffer; copies land at each slot's fixed
-    /// 256-byte-aligned offset.
     #[cfg(not(target_arch = "wasm32"))]
     ReplayTransform,
-    /// A replay slot's retained paint buffer (color patches land here).
     #[cfg(not(target_arch = "wasm32"))]
     ReplayPaintData(u32),
 }
@@ -5741,10 +4635,6 @@ impl StagedBufferUploads {
         self.stage_at(target, 0, bytes);
     }
 
-    /// Records a GPU copy whose source bytes were already written into the
-    /// frame upload buffer (via `Queue::write_buffer_with`), so nothing is
-    /// appended to `bytes`. `source_offset` is relative to the same base the
-    /// caller later passes to `flush_staged_uploads_at`.
     #[cfg(not(target_arch = "wasm32"))]
     fn record_upload_copy(
         &mut self,
@@ -5797,10 +4687,6 @@ impl StagedBufferUploads {
     }
 }
 
-/// The fresh-batch entry list for the shape bind group layout: the batch's
-/// own data buffers, the shared identity similarity buffer, and — storage
-/// mode only, where the layout carries the paint entry — the renderer-wide
-/// dummy paint buffer (fresh draws leave `paint_select` at 0.0).
 fn shape_batch_bind_group_entries<'a>(
     shape_buffer: &'a wgpu::Buffer,
     gradient_buffer: &'a wgpu::Buffer,
@@ -5881,8 +4767,6 @@ impl ShapeBatchBuffers {
         }
     }
 
-    /// Ensure buffers have enough capacity, resizing if needed.
-    /// Clamps growth to prevent excessive allocations for huge scenes.
     fn ensure_capacity(
         &mut self,
         device: &wgpu::Device,
@@ -5894,9 +4778,6 @@ impl ShapeBatchBuffers {
     ) {
         let mut need_bind_group_update = false;
 
-        // In uniform mode the shape and gradient buffers start at the cap
-        // (the shader's fixed-size array length) so these never fire; in
-        // storage mode they double toward the cap as scenes demand.
         if shapes_needed > self.shape_capacity
             && self.shape_capacity < self.batch_limits.max_shapes_per_batch
         {
@@ -6025,8 +4906,6 @@ impl ImageBatchBuffers {
     }
 }
 
-// Text image cache keys are local to rasterized WGPU text batches
-
 struct CompositionTarget {
     target: OffscreenTarget,
     output_bind_group: wgpu::BindGroup,
@@ -6041,22 +4920,8 @@ enum OutputMode {
 pub struct GpuRenderer {
     pub(crate) device: Arc<wgpu::Device>,
     pub(crate) queue: Arc<wgpu::Queue>,
-    /// Uncaptured-error record shared with the handler installed on
-    /// `device` at construction ([`DeviceErrorSentry`];
-    /// `CRANPOSE_SURVIVE_GPU_ERRORS` kill switch). Poisoned by any
-    /// uncaptured error; the head of [`Self::render`] answers each
-    /// poisoning with one cancelled packet.
     device_errors: Arc<DeviceErrorSentry>,
-    /// This instance's renderer epoch, stamped by `init_gpu` at
-    /// construction. A packet whose `renderer_epoch` differs was built
-    /// against another instance and is cancelled at the head of
-    /// [`Self::render`], never drawn.
     renderer_epoch: u64,
-    /// The producer feed generation this store's slot universe belongs to:
-    /// seeded at construction, advanced by `consume_replay_ops` when a
-    /// higher-generation batch arrives (the batch itself carries the
-    /// retirement releases). The store never reads the producer's
-    /// thread-local — this field is its only generation authority.
     #[cfg(not(target_arch = "wasm32"))]
     store_feed_generation: u64,
     composition_format: wgpu::TextureFormat,
@@ -6067,37 +4932,19 @@ pub struct GpuRenderer {
     screenshot_converter: OutputConverter,
     adapter_backend: wgpu::Backend,
     shape_batch_limits: ShapeBatchLimits,
-    /// `Some` exactly when the device granted [`wgpu::Features::PIPELINE_CACHE`]
-    /// (Vulkan; the platform layer requests it where the adapter offers it).
-    /// Every pipeline creation in this renderer passes it so the driver can
-    /// reuse compiled code across creates — and across launches once
-    /// [`crate::pipeline_disk_cache`] persists the blob.
     pipeline_cache: Option<wgpu::PipelineCache>,
     pipeline: SharedPassPipeline,
     pipeline_dst_out: SharedPassPipeline,
-    /// `fs_solid` twin of `pipeline` (SrcOver only), for gradient-free draws.
     pipeline_solid: SharedPassPipeline,
-    /// `Some` exactly in storage mode: the retained-mesh pipeline (`vs_mesh`
-    /// over a vertex buffer) that replay slots with a captured arc mesh draw
-    /// through. Uniform-mode devices never host retained slots.
     #[cfg(not(target_arch = "wasm32"))]
     mesh_pipeline: SharedPassPipeline,
-    /// `Some` exactly when this renderer latched the instanced-quad path at
-    /// construction (storage mode && `CRANPOSE_INSTANCED_QUADS` != 0). Read
-    /// ONCE per renderer lifetime — cached retained bundles encode the
-    /// selection, so it must never move under them (see
-    /// [`instanced_quads_enabled`]).
     #[cfg(not(target_arch = "wasm32"))]
     instanced_quads: Option<InstancedQuadPipelines>,
     #[cfg(not(target_arch = "wasm32"))]
     segment_capture_pipelines: SegmentCapturePipelines,
     uniform_bind_group_layout: wgpu::BindGroupLayout,
     shape_bind_group_layout: wgpu::BindGroupLayout,
-    /// `Some` exactly in storage mode: the 16-byte stand-in every fresh
-    /// batch binds at the paint entry (see `shape_batch_bind_group_entries`).
     dummy_paint_buffer: Option<wgpu::Buffer>,
-    /// Shared identity binding for `@group(1) @binding(2)`: every freshly
-    /// converted shape batch draws untransformed through this one buffer.
     identity_similarity_buffer: wgpu::Buffer,
     #[cfg(not(target_arch = "wasm32"))]
     replay_slots: ReplaySlotStore,
@@ -6112,7 +4959,6 @@ pub struct GpuRenderer {
     image_nearest_sampler: wgpu::Sampler,
     image_linear_sampler: wgpu::Sampler,
     text_fonts: SoftwareTextFontSet,
-    // Persistent GPU buffers (reused across frames)
     #[cfg(not(target_arch = "wasm32"))]
     upload_buffer: wgpu::Buffer,
     #[cfg(not(target_arch = "wasm32"))]
@@ -6148,7 +4994,6 @@ pub struct GpuRenderer {
     #[cfg(target_arch = "wasm32")]
     wasm_image_batch_cursor: usize,
     image_texture_cache: BoundedLruCache<u64, CachedImageTexture>,
-    /// Total `CachedImageTexture::bytes` currently in the cache.
     image_texture_cache_bytes: usize,
     text_image_cache: BoundedLruCache<TextImageCacheKey, CachedTextImage>,
     text_glyph_atlas: TextGlyphAtlas,
@@ -6186,124 +5031,52 @@ pub struct GpuRenderer {
     replay_upload_stats: ReplayUploadStats,
     #[cfg(not(target_arch = "wasm32"))]
     segment_encode_stats: SegmentEncodeStats,
-    /// The frame's replay recolor patches, parked here by
-    /// `consume_replay_ops` until the retained prepare arms drain them
-    /// (`stage_replay_patches`). The vec this frame's ops displace is last
-    /// frame's, already drained empty, and returns to the producer with
-    /// the ack — capacity ping-pongs planner queue → packet ops → here →
-    /// ack return, so neither side allocates per frame (P4b).
     #[cfg(not(target_arch = "wasm32"))]
     replay_color_patches: Vec<crate::scene::ColorPatch>,
-    /// Drain arena for `replay_color_patches`: `stage_replay_patches`
-    /// swaps against this instead of `mem::take`, so both keep their
-    /// high-water capacity across frames. Always empty between drains.
     #[cfg(not(target_arch = "wasm32"))]
     color_patch_scratch: Vec<crate::scene::ColorPatch>,
-    /// Capture staging scratch for `capture_replay_slot`: the converted
-    /// `ShapeData` records and gradient stops are built here, copied into
-    /// the slot's fresh GPU buffers, and the allocations survive to the
-    /// next capture — a re-partition frame captures one slot per segment
-    /// and used to allocate both vectors per slot.
     #[cfg(not(target_arch = "wasm32"))]
     replay_capture_shape_scratch: Vec<ShapeData>,
-    /// The gradient-stop half of the capture staging scratch.
     #[cfg(not(target_arch = "wasm32"))]
     replay_capture_gradient_scratch: Vec<GradientStop>,
-    /// Recycled confirmations buffer for the next [`crate::frame_packet::ReplayAck`]:
-    /// `consume_replay_ops` fills it, the planner drains it in `apply_ack`,
-    /// and the render loop hands the emptied vec (capacity intact) back
-    /// here — the ack channel's half of the P4b no-allocation contract.
     #[cfg(not(target_arch = "wasm32"))]
     replay_ack_confirmations: Vec<crate::frame_packet::ReplayConfirmation>,
-    /// Lifetime count of replay-ops batches dropped whole by the
-    /// generation check in `consume_replay_ops` — fail-closed against ops
-    /// planned under a slot universe this store no longer holds.
-    /// Synchronously impossible today; structural for the pipeline split.
     #[cfg(not(target_arch = "wasm32"))]
     replay_generation_drops: u64,
-    /// Cached render bundles for maximal consecutive retained stretches in
-    /// the fused segment pass (`CRANPOSE_RETAINED_BUNDLES` kill switch).
     #[cfg(not(target_arch = "wasm32"))]
     retained_bundle_cache: RetainedBundleCache,
-    /// Per-frame scratch for transient rim band meshes (`rim_mesh_band`):
-    /// appended per fused chunk, cleared at the top of every frame. Index
-    /// values are absolute into the frame's vertex list, so later chunks
-    /// append without rebasing.
     #[cfg(not(target_arch = "wasm32"))]
     rim_mesh_vertices: Vec<MeshVertex>,
     #[cfg(not(target_arch = "wasm32"))]
     rim_mesh_indices: Vec<u32>,
-    /// Fixed-capacity GPU twins of the rim scratch vecs, created lazily on
-    /// the first rim ([`RIM_MESH_VERTEX_CAPACITY`] /
-    /// [`RIM_MESH_INDEX_CAPACITY`]). NEVER recreated mid-frame: draws are
-    /// encoded before submit, so a replacement buffer would orphan every
-    /// already-encoded rim draw.
     #[cfg(not(target_arch = "wasm32"))]
     rim_mesh_vertex_buffer: Option<wgpu::Buffer>,
     #[cfg(not(target_arch = "wasm32"))]
     rim_mesh_index_buffer: Option<wgpu::Buffer>,
-    /// Counts of scratch vertices/indices already uploaded this frame, so
-    /// each fused chunk uploads only its newly appended region.
     #[cfg(not(target_arch = "wasm32"))]
     rim_mesh_uploaded_vertices: usize,
     #[cfg(not(target_arch = "wasm32"))]
     rim_mesh_uploaded_indices: usize,
-    /// Lifetime count of rims drawn as band meshes — the test hook behind
-    /// [`Self::rim_meshes_emitted`].
     #[cfg(not(target_arch = "wasm32"))]
     rim_meshes_emitted: u64,
-    /// Submitted fill-area accounting (`CRANPOSE_FILL_DIAG`); idle unless
-    /// the flag is set.
     #[cfg(not(target_arch = "wasm32"))]
     fill_area_diag: FillAreaDiag,
-    /// Opaque static leading-span cache (`CRANPOSE_STATIC_SPAN` kill
-    /// switch): the frame's byte-stable leading draws as one cached
-    /// full-target blit.
     #[cfg(not(target_arch = "wasm32"))]
     static_span: StaticSpanCache,
-    /// Retained-segment surface cache (`CRANPOSE_SEGMENT_SURFACE` opt-in,
-    /// see [`crate::segment_surface`]): qualifying retained spans rendered
-    /// once into pooled offscreens and re-drawn per frame as one rotated/
-    /// scaled textured quad each.
     #[cfg(not(target_arch = "wasm32"))]
     segment_surfaces: SegmentSurfaceCache,
-    /// Display clip region cull (see [`crate::display_clip`]): the
-    /// platform-provided visible region plus the per-size occluder/depth
-    /// resources. Inert — nothing beyond the enum is ever populated —
-    /// while the region is [`DisplayVisibleRegion::Full`].
     #[cfg(not(target_arch = "wasm32"))]
     display_clip: DisplayClipState,
 }
 
-/// Cache key of the display-clip resources: the surface size and the
-/// region whose complement the occluder was tessellated for.
 #[cfg(not(target_arch = "wasm32"))]
 type DisplayClipResourceKey = ((u32, u32), DisplayVisibleRegion);
 
-/// State of the display clip region cull, all renderer-side.
 #[cfg(not(target_arch = "wasm32"))]
 struct DisplayClipState {
-    /// The visible region from
-    /// [`GpuRenderer::set_display_visible_region`] — platform (or host)
-    /// truth about the panel, never derived from app content. `Full` for
-    /// every rectangular display; `InscribedCircle` is the round-display
-    /// provider's value.
     visible_region: DisplayVisibleRegion,
-    /// The view the current frame's packet renders to, set for the duration
-    /// of [`GpuRenderer::render`]. The fused pass culls only when its
-    /// target IS this view — full-frame-sized offscreen layer surfaces
-    /// must render whole (their content can be transformed into view
-    /// later), so size alone is not the test.
     frame_root_view: Option<wgpu::TextureView>,
-    /// True exactly while a fused pass that carries the depth attachment is
-    /// being encoded: every pipeline getter consults it to hand out the
-    /// depth-tested variant, which keeps the dozens of draw sites (and the
-    /// retained-bundle builder) untouched.
     pass_depth: Cell<bool>,
-    /// Depth attachment + occluder geometry for the current (size, region)
-    /// pair, or an inner `None` when the region's complement tessellation
-    /// failed its conservative verification for this size (cull stays
-    /// off; never retried until size or region changes).
     resources: Option<(DisplayClipResourceKey, Option<DisplayClipResources>)>,
     occluder_pipeline: LazyGpuResource<wgpu::RenderPipeline>,
 }
@@ -6321,23 +5094,13 @@ impl DisplayClipState {
     }
 }
 
-/// Per-(surface-size, region) GPU resources of the display clip cull.
 #[cfg(not(target_arch = "wasm32"))]
 struct DisplayClipResources {
-    /// `Depth16Unorm`, cleared each culled pass, stored never
-    /// (`StoreOp::Discard`) — transient GMEM residency on tilers.
     depth_view: wgpu::TextureView,
-    /// The region complement's conservative tessellation, NDC positions,
-    /// triangle list.
     occluder_vertex_buffer: wgpu::Buffer,
     occluder_vertex_count: u32,
 }
 
-/// Running totals for retained-slot patch uploads, the paint-bandwidth
-/// instrument: recolors upload 16-byte paint records (plus gradient stop
-/// spans), coalesced per slot between the lowest and highest patched
-/// index, so `bytes` versus `ideal_bytes` (patched colors alone) is just
-/// the untouched records inside each coalesced span.
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Default)]
 struct ReplayUploadStats {
@@ -6353,15 +5116,6 @@ struct ReplayUploadStats {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl ReplayUploadStats {
-    /// One aggregate line roughly every few seconds: cheap enough to stay
-    /// on unconditionally, which matters because the watch cannot take
-    /// setprop-backed diag flags — its logcat is the only channel, and a
-    /// measurement window must catch several lines. Counts every drain
-    /// call (the drain runs several times per frame; only the first sees
-    /// patches) so a target with zero paint traffic still reports an
-    /// affirmative zero instead of silence, while the averages divide by
-    /// PATCHED calls so they read as per-frame numbers.
-    /// warn level: the platform loggers filter info on desktop.
     const REPORT_CALLS: u64 = 1024;
 
     fn note_frame(&mut self, patches: u64, slots: u64, records: u64, bytes: u64, ideal: u64) {
@@ -6394,12 +5148,6 @@ impl ReplayUploadStats {
     }
 }
 
-/// Aggregate cost of the fused native partition loop — the numbers a
-/// parallel-encode decision needs: how many partitions each chunk carries
-/// and how long the serial loop spends encoding them. Always-on for the
-/// same reason as [`ReplayUploadStats`]: the watch takes no setprop diag
-/// flags, so the line has to reach logcat on its own, and one warn every
-/// [`Self::REPORT_CALLS`] chunks is bounded.
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Default)]
 struct SegmentEncodeStats {
@@ -6479,8 +5227,6 @@ fn layer_raster_cache_candidate(
     if layer_uses_external_backdrop_input(layer, has_backdrop_underlay) {
         return None;
     }
-    // Not just this layer's own effect: a shader anywhere below it makes the
-    // whole subtree change every frame with nothing in any hash to say so.
     if surface_requirements.contains_runtime_shader {
         return None;
     }
@@ -6507,11 +5253,6 @@ impl GpuRenderer {
         queue: Arc<wgpu::Queue>,
         surface_format: wgpu::TextureFormat,
         adapter_backend: wgpu::Backend,
-        // Beside the backend because it is the same kind of fact: something
-        // only the ADAPTER can answer, which the device cannot be asked for
-        // (wgpu 29 has `Adapter::get_downlevel_capabilities` and no device
-        // equivalent) and which decides whether the shape arrays can be
-        // storage buffers at all.
         adapter_downlevel: wgpu::DownlevelFlags,
         text_fonts: SoftwareTextFontSet,
         renderer_epoch: u64,
@@ -6521,19 +5262,7 @@ impl GpuRenderer {
         let _ = store_feed_generation;
         let display_format = surface_format;
         let composition_format = composition_format();
-        // Construction time is worth a line of its own. Before pipelines were
-        // built lazily this call linked every pipeline the frontend could ever
-        // need, and on a GL device each link ended in a blocking
-        // `glGetProgramiv` -- 25 s on an emulator, with nothing on screen. That
-        // is fixed, but "fixed" is a claim that needs a number on each device,
-        // and the per-pipeline `[gpu-pipeline]` lines cannot say what the
-        // renderer costs to build when it builds no pipelines at all.
         let construction_started = Instant::now();
-        // Installed before this renderer's first device call, so even a
-        // construction-time validation error is survived. Replaces wgpu's
-        // fatal default handler — see [`DeviceErrorSentry`] for the
-        // double-panic abort this prevents and
-        // [`survive_gpu_errors_enabled`] for the kill switch.
         let device_errors = Arc::new(DeviceErrorSentry::default());
         if survive_gpu_errors_enabled() {
             let sentry = Arc::clone(&device_errors);
@@ -6572,15 +5301,6 @@ impl GpuRenderer {
                 }],
             });
 
-        // Read-only storage bindings where the device has them (so a whole
-        // scene fits one batch); uniform arrays on WebGL-class devices, which
-        // have no storage buffers in fragment shaders. The shape array is
-        // visible to the vertex stage as well: the pipeline has no vertex
-        // buffer and `vs_main` pulls quad corners from ShapeData. Storage mode
-        // is gated on `DownlevelFlags::VERTEX_STORAGE` as well as on the
-        // limit -- see `ShapeBatchLimits::select`, where the comment this
-        // replaces claimed GL reports the limit as the minimum across stages
-        // and Mali proved otherwise.
         let mut shape_bind_group_layout_entries = vec![
             wgpu::BindGroupLayoutEntry {
                 binding: 0,
@@ -6602,10 +5322,6 @@ impl GpuRenderer {
                 },
                 count: None,
             },
-            // The similarity transform rides a dynamic offset so
-            // retained draws sharing one captured batch can each
-            // apply their own transform; ordinary batches pass
-            // offset 0 into the identity buffer.
             wgpu::BindGroupLayoutEntry {
                 binding: 2,
                 visibility: wgpu::ShaderStages::VERTEX,
@@ -6619,11 +5335,6 @@ impl GpuRenderer {
                 count: None,
             },
         ];
-        // Retained-slot paint colors, read by the vertex stage under
-        // `paint_select` (see `shape_shader_source`). Storage mode only:
-        // the uniform-variant shader never declares the array, and
-        // uniform-mode devices never host retained slots, so their layout
-        // stays exactly the three-entry one the uniform pipeline expects.
         if shape_batch_limits.storage {
             shape_bind_group_layout_entries.push(wgpu::BindGroupLayoutEntry {
                 binding: 3,
@@ -6654,10 +5365,6 @@ impl GpuRenderer {
             .copy_from_slice(bytemuck::bytes_of(&SimilarityTransform::IDENTITY));
         identity_similarity_buffer.unmap();
 
-        // Fresh-batch bind groups need a resource at the paint binding even
-        // though their draws leave `paint_select` at 0.0 and never use the
-        // value; one minimal buffer (a single never-read vec4) serves every
-        // batch. Uniform-mode layouts have no paint entry, so none exists.
         let dummy_paint_buffer = shape_batch_limits.storage.then(|| {
             device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Dummy Paint Buffer"),
@@ -6675,11 +5382,6 @@ impl GpuRenderer {
             PassPipeline::new("shape/solid-src-over", "shape/solid-src-over-depth");
         #[cfg(not(target_arch = "wasm32"))]
         let mesh_pipeline = PassPipeline::new("shape/mesh", "shape/mesh-depth");
-        // The instanced-quad selection is LATCHED here, once per renderer:
-        // cached retained bundles encode whichever pipelines this resolves
-        // to, so a per-draw env read could let a bundle replay a selection
-        // the direct path no longer makes. Storage mode only — the
-        // uniform/WebGL path keeps `vs_main` and its plain draws untouched.
         #[cfg(not(target_arch = "wasm32"))]
         let instanced_quads =
             (shape_batch_limits.storage && instanced_quads_enabled()).then(|| {
@@ -6846,12 +5548,6 @@ impl GpuRenderer {
                 }],
             });
 
-        // The cache handle costs nothing to create and pays on Vulkan: the
-        // persisted blob turns first-use compiles (2.0 s of render thread
-        // inside the first six seconds on a Pixel Watch 3) into cache hits
-        // across launches. `None` where the device lacks the feature (every
-        // non-Vulkan backend) — every creation site then behaves exactly as
-        // before, and the prewarm below carries the whole load instead.
         #[cfg(not(target_arch = "wasm32"))]
         let pipeline_cache = crate::pipeline_disk_cache::load(&device);
         #[cfg(target_arch = "wasm32")]
@@ -7070,19 +5766,11 @@ impl GpuRenderer {
         renderer
     }
 
-    /// The display's visible region (see [`crate::display_clip`]): the
-    /// part of the full-screen surface the panel physically shows. Only
-    /// the platform layer (or a host standing in for it) sets this —
-    /// never app content. `Full` — the default — keeps the cull machinery
-    /// structurally inert.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn set_display_visible_region(&mut self, region: DisplayVisibleRegion) {
         self.display_clip.visible_region = region;
     }
 
-    /// Whether the pass currently being encoded carries the display-clip
-    /// depth attachment; pipeline getters consult this to hand out the
-    /// depth-tested variant.
     #[cfg(not(target_arch = "wasm32"))]
     fn pass_depth(&self) -> bool {
         self.display_clip.pass_depth.get()
@@ -7093,13 +5781,6 @@ impl GpuRenderer {
         false
     }
 
-    /// Decides whether the fused pass about to be encoded is the culled
-    /// one and returns its depth view: the visible region must leave
-    /// something to cull, the kill switch must be open, and `target_view`
-    /// must be THIS frame's root target with the pass viewport covering
-    /// it whole. Offscreen layer passes — even full-frame-sized ones —
-    /// never qualify: a layer's content can be transformed into view
-    /// later.
     #[cfg(not(target_arch = "wasm32"))]
     fn display_clip_pass_depth_view(
         &mut self,
@@ -7119,11 +5800,6 @@ impl GpuRenderer {
         self.ensure_display_clip_resources(width, height)
     }
 
-    /// Returns the depth view for the current (size, region) pair,
-    /// tessellating the region's complement and building its vertex
-    /// buffer and the depth attachment on first use. A tessellation that
-    /// fails its conservative verification pins `None` for the pair: the
-    /// cull stays off rather than ever touching a visible pixel.
     #[cfg(not(target_arch = "wasm32"))]
     fn ensure_display_clip_resources(
         &mut self,
@@ -7165,9 +5841,6 @@ impl GpuRenderer {
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
                 view_formats: &[],
             });
-            // Once per (size, region), which is as rate-limited as it
-            // gets. The round display — the capability's first provider —
-            // keeps its own line.
             match region {
                 DisplayVisibleRegion::InscribedCircle => log::info!(
                     "[display-clip] round display: corner cull active ({} px masked) at {width}x{height}",
@@ -7189,9 +5862,6 @@ impl GpuRenderer {
         view
     }
 
-    /// Encodes the region complement's occluder, the first draw of a
-    /// culled fused pass: depth write at the near plane over the
-    /// tessellation, color writes off.
     #[cfg(not(target_arch = "wasm32"))]
     fn draw_display_clip_occluder(
         &self,
@@ -7242,14 +5912,6 @@ impl GpuRenderer {
         })
     }
 
-    /// The `fs_solid` twin of [`Self::shape_pipeline`], SrcOver only. Callers
-    /// pick it exactly when the draw's shapes carry zero gradient stops; the
-    /// coverage math is byte-identical, the gradient machinery is compiled
-    /// out of the fragment stage. Under `CRANPOSE_SOLID_TRIM_VARYINGS`
-    /// (re-read per build, see [`solid_trim_varyings_enabled`]) the build
-    /// compiles the trimmed-interface entries instead; either variant encodes
-    /// identically — same layouts, same blend, no vertex buffers — so every
-    /// caller, retained bundles included, is oblivious to the selection.
     fn shape_pipeline_solid(&self) -> &wgpu::RenderPipeline {
         self.pipeline_solid
             .get_or_init(self.adapter_backend, self.pass_depth(), |depth| {
@@ -7318,9 +5980,6 @@ impl GpuRenderer {
         })
     }
 
-    /// The `fs_solid` twin of [`Self::instanced_pipeline`], SrcOver only.
-    /// Trims its varyings under `CRANPOSE_SOLID_TRIM_VARYINGS` exactly like
-    /// [`Self::shape_pipeline_solid`].
     #[cfg(not(target_arch = "wasm32"))]
     fn instanced_pipeline_solid<'a>(
         &'a self,
@@ -7595,8 +6254,6 @@ impl GpuRenderer {
                 .saturating_sub(replaced.bytes);
         }
         self.image_texture_cache_bytes += bytes;
-        // Byte-bounded eviction on top of the count bound: never evict the
-        // entry just inserted (this frame draws it).
         while self.image_texture_cache_bytes > MAX_IMAGE_TEXTURE_CACHE_BYTES
             && self.image_texture_cache.len() > 1
         {
@@ -7630,8 +6287,6 @@ impl GpuRenderer {
         })
     }
 
-    /// Acquire an offscreen target from the pool with stats tracking.
-    /// Uses split borrows to avoid conflicting borrows on self.
     fn max_texture_dim(&self) -> u32 {
         self.effect_renderer.max_texture_dim()
     }
@@ -8718,10 +7373,6 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
         );
         #[cfg(target_arch = "wasm32")]
         let _ = culled_shadow_items;
-        // The ablation switch removes the items themselves: a shadow item
-        // that merely encoded nothing would still split the segment's batch
-        // passes, and the measurement would charge shadows for pass breaks
-        // they no longer cause.
         if skip_shadow_draws() {
             ordered_items.retain(|(_, item)| !matches!(item, SegmentDrawItem::Shadow(_)));
         }
@@ -8740,15 +7391,6 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
                     (*z_index, SegmentDrawItem::ShaderComposite(index))
                 }),
         );
-        // A converted shadow contributes one composite entry PER band, all at
-        // the shadow's own z; the first band replaces the shadow's ordered
-        // item in place and the rest append behind it for the sort to gather.
-        // A composite with NO bands is a fully occluded shadow — the opaque
-        // caster covers every visible pixel of its coverage (a bottom bar
-        // whose shadow only reaches past the screen edge, at some scales).
-        // Its item must vanish outright: converting it would hand the plan a
-        // composite index with nothing behind it, aliasing the next entry or
-        // running off the end of the prepared command buffer.
         let mut extra_band_items: Vec<(usize, SegmentDrawItem)> = Vec::new();
         let mut fully_occluded_zs: SmallVec<[usize; 4]> = SmallVec::new();
         let mut flattened_band_count = 0usize;
@@ -8782,8 +7424,6 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
             }
         }
         if !fully_occluded_zs.is_empty() {
-            // Z indices are unique per ordered item, so the z alone names the
-            // dropped shadow.
             ordered_items.retain(|(z_index, item)| {
                 !(matches!(item, SegmentDrawItem::Shadow(_)) && fully_occluded_zs.contains(z_index))
             });
@@ -8801,17 +7441,6 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
                 merged_composites.push((*z_index, item));
             }
         }
-        // Z indices are NOT unique here, and a tie's order decides what the
-        // user sees: a backdrop glass queues its optical tail (a shader
-        // composite) and its own body (a blit composite) at the element's
-        // one z, and the tail MUST draw first or the body smears into the
-        // blur — the Mate 20 X shipped a build whose nav bar was unreadable
-        // because this sort was unstable on exactly that tie. Every queued
-        // composite therefore carries its push sequence, and the key is
-        // total wherever a tie is real: scene draws tie-break 0 (their z's
-        // are unique by `next_z`), queued composites 1 + push-seq, and a
-        // banded shadow's strips 1 + item index (bands of one shadow share
-        // its z and must stay in band order).
         let composite_tie = |item_index: usize| -> usize {
             if item_index < composites.len() {
                 1 + composites[item_index].1
@@ -9234,8 +7863,6 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
         effect_rect: [f32; 4],
         target: &OffscreenTarget,
     ) -> Result<bool, String> {
-        // encode_effect emits its result at the destination view's own
-        // resolution, so a size mismatch would silently rescale the output.
         if target.width != source.width || target.height != source.height {
             return Ok(false);
         }
@@ -9377,10 +8004,6 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
     }
 
     fn record_layer_cache_miss(&self, key: &LayerRasterCacheKey, width: u32, height: u32) {
-        // Whole key on purpose: two consecutive frames' misses for the same
-        // stable id show WHICH field moved (content hash, bounds, size),
-        // which is the difference between "content legitimately changed"
-        // and "the key is position-poisoned".
         if cranpose_core::env_flag!("CRANPOSE_LAYER_RENDER_DIAG") {
             log::warn!("[layer-cache-miss] {width}x{height} {key:?}");
         }
@@ -9440,18 +8063,9 @@ impl GpuRenderer {
         output_mode: OutputMode,
         output_view: Option<&wgpu::TextureView>,
     ) -> Result<(), String> {
-        // Threaded mode rides the emptied ack-confirmations buffer back to
-        // the store inside the next packet ([`FramePacket::recycled_confirmations`]);
-        // adopt it before the validity gate so even a cancelled packet
-        // cannot leak the capacity. Sync callers always carry `None`.
         if let Some(confirmations) = packet.recycled_confirmations.take() {
             self.restore_replay_ack_confirmations(confirmations);
         }
-        // Packet validity gate — BEFORE consume_replay_ops and any
-        // encoding. A packet built against another renderer instance,
-        // another surface configuration, or another viewport is cancelled
-        // whole: its buffers travel back through `returns` for re-queue
-        // and recycling, and nothing of it reaches the GPU.
         let cancel_reason = if packet.renderer_epoch != self.renderer_epoch {
             Some(CancelReason::RendererEpoch)
         } else if packet.surface_epoch != surface_epoch {
@@ -9464,12 +8078,6 @@ impl GpuRenderer {
         if let Some(reason) = cancel_reason {
             return Self::cancel_packet(packet, reason, returns);
         }
-        // Device-error gate — same protocol as the validity gate above: an
-        // uncaptured error recorded since the last frame cancels this
-        // packet whole, so nothing is encoded on the suspect device. The
-        // take clears the poison, so the NEXT packet renders — one skipped
-        // frame per poisoning, the acquire path's give-up-this-frame
-        // semantics ([`DeviceErrorSentry`]).
         if self.device_errors.take_poison() {
             return Self::cancel_packet(packet, CancelReason::DeviceError, returns);
         }
@@ -9486,10 +8094,6 @@ impl GpuRenderer {
         #[cfg(not(target_arch = "wasm32"))]
         {
             self.retained_glyph_uniform_cursor = 0;
-            // Transient rim meshes live for exactly one frame: the scratch
-            // restarts here and every fused chunk appends after the region
-            // already uploaded (the GPU buffers themselves are fixed-capacity
-            // and persist).
             self.rim_mesh_vertices.clear();
             self.rim_mesh_indices.clear();
             self.rim_mesh_uploaded_vertices = 0;
@@ -9497,20 +8101,10 @@ impl GpuRenderer {
             if fill_area_diag_enabled() {
                 self.fill_area_diag.reset_frame(width, height);
             }
-            // One engagement per frame: the first fused partition carrying
-            // the frame's opaque clear consumes this.
             self.static_span.armed = true;
-            // Segment-surface frame boundary: config refresh, capture-slot
-            // cursor reset, periodic idle sweep.
             self.segment_surfaces.begin_frame();
-            // The frame's root target, held for the graph walk only: the
-            // display clip cull compares fused-pass targets against it so
-            // nothing but the real surface pass is ever culled.
         }
 
-        // Producer-side text layout cache size, carried by the packet — the
-        // present call tree holds no text layout state, and no layout runs
-        // between packet build and the stats block below.
         let text_cache_len = packet.text_cache_len;
         let composition = self.take_composition_target(width.max(1), height.max(1));
         #[cfg(not(target_arch = "wasm32"))]
@@ -9548,9 +8142,6 @@ impl GpuRenderer {
         #[cfg(not(target_arch = "wasm32"))]
         {
             if fill_area_diag_enabled() {
-                // Effect/composite fill accumulated during the graph walk
-                // lives in the effect renderer's own cells; fold it into
-                // this frame before the window closes over it.
                 let (composite_px2, offscreen_px2) = self.effect_renderer.take_fill_diag_fill_px2();
                 self.fill_area_diag
                     .add_effect_fill(composite_px2, offscreen_px2);
@@ -9615,11 +8206,6 @@ impl GpuRenderer {
             .merge_and_reset_debug_counters(&self.frame_stats);
         self.frame_graph_executor.reset_upload_allocators();
         let snapshot = self.frame_stats.snapshot();
-        // The eprintln-based 60-frame stats never reach logcat on devices
-        // whose stdio pump forwards nothing (Mate 20 X measured zero pump
-        // lines), so the per-frame surface/cache counters ride the stage
-        // telemetry switch through the logger, where the submit line
-        // carrying the pass split already arrives.
         if crate::frame_graph::frame_graph_pass_telemetry_threshold_ms().is_some() {
             log::warn!(
                 "[wgpu-render-stage:frame-stats] layer_hit={} layer_miss={} miss_px={} \
@@ -9636,9 +8222,6 @@ impl GpuRenderer {
         self.last_frame_stats = Some(snapshot);
         PRESENTED_FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         update_frame_warmup_budget(&mut self.pending_frame_warmup_frames, &snapshot);
-        // Read at the use site, not latched at construction: the toggle is a
-        // debug.cranpose.* property that must respond to setprop on a live
-        // app like every other entry in the table. Once per frame is free.
         let gpu_stats_on = gpu_stats_enabled();
         self.frame_stats
             .maybe_print_snapshot(snapshot, &mut self.frame_count, gpu_stats_on);
@@ -9657,25 +8240,11 @@ impl GpuRenderer {
             );
         }
         if result.is_ok() {
-            // Only a draw that actually ran may report `Presented`; an
-            // errored draw leaves the default `NotRun`.
             returns.outcome = PresentOutcome::Presented;
         }
         result
     }
 
-    /// Refuses a packet whole, before any encoding: every buffer it
-    /// carries travels back through `returns` — the direct scene for the
-    /// producer pool, the unconsumed replay plan for the planner to
-    /// re-queue (its releases name still-live store slots; dropping them
-    /// would leak pool ids forever). A cancel is a protocol outcome, not a
-    /// draw error, so the render call returns `Ok(())`.
-    ///
-    /// `pub(crate)` for the present runtime, which must cancel a packet
-    /// that cannot render at all (surface dropped) without touching the
-    /// GPU. Callers that bypass [`render`][Self::render] must take the
-    /// packet's `recycled_confirmations` first — this refuses the packet
-    /// without a store to adopt them into.
     pub(crate) fn cancel_packet(
         packet: FramePacket,
         reason: CancelReason,
@@ -9696,15 +8265,6 @@ impl GpuRenderer {
         } = packet;
         match root {
             PacketRoot::Direct(root) => {
-                // Destructure: the scene buffers return to the producer
-                // pool; the rest of the collected layer drops. A Direct
-                // packet's replay plan came from the planner and must go
-                // back to it unconsumed — a Surface packet only ever
-                // carries the empty default plan, which has nothing to
-                // reclaim. A plan the present stage already consumed
-                // (`take_replay_ack_early`) is not here to reclaim: the
-                // store honored it and its ack is on the way to the
-                // planner, so `replay` holds only the taken-out default.
                 returns.scene = Some(root.scene);
                 #[cfg(not(target_arch = "wasm32"))]
                 if !replay_preconsumed {
@@ -9764,8 +8324,6 @@ impl GpuRenderer {
             layer_surface_cache_cap: layer_surface_cache_stats.entries_cap,
             layer_surface_cache_identity_len: layer_surface_cache_stats.identity_len,
             layer_surface_cache_identity_cap: layer_surface_cache_stats.identity_cap,
-            // The producer frontend owns the only lowering-memo pair since
-            // step 6b; the present backend contributes nothing.
             layer_surface_rect_cache_len: 0,
             layer_surface_rect_cache_cap: 0,
             layer_surface_requirements_cache_len: 0,
@@ -10029,20 +8587,6 @@ impl GpuRenderer {
     ) -> Result<(), String> {
         let recorded_start = Instant::now();
 
-        // Present-side consumption of the packet's replay plan, adjacent to
-        // packet consumption: the store honors the ops just before the
-        // packet renders. Gated on a Direct root — a Surface packet never
-        // touched the planner and carries the empty default plan
-        // (generation 0), which the store must not consume: it would count
-        // a false generation drop. The ack travels back through `returns`
-        // and the producer applies it right after this render call —
-        // equivalent to the in-store drain this replaces, because both
-        // application points sit after this frame's graph build and before
-        // the next collect, which is where the bypass gate and `feed_slots`
-        // are read. The threaded present runtime consumes EARLIER
-        // (`take_replay_ack_early`, before surface acquire) and marks the
-        // packet, so this block must not feed the taken-out default plan
-        // to the store.
         #[cfg(not(target_arch = "wasm32"))]
         let mut packet = packet;
         #[cfg(not(target_arch = "wasm32"))]
@@ -10091,10 +8635,6 @@ impl GpuRenderer {
                     root_scale,
                     wgpu::LoadOp::Clear(CLEAR_COLOR),
                 ) {
-                    // Return the packet's scene buffers to the producer pool
-                    // in BOTH arms — for a heavy animated frame they are
-                    // megabytes of Vec, and an errored draw must not leak
-                    // them.
                     Ok(scene) => {
                         returns.scene = Some(scene);
                         Ok(())
@@ -10145,10 +8685,6 @@ impl GpuRenderer {
         let mut lowered = lowered;
         lowered.source = source;
 
-        // The root layer's visible area is always the viewport — content
-        // outside the screen is invisible regardless of scroll offsets or
-        // inflated scene bounds.  Pass the viewport rect as an explicit
-        // surface rect to prevent offscreen inflation on constrained GPUs.
         let viewport_rect = Rect {
             x: 0.0,
             y: 0.0,
@@ -10286,9 +8822,6 @@ impl GpuRenderer {
         Ok(())
     }
 
-    /// Renders the producer-lowered dev overlay on top of the frame. The
-    /// packet carries the collected overlay; the backend only validates
-    /// that it stayed directly renderable and draws it.
     fn render_overlay_packet<C: FrameCommandRecorder>(
         backend: &mut RecordingSurfaceBackend<'_, '_, C>,
         surface_view: &wgpu::TextureView,
@@ -10510,11 +9043,7 @@ impl GpuRenderer {
         let mut image_indices = std::mem::take(&mut self.scratch_image_indices);
         let mut image_cmds = std::mem::take(&mut self.scratch_image_cmds);
         let mut glyph_cmds = std::mem::take(&mut self.scratch_glyph_cmds);
-        // Moved out like the scratch vecs: the span blit borrows the cached
-        // texture across the render pass while `self` stays mutably usable.
         let mut span_cache = std::mem::take(&mut self.static_span);
-        // Moved out for the same reason: prepared segment composites borrow
-        // entry textures across the render pass.
         let mut segment_surfaces = std::mem::take(&mut self.segment_surfaces);
 
         image_vertices.clear();
@@ -10574,13 +9103,6 @@ impl GpuRenderer {
             }
             let after_shape_prepare = Instant::now();
 
-            // Segment-surface phase 1 (CRANPOSE_SEGMENT_SURFACE opt-in, see
-            // `crate::segment_surface`): per retained item of this
-            // partition, decide cached-composite vs direct, install/refresh
-            // entries, and stage this frame's capture transforms. Runs
-            // BEFORE the batch-prepare loop because recolor dirtiness is
-            // read from the frame's still-parked patch list, which the
-            // Retained prepare arm drains (`stage_replay_patches`).
             let mut segment_captures: Vec<SegmentCaptureJob> = Vec::new();
             let mut segment_composite_plans: Vec<(usize, SegmentCompositePlan)> = Vec::new();
             if segment_surfaces.enabled() {
@@ -10595,11 +9117,6 @@ impl GpuRenderer {
                 );
             }
 
-            // Opaque static leading-span cache: decide once per frame, on
-            // the partition carrying the frame's opaque clear, whether the
-            // leading run of converted records matches the cached span
-            // composite (skip them, blit instead), repeated byte-identically
-            // from last frame (draw live, then capture), or neither.
             let first_batch_info = match chunk.batches.first() {
                 Some(&SegmentBatchPlan::Shape {
                     start,
@@ -10628,10 +9145,6 @@ impl GpuRenderer {
             let span_skip = match span_decision {
                 StaticSpanDecision::Hit { skip } => {
                     if fill_area_diag_enabled() {
-                        // The skipped quads were counted at batch prepare;
-                        // the replacing blit is an effect-renderer
-                        // composite, which the instrument's policy does not
-                        // count.
                         self.fill_area_diag
                             .note_static_span_skip(&self.scratch_shape_data[..skip]);
                     }
@@ -10640,13 +9153,6 @@ impl GpuRenderer {
                 _ => 0,
             };
 
-            // Transient rim band meshes: scan the freshly converted shapes
-            // (still in `scratch_shape_data` after
-            // `prepare_shapes_batch_direct`) for huge circle rims and give
-            // each a band mesh covering ring ± AA margin instead of its full
-            // bounding quad. Kill switch read once per chunk; the mesh
-            // pipeline exists in storage mode only and blends SrcOver only,
-            // hence the two extra gates at the batch arm below.
             let rim_mesh_on = rim_mesh_enabled();
             let mut chunk_rims: Vec<RimDraw> = Vec::new();
 
@@ -10671,10 +9177,6 @@ impl GpuRenderer {
                             has_gradient |=
                                 shape_gradient_stop_count(&shapes[*shape_index], brushes) > 0;
                         }
-                        // A span hit skips the leading shapes of the FIRST
-                        // batch only: they stay in the upload (indices of
-                        // everything after them are untouched) but the draw
-                        // range starts past them.
                         let skip = if batch_index == 0 { span_skip } else { 0 };
                         let shape_count = end - start;
                         if shape_count > 0 {
@@ -10683,10 +9185,6 @@ impl GpuRenderer {
                                 && blend_mode == BlendMode::SrcOver
                             {
                                 for offset in skip..shape_count {
-                                    // The index `vs_mesh` reads into the
-                                    // storage shape array: position within
-                                    // the whole fused upload (shape_refs
-                                    // order == scratch_shape_data order).
                                     let global_index = shape_cursor + offset as u32;
                                     let converted = &self.scratch_shape_data[global_index as usize];
                                     let Some(band) = rim_mesh_band(converted) else {
@@ -10703,8 +9201,6 @@ impl GpuRenderer {
                                     )
                                     .is_none()
                                     {
-                                        // Nothing emitted (fully clipped) —
-                                        // the quad path draws it as today.
                                         self.rim_mesh_vertices.truncate(vertex_mark);
                                         self.rim_mesh_indices.truncate(index_mark);
                                         continue;
@@ -10712,9 +9208,6 @@ impl GpuRenderer {
                                     if self.rim_mesh_vertices.len() > RIM_MESH_VERTEX_CAPACITY
                                         || self.rim_mesh_indices.len() > RIM_MESH_INDEX_CAPACITY
                                     {
-                                        // Whole-rim rollback, never a
-                                        // truncation: a partial band would
-                                        // break the containment invariant.
                                         self.rim_mesh_vertices.truncate(vertex_mark);
                                         self.rim_mesh_indices.truncate(index_mark);
                                         rim_mesh_capacity_warn();
@@ -10900,14 +9393,6 @@ impl GpuRenderer {
                 );
             }
 
-            // Display clip region cull: engages exactly when this fused
-            // pass draws the frame's root surface whole and the platform
-            // reported a cullable visible region (the round display being
-            // the first provider). The pass then carries a transient depth
-            // attachment, the region complement's occluder is drawn first,
-            // and every pipeline below is fetched in its depth-tested
-            // variant (the getters read `pass_depth`). Offscreen/layer
-            // passes never reach this branch with a `Some` here.
             let display_clip_depth_view =
                 self.display_clip_pass_depth_view(target_view, width, height);
             let pass_depth = display_clip_depth_view.is_some();
@@ -10964,12 +9449,6 @@ impl GpuRenderer {
                     .debug_effects
                     .set(self.effect_renderer.debug_effects.get() + shader_items.len() as u32);
             }
-            // Span hit: prepare the cached-texture blit that stands in for
-            // the skipped shapes. Reuses the effect renderer's composite
-            // machinery — the same prepared-draw path the Composite arms
-            // ride — with Nearest sampling (an exact `textureLoad`), alpha
-            // 1.0, no mask, no viewports: a 1:1 full-target replace-write
-            // of alpha-255 texels (see `StaticSpanCache`).
             let span_blit_items =
                 span_cache
                     .texture
@@ -10995,10 +9474,6 @@ impl GpuRenderer {
                 ),
                 None => Vec::new(),
             };
-            // Segment-surface phase 2: prepared rotated-quad composites for
-            // the cached spans. Each is drawn inside the fused pass at its
-            // span's exact batch position (see the Retained draw arm), so
-            // interleaved z order is preserved by construction.
             let mut prepared_segment_composites: Vec<(usize, PreparedProjectiveComposite<'_>)> =
                 Vec::with_capacity(segment_composite_plans.len());
             for (index, plan) in &segment_composite_plans {
@@ -11035,10 +9510,6 @@ impl GpuRenderer {
                 });
             }
 
-            // The direct shape copies must be recorded before the staged
-            // flush: its capacity check may replace `upload_buffer`, and the
-            // shape payload was written into the buffer that existed at
-            // prepare time. Recording first binds the copies to that buffer.
             self.flush_staged_uploads_at(
                 frame_encoder.encoder(),
                 &direct_shape_uploads,
@@ -11049,14 +9520,6 @@ impl GpuRenderer {
             self.flush_staged_uploads_at(frame_encoder.encoder(), &staged_uploads, upload_offset);
             let after_upload = Instant::now();
 
-            // Segment-surface phase 3: encode this frame's capture passes —
-            // after the staged flush (their transforms and this frame's
-            // recolor patches ride it), before the fused pass that samples
-            // the surfaces. A recolored span therefore invalidates,
-            // recaptures and composites within ONE frame, and the fused
-            // pass never samples a stale surface. `pass_depth` is not yet
-            // set on the pipeline getters here, so the capture walk fetches
-            // the ordinary flat pipeline variants.
             let mut segment_capture_passes = 0u32;
             for job in &segment_captures {
                 let Some(entry) = segment_surfaces.entry(&job.key) else {
@@ -11078,9 +9541,6 @@ impl GpuRenderer {
                             resolve_target: None,
                             depth_slice: None,
                             ops: wgpu::Operations {
-                                // Transparent clear: the surface holds
-                                // the span's premultiplied flattening
-                                // and nothing else.
                                 load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                                 store: wgpu::StoreOp::Store,
                             },
@@ -11094,10 +9554,6 @@ impl GpuRenderer {
                     job.last,
                     MAX_REPLAY_SLOTS + job.capture_index,
                     &mut |cmd| match cmd {
-                        // The capture retargets bind group 0 to its
-                        // sub-viewport uniforms (viewport_offset maps the
-                        // capture rect onto the surface); everything else
-                        // is the IDENTICAL walk the direct draw encodes.
                         RetainedCmd::Uniforms(_) => {
                             capture_pass.set_bind_group(0, uniform_group, &[])
                         }
@@ -11138,9 +9594,6 @@ impl GpuRenderer {
                                 store: wgpu::StoreOp::Store,
                             },
                         })],
-                        // Clear + Discard: the display-clip depth
-                        // buffer is born and dies inside this pass — on
-                        // tiled GPUs it never leaves GMEM.
                         depth_stencil_attachment: display_clip_depth_view.as_ref().map(|view| {
                             wgpu::RenderPassDepthStencilAttachment {
                                 view,
@@ -11156,9 +9609,6 @@ impl GpuRenderer {
                         ..Default::default()
                     });
 
-                // The cached span composite replaces the frame's leading
-                // draws, so it goes down before every fused batch — same
-                // z position the skipped shapes held.
                 for draw in &span_blit {
                     self.effect_renderer.draw_prepared_composite(
                         &mut render_pass,
@@ -11168,8 +9618,6 @@ impl GpuRenderer {
                     );
                 }
                 if pass_depth {
-                    // The occluder must be the pass's first draw: everything
-                    // after it depth-tests against the region it wrote.
                     self.draw_display_clip_occluder(&mut render_pass, width, height);
                     self.display_clip.pass_depth.set(true);
                 }
@@ -11248,17 +9696,7 @@ impl GpuRenderer {
                             }
                         }
                         FusedSegmentBatch::Retained { item_range } => {
-                            // Each Retained arm is one MAXIMAL consecutive
-                            // retained stretch — the planner groups adjacent
-                            // retained items into a single batch — so caching
-                            // per arm never flattens across the dynamic
-                            // batches interleaved at their z positions.
                             let retained_start = Instant::now();
-                            // A render bundle cannot encode a segment-surface
-                            // composite, so a stretch containing one this
-                            // frame takes the per-item walk: order-identical,
-                            // and the walk is a handful of binds exactly when
-                            // the cache is saving the fragment work.
                             let stretch_has_composites = !prepared_segment_composites.is_empty()
                                 && ordered_items[item_range.clone()].iter().any(|(_, item)| {
                                     matches!(
@@ -11285,13 +9723,6 @@ impl GpuRenderer {
                                             .iter()
                                             .find(|(prepared_index, _)| prepared_index == index)
                                         {
-                                            // The cached span's surface, at
-                                            // the span's exact z position:
-                                            // SrcOver over premultiplied
-                                            // alpha is associative, so
-                                            // flatten-then-composite blends
-                                            // identically to the inline
-                                            // member draws it replaces.
                                             self.effect_renderer
                                                 .draw_prepared_projective_composite(
                                                     &mut render_pass,
@@ -11317,20 +9748,7 @@ impl GpuRenderer {
                     }
                 }
             }
-            // The depth attachment died with the fused pass just dropped;
-            // anything encoded from here to the closure exit (the span
-            // capture below) is a depth-less pass, so the pipeline getters
-            // must stop handing out depth variants NOW — the closure-exit
-            // reset is only the error-path net.
             self.display_clip.pass_depth.set(false);
-            // Span capture (miss frames whose leading run proved stable):
-            // re-render JUST the span shapes into the pooled offscreen,
-            // through the IDENTICAL pipelines at identical device
-            // coordinates — the shapes are already in this partition's
-            // upload, so the capture is one extra pass drawing instances
-            // 0..len of the same buffers, cleared with the frame's own
-            // clear color. Rare by construction: palette drains, shakes,
-            // and resizes are the only events that invalidate the key.
             let mut capture_passes = 0_u32;
             if let StaticSpanDecision::Capture { len, clear } = span_decision {
                 let texture = match span_cache.texture.take() {
@@ -11360,9 +9778,6 @@ impl GpuRenderer {
                             depth_stencil_attachment: None,
                             ..Default::default()
                         });
-                    // `has_gradient` is the LIVE first batch's whole-batch
-                    // flag: it selects the same fs_solid/gradient pipeline
-                    // variant the live path draws the span through.
                     let has_gradient = first_batch_info
                         .map(|(_, _, has_gradient)| has_gradient)
                         .unwrap_or(false);
@@ -11379,9 +9794,6 @@ impl GpuRenderer {
                         &[],
                     );
                     if fill_area_diag_enabled() {
-                        // The capture genuinely re-submits the span's fill
-                        // this frame — submitted, lit, opacity and (the
-                        // capture target is frame-sized) corner alike.
                         self.fill_area_diag
                             .add_shape_quads(&self.scratch_shape_data[..len], viewport);
                     }
@@ -11421,9 +9833,6 @@ impl GpuRenderer {
             })
         })();
 
-        // The depth flag lives exactly as long as the culled pass's encode;
-        // resetting here (not inside the closure) covers the error paths
-        // too, so no later pass can inherit a depth-variant pipeline.
         self.display_clip.pass_depth.set(false);
         self.scratch_image_vertices = image_vertices;
         self.scratch_image_indices = image_indices;
@@ -11432,8 +9841,6 @@ impl GpuRenderer {
         self.restore_staged_uploads(staged_uploads);
         self.static_span = span_cache;
         if result.is_err() {
-            // An aborted partition may have installed entries whose capture
-            // passes never encoded; a later frame must not sample them.
             segment_surfaces.clear();
         }
         self.segment_surfaces = segment_surfaces;
@@ -11805,14 +10212,6 @@ impl GpuRenderer {
                         next_load_op = wgpu::LoadOp::Load;
                     }
                     SegmentBatchPlan::Retained { start, end } => {
-                        // Reached only when native fusion declined the chunk;
-                        // retained batches exist on storage-mode native
-                        // devices, where fusion always accepts, but the arm
-                        // stays a real draw so that assumption is not load-
-                        // bearing for correctness. Deliberately direct encode
-                        // — retained bundle caching AND segment-surface
-                        // compositing live in the fused path only; this
-                        // fallback stays the simple reference.
                         #[cfg(target_arch = "wasm32")]
                         {
                             let _ = (start, end);
@@ -12124,8 +10523,6 @@ impl GpuRenderer {
                     UploadTarget::RetainedGlyphUniform => &self.retained_glyph_uniform_buffer,
                     UploadTarget::ReplayTransform => &self.replay_slots.transform_buffer,
                     UploadTarget::ReplayPaintData(slot) => {
-                        // A slot released between staging and flush has
-                        // nothing left to patch.
                         let Some(entry) = self.replay_slots.slots.get(&slot) else {
                             continue;
                         };
@@ -12221,7 +10618,6 @@ impl GpuRenderer {
             return;
         }
 
-        // Zero blur: render shapes directly to target (fast path).
         if shadow.blur_radius <= 0.0 {
             for (shape, blend_mode) in &shadow.shapes {
                 self.encode_shapes_pass(
@@ -12302,7 +10698,6 @@ impl GpuRenderer {
             return;
         }
 
-        // Compute pixel-space bounds for the offscreen textures, clamped to viewport.
         let Some(device_bounds) =
             device_pixel_bounds_for_rect(visible_blur_bounds, width, height, root_scale)
         else {
@@ -12460,7 +10855,7 @@ impl GpuRenderer {
                 pixel_radius,
                 pixel_radius,
                 TileMode::Decal,
-                None, // No scissor needed — the texture is already bounds-sized
+                None,
             );
         }
         frame_encoder.record_passes(2);
@@ -12470,8 +10865,6 @@ impl GpuRenderer {
             .and_then(|clip| scissor_rect_for_rect(clip, root_scale, width, height));
         let scissor = clip_scissor.or(processing_scissor);
         let rounded_mask = inner_shadow_composite_mask(shadow, root_scale).map(|mut mask| {
-            // Adjust mask coordinates from viewport-space to texture-local space,
-            // since the blit shader computes world_pos = uv * tex_size.
             mask.rect[0] -= viewport_offset[0];
             mask.rect[1] -= viewport_offset[1];
             mask
@@ -12596,11 +10989,6 @@ impl GpuRenderer {
             #[cfg(not(target_arch = "wasm32"))]
             {
                 if fill_area_diag_enabled() {
-                    // Each shadow-source pass round-trips the whole
-                    // bounds-sized offscreen target (clear on the first
-                    // pass, load/store after); the shape quads inside were
-                    // already priced by `prepare_shapes_batch` under this
-                    // pass's bounds viewport.
                     self.fill_area_diag
                         .add_offscreen_target_fill(f64::from(width) * f64::from(height));
                 }
@@ -12780,8 +11168,6 @@ impl GpuRenderer {
             bounds_w as f32,
             bounds_h as f32,
         );
-        // The filling frame bands exactly like every cache-hit frame after
-        // it, so hit and miss render the same pixels.
         let coverage = shadow_composite_coverage(dest_viewport, scissor, (width, height));
         let bands = shadow_band_scissors(coverage, shadow.occluder, root_scale);
         let band_items: SmallVec<[CompositeBatchItem<'_>; 4]> = bands
@@ -12835,10 +11221,6 @@ impl GpuRenderer {
         #[cfg(target_arch = "wasm32")]
         let _ = staged_uploads;
 
-        // Build shape data for this subset. Callers hand in only shapes visible in
-        // `viewport`: the segment paths culled at collect time, and the layer and
-        // shadow-source paths filter at the call site. Re-checking here would run
-        // the same quad math a second time on every shape of every frame.
         let shape_refs: Vec<&DrawShape> = layer_shapes
             .take(self.shape_batch_limits.max_shapes_per_batch)
             .collect();
@@ -12847,9 +11229,6 @@ impl GpuRenderer {
             return None;
         }
 
-        // Per-shape gradient spans as a prefix sum, so every output slot is
-        // known before conversion starts and the shapes can convert in
-        // parallel into disjoint sub-slices.
         let mut gradient_offsets: Vec<u32> = Vec::with_capacity(shape_count + 1);
         let mut total_gradient_stops = 0u32;
         gradient_offsets.push(0);
@@ -12946,12 +11325,6 @@ impl GpuRenderer {
         })
     }
 
-    /// Like [`Self::prepare_shapes_batch`], but converts shapes straight into
-    /// mapped regions of the frame upload buffer instead of scratch vectors —
-    /// one CPU pass over the data instead of three (convert, stage, upload).
-    /// Returns the prepared batch and the upload-buffer base offset to pass
-    /// to `flush_staged_uploads_at`; the GPU copies are recorded into
-    /// `staged_uploads` while its byte blob stays empty.
     #[cfg(not(target_arch = "wasm32"))]
     fn prepare_shapes_batch_direct<'a, I, C: FrameCommandRecorder>(
         &mut self,
@@ -13009,12 +11382,6 @@ impl GpuRenderer {
                 .add_shape_quads(&self.scratch_shape_data, viewport);
         }
 
-        // Region layout inside the frame upload buffer. Every element type is
-        // f32/u32-based, so all lengths are multiples of
-        // `COPY_BUFFER_ALIGNMENT` and back-to-back packing keeps each offset
-        // copy-aligned. Writing each scratch slice straight into the upload
-        // buffer skips the intermediate staged-bytes blob (one fewer CPU pass
-        // over the batch payload).
         let uniform_len = std::mem::size_of::<Uniforms>() as u64;
         let shape_len = (shape_count * std::mem::size_of::<ShapeData>()) as u64;
         let gradient_len = total_gradient_stops as u64 * std::mem::size_of::<GradientStop>() as u64;
@@ -13073,15 +11440,7 @@ impl GpuRenderer {
         ))
     }
 
-    /// Whether retained replay batches can exist on this device: they bind
-    /// unsized buffers, so they ride the storage-buffer batch mode only.
-    /// Always `false` on wasm, which has no retained replay path — the
-    /// method exists on both arches so the packet producer has one
-    /// architecture.
     pub(crate) fn replay_supported(&self) -> bool {
-        // Deliberately not conditioned on free slot ids: an exhausted pool
-        // only means new captures fail (handled per capture), while flipping
-        // this bit would retire every live feed slot.
         #[cfg(target_arch = "wasm32")]
         {
             false
@@ -13092,11 +11451,6 @@ impl GpuRenderer {
         }
     }
 
-    /// Return the planner-drained ack confirmations buffer (capacity
-    /// intact) to the store after the producer applied a frame's
-    /// [`crate::frame_packet::ReplayAck`] — the ack channel's half of the
-    /// P4b no-allocation contract, closed by the caller now that ack
-    /// application lives producer-side. No-op on wasm.
     pub(crate) fn restore_replay_ack_confirmations(
         &mut self,
         confirmations: Vec<crate::frame_packet::ReplayConfirmation>,
@@ -13109,31 +11463,16 @@ impl GpuRenderer {
         let _ = confirmations;
     }
 
-    /// The surface format this renderer was constructed for — the present
-    /// runtime's offscreen test target must match it.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn surface_format(&self) -> wgpu::TextureFormat {
         self.display_format
     }
 
-    /// Test inspector for the threaded confirmations round-trip: the
-    /// store-side ack buffer's current capacity.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn replay_ack_confirmations_capacity(&self) -> usize {
         self.replay_ack_confirmations.capacity()
     }
 
-    /// EARLY present-side consumption of a validated packet's replay plan
-    /// (threaded runtime only): identical store work to the render-time
-    /// block in `render_graph_recorded`, but runnable BEFORE surface
-    /// acquire, so the [`crate::frame_packet::ReplayAck`] can travel to the
-    /// producer without waiting out the swapchain — a capture confirmed
-    /// here is available to the very next frame's planning, the same
-    /// one-frame latency the synchronous path has. Marks the packet so the
-    /// render path does not consume the taken-out default plan, and so a
-    /// later cancel does not reclaim it. `None` for Surface roots, which
-    /// never touch the planner. The caller must have validated the packet
-    /// (epochs, viewport) first: this executes against the live store.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn take_replay_ack_early(
         &mut self,
@@ -13156,20 +11495,6 @@ impl GpuRenderer {
         Some((ack, recycled))
     }
 
-    /// Present-side consumption of one frame's [`ReplayFrameOps`]: frees
-    /// the plan's releases, then honors its capture requests against the
-    /// scene they were recorded for, answering with a [`ReplayAck`] of
-    /// (identity, gpu slot) confirmations plus the batch's emptied buffers
-    /// for recycling. This is the store half of the split — it touches NO
-    /// planner state: `feed_slots`, confirmation stamping, displaced-slot
-    /// release, and age eviction all live in the planner
-    /// (`take_frame_ops`/`apply_ack`).
-    ///
-    /// Ordering is what makes slot release safe: a slot the plan releases
-    /// is never referenced by a retained op of the same frame (misses
-    /// release before their op would have been pushed, and rebuild frames
-    /// release at flush start), so freeing it here — before any encoding —
-    /// cannot orphan a draw.
     #[cfg(not(target_arch = "wasm32"))]
     fn consume_replay_ops(
         &mut self,
@@ -13181,16 +11506,8 @@ impl GpuRenderer {
         crate::frame_packet::ReplayAck,
         crate::frame_packet::ReplayFrameOps,
     ) {
-        // The batch's own staleness ordinal, echoed in the ack so the
-        // planner purges exactly this batch's unconfirmed requests even
-        // when another batch is already in flight behind it.
         let acked_frame = ops.frame;
         if ops.generation < self.store_feed_generation {
-            // Fail-closed: ops planned under an OLDER slot universe name
-            // slots this store does not hold. Drop the batch whole —
-            // captures unconfirmed self-heal (the planner never serves
-            // them), and stale releases must not free live ids.
-            // Synchronously impossible today; structural for the split.
             self.replay_generation_drops += 1;
             log::warn!(
                 "[command-feed] dropping replay ops of generation {} against store \
@@ -13215,36 +11532,17 @@ impl GpuRenderer {
             );
         }
         if ops.generation > self.store_feed_generation {
-            // Adopt forward: a producer-side bump (scale change,
-            // `retire_feed`) delivers its whole retirement — the releases
-            // for every retired slot — THROUGH this very batch, so a
-            // higher generation is the new universe arriving, not a stale
-            // one. The store follows the producer's authority; it never
-            // reads the producer's thread-local.
             self.store_feed_generation = ops.generation;
         }
         let generation = ops.generation;
-        // Queued releases free first, so their buffers are available before
-        // this frame's captures ask.
         for slot in ops.releases.drain(..) {
             self.release_replay_slot(slot);
         }
-        // `take` leaves `Vec::new()` behind (no allocation); the render
-        // loop restores the vec after the planner drains the ack.
         let mut confirmations = std::mem::take(&mut self.replay_ack_confirmations);
         debug_assert!(confirmations.is_empty());
-        // One refs buffer for the whole batch: a re-partition frame carries
-        // one capture per segment, and `shapes` outlives the loop, so each
-        // capture's collect reuses a single allocation.
         let mut refs: Vec<&DrawShape> = Vec::new();
         for capture in ops.captures.drain(..) {
             if capture.frame != ops.frame {
-                // Defensive: a capture that outlived its frame references
-                // shape indices of a scene that never rendered; honoring it
-                // against THIS frame's shapes would retain wrong content
-                // under a confirmed identity. Categorically drop it. Should
-                // never fire now that ops travel inside the frame's own
-                // packet.
                 log::warn!(
                     "[command-feed] dropping stale capture for slot {} of {:?} \
                      (queued frame {}, ops frame {})",
@@ -13266,13 +11564,6 @@ impl GpuRenderer {
             };
             confirmations.push((capture.key, gpu_slot));
         }
-        // Park the frame's recolor patches for the retained prepare arms
-        // (`stage_replay_patches`); the vec swapped out is last frame's,
-        // already drained empty, and returns to the producer with the ack.
-        // The defensive clear only bites when no prepare arm ran last
-        // frame (aborted render): those patches targeted a frame that
-        // never encoded, and their spans re-queue fresh recolors each
-        // served frame.
         self.replay_color_patches.clear();
         std::mem::swap(&mut self.replay_color_patches, &mut ops.color_patches);
         (
@@ -13285,22 +11576,11 @@ impl GpuRenderer {
         )
     }
 
-    /// Test/diagnostic view of the store's lifetime count of replay-ops
-    /// batches dropped whole by the generation check — the consume gate's
-    /// proof that Surface frames (default plans, generation 0) are never
-    /// fed to the store.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn replay_generation_drops(&self) -> u64 {
         self.replay_generation_drops
     }
 
-    /// Test hook for the message protocol: runs one planner→store→planner
-    /// replay cycle outside a frame, with the batch stamped
-    /// `store_feed_generation + generation_skew`, and returns how many
-    /// captures the store confirmed. A skew that lands BELOW the store's
-    /// generation manufactures the fail-closed drop; a skew above it
-    /// exercises adopt-forward. Both are synchronously impossible through
-    /// the public render path today.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn replay_ops_roundtrip_for_tests(&mut self, generation_skew: u64) -> usize {
         let generation = self.store_feed_generation.wrapping_add(generation_skew);
@@ -13313,21 +11593,8 @@ impl GpuRenderer {
         confirmed
     }
 
-    /// Stages every queued replay recolor patch. Feed recolors are always
-    /// solid, so every patch rewrites the shape's 16-byte record in the
-    /// slot's paint buffer; the captured `ShapeData` itself is immutable, so
-    /// a recolored frame uploads colors, not geometry. Runs in the retained
-    /// prepare arms so the writes land in the same staged-upload flush that
-    /// carries the frame's transforms; draining is idempotent across arms.
     #[cfg(not(target_arch = "wasm32"))]
     fn stage_replay_patches(&mut self, staged_uploads: &mut StagedBufferUploads) {
-        // Capacity-retaining drain: swap the frame's parked patch buffer
-        // (see `consume_replay_ops`) against the scratch arena instead of
-        // `mem::take`, so both keep their high-water capacity across
-        // frames. The scratch is cleared before every return, which
-        // preserves drain idempotence across the retained prepare arms: a
-        // later drain in the same frame swaps one empty-with-capacity
-        // arena for another and stages nothing.
         std::mem::swap(
             &mut self.replay_color_patches,
             &mut self.color_patch_scratch,
@@ -13338,11 +11605,6 @@ impl GpuRenderer {
             return;
         }
 
-        // Patches land in the slot's CPU mirror and upload as one contiguous
-        // span per slot. Uploading each patch individually would record one
-        // copy command per patch, and MEGA's twinkle field recolors ~1.7k
-        // dots a frame — that many commands stall a mobile GPU for longer
-        // than the spans' untouched bytes ever cost.
         #[derive(Clone, Copy)]
         struct DirtySpan {
             paint_min: u32,
@@ -13358,7 +11620,6 @@ impl GpuRenderer {
             cranpose_ui_graphics::FxBuildHasher,
         > = std::collections::HashMap::default();
 
-        // One bare 16-byte write into the slot's paint mirror per patch.
         for patch in &self.color_patch_scratch {
             let Some(slot) = self.replay_slots.slots.get_mut(&patch.slot) else {
                 continue;
@@ -13390,8 +11651,6 @@ impl GpuRenderer {
                 );
             }
         }
-        // A patched color is one 16-byte vec4; the staged bytes exceed this
-        // only by the untouched records inside each coalesced span.
         let ideal_bytes = total_patches as u64 * 16;
         self.replay_upload_stats.note_frame(
             total_patches as u64,
@@ -13414,8 +11673,6 @@ impl GpuRenderer {
         self.color_patch_scratch.clear();
     }
 
-    /// Converts `shape_refs` once and retains the result on the GPU as a
-    /// replay slot. Returns the slot id the scene's retained draws reference.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn capture_replay_slot(
         &mut self,
@@ -13437,8 +11694,6 @@ impl GpuRenderer {
             gradient_offsets.push(total_gradient_stops);
         }
 
-        // Staging scratch, not fresh vectors: cleared and re-zeroed to this
-        // capture's exact sizes, capacity kept across captures.
         let mut shape_data = std::mem::take(&mut self.replay_capture_shape_scratch);
         shape_data.clear();
         shape_data.resize(shape_count, ShapeData::zeroed());
@@ -13481,31 +11736,18 @@ impl GpuRenderer {
             .copy_from_slice(bytemuck::cast_slice(&gradients));
         gradient_buffer.unmap();
 
-        // Filled by the mesh arm when the capture keeps its arc mesh, so
-        // the fill-diag records can price those shapes by their true
-        // triangle area.
         let mut mesh_fill_records: Option<Vec<FillDiagShapeRecord>> = None;
         let mut submitted_area_scale = 1.0f32;
         let mesh = if arc_mesh_enabled() {
             match build_arc_mesh_vertices(&shape_data, retained_mesh_min_px2()) {
                 Some(build) => {
                     let meshed_shapes = build.meshed_arcs + build.meshed_rims;
-                    // A pathological meshed/instanced interleave would spend
-                    // more on pipeline switches than the bands recover; the
-                    // whole slot stays instanced instead (content-conditional
-                    // — a property of this capture's shape order).
                     let within_stretch_cap = build.meshed_stretches <= MESH_SLOT_MAX_STRETCHES;
                     let cut = if build.quad_area > 0.0 {
                         (1.0 - build.mesh_area / build.quad_area) * 100.0
                     } else {
                         0.0
                     };
-                    // Always-on warn: `log::info` is invisible on the desktop
-                    // console, and captures are rare — one line per slot
-                    // lifetime. The unique-vert/index counts are the
-                    // vertex-amplification instrument P1b exists for; the
-                    // meshed/instanced split and the stretch count are the
-                    // size gate's own engagement instrument.
                     log::warn!(
                         "[arc-mesh] slot {id}: {} arcs + {} rims meshed ({} segs, \
                          {} stretches), {} instanced; {} unique verts / {} indices; \
@@ -13530,11 +11772,6 @@ impl GpuRenderer {
                     }
                     let keep_mesh = meshed_shapes > 0 && within_stretch_cap;
                     if keep_mesh && build.quad_area > 0.0 {
-                        // What this slot's replay actually rasterizes per
-                        // quad pixel, for the segment-surface economics
-                        // gate. Clamped away from zero so a degenerate
-                        // measurement cannot make the direct path look
-                        // free.
                         submitted_area_scale =
                             (build.mesh_area / build.quad_area).clamp(0.05, 1.0) as f32;
                     }
@@ -13544,8 +11781,6 @@ impl GpuRenderer {
                             Some((&build.vertices, &build.indices, &build.index_prefix)),
                         ));
                     }
-                    // A slot that meshed nothing gains nothing over the
-                    // instanced path — skip the buffers.
                     keep_mesh.then(|| {
                         let vertex_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
                             label: Some("Replay Mesh Vertex Buffer"),
@@ -13594,18 +11829,12 @@ impl GpuRenderer {
         let fill_diag_shapes = if fill_area_diag_enabled() {
             let records =
                 mesh_fill_records.unwrap_or_else(|| fill_diag_capture_records(&shape_data, None));
-            // Feed the once-per-process top-slack dump before the records
-            // move into the slot.
             self.fill_area_diag.note_retained_capture(id, &records);
             records
         } else {
             Vec::new()
         };
 
-        // Capture-space quad AABBs and the quad-area prefix sum for the
-        // segment-surface cache: the quads are the exact geometry the
-        // replay rasterizes, so a range's surface economics and capture
-        // rect derive from them with no second conversion.
         let mut shape_aabbs = Vec::with_capacity(shape_count);
         let mut area_prefix = Vec::with_capacity(shape_count + 1);
         area_prefix.push(0.0f32);
@@ -13627,8 +11856,6 @@ impl GpuRenderer {
                 max_y = max_y.max(corner[1]);
             }
             shape_aabbs.push([min_x, min_y, max_x, max_y]);
-            // Shoelace over the quad's boundary order (corners 0, 1, 3, 2 —
-            // the two triangles share the 1-2 diagonal).
             let ring = [corners[0], corners[1], corners[3], corners[2]];
             let mut doubled = 0.0f32;
             for i in 0..4 {
@@ -13641,8 +11868,6 @@ impl GpuRenderer {
             area_prefix.push(running + area);
         }
 
-        // Seed the mutable paint from the converted colors, so an unpatched
-        // replay renders bit-identically to the capture frame.
         let paint: Vec<[f32; 4]> = shape_data.iter().map(|shape| shape.color).collect();
         let paint_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Replay Paint Buffer"),
@@ -13668,9 +11893,6 @@ impl GpuRenderer {
                     binding: 1,
                     resource: gradient_buffer.as_entire_binding(),
                 },
-                // The transform slot is selected per draw via the dynamic
-                // offset, so retained draws sharing this capture can each
-                // move independently.
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
@@ -13709,33 +11931,20 @@ impl GpuRenderer {
                 submitted_area_scale,
             },
         );
-        // The staging buffers return to their scratch slots, contents
-        // spent, capacity kept for the next capture.
         self.replay_capture_shape_scratch = shape_data;
         self.replay_capture_gradient_scratch = gradients;
         Some(id)
     }
 
-    /// Frees a replay slot's GPU resources and returns its id to the pool.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn release_replay_slot(&mut self, id: u32) {
         if self.replay_slots.slots.remove(&id).is_some() {
             self.replay_slots.free_ids.push(id);
-            // A cached bundle keeps references on the slot buffers it binds.
-            // The epoch in each key already makes entries for this capture
-            // unreachable — releases are rare (churn, retire_feed), so drop
-            // the whole cache and free those references now rather than one
-            // frame later through eviction.
             self.retained_bundle_cache.clear();
-            // Segment death: every surface captured from this slot dies
-            // with it.
             self.segment_surfaces.drop_slot(id);
         }
     }
 
-    /// Test/diagnostic view of the retained-segment surface cache:
-    /// lifetime (captures, composite draws, dirty recaptures, churn
-    /// rejections, economics rejections).
     #[cfg(not(target_arch = "wasm32"))]
     #[doc(hidden)]
     pub fn segment_surface_stats(&self) -> (u64, u64, u64, u64, u64) {
@@ -13749,16 +11958,12 @@ impl GpuRenderer {
         )
     }
 
-    /// Test/diagnostic view of the latched instanced-quad selection: `true`
-    /// when this renderer's ordinary shape draws ride `vs_shape_instanced`.
     #[cfg(not(target_arch = "wasm32"))]
     #[doc(hidden)]
     pub fn instanced_quads_active(&self) -> bool {
         self.instanced_quads.is_some()
     }
 
-    /// Test/diagnostic view of retained arc meshes: how many live replay
-    /// slots hold a mesh, out of all live slots.
     #[cfg(not(target_arch = "wasm32"))]
     #[doc(hidden)]
     pub fn replay_slot_mesh_stats(&self) -> (usize, usize) {
@@ -13771,9 +11976,6 @@ impl GpuRenderer {
         (meshed, self.replay_slots.slots.len())
     }
 
-    /// Test/diagnostic view of the capture size gate, summed over live slots
-    /// that hold a mesh: (shapes meshed as arc bands, shapes meshed as
-    /// stroked-circle rim bands, shapes on the passthrough quad).
     #[cfg(not(target_arch = "wasm32"))]
     #[doc(hidden)]
     pub fn replay_slot_mesh_engagement(&self) -> (usize, usize, usize) {
@@ -13790,11 +11992,6 @@ impl GpuRenderer {
             })
     }
 
-    /// Segment-surface phase 1 for one fused partition: walks the chunk's
-    /// retained items, runs [`SegmentSurfaceCache::decide`] per item, and
-    /// for each (re)capture acquires the surface, installs the entry and
-    /// stages the capture similarity at its reserved transform slot. Emits
-    /// the frame's capture jobs and per-item composite plans.
     #[cfg(not(target_arch = "wasm32"))]
     #[allow(clippy::too_many_arguments)]
     fn plan_segment_surfaces(
@@ -13821,8 +12018,6 @@ impl GpuRenderer {
                 let SegmentDrawItem::Retained(index) = item else {
                     continue;
                 };
-                // Items past the transform-slot budget stage no transform
-                // and draw nothing on the direct path either; leave them.
                 if (*index as u32) >= MAX_REPLAY_SLOTS {
                     continue;
                 }
@@ -13878,20 +12073,11 @@ impl GpuRenderer {
                         plan.rect,
                         texture,
                     );
-                    // The capture renders the span under ITS OWN current
-                    // similarity (retained paint selected), staged at the
-                    // reserved slot past every per-draw transform.
                     staged_uploads.stage_at(
                         UploadTarget::ReplayTransform,
                         (MAX_REPLAY_SLOTS + plan.index) as u64 * REPLAY_TRANSFORM_STRIDE,
                         bytemuck::bytes_of(&transform.with_retained_paint()),
                     );
-                    // The capture viewport uniforms are written directly:
-                    // the cache is moved out of `self` for the partition,
-                    // so its buffer cannot ride the staged-upload flush
-                    // (which resolves targets on `self`). Queue writes
-                    // execute before any later-submitted command buffer —
-                    // exactly the capture pass's ordering need.
                     let uniforms = Self::viewport_uniforms(ViewportUniformParams {
                         width: plan.rect.width,
                         height: plan.rect.height,
@@ -13913,9 +12099,6 @@ impl GpuRenderer {
                         last,
                         capture_index: plan.index,
                     });
-                    // Fresh capture: the effective transform is identity by
-                    // construction, snapped exact so the composite is a 1:1
-                    // texel mapping.
                     composites.push((
                         *index,
                         SegmentCompositePlan {
@@ -13941,8 +12124,6 @@ impl GpuRenderer {
                     let effective = t_now.compose(&cap_inverse);
                     let rect = entry.rect;
                     let plan = if effective.is_identity_for_sampling() {
-                        // Snap away the compose/invert float noise so the
-                        // identity frame is a texel-exact mapping.
                         SegmentCompositePlan {
                             key,
                             dest_quad: segment_identity_quad(&rect),
@@ -13981,9 +12162,6 @@ impl GpuRenderer {
         }
     }
 
-    /// Draws one retained replay batch — `retained`'s shape range of its
-    /// slot's capture, under the transform staged for this draw's index (see
-    /// the retained arms of the segment paths).
     #[cfg(not(target_arch = "wasm32"))]
     fn draw_retained_batch(
         &self,
@@ -14046,31 +12224,6 @@ impl GpuRenderer {
         self.frame_stats.add_draw_calls(draws);
     }
 
-    /// Emits one retained op's draw commands into `sink` — the SINGLE
-    /// encoding shared by the direct pass path
-    /// ([`Self::draw_retained_batch`]) and the cached-bundle path
-    /// ([`Self::build_retained_bundle`]), so the two cannot drift. Returns
-    /// the number of draw calls issued.
-    ///
-    /// A slot without a mesh draws its whole range through the latched
-    /// instanced-quad pipeline (four vertex executions per shape, shape
-    /// index from the instance index), else the plain six-vertex expansion.
-    /// A slot WITH a mesh alternates along the range: maximal runs of
-    /// meshed shapes (non-empty [`ReplaySlotMesh::index_prefix`] ranges)
-    /// draw their band triangles through the mesh pipeline in one
-    /// `draw_indexed` each, and every other run STAYS instanced — routing
-    /// passthrough quads through per-vertex mesh attributes instead was the
-    /// S3 loss the watch measured (see [`arc_mesh_enabled`]). The walk
-    /// preserves exact shape order, so z is untouched, and every pipeline
-    /// involved blends SrcOver. Bind groups are set once up front: all the
-    /// pipelines share the uniform + shape bind-group layouts, so they stay
-    /// bound across pipeline switches; the mesh vertex buffer likewise
-    /// stays bound across instanced stretches because the instanced
-    /// pipeline declares no vertex buffers — only the index buffer
-    /// alternates. The alternation is a pure function of the capture-fixed
-    /// `index_prefix` and `first..last`, which is what lets
-    /// [`RetainedBundleOpKey`] pin the encoding by capture epoch and range
-    /// alone.
     #[cfg(not(target_arch = "wasm32"))]
     fn encode_retained_op<'r>(
         &'r self,
@@ -14119,11 +12272,6 @@ impl GpuRenderer {
         draws
     }
 
-    /// One instanced-quad (or, unlatched, six-vertex expansion) draw over a
-    /// contiguous shape range of a retained slot — the passthrough arm of
-    /// [`Self::encode_retained_op`]. The solid-vs-gradient pipeline choice
-    /// is fixed per capture, so a cached bundle can never encode a stale
-    /// pipeline for a slot id (the op key carries the capture epoch).
     #[cfg(not(target_arch = "wasm32"))]
     fn encode_retained_instanced<'r>(
         &'r self,
@@ -14155,13 +12303,6 @@ impl GpuRenderer {
         }
     }
 
-    /// Key of the retained stretch at `item_range`: one op key per resolved
-    /// retained item, in draw order, carrying exactly the state that decides
-    /// the commands [`Self::draw_retained_batch`] would encode for it —
-    /// clamped range, dynamic-offset index, whether the mesh-vs-instanced
-    /// draw walk runs, and the slot's capture epoch, which pins the walk's
-    /// stretch structure (`None` while the slot is absent, when the op
-    /// draws nothing on the direct path too).
     #[cfg(not(target_arch = "wasm32"))]
     fn retained_bundle_key(
         &self,
@@ -14207,12 +12348,6 @@ impl GpuRenderer {
         }
     }
 
-    /// Encodes `key`'s stretch into a render bundle: the IDENTICAL command
-    /// sequence [`Self::draw_retained_batch`] issues on the pass, minus the
-    /// scissor reset (bundles cannot set scissor; the caller sets the same
-    /// full-target scissor on the pass before executing). Must only be
-    /// called with a key built this frame, so every op with an epoch still
-    /// resolves to its slot.
     #[cfg(not(target_arch = "wasm32"))]
     fn build_retained_bundle(&self, key: &RetainedBundleKey) -> wgpu::RenderBundle {
         let mut encoder =
@@ -14220,10 +12355,6 @@ impl GpuRenderer {
                 .create_render_bundle_encoder(&wgpu::RenderBundleEncoderDescriptor {
                     label: Some("Retained Stretch Bundle"),
                     color_formats: &[Some(self.composition_format)],
-                    // A display-clip culled pass carries the depth
-                    // attachment; the bundle only reads it (content
-                    // pipelines test `Less`, write off), hence read-only on
-                    // both aspects.
                     depth_stencil: key.depth.then_some(wgpu::RenderBundleDepthStencil {
                         format: display_clip::DISPLAY_CLIP_DEPTH_FORMAT,
                         depth_read_only: true,
@@ -14242,10 +12373,6 @@ impl GpuRenderer {
             let Some(slot) = self.replay_slots.slots.get(&op.slot) else {
                 continue;
             };
-            // The latched instanced selection is a per-renderer constant,
-            // so it needs no place in `RetainedBundleOpKey` — every cached
-            // bundle in this renderer's lifetime encodes the same choice
-            // the direct path makes.
             self.encode_retained_op(
                 slot,
                 op.first,
@@ -14277,13 +12404,6 @@ impl GpuRenderer {
         })
     }
 
-    /// Draws one maximal consecutive retained stretch through the bundle
-    /// cache: key the stretch, rebuild on any mismatch (recapture, reorder,
-    /// range or count change, slot release), then execute the cached bundle.
-    /// Replays byte-identical commands to the per-op direct path.
-    /// `stage_replay_patches` and the per-frame transform staging stay in
-    /// the prepare arms, untouched — bundles bind buffers whose contents are
-    /// read at execution.
     #[cfg(not(target_arch = "wasm32"))]
     fn draw_retained_stretch_bundled(
         &mut self,
@@ -14299,8 +12419,6 @@ impl GpuRenderer {
             let bundle = self.build_retained_bundle(&key);
             self.retained_bundle_cache.insert(key.clone(), bundle);
         }
-        // Mirror the direct path's per-op stats for every op the bundle
-        // draws, so bundling is invisible to the frame counters.
         for op in &key.ops {
             if op.capture_epoch.is_some()
                 && op.retained_index < MAX_REPLAY_SLOTS
@@ -14309,7 +12427,6 @@ impl GpuRenderer {
                 self.frame_stats.bump_shapes();
                 self.frame_stats.add_draw_calls(1);
                 if fill_area_diag_enabled() {
-                    // Mirror the direct path's fill accounting per bundled op.
                     let slot = self.replay_slots.slots.get(&op.slot);
                     let retained = retained_draws.get(op.retained_index as usize);
                     if let (Some(slot), Some(retained)) = (slot, retained) {
@@ -14323,58 +12440,35 @@ impl GpuRenderer {
                 }
             }
         }
-        // Bundles inherit the pass scissor: set the same full-target rect
-        // the direct path sets before every retained draw. Executing the
-        // bundle then resets pipeline/bind/vertex state, which is harmless —
-        // every following fused arm re-binds its own.
         render_pass.set_scissor_rect(0, 0, width, height);
         if let Some(bundle) = self.retained_bundle_cache.get(&key) {
             render_pass.execute_bundles(std::iter::once(bundle));
         }
     }
 
-    /// Test/diagnostic view of the retained bundle cache: lifetime
-    /// (rebuilds, cached executes).
     #[cfg(not(target_arch = "wasm32"))]
     #[doc(hidden)]
     pub fn retained_bundle_stats(&self) -> (u64, u64) {
         self.retained_bundle_cache.stats()
     }
 
-    /// Test/diagnostic view of the transient rim mesh path: lifetime count
-    /// of rims drawn as band meshes instead of full bounding quads.
     #[cfg(not(target_arch = "wasm32"))]
     #[doc(hidden)]
     pub fn rim_meshes_emitted(&self) -> u64 {
         self.rim_meshes_emitted
     }
 
-    /// Test/diagnostic view of the device-error sentry: lifetime
-    /// uncaptured wgpu errors recorded on this renderer's device
-    /// (`CRANPOSE_SURVIVE_GPU_ERRORS` kill switch).
     #[doc(hidden)]
     pub fn device_error_count(&self) -> u64 {
         self.device_errors.error_count()
     }
 
-    /// Test/diagnostic view of the static leading-span cache: lifetime
-    /// (hits, recaptures).
-    ///
-    /// Gated like the cache it reads and like every sibling diagnostic here:
-    /// `static_span` does not exist on wasm, so an ungated accessor compiles
-    /// everywhere except the one target nothing in `cargo test` builds.
     #[cfg(not(target_arch = "wasm32"))]
     #[doc(hidden)]
     pub fn static_span_stats(&self) -> (u64, u64) {
         (self.static_span.hits, self.static_span.recaptures)
     }
 
-    /// Uploads the region of the transient rim mesh scratch appended since
-    /// the previous upload — chunks later in the frame append after regions
-    /// whose draws are already encoded, so earlier bytes are never
-    /// rewritten and the fixed-capacity buffers are never recreated
-    /// mid-frame. The executor-owned upload lands at the head of the next
-    /// submit, which is where this frame's passes execute.
     #[cfg(not(target_arch = "wasm32"))]
     fn upload_transient_rim_meshes(&mut self) {
         let device = self.device.clone();
@@ -14447,10 +12541,6 @@ impl GpuRenderer {
             &self.wasm_uniform_batches[batch.uniform_slot].bind_group,
             &self.wasm_shape_batches[batch.shape_slot],
         );
-        // Latched instanced path (storage mode only): one instance per
-        // shape, four vertices through the static quad index buffer —
-        // identical triangles, identical bind groups, still one draw call.
-        // The uniform/WebGL path never latches it and stays on `vs_main`.
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(instanced) = &self.instanced_quads {
             assert!(
@@ -14460,8 +12550,6 @@ impl GpuRenderer {
                 batch.vertex_start,
                 batch.vertex_count,
             );
-            // The same selection the preamble and every post-rim restore
-            // make — factored so the two sites cannot disagree.
             let set_instanced_pipeline = |render_pass: &mut wgpu::RenderPass<'_>| {
                 if blend_mode == BlendMode::SrcOver && !batch.has_gradient {
                     render_pass.set_pipeline(self.instanced_pipeline_solid(instanced));
@@ -14471,16 +12559,11 @@ impl GpuRenderer {
             };
             set_instanced_pipeline(render_pass);
             render_pass.set_bind_group(0, uniform_bind_group, &[]);
-            // Dynamic offset 0: ordinary batches read the identity
-            // similarity transform.
             render_pass.set_bind_group(1, &shape_buffers.bind_group, &[0]);
             let first_shape = batch.vertex_start / 6;
             let shape_count = batch.vertex_count / 6;
             render_pass
                 .set_index_buffer(instanced.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-            // Rims arrive in ascending shape order (step 4 walks the fused
-            // upload front to back), so this batch's rims are one contiguous
-            // run of the slice.
             debug_assert!(
                 rims.windows(2)
                     .all(|pair| pair[0].shape_index < pair[1].shape_index),
@@ -14499,13 +12582,6 @@ impl GpuRenderer {
                 render_pass.draw_indexed(0..6, 0, first_shape..first_shape + shape_count);
                 return;
             };
-            // Split the instance range around each rim, in exact shape
-            // order, so z is untouched: instances before the rim, the rim's
-            // band mesh through `vs_mesh`, instances after. Bind groups
-            // persist across `set_pipeline` because the mesh and instanced
-            // pipelines share identical bind group layouts (uniform layout +
-            // shape layout, dynamic similarity offset included), so only the
-            // pipeline and index/vertex buffers are re-set per switch.
             let mut draw_calls = 0u32;
             let mut cursor = first_shape;
             for rim in batch_rims {
@@ -14531,7 +12607,6 @@ impl GpuRenderer {
                 render_pass.draw_indexed(0..6, 0, cursor..first_shape + shape_count);
                 draw_calls += 1;
             }
-            // One draw call was already counted at the top of the fn.
             self.frame_stats
                 .add_draw_calls(draw_calls.saturating_sub(1));
             return;
@@ -14542,19 +12617,13 @@ impl GpuRenderer {
             render_pass.set_pipeline(self.shape_pipeline(blend_mode));
         }
         render_pass.set_bind_group(0, uniform_bind_group, &[]);
-        // Dynamic offset 0: ordinary batches read the identity similarity
-        // transform.
         render_pass.set_bind_group(1, &shape_buffers.bind_group, &[0]);
-        // Six unindexed vertices per shape; `vs_main` derives the corner from
-        // `vertex_index` and pulls the quad out of `ShapeData`.
         render_pass.draw(
             batch.vertex_start..batch.vertex_start + batch.vertex_count,
             0..1,
         );
     }
 
-    /// Stage shape buffer writes and record a shape render pass onto the
-    /// provided encoder. The caller is responsible for submitting.
     #[allow(clippy::too_many_arguments)]
     fn encode_shapes_pass<'a, I, C: FrameCommandRecorder>(
         &mut self,
@@ -14937,10 +13006,6 @@ impl GpuRenderer {
         }
 
         self.stage_viewport_uniforms(staged_uploads, viewport);
-        // Grow to a power of two, as the shape batch and frame upload buffers
-        // do. Sizing these to the exact byte count instead means one more glyph
-        // quad than the last frame destroys and recreates both buffers, and a
-        // caption that grows a character at a time does it on every frame.
         let needed_bytes = std::mem::size_of_val(image_vertices) as u64;
         if needed_bytes > self.image_vertex_buffer.size() {
             self.image_vertex_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -14970,8 +13035,6 @@ impl GpuRenderer {
         );
     }
 
-    /// Prepare image vertices, indices, ensure caching, and write to GPU buffers.
-    /// Returns the draw commands needed by `encode_images_pass`.
     fn prepare_image_draw_cmds<'a, I>(
         &mut self,
         layer_images: I,
@@ -15109,10 +13172,6 @@ impl GpuRenderer {
                     continue;
                 }
                 let entry = self.glyph_atlas_entry_for_placement(glyph)?;
-                // Read the size after the entry is in hand: the only path that
-                // resizes the atlas is the overflow reset, which returns `Err`
-                // above, so `entry` is always normalised against the atlas it
-                // was placed in.
                 generated_quads.push(cached_text_glyph_quad(
                     glyph,
                     entry,
@@ -15241,8 +13300,6 @@ impl GpuRenderer {
             Self::retained_glyph_viewport(viewport, source_raster_rect),
         );
         if fill_area_diag_enabled() {
-            // The retained run draws every quad of its cached buffer; the
-            // shared path's per-quad viewport cull is not re-run for it.
             for quad in quads {
                 self.fill_area_diag.add_glyph_quad(quad);
             }
@@ -16612,8 +14669,6 @@ enum SegmentBatchPlan {
         start: usize,
         end: usize,
     },
-    /// Retained replay batches: each item is one bind + draw of GPU slots
-    /// captured on an earlier frame, so they never merge and cost no budget.
     Retained {
         start: usize,
         end: usize,
@@ -16689,9 +14744,6 @@ struct ShadowSourceRenderOutcome {
     pass_count: u32,
 }
 
-/// One segment-surface capture this frame must encode: the entry's key,
-/// the slot shape range, and the claimed per-frame capture slot (transform
-/// stride + viewport-uniform slot index).
 #[cfg(not(target_arch = "wasm32"))]
 struct SegmentCaptureJob {
     key: SegmentSurfaceKey,
@@ -16700,9 +14752,6 @@ struct SegmentCaptureJob {
     capture_index: u32,
 }
 
-/// One retained item's cached-composite plan: the dest quad (device px,
-/// strip order TL TR BL BR) and the dest-px → source-texel inverse under
-/// this frame's effective transform.
 #[cfg(not(target_arch = "wasm32"))]
 struct SegmentCompositePlan {
     key: SegmentSurfaceKey,
@@ -16712,8 +14761,6 @@ struct SegmentCompositePlan {
     integer_translation: bool,
 }
 
-/// The capture rect's corners in capture space — also the dest quad under
-/// an identity effective transform.
 #[cfg(not(target_arch = "wasm32"))]
 fn segment_identity_quad(rect: &CaptureRect) -> [[f32; 2]; 4] {
     let [x, y] = rect.origin;
@@ -16727,8 +14774,6 @@ fn segment_identity_quad(rect: &CaptureRect) -> [[f32; 2]; 4] {
     ]
 }
 
-/// Dest px → source texel for the identity case: a pure integer translate,
-/// so `textureLoad` sampling is texel-exact.
 #[cfg(not(target_arch = "wasm32"))]
 fn segment_identity_inverse(rect: &CaptureRect) -> [[f32; 3]; 3] {
     [
@@ -16738,10 +14783,6 @@ fn segment_identity_inverse(rect: &CaptureRect) -> [[f32; 3]; 3] {
     ]
 }
 
-/// Measures a shape range's capture geometry under `transform`: the padded
-/// integer capture rect (None when degenerate or larger than the device
-/// allows) and the member-quad pixel sum the economics gate prices the
-/// direct path at (submitted-area scaled for arc-meshed slots).
 #[cfg(not(target_arch = "wasm32"))]
 fn plan_segment_capture_geometry(
     slot: &ReplaySlot,
@@ -16866,12 +14907,8 @@ impl Iterator for SegmentCommandIter<'_> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct PreparedShapeBatch {
-    /// First vertex and vertex count for the unindexed shape draw; always
-    /// multiples of 6 so `vs_main`'s `vertex_index / 6` lands on whole shapes.
     vertex_start: u32,
     vertex_count: u32,
-    /// Whether any shape in the batch carries gradient stops. False routes
-    /// a SrcOver draw through the `fs_solid` pipeline.
     has_gradient: bool,
     #[cfg(target_arch = "wasm32")]
     shape_slot: usize,
@@ -17414,10 +15451,6 @@ fn image_uv_rect(image: &ImageBitmap, src_rect: Option<Rect>) -> Option<ImageUvR
     })
 }
 
-/// Normalises an atlas entry against `atlas_size`, the side length of the
-/// texture the entry was placed in. The atlas grows on overflow, so the size
-/// has to be read from the live atlas rather than a constant — a UV computed
-/// against the wrong size samples the wrong glyph.
 fn glyph_atlas_uv_rect(entry: GlyphAtlasEntry, atlas_size: u32) -> ImageUvRect {
     let atlas_width = atlas_size as f32;
     let atlas_height = atlas_size as f32;
@@ -17595,8 +15628,6 @@ fn inner_shadow_composite_mask(
 mod shape_batch_limits_tests {
     use super::*;
 
-    /// A device that reports plenty of storage buffers, as ARM's GLES driver
-    /// does off the fragment stage.
     fn generous_limits() -> wgpu::Limits {
         wgpu::Limits {
             max_storage_buffers_per_shader_stage: 8,
@@ -17608,11 +15639,6 @@ mod shape_batch_limits_tests {
 
     #[test]
     fn a_device_without_vertex_storage_takes_the_uniform_path() {
-        // The shape array is bound VERTEX_FRAGMENT because `vs_main` reads
-        // quad corners out of it, so a device that cannot read storage from
-        // the vertex stage cannot host the storage layout AT ALL -- creating
-        // it is a validation error and wgpu makes that fatal. The limit alone
-        // says nothing about it: Mali reports 8 here and zero vertex storage.
         let limits = ShapeBatchLimits::select(&generous_limits(), wgpu::DownlevelFlags::empty());
         assert!(
             !limits.storage,
@@ -18726,11 +16752,6 @@ mod tests {
 
     #[test]
     fn shape_shadow_content_hash_is_stable_under_fractional_scale_scroll() {
-        // Regression: scrolling a shadowed panel on a fractional-scale display
-        // (e.g. Xft.dpi 130 → scale ≈ 1.354) must not re-render the shadow blur
-        // every frame. The production cache key derives its viewport offset from
-        // FLOORED device-pixel bounds, so the residual subpixel phase used to leak
-        // into the content hash and miss the cache on every scroll step.
         fn shadow_shapes_at(y: f32) -> Vec<(DrawShape, BlendMode)> {
             let mut shape = test_shape(1, BlendMode::SrcOver);
             shape.rect = Rect {
@@ -18764,10 +16785,6 @@ mod tests {
             .expect("cache key")
         };
 
-        // Wheel scroll translates the panel by whole logical pixels; the device
-        // subpixel phase changes on every step at fractional scale. The whole
-        // cache key (content hash AND surface pixel size) must stay stable, or
-        // every scroll frame re-renders the shadow blur.
         let base = key_at(640.0);
         for step in 1..=12 {
             let scrolled = key_at(640.0 - step as f32 * 4.0);
@@ -18824,8 +16841,6 @@ mod tests {
             .expect("cache key")
         };
 
-        // The card scrolls under a fixed viewport clip; the visible portion
-        // changes but the cache key must stay anchored to the unclipped source.
         assert_eq!(key_for(740.0), key_for(756.0));
     }
 
@@ -19397,7 +17412,6 @@ mod tests {
     #[test]
     fn scene_bounds_respects_clip_on_shapes() {
         let mut scene = CompositorScene::new();
-        // Shape inside viewport — visible
         scene.shapes.push(DrawShape {
             rect: Rect {
                 x: 10.0,
@@ -19413,7 +17427,6 @@ mod tests {
             }),
             ..test_shape(0, BlendMode::SrcOver)
         });
-        // Shape far outside viewport — clipped away entirely
         scene.shapes.push(DrawShape {
             rect: Rect {
                 x: 0.0,
@@ -19430,15 +17443,11 @@ mod tests {
             ..test_shape(1, BlendMode::SrcOver)
         });
         let bounds = scene_bounds(&scene).expect("should have bounds");
-        // Bounds should only cover the first shape's visible area,
-        // NOT extend to y=3050 from the clipped second shape.
         assert!(bounds.y + bounds.height <= 600.0);
     }
 
     #[test]
     fn scene_bounds_scroll_content_clipped_to_viewport() {
-        // Simulates a scroll container: many items with large y offsets,
-        // all clipped to a viewport-sized clip rect.
         let mut scene = CompositorScene::new();
         let viewport_clip = Rect {
             x: 0.0,
@@ -19459,8 +17468,6 @@ mod tests {
             });
         }
         let bounds = scene_bounds(&scene).expect("should have bounds");
-        // All shapes are clipped to viewport — bounds should be viewport-sized,
-        // NOT 20*300 = 6000 dp tall.
         assert_eq!(bounds.x, 0.0);
         assert_eq!(bounds.y, 0.0);
         assert!(bounds.width <= 800.0);
@@ -19469,8 +17476,6 @@ mod tests {
 
     #[test]
     fn scene_bounds_stable_across_scroll_offsets() {
-        // Simulates horizontal scroll at different offsets —
-        // bounds should be identical regardless of scroll position.
         let viewport_clip = Rect {
             x: 0.0,
             y: 0.0,
@@ -19496,7 +17501,6 @@ mod tests {
         let bounds_at_0 = compute_bounds_at_offset(0.0);
         let bounds_at_300 = compute_bounds_at_offset(300.0);
         let bounds_at_600 = compute_bounds_at_offset(600.0);
-        // Width should be stable (clipped to viewport) regardless of scroll offset
         assert!(
             (bounds_at_0.width - bounds_at_300.width).abs() < 1.0,
             "bounds width changed with scroll: {} vs {}",
@@ -19617,8 +17621,6 @@ mod tests {
 
     #[test]
     fn collect_layer_events_prefers_outer_effect_when_same_start_z() {
-        // Child emitted before parent (matching scene collection order where a
-        // parent effect is recorded after recursively processing children).
         let effects = vec![effect_layer(10, 20), effect_layer(10, 40)];
         let mut events = Vec::new();
         collect_layer_events(&effects, &[], 0, 50, None, &mut events);
@@ -21166,9 +19168,6 @@ mod tests {
         );
     }
 
-    /// Not a correctness test: a local timing harness for the shape-run
-    /// collect path. Run manually with
-    /// `cargo test --release -p cranpose-render-wgpu -- --ignored collect_timing --nocapture`.
     #[test]
     #[ignore]
     fn shape_run_collect_timing_harness() {
@@ -21185,8 +19184,6 @@ mod tests {
         };
         let graphics_layer = GraphicsLayer::default();
 
-        // A MEGA-BOSS-shaped workload: thousands of consecutive arcs, most
-        // solid, some gradient, one text-free layer.
         let mut nodes: Vec<DrawPrimitiveNode> = Vec::new();
         for i in 0..3000u32 {
             let f = i as f32;
@@ -21236,7 +19233,6 @@ mod tests {
 
         const ITERS: usize = 300;
 
-        // Reference: the pre-run per-primitive path.
         let local_layer = local_content_layer_for(&layer.graphics_layer);
         let start = Instant::now();
         let mut sink_shapes = 0usize;
@@ -21280,7 +19276,6 @@ mod tests {
         );
     }
 
-    /// Shared body for the serial and forced-parallel equivalence tests:
     fn assert_shape_run_collect_matches_per_primitive_emission() {
         use cranpose_render_common::{
             graph::DrawPrimitiveNode,
@@ -21295,8 +19290,6 @@ mod tests {
             width: 800.0,
             height: 800.0,
         };
-        // Rotation keeps rigid snapping off, so both paths agree on
-        // `snap_anchor: None` without replicating the anchor computation here.
         let graphics_layer = GraphicsLayer {
             scale: 1.25,
             translation_x: 3.5,
@@ -21340,7 +19333,6 @@ mod tests {
                 _ => {
                     let center = Point::new(60.0 + f % 71.0, 60.0 + f % 67.0);
                     let radius = 5.0 + (i % 13) as f32;
-                    // One degenerate sweep proves dropped draws stay dropped.
                     let sweep_angle = if i == 302 { 0.0 } else { 0.4 + (i % 6) as f32 };
                     let half = radius + 4.0;
                     DrawPrimitive::Arc {
@@ -21361,9 +19353,6 @@ mod tests {
                 }
             };
             let primitive = if i == 300 {
-                // A nested blend disqualifies the run view and forces a
-                // mid-run flush through the serial path, splitting 600 draws
-                // into two runs that are both long enough to fan out.
                 DrawPrimitive::Blend {
                     primitive: Box::new(DrawPrimitive::Blend {
                         primitive: Box::new(primitive),
@@ -21409,8 +19398,6 @@ mod tests {
         let collected =
             collect_layer_contents(&layer, None, None, &mut rect_cache, &mut requirements_cache);
 
-        // The reference scene: every primitive through the per-primitive
-        // emission path, exactly as the pre-run collect loop ran it.
         let local_layer = local_content_layer_for(&layer.graphics_layer);
         let mut expected = CompositorScene::new();
         for node in &nodes {
@@ -21476,10 +19463,6 @@ mod tests {
         }
     }
 
-    /// The run collector must emit exactly what per-primitive emission does,
-    /// on BOTH flush paths: the serial drain and the scoped-thread fan-out
-    /// (forced via the tuning override, since a test-sized scene would never
-    /// cross the size gate on its own).
     #[test]
     fn shape_run_collect_matches_per_primitive_emission_exactly() {
         assert_shape_run_collect_matches_per_primitive_emission();
@@ -22962,9 +20945,6 @@ mod tests {
 
     #[test]
     fn shape_data_layout_matches_the_wgsl_mirror() {
-        // 10 x vec4-sized slots. The uniform address space requires a 16-byte
-        // multiple, and `shape.wgsl`'s array length literal is derived from
-        // this size — if it drifts, batches silently overrun the binding.
         assert_eq!(std::mem::size_of::<ShapeData>(), 160);
         assert_eq!(std::mem::size_of::<ShapeData>() % 16, 0);
         assert_eq!(std::mem::size_of::<GradientStop>(), 32);
@@ -22984,7 +20964,6 @@ mod tests {
             pack_shape_flags(SHAPE_KIND_ARC, StrokeCap::Butt, StrokeJoin::Miter),
             2.0
         );
-        // cap in bits 2-3, join in bits 4-5
         assert_eq!(
             pack_shape_flags(SHAPE_KIND_ARC, StrokeCap::Round, StrokeJoin::Miter),
             2.0 + 4.0
@@ -23001,7 +20980,6 @@ mod tests {
             pack_shape_flags(SHAPE_KIND_STROKE, StrokeCap::Butt, StrokeJoin::Bevel),
             1.0 + 32.0
         );
-        // Every combination must round-trip through f32 exactly.
         for kind in [SHAPE_KIND_FILL, SHAPE_KIND_STROKE, SHAPE_KIND_ARC] {
             for cap in [StrokeCap::Butt, StrokeCap::Round, StrokeCap::Square] {
                 for join in [StrokeJoin::Miter, StrokeJoin::Round, StrokeJoin::Bevel] {
@@ -23019,14 +20997,9 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn mesh_vertex_layout_matches_the_wgsl_input() {
-        // {pos: vec2<f32>, uv: vec2<f32>, shape_idx: u32} = 20 bytes, no
-        // padding — the vertex buffer layout stride relies on it.
         assert_eq!(std::mem::size_of::<MeshVertex>(), 20);
     }
 
-    /// f32 port of `sdf_arc_band` (shape.wgsl), operation for operation: the
-    /// same ra/rb derivation and clamp, the same mirror trick (`abs` on the
-    /// rotated x), the same cap branches.
     #[cfg(not(target_arch = "wasm32"))]
     #[allow(clippy::too_many_arguments)]
     fn sdf_arc_band_reference(
@@ -23054,7 +21027,6 @@ mod tests {
             ((q[0] * q[0] + q[1] * q[1]).sqrt() - ra).abs() - rb
         };
         let plane = sc[1] * q[0] - sc[0] * q[1];
-        // STROKE_CAP_BUTT = 0, STROKE_CAP_SQUARE = 2, as in the shader.
         if cap == 0 {
             dist = dist.max(plane);
         } else if cap == 2 {
@@ -23094,10 +21066,6 @@ mod tests {
         converted
     }
 
-    /// The containment invariant, checked directly: every point of the
-    /// capture box whose (exactly ported) SDF keeps it must lie inside the
-    /// emitted triangle set. Thin/thick, tiny/huge, full rings, near-zero
-    /// and near-TAU sweeps, all caps, `Ri == 0` discs and pie wedges.
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn arc_mesh_contains_every_band_pixel() {
@@ -23105,36 +21073,21 @@ mod tests {
         let tau = cranpose_ui_graphics::TAU;
         let center = Point::new(250.0, 250.0);
         let cases: &[(f32, f32, f32, f32, StrokeCap)] = &[
-            // full ring, thin band
             (90.0, 100.0, 0.0, tau, StrokeCap::Round),
-            // sweep > TAU normalizes to a closed ring
             (80.0, 100.0, 1.0, 10.0, StrokeCap::Butt),
-            // full disc: Ri == 0
             (0.0, 40.0, 0.0, tau, StrokeCap::Round),
-            // thick partial arc, every cap
             (30.0, 80.0, 0.7, 2.5, StrokeCap::Butt),
             (30.0, 80.0, 0.7, 2.5, StrokeCap::Round),
             (30.0, 80.0, 0.7, 2.5, StrokeCap::Square),
-            // thin, axis-crossing sweep
             (99.0, 101.0, 3.0, 4.0, StrokeCap::Round),
-            // tiny
             (0.6, 2.0, 0.3, 1.2, StrokeCap::Butt),
-            // huge radius, thin band
             (1900.0, 1904.0, 0.1, 0.35, StrokeCap::Square),
-            // near-zero sweep
             (40.0, 60.0, 5.0, 1e-3, StrokeCap::Round),
-            // sweep near TAU: the cap pads wrap the range closed
             (40.0, 60.0, 0.2, tau - 1e-3, StrokeCap::Butt),
-            // rb_m >= ra: the cap disc wraps the center (pie wedge)
             (0.0, 3.0, 1.0, 2.0, StrokeCap::Round),
-            // filled annular sector (butt radial ends)
             (20.0, 60.0, 4.5, 1.9, StrokeCap::Butt),
         ];
         for (case, &(inner, outer, start, sweep, cap)) in cases.iter().enumerate() {
-            // 2.75 is deliberately non-dyadic: quad corners and rect then
-            // disagree by an ulp, which the axis-aligned gate must tolerate
-            // (an equality-with-rect gate silently failed every arc on the
-            // Huawei at scale 2.75).
             for root_scale in [1.0f32, 2.0, 2.75] {
                 let arc = ArcGeometry::new(center, inner, outer, start, sweep, cap);
                 assert!(!arc.is_degenerate(), "case {case} must be drawable");
@@ -23147,8 +21100,6 @@ mod tests {
                     emit_arc_band_mesh(&converted, 0, &band, &mut vertices, &mut indices)
                         .unwrap_or_else(|| panic!("case {case} must produce a mesh"));
                 assert!(segments >= ARC_MESH_MIN_SEGMENTS);
-                // The rasterized set is the indexed walk: triangles are index
-                // triples into the shared vertex list.
                 let position = |index: u32| {
                     let p = vertices[index as usize].position;
                     [p[0] as f64, p[1] as f64]
@@ -23160,9 +21111,6 @@ mod tests {
                     .map(|tri| [position(tri[0]), position(tri[1]), position(tri[2])])
                     .collect();
 
-                // Sample the QUAD box, not `rect`: quad expansion rasterizes the
-                // quad, the mesh clips to the quad, and at non-dyadic root
-                // scales the two boxes differ by an ulp.
                 let [qx, qy, ..] = converted.quad01;
                 let [_, _, qr, qb] = converted.quad23;
                 let (rw, rh) = (qr - qx, qb - qy);
@@ -23203,11 +21151,6 @@ mod tests {
         }
     }
 
-    /// An unmeshed shape contributes NOTHING to the mesh buffers — no
-    /// vertices, no indices, only an empty `index_prefix` range — because
-    /// the draw walk keeps it on the instanced-quad path. Routing
-    /// passthrough quads through the mesh vertex stream is exactly what the
-    /// watch A/B measured as the S3 loss.
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn unmeshed_shapes_leave_no_geometry_and_empty_index_ranges() {
@@ -23226,23 +21169,14 @@ mod tests {
         assert!(build.vertices.is_empty());
         assert!(build.indices.is_empty());
         assert_eq!(build.index_prefix, vec![0, 0]);
-        // The instanced arm submits the bounding quad; the telemetry must
-        // price it as such.
         assert_eq!(build.mesh_area, build.quad_area);
     }
 
-    /// The indexed-topology contract for arcs whose trapezoids survive
-    /// clipping whole: every band boundary contributes exactly one (inner,
-    /// outer) vertex pair, both adjacent trapezoids reference it through the
-    /// index list, and a closed ring's last segment wraps around to boundary
-    /// zero's pair — one seam vertex pair instead of bitwise-equal copies.
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn arc_mesh_indices_share_boundary_vertices_and_wrap_closed_rings() {
         use cranpose_ui_graphics::ArcGeometry;
         let tau = cranpose_ui_graphics::TAU;
-        // (sweep, expected boundary count relation): a closed ring wraps
-        // (boundaries == segments), an open arc does not (segments + 1).
         for (sweep, closed) in [(tau, true), (1.9f32, false)] {
             let arc = ArcGeometry::new(
                 Point::new(250.0, 250.0),
@@ -23253,9 +21187,6 @@ mod tests {
                 StrokeCap::Round,
             );
             let mut converted = converted_arc_shape(arc, 1.0);
-            // Inflate the quad box (and rect, for uv) far beyond the dilated
-            // band so NO trapezoid is clipped: every segment must take the
-            // shared-boundary path.
             converted.rect = [0.0, 0.0, 500.0, 500.0];
             converted.quad01 = [0.0, 0.0, 500.0, 0.0];
             converted.quad23 = [0.0, 500.0, 500.0, 500.0];
@@ -23271,9 +21202,6 @@ mod tests {
                 "closed={closed}: every boundary owns exactly one (inner, outer) pair"
             );
             assert_eq!(indices.len(), 6 * segments);
-            // Emission order is boundary order: boundary j's pair is
-            // (2j, 2j + 1). Each segment must reference its own boundary and
-            // its successor's — modulo the count exactly when closed.
             for j in 0..segments {
                 let jb = (j + 1) % boundary_count;
                 let (in_a, out_a) = (2 * j as u32, 2 * j as u32 + 1);
@@ -23285,13 +21213,8 @@ mod tests {
                 );
             }
             if closed {
-                // The wrap made concrete: the final segment indexes boundary
-                // zero's vertices.
                 assert_eq!(indices[6 * segments - 1], 0);
             }
-            // Inner vertices ride the dilated inner radius, outer vertices
-            // the pushed-out chord radius — sanity that pairs are ordered
-            // (inner, outer).
             for pair in vertices.as_chunks::<2>().0 {
                 let radius = |v: &MeshVertex| {
                     let dx = v.position[0] - 250.0;
@@ -23303,11 +21226,6 @@ mod tests {
         }
     }
 
-    /// The private-vertex arm of the indexed topology: under the real
-    /// tight-AABB quad the pushed-out chord vertices near the box edges get
-    /// clipped, and those trapezoids must fan over vertices of their own —
-    /// appended after the shared block, carrying clip-plane coordinates —
-    /// while untouched diagonal trapezoids still share boundary pairs.
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn arc_mesh_clipped_segments_fan_over_private_vertices() {
@@ -23326,8 +21244,6 @@ mod tests {
         let mut indices = Vec::new();
         emit_arc_band_mesh(&converted, 0, &band, &mut vertices, &mut indices)
             .expect("ring must mesh");
-        // Sharing must actually happen: a shared boundary vertex is used by
-        // both of its trapezoids' fans (at least three triangle references).
         let mut uses = vec![0usize; vertices.len()];
         for &index in &indices {
             uses[index as usize] += 1;
@@ -23336,11 +21252,6 @@ mod tests {
             uses.iter().any(|&count| count >= 3),
             "some boundary vertices must be shared across trapezoids"
         );
-        // Clipping must actually happen, and clipped polygons index private
-        // vertices lying bitwise ON the quad box (the clipper writes the
-        // bound coordinate exactly; boundary vertices never touch the box —
-        // inner ones sit strictly inside, pushed-out outer ones strictly
-        // outside near the extremes, where they are clipped).
         let [left, top, ..] = converted.quad01;
         let [.., right, bottom] = converted.quad23;
         let clipped: Vec<&MeshVertex> = vertices
@@ -23354,8 +21265,6 @@ mod tests {
             !clipped.is_empty(),
             "the tight box must clip the pushed-out chord vertices"
         );
-        // Fewer unique vertices than the non-indexed emitter's
-        // three-per-triangle — the amplification this change removes.
         assert!(
             vertices.len() < indices.len(),
             "{} unique vertices should undercut {} triangle corners",
@@ -23368,10 +21277,6 @@ mod tests {
     #[test]
     fn arc_mesh_budget_overflow_falls_back_to_whole_slot_passthrough() {
         use cranpose_ui_graphics::ArcGeometry;
-        // 100 large full rings mesh at the 64-segment ceiling (well over
-        // 4 KB of vertices + indices each), far past the byte budget
-        // max(100 * ~960 B, ~80 KB) — the builder must refuse the whole
-        // slot rather than truncate.
         let arc = ArcGeometry::new(
             Point::new(2000.0, 2000.0),
             1690.0,
@@ -23385,17 +21290,10 @@ mod tests {
         assert!(build_arc_mesh_vertices(&shapes, RETAINED_MESH_MIN_PX2_DEFAULT as f64).is_none());
     }
 
-    /// The size gate, boundary-exact: a shape meshes when its quad area is
-    /// AT LEAST the threshold and passes through below it — with the
-    /// engagement counters saying which happened — and the arc and rim
-    /// acceptances both sit behind the same gate.
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn retained_mesh_size_gate_engages_exactly_per_threshold() {
         use cranpose_ui_graphics::ArcGeometry;
-        // A big ring (quad ~322 px square ≈ 104k px²), a small brick arc
-        // (quad well under 1024 px²), and a big stroked-circle rim
-        // (90k-px² quad) in one capture.
         let big_ring = converted_arc_shape(
             ArcGeometry::new(
                 Point::new(204.0, 204.0),
@@ -23425,9 +21323,6 @@ mod tests {
         let rim_px2 = quad_shoelace_area(&shapes[2]);
         assert!(small_px2 < 1024.0 && big_px2 > rim_px2 && rim_px2 > 16384.0);
 
-        // Default gate: both big shapes mesh, the brick arc stays instanced.
-        // The meshed shapes sit at indices 0 and 2 with the brick between
-        // them — two stretches.
         let build = build_arc_mesh_vertices(&shapes, RETAINED_MESH_MIN_PX2_DEFAULT as f64)
             .expect("within budget");
         assert_eq!(
@@ -23435,20 +21330,15 @@ mod tests {
             (1, 1, 1)
         );
         assert_eq!(build.meshed_stretches, 2);
-        // The brick's index range is empty (no geometry emitted for it);
-        // the ring's and rim's are not.
         assert_eq!(build.index_prefix[1], build.index_prefix[2]);
         assert!(build.index_prefix[1] > build.index_prefix[0]);
         assert!(build.index_prefix[3] > build.index_prefix[2]);
 
-        // ≥, not >: a threshold bitwise AT a shape's quad area still meshes
-        // it...
         let build = build_arc_mesh_vertices(&shapes, big_px2).expect("within budget");
         assert_eq!(
             (build.meshed_arcs, build.meshed_rims, build.passthrough),
             (1, 0, 2)
         );
-        // ...and one ulp above it does not.
         let build =
             build_arc_mesh_vertices(&shapes, big_px2 + big_px2 * f64::EPSILON).expect("budget");
         assert_eq!(
@@ -23456,15 +21346,12 @@ mod tests {
             (0, 0, 3)
         );
 
-        // A threshold between the rim and the ring gates them apart.
         let build = build_arc_mesh_vertices(&shapes, (rim_px2 + big_px2) * 0.5).expect("budget");
         assert_eq!(
             (build.meshed_arcs, build.meshed_rims, build.passthrough),
             (1, 0, 2)
         );
 
-        // Gate-rejected shapes leave the mesh buffers EMPTY — they stay on
-        // the instanced path, so a capture like this keeps no mesh at all.
         let everything_gated =
             build_arc_mesh_vertices(&shapes, big_px2 * 2.0).expect("within budget");
         assert_eq!(everything_gated.passthrough, 3);
@@ -23473,10 +21360,6 @@ mod tests {
         assert_eq!(everything_gated.index_prefix, vec![0, 0, 0, 0]);
     }
 
-    /// The stretch counter counts MAXIMAL RUNS of consecutive meshed
-    /// shapes — the quantity the capture site caps at
-    /// [`MESH_SLOT_MAX_STRETCHES`], because each stretch costs the draw
-    /// walk two pipeline switches per covering op.
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn meshed_stretches_count_maximal_runs_of_consecutive_meshed_shapes() {
@@ -23503,20 +21386,15 @@ mod tests {
             ),
             1.0,
         );
-        // big big small big small small big big -> runs [0..2], [3], [6..8].
         let shapes = [big, big, small, big, small, small, big, big];
         let build = build_arc_mesh_vertices(&shapes, RETAINED_MESH_MIN_PX2_DEFAULT as f64)
             .expect("within budget");
         assert_eq!(build.meshed_arcs, 5);
         assert_eq!(build.passthrough, 3);
         assert_eq!(build.meshed_stretches, 3);
-        // An all-instanced interleave never exceeds the cap vacuously: the
-        // cap compares against this exact counter.
         assert!(build.meshed_stretches <= MESH_SLOT_MAX_STRETCHES);
     }
 
-    /// The env override's parse-and-clamp: unset and garbage read the
-    /// default, in-range values pass through, and both clamp ends hold.
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn retained_mesh_px2_override_parses_and_clamps() {
@@ -23543,10 +21421,6 @@ mod tests {
         );
     }
 
-    /// The retained builder accepts stroked-circle rims through
-    /// [`rim_band_geometry`]: the emitted mesh is the closed annulus band
-    /// (every vertex inside the dilated ring, none inside the hole), counted
-    /// as a rim, while the same shape under the gate stays a quad.
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn retained_capture_meshes_big_stroked_circle_rims_as_annuli() {
@@ -23561,10 +21435,6 @@ mod tests {
             (0, 1, 0)
         );
         assert!(build.meshed_segments >= ARC_MESH_MIN_SEGMENTS);
-        // The annulus, not the quad: the mesh area is far below the 90k-px²
-        // bounding quad and every vertex sits in the dilated band's radial
-        // range (clip-plane vertices included — the quad box touches the
-        // outer circle only near the axes, inside the band).
         assert!(build.mesh_area < 0.2 * build.quad_area);
         let band = rim_band_geometry(&rim).expect("rim must qualify");
         for vertex in &build.vertices {
@@ -23578,9 +21448,6 @@ mod tests {
         }
     }
 
-    /// A converted circle rim, hand-built in `ShapeData` terms: `rect` is the
-    /// stroke-inflated 300×300 box, the geometry is 292×292, and the corner
-    /// radius (300 − 8) / 2 = 146 equals the geometry half-extent — a circle.
     #[cfg(not(target_arch = "wasm32"))]
     fn rim_test_shape_data() -> ShapeData {
         let mut shape = ShapeData::zeroed();
@@ -23598,8 +21465,6 @@ mod tests {
         shape
     }
 
-    /// A viewport that never matches the diag's latched surface, so bucket
-    /// tests exercise no corner accounting.
     #[cfg(not(target_arch = "wasm32"))]
     fn offscreen_test_viewport() -> ViewportUniformParams {
         ViewportUniformParams {
@@ -23615,8 +21480,6 @@ mod tests {
         let diag = FillAreaDiag::default();
         let mut arc = ShapeData::zeroed();
         arc.stroke_params[1] = pack_shape_flags(SHAPE_KIND_ARC, StrokeCap::Butt, StrokeJoin::Miter);
-        // Arcs keep trig in `radii`; nonzero values there must not classify
-        // the shape as a rounded fill.
         arc.radii = [0.5; 4];
         arc.quad01 = [0.0, 0.0, 10.0, 0.0];
         arc.quad23 = [0.0, 10.0, 10.0, 10.0];
@@ -23639,9 +21502,7 @@ mod tests {
         assert_eq!(diag.frame[FillAreaDiag::ARC].get(), 100.0);
         assert_eq!(diag.frame[FillAreaDiag::RRECT_FILL].get(), 20.0);
         assert_eq!(diag.frame[FillAreaDiag::RECT].get(), 6.0);
-        // Off-frame passes never touch the corner counter.
         assert_eq!(diag.frame_corner.get(), 0.0);
-        // Lit never exceeds the submitted area, bucket by bucket.
         for (lit, quad) in diag.frame_lit.iter().zip(&diag.frame) {
             assert!(lit.get() <= quad.get() + 1e-9);
         }
@@ -23655,8 +21516,6 @@ mod tests {
         diag.note_rim_mesh(&rim_test_shape_data(), 1234.5);
         assert_eq!(diag.frame[FillAreaDiag::RRECT_STROKE].get(), 0.0);
         assert_eq!(diag.frame[FillAreaDiag::MESH].get(), 1234.5);
-        // The lit accounting moves with the quad: nothing left in the
-        // stroke bucket, and the mesh bucket's lit stays within the mesh.
         assert_eq!(diag.frame_lit[FillAreaDiag::RRECT_STROKE].get(), 0.0);
         assert!(diag.frame_lit[FillAreaDiag::MESH].get() <= 1234.5);
         assert!(diag.frame_lit[FillAreaDiag::MESH].get() > 0.0);
@@ -23681,12 +21540,9 @@ mod tests {
         };
         diag.add_glyph_quad(&quad);
         assert_eq!(diag.frame[FillAreaDiag::IMAGE_GLYPH].get(), 32.0 + 35.0);
-        // Textures light their whole quad: lit tracks the submitted area.
         assert_eq!(diag.frame_lit[FillAreaDiag::IMAGE_GLYPH].get(), 32.0 + 35.0);
     }
 
-    /// Midpoint-rule area of `inside` over `bounds` (min x, min y, max x,
-    /// max y), the reference the analytic-lit formulas are tested against.
     #[cfg(not(target_arch = "wasm32"))]
     fn numeric_area(bounds: [f64; 4], steps: usize, inside: impl Fn(f64, f64) -> bool) -> f64 {
         let dx = (bounds[2] - bounds[0]) / steps as f64;
@@ -23704,8 +21560,6 @@ mod tests {
         area
     }
 
-    /// f64 rounded-rect SDF (uniform radius), the reference for the
-    /// round-rect fill and stroke lit formulas.
     #[cfg(not(target_arch = "wasm32"))]
     fn sdf_rounded_rect_reference(
         p: [f64; 2],
@@ -23724,8 +21578,6 @@ mod tests {
         use cranpose_ui_graphics::ArcGeometry;
         let tau = cranpose_ui_graphics::TAU;
         let center = Point::new(250.0, 250.0);
-        // (inner, outer, start, sweep, cap): partial arcs with every cap,
-        // a closed ring, and a full disc.
         let cases: &[(f32, f32, f32, f32, StrokeCap)] = &[
             (90.0, 100.0, 0.7, 2.5, StrokeCap::Butt),
             (30.0, 80.0, 0.7, 2.5, StrokeCap::Round),
@@ -23741,8 +21593,6 @@ mod tests {
             let mid = [converted.radii[0], converted.radii[1]];
             let half = [converted.radii[2], converted.radii[3]];
             let aabb = quad_aabb(&converted);
-            // Pad past the fast-trig AABB slop so the whole kept set is
-            // integrated.
             let bounds = [aabb[0] - 2.0, aabb[1] - 2.0, aabb[2] + 2.0, aabb[3] + 2.0];
             let numeric = numeric_area(bounds, 1000, |x, y| {
                 sdf_arc_band_reference(
@@ -23769,7 +21619,6 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn fill_truth_circle_and_rrect_fill_lit_match_references() {
-        // A filled circle degenerates to exactly pi r^2.
         let mut circle = ShapeData::zeroed();
         circle.stroke_params[1] =
             pack_shape_flags(SHAPE_KIND_FILL, StrokeCap::Butt, StrokeJoin::Miter);
@@ -23782,7 +21631,6 @@ mod tests {
             "circle: {analytic} vs {exact}"
         );
 
-        // A rounded rect against the SDF reference.
         let mut rounded = ShapeData::zeroed();
         rounded.stroke_params[1] =
             pack_shape_flags(SHAPE_KIND_FILL, StrokeCap::Butt, StrokeJoin::Miter);
@@ -23802,8 +21650,6 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn fill_truth_stroked_rrect_lit_matches_the_band_area() {
-        // The circle rim: perimeter x stroke width equals the exact annulus
-        // pi (outer^2 - inner^2) = 2 pi geom_half sw.
         let rim = rim_test_shape_data();
         let analytic = analytic_covered_area(&rim);
         let exact = std::f64::consts::PI * (150.0 * 150.0 - 142.0 * 142.0);
@@ -23812,8 +21658,6 @@ mod tests {
             "circle rim: {analytic} vs {exact}"
         );
 
-        // A rounded-SQUARE ring (radius well below the half-extent) against
-        // the SDF band |sdf| < sw/2.
         let mut square_ring = rim_test_shape_data();
         square_ring.radii = [60.0; 4];
         let numeric = numeric_area([38.0, 38.0, 342.0, 342.0], 1000, |x, y| {
@@ -23830,20 +21674,16 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn fill_truth_corner_counter_prices_the_area_outside_the_inscribed_circle() {
-        // A full-viewport quad on a square (watch) surface wastes exactly
-        // the four corner lunes: (1 - pi/4) of the screen.
         let full = area_outside_inscribed_circle([0.0, 0.0, 454.0, 454.0], (454, 454));
         let exact = (1.0 - std::f64::consts::FRAC_PI_4) * 454.0 * 454.0;
         assert!(
             (full - exact).abs() / exact < 0.01,
             "full quad: {full} vs {exact}"
         );
-        // A centered box inside the circle wastes nothing, exactly.
         assert_eq!(
             area_outside_inscribed_circle([127.0, 127.0, 327.0, 327.0], (454, 454)),
             0.0
         );
-        // A box entirely inside a corner is all waste.
         let corner = area_outside_inscribed_circle([0.0, 0.0, 40.0, 40.0], (454, 454));
         assert!((corner - 1600.0).abs() < 1e-6, "corner box: {corner}");
     }
@@ -23870,16 +21710,12 @@ mod tests {
         let mut gradient = opaque;
         gradient.brush_type = 1;
         diag.add_shape_quads(&[opaque, faded, gradient], full_frame);
-        // Plain rects are all-lit: 5000 px each, one per class.
         let lit = |class: FillOpacityClass| diag.frame_opacity[class as usize].get();
         assert_eq!(lit(FillOpacityClass::Opaque), 5000.0);
         assert_eq!(lit(FillOpacityClass::Translucent), 5000.0);
         assert_eq!(lit(FillOpacityClass::NonSolid), 5000.0);
-        // The corner-hugging quads waste real area on a round display.
         assert!(diag.frame_corner.get() > 0.0);
 
-        // The same batch under an offset (offscreen) viewport must leave the
-        // corner counter alone.
         let offscreen = FillAreaDiag::default();
         offscreen.reset_frame(454, 454);
         offscreen.add_shape_quads(&[opaque], offscreen_test_viewport());
@@ -23902,27 +21738,21 @@ mod tests {
         assert_eq!(records[0].bucket, FillAreaDiag::RRECT_STROKE);
         assert_eq!(records[0].drawn_px2, 300.0 * 300.0);
         assert!(records[0].lit_px2 < records[0].drawn_px2, "a rim has slack");
-        // A plain rect is exact: no slack at all.
         assert_eq!(records[1].bucket, FillAreaDiag::RECT);
         assert_eq!(records[1].lit_px2, records[1].drawn_px2);
 
         let diag = FillAreaDiag::default();
         diag.reset_frame(454, 454);
-        // Scaled replay: areas scale with the similarity squared, and the
-        // capture-space AABBs no longer say where pixels land — no corner.
         let scaled = SimilarityTransform::new([0.0, 0.0], 0.0, 2.0);
         diag.add_retained_range(&records, 0, 2, &scaled);
         let drawn: f64 = records.iter().map(|record| record.drawn_px2).sum();
         assert!((diag.frame[FillAreaDiag::RETAINED].get() - drawn * 4.0).abs() < 1e-6);
         assert_eq!(diag.frame_corner.get(), 0.0);
 
-        // Identity replay: the rim's 300 px box on a 454 px round screen
-        // pokes into the corner lunes.
         let identity_diag = FillAreaDiag::default();
         identity_diag.reset_frame(454, 454);
         identity_diag.add_retained_range(&records, 0, 2, &SimilarityTransform::IDENTITY);
         assert!(identity_diag.frame_corner.get() > 0.0);
-        // And the range is respected: shape 1 alone has no rim slack.
         let tail = FillAreaDiag::default();
         tail.reset_frame(454, 454);
         tail.add_retained_range(&records, 1, 2, &SimilarityTransform::IDENTITY);
@@ -23947,7 +21777,6 @@ mod tests {
             .collect();
         diag.note_retained_capture(3, &records);
         assert_eq!(diag.slack_top.len(), FILL_DIAG_SLACK_TOP);
-        // Sorted by slack, worst first, and the two smallest fell off.
         assert_eq!(diag.slack_top[0].drawn_px2, 12000.0);
         assert_eq!(diag.slack_top[0].slot, 3);
         assert_eq!(diag.slack_top[0].shape, 11);
@@ -23973,7 +21802,6 @@ mod tests {
             band.sweep >= cranpose_ui_graphics::TAU,
             "a rim band is a closed ring"
         );
-        // And it actually meshes through the shared emitter.
         let mut vertices = Vec::new();
         let mut indices = Vec::new();
         emit_arc_band_mesh(
@@ -23986,29 +21814,22 @@ mod tests {
         .expect("rim must mesh");
         assert!(vertices.iter().all(|vertex| vertex.shape_idx == 7));
 
-        // Rounded SQUARE ring: radius well below the geometry half-extent.
-        // Meshing it would under-cover the flat spans — the false positive
-        // the circle gate exists to prevent.
         let mut square = rim_test_shape_data();
         square.radii = [100.0; 4];
         assert!(rim_mesh_band(&square).is_none());
 
-        // Non-square box.
         let mut oblong = rim_test_shape_data();
         oblong.rect = [40.0, 40.0, 300.0, 200.0];
         assert!(rim_mesh_band(&oblong).is_none());
 
-        // Gradient brush.
         let mut gradient = rim_test_shape_data();
         gradient.brush_type = 1;
         assert!(rim_mesh_band(&gradient).is_none());
 
-        // Live clip.
         let mut clipped = rim_test_shape_data();
         clipped.clip_rect = [0.0, 0.0, 400.0, 400.0];
         assert!(rim_mesh_band(&clipped).is_none());
 
-        // Small (100 × 100 < 65536 px²), even as a perfect circle.
         let mut small = rim_test_shape_data();
         small.rect = [40.0, 40.0, 100.0, 100.0];
         small.quad01 = [40.0, 40.0, 140.0, 40.0];
@@ -24016,18 +21837,15 @@ mod tests {
         small.radii = [46.0; 4];
         assert!(rim_mesh_band(&small).is_none());
 
-        // Fill kind, not stroke.
         let mut fill = rim_test_shape_data();
         fill.stroke_params[1] =
             pack_shape_flags(SHAPE_KIND_FILL, StrokeCap::Butt, StrokeJoin::Miter);
         assert!(rim_mesh_band(&fill).is_none());
 
-        // Zero stroke width.
         let mut hairline = rim_test_shape_data();
         hairline.stroke_params[0] = 0.0;
         assert!(rim_mesh_band(&hairline).is_none());
 
-        // Mismatched corner radii.
         let mut uneven = rim_test_shape_data();
         uneven.radii[2] = 145.0;
         assert!(rim_mesh_band(&uneven).is_none());
@@ -24036,8 +21854,6 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn shape_batch_limits_follow_uniform_binding_size() {
-        // With a 160-byte ShapeData, even a desktop-class 64 KiB binding can no
-        // longer hold the full compile-time cap: 65536 / 160 = 409 < 768.
         let desktop_shapes = 65536 / std::mem::size_of::<ShapeData>();
         assert_eq!(desktop_shapes, 409);
         assert_eq!(
@@ -24049,8 +21865,6 @@ mod tests {
             }
         );
 
-        // The 16 KiB downlevel/GLES minimum must shrink batches to fit:
-        // 16384 / 160-byte ShapeData = 102 shapes, 16384 / 32-byte stop = 512.
         let downlevel = ShapeBatchLimits::for_uniform_binding_size(16384);
         assert_eq!(downlevel.max_shapes_per_batch, 16384 / 160);
         assert_eq!(downlevel.max_shapes_per_batch, 102);
@@ -24058,7 +21872,6 @@ mod tests {
         assert!(downlevel.max_shapes_per_batch * std::mem::size_of::<ShapeData>() <= 16384);
         assert!(downlevel.max_gradient_stops * std::mem::size_of::<GradientStop>() <= 16384);
 
-        // Degenerate limits must not produce zero-sized buffers.
         let tiny = ShapeBatchLimits::for_uniform_binding_size(1);
         assert_eq!(tiny.max_shapes_per_batch, 1);
         assert_eq!(tiny.max_gradient_stops, 1);
@@ -24066,8 +21879,6 @@ mod tests {
 
     #[test]
     fn storage_shape_batch_limits_uncap_the_batch_and_start_small() {
-        // A typical 128 MiB storage binding hits the compile-time ceilings,
-        // not the device limit: one batch holds the whole scene.
         let storage = ShapeBatchLimits::for_storage_binding_size(128 << 20);
         assert!(storage.storage);
         assert_eq!(storage.max_shapes_per_batch, MAX_SHAPES_PER_STORAGE_BATCH);
@@ -24076,8 +21887,6 @@ mod tests {
             MAX_GRADIENT_STOPS_PER_STORAGE_BATCH
         );
 
-        // The buffers must not be allocated at the multi-megabyte ceiling up
-        // front; they start small and grow on demand.
         assert_eq!(
             storage.initial_shape_capacity(),
             INITIAL_STORAGE_BATCH_CAPACITY
@@ -24096,8 +21905,6 @@ mod tests {
                 .contains(wgpu::BufferUsages::STORAGE)
         );
 
-        // Uniform mode keeps its start-at-the-cap invariant: a uniform
-        // binding smaller than the shader's fixed array fails validation.
         let uniform = ShapeBatchLimits::desktop();
         assert_eq!(
             uniform.initial_shape_capacity(),
@@ -24164,8 +21971,6 @@ mod tests {
              entry when the selection is latched on)"
         );
 
-        // The storage variant is what native devices actually compile; it
-        // must be valid WGSL, not just textually plausible.
         let module = naga::front::wgsl::parse_str(&source)
             .expect("storage-mode shape shader must parse as WGSL");
         naga::valid::Validator::new(
@@ -24178,11 +21983,6 @@ mod tests {
 
     #[test]
     fn solid_trim_keeps_the_full_struct_locations_with_the_dropped_slots_vacant() {
-        // Suspect #1 from the reverted first trim (16a5d312 / 371dd06a): the
-        // survivors were renumbered densely. Every surviving varying line in
-        // `VertexOutputSolid` must be byte-identical to its `VertexOutput`
-        // line — same index, same interpolation, same type — and the two
-        // dropped slots must stay vacant.
         let appendix = shaders::SOLID_TRIM_APPENDIX;
         for line in [
             "@location(0) color: vec4<f32>,",
@@ -24223,10 +22023,6 @@ mod tests {
 
     #[test]
     fn solid_trim_source_reaches_every_injection_and_validates() {
-        // The trimmed entries are appended BEFORE `shape_shader_source`'s
-        // rewrites, so the storage rewrite's paint-select injection must land
-        // in all five vertex entries — a solid entry that missed it would
-        // freeze every recolor on the retained slots it draws.
         let storage =
             shape_shader_source(ShapeBatchLimits::for_storage_binding_size(128 << 20), true);
         for entry in [
@@ -24249,8 +22045,6 @@ mod tests {
              flag"
         );
 
-        // Both variants a native device can compile must be valid WGSL, flat
-        // and with the display-clip z rewrite applied.
         let uniform = shape_shader_source(ShapeBatchLimits::desktop(), true);
         for source in [&storage, &uniform] {
             for depth in [false, true] {
@@ -24269,8 +22063,6 @@ mod tests {
 
     #[test]
     fn solid_trim_flag_reads_the_documented_variable() {
-        // The parity suite's trimmed arms set exactly this variable; a name
-        // drift here would leave them silently comparing full against full.
         crate::debug_toggles::set_debug_toggle("CRANPOSE_SOLID_TRIM_VARYINGS", None);
         assert!(!solid_trim_varyings_enabled(), "the trim must default OFF");
         crate::debug_toggles::set_debug_toggle("CRANPOSE_SOLID_TRIM_VARYINGS", Some("1"));
@@ -24282,9 +22074,6 @@ mod tests {
 
     #[test]
     fn uniform_shape_shader_keeps_the_in_record_color_and_no_paint_binding() {
-        // The base text serves WebGL-class uniform devices, which can bind
-        // no storage buffers: the paint array and its select must exist only
-        // in the storage-mode rewrite.
         for source in [
             Cow::Borrowed(shaders::SHADER),
             shape_shader_source(ShapeBatchLimits::desktop(), false),
@@ -24308,9 +22097,6 @@ mod tests {
 
     #[test]
     fn shipped_shape_shader_array_length_fits_the_downlevel_uniform_floor() {
-        // The wasm build uses `shaders::SHADER` verbatim, so its declared array
-        // length is simultaneously the wasm batch cap and the WebGL binding
-        // size. It must fit the 16 KiB floor exactly.
         assert!(
             shaders::SHADER.contains("array<ShapeData, 102>"),
             "shape.wgsl array length must stay in sync with \
@@ -24322,8 +22108,6 @@ mod tests {
 
     #[test]
     fn glyph_atlas_doubles_on_overflow_and_stops_at_the_device_ceiling() {
-        // Every overflow buys one doubling, so an app that needs the old fixed
-        // 4096 atlas reaches it in three resets and then stays there.
         assert_eq!(
             next_glyph_atlas_size(TEXT_GLYPH_ATLAS_MIN_SIZE, TEXT_GLYPH_ATLAS_MAX_SIZE),
             1024
@@ -24337,21 +22121,15 @@ mod tests {
             TEXT_GLYPH_ATLAS_MAX_SIZE
         );
 
-        // A device that only grants `downlevel_defaults()`'s 2048 caps the
-        // growth there rather than failing to create the texture.
         assert_eq!(next_glyph_atlas_size(1024, 2048), 2048);
         assert_eq!(next_glyph_atlas_size(2048, 2048), 2048);
 
-        // Never zero and never wrapping, whatever the ceiling turns out to be.
         assert_eq!(next_glyph_atlas_size(u32::MAX, 4096), 4096);
         assert_eq!(next_glyph_atlas_size(0, 0), 1);
     }
 
     #[test]
     fn glyph_atlas_uv_rect_normalizes_against_the_atlas_it_was_placed_in() {
-        // The atlas grows, so a UV is only meaningful together with the size of
-        // the texture the entry came from. Reading the size off a constant is
-        // what would make a grown atlas sample the wrong glyph.
         let entry = GlyphAtlasEntry {
             x: 128,
             y: 256,
@@ -24381,18 +22159,11 @@ mod tests {
             "array<GradientStop, {}>",
             limits.max_gradient_stops
         )));
-        // Sanity: the substitution actually fired rather than silently leaving
-        // the downlevel literal in place.
         assert!(!source.contains("array<ShapeData, 146>"));
     }
 
     #[test]
     fn stroked_and_arc_shapes_batch_together_with_fills() {
-        // Strokes and arcs ride the same pipeline, the same ShapeData array and
-        // the same blend state as fills, so a run of mixed shapes must stay a
-        // single batch. If they ever split the batch, a polar UI built from
-        // hundreds of arcs would pay a draw call per arc — precisely the cost
-        // this primitive exists to remove.
         let fill = test_shape(0, BlendMode::SrcOver);
         let mut stroked = test_shape(1, BlendMode::SrcOver);
         stroked.stroke = Some(
@@ -24560,8 +22331,6 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn native_segment_fusion_partitions_shape_uniform_overflow() {
-        // The uniform batch cap is derived from the device binding size and
-        // the 112-byte ShapeData, not from the compile-time ceiling.
         let desktop_batch_cap = ShapeBatchLimits::desktop().max_shapes_per_batch;
         let ordered_items: Vec<_> = (0..=desktop_batch_cap)
             .map(|index| (index, SegmentDrawItem::Shape(index)))
@@ -24740,8 +22509,6 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn native_segment_fusion_partitions_preserve_non_shape_order_at_budget_boundary() {
-        // The uniform batch cap is derived from the device binding size and
-        // the 112-byte ShapeData, not from the compile-time ceiling.
         let desktop_batch_cap = ShapeBatchLimits::desktop().max_shapes_per_batch;
         let ordered_items: Vec<_> = (0..desktop_batch_cap)
             .map(|index| (index, SegmentDrawItem::Shape(index)))
@@ -24855,8 +22622,6 @@ mod tests {
 
     #[test]
     fn segment_command_iter_splits_contiguous_shape_runs_at_uniform_batch_limit() {
-        // The uniform batch cap is derived from the device binding size and
-        // the 112-byte ShapeData, not from the compile-time ceiling.
         let desktop_batch_cap = ShapeBatchLimits::desktop().max_shapes_per_batch;
         let ordered_items: Vec<_> = (0..=desktop_batch_cap)
             .map(|index| (index, SegmentDrawItem::Shape(index)))
@@ -25061,15 +22826,12 @@ mod tests {
 
     #[test]
     fn clip_to_bounds_propagates_visual_clip_to_all_descendant_shapes() {
-        // Simulates: root → clip_to_bounds container → child with shapes above/below clip
-        // All shapes inside the clip_to_bounds container must have a clip set.
         let container_local_bounds = Rect {
             x: 0.0,
             y: 0.0,
             width: 800.0,
             height: 500.0,
         };
-        // Container is placed at y=50 in parent space via transform_to_parent
         let container_clip_in_parent = Rect {
             x: 0.0,
             y: 50.0,
@@ -25077,7 +22839,6 @@ mod tests {
             height: 500.0,
         };
 
-        // Shape that extends above the clip boundary (scroll content scrolled up)
         let shape_above = RenderNode::Primitive(PrimitiveEntry {
             phase: PrimitivePhase::BeforeChildren,
             node: PrimitiveNode::Draw(DrawPrimitiveNode {
@@ -25095,7 +22856,6 @@ mod tests {
             }),
         });
 
-        // Shape within the clip boundary
         let shape_inside = RenderNode::Primitive(PrimitiveEntry {
             phase: PrimitivePhase::BeforeChildren,
             node: PrimitiveNode::Draw(DrawPrimitiveNode {
@@ -25113,7 +22873,6 @@ mod tests {
             }),
         });
 
-        // Shape below the clip boundary (scroll content below viewport)
         let shape_below = RenderNode::Primitive(PrimitiveEntry {
             phase: PrimitivePhase::BeforeChildren,
             node: PrimitiveNode::Draw(DrawPrimitiveNode {
@@ -25131,7 +22890,6 @@ mod tests {
             }),
         });
 
-        // Content child layer (represents scroll content, translated up by scroll offset)
         let mut content_layer = test_layer(
             Rect {
                 x: 0.0,
@@ -25144,7 +22902,6 @@ mod tests {
         content_layer.transform_to_parent = ProjectiveTransform::translation(0.0, -30.0);
         content_layer.translated_content_context = true;
 
-        // Clip container (e.g. TabContent with clip_to_bounds)
         let mut clip_container = test_layer(
             container_local_bounds,
             vec![RenderNode::Layer(Box::new(content_layer))],
@@ -25152,7 +22909,6 @@ mod tests {
         clip_container.clip_to_bounds = true;
         clip_container.transform_to_parent = ProjectiveTransform::translation(0.0, 50.0);
 
-        // Root
         let root = test_layer(
             Rect {
                 x: 0.0,
@@ -25192,13 +22948,6 @@ mod tests {
 
     #[test]
     fn clip_to_bounds_culls_child_layers_outside_boundary() {
-        // Reproduces the out-of-clip rendering bug: a child layer with
-        // graphics_layer.clip=true (e.g. from rounded_surface()) positioned
-        // entirely below the parent's clip_to_bounds boundary must be culled.
-        // Before the fix, resolve_clip returned None for non-overlapping rects,
-        // which downstream code interpreted as "no clipping" instead of "fully clipped",
-        // causing invisible content to render everywhere.
-
         let clip_container_bounds = Rect {
             x: 0.0,
             y: 0.0,
@@ -25223,7 +22972,6 @@ mod tests {
             }),
         });
 
-        // Card layer with graphics_layer.clip=true, positioned BELOW the clip boundary
         let mut card_outside = crate::test_support::layer_node(
             Rect {
                 x: 0.0,
@@ -25240,7 +22988,6 @@ mod tests {
         );
         card_outside.transform_to_parent = ProjectiveTransform::translation(10.0, 600.0);
 
-        // Card layer with graphics_layer.clip=true, positioned INSIDE the clip boundary
         let mut card_inside = crate::test_support::layer_node(
             Rect {
                 x: 0.0,
@@ -25257,7 +23004,6 @@ mod tests {
         );
         card_inside.transform_to_parent = ProjectiveTransform::translation(10.0, 100.0);
 
-        // Content layer holding both cards
         let content = test_layer(
             Rect {
                 x: 0.0,
@@ -25271,14 +23017,12 @@ mod tests {
             ],
         );
 
-        // Clip container
         let mut clip_container = test_layer(
             clip_container_bounds,
             vec![RenderNode::Layer(Box::new(content))],
         );
         clip_container.clip_to_bounds = true;
 
-        // Root
         let root = test_layer(
             Rect {
                 x: 0.0,
@@ -25310,9 +23054,6 @@ mod tests {
 
     #[test]
     fn flattened_layer_shadow_z_index_is_below_content() {
-        // Shadow must render behind content. When a child layer with shadow_elevation
-        // is flattened (no isolation), its shadow z-index must be lower than any
-        // content z-index so shadow draws render first.
         let shape = RenderNode::Primitive(PrimitiveEntry {
             phase: PrimitivePhase::BeforeChildren,
             node: PrimitiveNode::Draw(DrawPrimitiveNode {
@@ -25389,8 +23130,6 @@ mod tests {
         );
     }
 
-    /// One retained bundle op key with the fields the invalidation tests
-    /// vary; the rest stay representative constants.
     #[cfg(not(target_arch = "wasm32"))]
     fn bundle_op(slot: u32, epoch: Option<u64>, first: u32, last: u32) -> RetainedBundleOpKey {
         RetainedBundleOpKey {
@@ -25411,8 +23150,6 @@ mod tests {
         }
     }
 
-    /// The same stretch on consecutive frames reuses its bundle: one
-    /// rebuild, then cached executes.
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn retained_bundle_cache_reuses_stable_keys() {
@@ -25432,23 +23169,15 @@ mod tests {
         assert_eq!(cache.stats(), (1, 3), "one rebuild, three cached executes");
     }
 
-    /// Recapture (epoch bump), span reorder, count change, range change and
-    /// slot release each change the key, so a stale bundle can never satisfy
-    /// the lookup.
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn retained_bundle_cache_invalidates_on_any_op_change() {
         let ops = [bundle_op(3, Some(7), 0, 40), bundle_op(5, Some(9), 4, 12)];
         let variants: [Vec<RetainedBundleOpKey>; 5] = [
-            // Recaptured slot 3: same id, bumped epoch.
             vec![bundle_op(3, Some(8), 0, 40), bundle_op(5, Some(9), 4, 12)],
-            // Reordered stretch.
             vec![bundle_op(5, Some(9), 4, 12), bundle_op(3, Some(7), 0, 40)],
-            // Op count changed.
             vec![bundle_op(3, Some(7), 0, 40)],
-            // Draw range changed.
             vec![bundle_op(3, Some(7), 0, 41), bundle_op(5, Some(9), 4, 12)],
-            // Slot 5 released: epoch gone.
             vec![bundle_op(3, Some(7), 0, 40), bundle_op(5, None, 4, 12)],
         ];
         for changed in variants {
@@ -25465,9 +23194,6 @@ mod tests {
         }
     }
 
-    /// A stretch encoded for the display-clip culled pass (depth
-    /// attachment, depth-variant pipelines) must never satisfy the flat
-    /// pass's lookup — and vice versa.
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn retained_bundle_cache_keys_depth_variants_apart() {
@@ -25487,9 +23213,6 @@ mod tests {
         );
     }
 
-    /// Entries a frame does not use are evicted at its end — bundles pin
-    /// slot buffers, so unused ones must not accumulate — and `clear` (the
-    /// slot-release path) empties the cache outright.
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn retained_bundle_cache_evicts_unused_entries() {
@@ -25513,12 +23236,6 @@ mod tests {
         assert!(!cache.hit(&live), "clear must drop every entry");
     }
 
-    /// A real device that was never granted `Features::PIPELINE_CACHE` —
-    /// every backend except Vulkan: GL (the Android fallback that reported
-    /// tens of seconds of black screen per shader-pipeline compile), Metal,
-    /// DX12. Requesting zero features forces this regardless of what the
-    /// adapter under the test runner actually supports, so the assertion
-    /// below exercises the no-device-cache path on every CI host.
     #[cfg(not(target_arch = "wasm32"))]
     fn headless_device_without_pipeline_cache_feature() -> Option<(
         Arc<wgpu::Device>,
@@ -25552,14 +23269,6 @@ mod tests {
         ))
     }
 
-    /// The bug this guards: a background prewarm thread that only paid off
-    /// through a device-level `wgpu::PipelineCache` blob helped Vulkan and
-    /// did nothing on every other backend, so a device without the feature
-    /// — the reported black screen was GL, with no Vulkan adapter at all —
-    /// got no mitigation whatsoever. Prewarming now races the render
-    /// thread's own `get_or_init` on the SAME shared slot instead of
-    /// building a throwaway pipeline, so it must fill that slot even when
-    /// `pipeline_cache` is `None`.
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn pipeline_prewarm_fills_the_shared_slot_without_a_device_pipeline_cache() {
@@ -25587,19 +23296,11 @@ mod tests {
              PIPELINE_CACHE — this test is meaningless if it was"
         );
 
-        // Storage-capable devices default to the instanced-quad path
-        // (`CRANPOSE_INSTANCED_QUADS`, ON unless disabled), which prewarms
-        // `instanced_quads`'s own pipelines instead of the plain ones —
-        // check whichever pair this device actually latched, exactly as
-        // `Self::shape_pipeline`/`Self::instanced_pipeline` do at draw time.
         let (base, solid): (&PassPipeline, &PassPipeline) = match &renderer.instanced_quads {
             Some(instanced) => (&instanced.pipeline, &instanced.pipeline_solid),
             None => (&renderer.pipeline, &renderer.pipeline_solid),
         };
 
-        // The prewarm thread builds the shape pair before the glyph atlas
-        // pipeline (see `spawn_pipeline_prewarm`), so waiting on the last
-        // one it touches is enough to know the whole set has landed.
         let deadline = Instant::now() + Duration::from_secs(30);
         while renderer.glyph_atlas_pipeline.get(false).is_none() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(5));
