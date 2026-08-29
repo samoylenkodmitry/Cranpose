@@ -83,8 +83,8 @@ use crate::{
     DebugCpuAllocationStats, display_clip,
     effect_renderer::{
         CompositeBatchItem, CompositeSampleMode, EffectRenderer, EffectScratchTargetProvider,
-        ProjectiveSurfaceComposite, RoundedCompositeMask, ShaderCompositeBatchItem,
-        projective_dest_bounds_rect,
+        FusedCompositeItem, ProjectiveSurfaceComposite, RoundedCompositeMask,
+        ShaderCompositeBatchItem, projective_dest_bounds_rect,
     },
     frame_graph::{
         FrameCommandRecorder, FrameTextureDescriptor, WgpuFrameGraph, WgpuFrameGraphExecutor,
@@ -9062,6 +9062,43 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
                 .effect_renderer
                 .debug_effects
                 .set(self.renderer.effect_renderer.debug_effects.get() + composites.len() as u32);
+        }
+        encoded
+    }
+
+    fn fused_composite_batch_to_view(
+        &mut self,
+        dest_view: &wgpu::TextureView,
+        viewport: (u32, u32),
+        load_op: wgpu::LoadOp<wgpu::Color>,
+        items: &[FusedCompositeItem<'_>],
+    ) -> bool {
+        if items.is_empty() {
+            return true;
+        }
+        let shader_item_count = items
+            .iter()
+            .filter(|item| matches!(item, FusedCompositeItem::Shader(_)))
+            .count();
+        let device = self.renderer.device.clone();
+        let encoded = self
+            .renderer
+            .effect_renderer
+            .encode_fused_composite_batch_to_view(
+                self.recorder,
+                &device,
+                dest_view,
+                viewport,
+                load_op,
+                items,
+            );
+        if encoded {
+            self.recorder.record_pass();
+            self.renderer.effect_renderer.record_composite_pass();
+            self.renderer
+                .effect_renderer
+                .debug_effects
+                .set(self.renderer.effect_renderer.debug_effects.get() + shader_item_count as u32);
         }
         encoded
     }

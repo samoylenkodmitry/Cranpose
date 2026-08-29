@@ -6,8 +6,8 @@ use cranpose_ui_graphics::{BlendMode, Brush, LayerShape, Rect, RenderEffect, Run
 
 use crate::{
     effect_renderer::{
-        CompositeBatchItem, CompositeSampleMode, ProjectiveSurfaceComposite, RoundedCompositeMask,
-        ShaderCompositeBatchItem,
+        CompositeBatchItem, CompositeSampleMode, FusedCompositeItem, ProjectiveSurfaceComposite,
+        RoundedCompositeMask, ShaderCompositeBatchItem,
     },
     offscreen::OffscreenTarget,
     scene::{
@@ -259,6 +259,17 @@ pub(crate) trait SurfaceExecutionBackend {
         viewport: (u32, u32),
         load_op: wgpu::LoadOp<wgpu::Color>,
         composites: &[ShaderCompositeBatchItem<'_>],
+    ) -> bool;
+    /// Draw blits and runtime-shader composites interleaved in the items'
+    /// own order inside ONE render pass. Returns false when a shader
+    /// pipeline fails validation; nothing is drawn and the caller flushes
+    /// the items individually instead.
+    fn fused_composite_batch_to_view(
+        &mut self,
+        dest_view: &wgpu::TextureView,
+        viewport: (u32, u32),
+        load_op: wgpu::LoadOp<wgpu::Color>,
+        items: &[FusedCompositeItem<'_>],
     ) -> bool;
     #[allow(clippy::too_many_arguments)]
     fn composite_to_view_scissored_with_alpha_and_mask_and_blend_mode(
