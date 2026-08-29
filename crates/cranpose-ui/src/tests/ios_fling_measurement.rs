@@ -239,10 +239,10 @@ const RUBBER_BAND_TRACE: &[(f32, f32)] = &[
 /// Least-squares fit of `c` in `f(x)=x*d*c/(d+c*x)` against this exact trace
 /// gave c=0.5499 with max residual 0.177pt — this tolerance leaves ~3x
 /// headroom over that fit residual while sitting nowhere near what the old
-/// linear-resistance-then-clamp model produced for the same inputs (at
-/// x=435, the old model — resistance=(1-offset/limit).clamp(0.12,1)*0.5
-/// against limit=340.83 (half the viewport) — diverges from the recorded
-/// 177pt by over 60pt).
+/// linear-resistance-then-clamp model produced for the same inputs: Euler-
+/// integrating `resistance=(1-offset/limit).clamp(0.12,1)*0.5` (limit=340.83,
+/// half the viewport) over this trace's 29 15pt drag steps lands at 162.06pt
+/// where iOS recorded 177pt, a 14.9pt divergence — 30x this tolerance.
 const RUBBER_BAND_TOLERANCE_PT: f32 = 0.5;
 
 #[test]
