@@ -262,3 +262,24 @@ Signature → cause → what to do. One lesson per line, no incident history.
   CI" advice needs a check first: if the runner is mid-job, wait or use the
   second checkout with its own SCCACHE_DIR/port, or skip sccache
   (`SCCACHE_DISABLE=1`/unset RUSTC_WRAPPER) for the validation build.
+
+- **A recovery path keyed on a timeout is a guard that lies under load** —
+  `scripts/ci/start_sccache.sh` reclaimed the sccache port
+  (`--stop-server` then `--start-server`) when the server failed to answer
+  within 30s. It was written for a host carrying two sccache versions
+  fighting over port 4226; that second binary was retired the same evening
+  and the reclaim outlived its reason. A shared server under concurrent
+  load is precisely what misses a fixed timeout while being alive and
+  mid-compile for another job, so the reclaim killed healthy servers and
+  two builds died with "The server looks like it shut down unexpectedly,
+  compiling locally instead". Nothing may stop a daemon it did not start:
+  if a shared service will not answer, fail loudly rather than restarting
+  it underneath whoever is using it.
+
+- **Fixing the workflow in front of you is not the same as establishing the
+  property you named** — #526 was titled "Let one sccache serve the whole
+  host" but only rewired `heavy-selfhosted.yml`; `rust.yml` kept the bare
+  `RUSTC_WRAPPER: sccache` and its own `--start-server`. Two provisioning
+  regimes then ran concurrently on samarch-1, and only one of them could
+  kill the server. When a change claims a host-wide invariant, grep the
+  whole `.github/workflows` tree for the pattern before believing it holds.
