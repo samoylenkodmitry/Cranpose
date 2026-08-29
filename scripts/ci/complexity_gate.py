@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -57,14 +56,16 @@ def functions_in(space: dict, out: list[dict]) -> None:
         functions_in(child, out)
 
 
-def analyze_files(files: list[str], out_dir: Path) -> dict[str, list[dict]]:
+def analyze_files(
+    rust_code_analysis_cli: Path, files: list[str], out_dir: Path
+) -> dict[str, list[dict]]:
     """Run `rust-code-analysis-cli` on `files`, returning functions per file.
 
     The CLI takes one `-p <path>` per input (a comma-joined list is treated
     as one literal, nonexistent path, not a list) and mirrors each input's
     relative path under `out_dir` with a `.json` suffix appended.
     """
-    args = ["rust-code-analysis-cli", "-m", "-O", "json", "-o", str(out_dir)]
+    args = [str(rust_code_analysis_cli), "-m", "-O", "json", "-o", str(out_dir)]
     for f in files:
         args += ["-p", f]
     result = subprocess.run(args, cwd=ROOT, capture_output=True, text=True)
@@ -126,22 +127,15 @@ def main() -> int:
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     args = parser.parse_args()
 
-    if shutil.which("rust-code-analysis-cli") is None:
-        print(
-            "complexity-gate: rust-code-analysis-cli not found; "
-            "install with `cargo install rust-code-analysis-cli --locked`",
-            file=sys.stderr,
-        )
-        return 1
-
     max_cyclomatic = load_max_cyclomatic(args.config)
     ranges = gate_diff.changed_ranges(args.base, "*.rs")
     if not ranges:
         print(f"complexity-gate: no changed Rust files against {args.base}")
         return 0
 
+    rust_code_analysis_cli = gate_diff.resolve_cargo_tool("rust-code-analysis-cli")
     with tempfile.TemporaryDirectory() as tmp:
-        functions_by_file = analyze_files(sorted(ranges), Path(tmp))
+        functions_by_file = analyze_files(rust_code_analysis_cli, sorted(ranges), Path(tmp))
 
     violations = find_violations(ranges, functions_by_file, max_cyclomatic)
     if violations:

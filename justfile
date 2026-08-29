@@ -125,18 +125,15 @@ test-quality-gates:
     python3 scripts/ci/test_gate_diff.py
 
 # Cyclomatic complexity ceiling for functions the diff adds or modifies.
-# Installed on demand, the way `typos` is.
+# Installs its own tool on demand, the way `typos` does -- see
+# gate_diff.resolve_cargo_tool for why that install is pinned to a cargo
+# path rather than trusting whatever `rust-code-analysis-cli` is on $PATH.
 complexity-gate base="origin/main":
-    @command -v rust-code-analysis-cli >/dev/null || cargo install rust-code-analysis-cli --locked
     python3 scripts/ci/complexity_gate.py --base {{base}}
 
 # Copy-paste budget for a block the diff adds, at either end of the copy.
-#
-# jscpd v5 is a Rust CLI (its own npm package just wraps prebuilt binaries of
-# it); installing it with cargo keeps this off Node.js, which the runners
-# that carry the Rust toolchain do not otherwise have.
+# Same on-demand install as above, through the same pinned-path resolver.
 duplication-gate base="origin/main":
-    @command -v jscpd >/dev/null || cargo install jscpd --locked
     python3 scripts/ci/duplication_gate.py --base {{base}}
 
 # --- test ------------------------------------------------------------------

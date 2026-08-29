@@ -22,6 +22,7 @@ branch when it is not resolvable rather than failing with a confusing
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -115,6 +116,43 @@ def changed_ranges(base: str, pathspec: str = "*.rs") -> dict[str, list[tuple[in
         check=True,
     )
     return parse_unified_diff_zero_context(result.stdout)
+
+
+def cargo_bin_dir() -> Path:
+    """Where `cargo install` puts binaries -- $CARGO_HOME/bin, or ~/.cargo/bin.
+
+    Every gate tool is resolved against this exact path, never against
+    `$PATH`. `$PATH` is not deterministic across machines: a name like
+    `jscpd` can also be a leftover npm global, an old major version, or a
+    system package, and a bare `shutil.which()` / `command -v` probe accepts
+    whichever one happens to be sitting there first. Pinning the path pins
+    the binary to the one this project just installed.
+    """
+    cargo_home = os.environ.get("CARGO_HOME")
+    root = Path(cargo_home).expanduser() if cargo_home else Path.home() / ".cargo"
+    return root / "bin"
+
+
+def resolve_cargo_tool(name: str, on_install_failure_hint: str = "") -> Path:
+    """The cargo-installed `name`, installing it first if it is missing.
+
+    Never falls back to `$PATH`: see `cargo_bin_dir`. If cargo itself cannot
+    produce the binary (offline, registry down, name typo), this fails loudly
+    with `on_install_failure_hint` attached -- the place to name the actual
+    reason this project cannot substitute some other build of the same name
+    (a different language runtime, a different major version), since that
+    reason has nowhere else durable to live.
+    """
+    binary = cargo_bin_dir() / name
+    if not (binary.is_file() and os.access(binary, os.X_OK)):
+        subprocess.run(["cargo", "install", name, "--locked"], cwd=ROOT)
+    if not (binary.is_file() and os.access(binary, os.X_OK)):
+        hint = f" {on_install_failure_hint}" if on_install_failure_hint else ""
+        raise SystemExit(
+            f"gate_diff: {name} is not at {binary} and `cargo install {name} "
+            f"--locked` did not put it there.{hint}"
+        )
+    return binary
 
 
 def intersects(a: tuple[int, int], b: tuple[int, int]) -> bool:

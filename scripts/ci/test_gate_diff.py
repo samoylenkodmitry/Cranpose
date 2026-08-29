@@ -13,7 +13,12 @@ tool output, so it needs neither git history nor `rust-code-analysis-cli` /
 
 from __future__ import annotations
 
+import os
+import stat
+import tempfile
 import unittest
+from pathlib import Path
+from unittest import mock
 
 import complexity_gate
 import duplication_gate
@@ -122,6 +127,56 @@ class Intersects(unittest.TestCase):
         self.assertTrue(gate_diff.any_intersect(ranges, (55, 58)))
         self.assertFalse(gate_diff.any_intersect(ranges, (10, 20)))
         self.assertFalse(gate_diff.any_intersect([], (1, 1000)))
+
+
+class ResolveCargoTool(unittest.TestCase):
+    def test_cargo_bin_dir_honors_cargo_home(self) -> None:
+        with mock.patch.dict(os.environ, {"CARGO_HOME": "/scratch/cargo"}):
+            self.assertEqual(gate_diff.cargo_bin_dir(), Path("/scratch/cargo/bin"))
+
+    def test_cargo_bin_dir_falls_back_to_dot_cargo(self) -> None:
+        env_without_cargo_home = {k: v for k, v in os.environ.items() if k != "CARGO_HOME"}
+        with mock.patch.dict(os.environ, env_without_cargo_home, clear=True):
+            self.assertEqual(gate_diff.cargo_bin_dir(), Path.home() / ".cargo" / "bin")
+
+    def test_never_consults_path_when_already_at_the_pinned_location(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            bin_dir = Path(tmp) / "bin"
+            bin_dir.mkdir()
+            fake_tool = bin_dir / "some-tool"
+            fake_tool.write_text("#!/bin/sh\n")
+            fake_tool.chmod(fake_tool.stat().st_mode | stat.S_IEXEC)
+
+            with mock.patch.dict(os.environ, {"CARGO_HOME": tmp}):
+                with mock.patch("gate_diff.subprocess.run") as run:
+                    resolved = gate_diff.resolve_cargo_tool("some-tool")
+                    run.assert_not_called()
+            self.assertEqual(resolved, fake_tool)
+
+    def test_installs_when_missing_then_resolves_to_the_pinned_location(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            bin_dir = Path(tmp) / "bin"
+            bin_dir.mkdir()
+            fake_tool = bin_dir / "some-tool"
+
+            def fake_install(args, cwd=None):
+                fake_tool.write_text("#!/bin/sh\n")
+                fake_tool.chmod(fake_tool.stat().st_mode | stat.S_IEXEC)
+
+            with mock.patch.dict(os.environ, {"CARGO_HOME": tmp}):
+                with mock.patch("gate_diff.subprocess.run", side_effect=fake_install) as run:
+                    resolved = gate_diff.resolve_cargo_tool("some-tool")
+                    run.assert_called_once()
+            self.assertEqual(resolved, fake_tool)
+
+    def test_raises_with_the_hint_when_install_does_not_produce_the_binary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "bin").mkdir()
+            with mock.patch.dict(os.environ, {"CARGO_HOME": tmp}):
+                with mock.patch("gate_diff.subprocess.run"):
+                    with self.assertRaises(SystemExit) as raised:
+                        gate_diff.resolve_cargo_tool("some-tool", "do not substitute npm")
+            self.assertIn("do not substitute npm", str(raised.exception))
 
 
 class ComplexityFindViolations(unittest.TestCase):

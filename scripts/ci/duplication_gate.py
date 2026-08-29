@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -35,9 +34,11 @@ def load_duplication_config(config_path: Path) -> dict:
     return config["duplication"]
 
 
-def run_jscpd(min_lines: int, min_tokens: int, ignore_globs: list[str], out_dir: Path) -> list[dict]:
+def run_jscpd(
+    jscpd: Path, min_lines: int, min_tokens: int, ignore_globs: list[str], out_dir: Path
+) -> list[dict]:
     args = [
-        "jscpd",
+        str(jscpd),
         "--min-lines",
         str(min_lines),
         "--min-tokens",
@@ -95,22 +96,27 @@ def main() -> int:
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     args = parser.parse_args()
 
-    if shutil.which("jscpd") is None:
-        print(
-            "duplication-gate: jscpd not found; install with `cargo install jscpd --locked`",
-            file=sys.stderr,
-        )
-        return 1
-
     config = load_duplication_config(args.config)
     ranges = gate_diff.changed_ranges(args.base, "*.rs")
     if not ranges:
         print(f"duplication-gate: no changed Rust files against {args.base}")
         return 0
 
+    jscpd = gate_diff.resolve_cargo_tool(
+        "jscpd",
+        "jscpd also ships an npm package that wraps a prebuilt copy of the same "
+        "Rust binary, but this project does not require Node.js and will not "
+        "start requiring it here -- if `cargo install jscpd --locked` cannot "
+        "run, fix that (network, registry, offline mirror), do not swap in "
+        "`npm install -g jscpd`.",
+    )
     with tempfile.TemporaryDirectory() as tmp:
         duplicates = run_jscpd(
-            config["min_lines"], config["min_tokens"], config.get("ignore_globs", []), Path(tmp)
+            jscpd,
+            config["min_lines"],
+            config["min_tokens"],
+            config.get("ignore_globs", []),
+            Path(tmp),
         )
 
     violations = find_violations(duplicates, ranges)
