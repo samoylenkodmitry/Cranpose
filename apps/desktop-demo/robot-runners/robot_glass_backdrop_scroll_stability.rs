@@ -61,7 +61,7 @@ const WINDOW_TITLE: &str = "Robot Glass Backdrop Scroll Stability";
 /// caught once in this investigation — see TIME_WASTERS.md).
 const SETTLE_SCROLL: f32 = -400.0;
 const SCROLL_DELTA_Y: f32 = -1.0;
-const STEP_COUNT: usize = 20;
+const STEP_COUNT: usize = 10;
 const STEP_EPSILON: f32 = 0.05;
 /// Consecutive scroll events accumulate velocity under the current fling
 /// physics, so back-to-back one-pixel input events do not produce
@@ -72,23 +72,33 @@ const STEP_EPSILON: f32 = 0.05;
 const SETTLE_AFTER_SCROLL_EXTRA_MS: u64 = 1_500;
 /// Search radius for the reused shift-search engine. Must comfortably
 /// exceed the final step's expected cumulative shift (`STEP_COUNT` px).
-const COMPARE_SEARCH_OFFSET_PX: u32 = 32;
+const COMPARE_SEARCH_OFFSET_PX: u32 = 16;
 /// Small: the sampled glass patch is only ~90px tall, and the reused
 /// engine's fractional-alignment guard grows with the largest measured
 /// shift (up to ~`STEP_COUNT` px here), which must still leave a positive
 /// crop height.
 const COMPARE_STABILIZED_GUARD_PX: u32 = 4;
 /// Interior of the "Library" glass `TopBar`
-/// (`apps/desktop-demo/src/app/glass_feed.rs`), clear of both the
-/// "Library" text (left) and the round icon button (right). Verified by
-/// eye against this run's own `glass_step00.png` before trusting any
+/// (`apps/desktop-demo/src/app/glass_feed.rs`). Confirmed against this
+/// window size's own semantics dump: the bar's outer box is
+/// (28, 103.6, 744, 56), its icon button occupies x=[680,756], so
+/// x=[150,650] y=[105,157] sits inside the bar with margin, clear of
+/// both the "Library" text and the button. Also verified by eye
+/// against this run's own `glass_step00.png` before trusting any
 /// number from it — sampling the wrong rectangle has cost this
-/// investigation twice already (see TIME_WASTERS.md).
-const GLASS_REGION: (f32, f32, f32, f32) = (150.0, 100.0, 500.0, 90.0);
+/// investigation twice already (see TIME_WASTERS.md). Height is capped
+/// by the reused compare script's fractional-shift guard, which grows
+/// with the largest measured shift (~STEP_COUNT px) and must leave a
+/// positive crop height.
+const GLASS_REGION: (f32, f32, f32, f32) = (150.0, 105.0, 500.0, 52.0);
 /// A best-fit shift within this many pixels of the expected cumulative
 /// shift counts as tracking correctly. Must be well under 1 step's worth
 /// of motion or it cannot tell "frozen" from "on time" at step 1.
 const SHIFT_TOLERANCE_PX: i32 = 1;
+/// Skip this many of the topmost visible receipt subtitles when picking a
+/// tracking anchor, so a 20-step, 1px-per-step upward walk never pushes it
+/// into whatever clips items out near the fixed chrome's lower edge.
+const RECEIPT_ANCHOR_SKIP_FROM_TOP: usize = 2;
 
 fn fail(robot: &cranpose::Robot, message: &str) -> ! {
     println!("FATAL: {message}");
@@ -130,12 +140,36 @@ fn main() {
 
             // A receipt subtitle ("Receipt #NNNN — 12 items") is unique per
             // row, unlike the six recycled card titles, so once discovered
-            // it is an unambiguous anchor for the rest of the run.
-            let (_, _, _, _, anchor_text) = robot
-                .find_text_by_prefix("Receipt #")
-                .expect("query receipt subtitle")
-                .unwrap_or_else(|| fail(&robot, "no receipt subtitle visible after settle scroll"));
-            println!("tracking content anchor: {anchor_text:?}");
+            // it is an unambiguous anchor for the rest of the run. The
+            // topmost visible one is a bad choice: it starts close to
+            // whatever clips items out once they scroll under the fixed
+            // chrome, and a 20-step upward walk pushed it there mid-run
+            // ("target text must stay visible" at step 13, first attempt).
+            // Pick one with real headroom instead.
+            let semantics = robot.get_semantics().expect("query semantics");
+            let mut receipt_matches = Vec::new();
+            for root in &semantics {
+                collect_receipt_subtitles(root, &mut receipt_matches);
+            }
+            receipt_matches.sort_by(|a, b| a.1.partial_cmp(&b.1).expect("finite y"));
+            let anchor_text = receipt_matches
+                .get(RECEIPT_ANCHOR_SKIP_FROM_TOP)
+                .map(|(text, _)| text.clone())
+                .unwrap_or_else(|| {
+                    fail(
+                        &robot,
+                        &format!(
+                            "expected at least {} visible receipt subtitles after settle, found {}",
+                            RECEIPT_ANCHOR_SKIP_FROM_TOP + 1,
+                            receipt_matches.len()
+                        ),
+                    )
+                });
+            println!(
+                "tracking content anchor: {anchor_text:?} (of {} visible: {:?})",
+                receipt_matches.len(),
+                receipt_matches
+            );
             let anchor_text: &'static str = Box::leak(anchor_text.into_boxed_str());
 
             let mut previous_bounds = find_in_semantics(&robot, |elem| {
@@ -325,6 +359,17 @@ fn parse_anchor_dys(report: &str, expected_len: usize) -> Vec<i32> {
         "expected one anchor_dy per captured frame; report:\n{report}"
     );
     anchor_dys
+}
+
+fn collect_receipt_subtitles(elem: &cranpose::SemanticElement, out: &mut Vec<(String, f32)>) {
+    if let Some(text) = elem.text.as_deref() {
+        if text.starts_with("Receipt #") {
+            out.push((text.to_string(), elem.bounds.y));
+        }
+    }
+    for child in &elem.children {
+        collect_receipt_subtitles(child, out);
+    }
 }
 
 fn open_receipts_tab(robot: &cranpose::Robot) {
