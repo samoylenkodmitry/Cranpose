@@ -44,17 +44,20 @@ const WINDOW_TITLE: &str = "Robot Glass Backdrop Scroll Stability";
 /// rect reads as a stale cache, and is not one").
 const SETTLE_SCROLL: f32 = -400.0;
 const STEP_COUNT: usize = 20;
-/// Interior of the "Library" glass `TopBar` (`apps/desktop-demo/src/app/
-/// glass_feed.rs`): an 8px chrome margin, a 56px-tall bar, a 16/6px
-/// symmetric inner padding, "Library" text on the left (natural width, not
-/// stretched — `weight(1.0)` only gives it layout space, it stays
-/// start-aligned) and a 44x44 glass button on the right. This box sits well
-/// clear of both. Confirmed by eye against `step_00_full.png` in the
-/// diagnostic output dir before trusting any diff count from it — see the
-/// investigation record in PR history for the two prior false positives
-/// this exact check caught (sampling the outer tab-bar strip, and sampling
-/// still-empty content padding).
-const GLASS_REGION: (f32, f32, f32, f32) = (160.0, 20.0, 200.0, 30.0);
+/// Interior of the "Library" glass `TopBar`. NOT derived analytically this
+/// time — the first version of this constant (160, 20, 200, 30) was an
+/// analytic guess from `glass_feed.rs`'s layout constants that turned out
+/// wrong: it landed squarely in the outer, unrelated, always-static
+/// tab-bar strip (`combined_app`'s "Shaders / Shader Rect / ..." row sits
+/// above `TabContent`, so the real chrome starts well below y=20 once that
+/// row's own height and padding are counted). Caught by dumping
+/// `step_00_full.png`, annotating both rectangles, and looking — the same
+/// rule this investigation has needed twice before. These coordinates are
+/// pixel-sampled directly from that capture: a smoothly-varying blurred-
+/// content band confirmed to sit inside the purple glass bar, clear of the
+/// "Library" text (ends well before x=120) and the round icon button
+/// (starts after x=780).
+const GLASS_REGION: (f32, f32, f32, f32) = (300.0, 125.0, 200.0, 35.0);
 const CHANGE_CHANNEL_THRESHOLD: u8 = 6;
 /// A single real one-pixel scroll must move some pixel in the sampled patch
 /// by more than the noise floor. Zero is the freeze this test exists to
