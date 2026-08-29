@@ -1990,3 +1990,84 @@ fn param_state_update_reuses_existing_buffer_via_clone_from() {
         "ParamState::update should reuse the existing String allocation when capacity permits",
     );
 }
+
+/// A structural change costs the renderer a full re-lowering of the parent's
+/// subtree, so it must be recorded only when the child list actually changed.
+/// A steady scroll re-attaches retained children and detaches already-detached
+/// ones every frame; recording those marked the list structurally dirty on
+/// every frame and rebuilt ~51 layers for a frame in which one row moved.
+#[test]
+fn reattaching_a_child_to_its_current_parent_records_no_structural_change() {
+    let mut applier = test_applier();
+    let parent = applier.create(Box::new(RecordingNode::default()));
+    let child = applier.create(Box::new(RecordingNode::default()));
+
+    insert_child_with_reparenting(&mut applier, parent, child);
+    let _ = applier.take_structural_change_parents_attached_to(parent);
+
+    insert_child_with_reparenting(&mut applier, parent, child);
+
+    assert_eq!(
+        applier.take_structural_change_parents_attached_to(parent),
+        Vec::<NodeId>::new(),
+        "re-attaching a child that is already this parent's child changes nothing"
+    );
+}
+
+#[test]
+fn detaching_a_child_that_is_not_attached_records_no_structural_change() {
+    let mut applier = test_applier();
+    let parent = applier.create(Box::new(RecordingNode::default()));
+    let child = applier.create(Box::new(RecordingNode::default()));
+
+    detach_child_from_parent(&mut applier, parent, child).expect("detach of a non-child");
+
+    assert_eq!(
+        applier.take_structural_change_parents_attached_to(parent),
+        Vec::<NodeId>::new(),
+        "detaching a child this parent never had removes nothing"
+    );
+}
+
+/// The positive control for the two guards above: without it they would pass
+/// just as well if structural changes were never recorded at all.
+#[test]
+fn a_real_attach_and_a_real_detach_each_record_a_structural_change() {
+    let mut applier = test_applier();
+    let parent = applier.create(Box::new(RecordingNode::default()));
+    let child = applier.create(Box::new(RecordingNode::default()));
+
+    insert_child_with_reparenting(&mut applier, parent, child);
+    assert_eq!(
+        applier.take_structural_change_parents_attached_to(parent),
+        vec![parent],
+        "attaching a new child is a structural change"
+    );
+
+    detach_child_from_parent(&mut applier, parent, child).expect("detach of a real child");
+    assert_eq!(
+        applier.take_structural_change_parents_attached_to(parent),
+        vec![parent],
+        "detaching a child this parent actually had is a structural change"
+    );
+}
+
+#[test]
+fn reparenting_records_a_structural_change_on_both_parents() {
+    let mut applier = test_applier();
+    let old_parent = applier.create(Box::new(RecordingNode::default()));
+    let new_parent = applier.create(Box::new(RecordingNode::default()));
+    let child = applier.create(Box::new(RecordingNode::default()));
+
+    insert_child_with_reparenting(&mut applier, old_parent, child);
+    let _ = applier.take_structural_change_parents_attached_to(old_parent);
+    let _ = applier.take_structural_change_parents_attached_to(new_parent);
+
+    insert_child_with_reparenting(&mut applier, new_parent, child);
+
+    assert_eq!(
+        applier.take_structural_change_parents_attached_to(new_parent),
+        vec![new_parent],
+        "the new parent gained a child"
+    );
+}

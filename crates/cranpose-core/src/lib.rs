@@ -1912,6 +1912,7 @@ impl Command {
                     parent_node.move_child(from_index, to_index);
                 }
                 bubble.apply(applier, parent_id);
+                note_structural_move(parent_id, from_index, to_index);
                 applier.record_structural_change(parent_id);
                 Ok(())
             }
@@ -2493,13 +2494,21 @@ fn insert_child_with_reparenting(applier: &mut dyn Applier, parent_id: NodeId, c
         }
         bubble_layout_dirty(applier, old_parent_id);
         bubble_measure_dirty(applier, old_parent_id);
+        note_structural("reparent-detach", old_parent_id, child_id);
         applier.record_structural_change(old_parent_id);
     }
 
+    // `insert_child` returns early when the child is already in this parent's
+    // list, so re-inserting it changes nothing -- and a structural change
+    // recorded for it costs a full re-lowering of the parent's subtree.
+    let already_attached_here = old_parent == Some(parent_id);
     if let Ok(parent_node) = applier.get_mut(parent_id) {
         parent_node.insert_child(child_id);
     }
-    applier.record_structural_change(parent_id);
+    if !already_attached_here {
+        note_structural("attach", parent_id, child_id);
+        applier.record_structural_change(parent_id);
+    }
     if let Ok(child_node) = applier.get_mut(child_id) {
         child_node.on_attached_to_parent(parent_id);
     }
@@ -2528,12 +2537,25 @@ fn detach_child_from_parent(
     parent_id: NodeId,
     child_id: NodeId,
 ) -> Result<(), NodeError> {
+    // A child that is not this parent's child cannot be removed from it: the
+    // `remove_child` below is then a no-op, and the checks further down bail
+    // out for exactly that case. Decide here, before the record, or a repeated
+    // detach of an already-detached child marks the parent structurally dirty
+    // every frame and re-lowers its whole subtree for nothing.
+    let was_attached_here = applier
+        .get_mut(child_id)
+        .ok()
+        .and_then(|node| node.parent())
+        == Some(parent_id);
     if let Ok(parent_node) = applier.get_mut(parent_id) {
         parent_node.remove_child(child_id);
     }
     bubble_layout_dirty(applier, parent_id);
     bubble_measure_dirty(applier, parent_id);
-    applier.record_structural_change(parent_id);
+    if was_attached_here {
+        note_structural("detach", parent_id, child_id);
+        applier.record_structural_change(parent_id);
+    }
 
     if let Ok(node) = applier.get_mut(child_id) {
         match node.parent() {
@@ -4440,3 +4462,23 @@ pub mod hash;
 pub mod test_scratch;
 #[cfg(any(test, feature = "test-helpers"))]
 pub use test_scratch::test_scratch_dir;
+
+/// Traces every structural change back to the operation that recorded it.
+///
+/// A structural change re-lowers the parent's whole subtree, so what matters is
+/// not how many are recorded but which operation keeps recording them: an
+/// aggregate count hides a single child cycling every frame, and the sequence
+/// makes it obvious.
+pub(crate) fn note_structural(reason: &str, parent_id: NodeId, child_id: NodeId) {
+    if env_flag!("CRANPOSE_STRUCTURAL_DIAG") {
+        eprintln!("[structural] {reason} parent={parent_id} child={child_id}");
+    }
+}
+
+/// A move names indices rather than a child, so it gets its own line instead of
+/// a placeholder id that would read as a real node.
+pub(crate) fn note_structural_move(parent_id: NodeId, from_index: usize, to_index: usize) {
+    if env_flag!("CRANPOSE_STRUCTURAL_DIAG") {
+        eprintln!("[structural] move parent={parent_id} from={from_index} to={to_index}");
+    }
+}
