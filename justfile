@@ -227,6 +227,12 @@ test-host-lock:
 # reached main. This is the property behind that instance, not a fix for it
 # alone: it fails on any future recipe CI runs that `ci`/`ci-full` cannot
 # reach, not just this one.
+# `robot-gpu` and `robot-captures` partition the robot suite. Nothing made
+# the two lists agree, so an example dropped from one and not added to the
+# other would stop running anywhere without a gate going red.
+test-robot-suite-partition:
+    cargo xtask robot-suite-partition
+
 test-ci-gate-reachability:
     cargo xtask ci-gate-reachability
 
@@ -387,7 +393,7 @@ robot-build: _disk-guard
 robot-one example:
     ./run_robot_test.sh --sequential --example {{example}}
 
-# The three external-framebuffer captures are excluded here: a GPU swapchain
+# The four external-framebuffer captures are excluded here: a GPU swapchain
 # under Xvfb never lands pixels in the X server's buffer, so they can only read
 # their screenshots on software present.
 
@@ -491,7 +497,7 @@ _disk-guard:
 # all seven on every pull request.
 
 # What a pull request is gated on. Run this before pushing.
-ci: fmt-check typos versions test clippy clippy-optional-backends clippy-svg clippy-hyphenation clippy-robot clippy-wasm doc budgets test-quality-gates complexity-gate duplication-gate test-robot-discovery test-shell-helpers test-host-lock test-ci-filters test-features test-property bench-smoke test-ci-gate-reachability
+ci: fmt-check typos versions test clippy clippy-optional-backends clippy-svg clippy-hyphenation clippy-robot clippy-wasm doc budgets test-quality-gates complexity-gate duplication-gate test-robot-discovery test-shell-helpers test-host-lock test-ci-filters test-features test-property bench-smoke test-ci-gate-reachability test-robot-suite-partition
 
 # Needs a Linux box with the X11 stack, an Android SDK and (on macOS) Xcode.
 

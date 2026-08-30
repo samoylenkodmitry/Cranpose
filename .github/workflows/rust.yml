@@ -101,6 +101,10 @@ jobs:
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         run: just test-ci-gate-reachability
 
+      - name: Check the robot suite's two halves still partition it
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
+        run: just test-robot-suite-partition
+
       - name: Check cyclomatic complexity of changed functions
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         run: just complexity-gate
