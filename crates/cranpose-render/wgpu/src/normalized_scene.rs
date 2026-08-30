@@ -1216,6 +1216,15 @@ fn try_command_feed<'a>(
                             Some(gpu_slot)
                         })
                         .map(|gpu_slot| {
+                            if cranpose_core::env_flag!("CRANPOSE_BACKDROP_DIAG")
+                                && bounds_now.y < 180.0
+                                && bounds_now.y + bounds_now.height > 90.0
+                            {
+                                eprintln!(
+                                    "[backdrop-diag] retained-span-patch bounds_now={bounds_now:?} center_final={center_final:?} layer_bounds={:?} frame_center={:?}",
+                                    context.layer_bounds, frame.center,
+                                );
+                            }
                             local_scene.push_retained_draw(crate::scene::RetainedDraw {
                                 slot: gpu_slot,
                                 transform: SegmentTransform {
@@ -1233,6 +1242,15 @@ fn try_command_feed<'a>(
                     stat_retained += 1;
                 } else {
                     stat_fallback += 1;
+                    if cranpose_core::env_flag!("CRANPOSE_BACKDROP_DIAG")
+                        && bounds_now.y < 180.0
+                        && bounds_now.y + bounds_now.height > 90.0
+                    {
+                        eprintln!(
+                            "[backdrop-diag] retained-span-fallback bounds_now={bounds_now:?} center_final={center_final:?} layer_bounds={:?}",
+                            context.layer_bounds,
+                        );
+                    }
                     if range.1 > range.0 {
                         emit_feed_range(
                             local_scene,
