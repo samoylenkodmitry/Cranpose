@@ -250,8 +250,11 @@ mkdir -p "$(dirname "$LOG_FILE")" "$(dirname "$SUMMARY_FILE")"
 rm -f "$LOG_FILE" "$SUMMARY_FILE"
 
 echo "Cleaning up..."
-# Dynamically discover all robot tests from the robot-runners and examples directories
-# Exclude utility modules (files that don't have a main function)
+# A robot test is a file with a `fn main`. Anything else under robot_*.rs is a
+# module the runners share, and cargo builds no binary for it -- asking for one
+# reports FAIL:missing_binary, which is what a shared module named robot_exit.rs
+# did to the whole suite. The previous predicate was a single hardcoded name,
+# so every future shared module had to be added to it or break the suite.
 EXAMPLES=()
 RUN_EXAMPLES=()
 CAPABILITY_SKIPPED_EXAMPLES=()
@@ -260,13 +263,10 @@ for robot_source_dir in "$ROBOT_DIR" "$ROBOT_EXAMPLES_DIR"; do
         if [ ! -f "$file" ]; then
             continue
         fi
-        # Extract the example name (filename without .rs extension)
-        example=$(basename "$file" .rs)
-        # Skip utility modules (they don't have fn main)
-        if [ "$example" = "robot_test_utils" ]; then
+        if ! grep -qE '^fn main\(' "$file"; then
             continue
         fi
-        EXAMPLES+=("$example")
+        EXAMPLES+=("$(basename "$file" .rs)")
     done
 done
 
