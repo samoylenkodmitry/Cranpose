@@ -14802,6 +14802,9 @@ impl SegmentDrawChunkPlan {
         self.batches.iter().copied()
     }
 
+    // Both callers -- the fused native partition path and the fusion budget --
+    // are `not(target_arch = "wasm32")`, so on wasm this has no callers at all.
+    #[cfg(not(target_arch = "wasm32"))]
     fn shape_indices<'a>(
         &'a self,
         ordered_items: &'a [(usize, SegmentDrawItem)],
