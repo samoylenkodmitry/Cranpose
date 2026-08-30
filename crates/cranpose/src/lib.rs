@@ -155,8 +155,9 @@ pub use cranpose_audio::{AudioEngine, install as install_audio};
 /// Core runtime helpers commonly used by applications.
 pub use cranpose_core::{
     CoroutineScope, MutableState, SnapshotStateList, SnapshotStateMap, State, delay, interval,
-    launchBlocking, mutableStateOf, produceState, remember, rememberCoroutineScope,
-    rememberMutableStateOf, rememberMutableStateOfNeverEqual, rememberUpdatedState,
+    launchBlocking, mutableStateList, mutableStateListOf, mutableStateMap, mutableStateMapOf,
+    mutableStateOf, produceState, remember, rememberCoroutineScope, rememberMutableStateOf,
+    rememberMutableStateOfNeverEqual, rememberUpdatedState,
 };
 /// Liquid UI — the first-party glass component library
 /// (`use cranpose::liquid::prelude::*;`).
@@ -363,6 +364,7 @@ pub mod _docs;
 pub mod prelude {
     pub use cranpose_core::{
         CoroutineScope, MutableState, SnapshotStateList, SnapshotStateMap, State, delay, interval,
+        launchBlocking, mutableStateList, mutableStateListOf, mutableStateMap, mutableStateMapOf,
         mutableStateOf, produceState, remember, rememberCoroutineScope, rememberMutableStateOf,
         rememberMutableStateOfNeverEqual, rememberUpdatedState,
     };
