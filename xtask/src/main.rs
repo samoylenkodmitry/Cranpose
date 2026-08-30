@@ -115,6 +115,16 @@ const COMMANDS: &[XtaskCommand] = &[
         run: |args| run_duplication_gate(GateOptions::parse(args, "duplication-gate")?),
         print_usage: print_duplication_gate_usage,
     },
+    XtaskCommand {
+        name: "ci-gate-reachability",
+        run: |args| {
+            if let Some(extra) = args.first() {
+                return Err(format!("unknown ci-gate-reachability option `{extra}`"));
+            }
+            ci_gate_reachability::run_at(&workspace_root()?)
+        },
+        print_usage: print_ci_gate_reachability_usage,
+    },
 ];
 
 fn run(args: Vec<String>) -> Result<(), String> {
@@ -156,6 +166,7 @@ fn print_usage() {
            crate-published      Exit 0/1/2: published, not yet, or error\n\
            complexity-gate       Diff-scoped cyclomatic complexity ceiling\n\
            duplication-gate      Diff-scoped copy-paste budget\n\
+           ci-gate-reachability  Every `just` recipe CI runs must be reachable from `ci`/`ci-full`\n\
          \n\
          bundle-macos options:\n\
            --package <name>       Cargo package to build [desktop-app]\n\
@@ -330,6 +341,19 @@ fn print_duplication_gate_usage() {
          Fails if the diff introduces a cloned block of code, comparing jscpd's\n\
          report before and after so pre-existing duplication is not penalized.\n\
          Installs jscpd via `cargo install` if it is missing."
+    );
+}
+
+fn print_ci_gate_reachability_usage() {
+    eprintln!(
+        "usage: cargo xtask ci-gate-reachability\n\
+         \n\
+         Fails if `.github/workflows/rust.yml` invokes a `just` recipe that\n\
+         `ci` and `ci-full` cannot reach in the justfile's dependency graph --\n\
+         a gate CI judges every pull request on but a developer cannot run\n\
+         before pushing is worse than no gate at all (see #593). Also fails\n\
+         loudly, rather than passing, if it parses zero `just` invocations\n\
+         from rust.yml: that means the parser itself broke."
     );
 }
 
@@ -4095,6 +4119,300 @@ mod duplication_gate {
     }
 }
 
+/// Checks a property, not a list: every `just <recipe>` that
+/// `.github/workflows/rust.yml` invokes must be reachable from the
+/// justfile's `ci` or `ci-full` aggregate. `clippy-wasm` broke this exact
+/// way (#593) -- `wasm-build` gated every pull request on it, but `ci` (what
+/// "run this before pushing" documents as the pre-push check) did not
+/// contain it, so the only way to discover the break was to push and wait
+/// for CI. A hand-maintained list drifting from what it stands for is the
+/// same defect shape `clippy-android`, `clippy-svg`, `clippy-hyphenation`
+/// and `clippy-robot` were each added to close, one at a time, after each
+/// went unlinted until something noticed by hand. This gate makes the next
+/// one impossible instead of noticing it later.
+mod ci_gate_reachability {
+    use std::{
+        collections::{BTreeMap, BTreeSet},
+        fs,
+        path::Path,
+        sync::LazyLock,
+    };
+
+    use regex::Regex;
+
+    /// `just`'s own recipe-name grammar: a letter or underscore, then
+    /// letters, digits, underscores or hyphens. Requiring that first
+    /// character keeps `cargo install just --locked` from reading as an
+    /// invocation of a recipe named `--locked` -- `-` is a valid character
+    /// inside a recipe name (`test-shell-helpers`) but never starts one.
+    static JUST_CALL_RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"\bjust\s+([A-Za-z_][A-Za-z0-9_-]*)").expect("JUST_CALL_RE is a valid pattern")
+    });
+
+    /// Every `just <recipe>` name mentioned in `line`, ignoring anything
+    /// after the name itself -- `just robot-one my_example` yields
+    /// `robot-one`, so a recipe invoked with arguments is still found.
+    fn just_recipe_calls(line: &str) -> impl Iterator<Item = String> + '_ {
+        JUST_CALL_RE.captures_iter(line).map(|c| c[1].to_owned())
+    }
+
+    /// One `just <recipe>` call found in a workflow's `run:` step, kept with
+    /// enough context to name where it came from in a failure message.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(crate) struct WorkflowInvocation {
+        pub(crate) recipe: String,
+        pub(crate) line_number: usize,
+        pub(crate) line_text: String,
+    }
+
+    fn leading_spaces(line: &str) -> usize {
+        line.chars().take_while(|ch| *ch == ' ').count()
+    }
+
+    fn collect_workflow_calls(
+        line: &str,
+        line_number: usize,
+        invocations: &mut Vec<WorkflowInvocation>,
+    ) {
+        for recipe in just_recipe_calls(line) {
+            invocations.push(WorkflowInvocation {
+                recipe,
+                line_number,
+                line_text: line.trim().to_owned(),
+            });
+        }
+    }
+
+    /// Every `just <recipe>` call a GitHub Actions workflow's `run:` steps
+    /// make, whether written inline (`run: just fmt-check`) or inside a
+    /// block scalar (`run: |` followed by indented shell lines). Only
+    /// `run:` step bodies are scanned, not comments or doc-prose that merely
+    /// mentions a recipe in backticks, by tracking each `run:` line's own
+    /// indentation and following YAML's block-scalar rule: the block's
+    /// content ends at the first non-blank line back at or above that
+    /// indentation (blank lines inside the block do not end it).
+    pub(crate) fn parse_workflow_just_invocations(workflow_text: &str) -> Vec<WorkflowInvocation> {
+        let lines: Vec<&str> = workflow_text.split('\n').collect();
+        let mut invocations = Vec::new();
+        let mut index = 0;
+        while index < lines.len() {
+            let line = lines[index];
+            let indent = leading_spaces(line);
+            // `- run: just x` and `run: just x` are the same step to YAML.
+            // Matching only the second would make this gate's coverage depend
+            // on a formatting convention nothing enforces: one step written
+            // with the leading dash would be skipped in silence, and a gate
+            // that silently sees nothing reports every repository clean.
+            let bare = line.trim_start();
+            let bare = bare.strip_prefix("- ").map_or(bare, str::trim_start);
+            let Some(rest) = bare.strip_prefix("run:") else {
+                index += 1;
+                continue;
+            };
+            let rest = rest.trim();
+            let is_block_scalar = rest.is_empty() || rest.starts_with('|') || rest.starts_with('>');
+            if !is_block_scalar {
+                collect_workflow_calls(rest, index + 1, &mut invocations);
+                index += 1;
+                continue;
+            }
+            let mut cursor = index + 1;
+            while cursor < lines.len() {
+                let body_line = lines[cursor];
+                if body_line.trim().is_empty() {
+                    cursor += 1;
+                    continue;
+                }
+                if leading_spaces(body_line) <= indent {
+                    break;
+                }
+                collect_workflow_calls(body_line, cursor + 1, &mut invocations);
+                cursor += 1;
+            }
+            index = cursor;
+        }
+        invocations
+    }
+
+    /// The justfile's own recipe dependency graph: every recipe name it
+    /// defines, and for each one, the recipes it reaches directly -- both
+    /// declared prerequisites (`ci: fmt-check typos ...`) and recipes it
+    /// shells out to by name from its own body. `budgets` runs `just
+    /// budgets-here` from its body rather than declaring it as a
+    /// prerequisite, so a reading of only recipe headers would miss that
+    /// edge and wrongly report `budgets-here`'s dependencies as unreachable.
+    #[derive(Debug, Clone, Default, PartialEq, Eq)]
+    pub(crate) struct JustfileGraph {
+        pub(crate) recipes: BTreeSet<String>,
+        pub(crate) edges: BTreeMap<String, BTreeSet<String>>,
+    }
+
+    /// Splits a recipe header into its name-and-parameters part and its
+    /// dependency-list part, or `None` if `trimmed` is not a recipe header
+    /// at all. `nightly := \`sed ...\`` is a variable assignment, not a
+    /// recipe -- its `:=` is what tells the two apart, since no recipe
+    /// header can contain that sequence (parameter defaults use `="..."`,
+    /// never a colon).
+    fn recipe_header(trimmed: &str) -> Option<(&str, &str)> {
+        if trimmed.contains(":=") {
+            return None;
+        }
+        let colon = trimmed.find(':')?;
+        Some((&trimmed[..colon], &trimmed[colon + 1..]))
+    }
+
+    /// Parses a justfile into its recipe dependency graph. This is not a
+    /// general justfile parser -- it understands exactly the constructs
+    /// this repository's justfile uses (bare recipe headers, parameters
+    /// with quoted defaults, `#` doc-comments and variable assignments at
+    /// column zero, indented recipe bodies) and nothing more exotic
+    /// (recipe attributes, `import`, dependency arguments).
+    pub(crate) fn parse_justfile(justfile_text: &str) -> JustfileGraph {
+        let mut graph = JustfileGraph::default();
+        let mut current_recipe: Option<String> = None;
+        for line in justfile_text.split('\n') {
+            if line.starts_with(' ') || line.starts_with('\t') {
+                if let Some(recipe) = &current_recipe {
+                    graph
+                        .edges
+                        .entry(recipe.clone())
+                        .or_default()
+                        .extend(just_recipe_calls(line));
+                }
+                continue;
+            }
+            current_recipe = None;
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with('[') {
+                continue;
+            }
+            let Some((header, deps_part)) = recipe_header(trimmed) else {
+                continue;
+            };
+            let Some(name) = header.split_whitespace().next() else {
+                continue;
+            };
+            let deps: BTreeSet<String> = deps_part
+                .split('#')
+                .next()
+                .unwrap_or("")
+                .split_whitespace()
+                .map(str::to_owned)
+                .collect();
+            graph.recipes.insert(name.to_owned());
+            graph.edges.entry(name.to_owned()).or_default().extend(deps);
+            current_recipe = Some(name.to_owned());
+        }
+        graph
+    }
+
+    /// Every recipe `root` reaches, directly or transitively, through
+    /// `edges` -- a `root` the graph has no entry for simply reaches
+    /// nothing.
+    pub(crate) fn transitive_closure(
+        edges: &BTreeMap<String, BTreeSet<String>>,
+        root: &str,
+    ) -> BTreeSet<String> {
+        let mut seen = BTreeSet::new();
+        let mut stack = vec![root.to_owned()];
+        while let Some(name) = stack.pop() {
+            if !seen.insert(name.clone()) {
+                continue;
+            }
+            if let Some(deps) = edges.get(&name) {
+                stack.extend(deps.iter().cloned());
+            }
+        }
+        seen
+    }
+
+    /// For every recipe CI actually invokes (deduplicated, first occurrence
+    /// wins), either it is missing from the justfile entirely or it exists
+    /// but `ci`/`ci-full` cannot reach it -- reported as two distinct
+    /// failure shapes, as the property requires.
+    pub(crate) fn find_violations(
+        invocations: &[WorkflowInvocation],
+        graph: &JustfileGraph,
+    ) -> Vec<String> {
+        let reachable: BTreeSet<String> = transitive_closure(&graph.edges, "ci")
+            .into_iter()
+            .chain(transitive_closure(&graph.edges, "ci-full"))
+            .collect();
+
+        let mut seen_recipes = BTreeSet::new();
+        let mut violations = Vec::new();
+        for invocation in invocations {
+            if !seen_recipes.insert(invocation.recipe.clone()) {
+                continue;
+            }
+            if !graph.recipes.contains(&invocation.recipe) {
+                violations.push(format!(
+                    "`{}` -- invoked at rust.yml:{} (`{}`) but no such recipe exists in the justfile",
+                    invocation.recipe, invocation.line_number, invocation.line_text
+                ));
+            } else if !reachable.contains(&invocation.recipe) {
+                violations.push(format!(
+                    "`{}` -- invoked at rust.yml:{} (`{}`) but is not reachable from `ci` or `ci-full`",
+                    invocation.recipe, invocation.line_number, invocation.line_text
+                ));
+            }
+        }
+        violations
+    }
+
+    pub(crate) fn run_at(root: &Path) -> Result<(), String> {
+        let workflow_path = root.join(".github/workflows/rust.yml");
+        let workflow_text = fs::read_to_string(&workflow_path).map_err(|error| {
+            format!(
+                "ci-gate-reachability: failed to read {}: {error}",
+                workflow_path.display()
+            )
+        })?;
+        let justfile_path = root.join("justfile");
+        let justfile_text = fs::read_to_string(&justfile_path).map_err(|error| {
+            format!(
+                "ci-gate-reachability: failed to read {}: {error}",
+                justfile_path.display()
+            )
+        })?;
+
+        let invocations = parse_workflow_just_invocations(&workflow_text);
+        if invocations.is_empty() {
+            return Err(format!(
+                "ci-gate-reachability: parsed zero `just` invocations out of {} -- the parser \
+                 broke, or the workflow stopped calling `just` entirely, and either way this \
+                 gate would silently be checking nothing rather than failing loudly",
+                workflow_path.display()
+            ));
+        }
+
+        let graph = parse_justfile(&justfile_text);
+        if graph.recipes.is_empty() {
+            return Err(format!(
+                "ci-gate-reachability: parsed zero recipes out of {} -- the parser broke",
+                justfile_path.display()
+            ));
+        }
+
+        let violations = find_violations(&invocations, &graph);
+        if !violations.is_empty() {
+            return Err(super::violations_message(
+                format!(
+                    "ci-gate-reachability: {} recipe(s) CI runs are not reachable from `ci`/`ci-full`:",
+                    violations.len()
+                ),
+                &violations,
+            ));
+        }
+
+        println!(
+            "ci-gate-reachability: {} `just` invocation(s) in rust.yml, all reachable from `ci`/`ci-full`",
+            invocations.len()
+        );
+        Ok(())
+    }
+}
+
 #[cfg(all(test, unix))]
 fn make_executable(path: &Path) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
@@ -4106,6 +4424,143 @@ fn make_executable(path: &Path) -> io::Result<()> {
 #[cfg(all(test, not(unix)))]
 fn make_executable(_path: &Path) -> io::Result<()> {
     Ok(())
+}
+
+#[cfg(test)]
+mod ci_gate_reachability_tests {
+    use crate::ci_gate_reachability::{
+        find_violations, parse_justfile, parse_workflow_just_invocations, transitive_closure,
+    };
+
+    const JUSTFILE: &str = "\
+# a doc comment mentioning `just orphaned` must not create an edge
+alpha:
+    cargo alpha
+
+beta:
+    cargo beta
+
+deep:
+    cargo deep
+
+middle: deep
+    cargo middle
+
+platform-only:
+    cargo platform
+
+takes-args target=\"x\":
+    cargo run {{target}}
+
+body-caller:
+    just beta
+
+ci: alpha middle body-caller takes-args
+ci-full: ci platform-only
+";
+
+    fn workflow(body: &str) -> String {
+        format!("jobs:\n  check:\n    steps:\n{body}")
+    }
+
+    #[test]
+    fn a_recipe_reachable_only_through_ci_is_not_a_violation() {
+        let calls = parse_workflow_just_invocations(&workflow("      - run: just alpha\n"));
+        assert_eq!(calls.len(), 1, "the workflow declares exactly one call");
+        assert!(find_violations(&calls, &parse_justfile(JUSTFILE)).is_empty());
+    }
+
+    #[test]
+    fn a_recipe_reachable_only_through_ci_full_is_not_a_violation() {
+        let calls = parse_workflow_just_invocations(&workflow("      - run: just platform-only\n"));
+        assert!(find_violations(&calls, &parse_justfile(JUSTFILE)).is_empty());
+    }
+
+    #[test]
+    fn a_recipe_reached_through_a_dependency_chain_is_not_a_violation() {
+        // ci -> middle -> deep. Only the transitive step makes `deep` reachable.
+        let graph = parse_justfile(JUSTFILE);
+        assert!(transitive_closure(&graph.edges, "ci").contains("deep"));
+        let calls = parse_workflow_just_invocations(&workflow("      - run: just deep\n"));
+        assert!(find_violations(&calls, &graph).is_empty());
+    }
+
+    #[test]
+    fn a_recipe_a_body_shells_out_to_is_reachable() {
+        // `body-caller` runs `just beta` from its body rather than declaring
+        // it. Reading only recipe headers would report `beta` unreachable.
+        let calls = parse_workflow_just_invocations(&workflow("      - run: just beta\n"));
+        assert!(find_violations(&calls, &parse_justfile(JUSTFILE)).is_empty());
+    }
+
+    #[test]
+    fn a_recipe_in_neither_aggregate_is_a_violation() {
+        let calls = parse_workflow_just_invocations(&workflow("      - run: just orphaned\n"));
+        let violations = find_violations(&calls, &parse_justfile(JUSTFILE));
+        assert_eq!(violations.len(), 1, "got {violations:?}");
+        assert!(violations[0].contains("orphaned"), "got {violations:?}");
+    }
+
+    #[test]
+    fn a_recipe_absent_from_the_justfile_reports_distinctly() {
+        let defined = parse_workflow_just_invocations(&workflow("      - run: just beta\n"));
+        let mut undefined = parse_workflow_just_invocations(&workflow("      - run: just nope\n"));
+        undefined.extend(defined);
+        let violations = find_violations(&undefined, &parse_justfile(JUSTFILE));
+        assert_eq!(
+            violations.len(),
+            1,
+            "only the undefined one fails: {violations:?}"
+        );
+        assert!(
+            violations[0].contains("no such recipe exists"),
+            "an undefined recipe must not read as merely unreachable: {violations:?}"
+        );
+    }
+
+    #[test]
+    fn a_recipe_invoked_with_arguments_is_matched_by_name() {
+        let calls =
+            parse_workflow_just_invocations(&workflow("      - run: just takes-args value\n"));
+        assert_eq!(calls[0].recipe, "takes-args");
+        assert!(find_violations(&calls, &parse_justfile(JUSTFILE)).is_empty());
+    }
+
+    #[test]
+    fn calls_inside_a_block_scalar_are_found_and_prose_is_not() {
+        let text = workflow(
+            "      # just orphaned in a comment is prose, not a call\n\
+             \x20     - run: |\n\
+             \x20         just alpha\n\
+             \x20\n\
+             \x20         just beta\n\
+             \x20     - name: mentions `just orphaned` in prose\n",
+        );
+        let found: Vec<String> = parse_workflow_just_invocations(&text)
+            .into_iter()
+            .map(|call| call.recipe)
+            .collect();
+        assert_eq!(
+            found,
+            vec!["alpha".to_owned(), "beta".to_owned()],
+            "got {found:?}"
+        );
+    }
+
+    #[test]
+    fn the_real_workflow_parses_to_a_non_zero_number_of_calls() {
+        // Without this the whole gate is vacuous: a parser that silently
+        // finds nothing reports every repository clean.
+        let root = crate::workspace_root().expect("workspace root");
+        let text = std::fs::read_to_string(root.join(".github/workflows/rust.yml"))
+            .expect("rust.yml is readable");
+        let calls = parse_workflow_just_invocations(&text);
+        assert!(
+            calls.len() >= 10,
+            "rust.yml must parse to a meaningful number of `just` calls, got {}",
+            calls.len()
+        );
+    }
 }
 
 #[cfg(test)]
