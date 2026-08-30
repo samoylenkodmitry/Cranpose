@@ -444,8 +444,18 @@ Linux builds that share this host -- the size budget, the wasm build, the
 Android release build -- take the **shared** side for their whole run. The
 robot suite builds without it and takes the **exclusive** side for the timed
 part only, so builds still overlap builds and only a measurement empties the
-machine. Neither side ever refuses to run: after forty-five minutes it starts
-anyway and says on stdout that it did.
+machine. The two sides part ways on what a forty-five-minute wait means: a
+build starts anyway and says on stdout that it did, because a gate that will
+not start is worse than one that starts late, while a measurement fails,
+because measuring beside a build is the exact bug the lock exists to prevent.
+
+Plain `flock` alone cannot deliver that, either: it only ever checks locks
+currently held, never ones merely queued, so a continuous stream of shared
+builds is granted ahead of an already-waiting exclusive measurement for as
+long as the stream lasts. A turnstile in front of the real lock closes that
+gap (`host_capacity_turnstile_*`), and `just test-host-lock` holds it shut --
+it drives both sides against a private pair of lock files, so the suite that
+proves the machine's lock works cannot disturb a job holding it.
 
 That lock covers this fleet. The other nineteen queues on the box are not
 ours to serialise, so the suite also waits for the load average itself
