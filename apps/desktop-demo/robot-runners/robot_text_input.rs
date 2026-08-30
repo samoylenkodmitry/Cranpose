@@ -1,6 +1,9 @@
+mod robot_launch;
+
+mod robot_exit;
+
 use std::time::Duration;
 
-use cranpose::AppLauncher;
 use cranpose_testing::{find_button, find_button_in_semantics, find_in_semantics, find_text};
 use desktop_app::app;
 
@@ -11,16 +14,8 @@ fn main() {
 
     const TEST_TIMEOUT_SECS: u64 = 120;
 
-    AppLauncher::new()
-        .with_title("Robot Text Input Test")
-        .with_size(900, 700)
-        .with_headless(true)
-        .with_test_driver(|robot| {
-            std::thread::spawn(|| {
-                std::thread::sleep(Duration::from_secs(TEST_TIMEOUT_SECS));
-                println!("✗ Test timed out after {} seconds", TEST_TIMEOUT_SECS);
-                std::process::exit(1);
-            });
+    robot_launch::launch("Robot Text Input Test", 900, 700).with_test_driver(|robot| {
+            robot_exit::arm_timeout(TEST_TIMEOUT_SECS);
 
             println!("✓ App launched\n");
             std::thread::sleep(Duration::from_millis(500));

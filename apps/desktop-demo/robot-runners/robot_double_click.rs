@@ -1,6 +1,9 @@
+mod robot_launch;
+
+mod robot_exit;
+
 use std::time::Duration;
 
-use cranpose::AppLauncher;
 use cranpose_testing::{find_button, find_in_semantics, find_text};
 use desktop_app::app;
 
@@ -10,16 +13,9 @@ fn main() {
     env_logger::init();
     println!("=== Double-Click / Triple-Click Selection Test ===\n");
 
-    AppLauncher::new()
-        .with_title("Double-Click Test")
-        .with_size(600, 400)
-        .with_headless(true)
+    robot_launch::launch("Double-Click Test", 600, 400)
         .with_test_driver(|robot| {
-            std::thread::spawn(|| {
-                std::thread::sleep(Duration::from_secs(60));
-                println!("\n✗ Test timed out");
-                std::process::exit(1);
-            });
+            robot_exit::arm_timeout(60);
 
             std::thread::sleep(Duration::from_millis(300));
             println!("✓ App ready\n");

@@ -1,6 +1,7 @@
+mod robot_launch;
+
 use std::time::Duration;
 
-use cranpose::AppLauncher;
 use cranpose_testing::{
     exit_with_timeout, find_button_in_semantics, find_text_by_prefix_in_semantics,
 };
@@ -21,10 +22,7 @@ fn main() {
     println!("=== Robot Scroll Visual Test ===");
     println!("Verifying that scroll actually moves content visually\n");
 
-    AppLauncher::new()
-        .with_title("Robot Scroll Visual Test")
-        .with_size(800, 600)
-        .with_headless(true)
+    robot_launch::launch("Robot Scroll Visual Test", 800, 600)
         .with_test_driver(|robot| {
             println!("✓ App launched\n");
             std::thread::sleep(Duration::from_millis(500));

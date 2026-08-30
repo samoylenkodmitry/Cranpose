@@ -1,8 +1,9 @@
+mod robot_launch;
+
 #[cfg(target_os = "linux")]
 use std::collections::HashMap;
 use std::time::Duration;
 
-use cranpose::AppLauncher;
 use cranpose_testing::find_text_by_prefix_in_semantics;
 use desktop_app::app;
 
@@ -369,11 +370,7 @@ fn main() {
         SPIKE_DEPTH, MEASURE_CYCLES,
     );
 
-    AppLauncher::new()
-        .with_title("Robot Memory Leak Test")
-        .with_size(WINDOW_WIDTH, WINDOW_HEIGHT)
-        .with_headless(true)
-        .with_robot_app_hook(|name, argument| match name.as_str() {
+    robot_launch::launch("Robot Memory Leak Test", WINDOW_WIDTH, WINDOW_HEIGHT).with_robot_app_hook(|name, argument| match name.as_str() {
             SET_RECURSIVE_LAYOUT_DEPTH_HOOK => {
                 let depth = argument
                     .parse::<usize>()

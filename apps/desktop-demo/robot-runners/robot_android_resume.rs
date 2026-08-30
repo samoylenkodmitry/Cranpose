@@ -1,6 +1,7 @@
+mod robot_launch;
+
 use std::{cell::RefCell, path::Path};
 
-use cranpose::AppLauncher;
 use cranpose_core::{rememberMutableStateOf, MutableState};
 use cranpose_ui::{composable, Column, ColumnSpec, LinearArrangement, Modifier, Text, TextStyle};
 
@@ -68,10 +69,7 @@ fn android_resume_contract_is_fixed() {
 }
 
 fn main() {
-    AppLauncher::new()
-        .with_title("Android Resume")
-        .with_size(640, 480)
-        .with_headless(true)
+    robot_launch::launch("Android Resume", 640, 480)
         .with_robot_app_hook(lifecycle_hook)
         .with_test_driver(|robot| {
             robot.wait_for_idle().expect("initial frame");

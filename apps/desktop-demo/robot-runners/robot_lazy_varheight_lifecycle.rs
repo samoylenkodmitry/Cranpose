@@ -1,6 +1,8 @@
+mod robot_launch;
+
 use std::time::Duration;
 
-use cranpose::{AppLauncher, LazyItems};
+use cranpose::LazyItems;
 use cranpose_core::{DisposableEffect, DisposableEffectResult, MutableState};
 use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope, LazyListState};
 use cranpose_macros::composable;
@@ -148,10 +150,7 @@ fn main() {
     env_logger::init();
     println!("=== Variable Height Lifecycle Robot Test ===");
 
-    AppLauncher::new()
-        .with_title("VarHeight Lifecycle Test")
-        .with_size(800, 600)
-        .with_headless(true)
+    robot_launch::launch("VarHeight Lifecycle Test", 800, 600)
         .with_test_driver(|robot| {
             println!("✓ App launched");
             std::thread::sleep(Duration::from_millis(100));

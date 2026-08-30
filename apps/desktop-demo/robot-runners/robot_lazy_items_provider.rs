@@ -1,6 +1,7 @@
+mod robot_launch;
+
 use std::{rc::Rc, time::Duration};
 
-use cranpose::AppLauncher;
 use cranpose_foundation::lazy::{rememberLazyListState, LazyListScopeExt, LazyListState};
 use cranpose_macros::composable;
 use cranpose_testing::find_text_in_semantics;
@@ -178,10 +179,7 @@ fn main() {
     env_logger::init();
     println!("=== LazyList Provider Items Robot Test ===");
 
-    AppLauncher::new()
-        .with_title("Provider Items Test")
-        .with_size(800, 800)
-        .with_headless(true)
+    robot_launch::launch("Provider Items Test", 800, 800)
         .with_test_driver(|robot| {
             println!("✓ App launched");
             std::thread::sleep(Duration::from_millis(300));

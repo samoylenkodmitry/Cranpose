@@ -1,6 +1,8 @@
+mod robot_launch;
+
 use std::time::{Duration, Instant};
 
-use cranpose::{AppLauncher, LazyItems};
+use cranpose::LazyItems;
 use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope};
 use cranpose_testing::find_text_in_semantics;
 use cranpose_ui::{widgets::*, Color, LinearArrangement, Modifier, TextStyle};
@@ -117,10 +119,7 @@ fn main() {
         format_large_number(ITEM_COUNT)
     );
 
-    AppLauncher::new()
-        .with_title("LazyColumn Perf Test")
-        .with_size(800, 600)
-        .with_headless(true)
+    robot_launch::launch("LazyColumn Perf Test", 800, 600)
         .with_test_driver(|robot| {
             println!("✓ App launched");
 

@@ -1,8 +1,9 @@
+mod robot_launch;
+
 mod robot_exit;
 
 use std::time::Duration;
 
-use cranpose::AppLauncher;
 use cranpose_testing::{
     exit_with_timeout, find_button_in_semantics, find_text_by_prefix_in_semantics,
     find_text_in_semantics,
@@ -72,11 +73,7 @@ fn main() {
     env_logger::init();
     println!("=== Robot Async Progress After Animations Test ===");
 
-    AppLauncher::new()
-        .with_title("Robot Async Progress After Animations Test")
-        .with_size(1200, 800)
-        .with_headless(true)
-        .with_test_driver(|robot| {
+    robot_launch::launch("Robot Async Progress After Animations Test", 1200, 800).with_test_driver(|robot| {
             println!("✓ App launched");
             wait_for_text(&robot, "Counter App", Duration::from_secs(5));
 

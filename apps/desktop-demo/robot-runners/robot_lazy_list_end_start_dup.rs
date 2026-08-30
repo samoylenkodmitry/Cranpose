@@ -1,6 +1,7 @@
+mod robot_launch;
+
 use std::time::Duration;
 
-use cranpose::AppLauncher;
 use cranpose_testing::{
     count_text_in_tree, find_button_in_semantics, find_element_by_text_exact,
     print_semantics_with_bounds,
@@ -11,10 +12,7 @@ fn main() {
     env_logger::init();
     println!("=== LazyList End/Start Duplication Test ===");
 
-    AppLauncher::new()
-        .with_title("LazyList End/Start Dup Test")
-        .with_size(1200, 800)
-        .with_headless(true)
+    robot_launch::launch("LazyList End/Start Dup Test", 1200, 800)
         .with_test_driver(|robot| {
             println!("✓ App launched");
             std::thread::sleep(Duration::from_millis(500));

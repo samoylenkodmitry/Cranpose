@@ -1,8 +1,11 @@
+mod robot_launch;
+
 mod robot_exit;
+mod robot_handle_probe;
 
 use std::time::Duration;
 
-use cranpose::{AppLauncher, RobotScreenshot, SemanticElement};
+use cranpose::{RobotScreenshot, SemanticElement};
 use cranpose_testing::{find_button, find_button_in_semantics, find_in_semantics, find_text};
 use desktop_app::app;
 
@@ -22,10 +25,7 @@ fn main() {
     env_logger::init();
     println!("=== Text Handle Survives Tab Switch ===\n");
 
-    AppLauncher::new()
-        .with_title("Text Handle Survives Tab Switch")
-        .with_size(900, 700)
-        .with_headless(true)
+    robot_launch::launch("Text Handle Survives Tab Switch", 900, 700)
         .with_test_driver(move |robot| {
             robot_exit::arm_timeout(90);
 
@@ -356,22 +356,16 @@ fn count_handle_bands_in(
     let bottom = (((y + height) * sy) as usize).min(shot.height as usize);
     let upper_end = ((y + height * 0.45) * sy) as usize;
     let lower_start = ((y + height * 0.55) * sy) as usize;
-    let mut upper = 0;
-    let mut lower = 0;
-    for py in top..bottom {
-        for px in left..right {
-            let i = (py * shot.width as usize + px) * 4;
-            let (r, g, b) = (shot.pixels[i], shot.pixels[i + 1], shot.pixels[i + 2]);
-            if matches_accent(r, g, b, target) {
-                if py < upper_end {
-                    upper += 1;
-                } else if py >= lower_start {
-                    lower += 1;
-                }
-            }
-        }
-    }
-    (upper, lower)
+    robot_handle_probe::count_upper_lower_bands(
+        shot,
+        left,
+        right,
+        top,
+        bottom,
+        upper_end,
+        lower_start,
+        |r, g, b| matches_accent(r, g, b, target),
+    )
 }
 
 fn count_pixels_in(

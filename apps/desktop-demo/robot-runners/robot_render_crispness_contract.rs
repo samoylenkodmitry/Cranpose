@@ -1,7 +1,8 @@
 mod output_paths;
 mod robot_exit;
+mod robot_shot;
 
-use std::{path::Path, time::Duration};
+use std::time::Duration;
 
 use cranpose::AppLauncher;
 use cranpose_testing::crop_screenshot_logical;
@@ -12,7 +13,6 @@ use cranpose_ui::{
     Text, TextStyle,
 };
 use cranpose_ui_graphics::DrawScope;
-use image::{ImageBuffer, RgbaImage};
 
 const WINDOW_WIDTH: u32 = 320;
 const WINDOW_HEIGHT: u32 = 170;
@@ -32,18 +32,6 @@ const SCROLL_COMPARE_TOP: f32 = 1.0;
 const SCROLL_COMPARE_H: f32 = BLOCK_H - 2.0;
 const GRID_COMPARE_TOP: f32 = 26.4;
 const GRID_COMPARE_H: f32 = 20.0;
-
-fn save_png(path: &Path, screenshot: &cranpose::RobotScreenshot) -> Result<(), String> {
-    let image: RgbaImage = ImageBuffer::from_raw(
-        screenshot.width,
-        screenshot.height,
-        screenshot.pixels.clone(),
-    )
-    .ok_or_else(|| "invalid screenshot dimensions".to_string())?;
-    image
-        .save(path)
-        .map_err(|err| format!("failed to save {}: {}", path.display(), err))
-}
 
 fn atlas_bitmap() -> ImageBitmap {
     const WIDTH: u32 = 24;
@@ -258,7 +246,7 @@ fn main() {
                 .unwrap_or_else(|err| robot_exit::fail(&robot, &format!("failed to capture screenshot: {err}")));
             let output_path =
                 output_paths::diagnostic_path("cranpose_render_crispness_contract.png");
-            if let Err(err) = save_png(&output_path, &screenshot) {
+            if let Err(err) = robot_shot::save_checked(&output_path, &screenshot) {
                 robot_exit::fail(&robot, &err);
             }
             println!("SCREENSHOT_PATH={}", output_path.display());

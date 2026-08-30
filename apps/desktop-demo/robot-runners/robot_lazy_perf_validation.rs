@@ -1,17 +1,14 @@
+mod robot_launch;
+
 use std::time::Duration;
 
-use cranpose::AppLauncher;
 use cranpose_testing::find_text_in_semantics;
 
 fn main() {
     env_logger::init();
     println!("=== LazyList Performance Validation ===");
 
-    AppLauncher::new()
-        .with_title("Performance Validation")
-        .with_size(900, 700)
-        .with_headless(true)
-        .with_test_driver(|robot| {
+    robot_launch::launch("Performance Validation", 900, 700).with_test_driver(|robot| {
             println!("✓ App launched");
             std::thread::sleep(Duration::from_millis(200));
 

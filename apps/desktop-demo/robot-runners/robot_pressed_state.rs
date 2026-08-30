@@ -1,8 +1,10 @@
+mod robot_launch;
+
 mod robot_exit;
 
 use std::time::Duration;
 
-use cranpose::{AppLauncher, Robot};
+use cranpose::Robot;
 use cranpose_testing::capture_screenshot;
 use desktop_app::test_screens::pressed_state_repro::{
     PressedStateReproScreen, NORMAL_RGBA, PRESSED_RGBA, SPRITE_HEIGHT, SPRITE_OFFSET_X,
@@ -56,11 +58,7 @@ fn main() {
     env_logger::init();
     println!("=== Robot Pressed State Test ===");
 
-    AppLauncher::new()
-        .with_title("Robot Pressed State Test")
-        .with_size(800, 600)
-        .with_headless(true)
-        .with_test_driver(|robot| {
+    robot_launch::launch("Robot Pressed State Test", 800, 600).with_test_driver(|robot| {
             std::thread::sleep(Duration::from_millis(500));
             let _ = robot.wait_for_idle();
 

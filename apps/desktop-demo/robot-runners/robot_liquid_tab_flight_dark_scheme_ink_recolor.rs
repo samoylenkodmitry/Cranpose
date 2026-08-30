@@ -26,6 +26,7 @@
 
 mod robot_exit;
 mod robot_shot;
+mod robot_tab_fixture;
 
 use std::{path::PathBuf, process::ExitCode, sync::atomic::AtomicBool, time::Duration};
 
@@ -183,11 +184,7 @@ fn main() -> ExitCode {
                                 LiquidTabBarSpec::new(TAB_WIDTH),
                                 selected.get(),
                                 move |index| selected.set(index),
-                                |scope| {
-                                    for (icon, label) in TABS {
-                                        scope.tab(icon, label);
-                                    }
-                                },
+                                robot_tab_fixture::tabs(&TABS),
                             );
                         },
                     );

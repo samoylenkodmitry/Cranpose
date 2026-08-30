@@ -1,6 +1,7 @@
+mod robot_launch;
+
 use std::time::Duration;
 
-use cranpose::AppLauncher;
 use cranpose_testing::{find_button_in_semantics, find_text_in_semantics};
 use desktop_app::app;
 
@@ -8,10 +9,7 @@ fn main() {
     env_logger::init();
     println!("=== Comprehensive LazyList Tab Robot Test ===\n");
 
-    AppLauncher::new()
-        .with_title("LazyList Tab Test")
-        .with_size(1024, 768)
-        .with_headless(true)
+    robot_launch::launch("LazyList Tab Test", 1024, 768)
         .with_test_driver(|robot| {
             println!("✓ App launched\n");
             std::thread::sleep(Duration::from_millis(500));

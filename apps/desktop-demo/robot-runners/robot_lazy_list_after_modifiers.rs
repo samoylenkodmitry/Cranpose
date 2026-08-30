@@ -1,6 +1,7 @@
+mod robot_launch;
+
 use std::time::Duration;
 
-use cranpose::AppLauncher;
 use cranpose_testing::{
     find_button_in_semantics, find_element_by_text_exact, find_in_subtree_by_text,
     find_text_in_semantics, print_semantics_with_bounds,
@@ -11,10 +12,7 @@ fn main() {
     env_logger::init();
     println!("=== LazyList After Modifiers (rect validation) ===");
 
-    AppLauncher::new()
-        .with_title("LazyList After Modifiers")
-        .with_size(1200, 800)
-        .with_headless(true)
+    robot_launch::launch("LazyList After Modifiers", 1200, 800)
         .with_test_driver(|robot| {
             println!("✓ App launched");
             std::thread::sleep(Duration::from_millis(500));

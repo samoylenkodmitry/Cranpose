@@ -1,6 +1,7 @@
+mod robot_launch;
+
 use std::time::Duration;
 
-use cranpose::AppLauncher;
 use cranpose_core::rememberMutableStateOf;
 use cranpose_testing::find_text_in_semantics;
 use cranpose_ui::{
@@ -38,10 +39,7 @@ fn main() {
     env_logger::init();
     println!("=== Robot UI Breakage Reproduction ===");
 
-    AppLauncher::new()
-        .with_title("UI Breakage Repro")
-        .with_size(400, 300)
-        .with_headless(true)
+    robot_launch::launch("UI Breakage Repro", 400, 300)
         .with_test_driver(|robot| {
             println!("✓ App launched");
             std::thread::sleep(Duration::from_millis(500));

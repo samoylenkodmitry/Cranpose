@@ -1,36 +1,22 @@
 mod robot_exit;
+mod text_fixture_style;
 
 use std::{process::ExitCode, sync::atomic::AtomicBool, time::Duration};
 
 use cranpose::{
     widgets::{BasicTextFieldOptions, BasicTextFieldWithOptions, Box as CBox, BoxSpec},
-    AppLauncher, Color, Modifier, Size,
+    AppLauncher, Modifier, Size,
 };
 use cranpose_foundation::text::TextFieldState;
 use cranpose_testing::find_text_in_semantics;
-use cranpose_ui::text::{AnnotatedString, TextStyle, TextUnit};
-
-const WINDOW_WIDTH: u32 = 460;
-const WINDOW_HEIGHT: u32 = 340;
-const BACKDROP: Color = Color(0.149, 0.129, 0.125, 1.0);
-const TEXT_COLOR: Color = Color(0.94, 0.92, 0.90, 1.0);
-const ACCENT: Color = Color(0.965, 0.208, 0.557, 1.0);
-
-const FIELD_X: f32 = 20.0;
-const FIELD_Y: f32 = 170.0;
-const FIELD_WIDTH: f32 = 420.0;
+use cranpose_ui::text::AnnotatedString;
+use text_fixture_style::{
+    text_style, ACCENT, BACKDROP, FIELD_WIDTH, FIELD_X, FIELD_Y, WINDOW_HEIGHT, WINDOW_WIDTH,
+};
 
 const TEXT: &str = "Silence. Melody. Then beats.";
 
 static FAILED: AtomicBool = AtomicBool::new(false);
-
-fn text_style() -> TextStyle {
-    let mut style = TextStyle::default();
-    style.span_style.color = Some(TEXT_COLOR);
-    style.span_style.font_size = TextUnit::Sp(16.0);
-    style.paragraph_style.line_height = TextUnit::Sp(24.0);
-    style
-}
 
 fn main() -> ExitCode {
     let _ = env_logger::try_init();

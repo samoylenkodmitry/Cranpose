@@ -1,8 +1,10 @@
+mod robot_launch;
+
 mod robot_exit;
 
 use std::time::Duration;
 
-use cranpose::{AppLauncher, Robot};
+use cranpose::Robot;
 use cranpose_testing::{
     find_bounds_by_text, find_button_in_semantics, find_in_semantics, find_text,
     visible_bounds_in_viewport,
@@ -45,16 +47,8 @@ fn main() {
 
     const TEST_TIMEOUT_SECS: u64 = 180;
 
-    AppLauncher::new()
-        .with_title("Fling Edge Cases")
-        .with_size(800, 600)
-        .with_headless(true)
-        .with_test_driver(|robot| {
-            std::thread::spawn(|| {
-                std::thread::sleep(Duration::from_secs(TEST_TIMEOUT_SECS));
-                eprintln!("✗ Test timed out");
-                std::process::exit(1);
-            });
+    robot_launch::launch("Fling Edge Cases", 800, 600).with_test_driver(|robot| {
+            robot_exit::arm_timeout(TEST_TIMEOUT_SECS);
 
             std::thread::sleep(Duration::from_millis(500));
             let _ = robot.wait_for_idle();

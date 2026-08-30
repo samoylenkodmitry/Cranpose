@@ -1,6 +1,9 @@
+mod robot_launch;
+
+mod robot_exit;
+
 use std::time::Duration;
 
-use cranpose::AppLauncher;
 use cranpose_testing::find_text_center;
 use desktop_app::app;
 
@@ -10,19 +13,9 @@ fn main() {
 
     const TEST_TIMEOUT_SECS: u64 = 60;
 
-    AppLauncher::new()
-        .with_title("Robot Async Tab Bug Test")
-        .with_size(800, 600)
-        .with_headless(true)
+    robot_launch::launch("Robot Async Tab Bug Test", 800, 600)
         .with_test_driver(|robot| {
-            std::thread::spawn(move || {
-                std::thread::sleep(std::time::Duration::from_secs(TEST_TIMEOUT_SECS));
-                println!(
-                    "Test finished (timeout after {} seconds)",
-                    TEST_TIMEOUT_SECS
-                );
-                std::process::exit(1);
-            });
+            robot_exit::arm_timeout(TEST_TIMEOUT_SECS);
 
             println!("\n✓ App launched");
             std::thread::sleep(Duration::from_millis(500));

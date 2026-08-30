@@ -1,6 +1,8 @@
+mod robot_launch;
+
 use cranpose::{
     widgets::{Box, BoxSpec, Row, RowSpec},
-    AppLauncher, Color, LazyItems, Modifier, Size,
+    Color, LazyItems, Modifier, Size,
 };
 use cranpose_testing::sample_screenshot_pixel_logical;
 use cranpose_ui::{
@@ -22,10 +24,7 @@ fn pixel(screenshot: &cranpose::RobotScreenshot, x: f32, y: f32) -> [u8; 3] {
 }
 
 fn main() {
-    AppLauncher::new()
-        .with_title("Renderer Pixel Precision")
-        .with_size(WIDTH, HEIGHT)
-        .with_headless(true)
+    robot_launch::launch("Renderer Pixel Precision", WIDTH, HEIGHT)
         .with_test_driver(|robot| {
             std::thread::sleep(std::time::Duration::from_millis(900));
             let screenshot = robot.screenshot().expect("screenshot");

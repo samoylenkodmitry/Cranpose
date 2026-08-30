@@ -1,6 +1,7 @@
+mod robot_launch;
+
 use std::time::Duration;
 
-use cranpose::AppLauncher;
 use cranpose_testing::{
     find_button_in_semantics, find_in_semantics, find_text, sample_screenshot_pixel_logical,
 };
@@ -21,11 +22,7 @@ fn main() {
     env_logger::init();
     println!("=== Robot Image Chessboard Screenshot Test ===");
 
-    AppLauncher::new()
-        .with_title("Robot Image Chessboard")
-        .with_size(1200, 800)
-        .with_headless(true)
-        .with_test_driver(|robot| {
+    robot_launch::launch("Robot Image Chessboard", 1200, 800).with_test_driver(|robot| {
             std::thread::sleep(Duration::from_millis(600));
             let _ = robot.wait_for_idle();
 

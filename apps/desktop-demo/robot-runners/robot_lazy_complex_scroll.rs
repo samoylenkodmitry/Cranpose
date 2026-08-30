@@ -1,6 +1,7 @@
+mod robot_launch;
+
 use std::time::Duration;
 
-use cranpose::AppLauncher;
 use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope};
 use cranpose_testing::{find_button_in_semantics, find_text_in_semantics};
 use cranpose_ui::{
@@ -14,10 +15,7 @@ use cranpose_ui::{
 fn main() {
     env_logger::init();
 
-    AppLauncher::new()
-        .with_title("Lazy Complex Scroll Test")
-        .with_size(400, 800)
-        .with_headless(true)
+    robot_launch::launch("Lazy Complex Scroll Test", 400, 800)
         .with_test_driver(|robot| {
             std::thread::sleep(Duration::from_millis(500));
 

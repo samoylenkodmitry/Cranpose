@@ -1,8 +1,9 @@
+mod robot_launch;
+
 mod output_paths;
 
 use std::time::Duration;
 
-use cranpose::AppLauncher;
 use desktop_app::app;
 
 fn main() {
@@ -11,10 +12,7 @@ fn main() {
     println!("=== Robot Recorder Test ===");
     println!("Recording to: {:?}\n", recording_path);
 
-    AppLauncher::new()
-        .with_title("Robot Recorder Test")
-        .with_size(800, 600)
-        .with_headless(true)
+    robot_launch::launch("Robot Recorder Test", 800, 600)
         .with_recording(&recording_path)
         .with_test_driver(move |robot| {
             std::thread::sleep(Duration::from_millis(500));

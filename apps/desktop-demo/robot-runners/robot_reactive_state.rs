@@ -1,6 +1,9 @@
+mod robot_launch;
+
+mod robot_exit;
+
 use std::time::Duration;
 
-use cranpose::AppLauncher;
 use cranpose_testing::{find_button, find_in_semantics, find_text};
 use desktop_app::app;
 
@@ -9,16 +12,9 @@ fn main() {
     println!("=== Robot Reactive State Test ===");
     println!("Verifying TextFieldState snapshot integration\n");
 
-    AppLauncher::new()
-        .with_title("Robot Reactive State Test")
-        .with_size(900, 700)
-        .with_headless(true)
+    robot_launch::launch("Robot Reactive State Test", 900, 700)
         .with_test_driver(|robot| {
-            std::thread::spawn(|| {
-                std::thread::sleep(Duration::from_secs(20));
-                eprintln!("TIMEOUT: Test exceeded 20 seconds");
-                std::process::exit(1);
-            });
+            robot_exit::arm_timeout(20);
 
             std::thread::sleep(Duration::from_millis(500));
             println!("✓ App launched and ready\n");

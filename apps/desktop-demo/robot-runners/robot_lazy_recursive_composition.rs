@@ -1,6 +1,7 @@
+mod robot_launch;
+
 use std::time::Duration;
 
-use cranpose::AppLauncher;
 use cranpose_testing::{
     find_button_in_semantics, find_element_by_text_exact, find_in_semantics, find_text_exact,
 };
@@ -10,11 +11,7 @@ fn main() {
     env_logger::init();
     println!("=== LazyList Recursive Composition Bug Test ===");
 
-    AppLauncher::new()
-        .with_title("LazyList Recursive Composition Test")
-        .with_size(1200, 800)
-        .with_headless(true)
-        .with_test_driver(|robot| {
+    robot_launch::launch("LazyList Recursive Composition Test", 1200, 800).with_test_driver(|robot| {
             println!("✓ App launched");
             std::thread::sleep(Duration::from_millis(500));
 

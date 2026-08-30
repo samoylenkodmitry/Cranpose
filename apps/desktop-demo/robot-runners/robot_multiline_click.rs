@@ -1,6 +1,10 @@
+mod robot_launch;
+
+mod robot_exit;
+
 use std::time::Duration;
 
-use cranpose::{AppLauncher, Robot};
+use cranpose::Robot;
 use cranpose_testing::{find_in_semantics, find_text_exact};
 use cranpose_ui::TextStyle;
 use desktop_app::app;
@@ -11,16 +15,9 @@ fn main() {
     env_logger::init();
     println!("=== Multiline Click Positioning Test ===\n");
 
-    AppLauncher::new()
-        .with_title("Multiline Click Test")
-        .with_size(600, 600)
-        .with_headless(true)
+    robot_launch::launch("Multiline Click Test", 600, 600)
         .with_test_driver(|robot| {
-            std::thread::spawn(|| {
-                std::thread::sleep(Duration::from_secs(60));
-                println!("\n✗ Test timed out");
-                std::process::exit(1);
-            });
+            robot_exit::arm_timeout(60);
 
             std::thread::sleep(Duration::from_millis(300));
             println!("✓ App ready\n");

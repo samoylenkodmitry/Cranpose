@@ -1,6 +1,8 @@
+mod robot_launch;
+
 use std::time::Duration;
 
-use cranpose::{AppLauncher, Robot};
+use cranpose::Robot;
 use cranpose_testing::{find_in_semantics, find_text_exact};
 use desktop_app::test_screens::scroll_repro::ScrollReproScreen;
 
@@ -17,10 +19,7 @@ fn wait_for_content(robot: &Robot, expected: &str, attempts: usize, delay: Durat
 fn main() {
     println!("Launching app with robot control for Scroll Bug Reproduction...");
 
-    AppLauncher::new()
-        .with_title("Scroll Bug Reproduction")
-        .with_size(1024, 768)
-        .with_headless(true)
+    robot_launch::launch("Scroll Bug Reproduction", 1024, 768)
         .with_test_driver(|robot| {
             println!("App launched! Starting test...");
             std::thread::sleep(Duration::from_secs(1));

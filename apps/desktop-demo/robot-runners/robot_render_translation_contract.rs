@@ -1,13 +1,14 @@
+mod robot_launch;
+
 mod output_paths;
+mod text_showcase_external_helpers;
 
 use std::{path::Path, time::Duration};
 
-use cranpose::AppLauncher;
 use cranpose_testing::{
-    capture_screenshot, find_bounds_by_text, find_button_exact_in_semantics,
-    find_button_in_semantics, find_in_semantics, find_text_exact, find_text_in_semantics,
-    normalize_screenshot_region, root_bounds, screenshot_difference_stats, scroll_down, scroll_up,
-    y_is_visible,
+    capture_screenshot, find_bounds_by_text, find_button_in_semantics, find_in_semantics,
+    find_text_exact, normalize_screenshot_region, root_bounds, screenshot_difference_stats,
+    scroll_down, scroll_up, y_is_visible,
 };
 use desktop_app::app;
 use image::{ImageBuffer, RgbaImage};
@@ -34,23 +35,24 @@ fn main() {
     env_logger::init();
     println!("=== Robot Render Translation Contract ===");
 
-    AppLauncher::new()
-        .with_title("Robot Render Translation Contract")
-        .with_size(WINDOW_WIDTH, WINDOW_HEIGHT)
-        .with_headless(true)
-        .with_test_driver(|robot| {
-            std::thread::sleep(Duration::from_millis(600));
-            let _ = robot.wait_for_idle();
+    robot_launch::launch(
+        "Robot Render Translation Contract",
+        WINDOW_WIDTH,
+        WINDOW_HEIGHT,
+    )
+    .with_test_driver(|robot| {
+        std::thread::sleep(Duration::from_millis(600));
+        let _ = robot.wait_for_idle();
 
-            verify_text_drag_release_contract(&robot);
-            verify_lazy_list_drag_release_contract(&robot);
-            verify_lazy_list_translation_contract(&robot);
+        verify_text_drag_release_contract(&robot);
+        verify_lazy_list_drag_release_contract(&robot);
+        verify_lazy_list_translation_contract(&robot);
 
-            println!("\n=== Test Summary ===");
-            println!("✓ rigid subtree motion preserved in desktop demo surfaces");
-            robot.exit().expect("exit");
-        })
-        .run(app::combined_app);
+        println!("\n=== Test Summary ===");
+        println!("✓ rigid subtree motion preserved in desktop demo surfaces");
+        robot.exit().expect("exit");
+    })
+    .run(app::combined_app);
 }
 
 fn verify_text_drag_release_contract(robot: &cranpose::Robot) {
@@ -301,7 +303,9 @@ fn click_tab(robot: &cranpose::Robot, label: &str) {
 fn open_text_tab(robot: &cranpose::Robot) {
     for _ in 0..3 {
         click_tab(robot, "Shaders");
-        let Some((x, y, w, h)) = wait_for_exact_button(robot, "Text", 20) else {
+        let Some((x, y, w, h)) =
+            text_showcase_external_helpers::wait_for_exact_button_in_semantics(robot, "Text", 20)
+        else {
             continue;
         };
         robot
@@ -309,38 +313,16 @@ fn open_text_tab(robot: &cranpose::Robot) {
             .expect("click text tab");
         std::thread::sleep(Duration::from_millis(350));
         let _ = robot.wait_for_idle();
-        if wait_for_semantic_text(robot, "Text Rendering Feature Showcase", 30) {
+        if text_showcase_external_helpers::wait_for_text_in_semantics(
+            robot,
+            "Text Rendering Feature Showcase",
+            30,
+        ) {
             return;
         }
     }
 
     panic!("Text showcase heading not found after tab switch");
-}
-
-fn wait_for_exact_button(
-    robot: &cranpose::Robot,
-    text: &str,
-    attempts: usize,
-) -> Option<(f32, f32, f32, f32)> {
-    for _ in 0..attempts {
-        if let Some(bounds) = find_button_exact_in_semantics(robot, text) {
-            return Some(bounds);
-        }
-        std::thread::sleep(Duration::from_millis(100));
-        let _ = robot.wait_for_idle();
-    }
-    None
-}
-
-fn wait_for_semantic_text(robot: &cranpose::Robot, text: &str, attempts: usize) -> bool {
-    for _ in 0..attempts {
-        if find_text_in_semantics(robot, text).is_some() {
-            return true;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-        let _ = robot.wait_for_idle();
-    }
-    false
 }
 
 fn wait_for_text(robot: &cranpose::Robot, text: &str) {

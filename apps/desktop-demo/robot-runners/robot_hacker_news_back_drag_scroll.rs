@@ -1,8 +1,9 @@
+mod robot_launch;
+
 pub mod hacker_news_robot_support;
 
 use std::time::Duration;
 
-use cranpose::AppLauncher;
 use cranpose_core::CompositionLocalProvider;
 use cranpose_services::local_http_client;
 use cranpose_testing::{find_in_semantics, find_text_exact};
@@ -152,11 +153,7 @@ fn rewind_story_list_to_top(robot: &cranpose::Robot, list_bounds: (f32, f32, f32
 fn main() {
     env_logger::init();
     println!("=== Hacker News Back Drag Scroll Robot Test ===");
-    AppLauncher::new()
-        .with_title("Hacker News Back Drag Scroll Robot Test")
-        .with_size(390, 844)
-        .with_headless(true)
-        .with_test_driver(|robot| {
+    robot_launch::launch("Hacker News Back Drag Scroll Robot Test", 390, 844).with_test_driver(|robot| {
             println!("  • opening Hacker News startup");
             let list_bounds = open_hacker_news_tab(&robot);
             println!("  • measuring fresh drag baseline");

@@ -1,8 +1,10 @@
+mod robot_launch;
+
 mod robot_exit;
 
 use std::time::{Duration, Instant};
 
-use cranpose::{AppLauncher, Robot, RobotScreenshot};
+use cranpose::{Robot, RobotScreenshot};
 use cranpose_animation::{
     infiniteRepeatable, rememberInfiniteTransition, AnimationSpec, Easing, RepeatMode, StartOffset,
 };
@@ -121,10 +123,7 @@ fn main() {
     env_logger::init();
     println!("=== Conditional Infinite Transition Busy Robot Test ===");
 
-    AppLauncher::new()
-        .with_title("Conditional Infinite Transition Busy")
-        .with_size(800, 500)
-        .with_headless(true)
+    robot_launch::launch("Conditional Infinite Transition Busy", 800, 500)
         .with_test_driver(|robot| {
             wait_for_text(
                 &robot,

@@ -1,9 +1,10 @@
+mod robot_launch;
+
 use std::{
     sync::atomic::{AtomicUsize, Ordering},
     time::Duration,
 };
 
-use cranpose::AppLauncher;
 use cranpose_core::rememberMutableStateOf;
 use cranpose_testing::find_button_in_semantics;
 use cranpose_ui::{
@@ -18,10 +19,7 @@ static ROOT_COMPOSITIONS: AtomicUsize = AtomicUsize::new(0);
 
 fn main() {
     env_logger::init();
-    AppLauncher::new()
-        .with_title("Draw-only Transition Work")
-        .with_size(800, 600)
-        .with_headless(true)
+    robot_launch::launch("Draw-only Transition Work", 800, 600)
         .with_test_driver(|robot| {
             std::thread::sleep(Duration::from_millis(500));
             let (x, y, width, height) = find_button_in_semantics(&robot, "Activate")

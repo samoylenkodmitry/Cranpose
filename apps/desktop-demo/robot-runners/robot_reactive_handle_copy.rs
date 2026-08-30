@@ -1,4 +1,5 @@
-use cranpose::AppLauncher;
+mod robot_launch;
+
 use cranpose_core::remember;
 use cranpose_foundation::text::TextFieldState;
 use cranpose_ui::{
@@ -57,10 +58,7 @@ fn reactive_handle_copy_screen() {
 }
 
 fn main() {
-    AppLauncher::new()
-        .with_title("Reactive Handle Copy")
-        .with_size(640, 240)
-        .with_headless(true)
+    robot_launch::launch("Reactive Handle Copy", 640, 240)
         .with_test_driver(|robot| {
             std::thread::sleep(std::time::Duration::from_millis(500));
             robot.validate_content("left").expect("left content");

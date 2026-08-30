@@ -1,9 +1,10 @@
+mod robot_launch;
+
 use std::{
     sync::atomic::{AtomicUsize, Ordering},
     time::Duration,
 };
 
-use cranpose::AppLauncher;
 use cranpose_animation::{
     infiniteRepeatable, rememberInfiniteTransition, AnimationSpec, Easing, RepeatMode, StartOffset,
 };
@@ -34,11 +35,7 @@ fn click_mode(robot: &cranpose::Robot, label: &str) {
 
 fn main() {
     env_logger::init();
-    AppLauncher::new()
-        .with_title("Idle Transition Work")
-        .with_size(800, 600)
-        .with_headless(true)
-        .with_test_driver(|robot| {
+    robot_launch::launch("Idle Transition Work", 800, 600).with_test_driver(|robot| {
             std::thread::sleep(Duration::from_millis(500));
             robot.screenshot().expect("capture baseline frame");
             let baseline_render = robot

@@ -694,7 +694,7 @@ fn drag_main_and_assert_offsets(label: &str, windows: WinampWindows) {
     drag_and_assert_offsets(label, windows, windows.main, true);
 }
 
-fn drag_main_one_pixel_trace_and_assert_continuity(label: &str, windows: WinampWindows) {
+fn begin_main_drag(label: &str, windows: WinampWindows) -> WinampGeometries {
     let initial = assert_attached_offsets(label, windows.geometries());
     let (start_x, start_y) = drag_start_for_window(windows, windows.main);
 
@@ -703,6 +703,12 @@ fn drag_main_one_pixel_trace_and_assert_continuity(label: &str, windows: WinampW
     std::thread::sleep(Duration::from_millis(100));
     xdotool(["mousedown", "1"]);
     std::thread::sleep(Duration::from_millis(60));
+
+    initial
+}
+
+fn drag_main_one_pixel_trace_and_assert_continuity(label: &str, windows: WinampWindows) {
+    let initial = begin_main_drag(label, windows);
 
     let mut trace = Vec::with_capacity(PIXEL_TRACE_STEPS + 1);
     trace.push(DragTraceSample {
@@ -726,14 +732,7 @@ fn drag_main_one_pixel_trace_and_assert_continuity(label: &str, windows: WinampW
 }
 
 fn drag_main_fast_and_assert_offsets(label: &str, windows: WinampWindows) {
-    let initial = assert_attached_offsets(label, windows.geometries());
-    let (start_x, start_y) = drag_start_for_window(windows, windows.main);
-
-    activate_window(windows.main);
-    mousemove_in_window_exact(label, windows.main, start_x, start_y);
-    std::thread::sleep(Duration::from_millis(100));
-    xdotool(["mousedown", "1"]);
-    std::thread::sleep(Duration::from_millis(60));
+    let initial = begin_main_drag(label, windows);
 
     let mut previous_main = initial.main;
     for step in 1..=FAST_MOVE_STEPS {
@@ -764,14 +763,7 @@ fn drag_main_fast_and_assert_offsets(label: &str, windows: WinampWindows) {
 }
 
 fn drag_main_long_continuous_trace_and_assert_sync(label: &str, windows: WinampWindows) {
-    let initial = assert_attached_offsets(label, windows.geometries());
-    let (start_x, start_y) = drag_start_for_window(windows, windows.main);
-
-    activate_window(windows.main);
-    mousemove_in_window_exact(label, windows.main, start_x, start_y);
-    std::thread::sleep(Duration::from_millis(100));
-    xdotool(["mousedown", "1"]);
-    std::thread::sleep(Duration::from_millis(60));
+    let initial = begin_main_drag(label, windows);
 
     let origin_pointer = pointer_location();
     let started = Instant::now();

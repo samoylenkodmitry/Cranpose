@@ -1,6 +1,7 @@
+mod robot_launch;
+
 use std::time::Duration;
 
-use cranpose::AppLauncher;
 use cranpose_testing::{
     find_button_in_semantics, find_text_by_prefix_in_semantics, find_text_in_semantics,
 };
@@ -9,10 +10,7 @@ use desktop_app::app::lazy_list::lazy_list_example;
 fn main() {
     println!("=== LazyColumn usize::MAX Demo Test (ACTUAL APP) ===\n");
 
-    AppLauncher::new()
-        .with_title("LazyMax Test")
-        .with_size(800, 600)
-        .with_headless(true)
+    robot_launch::launch("LazyMax Test", 800, 600)
         .with_test_driver(|robot| {
             use std::time::Instant;
 
