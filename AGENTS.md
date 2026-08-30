@@ -51,6 +51,14 @@
   queue is queueing, not a stall: the jobs API lags the runner by minutes, so
   read that runner's own `_diag/Runner_*.log` for JobDispatcher lines and check
   its load before diagnosing one.
+- clean up after yourself: when you finish with a worktree, remove its `target/`
+  and `build/` directories. Each agent worktree builds a full Rust target tree
+  (15-100GB for this workspace) and nothing reclaims them; on 2026-08-29 they
+  reached ~350GB across `.claude/worktrees/` and filled this Mac to 100%, which
+  hard-stopped a running agent mid-investigation. Build artifacts are
+  regenerable by definition, so removing them is safe -- but never remove a
+  worktree's source or anything uncommitted, and check `df -h /` before starting
+  a large build
 - perf scripts are perf*.sh at project root
 - e2e robot headless tests is `just robot` (should all pass)
 - do not use big models as subagents (opus, codex xhigh thinking, etc), only small fast & cheap to not waste tokens
