@@ -81,6 +81,28 @@ pub struct SoftwareTextFontRegistry {
     system_faces: Vec<(FontFamilyKey, FontWeight, FontStyle)>,
 }
 
+#[derive(Default)]
+struct TolerantLoad {
+    first_error: Option<FontLoadError>,
+    loaded: usize,
+}
+
+impl TolerantLoad {
+    fn record(&mut self, result: Result<(), FontLoadError>) {
+        match result {
+            Ok(()) => self.loaded += 1,
+            Err(error) => self.first_error = self.first_error.take().or(Some(error)),
+        }
+    }
+
+    fn finish(self) -> Result<(), FontLoadError> {
+        match self.first_error {
+            Some(error) if self.loaded == 0 => Err(error),
+            _ => Ok(()),
+        }
+    }
+}
+
 impl SoftwareTextFontRegistry {
     pub fn new() -> Self {
         Self::default()
@@ -102,25 +124,17 @@ impl SoftwareTextFontRegistry {
         }
 
         let mut reads = FontFileReads::default();
-        let mut first_error = None;
-        let mut loaded = 0usize;
+        let mut load = TolerantLoad::default();
         for file in &files {
-            match self.register_read_face(
+            load.record(self.register_read_face(
                 &mut reads,
                 family,
                 file.weight,
                 file.style,
                 Path::new(&file.path),
-            ) {
-                Ok(()) => loaded += 1,
-                Err(error) => first_error = first_error.or(Some(error)),
-            }
+            ));
         }
-
-        match first_error {
-            Some(error) if loaded == 0 => Err(error),
-            _ => Ok(()),
-        }
+        load.finish()
     }
 
     fn register_read_face(
@@ -216,25 +230,17 @@ impl SoftwareTextFontRegistry {
     ) -> Result<(), FontLoadError> {
         let directory = directory.as_ref();
         let mut reads = FontFileReads::default();
-        let mut first_error = None;
-        let mut loaded = 0usize;
+        let mut load = TolerantLoad::default();
         for weight in weights {
-            match self.register_read_system_face(
+            load.record(self.register_read_system_face(
                 &mut reads,
                 directory,
                 family,
                 *weight,
                 FontStyle::Normal,
-            ) {
-                Ok(()) => loaded += 1,
-                Err(error) => first_error = first_error.or(Some(error)),
-            }
+            ));
         }
-
-        match first_error {
-            Some(error) if loaded == 0 => Err(error),
-            _ => Ok(()),
-        }
+        load.finish()
     }
 
     /// Register one weight/style of a generic family alias from the platform's

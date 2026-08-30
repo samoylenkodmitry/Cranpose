@@ -61,6 +61,7 @@ clippy:
 
 # Lint the exact package and feature set the web demo ships.
 clippy-wasm:
+    rustup target add wasm32-unknown-unknown
     scripts/ci/with_host_lock.sh --shared \
       cargo clippy --target wasm32-unknown-unknown -p desktop-app-platform --no-default-features --features web,renderer-wgpu -- -D warnings
 
@@ -68,19 +69,46 @@ clippy-wasm:
 clippy-ios:
     cargo clippy -p desktop-app --bin cranpose-ios --target aarch64-apple-ios-sim --no-default-features --features ios -- -D warnings
 
-# Lint the macOS desktop camera backend.
+# Lint the desktop-only backends that ship off by default: the macOS camera
+# capture path, the cpal audio output device, the in-process media backend
+# and the StoreKit purchase bridge.
 #
-# `just clippy` builds default features, and `camera-desktop` is off by
-# default, so the macOS half of `apple_camera.rs` would reach main unlinted
-# without this. That is the same shape of hole `clippy-android` was added to
-# close. Runs on any host: off a Mac the backend compiles away and this only
-# proves the feature still resolves.
+# `just clippy` builds default features, and none of these are on by
+# default, so their code would reach main unlinted without this. That is the
+# same shape of hole `clippy-android` was added to close. Runs on any host:
+# off a Mac the Apple-only backends compile away and this only proves the
+# features still resolve.
 #
 # `robot` rides along because the desktop shell's screenshot helpers are only
 # called from robot code: without it those three functions are dead and the
-# recipe fails on them instead of on the camera.
-clippy-camera-desktop:
-    cargo clippy -p cranpose --no-default-features --features desktop,renderer-wgpu,camera-desktop,robot --all-targets -- -D warnings
+# recipe fails on them instead of on the backends above. `playbilling` rides
+# along too: it is Android-only and compiles away on every other target, so
+# there is no per-target recipe for it to join instead.
+clippy-optional-backends:
+    cargo clippy -p cranpose --no-default-features --features desktop,renderer-wgpu,camera-desktop,robot,audio-desktop,media,storekit,playbilling --all-targets -- -D warnings
+
+# Lint the SVG image painter. `svg` is off by default and no crate in the
+# workspace ever turns it on, so `just clippy` never builds `image_svg.rs`
+# and `svg_painter_integration.rs` never compiles either.
+clippy-svg:
+    cargo clippy -p cranpose-ui --features svg --all-targets -- -D warnings
+
+# Lint the embedded hyphenation dictionary. `text-hyphenation-embedded` is
+# off by default and no crate in the workspace ever turns it on, so
+# `just clippy` never builds `text_hyphenation.rs`'s dictionary-backed path.
+clippy-hyphenation:
+    cargo clippy -p cranpose-render-common --features text-hyphenation-embedded --all-targets -- -D warnings
+
+# Lint the robot runners, which `just clippy` cannot reach.
+#
+# `cargo clippy --workspace --all-targets` silently SKIPS a target whose
+# `required-features` are not enabled, and all ~165 `[[example]]` entries in
+# apps/desktop-demo carry `required-features = ["robot-app"]`. Skipping is not
+# an error, so the omission never surfaced: `cargo check -p desktop-app
+# --examples` finishes in a fraction of a second having compiled nothing. The
+# runners went unlinted from the day the feature gate was added until #575.
+clippy-robot:
+    cargo clippy -p desktop-app --examples --features robot-app -- -D warnings
 
 # Lint the exact package, features and ABIs the Android build ships.
 #
@@ -113,28 +141,28 @@ clippy-android:
 #
 # Both gates below are scoped to the diff against `base`, not the whole
 # workspace: a function or a clone already there is left alone unless this
-# change touches it. See scripts/ci/gate_diff.py for how "touches" is
-# derived from the merge base, and scripts/ci/code_quality_gates.toml for the
-# thresholds. `base` defaults to `origin/main` so the same recipe means the
-# same thing for a developer comparing a local branch and for CI comparing a
-# pull request.
+# change touches it. See the `gate_diff` module in xtask/src/main.rs for how
+# "touches" is derived from the merge base, and
+# scripts/ci/code_quality_gates.toml for the thresholds. `base` defaults to
+# `origin/main` so the same recipe means the same thing for a developer
+# comparing a local branch and for CI comparing a pull request.
 
 # Unit tests for the diff-scoping logic itself -- synthetic diffs and
 # synthetic tool output, no git history or external tool required.
 test-quality-gates:
-    python3 scripts/ci/test_gate_diff.py
+    cargo test -p xtask
 
 # Cyclomatic complexity ceiling for functions the diff adds or modifies.
 # Installs its own tool on demand, the way `typos` does -- see
-# gate_diff.resolve_cargo_tool for why that install is pinned to a cargo
+# gate_diff::resolve_cargo_tool for why that install is pinned to a cargo
 # path rather than trusting whatever `rust-code-analysis-cli` is on $PATH.
 complexity-gate base="origin/main":
-    python3 scripts/ci/complexity_gate.py --base {{base}}
+    cargo xtask complexity-gate --base {{base}}
 
 # Copy-paste budget for a block the diff adds, at either end of the copy.
 # Same on-demand install as above, through the same pinned-path resolver.
 duplication-gate base="origin/main":
-    python3 scripts/ci/duplication_gate.py --base {{base}}
+    cargo xtask duplication-gate --base {{base}}
 
 # --- test ------------------------------------------------------------------
 
@@ -153,16 +181,42 @@ duplication-gate base="origin/main":
 test:
     cargo test --profile ci --workspace --no-fail-fast
 
-# Feature permutations of the core crate that the default build does not cover.
+# Feature permutations that the default build does not cover.
 test-features:
     cargo test --profile ci -p cranpose-core --features std-hash
     cargo test --profile ci -p cranpose-core --features internal
+    cargo test --profile ci -p cranpose-ui --features svg
+    cargo test --profile ci -p cranpose-render-common --features text-hyphenation-embedded
+    cargo test --profile ci -p cranpose --no-default-features --features desktop,renderer-wgpu,camera-desktop,robot,audio-desktop,media,storekit,playbilling
 
 # The docs-only trigger filter that lets the heavy jobs skip a prose diff.
 # A wrong answer there disables the robot suite silently, so the predicate is
 # pinned by the same gate that runs everywhere else.
 test-ci-filters:
     scripts/ci/docs_only_change_test.sh
+
+# run_robot_test.sh's example discovery: which robot_*.rs files it asks
+# cargo to build. A wrong answer there either drops a robot test silently or
+# demands a binary cargo never builds and fails the whole suite -- see
+# scripts/ci/robot_test_discovery_test.sh for the outage that predicate once
+# caused.
+test-robot-discovery:
+    scripts/ci/robot_test_discovery_test.sh
+
+# The shell helpers agents run by hand, pinned so they cannot rot.
+test-shell-helpers:
+    scripts/wait_until_quiet_test.sh
+
+# Covers the shared/exclusive lock that keeps builds off the machine while a
+# measurement runs, and the turnstile that keeps a stream of builds from
+# starving that measurement. It drives the real scripts against a private
+# lock pair under a scratch directory, so a run here cannot disturb -- or be
+# disturbed by -- a job actually holding the machine's lock. Needs flock(1):
+# on macOS the wrapper runs unlocked, and the lock cases say they skipped.
+
+# The host capacity lock's own suite.
+test-host-lock:
+    scripts/ci/with_host_lock_test.sh
 
 # The deterministic slot-table model check, at the frame count CI uses.
 test-property:
@@ -381,11 +435,14 @@ perf-heap *args:
 # --- aggregates ------------------------------------------------------------
 
 # Excludes the jobs that need a GPU, an Android SDK or an iOS toolchain.
+# clippy-wasm is in here because it needs none of those -- only the wasm32
+# target, which the recipe installs itself -- and CI gates every pull request
+# on it. A gate a pull request is judged by must be runnable before pushing.
 
 # What a pull request is gated on. Run this before pushing.
-ci: fmt-check typos versions test clippy doc budgets test-quality-gates complexity-gate duplication-gate
+ci: fmt-check typos versions test clippy clippy-robot clippy-wasm doc budgets test-quality-gates complexity-gate duplication-gate test-robot-discovery test-shell-helpers test-host-lock
 
 # Needs a Linux box with the X11 stack, an Android SDK and (on macOS) Xcode.
 
 # Every gate, including the platform builds and the robot suite.
-ci-full: ci clippy-wasm clippy-ios clippy-android web android robot
+ci-full: ci clippy-ios clippy-android web android robot

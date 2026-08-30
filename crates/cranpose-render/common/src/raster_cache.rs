@@ -65,6 +65,15 @@ pub struct LayerRasterCacheKey {
     scale_bucket: ScaleBucket,
 }
 
+fn local_bounds_bits(local_bounds: Rect) -> [u32; 4] {
+    [
+        local_bounds.x.to_bits(),
+        local_bounds.y.to_bits(),
+        local_bounds.width.to_bits(),
+        local_bounds.height.to_bits(),
+    ]
+}
+
 impl LayerRasterCacheKey {
     pub fn new(
         stable_id: Option<NodeId>,
@@ -79,12 +88,7 @@ impl LayerRasterCacheKey {
             stable_id,
             content_hash,
             effect_hash,
-            local_bounds_bits: [
-                local_bounds.x.to_bits(),
-                local_bounds.y.to_bits(),
-                local_bounds.width.to_bits(),
-                local_bounds.height.to_bits(),
-            ],
+            local_bounds_bits: local_bounds_bits(local_bounds),
             pixel_size: [pixel_size.0, pixel_size.1],
             scale_bucket,
         }
@@ -102,12 +106,7 @@ impl LayerRasterCacheKey {
             stable_id,
             content_hash,
             effect_hash: 0,
-            local_bounds_bits: [
-                local_bounds.x.to_bits(),
-                local_bounds.y.to_bits(),
-                local_bounds.width.to_bits(),
-                local_bounds.height.to_bits(),
-            ],
+            local_bounds_bits: local_bounds_bits(local_bounds),
             pixel_size: [pixel_size.0, pixel_size.1],
             scale_bucket,
         }
@@ -126,12 +125,7 @@ impl LayerRasterCacheKey {
             stable_id,
             content_hash: input_hash,
             effect_hash,
-            local_bounds_bits: [
-                local_bounds.x.to_bits(),
-                local_bounds.y.to_bits(),
-                local_bounds.width.to_bits(),
-                local_bounds.height.to_bits(),
-            ],
+            local_bounds_bits: local_bounds_bits(local_bounds),
             pixel_size: [pixel_size.0, pixel_size.1],
             scale_bucket,
         }
@@ -148,12 +142,7 @@ impl LayerRasterCacheKey {
             stable_id: None,
             content_hash,
             effect_hash: 0,
-            local_bounds_bits: [
-                local_bounds.x.to_bits(),
-                local_bounds.y.to_bits(),
-                local_bounds.width.to_bits(),
-                local_bounds.height.to_bits(),
-            ],
+            local_bounds_bits: local_bounds_bits(local_bounds),
             pixel_size: [pixel_size.0, pixel_size.1],
             scale_bucket,
         }
@@ -176,12 +165,7 @@ impl LayerRasterCacheKey {
             stable_id: None,
             content_hash,
             effect_hash: prefix_len,
-            local_bounds_bits: [
-                local_bounds.x.to_bits(),
-                local_bounds.y.to_bits(),
-                local_bounds.width.to_bits(),
-                local_bounds.height.to_bits(),
-            ],
+            local_bounds_bits: local_bounds_bits(local_bounds),
             pixel_size: [pixel_size.0, pixel_size.1],
             scale_bucket,
         }

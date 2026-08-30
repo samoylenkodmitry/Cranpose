@@ -2,12 +2,9 @@
 
 use std::{
     cell::RefCell,
-    future::Future,
     io::{Read, Write},
     path::{Path, PathBuf},
-    pin::Pin,
     rc::Rc,
-    task::{Context, Poll, Waker},
 };
 
 use cranpose_services::{
@@ -17,7 +14,7 @@ use cranpose_services::{
     SaveDocumentRequest, set_platform_file_picker,
 };
 use objc2::{
-    DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, rc::Retained,
+    DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, rc::Retained,
     runtime::ProtocolObject,
 };
 use objc2_foundation::{NSArray, NSObject, NSObjectProtocol, NSURL};
@@ -122,32 +119,9 @@ enum Kind {
 
 type PickResult = Result<Vec<Retained<NSURL>>, FilePickerError>;
 
-#[derive(Default)]
-struct PickSlot {
-    result: Option<PickResult>,
-    waker: Option<Waker>,
-}
+type SharedSlot = crate::ios_pick_future::SharedPickSlot<PickResult>;
 
-type SharedSlot = Rc<RefCell<PickSlot>>;
-
-struct PickFuture {
-    slot: SharedSlot,
-    _delegate: Retained<PickerDelegate>,
-}
-
-impl Future for PickFuture {
-    type Output = PickResult;
-
-    fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<PickResult> {
-        let mut slot = self.slot.borrow_mut();
-        if let Some(result) = slot.result.take() {
-            Poll::Ready(result)
-        } else {
-            slot.waker = Some(context.waker().clone());
-            Poll::Pending
-        }
-    }
-}
+type PickFuture = crate::ios_pick_future::PickFuture<PickResult, PickerDelegate>;
 
 define_class!(
     #[unsafe(super(NSObject))]
@@ -173,16 +147,11 @@ define_class!(
 
 impl PickerDelegate {
     fn new(slot: SharedSlot, mtm: MainThreadMarker) -> Retained<Self> {
-        let this = Self::alloc(mtm).set_ivars(slot);
-        unsafe { msg_send![super(this), init] }
+        crate::ios_pick_future::new_pick_delegate(slot, mtm)
     }
 
     fn resolve(&self, result: PickResult) {
-        let mut slot = self.ivars().borrow_mut();
-        slot.result = Some(result);
-        if let Some(waker) = slot.waker.take() {
-            waker.wake();
-        }
+        crate::ios_pick_future::resolve_pick_slot(self.ivars(), result);
     }
 }
 
@@ -205,7 +174,7 @@ fn present(
     };
 
     let picker = build(mtm);
-    let slot: SharedSlot = Rc::new(RefCell::new(PickSlot::default()));
+    let slot: SharedSlot = Rc::new(RefCell::new(Default::default()));
     let delegate = PickerDelegate::new(slot.clone(), mtm);
     picker.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
     root.presentViewController_animated_completion(&picker, true, None);

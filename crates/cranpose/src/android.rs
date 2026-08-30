@@ -630,6 +630,21 @@ fn apply_display_visible_region(
     });
 }
 
+fn apply_initialized_android_rendering(
+    app: &android_activity::AndroidApp,
+    app_shell: &mut Option<AppShell<WgpuRenderer>>,
+    gpu_resources: &mut Option<GpuResources>,
+    current_host_window_size: &mut Size,
+    resources: GpuResources,
+    actual_size: Option<Size>,
+) {
+    if let Some(actual_size) = actual_size {
+        *current_host_window_size = actual_size;
+    }
+    *gpu_resources = Some(resources);
+    apply_display_visible_region(app, app_shell);
+}
+
 fn render_once(
     resources: &mut GpuResources,
     shell: &mut AppShell<WgpuRenderer>,
@@ -2063,11 +2078,14 @@ pub fn run(
                                 present_thread,
                             ) {
                                 Ok((resources, actual_size)) => {
-                                    if let Some(actual_size) = actual_size {
-                                        current_host_window_size = actual_size;
-                                    }
-                                    gpu_resources = Some(resources);
-                                    apply_display_visible_region(&app, &mut app_shell);
+                                    apply_initialized_android_rendering(
+                                        &app,
+                                        &mut app_shell,
+                                        &mut gpu_resources,
+                                        &mut current_host_window_size,
+                                        resources,
+                                        actual_size,
+                                    );
                                 }
                                 Err(error) => {
                                     log::error!(
@@ -2108,11 +2126,14 @@ pub fn run(
                             present_thread,
                         ) {
                             Ok((resources, actual_size)) => {
-                                if let Some(actual_size) = actual_size {
-                                    current_host_window_size = actual_size;
-                                }
-                                gpu_resources = Some(resources);
-                                apply_display_visible_region(&app, &mut app_shell);
+                                apply_initialized_android_rendering(
+                                    &app,
+                                    &mut app_shell,
+                                    &mut gpu_resources,
+                                    &mut current_host_window_size,
+                                    resources,
+                                    actual_size,
+                                );
                                 log::info!(
                                     "Android overlay surface ready at {}x{} px ({:.2}x density)",
                                     width,

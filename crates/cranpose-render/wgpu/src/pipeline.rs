@@ -6,7 +6,7 @@ use cranpose_render_common::primitive_emit::resolve_clip;
 use cranpose_render_common::{
     Brush, RenderScene,
     geometry::{expand_blurred_rect, union_rect},
-    hit_graph::{HitGraphSink, collect_hits_from_graph as collect_common_hits},
+    hit_graph::collect_hits_from_graph,
     layer_shadow::layer_shadow_geometry,
     layer_transform::{apply_layer_to_rect, layer_uniform_scale},
     primitive_emit::{
@@ -29,21 +29,21 @@ use cranpose_ui::{
     text::{TextDecoration, TextDrawStyle, TextStyle},
     text_layout_result::TextLayoutResult,
 };
+#[cfg(test)]
+use cranpose_ui_graphics::Point;
 use cranpose_ui_graphics::{
-    BlendMode, Color, DrawPrimitive, GraphicsLayer, LayerShape, Point, Rect, RenderEffect,
+    BlendMode, Color, DrawPrimitive, GraphicsLayer, LayerShape, Rect, RenderEffect,
     RoundedCornerShape, RuntimeShader, TileMode,
 };
 
 use crate::{
-    scene::{ClickAction, CompositorScene, DrawShape, Scene, ShadowDraw, TextDraw},
+    scene::{CompositorScene, DrawShape, Scene, ShadowDraw, TextDraw},
     surface_requirements::{SurfaceRequirement, SurfaceRequirementSet},
 };
 
 mod style;
 use style::{apply_layer_to_brush, apply_layer_to_color, scale_corner_radii};
 
-#[cfg(test)]
-const TEXT_CLIP_PAD: f32 = 1.0;
 const GPU_TEXT_BRUSH_EFFECT_MAX_STOPS: usize = 16;
 const GPU_TEXT_BRUSH_EFFECT_FIRST_STOP_SLOT: usize = 8;
 const DECORATION_SEGMENT_MERGE_EPSILON: f32 = 0.75;
@@ -69,16 +69,6 @@ impl TextLayoutResolver for UiTextLayoutResolver {
         style: &TextStyle,
     ) -> TextLayoutResult {
         layout_text(text, style)
-    }
-}
-
-#[cfg(test)]
-fn pad_clip_rect(rect: Rect) -> Rect {
-    Rect {
-        x: rect.x - TEXT_CLIP_PAD,
-        y: rect.y - TEXT_CLIP_PAD,
-        width: (rect.width + TEXT_CLIP_PAD * 2.0).max(0.0),
-        height: (rect.height + TEXT_CLIP_PAD * 2.0).max(0.0),
     }
 }
 
@@ -212,51 +202,6 @@ pub(crate) fn render_layout_tree_with_scale(root: &LayoutBox, scene: &mut Scene,
         None,
     );
     scene.replace_graph(graph);
-}
-
-#[cfg(test)]
-fn resolve_text_clip(
-    overflow: TextOverflow,
-    visual_clip: Option<Rect>,
-    transformed_text_bounds: Rect,
-) -> Option<Option<Rect>> {
-    if overflow == TextOverflow::Visible {
-        return Some(visual_clip);
-    }
-    resolve_clip(visual_clip, Some(pad_clip_rect(transformed_text_bounds))).map(Some)
-}
-
-#[cfg(test)]
-fn expand_text_bounds_for_baseline_shift(
-    text_bounds: Rect,
-    text_style: &TextStyle,
-    font_size: f32,
-) -> Rect {
-    let baseline_shift_px = text_style
-        .span_style
-        .baseline_shift
-        .filter(|shift| shift.is_specified())
-        .map(|shift| -(shift.0 * font_size))
-        .unwrap_or(0.0);
-    if baseline_shift_px == 0.0 {
-        return text_bounds;
-    }
-
-    if baseline_shift_px < 0.0 {
-        Rect {
-            x: text_bounds.x,
-            y: text_bounds.y + baseline_shift_px,
-            width: text_bounds.width,
-            height: (text_bounds.height - baseline_shift_px).max(0.0),
-        }
-    } else {
-        Rect {
-            x: text_bounds.x,
-            y: text_bounds.y,
-            width: text_bounds.width,
-            height: (text_bounds.height + baseline_shift_px).max(0.0),
-        }
-    }
 }
 
 fn resolve_text_color_without_gradient_fallback(text_style: &TextStyle, default: Color) -> Color {
@@ -1908,7 +1853,9 @@ fn decoration_brush_for_span(
 }
 
 #[cfg(test)]
-use cranpose_render_common::scene_builder::resolve_text_measure_width;
+use cranpose_render_common::scene_builder::{
+    expand_text_bounds_for_baseline_shift, resolve_text_measure_width,
+};
 
 #[cfg(test)]
 fn resolve_text_horizontal_offset(
@@ -2051,45 +1998,6 @@ pub(crate) fn update_from_applier(
     );
     scene.replace_graph(graph);
     SceneUpdateOutcome::Patched
-}
-
-fn collect_hits_from_graph(
-    layer: &cranpose_render_common::graph::LayerNode,
-    parent_transform: cranpose_render_common::graph::ProjectiveTransform,
-    scene: &mut Scene,
-    parent_hit_clip: Option<Rect>,
-) {
-    struct SceneHitSink<'a> {
-        scene: &'a mut Scene,
-    }
-
-    impl HitGraphSink for SceneHitSink<'_> {
-        fn push_hit(
-            &mut self,
-            node_id: NodeId,
-            capture_path: &[NodeId],
-            geometry: cranpose_render_common::graph_scene::HitGeometry,
-            shape: Option<RoundedCornerShape>,
-            click_actions: &[Rc<dyn Fn(Point)>],
-            pointer_inputs: &[Rc<dyn Fn(cranpose_foundation::PointerEvent)>],
-        ) {
-            self.scene.push_hit(
-                node_id,
-                capture_path.to_vec(),
-                geometry,
-                shape,
-                click_actions
-                    .iter()
-                    .cloned()
-                    .map(ClickAction::WithPoint)
-                    .collect(),
-                pointer_inputs.to_vec(),
-            );
-        }
-    }
-
-    let mut sink = SceneHitSink { scene };
-    collect_common_hits(layer, parent_transform, &mut sink, parent_hit_clip);
 }
 
 const DRAW_PRIMITIVE_TEXT_NODE_ID: cranpose_core::NodeId = 0;
@@ -2580,40 +2488,6 @@ mod tests {
 
         assert_eq!(scene.hits.len(), 1);
         assert!(scene.graph.is_none());
-    }
-
-    #[test]
-    fn resolve_text_clip_skips_when_intersection_is_empty() {
-        let visual_clip = Some(Rect {
-            x: 0.0,
-            y: 0.0,
-            width: 10.0,
-            height: 10.0,
-        });
-        let text_bounds = Rect {
-            x: 20.0,
-            y: 20.0,
-            width: 5.0,
-            height: 5.0,
-        };
-        assert_eq!(
-            resolve_text_clip(TextOverflow::Clip, visual_clip, text_bounds),
-            None
-        );
-    }
-
-    #[test]
-    fn resolve_text_clip_visible_keeps_unbounded_draw() {
-        let text_bounds = Rect {
-            x: 20.0,
-            y: 20.0,
-            width: 5.0,
-            height: 5.0,
-        };
-        assert_eq!(
-            resolve_text_clip(TextOverflow::Visible, None, text_bounds),
-            Some(None)
-        );
     }
 
     #[test]

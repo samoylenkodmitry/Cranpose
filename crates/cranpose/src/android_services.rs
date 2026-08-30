@@ -264,33 +264,49 @@ impl BackgroundActivity for AndroidBackgroundActivity {
     }
 }
 
+fn call_android_activity_int(
+    app: &android_activity::AndroidApp,
+    method: &'static jni::strings::JNIStr,
+    fallback: i32,
+) -> i32 {
+    with_android_activity_env(app, |env, activity| {
+        env.call_method(&activity, method, jni_sig!("()I"), &[])
+            .and_then(|value| value.i())
+            .map_err(|error| {
+                clear_pending_android_jni_exception(env);
+                error.to_string()
+            })
+    })
+    .unwrap_or(fallback)
+}
+
+fn call_android_activity_bool(
+    app: &android_activity::AndroidApp,
+    method: &'static jni::strings::JNIStr,
+    fallback: bool,
+) -> bool {
+    with_android_activity_env(app, |env, activity| {
+        env.call_method(&activity, method, jni_sig!("()Z"), &[])
+            .and_then(|value| value.z())
+            .map_err(|error| {
+                clear_pending_android_jni_exception(env);
+                error.to_string()
+            })
+    })
+    .unwrap_or(fallback)
+}
+
 struct AndroidPowerMonitor {
     app: android_activity::AndroidApp,
 }
 
 impl AndroidPowerMonitor {
     fn call_int(&self, method: &'static jni::strings::JNIStr, fallback: i32) -> i32 {
-        with_android_activity_env(&self.app, |env, activity| {
-            env.call_method(&activity, method, jni_sig!("()I"), &[])
-                .and_then(|value| value.i())
-                .map_err(|error| {
-                    clear_pending_android_jni_exception(env);
-                    error.to_string()
-                })
-        })
-        .unwrap_or(fallback)
+        call_android_activity_int(&self.app, method, fallback)
     }
 
     fn call_bool(&self, method: &'static jni::strings::JNIStr, fallback: bool) -> bool {
-        with_android_activity_env(&self.app, |env, activity| {
-            env.call_method(&activity, method, jni_sig!("()Z"), &[])
-                .and_then(|value| value.z())
-                .map_err(|error| {
-                    clear_pending_android_jni_exception(env);
-                    error.to_string()
-                })
-        })
-        .unwrap_or(fallback)
+        call_android_activity_bool(&self.app, method, fallback)
     }
 }
 
@@ -649,20 +665,11 @@ impl Haptics for AndroidHaptics {
             2 => return true,
             _ => {}
         }
-        let supported = with_android_activity_env(&self.app, |env, activity| {
-            env.call_method(
-                &activity,
-                jni_str!("cranposeHapticHasAmplitudeControl"),
-                jni_sig!("()Z"),
-                &[],
-            )
-            .and_then(|value| value.z())
-            .map_err(|error| {
-                clear_pending_android_jni_exception(env);
-                error.to_string()
-            })
-        })
-        .unwrap_or(false);
+        let supported = call_android_activity_bool(
+            &self.app,
+            jni_str!("cranposeHapticHasAmplitudeControl"),
+            false,
+        );
         self.amplitude_control
             .store(if supported { 2 } else { 1 }, Ordering::Release);
         supported
@@ -823,20 +830,8 @@ impl NetworkMonitor for AndroidNetworkMonitor {
     }
 
     fn reconnect(&self) {
-        let registered = with_android_activity_env(&self.app, |env, activity| {
-            env.call_method(
-                &activity,
-                jni_str!("cranposeEnsureNetworkCallback"),
-                jni_sig!("()Z"),
-                &[],
-            )
-            .and_then(|value| value.z())
-            .map_err(|error| {
-                clear_pending_android_jni_exception(env);
-                error.to_string()
-            })
-        })
-        .unwrap_or(false);
+        let registered =
+            call_android_activity_bool(&self.app, jni_str!("cranposeEnsureNetworkCallback"), false);
         NETWORK_CALLBACK_REGISTERED.store(registered, Ordering::Release);
     }
 }
@@ -940,12 +935,8 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeNotifica
     _class: JClass<'local>,
     deeplink: JString<'local>,
 ) {
-    let deeplink = match env
-        .with_env(|env| -> jni::errors::Result<String> { deeplink.try_to_string(env) })
-        .into_outcome()
-    {
-        Outcome::Ok(deeplink) => deeplink,
-        Outcome::Err(_) | Outcome::Panic(_) => return,
+    let Some(deeplink) = crate::android_jni::decode_jni_string(&mut env, deeplink) else {
+        return;
     };
     if !deeplink.is_empty() {
         push_notification_deeplink(deeplink);
@@ -1067,12 +1058,8 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnLaunch
     _class: JClass<'local>,
     payload: JString<'local>,
 ) {
-    let payload = match env
-        .with_env(|env| -> jni::errors::Result<String> { payload.try_to_string(env) })
-        .into_outcome()
-    {
-        Outcome::Ok(payload) => payload,
-        Outcome::Err(_) | Outcome::Panic(_) => return,
+    let Some(payload) = crate::android_jni::decode_jni_string(&mut env, payload) else {
+        return;
     };
     if let Ok(mut slot) = PENDING_LAUNCH_ARGS.lock() {
         *slot = Some(payload);

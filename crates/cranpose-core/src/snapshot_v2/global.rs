@@ -152,27 +152,19 @@ impl GlobalSnapshot {
         self.nested_count.set(self.nested_count.get() + 1);
         self.state.add_pending_child(new_id);
 
-        let parent_arc = self.root_global();
-        let weak = Arc::downgrade(&parent_arc);
-        drop(parent_arc);
-        child.set_on_dispose({
-            let child_id = new_id;
-            move || {
-                if let Some(parent) = weak.upgrade() {
-                    if parent.nested_count.get() > 0 {
-                        parent
-                            .nested_count
-                            .set(parent.nested_count.get().saturating_sub(1));
-                    }
-                    let mut invalid = parent.state.invalid.borrow_mut();
-                    let new_set = invalid.clone().clear(child_id);
-                    *invalid = new_set;
-                    parent.state.remove_pending_child(child_id);
-                }
-            }
-        });
+        child.set_on_dispose(clear_nested_child_on_dispose(&self.root_global(), new_id));
 
         child
+    }
+}
+
+impl NestedMutableHost for GlobalSnapshot {
+    fn snapshot_state(&self) -> &SnapshotState {
+        &self.state
+    }
+
+    fn nested_count(&self) -> &Cell<usize> {
+        &self.nested_count
     }
 }
 

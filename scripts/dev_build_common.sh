@@ -417,8 +417,17 @@ wait_for_host_capacity() {
 # mid-stream exclusive waiter in within ~2.7s of joining, an order of
 # magnitude under the stream's own length -- so the turnstile needs no
 # turnstile of its own.
-readonly HOST_CAPACITY_LOCK_FILE="/tmp/cranpose-host-capacity.lock"
-readonly HOST_CAPACITY_TURNSTILE_FILE="/tmp/cranpose-host-capacity.turnstile.lock"
+#
+# One pair of paths per machine is the whole point: every job on the box has
+# to meet on the same two files or the lock guards nothing. That also means a
+# test of this logic cannot use them -- proving the turnstile above works
+# takes creating, deleting and locking these exact files while real CI jobs on
+# the same machine are holding them, which is how the fix was verified and is
+# not a thing to repeat. The two overrides point a test at a private pair
+# instead; scripts/ci/with_host_lock_test.sh is the only caller that sets them,
+# so every real build and measurement still meets on the defaults.
+readonly HOST_CAPACITY_LOCK_FILE="${CRANPOSE_HOST_LOCK_FILE:-/tmp/cranpose-host-capacity.lock}"
+readonly HOST_CAPACITY_TURNSTILE_FILE="${CRANPOSE_HOST_LOCK_TURNSTILE_FILE:-/tmp/cranpose-host-capacity.turnstile.lock}"
 
 host_capacity_lock_available() {
     command -v flock >/dev/null 2>&1 \

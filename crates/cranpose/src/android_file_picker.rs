@@ -4,7 +4,7 @@ use std::{
     collections::HashMap,
     fs::File,
     future::Future,
-    io::{self, Read, Write},
+    io::{self, Write},
     os::fd::FromRawFd,
     pin::Pin,
     rc::Rc,
@@ -24,7 +24,7 @@ use cranpose_services::{
 };
 use jni::{
     EnvUnowned, Outcome, jni_sig, jni_str,
-    objects::{JClass, JObject, JString, JValue},
+    objects::{JClass, JObject, JString, JValue, JValueOwned},
     sys::{jboolean, jint, jlong},
 };
 
@@ -71,14 +71,7 @@ fn document_info(uri: &str) -> Option<ContentMetadata> {
             )
             .and_then(|value| value.l())
             .map_err(|error| error.to_string())?;
-        if value.is_null() {
-            return Ok(None);
-        }
-        JString::cast_local(env, value)
-            .map_err(|error| error.to_string())?
-            .try_to_string(env)
-            .map(Some)
-            .map_err(|error| error.to_string())
+        optional_jstring(env, value)
     })
     .ok()
     .flatten()?;
@@ -308,7 +301,7 @@ fn present_documents(
                 let types_obj: &JObject = types.as_ref();
                 let arguments = [JValue::Long(token), JValue::Object(types_obj)];
                 let signature = jni_sig!("(JLjava/lang/String;)V");
-                match selection {
+                chooser_launch_result(match selection {
                     Selection::Single => env.call_method(
                         &activity,
                         jni_str!("cranposePickFile"),
@@ -321,12 +314,10 @@ fn present_documents(
                         signature,
                         &arguments,
                     ),
-                }
-                .map(|_| ())
-                .map_err(|error| format!("failed to launch the Android chooser: {error}"))
+                })
             })
         },
-        |error| Err(FilePickerError::Failed(error)),
+        picker_failed,
         || Ok(Vec::new()),
     )
 }
@@ -338,7 +329,7 @@ fn present_tree(grant: Grant) -> PickerFuture<Result<Option<String>, FilePickerE
             call_activity(move |env, activity| {
                 let arguments = [JValue::Long(token)];
                 let signature = jni_sig!("(J)V");
-                match grant {
+                chooser_launch_result(match grant {
                     Grant::ReadOnly => env.call_method(
                         &activity,
                         jni_str!("cranposePickFolder"),
@@ -351,12 +342,10 @@ fn present_tree(grant: Grant) -> PickerFuture<Result<Option<String>, FilePickerE
                         signature,
                         &arguments,
                     ),
-                }
-                .map(|_| ())
-                .map_err(|error| format!("failed to launch the Android chooser: {error}"))
+                })
             })
         },
-        |error| Err(FilePickerError::Failed(error)),
+        picker_failed,
         || Ok(None),
     )
 }
@@ -376,7 +365,7 @@ fn present_create_document(
                     .map_err(|error| error.to_string())?;
                 let name_obj: &JObject = name.as_ref();
                 let mime_obj: &JObject = mime.as_ref();
-                env.call_method(
+                chooser_launch_result(env.call_method(
                     &activity,
                     jni_str!("cranposeCreateDocument"),
                     jni_sig!("(JLjava/lang/String;Ljava/lang/String;)V"),
@@ -385,12 +374,10 @@ fn present_create_document(
                         JValue::Object(name_obj),
                         JValue::Object(mime_obj),
                     ],
-                )
-                .map(|_| ())
-                .map_err(|error| format!("failed to launch the Android chooser: {error}"))
+                ))
             })
         },
-        |error| Err(FilePickerError::Failed(error)),
+        picker_failed,
         || Ok(None),
     )
 }
@@ -400,6 +387,27 @@ fn call_activity<T>(
 ) -> Result<T, String> {
     let app = app()?;
     crate::android_jni::with_android_activity_env(app, body)
+}
+
+fn chooser_launch_result(result: jni::errors::Result<JValueOwned<'_>>) -> Result<(), String> {
+    result
+        .map(|_| ())
+        .map_err(|error| format!("failed to launch the Android chooser: {error}"))
+}
+
+fn picker_failed<T>(error: String) -> Result<T, FilePickerError> {
+    Err(FilePickerError::Failed(error))
+}
+
+fn optional_jstring(env: &mut jni::Env<'_>, value: JObject) -> Result<Option<String>, String> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    JString::cast_local(env, value)
+        .map_err(|error| error.to_string())?
+        .try_to_string(env)
+        .map(Some)
+        .map_err(|error| error.to_string())
 }
 
 struct Recoverable {
@@ -469,15 +477,8 @@ impl ContentReader for DescriptorReader {
                 return Ok(None);
             };
             let mut buffer = vec![0u8; DEFAULT_CHUNK_LEN];
-            let mut filled = 0;
-            while filled < buffer.len() {
-                match file.read(&mut buffer[filled..]) {
-                    Ok(0) => break,
-                    Ok(read) => filled += read,
-                    Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-                    Err(error) => return Err(ContentError::Io(error.to_string())),
-                }
-            }
+            let filled = crate::chunked_read::fill_buffer(file, &mut buffer)
+                .map_err(|error| ContentError::Io(error.to_string()))?;
             if filled == 0 {
                 *slot = None;
                 return Ok(None);
@@ -572,14 +573,7 @@ impl AndroidFolder {
                 )
                 .and_then(|value| value.l())
                 .map_err(|error| error.to_string())?;
-            if value.is_null() {
-                return Ok(None);
-            }
-            JString::cast_local(env, value)
-                .map_err(|error| error.to_string())?
-                .try_to_string(env)
-                .map(Some)
-                .map_err(|error| error.to_string())
+            optional_jstring(env, value)
         })
         .map_err(ContentError::Io)?;
         let rows = rows.ok_or_else(|| ContentError::Io("folder is not readable".into()))?;
@@ -824,18 +818,14 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnFilePi
 #[doc(hidden)]
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnFolderPicked<'local>(
-    mut env: EnvUnowned<'local>,
+    env: EnvUnowned<'local>,
     _class: JClass<'local>,
     token: jlong,
     uri: JString<'local>,
     cancelled: jboolean,
     error: JString<'local>,
 ) {
-    deliver(
-        tree_picks(),
-        token,
-        tree_result(&mut env, uri, cancelled, error),
-    );
+    deliver_tree_pick(tree_picks(), env, token, uri, cancelled, error);
 }
 
 #[doc(hidden)]
@@ -843,18 +833,14 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnFolder
 pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnWritableFolderPicked<
     'local,
 >(
-    mut env: EnvUnowned<'local>,
+    env: EnvUnowned<'local>,
     _class: JClass<'local>,
     token: jlong,
     uri: JString<'local>,
     cancelled: jboolean,
     error: JString<'local>,
 ) {
-    deliver(
-        tree_picks(),
-        token,
-        tree_result(&mut env, uri, cancelled, error),
-    );
+    deliver_tree_pick(tree_picks(), env, token, uri, cancelled, error);
 }
 
 #[doc(hidden)]
@@ -862,15 +848,26 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnWritab
 pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnDocumentCreated<
     'local,
 >(
-    mut env: EnvUnowned<'local>,
+    env: EnvUnowned<'local>,
     _class: JClass<'local>,
     token: jlong,
     uri: JString<'local>,
     cancelled: jboolean,
     error: JString<'local>,
 ) {
+    deliver_tree_pick(created_documents(), env, token, uri, cancelled, error);
+}
+
+fn deliver_tree_pick(
+    registry: &'static Registry<Result<Option<String>, FilePickerError>>,
+    mut env: EnvUnowned<'_>,
+    token: jlong,
+    uri: JString<'_>,
+    cancelled: jboolean,
+    error: JString<'_>,
+) {
     deliver(
-        created_documents(),
+        registry,
         token,
         tree_result(&mut env, uri, cancelled, error),
     );

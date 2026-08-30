@@ -10,12 +10,6 @@ use std::cell::Cell;
     not(target_arch = "wasm32")
 ))]
 use std::collections::HashMap;
-#[cfg(all(
-    feature = "desktop-shell",
-    feature = "renderer-wgpu",
-    not(target_arch = "wasm32")
-))]
-use std::rc::Weak;
 use std::{
     cell::RefCell,
     hash::{Hash, Hasher},
@@ -722,8 +716,8 @@ impl NativeWindowRegistry {
     not(target_arch = "wasm32")
 ))]
 thread_local! {
-    static CURRENT_NATIVE_WINDOW_REGISTRY: RefCell<Vec<Weak<NativeWindowRegistry>>> =
-        const { RefCell::new(Vec::new()) };
+    static CURRENT_NATIVE_WINDOW_REGISTRY: crate::scoped_weak_stack::ScopedWeakStack<NativeWindowRegistry> =
+        const { crate::scoped_weak_stack::ScopedWeakStack::new() };
 }
 
 thread_local! {
@@ -875,21 +869,7 @@ pub(crate) fn with_native_window_registry<R>(
     registry: &Rc<NativeWindowRegistry>,
     f: impl FnOnce() -> R,
 ) -> R {
-    struct RegistryGuard;
-
-    impl Drop for RegistryGuard {
-        fn drop(&mut self) {
-            CURRENT_NATIVE_WINDOW_REGISTRY.with(|stack| {
-                stack.borrow_mut().pop();
-            });
-        }
-    }
-
-    CURRENT_NATIVE_WINDOW_REGISTRY.with(|stack| {
-        stack.borrow_mut().push(Rc::downgrade(registry));
-    });
-    let _guard = RegistryGuard;
-    f()
+    CURRENT_NATIVE_WINDOW_REGISTRY.with(|stack| stack.with_scope(registry, f))
 }
 
 #[cfg(all(
@@ -898,18 +878,7 @@ pub(crate) fn with_native_window_registry<R>(
     not(target_arch = "wasm32")
 ))]
 fn current_native_window_registry() -> Option<Rc<NativeWindowRegistry>> {
-    CURRENT_NATIVE_WINDOW_REGISTRY.with(|stack| {
-        let mut stack = stack.borrow_mut();
-        loop {
-            match stack.last().and_then(Weak::upgrade) {
-                Some(registry) => return Some(registry),
-                None if stack.is_empty() => return None,
-                None => {
-                    stack.pop();
-                }
-            }
-        }
-    })
+    CURRENT_NATIVE_WINDOW_REGISTRY.with(crate::scoped_weak_stack::ScopedWeakStack::current)
 }
 
 #[cfg(all(
@@ -2245,6 +2214,60 @@ mod tests {
         feature = "renderer-wgpu",
         not(target_arch = "wasm32")
     ))]
+    const GRAPH_NODE_SIZE: Size = Size::new(100.0, 50.0);
+
+    #[cfg(all(
+        feature = "desktop-shell",
+        feature = "renderer-wgpu",
+        not(target_arch = "wasm32")
+    ))]
+    fn graph_windows(
+        group: &NativeWindowGroupMembership,
+        nodes: &[(&'static str, Point)],
+    ) -> Vec<WindowGraphPeerSnapshot> {
+        nodes
+            .iter()
+            .map(|(id, position)| graph_node(id, *position, GRAPH_NODE_SIZE, group))
+            .collect()
+    }
+
+    #[cfg(all(
+        feature = "desktop-shell",
+        feature = "renderer-wgpu",
+        not(target_arch = "wasm32")
+    ))]
+    fn main_and_playlist_windows(
+        group: &NativeWindowGroupMembership,
+    ) -> Vec<WindowGraphPeerSnapshot> {
+        graph_windows(
+            group,
+            &[
+                ("main", Point::new(100.0, 100.0)),
+                ("playlist", Point::new(216.0, 100.0)),
+            ],
+        )
+    }
+
+    #[cfg(all(
+        feature = "desktop-shell",
+        feature = "renderer-wgpu",
+        not(target_arch = "wasm32")
+    ))]
+    fn main_and_eq_windows(group: &NativeWindowGroupMembership) -> Vec<WindowGraphPeerSnapshot> {
+        graph_windows(
+            group,
+            &[
+                ("main", Point::new(100.0, 100.0)),
+                ("eq", Point::new(100.0, 150.0)),
+            ],
+        )
+    }
+
+    #[cfg(all(
+        feature = "desktop-shell",
+        feature = "renderer-wgpu",
+        not(target_arch = "wasm32")
+    ))]
     fn graph_position(moves: &[WindowGraphMove], id: WindowId) -> Option<Point> {
         moves
             .iter()
@@ -2263,26 +2286,14 @@ mod tests {
         let eq = WindowId::from_static("eq");
         let playlist = WindowId::from_static("playlist");
         let group = graph_group(WindowAttachPolicy::default());
-        let windows = vec![
-            graph_node(
-                "main",
-                Point::new(100.0, 100.0),
-                Size::new(100.0, 50.0),
-                &group,
-            ),
-            graph_node(
-                "eq",
-                Point::new(100.0, 150.0),
-                Size::new(100.0, 50.0),
-                &group,
-            ),
-            graph_node(
-                "playlist",
-                Point::new(240.0, 150.0),
-                Size::new(100.0, 50.0),
-                &group,
-            ),
-        ];
+        let windows = graph_windows(
+            &group,
+            &[
+                ("main", Point::new(100.0, 100.0)),
+                ("eq", Point::new(100.0, 150.0)),
+                ("playlist", Point::new(240.0, 150.0)),
+            ],
+        );
 
         let mut graph = WindowGraphState::default();
         graph.start_drag(&windows, main);
@@ -2303,20 +2314,7 @@ mod tests {
         let main = WindowId::from_static("main");
         let playlist = WindowId::from_static("playlist");
         let group = graph_group(WindowAttachPolicy::default());
-        let windows = vec![
-            graph_node(
-                "main",
-                Point::new(100.0, 100.0),
-                Size::new(100.0, 50.0),
-                &group,
-            ),
-            graph_node(
-                "playlist",
-                Point::new(216.0, 100.0),
-                Size::new(100.0, 50.0),
-                &group,
-            ),
-        ];
+        let windows = main_and_playlist_windows(&group);
 
         let mut graph = WindowGraphState::default();
         graph.start_drag(&windows, main);
@@ -2336,20 +2334,7 @@ mod tests {
         let main = WindowId::from_static("main");
         let eq = WindowId::from_static("eq");
         let group = graph_group(WindowAttachPolicy::default());
-        let windows = vec![
-            graph_node(
-                "main",
-                Point::new(100.0, 100.0),
-                Size::new(100.0, 50.0),
-                &group,
-            ),
-            graph_node(
-                "eq",
-                Point::new(100.0, 150.0),
-                Size::new(100.0, 50.0),
-                &group,
-            ),
-        ];
+        let windows = main_and_eq_windows(&group);
 
         let mut graph = WindowGraphState::default();
         graph.start_drag(&windows, main);
@@ -2369,34 +2354,14 @@ mod tests {
         let main = WindowId::from_static("main");
         let playlist = WindowId::from_static("playlist");
         let group = graph_group(WindowAttachPolicy::default());
-        let start = vec![
-            graph_node(
-                "main",
-                Point::new(100.0, 100.0),
-                Size::new(100.0, 50.0),
-                &group,
-            ),
-            graph_node(
-                "playlist",
-                Point::new(216.0, 100.0),
-                Size::new(100.0, 50.0),
-                &group,
-            ),
-        ];
-        let finish = vec![
-            graph_node(
-                "main",
-                Point::new(112.0, 100.0),
-                Size::new(100.0, 50.0),
-                &group,
-            ),
-            graph_node(
-                "playlist",
-                Point::new(216.0, 100.0),
-                Size::new(100.0, 50.0),
-                &group,
-            ),
-        ];
+        let start = main_and_playlist_windows(&group);
+        let finish = graph_windows(
+            &group,
+            &[
+                ("main", Point::new(112.0, 100.0)),
+                ("playlist", Point::new(216.0, 100.0)),
+            ],
+        );
 
         let mut graph = WindowGraphState::default();
         graph.start_drag(&start, main);
@@ -2423,46 +2388,22 @@ mod tests {
     fn graph_release_uses_drag_start_component_for_attached_windows() {
         let main = WindowId::from_static("main");
         let group = graph_group(WindowAttachPolicy::default());
-        let start = vec![
-            graph_node(
-                "main",
-                Point::new(100.0, 100.0),
-                Size::new(100.0, 50.0),
-                &group,
-            ),
-            graph_node(
-                "equalizer",
-                Point::new(100.0, 150.0),
-                Size::new(100.0, 50.0),
-                &group,
-            ),
-            graph_node(
-                "playlist",
-                Point::new(200.0, 150.0),
-                Size::new(100.0, 50.0),
-                &group,
-            ),
-        ];
-        let finish_with_peer_position_lag = vec![
-            graph_node(
-                "main",
-                Point::new(112.0, 100.0),
-                Size::new(100.0, 50.0),
-                &group,
-            ),
-            graph_node(
-                "equalizer",
-                Point::new(112.0, 150.0),
-                Size::new(100.0, 50.0),
-                &group,
-            ),
-            graph_node(
-                "playlist",
-                Point::new(216.0, 150.0),
-                Size::new(100.0, 50.0),
-                &group,
-            ),
-        ];
+        let start = graph_windows(
+            &group,
+            &[
+                ("main", Point::new(100.0, 100.0)),
+                ("equalizer", Point::new(100.0, 150.0)),
+                ("playlist", Point::new(200.0, 150.0)),
+            ],
+        );
+        let finish_with_peer_position_lag = graph_windows(
+            &group,
+            &[
+                ("main", Point::new(112.0, 100.0)),
+                ("equalizer", Point::new(112.0, 150.0)),
+                ("playlist", Point::new(216.0, 150.0)),
+            ],
+        );
 
         let mut graph = WindowGraphState::default();
         graph.start_drag(&start, main);
@@ -2482,20 +2423,7 @@ mod tests {
     fn graph_cancel_drag_discards_active_capture_without_release_moves() {
         let main = WindowId::from_static("main");
         let group = graph_group(WindowAttachPolicy::default());
-        let windows = vec![
-            graph_node(
-                "main",
-                Point::new(100.0, 100.0),
-                Size::new(100.0, 50.0),
-                &group,
-            ),
-            graph_node(
-                "playlist",
-                Point::new(216.0, 100.0),
-                Size::new(100.0, 50.0),
-                &group,
-            ),
-        ];
+        let windows = main_and_playlist_windows(&group);
 
         let mut graph = WindowGraphState::default();
         graph.start_drag(&windows, main);
@@ -2518,20 +2446,7 @@ mod tests {
             3.0,
             WindowMoveMode::DragLeaderOnly(vec![main]),
         ));
-        let windows = vec![
-            graph_node(
-                "main",
-                Point::new(100.0, 100.0),
-                Size::new(100.0, 50.0),
-                &group,
-            ),
-            graph_node(
-                "eq",
-                Point::new(100.0, 150.0),
-                Size::new(100.0, 50.0),
-                &group,
-            ),
-        ];
+        let windows = main_and_eq_windows(&group);
 
         let mut graph = WindowGraphState::default();
         graph.start_drag(&windows, eq);
@@ -2568,6 +2483,71 @@ mod tests {
         feature = "renderer-wgpu",
         not(target_arch = "wasm32")
     ))]
+    fn test_content() -> NativeWindowContent {
+        Rc::new(RefCell::new(Box::new(|| {}) as Box<dyn FnMut()>))
+    }
+
+    #[cfg(all(
+        feature = "desktop-shell",
+        feature = "renderer-wgpu",
+        not(target_arch = "wasm32")
+    ))]
+    fn register_panel(
+        key: NativeWindowKey,
+        content: NativeWindowContent,
+        owner: NativeWindowOwner,
+    ) {
+        register_native_window(
+            key,
+            NativeWindowOptions::new("Panel", 100.0, 50.0),
+            NativeWindowEvents::new(),
+            None,
+            None,
+            content,
+            owner,
+        );
+    }
+
+    #[cfg(all(
+        feature = "desktop-shell",
+        feature = "renderer-wgpu",
+        not(target_arch = "wasm32")
+    ))]
+    fn register_visible_panel(
+        key: NativeWindowKey,
+        visible: bool,
+        content: NativeWindowContent,
+        owner: NativeWindowOwner,
+    ) {
+        register_native_window(
+            key,
+            NativeWindowOptions::new("Panel", 100.0, 50.0).with_visible(visible),
+            NativeWindowEvents::new(),
+            None,
+            None,
+            content,
+            owner,
+        );
+    }
+
+    #[cfg(all(
+        feature = "desktop-shell",
+        feature = "renderer-wgpu",
+        not(target_arch = "wasm32")
+    ))]
+    fn latest_revision(registry: &NativeWindowRegistry) -> u64 {
+        native_window_requests(registry)
+            .into_iter()
+            .next()
+            .expect("native window request")
+            .revision
+    }
+
+    #[cfg(all(
+        feature = "desktop-shell",
+        feature = "renderer-wgpu",
+        not(target_arch = "wasm32")
+    ))]
     #[test]
     fn registry_replaces_native_window_declarations_by_key() {
         with_request_test_registry(|registry| {
@@ -2575,33 +2555,12 @@ mod tests {
 
             let key = NativeWindowKey::from_static("visibility-update");
             let owner = test_owner();
-            let content: NativeWindowContent =
-                Rc::new(RefCell::new(Box::new(|| {}) as Box<dyn FnMut()>));
+            let content = test_content();
 
-            register_native_window(
-                key,
-                NativeWindowOptions::new("Panel", 100.0, 50.0).with_visible(true),
-                NativeWindowEvents::new(),
-                None,
-                None,
-                Rc::clone(&content),
-                Rc::clone(&owner),
-            );
-            let initial_revision = native_window_requests(registry)
-                .into_iter()
-                .next()
-                .expect("first native window request")
-                .revision;
+            register_visible_panel(key, true, Rc::clone(&content), Rc::clone(&owner));
+            let initial_revision = latest_revision(registry);
 
-            register_native_window(
-                key,
-                NativeWindowOptions::new("Panel", 100.0, 50.0).with_visible(false),
-                NativeWindowEvents::new(),
-                None,
-                None,
-                content,
-                owner,
-            );
+            register_visible_panel(key, false, content, owner);
 
             let requests = native_window_requests(registry);
             assert_eq!(requests.len(), 1);
@@ -2626,40 +2585,12 @@ mod tests {
 
             let key = NativeWindowKey::from_static("content-update");
             let owner = test_owner();
-            let first_content: NativeWindowContent =
-                Rc::new(RefCell::new(Box::new(|| {}) as Box<dyn FnMut()>));
-            let second_content: NativeWindowContent =
-                Rc::new(RefCell::new(Box::new(|| {}) as Box<dyn FnMut()>));
 
-            register_native_window(
-                key,
-                NativeWindowOptions::new("Panel", 100.0, 50.0),
-                NativeWindowEvents::new(),
-                None,
-                None,
-                first_content,
-                Rc::clone(&owner),
-            );
-            let first_revision = native_window_requests(registry)
-                .into_iter()
-                .next()
-                .expect("first native window request")
-                .revision;
+            register_panel(key, test_content(), Rc::clone(&owner));
+            let first_revision = latest_revision(registry);
 
-            register_native_window(
-                key,
-                NativeWindowOptions::new("Panel", 100.0, 50.0),
-                NativeWindowEvents::new(),
-                None,
-                None,
-                second_content,
-                owner,
-            );
-            let second_revision = native_window_requests(registry)
-                .into_iter()
-                .next()
-                .expect("second native window request")
-                .revision;
+            register_panel(key, test_content(), owner);
+            let second_revision = latest_revision(registry);
 
             assert_ne!(first_revision, second_revision);
 
@@ -2679,38 +2610,13 @@ mod tests {
 
             let key = NativeWindowKey::from_static("same-content-update");
             let owner = test_owner();
-            let content: NativeWindowContent =
-                Rc::new(RefCell::new(Box::new(|| {}) as Box<dyn FnMut()>));
+            let content = test_content();
 
-            register_native_window(
-                key,
-                NativeWindowOptions::new("Panel", 100.0, 50.0),
-                NativeWindowEvents::new(),
-                None,
-                None,
-                Rc::clone(&content),
-                Rc::clone(&owner),
-            );
-            let first_revision = native_window_requests(registry)
-                .into_iter()
-                .next()
-                .expect("first native window request")
-                .revision;
+            register_panel(key, Rc::clone(&content), Rc::clone(&owner));
+            let first_revision = latest_revision(registry);
 
-            register_native_window(
-                key,
-                NativeWindowOptions::new("Panel", 100.0, 50.0),
-                NativeWindowEvents::new(),
-                None,
-                None,
-                content,
-                owner,
-            );
-            let second_revision = native_window_requests(registry)
-                .into_iter()
-                .next()
-                .expect("second native window request")
-                .revision;
+            register_panel(key, content, owner);
+            let second_revision = latest_revision(registry);
 
             assert_ne!(first_revision, second_revision);
 
@@ -2731,30 +2637,10 @@ mod tests {
             let key = NativeWindowKey::from_static("reattach-window");
             let stale_owner = test_owner();
             let current_owner = test_owner();
-            let first_content: NativeWindowContent =
-                Rc::new(RefCell::new(Box::new(|| {}) as Box<dyn FnMut()>));
-            let second_content: NativeWindowContent =
-                Rc::new(RefCell::new(Box::new(|| {}) as Box<dyn FnMut()>));
+            let second_content = test_content();
 
-            register_native_window(
-                key,
-                NativeWindowOptions::new("Panel", 100.0, 50.0),
-                NativeWindowEvents::new(),
-                None,
-                None,
-                Rc::clone(&first_content),
-                Rc::clone(&stale_owner),
-            );
-
-            register_native_window(
-                key,
-                NativeWindowOptions::new("Panel", 100.0, 50.0),
-                NativeWindowEvents::new(),
-                None,
-                None,
-                Rc::clone(&second_content),
-                Rc::clone(&current_owner),
-            );
+            register_panel(key, test_content(), Rc::clone(&stale_owner));
+            register_panel(key, Rc::clone(&second_content), Rc::clone(&current_owner));
             unregister_native_window(key, stale_owner);
 
             let requests = native_window_requests(registry);
@@ -2781,41 +2667,16 @@ mod tests {
 
             let key = NativeWindowKey::from_static("remove-window");
             let owner = test_owner();
-            let content: NativeWindowContent =
-                Rc::new(RefCell::new(Box::new(|| {}) as Box<dyn FnMut()>));
+            let content = test_content();
 
-            register_native_window(
-                key,
-                NativeWindowOptions::new("Panel", 100.0, 50.0),
-                NativeWindowEvents::new(),
-                None,
-                None,
-                Rc::clone(&content),
-                Rc::clone(&owner),
-            );
-            let first_revision = native_window_requests(registry)
-                .into_iter()
-                .next()
-                .expect("registered native window request")
-                .revision;
+            register_panel(key, Rc::clone(&content), Rc::clone(&owner));
+            let first_revision = latest_revision(registry);
 
             clear_native_window_requests(registry);
             assert!(native_window_requests(registry).is_empty());
 
-            register_native_window(
-                key,
-                NativeWindowOptions::new("Panel", 100.0, 50.0),
-                NativeWindowEvents::new(),
-                None,
-                None,
-                content,
-                owner,
-            );
-            let second_revision = native_window_requests(registry)
-                .into_iter()
-                .next()
-                .expect("registered native window request after cleanup")
-                .revision;
+            register_panel(key, content, owner);
+            let second_revision = latest_revision(registry);
 
             assert_ne!(first_revision, second_revision);
 

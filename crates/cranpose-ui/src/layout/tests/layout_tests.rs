@@ -203,6 +203,67 @@ impl MeasurePolicy for MutableLeafPolicy {
     }
 }
 
+struct DirtyCleanLeaves {
+    applier: MemoryApplier,
+    root_id: NodeId,
+    dirty_child: NodeId,
+    clean_child: NodeId,
+    dirty_size: Rc<Cell<Size>>,
+    dirty_calls: Rc<Cell<usize>>,
+    clean_calls: Rc<Cell<usize>>,
+}
+
+fn measured_dirty_clean_leaves() -> Result<DirtyCleanLeaves, NodeError> {
+    let dirty_size = Rc::new(Cell::new(Size::new(10.0, 10.0)));
+    let dirty_calls = Rc::new(Cell::new(0usize));
+    let clean_size = Rc::new(Cell::new(Size::new(5.0, 5.0)));
+    let clean_calls = Rc::new(Cell::new(0usize));
+
+    let mut applier = MemoryApplier::new();
+    let dirty_child = applier.create(Box::new(LayoutNode::new(
+        Modifier::empty(),
+        Rc::new(MutableLeafPolicy {
+            size: Rc::clone(&dirty_size),
+            calls: Rc::clone(&dirty_calls),
+        }),
+    )));
+    let clean_child = applier.create(Box::new(LayoutNode::new(
+        Modifier::empty(),
+        Rc::new(MutableLeafPolicy {
+            size: clean_size,
+            calls: Rc::clone(&clean_calls),
+        }),
+    )));
+
+    let mut root = LayoutNode::new(Modifier::empty(), Rc::new(VerticalStackPolicy));
+    root.children.push(dirty_child);
+    root.children.push(clean_child);
+    let root_id = applier.create(Box::new(root));
+
+    applier.with_node::<LayoutNode, _>(root_id, |node| node.set_node_id(root_id))?;
+    applier.with_node::<LayoutNode, _>(dirty_child, |node| {
+        node.set_node_id(dirty_child);
+        node.set_parent(root_id);
+    })?;
+    applier.with_node::<LayoutNode, _>(clean_child, |node| {
+        node.set_node_id(clean_child);
+        node.set_parent(root_id);
+    })?;
+
+    let first = measure_layout(&mut applier, root_id, Size::new(100.0, 100.0))?;
+    assert_eq!(first.root_size().height, 15.0);
+
+    Ok(DirtyCleanLeaves {
+        applier,
+        root_id,
+        dirty_child,
+        clean_child,
+        dirty_size,
+        dirty_calls,
+        clean_calls,
+    })
+}
+
 #[derive(Clone)]
 struct RecordingDensityPolicy {
     recorded: Rc<Cell<f32>>,
@@ -983,44 +1044,16 @@ fn scoped_layout_repass_remeasures_only_dirty_subtree() -> Result<(), NodeError>
     let _app_context = crate::render_state::app_context_test_scope();
     let _guard = crate::render_state::render_state_test_guard();
     crate::reset_render_state_for_tests();
-    let dirty_size = Rc::new(Cell::new(Size::new(10.0, 10.0)));
-    let dirty_calls = Rc::new(Cell::new(0usize));
-    let clean_size = Rc::new(Cell::new(Size::new(5.0, 5.0)));
-    let clean_calls = Rc::new(Cell::new(0usize));
+    let DirtyCleanLeaves {
+        mut applier,
+        root_id,
+        dirty_child,
+        clean_child,
+        dirty_size,
+        dirty_calls,
+        clean_calls,
+    } = measured_dirty_clean_leaves()?;
 
-    let mut applier = MemoryApplier::new();
-    let dirty_child = applier.create(Box::new(LayoutNode::new(
-        Modifier::empty(),
-        Rc::new(MutableLeafPolicy {
-            size: Rc::clone(&dirty_size),
-            calls: Rc::clone(&dirty_calls),
-        }),
-    )));
-    let clean_child = applier.create(Box::new(LayoutNode::new(
-        Modifier::empty(),
-        Rc::new(MutableLeafPolicy {
-            size: Rc::clone(&clean_size),
-            calls: Rc::clone(&clean_calls),
-        }),
-    )));
-
-    let mut root = LayoutNode::new(Modifier::empty(), Rc::new(VerticalStackPolicy));
-    root.children.push(dirty_child);
-    root.children.push(clean_child);
-    let root_id = applier.create(Box::new(root));
-
-    applier.with_node::<LayoutNode, _>(root_id, |node| node.set_node_id(root_id))?;
-    applier.with_node::<LayoutNode, _>(dirty_child, |node| {
-        node.set_node_id(dirty_child);
-        node.set_parent(root_id);
-    })?;
-    applier.with_node::<LayoutNode, _>(clean_child, |node| {
-        node.set_node_id(clean_child);
-        node.set_parent(root_id);
-    })?;
-
-    let first = measure_layout(&mut applier, root_id, Size::new(100.0, 100.0))?;
-    assert_eq!(first.root_size().height, 15.0);
     assert_eq!(
         dirty_calls.get(),
         1,
@@ -1213,44 +1246,16 @@ fn measure_layout_consumes_pending_scoped_repass_for_dirty_child() -> Result<(),
     let _guard = crate::render_state::render_state_test_guard();
     crate::reset_render_state_for_tests();
 
-    let dirty_size = Rc::new(Cell::new(Size::new(10.0, 10.0)));
-    let dirty_calls = Rc::new(Cell::new(0usize));
-    let clean_size = Rc::new(Cell::new(Size::new(5.0, 5.0)));
-    let clean_calls = Rc::new(Cell::new(0usize));
+    let DirtyCleanLeaves {
+        mut applier,
+        root_id,
+        dirty_child,
+        dirty_size,
+        dirty_calls,
+        clean_calls,
+        ..
+    } = measured_dirty_clean_leaves()?;
 
-    let mut applier = MemoryApplier::new();
-    let dirty_child = applier.create(Box::new(LayoutNode::new(
-        Modifier::empty(),
-        Rc::new(MutableLeafPolicy {
-            size: Rc::clone(&dirty_size),
-            calls: Rc::clone(&dirty_calls),
-        }),
-    )));
-    let clean_child = applier.create(Box::new(LayoutNode::new(
-        Modifier::empty(),
-        Rc::new(MutableLeafPolicy {
-            size: Rc::clone(&clean_size),
-            calls: Rc::clone(&clean_calls),
-        }),
-    )));
-
-    let mut root = LayoutNode::new(Modifier::empty(), Rc::new(VerticalStackPolicy));
-    root.children.push(dirty_child);
-    root.children.push(clean_child);
-    let root_id = applier.create(Box::new(root));
-
-    applier.with_node::<LayoutNode, _>(root_id, |node| node.set_node_id(root_id))?;
-    applier.with_node::<LayoutNode, _>(dirty_child, |node| {
-        node.set_node_id(dirty_child);
-        node.set_parent(root_id);
-    })?;
-    applier.with_node::<LayoutNode, _>(clean_child, |node| {
-        node.set_node_id(clean_child);
-        node.set_parent(root_id);
-    })?;
-
-    let first = measure_layout(&mut applier, root_id, Size::new(100.0, 100.0))?;
-    assert_eq!(first.root_size().height, 15.0);
     let epoch_before =
         applier.with_node::<LayoutNode, _>(root_id, |node| node.cache_handles().epoch())?;
 

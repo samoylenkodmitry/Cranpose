@@ -196,6 +196,7 @@ jobs:
           cargo xtask wait-for-crates-io "$TAG_NAME"
 
       - name: Point the isolated demo at the release
+        id: point
         run: |
           set -euo pipefail
           version="${TAG_NAME#v}"
@@ -245,6 +246,7 @@ jobs:
       # be built this way is broken for every application that is not this
       # repository, and nothing else in the pipeline would notice.
       - name: Build the isolated demo against the release
+        if: ${{ !cancelled() && steps.point.conclusion == 'success' }}
         run: |
           set -euo pipefail
           cargo build --manifest-path apps/isolated-demo/Cargo.toml \
@@ -257,6 +259,7 @@ jobs:
       # only place a release is proven to build for the browser the way an
       # application builds it.
       - name: Build the isolated demo for the web
+        if: ${{ !cancelled() && steps.point.conclusion == 'success' }}
         run: |
           set -euo pipefail
           rustup target add wasm32-unknown-unknown
@@ -271,6 +274,7 @@ jobs:
       # own environment; setting it here would override a working one with an
       # empty string.
       - name: Build the isolated demo's Android release
+        if: ${{ !cancelled() && steps.point.conclusion == 'success' }}
         run: |
           set -euo pipefail
           ./apps/isolated-demo/android/gradlew \

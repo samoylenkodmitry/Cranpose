@@ -1650,6 +1650,127 @@ pub(crate) fn root_direct_scene_events_are_supported(
 }
 
 #[allow(clippy::too_many_arguments)]
+fn composite_captured_effect_layer<B: SurfaceExecutionBackend>(
+    backend: &mut B,
+    source: &OffscreenTarget,
+    target_view: &wgpu::TextureView,
+    layer: &EffectLayer,
+    dest_quad: [[f32; 2]; 4],
+    scissor: (u32, u32, u32, u32),
+    capture_rect: Rect,
+    effect_width: u32,
+    effect_height: u32,
+    width: u32,
+    height: u32,
+    sample_mode: CompositeSampleMode,
+) -> Result<(), String> {
+    let composite_plain = |backend: &mut B| {
+        composite_surface_to_view(
+            backend,
+            source,
+            target_view,
+            (width, height),
+            dest_quad,
+            layer.composite_alpha,
+            wgpu::LoadOp::Load,
+            Some(scissor),
+            layer.blend_mode,
+            sample_mode,
+        )
+    };
+    let Some(effect) = &layer.effect else {
+        return composite_plain(backend);
+    };
+    if !backend.is_render_effect_supported(effect) {
+        backend.warn_unsupported_effect_once();
+        return composite_plain(backend);
+    }
+
+    let pixel_rect =
+        content_effect_pixel_rect(Some(layer.rect), capture_rect, effect_width, effect_height);
+    if let Some(dest_rect) = axis_aligned_quad_rect(dest_quad) {
+        let dest_viewport = Some(composite_dest_viewport(
+            dest_rect,
+            effect_width,
+            effect_height,
+            sample_mode,
+        ));
+        if let RenderEffect::Shader { shader } = effect {
+            backend.apply_shader_and_composite_to_view(
+                source,
+                shader,
+                pixel_rect,
+                target_view,
+                layer.composite_alpha,
+                wgpu::LoadOp::Load,
+                Some(scissor),
+                layer.blend_mode,
+                dest_viewport,
+                sample_mode,
+            );
+            Ok(())
+        } else {
+            backend.apply_effect_and_composite_to_view(
+                source,
+                effect,
+                pixel_rect,
+                target_view,
+                layer.composite_alpha,
+                wgpu::LoadOp::Load,
+                Some(scissor),
+                layer.blend_mode,
+                dest_viewport,
+                sample_mode,
+            )
+        }
+    } else {
+        let source_rect = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: effect_width as f32,
+            height: effect_height as f32,
+        };
+        let inverse = ProjectiveTransform::from_rect_to_quad(source_rect, dest_quad)
+            .inverse()
+            .ok_or_else(|| "effect layer transform is not invertible".to_string())?;
+        if let RenderEffect::Shader { shader } = effect {
+            backend.apply_shader_and_composite_to_view_projective(
+                source,
+                shader,
+                pixel_rect,
+                target_view,
+                (width, height),
+                (source_rect.width, source_rect.height),
+                inverse.matrix(),
+                dest_quad,
+                layer.composite_alpha,
+                wgpu::LoadOp::Load,
+                Some(scissor),
+                layer.blend_mode,
+                sample_mode,
+            );
+            Ok(())
+        } else {
+            backend.apply_effect_and_composite_to_view_projective(
+                source,
+                effect,
+                pixel_rect,
+                target_view,
+                (width, height),
+                (source_rect.width, source_rect.height),
+                inverse.matrix(),
+                dest_quad,
+                layer.composite_alpha,
+                wgpu::LoadOp::Load,
+                Some(scissor),
+                layer.blend_mode,
+                sample_mode,
+            )
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn render_effect_layer_to_view<B: SurfaceExecutionBackend>(
     backend: &mut B,
     target_view: &wgpu::TextureView,
@@ -1764,139 +1885,20 @@ fn render_effect_layer_to_view<B: SurfaceExecutionBackend>(
         root_scale,
         sample_mode,
     );
-    let composite_result = if layer.effect.is_none() {
-        composite_surface_to_view(
-            backend,
-            &source,
-            target_view,
-            (width, height),
-            dest_quad,
-            layer.composite_alpha,
-            wgpu::LoadOp::Load,
-            Some(scissor),
-            layer.blend_mode,
-            sample_mode,
-        )
-    } else if let Some(effect) = &layer.effect {
-        if backend.is_render_effect_supported(effect) {
-            if let Some(dest_rect) = axis_aligned_quad_rect(dest_quad) {
-                let dest_viewport = Some(composite_dest_viewport(
-                    dest_rect,
-                    effect_width,
-                    effect_height,
-                    sample_mode,
-                ));
-                if let RenderEffect::Shader { shader } = effect {
-                    backend.apply_shader_and_composite_to_view(
-                        &source,
-                        shader,
-                        content_effect_pixel_rect(
-                            Some(layer.rect),
-                            capture_rect,
-                            effect_width,
-                            effect_height,
-                        ),
-                        target_view,
-                        layer.composite_alpha,
-                        wgpu::LoadOp::Load,
-                        Some(scissor),
-                        layer.blend_mode,
-                        dest_viewport,
-                        sample_mode,
-                    );
-                    Ok(())
-                } else {
-                    backend.apply_effect_and_composite_to_view(
-                        &source,
-                        effect,
-                        content_effect_pixel_rect(
-                            Some(layer.rect),
-                            capture_rect,
-                            effect_width,
-                            effect_height,
-                        ),
-                        target_view,
-                        layer.composite_alpha,
-                        wgpu::LoadOp::Load,
-                        Some(scissor),
-                        layer.blend_mode,
-                        dest_viewport,
-                        sample_mode,
-                    )
-                }
-            } else {
-                let source_rect = Rect {
-                    x: 0.0,
-                    y: 0.0,
-                    width: effect_width as f32,
-                    height: effect_height as f32,
-                };
-                let inverse = ProjectiveTransform::from_rect_to_quad(source_rect, dest_quad)
-                    .inverse()
-                    .ok_or_else(|| "effect layer transform is not invertible".to_string())?;
-                if let RenderEffect::Shader { shader } = effect {
-                    backend.apply_shader_and_composite_to_view_projective(
-                        &source,
-                        shader,
-                        content_effect_pixel_rect(
-                            Some(layer.rect),
-                            capture_rect,
-                            effect_width,
-                            effect_height,
-                        ),
-                        target_view,
-                        (width, height),
-                        (source_rect.width, source_rect.height),
-                        inverse.matrix(),
-                        dest_quad,
-                        layer.composite_alpha,
-                        wgpu::LoadOp::Load,
-                        Some(scissor),
-                        layer.blend_mode,
-                        sample_mode,
-                    );
-                    Ok(())
-                } else {
-                    backend.apply_effect_and_composite_to_view_projective(
-                        &source,
-                        effect,
-                        content_effect_pixel_rect(
-                            Some(layer.rect),
-                            capture_rect,
-                            effect_width,
-                            effect_height,
-                        ),
-                        target_view,
-                        (width, height),
-                        (source_rect.width, source_rect.height),
-                        inverse.matrix(),
-                        dest_quad,
-                        layer.composite_alpha,
-                        wgpu::LoadOp::Load,
-                        Some(scissor),
-                        layer.blend_mode,
-                        sample_mode,
-                    )
-                }
-            }
-        } else {
-            backend.warn_unsupported_effect_once();
-            composite_surface_to_view(
-                backend,
-                &source,
-                target_view,
-                (width, height),
-                dest_quad,
-                layer.composite_alpha,
-                wgpu::LoadOp::Load,
-                Some(scissor),
-                layer.blend_mode,
-                sample_mode,
-            )
-        }
-    } else {
-        Err("effect layer destination requested without render effect".to_string())
-    };
+    let composite_result = composite_captured_effect_layer(
+        backend,
+        &source,
+        target_view,
+        &layer,
+        dest_quad,
+        scissor,
+        capture_rect,
+        effect_width,
+        effect_height,
+        width,
+        height,
+        sample_mode,
+    );
     backend.release_frame_surface(source);
     composite_result
 }
@@ -5749,121 +5751,22 @@ pub(crate) fn render_effect_layer_to_target<B: SurfaceExecutionBackend>(
         root_scale,
         sample_mode,
     );
-    if layer.effect.is_none() {
-        let composite_result = composite_surface_to_view(
-            backend,
-            &source,
-            &target.view,
-            (width, height),
-            dest_quad,
-            layer.composite_alpha,
-            wgpu::LoadOp::Load,
-            Some(scissor),
-            layer.blend_mode,
-            sample_mode,
-        );
-        backend.release_frame_surface(source);
-        return composite_result;
-    }
-
-    let Some(effect) = &layer.effect else {
-        backend.release_frame_surface(source);
-        return Err("effect layer destination requested without render effect".to_string());
-    };
-    if backend.is_render_effect_supported(effect) {
-        if let Some(dest_rect) = axis_aligned_quad_rect(dest_quad) {
-            let dest_viewport = Some(composite_dest_viewport(
-                dest_rect,
-                effect_width,
-                effect_height,
-                sample_mode,
-            ));
-            if let RenderEffect::Shader { shader } = effect {
-                backend.apply_shader_and_composite_to_view(
-                    &source,
-                    shader,
-                    content_effect_pixel_rect(
-                        Some(layer.rect),
-                        capture_rect,
-                        effect_width,
-                        effect_height,
-                    ),
-                    &target.view,
-                    layer.composite_alpha,
-                    wgpu::LoadOp::Load,
-                    Some(scissor),
-                    layer.blend_mode,
-                    dest_viewport,
-                    sample_mode,
-                );
-            } else {
-                backend.apply_effect_and_composite_to_view(
-                    &source,
-                    effect,
-                    content_effect_pixel_rect(
-                        Some(layer.rect),
-                        capture_rect,
-                        effect_width,
-                        effect_height,
-                    ),
-                    &target.view,
-                    layer.composite_alpha,
-                    wgpu::LoadOp::Load,
-                    Some(scissor),
-                    layer.blend_mode,
-                    dest_viewport,
-                    sample_mode,
-                )?;
-            }
-        } else {
-            let source_rect = Rect {
-                x: 0.0,
-                y: 0.0,
-                width: effect_width as f32,
-                height: effect_height as f32,
-            };
-            let inverse = ProjectiveTransform::from_rect_to_quad(source_rect, dest_quad)
-                .inverse()
-                .ok_or_else(|| "effect layer transform is not invertible".to_string())?;
-            backend.apply_effect_and_composite_to_view_projective(
-                &source,
-                effect,
-                content_effect_pixel_rect(
-                    Some(layer.rect),
-                    capture_rect,
-                    effect_width,
-                    effect_height,
-                ),
-                &target.view,
-                (width, height),
-                (source_rect.width, source_rect.height),
-                inverse.matrix(),
-                dest_quad,
-                layer.composite_alpha,
-                wgpu::LoadOp::Load,
-                Some(scissor),
-                layer.blend_mode,
-                sample_mode,
-            )?;
-        }
-    } else {
-        backend.warn_unsupported_effect_once();
-        composite_surface_to_view(
-            backend,
-            &source,
-            &target.view,
-            (width, height),
-            dest_quad,
-            layer.composite_alpha,
-            wgpu::LoadOp::Load,
-            Some(scissor),
-            layer.blend_mode,
-            sample_mode,
-        )?;
-    }
-
+    let composite_result = composite_captured_effect_layer(
+        backend,
+        &source,
+        &target.view,
+        &layer,
+        dest_quad,
+        scissor,
+        capture_rect,
+        effect_width,
+        effect_height,
+        width,
+        height,
+        sample_mode,
+    );
     backend.release_frame_surface(source);
-    Ok(())
+    composite_result
 }
 
 #[allow(clippy::too_many_arguments)]

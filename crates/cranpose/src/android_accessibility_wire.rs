@@ -1,4 +1,7 @@
-use crate::accessibility::{AccessibilityElement, AccessibilityRole, element_ids};
+use crate::{
+    accessibility::{AccessibilityElement, AccessibilityRole, element_ids},
+    android_wire_escape::escape_wire_field,
+};
 
 const ACTION_SEPARATOR: char = '\u{1f}';
 
@@ -62,28 +65,13 @@ fn tristate(value: Option<bool>) -> i32 {
 }
 
 fn escape(value: &str) -> String {
-    value
-        .replace('%', "%25")
-        .replace('\t', "%09")
-        .replace('\n', "%0A")
-        .replace('\r', "%0D")
-        .replace(ACTION_SEPARATOR, "%1F")
+    escape_wire_field(value).replace(ACTION_SEPARATOR, "%1F")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::accessibility::AccessibilityRect;
-
-    fn element(node_id: usize, canvas_key: Option<u64>) -> AccessibilityElement {
-        AccessibilityElement {
-            node_id,
-            canvas_key,
-            label: "Row".into(),
-            bounds: AccessibilityRect::new(0.0, 0.0, 10.0, 10.0),
-            ..AccessibilityElement::default()
-        }
-    }
+    use crate::accessibility::{AccessibilityRect, element_with};
 
     #[test]
     fn android_accessibility_wire_values_escape_record_delimiters() {
@@ -115,7 +103,7 @@ mod tests {
                 custom_actions: vec!["Pause".into(), "Resume".into()],
                 ..AccessibilityElement::default()
             },
-            element(5, Some(1)),
+            element_with(5, Some(1)),
         ];
 
         let payload = encode_elements(&elements, 2.0);

@@ -86,6 +86,17 @@ jobs:
         # this job is the one that never skips.
         run: just test-ci-filters
 
+      - name: Check robot test discovery
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
+        # The predicate the robot suite discovers its examples by. It runs in
+        # this job, not the robot suite's own, so a bad predicate is pinned
+        # before the heavy job ever spends a build on it.
+        run: just test-robot-discovery
+
+      - name: Test the shell helpers
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
+        run: just test-shell-helpers
+
       - name: Check cyclomatic complexity of changed functions
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         run: just complexity-gate
@@ -102,16 +113,28 @@ jobs:
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         run: just clippy
 
-      - name: Run clippy on the macOS camera backend
+      - name: Run clippy on the optional desktop backends
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
-        run: just clippy-camera-desktop
+        run: just clippy-optional-backends
+
+      - name: Run clippy on the SVG image painter
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
+        run: just clippy-svg
+
+      - name: Run clippy on the embedded hyphenation dictionary
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
+        run: just clippy-hyphenation
+
+      - name: Run clippy on the robot runners
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
+        run: just clippy-robot
 
       - name: Build documentation
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         # A broken intra-doc link is a broken published page.
         run: just doc
 
-      - name: Run cranpose-core feature permutations
+      - name: Run feature permutations the default build skips
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         run: just test-features
 
@@ -165,6 +188,14 @@ jobs:
           # one thing locally and another thing here.
           command -v just >/dev/null || cargo install just --locked
           scripts/ci/start_sccache.sh
+
+      - name: Run the host capacity lock suite
+        if: steps.changes.outputs.docs_only != 'true'
+        # Here rather than on the mac job: this is the machine the lock exists
+        # to protect, and the only one of the two with flock(1), so it is the
+        # only place the lock cases run at all. Takes no host lock itself --
+        # it drives a private pair of lock files under a scratch directory.
+        run: just test-host-lock
 
       - name: Check architecture budgets
         if: steps.changes.outputs.docs_only != 'true'

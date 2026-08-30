@@ -652,6 +652,39 @@ impl RenderScene for AppContextProbeScene {
     }
 }
 
+macro_rules! renderer_scene_accessors {
+    () => {
+        fn scene(&self) -> &Self::Scene {
+            &self.scene
+        }
+
+        fn scene_mut(&mut self) -> &mut Self::Scene {
+            &mut self.scene
+        }
+    };
+}
+
+macro_rules! renderer_noop_rebuild {
+    () => {
+        fn rebuild_scene(
+            &mut self,
+            _layout_tree: &LayoutTree,
+            _viewport: Size,
+        ) -> Result<(), Self::Error> {
+            Ok(())
+        }
+
+        fn rebuild_scene_from_applier(
+            &mut self,
+            _applier: &mut cranpose_core::MemoryApplier,
+            _root: cranpose_core::NodeId,
+            _viewport: Size,
+        ) -> Result<(), Self::Error> {
+            Ok(())
+        }
+    };
+}
+
 struct AppContextProbeRenderer {
     scene: AppContextProbeScene,
 }
@@ -660,30 +693,8 @@ impl Renderer for AppContextProbeRenderer {
     type Scene = AppContextProbeScene;
     type Error = ();
 
-    fn scene(&self) -> &Self::Scene {
-        &self.scene
-    }
-
-    fn scene_mut(&mut self) -> &mut Self::Scene {
-        &mut self.scene
-    }
-
-    fn rebuild_scene(
-        &mut self,
-        _layout_tree: &LayoutTree,
-        _viewport: Size,
-    ) -> Result<(), Self::Error> {
-        Ok(())
-    }
-
-    fn rebuild_scene_from_applier(
-        &mut self,
-        _applier: &mut cranpose_core::MemoryApplier,
-        _root: cranpose_core::NodeId,
-        _viewport: Size,
-    ) -> Result<(), Self::Error> {
-        Ok(())
-    }
+    renderer_scene_accessors!();
+    renderer_noop_rebuild!();
 }
 
 #[derive(Clone)]
@@ -853,30 +864,8 @@ impl Renderer for TestRenderer {
         }
     }
 
-    fn scene(&self) -> &Self::Scene {
-        &self.scene
-    }
-
-    fn scene_mut(&mut self) -> &mut Self::Scene {
-        &mut self.scene
-    }
-
-    fn rebuild_scene(
-        &mut self,
-        _layout_tree: &LayoutTree,
-        _viewport: Size,
-    ) -> Result<(), Self::Error> {
-        Ok(())
-    }
-
-    fn rebuild_scene_from_applier(
-        &mut self,
-        _applier: &mut cranpose_core::MemoryApplier,
-        _root: cranpose_core::NodeId,
-        _viewport: Size,
-    ) -> Result<(), Self::Error> {
-        Ok(())
-    }
+    renderer_scene_accessors!();
+    renderer_noop_rebuild!();
 }
 
 struct WarmupRenderer {
@@ -888,30 +877,8 @@ impl Renderer for WarmupRenderer {
     type Scene = TestScene;
     type Error = ();
 
-    fn scene(&self) -> &Self::Scene {
-        &self.scene
-    }
-
-    fn scene_mut(&mut self) -> &mut Self::Scene {
-        &mut self.scene
-    }
-
-    fn rebuild_scene(
-        &mut self,
-        _layout_tree: &LayoutTree,
-        _viewport: Size,
-    ) -> Result<(), Self::Error> {
-        Ok(())
-    }
-
-    fn rebuild_scene_from_applier(
-        &mut self,
-        _applier: &mut cranpose_core::MemoryApplier,
-        _root: cranpose_core::NodeId,
-        _viewport: Size,
-    ) -> Result<(), Self::Error> {
-        Ok(())
-    }
+    renderer_scene_accessors!();
+    renderer_noop_rebuild!();
 
     fn needs_frame_warmup(&self) -> bool {
         self.needs_warmup.get()
@@ -1379,60 +1346,16 @@ impl Renderer for MutableRecordingRenderer {
     type Scene = MutableRecordingScene;
     type Error = ();
 
-    fn scene(&self) -> &Self::Scene {
-        &self.scene
-    }
-
-    fn scene_mut(&mut self) -> &mut Self::Scene {
-        &mut self.scene
-    }
-
-    fn rebuild_scene(
-        &mut self,
-        _layout_tree: &LayoutTree,
-        _viewport: Size,
-    ) -> Result<(), Self::Error> {
-        Ok(())
-    }
-
-    fn rebuild_scene_from_applier(
-        &mut self,
-        _applier: &mut cranpose_core::MemoryApplier,
-        _root: cranpose_core::NodeId,
-        _viewport: Size,
-    ) -> Result<(), Self::Error> {
-        Ok(())
-    }
+    renderer_scene_accessors!();
+    renderer_noop_rebuild!();
 }
 
 impl Renderer for ScrollDispatchRenderer {
     type Scene = RecordingScene;
     type Error = ();
 
-    fn scene(&self) -> &Self::Scene {
-        &self.scene
-    }
-
-    fn scene_mut(&mut self) -> &mut Self::Scene {
-        &mut self.scene
-    }
-
-    fn rebuild_scene(
-        &mut self,
-        _layout_tree: &LayoutTree,
-        _viewport: Size,
-    ) -> Result<(), Self::Error> {
-        Ok(())
-    }
-
-    fn rebuild_scene_from_applier(
-        &mut self,
-        _applier: &mut cranpose_core::MemoryApplier,
-        _root: cranpose_core::NodeId,
-        _viewport: Size,
-    ) -> Result<(), Self::Error> {
-        Ok(())
-    }
+    renderer_scene_accessors!();
+    renderer_noop_rebuild!();
 }
 
 #[derive(Default)]
@@ -1445,13 +1368,7 @@ impl Renderer for RecordingRenderer {
     type Scene = TestScene;
     type Error = ();
 
-    fn scene(&self) -> &Self::Scene {
-        &self.scene
-    }
-
-    fn scene_mut(&mut self) -> &mut Self::Scene {
-        &mut self.scene
-    }
+    renderer_scene_accessors!();
 
     fn rebuild_scene(
         &mut self,
@@ -1502,13 +1419,7 @@ impl Renderer for CountingRenderer {
     type Scene = TestScene;
     type Error = ();
 
-    fn scene(&self) -> &Self::Scene {
-        &self.scene
-    }
-
-    fn scene_mut(&mut self) -> &mut Self::Scene {
-        &mut self.scene
-    }
+    renderer_scene_accessors!();
 
     fn rebuild_scene(
         &mut self,
@@ -1571,13 +1482,7 @@ impl Renderer for ScopedUpdateCountingRenderer {
     type Scene = cranpose_render_common::graph_scene::Scene;
     type Error = ();
 
-    fn scene(&self) -> &Self::Scene {
-        &self.scene
-    }
-
-    fn scene_mut(&mut self) -> &mut Self::Scene {
-        &mut self.scene
-    }
+    renderer_scene_accessors!();
 
     fn rebuild_scene(
         &mut self,
@@ -1722,13 +1627,7 @@ impl Renderer for HitGraphRenderer {
     type Scene = cranpose_render_common::graph_scene::Scene;
     type Error = ();
 
-    fn scene(&self) -> &Self::Scene {
-        &self.scene
-    }
-
-    fn scene_mut(&mut self) -> &mut Self::Scene {
-        &mut self.scene
-    }
+    renderer_scene_accessors!();
 
     fn rebuild_scene(
         &mut self,

@@ -383,6 +383,17 @@ fn collect_descendant_labels<'a>(node: &'a SemanticsNode, labels: &mut Vec<&'a s
 }
 
 #[cfg(test)]
+pub(crate) fn element_with(node_id: NodeId, canvas_key: Option<u64>) -> AccessibilityElement {
+    AccessibilityElement {
+        node_id,
+        canvas_key,
+        label: "Row".into(),
+        bounds: AccessibilityRect::new(0.0, 0.0, 10.0, 10.0),
+        ..AccessibilityElement::default()
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use std::{cell::RefCell, rc::Rc};
 
@@ -417,16 +428,6 @@ mod tests {
             y,
             width,
             height,
-        }
-    }
-
-    fn element_with(node_id: NodeId, canvas_key: Option<u64>) -> AccessibilityElement {
-        AccessibilityElement {
-            node_id,
-            canvas_key,
-            label: "Row".into(),
-            bounds: AccessibilityRect::new(0.0, 0.0, 10.0, 10.0),
-            ..AccessibilityElement::default()
         }
     }
 

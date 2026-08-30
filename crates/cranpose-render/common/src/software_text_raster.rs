@@ -178,6 +178,15 @@ impl SoftwareTextFont {
     pub fn content_hash(&self) -> u64 {
         self.content_hash
     }
+
+    fn raster_ref(&self) -> RasterFontRef<'_, KernedFont> {
+        RasterFontRef {
+            font: &self.font,
+            ab_glyph_scale_factor: self.metadata.ab_glyph_scale_factor,
+            weight: self.weight(),
+            style: self.style(),
+        }
+    }
 }
 
 pub fn try_default_software_text_font() -> Result<SoftwareTextFont, SoftwareTextFontError> {
@@ -1347,12 +1356,7 @@ pub fn rasterize_text_to_image(
             font_size,
             scale,
         },
-        RasterFontRef {
-            font: &font.font,
-            ab_glyph_scale_factor: font.metadata.ab_glyph_scale_factor,
-            weight: font.weight(),
-            style: font.style(),
-        },
+        font.raster_ref(),
         font.content_hash(),
         None,
     )
@@ -1378,12 +1382,7 @@ pub fn rasterize_text_to_image_with_glyph_cache(
             font_size,
             scale,
         },
-        RasterFontRef {
-            font: &font.font,
-            ab_glyph_scale_factor: font.metadata.ab_glyph_scale_factor,
-            weight: font.weight(),
-            style: font.style(),
-        },
+        font.raster_ref(),
         font.content_hash(),
         Some(glyph_cache),
     )
@@ -1522,6 +1521,72 @@ fn segment_advance_px(
     caret.max(0.0)
 }
 
+fn text_render_request_is_degenerate(
+    text_is_empty: bool,
+    rect: Rect,
+    font_size: f32,
+    scale: f32,
+) -> bool {
+    text_is_empty
+        || rect.width <= 0.0
+        || rect.height <= 0.0
+        || !font_size.is_finite()
+        || font_size <= 0.0
+        || !scale.is_finite()
+        || scale <= 0.0
+}
+
+#[derive(Clone, Copy)]
+struct TextSegmentMetrics {
+    font_px_size: f32,
+    letter_spacing: f32,
+    align_fraction: f32,
+    weight_synthesis: TextWeightSynthesis,
+    style_synthesis: TextStyleSynthesis,
+    line_height: f32,
+    first_baseline_y: f32,
+}
+
+fn text_segment_metrics(
+    text: &str,
+    local_rect: Rect,
+    style: &TextStyle,
+    font_size: f32,
+    scale: f32,
+    font: &SoftwareTextFont,
+) -> TextSegmentMetrics {
+    let font_px_size = font.ab_glyph_px_size(font_size) * scale;
+    let letter_spacing = resolve_letter_spacing(style, font_size) * scale;
+    let align_fraction = crate::scene_builder::text_align_fraction(style, text);
+    let weight_synthesis = TextWeightSynthesis::for_style(style, font.weight(), font_size, scale);
+    let style_synthesis = TextStyleSynthesis::for_style(style, font.style(), font_size, scale);
+    let metrics = vertical_metrics(&font.font, font_px_size);
+    let line_box = line_box_for(
+        style,
+        metrics,
+        (style.resolve_line_height(14.0, font_size * 1.4) * scale).max(1.0),
+        1.0,
+    );
+    TextSegmentMetrics {
+        font_px_size,
+        letter_spacing,
+        align_fraction,
+        weight_synthesis,
+        style_synthesis,
+        line_height: line_box.height,
+        first_baseline_y: local_rect.y + line_box.baseline,
+    }
+}
+
+fn text_segment_supports_solid_atlas(style: &TextStyle) -> bool {
+    style_can_atlas_solid_fill(style)
+        && style
+            .paragraph_style
+            .text_motion
+            .unwrap_or(TextMotion::Static)
+            == TextMotion::Static
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn rasterize_annotated_text_to_image_with_glyph_cache<'a>(
     text: impl Into<StyledTextRef<'a>>,
@@ -1547,14 +1612,7 @@ pub fn rasterize_annotated_text_to_image_with_glyph_cache<'a>(
             glyph_cache,
         );
     }
-    if text.is_empty()
-        || rect.width <= 0.0
-        || rect.height <= 0.0
-        || !font_size.is_finite()
-        || font_size <= 0.0
-        || !scale.is_finite()
-        || scale <= 0.0
-    {
+    if text_render_request_is_degenerate(text.is_empty(), rect, font_size, scale) {
         return None;
     }
 
@@ -1645,8 +1703,8 @@ pub fn rasterize_annotated_text_to_image_with_glyph_cache<'a>(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn collect_solid_text_atlas_glyphs(
-    text: &AnnotatedString,
+fn walk_solid_text_atlas_segments<'a, T>(
+    text: impl Into<StyledTextRef<'a>>,
     rect: Rect,
     style: &TextStyle,
     fallback_color: Color,
@@ -1654,43 +1712,33 @@ pub fn collect_solid_text_atlas_glyphs(
     scale: f32,
     fonts: &SoftwareTextFontSet,
     glyph_cache: &mut SoftwareGlyphRasterCache,
-    out: &mut Vec<SoftwareGlyphAtlasGlyph>,
+    out: &mut Vec<T>,
+    mut collect_segment: impl FnMut(
+        &str,
+        Rect,
+        &TextStyle,
+        Color,
+        f32,
+        f32,
+        &SoftwareTextFont,
+        &mut SoftwareGlyphRasterCache,
+        &mut Vec<T>,
+    ) -> Option<f32>,
 ) -> Option<()> {
-    if text.is_empty()
-        || rect.width <= 0.0
-        || rect.height <= 0.0
-        || !font_size.is_finite()
-        || font_size <= 0.0
-        || !scale.is_finite()
-        || scale <= 0.0
-    {
+    let text: StyledTextRef<'a> = text.into();
+    if text_render_request_is_degenerate(text.is_empty(), rect, font_size, scale) {
         return Some(());
     }
 
     let base_line_height = line_height_for_render_style(style, font_size);
     let mut current_line_height = base_line_height;
-    let line_offsets = annotated_line_alignment_offsets(
-        &StyledTextRef::from(text),
-        style,
-        font_size,
-        scale,
-        fonts,
-    );
+    let line_offsets = annotated_line_alignment_offsets(&text, style, font_size, scale, fonts);
     let mut line_idx = 0usize;
     let mut cursor_x = rect.x + line_offset(&line_offsets, 0);
     let mut cursor_y = rect.y;
     let initial_len = out.len();
 
-    let mut boundaries = text.span_boundaries();
-    for (offset, ch) in text.text.char_indices() {
-        if ch == '\n' {
-            boundaries.push(offset);
-            boundaries.push(offset + ch.len_utf8());
-        }
-    }
-    boundaries.sort_unstable();
-    boundaries.dedup();
-    boundaries.retain(|offset| *offset <= text.text.len() && text.text.is_char_boundary(*offset));
+    let boundaries = annotated_segment_boundaries(&text);
 
     for range in boundaries.windows(2) {
         let start = range[0];
@@ -1698,17 +1746,8 @@ pub fn collect_solid_text_atlas_glyphs(
         if start == end {
             continue;
         }
-        let segment_style = effective_style_for_range(&text.span_styles, style, start, end);
-        if !style_can_atlas_solid_fill(&segment_style) {
-            out.truncate(initial_len);
-            return None;
-        }
-        let static_text_motion = segment_style
-            .paragraph_style
-            .text_motion
-            .unwrap_or(TextMotion::Static)
-            == TextMotion::Static;
-        if !static_text_motion {
+        let segment_style = effective_style_for_range(text.span_styles, style, start, end);
+        if !text_segment_supports_solid_atlas(&segment_style) {
             out.truncate(initial_len);
             return None;
         }
@@ -1735,7 +1774,7 @@ pub fn collect_solid_text_atlas_glyphs(
                     height: rect.height,
                 };
                 let color = segment_style.resolve_text_color(fallback_color);
-                let advance_px = collect_text_segment_solid_atlas_glyphs(
+                let Some(advance_px) = collect_segment(
                     content,
                     local_rect,
                     &segment_style,
@@ -1745,7 +1784,10 @@ pub fn collect_solid_text_atlas_glyphs(
                     font,
                     glyph_cache,
                     out,
-                )?;
+                ) else {
+                    out.truncate(initial_len);
+                    return None;
+                };
                 cursor_x += advance_px;
                 current_line_height = current_line_height.max(line_height_for_render_style(
                     &segment_style,
@@ -1763,6 +1805,32 @@ pub fn collect_solid_text_atlas_glyphs(
     }
 
     Some(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn collect_solid_text_atlas_glyphs(
+    text: &AnnotatedString,
+    rect: Rect,
+    style: &TextStyle,
+    fallback_color: Color,
+    font_size: f32,
+    scale: f32,
+    fonts: &SoftwareTextFontSet,
+    glyph_cache: &mut SoftwareGlyphRasterCache,
+    out: &mut Vec<SoftwareGlyphAtlasGlyph>,
+) -> Option<()> {
+    walk_solid_text_atlas_segments(
+        text,
+        rect,
+        style,
+        fallback_color,
+        font_size,
+        scale,
+        fonts,
+        glyph_cache,
+        out,
+        collect_text_segment_solid_atlas_glyphs,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1777,113 +1845,18 @@ pub fn collect_cached_solid_text_atlas_placements(
     glyph_cache: &mut SoftwareGlyphRasterCache,
     out: &mut Vec<SoftwareGlyphAtlasPlacement>,
 ) -> Option<()> {
-    if text.is_empty()
-        || rect.width <= 0.0
-        || rect.height <= 0.0
-        || !font_size.is_finite()
-        || font_size <= 0.0
-        || !scale.is_finite()
-        || scale <= 0.0
-    {
-        return Some(());
-    }
-
-    let base_line_height = line_height_for_render_style(style, font_size);
-    let mut current_line_height = base_line_height;
-    let line_offsets = annotated_line_alignment_offsets(
-        &StyledTextRef::from(text),
+    walk_solid_text_atlas_segments(
+        text,
+        rect,
         style,
+        fallback_color,
         font_size,
         scale,
         fonts,
-    );
-    let mut line_idx = 0usize;
-    let mut cursor_x = rect.x + line_offset(&line_offsets, 0);
-    let mut cursor_y = rect.y;
-    let initial_len = out.len();
-
-    let mut boundaries = text.span_boundaries();
-    for (offset, ch) in text.text.char_indices() {
-        if ch == '\n' {
-            boundaries.push(offset);
-            boundaries.push(offset + ch.len_utf8());
-        }
-    }
-    boundaries.sort_unstable();
-    boundaries.dedup();
-    boundaries.retain(|offset| *offset <= text.text.len() && text.text.is_char_boundary(*offset));
-
-    for range in boundaries.windows(2) {
-        let start = range[0];
-        let end = range[1];
-        if start == end {
-            continue;
-        }
-        let segment_style = effective_style_for_range(&text.span_styles, style, start, end);
-        if !style_can_atlas_solid_fill(&segment_style) {
-            out.truncate(initial_len);
-            return None;
-        }
-        let static_text_motion = segment_style
-            .paragraph_style
-            .text_motion
-            .unwrap_or(TextMotion::Static)
-            == TextMotion::Static;
-        if !static_text_motion {
-            out.truncate(initial_len);
-            return None;
-        }
-
-        let segment = &text.text[start..end];
-        for part in segment.split_inclusive('\n') {
-            let has_newline = part.ends_with('\n');
-            let content = if has_newline {
-                &part[..part.len().saturating_sub(1)]
-            } else {
-                part
-            };
-
-            if !content.is_empty() {
-                let segment_font_size = segment_style.resolve_font_size(font_size);
-                let Some(font) = fonts.resolve(&segment_style) else {
-                    out.truncate(initial_len);
-                    return None;
-                };
-                let local_rect = Rect {
-                    x: (cursor_x - rect.x).round(),
-                    y: (cursor_y - rect.y).round(),
-                    width: rect.width,
-                    height: rect.height,
-                };
-                let color = segment_style.resolve_text_color(fallback_color);
-                let advance_px = collect_text_segment_cached_solid_atlas_placements(
-                    content,
-                    local_rect,
-                    &segment_style,
-                    color,
-                    segment_font_size,
-                    scale,
-                    font,
-                    glyph_cache,
-                    out,
-                )?;
-                cursor_x += advance_px;
-                current_line_height = current_line_height.max(line_height_for_render_style(
-                    &segment_style,
-                    segment_font_size,
-                ));
-            }
-
-            if has_newline {
-                line_idx += 1;
-                cursor_x = rect.x + line_offset(&line_offsets, line_idx);
-                cursor_y += current_line_height * scale;
-                current_line_height = base_line_height;
-            }
-        }
-    }
-
-    Some(())
+        glyph_cache,
+        out,
+        collect_text_segment_cached_solid_atlas_placements,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1898,108 +1871,18 @@ pub fn collect_solid_text_atlas_run<'a>(
     glyph_cache: &mut SoftwareGlyphRasterCache,
     out: &mut Vec<SoftwareGlyphAtlasRunGlyph>,
 ) -> Option<()> {
-    let text: StyledTextRef<'a> = text.into();
-    if text.is_empty()
-        || rect.width <= 0.0
-        || rect.height <= 0.0
-        || !font_size.is_finite()
-        || font_size <= 0.0
-        || !scale.is_finite()
-        || scale <= 0.0
-    {
-        return Some(());
-    }
-
-    let base_line_height = line_height_for_render_style(style, font_size);
-    let mut current_line_height = base_line_height;
-    let line_offsets = annotated_line_alignment_offsets(&text, style, font_size, scale, fonts);
-    let mut line_idx = 0usize;
-    let mut cursor_x = rect.x + line_offset(&line_offsets, 0);
-    let mut cursor_y = rect.y;
-    let initial_len = out.len();
-
-    let mut boundaries = text.span_boundaries();
-    for (offset, ch) in text.text.char_indices() {
-        if ch == '\n' {
-            boundaries.push(offset);
-            boundaries.push(offset + ch.len_utf8());
-        }
-    }
-    boundaries.sort_unstable();
-    boundaries.dedup();
-    boundaries.retain(|offset| *offset <= text.text.len() && text.text.is_char_boundary(*offset));
-
-    for range in boundaries.windows(2) {
-        let start = range[0];
-        let end = range[1];
-        if start == end {
-            continue;
-        }
-        let segment_style = effective_style_for_range(text.span_styles, style, start, end);
-        if !style_can_atlas_solid_fill(&segment_style) {
-            out.truncate(initial_len);
-            return None;
-        }
-        let static_text_motion = segment_style
-            .paragraph_style
-            .text_motion
-            .unwrap_or(TextMotion::Static)
-            == TextMotion::Static;
-        if !static_text_motion {
-            out.truncate(initial_len);
-            return None;
-        }
-
-        let segment = &text.text[start..end];
-        for part in segment.split_inclusive('\n') {
-            let has_newline = part.ends_with('\n');
-            let content = if has_newline {
-                &part[..part.len().saturating_sub(1)]
-            } else {
-                part
-            };
-
-            if !content.is_empty() {
-                let segment_font_size = segment_style.resolve_font_size(font_size);
-                let Some(font) = fonts.resolve(&segment_style) else {
-                    out.truncate(initial_len);
-                    return None;
-                };
-                let local_rect = Rect {
-                    x: (cursor_x - rect.x).round(),
-                    y: (cursor_y - rect.y).round(),
-                    width: rect.width,
-                    height: rect.height,
-                };
-                let color = segment_style.resolve_text_color(fallback_color);
-                let advance_px = collect_text_segment_solid_atlas_run(
-                    content,
-                    local_rect,
-                    &segment_style,
-                    color,
-                    segment_font_size,
-                    scale,
-                    font,
-                    glyph_cache,
-                    out,
-                )?;
-                cursor_x += advance_px;
-                current_line_height = current_line_height.max(line_height_for_render_style(
-                    &segment_style,
-                    segment_font_size,
-                ));
-            }
-
-            if has_newline {
-                line_idx += 1;
-                cursor_x = rect.x + line_offset(&line_offsets, line_idx);
-                cursor_y += current_line_height * scale;
-                current_line_height = base_line_height;
-            }
-        }
-    }
-
-    Some(())
+    walk_solid_text_atlas_segments(
+        text,
+        rect,
+        style,
+        fallback_color,
+        font_size,
+        scale,
+        fonts,
+        glyph_cache,
+        out,
+        collect_text_segment_solid_atlas_run,
+    )
 }
 
 pub fn measure_text_with_font(
@@ -2350,14 +2233,7 @@ fn rasterize_text_to_image_impl(
         scale,
     } = request;
 
-    if text.is_empty()
-        || rect.width <= 0.0
-        || rect.height <= 0.0
-        || !font_size.is_finite()
-        || font_size <= 0.0
-        || !scale.is_finite()
-        || scale <= 0.0
-    {
+    if text_render_request_is_degenerate(text.is_empty(), rect, font_size, scale) {
         return None;
     }
 
@@ -2523,17 +2399,7 @@ fn style_can_rasterize_direct_solid(style: &TextStyle) -> bool {
 }
 
 fn style_can_atlas_solid_fill(style: &TextStyle) -> bool {
-    if style
-        .span_style
-        .shadow
-        .is_some_and(|shadow| shadow.color.3 > 0.0)
-    {
-        return false;
-    }
-    if !matches!(
-        style.span_style.brush.as_ref(),
-        None | Some(Brush::Solid(_))
-    ) {
+    if !style_can_rasterize_direct_solid(style) {
         return false;
     }
     match style.span_style.draw_style.unwrap_or(TextDrawStyle::Fill) {
@@ -2556,14 +2422,7 @@ fn draw_text_segment_solid_to_rgba(
     font: &SoftwareTextFont,
     glyph_cache: &mut SoftwareGlyphRasterCache,
 ) -> f32 {
-    if text.is_empty()
-        || local_rect.width <= 0.0
-        || local_rect.height <= 0.0
-        || !font_size.is_finite()
-        || font_size <= 0.0
-        || !scale.is_finite()
-        || scale <= 0.0
-    {
+    if text_render_request_is_degenerate(text.is_empty(), local_rect, font_size, scale) {
         return 0.0;
     }
 
@@ -2584,20 +2443,7 @@ fn draw_text_segment_solid_to_rgba(
         .text_motion
         .unwrap_or(TextMotion::Static)
         == TextMotion::Static;
-    let font_px_size = font.ab_glyph_px_size(font_size) * scale;
-    let letter_spacing = resolve_letter_spacing(style, font_size) * scale;
-    let align_fraction = crate::scene_builder::text_align_fraction(style, text);
-    let weight_synthesis = TextWeightSynthesis::for_style(style, font.weight(), font_size, scale);
-    let style_synthesis = TextStyleSynthesis::for_style(style, font.style(), font_size, scale);
-    let metrics = vertical_metrics(&font.font, font_px_size);
-    let line_box = line_box_for(
-        style,
-        metrics,
-        (style.resolve_line_height(14.0, font_size * 1.4) * scale).max(1.0),
-        1.0,
-    );
-    let line_height = line_box.height;
-    let first_baseline_y = local_rect.y + line_box.baseline;
+    let m = text_segment_metrics(text, local_rect, style, font_size, scale, font);
     let origin_x = if text_motion_static {
         local_rect.x.round()
     } else {
@@ -2609,17 +2455,17 @@ fn draw_text_segment_solid_to_rgba(
         text,
         &font.font,
         font.content_hash(),
-        font_px_size,
-        line_height,
-        first_baseline_y,
+        m.font_px_size,
+        m.line_height,
+        m.first_baseline_y,
         origin_x,
         0.0,
-        letter_spacing,
-        align_fraction,
+        m.letter_spacing,
+        m.align_fraction,
         text_motion_static,
         raster_style,
-        weight_synthesis,
-        style_synthesis,
+        m.weight_synthesis,
+        m.style_synthesis,
         Some(glyph_cache),
         |mask| draw_mask_glyph_solid_u8(canvas, canvas_width, canvas_height, mask, color, 1.0),
     )
@@ -2637,43 +2483,14 @@ fn collect_text_segment_solid_atlas_glyphs(
     glyph_cache: &mut SoftwareGlyphRasterCache,
     out: &mut Vec<SoftwareGlyphAtlasGlyph>,
 ) -> Option<f32> {
-    if text.is_empty()
-        || local_rect.width <= 0.0
-        || local_rect.height <= 0.0
-        || !font_size.is_finite()
-        || font_size <= 0.0
-        || !scale.is_finite()
-        || scale <= 0.0
-    {
+    if text_render_request_is_degenerate(text.is_empty(), local_rect, font_size, scale) {
         return Some(0.0);
     }
-    if !style_can_atlas_solid_fill(style) {
+    if !text_segment_supports_solid_atlas(style) {
         return None;
     }
 
-    let text_motion_static = style
-        .paragraph_style
-        .text_motion
-        .unwrap_or(TextMotion::Static)
-        == TextMotion::Static;
-    if !text_motion_static {
-        return None;
-    }
-
-    let font_px_size = font.ab_glyph_px_size(font_size) * scale;
-    let letter_spacing = resolve_letter_spacing(style, font_size) * scale;
-    let align_fraction = crate::scene_builder::text_align_fraction(style, text);
-    let weight_synthesis = TextWeightSynthesis::for_style(style, font.weight(), font_size, scale);
-    let style_synthesis = TextStyleSynthesis::for_style(style, font.style(), font_size, scale);
-    let metrics = vertical_metrics(&font.font, font_px_size);
-    let line_box = line_box_for(
-        style,
-        metrics,
-        (style.resolve_line_height(14.0, font_size * 1.4) * scale).max(1.0),
-        1.0,
-    );
-    let line_height = line_box.height;
-    let first_baseline_y = local_rect.y + line_box.baseline;
+    let m = text_segment_metrics(text, local_rect, style, font_size, scale, font);
     let origin_x = local_rect.x.round();
     let initial_len = out.len();
 
@@ -2681,17 +2498,17 @@ fn collect_text_segment_solid_atlas_glyphs(
         text,
         &font.font,
         font.content_hash(),
-        font_px_size,
-        line_height,
-        first_baseline_y,
+        m.font_px_size,
+        m.line_height,
+        m.first_baseline_y,
         origin_x,
         0.0,
-        letter_spacing,
-        align_fraction,
+        m.letter_spacing,
+        m.align_fraction,
         true,
         GlyphRasterStyle::Fill,
-        weight_synthesis,
-        style_synthesis,
+        m.weight_synthesis,
+        m.style_synthesis,
         Some(glyph_cache),
         |key, mask| {
             if mask.width == 0 || mask.height == 0 {
@@ -2731,43 +2548,14 @@ fn collect_text_segment_cached_solid_atlas_placements(
     glyph_cache: &mut SoftwareGlyphRasterCache,
     out: &mut Vec<SoftwareGlyphAtlasPlacement>,
 ) -> Option<f32> {
-    if text.is_empty()
-        || local_rect.width <= 0.0
-        || local_rect.height <= 0.0
-        || !font_size.is_finite()
-        || font_size <= 0.0
-        || !scale.is_finite()
-        || scale <= 0.0
-    {
+    if text_render_request_is_degenerate(text.is_empty(), local_rect, font_size, scale) {
         return Some(0.0);
     }
-    if !style_can_atlas_solid_fill(style) {
+    if !text_segment_supports_solid_atlas(style) {
         return None;
     }
 
-    let text_motion_static = style
-        .paragraph_style
-        .text_motion
-        .unwrap_or(TextMotion::Static)
-        == TextMotion::Static;
-    if !text_motion_static {
-        return None;
-    }
-
-    let font_px_size = font.ab_glyph_px_size(font_size) * scale;
-    let letter_spacing = resolve_letter_spacing(style, font_size) * scale;
-    let align_fraction = crate::scene_builder::text_align_fraction(style, text);
-    let weight_synthesis = TextWeightSynthesis::for_style(style, font.weight(), font_size, scale);
-    let style_synthesis = TextStyleSynthesis::for_style(style, font.style(), font_size, scale);
-    let metrics = vertical_metrics(&font.font, font_px_size);
-    let line_box = line_box_for(
-        style,
-        metrics,
-        (style.resolve_line_height(14.0, font_size * 1.4) * scale).max(1.0),
-        1.0,
-    );
-    let line_height = line_box.height;
-    let first_baseline_y = local_rect.y + line_box.baseline;
+    let m = text_segment_metrics(text, local_rect, style, font_size, scale, font);
     let origin_x = local_rect.x.round();
     let initial_len = out.len();
 
@@ -2775,16 +2563,16 @@ fn collect_text_segment_cached_solid_atlas_placements(
         text,
         &font.font,
         font.content_hash(),
-        font_px_size,
-        line_height,
-        first_baseline_y,
+        m.font_px_size,
+        m.line_height,
+        m.first_baseline_y,
         origin_x,
         0.0,
-        letter_spacing,
-        align_fraction,
+        m.letter_spacing,
+        m.align_fraction,
         GlyphRasterStyle::Fill,
-        weight_synthesis,
-        style_synthesis,
+        m.weight_synthesis,
+        m.style_synthesis,
         glyph_cache,
         |placement| {
             if placement.width == 0 || placement.height == 0 {
@@ -2814,43 +2602,14 @@ fn collect_text_segment_solid_atlas_run(
     glyph_cache: &mut SoftwareGlyphRasterCache,
     out: &mut Vec<SoftwareGlyphAtlasRunGlyph>,
 ) -> Option<f32> {
-    if text.is_empty()
-        || local_rect.width <= 0.0
-        || local_rect.height <= 0.0
-        || !font_size.is_finite()
-        || font_size <= 0.0
-        || !scale.is_finite()
-        || scale <= 0.0
-    {
+    if text_render_request_is_degenerate(text.is_empty(), local_rect, font_size, scale) {
         return Some(0.0);
     }
-    if !style_can_atlas_solid_fill(style) {
+    if !text_segment_supports_solid_atlas(style) {
         return None;
     }
 
-    let text_motion_static = style
-        .paragraph_style
-        .text_motion
-        .unwrap_or(TextMotion::Static)
-        == TextMotion::Static;
-    if !text_motion_static {
-        return None;
-    }
-
-    let font_px_size = font.ab_glyph_px_size(font_size) * scale;
-    let letter_spacing = resolve_letter_spacing(style, font_size) * scale;
-    let align_fraction = crate::scene_builder::text_align_fraction(style, text);
-    let weight_synthesis = TextWeightSynthesis::for_style(style, font.weight(), font_size, scale);
-    let style_synthesis = TextStyleSynthesis::for_style(style, font.style(), font_size, scale);
-    let metrics = vertical_metrics(&font.font, font_px_size);
-    let line_box = line_box_for(
-        style,
-        metrics,
-        (style.resolve_line_height(14.0, font_size * 1.4) * scale).max(1.0),
-        1.0,
-    );
-    let line_height = line_box.height;
-    let first_baseline_y = local_rect.y + line_box.baseline;
+    let m = text_segment_metrics(text, local_rect, style, font_size, scale, font);
     let origin_x = local_rect.x.round();
     let initial_len = out.len();
 
@@ -2858,16 +2617,16 @@ fn collect_text_segment_solid_atlas_run(
         text,
         &font.font,
         font.content_hash(),
-        font_px_size,
-        line_height,
-        first_baseline_y,
+        m.font_px_size,
+        m.line_height,
+        m.first_baseline_y,
         origin_x,
         0.0,
-        letter_spacing,
-        align_fraction,
+        m.letter_spacing,
+        m.align_fraction,
         GlyphRasterStyle::Fill,
-        weight_synthesis,
-        style_synthesis,
+        m.weight_synthesis,
+        m.style_synthesis,
         glyph_cache,
         |run_glyph| {
             let run_glyph = match run_glyph {

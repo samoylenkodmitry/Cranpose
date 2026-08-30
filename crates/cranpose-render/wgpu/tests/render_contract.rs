@@ -851,26 +851,24 @@ fn transformed_effect_layer_records_effect_and_projective_composite_together() {
     let surface_backend_source =
         std::fs::read_to_string(crate_dir.join("src/surface_executor/backend.rs"))
             .expect("failed to read surface backend source");
-    let start = surface_executor_source
-        .find("pub(crate) fn render_effect_layer_to_target")
-        .expect("effect layer renderer must exist");
-    let end = surface_executor_source[start..]
-        .find("pub(crate) fn apply_backdrop_layer_to_target")
-        .map(|offset| start + offset)
-        .expect("backdrop layer renderer must follow effect layer renderer");
-    let body = &surface_executor_source[start..end];
+    assert!(
+        surface_executor_source.contains("pub(crate) fn render_effect_layer_to_target")
+            && surface_executor_source.contains("pub(crate) fn apply_backdrop_layer_to_target"),
+        "effect layer renderer must exist alongside the backdrop layer renderer"
+    );
 
     assert!(
         surface_backend_source.contains("fn apply_effect_and_composite_to_view_projective("),
         "surface backends must expose a combined transformed effect composite path"
     );
     assert!(
-        body.contains("backend.apply_effect_and_composite_to_view_projective("),
+        surface_executor_source.contains("backend.apply_effect_and_composite_to_view_projective("),
         "transformed render-effect layers must record effect and projective composite together"
     );
     assert!(
-        !body.contains("let effect_dest = backend.acquire_offscreen(effect_width, effect_height);")
-            && !body.contains(
+        !surface_executor_source
+            .contains("let effect_dest = backend.acquire_offscreen(effect_width, effect_height);")
+            && !surface_executor_source.contains(
                 "let fallback_dest = backend.acquire_offscreen(effect_width, effect_height);"
             ),
         "transformed render-effect layers must not allocate caller-owned intermediate targets"
@@ -1055,10 +1053,11 @@ fn surface_executor_allocations_are_semantic() {
     assert!(
         !surface_executor_source
             .contains("effect-free layers return before allocating a destination surface")
-            && surface_executor_source
-                .contains("effect layer destination requested without render effect")
+            && surface_executor_source.contains("fn composite_captured_effect_layer")
+            && surface_executor_source.contains("effect layer transform is not invertible")
             && surface_executor_source.contains("backend.release_frame_surface(source);"),
-        "effect-layer destination failures must release frame surfaces and return renderer errors"
+        "effect-layer destination composites must share one path that returns renderer errors \
+         to the caller, which unconditionally releases the frame surface"
     );
     assert!(
         render_source.contains("fn acquire_retained_surface(&mut self, width: u32, height: u32)")

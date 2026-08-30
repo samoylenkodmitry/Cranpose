@@ -2,7 +2,7 @@
 
 use std::{
     fs::File,
-    io::{Read, Write},
+    io::Write,
     path::{Path, PathBuf},
     sync::Arc,
     time::UNIX_EPOCH,
@@ -173,16 +173,7 @@ impl FolderReader for BookmarkReader {
         let path = self.path.clone();
         let filled = store.with_scope(|_| {
             let _ = &path;
-            let mut filled = 0;
-            while filled < buffer.len() {
-                match file.read(&mut buffer[filled..]) {
-                    Ok(0) => break,
-                    Ok(read) => filled += read,
-                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-                    Err(error) => return Err(error),
-                }
-            }
-            Ok(filled)
+            crate::chunked_read::fill_buffer(file, &mut buffer)
         })?;
         if filled == 0 {
             self.file = None;

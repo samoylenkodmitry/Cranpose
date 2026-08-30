@@ -70,6 +70,25 @@ where
         event.finish_post_dispatch();
     }
 
+    fn dispatch_to_hits(
+        &mut self,
+        hits: &[<<R as Renderer>::Scene as RenderScene>::HitTarget],
+        event: PointerEvent,
+    ) -> bool {
+        let capture_paths = hits
+            .iter()
+            .map(|hit| hit.capture_path())
+            .collect::<Vec<_>>();
+        let targets = crate::hit_path_tracker::dispatch_order_for_paths(&capture_paths)
+            .into_iter()
+            .filter_map(|node_id| self.renderer.scene().find_target(node_id))
+            .collect::<Vec<_>>();
+
+        self.dispatch_targets(targets, event.clone(), true);
+
+        event.is_consumed()
+    }
+
     /// Sets the device source (touch/mouse/stylus) of the pointer sample that
     /// the platform is about to dispatch. Call this before `set_cursor` /
     /// `pointer_pressed` / `pointer_released` so the resulting `PointerEvent`s
@@ -550,18 +569,7 @@ where
             .with_zoom_delta(zoom_factor)
             .with_source(self.pointer_source);
 
-        let capture_paths = hits
-            .iter()
-            .map(|hit| hit.capture_path())
-            .collect::<Vec<_>>();
-        let targets = crate::hit_path_tracker::dispatch_order_for_paths(&capture_paths)
-            .into_iter()
-            .filter_map(|node_id| self.renderer.scene().find_target(node_id))
-            .collect::<Vec<_>>();
-
-        self.dispatch_targets(targets, event.clone(), true);
-
-        event.is_consumed()
+        self.dispatch_to_hits(&hits, event)
     }
 
     /// Dispatches one mouse-wheel / trackpad sample through the whole wheel
@@ -675,18 +683,7 @@ where
             })
             .with_source(self.pointer_source);
 
-        let capture_paths = hits
-            .iter()
-            .map(|hit| hit.capture_path())
-            .collect::<Vec<_>>();
-        let targets = crate::hit_path_tracker::dispatch_order_for_paths(&capture_paths)
-            .into_iter()
-            .filter_map(|node_id| self.renderer.scene().find_target(node_id))
-            .collect::<Vec<_>>();
-
-        self.dispatch_targets(targets, event.clone(), true);
-
-        event.is_consumed()
+        self.dispatch_to_hits(&hits, event)
     }
 
     /// Installs the window-level rotary (Wear OS crown / rotating bezel)

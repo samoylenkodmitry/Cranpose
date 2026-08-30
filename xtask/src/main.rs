@@ -105,6 +105,16 @@ const COMMANDS: &[XtaskCommand] = &[
         run: |args| wait_for_crates_io(&single_positional_arg("wait-for-crates-io", args)?),
         print_usage: print_wait_for_crates_io_usage,
     },
+    XtaskCommand {
+        name: "complexity-gate",
+        run: |args| run_complexity_gate(GateOptions::parse(args, "complexity-gate")?),
+        print_usage: print_complexity_gate_usage,
+    },
+    XtaskCommand {
+        name: "duplication-gate",
+        run: |args| run_duplication_gate(GateOptions::parse(args, "duplication-gate")?),
+        print_usage: print_duplication_gate_usage,
+    },
 ];
 
 fn run(args: Vec<String>) -> Result<(), String> {
@@ -144,6 +154,8 @@ fn print_usage() {
            publish-order        Print/write the cranpose crate publish order\n\
            wait-for-crates-io   Poll crates.io until a release is live\n\
            crate-published      Exit 0/1/2: published, not yet, or error\n\
+           complexity-gate       Diff-scoped cyclomatic complexity ceiling\n\
+           duplication-gate      Diff-scoped copy-paste budget\n\
          \n\
          bundle-macos options:\n\
            --package <name>       Cargo package to build [desktop-app]\n\
@@ -245,6 +257,79 @@ fn print_crate_published_usage() {
          Exit code 0 = published, 1 = not published (404), 2 = error --\n\
          this three-way contract is deliberate, matching a shell\n\
          `if crate_exists ...; then ... else ...; fi` caller."
+    );
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct GateOptions {
+    base: String,
+    config: Option<PathBuf>,
+}
+
+impl GateOptions {
+    fn parse(args: &[String], command_name: &str) -> Result<Self, String> {
+        let mut base = "origin/main".to_owned();
+        let mut config = None;
+        let mut index = 0;
+        while index < args.len() {
+            match args[index].as_str() {
+                "--base" => base = required_value(args, &mut index, "--base")?,
+                "--config" => {
+                    config = Some(PathBuf::from(required_value(args, &mut index, "--config")?))
+                }
+                other => return Err(format!("unknown {command_name} option `{other}`")),
+            }
+            index += 1;
+        }
+        Ok(Self { base, config })
+    }
+}
+
+fn default_code_quality_gates_config(root: &Path) -> PathBuf {
+    root.join("scripts/ci/code_quality_gates.toml")
+}
+
+fn violations_message(header: String, violations: &[String]) -> String {
+    let mut message = header;
+    for violation in violations {
+        message.push_str(&format!("\n  {violation}"));
+    }
+    message
+}
+
+fn run_complexity_gate(options: GateOptions) -> Result<(), String> {
+    let root = workspace_root()?;
+    let config_path = options
+        .config
+        .unwrap_or_else(|| default_code_quality_gates_config(&root));
+    complexity_gate::run_at(&root, &options.base, &config_path)
+}
+
+fn run_duplication_gate(options: GateOptions) -> Result<(), String> {
+    let root = workspace_root()?;
+    let config_path = options
+        .config
+        .unwrap_or_else(|| default_code_quality_gates_config(&root));
+    duplication_gate::run_at(&root, &options.base, &config_path)
+}
+
+fn print_complexity_gate_usage() {
+    eprintln!(
+        "usage: cargo xtask complexity-gate [--base origin/main] [--config path]\n\
+         \n\
+         Fails if a function the diff adds or modifies has a higher cyclomatic\n\
+         complexity than before (or, for new code, above the configured limit).\n\
+         Installs rust-code-analysis-cli via `cargo install` if it is missing."
+    );
+}
+
+fn print_duplication_gate_usage() {
+    eprintln!(
+        "usage: cargo xtask duplication-gate [--base origin/main] [--config path]\n\
+         \n\
+         Fails if the diff introduces a cloned block of code, comparing jscpd's\n\
+         report before and after so pre-existing duplication is not penalized.\n\
+         Installs jscpd via `cargo install` if it is missing."
     );
 }
 
@@ -2723,6 +2808,1293 @@ fn wait_for_crates_io(tag_or_version: &str) -> Result<(), String> {
     Ok(())
 }
 
+mod gate_diff {
+    use std::{
+        collections::BTreeMap,
+        fs,
+        path::{Path, PathBuf},
+        process::Command,
+        sync::LazyLock,
+    };
+
+    use regex::Regex;
+
+    pub(crate) type Span = (usize, usize);
+    pub(crate) type HunkSpans = BTreeMap<String, Vec<(Option<Span>, Option<Span>)>>;
+    pub(crate) type RangesByFile = BTreeMap<String, Vec<Span>>;
+
+    pub(crate) fn ensure_ref(root: &Path, base: &str) -> Result<(), String> {
+        if let Some(branch) = base.strip_prefix("origin/") {
+            let _ = Command::new("git")
+                .args(["fetch", "--quiet", "origin", branch])
+                .current_dir(root)
+                .status();
+        }
+        let resolved = Command::new("git")
+            .args(["rev-parse", "--verify", "-q", base])
+            .current_dir(root)
+            .output()
+            .map_err(|error| format!("gate_diff: failed to run git rev-parse: {error}"))?;
+        if !resolved.status.success() {
+            return Err(format!(
+                "gate_diff: cannot resolve base ref `{base}`: it fetched nothing and no local ref by that name exists"
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn is_shallow_repository(root: &Path) -> Result<bool, String> {
+        let output = Command::new("git")
+            .args(["rev-parse", "--is-shallow-repository"])
+            .current_dir(root)
+            .output()
+            .map_err(|error| format!("gate_diff: failed to run git rev-parse: {error}"))?;
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).trim().to_owned());
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).trim() == "true")
+    }
+
+    pub(crate) fn merge_base(root: &Path, base: &str) -> Result<String, String> {
+        ensure_ref(root, base)?;
+
+        let first_attempt = Command::new("git")
+            .args(["merge-base", base, "HEAD"])
+            .current_dir(root)
+            .output()
+            .map_err(|error| format!("gate_diff: failed to run git merge-base: {error}"))?;
+        if first_attempt.status.success() {
+            return Ok(String::from_utf8_lossy(&first_attempt.stdout)
+                .trim()
+                .to_owned());
+        }
+
+        if !is_shallow_repository(root)? {
+            return Err(format!(
+                "gate_diff: no merge base between `{base}` and HEAD, and the checkout \
+                 already has full history -- these two branches share no common ancestor, \
+                 so the diff cannot be scoped"
+            ));
+        }
+
+        let deepened = Command::new("git")
+            .args(["fetch", "--quiet", "--unshallow", "origin"])
+            .current_dir(root)
+            .status()
+            .map_err(|error| format!("gate_diff: failed to run git fetch: {error}"))?;
+        if !deepened.success() {
+            return Err(format!(
+                "gate_diff: the checkout is shallow and `git fetch --unshallow origin` \
+                 failed -- cannot deepen history enough to find a merge base with `{base}`"
+            ));
+        }
+
+        let second_attempt = Command::new("git")
+            .args(["merge-base", base, "HEAD"])
+            .current_dir(root)
+            .output()
+            .map_err(|error| format!("gate_diff: failed to run git merge-base: {error}"))?;
+        if !second_attempt.status.success() {
+            return Err(format!(
+                "gate_diff: no merge base between `{base}` and HEAD even after \
+                 `git fetch --unshallow` -- cannot scope the diff safely"
+            ));
+        }
+        Ok(String::from_utf8_lossy(&second_attempt.stdout)
+            .trim()
+            .to_owned())
+    }
+
+    static HUNK_HEADER_RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
+            .expect("HUNK_HEADER_RE is a valid pattern")
+    });
+
+    pub(crate) fn parse_hunk_spans(diff_text: &str) -> HunkSpans {
+        let mut hunks: HunkSpans = BTreeMap::new();
+        let mut current_file: Option<String> = None;
+        for line in diff_text.split('\n') {
+            if let Some(path) = line.strip_prefix("+++ ") {
+                current_file = if path == "/dev/null" {
+                    None
+                } else {
+                    Some(path.to_owned())
+                };
+                continue;
+            }
+            if !line.starts_with("@@ ") {
+                continue;
+            }
+            let Some(file) = current_file.as_ref() else {
+                continue;
+            };
+            let Some(captures) = HUNK_HEADER_RE.captures(line) else {
+                continue;
+            };
+            let old_start: usize = captures[1].parse().expect("hunk header has digits");
+            let old_count: usize = captures
+                .get(2)
+                .map_or(1, |m| m.as_str().parse().expect("hunk header has digits"));
+            let new_start: usize = captures[3].parse().expect("hunk header has digits");
+            let new_count: usize = captures
+                .get(4)
+                .map_or(1, |m| m.as_str().parse().expect("hunk header has digits"));
+            let old_span = (old_count != 0).then(|| (old_start, old_start + old_count - 1));
+            let new_span = (new_count != 0).then(|| (new_start, new_start + new_count - 1));
+            hunks
+                .entry(file.clone())
+                .or_default()
+                .push((old_span, new_span));
+        }
+        hunks
+    }
+
+    fn is_ident_char(ch: char) -> bool {
+        ch.is_ascii_alphanumeric() || ch == '_'
+    }
+
+    fn is_hex_digit(ch: Option<&char>) -> bool {
+        matches!(ch, Some(ch) if ch.is_ascii_hexdigit())
+    }
+
+    fn raw_string_prefix_end(chars: &[char], i: usize) -> Option<(usize, usize)> {
+        let mut j = i;
+        if chars.get(j) == Some(&'b') {
+            j += 1;
+        }
+        if chars.get(j) != Some(&'r') {
+            return None;
+        }
+        j += 1;
+        let hashes_start = j;
+        while chars.get(j) == Some(&'#') && j - hashes_start < 255 {
+            j += 1;
+        }
+        let hashes = j - hashes_start;
+        if chars.get(j) != Some(&'"') {
+            return None;
+        }
+        Some((hashes, j + 1))
+    }
+
+    fn find_char_subsequence(haystack: &[char], needle: &[char], from: usize) -> Option<usize> {
+        if needle.is_empty() {
+            return Some(from);
+        }
+        if from + needle.len() > haystack.len() {
+            return None;
+        }
+        (from..=haystack.len() - needle.len())
+            .find(|&start| haystack[start..start + needle.len()] == *needle)
+    }
+
+    fn match_hex_escape(chars: &[char], after_backslash: usize) -> Option<usize> {
+        if chars.get(after_backslash) == Some(&'x')
+            && is_hex_digit(chars.get(after_backslash + 1))
+            && is_hex_digit(chars.get(after_backslash + 2))
+        {
+            Some(after_backslash + 3)
+        } else {
+            None
+        }
+    }
+
+    fn match_unicode_escape(chars: &[char], after_backslash: usize) -> Option<usize> {
+        if chars.get(after_backslash) != Some(&'u') || chars.get(after_backslash + 1) != Some(&'{')
+        {
+            return None;
+        }
+        let hex_start = after_backslash + 2;
+        let mut k = hex_start;
+        while is_hex_digit(chars.get(k)) && k - hex_start < 6 {
+            k += 1;
+        }
+        (k > hex_start && chars.get(k) == Some(&'}')).then_some(k + 1)
+    }
+
+    fn match_any_escape(chars: &[char], after_backslash: usize) -> Option<usize> {
+        match chars.get(after_backslash) {
+            Some(&c) if c != '\n' => Some(after_backslash + 1),
+            _ => None,
+        }
+    }
+
+    fn match_char_literal_escape(chars: &[char], after_quote: usize) -> Option<usize> {
+        let after_backslash = after_quote + 1;
+        match_hex_escape(chars, after_backslash)
+            .or_else(|| match_unicode_escape(chars, after_backslash))
+            .or_else(|| match_any_escape(chars, after_backslash))
+    }
+
+    fn match_char_literal_body(chars: &[char], after_quote: usize) -> Option<usize> {
+        if chars.get(after_quote) == Some(&'\\') {
+            return match_char_literal_escape(chars, after_quote);
+        }
+        match chars.get(after_quote) {
+            Some(&c) if c != '\'' && c != '\\' && c != '\n' => Some(after_quote + 1),
+            _ => None,
+        }
+    }
+
+    fn match_char_literal(chars: &[char], i: usize) -> Option<usize> {
+        if chars.get(i) != Some(&'\'') {
+            return None;
+        }
+        let after_body = match_char_literal_body(chars, i + 1)?;
+        (chars.get(after_body) == Some(&'\'')).then_some(after_body + 1)
+    }
+
+    struct Scanned {
+        token: String,
+        next_i: usize,
+        newlines: usize,
+    }
+
+    fn advance_in_block_comment(chars: &[char], i: usize) -> (usize, i32) {
+        if chars.get(i) == Some(&'/') && chars.get(i + 1) == Some(&'*') {
+            (i + 2, 1)
+        } else if chars.get(i) == Some(&'*') && chars.get(i + 1) == Some(&'/') {
+            (i + 2, -1)
+        } else {
+            (i + 1, 0)
+        }
+    }
+
+    fn skip_line_comment(chars: &[char], i: usize) -> Option<usize> {
+        if chars.get(i) != Some(&'/') || chars.get(i + 1) != Some(&'/') {
+            return None;
+        }
+        Some(
+            chars[i..]
+                .iter()
+                .position(|&c| c == '\n')
+                .map_or(chars.len(), |p| p + i),
+        )
+    }
+
+    fn starts_block_comment(chars: &[char], i: usize) -> bool {
+        chars.get(i) == Some(&'/') && chars.get(i + 1) == Some(&'*')
+    }
+
+    fn scan_raw_string(chars: &[char], i: usize) -> Option<Scanned> {
+        let (hashes, open_end) = raw_string_prefix_end(chars, i)?;
+        let mut end_marker = vec!['"'];
+        end_marker.extend(std::iter::repeat_n('#', hashes));
+        Some(match find_char_subsequence(chars, &end_marker, open_end) {
+            None => Scanned {
+                token: chars[i..].iter().collect(),
+                next_i: chars.len(),
+                newlines: 0,
+            },
+            Some(end) => {
+                let span_end = end + end_marker.len();
+                let token: String = chars[i..span_end].iter().collect();
+                let newlines = token.matches('\n').count();
+                Scanned {
+                    token,
+                    next_i: span_end,
+                    newlines,
+                }
+            }
+        })
+    }
+
+    fn scan_double_quoted_string(chars: &[char], i: usize) -> Scanned {
+        let n = chars.len();
+        let mut j = i + 1;
+        while j < n {
+            let c = chars[j];
+            if c == '\\' && j + 1 < n {
+                j += 2;
+                continue;
+            }
+            j += 1;
+            if c == '"' {
+                break;
+            }
+        }
+        let token: String = chars[i..j].iter().collect();
+        let newlines = token.matches('\n').count();
+        Scanned {
+            token,
+            next_i: j,
+            newlines,
+        }
+    }
+
+    fn scan_identifier(chars: &[char], i: usize) -> Scanned {
+        let n = chars.len();
+        let mut j = i;
+        while j < n && is_ident_char(chars[j]) {
+            j += 1;
+        }
+        Scanned {
+            token: chars[i..j].iter().collect(),
+            next_i: j,
+            newlines: 0,
+        }
+    }
+
+    fn push_scanned(tokens: &mut [Vec<String>], line_idx: &mut usize, scanned: Scanned) -> usize {
+        tokens[*line_idx].push(scanned.token);
+        *line_idx += scanned.newlines;
+        scanned.next_i
+    }
+
+    pub(crate) fn code_tokens_by_line(text: &str) -> Vec<Vec<String>> {
+        let chars: Vec<char> = text.chars().collect();
+        let n = chars.len();
+        let line_count = text.matches('\n').count() + 1;
+        let mut tokens: Vec<Vec<String>> = vec![Vec::new(); line_count];
+        let mut line_idx = 0usize;
+        let mut i = 0usize;
+        let mut block_depth = 0u32;
+
+        while i < n {
+            let ch = chars[i];
+
+            if ch == '\n' {
+                line_idx += 1;
+                i += 1;
+                continue;
+            }
+
+            if block_depth > 0 {
+                let (next_i, delta) = advance_in_block_comment(&chars, i);
+                block_depth = block_depth.saturating_add_signed(delta);
+                i = next_i;
+                continue;
+            }
+
+            if ch == ' ' || ch == '\t' || ch == '\r' {
+                i += 1;
+                continue;
+            }
+
+            if let Some(next_i) = skip_line_comment(&chars, i) {
+                i = next_i;
+                continue;
+            }
+
+            if starts_block_comment(&chars, i) {
+                block_depth = 1;
+                i += 2;
+                continue;
+            }
+
+            let prev_is_ident = i > 0 && is_ident_char(chars[i - 1]);
+            if !prev_is_ident {
+                if let Some(scanned) = scan_raw_string(&chars, i) {
+                    i = push_scanned(&mut tokens, &mut line_idx, scanned);
+                    continue;
+                }
+            }
+
+            if ch == '"' {
+                let scanned = scan_double_quoted_string(&chars, i);
+                i = push_scanned(&mut tokens, &mut line_idx, scanned);
+                continue;
+            }
+
+            if ch == '\'' {
+                match match_char_literal(&chars, i) {
+                    Some(end) => {
+                        tokens[line_idx].push(chars[i..end].iter().collect());
+                        i = end;
+                    }
+                    None => {
+                        tokens[line_idx].push(ch.to_string());
+                        i += 1;
+                    }
+                }
+                continue;
+            }
+
+            if is_ident_char(ch) {
+                let scanned = scan_identifier(&chars, i);
+                i = push_scanned(&mut tokens, &mut line_idx, scanned);
+                continue;
+            }
+
+            tokens[line_idx].push(ch.to_string());
+            i += 1;
+        }
+
+        tokens
+    }
+
+    fn tokens_in_span(tokens_by_line: &[Vec<String>], span: Option<Span>) -> Vec<String> {
+        let Some((start, end)) = span else {
+            return Vec::new();
+        };
+        let upper = end.min(tokens_by_line.len());
+        let mut result = Vec::new();
+        for line in &tokens_by_line[start.saturating_sub(1).min(upper)..upper] {
+            result.extend(line.iter().cloned());
+        }
+        result
+    }
+
+    const CLOSING_DELIMITERS: [&str; 3] = [")", "]", "}"];
+
+    pub(crate) fn drop_trailing_commas(tokens: &[String]) -> Vec<String> {
+        tokens
+            .iter()
+            .enumerate()
+            .filter(|(idx, tok)| {
+                !(tok.as_str() == ","
+                    && idx + 1 < tokens.len()
+                    && CLOSING_DELIMITERS.contains(&tokens[idx + 1].as_str()))
+            })
+            .map(|(_, tok)| tok.clone())
+            .collect()
+    }
+
+    pub(crate) fn semantic_ranges(
+        hunk_spans: &HunkSpans,
+        mut read_old: impl FnMut(&str) -> String,
+        mut read_new: impl FnMut(&str) -> String,
+    ) -> RangesByFile {
+        let mut ranges: RangesByFile = BTreeMap::new();
+        for (file, spans) in hunk_spans {
+            let new_tokens_by_line = code_tokens_by_line(&read_new(file));
+            let old_tokens_by_line = code_tokens_by_line(&read_old(file));
+            let mut kept: Vec<Span> = Vec::new();
+            for (old_span, new_span) in spans {
+                let Some(new_span) = *new_span else {
+                    continue;
+                };
+                let old_tokens =
+                    drop_trailing_commas(&tokens_in_span(&old_tokens_by_line, *old_span));
+                let new_tokens =
+                    drop_trailing_commas(&tokens_in_span(&new_tokens_by_line, Some(new_span)));
+                if old_tokens == new_tokens {
+                    continue;
+                }
+                kept.push(new_span);
+            }
+            if !kept.is_empty() {
+                ranges.insert(file.clone(), kept);
+            }
+        }
+        ranges
+    }
+
+    pub(crate) fn changed_ranges(
+        root: &Path,
+        base: &str,
+        pathspec: &str,
+    ) -> Result<RangesByFile, String> {
+        let base_sha = merge_base(root, base)?;
+        let output = Command::new("git")
+            .args([
+                "diff",
+                "--unified=0",
+                "--no-prefix",
+                &base_sha,
+                "--",
+                pathspec,
+            ])
+            .current_dir(root)
+            .output()
+            .map_err(|error| format!("gate_diff: failed to run git diff: {error}"))?;
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).trim().to_owned());
+        }
+        let diff_text = String::from_utf8_lossy(&output.stdout).into_owned();
+        let hunk_spans = parse_hunk_spans(&diff_text);
+
+        let read_new =
+            |file: &str| -> String { fs::read_to_string(root.join(file)).unwrap_or_default() };
+        let read_old = |file: &str| -> String {
+            let blob = Command::new("git")
+                .args(["show", &format!("{base_sha}:{file}")])
+                .current_dir(root)
+                .output();
+            match blob {
+                Ok(blob) if blob.status.success() => {
+                    String::from_utf8_lossy(&blob.stdout).into_owned()
+                }
+                _ => String::new(),
+            }
+        };
+
+        Ok(semantic_ranges(&hunk_spans, read_old, read_new))
+    }
+
+    pub(crate) fn write_old_blobs(
+        root: &Path,
+        base_sha: &str,
+        files: &[String],
+        dest_root: &Path,
+    ) -> Result<Vec<String>, String> {
+        let mut written = Vec::new();
+        for file in files {
+            let blob = Command::new("git")
+                .args(["show", &format!("{base_sha}:{file}")])
+                .current_dir(root)
+                .output()
+                .map_err(|error| format!("gate_diff: failed to run git show: {error}"))?;
+            if !blob.status.success() {
+                continue;
+            }
+            let dest = dest_root.join(file);
+            if let Some(parent) = dest.parent() {
+                fs::create_dir_all(parent).map_err(|error| {
+                    format!(
+                        "gate_diff: failed to create `{}`: {error}",
+                        parent.display()
+                    )
+                })?;
+            }
+            fs::write(&dest, &blob.stdout).map_err(|error| {
+                format!("gate_diff: failed to write `{}`: {error}", dest.display())
+            })?;
+            written.push(file.clone());
+        }
+        Ok(written)
+    }
+
+    fn home_dir() -> PathBuf {
+        std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/"))
+    }
+
+    fn expand_user(path: &Path, home: &Path) -> PathBuf {
+        match path.to_str() {
+            Some("~") => home.to_path_buf(),
+            Some(s) if s.starts_with("~/") => home.join(&s[2..]),
+            _ => path.to_path_buf(),
+        }
+    }
+
+    pub(crate) fn cargo_bin_dir() -> PathBuf {
+        cargo_bin_dir_for(std::env::var_os("CARGO_HOME"), home_dir())
+    }
+
+    pub(crate) fn cargo_bin_dir_for(
+        cargo_home: Option<std::ffi::OsString>,
+        home: PathBuf,
+    ) -> PathBuf {
+        match cargo_home {
+            Some(cargo_home) => expand_user(Path::new(&cargo_home), &home).join("bin"),
+            None => home.join(".cargo").join("bin"),
+        }
+    }
+
+    #[cfg(unix)]
+    fn is_executable_file(path: &Path) -> bool {
+        use std::os::unix::fs::PermissionsExt;
+        path.is_file()
+            && fs::metadata(path)
+                .map(|meta| meta.permissions().mode() & 0o111 != 0)
+                .unwrap_or(false)
+    }
+
+    #[cfg(not(unix))]
+    fn is_executable_file(path: &Path) -> bool {
+        path.is_file()
+    }
+
+    fn install_cargo_tool(root: &Path, name: &str) {
+        let _ = Command::new("cargo")
+            .args(["install", name, "--locked"])
+            .current_dir(root)
+            .status();
+    }
+
+    pub(crate) fn resolve_cargo_tool(
+        root: &Path,
+        name: &str,
+        on_install_failure_hint: &str,
+    ) -> Result<PathBuf, String> {
+        resolve_cargo_tool_in(
+            root,
+            &cargo_bin_dir(),
+            name,
+            on_install_failure_hint,
+            install_cargo_tool,
+        )
+    }
+
+    pub(crate) fn resolve_cargo_tool_in(
+        root: &Path,
+        bin_dir: &Path,
+        name: &str,
+        on_install_failure_hint: &str,
+        install: impl FnOnce(&Path, &str),
+    ) -> Result<PathBuf, String> {
+        let binary = bin_dir.join(name);
+        if !is_executable_file(&binary) {
+            install(root, name);
+        }
+        if !is_executable_file(&binary) {
+            let hint = if on_install_failure_hint.is_empty() {
+                String::new()
+            } else {
+                format!(" {on_install_failure_hint}")
+            };
+            return Err(format!(
+                "gate_diff: {name} is not at {} and `cargo install {name} --locked` did not put it there.{hint}",
+                binary.display()
+            ));
+        }
+        Ok(binary)
+    }
+
+    pub(crate) fn intersects(a: Span, b: Span) -> bool {
+        a.0 <= b.1 && b.0 <= a.1
+    }
+
+    pub(crate) fn any_intersect(ranges: &[Span], span: Span) -> bool {
+        ranges.iter().any(|&range| intersects(range, span))
+    }
+}
+mod complexity_gate {
+    use std::{collections::BTreeMap, fs, path::Path, process::Command};
+
+    use serde_json::Value;
+
+    use super::gate_diff;
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(crate) struct FunctionMetric {
+        pub(crate) name: String,
+        pub(crate) start: Option<usize>,
+        pub(crate) end: Option<usize>,
+        pub(crate) cyclomatic: Option<i64>,
+    }
+
+    const ANONYMOUS: &str = "<anonymous>";
+
+    pub(crate) fn load_max_cyclomatic(config_path: &Path) -> Result<i64, String> {
+        let config = super::load_toml(config_path)?;
+        config
+            .get("complexity")
+            .and_then(toml::Value::as_table)
+            .and_then(|table| table.get("max_cyclomatic"))
+            .and_then(toml::Value::as_integer)
+            .ok_or_else(|| {
+                format!(
+                    "{}: missing complexity.max_cyclomatic",
+                    config_path.display()
+                )
+            })
+    }
+
+    pub(crate) fn functions_in(
+        space: &Value,
+        out: &mut Vec<FunctionMetric>,
+        inside_function: bool,
+    ) {
+        let is_function = space.get("kind").and_then(Value::as_str) == Some("function");
+        let raw_name = space.get("name").and_then(Value::as_str);
+        let is_named = raw_name.is_some_and(|name| !name.is_empty() && name != ANONYMOUS);
+        if is_function && (is_named || !inside_function) {
+            let cyclomatic = space
+                .get("metrics")
+                .and_then(|metrics| metrics.get("cyclomatic"))
+                .and_then(|cyclomatic| cyclomatic.get("sum"))
+                .and_then(Value::as_f64)
+                .map(|sum| sum as i64);
+            out.push(FunctionMetric {
+                name: if is_named {
+                    raw_name
+                        .expect("is_named implies raw_name is Some")
+                        .to_owned()
+                } else {
+                    ANONYMOUS.to_owned()
+                },
+                start: space
+                    .get("start_line")
+                    .and_then(Value::as_u64)
+                    .map(|v| v as usize),
+                end: space
+                    .get("end_line")
+                    .and_then(Value::as_u64)
+                    .map(|v| v as usize),
+                cyclomatic,
+            });
+        }
+        if let Some(children) = space.get("spaces").and_then(Value::as_array) {
+            for child in children {
+                functions_in(child, out, inside_function || is_function);
+            }
+        }
+    }
+
+    fn find_json_files_recursive(dir: &Path) -> Vec<std::path::PathBuf> {
+        let mut found = Vec::new();
+        let Ok(entries) = fs::read_dir(dir) else {
+            return found;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                found.extend(find_json_files_recursive(&path));
+            } else if path.extension().and_then(|ext| ext.to_str()) == Some("json") {
+                found.push(path);
+            }
+        }
+        found
+    }
+
+    pub(crate) fn analyze_files(
+        rust_code_analysis_cli: &Path,
+        files: &[String],
+        out_dir: &Path,
+        cwd: &Path,
+    ) -> Result<BTreeMap<String, Vec<FunctionMetric>>, String> {
+        let mut command = Command::new(rust_code_analysis_cli);
+        command
+            .arg("-m")
+            .arg("-O")
+            .arg("json")
+            .arg("-o")
+            .arg(out_dir)
+            .current_dir(cwd);
+        for file in files {
+            command.arg("-p").arg(file);
+        }
+        let output = command.output().map_err(|error| {
+            format!("complexity-gate: failed to run rust-code-analysis-cli: {error}")
+        })?;
+
+        let produced = find_json_files_recursive(out_dir);
+        if !output.status.success() && produced.is_empty() {
+            return Err(format!(
+                "complexity-gate: rust-code-analysis-cli failed with no output\nstdout: {}\nstderr: {}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if !stderr.trim().is_empty() {
+            eprintln!("{}", stderr.trim());
+        }
+
+        let mut by_file = BTreeMap::new();
+        for file in files {
+            let json_path = out_dir.join(format!("{file}.json"));
+            if !json_path.exists() {
+                eprintln!("complexity-gate: no analysis produced for {file}, skipping");
+                continue;
+            }
+            let text = match fs::read_to_string(&json_path) {
+                Ok(text) => text,
+                Err(error) => {
+                    eprintln!("complexity-gate: could not read analysis for {file}: {error}");
+                    continue;
+                }
+            };
+            let data: Value = match serde_json::from_str(&text) {
+                Ok(data) => data,
+                Err(error) => {
+                    eprintln!("complexity-gate: could not parse analysis for {file}: {error}");
+                    continue;
+                }
+            };
+            let mut functions = Vec::new();
+            functions_in(&data, &mut functions, false);
+            by_file.insert(file.clone(), functions);
+        }
+        Ok(by_file)
+    }
+
+    pub(crate) fn old_complexity_by_name(
+        functions: &[FunctionMetric],
+    ) -> BTreeMap<String, Vec<i64>> {
+        let mut by_name: BTreeMap<String, Vec<i64>> = BTreeMap::new();
+        for func in functions {
+            if func.name == ANONYMOUS {
+                continue;
+            }
+            let Some(cyclomatic) = func.cyclomatic else {
+                continue;
+            };
+            by_name
+                .entry(func.name.clone())
+                .or_default()
+                .push(cyclomatic);
+        }
+        by_name
+    }
+
+    pub(crate) fn find_violations(
+        ranges: &gate_diff::RangesByFile,
+        new_functions_by_file: &BTreeMap<String, Vec<FunctionMetric>>,
+        old_functions_by_file: &BTreeMap<String, Vec<FunctionMetric>>,
+        max_cyclomatic: i64,
+    ) -> Vec<String> {
+        let mut violations = Vec::new();
+        for (file, functions) in new_functions_by_file {
+            let file_ranges = ranges.get(file).map(Vec::as_slice).unwrap_or(&[]);
+            let old_by_name = old_complexity_by_name(
+                old_functions_by_file
+                    .get(file)
+                    .map(Vec::as_slice)
+                    .unwrap_or(&[]),
+            );
+            let mut cursor: BTreeMap<String, usize> = BTreeMap::new();
+            for func in functions {
+                let occurrence = *cursor.get(&func.name).unwrap_or(&0);
+                cursor.insert(func.name.clone(), occurrence + 1);
+
+                let (Some(start), Some(end), Some(new_cyclomatic)) =
+                    (func.start, func.end, func.cyclomatic)
+                else {
+                    continue;
+                };
+                if !gate_diff::any_intersect(file_ranges, (start, end)) {
+                    continue;
+                }
+                if new_cyclomatic <= max_cyclomatic {
+                    continue;
+                }
+                let old_cyclomatic = old_by_name
+                    .get(&func.name)
+                    .and_then(|values| values.get(occurrence))
+                    .copied();
+                if let Some(old_cyclomatic) = old_cyclomatic {
+                    if new_cyclomatic <= old_cyclomatic {
+                        continue;
+                    }
+                }
+                let reason = match old_cyclomatic {
+                    Some(old) => format!("was {old}, is now {new_cyclomatic}"),
+                    None => format!("is new at {new_cyclomatic}"),
+                };
+                violations.push(format!(
+                    "{file}:{start}-{end} {} {reason} (limit {max_cyclomatic})",
+                    func.name
+                ));
+            }
+        }
+        violations
+    }
+
+    fn old_functions_for(
+        root: &Path,
+        base_sha: &str,
+        files: &[String],
+        tmp_dir: &Path,
+        rust_code_analysis_cli: &Path,
+    ) -> Result<BTreeMap<String, Vec<FunctionMetric>>, String> {
+        let old_src = tmp_dir.join("old-src");
+        fs::create_dir(&old_src).map_err(|error| {
+            format!(
+                "complexity-gate: failed to create `{}`: {error}",
+                old_src.display()
+            )
+        })?;
+        let old_files = gate_diff::write_old_blobs(root, base_sha, files, &old_src)?;
+        if old_files.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+        let old_out = tmp_dir.join("old-out");
+        fs::create_dir(&old_out).map_err(|error| {
+            format!(
+                "complexity-gate: failed to create `{}`: {error}",
+                old_out.display()
+            )
+        })?;
+        analyze_files(rust_code_analysis_cli, &old_files, &old_out, &old_src)
+    }
+
+    pub(crate) fn run_at(root: &Path, base: &str, config_path: &Path) -> Result<(), String> {
+        let max_cyclomatic = load_max_cyclomatic(config_path)?;
+        let ranges = gate_diff::changed_ranges(root, base, "*.rs")?;
+        if ranges.is_empty() {
+            println!("complexity-gate: no changed Rust files against {base}");
+            return Ok(());
+        }
+
+        let rust_code_analysis_cli =
+            gate_diff::resolve_cargo_tool(root, "rust-code-analysis-cli", "")?;
+        let base_sha = gate_diff::merge_base(root, base)?;
+
+        let tmp = tempfile::tempdir()
+            .map_err(|error| format!("complexity-gate: failed to create a temp dir: {error}"))?;
+
+        let new_out = tmp.path().join("new-out");
+        fs::create_dir(&new_out).map_err(|error| {
+            format!(
+                "complexity-gate: failed to create `{}`: {error}",
+                new_out.display()
+            )
+        })?;
+        let files: Vec<String> = ranges.keys().cloned().collect();
+        let new_functions_by_file = analyze_files(&rust_code_analysis_cli, &files, &new_out, root)?;
+        let old_functions_by_file =
+            old_functions_for(root, &base_sha, &files, tmp.path(), &rust_code_analysis_cli)?;
+
+        let violations = find_violations(
+            &ranges,
+            &new_functions_by_file,
+            &old_functions_by_file,
+            max_cyclomatic,
+        );
+        if !violations.is_empty() {
+            return Err(super::violations_message(
+                format!(
+                    "complexity-gate: {} function(s) over the limit:",
+                    violations.len()
+                ),
+                &violations,
+            ));
+        }
+
+        let total_ranges: usize = ranges.values().map(Vec::len).sum();
+        println!("complexity-gate: {total_ranges} changed line range(s) clean");
+        Ok(())
+    }
+}
+mod duplication_gate {
+    use std::{
+        collections::{BTreeMap, BTreeSet},
+        fs,
+        path::Path,
+        process::Command,
+    };
+
+    use serde_json::Value;
+
+    use super::{gate_diff, gate_diff::Span};
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(crate) struct DuplicateSide {
+        pub(crate) name: String,
+        pub(crate) start: usize,
+        pub(crate) end: usize,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(crate) struct Duplicate {
+        pub(crate) first_file: DuplicateSide,
+        pub(crate) second_file: DuplicateSide,
+        pub(crate) lines: usize,
+    }
+
+    pub(crate) struct DuplicationConfig {
+        pub(crate) min_lines: u64,
+        pub(crate) min_tokens: u64,
+        pub(crate) ignore_globs: Vec<String>,
+    }
+
+    pub(crate) fn load_duplication_config(config_path: &Path) -> Result<DuplicationConfig, String> {
+        let config = super::load_toml(config_path)?;
+        let table = config
+            .get("duplication")
+            .and_then(toml::Value::as_table)
+            .ok_or_else(|| format!("{}: missing [duplication] table", config_path.display()))?;
+        let min_lines = table
+            .get("min_lines")
+            .and_then(toml::Value::as_integer)
+            .ok_or_else(|| format!("{}: missing duplication.min_lines", config_path.display()))?
+            as u64;
+        let min_tokens = table
+            .get("min_tokens")
+            .and_then(toml::Value::as_integer)
+            .ok_or_else(|| format!("{}: missing duplication.min_tokens", config_path.display()))?
+            as u64;
+        let ignore_globs = table
+            .get("ignore_globs")
+            .and_then(toml::Value::as_array)
+            .map(|globs| {
+                globs
+                    .iter()
+                    .filter_map(|v| v.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default();
+        Ok(DuplicationConfig {
+            min_lines,
+            min_tokens,
+            ignore_globs,
+        })
+    }
+
+    fn duplicate_side_from_json(value: &Value) -> Option<DuplicateSide> {
+        Some(DuplicateSide {
+            name: value.get("name")?.as_str()?.to_owned(),
+            start: value.get("start")?.as_u64()? as usize,
+            end: value.get("end")?.as_u64()? as usize,
+        })
+    }
+
+    fn duplicate_from_json(value: &Value) -> Option<Duplicate> {
+        Some(Duplicate {
+            first_file: duplicate_side_from_json(value.get("firstFile")?)?,
+            second_file: duplicate_side_from_json(value.get("secondFile")?)?,
+            lines: value.get("lines")?.as_u64()? as usize,
+        })
+    }
+
+    pub(crate) fn parse_duplicates(report: &Value) -> Vec<Duplicate> {
+        report
+            .get("duplicates")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(duplicate_from_json)
+            .collect()
+    }
+
+    pub(crate) fn run_jscpd(
+        jscpd: &Path,
+        min_lines: u64,
+        min_tokens: u64,
+        ignore_globs: &[String],
+        out_dir: &Path,
+        cwd: &Path,
+    ) -> Result<Vec<Duplicate>, String> {
+        let mut command = Command::new(jscpd);
+        command
+            .arg("--min-lines")
+            .arg(min_lines.to_string())
+            .arg("--min-tokens")
+            .arg(min_tokens.to_string())
+            .arg("-f")
+            .arg("rust")
+            .arg("-r")
+            .arg("json")
+            .arg("-o")
+            .arg(out_dir)
+            .current_dir(cwd);
+        if !ignore_globs.is_empty() {
+            command.arg("--ignore").arg(ignore_globs.join(","));
+        }
+        command.arg(".");
+        let output = command
+            .output()
+            .map_err(|error| format!("duplication-gate: failed to run jscpd: {error}"))?;
+
+        let report_path = out_dir.join("jscpd-report.json");
+        if !report_path.exists() {
+            return Err(format!(
+                "duplication-gate: jscpd produced no report\nstdout: {}\nstderr: {}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+        let text = fs::read_to_string(&report_path)
+            .map_err(|error| format!("duplication-gate: failed to read jscpd report: {error}"))?;
+        let report: Value = serde_json::from_str(&text)
+            .map_err(|error| format!("duplication-gate: could not parse jscpd report: {error}"))?;
+        Ok(parse_duplicates(&report))
+    }
+
+    pub(crate) fn side_span(side: &DuplicateSide) -> (&str, Span) {
+        (&side.name, (side.start, side.end))
+    }
+
+    pub(crate) fn file_pair(dup: &Duplicate) -> (String, String) {
+        let mut names = [dup.first_file.name.clone(), dup.second_file.name.clone()];
+        names.sort();
+        let [a, b] = names;
+        (a, b)
+    }
+
+    pub(crate) fn touches_diff(dup: &Duplicate, ranges: &gate_diff::RangesByFile) -> bool {
+        let (first_file, first_span) = side_span(&dup.first_file);
+        let (second_file, second_span) = side_span(&dup.second_file);
+        gate_diff::any_intersect(
+            ranges.get(first_file).map(Vec::as_slice).unwrap_or(&[]),
+            first_span,
+        ) || gate_diff::any_intersect(
+            ranges.get(second_file).map(Vec::as_slice).unwrap_or(&[]),
+            second_span,
+        )
+    }
+
+    pub(crate) fn already_duplicated_before(
+        candidate: &Duplicate,
+        old_duplicates: &[Duplicate],
+    ) -> bool {
+        let candidate_pair = file_pair(candidate);
+        for old_dup in old_duplicates {
+            if file_pair(old_dup) != candidate_pair {
+                continue;
+            }
+            if old_dup.lines == 0 || candidate.lines == 0 {
+                continue;
+            }
+            let ratio = old_dup.lines as f64 / candidate.lines as f64;
+            if (0.5..=2.0).contains(&ratio) {
+                return true;
+            }
+        }
+        false
+    }
+
+    pub(crate) fn find_violations(
+        new_duplicates: &[Duplicate],
+        old_duplicates: &[Duplicate],
+        ranges: &gate_diff::RangesByFile,
+    ) -> Vec<String> {
+        let mut old_by_pair: BTreeMap<(String, String), Vec<Duplicate>> = BTreeMap::new();
+        for old_dup in old_duplicates {
+            old_by_pair
+                .entry(file_pair(old_dup))
+                .or_default()
+                .push(old_dup.clone());
+        }
+
+        let mut violations = Vec::new();
+        for dup in new_duplicates {
+            if !touches_diff(dup, ranges) {
+                continue;
+            }
+            let comparable = old_by_pair
+                .get(&file_pair(dup))
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            if already_duplicated_before(dup, comparable) {
+                continue;
+            }
+            let (first_file, first_span) = side_span(&dup.first_file);
+            let (second_file, second_span) = side_span(&dup.second_file);
+            let first_hit = gate_diff::any_intersect(
+                ranges.get(first_file).map(Vec::as_slice).unwrap_or(&[]),
+                first_span,
+            );
+            let second_hit = gate_diff::any_intersect(
+                ranges.get(second_file).map(Vec::as_slice).unwrap_or(&[]),
+                second_span,
+            );
+            violations.push(format!(
+                "{first_file}:{}-{}{} duplicates {second_file}:{}-{}{} ({} lines, introduced by this diff)",
+                first_span.0,
+                first_span.1,
+                if first_hit { " (new)" } else { "" },
+                second_span.0,
+                second_span.1,
+                if second_hit { " (new)" } else { "" },
+                dup.lines,
+            ));
+        }
+        violations
+    }
+
+    const JSCPD_INSTALL_HINT: &str = "jscpd also ships an npm package that wraps a prebuilt copy \
+        of the same Rust binary, but this project does not require Node.js and will not start \
+        requiring it here -- if `cargo install jscpd --locked` cannot run, fix that (network, \
+        registry, offline mirror), do not swap in `npm install -g jscpd`.";
+
+    pub(crate) fn involved_files(candidates: &[Duplicate]) -> Vec<String> {
+        let mut files: BTreeSet<String> = BTreeSet::new();
+        for dup in candidates {
+            files.insert(dup.first_file.name.clone());
+            files.insert(dup.second_file.name.clone());
+        }
+        files.into_iter().collect()
+    }
+
+    fn old_duplicates_for(
+        root: &Path,
+        base_sha: &str,
+        involved_files: &[String],
+        tmp_dir: &Path,
+        jscpd: &Path,
+        config: &DuplicationConfig,
+    ) -> Result<Vec<Duplicate>, String> {
+        if involved_files.is_empty() {
+            return Ok(Vec::new());
+        }
+        let old_src = tmp_dir.join("old-src");
+        fs::create_dir(&old_src).map_err(|error| {
+            format!(
+                "duplication-gate: failed to create `{}`: {error}",
+                old_src.display()
+            )
+        })?;
+        let old_files = gate_diff::write_old_blobs(root, base_sha, involved_files, &old_src)?;
+        if old_files.is_empty() {
+            return Ok(Vec::new());
+        }
+        let old_out = tmp_dir.join("old-out");
+        fs::create_dir(&old_out).map_err(|error| {
+            format!(
+                "duplication-gate: failed to create `{}`: {error}",
+                old_out.display()
+            )
+        })?;
+        run_jscpd(
+            jscpd,
+            config.min_lines,
+            config.min_tokens,
+            &config.ignore_globs,
+            &old_out,
+            &old_src,
+        )
+    }
+
+    pub(crate) fn run_at(root: &Path, base: &str, config_path: &Path) -> Result<(), String> {
+        let config = load_duplication_config(config_path)?;
+        let ranges = gate_diff::changed_ranges(root, base, "*.rs")?;
+        if ranges.is_empty() {
+            println!("duplication-gate: no changed Rust files against {base}");
+            return Ok(());
+        }
+
+        let jscpd = gate_diff::resolve_cargo_tool(root, "jscpd", JSCPD_INSTALL_HINT)?;
+        let base_sha = gate_diff::merge_base(root, base)?;
+
+        let tmp = tempfile::tempdir()
+            .map_err(|error| format!("duplication-gate: failed to create a temp dir: {error}"))?;
+
+        let new_out = tmp.path().join("new-out");
+        fs::create_dir(&new_out).map_err(|error| {
+            format!(
+                "duplication-gate: failed to create `{}`: {error}",
+                new_out.display()
+            )
+        })?;
+        let duplicates = run_jscpd(
+            &jscpd,
+            config.min_lines,
+            config.min_tokens,
+            &config.ignore_globs,
+            &new_out,
+            root,
+        )?;
+
+        let candidates: Vec<Duplicate> = duplicates
+            .iter()
+            .filter(|dup| touches_diff(dup, &ranges))
+            .cloned()
+            .collect();
+        let files_to_check = involved_files(&candidates);
+        let old_duplicates = old_duplicates_for(
+            root,
+            &base_sha,
+            &files_to_check,
+            tmp.path(),
+            &jscpd,
+            &config,
+        )?;
+
+        let violations = find_violations(&duplicates, &old_duplicates, &ranges);
+        if !violations.is_empty() {
+            return Err(super::violations_message(
+                format!(
+                    "duplication-gate: {} clone(s) introduced by this diff:",
+                    violations.len()
+                ),
+                &violations,
+            ));
+        }
+
+        println!(
+            "duplication-gate: {} clone(s) in the repo, {} touch the diff, none introduced by it",
+            duplicates.len(),
+            candidates.len()
+        );
+        Ok(())
+    }
+}
+
 #[cfg(all(test, unix))]
 fn make_executable(path: &Path) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
@@ -4281,6 +5653,1472 @@ version = 4
 name = \"isolated-demo\"
 version = \"0.1.0\"
 ";
+
+    fn strs(values: &[&str]) -> Vec<String> {
+        values.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    fn token_lines(lines: &[&[&str]]) -> Vec<Vec<String>> {
+        lines.iter().map(|line| strs(line)).collect()
+    }
+
+    #[test]
+    fn parse_hunk_spans_single_hunk_modified_file() {
+        let diff = [
+            "diff --git a/src/lib.rs b/src/lib.rs",
+            "--- src/lib.rs",
+            "+++ src/lib.rs",
+            "@@ -10,2 +10,3 @@",
+            "+one",
+            "+two",
+            "+three",
+        ]
+        .join("\n");
+        assert_eq!(
+            gate_diff::parse_hunk_spans(&diff),
+            BTreeMap::from([(
+                "src/lib.rs".to_owned(),
+                vec![(Some((10, 11)), Some((10, 12)))]
+            )])
+        );
+    }
+
+    #[test]
+    fn parse_hunk_spans_single_line_hunk_omits_count() {
+        let diff = [
+            "--- src/lib.rs",
+            "+++ src/lib.rs",
+            "@@ -5 +5 @@",
+            "-old",
+            "+new",
+        ]
+        .join("\n");
+        assert_eq!(
+            gate_diff::parse_hunk_spans(&diff),
+            BTreeMap::from([("src/lib.rs".to_owned(), vec![(Some((5, 5)), Some((5, 5)))])])
+        );
+    }
+
+    #[test]
+    fn parse_hunk_spans_pure_deletion_hunk_has_no_new_side_span() {
+        let diff = [
+            "--- src/lib.rs",
+            "+++ src/lib.rs",
+            "@@ -20,3 +19,0 @@",
+            "-gone",
+            "-gone too",
+            "-and this",
+        ]
+        .join("\n");
+        assert_eq!(
+            gate_diff::parse_hunk_spans(&diff),
+            BTreeMap::from([("src/lib.rs".to_owned(), vec![(Some((20, 22)), None)])])
+        );
+    }
+
+    #[test]
+    fn parse_hunk_spans_pure_addition_hunk_has_no_old_side_span() {
+        let diff = [
+            "--- src/lib.rs",
+            "+++ src/lib.rs",
+            "@@ -50,0 +52,1 @@",
+            "+a3",
+        ]
+        .join("\n");
+        assert_eq!(
+            gate_diff::parse_hunk_spans(&diff),
+            BTreeMap::from([("src/lib.rs".to_owned(), vec![(None, Some((52, 52)))])])
+        );
+    }
+
+    #[test]
+    fn parse_hunk_spans_deleted_file_is_skipped() {
+        let diff = [
+            "--- src/dead.rs",
+            "+++ /dev/null",
+            "@@ -1,3 +0,0 @@",
+            "-a",
+            "-b",
+            "-c",
+        ]
+        .join("\n");
+        assert_eq!(gate_diff::parse_hunk_spans(&diff), BTreeMap::new());
+    }
+
+    #[test]
+    fn parse_hunk_spans_multiple_hunks_and_files() {
+        let diff = [
+            "--- src/a.rs",
+            "+++ src/a.rs",
+            "@@ -1,0 +1,2 @@",
+            "+a1",
+            "+a2",
+            "@@ -50,0 +52,1 @@",
+            "+a3",
+            "--- src/b.rs",
+            "+++ src/b.rs",
+            "@@ -3,1 +3,1 @@",
+            "-old",
+            "+new",
+        ]
+        .join("\n");
+        assert_eq!(
+            gate_diff::parse_hunk_spans(&diff),
+            BTreeMap::from([
+                (
+                    "src/a.rs".to_owned(),
+                    vec![(None, Some((1, 2))), (None, Some((52, 52)))]
+                ),
+                ("src/b.rs".to_owned(), vec![(Some((3, 3)), Some((3, 3)))]),
+            ])
+        );
+    }
+
+    #[test]
+    fn code_tokens_plain_code_line() {
+        assert_eq!(
+            gate_diff::code_tokens_by_line("let x = 1;"),
+            token_lines(&[&["let", "x", "=", "1", ";"]])
+        );
+    }
+
+    #[test]
+    fn code_tokens_blank_line() {
+        assert_eq!(gate_diff::code_tokens_by_line(""), token_lines(&[&[]]));
+        assert_eq!(
+            gate_diff::code_tokens_by_line("   \t  "),
+            token_lines(&[&[]])
+        );
+    }
+
+    #[test]
+    fn code_tokens_pure_line_comment() {
+        assert_eq!(
+            gate_diff::code_tokens_by_line("// just a note"),
+            token_lines(&[&[]])
+        );
+    }
+
+    #[test]
+    fn code_tokens_trailing_comment_yields_only_the_codes_tokens() {
+        assert_eq!(
+            gate_diff::code_tokens_by_line("let x = 1; // trailing"),
+            token_lines(&[&["let", "x", "=", "1", ";"]])
+        );
+    }
+
+    #[test]
+    fn code_tokens_slash_slash_inside_a_string_is_one_string_token_not_a_comment() {
+        let text = "let url = \"https://example.com\";";
+        assert_eq!(
+            gate_diff::code_tokens_by_line(text),
+            token_lines(&[&["let", "url", "=", "\"https://example.com\"", ";"]])
+        );
+    }
+
+    #[test]
+    fn code_tokens_string_spanning_a_naive_comment_check_does_not_start_one() {
+        let text = ["let s = \"a // b\";", "// this really is a comment"].join("\n");
+        assert_eq!(
+            gate_diff::code_tokens_by_line(&text),
+            token_lines(&[&["let", "s", "=", "\"a // b\"", ";"], &[]])
+        );
+    }
+
+    #[test]
+    fn code_tokens_single_line_block_comment() {
+        assert_eq!(
+            gate_diff::code_tokens_by_line("/* note */"),
+            token_lines(&[&[]])
+        );
+    }
+
+    #[test]
+    fn code_tokens_single_line_block_comment_with_trailing_code() {
+        assert_eq!(
+            gate_diff::code_tokens_by_line("/* note */ let x = 1;"),
+            token_lines(&[&["let", "x", "=", "1", ";"]])
+        );
+    }
+
+    #[test]
+    fn code_tokens_multi_line_block_comment_is_all_blank() {
+        let text = ["/* start", "middle line", "end */"].join("\n");
+        assert_eq!(
+            gate_diff::code_tokens_by_line(&text),
+            token_lines(&[&[], &[], &[]])
+        );
+    }
+
+    #[test]
+    fn code_tokens_multi_line_block_comment_with_code_before_and_after() {
+        let text = ["let a = 1; /* start", "middle line", "end */ let b = 2;"].join("\n");
+        assert_eq!(
+            gate_diff::code_tokens_by_line(&text),
+            token_lines(&[
+                &["let", "a", "=", "1", ";"],
+                &[],
+                &["let", "b", "=", "2", ";"]
+            ])
+        );
+    }
+
+    #[test]
+    fn code_tokens_nested_block_comments() {
+        let text = ["/* outer /* inner */ still commented", "*/ let x = 1;"].join("\n");
+        assert_eq!(
+            gate_diff::code_tokens_by_line(&text),
+            token_lines(&[&[], &["let", "x", "=", "1", ";"]])
+        );
+    }
+
+    #[test]
+    fn code_tokens_raw_string_containing_slashes_and_quotes_is_one_token() {
+        let text = "let s = r#\"// not a comment, and \"quoted\" too\"#;";
+        let raw_token = "r#\"// not a comment, and \"quoted\" too\"#";
+        assert_eq!(
+            gate_diff::code_tokens_by_line(text),
+            token_lines(&[&["let", "s", "=", raw_token, ";"]])
+        );
+    }
+
+    #[test]
+    fn code_tokens_raw_string_spanning_lines_is_one_token_on_its_start_line() {
+        let text = "let s = r\"line one\n// still string content\nline three\";";
+        let raw_token = "r\"line one\n// still string content\nline three\"";
+        assert_eq!(
+            gate_diff::code_tokens_by_line(text),
+            token_lines(&[&["let", "s", "=", raw_token], &[], &[";"]])
+        );
+    }
+
+    #[test]
+    fn code_tokens_raw_string_prefix_not_misdetected_mid_identifier() {
+        let text = "let bar = 1; let s = \"text\";";
+        assert_eq!(
+            gate_diff::code_tokens_by_line(text),
+            token_lines(&[&["let", "bar", "=", "1", ";", "let", "s", "=", "\"text\"", ";"]])
+        );
+    }
+
+    #[test]
+    fn code_tokens_char_literal_does_not_start_a_comment() {
+        let text = "let c = '/';";
+        assert_eq!(
+            gate_diff::code_tokens_by_line(text),
+            token_lines(&[&["let", "c", "=", "'/'", ";"]])
+        );
+    }
+
+    #[test]
+    fn code_tokens_escaped_char_literal() {
+        let text = "let c = '\\n';";
+        assert_eq!(
+            gate_diff::code_tokens_by_line(text),
+            token_lines(&[&["let", "c", "=", "'\\n'", ";"]])
+        );
+    }
+
+    #[test]
+    fn code_tokens_lifetime_is_not_treated_as_an_unterminated_char_literal() {
+        let text = "fn f<'a>(x: &'a str) -> &'a str { x }\n// a real comment";
+        let tokens = gate_diff::code_tokens_by_line(text);
+        assert!(
+            !tokens[0].is_empty(),
+            "the code line must yield at least one token"
+        );
+        assert_eq!(tokens[1], Vec::<String>::new());
+    }
+
+    #[test]
+    fn code_tokens_string_containing_an_escaped_quote_is_one_token() {
+        let text = "let s = \"she said \\\"hi\\\"\";";
+        let string_token = "\"she said \\\"hi\\\"\"";
+        assert_eq!(
+            gate_diff::code_tokens_by_line(text),
+            token_lines(&[&["let", "s", "=", string_token, ";"]])
+        );
+    }
+
+    #[test]
+    fn drop_trailing_commas_comma_before_closing_paren_is_dropped() {
+        assert_eq!(
+            gate_diff::drop_trailing_commas(&strs(&["f", "(", "a", ",", ")"])),
+            strs(&["f", "(", "a", ")"])
+        );
+    }
+
+    #[test]
+    fn drop_trailing_commas_comma_before_closing_bracket_is_dropped() {
+        assert_eq!(
+            gate_diff::drop_trailing_commas(&strs(&["[", "1", ",", "]"])),
+            strs(&["[", "1", "]"])
+        );
+    }
+
+    #[test]
+    fn drop_trailing_commas_comma_before_closing_brace_is_dropped() {
+        assert_eq!(
+            gate_diff::drop_trailing_commas(&strs(&["{", "x", ":", "1", ",", "}"])),
+            strs(&["{", "x", ":", "1", "}"])
+        );
+    }
+
+    #[test]
+    fn drop_trailing_commas_comma_between_arguments_is_kept() {
+        assert_eq!(
+            gate_diff::drop_trailing_commas(&strs(&["f", "(", "a", ",", "b", ")"])),
+            strs(&["f", "(", "a", ",", "b", ")"])
+        );
+    }
+
+    #[test]
+    fn drop_trailing_commas_trailing_comma_at_the_very_end_of_the_list_is_kept() {
+        assert_eq!(
+            gate_diff::drop_trailing_commas(&strs(&["a", ","])),
+            strs(&["a", ","])
+        );
+    }
+
+    fn semantic_ranges_with(
+        hunk_spans: &gate_diff::HunkSpans,
+        old: &BTreeMap<String, String>,
+        new: &BTreeMap<String, String>,
+    ) -> gate_diff::RangesByFile {
+        gate_diff::semantic_ranges(
+            hunk_spans,
+            |file: &str| old.get(file).cloned().unwrap_or_default(),
+            |file: &str| new.get(file).cloned().unwrap_or_default(),
+        )
+    }
+
+    #[test]
+    fn semantic_ranges_comment_only_edit_is_dropped() {
+        let hunk_spans =
+            BTreeMap::from([("src/lib.rs".to_owned(), vec![(Some((2, 2)), Some((2, 2)))])]);
+        let old = BTreeMap::from([(
+            "src/lib.rs".to_owned(),
+            "fn f() {\n    let x = 1;  // set x\n}\n".to_owned(),
+        )]);
+        let new = BTreeMap::from([(
+            "src/lib.rs".to_owned(),
+            "fn f() {\n    let x = 1;\n}\n".to_owned(),
+        )]);
+        assert_eq!(
+            semantic_ranges_with(&hunk_spans, &old, &new),
+            BTreeMap::new()
+        );
+    }
+
+    #[test]
+    fn semantic_ranges_hunk_with_a_real_code_change_is_kept_in_full() {
+        let hunk_spans =
+            BTreeMap::from([("src/lib.rs".to_owned(), vec![(Some((2, 3)), Some((2, 3)))])]);
+        let old = BTreeMap::from([(
+            "src/lib.rs".to_owned(),
+            "fn f() {\n    // a comment\n    let x = 0;\n}\n".to_owned(),
+        )]);
+        let new = BTreeMap::from([(
+            "src/lib.rs".to_owned(),
+            "fn f() {\n    // updated comment\n    let x = 1;\n}\n".to_owned(),
+        )]);
+        assert_eq!(
+            semantic_ranges_with(&hunk_spans, &old, &new),
+            BTreeMap::from([("src/lib.rs".to_owned(), vec![(2, 3)])])
+        );
+    }
+
+    #[test]
+    fn semantic_ranges_only_the_semantically_unchanged_hunk_is_dropped_others_survive() {
+        let hunk_spans = BTreeMap::from([(
+            "src/lib.rs".to_owned(),
+            vec![(Some((2, 2)), Some((2, 2))), (Some((4, 4)), Some((4, 4)))],
+        )]);
+        let old = BTreeMap::from([(
+            "src/lib.rs".to_owned(),
+            "fn f() {\n    // comment\n    let x = 1;\n    let y = 1;\n}\n".to_owned(),
+        )]);
+        let new = BTreeMap::from([(
+            "src/lib.rs".to_owned(),
+            "fn f() {\n    // different comment\n    let x = 1;\n    let y = 2;\n}\n".to_owned(),
+        )]);
+        assert_eq!(
+            semantic_ranges_with(&hunk_spans, &old, &new),
+            BTreeMap::from([("src/lib.rs".to_owned(), vec![(4, 4)])])
+        );
+    }
+
+    #[test]
+    fn semantic_ranges_file_with_no_surviving_ranges_is_dropped_entirely() {
+        let hunk_spans = BTreeMap::from([(
+            "src/only_comments.rs".to_owned(),
+            vec![(Some((1, 1)), Some((1, 1)))],
+        )]);
+        let old = BTreeMap::from([(
+            "src/only_comments.rs".to_owned(),
+            "// nothing but this\n".to_owned(),
+        )]);
+        let new = BTreeMap::from([(
+            "src/only_comments.rs".to_owned(),
+            "// nothing but this, reworded\n".to_owned(),
+        )]);
+        assert_eq!(
+            semantic_ranges_with(&hunk_spans, &old, &new),
+            BTreeMap::new()
+        );
+    }
+
+    #[test]
+    fn semantic_ranges_pure_deletion_hunk_contributes_no_range_regardless_of_content() {
+        let hunk_spans = BTreeMap::from([("src/lib.rs".to_owned(), vec![(Some((5, 7)), None)])]);
+        let old = BTreeMap::from([(
+            "src/lib.rs".to_owned(),
+            "fn f() {\n    let x = 1;\n    let y = 2;\n    let z = 3;\n}\n".to_owned(),
+        )]);
+        let new = BTreeMap::from([("src/lib.rs".to_owned(), "fn f() {\n}\n".to_owned())]);
+        assert_eq!(
+            semantic_ranges_with(&hunk_spans, &old, &new),
+            BTreeMap::new()
+        );
+    }
+
+    #[test]
+    fn semantic_ranges_comment_removal_that_collapses_a_block_onto_one_line_is_dropped() {
+        let hunk_spans =
+            BTreeMap::from([("src/lib.rs".to_owned(), vec![(Some((2, 4)), Some((2, 2)))])]);
+        let old = BTreeMap::from([(
+            "src/lib.rs".to_owned(),
+            [
+                "fn f(cond: bool) {",
+                "    if cond {",
+                "        // Found something",
+                "    }",
+                "}",
+                "",
+            ]
+            .join("\n"),
+        )]);
+        let new = BTreeMap::from([(
+            "src/lib.rs".to_owned(),
+            ["fn f(cond: bool) {", "    if cond {}", "}", ""].join("\n"),
+        )]);
+        assert_eq!(
+            semantic_ranges_with(&hunk_spans, &old, &new),
+            BTreeMap::new()
+        );
+    }
+
+    #[test]
+    fn semantic_ranges_whitespace_reorder_bundled_with_a_real_token_change_is_kept() {
+        let hunk_spans =
+            BTreeMap::from([("src/lib.rs".to_owned(), vec![(Some((1, 1)), Some((1, 2)))])]);
+        let old = BTreeMap::from([("src/lib.rs".to_owned(), "let x = 1;\n".to_owned())]);
+        let new = BTreeMap::from([("src/lib.rs".to_owned(), "let   x =\n    2;\n".to_owned())]);
+        assert_eq!(
+            semantic_ranges_with(&hunk_spans, &old, &new),
+            BTreeMap::from([("src/lib.rs".to_owned(), vec![(1, 2)])])
+        );
+    }
+
+    #[test]
+    fn semantic_ranges_string_literal_content_is_compared_not_discarded() {
+        let hunk_spans =
+            BTreeMap::from([("src/lib.rs".to_owned(), vec![(Some((1, 1)), Some((1, 1)))])]);
+        let old = BTreeMap::from([(
+            "src/lib.rs".to_owned(),
+            "let s = \"// keep me A\";\n".to_owned(),
+        )]);
+        let new = BTreeMap::from([(
+            "src/lib.rs".to_owned(),
+            "let s = \"// keep me B\";\n".to_owned(),
+        )]);
+        assert_eq!(
+            semantic_ranges_with(&hunk_spans, &old, &new),
+            BTreeMap::from([("src/lib.rs".to_owned(), vec![(1, 1)])])
+        );
+    }
+
+    #[test]
+    fn semantic_ranges_call_reformatted_onto_fewer_lines_drops_only_its_trailing_comma() {
+        let hunk_spans =
+            BTreeMap::from([("src/lib.rs".to_owned(), vec![(Some((1, 5)), Some((1, 1)))])]);
+        let old = BTreeMap::from([(
+            "src/lib.rs".to_owned(),
+            [
+                "f(",
+                "    // pick the material",
+                "    material(),",
+                "    move || dynamics(),",
+                ");",
+                "",
+            ]
+            .join("\n"),
+        )]);
+        let new = BTreeMap::from([(
+            "src/lib.rs".to_owned(),
+            "f(material(), move || dynamics());\n".to_owned(),
+        )]);
+        assert_eq!(
+            semantic_ranges_with(&hunk_spans, &old, &new),
+            BTreeMap::new()
+        );
+    }
+
+    #[test]
+    fn semantic_ranges_trailing_comma_change_bundled_with_a_real_edit_is_still_kept() {
+        let hunk_spans =
+            BTreeMap::from([("src/lib.rs".to_owned(), vec![(Some((1, 1)), Some((1, 1)))])]);
+        let old = BTreeMap::from([("src/lib.rs".to_owned(), "f(a, b,);\n".to_owned())]);
+        let new = BTreeMap::from([("src/lib.rs".to_owned(), "f(a, c);\n".to_owned())]);
+        assert_eq!(
+            semantic_ranges_with(&hunk_spans, &old, &new),
+            BTreeMap::from([("src/lib.rs".to_owned(), vec![(1, 1)])])
+        );
+    }
+
+    #[test]
+    fn intersects_overlapping_ranges() {
+        assert!(gate_diff::intersects((10, 20), (15, 25)));
+        assert!(gate_diff::intersects((15, 25), (10, 20)));
+    }
+
+    #[test]
+    fn intersects_touching_at_a_single_line_counts_as_overlap() {
+        assert!(gate_diff::intersects((10, 20), (20, 30)));
+    }
+
+    #[test]
+    fn intersects_disjoint_ranges() {
+        assert!(!gate_diff::intersects((10, 20), (21, 30)));
+    }
+
+    #[test]
+    fn intersects_one_range_contains_the_other() {
+        assert!(gate_diff::intersects((1, 100), (40, 41)));
+    }
+
+    #[test]
+    fn any_intersect_true_only_when_one_range_matches() {
+        let ranges = vec![(1, 5), (50, 60)];
+        assert!(gate_diff::any_intersect(&ranges, (55, 58)));
+        assert!(!gate_diff::any_intersect(&ranges, (10, 20)));
+        assert!(!gate_diff::any_intersect(&[], (1, 1000)));
+    }
+
+    #[test]
+    fn cargo_bin_dir_honors_cargo_home() {
+        let dir = gate_diff::cargo_bin_dir_for(
+            Some(std::ffi::OsString::from("/scratch/cargo")),
+            PathBuf::from("/unused"),
+        );
+        assert_eq!(dir, PathBuf::from("/scratch/cargo/bin"));
+    }
+
+    #[test]
+    fn cargo_bin_dir_falls_back_to_home_cargo() {
+        let dir = gate_diff::cargo_bin_dir_for(None, PathBuf::from("/home/test"));
+        assert_eq!(dir, PathBuf::from("/home/test/.cargo/bin"));
+    }
+
+    #[test]
+    fn resolve_cargo_tool_never_installs_when_already_at_the_pinned_location() {
+        let root = unique_temp_dir();
+        let bin_dir = unique_temp_dir();
+        let fake_tool = bin_dir.join("some-tool");
+        fs::write(&fake_tool, "#!/bin/sh\n").expect("write fake tool");
+        make_executable(&fake_tool).expect("chmod fake tool");
+
+        let installed = std::cell::Cell::new(false);
+        let resolved =
+            gate_diff::resolve_cargo_tool_in(&root, &bin_dir, "some-tool", "", |_, _| {
+                installed.set(true);
+            })
+            .expect("resolve succeeds");
+
+        assert!(!installed.get());
+        assert_eq!(resolved, fake_tool);
+    }
+
+    #[test]
+    fn resolve_cargo_tool_installs_when_missing_then_resolves_to_the_pinned_location() {
+        let root = unique_temp_dir();
+        let bin_dir = unique_temp_dir();
+        let fake_tool = bin_dir.join("some-tool");
+
+        let install_count = std::cell::Cell::new(0u32);
+        let resolved =
+            gate_diff::resolve_cargo_tool_in(&root, &bin_dir, "some-tool", "", |_, _| {
+                install_count.set(install_count.get() + 1);
+                fs::write(&fake_tool, "#!/bin/sh\n").expect("write fake tool");
+                make_executable(&fake_tool).expect("chmod fake tool");
+            })
+            .expect("resolve succeeds");
+
+        assert_eq!(install_count.get(), 1);
+        assert_eq!(resolved, fake_tool);
+    }
+
+    #[test]
+    fn resolve_cargo_tool_raises_with_the_hint_when_install_does_not_produce_the_binary() {
+        let root = unique_temp_dir();
+        let bin_dir = unique_temp_dir();
+        let error = gate_diff::resolve_cargo_tool_in(
+            &root,
+            &bin_dir,
+            "some-tool",
+            "do not substitute npm",
+            |_, _| {},
+        )
+        .expect_err("install never produces the binary");
+        assert!(error.contains("do not substitute npm"));
+    }
+
+    fn git(args: &[&str], cwd: &Path) -> std::process::Output {
+        Command::new("git")
+            .args(args)
+            .current_dir(cwd)
+            .output()
+            .expect("run git")
+    }
+
+    fn git_ok(args: &[&str], cwd: &Path) -> String {
+        let output = git(args, cwd);
+        assert!(
+            output.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).trim().to_owned()
+    }
+
+    fn is_shallow(repo: &Path) -> bool {
+        git_ok(&["rev-parse", "--is-shallow-repository"], repo) == "true"
+    }
+
+    fn commit_file(repo: &Path, message: &str) -> String {
+        fs::write(repo.join("file.txt"), message).expect("write file");
+        git_ok(&["add", "."], repo);
+        git_ok(&["commit", "--quiet", "-m", message], repo);
+        git_ok(&["rev-parse", "HEAD"], repo)
+    }
+
+    fn init_repo(repo: &Path, initial_branch: &str) {
+        fs::create_dir_all(repo).expect("create repo dir");
+        git_ok(&["init", "--quiet", "-b", initial_branch], repo);
+        git_ok(&["config", "user.email", "test@example.com"], repo);
+        git_ok(&["config", "user.name", "Test"], repo);
+    }
+
+    fn shallow_checkout_of_branch_tip(origin: &Path, branch: &str, work: &Path) {
+        fs::create_dir_all(work).expect("create work dir");
+        git_ok(&["init", "--quiet"], work);
+        git_ok(
+            &[
+                "remote",
+                "add",
+                "origin",
+                &format!("file://{}", origin.display()),
+            ],
+            work,
+        );
+        git_ok(
+            &[
+                "config",
+                "remote.origin.fetch",
+                "+refs/heads/*:refs/remotes/origin/*",
+            ],
+            work,
+        );
+        let tip = git_ok(&["rev-parse", branch], origin);
+        git_ok(
+            &[
+                "fetch",
+                "--quiet",
+                "--depth=1",
+                "origin",
+                &format!("+{tip}:refs/remotes/origin/{branch}"),
+            ],
+            work,
+        );
+        git_ok(
+            &[
+                "checkout",
+                "--quiet",
+                "-b",
+                branch,
+                &format!("origin/{branch}"),
+            ],
+            work,
+        );
+    }
+
+    #[test]
+    fn merge_base_deepens_shallow_history_to_find_the_merge_base() {
+        let tmp = unique_temp_dir();
+        let origin = tmp.join("origin");
+        let work = tmp.join("work");
+        init_repo(&origin, "main");
+        let shared_ancestor = commit_file(&origin, "shared ancestor");
+        git_ok(&["checkout", "--quiet", "-b", "feature"], &origin);
+        commit_file(&origin, "feature work");
+        git_ok(&["checkout", "--quiet", "main"], &origin);
+        commit_file(&origin, "main moved on without the feature branch");
+
+        shallow_checkout_of_branch_tip(&origin, "feature", &work);
+        assert!(is_shallow(&work));
+
+        assert_eq!(
+            gate_diff::merge_base(&work, "origin/main").expect("merge base found"),
+            shared_ancestor
+        );
+        assert!(!is_shallow(&work));
+    }
+
+    #[test]
+    fn merge_base_raises_when_histories_truly_share_no_ancestor() {
+        let tmp = unique_temp_dir();
+        let origin_main = tmp.join("origin_main");
+        let origin_feature = tmp.join("origin_feature");
+        let work = tmp.join("work");
+        init_repo(&origin_main, "main");
+        commit_file(&origin_main, "main's own unrelated root");
+        init_repo(&origin_feature, "feature");
+        commit_file(&origin_feature, "feature's own unrelated root");
+
+        fs::create_dir_all(&work).expect("create work dir");
+        git_ok(&["init", "--quiet"], &work);
+        git_ok(
+            &[
+                "remote",
+                "add",
+                "origin",
+                &format!("file://{}", origin_main.display()),
+            ],
+            &work,
+        );
+        git_ok(&["fetch", "--quiet", "origin", "main"], &work);
+        git_ok(
+            &[
+                "remote",
+                "add",
+                "elsewhere",
+                &format!("file://{}", origin_feature.display()),
+            ],
+            &work,
+        );
+        git_ok(&["fetch", "--quiet", "elsewhere", "feature"], &work);
+        git_ok(
+            &["checkout", "--quiet", "-b", "feature", "elsewhere/feature"],
+            &work,
+        );
+        assert!(!is_shallow(&work));
+
+        let error = gate_diff::merge_base(&work, "origin/main").expect_err("no shared history");
+        assert!(error.contains("share no common ancestor"));
+    }
+
+    const OVER_LIMIT_FUNCTION: &str = "fn deeply_branching(x: i32) -> i32 {\n    if x == 0 { return 0; }\n    if x == 1 { return 1; }\n    if x == 2 { return 2; }\n    if x == 3 { return 3; }\n    if x == 4 { return 4; }\n    if x == 5 { return 5; }\n    if x == 6 { return 6; }\n    if x == 7 { return 7; }\n    if x == 8 { return 8; }\n    if x == 9 { return 9; }\n    x\n}";
+
+    fn init_repo_with_base_commit(repo: &Path) {
+        fs::create_dir_all(repo.join("src")).expect("create src dir");
+        git_ok(&["init", "--quiet", "-b", "main"], repo);
+        git_ok(&["config", "user.email", "test@example.com"], repo);
+        git_ok(&["config", "user.name", "Test"], repo);
+        fs::write(repo.join("src/lib.rs"), format!("{OVER_LIMIT_FUNCTION}\n"))
+            .expect("write lib.rs");
+        git_ok(&["add", "."], repo);
+        git_ok(&["commit", "--quiet", "-m", "base"], repo);
+    }
+
+    fn write_and_commit(repo: &Path, contents: &str, message: &str) {
+        fs::write(repo.join("src/lib.rs"), contents).expect("write lib.rs");
+        git_ok(&["add", "."], repo);
+        git_ok(&["commit", "--quiet", "-m", message], repo);
+    }
+
+    #[test]
+    fn changed_ranges_removing_a_comment_inside_the_function_does_not_touch_it() {
+        let tmp = unique_temp_dir();
+        let repo = tmp.join("repo");
+        init_repo_with_base_commit(&repo);
+
+        let with_comment = OVER_LIMIT_FUNCTION.replace(
+            "    x\n}",
+            "    // fall through for anything else\n    x\n}",
+        );
+        write_and_commit(&repo, &format!("{with_comment}\n"), "add a comment");
+
+        let comment_removed = with_comment.replace("    // fall through for anything else\n", "");
+        write_and_commit(
+            &repo,
+            &format!("{comment_removed}\n"),
+            "remove only the comment",
+        );
+
+        let ranges =
+            gate_diff::changed_ranges(&repo, "HEAD~1", "*.rs").expect("changed_ranges succeeds");
+        assert_eq!(
+            ranges,
+            BTreeMap::new(),
+            "a hunk that only deleted a comment line must not touch anything"
+        );
+    }
+
+    #[test]
+    fn changed_ranges_a_genuine_logic_edit_in_the_same_function_still_touches_it() {
+        let tmp = unique_temp_dir();
+        let repo = tmp.join("repo");
+        init_repo_with_base_commit(&repo);
+
+        let edited = OVER_LIMIT_FUNCTION.replace(
+            "    if x == 9 { return 9; }",
+            "    if x == 9 { return 90; }",
+        );
+        write_and_commit(&repo, &format!("{edited}\n"), "change a return value");
+
+        let ranges =
+            gate_diff::changed_ranges(&repo, "HEAD~1", "*.rs").expect("changed_ranges succeeds");
+        let touched = ranges.get("src/lib.rs").expect("src/lib.rs touched");
+        assert!(
+            gate_diff::any_intersect(touched, (1, 13)),
+            "a real logic edit must still land inside the function's span, got {touched:?}"
+        );
+    }
+
+    #[test]
+    fn changed_ranges_mixed_hunk_of_comment_and_logic_still_touches_it() {
+        let tmp = unique_temp_dir();
+        let repo = tmp.join("repo");
+        init_repo_with_base_commit(&repo);
+
+        let edited = OVER_LIMIT_FUNCTION.replace(
+            "    x\n}",
+            "    // fall through for anything else\n    x + 1\n}",
+        );
+        write_and_commit(
+            &repo,
+            &format!("{edited}\n"),
+            "comment plus a real edit, one hunk",
+        );
+
+        let ranges =
+            gate_diff::changed_ranges(&repo, "HEAD~1", "*.rs").expect("changed_ranges succeeds");
+        assert!(gate_diff::any_intersect(
+            ranges.get("src/lib.rs").expect("touched"),
+            (1, 13)
+        ));
+    }
+
+    #[test]
+    fn changed_ranges_comment_deletion_that_collapses_a_branch_onto_one_line_does_not_touch_it() {
+        let tmp = unique_temp_dir();
+        let repo = tmp.join("repo");
+        init_repo_with_base_commit(&repo);
+
+        let with_comment_block = OVER_LIMIT_FUNCTION.replace(
+            "    if x == 9 { return 9; }",
+            "    if x == 9 {\n        // nothing special about nine\n    }",
+        );
+        write_and_commit(
+            &repo,
+            &format!("{with_comment_block}\n"),
+            "expand nine's branch",
+        );
+
+        let collapsed =
+            OVER_LIMIT_FUNCTION.replace("    if x == 9 { return 9; }", "    if x == 9 {}");
+        write_and_commit(
+            &repo,
+            &format!("{collapsed}\n"),
+            "delete the comment, collapse the block",
+        );
+
+        let ranges =
+            gate_diff::changed_ranges(&repo, "HEAD~1", "*.rs").expect("changed_ranges succeeds");
+        assert_eq!(
+            ranges,
+            BTreeMap::new(),
+            "deleting a comment and collapsing its now-empty block is not a logic edit, got {ranges:?}"
+        );
+    }
+
+    #[test]
+    fn changed_ranges_reformatting_a_line_while_also_changing_it_still_touches_it() {
+        let tmp = unique_temp_dir();
+        let repo = tmp.join("repo");
+        init_repo_with_base_commit(&repo);
+
+        let edited = OVER_LIMIT_FUNCTION.replace(
+            "    if x == 9 { return 9; }",
+            "    if x == 9 {\n        return 90;\n    }",
+        );
+        write_and_commit(
+            &repo,
+            &format!("{edited}\n"),
+            "reformat the branch onto three lines and change its value",
+        );
+
+        let ranges =
+            gate_diff::changed_ranges(&repo, "HEAD~1", "*.rs").expect("changed_ranges succeeds");
+        let touched = ranges.get("src/lib.rs").expect("src/lib.rs touched");
+        assert!(
+            gate_diff::any_intersect(touched, (1, 13)),
+            "a real value change bundled with a reformat must not be normalized away, got {touched:?}"
+        );
+    }
+
+    fn func_space(
+        name: Option<&str>,
+        start: u64,
+        end: u64,
+        cyclomatic: f64,
+        children: Vec<serde_json::Value>,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "kind": "function",
+            "name": name,
+            "start_line": start,
+            "end_line": end,
+            "metrics": {"cyclomatic": {"sum": cyclomatic}},
+            "spaces": children,
+        })
+    }
+
+    #[test]
+    fn functions_in_named_function_with_no_closures_is_reported_once() {
+        let mut out = Vec::new();
+        complexity_gate::functions_in(&func_space(Some("f"), 1, 10, 5.0, vec![]), &mut out, false);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].name, "f");
+    }
+
+    #[test]
+    fn functions_in_closure_nested_in_a_named_function_is_not_reported_separately() {
+        let closure = func_space(None, 2, 9, 25.0, vec![]);
+        let outer = func_space(Some("main"), 1, 10, 27.0, vec![closure]);
+        let mut out = Vec::new();
+        complexity_gate::functions_in(&outer, &mut out, false);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].name, "main");
+        assert_eq!(out[0].cyclomatic, Some(27));
+    }
+
+    #[test]
+    fn functions_in_closure_nested_in_a_closure_still_collapses_to_one_report() {
+        let inner_closure = func_space(None, 3, 8, 10.0, vec![]);
+        let outer_closure = func_space(None, 2, 9, 15.0, vec![inner_closure]);
+        let outer = func_space(Some("run"), 1, 10, 20.0, vec![outer_closure]);
+        let mut out = Vec::new();
+        complexity_gate::functions_in(&outer, &mut out, false);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].name, "run");
+    }
+
+    #[test]
+    fn functions_in_named_function_nested_inside_a_closure_is_still_reported() {
+        let nested_fn = func_space(Some("helper"), 3, 5, 8.0, vec![]);
+        let closure = func_space(None, 2, 6, 9.0, vec![nested_fn]);
+        let outer = func_space(Some("run"), 1, 7, 12.0, vec![closure]);
+        let mut out = Vec::new();
+        complexity_gate::functions_in(&outer, &mut out, false);
+        let names: BTreeSet<_> = out.iter().map(|f| f.name.clone()).collect();
+        assert_eq!(
+            names,
+            BTreeSet::from(["run".to_owned(), "helper".to_owned()])
+        );
+    }
+
+    #[test]
+    fn functions_in_top_level_closure_with_no_enclosing_function_is_still_reported() {
+        let top_level_closure = func_space(None, 1, 5, 12.0, vec![]);
+        let mut out = Vec::new();
+        complexity_gate::functions_in(&top_level_closure, &mut out, false);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].name, "<anonymous>");
+    }
+
+    #[test]
+    fn functions_in_rust_code_analysis_cli_names_a_closure_the_literal_string_anonymous() {
+        let closure = func_space(Some("<anonymous>"), 2, 9, 25.0, vec![]);
+        let outer = func_space(Some("main"), 1, 10, 27.0, vec![closure]);
+        let mut out = Vec::new();
+        complexity_gate::functions_in(&outer, &mut out, false);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].name, "main");
+    }
+
+    #[test]
+    fn functions_in_sibling_functions_are_both_reported() {
+        let root = serde_json::json!({
+            "kind": "file",
+            "spaces": [func_space(Some("a"), 1, 5, 5.0, vec![]), func_space(Some("b"), 10, 15, 5.0, vec![])],
+        });
+        let mut out = Vec::new();
+        complexity_gate::functions_in(&root, &mut out, false);
+        let names: BTreeSet<_> = out.iter().map(|f| f.name.clone()).collect();
+        assert_eq!(names, BTreeSet::from(["a".to_owned(), "b".to_owned()]));
+    }
+
+    fn function_metric(
+        name: &str,
+        start: usize,
+        end: usize,
+        cyclomatic: i64,
+    ) -> complexity_gate::FunctionMetric {
+        complexity_gate::FunctionMetric {
+            name: name.to_owned(),
+            start: Some(start),
+            end: Some(end),
+            cyclomatic: Some(cyclomatic),
+        }
+    }
+
+    #[test]
+    fn complexity_find_violations_flags_only_functions_the_diff_touches() {
+        let ranges = BTreeMap::from([("src/lib.rs".to_owned(), vec![(10, 15)])]);
+        let new_functions = BTreeMap::from([(
+            "src/lib.rs".to_owned(),
+            vec![
+                function_metric("touched_and_complex", 10, 15, 25),
+                function_metric("untouched_and_complex", 100, 120, 99),
+                function_metric("touched_but_simple", 12, 13, 3),
+            ],
+        )]);
+        let violations =
+            complexity_gate::find_violations(&ranges, &new_functions, &BTreeMap::new(), 20);
+        assert_eq!(violations.len(), 1);
+        assert!(violations[0].contains("touched_and_complex"));
+        assert!(violations[0].contains("is new at 25"));
+    }
+
+    #[test]
+    fn complexity_find_violations_no_violations_when_nothing_over_the_limit() {
+        let ranges = BTreeMap::from([("src/lib.rs".to_owned(), vec![(1, 100)])]);
+        let new_functions = BTreeMap::from([(
+            "src/lib.rs".to_owned(),
+            vec![function_metric("fine", 1, 10, 5)],
+        )]);
+        assert_eq!(
+            complexity_gate::find_violations(&ranges, &new_functions, &BTreeMap::new(), 20),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn complexity_find_violations_untouched_file_contributes_no_violations() {
+        let ranges = BTreeMap::from([("src/other.rs".to_owned(), vec![(1, 5)])]);
+        let new_functions = BTreeMap::from([(
+            "src/lib.rs".to_owned(),
+            vec![function_metric("huge", 1, 500, 500)],
+        )]);
+        assert_eq!(
+            complexity_gate::find_violations(&ranges, &new_functions, &BTreeMap::new(), 20),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn complexity_find_violations_already_over_limit_function_untouched_by_a_real_edit_passes() {
+        let ranges = BTreeMap::from([("src/lib.rs".to_owned(), vec![(1, 300)])]);
+        let new_functions = BTreeMap::from([(
+            "src/lib.rs".to_owned(),
+            vec![function_metric("run", 1, 300, 174)],
+        )]);
+        let old_functions = BTreeMap::from([(
+            "src/lib.rs".to_owned(),
+            vec![function_metric("run", 1, 305, 174)],
+        )]);
+        assert_eq!(
+            complexity_gate::find_violations(&ranges, &new_functions, &old_functions, 20),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn complexity_find_violations_already_over_limit_function_made_simpler_passes() {
+        let ranges = BTreeMap::from([("src/lib.rs".to_owned(), vec![(1, 300)])]);
+        let new_functions = BTreeMap::from([(
+            "src/lib.rs".to_owned(),
+            vec![function_metric("run", 1, 300, 150)],
+        )]);
+        let old_functions = BTreeMap::from([(
+            "src/lib.rs".to_owned(),
+            vec![function_metric("run", 1, 305, 174)],
+        )]);
+        assert_eq!(
+            complexity_gate::find_violations(&ranges, &new_functions, &old_functions, 20),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn complexity_find_violations_already_over_limit_function_made_worse_still_trips_the_gate() {
+        let ranges = BTreeMap::from([("src/lib.rs".to_owned(), vec![(1, 300)])]);
+        let new_functions = BTreeMap::from([(
+            "src/lib.rs".to_owned(),
+            vec![function_metric("run", 1, 300, 180)],
+        )]);
+        let old_functions = BTreeMap::from([(
+            "src/lib.rs".to_owned(),
+            vec![function_metric("run", 1, 305, 174)],
+        )]);
+        let violations =
+            complexity_gate::find_violations(&ranges, &new_functions, &old_functions, 20);
+        assert_eq!(violations.len(), 1);
+        assert!(violations[0].contains("was 174, is now 180"));
+    }
+
+    #[test]
+    fn complexity_find_violations_under_the_limit_before_and_over_after_still_trips_the_gate() {
+        let ranges = BTreeMap::from([("src/lib.rs".to_owned(), vec![(1, 20)])]);
+        let new_functions = BTreeMap::from([(
+            "src/lib.rs".to_owned(),
+            vec![function_metric("f", 1, 20, 25)],
+        )]);
+        let old_functions = BTreeMap::from([(
+            "src/lib.rs".to_owned(),
+            vec![function_metric("f", 1, 18, 18)],
+        )]);
+        let violations =
+            complexity_gate::find_violations(&ranges, &new_functions, &old_functions, 20);
+        assert_eq!(violations.len(), 1);
+        assert!(violations[0].contains("was 18, is now 25"));
+    }
+
+    #[test]
+    fn complexity_find_violations_new_function_with_no_old_counterpart_is_judged_against_the_limit()
+    {
+        let ranges = BTreeMap::from([("src/lib.rs".to_owned(), vec![(1, 20)])]);
+        let new_functions = BTreeMap::from([(
+            "src/lib.rs".to_owned(),
+            vec![function_metric("brand_new", 1, 20, 25)],
+        )]);
+        let violations =
+            complexity_gate::find_violations(&ranges, &new_functions, &BTreeMap::new(), 20);
+        assert_eq!(violations.len(), 1);
+        assert!(violations[0].contains("is new at 25"));
+    }
+
+    #[test]
+    fn complexity_find_violations_same_named_functions_are_matched_by_occurrence_order() {
+        let ranges = BTreeMap::from([("src/lib.rs".to_owned(), vec![(1, 5), (10, 15)])]);
+        let new_functions = BTreeMap::from([(
+            "src/lib.rs".to_owned(),
+            vec![
+                function_metric("new", 1, 5, 22),
+                function_metric("new", 10, 15, 30),
+            ],
+        )]);
+        let old_functions = BTreeMap::from([(
+            "src/lib.rs".to_owned(),
+            vec![
+                function_metric("new", 1, 5, 22),
+                function_metric("new", 9, 14, 18),
+            ],
+        )]);
+        let violations =
+            complexity_gate::find_violations(&ranges, &new_functions, &old_functions, 20);
+        assert_eq!(violations.len(), 1);
+        assert!(violations[0].contains(":10-15"));
+        assert!(violations[0].contains("was 18, is now 30"));
+    }
+
+    #[test]
+    fn complexity_find_violations_anonymous_function_has_no_old_counterpart_even_if_old_side_has_one(
+    ) {
+        let ranges = BTreeMap::from([("src/lib.rs".to_owned(), vec![(1, 5)])]);
+        let new_functions = BTreeMap::from([(
+            "src/lib.rs".to_owned(),
+            vec![function_metric("<anonymous>", 1, 5, 25)],
+        )]);
+        let old_functions = BTreeMap::from([(
+            "src/lib.rs".to_owned(),
+            vec![function_metric("<anonymous>", 1, 5, 99)],
+        )]);
+        let violations =
+            complexity_gate::find_violations(&ranges, &new_functions, &old_functions, 20);
+        assert_eq!(violations.len(), 1);
+        assert!(violations[0].contains("is new at 25"));
+    }
+
+    #[test]
+    fn load_max_cyclomatic_reads_the_configured_limit() {
+        let dir = unique_temp_dir();
+        let config_path = dir.join("code_quality_gates.toml");
+        fs::write(&config_path, "[complexity]\nmax_cyclomatic = 20\n").expect("write config");
+        assert_eq!(
+            complexity_gate::load_max_cyclomatic(&config_path).expect("load succeeds"),
+            20
+        );
+    }
+
+    #[test]
+    fn load_max_cyclomatic_fails_when_the_key_is_missing() {
+        let dir = unique_temp_dir();
+        let config_path = dir.join("code_quality_gates.toml");
+        fs::write(&config_path, "[complexity]\n").expect("write config");
+        assert!(complexity_gate::load_max_cyclomatic(&config_path).is_err());
+    }
+
+    fn duplicate(
+        first: (&str, usize, usize),
+        second: (&str, usize, usize),
+        lines: usize,
+    ) -> duplication_gate::Duplicate {
+        duplication_gate::Duplicate {
+            first_file: duplication_gate::DuplicateSide {
+                name: first.0.to_owned(),
+                start: first.1,
+                end: first.2,
+            },
+            second_file: duplication_gate::DuplicateSide {
+                name: second.0.to_owned(),
+                start: second.1,
+                end: second.2,
+            },
+            lines,
+        }
+    }
+
+    #[test]
+    fn duplication_find_violations_new_code_duplicating_old_code_fails() {
+        let ranges = BTreeMap::from([("src/new.rs".to_owned(), vec![(1, 20)])]);
+        let dup = duplicate(("src/new.rs", 5, 16), ("src/old.rs", 100, 111), 12);
+        let violations = duplication_gate::find_violations(&[dup], &[], &ranges);
+        assert_eq!(violations.len(), 1);
+        assert!(violations[0].contains("src/new.rs:5-16 (new)"));
+        assert!(!violations[0].contains("src/old.rs:100-111 (new)"));
+    }
+
+    #[test]
+    fn duplication_find_violations_two_untouched_clones_are_not_flagged() {
+        let ranges = BTreeMap::from([("src/elsewhere.rs".to_owned(), vec![(1, 5)])]);
+        let dup = duplicate(("src/old_a.rs", 1, 12), ("src/old_b.rs", 1, 12), 12);
+        assert_eq!(
+            duplication_gate::find_violations(&[dup], &[], &ranges),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn duplication_find_violations_new_code_duplicating_itself_flags_both_sides() {
+        let ranges = BTreeMap::from([("src/new.rs".to_owned(), vec![(1, 50)])]);
+        let dup = duplicate(("src/new.rs", 1, 12), ("src/new.rs", 20, 31), 12);
+        let violations = duplication_gate::find_violations(&[dup], &[], &ranges);
+        assert_eq!(violations.len(), 1);
+        assert!(violations[0].contains("(new)"));
+    }
+
+    #[test]
+    fn duplication_find_violations_touched_clone_already_duplicated_before_passes() {
+        let ranges = BTreeMap::from([("src/a.rs".to_owned(), vec![(10, 12)])]);
+        let new_dup = duplicate(("src/a.rs", 10, 21), ("src/b.rs", 40, 51), 12);
+        let old_dup = duplicate(("src/a.rs", 9, 20), ("src/b.rs", 38, 49), 12);
+        assert_eq!(
+            duplication_gate::find_violations(&[new_dup], &[old_dup], &ranges),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn duplication_find_violations_touched_clone_with_no_old_counterpart_still_fails() {
+        let ranges = BTreeMap::from([("src/a.rs".to_owned(), vec![(10, 12)])]);
+        let new_dup = duplicate(("src/a.rs", 10, 21), ("src/b.rs", 40, 51), 12);
+        let violations = duplication_gate::find_violations(&[new_dup], &[], &ranges);
+        assert_eq!(violations.len(), 1);
+        assert!(violations[0].contains("introduced by this diff"));
+    }
+
+    #[test]
+    fn duplication_find_violations_unrelated_old_clone_between_the_same_files_grants_no_amnesty() {
+        let ranges = BTreeMap::from([("src/a.rs".to_owned(), vec![(10, 12)])]);
+        let new_dup = duplicate(("src/a.rs", 10, 21), ("src/b.rs", 40, 51), 12);
+        let unrelated_old_dup = duplicate(("src/a.rs", 200, 299), ("src/b.rs", 300, 399), 100);
+        let violations =
+            duplication_gate::find_violations(&[new_dup], &[unrelated_old_dup], &ranges);
+        assert_eq!(violations.len(), 1);
+    }
+
+    #[test]
+    fn duplication_find_violations_reformatted_clone_within_size_tolerance_still_matches() {
+        let ranges = BTreeMap::from([("src/a.rs".to_owned(), vec![(10, 12)])]);
+        let new_dup = duplicate(("src/a.rs", 10, 19), ("src/b.rs", 40, 49), 10);
+        let old_dup = duplicate(("src/a.rs", 9, 20), ("src/b.rs", 38, 49), 12);
+        assert_eq!(
+            duplication_gate::find_violations(&[new_dup], &[old_dup], &ranges),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn file_pair_order_independent() {
+        let a = duplicate(("x.rs", 0, 0), ("y.rs", 0, 0), 0);
+        let b = duplicate(("y.rs", 0, 0), ("x.rs", 0, 0), 0);
+        assert_eq!(
+            duplication_gate::file_pair(&a),
+            duplication_gate::file_pair(&b)
+        );
+    }
+
+    #[test]
+    fn already_duplicated_before_no_old_duplicates_at_all() {
+        let candidate = duplicate(("a.rs", 1, 1), ("b.rs", 1, 1), 12);
+        assert!(!duplication_gate::already_duplicated_before(
+            &candidate,
+            &[]
+        ));
+    }
+
+    #[test]
+    fn already_duplicated_before_matching_pair_within_size_tolerance() {
+        let candidate = duplicate(("a.rs", 1, 1), ("b.rs", 1, 1), 12);
+        let old = duplicate(("a.rs", 1, 1), ("b.rs", 1, 1), 10);
+        assert!(duplication_gate::already_duplicated_before(
+            &candidate,
+            &[old]
+        ));
+    }
+
+    #[test]
+    fn already_duplicated_before_matching_pair_outside_size_tolerance_does_not_count() {
+        let candidate = duplicate(("a.rs", 1, 1), ("b.rs", 1, 1), 12);
+        let old = duplicate(("a.rs", 1, 1), ("b.rs", 1, 1), 100);
+        assert!(!duplication_gate::already_duplicated_before(
+            &candidate,
+            &[old]
+        ));
+    }
+
+    #[test]
+    fn already_duplicated_before_different_pair_does_not_count() {
+        let candidate = duplicate(("a.rs", 1, 1), ("b.rs", 1, 1), 12);
+        let old = duplicate(("a.rs", 1, 1), ("c.rs", 1, 1), 12);
+        assert!(!duplication_gate::already_duplicated_before(
+            &candidate,
+            &[old]
+        ));
+    }
+
+    #[test]
+    fn load_duplication_config_reads_lines_tokens_and_ignore_globs() {
+        let dir = unique_temp_dir();
+        let config_path = dir.join("code_quality_gates.toml");
+        fs::write(
+            &config_path,
+            "[duplication]\nmin_lines = 10\nmin_tokens = 50\nignore_globs = [\"**/target/**\"]\n",
+        )
+        .expect("write config");
+        let config =
+            duplication_gate::load_duplication_config(&config_path).expect("load succeeds");
+        assert_eq!(config.min_lines, 10);
+        assert_eq!(config.min_tokens, 50);
+        assert_eq!(config.ignore_globs, vec!["**/target/**".to_owned()]);
+    }
+
+    #[test]
+    fn load_duplication_config_defaults_ignore_globs_to_empty() {
+        let dir = unique_temp_dir();
+        let config_path = dir.join("code_quality_gates.toml");
+        fs::write(
+            &config_path,
+            "[duplication]\nmin_lines = 10\nmin_tokens = 50\n",
+        )
+        .expect("write config");
+        let config =
+            duplication_gate::load_duplication_config(&config_path).expect("load succeeds");
+        assert_eq!(config.ignore_globs, Vec::<String>::new());
+    }
+
+    #[test]
+    fn parse_duplicates_reads_first_and_second_file_spans() {
+        let report = serde_json::json!({
+            "duplicates": [
+                {
+                    "firstFile": {"name": "a.rs", "start": 1, "end": 12},
+                    "secondFile": {"name": "b.rs", "start": 5, "end": 16},
+                    "lines": 12,
+                }
+            ]
+        });
+        let duplicates = duplication_gate::parse_duplicates(&report);
+        assert_eq!(duplicates.len(), 1);
+        assert_eq!(duplicates[0].first_file.name, "a.rs");
+        assert_eq!(duplicates[0].lines, 12);
+    }
+
+    #[test]
+    fn parse_duplicates_skips_entries_missing_required_fields() {
+        let report = serde_json::json!({"duplicates": [{"firstFile": {"name": "a.rs", "start": 1, "end": 12}}]});
+        assert_eq!(
+            duplication_gate::parse_duplicates(&report),
+            Vec::<duplication_gate::Duplicate>::new()
+        );
+    }
+
+    #[test]
+    fn parse_duplicates_defaults_to_empty_when_the_key_is_absent() {
+        let report = serde_json::json!({});
+        assert_eq!(
+            duplication_gate::parse_duplicates(&report),
+            Vec::<duplication_gate::Duplicate>::new()
+        );
+    }
+
+    #[test]
+    fn duplication_involved_files_collects_both_sides_of_every_candidate() {
+        let a = duplicate(("a.rs", 1, 5), ("b.rs", 1, 5), 5);
+        let b = duplicate(("b.rs", 10, 15), ("c.rs", 10, 15), 5);
+        assert_eq!(
+            duplication_gate::involved_files(&[a, b]),
+            vec!["a.rs".to_owned(), "b.rs".to_owned(), "c.rs".to_owned()]
+        );
+    }
+
+    #[test]
+    fn parse_gate_options_defaults() {
+        let options = GateOptions::parse(&[], "complexity-gate").expect("parse succeeds");
+        assert_eq!(options.base, "origin/main");
+        assert_eq!(options.config, None);
+    }
+
+    #[test]
+    fn parse_gate_options_explicit_base_and_config() {
+        let options = GateOptions::parse(
+            &[
+                "--base".into(),
+                "main".into(),
+                "--config".into(),
+                "gates.toml".into(),
+            ],
+            "duplication-gate",
+        )
+        .expect("parse succeeds");
+        assert_eq!(options.base, "main");
+        assert_eq!(options.config, Some(PathBuf::from("gates.toml")));
+    }
+
+    #[test]
+    fn parse_gate_options_rejects_unknown_option() {
+        let error = GateOptions::parse(&["--nope".into()], "complexity-gate")
+            .expect_err("rejects unknown option");
+        assert!(error.contains("complexity-gate"));
+        assert!(error.contains("--nope"));
+    }
+
+    #[test]
+    fn violations_message_lists_each_violation_indented() {
+        let message = violations_message(
+            "complexity-gate: 2 function(s) over the limit:".to_owned(),
+            &[
+                "a.rs:1-2 f is new at 21 (limit 20)".to_owned(),
+                "b.rs:3-4 g is new at 30 (limit 20)".to_owned(),
+            ],
+        );
+        assert_eq!(
+            message,
+            "complexity-gate: 2 function(s) over the limit:\n  a.rs:1-2 f is new at 21 (limit 20)\n  b.rs:3-4 g is new at 30 (limit 20)"
+        );
+    }
 
     /// A fresh, never-reused scratch directory for a single test.
     ///
