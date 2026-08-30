@@ -20,7 +20,7 @@ mod render_hash;
 mod shadow;
 mod stroke;
 mod typography;
-mod unit;
+pub mod unit;
 mod vector_path;
 
 pub use alpha_mask::*;

@@ -1,8 +1,8 @@
 use std::rc::Rc;
 
 use cranpose_ui_graphics::{
-    BlendMode, Color, ColorFilter, CompositingStrategy, Dp, GradientBlurDirection,
-    GradientCutMaskSpec, GradientFadeMaskSpec, LayerShape, RenderEffect, RoundedCornerShape,
+    BlendMode, Color, ColorFilter, CompositingStrategy, Density, Dp, GradientBlurDirection,
+    GradientCutMaskSpec, GradientFadeMaskSpec, LayerShape, Px, RenderEffect, RoundedCornerShape,
     RuntimeShader, TransformOrigin, gradient_blur_effect, gradient_cut_mask_effect,
     gradient_fade_dst_out_effect, rounded_alpha_mask_effect,
 };
@@ -11,11 +11,10 @@ use super::{GraphicsLayer, Modifier, inspector_metadata};
 use crate::modifier_nodes::{GraphicsLayerElement, LazyGraphicsLayerElement};
 
 fn backdrop_blur_layer(radius: Dp, shape: LayerShape) -> GraphicsLayer {
-    let radius_px = radius
-        .to_px(crate::render_state::current_density())
-        .max(0.0);
+    let density = Density::from_scale(crate::render_state::current_density());
+    let radius_px = radius.to_px(density).max(Px::ZERO);
     GraphicsLayer {
-        backdrop_effect: (radius_px > 0.0).then(|| RenderEffect::blur(radius_px)),
+        backdrop_effect: (radius_px.0 > 0.0).then(|| RenderEffect::blur(radius_px.0)),
         shape,
         clip: true,
         ..Default::default()
@@ -27,12 +26,12 @@ fn backdrop_gradient_blur_layer(
     end_radius: Dp,
     direction: GradientBlurDirection,
 ) -> GraphicsLayer {
-    let density = crate::render_state::current_density();
-    let start_px = start_radius.to_px(density).max(0.0);
-    let end_px = end_radius.to_px(density).max(0.0);
+    let density = Density::from_scale(crate::render_state::current_density());
+    let start_px = start_radius.to_px(density).max(Px::ZERO);
+    let end_px = end_radius.to_px(density).max(Px::ZERO);
     GraphicsLayer {
-        backdrop_effect: (start_px > 0.0 || end_px > 0.0)
-            .then(|| gradient_blur_effect(start_px, end_px, direction)),
+        backdrop_effect: (start_px.0 > 0.0 || end_px.0 > 0.0)
+            .then(|| gradient_blur_effect(start_px.0, end_px.0, direction)),
         shape: LayerShape::Rectangle,
         clip: true,
         ..Default::default()

@@ -1,6 +1,8 @@
 use std::rc::Rc;
 
-use cranpose_ui_graphics::{DrawPrimitive, DrawScope as _, DrawScopeDefault, ShadowPrimitive};
+use cranpose_ui_graphics::{
+    Density, DrawPrimitive, DrawScope as _, DrawScopeDefault, ShadowPrimitive,
+};
 
 use super::{
     Brush, Color, DrawCommand, LayerShape, Modifier, Point, Rect, Shadow, ShadowScope, Size,
@@ -39,7 +41,8 @@ impl Modifier {
     pub fn drop_shadow_value(self, shape: LayerShape, shadow: Shadow) -> Self {
         let shadow_value = shadow.clone();
         let draw = Rc::new(move |scope: &mut DrawScopeDefault| {
-            let shadow = shadow_value.to_scope(crate::render_state::current_density());
+            let shadow =
+                shadow_value.to_scope(Density::from_scale(crate::render_state::current_density()));
             let primitives = build_drop_shadow_primitives(scope.size(), shape, &shadow);
             scope.push_recorded(primitives);
         });
@@ -81,7 +84,8 @@ impl Modifier {
     pub fn inner_shadow_value(self, shape: LayerShape, shadow: Shadow) -> Self {
         let shadow_value = shadow.clone();
         let draw = Rc::new(move |scope: &mut DrawScopeDefault| {
-            let shadow = shadow_value.to_scope(crate::render_state::current_density());
+            let shadow =
+                shadow_value.to_scope(Density::from_scale(crate::render_state::current_density()));
             let primitives = build_inner_shadow_primitives(scope.size(), shape, &shadow);
             scope.push_recorded(primitives);
         });

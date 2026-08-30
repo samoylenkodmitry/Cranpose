@@ -1,6 +1,6 @@
 //! Scope traits and implementations for Box, Column, and Row
 
-use cranpose_ui_graphics::Dp;
+use cranpose_ui_graphics::{Density, Dp, Px};
 use cranpose_ui_layout::{Alignment, Constraints, HorizontalAlignment, VerticalAlignment};
 
 use crate::modifier::Modifier;
@@ -65,11 +65,11 @@ impl BoxWithConstraintsScopeImpl {
     }
 
     fn to_dp(self, raw: f32) -> Dp {
-        Dp::from_px(raw, self.density)
+        Dp::from_px(Px(raw), Density::from_scale(self.density))
     }
 
     pub fn to_px(&self, dp: Dp) -> f32 {
-        dp.to_px(self.density)
+        dp.to_px(Density::from_scale(self.density)).0
     }
 
     pub fn density(&self) -> f32 {
