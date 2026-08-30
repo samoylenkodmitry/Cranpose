@@ -430,3 +430,15 @@ Signature → cause → what to do. One lesson per line, no incident history.
   behind the lock — a captures job sat 44:50 behind one wedged wrapper.
   Invoke the script bare; if you must kill a wedged holder, match PIDs by
   checkout path, never by process name (pgrep matches your own grep).
+
+- **`[GPU f#N]` prints every 60th frame and its counters describe THAT
+  frame only** — it is not a per-frame average, and the sampled frame can
+  be the one atypical frame in the window. During the scroll campaign the
+  sampled frames were ambient-step epoch frames where every backdrop
+  cache misses at once, so the line read "miss=18" while the all-frames
+  `CRANPOSE_LAYER_CACHE_DIAG` total over the same window averaged 1-2
+  misses per frame — an order of magnitude apart, and it misdirected the
+  attribution for about an hour. The counter answered a different
+  question than the one asked. When a sampled instrument and a totals
+  instrument disagree, believe the totals; better, never average from one
+  sample.
