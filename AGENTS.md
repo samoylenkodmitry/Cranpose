@@ -24,6 +24,12 @@
 - do a code review; look for any shortcuts, laziness, taking the easy path instead of doing the hard necessary work, poor architectural choices, everything that will shoot in the foot, poorly written code like it was a deadline 1 minute before end of the work day; but not invent the problems if there arent any- don't fear the significant arch change; everything is still pre-alpha; this is the right time for a big change
 - do not ever git reset, always stash if needed
 - do not ever remove recursively by \r\m \-\r\f, prefer mv to some _old name
+- never chain a delete with anything else. A removal runs as its own command,
+  never joined by `&&`, `;` or `|`, never inside a loop body that also does
+  other work, and never after a `cd` in the same command. A chained delete is
+  reviewed as one line but executes with whatever state the earlier part left
+  behind, so a failed `cd` or an unset variable silently changes what gets
+  removed. Run the delete alone, then verify the result in a separate command
 - all tests should pass, its never *not yours*
 - zero warnings on all build/clippy/test commands, never *was pre-existing*
 - the #[cfg(feature = "robot-app")] is forbidden
