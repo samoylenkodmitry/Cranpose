@@ -53,7 +53,7 @@ fmt-check:
 # --- lint ------------------------------------------------------------------
 
 # Lint the whole workspace, every target.
-clippy:
+clippy: _disk-guard
     cargo clippy --workspace --all-targets -- -D warnings
 
 # A plain build does not catch `Arc<dyn Trait>` values that pay for
@@ -178,7 +178,7 @@ duplication-gate base="origin/main":
 # silently never executes while the gate reports one failure. The same shape
 # as a step that stops its job -- one problem hides the rest, and the fix
 # costs a full second run to find the second one.
-test:
+test: _disk-guard
     cargo test --profile ci --workspace --no-fail-fast
 
 # Feature permutations that the default build does not cover.
@@ -206,6 +206,7 @@ test-robot-discovery:
 # The shell helpers agents run by hand, pinned so they cannot rot.
 test-shell-helpers:
     scripts/wait_until_quiet_test.sh
+    scripts/dev/target_gc_test.sh
 
 # Covers the shared/exclusive lock that keeps builds off the machine while a
 # measurement runs, and the turnstile that keeps a stream of builds from
@@ -325,7 +326,7 @@ run-isolated:
 # so a "passing" fast build proves nothing that CI actually checks.
 
 # Build the web demo.
-web:
+web: _disk-guard
     scripts/ci/with_host_lock.sh --shared apps/desktop-demo/build-web.sh --release
 
 # Build the starter template for web, the way the publish canary does.
@@ -336,7 +337,7 @@ web-isolated:
 # serving a foreign project's build.
 
 # Build the Android demo.
-android:
+android: _disk-guard
     cd apps/android-demo/android && ../../../scripts/ci/with_host_lock.sh --shared \
       ./gradlew --no-daemon :app:assembleRelease
 
@@ -364,11 +365,11 @@ ios-run:
 # --- robot end-to-end ------------------------------------------------------
 
 # The full robot suite, as documented for local runs.
-robot:
+robot: _disk-guard
     ./run_robot_test.sh --sequential
 
 # Compile every robot example without running any of them.
-robot-build:
+robot-build: _disk-guard
     ./run_robot_test.sh --build-only
 
 # One robot example by name.
@@ -436,6 +437,32 @@ perf-cpu *args:
 # Heap profile of a perf scenario.
 perf-heap *args:
     ./perf_robot_heap.sh {{args}}
+
+# --- disk ------------------------------------------------------------------
+
+# Worktree cargo target dirs are caches, and nothing used to collect them. On
+# 2026-08-29 they filled a 926GB disk to 117MB free and hard-stopped a running
+# agent, which could no longer create a file to capture command output. These
+# recipes are how that stays fixed; `_disk-guard` runs ahead of the heavy
+# recipes so exhaustion arrives as a refusal with a number rather than as
+# `No space left on device (os error 28)` from inside a link step.
+
+# Report what the sweep would reclaim. Removes nothing.
+gc:
+    scripts/dev/target_gc.sh
+
+# Reclaim least-recently-built worktree target dirs to the free-space target.
+gc-apply:
+    scripts/dev/target_gc.sh --apply
+
+# Current free space and the per-worktree target dirs behind it.
+disk:
+    @scripts/dev/target_gc.sh --min-free-gb 0
+
+# Refuse to start a heavy recipe the disk cannot finish. Sweeps first.
+_disk-guard:
+    @scripts/dev/disk_guard.sh "this recipe"
+
 
 # --- aggregates ------------------------------------------------------------
 
