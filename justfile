@@ -207,6 +207,17 @@ test-robot-discovery:
 test-shell-helpers:
     scripts/wait_until_quiet_test.sh
 
+# Covers the shared/exclusive lock that keeps builds off the machine while a
+# measurement runs, and the turnstile that keeps a stream of builds from
+# starving that measurement. It drives the real scripts against a private
+# lock pair under a scratch directory, so a run here cannot disturb -- or be
+# disturbed by -- a job actually holding the machine's lock. Needs flock(1):
+# on macOS the wrapper runs unlocked, and the lock cases say they skipped.
+
+# The host capacity lock's own suite.
+test-host-lock:
+    scripts/ci/with_host_lock_test.sh
+
 # The deterministic slot-table model check, at the frame count CI uses.
 test-property:
     cargo test --profile ci -p cranpose-core deterministic_model_render_frames_match_slot_table
@@ -429,7 +440,7 @@ perf-heap *args:
 # on it. A gate a pull request is judged by must be runnable before pushing.
 
 # What a pull request is gated on. Run this before pushing.
-ci: fmt-check typos versions test clippy clippy-robot clippy-wasm doc budgets test-quality-gates complexity-gate duplication-gate test-robot-discovery test-shell-helpers
+ci: fmt-check typos versions test clippy clippy-robot clippy-wasm doc budgets test-quality-gates complexity-gate duplication-gate test-robot-discovery test-shell-helpers test-host-lock
 
 # Needs a Linux box with the X11 stack, an Android SDK and (on macOS) Xcode.
 

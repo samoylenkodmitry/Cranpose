@@ -189,6 +189,14 @@ jobs:
           command -v just >/dev/null || cargo install just --locked
           scripts/ci/start_sccache.sh
 
+      - name: Run the host capacity lock suite
+        if: steps.changes.outputs.docs_only != 'true'
+        # Here rather than on the mac job: this is the machine the lock exists
+        # to protect, and the only one of the two with flock(1), so it is the
+        # only place the lock cases run at all. Takes no host lock itself --
+        # it drives a private pair of lock files under a scratch directory.
+        run: just test-host-lock
+
       - name: Check architecture budgets
         if: steps.changes.outputs.docs_only != 'true'
         # Featureless and all-features builds, the per-backend winit checks, the
