@@ -25,6 +25,8 @@ use super::{
         surface_target_size, target_quad, visible_layer_rect,
     },
 };
+#[cfg(not(target_arch = "wasm32"))]
+use crate::shape_replay::{any_pending_feed_captures, shape_index_pending_feed_capture};
 use crate::{
     effect_renderer::{
         CompositeBatchItem, CompositeSampleMode, FusedCompositeItem, ProjectiveSurfaceComposite,
@@ -52,6 +54,19 @@ use crate::{
     },
     surface_requirements::{SurfaceRequirement, SurfaceRequirementSet},
 };
+
+/// The command feed and its capture machinery are native-only, so on wasm
+/// no feed capture can ever be pending: both predicates are identically
+/// false here rather than configured out at every call site.
+#[cfg(target_arch = "wasm32")]
+fn any_pending_feed_captures() -> bool {
+    false
+}
+
+#[cfg(target_arch = "wasm32")]
+fn shape_index_pending_feed_capture(_shape_index: usize) -> bool {
+    false
+}
 
 fn layer_render_diag_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -1379,7 +1394,7 @@ fn draw_op_caches_as_transparent_surface(scene: &CompositorScene, op: DrawOp) ->
                 .shapes
                 .get(index)
                 .is_some_and(|shape| shape.blend_mode == BlendMode::SrcOver)
-                && !crate::shape_replay::shape_index_pending_feed_capture(index)
+                && !shape_index_pending_feed_capture(index)
         }
         DrawOpKind::Image(index) => scene
             .images
@@ -4598,9 +4613,7 @@ fn prefix_snapshot_range_end(scene: &CompositorScene, z_end: usize) -> usize {
     for op in scene_range_draw_ops(&scene.draw_ops, 0, z_end) {
         let stable = match op.kind {
             DrawOpKind::Retained(_) => false,
-            DrawOpKind::Shape(index) => {
-                !crate::shape_replay::shape_index_pending_feed_capture(index)
-            }
+            DrawOpKind::Shape(index) => !shape_index_pending_feed_capture(index),
             DrawOpKind::Image(_) | DrawOpKind::Text(_) | DrawOpKind::Shadow(_) => true,
         };
         if !stable {
@@ -4680,6 +4693,50 @@ enum PrefixSnapshotOutcome {
     Served(usize),
 }
 
+/// Runs the prefix stage and folds its outcome into the walk: a served
+/// prefix advances the cursor past its composite, a claimed one seeds the
+/// direct run so the range renders as plain direct ops ahead of the
+/// chunker, and an inert stage leaves the walk untouched. Returns the z
+/// the chunk walk starts from.
+#[allow(clippy::too_many_arguments)]
+fn stage_prefix_snapshot_into_walk<B: SurfaceExecutionBackend>(
+    backend: &mut B,
+    snapshot_source: Option<&OffscreenTarget>,
+    scene: &CompositorScene,
+    z_start: usize,
+    z_end: usize,
+    width: u32,
+    height: u32,
+    root_scale: f32,
+    pending_composites: &mut Vec<PendingLayerComposite>,
+    composite_seq: &mut usize,
+    pending_composite_load_op: &mut Option<wgpu::LoadOp<wgpu::Color>>,
+    next_load_op: &mut wgpu::LoadOp<wgpu::Color>,
+    direct_run: &mut DirectChunkRunCoalescer,
+) -> Result<usize, String> {
+    match serve_or_capture_prefix_snapshot(
+        backend,
+        snapshot_source,
+        scene,
+        z_start,
+        z_end,
+        width,
+        height,
+        root_scale,
+        pending_composites,
+        composite_seq,
+        pending_composite_load_op,
+        next_load_op,
+    )? {
+        PrefixSnapshotOutcome::Inert => Ok(z_start),
+        PrefixSnapshotOutcome::Served(end) => Ok(end),
+        PrefixSnapshotOutcome::Claimed(end) => {
+            direct_run.absorb(z_start);
+            Ok(end)
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn serve_or_capture_prefix_snapshot<B: SurfaceExecutionBackend>(
     backend: &mut B,
@@ -4711,7 +4768,7 @@ fn serve_or_capture_prefix_snapshot<B: SurfaceExecutionBackend>(
     // conversion stream; both replaying past them and splitting the frame's
     // batches around them would corrupt what the store captures. Captures
     // are one-shot events, so sitting the whole frame out is free.
-    if crate::shape_replay::any_pending_feed_captures() {
+    if any_pending_feed_captures() {
         return Ok(PrefixSnapshotOutcome::Inert);
     }
     let prefix_end = prefix_snapshot_range_end(scene, z_end);
@@ -4821,7 +4878,7 @@ fn render_direct_scene_range_with_pending_composites<B: SurfaceExecutionBackend>
     let mut cursor_z = z_start;
     let mut direct_run = DirectChunkRunCoalescer::default();
     if cache_enabled {
-        match serve_or_capture_prefix_snapshot(
+        cursor_z = stage_prefix_snapshot_into_walk(
             backend,
             snapshot_source,
             scene,
@@ -4834,14 +4891,8 @@ fn render_direct_scene_range_with_pending_composites<B: SurfaceExecutionBackend>
             composite_seq,
             pending_composite_load_op,
             next_load_op,
-        )? {
-            PrefixSnapshotOutcome::Inert => {}
-            PrefixSnapshotOutcome::Served(end) => cursor_z = end,
-            PrefixSnapshotOutcome::Claimed(end) => {
-                direct_run.absorb(cursor_z);
-                cursor_z = end;
-            }
-        }
+            &mut direct_run,
+        )?;
     }
     while cursor_z < z_end {
         let mut chunk_end = direct_scene_range_cache_chunk_end(scene, cursor_z, z_end, root_scale);
