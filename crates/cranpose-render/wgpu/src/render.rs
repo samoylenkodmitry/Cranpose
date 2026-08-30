@@ -1290,6 +1290,7 @@ fn hash_shape_shadow_item<H: Hasher>(
 
 fn shape_shadow_content_hash(
     shapes: &[(DrawShape, BlendMode)],
+    post_blur_cutouts: &[(DrawShape, BlendMode)],
     brushes: &[Brush],
     root_scale: f32,
 ) -> u64 {
@@ -1302,7 +1303,7 @@ fn shape_shadow_content_hash(
     });
 
     shapes.len().hash(&mut hasher);
-    for (shape, blend_mode) in shapes {
+    for (shape, blend_mode) in shapes.iter().chain(post_blur_cutouts) {
         hash_shape_shadow_item(
             shape,
             brushes,
@@ -1318,13 +1319,14 @@ fn shape_shadow_content_hash(
 
 fn shape_shadow_surface_cache_key(
     shapes: &[(DrawShape, BlendMode)],
+    post_blur_cutouts: &[(DrawShape, BlendMode)],
     brushes: &[Brush],
     device_bounds: DevicePixelBounds,
     pixel_radius: f32,
     root_scale: f32,
 ) -> Option<ShadowSurfaceCacheKey> {
     (root_scale.is_finite() && root_scale > 0.0).then(|| ShadowSurfaceCacheKey {
-        content_hash: shape_shadow_content_hash(shapes, brushes, root_scale),
+        content_hash: shape_shadow_content_hash(shapes, post_blur_cutouts, brushes, root_scale),
         pixel_size: [device_bounds.width, device_bounds.height],
         root_scale_bits: root_scale.to_bits(),
         blur_radius_bits: pixel_radius.to_bits(),
@@ -6413,6 +6415,7 @@ impl GpuRenderer {
         )?;
         let key = shape_shadow_surface_cache_key(
             &shadow.shapes,
+            &shadow.post_blur_cutouts,
             &shadow.brushes,
             plan.source_device_bounds,
             plan.pixel_radius,
@@ -10843,6 +10846,15 @@ impl GpuRenderer {
             );
         }
         frame_encoder.record_passes(2);
+        self.encode_post_blur_cutout_passes(
+            frame_encoder,
+            &source.view,
+            shadow,
+            bounds_w,
+            bounds_h,
+            viewport_offset,
+            root_scale,
+        );
 
         let clip_scissor = shadow
             .clip
@@ -10880,6 +10892,35 @@ impl GpuRenderer {
         self.effect_renderer.record_composite_pass();
         frame_encoder.release_transient_offscreen(scratch_descriptor, scratch);
         frame_encoder.release_transient_offscreen(source_descriptor, source);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn encode_post_blur_cutout_passes<C: FrameCommandRecorder>(
+        &mut self,
+        frame_encoder: &mut C,
+        source_view: &wgpu::TextureView,
+        shadow: &ShadowDraw,
+        width: u32,
+        height: u32,
+        viewport_offset: [f32; 2],
+        root_scale: f32,
+    ) {
+        if shadow.post_blur_cutouts.is_empty() {
+            return;
+        }
+        let mut load_op = wgpu::LoadOp::Load;
+        let outcome = self.encode_shadow_shape_source_passes(
+            frame_encoder,
+            source_view,
+            &shadow.post_blur_cutouts,
+            &shadow.brushes,
+            width,
+            height,
+            viewport_offset,
+            root_scale,
+            &mut load_op,
+        );
+        frame_encoder.record_passes(outcome.pass_count);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -11009,6 +11050,7 @@ impl GpuRenderer {
         let viewport_offset = [device_bounds.x, device_bounds.y];
         let cache_key = shape_shadow_surface_cache_key(
             &shadow.shapes,
+            &shadow.post_blur_cutouts,
             &shadow.brushes,
             device_bounds,
             pixel_radius,
@@ -11136,6 +11178,15 @@ impl GpuRenderer {
             );
         }
         frame_encoder.record_passes(2);
+        self.encode_post_blur_cutout_passes(
+            frame_encoder,
+            &source.view,
+            shadow,
+            bounds_w,
+            bounds_h,
+            viewport_offset,
+            root_scale,
+        );
 
         let clip_scissor = shadow
             .clip
@@ -16712,14 +16763,14 @@ mod tests {
             (translated_cutout, BlendMode::DstOut),
         ];
 
-        let first_hash = shape_shadow_content_hash(&first_shapes, &[], root_scale);
-        let translated_hash = shape_shadow_content_hash(&translated_shapes, &[], root_scale);
+        let first_hash = shape_shadow_content_hash(&first_shapes, &[], &[], root_scale);
+        let translated_hash = shape_shadow_content_hash(&translated_shapes, &[], &[], root_scale);
 
         assert_eq!(first_hash, translated_hash);
 
         let mut changed_shapes = translated_shapes;
         changed_shapes[0].0.rect.width += 1.0;
-        let changed_hash = shape_shadow_content_hash(&changed_shapes, &[], root_scale);
+        let changed_hash = shape_shadow_content_hash(&changed_shapes, &[], &[], root_scale);
 
         assert_ne!(first_hash, changed_hash);
     }
@@ -16751,6 +16802,7 @@ mod tests {
                     .expect("surface plan");
             shape_shadow_surface_cache_key(
                 &shapes,
+                &[],
                 &[],
                 plan.source_device_bounds,
                 pixel_radius,
@@ -16808,6 +16860,7 @@ mod tests {
             shape_shadow_surface_cache_key(
                 &shapes,
                 &[],
+                &[],
                 plan.source_device_bounds,
                 plan.pixel_radius,
                 root_scale,
@@ -16863,6 +16916,7 @@ mod tests {
     fn test_shadow_draw(shapes: Vec<(DrawShape, BlendMode)>) -> ShadowDraw {
         ShadowDraw {
             shapes,
+            post_blur_cutouts: vec![],
             brushes: vec![],
             texts: vec![],
             blur_radius: 8.0,
@@ -20849,6 +20903,7 @@ mod tests {
         };
         let shadow_draws = vec![ShadowDraw {
             shapes: vec![(shadow_shape, BlendMode::SrcOver)],
+            post_blur_cutouts: vec![],
             brushes: vec![],
             texts: Vec::new(),
             blur_radius: 8.0,
@@ -20901,6 +20956,7 @@ mod tests {
         };
         let shadow_draws = vec![ShadowDraw {
             shapes: vec![(shadow_shape, BlendMode::SrcOver)],
+            post_blur_cutouts: vec![],
             brushes: vec![],
             texts: Vec::new(),
             blur_radius: 8.0,

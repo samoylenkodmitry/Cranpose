@@ -7,9 +7,10 @@ use cranpose_ui::{
     text::{SpanStyle, TextStyle},
     widgets::{Box, BoxSpec, Column, ColumnSpec, Text},
 };
-use cranpose_ui_graphics::{Brush, Color, CornerRadii};
+use cranpose_ui_graphics::{Brush, CornerRadii};
 
 use crate::{
+    material::{Glass, GlassDynamics, LiquidModifierExt, LiquidShape},
     motion::LiquidMotion,
     theme::{liquid_colors, liquid_typography},
 };
@@ -39,28 +40,21 @@ pub fn Card(modifier: Modifier, content: impl FnMut() + 'static) {
     LiquidCard(modifier, content);
 }
 
-/// An elevated surface with the grouped-inset card look.
+/// An elevated glass pane with the grouped-inset card look: a resting pane
+/// that transmits its backdrop through the translucent surface wash.
 #[composable]
 #[allow(non_snake_case)]
 pub fn LiquidCard(modifier: Modifier, content: impl FnMut() + 'static) {
     let colors = liquid_colors();
-    let surface = colors.surface;
-    let shadow_alpha = if colors.is_dark { 0.35 } else { 0.07 };
-    let base = Modifier::empty()
-        .drop_shadow(
-            cranpose_ui_graphics::LayerShape::Rounded(
-                cranpose_ui_graphics::RoundedCornerShape::uniform(CARD_RADIUS),
-            ),
-            move |scope| {
-                scope.radius = 14.0;
-                scope.offset.y = 3.0;
-                scope.color = Color::BLACK.with_alpha(shadow_alpha);
-            },
-        )
-        .rounded_corners(CARD_RADIUS)
-        .draw_behind(move |scope| {
-            scope.draw_round_rect(Brush::solid(surface), CornerRadii::uniform(CARD_RADIUS));
-        });
+    let surface_glass = colors.surface_glass;
+    let base = Modifier::empty().glass_effect_with(
+        Glass::regular().shape(LiquidShape::RoundedRect(CARD_RADIUS)),
+        move || GlassDynamics {
+            activity: Some(0.0),
+            resting_tint: Some(surface_glass),
+            ..Default::default()
+        },
+    );
     Box(base.then(modifier), BoxSpec::default(), content);
 }
 

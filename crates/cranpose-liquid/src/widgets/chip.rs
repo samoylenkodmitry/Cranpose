@@ -1,6 +1,6 @@
 use std::{cell::RefCell, rc::Rc};
 
-use cranpose_animation::animateColorAsState;
+use cranpose_animation::{animateColorAsState, animateFloatAsState};
 use cranpose_macros::composable;
 use cranpose_services::{HapticFeedback, default_haptics};
 use cranpose_ui::{
@@ -8,17 +8,18 @@ use cranpose_ui::{
     text::{FontWeight, SpanStyle, TextStyle},
     widgets::{Box, BoxSpec, Text},
 };
-use cranpose_ui_graphics::{Brush, CornerRadii};
 use cranpose_ui_layout::Alignment;
 
 use crate::{
-    material::{Glass, LiquidModifierExt},
+    material::{Glass, GlassDynamics, LiquidModifierExt},
     motion::{LiquidMotion, liquid_press_scale},
     theme::{liquid_colors, liquid_typography},
 };
 
-/// A selectable filter pill (the Library "All / Receipts" chips). Selected
-/// chips render on glass; unselected ones sit on the fill color.
+/// A selectable filter pill (the Library "All / Receipts" chips). One
+/// persistent glass pane: selection raises its optical activity, and an
+/// unselected chip rests as a fill-washed pane that still transmits its
+/// backdrop.
 #[composable]
 #[allow(non_snake_case)]
 pub fn LiquidChip(
@@ -43,15 +44,20 @@ pub fn LiquidChip(
         "chip-label",
     );
 
-    let mut base = Modifier::empty();
-    if selected {
-        base = base.glass_effect(Glass::regular().adaptive_frost(colors.accent, 0.65));
-    } else {
-        let fill = colors.fill;
-        base = base.clip_to_bounds().draw_behind(move |scope| {
-            scope.draw_round_rect(Brush::solid(fill), CornerRadii::uniform(999.0));
-        });
-    }
+    let activity = animateFloatAsState(
+        if selected { 1.0 } else { 0.0 },
+        LiquidMotion::smooth(),
+        "chip-activity",
+    );
+    let fill = colors.fill;
+    let base = Modifier::empty().glass_effect_with(
+        Glass::regular().adaptive_frost(colors.accent, 0.65),
+        move || GlassDynamics {
+            activity: Some(activity.get()),
+            resting_tint: Some(fill),
+            ..Default::default()
+        },
+    );
 
     let on_click = Rc::new(RefCell::new(on_click));
     let base = base

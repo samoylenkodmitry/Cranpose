@@ -245,6 +245,7 @@ pub(crate) struct DrawOp {
 #[derive(Clone)]
 pub(crate) struct ShadowDraw {
     pub shapes: Vec<(DrawShape, BlendMode)>,
+    pub post_blur_cutouts: Vec<(DrawShape, BlendMode)>,
     pub brushes: Vec<Brush>,
     pub texts: Vec<TextDraw>,
     pub blur_radius: f32,

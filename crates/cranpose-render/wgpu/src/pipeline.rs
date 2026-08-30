@@ -160,6 +160,7 @@ pub(crate) fn push_layer_shadow(
         );
         scene.push_shadow_draw(ShadowDraw {
             shapes: vec![shadow_shape(ambient_pass.rect, ambient, resolved_shape)],
+            post_blur_cutouts: vec![],
             brushes: vec![],
             texts: vec![],
             blur_radius: ambient_pass.blur_radius,
@@ -178,6 +179,7 @@ pub(crate) fn push_layer_shadow(
         );
         scene.push_shadow_draw(ShadowDraw {
             shapes: vec![shadow_shape(spot_pass.rect, spot, resolved_shape)],
+            post_blur_cutouts: vec![],
             brushes: vec![],
             texts: vec![],
             blur_radius: spot_pass.blur_radius,
@@ -796,6 +798,7 @@ impl TextStyleDrawSink for CompositorScene {
     ) {
         self.push_shadow_draw(ShadowDraw {
             shapes: vec![],
+            post_blur_cutouts: vec![],
             brushes: vec![],
             texts: vec![TextDraw {
                 node_id,
@@ -2131,7 +2134,7 @@ fn push_shadow_primitive(
             else {
                 return;
             };
-            let mut shapes = vec![shape_pair];
+            let mut post_blur_cutouts = Vec::new();
             if let Some(cutout) = cutout {
                 let Some(cutout_pair) = shape_pair_for_primitive(
                     *cutout,
@@ -2142,10 +2145,11 @@ fn push_shadow_primitive(
                 ) else {
                     return;
                 };
-                shapes.push(cutout_pair);
+                post_blur_cutouts.push(cutout_pair);
             }
             scene.push_shadow_draw(ShadowDraw {
-                shapes,
+                shapes: vec![shape_pair],
+                post_blur_cutouts,
                 brushes,
                 texts: vec![],
                 blur_radius,
@@ -2185,6 +2189,7 @@ fn push_shadow_primitive(
             let transformed_clip = apply_layer_to_rect(abs_clip, layer_bounds, layer);
             scene.push_shadow_draw(ShadowDraw {
                 shapes: vec![fill_pair, cutout_pair],
+                post_blur_cutouts: vec![],
                 brushes,
                 texts: vec![],
                 blur_radius,
