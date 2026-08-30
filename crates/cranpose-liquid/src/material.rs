@@ -307,14 +307,17 @@ pub struct Glass {
     pub blur_radius: Option<f32>,
     /// Saturation boost (defaults per variant).
     pub saturation: Option<f32>,
-    /// wcKSRD refraction depth as a fraction of the shape inradius.
+    /// wcKSRD refraction depth as a fraction of the shape inradius. Regular
+    /// frosted surfaces default to zero so their backdrop stays motion-stable;
+    /// interactive lenses opt into optical displacement explicitly.
     pub refraction_depth: f32,
     /// Normalized wcKSRD ray-return exponent.
     pub refraction_curve: f32,
     /// Normalized wcKSRD spectral ray separation.
     pub dispersion: f32,
     /// Fraction of the wcKSRD displacement applied to the transmitted
-    /// backdrop. The mirrored meniscus follows its own optical path.
+    /// backdrop. Regular frosted surfaces default to zero. The mirrored
+    /// meniscus follows its own optical path.
     pub transmission_refraction: f32,
     /// Energy removed from the transmitted ray at the meniscus. Reflection
     /// and spectral return follow independent paths.
@@ -359,6 +362,7 @@ pub struct Glass {
 }
 
 impl Glass {
+    /// A motion-stable frosted surface without optical displacement.
     pub fn regular() -> Self {
         Self {
             variant: GlassVariant::Regular,
@@ -366,10 +370,10 @@ impl Glass {
             tint: None,
             blur_radius: None,
             saturation: None,
-            refraction_depth: 0.34,
+            refraction_depth: 0.0,
             refraction_curve: 0.25,
             dispersion: 0.0,
-            transmission_refraction: 1.0,
+            transmission_refraction: 0.0,
             meniscus_absorption: 1.0,
             fold_depth: 0.0,
             optical_zoom: 1.0,
@@ -1061,6 +1065,8 @@ mod tests {
         assert!(clear.blur_radius_dp > lens.blur_radius_dp);
         assert!(regular.saturation > clear.saturation);
         assert_eq!(lens.rim_style, 1.0);
+        assert_eq!(regular.refraction_depth, 0.0);
+        assert_eq!(regular.transmission_refraction, 0.0);
         assert_eq!(regular.refraction_curve, 0.25);
         assert_eq!(lens.refraction_curve, 1.0);
         assert_eq!(regular.dispersion, 0.0);
