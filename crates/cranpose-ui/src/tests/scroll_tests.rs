@@ -1577,3 +1577,76 @@ fn wheel_overscroll_rearms_after_interrupted_settle() {
     }
     assert!(context.overscroll().offset().abs() <= 0.001);
 }
+
+// The guarded scroll variants were removed in 9af4604b as dead code because
+// nothing in this repository called them -- a first-party downstream app did,
+// and lost its drag-reorder gesture to the row's own scroll. These tests are
+// that missing caller as much as they are a regression guard.
+
+#[test]
+fn a_scroll_without_gestures_leaves_the_drag_for_its_owner() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    with_test_runtime(|| {
+        let state = ScrollState::new(0.0);
+        state.set_max_value(100.0);
+        let (handler, _chain) =
+            pointer_handler_for(Modifier::empty().vertical_scroll_without_gestures(state, false));
+
+        handler(scroll_pointer_event(PointerEventKind::Down, 0.0, 100.0));
+        let move_event = scroll_pointer_event(PointerEventKind::Move, 0.0, 160.0);
+        handler(move_event.clone());
+        move_event.finish_post_dispatch();
+
+        assert!(
+            !move_event.is_consumed(),
+            "an unconsumed drag is the whole point: the owner's own pointer_input \
+             only sees the event if this scroll declines it"
+        );
+        assert_eq!(
+            state.value(),
+            0.0,
+            "a scroll that declines the gesture must not move on a drag"
+        );
+    });
+}
+
+#[test]
+fn a_scroll_without_gestures_still_moves_programmatically() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    with_test_runtime(|| {
+        let state = ScrollState::new(0.0);
+        state.set_max_value(100.0);
+        let (_handler, _chain) =
+            pointer_handler_for(Modifier::empty().horizontal_scroll_without_gestures(state, false));
+
+        state.scroll_to(40.0);
+
+        assert!(
+            (state.value() - 40.0).abs() < 0.001,
+            "declining pointer gestures must not disable ScrollState itself, got {}",
+            state.value()
+        );
+    });
+}
+
+#[test]
+fn an_ordinary_scroll_still_claims_the_drag() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    with_test_runtime(|| {
+        let state = ScrollState::new(0.0);
+        state.set_max_value(100.0);
+        let (handler, _chain) =
+            pointer_handler_for(Modifier::empty().vertical_scroll(state, false));
+
+        handler(scroll_pointer_event(PointerEventKind::Down, 0.0, 100.0));
+        let move_event = scroll_pointer_event(PointerEventKind::Move, 0.0, 160.0);
+        handler(move_event.clone());
+        move_event.finish_post_dispatch();
+
+        assert!(
+            move_event.is_consumed(),
+            "the control for the two tests above: without this, they would pass \
+             even if the scroll gesture had stopped working entirely"
+        );
+    });
+}

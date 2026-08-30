@@ -468,3 +468,25 @@ Signature → cause → what to do. One lesson per line, no incident history.
   question than the one asked. When a sampled instrument and a totals
   instrument disagree, believe the totals; better, never average from one
   sample.
+
+- **"No caller in this repo" is not evidence an API is dead, and the check
+  that says so silently excludes first-party consumers** — `9af4604b`
+  deleted `Modifier::horizontal_scroll_guarded`/`vertical_scroll_guarded`
+  as dead code on that reasoning. leetcodedaily called the horizontal one,
+  passing `|| false` to stop the row's built-in drag from competing with
+  its own drag-reorder `pointer_input`; migrating it to 0.1.106 forced
+  `.horizontal_scroll(...)` just to compile, and the two gestures have
+  been fighting since. The same commit added 280 lines of
+  `draggable_guarded` tests, so `draggable_guarded` survived the identical
+  pass — the asymmetry is the tell that the scope, not the judgement, was
+  wrong. Note the implementation never died: `scroll_impl` still took the
+  guard, still threaded it into `DragGesture`, still evaluated it per
+  event. Only the public entry points went, leaving a live mechanism
+  pinned to `None`, which is why nothing failed to compile.
+  Same class as `just clippy` never linting the ~165 `[[example]]` targets
+  behind `required-features = ["robot-app"]`: a check whose scope silently
+  excludes the thing it is supposed to cover, reporting clean because it
+  looked nowhere. Before deleting a public API, grep the downstream
+  consumers too (`/Users/s/develop/consumer-bumps/`), and prefer a test
+  that calls it — a test is an in-repo caller, and it is what kept
+  `draggable_guarded` alive.

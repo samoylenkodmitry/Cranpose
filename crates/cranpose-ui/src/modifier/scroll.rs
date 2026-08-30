@@ -1367,6 +1367,41 @@ impl Modifier {
     pub fn vertical_scroll(self, state: ScrollState, reverse_scrolling: bool) -> Self {
         self.then(scroll_impl(state, true, reverse_scrolling, None))
     }
+
+    /// A horizontal scroll that never claims a pointer gesture.
+    ///
+    /// The position still moves through [`ScrollState`], but drags and wheel
+    /// events pass straight through, so an owner can run its own
+    /// `pointer_input` on the same row -- a drag-to-reorder list, say --
+    /// without the two competing for the gesture.
+    pub fn horizontal_scroll_without_gestures(
+        self,
+        state: ScrollState,
+        reverse_scrolling: bool,
+    ) -> Self {
+        self.then(scroll_impl(
+            state,
+            false,
+            reverse_scrolling,
+            Some(Rc::new(|| false)),
+        ))
+    }
+
+    /// A vertical scroll that never claims a pointer gesture.
+    ///
+    /// The vertical counterpart of [`Modifier::horizontal_scroll_without_gestures`].
+    pub fn vertical_scroll_without_gestures(
+        self,
+        state: ScrollState,
+        reverse_scrolling: bool,
+    ) -> Self {
+        self.then(scroll_impl(
+            state,
+            true,
+            reverse_scrolling,
+            Some(Rc::new(|| false)),
+        ))
+    }
 }
 
 fn scroll_impl(
