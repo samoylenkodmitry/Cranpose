@@ -4,6 +4,19 @@ name: heavy (self-hosted)
 # own runners. Forks are DISABLED on this repository, so pull_request
 # events only ever come from the owner's branches — self-hosted execution
 # is safe for every trigger.
+#
+# These are the most expensive jobs on the board and the two Linux runners
+# that carry [self-hosted, Linux, cranpose-heavy] are the whole pool the
+# robot suite can use, so a prose-only pull request that occupies them
+# delays a release. Every job here therefore checks the diff first and
+# short-circuits to success on one, via scripts/ci/docs_only_change.sh.
+#
+# Deliberately not `paths-ignore`. A trigger filter stops the check from
+# reporting at all, which turns any job that is later made a required
+# status check into a permanent merge block rather than a fast one. Nothing
+# on main is required today, but a `main` ruleset already exists (currently
+# disabled), so the pattern that survives it being enabled is the one used
+# here: run the job, decide inside it.
 on:
   push:
     branches: ["main"]
@@ -29,8 +42,17 @@ jobs:
       CARGO_INCREMENTAL: "0"
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          # Both parents of the merge commit, for the diff below.
+          fetch-depth: 2
+
+      - name: Detect a docs-only change
+        id: changes
+        # Why a short-circuit and not paths-ignore: see the header.
+        run: scripts/ci/docs_only_change.sh
 
       - name: Configure machine-local knobs
+        if: steps.changes.outputs.docs_only != 'true'
         env:
           RUNNER_NAME: ${{ runner.name }}
         run: |
@@ -52,11 +74,13 @@ jobs:
           echo "$(eval echo "~$(id -un)")/.cargo/bin" >> "$GITHUB_PATH"
 
       - name: Start sccache
+        if: steps.changes.outputs.docs_only != 'true'
         run: |
           command -v just >/dev/null || cargo install just --locked
           scripts/ci/start_sccache.sh
 
       - name: Run the robot suite on the GPU
+        if: steps.changes.outputs.docs_only != 'true'
         # The suite relaxes the environment-sensitive frame-rate assertions
         # itself; the Vulkan ICD here still selects the real GPU. The three
         # external-framebuffer capture tests run in robot-capture-software
@@ -72,7 +96,7 @@ jobs:
         run: just robot-gpu
 
       - name: sccache stats
-        if: always()
+        if: always() && steps.changes.outputs.docs_only != 'true'
         run: '"$RUSTC_WRAPPER" --show-stats || true'
 
   robot-capture-software:
@@ -87,8 +111,17 @@ jobs:
       CARGO_INCREMENTAL: "0"
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          # Both parents of the merge commit, for the diff below.
+          fetch-depth: 2
+
+      - name: Detect a docs-only change
+        id: changes
+        # Why a short-circuit and not paths-ignore: see the header.
+        run: scripts/ci/docs_only_change.sh
 
       - name: Configure machine-local knobs
+        if: steps.changes.outputs.docs_only != 'true'
         env:
           RUNNER_NAME: ${{ runner.name }}
         run: |
@@ -102,11 +135,13 @@ jobs:
           echo "$(eval echo "~$(id -un)")/.cargo/bin" >> "$GITHUB_PATH"
 
       - name: Start sccache
+        if: steps.changes.outputs.docs_only != 'true'
         run: |
           command -v just >/dev/null || cargo install just --locked
           scripts/ci/start_sccache.sh
 
       - name: Run the external capture trio on software present
+        if: steps.changes.outputs.docs_only != 'true'
         # See robot-e2e-gpu above: this suite and that one share a
         # host-level lock so they never run at once on the same box.
         run: just robot-captures
@@ -119,8 +154,17 @@ jobs:
       CARGO_INCREMENTAL: "0"
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          # Both parents of the merge commit, for the diff below.
+          fetch-depth: 2
+
+      - name: Detect a docs-only change
+        id: changes
+        # Why a short-circuit and not paths-ignore: see the header.
+        run: scripts/ci/docs_only_change.sh
 
       - name: Provision iOS Rust targets
+        if: steps.changes.outputs.docs_only != 'true'
         run: |
           # Resolve the account's real home rather than trusting $HOME:
           # actions/checkout temporarily overrides HOME, and a step that runs
@@ -145,12 +189,15 @@ jobs:
             aarch64-apple-ios
 
       - name: Clippy iOS simulator
+        if: steps.changes.outputs.docs_only != 'true'
         run: just clippy-ios
 
       - name: Build iOS device binary
+        if: steps.changes.outputs.docs_only != 'true'
         run: just ios-device
 
       - name: Assemble simulator app bundle
+        if: steps.changes.outputs.docs_only != 'true'
         run: just ios-sim
 
   android-release:
@@ -162,8 +209,17 @@ jobs:
       CARGO_INCREMENTAL: "0"
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          # Both parents of the merge commit, for the diff below.
+          fetch-depth: 2
+
+      - name: Detect a docs-only change
+        id: changes
+        # Why a short-circuit and not paths-ignore: see the header.
+        run: scripts/ci/docs_only_change.sh
 
       - name: Configure machine-local SDK and cache paths
+        if: steps.changes.outputs.docs_only != 'true'
         env:
           RUNNER_NAME: ${{ runner.name }}
           RUNNER_OS: ${{ runner.os }}
@@ -197,6 +253,7 @@ jobs:
           echo "$sdk_root/platform-tools" >> "$GITHUB_PATH"
 
       - name: Provision toolchains and start sccache
+        if: steps.changes.outputs.docs_only != 'true'
         run: |
           # rust-toolchain.toml owns the version; the targets land on it.
           rustc --version
@@ -216,12 +273,14 @@ jobs:
           test -f "$ANDROID_NDK_HOME/source.properties"
 
       - name: Clippy Android ABIs
+        if: steps.changes.outputs.docs_only != 'true'
         # Gradle does not deny warnings, so the APK build below cannot be the
         # zero-warning gate for this target. Runs first: a lint failure should
         # not wait behind a full release APK.
         run: just clippy-android
 
       - name: Build Android release APK
+        if: steps.changes.outputs.docs_only != 'true'
         # --no-daemon: never attach to a shared/foreign Gradle daemon on this
         # self-hosted box. Reused daemons started by other builds on the runner
         # can carry a PATH without ~/.cargo/bin, which makes the cargo-ndk check
@@ -230,5 +289,5 @@ jobs:
         run: just android
 
       - name: sccache stats
-        if: always()
+        if: always() && steps.changes.outputs.docs_only != 'true'
         run: '"$RUSTC_WRAPPER" --show-stats || true'
