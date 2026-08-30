@@ -1,4 +1,5 @@
 mod output_paths;
+mod robot_exit;
 mod text_showcase_external_helpers;
 
 use std::{path::Path, time::Duration};
@@ -124,12 +125,6 @@ fn normalize_micro_contract_logical_size(
     screenshot.logical_width = WINDOW_WIDTH as f32;
     screenshot.logical_height = WINDOW_HEIGHT as f32;
     screenshot
-}
-
-fn fail(robot: &cranpose::Robot, message: &str) -> ! {
-    println!("FATAL: {message}");
-    let _ = robot.exit();
-    std::process::exit(1);
 }
 
 struct MicroContractMetrics {
@@ -532,18 +527,18 @@ fn assert_micro_contract_pixels(
         ),
     ] {
         if let Err(err) = assert_color(screenshot, label, x, y, expected) {
-            fail(robot, &format!("{capture_label} {err}"));
+            robot_exit::fail(robot, &format!("{capture_label} {err}"));
         }
     }
 
     let Some(underline_crop) = crop_screenshot_logical(screenshot, 58.0, 22.0, 90.0, 24.0) else {
-        fail(
+        robot_exit::fail(
             robot,
             &format!("{capture_label} failed to crop underlined text region"),
         );
     };
     let Some(underline_band) = crop_screenshot_logical(screenshot, 58.0, 37.0, 90.0, 4.0) else {
-        fail(
+        robot_exit::fail(
             robot,
             &format!("{capture_label} failed to crop underline band"),
         );
@@ -552,31 +547,29 @@ fn assert_micro_contract_pixels(
     let underline_bright = count_bright_pixels(&underline_crop);
     let underline_band_bright = count_bright_pixels(&underline_band);
     if underline_bright < 150 {
-        fail(
+        robot_exit::fail(
             robot,
             &format!(
                 "{capture_label} underlined text region is too soft or missing: bright_pixels={underline_bright}"
-            ),
-        );
+            ));
     }
     if underline_band_bright < 22 {
-        fail(
+        robot_exit::fail(
             robot,
             &format!(
                 "{capture_label} underline band is too weak or misplaced: bright_pixels={underline_band_bright}"
-            ),
-        );
+            ));
     }
 
     let Some(bitmap_row_text) = crop_screenshot_logical(screenshot, 38.0, 96.0, 134.0, 30.0) else {
-        fail(
+        robot_exit::fail(
             robot,
             &format!("{capture_label} failed to crop bitmap icon text row"),
         );
     };
     let Some(source_row_text) = crop_screenshot_logical(screenshot, 38.0, 126.0, 134.0, 30.0)
     else {
-        fail(
+        robot_exit::fail(
             robot,
             &format!("{capture_label} failed to crop source icon text row"),
         );
@@ -584,45 +577,42 @@ fn assert_micro_contract_pixels(
     let bitmap_green = count_green_text_pixels(&bitmap_row_text);
     let source_green = count_green_text_pixels(&source_row_text);
     let Some(panel_text) = crop_screenshot_logical(screenshot, 100.0, 46.0, 60.0, 22.0) else {
-        fail(
+        robot_exit::fail(
             robot,
             &format!("{capture_label} failed to crop nested panel text"),
         );
     };
     let panel_yellow = count_yellow_text_pixels(&panel_text);
     if bitmap_green < 35 {
-        fail(
+        robot_exit::fail(
             robot,
             &format!(
                 "{capture_label} text after Image(BitmapPainter) is missing or clipped: green_pixels={bitmap_green}"
-            ),
-        );
+            ));
     }
     if source_green < 35 {
-        fail(
+        robot_exit::fail(
             robot,
             &format!(
                 "{capture_label} text after draw_image_src is missing or clipped: green_pixels={source_green}"
-            ),
-        );
+            ));
     }
     if panel_yellow < 20 {
-        fail(
+        robot_exit::fail(
             robot,
             &format!(
                 "{capture_label} nested panel text after image layers is missing or clipped: yellow_pixels={panel_yellow}"
-            ),
-        );
+            ));
     }
 
     let Some(compact_text) = crop_screenshot_logical(screenshot, 36.0, 156.0, 94.0, 34.0) else {
-        fail(
+        robot_exit::fail(
             robot,
             &format!("{capture_label} failed to crop compact text row"),
         );
     };
     let Some(compact_gap) = crop_screenshot_logical(screenshot, 135.0, 158.0, 4.0, 28.0) else {
-        fail(
+        robot_exit::fail(
             robot,
             &format!("{capture_label} failed to crop compact text gap"),
         );
@@ -630,20 +620,18 @@ fn assert_micro_contract_pixels(
     let compact_green = count_green_text_pixels(&compact_text);
     let compact_gap_green = count_green_text_pixels(&compact_gap);
     if compact_green < 18 {
-        fail(
+        robot_exit::fail(
             robot,
             &format!(
                 "{capture_label} scaled compact text is missing or over-clipped: green_pixels={compact_green}"
-            ),
-        );
+            ));
     }
     if compact_gap_green != 0 {
-        fail(
+        robot_exit::fail(
             robot,
             &format!(
                 "{capture_label} scaled compact text drew outside its bounds into badge gap: green_pixels={compact_gap_green}"
-            ),
-        );
+            ));
     }
 
     MicroContractMetrics {
@@ -672,20 +660,19 @@ fn main() {
 
             let screenshot = robot
                 .screenshot_with_scale(1.0)
-                .unwrap_or_else(|err| fail(&robot, &format!("failed to capture screenshot: {err}")));
+                .unwrap_or_else(|err| robot_exit::fail(&robot, &format!("failed to capture screenshot: {err}")));
             if screenshot.width < WINDOW_WIDTH || screenshot.height < WINDOW_HEIGHT {
-                fail(
+                robot_exit::fail(
                     &robot,
                     &format!(
                         "renderer readback scale-1 screenshot is smaller than the requested app surface: expected_at_least={}x{} actual={}x{}",
                         WINDOW_WIDTH, WINDOW_HEIGHT, screenshot.width, screenshot.height
-                    ),
-                );
+                    ));
             }
             let screenshot = normalize_micro_contract_logical_size(screenshot);
             let output_path = output_paths::diagnostic_path("cranpose_renderer_micro_contract.png");
             if let Err(err) = save_png(&output_path, &screenshot) {
-                fail(&robot, &err);
+                robot_exit::fail(&robot, &err);
             }
             println!("SCREENSHOT_PATH={}", output_path.display());
             println!(

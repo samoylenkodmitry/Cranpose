@@ -1,3 +1,5 @@
+mod robot_exit;
+
 use std::{
     path::{Path, PathBuf},
     process::ExitCode,
@@ -70,10 +72,8 @@ fn main() -> ExitCode {
                 save(&shot, &shot_dir, &format!("1-{name}-end-cell.png"));
 
                 let (first, last) = changed_span(&interior, &shot).unwrap_or_else(|| {
-                    fail(
-                        &robot,
-                        &format!("selecting the {name} end cell changed nothing on screen"),
-                    )
+                    robot_exit::fail_and_await_shutdown(&robot, &FAILED,
+                        &format!("selecting the {name} end cell changed nothing on screen"))
                 });
                 println!("the {name} end bubble occupies columns {first}..={last}");
 
@@ -81,15 +81,13 @@ fn main() -> ExitCode {
                 let past_right = last as f32 - right_edge;
                 if past_left > ESCAPE_BUDGET_PX || past_right > ESCAPE_BUDGET_PX {
                     let escape = past_left.max(past_right) / scale;
-                    fail(
-                        &robot,
+                    robot_exit::fail_and_await_shutdown(&robot, &FAILED,
                         &format!(
                             "the resting bubble on the {name} end cell is drawing outside the \
                              bar: columns {first}..={last} against the {left_edge:.1}..={right_edge:.1} \
                              it was given, about {escape:.1}dp of glass past the pill's rounded \
                              end. Its overhang past its own cell has outgrown the pill's margin."
-                        ),
-                    );
+                        ));
                 }
 
                 click_cell(&robot, 1);
@@ -217,11 +215,4 @@ fn settle(robot: &cranpose::Robot, millis: u64) {
     let _ = robot.wait_for_idle();
     std::thread::sleep(Duration::from_millis(millis));
     let _ = robot.wait_for_idle();
-}
-
-fn fail(robot: &cranpose::Robot, message: &str) -> ! {
-    println!("\n✗ {message}");
-    FAILED.store(true, Ordering::Relaxed);
-    let _ = robot.exit();
-    std::process::exit(1);
 }

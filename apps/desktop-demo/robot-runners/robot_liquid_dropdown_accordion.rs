@@ -1,3 +1,5 @@
+mod robot_exit;
+
 use std::{
     process::ExitCode,
     sync::atomic::{AtomicBool, Ordering},
@@ -41,8 +43,9 @@ fn main() -> ExitCode {
             settle(&robot, SETTLE_MS);
 
             if visible(&robot, ACCORDION_HEADER) {
-                fail(
+                robot_exit::fail_and_await_shutdown(
                     &robot,
+                    &FAILED,
                     "the dropdown was already open before anything was tapped",
                 );
             }
@@ -50,11 +53,16 @@ fn main() -> ExitCode {
             tap(&robot, TRIGGER_LABEL, "open the dropdown");
             settle(&robot, SETTLE_MS);
             if !visible(&robot, ACCORDION_HEADER) {
-                fail(&robot, "tapping the trigger did not open the dropdown");
+                robot_exit::fail_and_await_shutdown(
+                    &robot,
+                    &FAILED,
+                    "tapping the trigger did not open the dropdown",
+                );
             }
             if visible(&robot, UNFOLDED_ROW) {
-                fail(
+                robot_exit::fail_and_await_shutdown(
                     &robot,
+                    &FAILED,
                     "the accordion was unfolded before its header was tapped",
                 );
             }
@@ -63,16 +71,18 @@ fn main() -> ExitCode {
             settle(&robot, SETTLE_MS);
 
             if !visible(&robot, ACCORDION_HEADER) {
-                fail(
+                robot_exit::fail_and_await_shutdown(
                     &robot,
+                    &FAILED,
                     "tapping a `keeps_open` row dismissed the dropdown. The row asked the \
                      menu to stay open and the menu closed anyway, so an accordion inside a \
                      dropdown can never unfold.",
                 );
             }
             if !visible(&robot, UNFOLDED_ROW) {
-                fail(
+                robot_exit::fail_and_await_shutdown(
                     &robot,
+                    &FAILED,
                     &format!(
                         "the dropdown stayed open but never unfolded: `{UNFOLDED_ROW}` is not \
                          on screen after tapping `{ACCORDION_HEADER}`."
@@ -84,8 +94,9 @@ fn main() -> ExitCode {
             tap(&robot, PLAIN_ROW, "tap an ordinary row");
             settle(&robot, SETTLE_MS);
             if visible(&robot, ACCORDION_HEADER) {
-                fail(
+                robot_exit::fail_and_await_shutdown(
                     &robot,
+                    &FAILED,
                     "tapping an ordinary row left the dropdown open. A row that does not ask \
                      to stay open has to dismiss.",
                 );
@@ -95,8 +106,9 @@ fn main() -> ExitCode {
             tap(&robot, TRIGGER_LABEL, "reopen the dropdown");
             settle(&robot, SETTLE_MS);
             if !visible(&robot, ACCORDION_HEADER) {
-                fail(
+                robot_exit::fail_and_await_shutdown(
                     &robot,
+                    &FAILED,
                     "the dropdown would not reopen after being dismissed",
                 );
             }
@@ -171,21 +183,22 @@ fn tap(robot: &cranpose::Robot, text: &str, what: &str) {
     let bounds = robot
         .find_text_bounds(text)
         .expect("query the screen for text")
-        .unwrap_or_else(|| fail(robot, &format!("cannot {what}: `{text}` is not on screen")));
+        .unwrap_or_else(|| {
+            robot_exit::fail_and_await_shutdown(
+                robot,
+                &FAILED,
+                &format!("cannot {what}: `{text}` is not on screen"),
+            )
+        });
     robot
         .click(bounds.0 + bounds.2 * 0.5, bounds.1 + bounds.3 * 0.5)
-        .unwrap_or_else(|error| fail(robot, &format!("cannot {what}: {error}")));
+        .unwrap_or_else(|error| {
+            robot_exit::fail_and_await_shutdown(robot, &FAILED, &format!("cannot {what}: {error}"))
+        });
 }
 
 fn settle(robot: &cranpose::Robot, millis: u64) {
     let _ = robot.wait_for_idle();
     std::thread::sleep(Duration::from_millis(millis));
     let _ = robot.wait_for_idle();
-}
-
-fn fail(robot: &cranpose::Robot, message: &str) -> ! {
-    println!("\n✗ {message}");
-    FAILED.store(true, Ordering::Relaxed);
-    let _ = robot.exit();
-    std::process::exit(1);
 }

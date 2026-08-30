@@ -1,3 +1,5 @@
+mod robot_exit;
+
 use std::{
     path::{Path, PathBuf},
     process::ExitCode,
@@ -107,7 +109,7 @@ fn main() -> ExitCode {
                     break;
                 }
                 if attempt == 2 {
-                    fail(&robot, "double-tap selection never armed");
+                    robot_exit::fail_and_await_shutdown(&robot, &FAILED,  "double-tap selection never armed");
                 }
                 robot
                     .drag(melody_center, line1_mid, melody_center, line1_mid)
@@ -149,13 +151,13 @@ fn main() -> ExitCode {
                 save(shot, &shot_dir, name);
             }
             if !region_has_structure(shots.last().expect("settled grow frame"), loupe_region_at(end_x)) {
-                fail(&robot, "the loupe never reached its raised steady pose");
+                robot_exit::fail_and_await_shutdown(&robot, &FAILED,  "the loupe never reached its raised steady pose");
             }
             std::thread::sleep(Duration::from_millis(420));
 
             let held = robot.screenshot_with_scale(3.0).expect("held loupe");
             let held_center = loupe_top_rim_center_x(&held)
-                .unwrap_or_else(|| fail(&robot, "held loupe top rim was not measurable"));
+                .unwrap_or_else(|| robot_exit::fail_and_await_shutdown(&robot, &FAILED,  "held loupe top rim was not measurable"));
             let jump_x = (end_x + 90.0).min(FIELD_X + FIELD_WIDTH - 60.0);
             robot
                 .touch_move(jump_x, line1_mid)
@@ -165,19 +167,17 @@ fn main() -> ExitCode {
                 .expect("immediate jump frame");
             save(&jumped, &shot_dir, "05b-direct-follow");
             let jumped_center = loupe_top_rim_center_x(&jumped)
-                .unwrap_or_else(|| fail(&robot, "jumped loupe top rim was not measurable"));
+                .unwrap_or_else(|| robot_exit::fail_and_await_shutdown(&robot, &FAILED,  "jumped loupe top rim was not measurable"));
             println!(
                 "loupe direct follow held={held_center:.2} pointer={jump_x:.2} frame={jumped_center:.2}"
             );
             let step = jump_x - end_x;
             let moved = jumped_center - held_center;
             if moved < -2.0 || moved > step * 0.75 {
-                fail(
-                    &robot,
+                robot_exit::fail_and_await_shutdown(&robot, &FAILED,
                     &format!(
                         "loupe step response outside the measured follow envelope: held={held_center:.2}, pointer={jump_x:.2}, frame={jumped_center:.2}"
-                    ),
-                );
+                    ));
             }
             std::thread::sleep(Duration::from_millis(350));
             let _ = robot.wait_for_idle();
@@ -186,14 +186,12 @@ fn main() -> ExitCode {
                 .expect("converged follow frame");
             save(&converged, &shot_dir, "05c-follow-converged");
             let converged_center = loupe_top_rim_center_x(&converged)
-                .unwrap_or_else(|| fail(&robot, "converged loupe top rim was not measurable"));
+                .unwrap_or_else(|| robot_exit::fail_and_await_shutdown(&robot, &FAILED,  "converged loupe top rim was not measurable"));
             if (converged_center - jump_x).abs() > 8.0 {
-                fail(
-                    &robot,
+                robot_exit::fail_and_await_shutdown(&robot, &FAILED,
                     &format!(
                         "loupe follow did not converge on the pointer: pointer={jump_x:.2}, settled={converged_center:.2}"
-                    ),
-                );
+                    ));
             }
             robot
                 .touch_move(end_x, line1_mid)
@@ -264,7 +262,7 @@ fn main() -> ExitCode {
                 line1_mid - 14.0,
             );
             if region_has_structure(&shots[5], terminal_region) {
-                fail(&robot, "collapse +270 ms: bubble residue never unmounted");
+                robot_exit::fail_and_await_shutdown(&robot, &FAILED,  "collapse +270 ms: bubble residue never unmounted");
             }
             std::thread::sleep(Duration::from_millis(500));
             let after = robot.screenshot_with_scale(3.0).expect("after");
@@ -283,7 +281,7 @@ fn main() -> ExitCode {
                 line1_mid - 72.0,
             );
             if !region_has_structure(&dot_drag, dot_loupe_region) {
-                fail(&robot, "no loupe rose for a dot grab below the line");
+                robot_exit::fail_and_await_shutdown(&robot, &FAILED,  "no loupe rose for a dot grab below the line");
             }
             robot
                 .touch_move(wrap_boundary_x, dot_y)
@@ -304,10 +302,8 @@ fn main() -> ExitCode {
                 "wrapped boundary byte={first_wrap_boundary} x={wrap_boundary_x:.2} upper-end pixels={upper_end_pixels}"
             );
             if upper_end_pixels < 20 {
-                fail(
-                    &robot,
-                    "end handle at a shared soft-wrap boundary jumped off the upper visual line",
-                );
+                robot_exit::fail_and_await_shutdown(&robot, &FAILED,
+                    "end handle at a shared soft-wrap boundary jumped off the upper visual line");
             }
             robot
                 .touch_up(wrap_boundary_x, dot_y)
@@ -470,17 +466,4 @@ fn count_accent_pixels(shot: &cranpose::RobotScreenshot, region: (f32, f32, f32,
         }
     }
     count
-}
-
-fn fail(robot: &cranpose::Robot, message: &str) -> ! {
-    println!("FATAL: {message}");
-    FAILED.store(true, Ordering::Relaxed);
-    std::thread::spawn(|| {
-        std::thread::sleep(Duration::from_secs(15));
-        std::process::exit(1);
-    });
-    let _ = robot.exit();
-    loop {
-        std::thread::sleep(Duration::from_secs(1));
-    }
 }

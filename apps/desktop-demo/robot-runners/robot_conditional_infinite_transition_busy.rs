@@ -1,3 +1,5 @@
+mod robot_exit;
+
 use std::time::{Duration, Instant};
 
 use cranpose::{AppLauncher, Robot, RobotScreenshot};
@@ -13,16 +15,10 @@ use cranpose_ui::{
     RowSpec, Text, TextStyle,
 };
 
-fn fail(robot: &Robot, message: &str) -> ! {
-    println!("FAIL: {message}");
-    robot.exit().ok();
-    std::process::exit(1);
-}
-
 fn capture(robot: &Robot, label: &str) -> RobotScreenshot {
     robot
         .screenshot()
-        .unwrap_or_else(|err| fail(robot, &format!("{label} screenshot failed: {err}")))
+        .unwrap_or_else(|err| robot_exit::fail(robot, &format!("{label} screenshot failed: {err}")))
 }
 
 fn wait_for_text(robot: &Robot, text: &str, timeout: Duration) -> (f32, f32, f32, f32) {
@@ -33,16 +29,16 @@ fn wait_for_text(robot: &Robot, text: &str, timeout: Duration) -> (f32, f32, f32
         }
         std::thread::sleep(Duration::from_millis(30));
     }
-    fail(robot, &format!("timed out waiting for text {text:?}"));
+    robot_exit::fail(robot, &format!("timed out waiting for text {text:?}"));
 }
 
 fn click_button(robot: &Robot, label: &str) {
     let Some((x, y, w, h)) = find_button_in_semantics(robot, label) else {
-        fail(robot, &format!("button {label:?} not found"));
+        robot_exit::fail(robot, &format!("button {label:?} not found"));
     };
     robot
         .click(x + w * 0.5, y + h * 0.5)
-        .unwrap_or_else(|err| fail(robot, &format!("click {label:?} failed: {err}")));
+        .unwrap_or_else(|err| robot_exit::fail(robot, &format!("click {label:?} failed: {err}")));
 }
 
 fn test_app() {
@@ -140,18 +136,18 @@ fn main() {
                 wait_for_text(&robot, "Busy indicator", Duration::from_secs(5));
             let indicator_region = (text_x - 16.0, text_y - 14.0, 360.0, 52.0);
 
-            robot
-                .pump_frames(2)
-                .unwrap_or_else(|err| fail(&robot, &format!("initial pump failed: {err}")));
+            robot.pump_frames(2).unwrap_or_else(|err| {
+                robot_exit::fail(&robot, &format!("initial pump failed: {err}"))
+            });
             let first = capture(&robot, "first busy frame");
-            robot
-                .pump_frames(16)
-                .unwrap_or_else(|err| fail(&robot, &format!("animation pump failed: {err}")));
+            robot.pump_frames(16).unwrap_or_else(|err| {
+                robot_exit::fail(&robot, &format!("animation pump failed: {err}"))
+            });
             let later = capture(&robot, "later busy frame");
 
             let changed = changed_pixel_count_in_region(&first, &later, indicator_region, 8);
             if changed < 80 {
-                fail(
+                robot_exit::fail(
                     &robot,
                     &format!("busy indicator painted once but did not advance; changed={changed}"),
                 );

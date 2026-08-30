@@ -1,3 +1,5 @@
+mod robot_exit;
+
 use std::time::Duration;
 
 use cranpose::AppLauncher;
@@ -9,7 +11,7 @@ use desktop_app::app;
 
 fn click_button(robot: &cranpose::Robot, label: &str) {
     let Some((x, y, w, h)) = find_button_in_semantics(robot, label) else {
-        fail(robot, &format!("button {label:?} not found"));
+        robot_exit::fail(robot, &format!("button {label:?} not found"));
     };
     let cx = x + w / 2.0;
     let cy = y + h / 2.0;
@@ -49,12 +51,6 @@ fn visible_texts(robot: &cranpose::Robot) -> Vec<String> {
     texts
 }
 
-fn fail(robot: &cranpose::Robot, message: &str) -> ! {
-    println!("FAIL: {message}");
-    let _ = robot.exit();
-    std::process::exit(1);
-}
-
 fn wait_for_text(robot: &cranpose::Robot, text: &str, timeout: Duration) {
     let deadline = std::time::Instant::now() + timeout;
     while std::time::Instant::now() < deadline {
@@ -63,7 +59,7 @@ fn wait_for_text(robot: &cranpose::Robot, text: &str, timeout: Duration) {
         }
         std::thread::sleep(Duration::from_millis(50));
     }
-    fail(
+    robot_exit::fail(
         robot,
         &format!(
             "timed out waiting for text {text:?}; visible_texts={:?}",
@@ -91,13 +87,12 @@ fn main() {
             wait_for_text(&robot, "Async Runtime Demo", Duration::from_secs(5));
 
             let initial_progress = read_progress_percent(&robot).unwrap_or_else(|| {
-                fail(
+                robot_exit::fail(
                     &robot,
                     &format!(
                         "Async progress text missing after switching from Animations; visible_texts={:?}",
                         visible_texts(&robot)
-                    ),
-                );
+                    ));
             });
 
             println!("Initial async progress after switch: {initial_progress}%");
@@ -116,13 +111,12 @@ fn main() {
             }
 
             if !progressed {
-                fail(
+                robot_exit::fail(
                     &robot,
                     &format!(
                         "Async Runtime progress stayed stuck after Animations -> Async switch; initial={initial_progress}% last={last_progress}% visible_texts={:?}",
                         visible_texts(&robot)
-                    ),
-                );
+                    ));
             }
 
             println!(

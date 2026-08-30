@@ -1,3 +1,5 @@
+mod robot_exit;
+
 use std::{
     path::PathBuf,
     process::ExitCode,
@@ -96,38 +98,30 @@ fn main() -> ExitCode {
             );
 
             if plain_white - adaptive_white < 8.0 {
-                fail(
-                    &robot,
+                robot_exit::fail_and_await_shutdown(&robot, &FAILED,
                     &format!(
                         "adaptive glass must darken over a bright backdrop: \
                          adaptive {adaptive_white:.1} vs plain {plain_white:.1}"
-                    ),
-                );
+                    ));
             }
             if adaptive_black - plain_black < 8.0 {
-                fail(
-                    &robot,
+                robot_exit::fail_and_await_shutdown(&robot, &FAILED,
                     &format!(
                         "adaptive glass must lighten behind dark foreground on a dark backdrop: \
                          adaptive {adaptive_black:.1} vs plain {plain_black:.1}"
-                    ),
-                );
+                    ));
             }
             if white_text_extrema.1 < 225.0 || black_text_extrema.0 > 30.0 {
-                fail(
-                    &robot,
+                robot_exit::fail_and_await_shutdown(&robot, &FAILED,
                     &format!(
                         "adaptive proof labels did not render at their requested foreground polarity: white {white_text_extrema:?}, black {black_text_extrema:?}"
-                    ),
-                );
+                    ));
             }
             if white_contrast < 4.5 || black_contrast < 4.5 {
-                fail(
-                    &robot,
+                robot_exit::fail_and_await_shutdown(&robot, &FAILED,
                     &format!(
                         "adaptive frost failed foreground contrast: white {white_contrast:.2}:1, black {black_contrast:.2}:1"
-                    ),
-                );
+                    ));
             }
 
             println!("PASS: adaptive frost contract");
@@ -233,19 +227,6 @@ fn main() -> ExitCode {
         ExitCode::FAILURE
     } else {
         ExitCode::SUCCESS
-    }
-}
-
-fn fail(robot: &cranpose::Robot, message: &str) -> ! {
-    println!("FATAL: {message}");
-    FAILED.store(true, Ordering::Relaxed);
-    std::thread::spawn(|| {
-        std::thread::sleep(Duration::from_secs(15));
-        std::process::exit(1);
-    });
-    let _ = robot.exit();
-    loop {
-        std::thread::sleep(Duration::from_secs(60));
     }
 }
 

@@ -1,4 +1,5 @@
 mod output_paths;
+mod robot_exit;
 
 use std::{path::Path, time::Duration};
 
@@ -31,12 +32,6 @@ const SCROLL_COMPARE_TOP: f32 = 1.0;
 const SCROLL_COMPARE_H: f32 = BLOCK_H - 2.0;
 const GRID_COMPARE_TOP: f32 = 26.4;
 const GRID_COMPARE_H: f32 = 20.0;
-
-fn fail(robot: &cranpose::Robot, message: &str) -> ! {
-    println!("FATAL: {message}");
-    let _ = robot.exit();
-    std::process::exit(1);
-}
 
 fn save_png(path: &Path, screenshot: &cranpose::RobotScreenshot) -> Result<(), String> {
     let image: RgbaImage = ImageBuffer::from_raw(
@@ -260,11 +255,11 @@ fn main() {
 
             let screenshot = robot
                 .screenshot_with_scale(CAPTURE_SCALE)
-                .unwrap_or_else(|err| fail(&robot, &format!("failed to capture screenshot: {err}")));
+                .unwrap_or_else(|err| robot_exit::fail(&robot, &format!("failed to capture screenshot: {err}")));
             let output_path =
                 output_paths::diagnostic_path("cranpose_render_crispness_contract.png");
             if let Err(err) = save_png(&output_path, &screenshot) {
-                fail(&robot, &err);
+                robot_exit::fail(&robot, &err);
             }
             println!("SCREENSHOT_PATH={}", output_path.display());
 
@@ -335,7 +330,7 @@ fn main() {
             }
 
             if !failures.is_empty() {
-                fail(&robot, &failures.join("; "));
+                robot_exit::fail(&robot, &failures.join("; "));
             }
 
             println!(

@@ -1,4 +1,5 @@
 mod output_paths;
+mod robot_exit;
 
 use std::{path::Path, time::Duration};
 
@@ -62,11 +63,6 @@ fn tab_row_y(tabs: &[(String, Rect)]) -> f32 {
     ys[ys.len() / 2]
 }
 
-fn fail(_robot: &cranpose::Robot, message: &str) -> ! {
-    println!("FATAL: {message}");
-    std::process::exit(1);
-}
-
 fn save_screenshot(path: &Path, screenshot: &cranpose::RobotScreenshot) {
     let Some(image) = ImageBuffer::<image::Rgba<u8>, _>::from_raw(
         screenshot.width,
@@ -97,17 +93,17 @@ fn main() {
             let root = root_bounds(&robot).unwrap_or((0.0, 0.0, 900.0, 700.0));
             let initial_tabs = collect_tab_bounds(&robot, &labels);
             if initial_tabs.len() < 4 {
-                fail(&robot, "not enough tab semantics collected");
+                robot_exit::fail_without_shutdown( "not enough tab semantics collected");
             }
             let axis = detect_tab_axis(&initial_tabs).unwrap_or(TabAxis::Horizontal);
             if axis != TabAxis::Horizontal {
-                fail(&robot, "tabbar is expected to be horizontal in the desktop demo");
+                robot_exit::fail_without_shutdown( "tabbar is expected to be horizontal in the desktop demo");
             }
             let Some(span) = bounds_span(&initial_tabs) else {
-                fail(&robot, "missing tab span");
+                robot_exit::fail_without_shutdown( "missing tab span");
             };
             if span.2 - span.0 <= root.2 - 40.0 {
-                fail(&robot, "tabbar does not overflow, so scroll contract cannot run");
+                robot_exit::fail_without_shutdown( "tabbar does not overflow, so scroll contract cannot run");
             }
 
             let initial_y = tab_row_y(&initial_tabs);
@@ -121,10 +117,8 @@ fn main() {
             let wheel_y_delta = after_wheel_y - initial_y;
             println!("after_wheel_y={after_wheel_y:.2} wheel_y_delta={wheel_y_delta:.2}");
             if wheel_y_delta.abs() > 1.0 {
-                fail(
-                    &robot,
-                    &format!("tab row changed Y during wheel scroll: delta={wheel_y_delta:.2}"),
-                );
+                robot_exit::fail_without_shutdown(
+                    &format!("tab row changed Y during wheel scroll: delta={wheel_y_delta:.2}"));
             }
 
             scroll_tab_row_left(&robot, initial_counter, 260.0);
@@ -137,10 +131,8 @@ fn main() {
                 lazy_after_drag.0
             );
             if y_delta.abs() > 1.0 {
-                fail(
-                    &robot,
-                    &format!("tab row changed Y while scrolling: delta={y_delta:.2}"),
-                );
+                robot_exit::fail_without_shutdown(
+                    &format!("tab row changed Y while scrolling: delta={y_delta:.2}"));
             }
 
             for label in [
@@ -187,10 +179,8 @@ fn main() {
             let before_hn = require_tab(&before_click, "Hacker News");
             let before_counter = require_tab(&before_click, "Counter App");
             if !visible_in_root(before_hn, root) {
-                fail(
-                    &robot,
-                    &format!("Hacker News tab is still not visible after tabbar scroll: {before_hn:?}"),
-                );
+                robot_exit::fail_without_shutdown(
+                    &format!("Hacker News tab is still not visible after tabbar scroll: {before_hn:?}"));
             }
             let tab_strip_region = (0.0, (before_hn.1 - 18.0).max(0.0), root.2, before_hn.3 + 36.0);
             let screenshot_before_click = robot.screenshot().expect("tabbar before click screenshot");
@@ -230,13 +220,11 @@ fn main() {
                 || hn_jump.abs() > 12.0
                 || tab_strip_diff > 18_000
             {
-                fail(
-                    &robot,
-                    "clicking Hacker News after tabbar scroll reset or jumped the tab-row scroll position",
-                );
+                robot_exit::fail_without_shutdown(
+                    "clicking Hacker News after tabbar scroll reset or jumped the tab-row scroll position");
             }
             if find_button_exact_in_semantics(&robot, "Hacker News").is_none() {
-                fail(&robot, "Hacker News tab disappeared from button semantics");
+                robot_exit::fail_without_shutdown( "Hacker News tab disappeared from button semantics");
             }
 
             let edge_probe_before = collect_tab_bounds(&robot, &labels);
@@ -255,12 +243,10 @@ fn main() {
             let edge_probe_delta = edge_probe_hn_after.0 - edge_probe_hn_before.0;
             println!("edge_wheel_delta={edge_probe_delta:.2}");
             if edge_probe_delta < 100.0 {
-                fail(
-                    &robot,
+                robot_exit::fail_without_shutdown(
                     &format!(
                         "horizontal wheel inside the tab-row band near the window edge did not reach the row: delta={edge_probe_delta:.2}"
-                    ),
-                );
+                    ));
             }
 
             println!("PASS: tab row keeps Y position and retained scroll offset");
