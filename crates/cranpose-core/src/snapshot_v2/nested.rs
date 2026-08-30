@@ -260,54 +260,18 @@ impl NestedMutableSnapshot {
         read_observer: Option<ReadObserver>,
         write_observer: Option<WriteObserver>,
     ) -> Arc<NestedMutableSnapshot> {
-        let merged_read =
-            merge_read_observers(read_observer, self.state.read_observer.borrow().clone());
-        let merged_write =
-            merge_write_observers(write_observer, self.state.write_observer.borrow().clone());
+        let root = Arc::downgrade(&self.root_mutable());
+        allocate_nested_mutable_snapshot(self, root, read_observer, write_observer)
+    }
+}
 
-        let parent_id = self.state.id.get();
-        let current_invalid = self.state.invalid.borrow().clone();
+impl NestedMutableHost for NestedMutableSnapshot {
+    fn snapshot_state(&self) -> &SnapshotState {
+        &self.state
+    }
 
-        let (new_id, _runtime_invalid) = allocate_snapshot();
-
-        let parent_invalid_with_child = current_invalid.set(new_id);
-        self.state.invalid.replace(parent_invalid_with_child);
-
-        let invalid = current_invalid.add_range(parent_id + 1, new_id);
-
-        let self_weak = Arc::downgrade(&self.root_mutable());
-
-        let nested = NestedMutableSnapshot::new(
-            new_id,
-            invalid,
-            merged_read,
-            merged_write,
-            self_weak,
-            self.state.id.get(),
-        );
-
-        self.nested_count.set(self.nested_count.get() + 1);
-        self.state.add_pending_child(new_id);
-
-        let parent_self_weak = Arc::downgrade(self);
-        nested.set_on_dispose({
-            let child_id = new_id;
-            move || {
-                if let Some(parent) = parent_self_weak.upgrade() {
-                    if parent.nested_count.get() > 0 {
-                        parent
-                            .nested_count
-                            .set(parent.nested_count.get().saturating_sub(1));
-                    }
-                    let mut invalid = parent.state.invalid.borrow_mut();
-                    let new_set = invalid.clone().clear(child_id);
-                    *invalid = new_set;
-                    parent.state.remove_pending_child(child_id);
-                }
-            }
-        });
-
-        nested
+    fn nested_count(&self) -> &Cell<usize> {
+        &self.nested_count
     }
 }
 

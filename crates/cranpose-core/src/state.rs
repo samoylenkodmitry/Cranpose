@@ -627,6 +627,19 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
         readable_record_for(&head, snapshot_id, invalid)
     }
 
+    fn is_equivalent_to_readable(
+        &self,
+        snapshot_id: SnapshotId,
+        invalid: &SnapshotIdSet,
+        new_value: &T,
+    ) -> bool {
+        self.readable_for(snapshot_id, invalid)
+            .map(|record| {
+                record.with_value(|current: &T| self.policy.equivalent(current, new_value))
+            })
+            .unwrap_or(false)
+    }
+
     fn writable_record(&self, snapshot_id: SnapshotId, invalid: &SnapshotIdSet) -> Rc<StateRecord> {
         let readable = match self.readable_for(snapshot_id, invalid) {
             Some(record) => record,
@@ -843,13 +856,7 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
         match &snapshot {
             AnySnapshot::Global(global) => {
                 let invalid = snapshot.invalid();
-                let equivalent = self
-                    .readable_for(snapshot_id, &invalid)
-                    .map(|record| {
-                        record.with_value(|current: &T| self.policy.equivalent(current, &new_value))
-                    })
-                    .unwrap_or(false);
-                if equivalent {
+                if self.is_equivalent_to_readable(snapshot_id, &invalid, &new_value) {
                     return false;
                 }
 
@@ -901,13 +908,7 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
             | AnySnapshot::NestedMutable(_)
             | AnySnapshot::TransparentMutable(_) => {
                 let invalid = snapshot.invalid();
-                let equivalent = self
-                    .readable_for(snapshot_id, &invalid)
-                    .map(|record| {
-                        record.with_value(|current: &T| self.policy.equivalent(current, &new_value))
-                    })
-                    .unwrap_or(false);
-                if equivalent {
+                if self.is_equivalent_to_readable(snapshot_id, &invalid, &new_value) {
                     return false;
                 }
 
@@ -1318,6 +1319,30 @@ fn register_current_state_scope<T: Clone + 'static>(inner: &MutableStateInner<T>
     }
 }
 
+trait StateArenaHandle<T: Clone + 'static> {
+    fn state_id(&self) -> StateId;
+    fn runtime_id(&self) -> runtime::RuntimeId;
+
+    fn runtime_handle(&self) -> RuntimeHandle {
+        runtime::runtime_handle_by_id(self.runtime_id())
+            .unwrap_or_else(|| panic!("runtime {:?} dropped", self.runtime_id()))
+    }
+
+    fn runtime_handle_opt(&self) -> Option<RuntimeHandle> {
+        runtime::runtime_handle_by_id(self.runtime_id())
+    }
+
+    fn with_inner<R>(&self, f: impl FnOnce(&MutableStateInner<T>) -> R) -> R {
+        self.runtime_handle()
+            .with_state_arena(|arena| arena.with_typed::<T, R>(self.state_id(), f))
+    }
+
+    fn try_with_inner<R>(&self, f: impl FnOnce(&MutableStateInner<T>) -> R) -> Option<R> {
+        self.runtime_handle_opt()?
+            .try_with_state_arena(|arena| arena.with_typed_opt::<T, R>(self.state_id(), f))?
+    }
+}
+
 /// Cheap copyable read-only view of a state cell.
 pub struct State<T: Clone + 'static> {
     id: StateId,
@@ -1376,7 +1401,7 @@ impl<T: Clone + 'static> Clone for MutableState<T> {
     }
 }
 
-impl<T: Clone + 'static> State<T> {
+impl<T: Clone + 'static> StateArenaHandle<T> for State<T> {
     fn state_id(&self) -> StateId {
         self.id
     }
@@ -1384,26 +1409,9 @@ impl<T: Clone + 'static> State<T> {
     fn runtime_id(&self) -> runtime::RuntimeId {
         self.runtime_id
     }
+}
 
-    fn runtime_handle(&self) -> RuntimeHandle {
-        runtime::runtime_handle_by_id(self.runtime_id())
-            .unwrap_or_else(|| panic!("runtime {:?} dropped", self.runtime_id()))
-    }
-
-    fn runtime_handle_opt(&self) -> Option<RuntimeHandle> {
-        runtime::runtime_handle_by_id(self.runtime_id())
-    }
-
-    fn with_inner<R>(&self, f: impl FnOnce(&MutableStateInner<T>) -> R) -> R {
-        self.runtime_handle()
-            .with_state_arena(|arena| arena.with_typed::<T, R>(self.state_id(), f))
-    }
-
-    fn try_with_inner<R>(&self, f: impl FnOnce(&MutableStateInner<T>) -> R) -> Option<R> {
-        self.runtime_handle_opt()?
-            .try_with_state_arena(|arena| arena.with_typed_opt::<T, R>(self.state_id(), f))?
-    }
-
+impl<T: Clone + 'static> State<T> {
     fn subscribe_current_scope(&self) {
         self.with_inner(register_current_state_scope::<T>);
     }
@@ -1474,6 +1482,16 @@ pub struct StateSubscriptionHold {
     _lease: Option<Box<dyn Any>>,
 }
 
+impl<T: Clone + 'static> StateArenaHandle<T> for MutableState<T> {
+    fn state_id(&self) -> StateId {
+        self.id
+    }
+
+    fn runtime_id(&self) -> runtime::RuntimeId {
+        self.runtime_id
+    }
+}
+
 impl<T: Clone + 'static> MutableState<T> {
     pub fn with_runtime(value: T, runtime: RuntimeHandle) -> Self {
         runtime.alloc_persistent_state(value)
@@ -1489,33 +1507,6 @@ impl<T: Clone + 'static> MutableState<T> {
 
     pub(crate) fn from_lease(lease: &Rc<runtime::StateHandleLease>) -> Self {
         Self::from_parts(lease.id(), lease.runtime().id())
-    }
-
-    fn state_id(&self) -> StateId {
-        self.id
-    }
-
-    fn runtime_id(&self) -> runtime::RuntimeId {
-        self.runtime_id
-    }
-
-    fn runtime_handle(&self) -> RuntimeHandle {
-        runtime::runtime_handle_by_id(self.runtime_id())
-            .unwrap_or_else(|| panic!("runtime {:?} dropped", self.runtime_id()))
-    }
-
-    fn runtime_handle_opt(&self) -> Option<RuntimeHandle> {
-        runtime::runtime_handle_by_id(self.runtime_id())
-    }
-
-    fn with_inner<R>(&self, f: impl FnOnce(&MutableStateInner<T>) -> R) -> R {
-        self.runtime_handle()
-            .with_state_arena(|arena| arena.with_typed::<T, R>(self.state_id(), f))
-    }
-
-    fn try_with_inner<R>(&self, f: impl FnOnce(&MutableStateInner<T>) -> R) -> Option<R> {
-        self.runtime_handle_opt()?
-            .try_with_state_arena(|arena| arena.with_typed_opt::<T, R>(self.state_id(), f))?
     }
 
     pub fn is_alive(&self) -> bool {
@@ -2384,36 +2375,7 @@ mod tests {
         let rec2 = StateRecord::new(200, 2i32, Some(rec1.clone()));
         let rec3 = StateRecord::new(300, 3i32, Some(rec2.clone()));
 
-        struct TestState {
-            head: Rc<StateRecord>,
-        }
-        impl StateObject for TestState {
-            fn object_id(&self) -> ObjectId {
-                ObjectId(999)
-            }
-            fn first_record(&self) -> Rc<StateRecord> {
-                Rc::clone(&self.head)
-            }
-            fn try_readable_record(
-                &self,
-                _: SnapshotId,
-                _: &SnapshotIdSet,
-            ) -> Option<Rc<StateRecord>> {
-                Some(Rc::clone(&self.head))
-            }
-            fn readable_record(&self, _: SnapshotId, _: &SnapshotIdSet) -> Rc<StateRecord> {
-                Rc::clone(&self.head)
-            }
-            fn prepend_state_record(&self, _: Rc<StateRecord>) {}
-            fn promote_record(&self, _: SnapshotId) -> Result<(), &'static str> {
-                Ok(())
-            }
-            fn as_any(&self) -> &dyn Any {
-                self
-            }
-        }
-
-        let test_state = TestState { head: rec3.clone() };
+        let test_state = ManualState::new(rec3.clone());
 
         let _pin = crate::snapshot_pinning::track_pinning(1000, &SnapshotIdSet::EMPTY);
 

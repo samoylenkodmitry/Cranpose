@@ -13,6 +13,22 @@ use std::{
 
 use crate::{Key, RuntimeHandle, TaskHandle, effect_key::EffectKey, with_current_composer};
 
+trait EffectKeySlot {
+    fn key(&self) -> &Option<EffectKey>;
+    fn key_mut(&mut self) -> &mut Option<EffectKey>;
+
+    fn should_run(&self, key: &EffectKey) -> bool {
+        match self.key() {
+            Some(current) => key.differs_from(current),
+            None => true,
+        }
+    }
+
+    fn set_key(&mut self, key: EffectKey) {
+        *self.key_mut() = Some(key);
+    }
+}
+
 #[derive(Default)]
 struct LaunchedEffectState {
     key: Option<EffectKey>,
@@ -72,18 +88,17 @@ struct LaunchedEffectAsyncState {
     site: TaskSite,
 }
 
+impl EffectKeySlot for LaunchedEffectState {
+    fn key(&self) -> &Option<EffectKey> {
+        &self.key
+    }
+
+    fn key_mut(&mut self) -> &mut Option<EffectKey> {
+        &mut self.key
+    }
+}
+
 impl LaunchedEffectState {
-    fn should_run(&self, key: &EffectKey) -> bool {
-        match &self.key {
-            Some(current) => key.differs_from(current),
-            None => true,
-        }
-    }
-
-    fn set_key(&mut self, key: EffectKey) {
-        self.key = Some(key);
-    }
-
     fn launch(
         &mut self,
         runtime: RuntimeHandle,
@@ -129,18 +144,17 @@ impl LaunchedEffectCancellation {
     }
 }
 
+impl EffectKeySlot for LaunchedEffectAsyncState {
+    fn key(&self) -> &Option<EffectKey> {
+        &self.key
+    }
+
+    fn key_mut(&mut self) -> &mut Option<EffectKey> {
+        &mut self.key
+    }
+}
+
 impl LaunchedEffectAsyncState {
-    fn should_run(&self, key: &EffectKey) -> bool {
-        match &self.key {
-            Some(current) => key.differs_from(current),
-            None => true,
-        }
-    }
-
-    fn set_key(&mut self, key: EffectKey) {
-        self.key = Some(key);
-    }
-
     fn set_site(&mut self, site: TaskSite) {
         self.site = site;
     }
