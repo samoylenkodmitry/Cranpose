@@ -106,6 +106,10 @@ jobs:
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         run: just clippy-camera-desktop
 
+      - name: Run clippy on the robot runners
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
+        run: just clippy-robot
+
       - name: Build documentation
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         # A broken intra-doc link is a broken published page.
