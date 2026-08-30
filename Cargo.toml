@@ -75,6 +75,20 @@ web-time = "1.1"
 [workspace.lints.rust]
 unsafe_code = "deny"
 
+# The one warning class `-D warnings` structurally cannot reach: `clippy`
+# stops at metadata and never links, so a message from the target linker only
+# ever appears under `cargo build`/`cargo test`, where nothing escalates it.
+# Denying it here is what extends the zero-warnings rule over the link step.
+# Messages the compiler knows are informational are a separate lint,
+# `linker_info`, which stays allowed.
+#
+# The shape that reaches this in practice is macOS ld's `__eh_frame section
+# too large (max 16MB) to encode dwarf unwind offsets in compact unwind
+# table`, which is a code-volume symptom of the binary being linked, not a
+# profile or feature-set one -- see TIME_WASTERS.md for how to attribute the
+# section back to the object files that filled it.
+linker_messages = "deny"
+
 # "don't put unfinished parts here" and "never leave debug logs", as gates.
 [workspace.lints.clippy]
 todo = "deny"

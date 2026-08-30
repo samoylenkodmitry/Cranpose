@@ -5661,6 +5661,92 @@ cranpose v0.1.0
             .expect("the real workspace's own versions must already be aligned");
     }
 
+    /// The root manifest's `[workspace]` table.
+    fn workspace_table(root: &Path) -> toml::value::Table {
+        load_toml(&root.join("Cargo.toml"))
+            .expect("parse the workspace manifest")
+            .get("workspace")
+            .and_then(toml::Value::as_table)
+            .cloned()
+            .expect("the root manifest has a [workspace] table")
+    }
+
+    /// Every path listed in `workspace.members`.
+    fn workspace_members(workspace: &toml::value::Table) -> Vec<String> {
+        workspace
+            .get("members")
+            .and_then(toml::Value::as_array)
+            .expect("the workspace manifest lists its members")
+            .iter()
+            .map(|member| {
+                member
+                    .as_str()
+                    .expect("every workspace member is a path string")
+                    .to_owned()
+            })
+            .collect()
+    }
+
+    /// The level `[workspace.lints.rust]` sets for `name`, if any.
+    fn workspace_rust_lint_level(workspace: &toml::value::Table, name: &str) -> Option<String> {
+        workspace
+            .get("lints")
+            .and_then(toml::Value::as_table)
+            .and_then(|lints| lints.get("rust"))
+            .and_then(toml::Value::as_table)
+            .and_then(|rust| rust.get(name))
+            .and_then(toml::Value::as_str)
+            .map(str::to_owned)
+    }
+
+    /// The rules AGENTS.md hands to the compiler live in the root manifest's
+    /// `[workspace.lints]` tables, and cargo applies them to a member only
+    /// when that member's own manifest says `[lints] workspace = true`.
+    /// Nothing requires that opt-in, so a crate added without it builds with
+    /// `unsafe_code`, `todo`, `dbg_macro` and `linker_messages` all back at
+    /// their default levels while every gate stays green.
+    #[test]
+    fn every_workspace_member_inherits_the_workspace_lints() {
+        let root = real_workspace_root();
+        let missing: Vec<String> = workspace_members(&workspace_table(&root))
+            .into_iter()
+            .filter(|member| {
+                let manifest = load_toml(&root.join(member).join("Cargo.toml"))
+                    .expect("parse a workspace member manifest");
+                manifest
+                    .get("lints")
+                    .and_then(toml::Value::as_table)
+                    .and_then(|lints| lints.get("workspace"))
+                    .and_then(toml::Value::as_bool)
+                    != Some(true)
+            })
+            .collect();
+
+        assert!(
+            missing.is_empty(),
+            "these workspace members do not carry `workspace = true` under `[lints]`, so the \
+             workspace lint table does not reach them: {missing:?}"
+        );
+    }
+
+    /// `linker_messages` is the one warning class a `-D warnings` run cannot
+    /// reach, because clippy stops at metadata and never links. Denying it
+    /// in the workspace lint table is what fails a build on a linker
+    /// warning; at its default level a message such as macOS ld's
+    /// `__eh_frame section too large` prints under `cargo build`/`cargo
+    /// test` and turns nothing red.
+    #[test]
+    fn the_workspace_lints_deny_linker_messages() {
+        assert_eq!(
+            workspace_rust_lint_level(&workspace_table(&real_workspace_root()), "linker_messages")
+                .as_deref(),
+            Some("deny"),
+            "a linker warning must fail the build; shrink what is being linked instead of \
+             relaxing this level -- TIME_WASTERS.md records how to attribute an oversized \
+             `__eh_frame` back to the objects that filled it"
+        );
+    }
+
     #[test]
     fn verify_tag_passes_against_the_real_workspace_version() {
         let root = real_workspace_root();
