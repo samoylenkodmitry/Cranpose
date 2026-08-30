@@ -75,7 +75,7 @@ fn property_flag(name: &str) -> bool {
 /// any length — so a name may run right up to or past that pre-O limit, as
 /// `debug.cranpose.retained_mesh_px2` does; every deployment target is far
 /// past O.)
-const PROPERTY_BACKED_ENV_VARS: [(&str, &str); 43] = [
+const PROPERTY_BACKED_ENV_VARS: [(&str, &str); 44] = [
     ("debug.cranpose.root_direct", "CRANPOSE_ROOT_DIRECT_DIAG"),
     (
         "debug.cranpose.layout_ms",
@@ -147,6 +147,10 @@ const PROPERTY_BACKED_ENV_VARS: [(&str, &str); 43] = [
     (
         "debug.cranpose.no_range_cache",
         "CRANPOSE_DISABLE_DIRECT_SCENE_RANGE_CACHE",
+    ),
+    (
+        "debug.cranpose.range_cache_pct",
+        "CRANPOSE_DIRECT_SCENE_RANGE_CACHE_VIEWPORT_PCT",
     ),
     ("debug.cranpose.gpu_backend", "CRANPOSE_ANDROID_GPU_BACKEND"),
     ("debug.cranpose.async_haptics", "CRANPOSE_ASYNC_HAPTICS"),

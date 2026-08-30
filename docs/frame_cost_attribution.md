@@ -2,7 +2,8 @@
 
 Device-measured findings from 2026-08-29, taken with the
 `debug.cranpose.frame_telemetry` stage instrument on two real apps:
-cranscan (list scrolling) and cranpose-orbit (animated showcase). Two
+cranscan (list scrolling) and cranpose-showcase (the animated showcase
+app, formerly named cranpose-orbit — not cranorbit, the Wear game). Two
 of these findings are statements about Cranpose itself, independent of
 either app. Every number is a real-device capture; the methods notes at
 the end are the traps that produced wrong readings before the right
@@ -30,10 +31,27 @@ single variable per arm, order-alternated, temperature-logged:
 Freezing the layer returns the CPU encode to the removed level — the
 retained scene is not re-encoded, retention works — but present
 recovers only half: ~6 ms of GPU per frame remains for pixels that
-never change, and only removal recovers it. Texture-caching stable
-layers or damage-rect scissoring would recover that cost for every
-decorated app. This is an architectural piece of work, scheduled after
-the v0.1.105 release; it should not be attempted as a side change.
+never change, and only removal recovers it.
+
+**Resolution (2026-08-30).** The mechanism to recover this already
+existed: the direct scene-range cache renders a stable-hash chunk to a
+texture once and composites it as a quad inside the neighboring render
+pass — no per-frame round-trip, so Finding 4's economics do not apply
+to it. Fullscreen chunks were excluded solely by a flat 2 MB per-entry
+admission (a 1080x2244 chunk is 9.24 MB at Rgba8; a 408x408 Wear chunk
+is 0.64 MB and always fit, making the flat rule implicitly
+display-class-conditional). Two same-binary sysprop A/Bs on the Mate
+20 X, alternated and temperature-flat: admitting fullscreen entries on
+the frozen backdrop gained +4.2 fps (present p50 17.4/17.6 ->
+15.3/15.0 ms), with cache-diag proving three near-fullscreen entries
+hit every frame; on the shipping quantized backdrop, where the hash
+changes about once a second and each change pays one refused sighting
+plus one 9.7 MB store, the win held at +1.5 fps (present -1.4 ms).
+Admission is now viewport-relative — entries admit up to
+max(2 MB, 125% of the render target's own bytes),
+`debug.cranpose.range_cache_pct` overrides the percentage (0 restores
+the flat floor for A/B arms) — so the same rule derives the same
+behavior on every display class instead of being tuned to one.
 
 ## Finding 2 — re-recording costs ~37µs per solid-brush primitive
 
@@ -53,7 +71,7 @@ with two different owners live here, and they must not be merged:
 
 ## Finding 3 — frame-driven animation recomposes the world
 
-cranpose-orbit at IDLE spends 13-19 ms of `update` per frame because an
+cranpose-showcase at IDLE spends 13-19 ms of `update` per frame because an
 app-level ambient animation recomposes the entire tree every frame and
 rebuilds fourteen `RuntimeShader` objects from shared source. Even with
 the backdrop removed entirely, the app tops out at 42 fps on this CPU
