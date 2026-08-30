@@ -3,7 +3,7 @@ mod robot_launch;
 use std::time::Duration;
 
 use cranpose::SemanticElement;
-use cranpose_testing::{find_button_in_semantics, find_text_in_semantics};
+use cranpose_testing::{click_button_in_semantics, find_text_in_semantics};
 use desktop_app::app;
 
 const WINDOW_WIDTH: f32 = 1200.0;
@@ -211,22 +211,7 @@ fn main() {
         let mut all_issues: Vec<(String, LayoutIssue)> = Vec::new();
         let window_bounds = (0.0, 0.0, WINDOW_WIDTH, WINDOW_HEIGHT);
 
-        let click_button = |name: &str| -> bool {
-            if let Some((x, y, w, h)) = find_button_in_semantics(&robot, name) {
-                println!(
-                    "  Clicking '{}' at ({:.1}, {:.1})",
-                    name,
-                    x + w / 2.0,
-                    y + h / 2.0
-                );
-                robot.click(x + w / 2.0, y + h / 2.0).ok();
-                std::thread::sleep(Duration::from_millis(200));
-                true
-            } else {
-                println!("  ✗ Button '{}' not found!", name);
-                false
-            }
-        };
+        let click_button = |name: &str| -> bool { click_button_in_semantics(&robot, name) };
 
         println!("\n\n######################################");
         println!("# TEST 1: ASYNC RUNTIME TAB");

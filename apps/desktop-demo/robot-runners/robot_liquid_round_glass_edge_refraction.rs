@@ -24,6 +24,7 @@
 //! ```
 
 mod robot_exit;
+mod robot_shot;
 
 use std::{
     f32::consts::TAU,
@@ -160,13 +161,6 @@ fn ProbeApp() {
     });
 }
 
-fn color_distance(a: (u8, u8, u8), b: (u8, u8, u8)) -> f32 {
-    let dr = a.0 as f32 - b.0 as f32;
-    let dg = a.1 as f32 - b.1 as f32;
-    let db = a.2 as f32 - b.2 as f32;
-    (dr * dr + dg * dg + db * db).sqrt()
-}
-
 fn main() -> ExitCode {
     let _ = env_logger::try_init();
     let shot_dir = PathBuf::from(
@@ -189,25 +183,15 @@ fn main() -> ExitCode {
             {
                 let _ = image.save(shot_dir.join("round-glass-edge-refraction.png"));
             }
-            let scale = shot.width as f32 / shot.logical_width;
-            let sample = |lx: f32, ly: f32| -> (u8, u8, u8) {
-                let px = (lx * scale).round().clamp(0.0, shot.width as f32 - 1.0) as u32;
-                let py = (ly * scale).round().clamp(0.0, shot.height as f32 - 1.0) as u32;
-                let idx = ((py * shot.width + px) * 4) as usize;
-                (shot.pixels[idx], shot.pixels[idx + 1], shot.pixels[idx + 2])
-            };
-            let marker_rgb = (
-                (MARKER.r() * 255.0) as u8,
-                (MARKER.g() * 255.0) as u8,
-                (MARKER.b() * 255.0) as u8,
-            );
+            let sample = robot_shot::logical_sampler(&shot);
+            let marker_rgb = robot_shot::to_rgb8(MARKER);
 
             for probe in probes() {
                 // Sanity: the marker itself must actually be rendered (a
                 // deep, undistorted lens face is identity-mapped), or the
                 // rim check below would trivially pass by testing nothing.
                 let at_marker = sample(probe.center.0, probe.center.1);
-                let marker_visible = color_distance(at_marker, marker_rgb);
+                let marker_visible = robot_shot::color_distance(at_marker, marker_rgb);
                 if marker_visible > 60.0 {
                     println!(
                         "\n✗ the {}'s own center marker is not visible through the glass \
@@ -228,7 +212,7 @@ fn main() -> ExitCode {
                     let lx = probe.center.0 + axis_shift + (probe.radius - RIM_INSET) * angle.cos();
                     let ly = probe.center.1 + (probe.radius - RIM_INSET) * angle.sin();
                     let rgb = sample(lx, ly);
-                    let dist = color_distance(rgb, marker_rgb);
+                    let dist = robot_shot::color_distance(rgb, marker_rgb);
                     if dist < worst {
                         worst = dist;
                         worst_angle = angle.to_degrees();

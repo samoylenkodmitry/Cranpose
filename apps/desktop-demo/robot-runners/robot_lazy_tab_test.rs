@@ -2,7 +2,7 @@ mod robot_launch;
 
 use std::time::Duration;
 
-use cranpose_testing::{find_button_in_semantics, find_text_in_semantics};
+use cranpose_testing::{click_button_in_semantics, find_text_in_semantics};
 use desktop_app::app;
 
 fn main() {
@@ -15,18 +15,15 @@ fn main() {
             std::thread::sleep(Duration::from_millis(500));
 
             let click_button = |name: &str| -> bool {
-                if let Some((x, y, w, h)) = find_button_in_semantics(&robot, name) {
-                    println!("  Found button '{}' at ({:.1}, {:.1})", name, x, y);
-                    robot.click(x + w / 2.0, y + h / 2.0).ok();
-                    std::thread::sleep(Duration::from_millis(200));
+                if click_button_in_semantics(&robot, name) {
                     return true;
-                } else if let Some((x, y, w, h)) = find_text_in_semantics(&robot, name) {
+                }
+                if let Some((x, y, w, h)) = find_text_in_semantics(&robot, name) {
                     println!("  Found text/button '{}' at ({:.1}, {:.1})", name, x, y);
                     robot.click(x + w / 2.0, y + h / 2.0).ok();
                     std::thread::sleep(Duration::from_millis(200));
                     return true;
                 }
-                println!("  ✗ Button '{}' not found!", name);
                 false
             };
 

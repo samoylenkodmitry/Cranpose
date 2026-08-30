@@ -2,15 +2,11 @@ mod support;
 
 use cranpose_render_common::{
     Renderer,
-    graph::{
-        CachePolicy, DrawCommandId, DrawRunNode, IsolationReasons, LayerNode, PrimitivePhase,
-        ProjectiveTransform, RenderGraph, RenderNode,
-    },
-    raster_cache::LayerRasterCacheHashes,
+    graph::{DrawCommandId, DrawRunNode, PrimitivePhase, RenderGraph, RenderNode},
     style_shared::DrawPlacement,
 };
 use cranpose_ui_graphics::{
-    Brush, Color, CommandReplayState, DrawScope, DrawScopeDefault, GraphicsLayer, Point, Rect,
+    Brush, Color, CommandReplayState, DrawScope, DrawScopeDefault, Point, Rect,
 };
 
 const SIZE: u32 = 408;
@@ -90,33 +86,12 @@ fn record_frame(frame: usize) -> DrawScopeDefault {
 }
 
 fn graph_for(children: Vec<RenderNode>) -> RenderGraph {
-    RenderGraph::new(LayerNode {
-        node_id: None,
-        local_bounds: Rect {
-            x: 0.0,
-            y: 0.0,
-            width: SIZE as f32,
-            height: SIZE as f32,
-        },
-        transform_to_parent: ProjectiveTransform::identity(),
-        content_offset: Point::default(),
-        motion_context_animated: false,
-        translated_content_context: false,
-        translated_content_offset: Point::default(),
-        scene_children_origin: Point::default(),
-        scene_children_layer_translation: Point::default(),
-        graphics_layer: GraphicsLayer::default(),
-        clip_to_bounds: false,
-        shadow_clip: None,
-        hit_test: None,
-        has_hit_targets: false,
-        has_origin_sinks: false,
-        isolation: IsolationReasons::default(),
-        cache_policy: CachePolicy::None,
-        cache_hashes: LayerRasterCacheHashes::default(),
-        cache_hashes_valid: false,
+    RenderGraph::new(support::layer_node(
+        None,
+        SIZE as f32,
+        SIZE as f32,
         children,
-    })
+    ))
 }
 
 fn command_for(node_id: usize) -> DrawCommandId {

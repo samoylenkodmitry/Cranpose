@@ -5,11 +5,36 @@ use std::{
     sync::{Arc, Mutex, MutexGuard},
 };
 
-use cranpose_render_common::{Renderer, software_text_raster::DEFAULT_SOFTWARE_TEXT_FONT_BYTES};
+use cranpose_core::NodeId;
+use cranpose_render_common::{
+    Renderer,
+    graph::{LayerNode, RenderNode},
+    software_text_raster::DEFAULT_SOFTWARE_TEXT_FONT_BYTES,
+};
 use cranpose_render_wgpu::{CapturedFrame, RenderStatsSnapshot, WgpuRenderer};
 use cranpose_ui::AppContext;
+use cranpose_ui_graphics::Rect;
 
 pub static TEST_FONT: &[u8] = DEFAULT_SOFTWARE_TEXT_FONT_BYTES;
+
+pub fn layer_node(
+    node_id: Option<NodeId>,
+    width: f32,
+    height: f32,
+    children: Vec<RenderNode>,
+) -> LayerNode {
+    LayerNode {
+        node_id,
+        local_bounds: Rect {
+            x: 0.0,
+            y: 0.0,
+            width,
+            height,
+        },
+        children,
+        ..Default::default()
+    }
+}
 
 static GPU_TEST_LOCK: Mutex<()> = Mutex::new(());
 

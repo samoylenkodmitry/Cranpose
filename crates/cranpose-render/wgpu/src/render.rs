@@ -8345,20 +8345,14 @@ impl GpuRenderer {
             return Err("Screenshot size must be non-zero".to_string());
         }
 
-        let output_texture = self.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Screenshot Output Texture"),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
+        let output_texture = crate::offscreen::create_2d_texture(
+            &self.device,
+            wgpu::TextureFormat::Rgba8Unorm,
+            width,
+            height,
+            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            Some("Screenshot Output Texture"),
+        );
         let output_view = output_texture.create_view(&wgpu::TextureViewDescriptor::default());
         self.render_internal(
             width,

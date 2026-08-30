@@ -25,6 +25,30 @@ fn resolve_composition_format(requested: Option<&str>, android: bool) -> wgpu::T
     }
 }
 
+pub(crate) fn create_2d_texture(
+    device: &wgpu::Device,
+    format: wgpu::TextureFormat,
+    width: u32,
+    height: u32,
+    usage: wgpu::TextureUsages,
+    label: Option<&str>,
+) -> wgpu::Texture {
+    device.create_texture(&wgpu::TextureDescriptor {
+        label,
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage,
+        view_formats: &[],
+    })
+}
+
 pub(crate) struct OffscreenTarget {
     texture: wgpu::Texture,
     pub view: wgpu::TextureView,
@@ -51,23 +75,17 @@ impl OffscreenTarget {
         height: u32,
         label: &'static str,
     ) -> Self {
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some(label),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
+        let texture = create_2d_texture(
+            device,
             format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+            width,
+            height,
+            wgpu::TextureUsages::RENDER_ATTACHMENT
                 | wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::COPY_SRC
                 | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
+            Some(label),
+        );
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         Self {
             texture,

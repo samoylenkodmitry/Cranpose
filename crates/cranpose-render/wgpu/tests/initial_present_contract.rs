@@ -1,6 +1,6 @@
 use std::{sync::mpsc, time::Duration};
 
-use cranpose_render_wgpu::clear_to_default_background;
+use cranpose_render_wgpu::{clear_to_default_background, offscreen_render_target_for_tests};
 
 fn headless_device() -> Option<(wgpu::Device, wgpu::Queue)> {
     let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
@@ -32,21 +32,8 @@ fn clears_every_pixel_to_the_frameworks_default_background() {
 
     const WIDTH: u32 = 4;
     const HEIGHT: u32 = 4;
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("placeholder-clear-test-target"),
-        size: wgpu::Extent3d {
-            width: WIDTH,
-            height: HEIGHT,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8Unorm,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
-    });
-    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let (texture, view) =
+        offscreen_render_target_for_tests(&device, WIDTH, HEIGHT, "placeholder-clear-test-target");
 
     clear_to_default_background(&device, &queue, &view);
 
