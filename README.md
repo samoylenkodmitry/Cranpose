@@ -303,4 +303,4 @@ Zero warnings is the standard, not a target. Contributor conventions live in
 
 ## License
 
-Apache License 2.0. See [`LICENSE-APACHE`](LICENSE-APACHE).
+Apache License 2.0. See [`LICENSE`](LICENSE).
