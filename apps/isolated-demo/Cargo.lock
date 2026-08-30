@@ -1650,6 +1650,8 @@ dependencies = [
  "console_error_panic_hook",
  "cranpose",
  "cranpose-core",
+ "cranpose-foundation",
+ "cranpose-ui",
  "env_logger",
  "getrandom 0.3.4",
  "js-sys",
