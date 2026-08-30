@@ -329,7 +329,7 @@ robot-gpu:
       --skip robot_leetcodedaily_full_layout_scroll_stability \
       --skip robot_glass_backdrop_scroll_stability
 
-# CI's software-present half: exactly the three captures excluded above.
+# CI's software-present half: exactly the four captures excluded above.
 robot-captures:
     WGPU_BACKEND=gl LIBGL_ALWAYS_SOFTWARE=1 \
       xvfb-run -a -s "-screen 0 1600x1200x24" ./run_robot_test.sh \
