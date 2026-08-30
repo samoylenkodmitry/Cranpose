@@ -71,11 +71,6 @@ fn measure_tree(
     layout
 }
 
-/// Composes `content` under a freshly `remember`-ed `LazyListState` and hands
-/// back both the composition and a freshly captured (never shared or cached)
-/// handle to that state -- every call gets its own `Rc`, so tests stay
-/// isolated from one another the same way the removed `thread_local!` was
-/// not.
 fn compose_with_list_state(
     mut content: impl FnMut(LazyListState) + 'static,
 ) -> (TestComposition, Rc<RefCell<Option<LazyListState>>>) {
@@ -91,8 +86,6 @@ fn compose_with_list_state(
     (composition, captured_state)
 }
 
-/// As [`compose_with_list_state`], but starting from a restored scroll
-/// position via `rememberLazyListStateWithPosition`.
 fn compose_with_list_state_at(
     index: usize,
     offset: f32,
@@ -110,9 +103,6 @@ fn compose_with_list_state_at(
     (composition, captured_state)
 }
 
-/// Shared body for the reverse-scroll "keeps rendered items ordered" tests:
-/// asserts the currently visible items are non-empty and index-ordered, and
-/// that the top item only ever moves in the direction the scroll implies.
 fn assert_visible_items_stay_ordered(
     visible: &[(usize, f32)],
     step: usize,

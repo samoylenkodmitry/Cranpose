@@ -28,13 +28,6 @@ use crate::{
 type CapturedLazyListState = Rc<RefCell<Option<LazyListState>>>;
 type CapturedNodeId = Rc<RefCell<Option<NodeId>>>;
 
-/// Bundles the two output slots the `BoxWithConstraints` conditional-branch
-/// tests capture out of a composable (its `LazyListState` and the `NodeId`
-/// the composable produced), so re-threading them through several levels of
-/// nested `Row`/`Column` closures is one `.clone()` per level instead of two
-/// independent `Rc::clone` calls. Every `CapturedLazyListSlot::new()` starts
-/// both slots empty and owned only by that call -- cloning shares the same
-/// two `Rc`s, never a slot from a different test.
 #[derive(Clone, PartialEq)]
 struct CapturedLazyListSlot {
     state: CapturedLazyListState,

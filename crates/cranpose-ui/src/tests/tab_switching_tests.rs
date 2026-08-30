@@ -163,12 +163,6 @@ fn make_tab_renderer(
     }
 }
 
-/// Shared harness for the `progress_tab`/`summary_tab` switching tests: owns
-/// the composition, the render closure, and the render/branch-call counters
-/// so each test only supplies the one thing that varies between them (the
-/// initial progress value) instead of re-deriving this scaffold by hand.
-/// Every call builds a fresh composition and fresh `Rc<Cell<usize>>`
-/// counters -- nothing here is shared or cached across tests.
 struct ProgressTabHarness {
     _app_context: crate::render_state::TestAppContextScope,
     composition: Composition<MemoryApplier>,

@@ -170,10 +170,6 @@ fn ScrollIndicatorLazyList(captured_state: Rc<RefCell<Option<LazyListState>>>) {
     });
 }
 
-/// Renders `ScrollIndicatorLazyList` under a fresh `Composition`, returning
-/// the app-context guard (kept alive by the caller for the test's duration),
-/// the composition, and a freshly captured (never shared or cached) handle
-/// to the list state it composed.
 fn render_scroll_indicator_lazy_list() -> (
     crate::render_state::TestAppContextScope,
     Composition<MemoryApplier>,
@@ -304,12 +300,6 @@ fn StableKeyedCountingLazyList(
     );
 }
 
-/// Renders a `(item_invocations, captured_state)`-shaped composable (as
-/// `ReactiveSiblingLazyList` and `StableKeyedCountingLazyList` both are)
-/// under a fresh `Composition`, returning the app-context guard (kept alive
-/// by the caller for the test's duration), the composition, and freshly
-/// captured (never shared or cached) handles to the item-invocation counter
-/// and the list state.
 type RenderedCountingLazyList = (
     crate::render_state::TestAppContextScope,
     Composition<MemoryApplier>,

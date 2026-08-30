@@ -222,13 +222,6 @@ where
         pass
     }
 
-    /// The backfill walk is capped by `MAX_VISIBLE_ITEMS_SAFETY`, not by a wall
-    /// clock. This correction is what makes the first visible item and scroll
-    /// offset correct after a viewport grows, so it must finish deterministically:
-    /// bailing out early under CPU scheduling pressure (a real clock can read
-    /// past a budget after nothing but an OS-preempted thread, with zero extra
-    /// work done) used to leave the list visibly under-corrected — a blank gap
-    /// at the bottom that a slower frame, not a larger one, produced.
     fn fill_end_gap(
         &mut self,
         visible_items: &mut Vec<LazyListMeasuredItem>,
@@ -486,23 +479,6 @@ mod tests {
 
     #[test]
     fn fill_end_gap_backfills_fully_even_when_item_measurement_is_slow() {
-        // Regression test for a real, load-dependent CI flake: `fill_end_gap`'s
-        // backward walk used to bail out once wall-clock time exceeded
-        // `DEFAULT_TIME_BUDGET`, even though how much work was left to do had
-        // not changed at all. Under CPU scheduling pressure (many other
-        // threads competing for the CPU, e.g. the rest of the test suite
-        // running concurrently) that wall clock could read past the budget
-        // after measuring only a couple of items, leaving the list
-        // under-corrected: a stale first-visible-item/offset that still left
-        // a blank gap at the bottom of a viewport that had just grown. The
-        // backfill must be bounded by how much work is left (a fixed item
-        // count, `MAX_VISIBLE_ITEMS_SAFETY`), never by how slow the clock on
-        // the host machine happened to look.
-        //
-        // Each measured item sleeps 2ms; measuring the five initially visible
-        // items alone (10ms) already exceeds the old 6ms budget, so the old
-        // code would perform zero backfill iterations here, deterministically
-        // (not flakily) leaving `start_index` at 15 instead of 7.
         let config = LazyListMeasureConfig::default();
         let mut measure = |i| {
             std::thread::sleep(Duration::from_millis(2));
@@ -510,12 +486,8 @@ mod tests {
         };
         let mut measurer =
             ItemMeasurer::new(&mut measure, &config, 20, 500.0, 40.0, VecDeque::new())
-                // Isolate the backfill: skip the separate before-bounds
-                // prefetch pass so this test only exercises `fill_end_gap`.
                 .with_include_before_beyond_bounds(false);
 
-        // Start near the end of the list, as if scrolled to the bottom of a
-        // smaller viewport, then measure with a larger one (the viewport grew).
         let pass = measurer.measure_all(15, 0.0);
 
         assert_eq!(

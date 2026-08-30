@@ -878,13 +878,6 @@ fn compose_credits_screen() -> (TestComposition, CapturedListState) {
                         inner,
                         WearScalingLazyColumnSpec::default().content_padding(30.0, SCREEN_VERTICAL),
                         move |scope| {
-                            // Six lines and then the button, rather than four: a
-                            // scaling list stacks its DRAWN boxes a gap apart, so a
-                            // shrunken row does not push the one after it down and
-                            // a short list keeps more of itself on the first
-                            // screen. `a_row_below_the_fold_paints_once_it_is_scrolled_to`
-                            // needs the button genuinely off screen at rest, and
-                            // with four lines above it no longer is.
                             let lines = [
                                 "ORBIT BREAKER",
                                 "Version 1.0.0-debug",
