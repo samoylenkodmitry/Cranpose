@@ -1,19 +1,3 @@
-//! Regression test for a stuck selection handle: focus a text field, raise
-//! its finger handle(s), switch to another tab (which disposes the field and
-//! its handles) and switch back. The returning field is a fresh, unfocused
-//! mount — no handle from the old field may still be on screen.
-//!
-//! The repro the owner reported: open the Text Input tab, tap the field,
-//! move the cursor, switch to another tab, switch back — the handle from
-//! before the switch allegedly stayed painted over the freshly mounted
-//! field. Exercised two ways: a mouse drag-selection (range, two lollipops)
-//! and a touch double-tap word selection (the field's own invited gesture).
-//!
-//! Run with:
-//! ```bash
-//! cargo run --package desktop-app --example robot_text_handle_survives_tab_switch --features robot-app
-//! ```
-
 use std::time::Duration;
 
 use cranpose::{AppLauncher, RobotScreenshot, SemanticElement};
@@ -22,14 +6,6 @@ use desktop_app::app;
 
 type SelectedEditable = ((f32, f32, f32, f32), (usize, usize));
 
-/// The field accent (`Color(0.0, 0.478, 1.0, 1.0)`, ~(0, 122, 255)) and the
-/// touch-selection field's accent (`Color(0.965, 0.208, 0.557, 1.0)`,
-/// ~(246, 53, 142)) are both far enough from every other color in this
-/// fixture (dark backgrounds, the buttons' muted blue, white button-label
-/// text) that a tight tolerance around either cannot false-positive on
-/// anti-aliased edges elsewhere — a looser "is it bluish" test does: it
-/// matches the "Copy" button's white label anti-aliased against its own
-/// blue fill.
 fn matches_accent(r: u8, g: u8, b: u8, target: (i16, i16, i16)) -> bool {
     const TOLERANCE: i16 = 20;
     (r as i16 - target.0).abs() <= TOLERANCE
@@ -69,9 +45,6 @@ fn main() {
         .run(app::combined_app);
 }
 
-/// Mouse drag-selects a range (raising the start/end lollipops), switches
-/// away and back, and checks the field's own footprint for stray handle
-/// pixels.
 fn drag_selection_survives_tab_switch(robot: &cranpose::Robot) {
     click_tab(robot, "Text Input");
     wait_for_text(robot, "Text Input Demo");
@@ -81,8 +54,6 @@ fn drag_selection_survives_tab_switch(robot: &cranpose::Robot) {
     })
     .expect("text field must be present on the Text Input tab");
 
-    // Lengthen the field's text so a right-to-left drag has room to select a
-    // non-trivial range (mirrors robot_drag_selection.rs).
     for _ in 0..5 {
         if let Some((x, y, w, h)) = find_in_semantics(robot, |elem| find_button(elem, "Add !")) {
             let _ = robot.click(x + w * 0.5, y + h * 0.5);
@@ -156,9 +127,6 @@ fn drag_selection_survives_tab_switch(robot: &cranpose::Robot) {
     );
 }
 
-/// Touch double-taps a word in the pink-accented "Touch Selection" field
-/// (raising the collapsed/range handle the field's own label invites),
-/// switches away and back, and checks for stray pink handle pixels.
 fn touch_double_tap_survives_tab_switch(robot: &cranpose::Robot) {
     click_tab(robot, "Text Input");
     wait_for_text(robot, "Text Input Demo");
@@ -213,10 +181,6 @@ fn touch_double_tap_survives_tab_switch(robot: &cranpose::Robot) {
     );
 }
 
-/// Focuses field1, taps twice to place then move the caret (raising its
-/// cursor handle), then moves focus to field2 WITHOUT switching tabs at all —
-/// a plain focus hand-off between two fields on the same screen. field1's
-/// handle must disappear the moment field2 takes focus.
 fn handle_survives_field_to_field_focus_handoff(robot: &cranpose::Robot) {
     click_tab(robot, "Text Input");
     wait_for_text(robot, "Text Input Demo");
