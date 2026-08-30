@@ -1,9 +1,0 @@
-dev.cranpose.android.cranpose-android-pngs-0 /Users/s/develop/projects/Cranpose/android/cranpose-android/build/generated/res/pngs/release
-dev.cranpose.android.cranpose-android-updated_navigation_xml-1 /Users/s/develop/projects/Cranpose/android/cranpose-android/build/generated/updated_navigation_xml/release
-dev.cranpose.android.cranpose-android-mergeReleaseResources-2 /Users/s/develop/projects/Cranpose/android/cranpose-android/build/intermediates/incremental/release/mergeReleaseResources/merged.dir
-dev.cranpose.android.cranpose-android-mergeReleaseResources-3 /Users/s/develop/projects/Cranpose/android/cranpose-android/build/intermediates/incremental/release/mergeReleaseResources/stripped.dir
-dev.cranpose.android.cranpose-android-release-4 /Users/s/develop/projects/Cranpose/android/cranpose-android/build/intermediates/merged_res/release/mergeReleaseResources
-dev.cranpose.android.cranpose-android-release-5 /Users/s/develop/projects/Cranpose/android/cranpose-android/build/intermediates/packaged_res/release/packageReleaseResources
-dev.cranpose.android.cranpose-android-main-6 /Users/s/develop/projects/Cranpose/android/cranpose-android/src/main/res
-dev.cranpose.android.cranpose-android-release-7 /Users/s/develop/projects/Cranpose/android/cranpose-android/src/release/res
-gradleHome-0 /Users/s/.gradle

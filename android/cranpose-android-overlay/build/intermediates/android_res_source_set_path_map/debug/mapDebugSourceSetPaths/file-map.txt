@@ -1,9 +1,0 @@
-dev.cranpose.android.overlay.cranpose-android-overlay-pngs-0 /Users/s/develop/projects/Cranpose/android/cranpose-android-overlay/build/generated/res/pngs/debug
-dev.cranpose.android.overlay.cranpose-android-overlay-updated_navigation_xml-1 /Users/s/develop/projects/Cranpose/android/cranpose-android-overlay/build/generated/updated_navigation_xml/debug
-dev.cranpose.android.overlay.cranpose-android-overlay-mergeDebugResources-2 /Users/s/develop/projects/Cranpose/android/cranpose-android-overlay/build/intermediates/incremental/debug/mergeDebugResources/merged.dir
-dev.cranpose.android.overlay.cranpose-android-overlay-mergeDebugResources-3 /Users/s/develop/projects/Cranpose/android/cranpose-android-overlay/build/intermediates/incremental/debug/mergeDebugResources/stripped.dir
-dev.cranpose.android.overlay.cranpose-android-overlay-debug-4 /Users/s/develop/projects/Cranpose/android/cranpose-android-overlay/build/intermediates/merged_res/debug/mergeDebugResources
-dev.cranpose.android.overlay.cranpose-android-overlay-debug-5 /Users/s/develop/projects/Cranpose/android/cranpose-android-overlay/build/intermediates/packaged_res/debug/packageDebugResources
-dev.cranpose.android.overlay.cranpose-android-overlay-debug-6 /Users/s/develop/projects/Cranpose/android/cranpose-android-overlay/src/debug/res
-dev.cranpose.android.overlay.cranpose-android-overlay-main-7 /Users/s/develop/projects/Cranpose/android/cranpose-android-overlay/src/main/res
-gradleHome-0 /Users/s/.gradle
