@@ -62,6 +62,7 @@ pub use cranpose_foundation::{
         LazyItems, LazyListItemInfo, LazyListLayoutInfo, LazyListScope, LazyListState,
         rememberLazyListState, rememberLazyListStateWithPosition,
     },
+    text::{TextFieldBuffer, TextFieldLineLimits, TextFieldState, TextFieldValue, TextRange},
 };
 pub use cranpose_ui_graphics::{BlurredEdgeTreatment, ColorFilter, Dp, ImageBitmap, ImageSampling};
 pub use cranpose_ui_layout::IntrinsicSize;
