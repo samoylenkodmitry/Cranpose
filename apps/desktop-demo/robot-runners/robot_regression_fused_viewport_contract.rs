@@ -1,3 +1,5 @@
+mod robot_exit;
+
 use std::{
     path::{Path, PathBuf},
     time::Duration,
@@ -64,10 +66,9 @@ fn main() {
                         let fully_visible =
                             y > chrome_bottom && y + h < WINDOW_HEIGHT as f32 - 10.0;
                         if fully_visible && ink < 40 {
-                            fail(
+                            robot_exit::fail(
                                 &robot,
-                                &format!("'{label}' missing on the initial frame ({ink} ink pixels)"),
-                            );
+                                &format!("'{label}' missing on the initial frame ({ink} ink pixels)"));
                         }
                     } else {
                         println!("initial '{label}' no semantics");
@@ -89,12 +90,11 @@ fn main() {
                             line.push_str(&format!(" | {label}: y={y:.0} ink={ink}"));
                             if ink < 40 {
                                 save(&shot, &shot_dir, &format!("missing-{step:02}"));
-                                fail(
+                                robot_exit::fail(
                                     &robot,
                                     &format!(
                                         "'{label}' visible in semantics at y={y:.0} but only {ink} ink pixels rendered (step {step})"
-                                    ),
-                                );
+                                    ));
                             }
                         }
                     }
@@ -138,12 +138,11 @@ fn main() {
                     println!("ghost-diff-pixels target={target} scroll={scroll_delta} diff={diff}");
                     if diff > threshold {
                         save(&shot, &shot_dir, &format!("{target}-ghost-{scroll_delta}"));
-                        fail(
+                        robot_exit::fail(
                             &robot,
                             &format!(
                                 "liquid page (scrolled {scroll_delta}) ghosting through {target} tab: {diff} changed pixels"
-                            ),
-                        );
+                            ));
                     }
                     robot
                         .invoke_app_hook("set-tab", "liquid")
@@ -158,12 +157,6 @@ fn main() {
             robot.exit().expect("exit");
         })
         .run(app::combined_app);
-}
-
-fn fail(robot: &cranpose::Robot, message: &str) -> ! {
-    println!("FATAL: {message}");
-    let _ = robot.exit();
-    std::process::exit(1);
 }
 
 fn count_ink(shot: &cranpose::RobotScreenshot, x: f32, y: f32, w: f32, h: f32) -> usize {

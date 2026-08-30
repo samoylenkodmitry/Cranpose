@@ -1,3 +1,5 @@
+mod robot_exit;
+
 use std::time::Duration;
 
 use cranpose::{
@@ -34,7 +36,7 @@ fn main() {
 
             let expect_exact = |label: &str, (x, y): (f32, f32), expected: Color| {
                 let Some(actual) = sample_screenshot_pixel_logical(&screenshot, x, y) else {
-                    fail(&robot, &format!("{label}: sample out of bounds"));
+                    robot_exit::fail(&robot, &format!("{label}: sample out of bounds"));
                 };
                 let expected = [
                     (expected.0 * 255.0).round() as u8,
@@ -47,7 +49,7 @@ fn main() {
                     .zip(expected.iter())
                     .all(|(a, e)| (*a as i16 - *e as i16).abs() <= 1);
                 if !close {
-                    fail(
+                    robot_exit::fail(
                         &robot,
                         &format!("{label}: expected {expected:?}, got {actual:?}"),
                     );
@@ -83,7 +85,7 @@ fn main() {
                 .zip(text_expected.iter())
                 .all(|(a, e)| (*a as i16 - *e as i16).abs() <= 8);
             if !text_ok {
-                fail(
+                robot_exit::fail(
                     &robot,
                     &format!("text core: expected ~{text_expected:?}, darkest {darkest:?}"),
                 );
@@ -94,12 +96,6 @@ fn main() {
             robot.exit().expect("exit");
         })
         .run(content);
-}
-
-fn fail(robot: &cranpose::Robot, message: &str) -> ! {
-    println!("FATAL: {message}");
-    let _ = robot.exit();
-    std::process::exit(1);
 }
 
 fn content() {

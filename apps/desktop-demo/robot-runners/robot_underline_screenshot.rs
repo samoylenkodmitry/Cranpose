@@ -1,4 +1,5 @@
 mod output_paths;
+mod robot_exit;
 mod text_showcase_external_helpers;
 
 use std::{path::Path, time::Duration};
@@ -35,12 +36,6 @@ impl UnderlineMetrics {
     fn span_width(self) -> u32 {
         self.last_x.saturating_sub(self.first_x) + 1
     }
-}
-
-fn fail(robot: &cranpose::Robot, message: &str) -> ! {
-    println!("FATAL: {message}");
-    let _ = robot.exit();
-    std::process::exit(1);
 }
 
 fn main() {
@@ -93,18 +88,17 @@ fn main() {
                     bounds.2 + 24.0,
                     bounds.3 + 24.0,
                 )
-                .unwrap_or_else(|| fail(&robot, "failed to crop underlined text"));
+                .unwrap_or_else(|| robot_exit::fail(&robot, "failed to crop underlined text"));
                 let crop_path = output_dir.join(format!("step_{step:02}_underline_crop.png"));
                 save_robot_screenshot(&crop, &crop_path);
 
                 let metrics = underline_metrics(&crop).unwrap_or_else(|| {
-                    fail(
+                    robot_exit::fail(
                         &robot,
                         &format!(
                             "red underline not found in crop at step {step}: {}",
                             crop_path.display()
-                        ),
-                    )
+                        ))
                 });
                 println!(
                     "  underline step={step}: row={} span={} first_x={} last_x={} coverage={:.3} max_red_gap={} thickness={}",
@@ -142,15 +136,14 @@ fn main() {
 
 fn assert_underline_quality(robot: &cranpose::Robot, step: usize, metrics: UnderlineMetrics) {
     if metrics.coverage < MIN_UNDERLINE_COVERAGE || metrics.max_red_gap > MAX_UNDERLINE_GAP_PX {
-        fail(
+        robot_exit::fail(
             robot,
             &format!(
                 "underline is dashed or broken at step {step}: coverage={:.3} max_red_gap={} span={}",
                 metrics.coverage,
                 metrics.max_red_gap,
                 metrics.span_width()
-            ),
-        );
+            ));
     }
 }
 
@@ -163,12 +156,11 @@ fn assert_underline_stability(
     let thickness_delta = baseline.thickness.abs_diff(current.thickness);
     let span_delta = baseline.span_width().abs_diff(current.span_width());
     if thickness_delta > MAX_THICKNESS_DELTA_PX || span_delta > MAX_SPAN_DELTA_PX {
-        fail(
+        robot_exit::fail(
             robot,
             &format!(
                 "underline changed under scroll at step {step}: baseline={baseline:?} current={current:?} thickness_delta={thickness_delta} span_delta={span_delta}",
-            ),
-        );
+            ));
     }
 }
 
