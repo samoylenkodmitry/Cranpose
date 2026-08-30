@@ -322,6 +322,26 @@ mod tests {
     }
 
     #[test]
+    fn prefix_snapshot_keys_share_the_scene_range_partition_but_never_a_key() {
+        let rect = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 320.0,
+            height: 240.0,
+        };
+        let scale = ScaleBucket::from_scale(1.0);
+        let prefix = LayerRasterCacheKey::prefix_snapshot(11, 7, rect, (320, 240), scale);
+        let range = LayerRasterCacheKey::scene_range(11, rect, (320, 240), scale);
+        let longer = LayerRasterCacheKey::prefix_snapshot(11, 8, rect, (320, 240), scale);
+
+        assert!(prefix.is_scene_range());
+        assert_ne!(prefix, range);
+        assert_ne!(prefix, longer);
+        assert_eq!(prefix.identity(), None);
+        assert_eq!(prefix.pixel_size(), (320, 240));
+    }
+
+    #[test]
     fn scene_range_keys_do_not_collide_with_layer_surface_keys() {
         let rect = Rect {
             x: 0.0,
