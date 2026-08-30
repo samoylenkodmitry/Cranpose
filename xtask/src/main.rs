@@ -116,6 +116,16 @@ const COMMANDS: &[XtaskCommand] = &[
         print_usage: print_duplication_gate_usage,
     },
     XtaskCommand {
+        name: "robot-suite-partition",
+        run: |args| {
+            if let Some(extra) = args.first() {
+                return Err(format!("unknown robot-suite-partition option `{extra}`"));
+            }
+            robot_suite_partition::run_at(&workspace_root()?)
+        },
+        print_usage: print_robot_suite_partition_usage,
+    },
+    XtaskCommand {
         name: "ci-gate-reachability",
         run: |args| {
             if let Some(extra) = args.first() {
@@ -341,6 +351,17 @@ fn print_duplication_gate_usage() {
          Fails if the diff introduces a cloned block of code, comparing jscpd's\n\
          report before and after so pre-existing duplication is not penalized.\n\
          Installs jscpd via `cargo install` if it is missing."
+    );
+}
+
+fn print_robot_suite_partition_usage() {
+    eprint!(
+        "usage: cargo xtask robot-suite-partition\n\
+         \n\
+         Every robot example `robot-gpu` skips must be one `robot-captures`\n\
+         runs, and the reverse. CI splits the suite across those two halves;\n\
+         an example dropped from one and not added to the other stops running\n\
+         anywhere, in silence.\n"
     );
 }
 
@@ -4130,6 +4151,111 @@ mod duplication_gate {
 /// and `clippy-robot` were each added to close, one at a time, after each
 /// went unlinted until something noticed by hand. This gate makes the next
 /// one impossible instead of noticing it later.
+/// CI runs the robot suite as two halves: `robot-gpu` under a hardware
+/// swapchain with a handful of examples skipped, and `robot-captures` under
+/// software present running exactly those. Nothing enforced that the two
+/// lists agree, so an example removed from one half and not added to the
+/// other would stop running anywhere without a gate going red -- the same
+/// shape as a hand-maintained list standing in for a property.
+mod robot_suite_partition {
+    use std::{collections::BTreeSet, fs, path::Path};
+
+    /// Collects the arguments of every `--<flag> <value>` occurrence inside a
+    /// recipe's body, where the recipe runs from `name:` at column zero to the
+    /// next line at column zero.
+    pub(crate) fn recipe_flag_values(
+        justfile_text: &str,
+        recipe: &str,
+        flag: &str,
+    ) -> BTreeSet<String> {
+        let header = format!("{recipe}:");
+        let mut values = BTreeSet::new();
+        let mut inside = false;
+        for line in justfile_text.split('\n') {
+            let indented = line.starts_with(' ') || line.starts_with('\t');
+            if !indented {
+                if inside {
+                    break;
+                }
+                inside = line.trim_end() == header;
+                continue;
+            }
+            if !inside {
+                continue;
+            }
+            let mut tokens = line.split_whitespace().peekable();
+            while let Some(token) = tokens.next() {
+                if token == flag {
+                    if let Some(value) = tokens.peek() {
+                        values.insert((*value).to_owned());
+                    }
+                }
+            }
+        }
+        values
+    }
+
+    pub(crate) fn find_violations(justfile_text: &str) -> Vec<String> {
+        let skipped = recipe_flag_values(justfile_text, "robot-gpu", "--skip");
+        let captured = recipe_flag_values(justfile_text, "robot-captures", "--example");
+        let mut violations = Vec::new();
+
+        // Non-vacuity: two empty sets are trivially equal, and would let this
+        // gate pass on a justfile it failed to parse at all.
+        if skipped.is_empty() {
+            violations.push(
+                "`robot-gpu` declares no `--skip` examples; either the split is gone or this \
+                 gate failed to parse the recipe"
+                    .to_owned(),
+            );
+        }
+        if captured.is_empty() {
+            violations.push(
+                "`robot-captures` declares no `--example` entries; either the split is gone or \
+                 this gate failed to parse the recipe"
+                    .to_owned(),
+            );
+        }
+        for name in skipped.difference(&captured) {
+            violations.push(format!(
+                "`{name}` is skipped by `robot-gpu` but not run by `robot-captures`, so it runs \
+                 nowhere"
+            ));
+        }
+        for name in captured.difference(&skipped) {
+            violations.push(format!(
+                "`{name}` is run by `robot-captures` but not skipped by `robot-gpu`, so it runs \
+                 twice"
+            ));
+        }
+        violations
+    }
+
+    pub(crate) fn run_at(root: &Path) -> Result<(), String> {
+        let path = root.join("justfile");
+        let text = fs::read_to_string(&path)
+            .map_err(|error| format!("robot-suite-partition: failed to read {path:?}: {error}"))?;
+        let violations = find_violations(&text);
+        if violations.is_empty() {
+            let count = recipe_flag_values(&text, "robot-gpu", "--skip").len();
+            println!(
+                "robot-suite-partition: the {count} example(s) `robot-gpu` skips are exactly \
+                 those `robot-captures` runs"
+            );
+            return Ok(());
+        }
+        let mut message = format!(
+            "robot-suite-partition: {} problem(s) with the robot suite split:",
+            violations.len()
+        );
+        for violation in &violations {
+            message.push_str("\n  ");
+            message.push_str(violation);
+        }
+        Err(message)
+    }
+}
+
 mod ci_gate_reachability {
     use std::{
         collections::{BTreeMap, BTreeSet},
@@ -4424,6 +4550,95 @@ fn make_executable(path: &Path) -> io::Result<()> {
 #[cfg(all(test, not(unix)))]
 fn make_executable(_path: &Path) -> io::Result<()> {
     Ok(())
+}
+
+#[cfg(test)]
+mod robot_suite_partition_tests {
+    use crate::robot_suite_partition::{find_violations, recipe_flag_values};
+
+    fn justfile(gpu_skips: &[&str], capture_examples: &[&str]) -> String {
+        let mut text =
+            String::from("# a comment\nrobot-gpu:\n    xvfb-run ./run_robot_test.sh \\\n");
+        for name in gpu_skips {
+            text.push_str(&format!("      --skip {name} \\\n"));
+        }
+        text.push_str("\nrobot-captures:\n    xvfb-run ./run_robot_test.sh \\\n");
+        for name in capture_examples {
+            text.push_str(&format!("      --example {name} \\\n"));
+        }
+        text.push_str("\nunrelated:\n    --skip not_in_either\n");
+        text
+    }
+
+    #[test]
+    fn matching_halves_are_clean() {
+        let text = justfile(&["alpha", "beta"], &["beta", "alpha"]);
+        assert!(
+            find_violations(&text).is_empty(),
+            "{:?}",
+            find_violations(&text)
+        );
+    }
+
+    #[test]
+    fn an_example_skipped_but_never_captured_runs_nowhere() {
+        let text = justfile(&["alpha", "beta"], &["alpha"]);
+        let violations = find_violations(&text);
+        assert_eq!(violations.len(), 1, "{violations:?}");
+        assert!(
+            violations[0].contains("beta") && violations[0].contains("nowhere"),
+            "{violations:?}"
+        );
+    }
+
+    #[test]
+    fn an_example_captured_but_not_skipped_runs_twice() {
+        let text = justfile(&["alpha"], &["alpha", "beta"]);
+        let violations = find_violations(&text);
+        assert_eq!(violations.len(), 1, "{violations:?}");
+        assert!(
+            violations[0].contains("beta") && violations[0].contains("twice"),
+            "{violations:?}"
+        );
+    }
+
+    #[test]
+    fn an_empty_half_fails_rather_than_passing_vacuously() {
+        // Two empty sets are equal. Without the emptiness check this gate
+        // would pass on a justfile it could not parse.
+        let text = justfile(&[], &[]);
+        let violations = find_violations(&text);
+        assert_eq!(
+            violations.len(),
+            2,
+            "both halves must be reported: {violations:?}"
+        );
+    }
+
+    #[test]
+    fn a_recipe_body_ends_at_the_next_column_zero_line() {
+        // `unrelated` also contains `--skip`; it must not leak into robot-gpu.
+        let text = justfile(&["alpha"], &["alpha"]);
+        let skipped = recipe_flag_values(&text, "robot-gpu", "--skip");
+        assert!(
+            !skipped.contains("not_in_either"),
+            "leaked from a later recipe: {skipped:?}"
+        );
+        assert_eq!(skipped.len(), 1);
+    }
+
+    #[test]
+    fn the_real_justfile_halves_agree_and_are_not_empty() {
+        let root = crate::workspace_root().expect("workspace root");
+        let text = std::fs::read_to_string(root.join("justfile")).expect("justfile is readable");
+        let skipped = recipe_flag_values(&text, "robot-gpu", "--skip");
+        assert!(!skipped.is_empty(), "the gate must find the real skip list");
+        assert!(
+            find_violations(&text).is_empty(),
+            "{:?}",
+            find_violations(&text)
+        );
+    }
 }
 
 #[cfg(test)]
