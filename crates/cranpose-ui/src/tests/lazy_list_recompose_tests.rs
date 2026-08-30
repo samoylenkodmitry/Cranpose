@@ -15,12 +15,6 @@ use crate::{
     text_layout_result::TextLayoutResult,
 };
 
-thread_local! {
-    static LAST_LAZY_STATE: RefCell<Option<LazyListState>> = const { RefCell::new(None) };
-    static GROWING_LAZY_LIST_CALL_COUNT: Cell<usize> = const { Cell::new(0) };
-    static LAST_INNER_ROW_SCROLL_STATE: RefCell<Option<ScrollState>> = const { RefCell::new(None) };
-}
-
 struct CountingPreparedTextMeasurer {
     prepare_calls: Rc<Cell<usize>>,
 }
@@ -144,11 +138,9 @@ impl TextMeasurer for TallMultilineTextMeasurer {
 
 #[composable]
 #[allow(non_snake_case)]
-fn ScrollIndicatorLazyList() {
+fn ScrollIndicatorLazyList(captured_state: Rc<RefCell<Option<LazyListState>>>) {
     let list_state = rememberLazyListState();
-    LAST_LAZY_STATE.with(|cell| {
-        *cell.borrow_mut() = Some(list_state);
-    });
+    *captured_state.borrow_mut() = Some(list_state);
 
     Column(Modifier::empty(), ColumnSpec::default(), move || {
         Text(
@@ -193,11 +185,9 @@ fn ChildScrollIndicator(list_state: LazyListState) {
 
 #[composable]
 #[allow(non_snake_case)]
-fn ChildScrollIndicatorLazyList() {
+fn ChildScrollIndicatorLazyList(captured_state: Rc<RefCell<Option<LazyListState>>>) {
     let list_state = rememberLazyListState();
-    LAST_LAZY_STATE.with(|cell| {
-        *cell.borrow_mut() = Some(list_state);
-    });
+    *captured_state.borrow_mut() = Some(list_state);
 
     Column(Modifier::empty(), ColumnSpec::default(), move || {
         ChildScrollIndicator(list_state);
@@ -220,11 +210,12 @@ fn ChildScrollIndicatorLazyList() {
 
 #[composable]
 #[allow(non_snake_case)]
-fn ReactiveSiblingLazyList(item_invocations: Rc<Cell<usize>>) {
+fn ReactiveSiblingLazyList(
+    item_invocations: Rc<Cell<usize>>,
+    captured_state: Rc<RefCell<Option<LazyListState>>>,
+) {
     let list_state = rememberLazyListState();
-    LAST_LAZY_STATE.with(|cell| {
-        *cell.borrow_mut() = Some(list_state);
-    });
+    *captured_state.borrow_mut() = Some(list_state);
 
     Column(Modifier::empty(), ColumnSpec::default(), move || {
         Text(
@@ -258,11 +249,12 @@ fn ReactiveSiblingLazyList(item_invocations: Rc<Cell<usize>>) {
 
 #[composable]
 #[allow(non_snake_case)]
-fn StableKeyedCountingLazyList(item_invocations: Rc<Cell<usize>>) {
+fn StableKeyedCountingLazyList(
+    item_invocations: Rc<Cell<usize>>,
+    captured_state: Rc<RefCell<Option<LazyListState>>>,
+) {
     let list_state = rememberLazyListState();
-    LAST_LAZY_STATE.with(|cell| {
-        *cell.borrow_mut() = Some(list_state);
-    });
+    *captured_state.borrow_mut() = Some(list_state);
 
     LazyColumn(
         Modifier::empty().fill_max_width().height(240.0),
@@ -289,11 +281,13 @@ fn StableKeyedCountingLazyList(item_invocations: Rc<Cell<usize>>) {
 
 #[composable]
 #[allow(non_snake_case)]
-fn StatefulCachedLazyList(item_invocations: Rc<Cell<usize>>, label_state: MutableState<usize>) {
+fn StatefulCachedLazyList(
+    item_invocations: Rc<Cell<usize>>,
+    label_state: MutableState<usize>,
+    captured_state: Rc<RefCell<Option<LazyListState>>>,
+) {
     let list_state = rememberLazyListState();
-    LAST_LAZY_STATE.with(|cell| {
-        *cell.borrow_mut() = Some(list_state);
-    });
+    *captured_state.borrow_mut() = Some(list_state);
 
     LazyColumn(
         Modifier::empty().fill_max_width().height(120.0),
@@ -320,11 +314,12 @@ fn StatefulCachedLazyList(item_invocations: Rc<Cell<usize>>, label_state: Mutabl
 
 #[composable]
 #[allow(non_snake_case)]
-fn VariableHeightCachedLazyList(short_body_state: MutableState<bool>) {
+fn VariableHeightCachedLazyList(
+    short_body_state: MutableState<bool>,
+    captured_state: Rc<RefCell<Option<LazyListState>>>,
+) {
     let list_state = rememberLazyListState();
-    LAST_LAZY_STATE.with(|cell| {
-        *cell.borrow_mut() = Some(list_state);
-    });
+    *captured_state.borrow_mut() = Some(list_state);
 
     LazyColumn(
         Modifier::empty().fill_max_width().height(320.0),
@@ -395,11 +390,9 @@ fn AnimatedLazyItemList() {
 
 #[composable]
 #[allow(non_snake_case)]
-fn TallCachedLazyTextList(body: Rc<String>) {
+fn TallCachedLazyTextList(body: Rc<String>, captured_state: Rc<RefCell<Option<LazyListState>>>) {
     let list_state = rememberLazyListState();
-    LAST_LAZY_STATE.with(|cell| {
-        *cell.borrow_mut() = Some(list_state);
-    });
+    *captured_state.borrow_mut() = Some(list_state);
 
     LazyColumn(
         Modifier::empty().fill_max_width().height(640.0),
@@ -416,12 +409,10 @@ fn TallCachedLazyTextList(body: Rc<String>) {
 
 #[composable]
 #[allow(non_snake_case)]
-fn LazyItemWithScrollableRow() {
+fn LazyItemWithScrollableRow(captured_row_scroll: Rc<RefCell<Option<ScrollState>>>) {
     let list_state = rememberLazyListState();
     let row_scroll = cranpose_core::remember(|| ScrollState::new(0.0)).with(ScrollState::clone);
-    LAST_INNER_ROW_SCROLL_STATE.with(|cell| {
-        *cell.borrow_mut() = Some(row_scroll);
-    });
+    *captured_row_scroll.borrow_mut() = Some(row_scroll);
 
     LazyColumn(
         Modifier::empty().fill_max_width().height(240.0),
@@ -593,11 +584,12 @@ fn assert_consecutive_rows(indices: &[usize], context: &str) {
 
 #[composable]
 #[allow(non_snake_case)]
-fn SelectableScrolledLazyList(selected_index: MutableState<usize>) {
+fn SelectableScrolledLazyList(
+    selected_index: MutableState<usize>,
+    captured_state: Rc<RefCell<Option<LazyListState>>>,
+) {
     let list_state = rememberLazyListState();
-    LAST_LAZY_STATE.with(|cell| {
-        *cell.borrow_mut() = Some(list_state);
-    });
+    *captured_state.borrow_mut() = Some(list_state);
 
     LazyColumn(
         Modifier::empty().fill_max_width().height(210.0),
@@ -742,18 +734,22 @@ fn scroll_state_recomposition_does_not_reprepare_stable_lazy_rows() {
     crate::text::set_text_measurer(CountingPreparedTextMeasurer::new(Rc::clone(&prepare_calls)));
 
     let item_invocations = Rc::new(Cell::new(0));
+    let captured_state = Rc::new(RefCell::new(None));
     let mut composition = Composition::new(MemoryApplier::new());
     let key = location_key(file!(), line!(), column!());
     composition
         .render(key, {
             let item_invocations = Rc::clone(&item_invocations);
-            move || ReactiveSiblingLazyList(Rc::clone(&item_invocations))
+            let captured_state = Rc::clone(&captured_state);
+            move || {
+                ReactiveSiblingLazyList(Rc::clone(&item_invocations), Rc::clone(&captured_state))
+            }
         })
         .expect("initial render");
 
     let root = composition.root().expect("lazy list root");
     let _ = render_texts(&mut composition, root);
-    let list_state = LAST_LAZY_STATE.with(|cell| (*cell.borrow()).expect("state captured"));
+    let list_state = (*captured_state.borrow()).expect("state captured");
 
     list_state.dispatch_scroll_delta(-160.0);
     let _ = render_texts(&mut composition, root);
@@ -781,13 +777,14 @@ fn scroll_state_recomposition_does_not_reprepare_stable_lazy_rows() {
 fn gesture_scroll_recomposes_scroll_position_observers() {
     let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
-    LAST_LAZY_STATE.with(|cell| {
-        *cell.borrow_mut() = None;
-    });
+    let captured_state = Rc::new(RefCell::new(None));
 
     composition
-        .render(location_key(file!(), line!(), column!()), || {
-            ScrollIndicatorLazyList();
+        .render(location_key(file!(), line!(), column!()), {
+            let captured_state = Rc::clone(&captured_state);
+            move || {
+                ScrollIndicatorLazyList(Rc::clone(&captured_state));
+            }
         })
         .expect("initial render");
 
@@ -809,7 +806,7 @@ fn gesture_scroll_recomposes_scroll_position_observers() {
         "test must subscribe a composition scope to lazy scroll bounds"
     );
 
-    let list_state = LAST_LAZY_STATE.with(|cell| (*cell.borrow()).expect("state captured"));
+    let list_state = (*captured_state.borrow()).expect("state captured");
     list_state.dispatch_scroll_delta(-320.0);
     measure_root(&mut composition, root, viewport);
 
@@ -843,22 +840,25 @@ fn gesture_scroll_recomposes_scroll_position_observers() {
             .any(|text| text == "Can scroll back true"),
         "scroll observer text did not track gesture-updated backward capability; got {scrolled_texts:?}"
     );
-
-    LAST_LAZY_STATE.with(|cell| {
-        *cell.borrow_mut() = None;
-    });
 }
 
 #[test]
 fn repeated_measure_of_stable_keyed_lazy_list_reuses_retained_item_content() {
     let _app_context = crate::render_state::app_context_test_scope();
     let item_invocations = Rc::new(Cell::new(0));
+    let captured_state = Rc::new(RefCell::new(None));
     let mut composition = Composition::new(MemoryApplier::new());
     let key = location_key(file!(), line!(), column!());
     composition
         .render(key, {
             let item_invocations = Rc::clone(&item_invocations);
-            move || StableKeyedCountingLazyList(Rc::clone(&item_invocations))
+            let captured_state = Rc::clone(&captured_state);
+            move || {
+                StableKeyedCountingLazyList(
+                    Rc::clone(&item_invocations),
+                    Rc::clone(&captured_state),
+                )
+            }
         })
         .expect("initial render");
 
@@ -887,12 +887,19 @@ fn repeated_measure_of_stable_keyed_lazy_list_reuses_retained_item_content() {
 fn large_forward_lazy_scroll_reuses_skipped_active_slots_in_same_measure_pass() {
     let _app_context = crate::render_state::app_context_test_scope();
     let item_invocations = Rc::new(Cell::new(0));
+    let captured_state = Rc::new(RefCell::new(None));
     let mut composition = Composition::new(MemoryApplier::new());
     let key = location_key(file!(), line!(), column!());
     composition
         .render(key, {
             let item_invocations = Rc::clone(&item_invocations);
-            move || StableKeyedCountingLazyList(Rc::clone(&item_invocations))
+            let captured_state = Rc::clone(&captured_state);
+            move || {
+                StableKeyedCountingLazyList(
+                    Rc::clone(&item_invocations),
+                    Rc::clone(&captured_state),
+                )
+            }
         })
         .expect("initial render");
 
@@ -902,7 +909,7 @@ fn large_forward_lazy_scroll_reuses_skipped_active_slots_in_same_measure_pass() 
         height: 260.0,
     };
     measure_root(&mut composition, root, viewport);
-    let list_state = LAST_LAZY_STATE.with(|cell| (*cell.borrow()).expect("state captured"));
+    let list_state = (*captured_state.borrow()).expect("state captured");
     let reuse_count_before = list_state.stats().reuse_count;
 
     list_state.dispatch_scroll_delta(-800.0);
@@ -926,10 +933,12 @@ fn cached_lazy_item_keeps_unbounded_child_measurement_when_placed() {
             .join("\n"),
     );
     let mut composition = Composition::new(MemoryApplier::new());
+    let captured_state = Rc::new(RefCell::new(None));
     composition
         .render(location_key(file!(), line!(), column!()), {
             let body = Rc::clone(&body);
-            move || TallCachedLazyTextList(Rc::clone(&body))
+            let captured_state = Rc::clone(&captured_state);
+            move || TallCachedLazyTextList(Rc::clone(&body), Rc::clone(&captured_state))
         })
         .expect("initial render");
     let root = composition.root().expect("lazy list root");
@@ -963,11 +972,12 @@ fn cached_lazy_item_keeps_unbounded_child_measurement_when_placed() {
 fn scrolling_a_row_inside_a_cached_lazy_item_moves_its_rendered_children() {
     let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
+    let captured_row_scroll = Rc::new(RefCell::new(None));
     composition
-        .render(
-            location_key(file!(), line!(), column!()),
-            LazyItemWithScrollableRow,
-        )
+        .render(location_key(file!(), line!(), column!()), {
+            let captured_row_scroll = Rc::clone(&captured_row_scroll);
+            move || LazyItemWithScrollableRow(Rc::clone(&captured_row_scroll))
+        })
         .expect("initial render");
     let root = composition.root().expect("lazy list root");
 
@@ -978,9 +988,7 @@ fn scrolling_a_row_inside_a_cached_lazy_item_moves_its_rendered_children() {
     let initial_records = render_text_records_with_size(&mut composition, root, viewport);
     let initial_x = text_x(&initial_records, "Chip B");
 
-    let row_scroll = LAST_INNER_ROW_SCROLL_STATE
-        .with(|cell| *cell.borrow())
-        .expect("inner row scroll state captured");
+    let row_scroll = (*captured_row_scroll.borrow()).expect("inner row scroll state captured");
     assert!(
         row_scroll.max_value() > 100.0,
         "inner row must actually overflow its viewport, max_value={}",
@@ -1011,11 +1019,19 @@ fn invalidated_cached_lazy_item_recomposes_instead_of_reusing_stale_content() {
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
     let label_state = MutableState::with_runtime(0usize, runtime);
+    let captured_state = Rc::new(RefCell::new(None));
     let key = location_key(file!(), line!(), column!());
     composition
         .render(key, {
             let item_invocations = Rc::clone(&item_invocations);
-            move || StatefulCachedLazyList(Rc::clone(&item_invocations), label_state)
+            let captured_state = Rc::clone(&captured_state);
+            move || {
+                StatefulCachedLazyList(
+                    Rc::clone(&item_invocations),
+                    label_state,
+                    Rc::clone(&captured_state),
+                )
+            }
         })
         .expect("initial render");
 
@@ -1042,10 +1058,11 @@ fn invalidated_cached_lazy_item_remeasures_when_text_height_shrinks() {
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
     let short_body_state = MutableState::with_runtime(false, runtime);
+    let captured_state = Rc::new(RefCell::new(None));
     let key = location_key(file!(), line!(), column!());
     composition
         .render(key, move || {
-            VariableHeightCachedLazyList(short_body_state);
+            VariableHeightCachedLazyList(short_body_state, Rc::clone(&captured_state));
         })
         .expect("initial render");
 
@@ -1121,13 +1138,14 @@ fn scrolled_lazy_list_scoped_row_recompose_does_not_ghost_old_rows() {
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
     let selected_index = MutableState::with_runtime(usize::MAX, runtime);
+    let captured_state = Rc::new(RefCell::new(None));
 
-    LAST_LAZY_STATE.with(|cell| {
-        *cell.borrow_mut() = None;
-    });
     composition
-        .render(location_key(file!(), line!(), column!()), || {
-            SelectableScrolledLazyList(selected_index);
+        .render(location_key(file!(), line!(), column!()), {
+            let captured_state = Rc::clone(&captured_state);
+            move || {
+                SelectableScrolledLazyList(selected_index, Rc::clone(&captured_state));
+            }
         })
         .expect("initial render");
 
@@ -1138,7 +1156,7 @@ fn scrolled_lazy_list_scoped_row_recompose_does_not_ghost_old_rows() {
     };
     measure_root(&mut composition, root, viewport);
 
-    let list_state = LAST_LAZY_STATE.with(|cell| (*cell.borrow()).expect("state captured"));
+    let list_state = (*captured_state.borrow()).expect("state captured");
     list_state.scroll_to_item(24, 0.0);
     measure_root(&mut composition, root, viewport);
 
@@ -1215,23 +1233,19 @@ fn scrolled_lazy_list_scoped_row_recompose_does_not_ghost_old_rows() {
         }
         previous_y = Some(record.y);
     }
-
-    LAST_LAZY_STATE.with(|cell| {
-        *cell.borrow_mut() = None;
-    });
 }
 
 #[composable]
 #[allow(non_snake_case)]
-fn GrowingLazyList(item_count: MutableState<usize>) {
+fn GrowingLazyList(
+    item_count: MutableState<usize>,
+    captured_state: Rc<RefCell<Option<LazyListState>>>,
+    call_count: Rc<Cell<usize>>,
+) {
     let list_state = rememberLazyListState();
-    LAST_LAZY_STATE.with(|cell| {
-        *cell.borrow_mut() = Some(list_state);
-    });
+    *captured_state.borrow_mut() = Some(list_state);
     let count = item_count.value();
-    GROWING_LAZY_LIST_CALL_COUNT.with(|call_count| {
-        call_count.set(call_count.get() + 1);
-    });
+    call_count.set(call_count.get() + 1);
 
     Column(Modifier::empty(), ColumnSpec::default(), move || {
         Text(
@@ -1268,12 +1282,21 @@ fn lazy_list_updates_scroll_bounds_when_item_count_grows_without_scrolling() {
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
     let item_count = MutableState::with_runtime(2usize, runtime.clone());
+    let captured_state = Rc::new(RefCell::new(None));
+    let call_count = Rc::new(Cell::new(0));
 
-    GROWING_LAZY_LIST_CALL_COUNT.with(|call_count| call_count.set(0));
     let key = location_key(file!(), line!(), column!());
     composition
-        .render(key, || {
-            GrowingLazyList(item_count);
+        .render(key, {
+            let captured_state = Rc::clone(&captured_state);
+            let call_count = Rc::clone(&call_count);
+            move || {
+                GrowingLazyList(
+                    item_count,
+                    Rc::clone(&captured_state),
+                    Rc::clone(&call_count),
+                );
+            }
         })
         .expect("initial render");
 
@@ -1284,7 +1307,7 @@ fn lazy_list_updates_scroll_bounds_when_item_count_grows_without_scrolling() {
     };
     measure_root(&mut composition, root, viewport);
 
-    let list_state = LAST_LAZY_STATE.with(|cell| (*cell.borrow()).expect("state captured"));
+    let list_state = (*captured_state.borrow()).expect("state captured");
     assert_eq!(list_state.layout_info().total_items_count, 2);
     assert!(
         !list_state.can_scroll_forward(),
@@ -1303,12 +1326,10 @@ fn lazy_list_updates_scroll_bounds_when_item_count_grows_without_scrolling() {
         recomposed,
         "expected composition to re-run after item count growth"
     );
-    GROWING_LAZY_LIST_CALL_COUNT.with(|call_count| {
-        assert!(
-            call_count.get() >= 2,
-            "expected LazyColumn parent composable to execute again after item count growth"
-        );
-    });
+    assert!(
+        call_count.get() >= 2,
+        "expected LazyColumn parent composable to execute again after item count growth"
+    );
     measure_root(&mut composition, root, viewport);
 
     assert_eq!(list_state.layout_info().total_items_count, 24);
@@ -1321,23 +1342,20 @@ fn lazy_list_updates_scroll_bounds_when_item_count_grows_without_scrolling() {
         texts.iter().any(|text| text == "Count 24"),
         "expected parent composition to observe the grown item count"
     );
-
-    LAST_LAZY_STATE.with(|cell| {
-        *cell.borrow_mut() = None;
-    });
 }
 
 #[test]
 fn scroll_to_item_invalidates_indicator_scope_and_updates_visible_index_text() {
     let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
-    LAST_LAZY_STATE.with(|cell| {
-        *cell.borrow_mut() = None;
-    });
+    let captured_state = Rc::new(RefCell::new(None));
 
     composition
-        .render(location_key(file!(), line!(), column!()), || {
-            ScrollIndicatorLazyList();
+        .render(location_key(file!(), line!(), column!()), {
+            let captured_state = Rc::clone(&captured_state);
+            move || {
+                ScrollIndicatorLazyList(Rc::clone(&captured_state));
+            }
         })
         .expect("initial render");
 
@@ -1354,7 +1372,7 @@ fn scroll_to_item_invalidates_indicator_scope_and_updates_visible_index_text() {
         "expected initial indicator text before scrolling"
     );
 
-    let list_state = LAST_LAZY_STATE.with(|cell| (*cell.borrow()).expect("state captured"));
+    let list_state = (*captured_state.borrow()).expect("state captured");
     list_state.scroll_to_item(20, 0.0);
 
     assert!(
@@ -1382,10 +1400,6 @@ fn scroll_to_item_invalidates_indicator_scope_and_updates_visible_index_text() {
         texts.iter().any(|text| text == "First visible 20"),
         "expected indicator text to track scroll_to_item target; texts={texts:?}"
     );
-
-    LAST_LAZY_STATE.with(|cell| {
-        *cell.borrow_mut() = None;
-    });
 }
 
 #[test]
@@ -1393,11 +1407,14 @@ fn scroll_to_item_updates_child_indicator_scope() {
     let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let key = location_key(file!(), line!(), column!());
-    LAST_LAZY_STATE.with(|cell| cell.borrow_mut().take());
+    let captured_state = Rc::new(RefCell::new(None));
 
     composition
-        .render(key, || {
-            ChildScrollIndicatorLazyList();
+        .render(key, {
+            let captured_state = Rc::clone(&captured_state);
+            move || {
+                ChildScrollIndicatorLazyList(Rc::clone(&captured_state));
+            }
         })
         .expect("initial render");
 
@@ -1410,7 +1427,7 @@ fn scroll_to_item_updates_child_indicator_scope() {
         "expected initial child indicator text, got {initial_texts:?}"
     );
 
-    let list_state = LAST_LAZY_STATE.with(|cell| (*cell.borrow()).expect("state captured"));
+    let list_state = (*captured_state.borrow()).expect("state captured");
     list_state.scroll_to_item(20, 0.0);
 
     assert!(

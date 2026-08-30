@@ -1,4 +1,8 @@
-use std::cell::RefCell;
+
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 
 use cranpose_core::{Composition, MemoryApplier, MutableState, NodeId, location_key};
 use cranpose_foundation::lazy::{LazyListScope, LazyListState, rememberLazyListState};
@@ -6,32 +10,29 @@ use cranpose_ui_graphics::Size as ViewportSize;
 
 use super::*;
 
-thread_local! {
-    static LAST_LAZY_ROW_STATE: RefCell<Option<LazyListState>> = const { RefCell::new(None) };
-    static GROWING_LAZY_ROW_CALL_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
 #[test]
 fn lazy_row_unbounded_width_matches_effective_viewport() {
-    let mut composition = run_test_composition(|| {
-        let list_state = rememberLazyListState();
-        LAST_LAZY_ROW_STATE.with(|cell| {
-            *cell.borrow_mut() = Some(list_state);
-        });
+    let captured_state = Rc::new(RefCell::new(None));
+    let mut composition = run_test_composition({
+        let captured_state = Rc::clone(&captured_state);
+        move || {
+            let list_state = rememberLazyListState();
+            *captured_state.borrow_mut() = Some(list_state);
 
-        LazyRow(
-            Modifier::empty(),
-            list_state,
-            LazyRowSpec::default(),
-            |scope| {
-                scope.items(100, |_| {
-                    Spacer(Size {
-                        width: 100.0,
-                        height: 0.0,
+            LazyRow(
+                Modifier::empty(),
+                list_state,
+                LazyRowSpec::default(),
+                |scope| {
+                    scope.items(100, |_| {
+                        Spacer(Size {
+                            width: 100.0,
+                            height: 0.0,
+                        });
                     });
-                });
-            },
-        );
+                },
+            );
+        }
     });
 
     let root = composition.root().expect("lazy row root");
@@ -52,7 +53,7 @@ fn lazy_row_unbounded_width_matches_effective_viewport() {
         result
     };
 
-    let list_state = LAST_LAZY_ROW_STATE.with(|cell| (*cell.borrow()).expect("state captured"));
+    let list_state = (*captured_state.borrow()).expect("state captured");
     let expected_width = list_state.layout_info().viewport_size;
     let actual_width = measurements.root_size().width;
 
@@ -61,23 +62,19 @@ fn lazy_row_unbounded_width_matches_effective_viewport() {
         (actual_width - expected_width).abs() < 0.01,
         "expected lazy row width to match effective viewport {expected_width}, got {actual_width}"
     );
-
-    LAST_LAZY_ROW_STATE.with(|cell| {
-        *cell.borrow_mut() = None;
-    });
 }
 
 #[composable]
 #[allow(non_snake_case)]
-fn GrowingLazyRow(item_count: MutableState<usize>) {
+fn GrowingLazyRow(
+    item_count: MutableState<usize>,
+    captured_state: Rc<RefCell<Option<LazyListState>>>,
+    call_count: Rc<Cell<usize>>,
+) {
     let list_state = rememberLazyListState();
-    LAST_LAZY_ROW_STATE.with(|cell| {
-        *cell.borrow_mut() = Some(list_state);
-    });
+    *captured_state.borrow_mut() = Some(list_state);
     let count = item_count.value();
-    GROWING_LAZY_ROW_CALL_COUNT.with(|call_count| {
-        call_count.set(call_count.get() + 1);
-    });
+    call_count.set(call_count.get() + 1);
 
     Column(Modifier::empty(), ColumnSpec::default(), move || {
         Text(
@@ -114,12 +111,21 @@ fn lazy_row_updates_scroll_bounds_when_item_count_grows_without_scrolling() {
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
     let item_count = MutableState::with_runtime(2usize, runtime.clone());
+    let captured_state = Rc::new(RefCell::new(None));
+    let call_count = Rc::new(Cell::new(0));
 
-    GROWING_LAZY_ROW_CALL_COUNT.with(|call_count| call_count.set(0));
     let key = location_key(file!(), line!(), column!());
     composition
-        .render(key, || {
-            GrowingLazyRow(item_count);
+        .render(key, {
+            let captured_state = Rc::clone(&captured_state);
+            let call_count = Rc::clone(&call_count);
+            move || {
+                GrowingLazyRow(
+                    item_count,
+                    Rc::clone(&captured_state),
+                    Rc::clone(&call_count),
+                );
+            }
         })
         .expect("initial render");
 
@@ -130,7 +136,7 @@ fn lazy_row_updates_scroll_bounds_when_item_count_grows_without_scrolling() {
     };
     measure_root(&mut composition, root, viewport);
 
-    let list_state = LAST_LAZY_ROW_STATE.with(|cell| (*cell.borrow()).expect("state captured"));
+    let list_state = (*captured_state.borrow()).expect("state captured");
     assert_eq!(list_state.layout_info().total_items_count, 2);
     assert!(
         !list_state.can_scroll_forward(),
@@ -149,12 +155,10 @@ fn lazy_row_updates_scroll_bounds_when_item_count_grows_without_scrolling() {
         recomposed,
         "expected composition to re-run after item count growth"
     );
-    GROWING_LAZY_ROW_CALL_COUNT.with(|call_count| {
-        assert!(
-            call_count.get() >= 2,
-            "expected LazyRow parent composable to execute again after item count growth"
-        );
-    });
+    assert!(
+        call_count.get() >= 2,
+        "expected LazyRow parent composable to execute again after item count growth"
+    );
     measure_root(&mut composition, root, viewport);
 
     assert_eq!(list_state.layout_info().total_items_count, 24);
@@ -167,19 +171,13 @@ fn lazy_row_updates_scroll_bounds_when_item_count_grows_without_scrolling() {
         texts.iter().any(|text| text == "Count 24"),
         "expected parent composition to observe the grown item count"
     );
-
-    LAST_LAZY_ROW_STATE.with(|cell| {
-        *cell.borrow_mut() = None;
-    });
 }
 
 #[composable]
 #[allow(non_snake_case)]
-fn HorizontalScrollIndicatorLazyRow() {
+fn HorizontalScrollIndicatorLazyRow(captured_state: Rc<RefCell<Option<LazyListState>>>) {
     let list_state = rememberLazyListState();
-    LAST_LAZY_ROW_STATE.with(|cell| {
-        *cell.borrow_mut() = Some(list_state);
-    });
+    *captured_state.borrow_mut() = Some(list_state);
 
     Column(Modifier::empty(), ColumnSpec::default(), move || {
         Text(
@@ -213,13 +211,14 @@ fn HorizontalScrollIndicatorLazyRow() {
 fn lazy_row_gesture_scroll_moves_rendered_items_along_the_horizontal_axis() {
     let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
-    LAST_LAZY_ROW_STATE.with(|cell| {
-        *cell.borrow_mut() = None;
-    });
+    let captured_state = Rc::new(RefCell::new(None));
 
     composition
-        .render(location_key(file!(), line!(), column!()), || {
-            HorizontalScrollIndicatorLazyRow();
+        .render(location_key(file!(), line!(), column!()), {
+            let captured_state = Rc::clone(&captured_state);
+            move || {
+                HorizontalScrollIndicatorLazyRow(Rc::clone(&captured_state));
+            }
         })
         .expect("initial render");
 
@@ -244,7 +243,7 @@ fn lazy_row_gesture_scroll_moves_rendered_items_along_the_horizontal_axis() {
     let initial_item_0_x = text_x(&initial_records, "Item 0");
     let initial_item_0_y = text_y(&initial_records, "Item 0");
 
-    let list_state = LAST_LAZY_ROW_STATE.with(|cell| (*cell.borrow()).expect("state captured"));
+    let list_state = (*captured_state.borrow()).expect("state captured");
     list_state.dispatch_scroll_delta(-40.0);
     measure_root(&mut composition, root, viewport);
 
@@ -280,10 +279,6 @@ fn lazy_row_gesture_scroll_moves_rendered_items_along_the_horizontal_axis() {
         "scrolling a lazy row must not move its rendered items along y: \
          initial_y={initial_item_0_y}, scrolled_y={scrolled_item_0_y}"
     );
-
-    LAST_LAZY_ROW_STATE.with(|cell| {
-        *cell.borrow_mut() = None;
-    });
 }
 
 #[derive(Debug)]

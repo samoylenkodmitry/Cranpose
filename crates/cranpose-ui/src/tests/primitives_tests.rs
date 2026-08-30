@@ -5,7 +5,7 @@ use std::{
 
 use cranpose_core::{
     self, Applier, Composer, Composition, ConcreteApplierHost, MemoryApplier, NodeId, Phase,
-    SlotTable, SlotsHost, SnapshotStateObserver, State, location_key,
+    SlotTable, SlotsHost, SnapshotStateObserver, location_key,
 };
 use cranpose_foundation::lazy::{LazyListScope, LazyListState, rememberLazyListState};
 use cranpose_ui_layout::{HorizontalAlignment, LinearArrangement, VerticalAlignment};
@@ -20,17 +20,13 @@ use crate::{
     subcompose_layout::{Constraints, SubcomposeLayoutNode},
     text::TextStyle,
     widgets::{
-        BoxWithConstraints, Column, ColumnSpec, DynamicTextSource, LazyColumn, LazyColumnSpec, Row,
-        RowSpec, Spacer, Text, nodes::LayoutNode,
+        BoxWithConstraints, Column, ColumnSpec, LazyColumn, LazyColumnSpec, Row, RowSpec, Spacer,
+        Text, nodes::LayoutNode,
     },
 };
 
-thread_local! {
-    static COUNTER_ROW_INVOCATIONS: Cell<usize> = const { Cell::new(0) };
-    static COUNTER_TEXT_ID: RefCell<Option<NodeId>> = const { RefCell::new(None) };
-    static CONDITIONAL_LAZY_LIST_STATE: RefCell<Option<LazyListState>> = const { RefCell::new(None) };
-    static CONDITIONAL_LAZY_LIST_NODE_ID: RefCell<Option<NodeId>> = const { RefCell::new(None) };
-}
+type CapturedLazyListState = Rc<RefCell<Option<LazyListState>>>;
+type CapturedNodeId = Rc<RefCell<Option<NodeId>>>;
 
 fn prepare_measure_composer(
     slots: &mut SlotTable,
@@ -296,26 +292,6 @@ fn assert_box_with_constraints_branch_toggle<F>(
 }
 
 #[composable]
-fn CounterRow(label: &'static str, count: State<i32>) -> NodeId {
-    COUNTER_ROW_INVOCATIONS.with(|calls| calls.set(calls.get() + 1));
-    Column(Modifier::empty(), ColumnSpec::default(), move || {
-        Text(label, Modifier::empty(), TextStyle::default());
-        let count_for_text = count;
-        let text_id = Text(
-            DynamicTextSource::new(move || {
-                Rc::new(crate::text::AnnotatedString::from(format!(
-                    "Count = {}",
-                    count_for_text.value()
-                )))
-            }),
-            Modifier::empty(),
-            TextStyle::default(),
-        );
-        COUNTER_TEXT_ID.with(|slot| *slot.borrow_mut() = Some(text_id));
-    })
-}
-
-#[composable]
 fn PrimitiveStoriesBranch() {
     Text("Stories", Modifier::empty(), TextStyle::default());
 }
@@ -370,10 +346,12 @@ fn PrimitiveStoriesListBranch(list_state: LazyListState) {
 }
 
 #[composable]
-fn PrimitiveScrollReactiveStoriesBranch(list_state: LazyListState) {
-    CONDITIONAL_LAZY_LIST_STATE.with(|slot| {
-        *slot.borrow_mut() = Some(list_state);
-    });
+fn PrimitiveScrollReactiveStoriesBranch(
+    list_state: LazyListState,
+    captured_state: CapturedLazyListState,
+    captured_node_id: CapturedNodeId,
+) {
+    *captured_state.borrow_mut() = Some(list_state);
 
     Column(
         Modifier::empty().fill_max_size(),
@@ -398,25 +376,32 @@ fn PrimitiveScrollReactiveStoriesBranch(list_state: LazyListState) {
                     });
                 },
             );
-            CONDITIONAL_LAZY_LIST_NODE_ID.with(|slot| {
-                *slot.borrow_mut() = Some(node_id);
-            });
+            *captured_node_id.borrow_mut() = Some(node_id);
         },
     );
 }
 
 #[composable]
-fn PrimitiveStoriesPaneWithIndicator(modifier: Modifier, list_state: LazyListState) {
+fn PrimitiveStoriesPaneWithIndicator(
+    modifier: Modifier,
+    list_state: LazyListState,
+    captured_state: CapturedLazyListState,
+    captured_node_id: CapturedNodeId,
+) {
     Column(
         modifier,
         ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(8.0)),
         move || {
             Text("Top stories", Modifier::empty(), TextStyle::default());
             Text("40 loaded of 40", Modifier::empty(), TextStyle::default());
+            let captured_state = Rc::clone(&captured_state);
+            let captured_node_id = Rc::clone(&captured_node_id);
             Row(
                 Modifier::empty().fill_max_width().weight(1.0),
                 RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(8.0)),
                 move || {
+                    let captured_state = Rc::clone(&captured_state);
+                    let captured_node_id = Rc::clone(&captured_node_id);
                     Column(
                         Modifier::empty().weight(1.0).fill_max_height(),
                         ColumnSpec::default(),
@@ -435,12 +420,8 @@ fn PrimitiveStoriesPaneWithIndicator(modifier: Modifier, list_state: LazyListSta
                                     });
                                 },
                             );
-                            CONDITIONAL_LAZY_LIST_STATE.with(|slot| {
-                                *slot.borrow_mut() = Some(list_state);
-                            });
-                            CONDITIONAL_LAZY_LIST_NODE_ID.with(|slot| {
-                                *slot.borrow_mut() = Some(node_id);
-                            });
+                            *captured_state.borrow_mut() = Some(list_state);
+                            *captured_node_id.borrow_mut() = Some(node_id);
                         },
                     );
                     Column(
@@ -465,6 +446,8 @@ fn PrimitiveStoriesPaneWithDynamicStatus(
     modifier: Modifier,
     list_state: LazyListState,
     loaded_count: cranpose_core::MutableState<usize>,
+    captured_state: CapturedLazyListState,
+    captured_node_id: CapturedNodeId,
 ) {
     Column(
         modifier,
@@ -476,10 +459,14 @@ fn PrimitiveStoriesPaneWithDynamicStatus(
                 Modifier::empty(),
                 TextStyle::default(),
             );
+            let captured_state = Rc::clone(&captured_state);
+            let captured_node_id = Rc::clone(&captured_node_id);
             Row(
                 Modifier::empty().fill_max_width().weight(1.0),
                 RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(8.0)),
                 move || {
+                    let captured_state = Rc::clone(&captured_state);
+                    let captured_node_id = Rc::clone(&captured_node_id);
                     Column(
                         Modifier::empty().weight(1.0).fill_max_height(),
                         ColumnSpec::default(),
@@ -498,12 +485,8 @@ fn PrimitiveStoriesPaneWithDynamicStatus(
                                     });
                                 },
                             );
-                            CONDITIONAL_LAZY_LIST_STATE.with(|slot| {
-                                *slot.borrow_mut() = Some(list_state);
-                            });
-                            CONDITIONAL_LAZY_LIST_NODE_ID.with(|slot| {
-                                *slot.borrow_mut() = Some(node_id);
-                            });
+                            *captured_state.borrow_mut() = Some(list_state);
+                            *captured_node_id.borrow_mut() = Some(node_id);
                         },
                     );
                     Column(
@@ -523,14 +506,12 @@ fn PrimitiveStoriesPaneWithDynamicStatus(
     );
 }
 
-fn captured_conditional_lazy_list_state() -> LazyListState {
-    CONDITIONAL_LAZY_LIST_STATE
-        .with(|slot| (*slot.borrow()).expect("conditional lazy list state should be captured"))
+fn captured_conditional_lazy_list_state(captured_state: &CapturedLazyListState) -> LazyListState {
+    (*captured_state.borrow()).expect("conditional lazy list state should be captured")
 }
 
-fn captured_conditional_lazy_list_node_id() -> NodeId {
-    CONDITIONAL_LAZY_LIST_NODE_ID
-        .with(|slot| (*slot.borrow()).expect("conditional lazy list node id should be captured"))
+fn captured_conditional_lazy_list_node_id(captured_node_id: &CapturedNodeId) -> NodeId {
+    (*captured_node_id.borrow()).expect("conditional lazy list node id should be captured")
 }
 
 fn node_generation(composition: &mut Composition<MemoryApplier>, node_id: NodeId) -> u32 {
@@ -969,36 +950,43 @@ fn box_with_constraints_restored_lazy_list_branch_keeps_host_generation_during_s
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
     let selected_story = cranpose_core::MutableState::with_runtime(None::<u64>, runtime.clone());
-
-    CONDITIONAL_LAZY_LIST_STATE.with(|slot| {
-        *slot.borrow_mut() = None;
-    });
-    CONDITIONAL_LAZY_LIST_NODE_ID.with(|slot| {
-        *slot.borrow_mut() = None;
-    });
+    let captured_state: CapturedLazyListState = Rc::new(RefCell::new(None));
+    let captured_node_id: CapturedNodeId = Rc::new(RefCell::new(None));
 
     composition
-        .render(location_key(file!(), line!(), column!()), || {
-            let list_state = rememberLazyListState();
-            BoxWithConstraints(Modifier::empty().fill_max_size(), move |_scope| {
-                Column(
-                    Modifier::empty().fill_max_size(),
-                    ColumnSpec::default(),
-                    move || {
-                        Text("Header", Modifier::empty(), TextStyle::default());
-                        let single_pane_key = selected_story.value();
-                        cranpose_core::with_key(&single_pane_key, move || {
-                            if single_pane_key.is_some() {
-                                PrimitiveThreadPaneLike(
-                                    Modifier::empty().fill_max_width().weight(1.0),
-                                );
-                            } else {
-                                PrimitiveScrollReactiveStoriesBranch(list_state);
-                            }
-                        });
-                    },
-                );
-            });
+        .render(location_key(file!(), line!(), column!()), {
+            let captured_state = Rc::clone(&captured_state);
+            let captured_node_id = Rc::clone(&captured_node_id);
+            move || {
+                let list_state = rememberLazyListState();
+                let captured_state = Rc::clone(&captured_state);
+                let captured_node_id = Rc::clone(&captured_node_id);
+                BoxWithConstraints(Modifier::empty().fill_max_size(), move |_scope| {
+                    Column(Modifier::empty().fill_max_size(), ColumnSpec::default(), {
+                        let captured_state = Rc::clone(&captured_state);
+                        let captured_node_id = Rc::clone(&captured_node_id);
+                        move || {
+                            Text("Header", Modifier::empty(), TextStyle::default());
+                            let single_pane_key = selected_story.value();
+                            let captured_state = Rc::clone(&captured_state);
+                            let captured_node_id = Rc::clone(&captured_node_id);
+                            cranpose_core::with_key(&single_pane_key, move || {
+                                if single_pane_key.is_some() {
+                                    PrimitiveThreadPaneLike(
+                                        Modifier::empty().fill_max_width().weight(1.0),
+                                    );
+                                } else {
+                                    PrimitiveScrollReactiveStoriesBranch(
+                                        list_state,
+                                        Rc::clone(&captured_state),
+                                        Rc::clone(&captured_node_id),
+                                    );
+                                }
+                            });
+                        }
+                    });
+                });
+            }
         })
         .expect("initial render");
 
@@ -1009,14 +997,14 @@ fn box_with_constraints_restored_lazy_list_branch_keeps_host_generation_during_s
     };
     settle_scroll_recomposition(&mut composition, root, size);
 
-    let list_state = captured_conditional_lazy_list_state();
-    let fresh_node_id = captured_conditional_lazy_list_node_id();
+    let list_state = captured_conditional_lazy_list_state(&captured_state);
+    let fresh_node_id = captured_conditional_lazy_list_node_id(&captured_node_id);
     let fresh_generation = node_generation(&mut composition, fresh_node_id);
 
     list_state.dispatch_scroll_delta(-120.0);
     settle_scroll_recomposition(&mut composition, root, size);
 
-    let fresh_after_node_id = captured_conditional_lazy_list_node_id();
+    let fresh_after_node_id = captured_conditional_lazy_list_node_id(&captured_node_id);
     let fresh_after_generation = node_generation(&mut composition, fresh_after_node_id);
     assert_eq!(
         (fresh_after_node_id, fresh_after_generation),
@@ -1042,14 +1030,14 @@ fn box_with_constraints_restored_lazy_list_branch_keeps_host_generation_during_s
     }
     settle_scroll_recomposition(&mut composition, root, size);
 
-    let restored_node_id = captured_conditional_lazy_list_node_id();
+    let restored_node_id = captured_conditional_lazy_list_node_id(&captured_node_id);
     let restored_generation = node_generation(&mut composition, restored_node_id);
 
     let mut seen = Vec::new();
     for _ in 0..4 {
         list_state.dispatch_scroll_delta(-120.0);
         settle_scroll_recomposition(&mut composition, root, size);
-        let node_id = captured_conditional_lazy_list_node_id();
+        let node_id = captured_conditional_lazy_list_node_id(&captured_node_id);
         let generation = node_generation(&mut composition, node_id);
         seen.push((node_id, generation));
     }
@@ -1067,39 +1055,48 @@ fn box_with_constraints_restored_weighted_lazy_list_branch_keeps_host_generation
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
     let selected_story = cranpose_core::MutableState::with_runtime(None::<u64>, runtime.clone());
-
-    CONDITIONAL_LAZY_LIST_STATE.with(|slot| {
-        *slot.borrow_mut() = None;
-    });
-    CONDITIONAL_LAZY_LIST_NODE_ID.with(|slot| {
-        *slot.borrow_mut() = None;
-    });
+    let captured_state: CapturedLazyListState = Rc::new(RefCell::new(None));
+    let captured_node_id: CapturedNodeId = Rc::new(RefCell::new(None));
 
     composition
-        .render(location_key(file!(), line!(), column!()), || {
-            let list_state = rememberLazyListState();
-            BoxWithConstraints(Modifier::empty().fill_max_size(), move |_scope| {
-                Column(
-                    Modifier::empty().fill_max_size(),
-                    ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(12.0)),
-                    move || {
-                        Text("Header", Modifier::empty(), TextStyle::default());
-                        let single_pane_key = selected_story.value();
-                        cranpose_core::with_key(&single_pane_key, move || {
-                            if single_pane_key.is_some() {
-                                PrimitiveThreadPaneLike(
-                                    Modifier::empty().fill_max_width().weight(1.0),
-                                );
-                            } else {
-                                PrimitiveStoriesPaneWithIndicator(
-                                    Modifier::empty().fill_max_width().weight(1.0),
-                                    list_state,
-                                );
+        .render(location_key(file!(), line!(), column!()), {
+            let captured_state = Rc::clone(&captured_state);
+            let captured_node_id = Rc::clone(&captured_node_id);
+            move || {
+                let list_state = rememberLazyListState();
+                let captured_state = Rc::clone(&captured_state);
+                let captured_node_id = Rc::clone(&captured_node_id);
+                BoxWithConstraints(Modifier::empty().fill_max_size(), move |_scope| {
+                    Column(
+                        Modifier::empty().fill_max_size(),
+                        ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(12.0)),
+                        {
+                            let captured_state = Rc::clone(&captured_state);
+                            let captured_node_id = Rc::clone(&captured_node_id);
+                            move || {
+                                Text("Header", Modifier::empty(), TextStyle::default());
+                                let single_pane_key = selected_story.value();
+                                let captured_state = Rc::clone(&captured_state);
+                                let captured_node_id = Rc::clone(&captured_node_id);
+                                cranpose_core::with_key(&single_pane_key, move || {
+                                    if single_pane_key.is_some() {
+                                        PrimitiveThreadPaneLike(
+                                            Modifier::empty().fill_max_width().weight(1.0),
+                                        );
+                                    } else {
+                                        PrimitiveStoriesPaneWithIndicator(
+                                            Modifier::empty().fill_max_width().weight(1.0),
+                                            list_state,
+                                            Rc::clone(&captured_state),
+                                            Rc::clone(&captured_node_id),
+                                        );
+                                    }
+                                });
                             }
-                        });
-                    },
-                );
-            });
+                        },
+                    );
+                });
+            }
         })
         .expect("initial render");
 
@@ -1110,14 +1107,14 @@ fn box_with_constraints_restored_weighted_lazy_list_branch_keeps_host_generation
     };
     settle_scroll_recomposition(&mut composition, root, size);
 
-    let list_state = captured_conditional_lazy_list_state();
-    let fresh_node_id = captured_conditional_lazy_list_node_id();
+    let list_state = captured_conditional_lazy_list_state(&captured_state);
+    let fresh_node_id = captured_conditional_lazy_list_node_id(&captured_node_id);
     let fresh_generation = node_generation(&mut composition, fresh_node_id);
 
     list_state.dispatch_scroll_delta(-120.0);
     settle_scroll_recomposition(&mut composition, root, size);
 
-    let fresh_after_node_id = captured_conditional_lazy_list_node_id();
+    let fresh_after_node_id = captured_conditional_lazy_list_node_id(&captured_node_id);
     let fresh_after_generation = node_generation(&mut composition, fresh_after_node_id);
     assert_eq!(
         (fresh_after_node_id, fresh_after_generation),
@@ -1143,14 +1140,14 @@ fn box_with_constraints_restored_weighted_lazy_list_branch_keeps_host_generation
     }
     settle_scroll_recomposition(&mut composition, root, size);
 
-    let restored_node_id = captured_conditional_lazy_list_node_id();
+    let restored_node_id = captured_conditional_lazy_list_node_id(&captured_node_id);
     let restored_generation = node_generation(&mut composition, restored_node_id);
 
     let mut seen = Vec::new();
     for _ in 0..4 {
         list_state.dispatch_scroll_delta(-120.0);
         settle_scroll_recomposition(&mut composition, root, size);
-        let node_id = captured_conditional_lazy_list_node_id();
+        let node_id = captured_conditional_lazy_list_node_id(&captured_node_id);
         let generation = node_generation(&mut composition, node_id);
         seen.push((node_id, generation));
     }
@@ -1169,40 +1166,49 @@ fn box_with_constraints_restored_weighted_lazy_list_branch_keeps_host_during_sta
     let runtime = composition.runtime_handle();
     let selected_story = cranpose_core::MutableState::with_runtime(None::<u64>, runtime.clone());
     let loaded_count = cranpose_core::MutableState::with_runtime(20usize, runtime.clone());
-
-    CONDITIONAL_LAZY_LIST_STATE.with(|slot| {
-        *slot.borrow_mut() = None;
-    });
-    CONDITIONAL_LAZY_LIST_NODE_ID.with(|slot| {
-        *slot.borrow_mut() = None;
-    });
+    let captured_state: CapturedLazyListState = Rc::new(RefCell::new(None));
+    let captured_node_id: CapturedNodeId = Rc::new(RefCell::new(None));
 
     composition
-        .render(location_key(file!(), line!(), column!()), || {
-            let list_state = rememberLazyListState();
-            BoxWithConstraints(Modifier::empty().fill_max_size(), move |_scope| {
-                Column(
-                    Modifier::empty().fill_max_size(),
-                    ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(12.0)),
-                    move || {
-                        Text("Header", Modifier::empty(), TextStyle::default());
-                        let single_pane_key = selected_story.value();
-                        cranpose_core::with_key(&single_pane_key, move || {
-                            if single_pane_key.is_some() {
-                                PrimitiveThreadPaneLike(
-                                    Modifier::empty().fill_max_width().weight(1.0),
-                                );
-                            } else {
-                                PrimitiveStoriesPaneWithDynamicStatus(
-                                    Modifier::empty().fill_max_width().weight(1.0),
-                                    list_state,
-                                    loaded_count,
-                                );
+        .render(location_key(file!(), line!(), column!()), {
+            let captured_state = Rc::clone(&captured_state);
+            let captured_node_id = Rc::clone(&captured_node_id);
+            move || {
+                let list_state = rememberLazyListState();
+                let captured_state = Rc::clone(&captured_state);
+                let captured_node_id = Rc::clone(&captured_node_id);
+                BoxWithConstraints(Modifier::empty().fill_max_size(), move |_scope| {
+                    Column(
+                        Modifier::empty().fill_max_size(),
+                        ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(12.0)),
+                        {
+                            let captured_state = Rc::clone(&captured_state);
+                            let captured_node_id = Rc::clone(&captured_node_id);
+                            move || {
+                                Text("Header", Modifier::empty(), TextStyle::default());
+                                let single_pane_key = selected_story.value();
+                                let captured_state = Rc::clone(&captured_state);
+                                let captured_node_id = Rc::clone(&captured_node_id);
+                                cranpose_core::with_key(&single_pane_key, move || {
+                                    if single_pane_key.is_some() {
+                                        PrimitiveThreadPaneLike(
+                                            Modifier::empty().fill_max_width().weight(1.0),
+                                        );
+                                    } else {
+                                        PrimitiveStoriesPaneWithDynamicStatus(
+                                            Modifier::empty().fill_max_width().weight(1.0),
+                                            list_state,
+                                            loaded_count,
+                                            Rc::clone(&captured_state),
+                                            Rc::clone(&captured_node_id),
+                                        );
+                                    }
+                                });
                             }
-                        });
-                    },
-                );
-            });
+                        },
+                    );
+                });
+            }
         })
         .expect("initial render");
 
@@ -1231,13 +1237,13 @@ fn box_with_constraints_restored_weighted_lazy_list_branch_keeps_host_during_sta
     }
     settle_scroll_recomposition(&mut composition, root, size);
 
-    let restored_node_id = captured_conditional_lazy_list_node_id();
+    let restored_node_id = captured_conditional_lazy_list_node_id(&captured_node_id);
     let restored_generation = node_generation(&mut composition, restored_node_id);
 
     loaded_count.set_value(40);
     settle_scroll_recomposition(&mut composition, root, size);
 
-    let after_node_id = captured_conditional_lazy_list_node_id();
+    let after_node_id = captured_conditional_lazy_list_node_id(&captured_node_id);
     let after_generation = node_generation(&mut composition, after_node_id);
 
     assert_eq!(
@@ -1253,39 +1259,48 @@ fn box_with_constraints_restored_weighted_branch_after_header_toggle_keeps_host_
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
     let selected_story = cranpose_core::MutableState::with_runtime(None::<u64>, runtime.clone());
-
-    CONDITIONAL_LAZY_LIST_STATE.with(|slot| {
-        *slot.borrow_mut() = None;
-    });
-    CONDITIONAL_LAZY_LIST_NODE_ID.with(|slot| {
-        *slot.borrow_mut() = None;
-    });
+    let captured_state: CapturedLazyListState = Rc::new(RefCell::new(None));
+    let captured_node_id: CapturedNodeId = Rc::new(RefCell::new(None));
 
     composition
-        .render(location_key(file!(), line!(), column!()), || {
-            let list_state = rememberLazyListState();
-            BoxWithConstraints(Modifier::empty().fill_max_size(), move |_scope| {
-                Column(
-                    Modifier::empty().fill_max_size(),
-                    ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(12.0)),
-                    move || {
-                        PrimitiveHeaderWithOptionalBack(selected_story.value().is_some());
-                        let single_pane_key = selected_story.value();
-                        cranpose_core::with_key(&single_pane_key, move || {
-                            if single_pane_key.is_some() {
-                                PrimitiveThreadPaneLike(
-                                    Modifier::empty().fill_max_width().weight(1.0),
-                                );
-                            } else {
-                                PrimitiveStoriesPaneWithIndicator(
-                                    Modifier::empty().fill_max_width().weight(1.0),
-                                    list_state,
-                                );
+        .render(location_key(file!(), line!(), column!()), {
+            let captured_state = Rc::clone(&captured_state);
+            let captured_node_id = Rc::clone(&captured_node_id);
+            move || {
+                let list_state = rememberLazyListState();
+                let captured_state = Rc::clone(&captured_state);
+                let captured_node_id = Rc::clone(&captured_node_id);
+                BoxWithConstraints(Modifier::empty().fill_max_size(), move |_scope| {
+                    Column(
+                        Modifier::empty().fill_max_size(),
+                        ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(12.0)),
+                        {
+                            let captured_state = Rc::clone(&captured_state);
+                            let captured_node_id = Rc::clone(&captured_node_id);
+                            move || {
+                                PrimitiveHeaderWithOptionalBack(selected_story.value().is_some());
+                                let single_pane_key = selected_story.value();
+                                let captured_state = Rc::clone(&captured_state);
+                                let captured_node_id = Rc::clone(&captured_node_id);
+                                cranpose_core::with_key(&single_pane_key, move || {
+                                    if single_pane_key.is_some() {
+                                        PrimitiveThreadPaneLike(
+                                            Modifier::empty().fill_max_width().weight(1.0),
+                                        );
+                                    } else {
+                                        PrimitiveStoriesPaneWithIndicator(
+                                            Modifier::empty().fill_max_width().weight(1.0),
+                                            list_state,
+                                            Rc::clone(&captured_state),
+                                            Rc::clone(&captured_node_id),
+                                        );
+                                    }
+                                });
                             }
-                        });
-                    },
-                );
-            });
+                        },
+                    );
+                });
+            }
         })
         .expect("initial render");
 
@@ -1296,16 +1311,19 @@ fn box_with_constraints_restored_weighted_branch_after_header_toggle_keeps_host_
     };
     settle_scroll_recomposition(&mut composition, root, size);
 
-    let list_state = captured_conditional_lazy_list_state();
-    let fresh_node_id = captured_conditional_lazy_list_node_id();
+    let list_state = captured_conditional_lazy_list_state(&captured_state);
+    let fresh_node_id = captured_conditional_lazy_list_node_id(&captured_node_id);
     let fresh_generation = node_generation(&mut composition, fresh_node_id);
 
     list_state.dispatch_scroll_delta(-120.0);
     settle_scroll_recomposition(&mut composition, root, size);
     assert_eq!(
         (
-            captured_conditional_lazy_list_node_id(),
-            node_generation(&mut composition, captured_conditional_lazy_list_node_id())
+            captured_conditional_lazy_list_node_id(&captured_node_id),
+            node_generation(
+                &mut composition,
+                captured_conditional_lazy_list_node_id(&captured_node_id)
+            )
         ),
         (fresh_node_id, fresh_generation),
         "fresh scroll should not recreate the lazy list host",
@@ -1329,14 +1347,14 @@ fn box_with_constraints_restored_weighted_branch_after_header_toggle_keeps_host_
     }
     settle_scroll_recomposition(&mut composition, root, size);
 
-    let restored_node_id = captured_conditional_lazy_list_node_id();
+    let restored_node_id = captured_conditional_lazy_list_node_id(&captured_node_id);
     let restored_generation = node_generation(&mut composition, restored_node_id);
 
     let mut seen = Vec::new();
     for _ in 0..4 {
         list_state.dispatch_scroll_delta(-120.0);
         settle_scroll_recomposition(&mut composition, root, size);
-        let node_id = captured_conditional_lazy_list_node_id();
+        let node_id = captured_conditional_lazy_list_node_id(&captured_node_id);
         let generation = node_generation(&mut composition, node_id);
         seen.push((node_id, generation));
     }

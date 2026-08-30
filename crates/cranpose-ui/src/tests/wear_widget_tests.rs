@@ -30,10 +30,6 @@ const SCREEN_VERTICAL: f32 = 34.0;
 const HEADER_HEIGHT: f32 = 48.0;
 const ROW_HEIGHT: f32 = 52.0;
 
-thread_local! {
-    static LAST_STATE: RefCell<Option<WearScalingListState>> = const { RefCell::new(None) };
-}
-
 fn measured_colors() -> WearColors {
     WearColors {
         primary: Color::from_rgb_u8(0xB9, 0xF2, 0xFF),
@@ -56,36 +52,46 @@ fn settings_spec() -> WearScalingLazyColumnSpec {
     WearScalingLazyColumnSpec::default().content_padding(SETTINGS_SIDE, SCREEN_VERTICAL)
 }
 
-fn compose_fixed_rows(heights: Vec<f32>, spec: WearScalingLazyColumnSpec) -> TestComposition {
-    run_test_composition(move || {
-        crate::set_density(PX);
-        let state = rememberWearScalingListState(CentreAnchor::default());
-        LAST_STATE.with(|cell| *cell.borrow_mut() = Some(state));
-        let heights = heights.clone();
-        WearScalingLazyColumn(
-            Modifier::empty().fill_max_size(),
-            state,
-            spec,
-            move |scope| {
-                let heights = heights.clone();
-                scope.items(
-                    LazyItems::new(heights.len()).key(|index: usize| index as u64),
-                    move |index| {
-                        Spacer(Size {
-                            width: 0.0,
-                            height: heights[index],
-                        });
-                    },
-                );
-            },
-        );
-    })
+type CapturedListState = Rc<RefCell<Option<WearScalingListState>>>;
+
+fn compose_fixed_rows(
+    heights: Vec<f32>,
+    spec: WearScalingLazyColumnSpec,
+) -> (TestComposition, CapturedListState) {
+    let captured_state: CapturedListState = Rc::new(RefCell::new(None));
+    let composition = run_test_composition({
+        let captured_state = Rc::clone(&captured_state);
+        move || {
+            crate::set_density(PX);
+            let state = rememberWearScalingListState(CentreAnchor::default());
+            *captured_state.borrow_mut() = Some(state);
+            let heights = heights.clone();
+            WearScalingLazyColumn(
+                Modifier::empty().fill_max_size(),
+                state,
+                spec,
+                move |scope| {
+                    let heights = heights.clone();
+                    scope.items(
+                        LazyItems::new(heights.len()).key(|index: usize| index as u64),
+                        move |index| {
+                            Spacer(Size {
+                                width: 0.0,
+                                height: heights[index],
+                            });
+                        },
+                    );
+                },
+            );
+        }
+    });
+    (composition, captured_state)
 }
 
 use crate::widgets::wear::rememberWearScalingListState;
 
-fn state() -> WearScalingListState {
-    LAST_STATE.with(|cell| (*cell.borrow()).expect("state captured"))
+fn state(captured_state: &CapturedListState) -> WearScalingListState {
+    (*captured_state.borrow()).expect("state captured")
 }
 
 fn tree(composition: &mut TestComposition, root: NodeId) -> crate::LayoutTree {
@@ -127,7 +133,8 @@ fn item_layers(tree: &crate::LayoutTree) -> Vec<(f32, f32, Rc<ModifierNodeSlices
 
 #[test]
 fn the_settings_screen_puts_its_first_two_rows_where_the_framebuffer_has_them() {
-    let mut composition = compose_fixed_rows(vec![HEADER_HEIGHT, ROW_HEIGHT], settings_spec());
+    let (mut composition, _captured_state) =
+        compose_fixed_rows(vec![HEADER_HEIGHT, ROW_HEIGHT], settings_spec());
     let root = composition.root().expect("list root");
     let tree = tree(&mut composition, root);
     let layers = item_layers(&tree);
@@ -140,7 +147,8 @@ fn the_settings_screen_puts_its_first_two_rows_where_the_framebuffer_has_them() 
 
 #[test]
 fn content_padding_is_absorbed_by_auto_centring_rather_than_stacking_on_it() {
-    let mut composition = compose_fixed_rows(vec![HEADER_HEIGHT, ROW_HEIGHT], settings_spec());
+    let (mut composition, _captured_state) =
+        compose_fixed_rows(vec![HEADER_HEIGHT, ROW_HEIGHT], settings_spec());
     let root = composition.root().expect("list root");
     let tree = tree(&mut composition, root);
     let layers = item_layers(&tree);
@@ -151,7 +159,7 @@ fn content_padding_is_absorbed_by_auto_centring_rather_than_stacking_on_it() {
 
 #[test]
 fn a_list_with_no_content_padding_centres_its_anchor_in_the_same_place() {
-    let mut composition = compose_fixed_rows(
+    let (mut composition, _captured_state) = compose_fixed_rows(
         vec![HEADER_HEIGHT, ROW_HEIGHT],
         WearScalingLazyColumnSpec::default(),
     );
@@ -163,7 +171,7 @@ fn a_list_with_no_content_padding_centres_its_anchor_in_the_same_place() {
 
 #[test]
 fn a_top_aligned_list_still_starts_one_content_padding_down() {
-    let mut composition = compose_fixed_rows(
+    let (mut composition, _captured_state) = compose_fixed_rows(
         vec![HEADER_HEIGHT, ROW_HEIGHT],
         settings_spec().auto_centering(None),
     );
@@ -175,10 +183,11 @@ fn a_top_aligned_list_still_starts_one_content_padding_down() {
 
 #[test]
 fn a_row_is_placed_from_the_full_heights_above_it_not_the_scaled_ones() {
-    let mut composition = compose_fixed_rows(vec![ROW_HEIGHT; 6], settings_spec());
+    let (mut composition, captured_state) =
+        compose_fixed_rows(vec![ROW_HEIGHT; 6], settings_spec());
     let root = composition.root().expect("list root");
     let _ = tree(&mut composition, root);
-    state().scroll_by(ROW_HEIGHT * 2.0);
+    state(&captured_state).scroll_by(ROW_HEIGHT * 2.0);
     composition
         .process_invalid_scopes()
         .expect("scroll recomposition");
@@ -236,9 +245,10 @@ fn a_row_shrinks_and_fades_by_the_amounts_the_pixels_show() {
 
 #[test]
 fn the_scale_a_frame_draws_with_is_the_scale_that_frame_measured() {
-    let mut composition = compose_fixed_rows(vec![ROW_HEIGHT; 8], settings_spec());
+    let (mut composition, captured_state) =
+        compose_fixed_rows(vec![ROW_HEIGHT; 8], settings_spec());
     let root = composition.root().expect("list root");
-    let state = state();
+    let state = state(&captured_state);
 
     let mut seen = Vec::new();
     for step in 0..5 {
@@ -304,7 +314,8 @@ fn expected_rows(count: usize, anchor: CentreAnchor) -> Vec<crate::round_scaling
 
 #[test]
 fn a_shrunk_item_reaches_the_renderer_through_a_layer_pinned_to_its_top_edge() {
-    let mut composition = compose_fixed_rows(vec![ROW_HEIGHT; 6], settings_spec());
+    let (mut composition, _captured_state) =
+        compose_fixed_rows(vec![ROW_HEIGHT; 6], settings_spec());
     let root = composition.root().expect("list root");
     let tree = tree(&mut composition, root);
     for (_, _, slices) in item_layers(&tree) {
@@ -318,11 +329,12 @@ fn a_shrunk_item_reaches_the_renderer_through_a_layer_pinned_to_its_top_edge() {
 
 #[test]
 fn an_item_off_the_bottom_is_neither_composed_nor_placed() {
-    let mut composition = compose_fixed_rows(vec![ROW_HEIGHT; 30], settings_spec());
+    let (mut composition, captured_state) =
+        compose_fixed_rows(vec![ROW_HEIGHT; 30], settings_spec());
     let root = composition.root().expect("list root");
     let tree = tree(&mut composition, root);
     let layers = item_layers(&tree);
-    let info = state().layout_info();
+    let info = state(&captured_state).layout_info();
     assert_eq!(info.item_count, 30, "the list still knows how long it is");
     assert!(info.visible > 0 && info.visible < 30, "{info:?}");
     assert_eq!(
@@ -344,16 +356,16 @@ fn an_item_off_the_bottom_is_neither_composed_nor_placed() {
 
 #[test]
 fn the_composed_window_does_not_grow_with_the_list() {
-    let mut short = compose_fixed_rows(vec![ROW_HEIGHT; 9], settings_spec());
+    let (mut short, short_state) = compose_fixed_rows(vec![ROW_HEIGHT; 9], settings_spec());
     let root = short.root().expect("list root");
     let _ = tree(&mut short, root);
-    let nine = state().layout_info();
+    let nine = state(&short_state).layout_info();
     drop(short);
 
-    let mut long = compose_fixed_rows(vec![ROW_HEIGHT; 60], settings_spec());
+    let (mut long, long_state) = compose_fixed_rows(vec![ROW_HEIGHT; 60], settings_spec());
     let root = long.root().expect("list root");
     let _ = tree(&mut long, root);
-    let sixty = state().layout_info();
+    let sixty = state(&long_state).layout_info();
 
     assert_eq!(nine.item_count, 9);
     assert_eq!(sixty.item_count, 60);
@@ -366,13 +378,15 @@ fn the_composed_window_does_not_grow_with_the_list() {
 
 #[test]
 fn the_anchored_items_top_does_not_depend_on_the_heights_above_it() {
-    let mut thin = compose_fixed_rows(vec![7.5, ROW_HEIGHT, ROW_HEIGHT], settings_spec());
+    let (mut thin, _thin_state) =
+        compose_fixed_rows(vec![7.5, ROW_HEIGHT, ROW_HEIGHT], settings_spec());
     let root = thin.root().expect("list root");
     let tree_thin = tree(&mut thin, root);
     let thin_anchor = item_layers(&tree_thin)[1].0;
     drop(thin);
 
-    let mut fat = compose_fixed_rows(vec![101.5, ROW_HEIGHT, ROW_HEIGHT], settings_spec());
+    let (mut fat, _fat_state) =
+        compose_fixed_rows(vec![101.5, ROW_HEIGHT, ROW_HEIGHT], settings_spec());
     let root = fat.root().expect("list root");
     let tree_fat = tree(&mut fat, root);
     let fat_layers = item_layers(&tree_fat);
@@ -394,10 +408,11 @@ fn the_anchored_items_top_does_not_depend_on_the_heights_above_it() {
 
 #[test]
 fn the_indicator_travel_runs_between_the_first_and_last_row_centres() {
-    let mut composition = compose_fixed_rows(vec![ROW_HEIGHT; 10], settings_spec());
+    let (mut composition, captured_state) =
+        compose_fixed_rows(vec![ROW_HEIGHT; 10], settings_spec());
     let root = composition.root().expect("list root");
     let _ = tree(&mut composition, root);
-    let info = state().layout_info();
+    let info = state(&captured_state).layout_info();
     assert_eq!(info.item_count, 10);
     assert_eq!(info.travel(), 9.0 * (ROW_HEIGHT + 4.0));
 }
@@ -588,7 +603,6 @@ fn a_scaffold_draws_its_indicator_over_the_content_and_not_beside_it() {
     let mut composition = run_test_composition(|| {
         crate::set_density(PX);
         let state = rememberWearScalingListState(CentreAnchor::default());
-        LAST_STATE.with(|cell| *cell.borrow_mut() = Some(state));
         let inner = state;
         ScreenScaffold(
             Modifier::empty(),
@@ -635,18 +649,18 @@ fn header_and_rows() -> Vec<f32> {
 
 fn indicator_at_vertical_padding(vertical: f32) -> IndicatorGeometry {
     let spec = WearScalingLazyColumnSpec::default().content_padding(SETTINGS_SIDE, vertical);
-    let mut composition = compose_fixed_rows(header_and_rows(), spec);
+    let (mut composition, captured_state) = compose_fixed_rows(header_and_rows(), spec);
     let root = composition.root().expect("list root");
     let _ = tree(&mut composition, root);
-    indicator_for_scaling_list(&state()).expect("a ten-row list is scrollable")
+    indicator_for_scaling_list(&state(&captured_state)).expect("a ten-row list is scrollable")
 }
 
 #[test]
 fn the_composed_indicator_reads_item_indices_where_the_flat_model_reads_pixels() {
-    let mut composition = compose_fixed_rows(header_and_rows(), settings_spec());
+    let (mut composition, captured_state) = compose_fixed_rows(header_and_rows(), settings_spec());
     let root = composition.root().expect("list root");
     let _ = tree(&mut composition, root);
-    let list = state();
+    let list = state(&captured_state);
     let wear = indicator_for_scaling_list(&list).expect("a ten-row list is scrollable");
 
     let span = list.with_indicator_list(|_, items| {
@@ -672,10 +686,10 @@ fn the_composed_indicator_reads_item_indices_where_the_flat_model_reads_pixels()
 
 #[test]
 fn the_window_the_indicator_reads_carries_the_lists_own_item_indices() {
-    let mut composition = compose_fixed_rows(header_and_rows(), settings_spec());
+    let (mut composition, captured_state) = compose_fixed_rows(header_and_rows(), settings_spec());
     let root = composition.root().expect("list root");
     let _ = tree(&mut composition, root);
-    let list = state();
+    let list = state(&captured_state);
     let at_rest = indicator_for_scaling_list(&list).expect("indicator");
     assert_eq!(
         list.with_indicator_list(|_, items| items.visible.first().map(|item| item.index)),
@@ -689,7 +703,7 @@ fn the_window_the_indicator_reads_carries_the_lists_own_item_indices() {
         .process_invalid_scopes()
         .expect("scroll recomposition");
     let _ = tree(&mut composition, root);
-    let list = state();
+    let list = state(&captured_state);
     let indices = list
         .with_indicator_list(|_, items| items.visible.iter().map(|i| i.index).collect::<Vec<_>>());
     assert_eq!(
@@ -710,10 +724,10 @@ fn the_window_the_indicator_reads_carries_the_lists_own_item_indices() {
 
 #[test]
 fn the_thumb_keeps_the_length_it_was_first_measured_at() {
-    let mut composition = compose_fixed_rows(header_and_rows(), settings_spec());
+    let (mut composition, captured_state) = compose_fixed_rows(header_and_rows(), settings_spec());
     let root = composition.root().expect("list root");
     let _ = tree(&mut composition, root);
-    let list = state();
+    let list = state(&captured_state);
     let at_rest = indicator_for_scaling_list(&list).expect("indicator");
 
     list.scroll_by(list.layout_info().travel() * 0.5);
@@ -721,7 +735,7 @@ fn the_thumb_keeps_the_length_it_was_first_measured_at() {
         .process_invalid_scopes()
         .expect("scroll recomposition");
     let _ = tree(&mut composition, root);
-    let list = state();
+    let list = state(&captured_state);
     let scrolled = indicator_for_scaling_list(&list).expect("indicator");
     assert_eq!(scrolled.thumb, at_rest.thumb, "the thumb changed length");
     assert!(scrolled.offset > at_rest.offset, "and it did move");
@@ -756,10 +770,11 @@ fn the_indicator_counts_the_vertical_padding_this_list_was_given() {
 
 #[test]
 fn a_list_that_fits_on_its_screen_has_no_indicator_at_all() {
-    let mut composition = compose_fixed_rows(vec![ROW_HEIGHT; 2], settings_spec());
+    let (mut composition, captured_state) =
+        compose_fixed_rows(vec![ROW_HEIGHT; 2], settings_spec());
     let root = composition.root().expect("list root");
     let _ = tree(&mut composition, root);
-    assert_eq!(indicator_for_scaling_list(&state()), None);
+    assert_eq!(indicator_for_scaling_list(&state(&captured_state)), None);
 }
 
 #[test]
@@ -843,78 +858,90 @@ fn the_switch_slots_resolve_to_the_colours_the_framebuffer_shows() {
     );
 }
 
-fn compose_credits_screen() -> TestComposition {
-    run_test_composition(|| {
-        crate::set_density(PX);
-        let state = rememberWearScalingListState(CentreAnchor::default());
-        LAST_STATE.with(|cell| *cell.borrow_mut() = Some(state));
-        let inner = state;
-        ScreenScaffold(
-            Modifier::empty().fill_max_size(),
-            state,
-            ScreenScaffoldSpec::default()
-                .indicator(ScrollIndicatorSpec::default().colors(measured_colors())),
-            move || {
-                WearScalingLazyColumn(
-                    Modifier::empty().fill_max_size(),
-                    inner,
-                    WearScalingLazyColumnSpec::default().content_padding(30.0, SCREEN_VERTICAL),
-                    move |scope| {
-                        let lines = [
-                            "ORBIT BREAKER",
-                            "Version 1.0.0-debug",
-                            "Designed and built for Wear OS.",
-                            "Every graphic and sound in this game is generated inside the project.",
-                            "No third-party assets, no downloads, nothing loaded at runtime.",
-                            "Built on Cranpose, a Compose-shaped UI framework written in Rust.",
-                            "Back",
-                        ];
-                        let button = lines.len() - 1;
-                        scope.items(
-                            LazyItems::new(lines.len()).key(|index: usize| index as u64),
-                            move |index| match index {
-                                0 => {
-                                    ListHeader(
-                                        Modifier::empty(),
-                                        ListHeaderSpec::default().colors(measured_colors()),
-                                        lines[0].to_string(),
-                                    );
-                                }
-                                other if other == button => {
-                                    WearButton(
-                                        Modifier::empty().fill_max_width(),
-                                        WearButtonSpec::default().colors(measured_colors()),
-                                        lines[button].to_string(),
-                                        None,
-                                        || {},
-                                    );
-                                }
-                                other => {
-                                    Text(
-                                        lines[other].to_string(),
-                                        Modifier::empty().fill_max_width(),
-                                        WearTextStyle::BODY_LARGE
-                                            .at_size(12.0)
-                                            .with_line_height(16.0)
-                                            .resolve(measured_colors().content),
-                                    );
-                                }
-                            },
-                        );
-                    },
-                );
-            },
-        );
-    })
+fn compose_credits_screen() -> (TestComposition, CapturedListState) {
+    let captured_state: CapturedListState = Rc::new(RefCell::new(None));
+    let composition = run_test_composition({
+        let captured_state = Rc::clone(&captured_state);
+        move || {
+            crate::set_density(PX);
+            let state = rememberWearScalingListState(CentreAnchor::default());
+            *captured_state.borrow_mut() = Some(state);
+            let inner = state;
+            ScreenScaffold(
+                Modifier::empty().fill_max_size(),
+                state,
+                ScreenScaffoldSpec::default()
+                    .indicator(ScrollIndicatorSpec::default().colors(measured_colors())),
+                move || {
+                    WearScalingLazyColumn(
+                        Modifier::empty().fill_max_size(),
+                        inner,
+                        WearScalingLazyColumnSpec::default().content_padding(30.0, SCREEN_VERTICAL),
+                        move |scope| {
+                            // Six lines and then the button, rather than four: a
+                            // scaling list stacks its DRAWN boxes a gap apart, so a
+                            // shrunken row does not push the one after it down and
+                            // a short list keeps more of itself on the first
+                            // screen. `a_row_below_the_fold_paints_once_it_is_scrolled_to`
+                            // needs the button genuinely off screen at rest, and
+                            // with four lines above it no longer is.
+                            let lines = [
+                                "ORBIT BREAKER",
+                                "Version 1.0.0-debug",
+                                "Designed and built for Wear OS.",
+                                "Every graphic and sound in this game is generated inside the project.",
+                                "No third-party assets, no downloads, nothing loaded at runtime.",
+                                "Built on Cranpose, a Compose-shaped UI framework written in Rust.",
+                                "Back",
+                            ];
+                            let button = lines.len() - 1;
+                            scope.items(
+                                LazyItems::new(lines.len()).key(|index: usize| index as u64),
+                                move |index| match index {
+                                    0 => {
+                                        ListHeader(
+                                            Modifier::empty(),
+                                            ListHeaderSpec::default().colors(measured_colors()),
+                                            lines[0].to_string(),
+                                        );
+                                    }
+                                    other if other == button => {
+                                        WearButton(
+                                            Modifier::empty().fill_max_width(),
+                                            WearButtonSpec::default().colors(measured_colors()),
+                                            lines[button].to_string(),
+                                            None,
+                                            || {},
+                                        );
+                                    }
+                                    other => {
+                                        Text(
+                                            lines[other].to_string(),
+                                            Modifier::empty().fill_max_width(),
+                                            WearTextStyle::BODY_LARGE
+                                                .at_size(12.0)
+                                                .with_line_height(16.0)
+                                                .resolve(measured_colors().content),
+                                        );
+                                    }
+                                },
+                            );
+                        },
+                    );
+                },
+            );
+        }
+    });
+    (composition, captured_state)
 }
 
 #[test]
 fn a_credits_screen_of_text_measured_rows_places_rows_that_are_not_empty() {
-    let mut composition = compose_credits_screen();
+    let (mut composition, captured_state) = compose_credits_screen();
     let root = composition.root().expect("credits root");
     let tree = tree(&mut composition, root);
     let layers = item_layers(&tree);
-    let info = state().layout_info();
+    let info = state(&captured_state).layout_info();
     assert_eq!(info.item_count, 7);
     assert_eq!(
         layers.len(),
@@ -942,7 +969,7 @@ fn a_credits_screen_of_text_measured_rows_places_rows_that_are_not_empty() {
 
 #[test]
 fn a_credits_screen_emits_a_text_primitive_for_every_row_it_placed() {
-    let mut composition = compose_credits_screen();
+    let (mut composition, _captured_state) = compose_credits_screen();
     let root = composition.root().expect("credits root");
     let tree = tree(&mut composition, root);
     let texts = scene_texts(&tree);
@@ -958,9 +985,9 @@ fn a_credits_screen_emits_a_text_primitive_for_every_row_it_placed() {
 
 #[test]
 fn a_row_below_the_fold_paints_once_it_is_scrolled_to() {
-    let mut composition = compose_credits_screen();
+    let (mut composition, captured_state) = compose_credits_screen();
     let root = composition.root().expect("credits root");
-    let list = state();
+    let list = state(&captured_state);
     assert!(
         !scene_texts(&tree(&mut composition, root)).contains(&"Back".to_string()),
         "the button starts below the fold, or this test proves nothing"

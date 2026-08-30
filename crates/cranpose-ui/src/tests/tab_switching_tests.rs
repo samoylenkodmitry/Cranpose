@@ -1,4 +1,7 @@
-use std::cell::{Cell, RefCell};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 
 use cranpose_core::{Composition, MemoryApplier, MutableState, NodeId, location_key};
 use cranpose_macros::composable;
@@ -8,13 +11,6 @@ use crate::{
     layout::{LayoutEngine, MeasureLayoutOptions},
     measure_layout_with_options,
 };
-
-thread_local! {
-    static PROGRESS_TAB_RENDERS: Cell<usize> = const { Cell::new(0) };
-    static PROGRESS_BAR_BRANCH_CALLS: Cell<usize> = const { Cell::new(0) };
-    static RESTORED_COUNTER_STATE: RefCell<Option<MutableState<i32>>> = const { RefCell::new(None) };
-    static RESTORED_POINTER_STATE: RefCell<Option<MutableState<i32>>> = const { RefCell::new(None) };
-}
 
 fn expected_layout_counts(depth: usize, horizontal: bool) -> (usize, usize) {
     if depth <= 1 {
@@ -31,11 +27,6 @@ fn expected_layout_counts(depth: usize, horizontal: bool) -> (usize, usize) {
         let two = 1 + 1 + left_two + right_two;
         (total, two)
     }
-}
-
-fn reset_progress_counters() {
-    PROGRESS_TAB_RENDERS.with(|c| c.set(0));
-    PROGRESS_BAR_BRANCH_CALLS.with(|c| c.set(0));
 }
 
 fn composition_layout_texts(composition: &mut Composition<MemoryApplier>) -> Vec<String> {
@@ -102,8 +93,12 @@ fn run_recursive_depth_cycle(
 }
 
 #[composable]
-fn progress_tab(progress: MutableState<f32>) {
-    PROGRESS_TAB_RENDERS.with(|c| c.set(c.get() + 1));
+fn progress_tab(
+    progress: MutableState<f32>,
+    renders: Rc<Cell<usize>>,
+    branch_calls: Rc<Cell<usize>>,
+) {
+    renders.set(renders.get() + 1);
     let progress_value = progress.value();
 
     Column(
@@ -122,9 +117,10 @@ fn progress_tab(progress: MutableState<f32>) {
                     .then(Modifier::empty().height(12.0)),
                 RowSpec::default(),
                 {
+                    let branch_calls = Rc::clone(&branch_calls);
                     move || {
                         if progress_value > 0.0 {
-                            PROGRESS_BAR_BRANCH_CALLS.with(|c| c.set(c.get() + 1));
+                            branch_calls.set(branch_calls.get() + 1);
                             Row(
                                 Modifier::empty()
                                     .width(200.0 * progress_value)
@@ -155,9 +151,14 @@ fn summary_tab() {
     );
 }
 
-fn make_tab_renderer(active_tab: MutableState<i32>, progress: MutableState<f32>) -> impl FnMut() {
+fn make_tab_renderer(
+    active_tab: MutableState<i32>,
+    progress: MutableState<f32>,
+    renders: Rc<Cell<usize>>,
+    branch_calls: Rc<Cell<usize>>,
+) -> impl FnMut() {
     move || match active_tab.value() {
-        0 => progress_tab(progress),
+        0 => progress_tab(progress, Rc::clone(&renders), Rc::clone(&branch_calls)),
         _ => summary_tab(),
     }
 }
@@ -182,17 +183,16 @@ fn scrollable_test_tab(label: &'static str) {
 }
 
 #[composable]
-fn wrapped_stateful_counter_tab() {
+fn wrapped_stateful_counter_tab(
+    restored_counter: Rc<RefCell<Option<MutableState<i32>>>>,
+    restored_pointer: Rc<RefCell<Option<MutableState<i32>>>>,
+) {
     let scroll_state = cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| *state);
     let counter = cranpose_core::rememberMutableStateOf(|| 0i32);
     let pointer = cranpose_core::rememberMutableStateOf(|| 0i32);
     let is_even = counter.value() % 2 == 0;
-    RESTORED_COUNTER_STATE.with(|slot| {
-        *slot.borrow_mut() = Some(counter);
-    });
-    RESTORED_POINTER_STATE.with(|slot| {
-        *slot.borrow_mut() = Some(pointer);
-    });
+    *restored_counter.borrow_mut() = Some(counter);
+    *restored_pointer.borrow_mut() = Some(pointer);
 
     Column(
         Modifier::empty()
@@ -267,7 +267,11 @@ fn mixed_scrollable_tab_host(active_tab: MutableState<i32>, counter: MutableStat
 }
 
 #[composable]
-fn wrapped_tab_switching_host(active_tab: MutableState<i32>) {
+fn wrapped_tab_switching_host(
+    active_tab: MutableState<i32>,
+    restored_counter: Rc<RefCell<Option<MutableState<i32>>>>,
+    restored_pointer: Rc<RefCell<Option<MutableState<i32>>>>,
+) {
     Column(
         Modifier::empty().fill_max_size(),
         ColumnSpec::default(),
@@ -281,13 +285,20 @@ fn wrapped_tab_switching_host(active_tab: MutableState<i32>) {
             Box(
                 Modifier::empty().fill_max_width().weight(1.0),
                 BoxSpec::default(),
-                move || {
-                    let active = active_tab.value();
-                    cranpose_core::with_key(&active, || match active {
-                        0 => wrapped_stateful_counter_tab(),
-                        1 => scrollable_test_tab("Composition Local Marker"),
-                        _ => scrollable_test_tab("Web Fetch Marker"),
-                    });
+                {
+                    let restored_counter = Rc::clone(&restored_counter);
+                    let restored_pointer = Rc::clone(&restored_pointer);
+                    move || {
+                        let active = active_tab.value();
+                        cranpose_core::with_key(&active, || match active {
+                            0 => wrapped_stateful_counter_tab(
+                                Rc::clone(&restored_counter),
+                                Rc::clone(&restored_pointer),
+                            ),
+                            1 => scrollable_test_tab("Composition Local Marker"),
+                            _ => scrollable_test_tab("Web Fetch Marker"),
+                        });
+                    }
                 },
             );
         },
@@ -303,18 +314,24 @@ fn tab_switching_restores_conditional_layout_nodes() {
     let progress = MutableState::with_runtime(0.75f32, runtime.clone());
 
     let key = location_key(file!(), line!(), column!());
-    let mut render = make_tab_renderer(active_tab, progress);
+    let renders = Rc::new(Cell::new(0));
+    let branch_calls = Rc::new(Cell::new(0));
+    let mut render = make_tab_renderer(
+        active_tab,
+        progress,
+        Rc::clone(&renders),
+        Rc::clone(&branch_calls),
+    );
 
-    reset_progress_counters();
     composition
         .render(key, &mut render)
         .expect("initial render");
     assert!(
-        PROGRESS_TAB_RENDERS.with(|c| c.get()) > 0,
+        renders.get() > 0,
         "progress tab should render on initial composition"
     );
     assert!(
-        PROGRESS_BAR_BRANCH_CALLS.with(|c| c.get()) > 0,
+        branch_calls.get() > 0,
         "conditional progress bar should be built on initial render"
     );
 
@@ -334,16 +351,17 @@ fn tab_switching_restores_conditional_layout_nodes() {
         .expect("update progress while hidden");
 
     active_tab.set_value(0);
-    reset_progress_counters();
+    renders.set(0);
+    branch_calls.set(0);
     composition
         .render(key, &mut render)
         .expect("render primary tab after switch");
     assert!(
-        PROGRESS_TAB_RENDERS.with(|c| c.get()) > 0,
+        renders.get() > 0,
         "progress tab should render after switching back"
     );
     assert!(
-        PROGRESS_BAR_BRANCH_CALLS.with(|c| c.get()) > 0,
+        branch_calls.get() > 0,
         "conditional progress bar should rebuild after switching back"
     );
 }
@@ -396,8 +414,8 @@ fn scrollable_tab_host_preserves_content_across_mixed_switches() {
 #[test]
 fn restored_wrapped_counter_tab_updates_after_mixed_tab_walk() {
     let _app_context = crate::render_state::app_context_test_scope();
-    RESTORED_COUNTER_STATE.with(|slot| slot.borrow_mut().take());
-    RESTORED_POINTER_STATE.with(|slot| slot.borrow_mut().take());
+    let restored_counter = Rc::new(RefCell::new(None));
+    let restored_pointer = Rc::new(RefCell::new(None));
 
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
@@ -405,7 +423,17 @@ fn restored_wrapped_counter_tab_updates_after_mixed_tab_walk() {
     let key = location_key(file!(), line!(), column!());
 
     composition
-        .render(key, || wrapped_tab_switching_host(active_tab))
+        .render(key, {
+            let restored_counter = Rc::clone(&restored_counter);
+            let restored_pointer = Rc::clone(&restored_pointer);
+            move || {
+                wrapped_tab_switching_host(
+                    active_tab,
+                    Rc::clone(&restored_counter),
+                    Rc::clone(&restored_pointer),
+                )
+            }
+        })
         .expect("initial render");
     drain_all(&mut composition);
 
@@ -436,11 +464,15 @@ fn restored_wrapped_counter_tab_updates_after_mixed_tab_walk() {
 
     active_tab.set_value(0);
     drain_all(&mut composition);
-    let restored_counter = RESTORED_COUNTER_STATE
-        .with(|slot| slot.borrow().as_ref().copied())
+    let restored_counter = restored_counter
+        .borrow()
+        .as_ref()
+        .copied()
         .expect("restored counter state registered");
-    let restored_pointer = RESTORED_POINTER_STATE
-        .with(|slot| slot.borrow().as_ref().copied())
+    let restored_pointer = restored_pointer
+        .borrow()
+        .as_ref()
+        .copied()
         .expect("restored pointer state registered");
 
     restored_pointer.set_value(1);
@@ -472,7 +504,14 @@ fn tab_switching_multiple_toggle_cycles_stays_responsive() {
     let progress = MutableState::with_runtime(0.4f32, runtime.clone());
 
     let key = location_key(file!(), line!(), column!());
-    let mut render = make_tab_renderer(active_tab, progress);
+    let renders = Rc::new(Cell::new(0));
+    let branch_calls = Rc::new(Cell::new(0));
+    let mut render = make_tab_renderer(
+        active_tab,
+        progress,
+        Rc::clone(&renders),
+        Rc::clone(&branch_calls),
+    );
 
     composition
         .render(key, &mut render)
@@ -490,12 +529,12 @@ fn tab_switching_multiple_toggle_cycles_stays_responsive() {
             .expect("process progress change while hidden");
 
         active_tab.set_value(0);
-        reset_progress_counters();
+        renders.set(0);
         composition
             .render(key, &mut render)
             .expect("render progress tab after switch");
         assert!(
-            PROGRESS_TAB_RENDERS.with(|c| c.get()) > 0,
+            renders.get() > 0,
             "cycle {cycle}: progress tab should render after returning"
         );
     }
@@ -510,7 +549,12 @@ fn tab_switching_layout_pass_handles_conditional_nodes() {
     let progress = MutableState::with_runtime(0.8f32, runtime.clone());
 
     let key = location_key(file!(), line!(), column!());
-    let mut render = make_tab_renderer(active_tab, progress);
+    let mut render = make_tab_renderer(
+        active_tab,
+        progress,
+        Rc::new(Cell::new(0)),
+        Rc::new(Cell::new(0)),
+    );
 
     composition
         .render(key, &mut render)
@@ -926,7 +970,12 @@ fn tab_switching_node_vec_does_not_grow_unboundedly() {
     let progress = MutableState::with_runtime(0.5f32, runtime);
 
     let key = location_key(file!(), line!(), column!());
-    let mut render = make_tab_renderer(active_tab, progress);
+    let mut render = make_tab_renderer(
+        active_tab,
+        progress,
+        Rc::new(Cell::new(0)),
+        Rc::new(Cell::new(0)),
+    );
 
     composition.render(key, &mut render).expect("initial");
     active_tab.set_value(1);

@@ -164,7 +164,6 @@ where
                 current_offset,
                 content_end,
                 first_item_index,
-                start_time,
             )
             .unwrap_or(first_item_index);
         let backfilled = effective_first_index != first_item_index;
@@ -223,6 +222,13 @@ where
         pass
     }
 
+    /// The backfill walk is capped by `MAX_VISIBLE_ITEMS_SAFETY`, not by a wall
+    /// clock. This correction is what makes the first visible item and scroll
+    /// offset correct after a viewport grows, so it must finish deterministically:
+    /// bailing out early under CPU scheduling pressure (a real clock can read
+    /// past a budget after nothing but an OS-preempted thread, with zero extra
+    /// work done) used to leave the list visibly under-corrected — a blank gap
+    /// at the bottom that a slower frame, not a larger one, produced.
     fn fill_end_gap(
         &mut self,
         visible_items: &mut Vec<LazyListMeasuredItem>,
@@ -230,7 +236,6 @@ where
         current_offset: f32,
         viewport_end: f32,
         first_item_index: usize,
-        start_time: Instant,
     ) -> Option<usize> {
         if current_index < self.items_count || first_item_index == 0 || visible_items.is_empty() {
             return None;
@@ -244,10 +249,10 @@ where
         }
         let mut top = visible_items[0].offset;
         let mut idx = first_item_index;
-        while idx > 0 && top > self.config.before_content_padding + 0.5 {
-            if start_time.elapsed() > DEFAULT_TIME_BUDGET {
-                break;
-            }
+        while idx > 0
+            && top > self.config.before_content_padding + 0.5
+            && visible_items.len() < MAX_VISIBLE_ITEMS_SAFETY
+        {
             idx -= 1;
             let mut item = self
                 .take_pre_measured(idx)
@@ -476,6 +481,55 @@ mod tests {
         assert_eq!(
             measured, 5,
             "configured beyond-bounds rows are part of deterministic retained layout"
+        );
+    }
+
+    #[test]
+    fn fill_end_gap_backfills_fully_even_when_item_measurement_is_slow() {
+        // Regression test for a real, load-dependent CI flake: `fill_end_gap`'s
+        // backward walk used to bail out once wall-clock time exceeded
+        // `DEFAULT_TIME_BUDGET`, even though how much work was left to do had
+        // not changed at all. Under CPU scheduling pressure (many other
+        // threads competing for the CPU, e.g. the rest of the test suite
+        // running concurrently) that wall clock could read past the budget
+        // after measuring only a couple of items, leaving the list
+        // under-corrected: a stale first-visible-item/offset that still left
+        // a blank gap at the bottom of a viewport that had just grown. The
+        // backfill must be bounded by how much work is left (a fixed item
+        // count, `MAX_VISIBLE_ITEMS_SAFETY`), never by how slow the clock on
+        // the host machine happened to look.
+        //
+        // Each measured item sleeps 2ms; measuring the five initially visible
+        // items alone (10ms) already exceeds the old 6ms budget, so the old
+        // code would perform zero backfill iterations here, deterministically
+        // (not flakily) leaving `start_index` at 15 instead of 7.
+        let config = LazyListMeasureConfig::default();
+        let mut measure = |i| {
+            std::thread::sleep(Duration::from_millis(2));
+            create_test_item(i, 40.0)
+        };
+        let mut measurer =
+            ItemMeasurer::new(&mut measure, &config, 20, 500.0, 40.0, VecDeque::new())
+                // Isolate the backfill: skip the separate before-bounds
+                // prefetch pass so this test only exercises `fill_end_gap`.
+                .with_include_before_beyond_bounds(false);
+
+        // Start near the end of the list, as if scrolled to the bottom of a
+        // smaller viewport, then measure with a larger one (the viewport grew).
+        let pass = measurer.measure_all(15, 0.0);
+
+        assert_eq!(
+            pass.start_index, 7,
+            "the backfill must pull in every preceding item needed to fill the \
+             grown viewport, not stop partway because measuring was slow: {pass:?}"
+        );
+        let indices: Vec<usize> = pass.items.iter().map(|item| item.index).collect();
+        assert_eq!(indices, (7..=19).collect::<Vec<_>>());
+        let last = pass.items.last().expect("measured items");
+        let last_end = last.offset + last.main_axis_size;
+        assert!(
+            (last_end - 500.0).abs() < 0.01,
+            "content bottom must align with the grown viewport end: {last_end}"
         );
     }
 
