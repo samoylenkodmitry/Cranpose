@@ -97,6 +97,10 @@ jobs:
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         run: just test-shell-helpers
 
+      - name: Check every `just` recipe CI runs is reachable from `ci`/`ci-full`
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
+        run: just test-ci-gate-reachability
+
       - name: Check cyclomatic complexity of changed functions
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         run: just complexity-gate

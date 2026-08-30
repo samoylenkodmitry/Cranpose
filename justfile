@@ -219,6 +219,17 @@ test-shell-helpers:
 test-host-lock:
     scripts/ci/with_host_lock_test.sh
 
+# Every `just <recipe>` this repo's rust.yml invokes, checked against `ci`
+# and `ci-full`'s own dependency graph in this file. `clippy-wasm` reached
+# main unlinted (#593) because `wasm-build` gated every pull request on it
+# while `ci` -- documented as "what a pull request is gated on" -- did not
+# contain it, so no local command could have caught the break before it
+# reached main. This is the property behind that instance, not a fix for it
+# alone: it fails on any future recipe CI runs that `ci`/`ci-full` cannot
+# reach, not just this one.
+test-ci-gate-reachability:
+    cargo xtask ci-gate-reachability
+
 # The deterministic slot-table model check, at the frame count CI uses.
 test-property:
     cargo test --profile ci -p cranpose-core deterministic_model_render_frames_match_slot_table
@@ -470,9 +481,17 @@ _disk-guard:
 # clippy-wasm is in here because it needs none of those -- only the wasm32
 # target, which the recipe installs itself -- and CI gates every pull request
 # on it. A gate a pull request is judged by must be runnable before pushing.
+#
+# test-ci-gate-reachability holds this line to that rule as a property: every
+# recipe rust.yml invokes must appear somewhere below (or in ci-full), so a
+# recipe cannot repeat what happened to clippy-wasm (#593) by drifting out of
+# this list unnoticed. clippy-optional-backends, clippy-svg,
+# clippy-hyphenation, test-ci-filters, test-features, test-property and
+# bench-smoke are the seven it found already missing here despite CI running
+# all seven on every pull request.
 
 # What a pull request is gated on. Run this before pushing.
-ci: fmt-check typos versions test clippy clippy-robot clippy-wasm doc budgets test-quality-gates complexity-gate duplication-gate test-robot-discovery test-shell-helpers test-host-lock
+ci: fmt-check typos versions test clippy clippy-optional-backends clippy-svg clippy-hyphenation clippy-robot clippy-wasm doc budgets test-quality-gates complexity-gate duplication-gate test-robot-discovery test-shell-helpers test-host-lock test-ci-filters test-features test-property bench-smoke test-ci-gate-reachability
 
 # Needs a Linux box with the X11 stack, an Android SDK and (on macOS) Xcode.
 
