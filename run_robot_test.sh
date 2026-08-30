@@ -49,24 +49,26 @@ fi
 # lock further down never has to spawn the server itself.
 enable_local_sccache
 
-# The host lock, in two phases (scripts/ci/with_host_lock.sh owns the file).
+# The host lock, in two phases (scripts/dev_build_common.sh owns the files
+# and the turnstile fairness fix; scripts/ci/with_host_lock.sh calls the same
+# functions for its own single-command case).
 #
 # Phase one, from here: the shared side, the same side every heavy build on
 # this machine takes. The suite's own build is a build like any other, and
 # holding it here is what keeps a second robot suite -- or an Android release
-# -- from compiling beside the tests further down.
+# -- from compiling beside the tests further down. It passes through the
+# turnstile first so that an exclusive acquirer already waiting (phase two of
+# some other robot job on this box) is not passed over -- see
+# host_capacity_turnstile_pass's comment in dev_build_common.sh.
 #
 # Phase two, once the build is done: this fd is CLOSED and the exclusive side
 # taken on another. Converting in place would deadlock two suites that each
 # hold the shared side and each want the exclusive one; releasing first cannot,
 # and the worst it costs is letting a builder in during the gap, which the
 # exclusive acquire then waits out.
-HOST_LOCK_FILE="/tmp/cranpose-host-capacity.lock"
-host_lock_available() {
-    command -v flock >/dev/null 2>&1 && : >>"$HOST_LOCK_FILE" 2>/dev/null
-}
-if host_lock_available; then
-    exec 8>"$HOST_LOCK_FILE"
+if host_capacity_lock_available; then
+    host_capacity_turnstile_pass
+    exec 8>"$HOST_CAPACITY_LOCK_FILE"
     flock -s 8 || true
 fi
 
@@ -516,24 +518,30 @@ fi
 # keeps the next from starting until the suite is done -- so builds still
 # overlap builds, and only a measurement empties the machine.
 #
+# host_capacity_turnstile_hold is taken first and held across the wait: a
+# continuous stream of new --shared builds would otherwise keep this acquire
+# waiting forever, because plain flock only ever checks locks currently
+# held, never ones merely queued -- see that function's comment in
+# dev_build_common.sh for the experiment that proved it.
+#
 # The file descriptor is the lock. It is released when this script exits, by
-# the kernel, however it exits.
-if host_lock_available; then
+# the kernel, however it exits. On timeout this now FAILS the suite instead
+# of measuring anyway: a build's correctness never depended on isolation,
+# but a measurement's does, so proceeding here would reproduce the exact
+# phantom regression this lock exists to prevent, just reported as a failed
+# timing assertion instead of an honest lock timeout.
+if host_capacity_lock_available; then
     exec 8>&-
-    exec 9>"$HOST_LOCK_FILE"
-    if flock -n -x 9; then
-        echo "Host capacity: exclusive, taken immediately" | tee -a "$LOG_FILE"
-    else
-        echo "Host capacity: waiting for the builds sharing this machine..." | tee -a "$LOG_FILE"
-        lock_wait_started_at=$(date +%s)
-        if flock -w "${CRANPOSE_HOST_LOCK_MAX_WAIT_SECS:-2700}" -x 9; then
-            echo "Host capacity: exclusive after $(( $(date +%s) - lock_wait_started_at ))s" \
-                | tee -a "$LOG_FILE"
-        else
-            echo "Host capacity: gave up waiting; measuring beside another build." \
-                 "TREAT ANY TIMING FAILURE BELOW AS UNMEASURED." | tee -a "$LOG_FILE"
-        fi
+    host_capacity_turnstile_hold
+    exec 9>"$HOST_CAPACITY_LOCK_FILE"
+    host_capacity_flock_wait 9 -x "${CRANPOSE_HOST_LOCK_MAX_WAIT_SECS:-2700}" \
+        "the exclusive host lock" 1 | tee -a "$LOG_FILE"
+    if [ "${PIPESTATUS[0]}" -ne 0 ]; then
+        echo "Aborting: could not get exclusive host capacity for the robot suite." \
+            | tee -a "$LOG_FILE"
+        exit 1
     fi
+    host_capacity_turnstile_release
 fi
 
 # The lock covers this fleet. It does not cover the nineteen other

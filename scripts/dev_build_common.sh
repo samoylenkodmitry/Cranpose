@@ -388,3 +388,98 @@ wait_for_host_capacity() {
         elapsed=$((elapsed + cooldown_secs))
     done
 }
+
+# --- host capacity lock: shared (build) / exclusive (measurement) ----------
+#
+# The single implementation of both halves of this lock. scripts/ci/with_host_lock.sh
+# and run_robot_test.sh's own two-phase acquisition both call these instead of
+# each hand-rolling flock logic: a second copy is exactly the kind of drift
+# that let the two implementations diverge in the first place.
+#
+# flock(2) on Linux only ever checks locks *currently held*, never ones
+# merely queued, so a shared request that arrives while an exclusive request
+# is still waiting is granted immediately, ahead of it, every time. A
+# continuous stream of new builds can therefore starve a measurement's
+# exclusive acquire forever. Confirmed on samarch-1 (util-linux flock
+# 2.42.2): fifteen seconds of overlapping shared holders, a new one arriving
+# every 500ms and each held 1.5s, kept a waiting exclusive acquirer out for
+# the entire fifteen seconds -- it was granted only once the stream stopped.
+#
+# The fix is a turnstile: a second, plain mutex lock file every acquirer --
+# reader or writer -- passes through before touching the real lock. A reader
+# taps it and lets go. A writer holds it from the moment it starts waiting
+# for the real lock until the moment it gets it, so no new reader can even
+# begin waiting on the real lock during that window; the writer's wait is
+# then bounded by the readers already in flight, not by how long new ones
+# keep arriving. Exclusive-against-exclusive contention on the turnstile
+# itself does not reproduce the same starvation -- the same experiment run
+# against a continuous stream of quick exclusive turnstile taps let a
+# mid-stream exclusive waiter in within ~2.7s of joining, an order of
+# magnitude under the stream's own length -- so the turnstile needs no
+# turnstile of its own.
+readonly HOST_CAPACITY_LOCK_FILE="/tmp/cranpose-host-capacity.lock"
+readonly HOST_CAPACITY_TURNSTILE_FILE="/tmp/cranpose-host-capacity.turnstile.lock"
+
+host_capacity_lock_available() {
+    command -v flock >/dev/null 2>&1 \
+        && : >>"$HOST_CAPACITY_LOCK_FILE" 2>/dev/null \
+        && : >>"$HOST_CAPACITY_TURNSTILE_FILE" 2>/dev/null
+}
+
+# Reader side: fd 7, tapped and released immediately. Call this before
+# requesting the real lock in shared mode.
+host_capacity_turnstile_pass() {
+    exec 7>"$HOST_CAPACITY_TURNSTILE_FILE"
+    flock -x 7
+    exec 7>&-
+}
+
+# Writer side: fd 7, held open on return. Call this before requesting the
+# real lock in exclusive mode, and call host_capacity_turnstile_release once
+# that exclusive acquire succeeds.
+host_capacity_turnstile_hold() {
+    exec 7>"$HOST_CAPACITY_TURNSTILE_FILE"
+    flock -x 7
+}
+
+host_capacity_turnstile_release() {
+    exec 7>&-
+}
+
+# Acquires flock mode $2 (-s or -x) on already-open fd $1: non-blocking
+# first, then blocking up to $3 seconds, narrating both attempts the same
+# way for every caller.
+#
+# On timeout, the two modes disagree on purpose. A build's correctness never
+# depended on exclusivity, only its neighbours' *timing* did, so --shared
+# gives up and runs anyway ($5 = 0): a gate that will not start is worse
+# than one that starts late. A measurement's correctness *is* the isolation,
+# so --exclusive fails instead ($5 = 1): running the measurement beside a
+# build is the exact bug this lock exists to prevent, and a clearly-failed
+# gate beats a silently-wrong number that gets diagnosed as a regression.
+host_capacity_flock_wait() {
+    local fd="$1" flock_mode="$2" max_wait_secs="$3" label="$4" fail_on_timeout="${5:-0}"
+
+    if flock -n "$flock_mode" "$fd"; then
+        echo "host lock: took $label immediately"
+        return 0
+    fi
+
+    echo "host lock: busy -- waiting for $label..."
+    local started_at
+    started_at=$(date +%s)
+    if flock -w "$max_wait_secs" "$flock_mode" "$fd"; then
+        echo "host lock: took $label after $(( $(date +%s) - started_at ))s"
+        return 0
+    fi
+
+    if [ "$fail_on_timeout" = "1" ]; then
+        echo "host lock: gave up waiting for $label after ${max_wait_secs}s." \
+             "Refusing to measure beside a build instead of reporting an unmeasured number." >&2
+        return 1
+    fi
+
+    echo "host lock: gave up waiting for $label after ${max_wait_secs}s" \
+         "and started anyway. TREAT ANY TIMING RESULT BELOW AS UNMEASURED."
+    return 0
+}
