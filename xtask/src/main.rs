@@ -11,7 +11,15 @@ use std::{
 use regex::{Captures, Regex};
 
 fn main() -> ExitCode {
-    match run(env::args().skip(1).collect()) {
+    let args: Vec<String> = env::args().skip(1).collect();
+    // `crate-published` alone needs a three-way exit code (0 = published,
+    // 1 = not yet, 2 = error) to preserve the shell `crate_exists`/
+    // `publish_if_needed` contract in publish.yml, so it bypasses the
+    // ordinary `Result<(), String>` dispatch below.
+    if args.first().map(String::as_str) == Some("crate-published") {
+        return crate_published_command(&args[1..]);
+    }
+    match run(args) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("{error}");
@@ -20,54 +28,104 @@ fn main() -> ExitCode {
     }
 }
 
-fn run(args: Vec<String>) -> Result<(), String> {
-    let Some(command) = args.first().map(String::as_str) else {
-        print_usage();
-        return Ok(());
-    };
+/// One `cargo xtask <name>` subcommand: its handler and its `--help` text.
+///
+/// A table, not a growing `match`, deliberately: every arm used to repeat
+/// its own `if args[1..].iter().any(|arg| arg == "--help" ...)` guard, which
+/// made `run`'s own cyclomatic complexity grow by two branches per command
+/// forever -- the diff-scoped complexity gate (`just complexity-gate`) is
+/// what caught it, at 63 against a limit of 20. `run` now does exactly one
+/// generic lookup and one generic help-check; each command's own parsing
+/// and logic lives in its own (separately measured, separately testable)
+/// function.
+struct XtaskCommand {
+    name: &'static str,
+    run: fn(&[String]) -> Result<(), String>,
+    print_usage: fn(),
+}
 
-    match command {
-        "bundle-macos" if args[1..].iter().any(|arg| arg == "--help" || arg == "-h") => {
-            print_bundle_usage();
-            Ok(())
-        }
-        "bundle-macos" => bundle_macos(BundleMacosOptions::parse(&args[1..])?),
-        "binary-size" if args[1..].iter().any(|arg| arg == "--help" || arg == "-h") => {
-            print_binary_size_usage();
-            Ok(())
-        }
-        "binary-size" => report_binary_size(BinarySizeOptions::parse(&args[1..])?),
-        "dist-min" if args[1..].iter().any(|arg| arg == "--help" || arg == "-h") => {
-            print_dist_min_usage();
-            Ok(())
-        }
-        "dist-min" => build_dist_min(DistMinOptions::parse(&args[1..])?),
-        "dependency-budget" if args[1..].iter().any(|arg| arg == "--help" || arg == "-h") => {
-            print_dependency_budget_usage();
-            Ok(())
-        }
-        "dependency-budget" => check_dependency_budget(DependencyBudgetOptions::parse(&args[1..])?),
-        "versions" if args[1..].iter().any(|arg| arg == "--help" || arg == "-h") => {
-            print_versions_usage();
-            Ok(())
-        }
-        "versions" => {
-            if let Some(extra) = args.get(1) {
+const COMMANDS: &[XtaskCommand] = &[
+    XtaskCommand {
+        name: "bundle-macos",
+        run: |args| bundle_macos(BundleMacosOptions::parse(args)?),
+        print_usage: print_bundle_usage,
+    },
+    XtaskCommand {
+        name: "binary-size",
+        run: |args| report_binary_size(BinarySizeOptions::parse(args)?),
+        print_usage: print_binary_size_usage,
+    },
+    XtaskCommand {
+        name: "dist-min",
+        run: |args| build_dist_min(DistMinOptions::parse(args)?),
+        print_usage: print_dist_min_usage,
+    },
+    XtaskCommand {
+        name: "dependency-budget",
+        run: |args| check_dependency_budget(DependencyBudgetOptions::parse(args)?),
+        print_usage: print_dependency_budget_usage,
+    },
+    XtaskCommand {
+        name: "versions",
+        run: |args| {
+            if let Some(extra) = args.first() {
                 return Err(format!("unknown versions option `{extra}`"));
             }
             check_versions()
-        }
-        "sync-isolated-demo" if args[1..].iter().any(|arg| arg == "--help" || arg == "-h") => {
-            print_sync_isolated_demo_usage();
-            Ok(())
-        }
-        "sync-isolated-demo" => sync_isolated_demo(SyncIsolatedDemoOptions::parse(&args[1..])?),
-        "help" | "-h" | "--help" => {
-            print_usage();
-            Ok(())
-        }
-        other => Err(format!("unknown xtask command `{other}`")),
+        },
+        print_usage: print_versions_usage,
+    },
+    XtaskCommand {
+        name: "sync-isolated-demo",
+        run: |args| sync_isolated_demo(SyncIsolatedDemoOptions::parse(args)?),
+        print_usage: print_sync_isolated_demo_usage,
+    },
+    XtaskCommand {
+        name: "bump-release-version",
+        run: |args| bump_release_version(&single_positional_arg("bump-release-version", args)?),
+        print_usage: print_bump_release_version_usage,
+    },
+    XtaskCommand {
+        name: "verify-tag",
+        run: |args| verify_tag(&single_positional_arg("verify-tag", args)?),
+        print_usage: print_verify_tag_usage,
+    },
+    XtaskCommand {
+        name: "publish-order",
+        run: |args| {
+            if let Some(extra) = args.first() {
+                return Err(format!("unknown publish-order option `{extra}`"));
+            }
+            publish_order()
+        },
+        print_usage: print_publish_order_usage,
+    },
+    XtaskCommand {
+        name: "wait-for-crates-io",
+        run: |args| wait_for_crates_io(&single_positional_arg("wait-for-crates-io", args)?),
+        print_usage: print_wait_for_crates_io_usage,
+    },
+];
+
+fn run(args: Vec<String>) -> Result<(), String> {
+    let Some(command_name) = args.first().map(String::as_str) else {
+        print_usage();
+        return Ok(());
+    };
+    if matches!(command_name, "help" | "-h" | "--help") {
+        print_usage();
+        return Ok(());
     }
+
+    let Some(command) = COMMANDS.iter().find(|entry| entry.name == command_name) else {
+        return Err(format!("unknown xtask command `{command_name}`"));
+    };
+
+    if args[1..].iter().any(|arg| arg == "--help" || arg == "-h") {
+        (command.print_usage)();
+        return Ok(());
+    }
+    (command.run)(&args[1..])
 }
 
 fn print_usage() {
@@ -81,6 +139,11 @@ fn print_usage() {
            dependency-budget   Fail if new duplicate dependency families appear\n\
            versions            Check that workspace, lockfile and isolated-demo versions agree\n\
            sync-isolated-demo  Point apps/isolated-demo at a published cranpose version\n\
+           bump-release-version Bump Cargo.toml and Cargo.lock to a release tag's version\n\
+           verify-tag           Check a release tag against the workspace version\n\
+           publish-order        Print/write the cranpose crate publish order\n\
+           wait-for-crates-io   Poll crates.io until a release is live\n\
+           crate-published      Exit 0/1/2: published, not yet, or error\n\
          \n\
          bundle-macos options:\n\
            --package <name>       Cargo package to build [desktop-app]\n\
@@ -115,6 +178,73 @@ fn print_sync_isolated_demo_usage() {
          'v' (as in a release tag) is stripped. Run `cargo update --manifest-path\n\
          apps/isolated-demo/Cargo.toml -p cranpose -p cranpose-core` afterwards\n\
          to move the demo's lockfile."
+    );
+}
+
+/// A command that takes exactly one bare positional argument (no flags).
+fn single_positional_arg(command: &str, args: &[String]) -> Result<String, String> {
+    match args {
+        [value] if !value.starts_with('-') => Ok(value.clone()),
+        [] => Err(format!("{command} requires an argument")),
+        _ => Err(format!(
+            "{command} takes exactly one argument, got {args:?}"
+        )),
+    }
+}
+
+fn print_bump_release_version_usage() {
+    eprintln!(
+        "usage: cargo xtask bump-release-version <tag>\n\
+         \n\
+         Bumps Cargo.toml's workspace.package.version and every cranpose\n\
+         workspace.dependencies entry, plus every cranpose package's version\n\
+         in Cargo.lock, to <tag> (a leading 'v' is required and stripped).\n\
+         Rewrites the files in place with line-level text edits, so unrelated\n\
+         formatting and comments are left untouched."
+    );
+}
+
+fn print_verify_tag_usage() {
+    eprintln!(
+        "usage: cargo xtask verify-tag <tag>\n\
+         \n\
+         Checks that <tag> (a leading 'v' is required and stripped) matches\n\
+         Cargo.toml's workspace version, and that every cranpose workspace\n\
+         dependency matches it too. Does not check Cargo.lock or\n\
+         apps/isolated-demo -- this runs between `sync_versions` and\n\
+         `bump_isolated_demo` in publish.yml, before the isolated demo is\n\
+         allowed to move."
+    );
+}
+
+fn print_publish_order_usage() {
+    eprintln!(
+        "usage: cargo xtask publish-order\n\
+         \n\
+         Resolves the workspace's cranpose crates into a publish order (a\n\
+         crate never precedes one of its own non-dev dependencies), writes\n\
+         it to ./publish-order.txt (one crate per line), and prints it."
+    );
+}
+
+fn print_wait_for_crates_io_usage() {
+    eprintln!(
+        "usage: cargo xtask wait-for-crates-io <version>\n\
+         \n\
+         Polls crates.io for `cranpose` and `cranpose-core` at <version>,\n\
+         up to 30 times 10 seconds apart per crate, and fails if either\n\
+         never appears."
+    );
+}
+
+fn print_crate_published_usage() {
+    eprintln!(
+        "usage: cargo xtask crate-published <crate> <version>\n\
+         \n\
+         Queries crates.io for whether <crate>@<version> is published.\n\
+         Exit code 0 = published, 1 = not published (404), 2 = error --\n\
+         this three-way contract is deliberate, matching a shell\n\
+         `if crate_exists ...; then ... else ...; fi` caller."
     );
 }
 
@@ -1761,51 +1891,15 @@ fn check_versions_at(root: &Path) -> Result<(), String> {
         .ok_or_else(|| "Cargo.toml has no workspace.package.version".to_owned())?
         .to_owned();
 
-    let mut expected_package_names = BTreeSet::new();
-    if let Some(dependencies) = workspace
-        .get("dependencies")
-        .and_then(toml::Value::as_table)
-    {
-        for (name, spec) in sorted_cranpose_dependencies(dependencies) {
-            expected_package_names.insert(name.clone());
-            let version = dependency_version(spec);
-            if version.as_deref() != Some(workspace_version.as_str()) {
-                failures.push(format!(
-                    "workspace dependency {name} is {}, expected {workspace_version}",
-                    display_version(&version)
-                ));
-            }
-        }
-    }
-
-    let root_lock = load_toml(&root.join("Cargo.lock"))?;
-    let root_versions = lock_versions(&cranpose_lock_packages(&root_lock));
-    let root_lock_names: BTreeSet<String> = root_versions.keys().cloned().collect();
-    for name in expected_package_names.difference(&root_lock_names) {
-        failures.push(format!("Cargo.lock is missing workspace package {name}"));
-    }
-    for (name, versions) in &root_versions {
-        if !(versions.len() == 1 && versions.contains(&workspace_version)) {
-            let found = versions.iter().cloned().collect::<Vec<_>>().join(", ");
-            failures.push(format!(
-                "Cargo.lock package {name} has {found}, expected {workspace_version}"
-            ));
-        }
-    }
-
-    let isolated_manifest = load_toml(&root.join("apps/isolated-demo/Cargo.toml"))?;
-    for table in dependency_tables(&isolated_manifest) {
-        for (name, spec) in sorted_cranpose_dependencies(table) {
-            let version = dependency_version(spec);
-            if version.as_deref() != Some(workspace_version.as_str()) {
-                failures.push(format!(
-                    "apps/isolated-demo dependency {name} is {}, expected {workspace_version}",
-                    display_version(&version)
-                ));
-            }
-        }
-    }
-
+    let expected_package_names =
+        check_workspace_dependency_versions(workspace, &workspace_version, &mut failures);
+    check_root_lock_versions(
+        root,
+        &expected_package_names,
+        &workspace_version,
+        &mut failures,
+    )?;
+    check_isolated_demo_manifest_versions(root, &workspace_version, &mut failures)?;
     check_published_lock(
         &root.join("apps/isolated-demo/Cargo.lock"),
         "apps/isolated-demo/Cargo.lock",
@@ -1819,6 +1913,82 @@ fn check_versions_at(root: &Path) -> Result<(), String> {
     } else {
         Err(failures.join("\n"))
     }
+}
+
+/// Every cranpose `workspace.dependencies` entry must pin `workspace_version`.
+/// Returns the set of package names a root `Cargo.lock` is then expected to
+/// carry.
+fn check_workspace_dependency_versions(
+    workspace: &toml::Table,
+    workspace_version: &str,
+    failures: &mut Vec<String>,
+) -> BTreeSet<String> {
+    let mut expected_package_names = BTreeSet::new();
+    let Some(dependencies) = workspace
+        .get("dependencies")
+        .and_then(toml::Value::as_table)
+    else {
+        return expected_package_names;
+    };
+    for (name, spec) in sorted_cranpose_dependencies(dependencies) {
+        expected_package_names.insert(name.clone());
+        let version = dependency_version(spec);
+        if version.as_deref() != Some(workspace_version) {
+            failures.push(format!(
+                "workspace dependency {name} is {}, expected {workspace_version}",
+                display_version(&version)
+            ));
+        }
+    }
+    expected_package_names
+}
+
+/// The root `Cargo.lock` must carry every expected workspace package, each
+/// at exactly `workspace_version`.
+fn check_root_lock_versions(
+    root: &Path,
+    expected_package_names: &BTreeSet<String>,
+    workspace_version: &str,
+    failures: &mut Vec<String>,
+) -> Result<(), String> {
+    let root_lock = load_toml(&root.join("Cargo.lock"))?;
+    let root_versions = lock_versions(&cranpose_lock_packages(&root_lock));
+    let root_lock_names: BTreeSet<String> = root_versions.keys().cloned().collect();
+    for name in expected_package_names.difference(&root_lock_names) {
+        failures.push(format!("Cargo.lock is missing workspace package {name}"));
+    }
+    for (name, versions) in &root_versions {
+        if !(versions.len() == 1 && versions.contains(workspace_version)) {
+            let found = versions.iter().cloned().collect::<Vec<_>>().join(", ");
+            failures.push(format!(
+                "Cargo.lock package {name} has {found}, expected {workspace_version}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// `apps/isolated-demo`'s manifest must also pin `workspace_version` for
+/// every cranpose dependency, in `[dependencies]` and any
+/// `[target.'cfg(..)'.dependencies]`.
+fn check_isolated_demo_manifest_versions(
+    root: &Path,
+    workspace_version: &str,
+    failures: &mut Vec<String>,
+) -> Result<(), String> {
+    let isolated_manifest = load_toml(&root.join("apps/isolated-demo/Cargo.toml"))?;
+    for table in dependency_tables(&isolated_manifest) {
+        for (name, spec) in sorted_cranpose_dependencies(table) {
+            let version = dependency_version(spec);
+            if version.as_deref() != Some(workspace_version) {
+                failures.push(format!(
+                    "apps/isolated-demo dependency {name} is {}, expected {workspace_version}",
+                    display_version(&version)
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1938,6 +2108,617 @@ fn sync_isolated_demo_at(root: &Path, options: SyncIsolatedDemoOptions) -> Resul
         .map_err(|error| format!("failed to write `{}`: {error}", manifest_path.display()))?;
     for line in &changed {
         println!("apps/isolated-demo: {line}");
+    }
+    Ok(())
+}
+
+/// Splits `text` on `\n`, keeping each line's terminator attached (matching
+/// Python's `str.splitlines(keepends=True)` for the plain-`\n` files this
+/// module edits -- Cargo.toml and Cargo.lock never carry `\r\n` in this
+/// repository).
+fn split_keepends(text: &str) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut start = 0;
+    for (index, byte) in text.bytes().enumerate() {
+        if byte == b'\n' {
+            lines.push(text[start..=index].to_owned());
+            start = index + 1;
+        }
+    }
+    if start < text.len() {
+        lines.push(text[start..].to_owned());
+    }
+    lines
+}
+
+fn find_section_header_index(lines: &[String], section: &str) -> Option<usize> {
+    let header = format!("[{section}]");
+    lines.iter().position(|line| line.trim() == header)
+}
+
+/// The line range of `[section]`'s body: `(first line after the header,
+/// first line of the next top-level-or-nested `[...]` header, or the end of
+/// the file)`.
+fn find_section_bounds(lines: &[String], section: &str) -> Result<(usize, usize), String> {
+    let header_index = find_section_header_index(lines, section)
+        .ok_or_else(|| format!("Missing [{section}] in Cargo.toml"))?;
+    let start = header_index + 1;
+    let mut end = lines.len();
+    for (offset, line) in lines[start..].iter().enumerate() {
+        let stripped = line.trim();
+        if stripped.starts_with('[') && stripped.ends_with(']') {
+            end = start + offset;
+            break;
+        }
+    }
+    Ok((start, end))
+}
+
+static WORKSPACE_VERSION_LINE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*version\s*=").expect("WORKSPACE_VERSION_LINE_RE is valid"));
+static WORKSPACE_VERSION_DOTTED_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*version\.").expect("WORKSPACE_VERSION_DOTTED_RE is valid"));
+static LEADING_WHITESPACE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*").expect("LEADING_WHITESPACE_RE is valid"));
+static CRANPOSE_DEP_TABLE_LINE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^\s*cranpose[\w-]*\s*=\s*\{").expect("CRANPOSE_DEP_TABLE_LINE_RE is valid")
+});
+static VERSION_KV_PRESENT_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"version\s*=\s*"[^"]+""#).expect("VERSION_KV_PRESENT_RE is valid")
+});
+static VERSION_KV_REPLACE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(version\s*=\s*")[^"]+("\s*)"#).expect("VERSION_KV_REPLACE_RE is valid")
+});
+
+fn leading_whitespace(line: &str) -> &str {
+    LEADING_WHITESPACE_RE
+        .find(line)
+        .map(|m| m.as_str())
+        .unwrap_or("")
+}
+
+/// Inserts a `[workspace.package]` section (with the same defaults the
+/// former `scripts/check_cranpose_versions.py`'s sibling release script
+/// used) right before the end of `[workspace]`, if one is not already
+/// present. A workspace this repository ships always has one already; this
+/// exists only because the release script it replaces defended against its
+/// absence.
+fn ensure_workspace_package_section(lines: &mut Vec<String>, version: &str) -> Result<(), String> {
+    if find_section_header_index(lines, "workspace.package").is_some() {
+        return Ok(());
+    }
+
+    let (_, workspace_end) = find_section_bounds(lines, "workspace")?;
+    let insert_at = workspace_end;
+
+    let mut block = Vec::new();
+    if insert_at > 0 && !lines[insert_at - 1].trim().is_empty() {
+        block.push("\n".to_owned());
+    }
+    block.extend([
+        "[workspace.package]\n".to_owned(),
+        format!("version = \"{version}\"\n"),
+        "edition = \"2021\"\n".to_owned(),
+        "license = \"Apache-2.0\"\n".to_owned(),
+        "repository = \"https://github.com/samoylenkodmitry/cranpose\"\n".to_owned(),
+        "homepage = \"https://samoylenkodmitry.github.io/cranpose/\"\n".to_owned(),
+        "\n".to_owned(),
+    ]);
+    lines.splice(insert_at..insert_at, block);
+    Ok(())
+}
+
+/// Rewrites `[workspace.package]`'s `version` to `version`, dropping any
+/// other `version = ...` or dotted `version.xxx = ...` line in the section
+/// and leaving everything else untouched.
+fn update_workspace_package_section(lines: &mut Vec<String>, version: &str) -> Result<(), String> {
+    ensure_workspace_package_section(lines, version)?;
+    let (start, end) = find_section_bounds(lines, "workspace.package")?;
+
+    let mut new_lines = Vec::new();
+    let mut version_written = false;
+    for line in &lines[start..end] {
+        if WORKSPACE_VERSION_LINE_RE.is_match(line) {
+            if !version_written {
+                let indent = leading_whitespace(line);
+                new_lines.push(format!("{indent}version = \"{version}\"\n"));
+                version_written = true;
+            }
+            continue;
+        }
+        if WORKSPACE_VERSION_DOTTED_RE.is_match(line) {
+            continue;
+        }
+        new_lines.push(line.clone());
+    }
+    if !version_written {
+        new_lines.insert(0, format!("version = \"{version}\"\n"));
+    }
+    lines.splice(start..end, new_lines);
+    Ok(())
+}
+
+/// Rewrites every `cranpose[-foo] = { ... version = "x" ... }` line in
+/// `[workspace.dependencies]` to `version`, leaving the rest of each line
+/// (path, default-features, ...) untouched. A dependency table with no
+/// `version` key at all is left alone and reported as a mismatch, matching
+/// the release script this replaces -- a workspace dependency published to
+/// crates.io must always carry an explicit version.
+fn update_workspace_dependencies_section(
+    lines: &mut [String],
+    version: &str,
+) -> Result<(), String> {
+    let (start, end) = find_section_bounds(lines, "workspace.dependencies")?;
+    let escaped_version = regex::escape(version);
+    let version_matches_target =
+        Regex::new(&format!(r#"version\s*=\s*"{escaped_version}""#)).expect("valid pattern");
+
+    let mut mismatches = Vec::new();
+    for line in &mut lines[start..end] {
+        if !CRANPOSE_DEP_TABLE_LINE_RE.is_match(line) {
+            continue;
+        }
+        if !VERSION_KV_PRESENT_RE.is_match(line) {
+            mismatches.push(line.trim().to_owned());
+            continue;
+        }
+        let replaced = VERSION_KV_REPLACE_RE
+            .replace_all(line, format!("${{1}}{version}${{2}}"))
+            .into_owned();
+        if !version_matches_target.is_match(&replaced) {
+            mismatches.push(replaced.trim().to_owned());
+        }
+        *line = replaced;
+    }
+
+    if mismatches.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "Some cranpose workspace dependencies were not updated:\n{}",
+            mismatches.join("\n")
+        ))
+    }
+}
+
+/// Bumps `path` (a `Cargo.toml`) to `version`: `workspace.package.version`
+/// and every cranpose `workspace.dependencies` entry. Rewrites the file in
+/// place via line-level text edits -- not a TOML parse/reserialize -- so
+/// comments, ordering and formatting elsewhere in the manifest survive
+/// untouched. Writes only if the content actually changed.
+fn bump_cargo_toml_version(path: &Path, version: &str) -> Result<(), String> {
+    let original = fs::read_to_string(path)
+        .map_err(|error| format!("failed to read `{}`: {error}", path.display()))?;
+    let mut lines = split_keepends(&original);
+
+    update_workspace_package_section(&mut lines, version)?;
+    update_workspace_dependencies_section(&mut lines, version)?;
+
+    let updated = lines.concat();
+    if updated != original {
+        fs::write(path, updated)
+            .map_err(|error| format!("failed to write `{}`: {error}", path.display()))?;
+    }
+    Ok(())
+}
+
+/// Bumps every `[[package]]` in `path` (a `Cargo.lock`) whose `name` starts
+/// with `cranpose` to `version`, leaving `source`, `checksum` and
+/// `dependencies` lines alone. Always rewrites the file (matching the
+/// release script this replaces), even when no line actually changed.
+fn bump_cargo_lock_version(path: &Path, version: &str) -> Result<(), String> {
+    if !path.exists() {
+        return Err("Cargo.lock not found".to_owned());
+    }
+    let text = fs::read_to_string(path)
+        .map_err(|error| format!("failed to read `{}`: {error}", path.display()))?;
+    let mut lines = split_keepends(&text);
+
+    let mut in_package = false;
+    let mut update_version = false;
+    for line in &mut lines {
+        let stripped = line.trim();
+        if stripped == "[[package]]" {
+            in_package = true;
+            update_version = false;
+            continue;
+        }
+        if in_package && stripped.starts_with('[') && stripped.ends_with(']') {
+            in_package = false;
+            update_version = false;
+            continue;
+        }
+        if in_package && stripped.starts_with("name = ") {
+            let name = stripped["name = ".len()..].trim().trim_matches('"');
+            update_version = name.starts_with("cranpose");
+            continue;
+        }
+        if in_package && update_version && stripped.starts_with("version = ") {
+            let indent = leading_whitespace(line).to_owned();
+            *line = format!("{indent}version = \"{version}\"\n");
+            update_version = false;
+        }
+    }
+
+    fs::write(path, lines.concat())
+        .map_err(|error| format!("failed to write `{}`: {error}", path.display()))
+}
+
+/// `cargo xtask bump-release-version`: ported from the former inline
+/// `python3` heredocs in `publish.yml`'s `sync_versions` job. Neither
+/// heredoc imported `tomllib`, so this pair was not the release-breaking
+/// half of the ambient-Python defect -- but it is still ambient Python in
+/// the same release path, and the fix for one instance is the fix for all
+/// of them.
+fn bump_release_version(tag: &str) -> Result<(), String> {
+    let root = workspace_root()?;
+    bump_release_version_at(&root, tag)
+}
+
+fn bump_release_version_at(root: &Path, tag: &str) -> Result<(), String> {
+    let version = tag
+        .strip_prefix('v')
+        .ok_or_else(|| format!("Expected tag starting with 'v', got '{tag}'"))?;
+    bump_cargo_toml_version(&root.join("Cargo.toml"), version)?;
+    bump_cargo_lock_version(&root.join("Cargo.lock"), version)?;
+    Ok(())
+}
+
+/// `cargo xtask verify-tag`: ported from the `import tomllib` heredoc in
+/// `publish.yml`'s `publish` job -- the release-breaking half of the
+/// ambient-Python defect. Deliberately checks only the tag and the
+/// workspace dependency versions, not Cargo.lock or apps/isolated-demo:
+/// this runs after `sync_versions` but before `bump_isolated_demo`, the
+/// window where apps/isolated-demo still points at the *previous* release
+/// on purpose.
+fn verify_tag(tag: &str) -> Result<(), String> {
+    let root = workspace_root()?;
+    verify_tag_at(&root, tag)
+}
+
+fn verify_tag_at(root: &Path, tag: &str) -> Result<(), String> {
+    let tag_version = tag
+        .strip_prefix('v')
+        .ok_or_else(|| format!("Expected tag starting with 'v', got '{tag}'"))?;
+
+    let manifest = load_toml(&root.join("Cargo.toml"))?;
+    let workspace = manifest
+        .get("workspace")
+        .and_then(toml::Value::as_table)
+        .ok_or_else(|| "Cargo.toml has no [workspace] table".to_owned())?;
+    let workspace_version = workspace
+        .get("package")
+        .and_then(toml::Value::as_table)
+        .and_then(|package| package.get("version"))
+        .and_then(toml::Value::as_str)
+        .ok_or_else(|| "Cargo.toml has no workspace.package.version".to_owned())?;
+
+    if tag_version != workspace_version {
+        return Err(format!(
+            "Tag version v{tag_version} does not match workspace version {workspace_version}"
+        ));
+    }
+
+    let mut mismatches = Vec::new();
+    if let Some(dependencies) = workspace
+        .get("dependencies")
+        .and_then(toml::Value::as_table)
+    {
+        for (name, spec) in sorted_cranpose_dependencies(dependencies) {
+            let dep_version = dependency_version(spec);
+            if dep_version.as_deref() != Some(workspace_version) {
+                mismatches.push(format!("{name} => {}", display_version(&dep_version)));
+            }
+        }
+    }
+    if !mismatches.is_empty() {
+        return Err(format!(
+            "Workspace dependency versions must match workspace version:\n{}",
+            mismatches.join("\n")
+        ));
+    }
+
+    println!("Tag v{tag_version} matches workspace version {workspace_version}");
+    Ok(())
+}
+
+/// Runs `cargo metadata --no-deps --format-version 1`, optionally scoped to
+/// `manifest_path`, and returns its stdout. The one place every xtask
+/// command that needs cargo's own view of the workspace shells out from.
+fn cargo_metadata_json(manifest_path: Option<&Path>) -> Result<String, String> {
+    let mut command = Command::new("cargo");
+    command.args(["metadata", "--no-deps", "--format-version", "1"]);
+    if let Some(manifest_path) = manifest_path {
+        command.arg("--manifest-path").arg(manifest_path);
+    }
+    let output = command
+        .output()
+        .map_err(|error| format!("failed to run cargo metadata: {error}"))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_owned());
+    }
+    String::from_utf8(output.stdout)
+        .map_err(|error| format!("cargo metadata returned invalid UTF-8: {error}"))
+}
+
+/// `cargo xtask publish-order`: ported from the `json`-only (no `tomllib`)
+/// heredoc in `publish.yml`'s `publish` job. Resolves every cranpose
+/// workspace crate's non-dev dependency edges into a publish order and
+/// writes it to `publish-order.txt`, one crate per line, for the shell's
+/// `while IFS= read -r crate; do ...; done < publish-order.txt` loop.
+fn publish_order() -> Result<(), String> {
+    let metadata_json = cargo_metadata_json(None)?;
+    let order = resolve_publish_order(&metadata_json)?;
+
+    let mut file_contents = order.join("\n");
+    file_contents.push('\n');
+    fs::write("publish-order.txt", file_contents)
+        .map_err(|error| format!("failed to write `publish-order.txt`: {error}"))?;
+
+    println!("Resolved publish order:");
+    for name in &order {
+        println!("  {name}");
+    }
+    Ok(())
+}
+
+/// The topological sort at the heart of `publish-order`, pulled out as a
+/// pure function of `cargo metadata`'s JSON so it can be tested against a
+/// fixture instead of a real `cargo metadata` invocation. Split from the
+/// graph-building half (`cranpose_publish_graph`): together they were 27
+/// deep, over the diff-scoped complexity gate's limit of 20.
+fn resolve_publish_order(metadata_json: &str) -> Result<Vec<String>, String> {
+    let metadata: serde_json::Value = serde_json::from_str(metadata_json)
+        .map_err(|error| format!("cargo metadata returned invalid JSON: {error}"))?;
+    let (package_order, remaining) = cranpose_publish_graph(&metadata)?;
+    topological_publish_order(&package_order, remaining)
+}
+
+/// A cranpose workspace package's position among `workspace_members` (the
+/// tie-breaker `topological_publish_order` sorts by), keyed by name, paired
+/// with which other cranpose packages each one depends on non-dev.
+type PublishGraph = (BTreeMap<String, usize>, BTreeMap<String, BTreeSet<String>>);
+
+/// Every cranpose workspace package, its position among `workspace_members`
+/// (the tie-breaker `topological_publish_order` sorts by), and which other
+/// cranpose packages it depends on non-dev.
+fn cranpose_publish_graph(metadata: &serde_json::Value) -> Result<PublishGraph, String> {
+    let workspace_member_ids = metadata
+        .get("workspace_members")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| "cargo metadata output has no workspace_members array".to_owned())?;
+    let member_order: BTreeMap<&str, usize> = workspace_member_ids
+        .iter()
+        .enumerate()
+        .filter_map(|(index, id)| id.as_str().map(|id| (id, index)))
+        .collect();
+
+    let packages = metadata
+        .get("packages")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| "cargo metadata output has no packages array".to_owned())?;
+
+    let mut package_order = BTreeMap::<String, usize>::new();
+    let mut package_deps = BTreeMap::<String, BTreeSet<String>>::new();
+    for package in packages {
+        let Some((name, order, dependencies)) = cranpose_package_entry(package, &member_order)?
+        else {
+            continue;
+        };
+        package_order.insert(name.clone(), order);
+        package_deps.insert(name, dependencies);
+    }
+
+    // Only internal (cranpose-to-cranpose) edges gate the order.
+    let remaining = package_deps
+        .into_iter()
+        .map(|(name, deps)| {
+            let internal = deps
+                .into_iter()
+                .filter(|dep| package_order.contains_key(dep))
+                .collect();
+            (name, internal)
+        })
+        .collect();
+
+    Ok((package_order, remaining))
+}
+
+/// A workspace package's publish-graph entry, or `None` when `package` is
+/// not a cranpose workspace member (an external dependency, or a workspace
+/// member this release does not publish).
+fn cranpose_package_entry(
+    package: &serde_json::Value,
+    member_order: &BTreeMap<&str, usize>,
+) -> Result<Option<(String, usize, BTreeSet<String>)>, String> {
+    let id = package
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "cargo metadata package is missing an id".to_owned())?;
+    let Some(&order) = member_order.get(id) else {
+        return Ok(None);
+    };
+    let name = package
+        .get("name")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "cargo metadata package is missing a name".to_owned())?;
+    if !name.starts_with("cranpose") {
+        return Ok(None);
+    }
+
+    // Dev-deps never gate publish order (path-only dev-deps are stripped
+    // from published manifests); counting them creates false cycles like
+    // liquid -> testing -> cranpose -> liquid.
+    let dependencies = package
+        .get("dependencies")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|dependency| {
+            dependency.get("kind").and_then(serde_json::Value::as_str) != Some("dev")
+        })
+        .filter_map(|dependency| {
+            dependency
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
+        .collect::<BTreeSet<_>>();
+
+    Ok(Some((name.to_owned(), order, dependencies)))
+}
+
+/// Kahn's algorithm over `remaining` (package name -> its still-unpublished
+/// cranpose dependencies): repeatedly publish whatever has none left,
+/// breaking ties by `package_order` (declaration order in the workspace)
+/// then by name, for a deterministic result.
+fn topological_publish_order(
+    package_order: &BTreeMap<String, usize>,
+    mut remaining: BTreeMap<String, BTreeSet<String>>,
+) -> Result<Vec<String>, String> {
+    let mut order = Vec::new();
+    while !remaining.is_empty() {
+        let mut ready: Vec<String> = remaining
+            .iter()
+            .filter(|(_, deps)| deps.is_empty())
+            .map(|(name, _)| name.clone())
+            .collect();
+        if ready.is_empty() {
+            let cycle = remaining.keys().cloned().collect::<Vec<_>>().join(", ");
+            return Err(format!("Cyclic cranpose publish dependencies: {cycle}"));
+        }
+        ready.sort_by_key(|name| (package_order[name], name.clone()));
+
+        for name in &ready {
+            order.push(name.clone());
+            remaining.remove(name);
+        }
+        for deps in remaining.values_mut() {
+            for name in &ready {
+                deps.remove(name);
+            }
+        }
+    }
+
+    Ok(order)
+}
+
+/// The outcome of asking crates.io whether a crate version is published.
+enum CrateLookup {
+    Published,
+    NotPublished,
+    /// An HTTP response other than 200/404 -- fatal, never retried.
+    UnexpectedStatus(String),
+    /// A transport failure (DNS, connection, timeout) -- retried by pollers.
+    QueryFailed(String),
+}
+
+/// crates.io rejects requests with a blank or generic `User-Agent` (curl's
+/// own default included) with a 403, and asks API clients to identify
+/// themselves -- see <https://crates.io/data-access#api>. `reqwest::blocking::get`
+/// sends no `User-Agent` at all, so every lookup here needs a client built
+/// with one instead of the bare shortcut function.
+fn crates_io_client() -> Result<reqwest::blocking::Client, String> {
+    reqwest::blocking::Client::builder()
+        .user_agent("cranpose-xtask (https://github.com/samoylenkodmitry/Cranpose)")
+        .build()
+        .map_err(|error| format!("failed to build an HTTP client: {error}"))
+}
+
+fn lookup_crate_version(
+    client: &reqwest::blocking::Client,
+    crate_name: &str,
+    version: &str,
+) -> CrateLookup {
+    let url = format!("https://crates.io/api/v1/crates/{crate_name}/{version}");
+    match client.get(&url).send() {
+        Ok(response) => match response.status().as_u16() {
+            200 => CrateLookup::Published,
+            404 => CrateLookup::NotPublished,
+            _ => CrateLookup::UnexpectedStatus(response.status().to_string()),
+        },
+        Err(error) => CrateLookup::QueryFailed(error.to_string()),
+    }
+}
+
+/// `cargo xtask crate-published`: ported from the `crate_exists()` bash
+/// function's `python3` heredoc in `publish.yml`'s `publish` job. Exits 0
+/// (published), 1 (not published, HTTP 404) or 2 (error) -- that three-way
+/// contract is what `publish_if_needed`'s `if crate_exists ...; then ...
+/// else local rc=$?; if [ "$rc" -ne 1 ]; then ...` reads, so it bypasses
+/// the ordinary `Result<(), String>` command dispatch in `main`.
+fn crate_published_command(args: &[String]) -> ExitCode {
+    if args.iter().any(|arg| arg == "--help" || arg == "-h") {
+        print_crate_published_usage();
+        return ExitCode::SUCCESS;
+    }
+    let (crate_name, version) = match args {
+        [crate_name, version] => (crate_name, version),
+        _ => {
+            eprintln!("usage: cargo xtask crate-published <crate> <version>");
+            return ExitCode::from(2);
+        }
+    };
+    let client = match crates_io_client() {
+        Ok(client) => client,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::from(2);
+        }
+    };
+    match lookup_crate_version(&client, crate_name, version) {
+        CrateLookup::Published => ExitCode::SUCCESS,
+        CrateLookup::NotPublished => ExitCode::FAILURE,
+        CrateLookup::UnexpectedStatus(status) => {
+            eprintln!("Unexpected response for {crate_name} {version}: {status}");
+            ExitCode::from(2)
+        }
+        CrateLookup::QueryFailed(error) => {
+            eprintln!("Failed to query crates.io for {crate_name} {version}: {error}");
+            ExitCode::from(2)
+        }
+    }
+}
+
+/// The cranpose crates `bump_isolated_demo` waits on before pointing the
+/// isolated demo at a release.
+const RELEASE_WAIT_CRATES: &[&str] = &["cranpose", "cranpose-core"];
+const RELEASE_WAIT_ATTEMPTS: u32 = 30;
+const RELEASE_WAIT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// `cargo xtask wait-for-crates-io`: ported from the `python3` heredoc in
+/// `publish.yml`'s `bump_isolated_demo` job. Polls each of
+/// `RELEASE_WAIT_CRATES` up to `RELEASE_WAIT_ATTEMPTS` times,
+/// `RELEASE_WAIT_INTERVAL` apart, before giving up on that crate.
+fn wait_for_crates_io(tag_or_version: &str) -> Result<(), String> {
+    let version = tag_or_version.strip_prefix('v').unwrap_or(tag_or_version);
+    let client = crates_io_client()?;
+    for crate_name in RELEASE_WAIT_CRATES {
+        let mut published = false;
+        for _ in 0..RELEASE_WAIT_ATTEMPTS {
+            match lookup_crate_version(&client, crate_name, version) {
+                CrateLookup::Published => {
+                    println!("{crate_name} {version} is on crates.io.");
+                    published = true;
+                    break;
+                }
+                CrateLookup::NotPublished => {}
+                CrateLookup::UnexpectedStatus(status) => {
+                    return Err(format!(
+                        "Unexpected response for {crate_name} {version}: {status}"
+                    ));
+                }
+                CrateLookup::QueryFailed(error) => {
+                    println!("query for {crate_name} failed ({error}); retrying");
+                }
+            }
+            std::thread::sleep(RELEASE_WAIT_INTERVAL);
+        }
+        if !published {
+            return Err(format!(
+                "{crate_name} {version} never appeared on crates.io"
+            ));
+        }
     }
     Ok(())
 }
@@ -2819,6 +3600,35 @@ cranpose v0.1.0
         check_versions_at(&root).expect("aligned versions must pass");
     }
 
+    /// Fixtures prove the logic; they cannot prove the *real* Cargo.toml
+    /// still parses the way the fixtures assume it does. A fixture-only
+    /// suite can stay green while the actual manifest drifts into a shape
+    /// this parser does not handle (a renamed section, a moved key) and the
+    /// gate would silently stop meaning anything on the one file it exists
+    /// to check.
+    fn real_workspace_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .canonicalize()
+            .expect("resolve the real workspace root from xtask's own manifest dir")
+    }
+
+    #[test]
+    fn check_versions_passes_against_the_real_workspace() {
+        check_versions_at(&real_workspace_root())
+            .expect("the real workspace's own versions must already be aligned");
+    }
+
+    #[test]
+    fn verify_tag_passes_against_the_real_workspace_version() {
+        let root = real_workspace_root();
+        let workspace_version =
+            workspace_package_version(&root).expect("read the real workspace version");
+
+        verify_tag_at(&root, &format!("v{workspace_version}"))
+            .expect("verify-tag must accept the real workspace's own version as a matching tag");
+    }
+
     #[test]
     fn versions_fail_when_workspace_dependency_diverges() {
         let root = unique_temp_dir();
@@ -3008,6 +3818,16 @@ cranpose v0.1.0
         );
     }
 
+    fn sync_isolated_demo_to(root: &Path, version: &str) {
+        sync_isolated_demo_at(
+            root,
+            SyncIsolatedDemoOptions {
+                version: Some(version.to_owned()),
+            },
+        )
+        .expect("sync must succeed");
+    }
+
     #[test]
     fn sync_isolated_demo_rewrites_inline_and_bare_dependencies() {
         let root = unique_temp_dir();
@@ -3026,13 +3846,7 @@ cranpose v0.1.0
         )
         .expect("write isolated-demo manifest");
 
-        sync_isolated_demo_at(
-            &root,
-            SyncIsolatedDemoOptions {
-                version: Some("0.1.105".to_owned()),
-            },
-        )
-        .expect("sync must succeed");
+        sync_isolated_demo_to(&root, "0.1.105");
 
         let updated = fs::read_to_string(manifest_dir.join("Cargo.toml")).expect("read manifest");
         assert!(
@@ -3059,13 +3873,7 @@ cranpose v0.1.0
         let manifest_text = "[dependencies]\ncranpose = { version = \"0.1.105\" }\n";
         fs::write(manifest_dir.join("Cargo.toml"), manifest_text).expect("write manifest");
 
-        sync_isolated_demo_at(
-            &root,
-            SyncIsolatedDemoOptions {
-                version: Some("0.1.105".to_owned()),
-            },
-        )
-        .expect("sync must succeed");
+        sync_isolated_demo_to(&root, "0.1.105");
 
         let updated = fs::read_to_string(manifest_dir.join("Cargo.toml")).expect("read manifest");
         assert_eq!(
@@ -3161,6 +3969,296 @@ cranpose v0.1.0
             .expect_err("two positional arguments must be rejected");
         SyncIsolatedDemoOptions::parse(&["--bogus".to_owned()])
             .expect_err("unknown flags must be rejected");
+    }
+
+    fn write_root_lock_with_multiple_packages(root: &Path, cranpose_version: &str) {
+        let lock = format!(
+            "version = 4\n\
+             \n\
+             [[package]]\n\
+             name = \"cranpose\"\n\
+             version = \"{cranpose_version}\"\n\
+             dependencies = [\n\
+             \x20\"log\",\n\
+             ]\n\
+             \n\
+             [[package]]\n\
+             name = \"cranpose-core\"\n\
+             version = \"{cranpose_version}\"\n\
+             \n\
+             [[package]]\n\
+             name = \"log\"\n\
+             version = \"0.4.0\"\n"
+        );
+        fs::write(root.join("Cargo.lock"), lock).expect("write root lock");
+    }
+
+    #[test]
+    fn bump_release_version_rewrites_toml_and_lock() {
+        let root = unique_temp_dir();
+        write_root_manifest(&root, "0.1.104", "0.1.104");
+        write_root_lock_with_multiple_packages(&root, "0.1.104");
+
+        bump_release_version_at(&root, "v0.1.105").expect("bump must succeed");
+
+        let manifest = fs::read_to_string(root.join("Cargo.toml")).expect("read manifest");
+        assert!(
+            manifest.contains("version = \"0.1.105\""),
+            "workspace.package.version must be bumped: {manifest}"
+        );
+        assert!(
+            manifest.contains("cranpose = { path = \"crates/cranpose\", version = \"0.1.105\" }"),
+            "workspace dependency must be bumped: {manifest}"
+        );
+
+        let lock = fs::read_to_string(root.join("Cargo.lock")).expect("read lock");
+        assert!(
+            lock.contains("name = \"cranpose\"\nversion = \"0.1.105\""),
+            "{lock}"
+        );
+        assert!(
+            lock.contains("name = \"cranpose-core\"\nversion = \"0.1.105\""),
+            "{lock}"
+        );
+        assert!(
+            lock.contains("name = \"log\"\nversion = \"0.4.0\""),
+            "a non-cranpose package must be left alone: {lock}"
+        );
+    }
+
+    #[test]
+    fn bump_release_version_rejects_a_tag_without_a_leading_v() {
+        let root = unique_temp_dir();
+        write_root_manifest(&root, FIXTURE_VERSION, FIXTURE_VERSION);
+        write_root_lock(&root, FIXTURE_VERSION);
+
+        let error = bump_release_version_at(&root, "0.1.105")
+            .expect_err("a tag without a leading v must be rejected");
+
+        assert_eq!(error, "Expected tag starting with 'v', got '0.1.105'");
+    }
+
+    #[test]
+    fn bump_release_version_leaves_cargo_toml_untouched_on_a_dependency_mismatch() {
+        let root = unique_temp_dir();
+        let manifest = "[workspace]\n\
+             members = [\"crates/cranpose\"]\n\
+             \n\
+             [workspace.package]\n\
+             version = \"0.1.104\"\n\
+             \n\
+             [workspace.dependencies]\n\
+             cranpose = { path = \"crates/cranpose\" }\n";
+        fs::write(root.join("Cargo.toml"), manifest).expect("write manifest");
+        write_root_lock(&root, "0.1.104");
+
+        let error = bump_release_version_at(&root, "v0.1.105")
+            .expect_err("a dependency with no version key must be reported, not silently kept");
+
+        assert!(
+            error.contains("Some cranpose workspace dependencies were not updated"),
+            "{error}"
+        );
+        let unchanged = fs::read_to_string(root.join("Cargo.toml")).expect("read manifest");
+        assert_eq!(
+            unchanged, manifest,
+            "Cargo.toml must not be written when the dependency pass fails"
+        );
+    }
+
+    #[test]
+    fn bump_release_version_creates_workspace_package_when_missing() {
+        let root = unique_temp_dir();
+        let manifest = "[workspace]\n\
+             members = [\"crates/cranpose\"]\n\
+             \n\
+             [workspace.dependencies]\n\
+             cranpose = { path = \"crates/cranpose\", version = \"0.1.104\" }\n";
+        fs::write(root.join("Cargo.toml"), manifest).expect("write manifest");
+        write_root_lock(&root, "0.1.104");
+
+        bump_release_version_at(&root, "v0.1.105").expect("bump must succeed");
+
+        let updated = fs::read_to_string(root.join("Cargo.toml")).expect("read manifest");
+        assert!(updated.contains("[workspace.package]"), "{updated}");
+        assert!(updated.contains("version = \"0.1.105\""), "{updated}");
+        assert!(
+            updated.contains("cranpose = { path = \"crates/cranpose\", version = \"0.1.105\" }"),
+            "{updated}"
+        );
+    }
+
+    #[test]
+    fn verify_tag_passes_without_touching_the_lockfile_or_isolated_demo() {
+        let root = unique_temp_dir();
+        write_root_manifest(&root, FIXTURE_VERSION, FIXTURE_VERSION);
+        // Deliberately no Cargo.lock and no apps/isolated-demo: this runs
+        // between `sync_versions` and `bump_isolated_demo`, where the demo
+        // still points at the previous release on purpose. If verify-tag
+        // read either, this test would fail with a missing-file error.
+
+        verify_tag_at(&root, "v0.1.105").expect("verify-tag must not need Cargo.lock or the demo");
+    }
+
+    #[test]
+    fn verify_tag_rejects_a_tag_without_a_leading_v() {
+        let root = unique_temp_dir();
+        write_root_manifest(&root, FIXTURE_VERSION, FIXTURE_VERSION);
+
+        let error =
+            verify_tag_at(&root, "0.1.105").expect_err("a tag without a leading v must fail");
+
+        assert_eq!(error, "Expected tag starting with 'v', got '0.1.105'");
+    }
+
+    #[test]
+    fn verify_tag_fails_when_tag_does_not_match_workspace_version() {
+        let root = unique_temp_dir();
+        write_root_manifest(&root, "0.1.105", "0.1.105");
+
+        let error = verify_tag_at(&root, "v0.1.106")
+            .expect_err("a tag ahead of the workspace version must fail");
+
+        assert_eq!(
+            error,
+            "Tag version v0.1.106 does not match workspace version 0.1.105"
+        );
+    }
+
+    #[test]
+    fn verify_tag_fails_when_a_workspace_dependency_diverges() {
+        let root = unique_temp_dir();
+        write_root_manifest(&root, "0.1.105", "0.1.104");
+
+        let error =
+            verify_tag_at(&root, "v0.1.105").expect_err("a stale workspace dependency must fail");
+
+        assert_eq!(
+            error,
+            "Workspace dependency versions must match workspace version:\ncranpose => 0.1.104"
+        );
+    }
+
+    const PUBLISH_ORDER_METADATA_TEMPLATE: &str = r#"{
+        "workspace_members": ["cranpose-core 0.1.0", "cranpose 0.1.0", "cranpose-ui 0.1.0"],
+        "packages": [
+            {
+                "id": "cranpose-core 0.1.0",
+                "name": "cranpose-core",
+                "dependencies": []
+            },
+            {
+                "id": "cranpose 0.1.0",
+                "name": "cranpose",
+                "dependencies": [
+                    {"name": "cranpose-core", "kind": null},
+                    {"name": "cranpose-ui", "kind": null}
+                ]
+            },
+            {
+                "id": "cranpose-ui 0.1.0",
+                "name": "cranpose-ui",
+                "dependencies": [
+                    {"name": "cranpose-core", "kind": null}
+                ]
+            },
+            {
+                "id": "log 0.4.0",
+                "name": "log",
+                "dependencies": []
+            }
+        ]
+    }"#;
+
+    #[test]
+    fn resolve_publish_order_orders_dependencies_before_dependents() {
+        let order = resolve_publish_order(PUBLISH_ORDER_METADATA_TEMPLATE)
+            .expect("a valid dependency graph must resolve");
+
+        assert_eq!(order, vec!["cranpose-core", "cranpose-ui", "cranpose"]);
+    }
+
+    #[test]
+    fn resolve_publish_order_ignores_dev_dependencies() {
+        // liquid -> testing (dev) -> cranpose -> liquid would be a cycle if
+        // dev-deps gated the order; they must not.
+        let metadata = r#"{
+            "workspace_members": ["cranpose-liquid 0.1.0", "cranpose-testing 0.1.0", "cranpose 0.1.0"],
+            "packages": [
+                {
+                    "id": "cranpose-liquid 0.1.0",
+                    "name": "cranpose-liquid",
+                    "dependencies": [
+                        {"name": "cranpose-testing", "kind": "dev"}
+                    ]
+                },
+                {
+                    "id": "cranpose-testing 0.1.0",
+                    "name": "cranpose-testing",
+                    "dependencies": [
+                        {"name": "cranpose", "kind": null}
+                    ]
+                },
+                {
+                    "id": "cranpose 0.1.0",
+                    "name": "cranpose",
+                    "dependencies": [
+                        {"name": "cranpose-liquid", "kind": "dev"}
+                    ]
+                }
+            ]
+        }"#;
+
+        let order = resolve_publish_order(metadata).expect("dev-only cycles must not block");
+
+        assert_eq!(order.len(), 3);
+        assert!(
+            order.iter().position(|n| n == "cranpose").unwrap()
+                < order.iter().position(|n| n == "cranpose-testing").unwrap()
+        );
+    }
+
+    #[test]
+    fn resolve_publish_order_rejects_a_real_cycle() {
+        let metadata = r#"{
+            "workspace_members": ["cranpose-a 0.1.0", "cranpose-b 0.1.0"],
+            "packages": [
+                {
+                    "id": "cranpose-a 0.1.0",
+                    "name": "cranpose-a",
+                    "dependencies": [{"name": "cranpose-b", "kind": null}]
+                },
+                {
+                    "id": "cranpose-b 0.1.0",
+                    "name": "cranpose-b",
+                    "dependencies": [{"name": "cranpose-a", "kind": null}]
+                }
+            ]
+        }"#;
+
+        let error = resolve_publish_order(metadata).expect_err("a real cycle must be rejected");
+
+        assert_eq!(
+            error,
+            "Cyclic cranpose publish dependencies: cranpose-a, cranpose-b"
+        );
+    }
+
+    #[test]
+    fn resolve_publish_order_ignores_non_workspace_and_non_cranpose_packages() {
+        let metadata = r#"{
+            "workspace_members": ["cranpose 0.1.0"],
+            "packages": [
+                {"id": "cranpose 0.1.0", "name": "cranpose", "dependencies": [
+                    {"name": "log", "kind": null}
+                ]},
+                {"id": "log 0.4.0 (registry+https://x)", "name": "log", "dependencies": []}
+            ]
+        }"#;
+
+        let order = resolve_publish_order(metadata).expect("must resolve");
+
+        assert_eq!(order, vec!["cranpose"]);
     }
 
     const MINIMAL_MANIFEST: &str = "\
