@@ -1,10 +1,6 @@
 mod robot_exit;
 
-use std::{
-    process::ExitCode,
-    sync::atomic::{AtomicBool, Ordering},
-    time::Duration,
-};
+use std::{process::ExitCode, sync::atomic::AtomicBool, time::Duration};
 
 use cranpose::{
     liquid::prelude::*,
@@ -33,12 +29,7 @@ fn main() -> ExitCode {
         .with_fonts(desktop_app::fonts::DEMO_FONTS)
         .with_headless(std::env::var("CRANPOSE_HEADLESS").as_deref() != Ok("0"))
         .with_test_driver(move |robot| {
-            const TEST_TIMEOUT_SECS: u64 = 180;
-            std::thread::spawn(|| {
-                std::thread::sleep(Duration::from_secs(TEST_TIMEOUT_SECS));
-                println!("\n✗ Test timed out after {TEST_TIMEOUT_SECS} seconds");
-                std::process::exit(1);
-            });
+            robot_exit::arm_timeout(180);
             std::thread::sleep(Duration::from_millis(700));
             settle(&robot, SETTLE_MS);
 
@@ -165,11 +156,7 @@ fn main() -> ExitCode {
         })
         .expect("launch dropdown accordion runner");
 
-    if FAILED.load(Ordering::Relaxed) {
-        ExitCode::FAILURE
-    } else {
-        ExitCode::SUCCESS
-    }
+    robot_exit::exit_code(&FAILED)
 }
 
 fn visible(robot: &cranpose::Robot, text: &str) -> bool {

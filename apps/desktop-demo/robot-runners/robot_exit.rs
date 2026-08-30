@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use std::{
+    process::ExitCode,
     sync::atomic::{AtomicBool, Ordering},
     thread,
     time::Duration,
@@ -36,4 +37,20 @@ pub fn fail_and_await_shutdown(robot: &Robot, failed: &'static AtomicBool, messa
 
 fn report(message: &str) {
     println!("FATAL: {message}");
+}
+
+pub fn arm_timeout(seconds: u64) {
+    thread::spawn(move || {
+        thread::sleep(Duration::from_secs(seconds));
+        println!("FATAL: test timed out after {seconds} seconds");
+        std::process::exit(1);
+    });
+}
+
+pub fn exit_code(failed: &AtomicBool) -> ExitCode {
+    if failed.load(Ordering::Relaxed) {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    }
 }

@@ -3,10 +3,7 @@ mod robot_exit;
 use std::{
     path::{Path, PathBuf},
     process::ExitCode,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
-    },
+    sync::{atomic::AtomicBool, Arc, Mutex},
     time::Duration,
 };
 
@@ -316,11 +313,7 @@ fn main() -> ExitCode {
         .try_run(move || content(Arc::clone(&wrap_boundary)))
         .expect("launch text loupe runner");
 
-    if FAILED.load(Ordering::Relaxed) {
-        ExitCode::FAILURE
-    } else {
-        ExitCode::SUCCESS
-    }
+    robot_exit::exit_code(&FAILED)
 }
 
 fn content(wrap_boundary: Arc<Mutex<Option<usize>>>) {
