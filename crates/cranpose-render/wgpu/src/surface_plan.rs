@@ -1196,7 +1196,7 @@ mod tests {
                         height: 20.0,
                     },
                     text: std::rc::Rc::from("SCORE"),
-                    style: cranpose_ui_graphics::TextStyle::new(16.0),
+                    style: cranpose_ui_graphics::DrawTextStyle::new(16.0),
                     color: cranpose_ui_graphics::Color::WHITE,
                 })),
                 clip: None,

@@ -893,9 +893,7 @@ mod tests {
 
     use std::rc::Rc as StdRc;
 
-    use cranpose_ui_graphics::{
-        FontWeight as DrawFontWeight, TextPrimitive, TextStyle as DrawTextStyle,
-    };
+    use cranpose_ui_graphics::{DrawTextStyle, FontWeight as DrawFontWeight, TextPrimitive};
 
     #[derive(Default)]
     struct CollectingTextSink {

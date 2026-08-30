@@ -12,8 +12,8 @@
 use std::rc::Rc;
 
 use cranpose_ui_graphics::{
-    DrawTextMeasurer, FontStyle as DrawFontStyle, Size, TextMeasurement,
-    TextStyle as DrawTextStyle, estimate_text_measurement,
+    DrawTextMeasurer, DrawTextStyle, FontStyle as DrawFontStyle, Size, TextMeasurement,
+    estimate_text_measurement,
 };
 
 use super::{

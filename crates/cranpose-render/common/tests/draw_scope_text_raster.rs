@@ -5,10 +5,8 @@ use cranpose_render_common::software_text_raster::{
     SoftwareTextMeasurer, collect_solid_text_atlas_run,
     software_text_font_set_from_fonts_or_default,
 };
-use cranpose_ui::text::{
-    AnnotatedString, TextMeasurer, TextStyle as UiTextStyle, text_style_for_draw_style,
-};
-use cranpose_ui_graphics::{Color, Rect, TextStyle};
+use cranpose_ui::text::{AnnotatedString, TextMeasurer, TextStyle, text_style_for_draw_style};
+use cranpose_ui_graphics::{Color, DrawTextStyle, Rect};
 
 const GLYPH_CACHE_CAPACITY: usize = 512;
 
@@ -20,7 +18,7 @@ fn measurer() -> SoftwareTextMeasurer {
     SoftwareTextMeasurer::from_font_set(fonts(), 256)
 }
 
-fn measured_block(origin: (f32, f32), text: &str, style: &TextStyle) -> (Rect, UiTextStyle) {
+fn measured_block(origin: (f32, f32), text: &str, style: &DrawTextStyle) -> (Rect, TextStyle) {
     let ui_style = text_style_for_draw_style(style);
     let measurer = measurer();
     let metrics = measurer.measure(&AnnotatedString::from(text), &ui_style);
@@ -40,8 +38,8 @@ fn measured_block(origin: (f32, f32), text: &str, style: &TextStyle) -> (Rect, U
 fn collect(
     rect: Rect,
     text: &str,
-    ui_style: &UiTextStyle,
-    style: &TextStyle,
+    ui_style: &TextStyle,
+    style: &DrawTextStyle,
     cache: &mut SoftwareGlyphRasterCache,
 ) -> Vec<SoftwareGlyphAtlasRunGlyph> {
     let mut run = Vec::new();
@@ -62,7 +60,7 @@ fn collect(
 
 #[test]
 fn every_glyph_lands_inside_the_block_measure_text_reported() {
-    let style = TextStyle::new(24.0);
+    let style = DrawTextStyle::new(24.0);
     let (rect, ui_style) = measured_block((40.0, 60.0), "SCORE 1234", &style);
     let mut cache = SoftwareGlyphRasterCache::with_capacity_at_least_one(GLYPH_CACHE_CAPACITY);
     let run = collect(rect, "SCORE 1234", &ui_style, &style, &mut cache);
@@ -90,7 +88,7 @@ fn every_glyph_lands_inside_the_block_measure_text_reported() {
 
 #[test]
 fn a_wider_string_measures_wider_and_draws_wider() {
-    let style = TextStyle::new(20.0);
+    let style = DrawTextStyle::new(20.0);
     let mut cache = SoftwareGlyphRasterCache::with_capacity_at_least_one(GLYPH_CACHE_CAPACITY);
     let mut ink_right = |text: &str| {
         let (rect, ui_style) = measured_block((0.0, 0.0), text, &style);
@@ -116,7 +114,7 @@ fn a_wider_string_measures_wider_and_draws_wider() {
 
 #[test]
 fn a_stable_string_rasterizes_once_and_is_served_from_the_glyph_cache_after_that() {
-    let style = TextStyle::new(18.0);
+    let style = DrawTextStyle::new(18.0);
     let (rect, ui_style) = measured_block((10.0, 10.0), "FPS 60", &style);
     let mut cache = SoftwareGlyphRasterCache::with_capacity_at_least_one(GLYPH_CACHE_CAPACITY);
 
@@ -147,7 +145,7 @@ fn a_stable_string_rasterizes_once_and_is_served_from_the_glyph_cache_after_that
 
 #[test]
 fn only_the_new_characters_of_a_changing_counter_rasterize() {
-    let style = TextStyle::new(18.0);
+    let style = DrawTextStyle::new(18.0);
     let mut cache = SoftwareGlyphRasterCache::with_capacity_at_least_one(GLYPH_CACHE_CAPACITY);
     for score in 0..10 {
         let text = format!("SCORE {score}");
@@ -164,7 +162,7 @@ fn only_the_new_characters_of_a_changing_counter_rasterize() {
 
 #[test]
 fn an_unknown_font_family_falls_back_to_the_framework_font() {
-    let style = TextStyle::new(20.0).with_font_family("No Such Family At All");
+    let style = DrawTextStyle::new(20.0).with_font_family("No Such Family At All");
     let (rect, ui_style) = measured_block((0.0, 0.0), "AB", &style);
     assert!(
         rect.width > 0.0,
@@ -181,7 +179,7 @@ fn an_unknown_font_family_falls_back_to_the_framework_font() {
 #[test]
 fn characters_the_font_cannot_draw_measure_and_collect_without_panicking() {
     let text = "A\u{E000}\u{10FFFD}B";
-    let style = TextStyle::new(20.0);
+    let style = DrawTextStyle::new(20.0);
     let (rect, ui_style) = measured_block((0.0, 0.0), text, &style);
     assert!(rect.width > 0.0 && rect.height > 0.0);
 
@@ -196,7 +194,7 @@ fn characters_the_font_cannot_draw_measure_and_collect_without_panicking() {
 
 #[test]
 fn multiline_text_stacks_by_the_line_height_it_was_measured_with() {
-    let style = TextStyle::new(16.0);
+    let style = DrawTextStyle::new(16.0);
     let (rect, ui_style) = measured_block((0.0, 0.0), "AB\nCD", &style);
     let measured_line_height = rect.height / 2.0;
 
@@ -215,7 +213,7 @@ fn multiline_text_stacks_by_the_line_height_it_was_measured_with() {
 
 #[test]
 fn the_measured_baseline_is_the_row_glyphs_are_actually_placed_on() {
-    let style = TextStyle::new(32.0);
+    let style = DrawTextStyle::new(32.0);
     let ui_style = text_style_for_draw_style(&style);
     let baseline = measurer()
         .first_baseline(&ui_style)
@@ -237,7 +235,7 @@ fn a_drawn_run_that_names_a_line_height_policy_is_laid_out_by_it() {
     use cranpose_ui::text::{LineHeightAlignment, LineHeightMode, LineHeightStyle, LineHeightTrim};
 
     let asked = 30.0;
-    let plain = TextStyle::new(32.0).with_line_height(asked);
+    let plain = DrawTextStyle::new(32.0).with_line_height(asked);
     let styled = plain.clone().with_line_height_style(LineHeightStyle {
         alignment: LineHeightAlignment::Center,
         trim: LineHeightTrim::None,
@@ -288,10 +286,10 @@ fn a_drawn_run_that_names_a_line_height_policy_is_laid_out_by_it() {
 fn letter_spacing_pads_a_run_with_half_a_space_at_each_edge() {
     const WORD: &str = "ORBIT";
     const TRACKING: f32 = 5.0;
-    let plain = TextStyle::new(20.0);
-    let tracked = TextStyle::new(20.0).with_letter_spacing(TRACKING);
+    let plain = DrawTextStyle::new(20.0);
+    let tracked = DrawTextStyle::new(20.0).with_letter_spacing(TRACKING);
     let mut cache = SoftwareGlyphRasterCache::with_capacity_at_least_one(GLYPH_CACHE_CAPACITY);
-    let mut spans = |style: &TextStyle| {
+    let mut spans = |style: &DrawTextStyle| {
         let (rect, ui_style) = measured_block((0.0, 0.0), WORD, style);
         let run = collect(rect, WORD, &ui_style, style, &mut cache);
         let left = run
