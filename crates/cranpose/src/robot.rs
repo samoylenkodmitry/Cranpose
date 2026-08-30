@@ -286,6 +286,28 @@ pub struct Robot {
 }
 
 impl Robot {
+    fn recv_response<T>(
+        &self,
+        extract: impl FnOnce(RobotResponse) -> Option<T>,
+    ) -> Result<T, String> {
+        match self.rx.recv() {
+            Ok(RobotResponse::Error(e)) => Err(e),
+            Ok(response) => extract(response).ok_or_else(|| "Unexpected response".to_string()),
+            Err(e) => Err(format!("Failed to receive response: {}", e)),
+        }
+    }
+
+    fn recv_ack(&self) -> Result<(), String> {
+        self.recv_response(|response| matches!(response, RobotResponse::Ok).then_some(()))
+    }
+
+    fn send_and_ack(&self, command: RobotCommand, what: &str) -> Result<(), String> {
+        self.tx
+            .send(command)
+            .map_err(|e| format!("Failed to send {what}: {}", e))?;
+        self.recv_ack()
+    }
+
     /// Click at the specified coordinates (logical pixels)
     ///
     /// This simulates a full click (mouse down then mouse up) at the given location.
@@ -298,12 +320,7 @@ impl Robot {
         self.tx
             .send(RobotCommand::Click { x, y })
             .map_err(|e| format!("Failed to send click command: {}", e))?;
-        match self.rx.recv() {
-            Ok(RobotResponse::Ok) => Ok(()),
-            Ok(RobotResponse::Error(e)) => Err(e),
-            Ok(_) => Err("Unexpected response".to_string()),
-            Err(e) => Err(format!("Failed to receive response: {}", e)),
-        }
+        self.recv_ack()
     }
 
     /// Press a touch pointer down at the specified coordinates (logical
@@ -324,12 +341,7 @@ impl Robot {
         self.tx
             .send(RobotCommand::TouchDown { x, y, source })
             .map_err(|e| format!("Failed to send touch down: {}", e))?;
-        match self.rx.recv() {
-            Ok(RobotResponse::Ok) => Ok(()),
-            Ok(RobotResponse::Error(e)) => Err(e),
-            Ok(_) => Err("Unexpected response".to_string()),
-            Err(e) => Err(format!("Failed to receive response: {}", e)),
-        }
+        self.recv_ack()
     }
 
     /// Move the active touch pointer (after [`touch_down`](Self::touch_down)).
@@ -346,12 +358,7 @@ impl Robot {
         self.tx
             .send(RobotCommand::TouchMove { x, y, source })
             .map_err(|e| format!("Failed to send touch move: {}", e))?;
-        match self.rx.recv() {
-            Ok(RobotResponse::Ok) => Ok(()),
-            Ok(RobotResponse::Error(e)) => Err(e),
-            Ok(_) => Err("Unexpected response".to_string()),
-            Err(e) => Err(format!("Failed to receive response: {}", e)),
-        }
+        self.recv_ack()
     }
 
     fn primary_pointer_move_and_wait_for_frame(
@@ -363,12 +370,7 @@ impl Robot {
         self.tx
             .send(RobotCommand::TouchMoveAndWaitForFrame { x, y, source })
             .map_err(|e| format!("Failed to send primary-pointer move: {e}"))?;
-        match self.rx.recv() {
-            Ok(RobotResponse::Ok) => Ok(()),
-            Ok(RobotResponse::Error(error)) => Err(error),
-            Ok(_) => Err("Unexpected response".to_string()),
-            Err(error) => Err(format!("Failed to receive response: {error}")),
-        }
+        self.recv_ack()
     }
 
     /// Lift the active touch pointer at the specified coordinates.
@@ -385,12 +387,7 @@ impl Robot {
         self.tx
             .send(RobotCommand::TouchUp { x, y, source })
             .map_err(|e| format!("Failed to send touch up: {}", e))?;
-        match self.rx.recv() {
-            Ok(RobotResponse::Ok) => Ok(()),
-            Ok(RobotResponse::Error(e)) => Err(e),
-            Ok(_) => Err("Unexpected response".to_string()),
-            Err(e) => Err(format!("Failed to receive response: {}", e)),
-        }
+        self.recv_ack()
     }
 
     /// Move cursor to the specified coordinates (logical pixels)
@@ -403,12 +400,7 @@ impl Robot {
         self.tx
             .send(RobotCommand::MoveTo { x, y })
             .map_err(|e| format!("Failed to send move command: {}", e))?;
-        match self.rx.recv() {
-            Ok(RobotResponse::Ok) => Ok(()),
-            Ok(RobotResponse::Error(e)) => Err(e),
-            Ok(_) => Err("Unexpected response".to_string()),
-            Err(e) => Err(format!("Failed to receive response: {}", e)),
-        }
+        self.recv_ack()
     }
 
     /// Alias for move_to
@@ -426,12 +418,7 @@ impl Robot {
         self.tx
             .send(RobotCommand::MouseDown)
             .map_err(|e| format!("Failed to send mouse down command: {}", e))?;
-        match self.rx.recv() {
-            Ok(RobotResponse::Ok) => Ok(()),
-            Ok(RobotResponse::Error(e)) => Err(e),
-            Ok(_) => Err("Unexpected response".to_string()),
-            Err(e) => Err(format!("Failed to receive response: {}", e)),
-        }
+        self.recv_ack()
     }
 
     /// Release the left mouse button at the current cursor position
@@ -444,12 +431,7 @@ impl Robot {
         self.tx
             .send(RobotCommand::MouseUp)
             .map_err(|e| format!("Failed to send mouse up command: {}", e))?;
-        match self.rx.recv() {
-            Ok(RobotResponse::Ok) => Ok(()),
-            Ok(RobotResponse::Error(e)) => Err(e),
-            Ok(_) => Err("Unexpected response".to_string()),
-            Err(e) => Err(format!("Failed to receive response: {}", e)),
-        }
+        self.recv_ack()
     }
 
     /// Dispatch a mouse wheel / trackpad scroll delta at the current cursor position.
@@ -460,12 +442,7 @@ impl Robot {
         self.tx
             .send(RobotCommand::MouseScroll { delta_x, delta_y })
             .map_err(|e| format!("Failed to send mouse scroll command: {}", e))?;
-        match self.rx.recv() {
-            Ok(RobotResponse::Ok) => Ok(()),
-            Ok(RobotResponse::Error(e)) => Err(e),
-            Ok(_) => Err("Unexpected response".to_string()),
-            Err(e) => Err(format!("Failed to receive response: {}", e)),
-        }
+        self.recv_ack()
     }
 
     /// Dispatch a mouse wheel / trackpad scroll delta and wait for the frame it caused.
@@ -477,12 +454,7 @@ impl Robot {
         self.tx
             .send(RobotCommand::MouseScrollAndWaitForFrame { delta_x, delta_y })
             .map_err(|e| format!("Failed to send mouse scroll command: {}", e))?;
-        match self.rx.recv() {
-            Ok(RobotResponse::Ok) => Ok(()),
-            Ok(RobotResponse::Error(e)) => Err(e),
-            Ok(_) => Err("Unexpected response".to_string()),
-            Err(e) => Err(format!("Failed to receive response: {}", e)),
-        }
+        self.recv_ack()
     }
 
     /// Dispatch a sequence of mouse wheel / trackpad scroll deltas, advancing
@@ -500,12 +472,7 @@ impl Robot {
                 count,
             })
             .map_err(|e| format!("Failed to send mouse scroll sequence command: {}", e))?;
-        match self.rx.recv() {
-            Ok(RobotResponse::Ok) => Ok(()),
-            Ok(RobotResponse::Error(e)) => Err(e),
-            Ok(_) => Err("Unexpected response".to_string()),
-            Err(e) => Err(format!("Failed to receive response: {}", e)),
-        }
+        self.recv_ack()
     }
 
     /// Perform a drag gesture from one point to another
@@ -525,19 +492,14 @@ impl Robot {
     /// robot.drag(400.0, 200.0, 100.0, 200.0)?;
     /// ```
     pub fn drag(&self, from_x: f32, from_y: f32, to_x: f32, to_y: f32) -> Result<(), String> {
-        self.tx
-            .send(RobotCommand::TouchDown {
+        self.send_and_ack(
+            RobotCommand::TouchDown {
                 x: from_x,
                 y: from_y,
                 source: PointerSource::Touch,
-            })
-            .map_err(|e| format!("Failed to send touch down: {}", e))?;
-        match self.rx.recv() {
-            Ok(RobotResponse::Ok) => {}
-            Ok(RobotResponse::Error(e)) => return Err(e),
-            Ok(_) => return Err("Unexpected response".to_string()),
-            Err(e) => return Err(format!("Failed to receive response: {}", e)),
-        }
+            },
+            "touch down",
+        )?;
 
         let steps = 10;
         for i in 1..=steps {
@@ -545,34 +507,24 @@ impl Robot {
             let x = from_x + (to_x - from_x) * t;
             let y = from_y + (to_y - from_y) * t;
 
-            self.tx
-                .send(RobotCommand::TouchMove {
+            self.send_and_ack(
+                RobotCommand::TouchMove {
                     x,
                     y,
                     source: PointerSource::Touch,
-                })
-                .map_err(|e| format!("Failed to send touch move: {}", e))?;
-            match self.rx.recv() {
-                Ok(RobotResponse::Ok) => {}
-                Ok(RobotResponse::Error(e)) => return Err(e),
-                Ok(_) => return Err("Unexpected response".to_string()),
-                Err(e) => return Err(format!("Failed to receive response: {}", e)),
-            }
+                },
+                "touch move",
+            )?;
         }
 
-        self.tx
-            .send(RobotCommand::TouchUp {
+        self.send_and_ack(
+            RobotCommand::TouchUp {
                 x: to_x,
                 y: to_y,
                 source: PointerSource::Touch,
-            })
-            .map_err(|e| format!("Failed to send touch up: {}", e))?;
-        match self.rx.recv() {
-            Ok(RobotResponse::Ok) => Ok(()),
-            Ok(RobotResponse::Error(e)) => Err(e),
-            Ok(_) => Err("Unexpected response".to_string()),
-            Err(e) => Err(format!("Failed to receive response: {}", e)),
-        }
+            },
+            "touch up",
+        )
     }
 
     /// Perform a drag gesture and wait for each intermediate move to present.
@@ -594,12 +546,7 @@ impl Robot {
                 source: PointerSource::Touch,
             })
             .map_err(|e| format!("Failed to send touch down: {}", e))?;
-        match self.rx.recv() {
-            Ok(RobotResponse::Ok) => {}
-            Ok(RobotResponse::Error(e)) => return Err(e),
-            Ok(_) => return Err("Unexpected response".to_string()),
-            Err(e) => return Err(format!("Failed to receive response: {}", e)),
-        }
+        self.recv_ack()?;
 
         let steps = steps.max(1);
         for i in 1..=steps {
@@ -614,12 +561,7 @@ impl Robot {
                     source: PointerSource::Touch,
                 })
                 .map_err(|e| format!("Failed to send touch move: {}", e))?;
-            match self.rx.recv() {
-                Ok(RobotResponse::Ok) => {}
-                Ok(RobotResponse::Error(e)) => return Err(e),
-                Ok(_) => return Err("Unexpected response".to_string()),
-                Err(e) => return Err(format!("Failed to receive response: {}", e)),
-            }
+            self.recv_ack()?;
         }
 
         self.tx
@@ -629,12 +571,7 @@ impl Robot {
                 source: PointerSource::Touch,
             })
             .map_err(|e| format!("Failed to send touch up: {}", e))?;
-        match self.rx.recv() {
-            Ok(RobotResponse::Ok) => Ok(()),
-            Ok(RobotResponse::Error(e)) => Err(e),
-            Ok(_) => Err("Unexpected response".to_string()),
-            Err(e) => Err(format!("Failed to receive response: {}", e)),
-        }
+        self.recv_ack()
     }
 
     /// Wait for the application to be idle (no redraws, no animations)
@@ -651,12 +588,7 @@ impl Robot {
         self.tx
             .send(RobotCommand::WaitForIdle)
             .map_err(|e| format!("Failed to send wait command: {}", e))?;
-        match self.rx.recv() {
-            Ok(RobotResponse::Ok) => Ok(()),
-            Ok(RobotResponse::Error(e)) => Err(e),
-            Ok(_) => Err("Unexpected response".to_string()),
-            Err(e) => Err(format!("Failed to receive response: {}", e)),
-        }
+        self.recv_ack()
     }
 
     /// Run a bounded number of frame updates.
@@ -668,12 +600,7 @@ impl Robot {
         self.tx
             .send(RobotCommand::PumpFrames { count })
             .map_err(|e| format!("Failed to send pump_frames command: {}", e))?;
-        match self.rx.recv() {
-            Ok(RobotResponse::Ok) => Ok(()),
-            Ok(RobotResponse::Error(e)) => Err(e),
-            Ok(_) => Err("Unexpected response".to_string()),
-            Err(e) => Err(format!("Failed to receive response: {}", e)),
-        }
+        self.recv_ack()
     }
 
     /// Wait for the visible primary surface to present one more frame.
@@ -681,12 +608,7 @@ impl Robot {
         self.tx
             .send(RobotCommand::WaitForPresentFrame)
             .map_err(|e| format!("Failed to send present-frame wait command: {}", e))?;
-        match self.rx.recv() {
-            Ok(RobotResponse::Ok) => Ok(()),
-            Ok(RobotResponse::Error(e)) => Err(e),
-            Ok(_) => Err("Unexpected response".to_string()),
-            Err(e) => Err(format!("Failed to receive response: {}", e)),
-        }
+        self.recv_ack()
     }
 
     /// Type text into the currently focused text field
@@ -703,12 +625,7 @@ impl Robot {
         self.tx
             .send(RobotCommand::TypeText(text.to_string()))
             .map_err(|e| format!("Failed to send type_text command: {}", e))?;
-        match self.rx.recv() {
-            Ok(RobotResponse::Ok) => Ok(()),
-            Ok(RobotResponse::Error(e)) => Err(e),
-            Ok(_) => Err("Unexpected response".to_string()),
-            Err(e) => Err(format!("Failed to receive response: {}", e)),
-        }
+        self.recv_ack()
     }
 
     /// Send a key press event
@@ -727,12 +644,7 @@ impl Robot {
         self.tx
             .send(RobotCommand::SendKey(key.to_string()))
             .map_err(|e| format!("Failed to send send_key command: {}", e))?;
-        match self.rx.recv() {
-            Ok(RobotResponse::Ok) => Ok(()),
-            Ok(RobotResponse::Error(e)) => Err(e),
-            Ok(_) => Err("Unexpected response".to_string()),
-            Err(e) => Err(format!("Failed to receive response: {}", e)),
-        }
+        self.recv_ack()
     }
 
     /// Send a key press event with modifier keys
@@ -763,12 +675,7 @@ impl Robot {
                 meta,
             })
             .map_err(|e| format!("Failed to send send_key_with_modifiers command: {}", e))?;
-        match self.rx.recv() {
-            Ok(RobotResponse::Ok) => Ok(()),
-            Ok(RobotResponse::Error(e)) => Err(e),
-            Ok(_) => Err("Unexpected response".to_string()),
-            Err(e) => Err(format!("Failed to receive response: {}", e)),
-        }
+        self.recv_ack()
     }
 
     /// Exit the application
@@ -783,12 +690,7 @@ impl Robot {
         self.tx
             .send(RobotCommand::Exit)
             .map_err(|e| format!("Failed to send exit command: {}", e))?;
-        match self.rx.recv() {
-            Ok(RobotResponse::Ok) => Ok(()),
-            Ok(RobotResponse::Error(e)) => Err(e),
-            Ok(_) => Err("Unexpected response".to_string()),
-            Err(e) => Err(format!("Failed to receive response: {}", e)),
-        }
+        self.recv_ack()
     }
 
     /// Get semantic tree with geometric bounds
@@ -805,12 +707,10 @@ impl Robot {
         self.tx
             .send(RobotCommand::GetSemantics)
             .map_err(|e| format!("Failed to send get_semantics: {}", e))?;
-        match self.rx.recv() {
-            Ok(RobotResponse::Semantics(elements)) => Ok(elements),
-            Ok(RobotResponse::Error(e)) => Err(e),
-            Ok(_) => Err("Unexpected response".to_string()),
-            Err(e) => Err(format!("Failed to receive: {}", e)),
-        }
+        self.recv_response(|response| match response {
+            RobotResponse::Semantics(elements) => Some(elements),
+            _ => None,
+        })
     }
 
     fn request_semantic_query(
@@ -820,29 +720,32 @@ impl Robot {
         self.tx
             .send(command)
             .map_err(|e| format!("Failed to send semantic query: {}", e))?;
-        match self.rx.recv() {
-            Ok(RobotResponse::SemanticQuery(result)) => Ok(result),
-            Ok(RobotResponse::Error(e)) => Err(e),
-            Ok(_) => Err("Unexpected response".to_string()),
-            Err(e) => Err(format!("Failed to receive response: {}", e)),
-        }
+        self.recv_response(|response| match response {
+            RobotResponse::SemanticQuery(result) => Some(result),
+            _ => None,
+        })
+    }
+
+    fn semantic_query_bounds(
+        &self,
+        command: RobotCommand,
+    ) -> Result<Option<(f32, f32, f32, f32)>, String> {
+        Ok(self.request_semantic_query(command)?.map(|result| {
+            (
+                result.bounds.x,
+                result.bounds.y,
+                result.bounds.width,
+                result.bounds.height,
+            )
+        }))
     }
 
     /// Find the first semantic node whose text contains the provided substring.
     pub fn find_text_bounds(&self, text: &str) -> Result<Option<(f32, f32, f32, f32)>, String> {
-        Ok(self
-            .request_semantic_query(RobotCommand::FindText {
-                text: text.to_string(),
-                match_kind: SemanticTextMatchKind::Contains,
-            })?
-            .map(|result| {
-                (
-                    result.bounds.x,
-                    result.bounds.y,
-                    result.bounds.width,
-                    result.bounds.height,
-                )
-            }))
+        self.semantic_query_bounds(RobotCommand::FindText {
+            text: text.to_string(),
+            match_kind: SemanticTextMatchKind::Contains,
+        })
     }
 
     /// Find the first semantic node whose text starts with the provided prefix.
@@ -867,19 +770,10 @@ impl Robot {
 
     /// Find the first clickable semantic node whose subtree contains the provided substring.
     pub fn find_button_bounds(&self, text: &str) -> Result<Option<(f32, f32, f32, f32)>, String> {
-        Ok(self
-            .request_semantic_query(RobotCommand::FindButton {
-                text: text.to_string(),
-                match_kind: SemanticTextMatchKind::Contains,
-            })?
-            .map(|result| {
-                (
-                    result.bounds.x,
-                    result.bounds.y,
-                    result.bounds.width,
-                    result.bounds.height,
-                )
-            }))
+        self.semantic_query_bounds(RobotCommand::FindButton {
+            text: text.to_string(),
+            match_kind: SemanticTextMatchKind::Contains,
+        })
     }
 
     /// Find the first clickable semantic node whose subtree contains exactly matching text.
@@ -887,19 +781,10 @@ impl Robot {
         &self,
         text: &str,
     ) -> Result<Option<(f32, f32, f32, f32)>, String> {
-        Ok(self
-            .request_semantic_query(RobotCommand::FindButton {
-                text: text.to_string(),
-                match_kind: SemanticTextMatchKind::Exact,
-            })?
-            .map(|result| {
-                (
-                    result.bounds.x,
-                    result.bounds.y,
-                    result.bounds.width,
-                    result.bounds.height,
-                )
-            }))
+        self.semantic_query_bounds(RobotCommand::FindButton {
+            text: text.to_string(),
+            match_kind: SemanticTextMatchKind::Exact,
+        })
     }
 
     /// Capture a screenshot of the current render scene.
@@ -907,12 +792,10 @@ impl Robot {
         self.tx
             .send(RobotCommand::GetScreenshot)
             .map_err(|e| format!("Failed to send screenshot command: {}", e))?;
-        match self.rx.recv() {
-            Ok(RobotResponse::Screenshot(image)) => Ok(image),
-            Ok(RobotResponse::Error(e)) => Err(e),
-            Ok(_) => Err("Unexpected response".to_string()),
-            Err(e) => Err(format!("Failed to receive response: {}", e)),
-        }
+        self.recv_response(|response| match response {
+            RobotResponse::Screenshot(image) => Some(image),
+            _ => None,
+        })
     }
 
     /// Capture a screenshot at a specific device pixel scale (e.g., 2.0 for HiDPI).
@@ -920,12 +803,10 @@ impl Robot {
         self.tx
             .send(RobotCommand::GetScreenshotWithScale(scale))
             .map_err(|e| format!("Failed to send screenshot command: {}", e))?;
-        match self.rx.recv() {
-            Ok(RobotResponse::Screenshot(image)) => Ok(image),
-            Ok(RobotResponse::Error(e)) => Err(e),
-            Ok(_) => Err("Unexpected response".to_string()),
-            Err(e) => Err(format!("Failed to receive response: {}", e)),
-        }
+        self.recv_response(|response| match response {
+            RobotResponse::Screenshot(image) => Some(image),
+            _ => None,
+        })
     }
 
     /// Keyframe a live transition: advance the animation clock by the exact
@@ -943,12 +824,10 @@ impl Robot {
                 steps: steps.to_vec(),
             })
             .map_err(|e| format!("Failed to send capture command: {}", e))?;
-        match self.rx.recv() {
-            Ok(RobotResponse::Screenshots(shots)) => Ok(shots),
-            Ok(RobotResponse::Error(e)) => Err(e),
-            Ok(_) => Err("Unexpected response".to_string()),
-            Err(e) => Err(format!("Failed to receive response: {}", e)),
-        }
+        self.recv_response(|response| match response {
+            RobotResponse::Screenshots(shots) => Some(shots),
+            _ => None,
+        })
     }
 
     /// Run an input timeline atomically against the exact animation clock.
@@ -968,12 +847,10 @@ impl Robot {
                 steps: steps.to_vec(),
             })
             .map_err(|e| format!("Failed to send interaction capture command: {e}"))?;
-        match self.rx.recv() {
-            Ok(RobotResponse::Screenshots(shots)) => Ok(shots),
-            Ok(RobotResponse::Error(e)) => Err(e),
-            Ok(_) => Err("Unexpected response".to_string()),
-            Err(e) => Err(format!("Failed to receive response: {e}")),
-        }
+        self.recv_response(|response| match response {
+            RobotResponse::Screenshots(shots) => Some(shots),
+            _ => None,
+        })
     }
 
     /// Get the most recent renderer frame stats, if available.
@@ -982,12 +859,10 @@ impl Robot {
         self.tx
             .send(RobotCommand::GetRenderStats)
             .map_err(|e| format!("Failed to send render stats command: {}", e))?;
-        match self.rx.recv() {
-            Ok(RobotResponse::RenderStats(stats)) => Ok(*stats),
-            Ok(RobotResponse::Error(e)) => Err(e),
-            Ok(_) => Err("Unexpected response".to_string()),
-            Err(e) => Err(format!("Failed to receive response: {}", e)),
-        }
+        self.recv_response(|response| match response {
+            RobotResponse::RenderStats(stats) => Some(*stats),
+            _ => None,
+        })
     }
 
     /// Get a snapshot of the owning app shell's FPS monitor.
@@ -995,12 +870,10 @@ impl Robot {
         self.tx
             .send(RobotCommand::GetFpsStats)
             .map_err(|e| format!("Failed to send FPS stats command: {}", e))?;
-        match self.rx.recv() {
-            Ok(RobotResponse::FpsStats(stats)) => Ok(stats),
-            Ok(RobotResponse::Error(e)) => Err(e),
-            Ok(_) => Err("Unexpected response".to_string()),
-            Err(e) => Err(format!("Failed to receive response: {}", e)),
-        }
+        self.recv_response(|response| match response {
+            RobotResponse::FpsStats(stats) => Some(stats),
+            _ => None,
+        })
     }
 
     /// Where the dev overlay draws a frame-pacing control, in logical pixels.
@@ -1014,12 +887,10 @@ impl Robot {
         self.tx
             .send(RobotCommand::GetPacingControlCenter(mode))
             .map_err(|e| format!("Failed to send pacing control command: {}", e))?;
-        match self.rx.recv() {
-            Ok(RobotResponse::PacingControlCenter(center)) => Ok(center),
-            Ok(RobotResponse::Error(e)) => Err(e),
-            Ok(_) => Err("Unexpected response".to_string()),
-            Err(e) => Err(format!("Failed to receive response: {}", e)),
-        }
+        self.recv_response(|response| match response {
+            RobotResponse::PacingControlCenter(center) => Some(center),
+            _ => None,
+        })
     }
 
     /// Reset the owning app shell's FPS monitor.
@@ -1027,12 +898,7 @@ impl Robot {
         self.tx
             .send(RobotCommand::ResetFpsStats)
             .map_err(|e| format!("Failed to send FPS stats reset command: {}", e))?;
-        match self.rx.recv() {
-            Ok(RobotResponse::Ok) => Ok(()),
-            Ok(RobotResponse::Error(e)) => Err(e),
-            Ok(_) => Err("Unexpected response".to_string()),
-            Err(e) => Err(format!("Failed to receive response: {}", e)),
-        }
+        self.recv_ack()
     }
 
     /// Query the owning app context's latest recorded fling velocity.
@@ -1040,12 +906,10 @@ impl Robot {
         self.tx
             .send(RobotCommand::GetLastFlingVelocity)
             .map_err(|e| format!("Failed to send fling velocity command: {}", e))?;
-        match self.rx.recv() {
-            Ok(RobotResponse::F32(value)) => Ok(value),
-            Ok(RobotResponse::Error(e)) => Err(e),
-            Ok(_) => Err("Unexpected response".to_string()),
-            Err(e) => Err(format!("Failed to receive response: {}", e)),
-        }
+        self.recv_response(|response| match response {
+            RobotResponse::F32(value) => Some(value),
+            _ => None,
+        })
     }
 
     /// Reset the owning app context's recorded fling velocity.
@@ -1053,12 +917,7 @@ impl Robot {
         self.tx
             .send(RobotCommand::ResetLastFlingVelocity)
             .map_err(|e| format!("Failed to send fling velocity reset command: {}", e))?;
-        match self.rx.recv() {
-            Ok(RobotResponse::Ok) => Ok(()),
-            Ok(RobotResponse::Error(e)) => Err(e),
-            Ok(_) => Err("Unexpected response".to_string()),
-            Err(e) => Err(format!("Failed to receive response: {}", e)),
-        }
+        self.recv_ack()
     }
 
     /// Get a snapshot of CPU-side renderer allocation capacities.
@@ -1067,12 +926,10 @@ impl Robot {
         self.tx
             .send(RobotCommand::GetRenderCpuAllocationStats)
             .map_err(|e| format!("Failed to send render CPU allocation stats command: {}", e))?;
-        match self.rx.recv() {
-            Ok(RobotResponse::RenderCpuAllocationStats(stats)) => Ok(*stats),
-            Ok(RobotResponse::Error(e)) => Err(e),
-            Ok(_) => Err("Unexpected response".to_string()),
-            Err(e) => Err(format!("Failed to receive response: {}", e)),
-        }
+        self.recv_response(|response| match response {
+            RobotResponse::RenderCpuAllocationStats(stats) => Some(*stats),
+            _ => None,
+        })
     }
 
     /// Get a snapshot of runtime/applier allocation stats for leak diagnostics.
@@ -1080,12 +937,10 @@ impl Robot {
         self.tx
             .send(RobotCommand::GetRuntimeLeakDebugStats)
             .map_err(|e| format!("Failed to send runtime leak debug stats command: {}", e))?;
-        match self.rx.recv() {
-            Ok(RobotResponse::RuntimeLeakDebugStats(stats)) => Ok(*stats),
-            Ok(RobotResponse::Error(e)) => Err(e),
-            Ok(_) => Err("Unexpected response".to_string()),
-            Err(e) => Err(format!("Failed to receive response: {}", e)),
-        }
+        self.recv_response(|response| match response {
+            RobotResponse::RuntimeLeakDebugStats(stats) => Some(*stats),
+            _ => None,
+        })
     }
 
     /// The tasks the runtime is still holding, by id and label.
@@ -1098,12 +953,10 @@ impl Robot {
         self.tx
             .send(RobotCommand::GetLiveUiTaskLabels)
             .map_err(|e| format!("Failed to send live UI task labels command: {}", e))?;
-        match self.rx.recv() {
-            Ok(RobotResponse::LiveUiTaskLabels(labels)) => Ok(labels),
-            Ok(RobotResponse::Error(e)) => Err(e),
-            Ok(_) => Err("Unexpected response".to_string()),
-            Err(e) => Err(format!("Failed to receive response: {}", e)),
-        }
+        self.recv_response(|response| match response {
+            RobotResponse::LiveUiTaskLabels(labels) => Some(labels),
+            _ => None,
+        })
     }
 
     /// Measure text on the app thread using the active shell text service.
@@ -1118,12 +971,10 @@ impl Robot {
                 style: Box::new(style.clone()),
             })
             .map_err(|e| format!("Failed to send measure_text command: {}", e))?;
-        match self.rx.recv() {
-            Ok(RobotResponse::TextMetrics(metrics)) => Ok(metrics),
-            Ok(RobotResponse::Error(e)) => Err(e),
-            Ok(_) => Err("Unexpected response".to_string()),
-            Err(e) => Err(format!("Failed to receive response: {}", e)),
-        }
+        self.recv_response(|response| match response {
+            RobotResponse::TextMetrics(metrics) => Some(metrics),
+            _ => None,
+        })
     }
 
     /// Query focused text-field state on the app thread.
@@ -1131,12 +982,10 @@ impl Robot {
         self.tx
             .send(RobotCommand::HasFocusedTextField)
             .map_err(|e| format!("Failed to send focus query command: {}", e))?;
-        match self.rx.recv() {
-            Ok(RobotResponse::Bool(value)) => Ok(value),
-            Ok(RobotResponse::Error(e)) => Err(e),
-            Ok(_) => Err("Unexpected response".to_string()),
-            Err(e) => Err(format!("Failed to receive response: {}", e)),
-        }
+        self.recv_response(|response| match response {
+            RobotResponse::Bool(value) => Some(value),
+            _ => None,
+        })
     }
 
     /// Enable or disable eager semantics extraction for robot queries.
@@ -1144,12 +993,7 @@ impl Robot {
         self.tx
             .send(RobotCommand::SetSemanticsEnabled(enabled))
             .map_err(|e| format!("Failed to send semantics toggle command: {}", e))?;
-        match self.rx.recv() {
-            Ok(RobotResponse::Ok) => Ok(()),
-            Ok(RobotResponse::Error(e)) => Err(e),
-            Ok(_) => Err("Unexpected response".to_string()),
-            Err(e) => Err(format!("Failed to receive response: {}", e)),
-        }
+        self.recv_ack()
     }
 
     /// Invoke an application-defined robot hook on the app thread.
@@ -1160,12 +1004,10 @@ impl Robot {
                 argument: argument.to_string(),
             })
             .map_err(|e| format!("Failed to send app hook command: {}", e))?;
-        match self.rx.recv() {
-            Ok(RobotResponse::AppHookResult(result)) => Ok(result),
-            Ok(RobotResponse::Error(e)) => Err(e),
-            Ok(_) => Err("Unexpected response".to_string()),
-            Err(e) => Err(format!("Failed to receive response: {}", e)),
-        }
+        self.recv_response(|response| match response {
+            RobotResponse::AppHookResult(result) => Some(result),
+            _ => None,
+        })
     }
 
     /// Find any element by text content (recursive search)
@@ -1522,6 +1364,38 @@ fn semantic_element_from_canvas_node(
     }
 }
 
+type SemanticsTreeFinder = fn(
+    &HashMap<cranpose_core::NodeId, SemanticRect>,
+    &SemanticsNode,
+    &str,
+    SemanticTextMatchKind,
+) -> Option<SemanticQueryResult>;
+
+fn find_in_app<R>(
+    app: &mut AppShell<R>,
+    query: &str,
+    match_kind: SemanticTextMatchKind,
+    label: &str,
+    finder: SemanticsTreeFinder,
+) -> Option<SemanticQueryResult>
+where
+    R: Renderer,
+    R::Error: std::fmt::Debug,
+{
+    let layout_tree = app.layout_tree()?.clone();
+    let root = app.semantics_tree()?.root().clone();
+    let bounds_by_node = build_semantic_bounds_index(layout_tree.root());
+    let result = finder(&bounds_by_node, &root, query, match_kind);
+    log::trace!(
+        target: "cranpose::input",
+        "{label} query={query:?} result={:?}",
+        result
+            .as_ref()
+            .map(|result| (result.node_id, result.bounds, result.text.clone()))
+    );
+    result
+}
+
 pub(crate) fn find_text_in_app<R>(
     app: &mut AppShell<R>,
     query: &str,
@@ -1531,18 +1405,13 @@ where
     R: Renderer,
     R::Error: std::fmt::Debug,
 {
-    let layout_tree = app.layout_tree()?.clone();
-    let root = app.semantics_tree()?.root().clone();
-    let bounds_by_node = build_semantic_bounds_index(layout_tree.root());
-    let result = find_text_in_semantics_tree(&bounds_by_node, &root, query, match_kind);
-    log::trace!(
-        target: "cranpose::input",
-        "find_text query={query:?} result={:?}",
-        result
-            .as_ref()
-            .map(|result| (result.node_id, result.bounds, result.text.clone()))
-    );
-    result
+    find_in_app(
+        app,
+        query,
+        match_kind,
+        "find_text",
+        find_text_in_semantics_tree,
+    )
 }
 
 pub(crate) fn find_button_in_app<R>(
@@ -1554,18 +1423,13 @@ where
     R: Renderer,
     R::Error: std::fmt::Debug,
 {
-    let layout_tree = app.layout_tree()?.clone();
-    let root = app.semantics_tree()?.root().clone();
-    let bounds_by_node = build_semantic_bounds_index(layout_tree.root());
-    let result = find_button_in_semantics_tree(&bounds_by_node, &root, query, match_kind);
-    log::trace!(
-        target: "cranpose::input",
-        "find_button query={query:?} result={:?}",
-        result
-            .as_ref()
-            .map(|result| (result.node_id, result.bounds, result.text.clone()))
-    );
-    result
+    find_in_app(
+        app,
+        query,
+        match_kind,
+        "find_button",
+        find_button_in_semantics_tree,
+    )
 }
 
 fn semantic_rect_for_node(

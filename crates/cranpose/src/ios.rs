@@ -297,27 +297,11 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
             }
         };
 
-        let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
-        instance_descriptor.backends = wgpu::Backends::all();
-        let instance = wgpu::Instance::new(instance_descriptor);
-
-        let surface = match instance.create_surface(window.clone()) {
-            Ok(surface) => surface,
-            Err(error) => {
-                self.abort(event_loop, LaunchError::SurfaceCreate(error));
-                return;
-            }
-        };
-
-        let adapter =
-            match pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface: Some(&surface),
-                force_fallback_adapter: false,
-            })) {
-                Ok(adapter) => adapter,
+        let (_instance, surface, adapter) =
+            match crate::wgpu_surface::create_wgpu_surface_and_adapter(&window) {
+                Ok(triple) => triple,
                 Err(error) => {
-                    self.abort(event_loop, LaunchError::NoAdapter(error));
+                    self.abort(event_loop, error);
                     return;
                 }
             };

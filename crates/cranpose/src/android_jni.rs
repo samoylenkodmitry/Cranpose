@@ -35,6 +35,16 @@ where
     .map_err(|error| format!("failed to access Android JNI environment: {error}"))?
 }
 
+pub(crate) fn decode_jni_string(env: &mut EnvUnowned<'_>, value: JString<'_>) -> Option<String> {
+    match env
+        .with_env(|env| -> jni::errors::Result<String> { value.try_to_string(env) })
+        .into_outcome()
+    {
+        Outcome::Ok(text) => Some(text),
+        Outcome::Err(_) | Outcome::Panic(_) => None,
+    }
+}
+
 pub(crate) fn clear_pending_android_jni_exception(env: &mut Env<'_>) {
     if env.exception_check() {
         env.exception_describe();

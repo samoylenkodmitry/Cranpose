@@ -2,6 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use cranpose_services::purchases::{Product, PurchaseEvent, StorePhase, StoreState};
 
+use crate::android_wire_escape::unescape_wire_field as unescape;
+
 pub(crate) const EVENT_PURCHASED: i32 = 0;
 pub(crate) const EVENT_CANCELLED: i32 = 1;
 pub(crate) const EVENT_PENDING: i32 = 2;
@@ -95,17 +97,6 @@ fn decode_owned<'a>(
         .map(unescape)
         .filter(|order| !order.is_empty());
     Some((id, order))
-}
-
-fn unescape(value: &str) -> String {
-    if !value.contains('%') {
-        return value.to_string();
-    }
-    value
-        .replace("%09", "\t")
-        .replace("%0A", "\n")
-        .replace("%0D", "\r")
-        .replace("%25", "%")
 }
 
 #[cfg(test)]

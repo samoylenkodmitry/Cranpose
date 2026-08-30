@@ -1,12 +1,14 @@
 use std::{
     cell::{Cell, RefCell},
-    rc::{Rc, Weak},
+    rc::Rc,
     time::Duration,
 };
 
 use cranpose_core::MutableState;
 use cranpose_ui::{Point, Size, composable};
 use thiserror::Error;
+
+use crate::scoped_weak_stack::ScopedWeakStack;
 
 const SIZE_EPSILON: f32 = 0.5;
 
@@ -357,44 +359,19 @@ impl AndroidHostWindowRegistry {
 }
 
 thread_local! {
-    static CURRENT_ANDROID_HOST_WINDOW_REGISTRY: RefCell<Vec<Weak<AndroidHostWindowRegistry>>> =
-        const { RefCell::new(Vec::new()) };
+    static CURRENT_ANDROID_HOST_WINDOW_REGISTRY: ScopedWeakStack<AndroidHostWindowRegistry> =
+        const { ScopedWeakStack::new() };
 }
 
 pub(crate) fn with_android_host_window_registry<R>(
     registry: &Rc<AndroidHostWindowRegistry>,
     f: impl FnOnce() -> R,
 ) -> R {
-    struct RegistryGuard;
-
-    impl Drop for RegistryGuard {
-        fn drop(&mut self) {
-            CURRENT_ANDROID_HOST_WINDOW_REGISTRY.with(|stack| {
-                stack.borrow_mut().pop();
-            });
-        }
-    }
-
-    CURRENT_ANDROID_HOST_WINDOW_REGISTRY.with(|stack| {
-        stack.borrow_mut().push(Rc::downgrade(registry));
-    });
-    let _guard = RegistryGuard;
-    f()
+    CURRENT_ANDROID_HOST_WINDOW_REGISTRY.with(|stack| stack.with_scope(registry, f))
 }
 
 fn current_android_host_window_registry() -> Option<Rc<AndroidHostWindowRegistry>> {
-    CURRENT_ANDROID_HOST_WINDOW_REGISTRY.with(|stack| {
-        let mut stack = stack.borrow_mut();
-        loop {
-            match stack.last().and_then(Weak::upgrade) {
-                Some(registry) => return Some(registry),
-                None if stack.is_empty() => return None,
-                None => {
-                    stack.pop();
-                }
-            }
-        }
-    })
+    CURRENT_ANDROID_HOST_WINDOW_REGISTRY.with(ScopedWeakStack::current)
 }
 
 pub(crate) fn latest_android_host_window_request(

@@ -4,6 +4,12 @@
 
 #[cfg(all(feature = "android", target_os = "android"))]
 mod android_file_picker;
+#[cfg(any(
+    all(feature = "android", target_os = "android"),
+    all(feature = "ios", feature = "renderer-wgpu", target_os = "ios")
+))]
+mod chunked_read;
+mod scoped_weak_stack;
 #[cfg(all(feature = "android", target_os = "android"))]
 pub use android_file_picker::open_content_uri;
 #[cfg(any(
@@ -85,6 +91,8 @@ mod android_surface;
 mod android_text_input;
 #[cfg(all(feature = "android", target_os = "android"))]
 mod android_vsync;
+#[cfg(any(test, all(feature = "android", target_os = "android")))]
+mod android_wire_escape;
 #[cfg(all(feature = "android", target_os = "android"))]
 mod android_writable_folder;
 mod app_launcher;
@@ -121,36 +129,24 @@ pub use native_window::{
     WindowMoveMode, WindowNode, WindowResizeDirection, WindowState,
     current_native_window_surface_origin, rememberWindowState,
 };
-#[cfg(all(
-    feature = "renderer-wgpu",
-    any(
-        feature = "desktop-shell",
-        all(feature = "android", target_os = "android"),
-        all(feature = "ios", target_os = "ios"),
-        all(feature = "web", target_arch = "wasm32")
-    )
-))]
-mod present_mode;
-#[cfg(all(
-    feature = "renderer-wgpu",
-    any(
-        feature = "desktop-shell",
-        all(feature = "android", target_os = "android"),
-        all(feature = "ios", target_os = "ios"),
-        all(feature = "web", target_arch = "wasm32")
-    )
-))]
-mod surface_format;
-#[cfg(all(
-    feature = "renderer-wgpu",
-    any(
-        feature = "desktop-shell",
-        all(feature = "android", target_os = "android"),
-        all(feature = "ios", target_os = "ios"),
-        all(feature = "web", target_arch = "wasm32")
-    )
-))]
-mod wgpu_surface;
+macro_rules! renderer_wgpu_platform_modules {
+    ($($name:ident),+ $(,)?) => {
+        $(
+            #[cfg(all(
+                feature = "renderer-wgpu",
+                any(
+                    feature = "desktop-shell",
+                    all(feature = "android", target_os = "android"),
+                    all(feature = "ios", target_os = "ios"),
+                    all(feature = "web", target_arch = "wasm32")
+                )
+            ))]
+            mod $name;
+        )+
+    };
+}
+
+renderer_wgpu_platform_modules!(present_mode, surface_format, wgpu_surface);
 
 /// The real-time audio engine that backs `cranpose_services::audio`. Call
 /// [`install_audio`] once at startup; Android installs it automatically.
@@ -418,6 +414,11 @@ mod desktop_incoming;
 mod desktop_input;
 #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
 mod desktop_power;
+#[cfg(any(
+    all(feature = "desktop-shell", feature = "renderer-wgpu"),
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+))]
+mod host_surface_resize;
 
 #[cfg(all(
     unix,
@@ -458,6 +459,9 @@ pub mod ios;
 
 #[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
 mod ios_accessibility;
+
+#[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
+mod ios_pick_future;
 
 #[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
 mod ios_file_picker;
