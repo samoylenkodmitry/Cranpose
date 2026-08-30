@@ -253,11 +253,16 @@ dep-budget:
     cargo xtask dependency-budget --explain
 
 # Desktop binary size ceiling, measured against the isolated demo.
-# 16 MiB. The previous 15 MiB ceiling had 9,600 bytes of headroom left on
-# Linux (main measured 15,719,040 at 99.94%), so any addition tripped it;
-# the bump that consumed the margin was the per-pass GPU timestamp profiler
-# and its scene diagnostics (+84,440 bytes), runtime-gated but compiled in —
-# the same property-backed-toggle shape every other shipped instrument uses.
+# 16 MiB rather than 15 because the per-pass GPU timestamp profiler and its
+# scene diagnostics (+84,440 bytes) do not fit under 15 -- runtime-gated but
+# compiled in, the same property-backed-toggle shape every other shipped
+# instrument uses.
+#
+# No measurement is quoted here on purpose. A byte count in prose reads like a
+# live reading of main long after it stopped being one, and one quoted here
+# was still being compared against months later, which is how a change that
+# actually moved the binary by 119,576 bytes first got reported as 16,720.
+# Run the recipe for the current number.
 size-budget:
     scripts/ci/with_host_lock.sh --shared \
       cargo xtask binary-size --manifest-path apps/isolated-demo/Cargo.toml --package isolated-demo --bin isolated-demo --profile release-small --patch-workspace-cranpose --max-bytes 16777216

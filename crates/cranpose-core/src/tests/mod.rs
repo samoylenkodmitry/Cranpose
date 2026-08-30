@@ -29,6 +29,74 @@ fn reset_snapshot_runtime() -> TestRuntimeGuard {
 }
 
 #[test]
+fn cached_key_helpers_agree_with_the_uncached_derivation() {
+    struct Marker;
+    let marker = TypeId::of::<Marker>();
+
+    let definition_cell = OnceLock::new();
+    assert_eq!(
+        cached_composable_definition_key(&definition_cell, "src/probe.rs", 12, 34, marker),
+        composable_definition_key("src/probe.rs", 12, 34, marker),
+        "outlining the initializer must not change the definition key"
+    );
+
+    let branch_cell = OnceLock::new();
+    assert_eq!(
+        cached_branch_location_key(&branch_cell, "src/probe.rs", 56, 78, 3),
+        branch_location_key("src/probe.rs", 56, 78, 3),
+        "outlining the initializer must not change the branch key"
+    );
+}
+
+#[test]
+fn cached_key_helpers_latch_the_first_value() {
+    struct Marker;
+    let marker = TypeId::of::<Marker>();
+
+    let definition_cell = OnceLock::new();
+    let first = cached_composable_definition_key(&definition_cell, "src/probe.rs", 1, 1, marker);
+    assert_eq!(
+        cached_composable_definition_key(&definition_cell, "src/other.rs", 99, 99, marker),
+        first,
+        "the definition cell must keep the key it latched"
+    );
+
+    let branch_cell = OnceLock::new();
+    let first_branch = cached_branch_location_key(&branch_cell, "src/probe.rs", 1, 1, 0);
+    assert_eq!(
+        cached_branch_location_key(&branch_cell, "src/other.rs", 99, 99, 7),
+        first_branch,
+        "the branch cell must keep the key it latched"
+    );
+}
+
+#[test]
+fn cached_key_helpers_separate_distinct_sites() {
+    struct MarkerA;
+    struct MarkerB;
+
+    let a = OnceLock::new();
+    let b = OnceLock::new();
+    let c = OnceLock::new();
+    let key_a =
+        cached_composable_definition_key(&a, "src/probe.rs", 12, 34, TypeId::of::<MarkerA>());
+    let key_b =
+        cached_composable_definition_key(&b, "src/probe.rs", 12, 34, TypeId::of::<MarkerB>());
+    let key_c =
+        cached_composable_definition_key(&c, "src/probe.rs", 13, 34, TypeId::of::<MarkerA>());
+    assert_ne!(key_a, key_b, "the definition marker must separate sites");
+    assert_ne!(key_a, key_c, "the source location must separate sites");
+
+    let branch_zero = OnceLock::new();
+    let branch_one = OnceLock::new();
+    assert_ne!(
+        cached_branch_location_key(&branch_zero, "src/probe.rs", 12, 34, 0),
+        cached_branch_location_key(&branch_one, "src/probe.rs", 12, 34, 1),
+        "the branch index must separate guards emitted at one location"
+    );
+}
+
+#[test]
 fn debug_scope_env_flag_is_not_process_cached() {
     let source = include_str!("../debug_trace.rs");
     let once_lock = ["Once", "Lock"].concat();

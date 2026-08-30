@@ -200,6 +200,23 @@ fn core_crate_path() -> TokenStream2 {
     }
 }
 
+fn definition_key_stmt(core_path: &TokenStream2, caller_key_ident: &Ident) -> TokenStream2 {
+    quote! {
+        let #caller_key_ident = #core_path::composable_identity_key({
+            struct __CranposeDefinitionMarker;
+            static __CRANPOSE_DEFINITION_KEY: ::std::sync::OnceLock<#core_path::Key> =
+                ::std::sync::OnceLock::new();
+            #core_path::cached_composable_definition_key(
+                &__CRANPOSE_DEFINITION_KEY,
+                file!(),
+                line!(),
+                column!(),
+                ::std::any::TypeId::of::<__CranposeDefinitionMarker>(),
+            )
+        });
+    }
+}
+
 #[proc_macro_attribute]
 pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
     let attr_tokens = TokenStream2::from(attr);
@@ -304,21 +321,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
     let result_ident = Ident::new("__result", Span::mixed_site());
     let value_ident = Ident::new("__value", Span::mixed_site());
     let key_expr = quote! { #caller_key_ident };
-    let caller_key_stmt = quote! {
-        let #caller_key_ident = #core_path::composable_identity_key({
-            struct __CranposeDefinitionMarker;
-            static __CRANPOSE_DEFINITION_KEY: ::std::sync::OnceLock<#core_path::Key> =
-                ::std::sync::OnceLock::new();
-            *__CRANPOSE_DEFINITION_KEY.get_or_init(|| {
-                #core_path::composable_definition_key(
-                    file!(),
-                    line!(),
-                    column!(),
-                    ::std::any::TypeId::of::<__CranposeDefinitionMarker>(),
-                )
-            })
-        });
-    };
+    let caller_key_stmt = definition_key_stmt(&core_path, &caller_key_ident);
 
     let rebinds_for_no_skip: Vec<_> = param_info
         .iter()
@@ -804,4 +807,26 @@ fn find_reserved_pattern_ident(pat: &Pat) -> Option<&Ident> {
     let mut scan = Scan { found: None };
     scan.visit_pat(pat);
     scan.found
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn definition_key_does_not_monomorphise_the_once_lock_initializer() {
+        let core_path = quote!(::cranpose_core);
+        let ident = Ident::new("__cranpose_caller_key", Span::mixed_site());
+        let tokens = definition_key_stmt(&core_path, &ident).to_string();
+
+        assert!(
+            tokens.contains("cached_composable_definition_key"),
+            "the definition key must be latched through the outlined core \
+             helper, got: {tokens}"
+        );
+        assert!(
+            !tokens.contains("get_or_init"),
+            "no initializer closure may reach the expansion site, got: {tokens}"
+        );
+    }
 }

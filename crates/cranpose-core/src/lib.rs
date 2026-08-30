@@ -216,6 +216,7 @@ use std::{
     hash::{Hash, Hasher},
     ops::{Deref, DerefMut},
     rc::{Rc, Weak},
+    sync::OnceLock,
 };
 
 #[cfg(test)]
@@ -361,6 +362,17 @@ pub fn composable_definition_key(
     location_key(file, line, column) ^ avalanche_location_key(std::hash::Hasher::finish(&hasher))
 }
 
+#[doc(hidden)]
+pub fn cached_composable_definition_key(
+    cell: &OnceLock<Key>,
+    file: &str,
+    line: u32,
+    column: u32,
+    marker: TypeId,
+) -> Key {
+    *cell.get_or_init(|| composable_definition_key(file, line, column, marker))
+}
+
 pub fn location_key(file: &str, line: u32, column: u32) -> Key {
     let key = source_location_key(file, line, column);
     #[cfg(test)]
@@ -390,6 +402,17 @@ pub fn branch_location_key(file: &str, line: u32, column: u32, branch: u32) -> K
         register_location_key_debug_info(key, file, line, column);
     }
     key
+}
+
+#[doc(hidden)]
+pub fn cached_branch_location_key(
+    cell: &OnceLock<Key>,
+    file: &str,
+    line: u32,
+    column: u32,
+    branch: u32,
+) -> Key {
+    *cell.get_or_init(|| branch_location_key(file, line, column, branch))
 }
 
 /// Stable identifier for a slot in the slot table.
