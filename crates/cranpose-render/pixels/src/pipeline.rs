@@ -8,7 +8,7 @@ use cranpose_render_common::{
         RenderNode, TextPrimitiveNode,
     },
     graph_scene::RenderDiagnostics,
-    hit_graph::{HitGraphSink, collect_hits_from_graph as collect_common_hits},
+    hit_graph::collect_hits_from_graph,
     layer_composition::local_content_layer,
     layer_shadow::layer_shadow_geometry,
     layer_transform::{apply_layer_affine_to_rect, apply_layer_to_rect, layer_uniform_scale},
@@ -33,22 +33,9 @@ use cranpose_ui_graphics::{
 };
 
 use crate::{
-    scene::{ClickAction, RasterScene, Scene},
+    scene::{RasterScene, Scene},
     style::{apply_layer_to_brush, apply_layer_to_color, combine_layers, scale_corner_radii},
 };
-
-#[cfg(test)]
-const TEXT_CLIP_PAD: f32 = 1.0;
-
-#[cfg(test)]
-fn pad_clip_rect(rect: Rect) -> Rect {
-    Rect {
-        x: rect.x - TEXT_CLIP_PAD,
-        y: rect.y - TEXT_CLIP_PAD,
-        width: (rect.width + TEXT_CLIP_PAD * 2.0).max(0.0),
-        height: (rect.height + TEXT_CLIP_PAD * 2.0).max(0.0),
-    }
-}
 
 fn graphics_layer_supports_rigid_snap(layer: &GraphicsLayer) -> bool {
     (layer.scale - 1.0).abs() <= f32::EPSILON
@@ -403,51 +390,6 @@ pub(crate) fn render_layout_tree(root: &LayoutBox, scene: &mut Scene) {
     scene.replace_graph(graph);
 }
 
-#[cfg(test)]
-fn resolve_text_clip(
-    overflow: TextOverflow,
-    visual_clip: Option<Rect>,
-    transformed_text_bounds: Rect,
-) -> Option<Option<Rect>> {
-    if overflow == TextOverflow::Visible {
-        return Some(visual_clip);
-    }
-    resolve_clip(visual_clip, Some(pad_clip_rect(transformed_text_bounds))).map(Some)
-}
-
-#[cfg(test)]
-fn expand_text_bounds_for_baseline_shift(
-    text_bounds: Rect,
-    text_style: &TextStyle,
-    font_size: f32,
-) -> Rect {
-    let baseline_shift_px = text_style
-        .span_style
-        .baseline_shift
-        .filter(|shift| shift.is_specified())
-        .map(|shift| -(shift.0 * font_size))
-        .unwrap_or(0.0);
-    if baseline_shift_px == 0.0 {
-        return text_bounds;
-    }
-
-    if baseline_shift_px < 0.0 {
-        Rect {
-            x: text_bounds.x,
-            y: text_bounds.y + baseline_shift_px,
-            width: text_bounds.width,
-            height: (text_bounds.height - baseline_shift_px).max(0.0),
-        }
-    } else {
-        Rect {
-            x: text_bounds.x,
-            y: text_bounds.y,
-            width: text_bounds.width,
-            height: (text_bounds.height + baseline_shift_px).max(0.0),
-        }
-    }
-}
-
 fn resolve_text_color_without_gradient_fallback(text_style: &TextStyle, default: Color) -> Color {
     let mut color = text_style
         .span_style
@@ -681,7 +623,9 @@ fn text_decoration_rect(x: f32, y: f32, width: f32, thickness: f32) -> Rect {
 }
 
 #[cfg(test)]
-use cranpose_render_common::scene_builder::resolve_text_measure_width;
+use cranpose_render_common::scene_builder::{
+    expand_text_bounds_for_baseline_shift, resolve_text_measure_width,
+};
 
 #[cfg(test)]
 fn resolve_text_horizontal_offset(
@@ -723,45 +667,6 @@ pub(crate) fn render_from_applier(applier: &mut MemoryApplier, root: NodeId, sce
     };
     collect_hits_from_graph(&graph.root, ProjectiveTransform::identity(), scene, None);
     scene.replace_graph(graph);
-}
-
-fn collect_hits_from_graph(
-    layer: &LayerNode,
-    parent_transform: ProjectiveTransform,
-    scene: &mut Scene,
-    parent_hit_clip: Option<Rect>,
-) {
-    struct SceneHitSink<'a> {
-        scene: &'a mut Scene,
-    }
-
-    impl HitGraphSink for SceneHitSink<'_> {
-        fn push_hit(
-            &mut self,
-            node_id: NodeId,
-            capture_path: &[NodeId],
-            geometry: cranpose_render_common::graph_scene::HitGeometry,
-            shape: Option<RoundedCornerShape>,
-            click_actions: &[Rc<dyn Fn(Point)>],
-            pointer_inputs: &[Rc<dyn Fn(cranpose_foundation::PointerEvent)>],
-        ) {
-            self.scene.push_hit(
-                node_id,
-                capture_path.to_vec(),
-                geometry,
-                shape,
-                click_actions
-                    .iter()
-                    .cloned()
-                    .map(ClickAction::WithPoint)
-                    .collect(),
-                pointer_inputs.to_vec(),
-            );
-        }
-    }
-
-    let mut sink = SceneHitSink { scene };
-    collect_common_hits(layer, parent_transform, &mut sink, parent_hit_clip);
 }
 
 pub(crate) fn build_raster_scene(
@@ -1812,40 +1717,6 @@ mod tests {
                 width: 20.0,
                 height: 20.0,
             }
-        );
-    }
-
-    #[test]
-    fn resolve_text_clip_skips_when_intersection_is_empty() {
-        let visual_clip = Some(Rect {
-            x: 0.0,
-            y: 0.0,
-            width: 10.0,
-            height: 10.0,
-        });
-        let text_bounds = Rect {
-            x: 20.0,
-            y: 20.0,
-            width: 5.0,
-            height: 5.0,
-        };
-        assert_eq!(
-            resolve_text_clip(TextOverflow::Clip, visual_clip, text_bounds),
-            None
-        );
-    }
-
-    #[test]
-    fn resolve_text_clip_visible_keeps_unbounded_draw() {
-        let text_bounds = Rect {
-            x: 20.0,
-            y: 20.0,
-            width: 5.0,
-            height: 5.0,
-        };
-        assert_eq!(
-            resolve_text_clip(TextOverflow::Visible, None, text_bounds),
-            Some(None)
         );
     }
 

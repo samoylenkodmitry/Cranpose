@@ -7,7 +7,7 @@ use cranpose_ui_graphics::{Rect, RoundedCornerShape};
 
 use crate::{
     graph::{LayerNode, ProjectiveTransform, RenderNode, quad_bounds},
-    graph_scene::{HitClip, HitGeometry},
+    graph_scene::{ClickAction, HitClip, HitGeometry, Scene},
     primitive_emit::resolve_clip,
 };
 
@@ -21,6 +21,32 @@ pub trait HitGraphSink {
         click_actions: &[Rc<dyn Fn(Point)>],
         pointer_inputs: &[Rc<dyn Fn(PointerEvent)>],
     );
+}
+
+impl HitGraphSink for Scene {
+    fn push_hit(
+        &mut self,
+        node_id: NodeId,
+        capture_path: &[NodeId],
+        geometry: HitGeometry,
+        shape: Option<RoundedCornerShape>,
+        click_actions: &[Rc<dyn Fn(Point)>],
+        pointer_inputs: &[Rc<dyn Fn(PointerEvent)>],
+    ) {
+        Scene::push_hit(
+            self,
+            node_id,
+            capture_path.to_vec(),
+            geometry,
+            shape,
+            click_actions
+                .iter()
+                .cloned()
+                .map(ClickAction::WithPoint)
+                .collect(),
+            pointer_inputs.to_vec(),
+        );
+    }
 }
 
 pub fn collect_hits_from_graph<S: HitGraphSink>(

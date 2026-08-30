@@ -1807,7 +1807,7 @@ fn pad_clip_rect(rect: Rect) -> Rect {
     }
 }
 
-fn expand_text_bounds_for_baseline_shift(
+pub fn expand_text_bounds_for_baseline_shift(
     text_bounds: Rect,
     text_style: &TextStyle,
     font_size: f32,
