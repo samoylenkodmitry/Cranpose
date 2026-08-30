@@ -378,13 +378,13 @@ Verdict key: **Implemented** (equivalent name and semantics) ·
 | `mutableStateOf(x)` | `cranpose_core::hooks::mutableStateOf` | Implemented | Same shape: `(initial: T) -> MutableState<T>`. |
 | `derivedStateOf { ... }` | `cranpose_core::hooks::derivedStateOf` | Implemented | Same shape. |
 | `rememberSaveable { ... }` | `cranpose_services::preferences::rememberSaveable` | Renamed/reshaped | Lives in `cranpose-services`, not `cranpose-core`, and takes an explicit `key: &'static str` + `Saver<T>` up front rather than Compose's implicit-position + optional `Saver`. |
-| `LaunchedEffect(keys) { ... }` | `cranpose_core::LaunchedEffect!(keys, effect)` | Renamed/reshaped | Same semantics (re-run when `keys` changes, call-site identity via `location_key(file!(), line!(), column!())` inside a `macro_rules!`). Notably `remember` gets the same kind of call-site identity from a plain `#[track_caller]` function, not a macro -- `LaunchedEffect`/`DisposableEffect` did not have to become macros for that reason alone; see Findings. |
-| `DisposableEffect(keys) { onDispose { ... } }` | `cranpose_core::DisposableEffect!` | Renamed/reshaped | Same reasoning as `LaunchedEffect`. |
+| `LaunchedEffect(keys) { ... }` | `cranpose_core::LaunchedEffect(keys, effect)` | Implemented | A plain `#[track_caller]` function, matching `remember`. Was a `macro_rules!`; see Findings for why the macro was not merely unnecessary but wrong. |
+| `DisposableEffect(keys) { onDispose { ... } }` | `cranpose_core::DisposableEffect(keys, effect)` | Implemented | Same conversion as `LaunchedEffect`. |
 | `SideEffect { ... }` | `cranpose_core::SideEffect` | Implemented | Plain `fn(impl FnOnce())`, no macro needed since there's no key list. |
 | `CompositionLocal<T>` / `compositionLocalOf` / `staticCompositionLocalOf` | `cranpose_core::composition_locals::{CompositionLocal, compositionLocalOf, staticCompositionLocalOf}` | Implemented | Same three-way split (local, dynamic default, static default). |
 | `CompositionLocalProvider(...)` | `cranpose_core::CompositionLocalProvider` | Implemented | |
 | `rememberCoroutineScope()` | `cranpose_core::concurrency::rememberCoroutineScope` | Implemented | |
-| `key(vararg keys) { ... }` | -- | Absent | No standalone identity-scoping construct found under this or a squashed name; `location_key` is the internal call-site identity primitive `LaunchedEffect!`/`DisposableEffect!` use, not a public scoping composable. |
+| `key(vararg keys) { ... }` | `cranpose_core::key(keys, content)` | Renamed/reshaped | Owned-value keys -- a tuple for multiple -- rather than a vararg, which Rust has no equivalent of. Seeds the composition group through the same `with_key` machinery that already existed internally but was unreachable from the facade. |
 | `Modifier.Node` / `LayoutModifierNode` / `DrawModifierNode` / `PointerInputNode` (Compose 1.4+ node-based modifiers) | `cranpose_foundation::modifier::{ModifierNode, LayoutModifierNode, DrawModifierNode, PointerInputNode}` | Implemented | Same names, same architecture (Compose's newer node-based modifier system, not the older factory-based one). |
 
 ### Modifier & layout
@@ -534,21 +534,34 @@ how central `testTag` is to Compose's own testing guidance, this is worth
 treating as a real gap rather than a stylistic difference, not something
 to close inside this doc, but worth a spawned follow-up.
 
-### `LaunchedEffect`/`DisposableEffect` are macros; `remember` is not, for no evidenced reason
+### `LaunchedEffect`/`DisposableEffect` were macros -- resolved, and the macro was wrong
 
-`cranpose_core::hooks::remember` is a plain `#[track_caller]` function --
-`Location::caller()` gives it correct per-call-site identity without any
-macro involved. `LaunchedEffect!`/`DisposableEffect!` instead expand to
-`location_key(file!(), line!(), column!())` inside a `macro_rules!`. Both
-techniques solve the identical problem (a hook needs to know where in the
-source it was called from); Rust does not force the macro choice here,
-since `remember` next to it in the same crate proves the function-based
-route works. Whether the macro exists for an unrelated reason (composing
-with `LaunchedEffectAsync`'s future-boxing, or predating `#[track_caller]`
-being adopted elsewhere) was not chased down -- recorded as an
-inconsistency worth resolving, not a semantic gap: callers should not read
-"macro vs function" here as meaningful, since nothing in the evidence
-gathered this pass explains it as intentional.
+This pass recorded the macro-vs-function split as an unexplained
+inconsistency and did not chase it down. It has been chased down, and the
+answer is stronger than "the macro was unnecessary": the macro was
+actively worse, and it had already cost something.
+
+None of the candidate justifications survive -- future-boxing, variadic
+keys, lazy evaluation of the effect body and how `keys` is captured are
+all identical whether the call site is a macro or a function. The
+function route was already proven in-tree: the same internal impls
+(`__launched_effect_impl`, `__disposable_effect_impl`) were being invoked
+directly, with a `#[track_caller]`-computed key, by non-macro code in
+`cranpose-core::concurrency` and `cranpose-services`. `TaskSite`'s
+`From<&'static Location>` impl was dead code, which reads as the
+track_caller route having been anticipated and never finished.
+
+The defect: `file!()/line!()/column!()` are lexical, so every call routed
+through a second-order wrapper that is not itself `#[composable]` gets
+**one fixed key** -- every instance colliding on the wrapper's own source
+position instead of the caller's. `#[track_caller]` propagates through
+such a wrapper; a macro cannot. That is not hypothetical: the round-36
+caller-identity sweep in `a1f64e59` hit exactly this in
+`cranpose-animation` and worked around it with a manual XOR salt at the
+call site rather than at the root.
+
+Both are now `#[track_caller]` functions with the same bounds, exported
+through the facade and prelude.
 
 ### Positive divergences (deliberate, not gaps)
 
