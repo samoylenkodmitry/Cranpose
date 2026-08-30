@@ -61,6 +61,7 @@ clippy:
 
 # Lint the exact package and feature set the web demo ships.
 clippy-wasm:
+    rustup target add wasm32-unknown-unknown
     scripts/ci/with_host_lock.sh --shared \
       cargo clippy --target wasm32-unknown-unknown -p desktop-app-platform --no-default-features --features web,renderer-wgpu -- -D warnings
 
@@ -423,11 +424,14 @@ perf-heap *args:
 # --- aggregates ------------------------------------------------------------
 
 # Excludes the jobs that need a GPU, an Android SDK or an iOS toolchain.
+# clippy-wasm is in here because it needs none of those -- only the wasm32
+# target, which the recipe installs itself -- and CI gates every pull request
+# on it. A gate a pull request is judged by must be runnable before pushing.
 
 # What a pull request is gated on. Run this before pushing.
-ci: fmt-check typos versions test clippy clippy-robot doc budgets test-quality-gates complexity-gate duplication-gate test-robot-discovery test-shell-helpers
+ci: fmt-check typos versions test clippy clippy-robot clippy-wasm doc budgets test-quality-gates complexity-gate duplication-gate test-robot-discovery test-shell-helpers
 
 # Needs a Linux box with the X11 stack, an Android SDK and (on macOS) Xcode.
 
 # Every gate, including the platform builds and the robot suite.
-ci-full: ci clippy-wasm clippy-ios clippy-android web android robot
+ci-full: ci clippy-ios clippy-android web android robot
