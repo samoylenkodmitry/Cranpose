@@ -262,8 +262,26 @@ pub fn round_rect_shape_params(
     let quad = apply_layer_to_quad(draw_rect, layer_bounds, layer);
     let shape =
         RoundedCornerShape::with_radii(scale_corner_radii(radii, layer_uniform_scale(layer)));
+    let final_rect = quad_bounds(quad);
+    // Falsification probe for the "dynamic conversion" consumer named in
+    // scroll_translate_pixels.rs's invariant (the third and last of the
+    // three; cached-layer composites measured clean, retained span replay
+    // structurally never engages for this recycling list's per-index-varying
+    // content -- see PR #542). This is the exact call a receipt card's own
+    // `draw_round_rect` fill goes through every frame. Logs the FINAL
+    // on-screen rect for any round-rect landing in the glass header's
+    // vertical band, so it can be checked against the semantics-confirmed
+    // scroll offset per step from outside this process.
+    if cranpose_core::env_flag!("CRANPOSE_BACKDROP_DIAG")
+        && final_rect.y < 180.0
+        && final_rect.y + final_rect.height > 90.0
+    {
+        eprintln!(
+            "[backdrop-diag] dynamic-round-rect final_rect={final_rect:?} layer_bounds={layer_bounds:?} local_rect_in={local_rect:?}",
+        );
+    }
     Some(ShapeDrawParams {
-        rect: quad_bounds(quad),
+        rect: final_rect,
         local_rect,
         quad,
         brush: resolve_layer_brush(brush, layer),
