@@ -24,12 +24,10 @@
 //! cargo run --package desktop-app --example robot_liquid_tab_flight_dark_scheme_ink_recolor --features desktop,robot-app
 //! ```
 
-use std::{
-    path::{Path, PathBuf},
-    process::ExitCode,
-    sync::atomic::{AtomicBool, Ordering},
-    time::Duration,
-};
+mod robot_exit;
+mod robot_shot;
+
+use std::{path::PathBuf, process::ExitCode, sync::atomic::AtomicBool, time::Duration};
 
 use cranpose::{
     liquid::prelude::*,
@@ -76,17 +74,12 @@ fn main() -> ExitCode {
         .with_fonts(desktop_app::fonts::DEMO_FONTS)
         .with_headless(std::env::var("CRANPOSE_HEADLESS").as_deref() != Ok("0"))
         .with_test_driver(move |robot| {
-            const TEST_TIMEOUT_SECS: u64 = 180;
-            std::thread::spawn(|| {
-                std::thread::sleep(Duration::from_secs(TEST_TIMEOUT_SECS));
-                println!("\n✗ Test timed out after {TEST_TIMEOUT_SECS} seconds");
-                std::process::exit(1);
-            });
+            robot_exit::arm_timeout(180);
             std::thread::sleep(Duration::from_millis(700));
-            settle(&robot, SETTLE_MS);
+            robot_shot::settle(&robot, SETTLE_MS);
 
             let rest = robot.screenshot().expect("rest shot");
-            save(&rest, &shot_dir, "0-rest.png");
+            robot_shot::save(&rest, &shot_dir, "0-rest.png");
             let scale = rest.width as f32 / rest.logical_width;
 
             let press_index = 0usize;
@@ -96,9 +89,9 @@ fn main() -> ExitCode {
             let glyph = (cell_cx, cell_cy + ICON_ROW_OFFSET_Y);
 
             robot.touch_down(cell_cx, cell_cy).expect("press tab");
-            settle(&robot, SETTLE_MS);
+            robot_shot::settle(&robot, SETTLE_MS);
             let pressed = robot.screenshot().expect("pressed shot");
-            save(&pressed, &shot_dir, "1-pressed.png");
+            robot_shot::save(&pressed, &shot_dir, "1-pressed.png");
             robot.touch_up(cell_cx, cell_cy).expect("release tab");
 
             let off_glyph_rest = sample(&rest, off_glyph, scale);
@@ -131,7 +124,7 @@ fn main() -> ExitCode {
             const NOT_ACCENT_FLOOR: f32 = 60.0;
             let off_glyph_distance = distance(off_glyph_pressed, accent_rgb);
             if off_glyph_distance < NOT_ACCENT_FLOOR {
-                fail(
+                robot_exit::fail(
                     &robot,
                     &format!(
                         "a point inside the pressed lens but off its glyph reads as the \
@@ -150,7 +143,7 @@ fn main() -> ExitCode {
             const GLYPH_SHOULD_READ_AS_ACCENT_CEILING: f32 = 40.0;
             let glyph_pressed_distance = distance(glyph_pressed, accent_rgb);
             if glyph_pressed_distance > GLYPH_SHOULD_READ_AS_ACCENT_CEILING {
-                fail(
+                robot_exit::fail(
                     &robot,
                     &format!(
                         "the glyph under the pressed lens does not read as the accent color \
@@ -203,11 +196,7 @@ fn main() -> ExitCode {
         })
         .expect("launch tab flight dark ink recolor runner");
 
-    if FAILED.load(Ordering::Relaxed) {
-        ExitCode::FAILURE
-    } else {
-        ExitCode::SUCCESS
-    }
+    robot_exit::exit_code(&FAILED)
 }
 
 const TABS: [(&str, &str); TAB_COUNT] = [
@@ -228,23 +217,4 @@ fn distance(a: (u8, u8, u8), b: (u8, u8, u8)) -> f32 {
     let dg = a.1 as f32 - b.1 as f32;
     let db = a.2 as f32 - b.2 as f32;
     (dr * dr + dg * dg + db * db).sqrt()
-}
-
-fn save(shot: &RobotScreenshot, directory: &Path, name: &str) {
-    if let Some(image) = image::RgbaImage::from_raw(shot.width, shot.height, shot.pixels.clone()) {
-        let _ = image.save(directory.join(name));
-    }
-}
-
-fn settle(robot: &cranpose::Robot, millis: u64) {
-    let _ = robot.wait_for_idle();
-    std::thread::sleep(Duration::from_millis(millis));
-    let _ = robot.wait_for_idle();
-}
-
-fn fail(robot: &cranpose::Robot, message: &str) -> ! {
-    println!("\n✗ {message}");
-    FAILED.store(true, Ordering::Relaxed);
-    let _ = robot.exit();
-    std::process::exit(1);
 }

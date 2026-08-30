@@ -1,11 +1,7 @@
 mod robot_exit;
+mod robot_shot;
 
-use std::{
-    path::{Path, PathBuf},
-    process::ExitCode,
-    sync::atomic::{AtomicBool, Ordering},
-    time::Duration,
-};
+use std::{path::PathBuf, process::ExitCode, sync::atomic::AtomicBool, time::Duration};
 
 use cranpose::{
     liquid::prelude::*,
@@ -46,17 +42,12 @@ fn main() -> ExitCode {
         .with_fonts(desktop_app::fonts::DEMO_FONTS)
         .with_headless(std::env::var("CRANPOSE_HEADLESS").as_deref() != Ok("0"))
         .with_test_driver(move |robot| {
-            const TEST_TIMEOUT_SECS: u64 = 180;
-            std::thread::spawn(|| {
-                std::thread::sleep(Duration::from_secs(TEST_TIMEOUT_SECS));
-                println!("\n✗ Test timed out after {TEST_TIMEOUT_SECS} seconds");
-                std::process::exit(1);
-            });
+            robot_exit::arm_timeout(180);
             std::thread::sleep(Duration::from_millis(700));
-            settle(&robot, SETTLE_MS);
+            robot_shot::settle(&robot, SETTLE_MS);
 
             let interior = robot.screenshot().expect("interior selection shot");
-            save(&interior, &shot_dir, "0-interior-cell.png");
+            robot_shot::save(&interior, &shot_dir, "0-interior-cell.png");
             let scale = interior.width as f32 / interior.logical_width;
             let left_edge = BAR_LEFT * scale;
             let right_edge = (BAR_LEFT + BAR_WIDTH) * scale;
@@ -67,9 +58,9 @@ fn main() -> ExitCode {
 
             for (name, cell) in [("leading", 0usize), ("trailing", TAB_COUNT - 1)] {
                 click_cell(&robot, cell);
-                settle(&robot, SETTLE_MS);
+                robot_shot::settle(&robot, SETTLE_MS);
                 let shot = robot.screenshot().expect("end selection shot");
-                save(&shot, &shot_dir, &format!("1-{name}-end-cell.png"));
+                robot_shot::save(&shot, &shot_dir, &format!("1-{name}-end-cell.png"));
 
                 let (first, last) = changed_span(&interior, &shot).unwrap_or_else(|| {
                     robot_exit::fail_and_await_shutdown(&robot, &FAILED,
@@ -91,7 +82,7 @@ fn main() -> ExitCode {
                 }
 
                 click_cell(&robot, 1);
-                settle(&robot, SETTLE_MS);
+                robot_shot::settle(&robot, SETTLE_MS);
             }
 
             println!(
@@ -151,11 +142,7 @@ fn main() -> ExitCode {
         })
         .expect("launch tab bar pill containment runner");
 
-    if FAILED.load(Ordering::Relaxed) {
-        ExitCode::FAILURE
-    } else {
-        ExitCode::SUCCESS
-    }
+    robot_exit::exit_code(&FAILED)
 }
 
 const TABS: [(&str, &str); TAB_COUNT] = [
@@ -203,16 +190,4 @@ fn pixel(shot: &RobotScreenshot, x: u32, y: u32) -> (u8, u8, u8) {
         shot.pixels[index + 1],
         shot.pixels[index + 2],
     )
-}
-
-fn save(shot: &RobotScreenshot, directory: &Path, name: &str) {
-    if let Some(image) = image::RgbaImage::from_raw(shot.width, shot.height, shot.pixels.clone()) {
-        let _ = image.save(directory.join(name));
-    }
-}
-
-fn settle(robot: &cranpose::Robot, millis: u64) {
-    let _ = robot.wait_for_idle();
-    std::thread::sleep(Duration::from_millis(millis));
-    let _ = robot.wait_for_idle();
 }

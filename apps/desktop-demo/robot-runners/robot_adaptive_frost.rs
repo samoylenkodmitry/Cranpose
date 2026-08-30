@@ -1,11 +1,6 @@
 mod robot_exit;
 
-use std::{
-    path::PathBuf,
-    process::ExitCode,
-    sync::atomic::{AtomicBool, Ordering},
-    time::Duration,
-};
+use std::{path::PathBuf, process::ExitCode, sync::atomic::AtomicBool, time::Duration};
 
 use cranpose::{
     liquid::prelude::*,
@@ -223,11 +218,7 @@ fn main() -> ExitCode {
         })
         .expect("launch adaptive frost runner");
 
-    if FAILED.load(Ordering::Relaxed) {
-        ExitCode::FAILURE
-    } else {
-        ExitCode::SUCCESS
-    }
+    robot_exit::exit_code(&FAILED)
 }
 
 fn mean_luma(shot: &cranpose::RobotScreenshot, x: f32, y: f32, w: f32, h: f32) -> f32 {

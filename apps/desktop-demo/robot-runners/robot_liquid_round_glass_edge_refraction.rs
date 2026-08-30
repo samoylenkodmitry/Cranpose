@@ -23,6 +23,8 @@
 //! cargo run --package desktop-app --example robot_liquid_round_glass_edge_refraction --features desktop,robot-app
 //! ```
 
+mod robot_exit;
+
 use std::{
     f32::consts::TAU,
     path::PathBuf,
@@ -260,9 +262,5 @@ fn main() -> ExitCode {
         .try_run(move || ProbeApp())
         .expect("launch round glass edge refraction runner");
 
-    if FAILED.load(Ordering::Relaxed) {
-        ExitCode::FAILURE
-    } else {
-        ExitCode::SUCCESS
-    }
+    robot_exit::exit_code(&FAILED)
 }

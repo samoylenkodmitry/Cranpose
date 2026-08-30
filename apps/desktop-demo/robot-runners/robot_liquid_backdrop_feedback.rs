@@ -1,10 +1,6 @@
 mod robot_exit;
 
-use std::{
-    process::ExitCode,
-    sync::atomic::{AtomicBool, Ordering},
-    time::Duration,
-};
+use std::{process::ExitCode, sync::atomic::AtomicBool, time::Duration};
 
 use cranpose::AppLauncher;
 use desktop_app::app::{self, TEST_ACTIVE_TAB_STATE};
@@ -93,11 +89,7 @@ fn main() -> ExitCode {
         })
         .try_run(app::combined_app)
         .expect("launch backdrop feedback runner");
-    if FAILED.load(Ordering::Relaxed) {
-        ExitCode::FAILURE
-    } else {
-        ExitCode::SUCCESS
-    }
+    robot_exit::exit_code(&FAILED)
 }
 
 fn set_tab_hook(name: String, argument: String) -> Result<Option<String>, String> {

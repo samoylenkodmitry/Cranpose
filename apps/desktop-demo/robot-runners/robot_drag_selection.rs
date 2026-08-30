@@ -8,6 +8,7 @@ use cranpose_testing::{find_button, find_in_semantics, find_text};
 use desktop_app::app;
 use image::RgbaImage;
 
+mod robot_exit;
 mod text_input_robot_helpers;
 
 type SelectedEditable = ((f32, f32, f32, f32), (usize, usize));
@@ -25,12 +26,7 @@ fn main() {
         .with_size(600, 400)
         .with_headless(true)
         .with_test_driver(move |robot| {
-            const TEST_TIMEOUT_SECS: u64 = 60;
-            std::thread::spawn(|| {
-                std::thread::sleep(Duration::from_secs(TEST_TIMEOUT_SECS));
-                println!("\n✗ Test timed out after {} seconds", TEST_TIMEOUT_SECS);
-                std::process::exit(1);
-            });
+            robot_exit::arm_timeout(60);
 
             std::thread::sleep(Duration::from_millis(300));
             println!("✓ App ready\n");

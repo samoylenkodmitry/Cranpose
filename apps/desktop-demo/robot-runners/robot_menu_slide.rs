@@ -1,10 +1,6 @@
 mod robot_exit;
 
-use std::{
-    process::ExitCode,
-    sync::atomic::{AtomicBool, Ordering},
-    time::Duration,
-};
+use std::{process::ExitCode, sync::atomic::AtomicBool, time::Duration};
 
 use cranpose::{
     widgets::{BasicTextFieldOptions, BasicTextFieldWithOptions, Box as CBox, BoxSpec},
@@ -159,11 +155,7 @@ fn main() -> ExitCode {
         })
         .expect("launch menu slide runner");
 
-    if FAILED.load(Ordering::Relaxed) {
-        ExitCode::FAILURE
-    } else {
-        ExitCode::SUCCESS
-    }
+    robot_exit::exit_code(&FAILED)
 }
 
 fn count_accentish(
