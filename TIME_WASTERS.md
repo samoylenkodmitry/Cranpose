@@ -402,3 +402,21 @@ Signature → cause → what to do. One lesson per line, no incident history.
   counts its internal fallback as a rebuild. Both greens looked like proof
   and proved nothing; both were caught only by severing the mechanism and
   demanding the red first.
+
+- **Kirin 980's Vulkan driver grants no TIMESTAMP_QUERY, and the
+  instrument only says so once** — `debug.cranpose.pass_timing` is dead
+  on the Mate 20 X (Mali-G76, wgpu picks Vulkan): the adapter lacks the
+  feature, so no `[GPU-PASS]` window ever prints. The warning that names
+  the cause is logged once at renderer construction, so the standard
+  capture pattern (launch, settle, `logcat -c`, capture) wipes it and
+  the run reads as silently empty — one full three-arm device cycle was
+  spent on captures that could never contain data. Prove the instrument
+  is live before spending arms on it (capture startup WITHOUT clearing
+  logcat and look for the seeding line AND the absence of the
+  lacks-TIMESTAMP_QUERY warning). GPU attribution on this device class
+  is arm-differencing only. Related trap in the same cycle: an
+  env-gated renderer toggle is unreachable on Android unless it is in
+  `PROPERTY_BACKED_ENV_VARS` (android_frame_telemetry.rs) — check the
+  mirror list before planning a device A/B around any CRANPOSE_* switch
+  (CRANPOSE_ENABLE_DIRECT_SCENE_RANGE_CACHE was readable in code and
+  unreachable on device until 2c9deef9 mirrored it).
