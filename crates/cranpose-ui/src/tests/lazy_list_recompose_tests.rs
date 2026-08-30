@@ -170,6 +170,31 @@ fn ScrollIndicatorLazyList(captured_state: Rc<RefCell<Option<LazyListState>>>) {
     });
 }
 
+/// Renders `ScrollIndicatorLazyList` under a fresh `Composition`, returning
+/// the app-context guard (kept alive by the caller for the test's duration),
+/// the composition, and a freshly captured (never shared or cached) handle
+/// to the list state it composed.
+fn render_scroll_indicator_lazy_list() -> (
+    crate::render_state::TestAppContextScope,
+    Composition<MemoryApplier>,
+    Rc<RefCell<Option<LazyListState>>>,
+) {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let mut composition = Composition::new(MemoryApplier::new());
+    let captured_state = Rc::new(RefCell::new(None));
+
+    composition
+        .render(location_key(file!(), line!(), column!()), {
+            let captured_state = Rc::clone(&captured_state);
+            move || {
+                ScrollIndicatorLazyList(Rc::clone(&captured_state));
+            }
+        })
+        .expect("initial render");
+
+    (_app_context, composition, captured_state)
+}
+
 #[composable]
 #[allow(non_snake_case)]
 fn ChildScrollIndicator(list_state: LazyListState) {
@@ -277,6 +302,38 @@ fn StableKeyedCountingLazyList(
             }
         },
     );
+}
+
+/// Renders a `(item_invocations, captured_state)`-shaped composable (as
+/// `ReactiveSiblingLazyList` and `StableKeyedCountingLazyList` both are)
+/// under a fresh `Composition`, returning the app-context guard (kept alive
+/// by the caller for the test's duration), the composition, and freshly
+/// captured (never shared or cached) handles to the item-invocation counter
+/// and the list state.
+type RenderedCountingLazyList = (
+    crate::render_state::TestAppContextScope,
+    Composition<MemoryApplier>,
+    Rc<Cell<usize>>,
+    Rc<RefCell<Option<LazyListState>>>,
+);
+
+fn render_counting_lazy_list_composable(
+    mut build: impl FnMut(Rc<Cell<usize>>, Rc<RefCell<Option<LazyListState>>>) + 'static,
+) -> RenderedCountingLazyList {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let item_invocations = Rc::new(Cell::new(0));
+    let captured_state = Rc::new(RefCell::new(None));
+    let mut composition = Composition::new(MemoryApplier::new());
+    let key = location_key(file!(), line!(), column!());
+    composition
+        .render(key, {
+            let item_invocations = Rc::clone(&item_invocations);
+            let captured_state = Rc::clone(&captured_state);
+            move || build(Rc::clone(&item_invocations), Rc::clone(&captured_state))
+        })
+        .expect("initial render");
+
+    (_app_context, composition, item_invocations, captured_state)
 }
 
 #[composable]
@@ -775,18 +832,7 @@ fn scroll_state_recomposition_does_not_reprepare_stable_lazy_rows() {
 
 #[test]
 fn gesture_scroll_recomposes_scroll_position_observers() {
-    let _app_context = crate::render_state::app_context_test_scope();
-    let mut composition = Composition::new(MemoryApplier::new());
-    let captured_state = Rc::new(RefCell::new(None));
-
-    composition
-        .render(location_key(file!(), line!(), column!()), {
-            let captured_state = Rc::clone(&captured_state);
-            move || {
-                ScrollIndicatorLazyList(Rc::clone(&captured_state));
-            }
-        })
-        .expect("initial render");
+    let (_app_context, mut composition, captured_state) = render_scroll_indicator_lazy_list();
 
     let root = composition.root().expect("lazy list root");
     let viewport = Size {
@@ -844,23 +890,8 @@ fn gesture_scroll_recomposes_scroll_position_observers() {
 
 #[test]
 fn repeated_measure_of_stable_keyed_lazy_list_reuses_retained_item_content() {
-    let _app_context = crate::render_state::app_context_test_scope();
-    let item_invocations = Rc::new(Cell::new(0));
-    let captured_state = Rc::new(RefCell::new(None));
-    let mut composition = Composition::new(MemoryApplier::new());
-    let key = location_key(file!(), line!(), column!());
-    composition
-        .render(key, {
-            let item_invocations = Rc::clone(&item_invocations);
-            let captured_state = Rc::clone(&captured_state);
-            move || {
-                StableKeyedCountingLazyList(
-                    Rc::clone(&item_invocations),
-                    Rc::clone(&captured_state),
-                )
-            }
-        })
-        .expect("initial render");
+    let (_app_context, mut composition, item_invocations, _captured_state) =
+        render_counting_lazy_list_composable(StableKeyedCountingLazyList);
 
     let root = composition.root().expect("lazy list root");
     let viewport = Size {
@@ -885,23 +916,8 @@ fn repeated_measure_of_stable_keyed_lazy_list_reuses_retained_item_content() {
 
 #[test]
 fn large_forward_lazy_scroll_reuses_skipped_active_slots_in_same_measure_pass() {
-    let _app_context = crate::render_state::app_context_test_scope();
-    let item_invocations = Rc::new(Cell::new(0));
-    let captured_state = Rc::new(RefCell::new(None));
-    let mut composition = Composition::new(MemoryApplier::new());
-    let key = location_key(file!(), line!(), column!());
-    composition
-        .render(key, {
-            let item_invocations = Rc::clone(&item_invocations);
-            let captured_state = Rc::clone(&captured_state);
-            move || {
-                StableKeyedCountingLazyList(
-                    Rc::clone(&item_invocations),
-                    Rc::clone(&captured_state),
-                )
-            }
-        })
-        .expect("initial render");
+    let (_app_context, mut composition, _item_invocations, captured_state) =
+        render_counting_lazy_list_composable(StableKeyedCountingLazyList);
 
     let root = composition.root().expect("lazy list root");
     let viewport = Size {
@@ -1346,18 +1362,7 @@ fn lazy_list_updates_scroll_bounds_when_item_count_grows_without_scrolling() {
 
 #[test]
 fn scroll_to_item_invalidates_indicator_scope_and_updates_visible_index_text() {
-    let _app_context = crate::render_state::app_context_test_scope();
-    let mut composition = Composition::new(MemoryApplier::new());
-    let captured_state = Rc::new(RefCell::new(None));
-
-    composition
-        .render(location_key(file!(), line!(), column!()), {
-            let captured_state = Rc::clone(&captured_state);
-            move || {
-                ScrollIndicatorLazyList(Rc::clone(&captured_state));
-            }
-        })
-        .expect("initial render");
+    let (_app_context, mut composition, captured_state) = render_scroll_indicator_lazy_list();
 
     let root = composition.root().expect("root node");
     let viewport = Size {

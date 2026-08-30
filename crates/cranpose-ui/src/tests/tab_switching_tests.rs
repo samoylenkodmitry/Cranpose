@@ -163,6 +163,51 @@ fn make_tab_renderer(
     }
 }
 
+/// Shared harness for the `progress_tab`/`summary_tab` switching tests: owns
+/// the composition, the render closure, and the render/branch-call counters
+/// so each test only supplies the one thing that varies between them (the
+/// initial progress value) instead of re-deriving this scaffold by hand.
+/// Every call builds a fresh composition and fresh `Rc<Cell<usize>>`
+/// counters -- nothing here is shared or cached across tests.
+struct ProgressTabHarness {
+    _app_context: crate::render_state::TestAppContextScope,
+    composition: Composition<MemoryApplier>,
+    active_tab: MutableState<i32>,
+    progress: MutableState<f32>,
+    key: cranpose_core::Key,
+    render: Box<dyn FnMut()>,
+    renders: Rc<Cell<usize>>,
+    branch_calls: Rc<Cell<usize>>,
+}
+
+fn render_progress_tab_host(initial_progress: f32) -> ProgressTabHarness {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let composition = Composition::new(MemoryApplier::new());
+    let runtime = composition.runtime_handle();
+    let active_tab = MutableState::with_runtime(0i32, runtime.clone());
+    let progress = MutableState::with_runtime(initial_progress, runtime.clone());
+    let key = location_key(file!(), line!(), column!());
+    let renders = Rc::new(Cell::new(0));
+    let branch_calls = Rc::new(Cell::new(0));
+    let render: Box<dyn FnMut()> = Box::new(make_tab_renderer(
+        active_tab,
+        progress,
+        Rc::clone(&renders),
+        Rc::clone(&branch_calls),
+    ));
+
+    ProgressTabHarness {
+        _app_context,
+        composition,
+        active_tab,
+        progress,
+        key,
+        render,
+        renders,
+        branch_calls,
+    }
+}
+
 #[composable]
 fn scrollable_test_tab(label: &'static str) {
     let scroll_state = cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| *state);
@@ -307,61 +352,52 @@ fn wrapped_tab_switching_host(
 
 #[test]
 fn tab_switching_restores_conditional_layout_nodes() {
-    let _app_context = crate::render_state::app_context_test_scope();
-    let mut composition = Composition::new(MemoryApplier::new());
-    let runtime = composition.runtime_handle();
-    let active_tab = MutableState::with_runtime(0i32, runtime.clone());
-    let progress = MutableState::with_runtime(0.75f32, runtime.clone());
+    let mut harness = render_progress_tab_host(0.75);
 
-    let key = location_key(file!(), line!(), column!());
-    let renders = Rc::new(Cell::new(0));
-    let branch_calls = Rc::new(Cell::new(0));
-    let mut render = make_tab_renderer(
-        active_tab,
-        progress,
-        Rc::clone(&renders),
-        Rc::clone(&branch_calls),
-    );
-
-    composition
-        .render(key, &mut render)
+    harness
+        .composition
+        .render(harness.key, &mut harness.render)
         .expect("initial render");
     assert!(
-        renders.get() > 0,
+        harness.renders.get() > 0,
         "progress tab should render on initial composition"
     );
     assert!(
-        branch_calls.get() > 0,
+        harness.branch_calls.get() > 0,
         "conditional progress bar should be built on initial render"
     );
 
-    progress.set_value(0.0);
-    composition
+    harness.progress.set_value(0.0);
+    harness
+        .composition
         .process_invalid_scopes()
         .expect("recompose after collapsing progress");
 
-    active_tab.set_value(1);
-    composition
-        .render(key, &mut render)
+    harness.active_tab.set_value(1);
+    harness
+        .composition
+        .render(harness.key, &mut harness.render)
         .expect("render secondary tab");
 
-    progress.set_value(0.65);
-    composition
+    harness.progress.set_value(0.65);
+    harness
+        .composition
         .process_invalid_scopes()
         .expect("update progress while hidden");
 
-    active_tab.set_value(0);
-    renders.set(0);
-    branch_calls.set(0);
-    composition
-        .render(key, &mut render)
+    harness.active_tab.set_value(0);
+    harness.renders.set(0);
+    harness.branch_calls.set(0);
+    harness
+        .composition
+        .render(harness.key, &mut harness.render)
         .expect("render primary tab after switch");
     assert!(
-        renders.get() > 0,
+        harness.renders.get() > 0,
         "progress tab should render after switching back"
     );
     assert!(
-        branch_calls.get() > 0,
+        harness.branch_calls.get() > 0,
         "conditional progress bar should rebuild after switching back"
     );
 }
@@ -497,44 +533,36 @@ fn restored_wrapped_counter_tab_updates_after_mixed_tab_walk() {
 
 #[test]
 fn tab_switching_multiple_toggle_cycles_stays_responsive() {
-    let _app_context = crate::render_state::app_context_test_scope();
-    let mut composition = Composition::new(MemoryApplier::new());
-    let runtime = composition.runtime_handle();
-    let active_tab = MutableState::with_runtime(0i32, runtime.clone());
-    let progress = MutableState::with_runtime(0.4f32, runtime.clone());
+    let mut harness = render_progress_tab_host(0.4);
 
-    let key = location_key(file!(), line!(), column!());
-    let renders = Rc::new(Cell::new(0));
-    let branch_calls = Rc::new(Cell::new(0));
-    let mut render = make_tab_renderer(
-        active_tab,
-        progress,
-        Rc::clone(&renders),
-        Rc::clone(&branch_calls),
-    );
-
-    composition
-        .render(key, &mut render)
+    harness
+        .composition
+        .render(harness.key, &mut harness.render)
         .expect("initial render");
 
     for cycle in 0..6 {
-        active_tab.set_value(1);
-        composition
-            .render(key, &mut render)
+        harness.active_tab.set_value(1);
+        harness
+            .composition
+            .render(harness.key, &mut harness.render)
             .expect("render summary tab");
 
-        progress.set_value(if cycle % 2 == 0 { 0.0 } else { 0.9 });
-        composition
+        harness
+            .progress
+            .set_value(if cycle % 2 == 0 { 0.0 } else { 0.9 });
+        harness
+            .composition
             .process_invalid_scopes()
             .expect("process progress change while hidden");
 
-        active_tab.set_value(0);
-        renders.set(0);
-        composition
-            .render(key, &mut render)
+        harness.active_tab.set_value(0);
+        harness.renders.set(0);
+        harness
+            .composition
+            .render(harness.key, &mut harness.render)
             .expect("render progress tab after switch");
         assert!(
-            renders.get() > 0,
+            harness.renders.get() > 0,
             "cycle {cycle}: progress tab should render after returning"
         );
     }
@@ -542,48 +570,42 @@ fn tab_switching_multiple_toggle_cycles_stays_responsive() {
 
 #[test]
 fn tab_switching_layout_pass_handles_conditional_nodes() {
-    let _app_context = crate::render_state::app_context_test_scope();
-    let mut composition = Composition::new(MemoryApplier::new());
-    let runtime = composition.runtime_handle();
-    let active_tab = MutableState::with_runtime(0i32, runtime.clone());
-    let progress = MutableState::with_runtime(0.8f32, runtime.clone());
+    let mut harness = render_progress_tab_host(0.8);
 
-    let key = location_key(file!(), line!(), column!());
-    let mut render = make_tab_renderer(
-        active_tab,
-        progress,
-        Rc::new(Cell::new(0)),
-        Rc::new(Cell::new(0)),
-    );
-
-    composition
-        .render(key, &mut render)
+    harness
+        .composition
+        .render(harness.key, &mut harness.render)
         .expect("initial render");
 
-    progress.set_value(0.0);
-    composition
+    harness.progress.set_value(0.0);
+    harness
+        .composition
         .process_invalid_scopes()
         .expect("collapse progress to zero");
 
-    active_tab.set_value(1);
-    composition
-        .render(key, &mut render)
+    harness.active_tab.set_value(1);
+    harness
+        .composition
+        .render(harness.key, &mut harness.render)
         .expect("render inactive summary tab");
 
-    progress.set_value(0.55);
-    composition
+    harness.progress.set_value(0.55);
+    harness
+        .composition
         .process_invalid_scopes()
         .expect("update progress while hidden");
 
-    active_tab.set_value(0);
-    composition
-        .render(key, &mut render)
+    harness.active_tab.set_value(0);
+    harness
+        .composition
+        .render(harness.key, &mut harness.render)
         .expect("render progress tab again");
 
-    let root = composition
+    let root = harness
+        .composition
         .root()
         .expect("composition should have a root node");
-    let mut applier = composition.applier_mut();
+    let mut applier = harness.composition.applier_mut();
     let viewport = crate::modifier::Size {
         width: 800.0,
         height: 600.0,
@@ -963,40 +985,47 @@ fn recursive_layout_depth_decrease_then_increase_restores_branches() {
 
 #[test]
 fn tab_switching_node_vec_does_not_grow_unboundedly() {
-    let _app_context = crate::render_state::app_context_test_scope();
-    let mut composition = Composition::new(MemoryApplier::new());
-    let runtime = composition.runtime_handle();
-    let active_tab = MutableState::with_runtime(0i32, runtime.clone());
-    let progress = MutableState::with_runtime(0.5f32, runtime);
+    let mut harness = render_progress_tab_host(0.5);
 
-    let key = location_key(file!(), line!(), column!());
-    let mut render = make_tab_renderer(
-        active_tab,
-        progress,
-        Rc::new(Cell::new(0)),
-        Rc::new(Cell::new(0)),
-    );
+    harness
+        .composition
+        .render(harness.key, &mut harness.render)
+        .expect("initial");
+    harness.active_tab.set_value(1);
+    while harness
+        .composition
+        .process_invalid_scopes()
+        .expect("switch")
+    {}
+    harness.active_tab.set_value(0);
+    while harness
+        .composition
+        .process_invalid_scopes()
+        .expect("switch back")
+    {}
 
-    composition.render(key, &mut render).expect("initial");
-    active_tab.set_value(1);
-    while composition.process_invalid_scopes().expect("switch") {}
-    active_tab.set_value(0);
-    while composition.process_invalid_scopes().expect("switch back") {}
-
-    let baseline_active = composition.applier_mut().len();
-    let baseline_capacity = composition.applier_mut().capacity();
-    let baseline_slots = composition.debug_dump_slot_entries().len();
+    let baseline_active = harness.composition.applier_mut().len();
+    let baseline_capacity = harness.composition.applier_mut().capacity();
+    let baseline_slots = harness.composition.debug_dump_slot_entries().len();
 
     for _ in 0..50 {
-        active_tab.set_value(1);
-        while composition.process_invalid_scopes().expect("to tab 1") {}
-        active_tab.set_value(0);
-        while composition.process_invalid_scopes().expect("to tab 0") {}
+        harness.active_tab.set_value(1);
+        while harness
+            .composition
+            .process_invalid_scopes()
+            .expect("to tab 1")
+        {}
+        harness.active_tab.set_value(0);
+        while harness
+            .composition
+            .process_invalid_scopes()
+            .expect("to tab 0")
+        {}
     }
 
-    let final_active = composition.applier_mut().len();
-    let final_capacity = composition.applier_mut().capacity();
-    let final_slots = composition.debug_dump_slot_entries().len();
+    let final_active = harness.composition.applier_mut().len();
+    let final_capacity = harness.composition.applier_mut().capacity();
+    let final_slots = harness.composition.debug_dump_slot_entries().len();
 
     assert_eq!(
         baseline_active, final_active,
