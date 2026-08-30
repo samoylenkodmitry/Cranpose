@@ -68,19 +68,35 @@ clippy-wasm:
 clippy-ios:
     cargo clippy -p desktop-app --bin cranpose-ios --target aarch64-apple-ios-sim --no-default-features --features ios -- -D warnings
 
-# Lint the macOS desktop camera backend.
+# Lint the desktop-only backends that ship off by default: the macOS camera
+# capture path, the cpal audio output device, the in-process media backend
+# and the StoreKit purchase bridge.
 #
-# `just clippy` builds default features, and `camera-desktop` is off by
-# default, so the macOS half of `apple_camera.rs` would reach main unlinted
-# without this. That is the same shape of hole `clippy-android` was added to
-# close. Runs on any host: off a Mac the backend compiles away and this only
-# proves the feature still resolves.
+# `just clippy` builds default features, and none of these are on by
+# default, so their code would reach main unlinted without this. That is the
+# same shape of hole `clippy-android` was added to close. Runs on any host:
+# off a Mac the Apple-only backends compile away and this only proves the
+# features still resolve.
 #
 # `robot` rides along because the desktop shell's screenshot helpers are only
 # called from robot code: without it those three functions are dead and the
-# recipe fails on them instead of on the camera.
-clippy-camera-desktop:
-    cargo clippy -p cranpose --no-default-features --features desktop,renderer-wgpu,camera-desktop,robot --all-targets -- -D warnings
+# recipe fails on them instead of on the backends above. `playbilling` rides
+# along too: it is Android-only and compiles away on every other target, so
+# there is no per-target recipe for it to join instead.
+clippy-optional-backends:
+    cargo clippy -p cranpose --no-default-features --features desktop,renderer-wgpu,camera-desktop,robot,audio-desktop,media,storekit,playbilling --all-targets -- -D warnings
+
+# Lint the SVG image painter. `svg` is off by default and no crate in the
+# workspace ever turns it on, so `just clippy` never builds `image_svg.rs`
+# and `svg_painter_integration.rs` never compiles either.
+clippy-svg:
+    cargo clippy -p cranpose-ui --features svg --all-targets -- -D warnings
+
+# Lint the embedded hyphenation dictionary. `text-hyphenation-embedded` is
+# off by default and no crate in the workspace ever turns it on, so
+# `just clippy` never builds `text_hyphenation.rs`'s dictionary-backed path.
+clippy-hyphenation:
+    cargo clippy -p cranpose-render-common --features text-hyphenation-embedded --all-targets -- -D warnings
 
 # Lint the robot runners, which `just clippy` cannot reach.
 #
@@ -164,16 +180,31 @@ duplication-gate base="origin/main":
 test:
     cargo test --profile ci --workspace --no-fail-fast
 
-# Feature permutations of the core crate that the default build does not cover.
+# Feature permutations that the default build does not cover.
 test-features:
     cargo test --profile ci -p cranpose-core --features std-hash
     cargo test --profile ci -p cranpose-core --features internal
+    cargo test --profile ci -p cranpose-ui --features svg
+    cargo test --profile ci -p cranpose-render-common --features text-hyphenation-embedded
+    cargo test --profile ci -p cranpose --no-default-features --features desktop,renderer-wgpu,camera-desktop,robot,audio-desktop,media,storekit,playbilling
 
 # The docs-only trigger filter that lets the heavy jobs skip a prose diff.
 # A wrong answer there disables the robot suite silently, so the predicate is
 # pinned by the same gate that runs everywhere else.
 test-ci-filters:
     scripts/ci/docs_only_change_test.sh
+
+# run_robot_test.sh's example discovery: which robot_*.rs files it asks
+# cargo to build. A wrong answer there either drops a robot test silently or
+# demands a binary cargo never builds and fails the whole suite -- see
+# scripts/ci/robot_test_discovery_test.sh for the outage that predicate once
+# caused.
+test-robot-discovery:
+    scripts/ci/robot_test_discovery_test.sh
+
+# The shell helpers agents run by hand, pinned so they cannot rot.
+test-shell-helpers:
+    scripts/wait_until_quiet_test.sh
 
 # The deterministic slot-table model check, at the frame count CI uses.
 test-property:
@@ -394,7 +425,7 @@ perf-heap *args:
 # Excludes the jobs that need a GPU, an Android SDK or an iOS toolchain.
 
 # What a pull request is gated on. Run this before pushing.
-ci: fmt-check typos versions test clippy clippy-robot doc budgets test-quality-gates complexity-gate duplication-gate
+ci: fmt-check typos versions test clippy clippy-robot doc budgets test-quality-gates complexity-gate duplication-gate test-robot-discovery test-shell-helpers
 
 # Needs a Linux box with the X11 stack, an Android SDK and (on macOS) Xcode.
 

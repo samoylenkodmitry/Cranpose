@@ -151,18 +151,18 @@ impl SvgDocument {
 }
 
 fn draw_rect(pixmap: &mut tiny_skia::PixmapMut<'_>, rect: &SvgRect, transform: Transform) {
-    if let Some(fill) = rect.fill {
-        if let Some(skia_rect) = SkiaRect::from_xywh(rect.x, rect.y, rect.width, rect.height) {
-            let mut paint = Paint::default();
-            fill.apply_to(&mut paint);
-            pixmap.fill_rect(skia_rect, &paint, transform, None);
-        }
+    if let Some(fill) = rect.fill
+        && let Some(skia_rect) = SkiaRect::from_xywh(rect.x, rect.y, rect.width, rect.height)
+    {
+        let mut paint = Paint::default();
+        fill.apply_to(&mut paint);
+        pixmap.fill_rect(skia_rect, &paint, transform, None);
     }
 
-    if let Some(stroke) = &rect.stroke {
-        if let Some(path) = rect_path(rect) {
-            stroke_path(pixmap, &path, stroke, transform);
-        }
+    if let Some(stroke) = &rect.stroke
+        && let Some(path) = rect_path(rect)
+    {
+        stroke_path(pixmap, &path, stroke, transform);
     }
 }
 
@@ -315,10 +315,11 @@ fn parse_attributes(source: &str) -> Result<Vec<(String, String)>, SvgPainterErr
 }
 
 fn parse_intrinsic_size(tag: &SvgTag) -> Result<Size, SvgPainterError> {
-    if let (Some(width), Some(height)) = (number_attr(tag, "width")?, number_attr(tag, "height")?) {
-        if width > 0.0 && height > 0.0 {
-            return Ok(Size::new(width, height));
-        }
+    if let (Some(width), Some(height)) = (number_attr(tag, "width")?, number_attr(tag, "height")?)
+        && width > 0.0
+        && height > 0.0
+    {
+        return Ok(Size::new(width, height));
     }
 
     let view_box = attr(tag, "viewbox")
