@@ -1,6 +1,8 @@
 use std::rc::Rc;
 
-use cranpose_ui_graphics::{BlurredEdgeTreatment, Dp, GraphicsLayer, LayerShape, RenderEffect};
+use cranpose_ui_graphics::{
+    BlurredEdgeTreatment, Density, Dp, GraphicsLayer, LayerShape, Px, RenderEffect,
+};
 
 use super::{Modifier, inspector_metadata};
 use crate::modifier_nodes::LazyGraphicsLayerElement;
@@ -38,13 +40,13 @@ impl Modifier {
         }
 
         let modifier = Self::with_element(LazyGraphicsLayerElement::new(Rc::new(move || {
-            let density = crate::render_state::current_density();
-            let radius_x_px = radius_x.to_px(density).max(0.0);
-            let radius_y_px = radius_y.to_px(density).max(0.0);
-            let render_effect = if radius_x_px > 0.0 && radius_y_px > 0.0 {
+            let density = Density::from_scale(crate::render_state::current_density());
+            let radius_x_px = radius_x.to_px(density).max(Px::ZERO);
+            let radius_y_px = radius_y.to_px(density).max(Px::ZERO);
+            let render_effect = if radius_x_px.0 > 0.0 && radius_y_px.0 > 0.0 {
                 Some(RenderEffect::blur_xy(
-                    radius_x_px,
-                    radius_y_px,
+                    radius_x_px.0,
+                    radius_y_px.0,
                     edge_treatment.tile_mode(),
                 ))
             } else {

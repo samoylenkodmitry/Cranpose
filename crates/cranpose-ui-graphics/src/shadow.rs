@@ -1,6 +1,6 @@
 //! Shadow configuration models used by drop/inner shadow modifiers.
 
-use crate::{BlendMode, Brush, Color, Dp, Point};
+use crate::{BlendMode, Brush, Color, Density, Dp, Point};
 
 /// Density-independent offset for shadows.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -19,8 +19,8 @@ impl DpOffset {
         y: Dp(0.0),
     };
 
-    pub fn to_px(self, density: f32) -> Point {
-        Point::new(self.x.to_px(density), self.y.to_px(density))
+    pub fn to_px(self, density: Density) -> Point {
+        Point::new(self.x.to_px(density).0, self.y.to_px(density).0)
     }
 }
 
@@ -66,10 +66,10 @@ impl Default for Shadow {
 }
 
 impl Shadow {
-    pub fn to_scope(&self, density: f32) -> ShadowScope {
+    pub fn to_scope(&self, density: Density) -> ShadowScope {
         ShadowScope {
-            radius: self.radius.to_px(density),
-            spread: self.spread.to_px(density),
+            radius: self.radius.to_px(density).0,
+            spread: self.spread.to_px(density).0,
             offset: self.offset.to_px(density),
             color: self.color,
             brush: self.brush.clone(),
@@ -117,7 +117,7 @@ mod tests {
     #[test]
     fn dp_offset_converts_to_px() {
         let offset = DpOffset::new(Dp(4.0), Dp(-2.5));
-        let px = offset.to_px(2.0);
+        let px = offset.to_px(Density::from_scale(2.0));
         assert_eq!(px, Point::new(8.0, -5.0));
     }
 
@@ -145,7 +145,7 @@ mod tests {
             blend_mode: BlendMode::Overlay,
             cutout: false,
         };
-        let scope = shadow.to_scope(2.0);
+        let scope = shadow.to_scope(Density::from_scale(2.0));
         assert!((scope.radius - 10.0).abs() < 1e-6);
         assert!((scope.spread - 4.0).abs() < 1e-6);
         assert_eq!(scope.offset, Point::new(-2.0, 6.0));
