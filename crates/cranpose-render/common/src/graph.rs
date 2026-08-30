@@ -308,6 +308,38 @@ pub struct LayerNode {
     pub children: Vec<RenderNode>,
 }
 
+impl Default for LayerNode {
+    fn default() -> Self {
+        Self {
+            node_id: None,
+            local_bounds: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 0.0,
+                height: 0.0,
+            },
+            transform_to_parent: ProjectiveTransform::identity(),
+            content_offset: Point::default(),
+            motion_context_animated: false,
+            translated_content_context: false,
+            translated_content_offset: Point::default(),
+            scene_children_origin: Point::default(),
+            scene_children_layer_translation: Point::default(),
+            graphics_layer: GraphicsLayer::default(),
+            clip_to_bounds: false,
+            shadow_clip: None,
+            hit_test: None,
+            has_hit_targets: false,
+            has_origin_sinks: false,
+            isolation: IsolationReasons::default(),
+            cache_policy: CachePolicy::None,
+            cache_hashes: LayerRasterCacheHashes::default(),
+            cache_hashes_valid: false,
+            children: Vec::new(),
+        }
+    }
+}
+
 impl LayerNode {
     pub fn clip_rect(&self) -> Option<Rect> {
         (self.clip_to_bounds || self.graphics_layer.clip).then_some(self.local_bounds)
@@ -775,30 +807,12 @@ mod tests {
     use cranpose_ui_graphics::{Brush, Color, DrawPrimitive};
 
     use super::*;
-    use crate::raster_cache::LayerRasterCacheHashes;
 
     fn test_layer(local_bounds: Rect, children: Vec<RenderNode>) -> LayerNode {
         LayerNode {
-            node_id: None,
             local_bounds,
-            transform_to_parent: ProjectiveTransform::identity(),
-            content_offset: Point::default(),
-            motion_context_animated: false,
-            translated_content_context: false,
-            translated_content_offset: Point::default(),
-            scene_children_origin: Point::default(),
-            scene_children_layer_translation: Point::default(),
-            graphics_layer: GraphicsLayer::default(),
-            clip_to_bounds: false,
-            shadow_clip: None,
-            hit_test: None,
-            has_hit_targets: false,
-            has_origin_sinks: false,
-            isolation: IsolationReasons::default(),
-            cache_policy: CachePolicy::None,
-            cache_hashes: LayerRasterCacheHashes::default(),
-            cache_hashes_valid: false,
             children,
+            ..Default::default()
         }
     }
 

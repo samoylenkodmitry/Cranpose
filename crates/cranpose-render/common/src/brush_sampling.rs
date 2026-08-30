@@ -84,6 +84,24 @@ fn dither_gradient(rgba: [f32; 4], x: f32, y: f32) -> [f32; 4] {
     ]
 }
 
+fn sample_tiled_gradient_rgba(
+    t: f32,
+    tile_mode: TileMode,
+    colors: &[Color],
+    stops: Option<&[f32]>,
+    x: f32,
+    y: f32,
+) -> [f32; 4] {
+    match normalize_gradient_t(t, tile_mode) {
+        Some(sample_t) => dither_gradient(
+            color_to_rgba(interpolate_colors(colors, stops, sample_t)),
+            x,
+            y,
+        ),
+        None => color_to_rgba(TRANSPARENT),
+    }
+}
+
 #[doc(hidden)]
 pub fn sample_brush_rgba(brush: &Brush, rect: Rect, x: f32, y: f32) -> [f32; 4] {
     match brush {
@@ -103,14 +121,7 @@ pub fn sample_brush_rgba(brush: &Brush, rect: Rect, x: f32, y: f32) -> [f32; 4] 
             let dy = ey - sy;
             let denom = (dx * dx + dy * dy).max(f32::EPSILON);
             let t = ((x - sx) * dx + (y - sy) * dy) / denom;
-            match normalize_gradient_t(t, *tile_mode) {
-                Some(sample_t) => dither_gradient(
-                    color_to_rgba(interpolate_colors(colors, stops.as_deref(), sample_t)),
-                    x,
-                    y,
-                ),
-                None => color_to_rgba(TRANSPARENT),
-            }
+            sample_tiled_gradient_rgba(t, *tile_mode, colors, stops.as_deref(), x, y)
         }
         Brush::RadialGradient {
             colors,
@@ -126,14 +137,7 @@ pub fn sample_brush_rgba(brush: &Brush, rect: Rect, x: f32, y: f32) -> [f32; 4] 
             let dy = y - cy;
             let distance = (dx * dx + dy * dy).sqrt();
             let t = distance / radius;
-            match normalize_gradient_t(t, *tile_mode) {
-                Some(sample_t) => dither_gradient(
-                    color_to_rgba(interpolate_colors(colors, stops.as_deref(), sample_t)),
-                    x,
-                    y,
-                ),
-                None => color_to_rgba(TRANSPARENT),
-            }
+            sample_tiled_gradient_rgba(t, *tile_mode, colors, stops.as_deref(), x, y)
         }
         Brush::SweepGradient {
             colors,

@@ -108,6 +108,40 @@ fn log_render_phase_dirty_diagnostics(diagnostics: RenderPhaseDirtyDiagnostics<'
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn log_dirty_diagnostics_for_path(
+    render_dirty: bool,
+    pointer_dirty: bool,
+    scene_dirty: bool,
+    draw_repass_pending: bool,
+    draw_dirty_nodes: &[NodeId],
+    layout_dirty_nodes: &[NodeId],
+    structural_parents: &[NodeId],
+    partial_dirty_nodes: &[NodeId],
+    render_only_dirty: bool,
+    recomposed_this_frame: bool,
+    path: &str,
+) {
+    log_render_phase_dirty_diagnostics(RenderPhaseDirtyDiagnostics {
+        render_dirty,
+        pointer_dirty,
+        scene_dirty,
+        draw_repass_pending,
+        draw_dirty_nodes: draw_dirty_nodes.len(),
+        layout_dirty_nodes: layout_dirty_nodes.len(),
+        structural_dirty_nodes: structural_parents.len(),
+        partial_dirty_nodes: partial_dirty_nodes.len(),
+        dirty_node_ids: render_phase_dirty_diagnostics_enabled().then(|| {
+            format!(
+                "draw={draw_dirty_nodes:?} layout={layout_dirty_nodes:?} structural={structural_parents:?} partial={partial_dirty_nodes:?}",
+            )
+        }),
+        render_only_dirty,
+        recomposed_this_frame,
+        path,
+    });
+}
+
 impl<R> AppShell<R>
 where
     R: Renderer,
@@ -503,10 +537,6 @@ where
         partial_dirty_nodes.extend(structural_parents.iter().copied());
         partial_dirty_nodes.sort_unstable();
         partial_dirty_nodes.dedup();
-        let draw_dirty_node_count = draw_dirty_nodes.len();
-        let layout_dirty_node_count = layout_dirty_nodes.len();
-        let structural_dirty_node_count = structural_parents.len();
-        let partial_dirty_node_count = partial_dirty_nodes.len();
         let _ = cranpose_ui::has_focused_field();
 
         let render_only_dirty = render_dirty
@@ -529,32 +559,23 @@ where
             || structural_dirty;
 
         if !needs_scene_rebuild {
-            log_render_phase_dirty_diagnostics(RenderPhaseDirtyDiagnostics {
+            log_dirty_diagnostics_for_path(
                 render_dirty,
                 pointer_dirty,
                 scene_dirty,
                 draw_repass_pending,
-                draw_dirty_nodes: draw_dirty_node_count,
-                layout_dirty_nodes: layout_dirty_node_count,
-                structural_dirty_nodes: structural_dirty_node_count,
-                partial_dirty_nodes: partial_dirty_node_count,
-                dirty_node_ids: render_phase_dirty_diagnostics_enabled().then(|| {
-                    format!(
-                        "draw={:?} layout={:?} structural={:?} partial={:?}",
-                        draw_dirty_nodes,
-                        layout_dirty_nodes,
-                        structural_parents,
-                        partial_dirty_nodes
-                    )
-                }),
+                &draw_dirty_nodes,
+                &layout_dirty_nodes,
+                &structural_parents,
+                &partial_dirty_nodes,
                 render_only_dirty,
                 recomposed_this_frame,
-                path: if render_only_dirty {
+                if render_only_dirty {
                     "present-retained"
                 } else {
                     "skip"
                 },
-            });
+            );
             self.scoped_layout_scene_nodes = layout_dirty_nodes;
             if render_only_dirty && self.dev_options.fps_counter {
                 let viewport_size = Size {
@@ -584,34 +605,25 @@ where
             let use_partial_update =
                 !partial_dirty_nodes.is_empty() && !render_only_dirty && !full_scene_dirty;
             let use_visual_update = use_partial_update && draw_only_partial_dirty;
-            log_render_phase_dirty_diagnostics(RenderPhaseDirtyDiagnostics {
+            log_dirty_diagnostics_for_path(
                 render_dirty,
                 pointer_dirty,
                 scene_dirty,
                 draw_repass_pending,
-                draw_dirty_nodes: draw_dirty_node_count,
-                layout_dirty_nodes: layout_dirty_node_count,
-                structural_dirty_nodes: structural_dirty_node_count,
-                partial_dirty_nodes: partial_dirty_node_count,
-                dirty_node_ids: render_phase_dirty_diagnostics_enabled().then(|| {
-                    format!(
-                        "draw={:?} layout={:?} structural={:?} partial={:?}",
-                        draw_dirty_nodes,
-                        layout_dirty_nodes,
-                        structural_parents,
-                        partial_dirty_nodes
-                    )
-                }),
+                &draw_dirty_nodes,
+                &layout_dirty_nodes,
+                &structural_parents,
+                &partial_dirty_nodes,
                 render_only_dirty,
                 recomposed_this_frame,
-                path: if use_visual_update {
+                if use_visual_update {
                     "visual-update"
                 } else if use_partial_update {
                     "update"
                 } else {
                     "rebuild"
                 },
-            });
+            );
             let rebuild_result = if use_visual_update {
                 self.renderer.update_visual_scene_from_applier(
                     &mut applier,

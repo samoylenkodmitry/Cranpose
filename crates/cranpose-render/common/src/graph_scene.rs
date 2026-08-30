@@ -110,6 +110,38 @@ struct HitRegionInit {
     diagnostics: Rc<RenderDiagnostics>,
 }
 
+impl Default for HitRegionInit {
+    fn default() -> Self {
+        Self {
+            node_id: 0,
+            capture_path: Vec::new(),
+            geometry: HitGeometry {
+                rect: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 0.0,
+                    height: 0.0,
+                },
+                quad: [[0.0, 0.0]; 4],
+                local_bounds: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 0.0,
+                    height: 0.0,
+                },
+                world_to_local: ProjectiveTransform::identity(),
+                hit_clip_bounds: None,
+                hit_clips: Vec::new(),
+            },
+            shape: None,
+            click_actions: Vec::new(),
+            pointer_inputs: Vec::new(),
+            z_index: 0,
+            diagnostics: Rc::new(RenderDiagnostics::new()),
+        }
+    }
+}
+
 impl HitRegion {
     fn with_diagnostics(init: HitRegionInit) -> Self {
         let HitRegionInit {
@@ -615,14 +647,11 @@ mod tests {
                 width: 50.0,
                 height: 50.0,
             }),
-            shape: None,
-            click_actions: Vec::new(),
             pointer_inputs: vec![
                 make_handler(count_first.clone(), true),
                 make_handler(count_second.clone(), false),
             ],
-            z_index: 0,
-            diagnostics: test_diagnostics(),
+            ..Default::default()
         });
 
         let event = PointerEvent::new(
@@ -650,14 +679,11 @@ mod tests {
                 width: 50.0,
                 height: 50.0,
             }),
-            shape: None,
-            click_actions: Vec::new(),
             pointer_inputs: vec![
                 make_handler(count_first.clone(), true),
                 make_handler(count_second.clone(), false),
             ],
-            z_index: 0,
-            diagnostics: test_diagnostics(),
+            ..Default::default()
         });
 
         for kind in [PointerEventKind::Up, PointerEventKind::Cancel] {
@@ -684,11 +710,9 @@ mod tests {
                 width: 20.0,
                 height: 20.0,
             }),
-            shape: None,
-            click_actions: Vec::new(),
             pointer_inputs: vec![make_handler(child_count.clone(), true)],
             z_index: 1,
-            diagnostics: test_diagnostics(),
+            ..Default::default()
         });
         let parent_hit = HitRegion::with_diagnostics(HitRegionInit {
             node_id: 1,
@@ -699,11 +723,8 @@ mod tests {
                 width: 50.0,
                 height: 50.0,
             }),
-            shape: None,
-            click_actions: Vec::new(),
             pointer_inputs: vec![make_handler(parent_count.clone(), false)],
-            z_index: 0,
-            diagnostics: test_diagnostics(),
+            ..Default::default()
         });
 
         let event = PointerEvent::new(
@@ -735,11 +756,8 @@ mod tests {
                 width: 50.0,
                 height: 50.0,
             }),
-            shape: None,
             click_actions: vec![click_action],
-            pointer_inputs: Vec::new(),
-            z_index: 0,
-            diagnostics: test_diagnostics(),
+            ..Default::default()
         });
 
         hit.dispatch(PointerEvent::new(
@@ -773,11 +791,8 @@ mod tests {
                 width: 50.0,
                 height: 50.0,
             }),
-            shape: None,
             click_actions: vec![click_action],
-            pointer_inputs: Vec::new(),
-            z_index: 0,
-            diagnostics: test_diagnostics(),
+            ..Default::default()
         });
 
         hit.dispatch(PointerEvent::new(
@@ -806,11 +821,9 @@ mod tests {
                 width: 50.0,
                 height: 50.0,
             }),
-            shape: None,
             click_actions: vec![click_action],
             pointer_inputs: vec![Rc::new(|event: PointerEvent| event.consume())],
-            z_index: 0,
-            diagnostics: test_diagnostics(),
+            ..Default::default()
         });
 
         hit.dispatch(PointerEvent::new(
@@ -896,11 +909,8 @@ mod tests {
                 hit_clip_bounds: None,
                 hit_clips: Vec::new(),
             },
-            shape: None,
             click_actions: vec![click_action],
-            pointer_inputs: Vec::new(),
-            z_index: 0,
-            diagnostics: test_diagnostics(),
+            ..Default::default()
         });
 
         hit.dispatch(PointerEvent::new(
@@ -926,13 +936,11 @@ mod tests {
                 width: 50.0,
                 height: 50.0,
             }),
-            shape: None,
-            click_actions: Vec::new(),
             pointer_inputs: vec![Rc::new(move |_event: PointerEvent| {
                 handler_calls_for_handler.set(handler_calls_for_handler.get() + 1);
             })],
-            z_index: 0,
             diagnostics: Rc::clone(&diagnostics),
+            ..Default::default()
         });
         let misses_before = diagnostics.live_modifier_slice_lookup_miss_count();
         let mut applier = MemoryApplier::new();

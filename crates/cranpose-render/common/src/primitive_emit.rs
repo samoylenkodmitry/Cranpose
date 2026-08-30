@@ -927,6 +927,19 @@ mod tests {
         }))
     }
 
+    fn sample_text_primitive() -> DrawPrimitive {
+        text_primitive(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 30.0,
+                height: 14.0,
+            },
+            "AB",
+            DrawTextStyle::new(10.0),
+        )
+    }
+
     fn lower_text(primitive: DrawPrimitive, layer: &GraphicsLayer) -> Vec<TextDrawParams> {
         let mut sink = CollectingTextSink::default();
         emit_draw_primitive(
@@ -979,19 +992,7 @@ mod tests {
             transform_origin: cranpose_ui_graphics::TransformOrigin::new(0.0, 0.0),
             ..Default::default()
         };
-        let params = lower_text(
-            text_primitive(
-                Rect {
-                    x: 0.0,
-                    y: 0.0,
-                    width: 30.0,
-                    height: 14.0,
-                },
-                "AB",
-                DrawTextStyle::new(10.0),
-            ),
-            &layer,
-        );
+        let params = lower_text(sample_text_primitive(), &layer);
         assert_eq!(params[0].scale, 2.0, "glyphs rasterize at the layer scale");
         assert!(approx(params[0].rect.width, 60.0), "{:?}", params[0].rect);
     }
@@ -1002,19 +1003,7 @@ mod tests {
             alpha: 0.5,
             ..Default::default()
         };
-        let params = lower_text(
-            text_primitive(
-                Rect {
-                    x: 0.0,
-                    y: 0.0,
-                    width: 30.0,
-                    height: 14.0,
-                },
-                "AB",
-                DrawTextStyle::new(10.0),
-            ),
-            &layer,
-        );
+        let params = lower_text(sample_text_primitive(), &layer);
         assert!(approx(params[0].color.3, 0.5));
     }
 
