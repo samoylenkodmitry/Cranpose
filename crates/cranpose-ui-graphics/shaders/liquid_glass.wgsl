@@ -991,11 +991,14 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
         -reflection_path_length / max(inradius, 1.0) * internal_reflection_extinction,
     );
     let reflection_rgb = reflection_path.rgb * internal_reflection_transmittance;
+    // The opposite-wall return belongs to an interactive lens. Applying it
+    // to a regular surface duplicates the rim as a darker band inside it.
     let long_edge_return = 0.40 + 0.60 * pow(abs(outward_normal.y), 1.5);
     let meniscus_reflection = clamp(
         face_meniscus
             * long_edge_return
-            * mix(0.14, 0.24, rim_style),
+            * rim_style
+            * 0.24,
         0.0,
         0.24,
     ) * select(1.0, 0.0, loupe_mode > 0.5);
