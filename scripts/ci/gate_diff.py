@@ -31,7 +31,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 
-_HUNK_HEADER = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
+_HUNK_HEADER = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 
 
 def ensure_ref(base: str) -> None:
@@ -125,17 +125,24 @@ def merge_base(base: str) -> str:
     return second_attempt.stdout.strip()
 
 
-def parse_unified_diff_zero_context(diff_text: str) -> dict[str, list[tuple[int, int]]]:
-    """Parse `git diff --unified=0 --no-prefix` output into changed ranges.
+def parse_hunk_spans(
+    diff_text: str,
+) -> dict[str, list[tuple[tuple[int, int] | None, tuple[int, int] | None]]]:
+    """Parse `git diff --unified=0 --no-prefix` output into per-hunk spans.
 
-    Returns one inclusive `(start_line, end_line)` range per hunk, in the
-    *new* (post-change) file's line numbering, keyed by that file's path.
-    A hunk that only deletes lines (`+l,0`) contributes no range: there is no
-    added or modified line on the new side to hold accountable. A deleted
-    file (`+++ /dev/null`) is skipped for the same reason -- nothing in it can
-    be checked against, because nothing in it still exists.
+    Each hunk becomes one `(old_span, new_span)` pair, keyed by the file's
+    *new*-side path. `old_span` is the hunk's inclusive `(start, end)` range
+    in the pre-change file's line numbering, `new_span` the same in the
+    post-change file's; either is `None` when that side contributed zero
+    lines (`old_span` for a pure addition, `new_span` for a pure deletion).
+
+    `semantic_ranges` needs both sides: deciding whether a hunk changed
+    anything a reader would call code means reading what was actually there
+    before, not just guessing from the new side alone. A deleted file
+    (`+++ /dev/null`) is skipped -- nothing in it can be checked against,
+    because nothing in it still exists.
     """
-    ranges: dict[str, list[tuple[int, int]]] = {}
+    hunks: dict[str, list[tuple[tuple[int, int] | None, tuple[int, int] | None]]] = {}
     current_file: str | None = None
     for line in diff_text.splitlines():
         if line.startswith("+++ "):
@@ -149,12 +156,14 @@ def parse_unified_diff_zero_context(diff_text: str) -> dict[str, list[tuple[int,
         match = _HUNK_HEADER.match(line)
         if not match:
             continue
-        start = int(match.group(1))
-        count = int(match.group(2)) if match.group(2) is not None else 1
-        if count == 0:
-            continue
-        ranges.setdefault(current_file, []).append((start, start + count - 1))
-    return ranges
+        old_start = int(match.group(1))
+        old_count = int(match.group(2)) if match.group(2) is not None else 1
+        new_start = int(match.group(3))
+        new_count = int(match.group(4)) if match.group(4) is not None else 1
+        old_span = None if old_count == 0 else (old_start, old_start + old_count - 1)
+        new_span = None if new_count == 0 else (new_start, new_start + new_count - 1)
+        hunks.setdefault(current_file, []).append((old_span, new_span))
+    return hunks
 
 
 _RAW_STRING_START = re.compile(r"(?:b?r)(?P<hashes>#{0,255})\"")
@@ -162,12 +171,9 @@ _CHAR_LITERAL = re.compile(r"'(?:\\(?:x[0-9a-fA-F]{2}|u\{[0-9a-fA-F]{1,6}\}|.)|[
 _IDENT_CHAR = re.compile(r"[A-Za-z0-9_]")
 
 
-def line_has_code(text: str) -> list[bool]:
-    r"""Per physical line of `text` (0-indexed), whether it holds a token
-    that is not whitespace and not comment text -- i.e. whether a diff hunk
-    confined to lines where this is `False` could not possibly have changed
-    control flow or introduced/removed a clone, because nothing but comment
-    or blank bytes moved.
+def code_tokens_by_line(text: str) -> list[list[str]]:
+    r"""Per physical line of `text` (0-indexed), the code tokens that start
+    on it -- comments and whitespace contribute nothing.
 
     A single forward scan over the *whole* file, not just a hunk in
     isolation: a `git diff --unified=0` hunk carries no surrounding context,
@@ -177,20 +183,37 @@ def line_has_code(text: str) -> list[bool]:
     `/* /* */ */`) and string state correctly regardless of where a hunk's
     boundaries happen to fall.
 
-    Deliberately conservative in one direction only: every ambiguous case
-    below resolves toward "this is code", never toward "this is a comment".
-    Classifying a real code byte as comment would silently shrink the
-    gate's scope; classifying a comment byte as code only costs the
-    hunk-level precision the gate already accepts (see `drop_comment_only_ranges`).
-    A bare quote is the sharp edge: `'a` is a lifetime, not the start of an
-    unterminated char literal, so it is only treated as opening a char
-    literal when a closing quote is visible within a few characters,
-    matching a real `'c'` or a `'\n'` / `'\x41'` / `'\u{1F600}'` escape --
-    otherwise the quote is left as an ordinary code byte and scanning
-    continues normally, so a lifetime can never swallow the rest of the file.
+    Deliberately coarse-grained, on purpose: a maximal run of identifier
+    characters (`[A-Za-z0-9_]`) is one token, because a real lexer boundary
+    is the one thing whitespace or its absence actually decides (`let x` is
+    two tokens, `letx` is one, and that distinction must survive). Every
+    other significant byte -- each individual operator or punctuation
+    character, and each string / raw string / char literal as a single
+    whole -- is its own token. This never conflates two different inputs:
+    splitting a multi-character operator like `->` into two single-
+    character tokens only ever adds detail that could distinguish two
+    snippets, it never merges anything that was distinct before. Two
+    renderings of the same code -- different indentation, a comment removed,
+    a multi-line block collapsed onto one line -- always produce equal token
+    lists; nothing that changes what the code actually does can produce an
+    equal one, because it must add, remove, or replace at least one token.
+
+    Deliberately conservative in one direction only, same as the scan this
+    replaced: every ambiguous case below resolves toward "this is code",
+    never toward "this is a comment". Classifying a real code byte as
+    comment would silently shrink the gate's scope; classifying a comment
+    byte as code only costs `semantic_ranges` the precision of noticing two
+    sides are equal when they truly are not (it still never lets something
+    through the gate). A bare quote is the sharp edge: `'a` is a lifetime,
+    not the start of an unterminated char literal, so it is only treated as
+    opening a char literal when a closing quote is visible within a few
+    characters, matching a real `'c'` or a `'\n'` / `'\x41'` / `'\u{1F600}'`
+    escape -- otherwise the quote is emitted as its own one-character token
+    and scanning continues normally, so a lifetime can never swallow the
+    rest of the file.
     """
     lines = text.split("\n")
-    has_code = [False] * len(lines)
+    tokens: list[list[str]] = [[] for _ in lines]
     line_idx = 0
     i = 0
     n = len(text)
@@ -233,87 +256,161 @@ def line_has_code(text: str) -> list[bool]:
         if not _IDENT_CHAR.match(prev_char):
             raw_match = _RAW_STRING_START.match(text, i)
             if raw_match:
-                has_code[line_idx] = True
                 end_marker = '"' + raw_match.group("hashes")
                 end = text.find(end_marker, raw_match.end())
                 if end == -1:
-                    for idx in range(line_idx, len(lines)):
-                        has_code[idx] = True
+                    tokens[line_idx].append(text[i:])
                     i = n
                     continue
                 span_end = end + len(end_marker)
-                for _ in range(text.count("\n", i, span_end)):
-                    line_idx += 1
-                    has_code[line_idx] = True
+                tokens[line_idx].append(text[i:span_end])
+                line_idx += text.count("\n", i, span_end)
                 i = span_end
                 continue
 
         if ch == '"':
-            has_code[line_idx] = True
+            start = i
             i += 1
             while i < n:
                 c = text[i]
                 if c == "\\" and i + 1 < n:
                     i += 2
                     continue
-                if c == "\n":
-                    line_idx += 1
-                    has_code[line_idx] = True
-                    i += 1
-                    continue
                 i += 1
                 if c == '"':
                     break
+            span = text[start:i]
+            tokens[line_idx].append(span)
+            line_idx += span.count("\n")
             continue
 
         if ch == "'":
-            has_code[line_idx] = True
             match = _CHAR_LITERAL.match(text, i)
-            i = match.end() if match else i + 1
+            if match:
+                tokens[line_idx].append(text[i : match.end()])
+                i = match.end()
+            else:
+                tokens[line_idx].append(ch)
+                i += 1
             continue
 
-        has_code[line_idx] = True
+        if _IDENT_CHAR.match(ch):
+            start = i
+            while i < n and _IDENT_CHAR.match(text[i]):
+                i += 1
+            tokens[line_idx].append(text[start:i])
+            continue
+
+        tokens[line_idx].append(ch)
         i += 1
 
-    return has_code
+    return tokens
 
 
-def drop_comment_only_ranges(
-    ranges: dict[str, list[tuple[int, int]]],
-    read_file: Callable[[str], str],
-) -> dict[str, list[tuple[int, int]]]:
-    """`ranges`, minus any hunk whose changed lines are all comment/blank.
+def _tokens_in_span(tokens_by_line: list[list[str]], span: tuple[int, int] | None) -> list[str]:
+    """The tokens `code_tokens_by_line` attributed to lines `span[0]..=span[1]`."""
+    if span is None:
+        return []
+    start, end = span
+    result: list[str] = []
+    for i in range(start - 1, min(end, len(tokens_by_line))):
+        result.extend(tokens_by_line[i])
+    return result
 
-    A hunk keeps its full (start, end) span the moment even one line in it
-    has real code: the existing "touching a bad function makes you fix it"
-    behavior for a genuine logic edit is unchanged, deliberately -- only a
-    hunk that is *entirely* comment or whitespace, once read back from the
-    actual current file content rather than guessed from the diff text
-    alone, is excluded.
+
+_CLOSING_DELIMITERS = frozenset({")", "]", "}"})
+
+
+def _drop_trailing_commas(tokens: list[str]) -> list[str]:
+    """`tokens`, minus every `,` immediately followed by a closing delimiter.
+
+    A trailing comma right before `)`, `]`, or `}` is never semantically
+    significant in Rust: a tuple, array, function call, generic argument
+    list, struct literal, or the last arm of a `match` parses identically
+    with or without one. Whether rustfmt emits it depends only on its
+    multi-line-vs-single-line layout choice for the surrounding
+    expression -- which can flip purely because a comment that used to
+    keep the expression multi-line is gone, with nothing about the code
+    itself changed. That is exactly the "same code, different whitespace"
+    class `semantic_ranges` exists to see through, so this one narrow,
+    always-valid comma is dropped before old and new token lists are
+    compared, on both sides alike.
+
+    Deliberately this narrow: this is a fact about Rust's grammar, not a
+    general "whitespace doesn't matter" rule, and it changes nothing about
+    how any other token is compared.
     """
-    filtered: dict[str, list[tuple[int, int]]] = {}
-    for file, file_ranges in ranges.items():
-        code_lines = line_has_code(read_file(file))
-        kept = [
-            span
-            for span in file_ranges
-            if any(code_lines[i] for i in range(span[0] - 1, min(span[1], len(code_lines))))
-        ]
+    return [
+        tok
+        for idx, tok in enumerate(tokens)
+        if not (tok == "," and idx + 1 < len(tokens) and tokens[idx + 1] in _CLOSING_DELIMITERS)
+    ]
+
+
+def semantic_ranges(
+    hunk_spans: dict[str, list[tuple[tuple[int, int] | None, tuple[int, int] | None]]],
+    read_old: Callable[[str], str],
+    read_new: Callable[[str], str],
+) -> dict[str, list[tuple[int, int]]]:
+    """`hunk_spans`, narrowed to the hunks that changed actual code.
+
+    A hunk keeps its `new_span` the moment the tokens it changed differ from
+    what was there before: the existing "touching a bad function makes you
+    fix it" behavior for a genuine logic edit is unchanged, deliberately.
+    What is new is *how* "differ" gets decided -- both sides of the hunk are
+    read back from their real files (the pre-change blob via `read_old`, the
+    post-change file via `read_new`, both keyed by the new-side path) and
+    tokenized with `code_tokens_by_line`, then passed through
+    `_drop_trailing_commas` (see there for why that one further step is
+    Rust-grammar-safe rather than a general whitespace rule), so a hunk is
+    dropped exactly when its old and new token lists are equal: a comment
+    deleted, a comment added with nothing else, a multi-line block
+    reformatted or collapsed onto one line with no token added or removed.
+    This subsumes the narrower "hunk is entirely comment" rule this
+    replaced without a separate code path for it: a comment-only hunk's old
+    and new token lists were already both empty, so it always falls out of
+    the same single comparison.
+
+    A pure-deletion hunk (`new_span` is `None`) is dropped unconditionally,
+    regardless of what its old side tokenizes to: there is no line left on
+    the new side to hold accountable.
+    """
+    ranges: dict[str, list[tuple[int, int]]] = {}
+    old_cache: dict[str, list[list[str]]] = {}
+    new_cache: dict[str, list[list[str]]] = {}
+    for file, spans in hunk_spans.items():
+        if file not in new_cache:
+            new_cache[file] = code_tokens_by_line(read_new(file))
+        if file not in old_cache:
+            old_cache[file] = code_tokens_by_line(read_old(file))
+        old_tokens_by_line = old_cache[file]
+        new_tokens_by_line = new_cache[file]
+        kept: list[tuple[int, int]] = []
+        for old_span, new_span in spans:
+            if new_span is None:
+                continue
+            old_tokens = _drop_trailing_commas(_tokens_in_span(old_tokens_by_line, old_span))
+            new_tokens = _drop_trailing_commas(_tokens_in_span(new_tokens_by_line, new_span))
+            if old_tokens == new_tokens:
+                continue
+            kept.append(new_span)
         if kept:
-            filtered[file] = kept
-    return filtered
+            ranges[file] = kept
+    return ranges
 
 
 def changed_ranges(base: str, pathspec: str = "*.rs") -> dict[str, list[tuple[int, int]]]:
     """Changed line ranges per file, restricted to `pathspec`, vs `base`.
 
-    Excludes any hunk that only added or modified comment or blank lines:
-    see `drop_comment_only_ranges`. Read from the working tree, matching
-    what the diff itself compares against (see the module docstring) --
-    a path the diff reports as changed but that no longer exists on disk
-    (renamed since, or this run's `pathspec` disagrees with a prior one)
-    contributes no range rather than raising, since a deleted file cannot
-    have touched anything still there to check.
+    Excludes any hunk whose old and new sides are the same code once
+    comments and incidental whitespace are gone: see `semantic_ranges`. The
+    new side is read from the working tree, matching what the diff itself
+    compares against (see the module docstring); the old side is read from
+    `base`'s commit via `git show`, since the pre-change blob does not
+    otherwise exist anywhere on disk. Either side missing -- a path the diff
+    reports as changed but that no longer exists on disk, or a file that did
+    not exist at `base` -- reads back as empty rather than raising, since
+    there is nothing there to compare against.
     """
     base_sha = merge_base(base)
     result = subprocess.run(
@@ -323,16 +420,25 @@ def changed_ranges(base: str, pathspec: str = "*.rs") -> dict[str, list[tuple[in
         text=True,
         check=True,
     )
-    ranges = parse_unified_diff_zero_context(result.stdout)
+    hunk_spans = parse_hunk_spans(result.stdout)
 
-    def read_file(file: str) -> str:
+    def read_new(file: str) -> str:
         path = ROOT / file
         try:
             return path.read_text()
         except (FileNotFoundError, UnicodeDecodeError):
             return ""
 
-    return drop_comment_only_ranges(ranges, read_file)
+    def read_old(file: str) -> str:
+        blob = subprocess.run(
+            ["git", "show", f"{base_sha}:{file}"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+        )
+        return blob.stdout if blob.returncode == 0 else ""
+
+    return semantic_ranges(hunk_spans, read_old, read_new)
 
 
 def cargo_bin_dir() -> Path:
