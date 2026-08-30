@@ -1,8 +1,9 @@
+mod robot_launch;
+
 mod regression_robot_support;
 
 use std::time::Duration;
 
-use cranpose::AppLauncher;
 use cranpose_testing::{capture_screenshot, sample_screenshot_pixel_logical};
 use desktop_app::app;
 use regression_robot_support::{
@@ -54,11 +55,7 @@ fn main() {
     env_logger::init();
     println!("=== Robot Counter Conditional Text Top Test ===");
 
-    AppLauncher::new()
-        .with_title("Robot Counter Conditional Text Top Test")
-        .with_size(1024, 768)
-        .with_headless(true)
-        .with_test_driver(|robot| {
+    robot_launch::launch("Robot Counter Conditional Text Top Test", 1024, 768).with_test_driver(|robot| {
             spawn_timeout(30, "robot_counter_conditional_text_top");
 
             std::thread::sleep(Duration::from_millis(500));

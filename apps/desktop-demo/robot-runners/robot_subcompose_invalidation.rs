@@ -1,6 +1,10 @@
+mod robot_launch;
+
+mod robot_exit;
+
 use std::time::Duration;
 
-use cranpose::{AppLauncher, LazyItems};
+use cranpose::LazyItems;
 use cranpose_core::rememberMutableStateOf;
 use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope};
 use cranpose_testing::{find_button, find_in_semantics, find_text_in_semantics};
@@ -109,16 +113,9 @@ fn main() {
     println!("=== SubcomposeLayout Invalidation Routing Test ===");
     println!("Testing that modifier changes in LazyColumn items trigger re-renders\n");
 
-    AppLauncher::new()
-        .with_title("SubcomposeLayout Invalidation Test")
-        .with_size(800, 600)
-        .with_headless(true)
+    robot_launch::launch("SubcomposeLayout Invalidation Test", 800, 600)
         .with_test_driver(|robot| {
-            std::thread::spawn(|| {
-                std::thread::sleep(Duration::from_secs(30));
-                eprintln!("TIMEOUT: Test exceeded 30 seconds");
-                std::process::exit(1);
-            });
+            robot_exit::arm_timeout(30);
 
             std::thread::sleep(Duration::from_millis(500));
             println!("✓ App launched and ready\n");

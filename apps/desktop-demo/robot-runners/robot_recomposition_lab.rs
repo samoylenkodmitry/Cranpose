@@ -1,8 +1,9 @@
+mod robot_launch;
+
 mod regression_robot_support;
 
 use std::time::Duration;
 
-use cranpose::AppLauncher;
 use desktop_app::app;
 use regression_robot_support::{
     click_button, semantics_dump, spawn_timeout, wait_for_text, wait_for_text_prefix,
@@ -46,11 +47,7 @@ fn main() {
     env_logger::init();
     println!("=== Robot Recomposition Lab Test ===");
 
-    AppLauncher::new()
-        .with_title("Robot Recomposition Lab Test")
-        .with_size(1100, 1500)
-        .with_headless(true)
-        .with_test_driver(|robot| {
+    robot_launch::launch("Robot Recomposition Lab Test", 1100, 1500).with_test_driver(|robot| {
             spawn_timeout(90, "robot_recomposition_lab");
 
             std::thread::sleep(Duration::from_millis(500));

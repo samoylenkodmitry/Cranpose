@@ -1,6 +1,8 @@
+mod robot_launch;
+
 use std::time::Duration;
 
-use cranpose::{AppLauncher, SemanticElement};
+use cranpose::SemanticElement;
 use cranpose_testing::{
     find_button_in_semantics, find_text_by_prefix_in_semantics, find_text_in_semantics,
 };
@@ -143,71 +145,72 @@ fn main() {
     env_logger::init();
     println!("=== Recursive Layout Robot Test (rect validation) ===");
 
-    AppLauncher::new()
-        .with_title("Recursive Layout Test")
-        .with_size(WINDOW_WIDTH as u32, WINDOW_HEIGHT as u32)
-        .with_headless(true)
-        .with_test_driver(|robot| {
-            println!("✓ App launched");
-            std::thread::sleep(Duration::from_millis(400));
+    robot_launch::launch(
+        "Recursive Layout Test",
+        WINDOW_WIDTH as u32,
+        WINDOW_HEIGHT as u32,
+    )
+    .with_test_driver(|robot| {
+        println!("✓ App launched");
+        std::thread::sleep(Duration::from_millis(400));
 
-            let click_button = |name: &str| -> bool {
-                if let Some((x, y, w, h)) = find_button_in_semantics(&robot, name) {
-                    println!("  Found button '{}' at ({:.1}, {:.1})", name, x, y);
-                    robot.click(x + w / 2.0, y + h / 2.0).ok();
-                    std::thread::sleep(Duration::from_millis(150));
-                    true
-                } else {
-                    println!("  ✗ Button '{}' not found!", name);
-                    false
-                }
-            };
-
-            println!("\n--- Step 1: Navigate to 'Recursive Layout' tab ---");
-            if !click_button("Recursive Layout") {
-                println!("FATAL: Could not find 'Recursive Layout' tab button");
-                robot.exit().ok();
-                std::process::exit(1);
+        let click_button = |name: &str| -> bool {
+            if let Some((x, y, w, h)) = find_button_in_semantics(&robot, name) {
+                println!("  Found button '{}' at ({:.1}, {:.1})", name, x, y);
+                robot.click(x + w / 2.0, y + h / 2.0).ok();
+                std::thread::sleep(Duration::from_millis(150));
+                true
+            } else {
+                println!("  ✗ Button '{}' not found!", name);
+                false
             }
-            std::thread::sleep(Duration::from_millis(400));
+        };
 
-            println!("\n--- Step 2: Verify Recursive Layout header + controls ---");
-            if find_text_in_semantics(&robot, "Recursive Layout Playground").is_none() {
-                println!("  ✗ Missing Recursive Layout header");
-                robot.exit().ok();
-                std::process::exit(1);
-            }
-
-            let mut issues = Vec::new();
-            if find_button_in_semantics(&robot, "Increase depth").is_none() {
-                issues.push("Missing Increase depth button".to_string());
-            }
-            if find_button_in_semantics(&robot, "Decrease depth").is_none() {
-                issues.push("Missing Decrease depth button".to_string());
-            }
-            if find_text_by_prefix_in_semantics(&robot, "Current depth:").is_none() {
-                issues.push("Missing Current depth label".to_string());
-            }
-
-            println!("\n--- Step 3: Increase depth to 5 ---");
-            click_button("Increase depth");
-            click_button("Increase depth");
-            std::thread::sleep(Duration::from_millis(250));
-
-            issues.extend(validate_recursive_layout(&robot, "Depth 5"));
-
-            if !issues.is_empty() {
-                println!("\n=== FAILURE ===");
-                for issue in &issues {
-                    println!("✗ {issue}");
-                }
-                robot.exit().ok();
-                std::process::exit(1);
-            }
-
-            println!("\n=== SUCCESS ===");
-            println!("✓ Recursive Layout rects are within viewport");
+        println!("\n--- Step 1: Navigate to 'Recursive Layout' tab ---");
+        if !click_button("Recursive Layout") {
+            println!("FATAL: Could not find 'Recursive Layout' tab button");
             robot.exit().ok();
-        })
-        .run(app::combined_app);
+            std::process::exit(1);
+        }
+        std::thread::sleep(Duration::from_millis(400));
+
+        println!("\n--- Step 2: Verify Recursive Layout header + controls ---");
+        if find_text_in_semantics(&robot, "Recursive Layout Playground").is_none() {
+            println!("  ✗ Missing Recursive Layout header");
+            robot.exit().ok();
+            std::process::exit(1);
+        }
+
+        let mut issues = Vec::new();
+        if find_button_in_semantics(&robot, "Increase depth").is_none() {
+            issues.push("Missing Increase depth button".to_string());
+        }
+        if find_button_in_semantics(&robot, "Decrease depth").is_none() {
+            issues.push("Missing Decrease depth button".to_string());
+        }
+        if find_text_by_prefix_in_semantics(&robot, "Current depth:").is_none() {
+            issues.push("Missing Current depth label".to_string());
+        }
+
+        println!("\n--- Step 3: Increase depth to 5 ---");
+        click_button("Increase depth");
+        click_button("Increase depth");
+        std::thread::sleep(Duration::from_millis(250));
+
+        issues.extend(validate_recursive_layout(&robot, "Depth 5"));
+
+        if !issues.is_empty() {
+            println!("\n=== FAILURE ===");
+            for issue in &issues {
+                println!("✗ {issue}");
+            }
+            robot.exit().ok();
+            std::process::exit(1);
+        }
+
+        println!("\n=== SUCCESS ===");
+        println!("✓ Recursive Layout rects are within viewport");
+        robot.exit().ok();
+    })
+    .run(app::combined_app);
 }

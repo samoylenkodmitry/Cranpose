@@ -1,6 +1,7 @@
+mod robot_launch;
+
 use std::time::Duration;
 
-use cranpose::AppLauncher;
 use cranpose_testing::find_text_in_semantics;
 
 fn main() {
@@ -8,10 +9,7 @@ fn main() {
     println!("=== LazyList Extreme Navigation Robot Test ===");
     println!("Tests: Set usize::MAX → Jump Mid → Jump End");
 
-    AppLauncher::new()
-        .with_title("Extreme Navigation Test")
-        .with_size(900, 700)
-        .with_headless(true)
+    robot_launch::launch("Extreme Navigation Test", 900, 700)
         .with_test_driver(|robot| {
             println!("✓ App launched");
             std::thread::sleep(Duration::from_millis(200));

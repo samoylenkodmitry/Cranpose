@@ -1,6 +1,8 @@
+mod robot_launch;
+
 use std::time::Duration;
 
-use cranpose::{AppLauncher, SemanticElement};
+use cranpose::SemanticElement;
 use cranpose_testing::{find_button_in_semantics, find_by_text_recursive, find_text_exact};
 use desktop_app::app;
 
@@ -32,10 +34,7 @@ fn main() {
     println!("Robot Offset Test - Combined App");
     println!("=================================\n");
 
-    AppLauncher::new()
-        .with_title("Robot Offset Test")
-        .with_size(900, 700)
-        .with_headless(true)
+    robot_launch::launch("Robot Offset Test", 900, 700)
         .with_test_driver(|robot| {
             println!("App launched! Waiting for initial render...");
             std::thread::sleep(Duration::from_secs(1));

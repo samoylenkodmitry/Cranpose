@@ -1,6 +1,8 @@
+mod robot_launch;
+
 use std::time::Duration;
 
-use cranpose::{AppLauncher, SemanticElement};
+use cranpose::SemanticElement;
 use cranpose_testing::{find_button_in_semantics, find_text_in_semantics};
 use desktop_app::app;
 
@@ -197,155 +199,155 @@ fn main() {
     println!("=== Comprehensive Layout Validation Robot Test ===");
     println!("Window size: {}x{}", WINDOW_WIDTH, WINDOW_HEIGHT);
 
-    AppLauncher::new()
-        .with_title("Layout Validation Test")
-        .with_size(WINDOW_WIDTH as u32, WINDOW_HEIGHT as u32)
-        .with_headless(true)
-        .with_test_driver(|robot| {
-            println!("✓ App launched");
+    robot_launch::launch(
+        "Layout Validation Test",
+        WINDOW_WIDTH as u32,
+        WINDOW_HEIGHT as u32,
+    )
+    .with_test_driver(|robot| {
+        println!("✓ App launched");
+        std::thread::sleep(Duration::from_millis(500));
+
+        let mut all_issues: Vec<(String, LayoutIssue)> = Vec::new();
+        let window_bounds = (0.0, 0.0, WINDOW_WIDTH, WINDOW_HEIGHT);
+
+        let click_button = |name: &str| -> bool {
+            if let Some((x, y, w, h)) = find_button_in_semantics(&robot, name) {
+                println!(
+                    "  Clicking '{}' at ({:.1}, {:.1})",
+                    name,
+                    x + w / 2.0,
+                    y + h / 2.0
+                );
+                robot.click(x + w / 2.0, y + h / 2.0).ok();
+                std::thread::sleep(Duration::from_millis(200));
+                true
+            } else {
+                println!("  ✗ Button '{}' not found!", name);
+                false
+            }
+        };
+
+        println!("\n\n######################################");
+        println!("# TEST 1: ASYNC RUNTIME TAB");
+        println!("######################################");
+
+        if click_button("Async Runtime") {
             std::thread::sleep(Duration::from_millis(500));
 
-            let mut all_issues: Vec<(String, LayoutIssue)> = Vec::new();
-            let window_bounds = (0.0, 0.0, WINDOW_WIDTH, WINDOW_HEIGHT);
+            if find_text_in_semantics(&robot, "Async Runtime Demo").is_some() {
+                println!("✓ Navigated to Async Runtime tab");
 
-            let click_button = |name: &str| -> bool {
-                if let Some((x, y, w, h)) = find_button_in_semantics(&robot, name) {
-                    println!(
-                        "  Clicking '{}' at ({:.1}, {:.1})",
-                        name,
-                        x + w / 2.0,
-                        y + h / 2.0
-                    );
-                    robot.click(x + w / 2.0, y + h / 2.0).ok();
-                    std::thread::sleep(Duration::from_millis(200));
-                    true
-                } else {
-                    println!("  ✗ Button '{}' not found!", name);
-                    false
-                }
-            };
-
-            println!("\n\n######################################");
-            println!("# TEST 1: ASYNC RUNTIME TAB");
-            println!("######################################");
-
-            if click_button("Async Runtime") {
-                std::thread::sleep(Duration::from_millis(500));
-
-                if find_text_in_semantics(&robot, "Async Runtime Demo").is_some() {
-                    println!("✓ Navigated to Async Runtime tab");
-
-                    if let Ok(semantics) = robot.get_semantics() {
-                        println!("\n--- Full Semantics Tree ---");
-                        for elem in &semantics {
-                            print_semantics_tree(elem, 0);
-                        }
-
-                        let issues =
-                            validate_bounds(&semantics, "Async Runtime", window_bounds, false);
-                        for issue in issues {
-                            all_issues.push(("Async Runtime".to_string(), issue));
-                        }
+                if let Ok(semantics) = robot.get_semantics() {
+                    println!("\n--- Full Semantics Tree ---");
+                    for elem in &semantics {
+                        print_semantics_tree(elem, 0);
                     }
-                } else {
-                    println!("✗ Failed to verify Async Runtime tab content");
-                }
-            } else {
-                println!("✗ Could not find Async Runtime tab button");
-            }
 
-            println!("\n\n######################################");
-            println!("# TEST 2: RECURSIVE LAYOUT TAB");
-            println!("######################################");
-
-            if click_button("Recursive Layout") {
-                std::thread::sleep(Duration::from_millis(500));
-
-                if find_text_in_semantics(&robot, "Recursive Layout Playground").is_some() {
-                    println!("✓ Navigated to Recursive Layout tab");
-
-                    if let Ok(semantics) = robot.get_semantics() {
-                        println!("\n--- Full Semantics Tree ---");
-                        for elem in &semantics {
-                            print_semantics_tree(elem, 0);
-                        }
-
-                        let issues =
-                            validate_bounds(&semantics, "Recursive Layout", window_bounds, true);
-                        for issue in issues {
-                            all_issues.push(("Recursive Layout".to_string(), issue));
-                        }
-                    }
-                } else {
-                    println!("✗ Failed to verify Recursive Layout tab content");
-                }
-
-                println!("\n--- Testing after state changes ---");
-                if click_button("Increase depth") {
-                    std::thread::sleep(Duration::from_millis(300));
-                    if let Ok(semantics) = robot.get_semantics() {
-                        let issues = validate_bounds(
-                            &semantics,
-                            "Recursive Layout (depth+1)",
-                            window_bounds,
-                            true,
-                        );
-                        for issue in issues {
-                            all_issues.push(("Recursive Layout (depth+1)".to_string(), issue));
-                        }
-                    }
-                }
-
-                if click_button("Increase depth") {
-                    std::thread::sleep(Duration::from_millis(300));
-                    if let Ok(semantics) = robot.get_semantics() {
-                        let issues = validate_bounds(
-                            &semantics,
-                            "Recursive Layout (depth+2)",
-                            window_bounds,
-                            true,
-                        );
-                        for issue in issues {
-                            all_issues.push(("Recursive Layout (depth+2)".to_string(), issue));
-                        }
+                    let issues = validate_bounds(&semantics, "Async Runtime", window_bounds, false);
+                    for issue in issues {
+                        all_issues.push(("Async Runtime".to_string(), issue));
                     }
                 }
             } else {
-                println!("✗ Could not find Recursive Layout tab button");
+                println!("✗ Failed to verify Async Runtime tab content");
             }
+        } else {
+            println!("✗ Could not find Async Runtime tab button");
+        }
 
-            println!("\n\n######################################");
-            println!("# LAYOUT VALIDATION REPORT");
-            println!("######################################\n");
+        println!("\n\n######################################");
+        println!("# TEST 2: RECURSIVE LAYOUT TAB");
+        println!("######################################");
 
-            if all_issues.is_empty() {
-                println!("✓ NO LAYOUT ISSUES FOUND");
-                println!("\nAll elements have valid bounds:");
-                println!("  - No NaN/Infinity values");
-                println!("  - No zero/negative sizes");
-                println!("  - No elements far outside window");
-                println!("  - No negative positions");
-            } else {
-                println!("✗ FOUND {} LAYOUT ISSUES:\n", all_issues.len());
-                for (i, (tab, issue)) in all_issues.iter().enumerate() {
-                    println!("Issue #{}: [{}]", i + 1, tab);
-                    println!(
-                        "  Element: [{}] \"{}\"",
-                        issue.element_role, issue.element_text
-                    );
-                    println!("  Problem: {}", issue.issue);
-                    println!(
-                        "  Bounds: ({:.1}, {:.1}, {:.1}, {:.1})\n",
-                        issue.bounds.0, issue.bounds.1, issue.bounds.2, issue.bounds.3
-                    );
+        if click_button("Recursive Layout") {
+            std::thread::sleep(Duration::from_millis(500));
+
+            if find_text_in_semantics(&robot, "Recursive Layout Playground").is_some() {
+                println!("✓ Navigated to Recursive Layout tab");
+
+                if let Ok(semantics) = robot.get_semantics() {
+                    println!("\n--- Full Semantics Tree ---");
+                    for elem in &semantics {
+                        print_semantics_tree(elem, 0);
+                    }
+
+                    let issues =
+                        validate_bounds(&semantics, "Recursive Layout", window_bounds, true);
+                    for issue in issues {
+                        all_issues.push(("Recursive Layout".to_string(), issue));
+                    }
                 }
-                println!("\n=== TEST FAILED ===");
-                robot.exit().ok();
-                std::process::exit(1);
+            } else {
+                println!("✗ Failed to verify Recursive Layout tab content");
             }
 
-            println!("\n=== Layout Validation Complete ===");
+            println!("\n--- Testing after state changes ---");
+            if click_button("Increase depth") {
+                std::thread::sleep(Duration::from_millis(300));
+                if let Ok(semantics) = robot.get_semantics() {
+                    let issues = validate_bounds(
+                        &semantics,
+                        "Recursive Layout (depth+1)",
+                        window_bounds,
+                        true,
+                    );
+                    for issue in issues {
+                        all_issues.push(("Recursive Layout (depth+1)".to_string(), issue));
+                    }
+                }
+            }
+
+            if click_button("Increase depth") {
+                std::thread::sleep(Duration::from_millis(300));
+                if let Ok(semantics) = robot.get_semantics() {
+                    let issues = validate_bounds(
+                        &semantics,
+                        "Recursive Layout (depth+2)",
+                        window_bounds,
+                        true,
+                    );
+                    for issue in issues {
+                        all_issues.push(("Recursive Layout (depth+2)".to_string(), issue));
+                    }
+                }
+            }
+        } else {
+            println!("✗ Could not find Recursive Layout tab button");
+        }
+
+        println!("\n\n######################################");
+        println!("# LAYOUT VALIDATION REPORT");
+        println!("######################################\n");
+
+        if all_issues.is_empty() {
+            println!("✓ NO LAYOUT ISSUES FOUND");
+            println!("\nAll elements have valid bounds:");
+            println!("  - No NaN/Infinity values");
+            println!("  - No zero/negative sizes");
+            println!("  - No elements far outside window");
+            println!("  - No negative positions");
+        } else {
+            println!("✗ FOUND {} LAYOUT ISSUES:\n", all_issues.len());
+            for (i, (tab, issue)) in all_issues.iter().enumerate() {
+                println!("Issue #{}: [{}]", i + 1, tab);
+                println!(
+                    "  Element: [{}] \"{}\"",
+                    issue.element_role, issue.element_text
+                );
+                println!("  Problem: {}", issue.issue);
+                println!(
+                    "  Bounds: ({:.1}, {:.1}, {:.1}, {:.1})\n",
+                    issue.bounds.0, issue.bounds.1, issue.bounds.2, issue.bounds.3
+                );
+            }
+            println!("\n=== TEST FAILED ===");
             robot.exit().ok();
-        })
-        .run(app::combined_app);
+            std::process::exit(1);
+        }
+
+        println!("\n=== Layout Validation Complete ===");
+        robot.exit().ok();
+    })
+    .run(app::combined_app);
 }

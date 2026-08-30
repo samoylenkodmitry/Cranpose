@@ -1,8 +1,10 @@
+mod robot_launch;
+
 mod output_paths;
 
 use std::{path::Path, time::Duration};
 
-use cranpose::{AppLauncher, RobotScreenshot, SemanticElement};
+use cranpose::{RobotScreenshot, SemanticElement};
 use cranpose_testing::{
     find_button_exact_in_semantics, find_button_in_semantics, find_text_in_semantics,
     normalize_screenshot_region, screenshot_difference_stats,
@@ -25,25 +27,26 @@ fn main() {
     env_logger::init();
     println!("=== Robot Scroll Decoration Invariance ===");
 
-    AppLauncher::new()
-        .with_title("Robot Scroll Decoration Invariance")
-        .with_size(WINDOW_WIDTH, WINDOW_HEIGHT)
-        .with_headless(true)
-        .with_test_driver(|robot| {
-            std::thread::sleep(Duration::from_millis(600));
-            let _ = robot.wait_for_idle();
+    robot_launch::launch(
+        "Robot Scroll Decoration Invariance",
+        WINDOW_WIDTH,
+        WINDOW_HEIGHT,
+    )
+    .with_test_driver(|robot| {
+        std::thread::sleep(Duration::from_millis(600));
+        let _ = robot.wait_for_idle();
 
-            open_text_tab(&robot);
-            scroll_text_into_view(&robot, TARGET_TEXT, 20);
+        open_text_tab(&robot);
+        scroll_text_into_view(&robot, TARGET_TEXT, 20);
 
-            verify_underline_row_tracks_fractional_scroll(&robot);
-            verify_scroll_decoration_invariance(&robot);
+        verify_underline_row_tracks_fractional_scroll(&robot);
+        verify_scroll_decoration_invariance(&robot);
 
-            println!("\n=== Test Summary ===");
-            println!("PASS: text decoration rendering is scroll-position-invariant");
-            robot.exit().expect("exit");
-        })
-        .run(app::combined_app);
+        println!("\n=== Test Summary ===");
+        println!("PASS: text decoration rendering is scroll-position-invariant");
+        robot.exit().expect("exit");
+    })
+    .run(app::combined_app);
 }
 
 #[derive(Clone, Copy, Debug)]

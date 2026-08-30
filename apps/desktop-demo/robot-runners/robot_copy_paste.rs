@@ -1,6 +1,9 @@
+mod robot_launch;
+
+mod robot_exit;
+
 use std::time::Duration;
 
-use cranpose::AppLauncher;
 use cranpose_testing::{find_button, find_button_in_semantics, find_in_semantics, find_text};
 use desktop_app::app;
 
@@ -9,16 +12,9 @@ fn main() {
     println!("=== Robot Copy-Paste Test ===");
     println!("Testing text selection, copy, and paste functionality\n");
 
-    AppLauncher::new()
-        .with_title("Robot Copy-Paste Test")
-        .with_size(900, 700)
-        .with_headless(true)
+    robot_launch::launch("Robot Copy-Paste Test", 900, 700)
         .with_test_driver(|robot| {
-            std::thread::spawn(|| {
-                std::thread::sleep(Duration::from_secs(30));
-                println!("✗ Test timed out after 30 seconds");
-                std::process::exit(1);
-            });
+            robot_exit::arm_timeout(30);
 
             println!("✓ App launched\n");
             std::thread::sleep(Duration::from_millis(500));

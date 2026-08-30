@@ -1,14 +1,17 @@
+mod robot_launch;
+
 use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
 
-use cranpose::{AppLauncher, RobotScreenshot, SemanticElement};
+use cranpose::{RobotScreenshot, SemanticElement};
 use cranpose_testing::{find_button, find_in_semantics, find_text};
 use desktop_app::app;
 use image::RgbaImage;
 
 mod robot_exit;
+mod robot_handle_probe;
 mod text_input_robot_helpers;
 
 type SelectedEditable = ((f32, f32, f32, f32), (usize, usize));
@@ -21,11 +24,7 @@ fn main() {
     );
     std::fs::create_dir_all(&shot_dir).expect("create screenshot directory");
 
-    AppLauncher::new()
-        .with_title("Drag Selection Test")
-        .with_size(600, 400)
-        .with_headless(true)
-        .with_test_driver(move |robot| {
+    robot_launch::launch("Drag Selection Test", 600, 400).with_test_driver(move |robot| {
             robot_exit::arm_timeout(60);
 
             std::thread::sleep(Duration::from_millis(300));
@@ -210,34 +209,16 @@ fn lower_handle_center(shot: &RobotScreenshot, rect: (f32, f32, f32, f32)) -> Op
     let right = (((x + width) * sx) as usize).min(shot.width as usize);
     let top = (((y + height * 0.5) * sy) as usize).min(shot.height as usize);
     let bottom = (((y + height + 8.0) * sy) as usize).min(shot.height as usize);
-
-    let is_blue = |px: usize, py: usize| {
-        let i = (py * shot.width as usize + px) * 4;
-        let (r, g, b) = (shot.pixels[i], shot.pixels[i + 1], shot.pixels[i + 2]);
-        b > 170 && b.saturating_sub(r) > 55 && b.saturating_sub(g) > 25
-    };
-    let max_y = (top..bottom)
-        .rev()
-        .find(|&py| (left..right).any(|px| is_blue(px, py)))?;
-    let band_top = max_y.saturating_sub((4.0 * sy).ceil() as usize);
-    let mut sum_x = 0usize;
-    let mut sum_y = 0usize;
-    let mut count = 0usize;
-    for py in band_top..=max_y {
-        for px in left..right {
-            if is_blue(px, py) {
-                sum_x += px;
-                sum_y += py;
-                count += 1;
-            }
-        }
-    }
-    (count > 0).then(|| {
-        (
-            sum_x as f32 / count as f32 / sx,
-            sum_y as f32 / count as f32 / sy,
-        )
-    })
+    robot_handle_probe::lower_band_center(
+        shot,
+        sx,
+        sy,
+        left,
+        right,
+        top,
+        bottom,
+        robot_handle_probe::is_blue_handle,
+    )
 }
 
 fn selected_editable(elements: &[SemanticElement]) -> Option<SelectedEditable> {
@@ -269,22 +250,16 @@ fn count_blue_handle_bands(shot: &RobotScreenshot, rect: (f32, f32, f32, f32)) -
     let bottom = (((y + height) * sy) as usize).min(shot.height as usize);
     let upper_end = ((y + height * 0.45) * sy) as usize;
     let lower_start = ((y + height * 0.55) * sy) as usize;
-    let mut upper = 0;
-    let mut lower = 0;
-    for py in top..bottom {
-        for px in left..right {
-            let i = (py * shot.width as usize + px) * 4;
-            let (r, g, b) = (shot.pixels[i], shot.pixels[i + 1], shot.pixels[i + 2]);
-            if b > 170 && b.saturating_sub(r) > 55 && b.saturating_sub(g) > 25 {
-                if py < upper_end {
-                    upper += 1;
-                } else if py >= lower_start {
-                    lower += 1;
-                }
-            }
-        }
-    }
-    (upper, lower)
+    robot_handle_probe::count_upper_lower_bands(
+        shot,
+        left,
+        right,
+        top,
+        bottom,
+        upper_end,
+        lower_start,
+        robot_handle_probe::is_blue_handle,
+    )
 }
 
 fn save(shot: &RobotScreenshot, dir: &Path, name: &str) {

@@ -1,8 +1,9 @@
+mod robot_launch;
+
 mod regression_robot_support;
 
 use std::time::Duration;
 
-use cranpose::AppLauncher;
 use desktop_app::app;
 use regression_robot_support::{
     click_button, semantics_dump, spawn_timeout, wait_for_text, wait_for_text_prefix,
@@ -12,10 +13,7 @@ fn main() {
     env_logger::init();
     println!("=== Robot Recursive Layout Depth Six Test ===");
 
-    AppLauncher::new()
-        .with_title("Robot Recursive Layout Depth Six Test")
-        .with_size(1024, 768)
-        .with_headless(true)
+    robot_launch::launch("Robot Recursive Layout Depth Six Test", 1024, 768)
         .with_test_driver(|robot| {
             spawn_timeout(30, "robot_recursive_layout_depth_six");
 

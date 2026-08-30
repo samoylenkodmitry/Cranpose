@@ -1,6 +1,7 @@
+mod robot_launch;
+
 use std::time::Duration;
 
-use cranpose::AppLauncher;
 use cranpose_testing::{find_button_in_semantics, find_text_in_semantics};
 use desktop_app::app;
 
@@ -9,10 +10,7 @@ fn main() {
     println!("=== LazyList P1 Fixes Validation Test ===");
     println!("Testing: DEFAULT_ITEM_SIZE_ESTIMATE, dead code removal, slot tracking");
 
-    AppLauncher::new()
-        .with_title("LazyList Fixes Test")
-        .with_size(1200, 800)
-        .with_headless(true)
+    robot_launch::launch("LazyList Fixes Test", 1200, 800)
         .with_test_driver(|robot| {
             println!("✓ App launched");
             std::thread::sleep(Duration::from_millis(500));

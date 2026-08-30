@@ -1,3 +1,5 @@
+mod robot_handle_probe;
+
 use std::{
     path::{Path, PathBuf},
     process::ExitCode,
@@ -203,32 +205,8 @@ fn lower_handle_center(shot: &RobotScreenshot, rect: (f32, f32, f32, f32)) -> Op
     let right = (((x + width) * sx) as usize).min(shot.width as usize);
     let top = (y.max(0.0) * sy) as usize;
     let bottom = (((y + height + 10.0) * sy) as usize).min(shot.height as usize);
-    let is_accent = |px: usize, py: usize| {
-        let i = (py * shot.width as usize + px) * 4;
-        let (r, g, b) = (shot.pixels[i], shot.pixels[i + 1], shot.pixels[i + 2]);
+    robot_handle_probe::lower_band_center(shot, sx, sy, left, right, top, bottom, |r, g, b| {
         r > 180 && r.saturating_sub(g) > 70 && b.saturating_sub(g) > 25
-    };
-    let max_y = (top..bottom)
-        .rev()
-        .find(|&py| (left..right).any(|px| is_accent(px, py)))?;
-    let band_top = max_y.saturating_sub((4.0 * sy).ceil() as usize);
-    let mut sum_x = 0usize;
-    let mut sum_y = 0usize;
-    let mut count = 0usize;
-    for py in band_top..=max_y {
-        for px in left..right {
-            if is_accent(px, py) {
-                sum_x += px;
-                sum_y += py;
-                count += 1;
-            }
-        }
-    }
-    (count > 0).then(|| {
-        (
-            sum_x as f32 / count as f32 / sx,
-            sum_y as f32 / count as f32 / sy,
-        )
     })
 }
 

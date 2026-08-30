@@ -1,11 +1,11 @@
+mod markdown_scroll_drag;
+
 use std::{fs, sync::Arc, time::Duration};
 
 use cranpose::AppLauncher;
 use cranpose_core::CompositionLocalProvider;
 use cranpose_services::{local_http_client, HttpClientRef, StubHttpClient};
-use cranpose_testing::{
-    find_button_in_semantics, find_in_semantics, find_text, print_semantics_with_bounds,
-};
+use cranpose_testing::{find_in_semantics, find_text};
 use desktop_app::app;
 
 const VIEWPORT_TAG: &str = "MarkdownListViewport";
@@ -34,101 +34,6 @@ impl MarkdownFixture {
             body.push_str(&format!("- Line {i:03}\n"));
         }
         Self { body }
-    }
-}
-
-fn center(bounds: (f32, f32, f32, f32)) -> (f32, f32) {
-    (bounds.0 + bounds.2 * 0.5, bounds.1 + bounds.3 * 0.5)
-}
-
-fn wait_for_text_bounds(
-    robot: &cranpose::Robot,
-    text: &str,
-    timeout_ms: u64,
-) -> Option<(f32, f32, f32, f32)> {
-    let attempts = (timeout_ms / 100).max(1);
-    for _ in 0..attempts {
-        if let Some(bounds) = find_in_semantics(robot, |elem| find_text(elem, text)) {
-            return Some(bounds);
-        }
-        std::thread::sleep(Duration::from_millis(100));
-        let _ = robot.wait_for_idle();
-    }
-    None
-}
-
-fn fail_and_exit(robot: &cranpose::Robot, message: &str) -> ! {
-    eprintln!("FATAL: {message}");
-    if let Ok(semantics) = robot.get_semantics() {
-        print_semantics_with_bounds(&semantics, 0);
-    }
-    let _ = robot.exit();
-    std::process::exit(1);
-}
-
-fn click_button(robot: &cranpose::Robot, label: &str) {
-    let Some(bounds) = find_button_in_semantics(robot, label) else {
-        fail_and_exit(robot, &format!("button '{label}' not found"));
-    };
-    let (x, y) = center(bounds);
-    robot
-        .click(x, y)
-        .unwrap_or_else(|err| fail_and_exit(robot, &format!("click '{label}' failed: {err}")));
-    std::thread::sleep(Duration::from_millis(150));
-    let _ = robot.wait_for_idle();
-}
-
-fn drag_scrollbar(
-    robot: &cranpose::Robot,
-    rail_bounds: (f32, f32, f32, f32),
-    from_frac: f32,
-    to_frac: f32,
-    wait_for_idle: bool,
-) {
-    let x = rail_bounds.0 + rail_bounds.2 * 0.5;
-    let y0 = rail_bounds.1 + rail_bounds.3 * from_frac;
-    let y1 = rail_bounds.1 + rail_bounds.3 * to_frac;
-    let steps = 30;
-
-    let _ = robot.mouse_move(x, y0);
-    let _ = robot.mouse_down();
-    for step in 0..=steps {
-        let t = step as f32 / steps as f32;
-        let y = y0 + (y1 - y0) * t;
-        let _ = robot.mouse_move(x, y);
-        std::thread::sleep(Duration::from_millis(12));
-    }
-    let _ = robot.mouse_up();
-    std::thread::sleep(Duration::from_millis(120));
-    if wait_for_idle {
-        let _ = robot.wait_for_idle();
-    }
-}
-
-fn drag_viewport(
-    robot: &cranpose::Robot,
-    viewport_bounds: (f32, f32, f32, f32),
-    from_frac: f32,
-    to_frac: f32,
-    wait_for_idle: bool,
-) {
-    let x = viewport_bounds.0 + viewport_bounds.2 * 0.5;
-    let y0 = viewport_bounds.1 + viewport_bounds.3 * from_frac;
-    let y1 = viewport_bounds.1 + viewport_bounds.3 * to_frac;
-    let steps = 36;
-
-    let _ = robot.mouse_move(x, y0);
-    let _ = robot.mouse_down();
-    for step in 0..=steps {
-        let t = step as f32 / steps as f32;
-        let y = y0 + (y1 - y0) * t;
-        let _ = robot.mouse_move(x, y);
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    let _ = robot.mouse_up();
-    std::thread::sleep(Duration::from_millis(120));
-    if wait_for_idle {
-        let _ = robot.wait_for_idle();
     }
 }
 
@@ -254,10 +159,10 @@ fn main() {
             std::thread::sleep(Duration::from_millis(500));
             let _ = robot.wait_for_idle();
 
-            click_button(&robot, "Fetch");
+            markdown_scroll_drag::click_button(&robot, "Fetch", 150);
 
             if !top_sentinel.is_empty()
-                && wait_for_text_bounds(&robot, &top_sentinel, 10_000).is_none()
+                && markdown_scroll_drag::wait_for_text_bounds(&robot, &top_sentinel, 10_000).is_none()
             {
                 eprintln!(
                     "WARN: top sentinel {:?} not found within timeout; continuing",
@@ -265,11 +170,11 @@ fn main() {
                 );
             }
 
-            let Some(viewport_bounds) = wait_for_text_bounds(&robot, VIEWPORT_TAG, 2_000) else {
-                fail_and_exit(&robot, "markdown viewport semantics not found");
+            let Some(viewport_bounds) = markdown_scroll_drag::wait_for_text_bounds(&robot, VIEWPORT_TAG, 2_000) else {
+                markdown_scroll_drag::fail_and_exit(&robot, "markdown viewport semantics not found");
             };
-            let Some(rail_bounds) = wait_for_text_bounds(&robot, SCROLLBAR_TAG, 2_000) else {
-                fail_and_exit(&robot, "markdown scrollbar semantics not found");
+            let Some(rail_bounds) = markdown_scroll_drag::wait_for_text_bounds(&robot, SCROLLBAR_TAG, 2_000) else {
+                markdown_scroll_drag::fail_and_exit(&robot, "markdown scrollbar semantics not found");
             };
 
             println!(
@@ -297,9 +202,9 @@ fn main() {
             let mut after_bottom_visible = false;
             for loop_idx in 0..drag_loops {
                 if loop_idx % 2 == 0 {
-                    drag_scrollbar(&robot, rail_bounds, 0.10, 0.90, wait_for_idle_after_drag);
+                    markdown_scroll_drag::drag_scrollbar(&robot, rail_bounds, 0.10, 0.90, 12, wait_for_idle_after_drag);
                 } else {
-                    drag_scrollbar(&robot, rail_bounds, 0.90, 0.15, wait_for_idle_after_drag);
+                    markdown_scroll_drag::drag_scrollbar(&robot, rail_bounds, 0.90, 0.15, 12, wait_for_idle_after_drag);
                 }
                 if !deep_sentinel.is_empty() {
                     after_bottom_visible =
@@ -321,7 +226,7 @@ fn main() {
             };
 
             if drag_loops > 0 && !after_bottom_visible && !moved_forward {
-                fail_and_exit(
+                markdown_scroll_drag::fail_and_exit(
                     &robot,
                     "scrollbar drag did not move viewport forward enough",
                 );
@@ -338,12 +243,17 @@ fn main() {
 
                 let mut down_drags_executed = 0u32;
                 for _ in 0..viewport_drag_down_loops {
-                    drag_viewport(
+                    markdown_scroll_drag::drag_viewport(
                         &robot,
                         viewport_bounds,
-                        viewport_drag_from_frac,
-                        viewport_drag_to_frac,
-                        wait_for_idle_after_drag,
+                        markdown_scroll_drag::DragViewportConfig {
+                            from_frac: viewport_drag_from_frac,
+                            to_frac: viewport_drag_to_frac,
+                            steps: 36,
+                            step_delay_ms: 10,
+                            settle_delay_ms: 120,
+                            wait_for_idle: wait_for_idle_after_drag,
+                        },
                     );
                     down_drags_executed += 1;
                     if viewport_drag_stop_on_deep
@@ -366,12 +276,17 @@ fn main() {
                 );
 
                 for _ in 0..viewport_drag_up_loops {
-                    drag_viewport(
+                    markdown_scroll_drag::drag_viewport(
                         &robot,
                         viewport_bounds,
-                        viewport_drag_to_frac,
-                        viewport_drag_from_frac,
-                        wait_for_idle_after_drag,
+                        markdown_scroll_drag::DragViewportConfig {
+                            from_frac: viewport_drag_to_frac,
+                            to_frac: viewport_drag_from_frac,
+                            steps: 36,
+                            step_delay_ms: 10,
+                            settle_delay_ms: 120,
+                            wait_for_idle: wait_for_idle_after_drag,
+                        },
                     );
                 }
 

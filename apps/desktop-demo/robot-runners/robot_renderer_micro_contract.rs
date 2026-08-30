@@ -1,8 +1,9 @@
 mod output_paths;
 mod robot_exit;
+mod robot_shot;
 mod text_showcase_external_helpers;
 
-use std::{path::Path, time::Duration};
+use std::time::Duration;
 
 use cranpose::AppLauncher;
 use cranpose_testing::{crop_screenshot_logical, sample_screenshot_pixel_logical};
@@ -13,7 +14,6 @@ use cranpose_ui::{
     Modifier, Rect, Row, RowSpec, Size, Spacer, Text, TextOptions, TextOverflow, TextStyle,
     TextWithOptions,
 };
-use image::{ImageBuffer, RgbaImage};
 use text_showcase_external_helpers::{capture_x11_window_screenshot, find_window_id};
 
 const WINDOW_TITLE: &str = "Robot Renderer Micro Contract";
@@ -105,18 +105,6 @@ fn count_yellow_text_pixels(screenshot: &cranpose::RobotScreenshot) -> usize {
                 && rgba[1] > rgba[2].saturating_add(12)
         })
         .count()
-}
-
-fn save_png(path: &Path, screenshot: &cranpose::RobotScreenshot) -> Result<(), String> {
-    let image: RgbaImage = ImageBuffer::from_raw(
-        screenshot.width,
-        screenshot.height,
-        screenshot.pixels.clone(),
-    )
-    .ok_or_else(|| "invalid screenshot dimensions".to_string())?;
-    image
-        .save(path)
-        .map_err(|err| format!("failed to save {}: {}", path.display(), err))
 }
 
 fn normalize_micro_contract_logical_size(
@@ -671,7 +659,7 @@ fn main() {
             }
             let screenshot = normalize_micro_contract_logical_size(screenshot);
             let output_path = output_paths::diagnostic_path("cranpose_renderer_micro_contract.png");
-            if let Err(err) = save_png(&output_path, &screenshot) {
+            if let Err(err) = robot_shot::save_checked(&output_path, &screenshot) {
                 robot_exit::fail(&robot, &err);
             }
             println!("SCREENSHOT_PATH={}", output_path.display());

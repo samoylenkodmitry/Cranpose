@@ -1,6 +1,8 @@
+mod robot_launch;
+
 use std::time::Duration;
 
-use cranpose::{AppLauncher, SemanticElement};
+use cranpose::SemanticElement;
 use cranpose_testing::find_button_in_semantics;
 use cranpose_ui::{
     Button, ButtonSpec, Column, ColumnSpec, Modifier, Size, Spacer, Text, TextStyle,
@@ -166,120 +168,121 @@ fn main() {
     println!("=== Async Runtime Progress Bar Layout Test ===");
     println!("Window size: {}x{}", WINDOW_WIDTH, WINDOW_HEIGHT);
 
-    AppLauncher::new()
-        .with_title("Async Progress Layout")
-        .with_size(WINDOW_WIDTH as u32, WINDOW_HEIGHT as u32)
-        .with_headless(true)
-        .with_test_driver(|robot| {
-            std::thread::sleep(Duration::from_millis(400));
+    robot_launch::launch(
+        "Async Progress Layout",
+        WINDOW_WIDTH as u32,
+        WINDOW_HEIGHT as u32,
+    )
+    .with_test_driver(|robot| {
+        std::thread::sleep(Duration::from_millis(400));
 
-            let mut issues = Vec::new();
-            for (index, percent) in TEST_PCTS.iter().enumerate() {
-                robot.wait_for_idle().ok();
-                std::thread::sleep(Duration::from_millis(200));
+        let mut issues = Vec::new();
+        for (index, percent) in TEST_PCTS.iter().enumerate() {
+            robot.wait_for_idle().ok();
+            std::thread::sleep(Duration::from_millis(200));
 
-                if let Ok(semantics) = robot.get_semantics() {
+            if let Ok(semantics) = robot.get_semantics() {
+                for elem in &semantics {
+                    collect_semantic_issues(
+                        elem,
+                        (0.0, 0.0, WINDOW_WIDTH, WINDOW_HEIGHT),
+                        &mut issues,
+                    );
+                }
+                validate_progress_bar(&semantics, *percent, &mut issues);
+
+                if !issues.is_empty() {
+                    println!("\n--- Semantics Tree ({}%) ---", percent);
                     for elem in &semantics {
-                        collect_semantic_issues(
-                            elem,
-                            (0.0, 0.0, WINDOW_WIDTH, WINDOW_HEIGHT),
-                            &mut issues,
-                        );
-                    }
-                    validate_progress_bar(&semantics, *percent, &mut issues);
-
-                    if !issues.is_empty() {
-                        println!("\n--- Semantics Tree ({}%) ---", percent);
-                        for elem in &semantics {
-                            print_tree(elem, 0);
-                        }
-                    } else {
-                        println!("✓ Layout rects + progress sizing OK for {}%", percent);
+                        print_tree(elem, 0);
                     }
                 } else {
-                    issues.push("Failed to fetch semantics".to_string());
+                    println!("✓ Layout rects + progress sizing OK for {}%", percent);
                 }
-
-                if index + 1 < TEST_PCTS.len() {
-                    if let Some((x, y, w, h)) = find_button_in_semantics(&robot, "Next") {
-                        robot.click(x + w / 2.0, y + h / 2.0).ok();
-                        robot.wait_for_idle().ok();
-                        std::thread::sleep(Duration::from_millis(200));
-                    } else {
-                        issues.push("Next button not found".to_string());
-                    }
-                }
+            } else {
+                issues.push("Failed to fetch semantics".to_string());
             }
 
-            if !issues.is_empty() {
-                println!("\n=== FAILURE ===");
-                for issue in &issues {
-                    println!("✗ {issue}");
+            if index + 1 < TEST_PCTS.len() {
+                if let Some((x, y, w, h)) = find_button_in_semantics(&robot, "Next") {
+                    robot.click(x + w / 2.0, y + h / 2.0).ok();
+                    robot.wait_for_idle().ok();
+                    std::thread::sleep(Duration::from_millis(200));
+                } else {
+                    issues.push("Next button not found".to_string());
                 }
-                robot.exit().ok();
-                std::process::exit(1);
             }
+        }
 
-            println!("\n=== SUCCESS ===");
-            println!("✓ Async Runtime progress layout validated");
+        if !issues.is_empty() {
+            println!("\n=== FAILURE ===");
+            for issue in &issues {
+                println!("✗ {issue}");
+            }
             robot.exit().ok();
-        })
-        .run(|| {
-            let step_state = cranpose_core::rememberMutableStateOf(|| 0usize);
-            let initial_step = step_state.get();
-            let percent = TEST_PCTS[initial_step];
-            let progress = (percent as f32 / 100.0).clamp(0.0, 1.0);
-            let animation = cranpose_core::rememberMutableStateOf(|| AnimationState {
-                progress,
-                direction: 1.0,
-            });
-            let stats = cranpose_core::rememberMutableStateOf(|| FrameStats {
-                frames: 120,
-                last_frame_ms: 16.0,
-            });
-            let is_running = cranpose_core::rememberMutableStateOf(|| false);
-            let reset_signal = cranpose_core::rememberMutableStateOf(|| 0u64);
+            std::process::exit(1);
+        }
 
-            Column(
-                Modifier::empty().fill_max_size(),
-                ColumnSpec::default(),
-                move || {
-                    let step = step_state.get();
-                    Text(
-                        format!("Test percent: {}%", TEST_PCTS[step]),
-                        Modifier::empty().padding(6.0),
-                        TextStyle::default(),
-                    );
-                    Button(
-                        Modifier::empty().padding(6.0),
-                        ButtonSpec::default(),
-                        move || {
-                            let last = TEST_PCTS.len().saturating_sub(1);
-                            let next = (step_state.get() + 1).min(last);
-                            if next != step_state.get() {
-                                step_state.set(next);
-                                let pct = TEST_PCTS[next];
-                                let progress_value = (pct as f32 / 100.0).clamp(0.0, 1.0);
-                                animation.set(AnimationState {
-                                    progress: progress_value,
-                                    direction: 1.0,
-                                });
-                                stats.set(FrameStats {
-                                    frames: 120,
-                                    last_frame_ms: 16.0,
-                                });
-                            }
-                        },
-                        || {
-                            Text("Next", Modifier::empty().padding(4.0), TextStyle::default());
-                        },
-                    );
-                    Spacer(Size {
-                        width: 0.0,
-                        height: 8.0,
-                    });
-                    AsyncRuntimeTabContent(animation, stats, is_running, reset_signal);
-                },
-            );
+        println!("\n=== SUCCESS ===");
+        println!("✓ Async Runtime progress layout validated");
+        robot.exit().ok();
+    })
+    .run(|| {
+        let step_state = cranpose_core::rememberMutableStateOf(|| 0usize);
+        let initial_step = step_state.get();
+        let percent = TEST_PCTS[initial_step];
+        let progress = (percent as f32 / 100.0).clamp(0.0, 1.0);
+        let animation = cranpose_core::rememberMutableStateOf(|| AnimationState {
+            progress,
+            direction: 1.0,
         });
+        let stats = cranpose_core::rememberMutableStateOf(|| FrameStats {
+            frames: 120,
+            last_frame_ms: 16.0,
+        });
+        let is_running = cranpose_core::rememberMutableStateOf(|| false);
+        let reset_signal = cranpose_core::rememberMutableStateOf(|| 0u64);
+
+        Column(
+            Modifier::empty().fill_max_size(),
+            ColumnSpec::default(),
+            move || {
+                let step = step_state.get();
+                Text(
+                    format!("Test percent: {}%", TEST_PCTS[step]),
+                    Modifier::empty().padding(6.0),
+                    TextStyle::default(),
+                );
+                Button(
+                    Modifier::empty().padding(6.0),
+                    ButtonSpec::default(),
+                    move || {
+                        let last = TEST_PCTS.len().saturating_sub(1);
+                        let next = (step_state.get() + 1).min(last);
+                        if next != step_state.get() {
+                            step_state.set(next);
+                            let pct = TEST_PCTS[next];
+                            let progress_value = (pct as f32 / 100.0).clamp(0.0, 1.0);
+                            animation.set(AnimationState {
+                                progress: progress_value,
+                                direction: 1.0,
+                            });
+                            stats.set(FrameStats {
+                                frames: 120,
+                                last_frame_ms: 16.0,
+                            });
+                        }
+                    },
+                    || {
+                        Text("Next", Modifier::empty().padding(4.0), TextStyle::default());
+                    },
+                );
+                Spacer(Size {
+                    width: 0.0,
+                    height: 8.0,
+                });
+                AsyncRuntimeTabContent(animation, stats, is_running, reset_signal);
+            },
+        );
+    });
 }

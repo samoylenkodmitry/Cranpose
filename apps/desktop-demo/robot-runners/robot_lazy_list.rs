@@ -1,6 +1,7 @@
+mod robot_launch;
+
 use std::time::Duration;
 
-use cranpose::AppLauncher;
 use cranpose_testing::{
     find_button_in_semantics, find_element_by_text_exact, find_text_by_prefix_in_semantics,
     find_text_in_semantics, print_semantics_with_bounds, root_bounds, union_bounds,
@@ -11,11 +12,7 @@ fn main() {
     env_logger::init();
     println!("=== LazyList Robot Test (with bounds validation) ===");
 
-    AppLauncher::new()
-        .with_title("LazyList Test")
-        .with_size(1200, 800)
-        .with_headless(true)
-        .with_test_driver(|robot| {
+    robot_launch::launch("LazyList Test", 1200, 800).with_test_driver(|robot| {
             println!("✓ App launched");
             std::thread::sleep(Duration::from_millis(500));
             let _ = robot.wait_for_idle();

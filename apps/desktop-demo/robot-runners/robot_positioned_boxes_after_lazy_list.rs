@@ -1,6 +1,8 @@
+mod robot_launch;
+
 use std::time::Duration;
 
-use cranpose::{AppLauncher, SemanticElement};
+use cranpose::SemanticElement;
 use cranpose_testing::find_button_in_semantics;
 use desktop_app::app;
 
@@ -38,10 +40,7 @@ fn main() {
     env_logger::init();
     println!("=== Positioned Boxes After LazyList (dup check) ===");
 
-    AppLauncher::new()
-        .with_title("Positioned Boxes After LazyList")
-        .with_size(1200, 800)
-        .with_headless(true)
+    robot_launch::launch("Positioned Boxes After LazyList", 1200, 800)
         .with_test_driver(|robot| {
             println!("✓ App launched");
             std::thread::sleep(Duration::from_millis(500));

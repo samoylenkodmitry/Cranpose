@@ -1,6 +1,7 @@
+mod robot_launch;
+
 use std::time::Duration;
 
-use cranpose::AppLauncher;
 use cranpose_testing::find_text_in_semantics;
 
 const MAX_NEW_COMPOSES_DURING_SCROLL: usize = 200;
@@ -10,11 +11,7 @@ fn main() {
     env_logger::init();
     println!("=== Content-Type Reuse Robot Test ===");
 
-    AppLauncher::new()
-        .with_title("Content-Type Reuse Test")
-        .with_size(900, 700)
-        .with_headless(true)
-        .with_test_driver(|robot| {
+    robot_launch::launch("Content-Type Reuse Test", 900, 700).with_test_driver(|robot| {
             println!("✓ App launched");
             std::thread::sleep(Duration::from_millis(200));
 

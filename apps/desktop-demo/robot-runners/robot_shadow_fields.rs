@@ -1,8 +1,9 @@
+mod robot_launch;
+
 mod output_paths;
 
 use std::{fs, path::Path, time::Duration};
 
-use cranpose::AppLauncher;
 use cranpose_testing::{
     capture_screenshot, changed_pixel_count, changed_pixel_count_in_region,
     find_button_in_semantics, logical_region_to_pixel_bounds, scroll_prefix_into_view,
@@ -183,11 +184,7 @@ fn main() {
     env_logger::init();
     println!("=== Robot Shadow Fields Visual Test ===");
 
-    AppLauncher::new()
-        .with_title("Robot Shadow Fields Visual Test")
-        .with_size(WINDOW_WIDTH, WINDOW_HEIGHT)
-        .with_headless(true)
-        .with_test_driver(|robot| {
+    robot_launch::launch("Robot Shadow Fields Visual Test", WINDOW_WIDTH, WINDOW_HEIGHT).with_test_driver(|robot| {
             std::thread::sleep(Duration::from_millis(900));
             let _ = robot.wait_for_idle();
 

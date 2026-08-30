@@ -1,10 +1,13 @@
+mod robot_launch;
+
 mod robot_exit;
+mod robot_handle_probe;
 
 use std::time::Duration;
 
 use cranpose::{
     widgets::{BasicTextField, Box as CBox, BoxSpec},
-    AppLauncher, Color, Modifier, Robot, RobotScreenshot, Size,
+    Color, Modifier, Robot, RobotScreenshot, Size,
 };
 use cranpose_foundation::text::TextFieldState;
 use cranpose_ui::text::TextStyle;
@@ -55,11 +58,7 @@ fn main() {
     env_logger::init();
     println!("=== Text Handle Cycle Stability ===\n");
 
-    AppLauncher::new()
-        .with_title("Handle Cycle Stability")
-        .with_size(600, 400)
-        .with_headless(true)
-        .with_test_driver(move |robot| {
+    robot_launch::launch("Handle Cycle Stability", 600, 400).with_test_driver(move |robot| {
             robot_exit::arm_timeout(400);
 
             std::thread::sleep(Duration::from_millis(300));
@@ -361,32 +360,14 @@ fn lower_handle_center(shot: &RobotScreenshot, band: (f32, f32, f32)) -> Option<
     let right = (((x + width) * sx) as usize).min(shot.width as usize);
     let top = ((line_y * sy) as usize).min(shot.height as usize);
     let bottom = (((line_y + 40.0) * sy) as usize).min(shot.height as usize);
-
-    let is_blue = |px: usize, py: usize| {
-        let i = (py * shot.width as usize + px) * 4;
-        let (r, g, b) = (shot.pixels[i], shot.pixels[i + 1], shot.pixels[i + 2]);
-        b > 170 && b.saturating_sub(r) > 55 && b.saturating_sub(g) > 25
-    };
-    let max_y = (top..bottom)
-        .rev()
-        .find(|&py| (left..right).any(|px| is_blue(px, py)))?;
-    let band_top = max_y.saturating_sub((4.0 * sy).ceil() as usize);
-    let mut sum_x = 0usize;
-    let mut sum_y = 0usize;
-    let mut count = 0usize;
-    for py in band_top..=max_y {
-        for px in left..right {
-            if is_blue(px, py) {
-                sum_x += px;
-                sum_y += py;
-                count += 1;
-            }
-        }
-    }
-    (count > 0).then(|| {
-        (
-            sum_x as f32 / count as f32 / sx,
-            sum_y as f32 / count as f32 / sy,
-        )
-    })
+    robot_handle_probe::lower_band_center(
+        shot,
+        sx,
+        sy,
+        left,
+        right,
+        top,
+        bottom,
+        robot_handle_probe::is_blue_handle,
+    )
 }

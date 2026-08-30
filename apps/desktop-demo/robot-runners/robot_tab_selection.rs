@@ -1,6 +1,7 @@
+mod robot_launch;
+
 use std::time::Duration;
 
-use cranpose::AppLauncher;
 use cranpose_testing::{find_button_in_semantics, find_text_in_semantics};
 use desktop_app::{app, app::DemoTab};
 
@@ -13,10 +14,7 @@ fn main() {
     println!("=== Robot Tab Selection Test ===");
     println!("Testing that tab selection state visually changes\n");
 
-    AppLauncher::new()
-        .with_title("Robot Tab Selection Test")
-        .with_size(1200, 800)
-        .with_headless(true)
+    robot_launch::launch("Robot Tab Selection Test", 1200, 800)
         .with_test_driver(|robot| {
             println!("✓ App launched\n");
             std::thread::sleep(Duration::from_millis(500));

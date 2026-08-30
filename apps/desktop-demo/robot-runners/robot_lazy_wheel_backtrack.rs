@@ -1,6 +1,7 @@
+mod robot_launch;
+
 use std::{cmp::Ordering, time::Duration};
 
-use cranpose::AppLauncher;
 use cranpose_foundation::{
     lazy::{rememberLazyListState, LazyListScope},
     SemanticsConfiguration,
@@ -151,10 +152,7 @@ fn main() {
     env_logger::init();
     println!("=== Lazy Wheel Backtrack Test ===");
 
-    AppLauncher::new()
-        .with_title("Lazy Wheel Backtrack")
-        .with_size(640, 800)
-        .with_headless(true)
+    robot_launch::launch("Lazy Wheel Backtrack", 640, 800)
         .with_test_driver(|robot| {
             std::thread::sleep(Duration::from_millis(600));
             let _ = robot.wait_for_idle();

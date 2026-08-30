@@ -1,6 +1,8 @@
+mod robot_launch;
+
 use std::time::Duration;
 
-use cranpose::{AppLauncher, Robot};
+use cranpose::Robot;
 use desktop_app::app;
 
 fn wait_for_content(robot: &Robot, expected: &str, attempts: usize, delay: Duration) -> bool {
@@ -16,10 +18,7 @@ fn wait_for_content(robot: &Robot, expected: &str, attempts: usize, delay: Durat
 fn main() {
     println!("Launching app with robot control...");
 
-    AppLauncher::new()
-        .with_title("Robot Demo")
-        .with_size(800, 600)
-        .with_headless(true)
+    robot_launch::launch("Robot Demo", 800, 600)
         .with_test_driver(|robot| {
             println!("App launched! Starting robot interactions in 1 second...");
             std::thread::sleep(Duration::from_secs(1));

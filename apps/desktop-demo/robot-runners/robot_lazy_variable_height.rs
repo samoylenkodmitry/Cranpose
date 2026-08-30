@@ -1,6 +1,7 @@
+mod robot_launch;
+
 use std::time::Duration;
 
-use cranpose::AppLauncher;
 use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope};
 use cranpose_testing::find_text_in_semantics;
 use cranpose_ui::{
@@ -11,11 +12,7 @@ use cranpose_ui::{
 fn main() {
     env_logger::init();
 
-    AppLauncher::new()
-        .with_title("Lazy Variable Height Test")
-        .with_size(400, 600)
-        .with_headless(true)
-        .with_test_driver(|robot| {
+    robot_launch::launch("Lazy Variable Height Test", 400, 600).with_test_driver(|robot| {
              std::thread::sleep(Duration::from_millis(500));
 
              let check_item = |name: &str, expected_y: f32, _expected_height: f32| {

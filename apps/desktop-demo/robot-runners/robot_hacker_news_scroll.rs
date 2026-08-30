@@ -1,8 +1,10 @@
+mod robot_launch;
+
 pub mod hacker_news_robot_support;
 
 use std::time::Duration;
 
-use cranpose::{AppLauncher, Robot};
+use cranpose::Robot;
 use cranpose_core::CompositionLocalProvider;
 use cranpose_services::local_http_client;
 use cranpose_testing::{find_in_semantics, find_text_exact, root_bounds};
@@ -84,11 +86,7 @@ fn main() {
     env_logger::init();
     println!("=== Hacker News Single Pane Scroll Robot Test ===");
 
-    AppLauncher::new()
-        .with_title("Hacker News Single Pane Scroll Test")
-        .with_size(390, 844)
-        .with_headless(true)
-        .with_test_driver(|robot| {
+    robot_launch::launch("Hacker News Single Pane Scroll Test", 390, 844).with_test_driver(|robot| {
             std::thread::sleep(Duration::from_millis(500));
             let _ = robot.wait_for_idle();
 

@@ -1,6 +1,7 @@
+mod robot_launch;
+
 use std::time::Duration;
 
-use cranpose::AppLauncher;
 use cranpose_testing::find_button_in_semantics;
 use desktop_app::app;
 
@@ -9,10 +10,7 @@ fn main() {
     println!("=== Robot Tab Scroll Test ===");
     println!("Testing that clicking tabs doesn't cause scroll following cursor\n");
 
-    AppLauncher::new()
-        .with_title("Robot Tab Scroll Test")
-        .with_size(800, 600)
-        .with_headless(true)
+    robot_launch::launch("Robot Tab Scroll Test", 800, 600)
         .with_test_driver(|robot| {
             println!("✓ App launched\n");
             std::thread::sleep(Duration::from_millis(500));

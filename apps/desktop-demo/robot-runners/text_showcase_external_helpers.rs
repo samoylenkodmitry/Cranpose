@@ -311,7 +311,7 @@ fn wait_for_button_in_semantics(
     None
 }
 
-fn wait_for_exact_button_in_semantics(
+pub fn wait_for_exact_button_in_semantics(
     robot: &cranpose::Robot,
     text: &str,
     attempts: usize,
@@ -326,7 +326,7 @@ fn wait_for_exact_button_in_semantics(
     None
 }
 
-fn wait_for_text_in_semantics(robot: &cranpose::Robot, text: &str, attempts: usize) -> bool {
+pub fn wait_for_text_in_semantics(robot: &cranpose::Robot, text: &str, attempts: usize) -> bool {
     for _ in 0..attempts {
         if find_text_in_semantics(robot, text).is_some() {
             return true;

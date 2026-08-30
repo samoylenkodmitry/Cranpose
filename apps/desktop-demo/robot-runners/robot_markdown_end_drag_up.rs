@@ -1,11 +1,11 @@
+mod markdown_scroll_drag;
+
 use std::{cmp::Ordering, fs, sync::Arc, time::Duration};
 
 use cranpose::AppLauncher;
 use cranpose_core::CompositionLocalProvider;
 use cranpose_services::{local_http_client, HttpClientRef, StubHttpClient};
-use cranpose_testing::{
-    find_button_in_semantics, find_in_semantics, find_text, print_semantics_with_bounds,
-};
+use cranpose_testing::{find_in_semantics, find_text};
 use desktop_app::app;
 
 const VIEWPORT_TAG: &str = "MarkdownListViewport";
@@ -24,10 +24,6 @@ const DEFAULT_REVERSE_ATTEMPTS: u32 = 3;
 struct FixtureData {
     body: String,
     bottom_probe: String,
-}
-
-fn center(bounds: (f32, f32, f32, f32)) -> (f32, f32) {
-    (bounds.0 + bounds.2 * 0.5, bounds.1 + bounds.3 * 0.5)
 }
 
 fn parse_bool_env(name: &str, default: bool) -> bool {
@@ -49,102 +45,6 @@ fn parse_u32_env(name: &str, default: u32) -> u32 {
         .ok()
         .and_then(|value| value.parse::<u32>().ok())
         .unwrap_or(default)
-}
-
-fn wait_for_text_bounds(
-    robot: &cranpose::Robot,
-    text: &str,
-    timeout_ms: u64,
-) -> Option<(f32, f32, f32, f32)> {
-    let attempts = (timeout_ms / 100).max(1);
-    for _ in 0..attempts {
-        if let Some(bounds) = find_in_semantics(robot, |elem| find_text(elem, text)) {
-            return Some(bounds);
-        }
-        std::thread::sleep(Duration::from_millis(100));
-        let _ = robot.wait_for_idle();
-    }
-    None
-}
-
-fn fail_and_exit(robot: &cranpose::Robot, message: &str) -> ! {
-    eprintln!("FATAL: {message}");
-    if let Ok(semantics) = robot.get_semantics() {
-        print_semantics_with_bounds(&semantics, 0);
-    }
-    let _ = robot.exit();
-    std::process::exit(1);
-}
-
-fn click_button(robot: &cranpose::Robot, label: &str) {
-    let Some(bounds) = find_button_in_semantics(robot, label) else {
-        fail_and_exit(robot, &format!("button '{label}' not found"));
-    };
-    let (x, y) = center(bounds);
-    robot
-        .click(x, y)
-        .unwrap_or_else(|err| fail_and_exit(robot, &format!("click '{label}' failed: {err}")));
-    std::thread::sleep(Duration::from_millis(220));
-    let _ = robot.wait_for_idle();
-}
-
-struct DragViewportConfig {
-    from_frac: f32,
-    to_frac: f32,
-    steps: u32,
-    step_delay_ms: u64,
-    settle_delay_ms: u64,
-    wait_for_idle: bool,
-}
-
-fn drag_viewport(
-    robot: &cranpose::Robot,
-    viewport_bounds: (f32, f32, f32, f32),
-    config: DragViewportConfig,
-) {
-    let x = viewport_bounds.0 + viewport_bounds.2 * 0.5;
-    let y0 = viewport_bounds.1 + viewport_bounds.3 * config.from_frac;
-    let y1 = viewport_bounds.1 + viewport_bounds.3 * config.to_frac;
-    let _ = robot.mouse_move(x, y0);
-    let _ = robot.mouse_down();
-    for step in 0..=config.steps {
-        let t = step as f32 / config.steps as f32;
-        let y = y0 + (y1 - y0) * t;
-        let _ = robot.mouse_move(x, y);
-        std::thread::sleep(Duration::from_millis(config.step_delay_ms));
-    }
-    let _ = robot.mouse_up();
-    std::thread::sleep(Duration::from_millis(config.settle_delay_ms));
-    if config.wait_for_idle {
-        let _ = robot.wait_for_idle();
-    }
-}
-
-fn drag_scrollbar(
-    robot: &cranpose::Robot,
-    rail_bounds: (f32, f32, f32, f32),
-    from_frac: f32,
-    to_frac: f32,
-    wait_for_idle: bool,
-) {
-    let x = rail_bounds.0 + rail_bounds.2 * 0.5;
-    let y0 = rail_bounds.1 + rail_bounds.3 * from_frac;
-    let y1 = rail_bounds.1 + rail_bounds.3 * to_frac;
-    let steps = 30;
-
-    let _ = robot.mouse_move(x, y0);
-    let _ = robot.mouse_down();
-    for step in 0..=steps {
-        let t = step as f32 / steps as f32;
-        let y = y0 + (y1 - y0) * t;
-        let _ = robot.mouse_move(x, y);
-        std::thread::sleep(Duration::from_millis(8));
-    }
-    let _ = robot.mouse_up();
-    std::thread::sleep(Duration::from_millis(120));
-    if wait_for_idle {
-        let _ = robot.wait_for_idle();
-    }
 }
 
 fn sentinel_bounds(robot: &cranpose::Robot, text: &str) -> Option<(f32, f32, f32, f32)> {
@@ -269,10 +169,10 @@ fn drag_down_until_stalled(
     let mut previous_sig = viewport_signature(robot, viewport_bounds);
 
     for loop_idx in 1..=down_drag_loops {
-        drag_viewport(
+        markdown_scroll_drag::drag_viewport(
             robot,
             viewport_bounds,
-            DragViewportConfig {
+            markdown_scroll_drag::DragViewportConfig {
                 from_frac: down_drag_from_frac,
                 to_frac: down_drag_to_frac,
                 steps: 7,
@@ -316,8 +216,8 @@ fn force_absolute_bottom_with_scrollbar(
     let mut last_probe_y = sentinel_bounds(robot, bottom_probe).map(|b| b.1);
 
     for pass in 1..=scrollbar_max_passes {
-        drag_scrollbar(robot, rail_bounds, 0.20, 0.995, false);
-        drag_scrollbar(robot, rail_bounds, 0.88, 0.995, false);
+        markdown_scroll_drag::drag_scrollbar(robot, rail_bounds, 0.20, 0.995, 8, false);
+        markdown_scroll_drag::drag_scrollbar(robot, rail_bounds, 0.88, 0.995, 8, false);
         let probe_y = sentinel_bounds(robot, bottom_probe).map(|b| b.1);
 
         let stable_by_probe = match (last_probe_y, probe_y) {
@@ -376,11 +276,12 @@ fn reverse_drag_moves_content(
         let _ = robot.mouse_up();
         std::thread::sleep(Duration::from_millis(8));
 
-        drag_scrollbar(
+        markdown_scroll_drag::drag_scrollbar(
             robot,
             rail_bounds,
             reverse_drag_to_frac,
             reverse_drag_from_frac,
+            8,
             false,
         );
         std::thread::sleep(Duration::from_millis(140));
@@ -524,10 +425,10 @@ fn main() {
             std::thread::sleep(Duration::from_millis(500));
             let _ = robot.wait_for_idle();
 
-            click_button(&robot, "Fetch");
+            markdown_scroll_drag::click_button(&robot, "Fetch", 220);
 
             if !top_sentinel.is_empty()
-                && wait_for_text_bounds(&robot, &top_sentinel, 10_000).is_none()
+                && markdown_scroll_drag::wait_for_text_bounds(&robot, &top_sentinel, 10_000).is_none()
             {
                 eprintln!(
                     "NOTE: top sentinel {:?} not found within timeout; continuing",
@@ -535,11 +436,11 @@ fn main() {
                 );
             }
 
-            let Some(viewport_bounds) = wait_for_text_bounds(&robot, VIEWPORT_TAG, 4_000) else {
-                fail_and_exit(&robot, "markdown viewport semantics not found");
+            let Some(viewport_bounds) = markdown_scroll_drag::wait_for_text_bounds(&robot, VIEWPORT_TAG, 4_000) else {
+                markdown_scroll_drag::fail_and_exit(&robot, "markdown viewport semantics not found");
             };
-            let Some(rail_bounds) = wait_for_text_bounds(&robot, SCROLLBAR_TAG, 4_000) else {
-                fail_and_exit(&robot, "markdown scrollbar semantics not found");
+            let Some(rail_bounds) = markdown_scroll_drag::wait_for_text_bounds(&robot, SCROLLBAR_TAG, 4_000) else {
+                markdown_scroll_drag::fail_and_exit(&robot, "markdown scrollbar semantics not found");
             };
 
             println!(
@@ -560,17 +461,17 @@ fn main() {
             );
             robot
                 .mouse_move(viewport_center.0, viewport_center.1)
-                .unwrap_or_else(|err| fail_and_exit(&robot, &format!("mouse move failed: {err}")));
+                .unwrap_or_else(|err| markdown_scroll_drag::fail_and_exit(&robot, &format!("mouse move failed: {err}")));
 
             let mut down_history = Vec::new();
             for step in 0..6 {
                 robot.mouse_scroll(0.0, -120.0).unwrap_or_else(|err| {
-                    fail_and_exit(&robot, &format!("forward wheel step {step} failed: {err}"))
+                    markdown_scroll_drag::fail_and_exit(&robot, &format!("forward wheel step {step} failed: {err}"))
                 });
                 std::thread::sleep(Duration::from_millis(120));
                 let _ = robot.wait_for_idle();
                 let top_line = top_visible_markdown_line(&robot, viewport_bounds).unwrap_or_else(|| {
-                    fail_and_exit(&robot, "failed to capture top visible markdown line after forward wheel");
+                    markdown_scroll_drag::fail_and_exit(&robot, "failed to capture top visible markdown line after forward wheel");
                 });
                 down_history.push(top_line);
                 println!("wheel_down step={step} top_line={top_line}");
@@ -578,19 +479,19 @@ fn main() {
 
             let mut previous_top_line = *down_history
                 .last()
-                .unwrap_or_else(|| fail_and_exit(&robot, "missing wheel down history"));
+                .unwrap_or_else(|| markdown_scroll_drag::fail_and_exit(&robot, "missing wheel down history"));
             for step in 0..6 {
                 robot.mouse_scroll(0.0, 120.0).unwrap_or_else(|err| {
-                    fail_and_exit(&robot, &format!("reverse wheel step {step} failed: {err}"))
+                    markdown_scroll_drag::fail_and_exit(&robot, &format!("reverse wheel step {step} failed: {err}"))
                 });
                 std::thread::sleep(Duration::from_millis(120));
                 let _ = robot.wait_for_idle();
                 let top_line = top_visible_markdown_line(&robot, viewport_bounds).unwrap_or_else(|| {
-                    fail_and_exit(&robot, "failed to capture top visible markdown line after reverse wheel");
+                    markdown_scroll_drag::fail_and_exit(&robot, "failed to capture top visible markdown line after reverse wheel");
                 });
                 println!("wheel_up step={step} top_line={top_line}");
                 if top_line > previous_top_line {
-                    fail_and_exit(
+                    markdown_scroll_drag::fail_and_exit(
                         &robot,
                         &format!(
                             "reverse wheel backtracked from top line {previous_top_line} to {top_line}"
@@ -628,7 +529,7 @@ fn main() {
                 reverse_drag_to_frac,
                 reverse_attempts,
             ) {
-                fail_and_exit(
+                markdown_scroll_drag::fail_and_exit(
                     &robot,
                     "BUG REPRODUCED: reverse drag after drag-down+scrollbar-bottom did not move markdown content",
                 );

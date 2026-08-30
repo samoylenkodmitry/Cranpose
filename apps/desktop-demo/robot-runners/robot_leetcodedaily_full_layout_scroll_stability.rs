@@ -11,7 +11,7 @@ mod text_showcase_external_helpers;
 use std::{
     cell::RefCell,
     collections::{BTreeMap, HashMap, HashSet},
-    path::{Path, PathBuf},
+    path::PathBuf,
     time::{Duration, Instant},
 };
 
@@ -32,7 +32,7 @@ use cranpose_ui::{
     Point, Rect, RoundedCornerShape, Row, RowSpec, ScrollState, Size, Spacer, SpanStyle, Text,
     TextOverflow, TextStyle, VerticalAlignment,
 };
-use image::{imageops::FilterType, ImageBuffer, RgbaImage};
+use image::{imageops::FilterType, RgbaImage};
 use perf_robot_stats::{print_render_summary, RenderStatsAccumulator};
 use scroll_stability_external_helpers::{run_scroll_stability_capture, ScrollStabilityConfig};
 use text_showcase_external_helpers::{find_window_id, take_x11_screenshot};
@@ -6791,7 +6791,7 @@ fn capture_bottom_clear_stability_sample(robot: &cranpose::Robot) -> BottomClear
     .unwrap_or_else(|| {
         let dir = bottom_clear_capture_dir();
         let full_path = dir.join("missing-visual-clear-full-window.png");
-        save_robot_screenshot_png(&full_path, &screenshot);
+        scroll_stability_external_helpers::save_robot_screenshot(&full_path, &screenshot);
         fail_with_robot(
             robot,
             &format!(
@@ -6825,7 +6825,7 @@ fn capture_bottom_clear_stability_sample(robot: &cranpose::Robot) -> BottomClear
     let red_profile = red_icon_horizontal_profile(&clear_crop).unwrap_or_else(|| {
         let dir = bottom_clear_capture_dir();
         let clear_path = dir.join("missing-red-profile-clear-button.png");
-        save_robot_screenshot_png(&clear_path, &clear_crop);
+        scroll_stability_external_helpers::save_robot_screenshot(&clear_path, &clear_crop);
         fail_with_robot(
             robot,
             &format!(
@@ -7973,8 +7973,8 @@ fn save_row_micro_failure(
     let dir = leetcodedaily_diagnostic_dir("cranpose-leetcodedaily-row-micro-stability");
     let before_path = dir.join(format!("step{step:02}_before.png"));
     let after_path = dir.join(format!("step{step:02}_after.png"));
-    save_robot_screenshot_png(&before_path, before);
-    save_robot_screenshot_png(&after_path, after);
+    scroll_stability_external_helpers::save_robot_screenshot(&before_path, before);
+    scroll_stability_external_helpers::save_robot_screenshot(&after_path, after);
     eprintln!(
         "row_micro_failure_paths step={step} before={} after={}",
         before_path.display(),
@@ -7999,8 +7999,8 @@ fn save_workspace_strip_failure(
     let dir = leetcodedaily_diagnostic_dir("cranpose-leetcodedaily-workspace-strip-stability");
     let before_path = dir.join(format!("step{step:02}_before.png"));
     let after_path = dir.join(format!("step{step:02}_after.png"));
-    save_robot_screenshot_png(&before_path, &before);
-    save_robot_screenshot_png(&after_path, &after);
+    scroll_stability_external_helpers::save_robot_screenshot(&before_path, &before);
+    scroll_stability_external_helpers::save_robot_screenshot(&after_path, &after);
     eprintln!(
         "workspace_strip_failure_paths step={step} before={} after={}",
         before_path.display(),
@@ -8025,8 +8025,8 @@ fn save_workspace_top_band_failure(
     let dir = leetcodedaily_diagnostic_dir("cranpose-leetcodedaily-workspace-top-band-stability");
     let before_path = dir.join(format!("step{step:02}_before.png"));
     let after_path = dir.join(format!("step{step:02}_after.png"));
-    save_robot_screenshot_png(&before_path, &before);
-    save_robot_screenshot_png(&after_path, &after);
+    scroll_stability_external_helpers::save_robot_screenshot(&before_path, &before);
+    scroll_stability_external_helpers::save_robot_screenshot(&after_path, &after);
     eprintln!(
         "workspace_top_band_failure_paths step={step} before={} after={}",
         before_path.display(),
@@ -8054,8 +8054,8 @@ fn save_workspace_top_band_sample_if_requested(
     let dir = leetcodedaily_diagnostic_dir("cranpose-leetcodedaily-workspace-top-band-samples");
     let full_path = dir.join(format!("step{step:02}_full.png"));
     let band_path = dir.join(format!("step{step:02}_band.png"));
-    save_robot_screenshot_png(&full_path, &full);
-    save_robot_screenshot_png(&band_path, &band);
+    scroll_stability_external_helpers::save_robot_screenshot(&full_path, &full);
+    scroll_stability_external_helpers::save_robot_screenshot(&band_path, &band);
     eprintln!(
         "workspace_top_band_sample_paths step={step} full={} band={}",
         full_path.display(),
@@ -8093,8 +8093,8 @@ fn save_row_micro_feature_failure(
     let dir = leetcodedaily_diagnostic_dir("cranpose-leetcodedaily-row-micro-stability");
     let before_path = dir.join(format!("step{step:02}_{label}_before.png"));
     let after_path = dir.join(format!("step{step:02}_{label}_after.png"));
-    save_robot_screenshot_png(&before_path, &before);
-    save_robot_screenshot_png(&after_path, &after);
+    scroll_stability_external_helpers::save_robot_screenshot(&before_path, &before);
+    scroll_stability_external_helpers::save_robot_screenshot(&after_path, &after);
     eprintln!(
         "row_micro_feature_failure_paths step={step} label={label} before={} after={}",
         before_path.display(),
@@ -8113,8 +8113,8 @@ fn save_bottom_clear_sample_if_requested(step: usize, sample: &BottomClearStabil
     let dir = bottom_clear_capture_dir();
     let fixed_path = dir.join(format!("step{step:02}_fixed-bottom.png"));
     let clear_path = dir.join(format!("step{step:02}_clear-button.png"));
-    save_robot_screenshot_png(&fixed_path, &sample.fixed_crop);
-    save_robot_screenshot_png(&clear_path, &sample.clear_crop);
+    scroll_stability_external_helpers::save_robot_screenshot(&fixed_path, &sample.fixed_crop);
+    scroll_stability_external_helpers::save_robot_screenshot(&clear_path, &sample.clear_crop);
     println!(
         "bottom_clear_capture step={step} fixed={} clear={}",
         fixed_path.display(),
@@ -8132,10 +8132,22 @@ fn save_bottom_clear_failure(
     let current_fixed_path = dir.join(format!("step{step:02}_current_fixed-bottom.png"));
     let previous_clear_path = dir.join(format!("step{step:02}_previous_clear-button.png"));
     let current_clear_path = dir.join(format!("step{step:02}_current_clear-button.png"));
-    save_robot_screenshot_png(&previous_fixed_path, &previous.fixed_crop);
-    save_robot_screenshot_png(&current_fixed_path, &current.fixed_crop);
-    save_robot_screenshot_png(&previous_clear_path, &previous.clear_crop);
-    save_robot_screenshot_png(&current_clear_path, &current.clear_crop);
+    scroll_stability_external_helpers::save_robot_screenshot(
+        &previous_fixed_path,
+        &previous.fixed_crop,
+    );
+    scroll_stability_external_helpers::save_robot_screenshot(
+        &current_fixed_path,
+        &current.fixed_crop,
+    );
+    scroll_stability_external_helpers::save_robot_screenshot(
+        &previous_clear_path,
+        &previous.clear_crop,
+    );
+    scroll_stability_external_helpers::save_robot_screenshot(
+        &current_clear_path,
+        &current.clear_crop,
+    );
     eprintln!(
         "bottom_clear_failure_paths step={step} previous_fixed={} current_fixed={} previous_clear={} current_clear={}",
         previous_fixed_path.display(),
@@ -8803,7 +8815,7 @@ fn save_full_frame_color_health_failure(
 ) -> PathBuf {
     let dir = leetcodedaily_diagnostic_dir("cranpose-leetcodedaily-full-frame-color-health");
     let path = dir.join(format!("{}.png", sanitize_capture_name(label)));
-    save_robot_screenshot_png(&path, screenshot);
+    scroll_stability_external_helpers::save_robot_screenshot(&path, screenshot);
     path
 }
 
@@ -8822,7 +8834,7 @@ fn save_button_reference_crop(
         sanitize_capture_name(phase),
         sanitize_capture_name(tag)
     ));
-    save_robot_screenshot_png(&path, screenshot);
+    scroll_stability_external_helpers::save_robot_screenshot(&path, screenshot);
     path
 }
 
@@ -8862,7 +8874,7 @@ fn save_button_quality_crop_if_requested(
         sanitize_capture_name(label),
         sanitize_capture_name(phase)
     ));
-    save_robot_screenshot_png(&path, screenshot);
+    scroll_stability_external_helpers::save_robot_screenshot(&path, screenshot);
     Some(path)
 }
 
@@ -8903,18 +8915,6 @@ fn sanitize_capture_name(input: &str) -> String {
             }
         })
         .collect()
-}
-
-fn save_robot_screenshot_png(path: &Path, screenshot: &cranpose::RobotScreenshot) {
-    let image: RgbaImage = ImageBuffer::from_raw(
-        screenshot.width,
-        screenshot.height,
-        screenshot.pixels.clone(),
-    )
-    .expect("valid screenshot dimensions");
-    image
-        .save(path)
-        .unwrap_or_else(|err| panic!("failed to save {}: {err}", path.display()));
 }
 
 fn fail_with_robot(robot: &cranpose::Robot, message: &str) -> ! {

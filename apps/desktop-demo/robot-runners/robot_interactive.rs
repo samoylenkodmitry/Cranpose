@@ -1,6 +1,8 @@
+mod robot_launch;
+
 use std::time::Duration;
 
-use cranpose::{AppLauncher, Robot};
+use cranpose::Robot;
 use desktop_app::app;
 
 fn wait_for_content(robot: &Robot, expected: &str, attempts: usize, delay: Duration) -> bool {
@@ -17,10 +19,7 @@ fn main() {
     println!("=== Robot Interactive Demo (Semantic API) ===");
     println!("This demo uses semantic tree queries instead of hardcoded coordinates.\n");
 
-    AppLauncher::new()
-        .with_title("Robot Interactive Demo - Semantic API")
-        .with_size(800, 600)
-        .with_headless(true)
+    robot_launch::launch("Robot Interactive Demo - Semantic API", 800, 600)
         .with_test_driver(|robot| {
             std::thread::sleep(Duration::from_millis(500));
             println!("✓ App launched\n");

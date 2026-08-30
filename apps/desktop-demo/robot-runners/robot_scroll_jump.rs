@@ -1,6 +1,10 @@
+mod robot_launch;
+
+mod robot_exit;
+
 use std::time::Duration;
 
-use cranpose::{AppLauncher, Robot};
+use cranpose::Robot;
 use cranpose_testing::{find_button_in_semantics, find_in_semantics, find_text};
 use desktop_app::app;
 
@@ -8,16 +12,9 @@ fn main() {
     env_logger::init();
     println!("=== Lazy List Scroll Bug Test ===\n");
 
-    AppLauncher::new()
-        .with_title("Lazy List Scroll Bug")
-        .with_size(800, 600)
-        .with_headless(true)
+    robot_launch::launch("Lazy List Scroll Bug", 800, 600)
         .with_test_driver(|robot| {
-            std::thread::spawn(|| {
-                std::thread::sleep(Duration::from_secs(120));
-                eprintln!("✗ Test timed out");
-                std::process::exit(1);
-            });
+            robot_exit::arm_timeout(120);
 
             std::thread::sleep(Duration::from_millis(800));
             let _ = robot.wait_for_idle();
