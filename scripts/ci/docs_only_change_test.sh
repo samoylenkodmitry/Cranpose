@@ -2,9 +2,17 @@
 # Regression test for docs_only_change.sh.
 #
 # A wrong `false` costs one redundant run. A wrong `true` skips the robot
-# suite, the Android build and the iOS build on a change that could break any
-# of them, and the board stays green while it does. That asymmetry is why the
-# fail-safe branches are pinned here alongside the happy path.
+# suite, the Android build, the iOS build, the architecture budgets and the
+# wasm build on a change that could break any of them, and the board stays
+# green while it does. That asymmetry is the whole design: every case that
+# must not be mistaken for prose is pinned here.
+#
+# The second pass is what keeps this file honest. Asserting `false` proves
+# nothing on its own -- the fail-safe branches answer `false` too, so a
+# negative case can pass while testing nothing. So each path-based negative is
+# replayed against a mutant detector whose path predicate is inverted, and must
+# flip to `true`. A case that does not flip is not exercising the predicate.
+# Positives are excluded: they already report `true`, so they cannot flip.
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -12,129 +20,151 @@ detector="$script_dir/docs_only_change.sh"
 workdir="$(mktemp -d)"
 trap 'rm -rf "$workdir"' EXIT
 
+repo="$workdir/repo"
+cases="$workdir/cases"
 failures=0
+: > "$cases"
 
-# Build a pull request the way actions/checkout presents one: a merge commit
-# whose first parent is the base and whose second is the branch head.
-open_pr() {
-    local branch="$1"
-    git -C "$repo" checkout -q -b "$branch" main
-}
+open_pr() { git -C "$repo" checkout -q -b "$1" main; }
 
-merge_pr() {
-    local branch="$1"
+# Land the branch as a merge commit, the shape actions/checkout gives a job:
+# first parent the base, second the head. Record it as a replayable case.
+land() {
+    local branch="$1" expect="$2" kind="$3" label="$4"
     git -C "$repo" checkout -q main
     git -C "$repo" merge -q --no-ff "$branch" -m "merge $branch"
+    printf '%s\t%s\t%s\t%s\n' "$(git -C "$repo" rev-parse HEAD)" "$expect" "$kind" "$label" >> "$cases"
+}
+
+detect_at() { # sha, detector
+    git -C "$repo" checkout -q --detach "$1"
+    (cd "$repo" && GITHUB_EVENT_NAME=pull_request bash "$2")
 }
 
 check() {
     local label="$1" want="$2" got="$3"
     if [[ "$got" == "$want" ]]; then
-        printf 'ok    %-42s %s\n' "$label" "$got"
+        printf 'ok    %-44s %s\n' "$label" "$got"
     else
-        printf 'FAIL  %-42s got %s, want %s\n' "$label" "$got" "$want"
+        printf 'FAIL  %-44s got %s, want %s\n' "$label" "$got" "$want"
         failures=$((failures + 1))
     fi
 }
 
-detect() {
-    (cd "$repo" && GITHUB_EVENT_NAME="${1:-pull_request}" bash "$detector")
-}
-
-repo="$workdir/repo"
+# --- fixtures -------------------------------------------------------------
 mkdir -p "$repo"
 git -C "$repo" init -q -b main
 git -C "$repo" config user.email ci@example.invalid
 git -C "$repo" config user.name ci
-mkdir -p "$repo/docs/render-reference" "$repo/crates/foo/src" "$repo/tools/api-surface/src"
+mkdir -p "$repo/docs/render-reference" "$repo/crates/foo/src" \
+         "$repo/crates/foo/shaders" "$repo/tools/api-surface/src" \
+         "$repo/.github/workflows"
 echo prose > "$repo/docs/guide.md"
 echo prose > "$repo/README.md"
 echo 'fn main() {}' > "$repo/crates/foo/src/lib.rs"
-echo 'pub fn helper() {}' > "$repo/crates/foo/src/helper.rs"
+echo 'fn helper() {}' > "$repo/crates/foo/src/helper.rs"
+echo 'fn shade() {}' > "$repo/crates/foo/shaders/blur.wgsl"
+echo '[package]' > "$repo/crates/foo/Cargo.toml"
 echo 'fn main() {}' > "$repo/tools/api-surface/src/main.rs"
+echo 'name: ci' > "$repo/.github/workflows/ci.yml"
 printf 'not-really-a-png' > "$repo/docs/render-reference/contract.png"
 git -C "$repo" add -A
 git -C "$repo" commit -qm base
 
-# A nested prose file is the case the filter exists for.
-open_pr prose-nested
-echo more >> "$repo/docs/guide.md"
-git -C "$repo" commit -qam .
-merge_pr prose-nested
-check "nested .md only" true "$(detect)"
+# Prose, the case the filter exists for. Nested and root-level both count:
+# TIME_WASTERS.md and AGENTS.md live at the root, and the `**/*.md` glob that
+# looks like the obvious filter does not match them.
+open_pr prose-nested; echo more >> "$repo/docs/guide.md"
+git -C "$repo" commit -qam .; land prose-nested true path "nested .md only"
 
-# Root-level prose too: TIME_WASTERS.md and AGENTS.md live there, and the
-# `**/*.md` glob that looks like the obvious filter does not match them.
-open_pr prose-root
-echo more >> "$repo/README.md"
-git -C "$repo" commit -qam .
-merge_pr prose-root
-check "root-level .md only" true "$(detect)"
+open_pr prose-root; echo more >> "$repo/README.md"
+git -C "$repo" commit -qam .; land prose-root true path "root-level .md only"
 
-# The shape that motivated the filter: prose plus a source file. The source
-# file wins, because it is the half a build can observe.
-open_pr prose-and-source
-echo more >> "$repo/docs/guide.md"
+# Everything a build can observe. Each of these must outvote the prose in the
+# same diff, so the mixed case carries a doc edit alongside the source edit.
+open_pr mixed; echo more >> "$repo/docs/guide.md"
 echo '// tweak' >> "$repo/crates/foo/src/lib.rs"
-git -C "$repo" commit -qam .
-merge_pr prose-and-source
-check "prose + .rs" false "$(detect)"
+git -C "$repo" commit -qam .; land mixed false path "mixed: one doc + one .rs"
+
+open_pr source-only; echo '// tweak' >> "$repo/crates/foo/src/helper.rs"
+git -C "$repo" commit -qam .; land source-only false path ".rs only"
+
+open_pr shader-only; echo '// tweak' >> "$repo/crates/foo/shaders/blur.wgsl"
+git -C "$repo" commit -qam .; land shader-only false path "shader (.wgsl) only"
+
+open_pr manifest-only; echo 'edition = "2024"' >> "$repo/crates/foo/Cargo.toml"
+git -C "$repo" commit -qam .; land manifest-only false path "Cargo.toml only"
+
+open_pr workflow-only; echo '# tweak' >> "$repo/.github/workflows/ci.yml"
+git -C "$repo" commit -qam .; land workflow-only false path "workflow file only"
 
 # tools/ is Rust that no gate currently builds. It still runs the full board:
 # nothing pins it that way, and the cost of being wrong is one-sided.
-open_pr tools-only
-echo '// tweak' >> "$repo/tools/api-surface/src/main.rs"
-git -C "$repo" commit -qam .
-merge_pr tools-only
-check "tools/ source only" false "$(detect)"
+open_pr tools-only; echo '// tweak' >> "$repo/tools/api-surface/src/main.rs"
+git -C "$repo" commit -qam .; land tools-only false path "tools/ source only"
 
-# Images under docs/ are not prose. The render reference is a fixture.
-open_pr docs-image
-printf 'changed' > "$repo/docs/render-reference/contract.png"
-git -C "$repo" commit -qam .
-merge_pr docs-image
-check "docs/ image" false "$(detect)"
+# Images under docs/ are fixtures, not prose.
+open_pr docs-image; printf changed > "$repo/docs/render-reference/contract.png"
+git -C "$repo" commit -qam .; land docs-image false path "docs/ image"
 
 # Rename detection would report only the .md destination and read as prose.
-open_pr rename-source-to-md
-git -C "$repo" mv crates/foo/src/lib.rs crates/foo/src/lib.md
-git -C "$repo" commit -qam .
-merge_pr rename-source-to-md
-check ".rs renamed to .md" false "$(detect)"
+open_pr rename-to-md; git -C "$repo" mv crates/foo/src/lib.rs crates/foo/src/lib.md
+git -C "$repo" commit -qam .; land rename-to-md false path ".rs renamed to .md"
 
-# Deleting a source file is not prose either.
-open_pr delete-source
-git -C "$repo" rm -q crates/foo/src/helper.rs
-git -C "$repo" commit -qam .
-merge_pr delete-source
-check "source deletion" false "$(detect)"
+open_pr delete-source; git -C "$repo" rm -q crates/foo/src/helper.rs
+git -C "$repo" commit -qam .; land delete-source false path "source deletion"
 
-# Workflow edits must run the workflows they edit.
-open_pr workflow-edit
-mkdir -p "$repo/.github/workflows"
-echo 'name: x' > "$repo/.github/workflows/x.yml"
-git -C "$repo" add -A
-git -C "$repo" commit -qm .
-merge_pr workflow-edit
-check "workflow file" false "$(detect)"
+# --- pass 1: the predicate itself ----------------------------------------
+echo "-- predicate --"
+while IFS=$'\t' read -r sha expect kind label; do
+    check "$label" "$expect" "$(detect_at "$sha" "$detector")"
+done < "$cases"
 
-# Events without a base to diff against never skip.
-check "push event" false "$(detect push)"
-check "workflow_dispatch event" false "$(detect workflow_dispatch)"
-
-# A HEAD that is not a merge commit means the diff is unknowable, not empty.
-git -C "$repo" checkout -q workflow-edit
-check "HEAD is not a merge commit" false "$(detect)"
+# Events with no base to diff against, and a HEAD that is not a merge commit,
+# never skip: the diff is unknowable, not empty.
 git -C "$repo" checkout -q main
+check "push event" false "$(cd "$repo" && GITHUB_EVENT_NAME=push bash "$detector")"
+check "workflow_dispatch event" false \
+    "$(cd "$repo" && GITHUB_EVENT_NAME=workflow_dispatch bash "$detector")"
+git -C "$repo" checkout -q --detach "$(git -C "$repo" rev-parse main^2)"
+check "HEAD is not a merge commit" false \
+    "$(cd "$repo" && GITHUB_EVENT_NAME=pull_request bash "$detector")"
 
-# The step output the workflows read must actually be written.
-output_file="$workdir/github_output"
-: > "$output_file"
-(cd "$repo" && GITHUB_EVENT_NAME=pull_request GITHUB_OUTPUT="$output_file" bash "$detector" >/dev/null)
+# The step output the workflows read on must actually be written.
+git -C "$repo" checkout -q main
+output_file="$workdir/github_output"; : > "$output_file"
+(cd "$repo" && GITHUB_EVENT_NAME=pull_request GITHUB_OUTPUT="$output_file" \
+    bash "$detector" >/dev/null)
 check "step output written" "docs_only=false" "$(cat "$output_file")"
+
+# --- pass 2: the assertions must be load-bearing --------------------------
+# Invert the path predicate so every path is accepted as prose. Every
+# path-based case must now report `true`; one that still reports `false` is
+# passing for some unrelated reason and is not testing what it claims.
+mutant="$workdir/mutant.sh"
+sed 's|^        \*) emit false ;;$|        *) ;;|' "$detector" > "$mutant"
+if cmp -s "$detector" "$mutant"; then
+    echo "FAIL  mutation did not apply -- the predicate moved, update this test" >&2
+    exit 1
+fi
+
+# Only the negatives carry information here: a positive case already reports
+# `true`, so it would "flip" to `true` without proving anything.
+echo "-- mutation: inverted predicate must break every negative assertion --"
+while IFS=$'\t' read -r sha expect kind label; do
+    [[ "$kind" == "path" && "$expect" == "false" ]] || continue
+    got="$(detect_at "$sha" "$mutant")"
+    if [[ "$got" == "true" ]]; then
+        printf 'ok    %-44s flips under mutation\n' "$label"
+    else
+        printf 'FAIL  %-44s did NOT flip (got %s): assertion is not load-bearing\n' \
+            "$label" "$got"
+        failures=$((failures + 1))
+    fi
+done < "$cases"
 
 if [[ "$failures" -ne 0 ]]; then
     printf '\n%d case(s) failed\n' "$failures" >&2
     exit 1
 fi
-printf '\nall docs-only filter cases pass\n'
+printf '\nall docs-only filter cases pass, and every negative assertion is load-bearing\n'
