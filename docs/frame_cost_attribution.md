@@ -180,11 +180,46 @@ Two CPU-side lessons from the same campaign:
   boundaries during translation, churning keys for content that did
   not change.
 
-The open mechanisms, in the model's currency: batch the per-surface
-blur chains into shared passes (9 blur passes are ~4 surfaces times
-two axes that could be two passes over an atlas), and make snapped
-surface sizes motion-stable so translation cannot flip a key by one
-pixel. Both need device ladders before any claim.
+Both candidate mechanisms were then bounded on the device BEFORE being
+built, and both bounds redirected the program:
+
+- **Blur-atlas pass batching, demoted.** With card glass replaced by
+  solid rects, sampled scroll frames still ran blur=8 passes=37 and
+  present improved only 1.2/3.5 ms — the blur lives in the FULL-WIDTH
+  surfaces (nav ramp, search bar, tab bar) whose backdrop inputs
+  change every scroll frame by nature. Pass count alone is not the
+  binding constraint, so an atlas that only relieves pass count does
+  not lead.
+- **Half-scale backdrops, validated as a term and rejected as a
+  form.** A one-sysprop probe rendering the whole backdrop chain at
+  half scale measured the blur-ALU term as real (present -2.25 ms
+  scroll, -2 ms idle, idle fps +0.7/+1.7) and disqualified the naive
+  design twice over: `scale != root` silently forfeits the
+  copy-texture fast path, putting 1.8 ms of CPU encode back inside
+  the same period the GPU win came out of (a mechanism paying for
+  itself with its own savings, every individual number looking
+  right); and the liquid-glass refraction shaders carry pixel-space
+  uniforms that do not survive a rescaled capture — square seams with
+  displaced content around every planet thumbnail, probe-off arm of
+  the same binary clean.
+
+The surviving design is narrower than the one first proposed and
+better for it: reduce the resolution of the PURE BLUR INTERMEDIATE
+alone — the vertical pass writes a low-res target and the existing
+composite upsamples — while capture keeps the full-res copy path and
+every mask and refraction tail stays at composite time at full
+resolution. It dodges both measured failure modes by construction,
+and the blur frequency argument makes it a static win, not a
+motion-gated one. It ships only behind a red-first quality test (mask
+edges byte-crisp, blur envelope bounded against a full-res reference
+— the naive probe's seams would have failed exactly that test) and
+its own ladder.
+
+The economics of this section: one APK build and eight device minutes
+of probing demoted two mechanisms that would have cost days to build,
+and the fps table alone would have credited one of them while the
+screen was visibly wrong. Probe before architecting, and read the
+probe's screenshots, not only its numbers.
 
 ## Methods notes (the traps)
 
@@ -195,6 +230,17 @@ pixel. Both need device ladders before any claim.
   average sits at 1-2 misses; treating one sampled frame as the
   per-frame typical misattributed a whole scroll campaign before
   `layer_cache_diag` totals over the full window corrected it.
+- A stage-level win can be self-funded by a stage-level tax in the
+  same period: the half-scale probe's present p50 fell 2.25 ms while
+  render encode rose 1.8 ms, and fps did not move. Before believing
+  any single-stage improvement, sum the stages and compare periods.
+- Shaders that take pixel-space uniforms (refraction offsets,
+  container geometry) bind the capture scale into their contract; a
+  capture rendered at a different scale feeds them wrong geometry
+  silently. Any mechanism that rescales an effect input must audit
+  the effect chain for pixel-space uniforms first — or keep the
+  rescale strictly inside stages that carry no such uniforms, which
+  is what confines the blur-intermediate design to the pure blur.
 - Thermal drift on this device is ~2 fps across a back-to-back arm
   sequence at 38-39°C battery temperature; alternate arm order and log
   temps, or a late-running baseline reads as a regression.
