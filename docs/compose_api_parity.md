@@ -1,12 +1,15 @@
 # Jetpack Compose <-> Cranpose API Parity
 
-> **The Compose side of this doc is a mid-2023 snapshot (~Compose 1.5.0-beta),
-> not current Compose (1.10.6 stable / 1.12 in dev as of this writing,
-> August 2026).** Every "Absent" verdict below needs reading as "absent from that
-> 2023 snapshot," not "absent from Compose" -- see **How stale, and what it
-> hides** under Sources for a quantified accounting, including one whole
-> widely-used feature area (shared element transitions) this pass cannot see
-> at all because it postdates the snapshot by over a year.
+> **Generated against Jetpack Compose 1.12.0** (the frozen
+> `api/1.12.0-beta01.txt` snapshot across the compose-ui/foundation/runtime/
+> animation release train -- Compose's API freezes at a module's first beta,
+> so this is 1.12.0's actual shipped surface, not an in-progress one), read
+> at upstream `androidx/androidx` commit `5ba2cdd61be7b6945db999b238d14f3c626136fb`
+> (androidx-main, fetched 2026-08-29). The first version of this doc was
+> generated against a stale 2023-06-26 snapshot (~Compose 1.5.0-beta) by
+> mistake; **How this doc was refreshed** under Sources has the before/after
+> coverage numbers and confirms the four headline findings below still hold
+> against current Compose.
 
 No prior version of this document existed. `docs/capability_parity.md` was
 checked first and is a different thing entirely: a per-platform capability
@@ -96,71 +99,141 @@ task asked for: one line per class/interface/enum/annotation declaration
 and one per method/field/property/constructor/enum-constant, in the
 metalava signature format.
 
-**This checkout is stale relative to today's Jetpack Compose.** Its
-`current.txt` files reflect an in-progress `1.5.0-beta01`-era snapshot; the
-last commit touching `compose/foundation/foundation/api/current.txt` is
-`be18a1188a13a253d2a6784f812815c88454775c`, dated **2023-06-26**. Current
-Jetpack Compose, as of this writing (2026-08-29), is at 1.10.6 stable /
-1.12 in the dev channel -- roughly three years and seven-to-eight minor
-versions past this snapshot.
+**The working tree there is not this doc's source and was never touched.**
+Someone else may depend on that checkout being exactly where it is (it was
+already mid-refactor with hundreds of uncommitted deletions when this pass
+found it), so nothing here does a `git checkout`, `reset`, `pull`, or
+`merge` against it. Instead:
 
-#### How stale, and what it hides
+1. `git fetch --depth=1 --filter=blob:none upstream androidx-main:refs/heads/compose-parity-snapshot`,
+   invoked through `scripts/ci/with_host_lock.sh --shared` from the CI
+   runner's own Cranpose checkout
+   (`/home/s/actions-runner-cranpose/_work/Cranpose/Cranpose`). **That
+   wrapper turned out not to actually hold the lock**: it closed the lock's
+   file descriptors as part of the same `exec` that launched the wrapped
+   command, before the command's image loaded, so the lock was released in
+   milliseconds every time it ran (fix pending in #552) -- this fetch ran
+   unlocked, and that claim should not be repeated until #552 lands. What
+   actually made it safe here was the operation's own shape, not the lock:
+   `--depth=1` + `--filter=blob:none` fetch only the *tip* commit's tree
+   and commit objects, not three years of history or blob content --
+   `.git` grew by ~33 MB (831 MB to 864 MB), not the multi-gigabyte
+   full-history clone a plain `git fetch` of a monorepo this size would
+   cost. Blobs (the actual file content) are fetched lazily, one small
+   text file at a time, only when something asks to read one. This
+   created one new local ref (`compose-parity-snapshot`) and updated the
+   `upstream/androidx-main` remote-tracking ref; the checked-out branch,
+   its HEAD, and its dirty working tree were verified unchanged
+   afterward (same commit, same 311 modified-file count) -- that
+   verification, not the lock, is what backs the "nothing else's state
+   changed" claim below.
+2. `androidx/androidx` has **no release git tags** (`git ls-remote --tags
+   upstream` returns nothing) -- androidx versions its Maven artifacts
+   without tagging the monorepo, so "pick a released ref" means picking a
+   frozen *file*, not a tag. The compose-ui/foundation/runtime/animation
+   family freezes its public API at each version's first beta: every
+   module's `api/` directory carries one `api/<version>-beta01.txt` per
+   cycle, and `api/current.txt` only diverges from the latest such file
+   once work starts on the *next* version. At the fetched commit, every one
+   of those modules' newest frozen file was **`1.12.0-beta01.txt`**, and
+   `current.txt` had already drifted 461 lines from it (`git diff --stat`)
+   -- meaning current.txt itself was live 1.13.0-alpha work-in-progress,
+   not something to trust as "released." Reading `1.12.0-beta01.txt`
+   instead is both more honest and exactly reproducible: given the pinned
+   commit, that path's content cannot change out from under a later reader
+   the way `current.txt` would.
+3. Paths were listed with `git ls-tree -r compose-parity-snapshot`, and
+   each module's chosen file was read with
+   `git show compose-parity-snapshot:compose/<module>/api/<file>` over
+   `ssh samarch-1`, piping stdout straight into a local mirror tree --
+   `git show` reads an object, it does not touch the working tree, and
+   nothing was written to disk on `samarch-1` at any point in this step.
 
-Every "Absent" verdict in this doc means "absent from the 2023-06-26
-snapshot," not "absent from Compose" -- and the gap between those two is
-not small. Rather than re-deriving this from a second full API dump (which
-would need re-cloning `androidx/androidx` -- see cost note below), this
-was bounded from Google's own published release notes
-(`developer.android.com/jetpack/androidx/releases/compose-{foundation,ui,runtime,animation}`),
-reading every "New Feature" entry from 1.5.0 through the latest listed
-version and counting headline API additions (composables, modifier
-functions, new types) while ignoring bug fixes and internal-only changes.
-That is necessarily an undercount of the true diff (minor overloads and
-undocumented additions don't get their own changelog bullet), but it
-bounds the *shape* of the blind spot, not just its rough size:
+Two of the 33 modules from the first pass no longer exist at that path:
+`material/material-icons-core` and `material3/material3-adaptive` were
+removed or renamed (the latter now lives at `compose/material3/adaptive`)
+sometime in the three years since the 2023 snapshot. Both are in the
+Material bucket, already out of this doc's deep-comparison scope, so they
+are simply dropped from the current pass's module count (33 -> 31) rather
+than chased to their new location.
 
-| Module | ~New public APIs since 1.5.0 (changelog-derived) | Biggest addition this doc cannot see |
-|---|---:|---|
-| `compose-ui` | ~68 | Variable/downloadable fonts, wide-color-gamut support, mesh gradients, several semantics/accessibility properties |
-| `compose-foundation` | ~60-80 | `Grid` and `FlexBox` layout composables (2D CSS-Grid-style layout), scroll indicators, the `Style` API |
-| `compose-animation`/`animation-core` | ~45-55 | **`SharedTransitionLayout` / `Modifier.sharedElement()`** (shipped 1.7.0, mid-2024) -- shared-element transitions are a widely-reached-for feature with no trace in this snapshot at all, not a narrower version of something present |
-| `compose-runtime` | ~27-35 | The `retain()` API family (`RetainScope`, `RetainedEffect`, ...; 1.10.0) and a rewritten internal slot table (1.11.0) |
+**Pinned commit:** `5ba2cdd61be7b6945db999b238d14f3c626136fb` on
+`upstream/androidx-main` (dated 2026-08-28T23:36:29-07:00, i.e. the branch
+tip as fetched on 2026-08-29). **Compose version represented:** 1.12.0 for
+the 27 compose-ui-family modules (`api/1.12.0-beta01.txt`); Material3
+1.4.0-beta03 for the 2 material3 modules that still had a frozen snapshot
+present (`material3`, `material3-window-size-class`) -- Material3 versions
+independently of the compose-ui-family and was already out of this doc's
+deep-comparison scope.
 
-That is on the order of **200-250 new public API elements** across just
-these four modules -- comparable in scale to `cranpose-animation`'s entire
-82-item surface. Every one of them will show up as "Absent" or simply
-missing from the Curated correspondence tables below, indistinguishable
-from a genuine Cranpose gap unless the reader already knows this snapshot
-predates them. `SharedTransitionLayout` specifically deserves calling out
-by name: it is not in the Animation table above because this snapshot has
-never heard of it, not because Cranpose was checked against it and found
-wanting.
+#### How this doc was refreshed, and what changed
 
-**Cost of fixing this properly:** the `androidx/androidx` monorepo is not
-sparse-checkout-friendly for just `compose/`, and a fresh full clone is
-multi-gigabyte and multi-minute-to-multi-hour depending on shallow-depth
-choices -- not something to start on `samarch-1` unscheduled, since that
-host is the CI runner pool and its jobs are documented to die above load 7.
-A `git fetch` of just the newer commits into the *existing* checkout
-(rather than a fresh clone) would be far cheaper if `upstream/androidx-main`
-already has the newer history reachable, but that still needs someone to
-run and verify it on that host rather than assume it from here.
+The first version of this doc (merged as #546) was generated against a
+2023-06-26 snapshot by mistake -- the checkout above was already three
+years stale and nobody had noticed. Refreshing it validates the concern
+that motivated calling that staleness out in the first place: the Compose
+side grew enough to visibly shift every coverage number.
 
-`tools/api-surface/dump-compose-api` parses every `api/current.txt` under a
-given root (auto-discovered by directory name, not a hardcoded module
-list) into structured JSON: package, class, class kind, member kind, name,
-raw signature, static/deprecated/experimental flags. Because `samarch-1` is
-also a CI host under load, the actual `current.txt` files were pulled to a
-local machine with `rsync` (reading files is fine, `cargo build` was not
-run there) rather than parsed in place:
+| | 2023-06-26 snapshot (1.5.0-beta) | 2026-08-29 refresh (1.12.0) |
+|---|---:|---:|
+| Compose modules considered | 33 | 31 (2 removed/renamed, see above) |
+| Compose entries, all modules | 12,529 | 19,838 (+58%) |
+| Compose entries, 14 core modules | 9,213 | 15,373 (+67%) |
+| Cranpose flattened items | 8,477 | 8,464 (ordinary drift from commits landed on `main` since) |
+| Cranpose rows matched (vs all Compose keys) | 2,284 (27%) | 2,414 (28.5%) |
+| Cranpose rows matched (vs core-module keys only) | 2,174 (26%) | 2,303 (27.2%) |
+| Compose core-module entries matched | 2,449 (27%) | 3,300 (21.5%) |
+| Compose all-module entries matched | 2,834 (23%) | 3,838 (19.3%) |
+| Cranpose unclassified | 6,193 (73%) | 6,050 (71.5%) |
+
+Reading this: Cranpose's own match rate barely moved (27% -> 28.5%) because
+Cranpose's surface didn't change much in three years. Compose's match rate
+*dropped* (27% -> 21.5% on core modules) despite Cranpose matching more
+entries in absolute terms (2,449 -> 3,300), because Compose's surface grew
+faster than Cranpose's did -- exactly the shape of gap a stale comparison
+hides and a fresh one exposes. `SharedTransitionLayout`/`SharedTransitionScope`
+(the shared-element transition API the 2023 snapshot could not see at all)
+is confirmed present in this refresh's data and confirmed still absent from
+Cranpose by name -- it is now an honest "Absent" verdict instead of an
+invisible one.
+
+The four same-name-different-semantics and mechanism findings below were
+re-verified against this refreshed data before being left unchanged; see
+the note at the top of **Findings**.
+
+`tools/api-surface/dump-compose-api` parses every `api/current.txt` (or, as
+used for this refresh, any metalava-format file passed under that name in
+the local mirror) under a given root (auto-discovered by directory name,
+not a hardcoded module list) into structured JSON: package, class, class
+kind, member kind, name, raw signature, static/deprecated/experimental
+flags. This refresh also fixed two real parsing bugs the 2023 data never
+exercised -- `nonexhaustive`/`exhaustive` sealed-class modifiers and
+`package @Annotation pkg.name {}`-prefixed package declarations, both new
+metalava output since 2023 -- and added a `typealias` entry kind, all with
+regression tests (`tools/api-surface/src/bin/dump_compose_api.rs`).
+
+To refresh again later, from a host with the androidx checkout: confirm
+`scripts/ci/with_host_lock.sh` actually holds the lock for the duration of
+the command before relying on it again (#552 fixes a real bug where it
+released immediately on `exec`; verify the fix landed, don't just check
+the wrapper is present), and re-derive step 2 above for whatever the
+current highest frozen version is by then. Regardless of the lock, verify
+`git status`/`git log -1` on the checkout are unchanged before and after,
+the way this refresh did -- that check is what actually establishes
+nothing else's state moved:
 
 ```
-rsync -av --prune-empty-dirs --include='*/' --include='api/current.txt' \
-  --exclude='*' samarch-1:/media/huge/projects/android/androidx/compose/ \
-  /tmp/compose-mirror/
+ssh samarch-1 "cd /home/s/actions-runner-cranpose/_work/Cranpose/Cranpose && ./scripts/ci/with_host_lock.sh --shared git -C /media/huge/projects/android/androidx fetch --depth=1 --filter=blob:none upstream androidx-main:refs/heads/compose-parity-snapshot"
+```
+
+Then, for each module, find its highest frozen `<version>-betaNN.txt` and
+read it with `git show compose-parity-snapshot:compose/<module>/api/<file>`
+over ssh, writing each into a local `<module>/api/current.txt` mirror
+(exactly what step 3 above did), then:
+
+```
 cd tools/api-surface && cargo build --release
-target/release/dump-compose-api --root /tmp/compose-mirror \
-  --out /tmp/compose_api_surface.json
+target/release/dump-compose-api --root /tmp/compose-mirror --out /tmp/compose_api_surface.json
 ```
 
 ### Matching the two
@@ -177,33 +250,37 @@ short name -- `size`, `offset`, `key`) and false negatives (a real
 correspondence under an unrelated name is invisible to it). Every row it
 produces is a *candidate for review*, not a verdict; that review is the
 **Curated correspondence** section below, done for the parts of the
-surface most likely to be asked about, not the whole 8,477-row table.
+surface most likely to be asked about, not the whole 8,464-row table.
 
 ```
 target/release/match-api --compose /tmp/compose_api_surface.json \
   --cranpose /tmp/cranpose_api_surface.json --out /tmp/match_result.json
 ```
 
-The generated JSON files are not committed (they total ~14 MB and are
-fully reproducible from the three commands above plus the external
+The generated JSON files are not committed (they total ~19 MB and are
+fully reproducible from the commands under Sources above plus the external
 checkout); this document's numbers are a point-in-time snapshot, stamped
 below.
 
-**As of:** Cranpose `5b399b71` (workspace version 0.1.104), androidx
-`be18a1188a13a253d2a6784f812815c88454775c` (2023-06-26), generated
-2026-08-29.
+**As of:** Cranpose `a0d22b1a` (workspace version 0.1.104), androidx
+`5ba2cdd61be7b6945db999b238d14f3c626136fb` (androidx-main tip, Compose
+1.12.0 frozen surface), generated 2026-08-29. Supersedes the first version
+of this doc, generated against Cranpose `5b399b71` / androidx
+`be18a1188a1` (2023-06-26).
 
 ## Scope
 
-Jetpack Compose ships 33 Gradle modules under `compose/`. Not all of them
-are in Cranpose's problem domain, and forcing a match attempt on ones that
-aren't would manufacture noise, not signal. Three buckets:
+Jetpack Compose ships 31 Gradle modules under `compose/` as read for this
+pass (33 in the first pass; see **How this doc was refreshed** above for
+the 2 that were removed or renamed). Not all of them are in Cranpose's
+problem domain, and forcing a match attempt on ones that aren't would
+manufacture noise, not signal. Three buckets:
 
 | Bucket | Compose modules | Entries | In this doc |
 |---|---|---:|---|
-| **Core UI toolkit** (compared in depth) | `runtime`, `runtime-saveable`, `ui`, `ui-geometry`, `ui-graphics`, `ui-unit`, `ui-text`, `ui-util`, `foundation`, `foundation-layout`, `animation`, `animation-core`, `ui-test`, `ui-test-junit4` (14 modules) | 9,213 | Curated correspondence + Findings |
-| **Material / Material3** (design-system widget libraries) | `material`, `material-icons-core`, `material-ripple`, `material3`, `material3-adaptive`, `material3-window-size-class` (6 modules) | 2,953 | One decision, not a per-symbol match (see below) |
-| **Android/JVM interop, tooling, and IDE support** | `runtime-livedata`, `runtime-rxjava2/3`, `runtime-tracing`, `ui-tooling*`, `ui-viewbinding`, `ui-android-stubs`, `ui-test-manifest`, `ui-text-google-fonts`, `animation-graphics`, `animation-tooling-internal` (13 modules) | 363 | Excluded: bridges to Android View/RxJava/LiveData/Android Studio preview tooling that Cranpose's architecture (no Android View interop, no Android Studio compiler plugin) has no analog for |
+| **Core UI toolkit** (compared in depth) | `runtime`, `runtime-saveable`, `ui`, `ui-geometry`, `ui-graphics`, `ui-unit`, `ui-text`, `ui-util`, `foundation`, `foundation-layout`, `animation`, `animation-core`, `ui-test`, `ui-test-junit4` (14 modules) | 15,373 | Curated correspondence + Findings |
+| **Material / Material3** (design-system widget libraries) | `material`, `material-ripple`, `material3`, `material3-window-size-class` (4 modules; `material-icons-core` and `material3-adaptive` no longer at this path) | 3,953 | One decision, not a per-symbol match (see below) |
+| **Android/JVM interop, tooling, and IDE support** | `runtime-livedata`, `runtime-rxjava2/3`, `runtime-tracing`, `ui-tooling*`, `ui-viewbinding`, `ui-android-stubs`, `ui-test-manifest`, `ui-text-google-fonts`, `animation-graphics`, `animation-tooling-internal` (13 modules) | 512 | Excluded: bridges to Android View/RxJava/LiveData/Android Studio preview tooling that Cranpose's architecture (no Android View interop, no Android Studio compiler plugin) has no analog for |
 
 **Material/Material3 decision:** Cranpose does not attempt to be a
 Material Design implementation. `cranpose-liquid`'s own doc comment calls
@@ -245,18 +322,22 @@ close that.
 | | Count |
 |---|---:|
 | Cranpose crates considered (23 total; all are in scope for the raw count, 12 for item-level Compose matching) | 23 |
-| Cranpose reachable public items (top-level: fns, types, traits, consts, statics, macros) | 5,351 |
-| ...flattened with struct/enum/trait/impl members and re-exports as their own rows | 8,477 |
-| Compose entries considered, all 33 modules (class/interface/enum/annotation declarations + method/field/property/ctor/enum-constant) | 12,529 |
-| ...of which in the 14 core-UI-toolkit modules | 9,213 |
-| Cranpose rows with >=1 name-squash Compose candidate (of 8,477) | 2,284 (27%) |
-| ...restricted to core-module Compose keys only | 2,174 (26%) |
-| Compose core-module entries with >=1 Cranpose candidate (of 9,213) | 2,449 (27%) |
-| Compose entries (all 33 modules) with >=1 Cranpose candidate (of 12,529) | 2,834 (23%) |
-| **Unclassified** (Cranpose rows with zero candidate) | 6,193 (73%) |
+| Cranpose reachable public items (top-level: fns, types, traits, consts, statics, macros) | 5,341 |
+| ...flattened with struct/enum/trait/impl members and re-exports as their own rows | 8,464 |
+| Compose entries considered, all 31 modules (class/interface/enum/annotation declarations + method/field/property/ctor/enum-constant) | 19,838 |
+| ...of which in the 14 core-UI-toolkit modules | 15,373 |
+| Cranpose rows with >=1 name-squash Compose candidate (of 8,464) | 2,414 (28.5%) |
+| ...restricted to core-module Compose keys only | 2,303 (27.2%) |
+| Compose core-module entries with >=1 Cranpose candidate (of 15,373) | 3,300 (21.5%) |
+| Compose entries (all 31 modules) with >=1 Cranpose candidate (of 19,838) | 3,838 (19.3%) |
+| **Unclassified** (Cranpose rows with zero candidate) | 6,050 (71.5%) |
 
-That 73% unclassified figure is the honest number, not an oversight: most
-of it is Rust-internal plumbing with no Kotlin analog to search for
+(The first version of this doc, against the 2023 snapshot, reported 33
+modules / 12,529 Compose entries / 2,834 matched (23%) / 73% unclassified
+-- see the before/after table under **How this doc was refreshed** above.)
+
+That 71.5% unclassified figure is the honest number, not an oversight:
+most of it is Rust-internal plumbing with no Kotlin analog to search for
 (`Cell`/`Rc`/`RefCell` field accessors, `impl Default`, private-module
 re-export bookkeeping counted at the flattened level, trait bound
 machinery) and the long tail of both APIs that a coarse name-squash simply
@@ -267,7 +348,7 @@ By crate (in-domain crates only, sorted by size):
 
 | Crate | Reachable items | `#[composable]` fns |
 |---|---:|---:|
-| `cranpose-ui` | 1,671 | 62 |
+| `cranpose-ui` | 1,675 | 62 |
 | `cranpose-core` | 691 | 0 |
 | `cranpose-ui-graphics` | 453 | 0 |
 | `cranpose-foundation` | 438 | 2 |
@@ -275,7 +356,7 @@ By crate (in-domain crates only, sorted by size):
 | `cranpose` | 194 | 5 |
 | `cranpose-testing` | 177 | 0 |
 | `cranpose-app-shell` | 137 | 0 |
-| `cranpose-animation` | 82 | 0 |
+| `cranpose-animation` | 68 | 0 |
 | `cranpose-ui-layout` | 65 | 0 |
 | `cranpose-runtime-std` | 25 | 0 |
 | `cranpose-macros` | 1 | 0 (defines `#[composable]` itself) |
@@ -356,7 +437,7 @@ by symbol, per the Scope decision above.
 | `Animatable<T>` | Same name | Implemented | |
 | `rememberInfiniteTransition()` / `InfiniteTransition.animateFloat` | Same names | Implemented | |
 | `updateTransition(targetState)` / `Transition<S>` / `transition.animateFloat { }` (finite, multi-property, state-machine-driven transitions) | -- | Absent | Cranpose covers single-value animation and infinite repetition, not the general finite state-driven multi-property orchestration API. |
-| `DecayAnimationSpec`, `FloatDecayAnimationSpec`, `SplineBasedDecay` (fling physics) | `cranpose-animation::decay_spec::{FlingCalculator, FlingInfo, FloatDecayAnimationSpec, SplineBasedDecaySpec}` | Implemented | |
+| `DecayAnimationSpec`, `FloatDecayAnimationSpec` (fling physics contract) | `cranpose-animation::decay_spec::{FloatDecayAnimationSpec, ExponentialDecaySpec}` | Implemented, deliberately different physics | The trait matches; the concrete spec does not. `SplineBasedDecaySpec` (a port of `android.widget.Scroller`'s math) was replaced in #541 (landed after this doc's data was last generated, caught while re-verifying for this refresh) by `ExponentialDecaySpec` + `IOS_DECELERATION_RATE_{FAST,NORMAL}`, physics measured directly from a real iOS `UIScrollView` -- a deliberate divergence (Cranpose targets iOS feel, not an Android-physics port), not a gap. |
 
 ### Text
 
@@ -381,6 +462,21 @@ reach for first, under a name that matches, behaving differently enough
 to bite. Everything after them is either an outright absence or a
 deliberate divergence, which are lower-risk because nothing about them
 looks familiar enough to trust on sight.
+
+**All four findings below were re-checked against this refresh's data
+(Compose 1.12.0, not the original 2023 snapshot) and hold unchanged.**
+Specifically: `Modifier.clickable` in 1.12.0 still has no position
+parameter on `onClick` and still carries `enabled`/`onClickLabel`/`role`/
+`interactionSource`/`indication` that Cranpose's version lacks (the
+signature shown below is 1.12.0's, not 2023's -- it reordered slightly but
+the shape didn't change). `remember` in 1.12.0 still returns `T` directly
+(and its `vararg keys` overload, now visible in the refreshed data, is
+built into `remember` itself as an overload family Kotlin can express and
+Rust cannot -- confirming, not weakening, why `rememberKeyed` had to be a
+separate name). `Modifier.testTag` is unchanged and Cranpose still has
+nothing matching it under any spelling. The `remember`/`LaunchedEffect`
+mechanism split is entirely internal to Cranpose and does not depend on
+Compose's version at all. None of the four needed a rewrite.
 
 ### Same name, different semantics: `Modifier.clickable`
 
@@ -476,9 +572,9 @@ git-blame/design-doc dig this pass didn't do.
 
 ## Regenerating the full generated candidate table
 
-The three commands under **Sources** produce `/tmp/cranpose_api_surface.json`,
+The commands under **Sources** produce `/tmp/cranpose_api_surface.json`,
 `/tmp/compose_api_surface.json`, and `/tmp/match_result.json`. The last one
-is the full 8,477-row candidate table (Cranpose item -> every Compose entry
+is the full 8,464-row candidate table (Cranpose item -> every Compose entry
 whose squashed name matches), including everything not mentioned in the
 Curated correspondence section above -- most of it correctly unclassified,
 some of it worth someone's next look.
