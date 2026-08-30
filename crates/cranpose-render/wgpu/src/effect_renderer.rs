@@ -56,6 +56,18 @@ fn force_blur_scale_1_enabled() -> bool {
     *ENABLED.get_or_init(|| std::env::var_os("CRANPOSE_FORCE_BLUR_SCALE_1").is_some())
 }
 
+/// PR #542 investigation only: per-call trace of the blur radius this
+/// function received and the downscale factor it chose. Reuses the
+/// `CRANPOSE_BACKDROP_DIAG` flag already used by every other probe in this
+/// investigation rather than adding a new one. Distinguish this from the
+/// `scale=` field already printed by the surface_executor diagnostics —
+/// that one is the root/device-pixel scale; `chosen_downscale` here is
+/// `blur_scratch_size`'s own 1/2/4x scratch-texture factor.
+fn blur_scale_diag_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("CRANPOSE_BACKDROP_DIAG").is_some())
+}
+
 pub(crate) fn blur_scratch_size(
     radius_x: f32,
     radius_y: f32,
@@ -75,6 +87,11 @@ pub(crate) fn blur_scratch_size(
     };
     while scale > 1 && (width / scale < 16 || height / scale < 16) {
         scale /= 2;
+    }
+    if blur_scale_diag_enabled() {
+        eprintln!(
+            "[blur-scale-diag] radius_x={radius_x} radius_y={radius_y} radius={radius} chosen_downscale={scale} source_width={width} source_height={height}"
+        );
     }
     if scale <= 1 {
         return (width, height);
