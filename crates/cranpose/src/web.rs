@@ -44,6 +44,99 @@ fn web_modifiers(event: &web_sys::MouseEvent) -> cranpose_app_shell::Modifiers {
     }
 }
 
+fn web_key_modifiers(event: &web_sys::KeyboardEvent) -> cranpose_app_shell::Modifiers {
+    cranpose_app_shell::Modifiers {
+        shift: event.shift_key(),
+        ctrl: event.ctrl_key(),
+        alt: event.alt_key(),
+        meta: event.meta_key(),
+    }
+}
+
+const WEB_KEY_CODES: &[(&str, cranpose_app_shell::KeyCode)] = {
+    use cranpose_app_shell::KeyCode;
+    &[
+        ("KeyA", KeyCode::A),
+        ("KeyB", KeyCode::B),
+        ("KeyC", KeyCode::C),
+        ("KeyD", KeyCode::D),
+        ("KeyE", KeyCode::E),
+        ("KeyF", KeyCode::F),
+        ("KeyG", KeyCode::G),
+        ("KeyH", KeyCode::H),
+        ("KeyI", KeyCode::I),
+        ("KeyJ", KeyCode::J),
+        ("KeyK", KeyCode::K),
+        ("KeyL", KeyCode::L),
+        ("KeyM", KeyCode::M),
+        ("KeyN", KeyCode::N),
+        ("KeyO", KeyCode::O),
+        ("KeyP", KeyCode::P),
+        ("KeyQ", KeyCode::Q),
+        ("KeyR", KeyCode::R),
+        ("KeyS", KeyCode::S),
+        ("KeyT", KeyCode::T),
+        ("KeyU", KeyCode::U),
+        ("KeyV", KeyCode::V),
+        ("KeyW", KeyCode::W),
+        ("KeyX", KeyCode::X),
+        ("KeyY", KeyCode::Y),
+        ("KeyZ", KeyCode::Z),
+        ("Digit0", KeyCode::Digit0),
+        ("Digit1", KeyCode::Digit1),
+        ("Digit2", KeyCode::Digit2),
+        ("Digit3", KeyCode::Digit3),
+        ("Digit4", KeyCode::Digit4),
+        ("Digit5", KeyCode::Digit5),
+        ("Digit6", KeyCode::Digit6),
+        ("Digit7", KeyCode::Digit7),
+        ("Digit8", KeyCode::Digit8),
+        ("Digit9", KeyCode::Digit9),
+        ("ArrowUp", KeyCode::ArrowUp),
+        ("ArrowDown", KeyCode::ArrowDown),
+        ("ArrowLeft", KeyCode::ArrowLeft),
+        ("ArrowRight", KeyCode::ArrowRight),
+        ("Home", KeyCode::Home),
+        ("End", KeyCode::End),
+        ("PageUp", KeyCode::PageUp),
+        ("PageDown", KeyCode::PageDown),
+        ("Backspace", KeyCode::Backspace),
+        ("Delete", KeyCode::Delete),
+        ("Enter", KeyCode::Enter),
+        ("NumpadEnter", KeyCode::Enter),
+        ("Tab", KeyCode::Tab),
+        ("Space", KeyCode::Space),
+        ("Escape", KeyCode::Escape),
+        ("Minus", KeyCode::Minus),
+        ("Equal", KeyCode::Equal),
+        ("BracketLeft", KeyCode::BracketLeft),
+        ("BracketRight", KeyCode::BracketRight),
+        ("Backslash", KeyCode::Backslash),
+        ("Semicolon", KeyCode::Semicolon),
+        ("Quote", KeyCode::Quote),
+        ("Comma", KeyCode::Comma),
+        ("Period", KeyCode::Period),
+        ("Slash", KeyCode::Slash),
+        ("Backquote", KeyCode::Backquote),
+    ]
+};
+
+fn web_key_code(code: &str) -> cranpose_app_shell::KeyCode {
+    WEB_KEY_CODES
+        .iter()
+        .find(|(name, _)| *name == code)
+        .map_or(cranpose_app_shell::KeyCode::Unknown, |(_, key)| *key)
+}
+
+fn web_key_event_prefix(
+    event: &web_sys::KeyboardEvent,
+) -> Option<(cranpose_app_shell::KeyCode, cranpose_app_shell::Modifiers)> {
+    if event.is_composing() || event.key_code() == 229 {
+        return None;
+    }
+    Some((web_key_code(&event.code()), web_key_modifiers(event)))
+}
+
 fn wheel_uptime_millis() -> u64 {
     thread_local! {
         static EPOCH: web_time::Instant = web_time::Instant::now();
@@ -500,84 +593,11 @@ pub async fn run(
         let app = app.clone();
         let request_frame = request_frame.clone();
         let closure = Closure::wrap(Box::new(move |event: web_sys::KeyboardEvent| {
-            use cranpose_app_shell::{KeyCode, KeyEvent, KeyEventType, Modifiers};
+            use cranpose_app_shell::{KeyEvent, KeyEventType};
 
-            if event.is_composing() || event.key_code() == 229 {
+            let Some((key_code, modifiers)) = web_key_event_prefix(&event) else {
                 return;
-            }
-
-            let key_code = match event.code().as_str() {
-                "KeyA" => KeyCode::A,
-                "KeyB" => KeyCode::B,
-                "KeyC" => KeyCode::C,
-                "KeyD" => KeyCode::D,
-                "KeyE" => KeyCode::E,
-                "KeyF" => KeyCode::F,
-                "KeyG" => KeyCode::G,
-                "KeyH" => KeyCode::H,
-                "KeyI" => KeyCode::I,
-                "KeyJ" => KeyCode::J,
-                "KeyK" => KeyCode::K,
-                "KeyL" => KeyCode::L,
-                "KeyM" => KeyCode::M,
-                "KeyN" => KeyCode::N,
-                "KeyO" => KeyCode::O,
-                "KeyP" => KeyCode::P,
-                "KeyQ" => KeyCode::Q,
-                "KeyR" => KeyCode::R,
-                "KeyS" => KeyCode::S,
-                "KeyT" => KeyCode::T,
-                "KeyU" => KeyCode::U,
-                "KeyV" => KeyCode::V,
-                "KeyW" => KeyCode::W,
-                "KeyX" => KeyCode::X,
-                "KeyY" => KeyCode::Y,
-                "KeyZ" => KeyCode::Z,
-                "Digit0" => KeyCode::Digit0,
-                "Digit1" => KeyCode::Digit1,
-                "Digit2" => KeyCode::Digit2,
-                "Digit3" => KeyCode::Digit3,
-                "Digit4" => KeyCode::Digit4,
-                "Digit5" => KeyCode::Digit5,
-                "Digit6" => KeyCode::Digit6,
-                "Digit7" => KeyCode::Digit7,
-                "Digit8" => KeyCode::Digit8,
-                "Digit9" => KeyCode::Digit9,
-                "ArrowUp" => KeyCode::ArrowUp,
-                "ArrowDown" => KeyCode::ArrowDown,
-                "ArrowLeft" => KeyCode::ArrowLeft,
-                "ArrowRight" => KeyCode::ArrowRight,
-                "Home" => KeyCode::Home,
-                "End" => KeyCode::End,
-                "PageUp" => KeyCode::PageUp,
-                "PageDown" => KeyCode::PageDown,
-                "Backspace" => KeyCode::Backspace,
-                "Delete" => KeyCode::Delete,
-                "Enter" | "NumpadEnter" => KeyCode::Enter,
-                "Tab" => KeyCode::Tab,
-                "Space" => KeyCode::Space,
-                "Escape" => KeyCode::Escape,
-                "Minus" => KeyCode::Minus,
-                "Equal" => KeyCode::Equal,
-                "BracketLeft" => KeyCode::BracketLeft,
-                "BracketRight" => KeyCode::BracketRight,
-                "Backslash" => KeyCode::Backslash,
-                "Semicolon" => KeyCode::Semicolon,
-                "Quote" => KeyCode::Quote,
-                "Comma" => KeyCode::Comma,
-                "Period" => KeyCode::Period,
-                "Slash" => KeyCode::Slash,
-                "Backquote" => KeyCode::Backquote,
-                _ => KeyCode::Unknown,
             };
-
-            let modifiers = Modifiers {
-                shift: event.shift_key(),
-                ctrl: event.ctrl_key(),
-                alt: event.alt_key(),
-                meta: event.meta_key(),
-            };
-
             let text = {
                 let key = event.key();
                 if key.len() == 1 { key } else { String::new() }
@@ -605,66 +625,10 @@ pub async fn run(
         let app = app.clone();
         let request_frame = request_frame.clone();
         let closure = Closure::wrap(Box::new(move |event: web_sys::KeyboardEvent| {
-            use cranpose_app_shell::{KeyCode, KeyEvent, KeyEventType, Modifiers};
+            use cranpose_app_shell::{KeyEvent, KeyEventType};
 
-            if event.is_composing() || event.key_code() == 229 {
+            let Some((key_code, modifiers)) = web_key_event_prefix(&event) else {
                 return;
-            }
-
-            let key_code = match event.code().as_str() {
-                "KeyA" => KeyCode::A,
-                "KeyB" => KeyCode::B,
-                "KeyC" => KeyCode::C,
-                "KeyD" => KeyCode::D,
-                "KeyE" => KeyCode::E,
-                "KeyF" => KeyCode::F,
-                "KeyG" => KeyCode::G,
-                "KeyH" => KeyCode::H,
-                "KeyI" => KeyCode::I,
-                "KeyJ" => KeyCode::J,
-                "KeyK" => KeyCode::K,
-                "KeyL" => KeyCode::L,
-                "KeyM" => KeyCode::M,
-                "KeyN" => KeyCode::N,
-                "KeyO" => KeyCode::O,
-                "KeyP" => KeyCode::P,
-                "KeyQ" => KeyCode::Q,
-                "KeyR" => KeyCode::R,
-                "KeyS" => KeyCode::S,
-                "KeyT" => KeyCode::T,
-                "KeyU" => KeyCode::U,
-                "KeyV" => KeyCode::V,
-                "KeyW" => KeyCode::W,
-                "KeyX" => KeyCode::X,
-                "KeyY" => KeyCode::Y,
-                "KeyZ" => KeyCode::Z,
-                "Digit0" => KeyCode::Digit0,
-                "Digit1" => KeyCode::Digit1,
-                "Digit2" => KeyCode::Digit2,
-                "Digit3" => KeyCode::Digit3,
-                "Digit4" => KeyCode::Digit4,
-                "Digit5" => KeyCode::Digit5,
-                "Digit6" => KeyCode::Digit6,
-                "Digit7" => KeyCode::Digit7,
-                "Digit8" => KeyCode::Digit8,
-                "Digit9" => KeyCode::Digit9,
-                "ArrowUp" => KeyCode::ArrowUp,
-                "ArrowDown" => KeyCode::ArrowDown,
-                "ArrowLeft" => KeyCode::ArrowLeft,
-                "ArrowRight" => KeyCode::ArrowRight,
-                "Backspace" => KeyCode::Backspace,
-                "Delete" => KeyCode::Delete,
-                "Enter" | "NumpadEnter" => KeyCode::Enter,
-                "Tab" => KeyCode::Tab,
-                "Space" => KeyCode::Space,
-                _ => KeyCode::Unknown,
-            };
-
-            let modifiers = Modifiers {
-                shift: event.shift_key(),
-                ctrl: event.ctrl_key(),
-                alt: event.alt_key(),
-                meta: event.meta_key(),
             };
 
             let key_event = KeyEvent {

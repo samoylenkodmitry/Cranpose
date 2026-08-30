@@ -1632,6 +1632,20 @@ impl App {
         native.surface_dirty = surface_reconfigure_requires_redraw(width, height);
     }
 
+    fn apply_native_window_resize(native: &mut NativeWindowSurface, width: u32, height: u32) {
+        let previous_state_size = native.state.map(|state| state.size_non_reactive());
+        update_native_options_size(&mut native.options, &native.window, width, height);
+        notify_native_window_resized(&native.events, &native.window, width, height);
+        sync_native_window_state_size(
+            native.state,
+            previous_state_size,
+            &native.window,
+            width,
+            height,
+        );
+        Self::resize_native_surface(native, width, height);
+    }
+
     fn sync_native_window_position_from_os(
         platform_probe: &NativeWindowPlatformProbe,
         native: &mut NativeWindowSurface,
@@ -2178,58 +2192,18 @@ impl App {
                 keep_window = false;
             }
             WindowEvent::SurfaceResized(new_size) => {
-                let previous_state_size = native.state.map(|state| state.size_non_reactive());
-                update_native_options_size(
-                    &mut native.options,
-                    &native.window,
-                    new_size.width,
-                    new_size.height,
-                );
-                notify_native_window_resized(
-                    &native.events,
-                    &native.window,
-                    new_size.width,
-                    new_size.height,
-                );
-                sync_native_window_state_size(
-                    native.state,
-                    previous_state_size,
-                    &native.window,
-                    new_size.width,
-                    new_size.height,
-                );
-                Self::resize_native_surface(&mut native, new_size.width, new_size.height);
+                Self::apply_native_window_resize(&mut native, new_size.width, new_size.height);
                 sync_after_event = true;
             }
             WindowEvent::ScaleFactorChanged {
                 scale_factor,
                 mut surface_size_writer,
             } => {
-                let previous_state_size = native.state.map(|state| state.size_non_reactive());
                 update_app_scale_factor(&mut native.app, &mut native.platform, scale_factor);
 
                 let new_size = native.window.surface_size();
                 let _ = surface_size_writer.request_surface_size(new_size);
-                update_native_options_size(
-                    &mut native.options,
-                    &native.window,
-                    new_size.width,
-                    new_size.height,
-                );
-                notify_native_window_resized(
-                    &native.events,
-                    &native.window,
-                    new_size.width,
-                    new_size.height,
-                );
-                sync_native_window_state_size(
-                    native.state,
-                    previous_state_size,
-                    &native.window,
-                    new_size.width,
-                    new_size.height,
-                );
-                Self::resize_native_surface(&mut native, new_size.width, new_size.height);
+                Self::apply_native_window_resize(&mut native, new_size.width, new_size.height);
                 sync_after_event = true;
             }
             WindowEvent::Moved(position) => {
@@ -2666,6 +2640,98 @@ impl App {
     fn set_robot_controller(&mut self, controller: RobotController) {
         self.robot_controller = Some(controller);
     }
+}
+
+#[cfg(feature = "robot")]
+fn begin_robot_pump_present_wait(
+    controller: &mut RobotController,
+    window: &Arc<dyn Window>,
+    last_frame_start_time: &mut Option<Instant>,
+    primary_redraw_pending: &mut bool,
+    target: u64,
+) {
+    controller.begin_pump_present_wait(target);
+    *last_frame_start_time = None;
+    request_redraw_once(window, primary_redraw_pending);
+}
+
+#[cfg(feature = "robot")]
+fn robot_finish_without_wait(
+    app: &mut AppShell<WgpuRenderer>,
+    registry: &Rc<native_window::NativeWindowRegistry>,
+    controller: &RobotController,
+    robot_visible_surface_dirty: &mut bool,
+) {
+    let update_result = update_app_with_native_window_registry(app, registry);
+    *robot_visible_surface_dirty = app.needs_redraw() || update_result.visual_changed;
+    let _ = controller.tx.send(RobotResponse::Ok);
+}
+
+#[cfg(feature = "robot")]
+#[allow(clippy::too_many_arguments)]
+fn robot_present_or_update(
+    controller: &mut RobotController,
+    window: &Arc<dyn Window>,
+    app: &mut AppShell<WgpuRenderer>,
+    registry: &Rc<native_window::NativeWindowRegistry>,
+    last_frame_start_time: &mut Option<Instant>,
+    primary_redraw_pending: &mut bool,
+    robot_visible_surface_dirty: &mut bool,
+    target: Option<u64>,
+) {
+    match target {
+        Some(target) => begin_robot_pump_present_wait(
+            controller,
+            window,
+            last_frame_start_time,
+            primary_redraw_pending,
+            target,
+        ),
+        None => robot_finish_without_wait(app, registry, controller, robot_visible_surface_dirty),
+    }
+}
+
+#[cfg(feature = "robot")]
+fn robot_present_or_ack(
+    controller: &mut RobotController,
+    window: &Arc<dyn Window>,
+    last_frame_start_time: &mut Option<Instant>,
+    primary_redraw_pending: &mut bool,
+    target: Option<u64>,
+) {
+    match target {
+        Some(target) => begin_robot_pump_present_wait(
+            controller,
+            window,
+            last_frame_start_time,
+            primary_redraw_pending,
+            target,
+        ),
+        None => {
+            let _ = controller.tx.send(RobotResponse::Ok);
+        }
+    }
+}
+
+#[cfg(feature = "robot")]
+fn robot_scroll_present_target(
+    app: &mut AppShell<WgpuRenderer>,
+    delta_x: f32,
+    delta_y: f32,
+    primary_window_visible: bool,
+    headless: bool,
+    presented_frame_generation: u64,
+) -> Option<Option<u64>> {
+    let consumed = app.pointer_scrolled(delta_x, delta_y);
+    if !consumed {
+        return None;
+    }
+    Some(robot_visible_pump_present_target(
+        primary_window_visible,
+        headless,
+        1,
+        presented_frame_generation,
+    ))
 }
 
 fn apply_frame_pacing_mode(
@@ -3832,6 +3898,32 @@ fn viewport_for_surface_size(
     requested_viewport.unwrap_or_else(|| surface_logical_viewport_size(width, height, scale_factor))
 }
 
+#[allow(clippy::too_many_arguments)]
+fn apply_primary_surface_resize(
+    app: &mut AppShell<WgpuRenderer>,
+    surface: &wgpu::Surface<'static>,
+    surface_config: &mut wgpu::SurfaceConfiguration,
+    window: &Arc<dyn Window>,
+    primary_viewport_override: Option<(f32, f32)>,
+    width: u32,
+    height: u32,
+    primary_surface_dirty: &mut bool,
+    primary_redraw_pending: &mut bool,
+) {
+    if width == 0 || height == 0 {
+        return;
+    }
+    let viewport = viewport_for_surface_size(
+        primary_viewport_override,
+        width,
+        height,
+        window.scale_factor(),
+    );
+    configure_app_surface_size(app, surface, surface_config, width, height, viewport);
+    *primary_surface_dirty = true;
+    request_redraw_once(window, primary_redraw_pending);
+}
+
 fn primary_viewport_for_surface_size(
     settings: &AppSettings,
     width: u32,
@@ -4084,27 +4176,11 @@ impl ApplicationHandler for App {
             }
         };
 
-        let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
-        instance_descriptor.backends = wgpu::Backends::all();
-        let instance = wgpu::Instance::new(instance_descriptor);
-
-        let surface = match instance.create_surface(window.clone()) {
-            Ok(surface) => surface,
-            Err(error) => {
-                self.abort_launch(event_loop, LaunchError::SurfaceCreate(error));
-                return;
-            }
-        };
-
-        let adapter =
-            match pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface: Some(&surface),
-                force_fallback_adapter: false,
-            })) {
-                Ok(adapter) => adapter,
+        let (instance, surface, adapter) =
+            match crate::wgpu_surface::create_wgpu_surface_and_adapter(&window) {
+                Ok(triple) => triple,
                 Err(error) => {
-                    self.abort_launch(event_loop, LaunchError::NoAdapter(error));
+                    self.abort_launch(event_loop, error);
                     return;
                 }
             };
@@ -4327,23 +4403,18 @@ impl ApplicationHandler for App {
                     crate::desktop_incoming::publish_file(path);
                 }
             }
-            WindowEvent::SurfaceResized(new_size) if new_size.width > 0 && new_size.height > 0 => {
-                let viewport = viewport_for_surface_size(
-                    primary_viewport_override,
-                    new_size.width,
-                    new_size.height,
-                    window.scale_factor(),
-                );
-                configure_app_surface_size(
+            WindowEvent::SurfaceResized(new_size) => {
+                apply_primary_surface_resize(
                     app,
                     surface,
                     surface_config,
+                    window,
+                    primary_viewport_override,
                     new_size.width,
                     new_size.height,
-                    viewport,
+                    &mut self.primary_surface_dirty,
+                    &mut self.primary_redraw_pending,
                 );
-                self.primary_surface_dirty = true;
-                request_redraw_once(window, &mut self.primary_redraw_pending);
             }
             WindowEvent::ScaleFactorChanged {
                 scale_factor,
@@ -4353,24 +4424,17 @@ impl ApplicationHandler for App {
 
                 let new_size = window.surface_size();
                 let _ = surface_size_writer.request_surface_size(new_size);
-                if new_size.width > 0 && new_size.height > 0 {
-                    let viewport = viewport_for_surface_size(
-                        primary_viewport_override,
-                        new_size.width,
-                        new_size.height,
-                        window.scale_factor(),
-                    );
-                    configure_app_surface_size(
-                        app,
-                        surface,
-                        surface_config,
-                        new_size.width,
-                        new_size.height,
-                        viewport,
-                    );
-                    self.primary_surface_dirty = true;
-                    request_redraw_once(window, &mut self.primary_redraw_pending);
-                }
+                apply_primary_surface_resize(
+                    app,
+                    surface,
+                    surface_config,
+                    window,
+                    primary_viewport_override,
+                    new_size.width,
+                    new_size.height,
+                    &mut self.primary_surface_dirty,
+                    &mut self.primary_redraw_pending,
+                );
             }
             WindowEvent::Moved(_) => {
                 self.vsync_interval = monitor_refresh_interval(window);
@@ -4798,29 +4862,28 @@ impl ApplicationHandler for App {
                         let _ = controller.tx.send(RobotResponse::Ok);
                     }
                     RobotCommand::MouseScrollAndWaitForFrame { delta_x, delta_y } => {
-                        let consumed = app.pointer_scrolled(delta_x, delta_y);
-                        if !consumed {
-                            let _ = controller.tx.send(RobotResponse::Ok);
-                            continue;
-                        }
-
-                        if let Some(target) = robot_visible_pump_present_target(
+                        let Some(target) = robot_scroll_present_target(
+                            app,
+                            delta_x,
+                            delta_y,
                             self.settings.primary_window_visible,
                             self.settings.headless,
-                            1,
                             self.presented_frame_generation,
-                        ) {
-                            robot_visual_dirty = true;
-                            controller.begin_pump_present_wait(target);
-                            self.last_frame_start_time = None;
-                            request_redraw_once(&window, &mut self.primary_redraw_pending);
-                        } else {
-                            let update_result =
-                                update_app_with_native_window_registry(app, &registry);
-                            self.robot_visible_surface_dirty =
-                                app.needs_redraw() || update_result.visual_changed;
+                        ) else {
                             let _ = controller.tx.send(RobotResponse::Ok);
-                        }
+                            continue;
+                        };
+                        robot_visual_dirty |= target.is_some();
+                        robot_present_or_update(
+                            controller,
+                            &window,
+                            app,
+                            &registry,
+                            &mut self.last_frame_start_time,
+                            &mut self.primary_redraw_pending,
+                            &mut self.robot_visible_surface_dirty,
+                            target,
+                        );
                     }
                     RobotCommand::MouseScrollSequenceAndWaitForFrames {
                         delta_x,
@@ -4831,34 +4894,35 @@ impl ApplicationHandler for App {
                             let _ = controller.tx.send(RobotResponse::Ok);
                             continue;
                         }
-                        let consumed = app.pointer_scrolled(delta_x, delta_y);
-                        if !consumed {
-                            let _ = controller.tx.send(RobotResponse::Ok);
-                            continue;
-                        }
-
-                        if let Some(target) = robot_visible_pump_present_target(
+                        let Some(target) = robot_scroll_present_target(
+                            app,
+                            delta_x,
+                            delta_y,
                             self.settings.primary_window_visible,
                             self.settings.headless,
-                            1,
                             self.presented_frame_generation,
-                        ) {
+                        ) else {
+                            let _ = controller.tx.send(RobotResponse::Ok);
+                            continue;
+                        };
+                        if target.is_some() {
                             controller.scroll_sequence = Some(RobotScrollSequence {
                                 delta_x,
                                 delta_y,
                                 remaining: count.saturating_sub(1),
                             });
                             robot_visual_dirty = true;
-                            controller.begin_pump_present_wait(target);
-                            self.last_frame_start_time = None;
-                            request_redraw_once(&window, &mut self.primary_redraw_pending);
-                        } else {
-                            let update_result =
-                                update_app_with_native_window_registry(app, &registry);
-                            self.robot_visible_surface_dirty =
-                                app.needs_redraw() || update_result.visual_changed;
-                            let _ = controller.tx.send(RobotResponse::Ok);
                         }
+                        robot_present_or_update(
+                            controller,
+                            &window,
+                            app,
+                            &registry,
+                            &mut self.last_frame_start_time,
+                            &mut self.primary_redraw_pending,
+                            &mut self.robot_visible_surface_dirty,
+                            target,
+                        );
                     }
 
                     RobotCommand::TouchDown { x, y, source } => {
@@ -4893,17 +4957,16 @@ impl ApplicationHandler for App {
                                 )
                             })
                             .flatten();
-                        if let Some(target) = present_target {
-                            controller.begin_pump_present_wait(target);
-                            self.last_frame_start_time = None;
-                            request_redraw_once(&window, &mut self.primary_redraw_pending);
-                        } else {
-                            let update_result =
-                                update_app_with_native_window_registry(app, &registry);
-                            self.robot_visible_surface_dirty =
-                                app.needs_redraw() || update_result.visual_changed;
-                            let _ = controller.tx.send(RobotResponse::Ok);
-                        }
+                        robot_present_or_update(
+                            controller,
+                            &window,
+                            app,
+                            &registry,
+                            &mut self.last_frame_start_time,
+                            &mut self.primary_redraw_pending,
+                            &mut self.robot_visible_surface_dirty,
+                            present_target,
+                        );
                     }
                     RobotCommand::TouchUp { x, y, source } => {
                         app.set_pointer_source(source);
@@ -5224,13 +5287,13 @@ impl ApplicationHandler for App {
                                 )
                             })
                             .flatten();
-                        if let Some(target) = present_target {
-                            controller.begin_pump_present_wait(target);
-                            self.last_frame_start_time = None;
-                            request_redraw_once(&window, &mut self.primary_redraw_pending);
-                        } else {
-                            let _ = controller.tx.send(RobotResponse::Ok);
-                        }
+                        robot_present_or_ack(
+                            controller,
+                            &window,
+                            &mut self.last_frame_start_time,
+                            &mut self.primary_redraw_pending,
+                            present_target,
+                        );
                     }
                     RobotCommand::WaitForPresentFrame => {
                         let mut visual_frame_pending =
@@ -5252,13 +5315,13 @@ impl ApplicationHandler for App {
                                 )
                             })
                             .flatten();
-                        if let Some(target) = present_target {
-                            controller.begin_pump_present_wait(target);
-                            self.last_frame_start_time = None;
-                            request_redraw_once(&window, &mut self.primary_redraw_pending);
-                        } else {
-                            let _ = controller.tx.send(RobotResponse::Ok);
-                        }
+                        robot_present_or_ack(
+                            controller,
+                            &window,
+                            &mut self.last_frame_start_time,
+                            &mut self.primary_redraw_pending,
+                            present_target,
+                        );
                     }
                     RobotCommand::Exit => {
                         let _ = controller.tx.send(RobotResponse::Ok);

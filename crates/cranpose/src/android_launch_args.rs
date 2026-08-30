@@ -1,5 +1,7 @@
 use cranpose_services::{LaunchArgValue, LaunchArgs};
 
+use crate::android_wire_escape::unescape_wire_field as unescape;
+
 pub(crate) fn decode_launch_arguments(payload: &str) -> LaunchArgs {
     let mut lines = payload.split('\n');
     let debuggable = matches!(lines.next(), Some("1"));
@@ -23,17 +25,6 @@ fn decode_record(record: &str) -> Option<(String, LaunchArgValue)> {
         _ => return None,
     };
     Some((name, value))
-}
-
-fn unescape(value: &str) -> String {
-    if !value.contains('%') {
-        return value.to_string();
-    }
-    value
-        .replace("%09", "\t")
-        .replace("%0A", "\n")
-        .replace("%0D", "\r")
-        .replace("%25", "%")
 }
 
 #[cfg(test)]

@@ -7,7 +7,7 @@ use std::{
 
 use cranpose_services::purchases::{PurchaseEvent, Purchases, StoreState, set_platform_purchases};
 use jni::{
-    Env, EnvUnowned, Outcome, jni_sig, jni_str,
+    Env, EnvUnowned, jni_sig, jni_str,
     objects::{JClass, JObject, JString, JValue},
     sys::jint,
 };
@@ -134,7 +134,7 @@ impl Purchases for AndroidPurchases {
                 class,
                 jni_str!("cranposeBillingRestore"),
                 jni_sig!("(Landroid/app/Activity;)V"),
-                &[JValue::Object(&activity)],
+                &[JValue::Object(activity)],
             )
             .map_err(|error| {
                 clear_pending_android_jni_exception(env);
@@ -184,12 +184,8 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeBilling_nativeBillingSn
     _class: JClass<'local>,
     payload: JString<'local>,
 ) {
-    let payload = match env
-        .with_env(|env| -> jni::errors::Result<String> { payload.try_to_string(env) })
-        .into_outcome()
-    {
-        Outcome::Ok(payload) => payload,
-        Outcome::Err(_) | Outcome::Panic(_) => return,
+    let Some(payload) = crate::android_jni::decode_jni_string(&mut env, payload) else {
+        return;
     };
     *snapshot() = Some(decode_store_snapshot(&payload));
     cranpose_services::note_store_news();
@@ -205,13 +201,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeBilling_nativeBillingEv
     message: JString<'local>,
     count: jint,
 ) {
-    let message = match env
-        .with_env(|env| -> jni::errors::Result<String> { message.try_to_string(env) })
-        .into_outcome()
-    {
-        Outcome::Ok(message) => message,
-        Outcome::Err(_) | Outcome::Panic(_) => String::new(),
-    };
+    let message = crate::android_jni::decode_jni_string(&mut env, message).unwrap_or_default();
     let Some(event) = decode_purchase_event(code, message, count) else {
         return;
     };

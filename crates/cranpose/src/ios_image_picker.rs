@@ -1,20 +1,12 @@
 #![allow(unsafe_code)]
 
-use std::{
-    cell::RefCell,
-    future::Future,
-    pin::Pin,
-    rc::Rc,
-    sync::Arc,
-    task::{Context, Poll, Waker},
-};
+use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 use cranpose_services::{
     ImagePicker, ImagePickerError, ImageSource, PickerFuture, set_platform_image_picker,
 };
 use objc2::{
-    DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, rc::Retained,
-    runtime::AnyObject,
+    DefinedClass, MainThreadMarker, MainThreadOnly, define_class, rc::Retained, runtime::AnyObject,
 };
 use objc2_foundation::{NSDictionary, NSObject, NSObjectProtocol};
 use objc2_ui_kit::{
@@ -50,32 +42,9 @@ impl ImagePicker for IosImagePicker {
 
 type PickResult = Result<Option<Vec<u8>>, ImagePickerError>;
 
-#[derive(Default)]
-struct PickSlot {
-    result: Option<PickResult>,
-    waker: Option<Waker>,
-}
+type SharedSlot = crate::ios_pick_future::SharedPickSlot<PickResult>;
 
-type SharedSlot = Rc<RefCell<PickSlot>>;
-
-struct PickFuture {
-    slot: SharedSlot,
-    _delegate: Retained<PickerDelegate>,
-}
-
-impl Future for PickFuture {
-    type Output = PickResult;
-
-    fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<PickResult> {
-        let mut slot = self.slot.borrow_mut();
-        if let Some(result) = slot.result.take() {
-            Poll::Ready(result)
-        } else {
-            slot.waker = Some(context.waker().clone());
-            Poll::Pending
-        }
-    }
-}
+type PickFuture = crate::ios_pick_future::PickFuture<PickResult, PickerDelegate>;
 
 define_class!(
     #[unsafe(super(NSObject))]
@@ -110,16 +79,11 @@ define_class!(
 
 impl PickerDelegate {
     fn new(slot: SharedSlot, mtm: MainThreadMarker) -> Retained<Self> {
-        let this = Self::alloc(mtm).set_ivars(slot);
-        unsafe { msg_send![super(this), init] }
+        crate::ios_pick_future::new_pick_delegate(slot, mtm)
     }
 
     fn resolve(&self, result: PickResult) {
-        let mut slot = self.ivars().borrow_mut();
-        slot.result = Some(result);
-        if let Some(waker) = slot.waker.take() {
-            waker.wake();
-        }
+        crate::ios_pick_future::resolve_pick_slot(self.ivars(), result);
     }
 }
 
@@ -164,7 +128,7 @@ fn present(source: ImageSource, mtm: MainThreadMarker) -> Result<PickFuture, Ima
     let picker = UIImagePickerController::new(mtm);
     picker.setSourceType(source_type);
 
-    let slot: SharedSlot = Rc::new(RefCell::new(PickSlot::default()));
+    let slot: SharedSlot = Rc::new(RefCell::new(Default::default()));
     let delegate = PickerDelegate::new(slot.clone(), mtm);
     // SAFETY: the delegate conforms to both delegate protocols the picker needs;
     // `setDelegate` takes the untyped `id` and holds it weakly (the returned
