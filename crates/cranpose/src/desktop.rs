@@ -2827,25 +2827,6 @@ impl App {
             )),
             ..Default::default()
         });
-        // BLUNT DIAGNOSTIC, not a candidate fix (PR #542): force every frame
-        // to fully drain all previously-submitted GPU work before this
-        // frame records anything of its own, eliminating any overlap
-        // between frames sharing pooled offscreen textures. Interventional
-        // test per AGENTS.md: confirm a suspected cause by removing it and
-        // re-running, before writing a fix. If this makes the glass
-        // backdrop caterpillar disappear, overlapping in-flight frames
-        // (enabled by NoVsync's desired_maximum_frame_latency=2) reusing a
-        // pooled texture before a prior frame's read of it completed is
-        // confirmed as the cause. If the caterpillar persists identically,
-        // GPU submission/execution ordering is exonerated too.
-        if std::env::var_os("CRANPOSE_FORCE_FRAME_SYNC").is_some()
-            && let Some(device) = native.app.renderer().try_device()
-        {
-            let _ = device.poll(wgpu::PollType::Wait {
-                submission_index: None,
-                timeout: None,
-            });
-        }
         if let Err(error) = native.app.renderer().render_surface_texture(
             &view,
             native.surface_config.width,
