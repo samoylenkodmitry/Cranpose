@@ -206,9 +206,7 @@ impl BranchGroupInjector<'_> {
         let key = syn::Ident::new("__CRANPOSE_BRANCH_KEY", Span::mixed_site());
         let cached_key = quote::quote! {{
             static #key: ::std::sync::OnceLock<#core_path::Key> = ::std::sync::OnceLock::new();
-            *#key.get_or_init(|| {
-                #core_path::branch_location_key(file!(), line!(), column!(), #branch)
-            })
+            #core_path::cached_branch_location_key(&#key, file!(), line!(), column!(), #branch)
         }};
         if self.in_content_closure {
             syn::parse_quote_spanned! {span=>
@@ -764,6 +762,30 @@ mod tests {
         assert!(
             block.stmts.len() > reference.stmts.len(),
             "the sibling statements around the naked items are still instrumented"
+        );
+    }
+
+    #[test]
+    fn branch_keys_do_not_monomorphise_the_once_lock_initializer() {
+        let mut block: Block = syn::parse_quote!({
+            if flag {
+                first();
+            } else {
+                second();
+            }
+        });
+        let core_path = quote!(::cranpose_core);
+        inject_branch_groups(&core_path, &mut block);
+        let tokens = block.to_token_stream().to_string();
+
+        assert!(
+            tokens.contains("cached_branch_location_key"),
+            "branch keys must be latched through the outlined core helper, \
+             got: {tokens}"
+        );
+        assert!(
+            !tokens.contains("get_or_init"),
+            "no initializer closure may reach the expansion site, got: {tokens}"
         );
     }
 }
