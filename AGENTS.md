@@ -43,8 +43,9 @@
 - the CI runner names mislead. `mac-idle-Cranpose` is this Mac: it registers
   only while nobody is at the keyboard and exists for signing, so offline is its
   normal state, it is not spare macOS capacity, and bringing it up is not a way
-  to speed CI. `dmitriis-mac-Cranpose` is macm3 and is the default macOS runner;
-  every macOS job serialises on it. The Linux heavy pool is two --
+  to speed CI. macm3 hosts two runners for this repo, `dmitriis-mac-Cranpose`
+  and `macm3-cranpose-2`, so macOS jobs run two at a time there rather than
+  serialising on one. The Linux heavy pool is two --
   `samarch-1-cranpose` and `samarch-1-cranpose-2`; the Macs carry
   `cranpose-heavy` as well but do not match `[self-hosted, Linux, ...]`. A deep
   queue is queueing, not a stall: the jobs API lags the runner by minutes, so
