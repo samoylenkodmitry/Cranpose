@@ -2,8 +2,9 @@
 #
 # Both gates are `just` recipes (`complexity-gate`, `duplication-gate`); CI
 # calls them the same way a developer does. Scope is new or modified code
-# only -- see scripts/ci/gate_diff.py for how "changed" is derived from the
-# PR's merge base. Neither gate requires the existing codebase to pass.
+# only -- see the `gate_diff` module in xtask/src/main.rs for how "changed"
+# is derived from the PR's merge base. Neither gate requires the existing
+# codebase to pass.
 
 [complexity]
 # Cyclomatic complexity above this, in a function the diff adds or modifies,
