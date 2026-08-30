@@ -44,8 +44,11 @@
 - use samarch-1 or the mac by ssh for builds where possible: `ssh samarch-1`
   (Linux, Android SDK at /home/s/develop/sdk, X11 for the robot suite) and
   `ssh macm3` (macOS, Apple toolchains). They are faster than this machine and
-  keep long compiles off it. Note macOS logs in over ssh with zsh, which does
-  not word-split unquoted expansions, so wrap remote scripts in `bash -lc "..."`.
+  keep long compiles off it. Note both hosts log in over ssh with zsh -- samarch-1
+  is Linux but its login shell is zsh as well -- and zsh does not word-split
+  unquoted expansions, so wrap remote scripts in `bash -lc "..."`. Skipping that
+  on the Linux host does not error: loops iterate once over the whole string and
+  report success having done nothing.
 - the CI runner names mislead. `mac-idle-Cranpose` is this Mac: it registers
   only while nobody is at the keyboard and exists for signing, so offline is its
   normal state, it is not spare macOS capacity, and bringing it up is not a way
