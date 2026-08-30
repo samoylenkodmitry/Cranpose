@@ -2,7 +2,8 @@
 
 Device-measured findings from 2026-08-29, taken with the
 `debug.cranpose.frame_telemetry` stage instrument on two real apps:
-cranscan (list scrolling) and cranpose-orbit (animated showcase). Two
+cranscan (list scrolling) and cranpose-showcase (the animated showcase
+app, formerly named cranpose-orbit — not cranorbit, the Wear game). Two
 of these findings are statements about Cranpose itself, independent of
 either app. Every number is a real-device capture; the methods notes at
 the end are the traps that produced wrong readings before the right
@@ -30,10 +31,41 @@ single variable per arm, order-alternated, temperature-logged:
 Freezing the layer returns the CPU encode to the removed level — the
 retained scene is not re-encoded, retention works — but present
 recovers only half: ~6 ms of GPU per frame remains for pixels that
-never change, and only removal recovers it. Texture-caching stable
-layers or damage-rect scissoring would recover that cost for every
-decorated app. This is an architectural piece of work, scheduled after
-the v0.1.105 release; it should not be attempted as a side change.
+never change, and only removal recovers it.
+
+**Resolution (2026-08-30): prefix snapshots.** The first fix admitted
+fullscreen chunks into the flatten cache (viewport-relative admission),
+and its A/B — +4.2 fps frozen backdrop, +1.5 fps quantized — proved the
+ECONOMICS: replaying a fullscreen texture beats re-rasterizing a stable
+backdrop on this GPU. But that mechanism was retired without shipping,
+because flattening cannot be byte-exact and a fullscreen inexact entry
+is a fullscreen wrong answer. The impossibility is structural, not a
+precision bug: the direct path rounds to the composition format between
+EVERY overlapping write — each ROP blend reads an already-rounded
+destination — while a flatten collapses that chain of roundings into
+one. No entry precision fixes that (f32 included); overlapping
+anti-aliased content diverges by construction.
+
+What shipped instead is exact by construction. The scene's stable
+bottom prefix — every op below the first retained or feed-captured one
+— is rendered once into an entry through the same segment pipeline,
+over the same clear color: identical op sequence from identical initial
+state reproduces the direct path's rounding chain bit for bit. Replay
+is a single REPLACE composite of that entry (Src, not SrcOver: the
+entry is the target's whole post-prefix state, and a SrcOver replay is
+off by one bit wherever stored alpha rounds below one at an AA pixel).
+From its first sighting the prefix range is claimed away from the
+flatten chunker entirely, so observe, store, and replay frames all
+produce the direct bytes — the mechanism is a per-position pure
+function, enforced by `scene_range_cache_exactness.rs` and the
+instanced/retained/feed parity suites. The flatten class survives only
+below its flat 2 MB floor, where its measured envelope is 1 LSB on
+0.05% of bytes (the same suite measures and reports it).
+
+Same-binary sysprop ladder on the Mate 20 X (idle list screen,
+alternated, temps 40.0-41.0 °C flat, `debug.cranpose.no_prefix_snap`
+the only variable): OFF 37.2 / 36.2 fps, ON 40.3 / 40.3 fps — +3.1 and
++4.1 fps, present p50 18.6/18.8 -> 16.6/16.7 ms.
 
 ## Finding 2 — re-recording costs ~37µs per solid-brush primitive
 
@@ -53,7 +85,7 @@ with two different owners live here, and they must not be merged:
 
 ## Finding 3 — frame-driven animation recomposes the world
 
-cranpose-orbit at IDLE spends 13-19 ms of `update` per frame because an
+cranpose-showcase at IDLE spends 13-19 ms of `update` per frame because an
 app-level ambient animation recomposes the entire tree every frame and
 rebuilds fourteen `RuntimeShader` objects from shared source. Even with
 the backdrop removed entirely, the app tops out at 42 fps on this CPU
@@ -105,15 +137,20 @@ into discrete steps) so the existing scene diff can skip re-encoding —
 27.0-29.6 → 38.2-38.6 fps at 39.0°C flat, against a 48.7 ceiling with
 the field removed.
 
-The consequence for the unchanged-layer work (Finding 1): on this
-class of GPU, bandwidth is the scarce resource. Texture-caching stable
-layers pays only when sampling the cached texture is cheaper than
-re-rendering the layer's content — true for expensive layers, false
-for cheap ones, and the two failures above are the measured proof that
-"render once, composite forever" is not free here. Any design must
-either skip GPU work without adding round-trips (damage-aware
-rendering) or cache selectively with a cost model, and must be
-device-measured, not reasoned into existence.
+The consequence for the unchanged-layer work (Finding 1), refined by
+later ablations: the scarce resources on this GPU are per-pixel shader
+ALU and render-pass overhead, NOT raw sampling fill. The fill-Mpx model
+(cost proportional to composited megapixels) is retired — removing
+4.8 Mpx/frame of composites bought ~0 fps, while each additional
+backdrop effect pass costs ~0.18 ms against ~18 passes/frame. That
+re-reads both failures above: the fullscreen shader pass and the
+per-group layers lost because each added a PASS (a tile store and
+reload of the target), not because sampling is expensive. So
+"render once, composite forever" pays exactly when the replay rides an
+EXISTING pass and displaces per-pixel rasterization ALU — which is what
+the prefix snapshot does (see Finding 1's resolution) — and loses when
+it adds passes. Any such design must be device-measured, not reasoned
+into existence.
 
 ## Methods notes (the traps)
 

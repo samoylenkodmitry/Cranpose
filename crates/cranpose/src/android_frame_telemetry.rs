@@ -32,7 +32,7 @@ fn property_flag(name: &str) -> bool {
     }
 }
 
-const PROPERTY_BACKED_ENV_VARS: [(&str, &str); 43] = [
+const PROPERTY_BACKED_ENV_VARS: [(&str, &str); 44] = [
     ("debug.cranpose.root_direct", "CRANPOSE_ROOT_DIRECT_DIAG"),
     (
         "debug.cranpose.layout_ms",
@@ -104,6 +104,10 @@ const PROPERTY_BACKED_ENV_VARS: [(&str, &str); 43] = [
     (
         "debug.cranpose.no_range_cache",
         "CRANPOSE_DISABLE_DIRECT_SCENE_RANGE_CACHE",
+    ),
+    (
+        "debug.cranpose.no_prefix_snap",
+        "CRANPOSE_DISABLE_PREFIX_SNAPSHOT",
     ),
     ("debug.cranpose.gpu_backend", "CRANPOSE_ANDROID_GPU_BACKEND"),
     ("debug.cranpose.async_haptics", "CRANPOSE_ASYNC_HAPTICS"),

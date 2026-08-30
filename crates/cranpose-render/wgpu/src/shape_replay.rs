@@ -100,6 +100,24 @@ pub fn pending_feed_capture_count_for_tests() -> usize {
 }
 
 #[doc(hidden)]
+pub fn clear_pending_feed_captures_for_tests() {
+    SHAPE_REPLAY.with(|state| state.borrow_mut().pending_feed_captures.clear());
+}
+
+pub(crate) fn any_pending_feed_captures() -> bool {
+    SHAPE_REPLAY.with(|state| !state.borrow().pending_feed_captures.is_empty())
+}
+
+pub(crate) fn shape_index_pending_feed_capture(shape_index: usize) -> bool {
+    SHAPE_REPLAY.with(|state| {
+        state.borrow().pending_feed_captures.iter().any(|capture| {
+            shape_index >= capture.shape_start
+                && shape_index < capture.shape_start.saturating_add(capture.shape_count)
+        })
+    })
+}
+
+#[doc(hidden)]
 pub fn planner_replay_queue_stats_for_tests() -> (usize, usize) {
     SHAPE_REPLAY.with(|state| {
         let state = state.borrow();

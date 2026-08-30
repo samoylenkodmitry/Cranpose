@@ -200,6 +200,49 @@ fn state_subscriber_callback_tracks_first_live_scope() {
     assert_eq!(notifications.get(), 2);
 }
 
+/// A producer gated on `has_subscribers` (an infinite transition) stops for
+/// a consumer that only polls the value from a frame effect, because no
+/// snapshot observer ever sees that read. The hold is the polling consumer's
+/// way to stay counted; the showcase app's starfield froze on a screen with
+/// no draw-observed reader before it existed.
+#[test]
+fn a_subscription_hold_keeps_an_unobserved_state_subscribed() {
+    let runtime = TestRuntime::new();
+    let handle = runtime.handle();
+    let state = MutableState::with_runtime(0i32, handle.clone());
+    assert!(!state.as_state().has_subscribers());
+
+    let hold = state.as_state().subscription_hold();
+    assert!(state.as_state().has_subscribers());
+
+    let second = state.as_state().subscription_hold();
+    drop(hold);
+    assert!(state.as_state().has_subscribers());
+
+    drop(second);
+    assert!(!state.as_state().has_subscribers());
+}
+
+/// The hold also wakes a producer waiting for its first subscriber, through
+/// the same callback channel a scope subscription uses.
+#[test]
+fn a_subscription_hold_fires_the_subscriber_callback() {
+    let runtime = TestRuntime::new();
+    let handle = runtime.handle();
+    let state = MutableState::with_runtime(0i32, handle.clone());
+    let notifications = Rc::new(Cell::new(0));
+    let notifications_for_callback = Rc::clone(&notifications);
+    let callback: Rc<dyn Fn()> = Rc::new(move || {
+        notifications_for_callback.set(notifications_for_callback.get() + 1);
+    });
+    state.as_state().on_subscriber(callback.clone());
+
+    let hold = state.as_state().subscription_hold();
+    assert_eq!(notifications.get(), 1);
+    drop(hold);
+    drop(callback);
+}
+
 #[composable]
 fn subscriber_callback_reader(state: MutableState<i32>) {
     let _ = state.get();

@@ -427,3 +427,12 @@ Signature → cause → what to do. One lesson per line, no incident history.
   mirror list before planning a device A/B around any CRANPOSE_* switch
   (CRANPOSE_ENABLE_DIRECT_SCENE_RANGE_CACHE was readable in code and
   unreachable on device until 2c9deef9 mirrored it).
+
+- **with_host_lock.sh around run_robot_test.sh is a self-deadlock, and it
+  starves CI while it hangs** — run_robot_test.sh acquires the samarch-1
+  host lock internally; hold it exclusively from outside and the script's
+  own acquisition waits forever on your hold. The hang is silent (the
+  suite just "runs long") while every queued CI job on the host waits
+  behind the lock — a captures job sat 44:50 behind one wedged wrapper.
+  Invoke the script bare; if you must kill a wedged holder, match PIDs by
+  checkout path, never by process name (pgrep matches your own grep).
