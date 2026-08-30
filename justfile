@@ -175,6 +175,14 @@ test-features:
 test-ci-filters:
     scripts/ci/docs_only_change_test.sh
 
+# run_robot_test.sh's example discovery: which robot_*.rs files it asks
+# cargo to build. A wrong answer there either drops a robot test silently or
+# demands a binary cargo never builds and fails the whole suite -- see
+# scripts/ci/robot_test_discovery_test.sh for the outage that predicate once
+# caused.
+test-robot-discovery:
+    scripts/ci/robot_test_discovery_test.sh
+
 # The deterministic slot-table model check, at the frame count CI uses.
 test-property:
     cargo test --profile ci -p cranpose-core deterministic_model_render_frames_match_slot_table
@@ -394,7 +402,7 @@ perf-heap *args:
 # Excludes the jobs that need a GPU, an Android SDK or an iOS toolchain.
 
 # What a pull request is gated on. Run this before pushing.
-ci: fmt-check typos versions test clippy clippy-robot doc budgets test-quality-gates complexity-gate duplication-gate
+ci: fmt-check typos versions test clippy clippy-robot doc budgets test-quality-gates complexity-gate duplication-gate test-robot-discovery
 
 # Needs a Linux box with the X11 stack, an Android SDK and (on macOS) Xcode.
 

@@ -86,6 +86,13 @@ jobs:
         # this job is the one that never skips.
         run: just test-ci-filters
 
+      - name: Check robot test discovery
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
+        # The predicate the robot suite discovers its examples by. It runs in
+        # this job, not the robot suite's own, so a bad predicate is pinned
+        # before the heavy job ever spends a build on it.
+        run: just test-robot-discovery
+
       - name: Check cyclomatic complexity of changed functions
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         run: just complexity-gate
