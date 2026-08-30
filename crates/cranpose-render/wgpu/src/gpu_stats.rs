@@ -16,6 +16,12 @@ use crate::{
 
 const TOP_ISOLATED_LAYER_LIMIT: usize = 8;
 
+/// Small and fixed: a scene realistically carries a handful of glass /
+/// backdrop layers at once, and this exists for robot-test correctness
+/// queries (starvation-immune capture-generation gating), not perf triage,
+/// so there is no need for the ranked eviction `top_isolated_layers` uses.
+const TOP_BACKDROP_CAPTURE_LIMIT: usize = 8;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct LayerSurfaceReasons {
     pub explicit_offscreen: bool,
@@ -176,6 +182,48 @@ impl Default for IsolatedLayerStat {
     }
 }
 
+/// A backdrop layer's freshest-observed capture state this frame, keyed by
+/// `node_id`. Exists so a robot test can gate a screenshot on the
+/// backdrop's own capture-generation signal instead of a wall-clock
+/// `wait_for_present_frame`, which only tracks whether the CPU side still
+/// has queued work -- not whether this specific backdrop's composite chain
+/// has caught up to the confirmed content. `content_hash` changes exactly
+/// when the captured content moved (verified against the glass backdrop
+/// scroll-continuity investigation, PR #542: it advances every 1px scroll
+/// step, not only when the visible item set changes), so equality against
+/// the previous step's reading is a real completion signal a slow host can
+/// only delay, never falsify. `still_pending_composite`/`still_pending_shader`
+/// reuse the same dependency check `flush_pending_queues_for_backdrop_capture`
+/// already performs, as corroborating evidence that nothing the capture
+/// depended on was still queued when it ran.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BackdropCaptureStat {
+    pub node_id: Option<NodeId>,
+    pub layer_rect: Rect,
+    pub content_hash: Option<u64>,
+    pub effect_hash: u64,
+    pub still_pending_composite: bool,
+    pub still_pending_shader: bool,
+}
+
+impl Default for BackdropCaptureStat {
+    fn default() -> Self {
+        Self {
+            node_id: None,
+            layer_rect: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 0.0,
+                height: 0.0,
+            },
+            content_hash: None,
+            effect_hash: 0,
+            still_pending_composite: false,
+            still_pending_shader: false,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct FrameStatsSnapshot {
     pub submits: u32,
@@ -233,6 +281,8 @@ pub struct FrameStatsSnapshot {
     pub text_cache_size: u32,
     pub top_isolated_layers: [Option<IsolatedLayerStat>; TOP_ISOLATED_LAYER_LIMIT],
     pub top_isolated_layer_count: usize,
+    pub top_backdrop_captures: [Option<BackdropCaptureStat>; TOP_BACKDROP_CAPTURE_LIMIT],
+    pub top_backdrop_capture_count: usize,
 }
 
 impl FrameStatsSnapshot {
@@ -256,6 +306,13 @@ impl FrameStatsSnapshot {
             .into_iter()
             .flatten()
             .take(self.top_isolated_layer_count)
+    }
+
+    pub fn top_backdrop_captures(self) -> impl Iterator<Item = BackdropCaptureStat> {
+        self.top_backdrop_captures
+            .into_iter()
+            .flatten()
+            .take(self.top_backdrop_capture_count)
     }
 
     fn layer_cache_hit_rate(self) -> f64 {
@@ -402,6 +459,8 @@ pub(crate) struct FrameStats {
     pub text_cache_size: Cell<u32>,
     top_isolated_layers: RefCell<[Option<IsolatedLayerStat>; TOP_ISOLATED_LAYER_LIMIT]>,
     top_isolated_layer_count: Cell<usize>,
+    top_backdrop_captures: RefCell<[Option<BackdropCaptureStat>; TOP_BACKDROP_CAPTURE_LIMIT]>,
+    top_backdrop_capture_count: Cell<usize>,
     shadow_shape_cache_miss_log_count: Cell<u32>,
     /// Keys the layer cache was probed for and did not hold, this frame.
     ///
@@ -498,6 +557,80 @@ impl FrameStats {
             height,
             reasons,
         });
+    }
+
+    /// Records this frame's freshest `content_hash`/`effect_hash` reading
+    /// for a backdrop layer's cache lookup (hit or miss alike -- the robot
+    /// query below cares whether the input changed, not whether it hit).
+    /// Merges into an existing entry for the same `node_id` this frame
+    /// rather than appending a duplicate, so `record_backdrop_capture_pending`
+    /// (called from the earlier composite-queue-flush point in the same
+    /// frame) and this call end up describing one capture, not two.
+    pub fn record_backdrop_capture_content(
+        &self,
+        node_id: Option<NodeId>,
+        layer_rect: Rect,
+        content_hash: Option<u64>,
+        effect_hash: u64,
+    ) {
+        self.upsert_backdrop_capture(node_id, layer_rect, |stat| {
+            stat.content_hash = content_hash;
+            stat.effect_hash = effect_hash;
+        });
+    }
+
+    /// Records whether anything the backdrop capture depends on was still
+    /// queued when `flush_pending_queues_for_backdrop_capture` ran for this
+    /// layer this frame. Reuses the exact intersection check that flush
+    /// already performs; this does not recompute it independently.
+    pub fn record_backdrop_capture_pending(
+        &self,
+        node_id: Option<NodeId>,
+        layer_rect: Rect,
+        still_pending_composite: bool,
+        still_pending_shader: bool,
+    ) {
+        self.upsert_backdrop_capture(node_id, layer_rect, |stat| {
+            stat.still_pending_composite = still_pending_composite;
+            stat.still_pending_shader = still_pending_shader;
+        });
+    }
+
+    fn upsert_backdrop_capture(
+        &self,
+        node_id: Option<NodeId>,
+        layer_rect: Rect,
+        mutate: impl FnOnce(&mut BackdropCaptureStat),
+    ) {
+        let mut captures = self.top_backdrop_captures.borrow_mut();
+        let len = self.top_backdrop_capture_count.get();
+        if node_id.is_some()
+            && let Some(slot) = captures[..len]
+                .iter_mut()
+                .find(|slot| slot.is_some_and(|existing| existing.node_id == node_id))
+        {
+            // First write for this node_id this frame wins the rect: the
+            // two call sites describe the same layer from slightly
+            // different padding conventions (dependency rect vs. snapped
+            // layer rect), and flip-flopping between them every merge
+            // would make the region robot tests match against jitter
+            // frame to frame for no reason.
+            let mut stat = slot.expect("checked Some above");
+            mutate(&mut stat);
+            *slot = Some(stat);
+            return;
+        }
+        if len >= TOP_BACKDROP_CAPTURE_LIMIT {
+            return;
+        }
+        let mut stat = BackdropCaptureStat {
+            node_id,
+            layer_rect,
+            ..Default::default()
+        };
+        mutate(&mut stat);
+        captures[len] = Some(stat);
+        self.top_backdrop_capture_count.set(len + 1);
     }
 
     pub fn record_layer_cache_hit(&self, width: u32, height: u32) {
@@ -740,6 +873,8 @@ impl FrameStats {
             text_cache_size: self.text_cache_size.get(),
             top_isolated_layers: *self.top_isolated_layers.borrow(),
             top_isolated_layer_count: self.top_isolated_layer_count.get(),
+            top_backdrop_captures: *self.top_backdrop_captures.borrow(),
+            top_backdrop_capture_count: self.top_backdrop_capture_count.get(),
         }
     }
 
@@ -785,6 +920,8 @@ impl FrameStats {
         self.text_glyph_atlas_miss_pixels.set(0);
         *self.top_isolated_layers.borrow_mut() = [None; TOP_ISOLATED_LAYER_LIMIT];
         self.top_isolated_layer_count.set(0);
+        *self.top_backdrop_captures.borrow_mut() = [None; TOP_BACKDROP_CAPTURE_LIMIT];
+        self.top_backdrop_capture_count.set(0);
         self.shadow_shape_cache_miss_log_count.set(0);
     }
 
@@ -1204,5 +1341,90 @@ mod tests {
         assert_eq!(top_layers.len(), TOP_ISOLATED_LAYER_LIMIT);
         assert_eq!(top_layers[0].node_id, Some(TOP_ISOLATED_LAYER_LIMIT + 1));
         assert_eq!(top_layers[1].node_id, Some(TOP_ISOLATED_LAYER_LIMIT));
+    }
+
+    #[test]
+    fn backdrop_capture_merges_pending_and_content_readings_by_node_id() {
+        // The two call sites run at different points in the same frame's
+        // pipeline (composite-queue flush, then cache lookup); the robot
+        // query needs one record per layer combining both, not two.
+        let stats = FrameStats::default();
+        let rect = Rect {
+            x: 18.0,
+            y: 95.6,
+            width: 764.0,
+            height: 75.0,
+        };
+        stats.record_backdrop_capture_pending(Some(94), rect, true, false);
+        stats.record_backdrop_capture_content(Some(94), rect, Some(0xC0FFEE), 42);
+
+        let snapshot = stats.snapshot();
+        let captures = snapshot.top_backdrop_captures().collect::<Vec<_>>();
+        assert_eq!(captures.len(), 1);
+        assert_eq!(captures[0].node_id, Some(94));
+        assert_eq!(captures[0].content_hash, Some(0xC0FFEE));
+        assert_eq!(captures[0].effect_hash, 42);
+        assert!(captures[0].still_pending_composite);
+        assert!(!captures[0].still_pending_shader);
+    }
+
+    #[test]
+    fn backdrop_capture_content_hash_change_is_observable_across_frames() {
+        // This is the exact signal `wait_for_fresh_backdrop_capture` polls
+        // for: a scroll step changes the content_hash reported for the same
+        // node_id, and `reset()` between frames does not carry a stale
+        // reading forward that could be mistaken for a fresh one.
+        let stats = FrameStats::default();
+        let rect = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 10.0,
+            height: 10.0,
+        };
+        stats.record_backdrop_capture_content(Some(1), rect, Some(1), 0);
+        let first = stats
+            .snapshot()
+            .top_backdrop_captures()
+            .next()
+            .expect("one capture recorded");
+        assert_eq!(first.content_hash, Some(1));
+
+        stats.reset();
+        assert_eq!(stats.snapshot().top_backdrop_capture_count, 0);
+
+        stats.record_backdrop_capture_content(Some(1), rect, Some(2), 0);
+        let second = stats
+            .snapshot()
+            .top_backdrop_captures()
+            .next()
+            .expect("one capture recorded");
+        assert_ne!(second.content_hash, first.content_hash);
+    }
+
+    #[test]
+    fn backdrop_captures_beyond_the_limit_are_dropped_not_panicking() {
+        let stats = FrameStats::default();
+        for node in 0..(TOP_BACKDROP_CAPTURE_LIMIT + 2) {
+            stats.record_backdrop_capture_content(
+                Some(node),
+                Rect {
+                    x: node as f32,
+                    y: 0.0,
+                    width: 1.0,
+                    height: 1.0,
+                },
+                Some(node as u64),
+                0,
+            );
+        }
+        let snapshot = stats.snapshot();
+        assert_eq!(
+            snapshot.top_backdrop_capture_count,
+            TOP_BACKDROP_CAPTURE_LIMIT
+        );
+        assert_eq!(
+            snapshot.top_backdrop_captures().count(),
+            TOP_BACKDROP_CAPTURE_LIMIT
+        );
     }
 }

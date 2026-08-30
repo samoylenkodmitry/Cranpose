@@ -369,6 +369,22 @@ pub(crate) trait SurfaceExecutionBackend {
         logical_rect: Rect,
         requirements: SurfaceRequirementSet,
     );
+    /// See `FrameStats::record_backdrop_capture_content`.
+    fn record_backdrop_capture_content(
+        &self,
+        node_id: Option<NodeId>,
+        layer_rect: Rect,
+        content_hash: Option<u64>,
+        effect_hash: u64,
+    );
+    /// See `FrameStats::record_backdrop_capture_pending`.
+    fn record_backdrop_capture_pending(
+        &self,
+        node_id: Option<NodeId>,
+        layer_rect: Rect,
+        still_pending_composite: bool,
+        still_pending_shader: bool,
+    );
 }
 
 #[cfg(test)]

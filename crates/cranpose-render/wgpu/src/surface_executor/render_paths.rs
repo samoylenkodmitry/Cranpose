@@ -4947,25 +4947,35 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
                 // afterward. If this ever fires, the flush gate itself has
                 // a real bug -- the capture-copy right after this is about
                 // to read `target` before dependent content landed in it.
+                // Computed unconditionally (not just under the diag flag):
+                // `FrameStats::record_backdrop_capture_pending` is the
+                // starvation-immune robot test's completion signal, reusing
+                // this exact dependency check rather than a second one.
+                let dependency_pixels = surface_pixel_rect(dependency_rect, target_scale);
+                let still_pending_composite = pending_composites.iter().any(|pending| {
+                    pending_write_intersects_rect(
+                        pending.dest_quad,
+                        pending.scissor,
+                        dependency_pixels,
+                    )
+                });
+                let still_pending_shader = pending_shader_composites.iter().any(|pending| {
+                    pending_write_intersects_rect(
+                        pending.dest_quad,
+                        pending.scissor,
+                        dependency_pixels,
+                    )
+                });
+                backend.record_backdrop_capture_pending(
+                    child.node_id,
+                    dependency_rect,
+                    still_pending_composite,
+                    still_pending_shader,
+                );
                 if cranpose_core::env_flag!("CRANPOSE_BACKDROP_DIAG")
                     && dependency_rect.y < 180.0
                     && dependency_rect.y + dependency_rect.height > 90.0
                 {
-                    let dependency_pixels = surface_pixel_rect(dependency_rect, target_scale);
-                    let still_pending_composite = pending_composites.iter().any(|pending| {
-                        pending_write_intersects_rect(
-                            pending.dest_quad,
-                            pending.scissor,
-                            dependency_pixels,
-                        )
-                    });
-                    let still_pending_shader = pending_shader_composites.iter().any(|pending| {
-                        pending_write_intersects_rect(
-                            pending.dest_quad,
-                            pending.scissor,
-                            dependency_pixels,
-                        )
-                    });
                     eprintln!(
                         "[backdrop-diag] capture-timing node={:?} dependency_rect={dependency_rect:?} still_pending_composite={still_pending_composite} still_pending_shader={still_pending_shader} pending_composites_len={} pending_shader_composites_len={} cursor_z={cursor_z} child_z={}",
                         child.node_id,
@@ -5959,6 +5969,12 @@ fn prepare_cached_backdrop_layer_composite<B: SurfaceExecutionBackend>(
     let materialized_effect_hash = materialized_effect
         .map(retained_render_effect_hash)
         .unwrap_or(0);
+    backend.record_backdrop_capture_content(
+        layer.node_id,
+        layer_rect,
+        input_content_hash,
+        materialized_effect_hash,
+    );
     let Some(cache_key) = input_content_hash.and_then(|hash| {
         (backdrop_underlay.is_none()
             && backend.is_render_effect_supported(&layer.effect)

@@ -100,15 +100,89 @@ const SHIFT_TOLERANCE_PX: i32 = 1;
 /// into whatever clips items out near the fixed chrome's lower edge.
 const RECEIPT_ANCHOR_SKIP_FROM_TOP: usize = 2;
 
-/// Times `wait_for_present_frame` and prints the elapsed duration, so a
-/// suspiciously-fast call (a few microseconds) is visible as evidence the
-/// call returned without actually waiting for anything, rather than being
-/// silently trusted just because the call succeeded.
-fn time_present_wait(robot: &cranpose::Robot, label: &str) {
-    let started = std::time::Instant::now();
-    let result = robot.wait_for_present_frame();
-    let elapsed = started.elapsed();
-    println!("{label}: wait_for_present_frame took {elapsed:?} result={result:?}");
+/// Bounded poll timeout for `wait_for_fresh_backdrop_capture`: generous for
+/// a shared, contended CI host, but bounded so a genuinely stuck capture
+/// chain fails loudly and quickly instead of hanging the run.
+const BACKDROP_GENERATION_TIMEOUT: Duration = Duration::from_secs(5);
+const BACKDROP_GENERATION_POLL_INTERVAL: Duration = Duration::from_millis(10);
+
+/// Polls the renderer's own backdrop-capture bookkeeping until the glass
+/// layer under `region` reports a capture that is both FRESH (its
+/// `content_hash` differs from `previous_hash`) and UNCONTENDED (nothing it
+/// depended on was still queued when it ran).
+///
+/// This replaces gating the screenshot on `wait_for_present_frame`, which
+/// only reports whether the CPU side still has queued work -- not whether
+/// THIS layer's composite chain has caught up to the content this step just
+/// confirmed via semantics. On a quiet host those two normally converge
+/// close enough not to matter; investigating PR #542's caterpillar on a
+/// contended shared host (samarch-1, load 13-37 against its own 7.2 quiet
+/// threshold) found the opposite: `wait_for_present_frame` returned in
+/// microseconds while the backdrop's own capture chain was still racing to
+/// catch up, and the resulting screenshot-vs-wall-clock comparison could no
+/// longer tell "the backdrop is wrong" from "the host was too slow to
+/// finish rendering it yet" apart.
+///
+/// `content_hash`/`effect_hash`/`still_pending_composite`/
+/// `still_pending_shader` are not new bookkeeping invented for this test --
+/// they are the exact fields the render pipeline already computes for its
+/// own layer cache and composite-queue flush-ordering decisions (see
+/// `prepare_cached_backdrop_layer_composite` and
+/// `flush_pending_queues_for_backdrop_capture` in
+/// `crates/cranpose-render/wgpu/src/surface_executor/render_paths.rs`),
+/// surfaced through `FrameStats`/`RenderStatsSnapshot` the same way every
+/// other render counter already is. Verified empirically against this
+/// exact test (PR #542): `content_hash` changes on every confirmed 1px
+/// scroll step, not only when the visible item set changes, so hash
+/// inequality is a real, per-step completion signal a slow host can only
+/// delay -- never falsify.
+///
+/// This does not replace the pixel-shift assertion below; it only removes
+/// the wall-clock dependence from WHEN the screenshot is taken. A capture
+/// can be perfectly in sync and still composite the wrong offset -- that is
+/// the caterpillar's own shape -- so the pixel comparison still runs on
+/// every step's freshly-gated screenshot.
+fn wait_for_fresh_backdrop_capture(
+    robot: &cranpose::Robot,
+    region: (f32, f32, f32, f32),
+    previous_hash: Option<u64>,
+) -> u64 {
+    let (region_x, region_y, region_w, region_h) = region;
+    let deadline = std::time::Instant::now() + BACKDROP_GENERATION_TIMEOUT;
+    loop {
+        let stats = robot
+            .get_render_stats()
+            .unwrap_or_else(|err| fail(robot, &format!("get_render_stats failed: {err}")))
+            .unwrap_or_else(|| fail(robot, "no render stats available yet"));
+        let candidate = stats.top_backdrop_captures().find(|capture| {
+            let r = capture.layer_rect;
+            r.x <= region_x
+                && r.y <= region_y
+                && r.x + r.width >= region_x + region_w
+                && r.y + r.height >= region_y + region_h
+        });
+        if let Some(capture) = candidate {
+            if let Some(hash) = capture.content_hash {
+                if Some(hash) != previous_hash
+                    && !capture.still_pending_composite
+                    && !capture.still_pending_shader
+                {
+                    return hash;
+                }
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            fail(
+                robot,
+                &format!(
+                    "backdrop capture for region {region:?} did not reach a fresh generation \
+within {BACKDROP_GENERATION_TIMEOUT:?} (previous_hash={previous_hash:?}, \
+last observed={candidate:?})"
+                ),
+            );
+        }
+        std::thread::sleep(BACKDROP_GENERATION_POLL_INTERVAL);
+    }
 }
 
 fn fail(robot: &cranpose::Robot, message: &str) -> ! {
@@ -148,9 +222,12 @@ fn main() {
                 .expect("settle scroll past empty content padding");
             // wait_for_present_frame only actually waits when a redraw is
             // still pending; called after a long sleep it is a proven
-            // no-op (see the per-step timing print below), so it must run
-            // BEFORE anything gives the frame time to drain on its own.
-            time_present_wait(&robot, "baseline");
+            // no-op, so it must run BEFORE anything gives the frame time to
+            // drain on its own. This is a generic content-settle wait, not
+            // the per-step backdrop-capture gate below -- no screenshot
+            // follows it, so it stays on `wait_for_present_frame` rather
+            // than `wait_for_fresh_backdrop_capture`.
+            let _ = robot.wait_for_present_frame();
             std::thread::sleep(Duration::from_millis(500));
             let _ = robot.wait_for_idle();
 
@@ -209,6 +286,16 @@ fn main() {
             };
 
             let mut capture_paths = Vec::with_capacity(STEP_COUNT + 1);
+            let initial_anchor_y = previous_bounds.1;
+            let mut expected_shifts = Vec::with_capacity(STEP_COUNT + 1);
+            expected_shifts.push(0i32);
+
+            // Gate the baseline capture the same way every step below does:
+            // on the backdrop's own capture-generation signal, not a
+            // wall-clock wait. There is no "previous" reading yet, so this
+            // accepts whatever the pipeline currently reports, as long as
+            // nothing it depends on is still queued.
+            let mut backdrop_hash = wait_for_fresh_backdrop_capture(&robot, GLASS_REGION, None);
             let baseline_path = output_dir.join("glass_step00.png");
             capture_x11_window_screenshot(
                 &window_id,
@@ -227,26 +314,26 @@ fn main() {
                     "glass-step",
                     ScrollStepDriver::PointerWheel,
                 );
-                // Immediately, before anything gives the just-scrolled frame
-                // time to drain on its own — `wait_for_present_frame` only
-                // blocks while a redraw is genuinely still pending
-                // (crates/cranpose/src/desktop.rs, RobotCommand::
-                // WaitForPresentFrame: it checks robot_visible_surface_dirty
-                // || app.needs_redraw() first and returns immediately if
-                // neither holds), so calling it after a long settle sleep,
-                // as the first version of this fix did, is a proven no-op:
-                // by then the app has already gone idle on its own and
-                // there is nothing left to wait for. `wait_for_idle`
-                // confirms CPU/composition quiescence, not that software
-                // present has actually drained this frame to the window —
-                // under Xvfb's software presenter a screenshot taken on
-                // CPU-idle alone can show a still-queued frame, which would
-                // read as the backdrop lagging then catching up as the
-                // queue drains. That shape is otherwise indistinguishable
-                // from a real compositor defect, so the capture must wait
-                // for actual presentation, called where it can still catch
-                // one.
-                time_present_wait(&robot, &format!("step {step:02}"));
+                // The confirmed cumulative content shift, from the same
+                // semantics read `scroll_once_and_expect_target_delta` just
+                // used to prove content moved by exactly one pixel -- not
+                // `step * SCROLL_DELTA_Y`, which only holds if every step
+                // stayed exact AND the harness stayed in lock-step with real
+                // time. Deriving it from the confirmed position instead
+                // means the pixel-shift assertion below is checked against
+                // what the content actually, confirmedly did.
+                expected_shifts.push((initial_anchor_y - previous_bounds.1).abs().round() as i32);
+
+                // Gate the capture on the backdrop's OWN capture-generation
+                // signal (a fresh content_hash, with nothing it depends on
+                // still queued) instead of `wait_for_present_frame`, which
+                // only reports whether the CPU side still has queued work —
+                // not whether this layer's composite chain caught up to the
+                // content this step just confirmed. See
+                // `wait_for_fresh_backdrop_capture`'s own doc comment for
+                // why (PR #542).
+                backdrop_hash =
+                    wait_for_fresh_backdrop_capture(&robot, GLASS_REGION, Some(backdrop_hash));
 
                 let step_path = output_dir.join(format!("glass_step{:02}.png", step + 1));
                 capture_x11_window_screenshot(
@@ -317,9 +404,14 @@ fn main() {
             });
             let anchor_dys = parse_anchor_dys(&report, capture_paths.len());
 
+            assert_eq!(
+                expected_shifts.len(),
+                anchor_dys.len(),
+                "one confirmed expected_shift per captured frame"
+            );
             let mut failures = Vec::new();
             for (step, &actual) in anchor_dys.iter().enumerate().skip(1) {
-                let expected = (step as f32 * SCROLL_DELTA_Y.abs()).round() as i32;
+                let expected = expected_shifts[step];
                 let mode = classify(actual, expected);
                 println!(
                     "step {step:02}: expected_shift={expected} best_fit_shift={actual}{}",

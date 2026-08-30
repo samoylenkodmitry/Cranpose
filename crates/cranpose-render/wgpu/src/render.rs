@@ -9372,6 +9372,36 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
             requirements.into(),
         );
     }
+
+    fn record_backdrop_capture_content(
+        &self,
+        node_id: Option<NodeId>,
+        layer_rect: Rect,
+        content_hash: Option<u64>,
+        effect_hash: u64,
+    ) {
+        self.renderer.frame_stats.record_backdrop_capture_content(
+            node_id,
+            layer_rect,
+            content_hash,
+            effect_hash,
+        );
+    }
+
+    fn record_backdrop_capture_pending(
+        &self,
+        node_id: Option<NodeId>,
+        layer_rect: Rect,
+        still_pending_composite: bool,
+        still_pending_shader: bool,
+    ) {
+        self.renderer.frame_stats.record_backdrop_capture_pending(
+            node_id,
+            layer_rect,
+            still_pending_composite,
+            still_pending_shader,
+        );
+    }
 }
 
 impl GpuRenderer {
