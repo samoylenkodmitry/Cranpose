@@ -86,6 +86,35 @@ cpu > period crossing (pipelined against the swapchain) holds on means
 in all three idle windows — 56.5/60.3/60.0 vs 40.0/41.5/41.5 — which is
 what makes it structural rather than distribution shape.
 
+## Finding 4 — offscreen round-trips lose to redrawing on the Mali-G76
+
+Two architecturally-obvious fixes for the starfield were tried on the
+device by the Orbit team and BOTH lost, which is a statement about the
+GPU's economics, not about the fixes' authors:
+
+- A fullscreen `shader_background` left fps flat even with a
+  constant-color shader — the cost is the full-screen texture
+  round-trip itself, not per-pixel math. A shader pass over the screen
+  costs more than re-recording and drawing 160 solid primitives.
+- Per-group `graphics_layer_block` alpha measured WORSE than baseline —
+  each `GraphicsLayer` takes its own offscreen composite pass, and the
+  passes cost more than not grouping at all.
+
+What worked instead: quantizing the animation (`twinkle`/`parallax`
+into discrete steps) so the existing scene diff can skip re-encoding —
+27.0-29.6 → 38.2-38.6 fps at 39.0°C flat, against a 48.7 ceiling with
+the field removed.
+
+The consequence for the unchanged-layer work (Finding 1): on this
+class of GPU, bandwidth is the scarce resource. Texture-caching stable
+layers pays only when sampling the cached texture is cheaper than
+re-rendering the layer's content — true for expensive layers, false
+for cheap ones, and the two failures above are the measured proof that
+"render once, composite forever" is not free here. Any design must
+either skip GPU work without adding round-trips (damage-aware
+rendering) or cache selectively with a cost model, and must be
+device-measured, not reasoned into existence.
+
 ## Methods notes (the traps)
 
 - xvfb frame rates are software presentation, not the GPU.
