@@ -39,6 +39,7 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Provision PATH and sccache
+        id: provision
         run: |
           # Both, and in this order. `GITHUB_PATH` only reaches LATER steps,
           # and the `cargo install` on the next line runs in THIS one -- so on
@@ -64,48 +65,62 @@ jobs:
           scripts/ci/start_sccache.sh
 
       - name: Check formatting
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         run: just fmt-check
 
       - name: Check Cranpose package versions
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         run: just versions
 
       - name: Spell check
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         run: just typos
 
       - name: Test the quality gates' diff-scoping logic
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         run: just test-quality-gates
 
       - name: Check the docs-only trigger filter
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         # The predicate the heavy jobs skip on. It runs in this job because
         # this job is the one that never skips.
         run: just test-ci-filters
 
       - name: Check cyclomatic complexity of changed functions
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         run: just complexity-gate
 
       - name: Check for duplicated code in the diff
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         run: just duplication-gate
 
       - name: Run workspace tests
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         run: just test
 
       - name: Run workspace clippy
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         run: just clippy
 
       - name: Run clippy on the macOS camera backend
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         run: just clippy-camera-desktop
 
       - name: Build documentation
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         # A broken intra-doc link is a broken published page.
         run: just doc
 
       - name: Run cranpose-core feature permutations
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         run: just test-features
 
       - name: Run the deterministic slot-table model check
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         run: just test-property
 
       - name: Run the slot-table Criterion smoke
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         run: just bench-smoke
 
   architecture-budget:
@@ -179,6 +194,7 @@ jobs:
         run: scripts/ci/docs_only_change.sh
 
       - name: Provision PATH and sccache
+        id: provision
         if: steps.changes.outputs.docs_only != 'true'
         run: |
           # Both, and in this order. `GITHUB_PATH` only reaches LATER steps,
@@ -210,7 +226,7 @@ jobs:
           wasm-opt --version || echo "no system binaryen; wasm-pack supplies its own"
 
       - name: Run wasm clippy
-        if: steps.changes.outputs.docs_only != 'true'
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' && steps.changes.outputs.docs_only != 'true' }}
         # A build alone (below) does not lint: `Arc<dyn Trait>` values that are
         # not `Send + Sync` on the single-threaded wasm target compile fine but
         # pay for synchronisation the target cannot use. Only clippy catches
@@ -218,5 +234,5 @@ jobs:
         run: just clippy-wasm
 
       - name: Build web demo
-        if: steps.changes.outputs.docs_only != 'true'
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' && steps.changes.outputs.docs_only != 'true' }}
         run: just web
