@@ -142,8 +142,16 @@ duplication-gate base="origin/main":
 # backtrace from a failing gate is readable.
 
 # The workspace test suite.
+#
+# `--no-fail-fast` because cargo otherwise stops at the first test binary that
+# fails, and the ~129 remaining binaries report nothing. On samarch-1 that is
+# not hypothetical: `cranpose-render-wgpu --test pass_timing_report` segfaults
+# from an environmental GPU fault, and every crate after it in the run
+# silently never executes while the gate reports one failure. The same shape
+# as a step that stops its job -- one problem hides the rest, and the fix
+# costs a full second run to find the second one.
 test:
-    cargo test --profile ci --workspace
+    cargo test --profile ci --workspace --no-fail-fast
 
 # Feature permutations of the core crate that the default build does not cover.
 test-features:
