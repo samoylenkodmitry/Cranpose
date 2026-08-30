@@ -188,7 +188,7 @@ fn direct_scene_range_hash_detail_z() -> Option<usize> {
 }
 
 const MIN_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS: usize = 2;
-const MAX_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS: usize = 64;
+const MAX_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS: usize = 256;
 const MIN_SINGLE_DRAW_DIRECT_SCENE_RANGE_CACHE_BYTES: u64 = 512 * 1024;
 const MAX_MOTION_SENSITIVE_DIRECT_SCENE_CACHE_DRAW_BYTES: u64 = 2_097_152;
 const DIRECT_SCENE_RANGE_CACHE_FLOOR_BYTES: u64 = 2 * 1024 * 1024;
@@ -1394,6 +1394,24 @@ fn scene_range_draw_op_count(scene: &CompositorScene, z_start: usize, z_end: usi
     scene_range_draw_ops(&scene.draw_ops, z_start, z_end).len()
 }
 
+fn draw_op_caches_as_transparent_surface(scene: &CompositorScene, op: DrawOp) -> bool {
+    match op.kind {
+        DrawOpKind::Shape(index) => scene
+            .shapes
+            .get(index)
+            .is_some_and(|shape| shape.blend_mode == BlendMode::SrcOver),
+        DrawOpKind::Image(index) => scene
+            .images
+            .get(index)
+            .is_some_and(|image| image.blend_mode == BlendMode::SrcOver),
+        DrawOpKind::Text(_) => true,
+        DrawOpKind::Shadow(_) => false,
+        // A replayed batch transforms every frame; a texture of it would
+        // be stale on arrival.
+        DrawOpKind::Retained(_) => false,
+    }
+}
+
 fn scene_range_can_cache_as_transparent_surface(
     scene: &CompositorScene,
     z_start: usize,
@@ -1406,21 +1424,7 @@ fn scene_range_can_cache_as_transparent_surface(
     // times just to skip it.
     scene_range_draw_ops(&scene.draw_ops, z_start, z_end)
         .iter()
-        .all(|op| match op.kind {
-            DrawOpKind::Shape(index) => scene
-                .shapes
-                .get(index)
-                .is_some_and(|shape| shape.blend_mode == BlendMode::SrcOver),
-            DrawOpKind::Image(index) => scene
-                .images
-                .get(index)
-                .is_some_and(|image| image.blend_mode == BlendMode::SrcOver),
-            DrawOpKind::Text(_) => true,
-            DrawOpKind::Shadow(_) => false,
-            // A replayed batch transforms every frame; a texture of it would
-            // be stale on arrival.
-            DrawOpKind::Retained(_) => false,
-        })
+        .all(|op| draw_op_caches_as_transparent_surface(scene, *op))
 }
 
 fn scene_range_meets_direct_cache_floor(
@@ -1482,6 +1486,12 @@ fn direct_scene_range_chunk_fits_cache_entry(
     )
 }
 
+/// Chunk boundaries fall where cacheability changes, not at an op count: a
+/// clean run mixed with one shadow can never produce a key, and a clean run
+/// cut mid-way produces several stacked entries where one would do — the
+/// Mate 20 X list screen paid three fullscreen composite reads per frame
+/// for one 161-op backdrop that the old 64-op cap split in three. The cap
+/// survives only as a ceiling on per-chunk bounds-union and hash work.
 fn direct_scene_range_cache_chunk_end(
     scene: &CompositorScene,
     z_start: usize,
@@ -1489,12 +1499,22 @@ fn direct_scene_range_cache_chunk_end(
     root_scale: f32,
 ) -> usize {
     let mut draw_count = 0usize;
+    let mut run_is_cacheable: Option<bool> = None;
     for draw_op in scene_range_draw_ops(&scene.draw_ops, z_start, z_end) {
         if draw_op_splits_direct_scene_range_cache(scene, *draw_op, root_scale) {
             if draw_op.z_index <= z_start {
                 return draw_op.z_index.saturating_add(1).min(z_end);
             }
             return draw_op.z_index.min(z_end);
+        }
+
+        let op_is_cacheable = draw_op_caches_as_transparent_surface(scene, *draw_op);
+        match run_is_cacheable {
+            None => run_is_cacheable = Some(op_is_cacheable),
+            Some(run) if run != op_is_cacheable => {
+                return draw_op.z_index.min(z_end);
+            }
+            _ => {}
         }
 
         draw_count = draw_count.saturating_add(1);
@@ -7470,6 +7490,72 @@ mod tests {
         assert!(
             key.is_some(),
             "ordinary SrcOver root ranges should be retained"
+        );
+    }
+
+    #[test]
+    fn a_clean_run_is_cut_at_the_first_uncacheable_op_not_at_the_op_cap() {
+        // 161 SrcOver ops (a fullscreen decorative backdrop) followed by a
+        // non-SrcOver op. Cut at the 64-op cap this run becomes THREE
+        // fullscreen cache entries, and the frame pays three fullscreen
+        // composite reads for one backdrop — measured at 7.2 of the 10.6
+        // effect-composite Mpx/frame on the Mate 20 X list screen. The
+        // boundary that matters is where cacheability changes, not an op
+        // count.
+        let clean_ops = 161usize;
+        let mut scene = CompositorScene::new();
+        for z_index in 0..clean_ops {
+            let mut shape = prefix_shape(z_index, Color::BLACK);
+            shape.rect.x = (z_index % 40) as f32 * 4.0;
+            shape.local_rect = shape.rect;
+            shape.quad = crate::rect_to_quad(shape.rect);
+            scene.shapes.push(shape);
+            scene.draw_ops.push(DrawOp {
+                z_index,
+                kind: DrawOpKind::Shape(z_index),
+            });
+        }
+        let mut dirty = prefix_shape(clean_ops, Color::BLACK);
+        dirty.blend_mode = BlendMode::Plus;
+        scene.shapes.push(dirty);
+        scene.draw_ops.push(DrawOp {
+            z_index: clean_ops,
+            kind: DrawOpKind::Shape(clean_ops),
+        });
+        scene.next_z = clean_ops + 1;
+
+        assert_eq!(
+            direct_scene_range_cache_chunk_end(&scene, 0, scene.next_z, 1.0),
+            clean_ops,
+            "the whole clean run belongs to one chunk, cut before the dirty op"
+        );
+        assert_eq!(
+            direct_scene_range_cache_chunk_end(&scene, clean_ops, scene.next_z, 1.0),
+            scene.next_z,
+            "the dirty remainder is its own chunk"
+        );
+    }
+
+    #[test]
+    fn a_dirty_run_ends_where_cacheable_content_resumes() {
+        let mut scene = CompositorScene::new();
+        for z_index in 0..4usize {
+            let mut shape = prefix_shape(z_index, Color::BLACK);
+            if z_index < 2 {
+                shape.blend_mode = BlendMode::Plus;
+            }
+            scene.shapes.push(shape);
+            scene.draw_ops.push(DrawOp {
+                z_index,
+                kind: DrawOpKind::Shape(z_index),
+            });
+        }
+        scene.next_z = 4;
+
+        assert_eq!(
+            direct_scene_range_cache_chunk_end(&scene, 0, scene.next_z, 1.0),
+            2,
+            "the dirty run must not absorb the cacheable ops behind it"
         );
     }
 
