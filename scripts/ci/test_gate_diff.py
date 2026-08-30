@@ -114,6 +114,113 @@ class ParseUnifiedDiffZeroContext(unittest.TestCase):
         )
 
 
+class LineHasCode(unittest.TestCase):
+    def test_plain_code_line(self) -> None:
+        self.assertEqual(gate_diff.line_has_code("let x = 1;"), [True])
+
+    def test_blank_line(self) -> None:
+        self.assertEqual(gate_diff.line_has_code(""), [False])
+        self.assertEqual(gate_diff.line_has_code("   \t  "), [False])
+
+    def test_pure_line_comment(self) -> None:
+        self.assertEqual(gate_diff.line_has_code("// just a note"), [False])
+
+    def test_code_with_trailing_comment_counts_as_code(self) -> None:
+        self.assertEqual(gate_diff.line_has_code("let x = 1; // trailing"), [True])
+
+    def test_slash_slash_inside_a_string_is_not_a_comment(self) -> None:
+        text = 'let url = "https://example.com";'
+        self.assertEqual(gate_diff.line_has_code(text), [True])
+
+    def test_string_spanning_a_naive_comment_check_does_not_start_one(self) -> None:
+        # A string literal containing `//` followed by a real comment on the
+        # next line: the `//` inside the string must not be mistaken for the
+        # start of a comment that swallows the rest of the string plus the
+        # next, genuinely-commented, line.
+        text = '\n'.join(['let s = "a // b";', "// this really is a comment"])
+        self.assertEqual(gate_diff.line_has_code(text), [True, False])
+
+    def test_single_line_block_comment(self) -> None:
+        self.assertEqual(gate_diff.line_has_code("/* note */"), [False])
+
+    def test_single_line_block_comment_with_trailing_code_counts_as_code(self) -> None:
+        self.assertEqual(gate_diff.line_has_code("/* note */ let x = 1;"), [True])
+
+    def test_multi_line_block_comment_is_all_blank(self) -> None:
+        text = "\n".join(["/* start", "middle line", "end */"])
+        self.assertEqual(gate_diff.line_has_code(text), [False, False, False])
+
+    def test_multi_line_block_comment_with_code_before_and_after(self) -> None:
+        text = "\n".join(["let a = 1; /* start", "middle line", "end */ let b = 2;"])
+        self.assertEqual(gate_diff.line_has_code(text), [True, False, True])
+
+    def test_nested_block_comments(self) -> None:
+        # Rust block comments nest, unlike C's.
+        text = "\n".join(["/* outer /* inner */ still commented", "*/ let x = 1;"])
+        self.assertEqual(gate_diff.line_has_code(text), [False, True])
+
+    def test_raw_string_containing_slashes_and_quotes(self) -> None:
+        text = 'let s = r#"// not a comment, and "quoted" too"#;'
+        self.assertEqual(gate_diff.line_has_code(text), [True])
+
+    def test_raw_string_spanning_lines(self) -> None:
+        text = "\n".join(['let s = r"line one', "// still string content", 'line three";'])
+        self.assertEqual(gate_diff.line_has_code(text), [True, True, True])
+
+    def test_raw_string_prefix_not_misdetected_mid_identifier(self) -> None:
+        # `bar` ends in `r`; the `"` that follows belongs to a separate,
+        # ordinary string literal, not a raw string starting at that `r`.
+        text = 'let bar = 1; let s = "text";'
+        self.assertEqual(gate_diff.line_has_code(text), [True])
+
+    def test_char_literal_does_not_start_a_comment(self) -> None:
+        text = "let c = '/';"
+        self.assertEqual(gate_diff.line_has_code(text), [True])
+
+    def test_escaped_char_literal(self) -> None:
+        text = r"let c = '\n';"
+        self.assertEqual(gate_diff.line_has_code(text), [True])
+
+    def test_lifetime_is_not_treated_as_an_unterminated_char_literal(self) -> None:
+        # If `'a` were treated as opening a char literal that never closes,
+        # scanning would run past the real comment below looking for a
+        # closing quote, hiding it from the result.
+        text = "\n".join(["fn f<'a>(x: &'a str) -> &'a str { x }", "// a real comment"])
+        self.assertEqual(gate_diff.line_has_code(text), [True, False])
+
+    def test_string_containing_an_escaped_quote(self) -> None:
+        text = r'let s = "she said \"hi\"";'
+        self.assertEqual(gate_diff.line_has_code(text), [True])
+
+
+class DropCommentOnlyRanges(unittest.TestCase):
+    def test_hunk_that_is_entirely_comment_is_dropped(self) -> None:
+        ranges = {"src/lib.rs": [(2, 2)]}
+        files = {"src/lib.rs": "fn f() {\n    // just a comment\n}\n"}
+        self.assertEqual(gate_diff.drop_comment_only_ranges(ranges, files.get), {})
+
+    def test_hunk_with_any_real_code_line_is_kept_in_full(self) -> None:
+        ranges = {"src/lib.rs": [(2, 3)]}
+        files = {"src/lib.rs": "fn f() {\n    // a comment\n    let x = 1;\n}\n"}
+        self.assertEqual(
+            gate_diff.drop_comment_only_ranges(ranges, files.get),
+            {"src/lib.rs": [(2, 3)]},
+        )
+
+    def test_only_the_comment_only_hunk_is_dropped_others_survive(self) -> None:
+        ranges = {"src/lib.rs": [(2, 2), (4, 4)]}
+        files = {"src/lib.rs": "fn f() {\n    // comment\n    let x = 1;\n    let y = 2;\n}\n"}
+        self.assertEqual(
+            gate_diff.drop_comment_only_ranges(ranges, files.get),
+            {"src/lib.rs": [(4, 4)]},
+        )
+
+    def test_file_with_no_surviving_ranges_is_dropped_entirely(self) -> None:
+        ranges = {"src/only_comments.rs": [(1, 1)]}
+        files = {"src/only_comments.rs": "// nothing but this\n"}
+        self.assertEqual(gate_diff.drop_comment_only_ranges(ranges, files.get), {})
+
+
 class Intersects(unittest.TestCase):
     def test_overlapping_ranges(self) -> None:
         self.assertTrue(gate_diff.intersects((10, 20), (15, 25)))
@@ -266,6 +373,110 @@ class MergeBaseShallowHistory(unittest.TestCase):
                 with self.assertRaises(SystemExit) as raised:
                     gate_diff.merge_base("origin/main")
             self.assertIn("share no common ancestor", str(raised.exception))
+
+
+class ChangedRangesExcludesCommentOnlyHunks(unittest.TestCase):
+    """The end-to-end fixture: a real repo, a real over-limit function, and
+    the exact `changed_ranges` pipeline `complexity_gate`/`duplication_gate`
+    call in CI -- not a synthetic diff string standing in for one.
+    """
+
+    _OVER_LIMIT_FUNCTION = "\n".join(
+        [
+            "fn deeply_branching(x: i32) -> i32 {",
+            "    if x == 0 { return 0; }",
+            "    if x == 1 { return 1; }",
+            "    if x == 2 { return 2; }",
+            "    if x == 3 { return 3; }",
+            "    if x == 4 { return 4; }",
+            "    if x == 5 { return 5; }",
+            "    if x == 6 { return 6; }",
+            "    if x == 7 { return 7; }",
+            "    if x == 8 { return 8; }",
+            "    if x == 9 { return 9; }",
+            "    x",
+            "}",
+        ]
+    )
+
+    def _git(self, args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True)
+
+    def _init_repo_with_base_commit(self, repo: Path) -> None:
+        repo.mkdir()
+        self._git(["init", "--quiet", "-b", "main"], repo)
+        self._git(["config", "user.email", "test@example.com"], repo)
+        self._git(["config", "user.name", "Test"], repo)
+        (repo / "src").mkdir()
+        (repo / "src" / "lib.rs").write_text(self._OVER_LIMIT_FUNCTION + "\n")
+        self._git(["add", "."], repo)
+        self._git(["commit", "--quiet", "-m", "base"], repo)
+
+    def _write_and_commit(self, repo: Path, contents: str, message: str) -> None:
+        (repo / "src" / "lib.rs").write_text(contents)
+        self._git(["add", "."], repo)
+        self._git(["commit", "--quiet", "-m", message], repo)
+
+    def test_removing_a_comment_inside_the_function_does_not_touch_it(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "repo"
+            self._init_repo_with_base_commit(repo)
+
+            with_comment = self._OVER_LIMIT_FUNCTION.replace(
+                "    x\n}", "    // fall through for anything else\n    x\n}"
+            )
+            self._write_and_commit(repo, with_comment + "\n", "add a comment")
+
+            comment_removed = with_comment.replace(
+                "    // fall through for anything else\n", ""
+            )
+            self._write_and_commit(repo, comment_removed + "\n", "remove only the comment")
+
+            with mock.patch("gate_diff.ROOT", repo):
+                ranges = gate_diff.changed_ranges("HEAD~1")
+
+            self.assertEqual(
+                ranges,
+                {},
+                "a hunk that only deleted a comment line must not touch anything",
+            )
+
+    def test_a_genuine_logic_edit_in_the_same_function_still_touches_it(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "repo"
+            self._init_repo_with_base_commit(repo)
+
+            edited = self._OVER_LIMIT_FUNCTION.replace(
+                "    if x == 9 { return 9; }", "    if x == 9 { return 90; }"
+            )
+            self._write_and_commit(repo, edited + "\n", "change a return value")
+
+            with mock.patch("gate_diff.ROOT", repo):
+                ranges = gate_diff.changed_ranges("HEAD~1")
+
+            self.assertIn("src/lib.rs", ranges)
+            touched = ranges["src/lib.rs"]
+            self.assertTrue(
+                gate_diff.any_intersect(touched, (1, 13)),
+                f"a real logic edit must still land inside the function's span, got {touched}",
+            )
+
+    def test_mixed_hunk_of_comment_and_logic_still_touches_it(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "repo"
+            self._init_repo_with_base_commit(repo)
+
+            edited = self._OVER_LIMIT_FUNCTION.replace(
+                "    x\n}",
+                "    // fall through for anything else\n    x + 1\n}",
+            )
+            self._write_and_commit(repo, edited + "\n", "comment plus a real edit, one hunk")
+
+            with mock.patch("gate_diff.ROOT", repo):
+                ranges = gate_diff.changed_ranges("HEAD~1")
+
+            self.assertIn("src/lib.rs", ranges)
+            self.assertTrue(gate_diff.any_intersect(ranges["src/lib.rs"], (1, 13)))
 
 
 class ComplexityFindViolations(unittest.TestCase):

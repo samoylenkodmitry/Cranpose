@@ -26,6 +26,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -156,8 +157,164 @@ def parse_unified_diff_zero_context(diff_text: str) -> dict[str, list[tuple[int,
     return ranges
 
 
+_RAW_STRING_START = re.compile(r"(?:b?r)(?P<hashes>#{0,255})\"")
+_CHAR_LITERAL = re.compile(r"'(?:\\(?:x[0-9a-fA-F]{2}|u\{[0-9a-fA-F]{1,6}\}|.)|[^'\\\n])'")
+_IDENT_CHAR = re.compile(r"[A-Za-z0-9_]")
+
+
+def line_has_code(text: str) -> list[bool]:
+    r"""Per physical line of `text` (0-indexed), whether it holds a token
+    that is not whitespace and not comment text -- i.e. whether a diff hunk
+    confined to lines where this is `False` could not possibly have changed
+    control flow or introduced/removed a clone, because nothing but comment
+    or blank bytes moved.
+
+    A single forward scan over the *whole* file, not just a hunk in
+    isolation: a `git diff --unified=0` hunk carries no surrounding context,
+    so a block comment that opened on an earlier, unchanged line is
+    invisible to anything that only looks at the hunk's own text. Scanning
+    from byte zero of the real file tracks block-comment depth (Rust nests
+    `/* /* */ */`) and string state correctly regardless of where a hunk's
+    boundaries happen to fall.
+
+    Deliberately conservative in one direction only: every ambiguous case
+    below resolves toward "this is code", never toward "this is a comment".
+    Classifying a real code byte as comment would silently shrink the
+    gate's scope; classifying a comment byte as code only costs the
+    hunk-level precision the gate already accepts (see `drop_comment_only_ranges`).
+    A bare quote is the sharp edge: `'a` is a lifetime, not the start of an
+    unterminated char literal, so it is only treated as opening a char
+    literal when a closing quote is visible within a few characters,
+    matching a real `'c'` or a `'\n'` / `'\x41'` / `'\u{1F600}'` escape --
+    otherwise the quote is left as an ordinary code byte and scanning
+    continues normally, so a lifetime can never swallow the rest of the file.
+    """
+    lines = text.split("\n")
+    has_code = [False] * len(lines)
+    line_idx = 0
+    i = 0
+    n = len(text)
+    block_depth = 0
+
+    while i < n:
+        ch = text[i]
+
+        if ch == "\n":
+            line_idx += 1
+            i += 1
+            continue
+
+        if block_depth > 0:
+            if text.startswith("/*", i):
+                block_depth += 1
+                i += 2
+            elif text.startswith("*/", i):
+                block_depth -= 1
+                i += 2
+            else:
+                i += 1
+            continue
+
+        if ch in " \t\r":
+            i += 1
+            continue
+
+        if text.startswith("//", i):
+            end = text.find("\n", i)
+            i = n if end == -1 else end
+            continue
+
+        if text.startswith("/*", i):
+            block_depth = 1
+            i += 2
+            continue
+
+        prev_char = text[i - 1] if i > 0 else ""
+        if not _IDENT_CHAR.match(prev_char):
+            raw_match = _RAW_STRING_START.match(text, i)
+            if raw_match:
+                has_code[line_idx] = True
+                end_marker = '"' + raw_match.group("hashes")
+                end = text.find(end_marker, raw_match.end())
+                if end == -1:
+                    for idx in range(line_idx, len(lines)):
+                        has_code[idx] = True
+                    i = n
+                    continue
+                span_end = end + len(end_marker)
+                for _ in range(text.count("\n", i, span_end)):
+                    line_idx += 1
+                    has_code[line_idx] = True
+                i = span_end
+                continue
+
+        if ch == '"':
+            has_code[line_idx] = True
+            i += 1
+            while i < n:
+                c = text[i]
+                if c == "\\" and i + 1 < n:
+                    i += 2
+                    continue
+                if c == "\n":
+                    line_idx += 1
+                    has_code[line_idx] = True
+                    i += 1
+                    continue
+                i += 1
+                if c == '"':
+                    break
+            continue
+
+        if ch == "'":
+            has_code[line_idx] = True
+            match = _CHAR_LITERAL.match(text, i)
+            i = match.end() if match else i + 1
+            continue
+
+        has_code[line_idx] = True
+        i += 1
+
+    return has_code
+
+
+def drop_comment_only_ranges(
+    ranges: dict[str, list[tuple[int, int]]],
+    read_file: Callable[[str], str],
+) -> dict[str, list[tuple[int, int]]]:
+    """`ranges`, minus any hunk whose changed lines are all comment/blank.
+
+    A hunk keeps its full (start, end) span the moment even one line in it
+    has real code: the existing "touching a bad function makes you fix it"
+    behavior for a genuine logic edit is unchanged, deliberately -- only a
+    hunk that is *entirely* comment or whitespace, once read back from the
+    actual current file content rather than guessed from the diff text
+    alone, is excluded.
+    """
+    filtered: dict[str, list[tuple[int, int]]] = {}
+    for file, file_ranges in ranges.items():
+        code_lines = line_has_code(read_file(file))
+        kept = [
+            span
+            for span in file_ranges
+            if any(code_lines[i] for i in range(span[0] - 1, min(span[1], len(code_lines))))
+        ]
+        if kept:
+            filtered[file] = kept
+    return filtered
+
+
 def changed_ranges(base: str, pathspec: str = "*.rs") -> dict[str, list[tuple[int, int]]]:
-    """Changed line ranges per file, restricted to `pathspec`, vs `base`."""
+    """Changed line ranges per file, restricted to `pathspec`, vs `base`.
+
+    Excludes any hunk that only added or modified comment or blank lines:
+    see `drop_comment_only_ranges`. Read from the working tree, matching
+    what the diff itself compares against (see the module docstring) --
+    a path the diff reports as changed but that no longer exists on disk
+    (renamed since, or this run's `pathspec` disagrees with a prior one)
+    contributes no range rather than raising, since a deleted file cannot
+    have touched anything still there to check.
+    """
     base_sha = merge_base(base)
     result = subprocess.run(
         ["git", "diff", "--unified=0", "--no-prefix", base_sha, "--", pathspec],
@@ -166,7 +323,16 @@ def changed_ranges(base: str, pathspec: str = "*.rs") -> dict[str, list[tuple[in
         text=True,
         check=True,
     )
-    return parse_unified_diff_zero_context(result.stdout)
+    ranges = parse_unified_diff_zero_context(result.stdout)
+
+    def read_file(file: str) -> str:
+        path = ROOT / file
+        try:
+            return path.read_text()
+        except (FileNotFoundError, UnicodeDecodeError):
+            return ""
+
+    return drop_comment_only_ranges(ranges, read_file)
 
 
 def cargo_bin_dir() -> Path:
