@@ -63,11 +63,19 @@ echo prose > "$repo/docs/guide.md"
 echo prose > "$repo/README.md"
 echo 'fn main() {}' > "$repo/crates/foo/src/lib.rs"
 echo 'fn helper() {}' > "$repo/crates/foo/src/helper.rs"
+echo 'fn mixed() {}' > "$repo/crates/foo/src/mixed.rs"
 echo 'fn shade() {}' > "$repo/crates/foo/shaders/blur.wgsl"
 echo '[package]' > "$repo/crates/foo/Cargo.toml"
 echo 'fn main() {}' > "$repo/tools/api-surface/src/main.rs"
 echo 'name: ci' > "$repo/.github/workflows/ci.yml"
 printf 'not-really-a-png' > "$repo/docs/render-reference/contract.png"
+printf 'Apache License\n' > "$repo/LICENSE-APACHE"
+printf 'MIT License\n' > "$repo/LICENSE-MIT"
+printf 'Notices\n' > "$repo/NOTICE"
+printf 'Contributors\n' > "$repo/AUTHORS"
+printf 'default:\n\t@echo hi\n' > "$repo/justfile"
+printf 'all:\n\techo hi\n' > "$repo/Makefile"
+printf 'FROM scratch\n' > "$repo/Dockerfile"
 git -C "$repo" add -A
 git -C "$repo" commit -qm base
 
@@ -114,6 +122,31 @@ git -C "$repo" commit -qam .; land rename-to-md false path ".rs renamed to .md"
 open_pr delete-source; git -C "$repo" rm -q crates/foo/src/helper.rs
 git -C "$repo" commit -qam .; land delete-source false path "source deletion"
 
+# The enumerated legal set. #560 renamed LICENSE-APACHE to LICENSE and burned a
+# full heavy run on it; a licence file cannot change what any target builds.
+open_pr licence-rename; git -C "$repo" mv LICENSE-APACHE LICENSE
+git -C "$repo" commit -qam .; land licence-rename true path "#560: LICENSE-APACHE -> LICENSE"
+
+open_pr legal-set; echo more >> "$repo/NOTICE"; echo more >> "$repo/AUTHORS"
+echo more >> "$repo/LICENSE-MIT"
+git -C "$repo" commit -qam .; land legal-set true path "NOTICE + AUTHORS + LICENSE-MIT"
+
+# The set is closed on purpose. "Extensionless file" would swallow all three of
+# these, and each one decides what CI builds.
+open_pr justfile-only; echo '# tweak' >> "$repo/justfile"
+git -C "$repo" commit -qam .; land justfile-only false path "justfile only"
+
+open_pr makefile-only; echo '# tweak' >> "$repo/Makefile"
+git -C "$repo" commit -qam .; land makefile-only false path "Makefile only"
+
+open_pr dockerfile-only; echo '# tweak' >> "$repo/Dockerfile"
+git -C "$repo" commit -qam .; land dockerfile-only false path "Dockerfile only"
+
+# Prose plus a licence file is still prose; prose plus source is not.
+open_pr licence-and-source; echo more >> "$repo/NOTICE"
+echo '// tweak' >> "$repo/crates/foo/src/mixed.rs"
+git -C "$repo" commit -qam .; land licence-and-source false path "LICENSE-set + .rs"
+
 # --- pass 1: the predicate itself ----------------------------------------
 echo "-- predicate --"
 while IFS=$'\t' read -r sha expect kind label; do
@@ -124,6 +157,17 @@ done < "$cases"
 # never skip: the diff is unknowable, not empty.
 git -C "$repo" checkout -q main
 check "push event" false "$(cd "$repo" && GITHUB_EVENT_NAME=push bash "$detector")"
+
+# main's own shape: a push event on a single-parent commit, where the squash
+# merge leaves no HEAD^2. Both guards are live and only the first fires, so a
+# reordering that broke the event check would still pass on the parent check
+# and nobody would learn which one was load-bearing.
+git -C "$repo" checkout -q --detach "$(git -C "$repo" rev-parse main^2)"
+check "push event on single-parent HEAD" false \
+    "$(cd "$repo" && GITHUB_EVENT_NAME=push bash "$detector")"
+check "unset event name" false \
+    "$(cd "$repo" && env -u GITHUB_EVENT_NAME bash "$detector")"
+git -C "$repo" checkout -q main
 check "workflow_dispatch event" false \
     "$(cd "$repo" && GITHUB_EVENT_NAME=workflow_dispatch bash "$detector")"
 git -C "$repo" checkout -q --detach "$(git -C "$repo" rev-parse main^2)"
