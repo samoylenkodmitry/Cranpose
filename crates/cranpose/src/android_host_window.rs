@@ -1,5 +1,3 @@
-//! Android host-window size request state.
-
 use std::{
     cell::{Cell, RefCell},
     rc::{Rc, Weak},
@@ -12,11 +10,6 @@ use thiserror::Error;
 
 const SIZE_EPSILON: f32 = 0.5;
 
-/// Duration after which an Android host-window resize request is considered unsupported.
-///
-/// Android fullscreen and split-screen activities commonly ignore `Window.setLayout`.
-/// A delayed confirmation keeps that distinction observable without blocking the
-/// rendering loop while the platform has a chance to emit a resize event.
 pub(crate) const HOST_WINDOW_CONFIRMATION_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// Validation error for an Android host-window size request.

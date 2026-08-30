@@ -2,11 +2,9 @@ use cranpose_macros::composable;
 
 use crate::{Composition, MemoryApplier, MutableState, location_key, tests::test_composition};
 
-/// Simple recursive function that creates keyed groups similar to the desktop demo
 #[composable]
 fn recursive_node(depth: usize, index: usize) {
     if depth > 1 {
-        // Create two children at each level
         for child_idx in 0..2 {
             let child_key = (depth - 1, index * 2 + child_idx);
             crate::with_key(&child_key, || {
@@ -18,12 +16,10 @@ fn recursive_node(depth: usize, index: usize) {
 
 #[composable]
 fn recursive_root(depth_state: MutableState<usize>) {
-    // Read the state inside the composable to subscribe to changes
     let depth = depth_state.get();
     recursive_node(depth, 0);
 }
 
-/// Count all groups in the slot table
 fn count_groups(composition: &Composition<MemoryApplier>) -> usize {
     composition.debug_dump_slot_table_groups().len()
 }
@@ -36,7 +32,6 @@ fn recursive_decrease_increase_preserves_structure() {
 
     let key = location_key(file!(), line!(), column!());
 
-    // Initial render at depth 3
     eprintln!("\n=== Initial render at depth 3 ===");
     composition
         .render(key, &mut || {
@@ -56,7 +51,6 @@ fn recursive_decrease_increase_preserves_structure() {
     );
     assert!(initial_groups > 0, "Should have groups at depth 3");
 
-    // Decrease to depth 2
     eprintln!("\n=== Decrease to depth 2 ===");
     depth_state.set(2);
     let mut recomp_count = 0;
@@ -83,13 +77,11 @@ fn recursive_decrease_increase_preserves_structure() {
         eprintln!("  [{}] {}", entry.path, entry.line);
     }
 
-    // The important property is that the active tree shrinks after the render.
     assert!(
         decreased_groups < initial_groups,
         "Decreasing depth should reduce group count"
     );
 
-    // Increase back to depth 3
     eprintln!("\n=== Increase back to depth 3 ===");
     depth_state.set(3);
     while composition
@@ -112,7 +104,6 @@ fn recursive_decrease_increase_preserves_structure() {
         eprintln!("  [{}] {}", entry.path, entry.line);
     }
 
-    // After increasing back, we should have restored the original structure exactly
     eprintln!("\nComparison:");
     eprintln!("  Initial groups: {}", initial_groups);
     eprintln!("  Restored groups: {}", restored_groups);
@@ -132,7 +123,6 @@ fn recursive_decrease_increase_multiple_cycles() {
 
     let key = location_key(file!(), line!(), column!());
 
-    // Initial render at depth 3
     composition
         .render(key, &mut || {
             recursive_root(depth_state);
@@ -147,17 +137,14 @@ fn recursive_decrease_increase_multiple_cycles() {
         .collect();
     eprintln!("Initial keys: {:?}", initial_keys);
 
-    // Do multiple decrease-increase cycles
     for cycle in 0..3 {
         eprintln!("\n=== Cycle {} ===", cycle);
 
-        // Decrease
         depth_state.set(2);
         while composition.process_invalid_scopes().expect("recompose") {}
 
         eprintln!("After decrease");
 
-        // Increase
         depth_state.set(3);
         while composition.process_invalid_scopes().expect("recompose") {}
 
@@ -173,7 +160,6 @@ fn recursive_decrease_increase_multiple_cycles() {
         );
         eprintln!("Current keys: {:?}", current_keys);
 
-        // Check for duplicate keys
         let mut key_counts: crate::collections::map::HashMap<u64, i32> =
             crate::collections::map::HashMap::default();
         for k in &current_keys {
@@ -185,7 +171,6 @@ fn recursive_decrease_increase_multiple_cycles() {
             }
         }
 
-        // Check for missing keys
         for k in &initial_keys {
             if !current_keys.contains(k) {
                 eprintln!("MISSING KEY: {:?}", k);

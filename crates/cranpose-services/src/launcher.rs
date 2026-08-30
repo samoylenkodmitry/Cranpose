@@ -51,38 +51,18 @@ use crate::{
 pub type LauncherResult<T> = Result<T, FilePickerError>;
 
 thread_local! {
-    /// Results the host recovered after their requesting composition was
-    /// destroyed, keyed by the request key that asked for them.
     static RECOVERED: RefCell<HashMap<String, RecoveredPick>> = RefCell::new(HashMap::new());
-    /// The request key of the chooser currently in flight, if any. At most one
-    /// system chooser can be in front, so one slot is enough.
     static IN_FLIGHT: RefCell<Option<String>> = const { RefCell::new(None) };
-    /// Request keys with a live launcher, so duplicates are caught in debug.
     static REGISTERED_KEYS: RefCell<HashMap<String, usize>> = RefCell::new(HashMap::new());
 }
 
-/// Where the in-flight request key is kept so it outlives the process.
-///
-/// The in-memory slot covers a composition being torn down. It does not cover
-/// the process being killed, which is the case Android actually presents: the
-/// system may destroy an application outright while its chooser is in front,
-/// and the grant then arrives to a process that has forgotten it asked. An
-/// application that wanted to survive that had to write its own marker file
-/// beside its data and read it back on the next start — which is the framework
-/// doing half a job and leaving the awkward half to every application.
 const IN_FLIGHT_PREFERENCE: &str = "cranpose.launcher.in-flight";
 
-/// Records that `request_key` launched a chooser. Called before presenting so a
-/// host recreation — or a restart after the process was killed — can attribute
-/// the recovered result.
 fn begin_request(request_key: &str) {
     IN_FLIGHT.with(|slot| *slot.borrow_mut() = Some(request_key.to_string()));
-    // Written before the chooser is presented, so a process killed while it is
-    // in front still leaves the record behind.
     let _ = preferences().set(IN_FLIGHT_PREFERENCE, request_key);
 }
 
-/// Clears the in-flight record once the chooser resolves in this process.
 fn finish_request(request_key: &str) {
     IN_FLIGHT.with(|slot| {
         let mut slot = slot.borrow_mut();
@@ -95,16 +75,12 @@ fn finish_request(request_key: &str) {
     }
 }
 
-/// The request that was in flight, from this process or the one before it.
 fn in_flight_request() -> Option<String> {
     IN_FLIGHT
         .with(|slot| slot.borrow().clone())
         .or_else(|| preferences().get(IN_FLIGHT_PREFERENCE))
 }
 
-/// Moves anything the platform recovered into the keyed inbox. Called whenever a
-/// launcher composes, which is the first moment a recreated composition can take
-/// delivery.
 fn drain_recovered(picker: &FilePickerRef) {
     while let Some(pick) = picker.take_recovered_pick() {
         let Some(key) = in_flight_request() else {
@@ -115,7 +91,6 @@ fn drain_recovered(picker: &FilePickerRef) {
     }
 }
 
-/// Takes the recovered result addressed to `request_key`, if any.
 fn take_recovered(request_key: &str) -> Option<RecoveredPick> {
     let recovered = RECOVERED.with(|inbox| inbox.borrow_mut().remove(request_key));
     if recovered.is_some() {
@@ -132,8 +107,6 @@ pub fn clear_launcher_state() {
     REGISTERED_KEYS.with(|keys| keys.borrow_mut().clear());
 }
 
-/// Shared state behind every launcher: the picker, the runtime that runs the
-/// chooser future, and whether a request is outstanding.
 struct LauncherCore {
     request_key: String,
     picker: FilePickerRef,
@@ -162,8 +135,6 @@ impl LauncherCore {
         }
     }
 
-    /// Marks a request as starting, refusing to present a second chooser while
-    /// one is already in front.
     fn begin(self: &Rc<Self>) -> bool {
         if self.in_flight.get() {
             return false;
@@ -179,8 +150,6 @@ impl LauncherCore {
     }
 }
 
-/// Registration guard: keeps the duplicate-key check honest across recomposition
-/// and removes the key when the launcher leaves the composition.
 struct KeyRegistration {
     request_key: String,
 }
@@ -217,14 +186,11 @@ impl Drop for KeyRegistration {
     }
 }
 
-/// Everything a remembered launcher owns for one request key.
 struct LauncherSlot {
     core: Rc<LauncherCore>,
     _registration: KeyRegistration,
 }
 
-/// Remembers a launcher core for `request_key`, draining anything the host
-/// recovered for it and handing it to `deliver`.
 #[track_caller]
 fn remember_core(
     request_key: &'static str,
@@ -506,30 +472,15 @@ pub fn rememberWritableFolderLauncher(
 mod tests {
     use super::*;
 
-    /// The persistence contract, in one test.
-    ///
-    /// Two tests would share the process-wide preferences store *and* the one
-    /// key the in-flight record lives under, and the harness runs them at the
-    /// same time - so each would clear the other's record and the failure would
-    /// look like the contract being wrong. One outstanding request is also the
-    /// real invariant: a system chooser is modal, so there is one to remember.
     #[test]
     fn an_in_flight_request_outlives_the_process_that_started_it() {
-        // An in-memory store, because a unit test has no business writing to
-        // the user's config directory - which is where the default file-backed
-        // store puts it.
         crate::preferences::set_platform_preferences(std::sync::Arc::new(
             crate::preferences::MemoryPreferences::new(),
         ));
 
-        // The in-memory slot is what a torn-down composition leaves behind. A
-        // killed process leaves nothing, so the record has to be somewhere that
-        // outlives it - otherwise a grant returns to an application that has
-        // forgotten it asked, and every application writes its own marker file.
         begin_request("test.pick");
         assert_eq!(in_flight_request().as_deref(), Some("test.pick"));
 
-        // The process dies: the thread-local is gone, the record is not.
         IN_FLIGHT.with(|slot| *slot.borrow_mut() = None);
         assert_eq!(
             in_flight_request().as_deref(),
@@ -537,8 +488,6 @@ mod tests {
             "a restarted process must still know which request was outstanding"
         );
 
-        // A different launcher resolving must not clear this one's record;
-        // `drain_recovered` routes a recovered grant by it.
         finish_request("test.other");
         assert_eq!(
             in_flight_request().as_deref(),

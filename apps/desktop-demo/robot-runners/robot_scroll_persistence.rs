@@ -1,14 +1,3 @@
-//! Robot test for scroll state persistence after fling
-//!
-//! This test verifies the fix for the scroll offset reset bug where:
-//! - First scroll + fling would work correctly
-//! - Second scroll after fling would start from offset 0 instead of where fling ended
-//!
-//! Run with:
-//! ```bash
-//! cargo run --package desktop-app --example robot_scroll_persistence --features robot-app
-//! ```
-
 use std::time::Duration;
 
 use cranpose::AppLauncher;
@@ -27,7 +16,6 @@ fn main() {
         .with_size(800, 600)
         .with_headless(true)
         .with_test_driver(|robot| {
-            // Timeout safety
             std::thread::spawn(|| {
                 std::thread::sleep(Duration::from_secs(TEST_TIMEOUT_SECS));
                 println!("✗ Test timed out after {} seconds", TEST_TIMEOUT_SECS);
@@ -42,7 +30,6 @@ fn main() {
                 Err(e) => println!("Note: {}\n", e),
             }
 
-            // Navigate to Lazy List tab
             println!("--- Navigating to Lazy List Tab ---");
 
             if let Some((x, y, w, h)) = find_button_in_semantics(&robot, "Lazy List") {
@@ -62,23 +49,18 @@ fn main() {
                 return;
             }
 
-            // =========================================================
-            // TEST: Scroll persistence after fling
-            // =========================================================
             println!("--- Test: Scroll Persistence After Fling ---");
 
             let start_x = 400.0;
             let start_y = 400.0;
             let swipe_distance = 150.0;
 
-            // Step 1: Perform first fling gesture
             println!("  Step 1: First fling gesture...");
             let _ = robot.mouse_move(start_x, start_y);
             std::thread::sleep(Duration::from_millis(50));
             let _ = robot.mouse_down();
             std::thread::sleep(Duration::from_millis(20));
 
-            // Fast swipe up (scroll down)
             for i in 1..=5 {
                 let progress = i as f32 / 5.0;
                 let new_y = start_y - (swipe_distance * progress);
@@ -87,22 +69,18 @@ fn main() {
             }
             let _ = robot.mouse_up();
 
-            // Wait for fling animation to complete
             std::thread::sleep(Duration::from_millis(600));
             println!("    Fling 1 complete");
 
-            // Record position after first fling
             let item_after_fling1 = find_in_semantics(&robot, |elem| find_text(elem, "Item 10"));
             let pos_after_fling1 = item_after_fling1.map(|(_, y, _, _)| y);
 
-            // Step 2: Perform second scroll gesture
             println!("  Step 2: Second scroll gesture (should continue from current position)...");
             let _ = robot.mouse_move(start_x, start_y - swipe_distance);
             std::thread::sleep(Duration::from_millis(100));
             let _ = robot.mouse_down();
             std::thread::sleep(Duration::from_millis(20));
 
-            // Slow scroll (no fling) - just 30px
             for i in 1..=3 {
                 let progress = i as f32 / 3.0;
                 let new_y = (start_y - swipe_distance) - (30.0 * progress);
@@ -113,11 +91,9 @@ fn main() {
             std::thread::sleep(Duration::from_millis(200));
             println!("    Scroll 2 complete");
 
-            // Record position after second scroll
             let item_after_scroll2 = find_in_semantics(&robot, |elem| find_text(elem, "Item 10"));
             let pos_after_scroll2 = item_after_scroll2.map(|(_, y, _, _)| y);
 
-            // Analyze results
             println!("\n  Results:");
             match (pos_after_fling1, pos_after_scroll2) {
                 (Some(p1), Some(p2)) => {
@@ -126,8 +102,6 @@ fn main() {
                     println!("    Item 10 after scroll 2: Y={:.1}", p2);
                     println!("    Delta: {:.1}px", delta);
 
-                    // If scroll 2 continued from fling position, delta should be ~30px
-                    // If it reset to 0, delta would be much larger (the item might even be off-screen)
                     if delta < 100.0 {
                         println!("\n  ✓ PASS: Scroll position persisted correctly");
                         println!("    Second scroll continued from where first fling ended");

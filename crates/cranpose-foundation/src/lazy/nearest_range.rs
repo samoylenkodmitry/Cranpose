@@ -1,6 +1,3 @@
-// Copyright 2025 The Cranpose Authors
-// SPDX-License-Identifier: Apache-2.0
-
 //! Nearest range state for optimized key→index lookup.
 //!
 //! Based on JC's `LazyLayoutNearestRangeState`. Uses a sliding window
@@ -26,13 +23,9 @@ pub const NEAREST_ITEMS_EXTRA_COUNT: usize = 100;
 /// Matches JC's `LazyLayoutNearestRangeState`.
 #[derive(Debug, Clone)]
 pub struct NearestRangeState {
-    /// Current range of indices to search for keys.
     value: Range<usize>,
-    /// Last known first visible item index.
     last_first_visible_item: usize,
-    /// Size of the sliding window.
     sliding_window_size: usize,
-    /// Extra items to include on each side.
     extra_item_count: usize,
 }
 
@@ -86,8 +79,6 @@ impl NearestRangeState {
         }
     }
 
-    /// Calculates the range of items to include.
-    /// Optimized to return the same range for small changes in firstVisibleItem.
     fn calculate_range(
         first_visible_item: usize,
         sliding_window_size: usize,
@@ -110,7 +101,6 @@ mod tests {
     #[test]
     fn test_initial_range() {
         let state = NearestRangeState::new(0);
-        // Window starts at 0, so range is 0..(0 + 30 + 100) = 0..130
         assert_eq!(state.range(), 0..130);
     }
 
@@ -118,7 +108,6 @@ mod tests {
     fn test_range_after_small_scroll() {
         let mut state = NearestRangeState::new(0);
         state.update(5);
-        // Still in first window (0..30), so range stays 0..130
         assert_eq!(state.range(), 0..130);
     }
 
@@ -126,9 +115,6 @@ mod tests {
     fn test_range_after_crossing_window() {
         let mut state = NearestRangeState::new(0);
         state.update(35);
-        // Now in second window (30..60)
-        // Start: 30 - 100 = 0 (saturating)
-        // End: 30 + 30 + 100 = 160
         assert_eq!(state.range(), 0..160);
     }
 
@@ -136,9 +122,6 @@ mod tests {
     fn test_range_far_scroll() {
         let mut state = NearestRangeState::new(0);
         state.update(1000);
-        // Window: 990..1020
-        // Start: 990 - 100 = 890
-        // End: 990 + 30 + 100 = 1120
         assert_eq!(state.range(), 890..1120);
     }
 }

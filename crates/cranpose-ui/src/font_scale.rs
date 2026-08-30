@@ -39,9 +39,6 @@
 /// measurement path.
 pub const MAX_FONT_SCALE_KNOTS: usize = 12;
 
-/// How far off a straight line through its neighbours a knot has to sit to be
-/// worth keeping, in dp. Well under the half device pixel that could move a
-/// glyph, and well over the float noise a sampled curve carries.
 const COLLINEAR_EPSILON_DP: f32 = 1.0e-3;
 
 /// The sp → dp conversion the platform performs, sampled from the platform.
@@ -177,8 +174,6 @@ impl FontScaleCurve {
     }
 }
 
-/// Drops the samples that sit on the line between their neighbours, and refuses
-/// a set the platform could not have produced.
 fn compress(samples: &[(f32, f32)]) -> Option<Vec<(f32, f32)>> {
     if samples.len() < 2 {
         return None;
@@ -227,11 +222,6 @@ fn fingerprint(scale: f32, knots: &[(f32, f32)]) -> u32 {
 mod tests {
     use super::*;
 
-    /// The curve Android 14 applies at font scale 1.24 on a density-2 display,
-    /// in dp, read off `TypedValue.applyDimension(COMPLEX_UNIT_SP, ..)` on a
-    /// Wear OS 5 emulator. `androidx.compose.ui.unit.Density(context).toPx()`
-    /// returns the same value for every one of these, so this is what the Kotlin
-    /// build measures with as well.
     const PLATFORM_124: [(f32, f32); 10] = [
         (8.0, 9.92),
         (10.0, 12.4),
@@ -263,16 +253,12 @@ mod tests {
         assert!(FontScaleCurve::linear(1.0).is_identity());
         assert!(!FontScaleCurve::linear(1.24).is_identity());
         assert!(!platform_124().is_identity());
-        // A platform that answers with a table while the setting is 1.0 has
-        // still answered "nothing changes", and the fast path has to see that.
         let flat: Vec<(f32, f32)> = (1..=40).map(|sp| (sp as f32, sp as f32)).collect();
         assert!(FontScaleCurve::from_samples(1.0, &flat).is_identity());
     }
 
     #[test]
     fn the_platform_curve_is_reproduced_at_every_size_the_platform_was_asked() {
-        // Not just at the knots: these are the sizes a Wear type scale actually
-        // names, and each is the number the emulator returned.
         let curve = platform_124();
         for (sp, expected_px) in [
             (0.4f32, 0.992f32),
@@ -299,10 +285,6 @@ mod tests {
 
     #[test]
     fn the_thirteen_sp_secondary_label_is_where_multiplying_goes_wrong() {
-        // The size behind the defect this curve exists for: Wear Material 3's
-        // `labelSmall`, which a Settings chip puts its secondary line in. A
-        // multiplier makes it 32.24 px and the platform makes it 32.72, and the
-        // 1.5% is the difference between one line and two in a 326 px column.
         let curve = platform_124();
         assert!((curve.sp_to_dp(13.0) * 2.0 - 32.72).abs() < 1.0e-3);
         assert!((FontScaleCurve::linear(1.24).sp_to_dp(13.0) * 2.0 - 32.24).abs() < 1.0e-3);
@@ -311,8 +293,6 @@ mod tests {
     #[test]
     fn collinear_samples_are_dropped_and_the_curve_still_answers_the_same() {
         let curve = platform_124();
-        // 10 sits on the line from 8 to 12 and 16 on the line from 14 to 18, so
-        // eight of the platform's ten knots survive.
         assert_eq!(curve.knot_count(), 8);
         let dense: Vec<(f32, f32)> = (1..=120)
             .map(|sp| {
@@ -350,8 +330,6 @@ mod tests {
 
     #[test]
     fn more_bends_than_there_are_knots_falls_back_rather_than_truncating() {
-        // A truncated curve answers plausibly and wrongly, which is worse than
-        // answering the way a platform with no table would.
         let zigzag: Vec<(f32, f32)> = (1..=40)
             .map(|sp| {
                 let sp = sp as f32;

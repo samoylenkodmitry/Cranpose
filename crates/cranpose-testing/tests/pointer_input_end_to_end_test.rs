@@ -1,6 +1,3 @@
-//! End-to-end test simulating the full pointer input pipeline from
-//! composition → layout → rendering → hit-testing → event dispatch
-
 use cranpose_core::MutableState;
 use cranpose_foundation::PointerEventKind;
 use cranpose_macros::composable;
@@ -19,32 +16,29 @@ fn test_hover_app(position: MutableState<Point>, event_count: MutableState<i32>)
             .then(Modifier::empty().pointer_input((), {
                 let pos = position;
                 let count = event_count;
-                move |scope: PointerInputScope| {
-                    async move {
-                        // Log that we started
-                        count.set(-1); // -1 means "started but no events yet"
+                move |scope: PointerInputScope| async move {
+                    count.set(-1);
 
-                        scope
-                            .await_pointer_event_scope(|await_scope| async move {
-                                loop {
-                                    let event = await_scope.await_pointer_event().await;
-                                    if event.kind == PointerEventKind::Move {
-                                        pos.set(Point {
-                                            x: event.position.x,
-                                            y: event.position.y,
-                                        });
-                                        count.update(|c| {
-                                            if *c == -1 {
-                                                *c = 1; // First event
-                                            } else {
-                                                *c += 1;
-                                            }
-                                        });
-                                    }
+                    scope
+                        .await_pointer_event_scope(|await_scope| async move {
+                            loop {
+                                let event = await_scope.await_pointer_event().await;
+                                if event.kind == PointerEventKind::Move {
+                                    pos.set(Point {
+                                        x: event.position.x,
+                                        y: event.position.y,
+                                    });
+                                    count.update(|c| {
+                                        if *c == -1 {
+                                            *c = 1;
+                                        } else {
+                                            *c += 1;
+                                        }
+                                    });
                                 }
-                            })
-                            .await;
-                    }
+                            }
+                        })
+                        .await;
                 }
             })),
         ColumnSpec::default(),
@@ -110,7 +104,6 @@ fn pause_button_app(is_running: MutableState<bool>, click_count: MutableState<i3
                 TextStyle::default(),
             );
 
-            // Recreate the pause button structure from the demo
             Button(
                 Modifier::empty()
                     .rounded_corners(16.0)
@@ -158,29 +151,20 @@ fn test_pause_button_with_dynamic_content() {
     })
     .expect("initial render succeeds");
 
-    // Verify initial state
     assert!(is_running.get());
     assert_eq!(click_count.get(), 0);
 
-    // The button's closure captures is_running and click_count
-    // When the button is clicked (which we can't simulate here),
-    // it should toggle is_running and increment click_count
-
-    // Manually simulate what a click would do:
     is_running.set(false);
     click_count.set(1);
 
     rule.pump_until_idle()
         .expect("recompose after state change");
 
-    // Verify state changed
     assert!(!is_running.get());
     assert_eq!(click_count.get(), 1);
 
-    // Check that recomposition happened
     let node_count_after_first_toggle = rule.applier_mut().len();
 
-    // Toggle again
     is_running.set(true);
     click_count.set(2);
 
@@ -192,7 +176,6 @@ fn test_pause_button_with_dynamic_content() {
 
     let node_count_after_second_toggle = rule.applier_mut().len();
 
-    // Node count should remain stable across toggles
     assert_eq!(
         node_count_after_first_toggle, node_count_after_second_toggle,
         "Node count should not change when toggling button state"

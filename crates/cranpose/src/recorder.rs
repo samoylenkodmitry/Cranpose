@@ -139,13 +139,9 @@ pub enum RecordedEvent {
 
 /// Input recorder that captures events with timestamps
 pub struct InputRecorder {
-    /// When recording started
     start_time: Instant,
-    /// All recorded events
     events: Vec<RecordedEvent>,
-    /// Output file path
     output_path: PathBuf,
-    /// Last mouse position (to avoid duplicate moves)
     last_mouse_pos: Option<(f32, f32)>,
 }
 
@@ -162,14 +158,12 @@ impl InputRecorder {
         }
     }
 
-    /// Get elapsed time in milliseconds since recording started
     fn elapsed_ms(&self) -> u64 {
         self.start_time.elapsed().as_millis() as u64
     }
 
     /// Record a mouse move event
     pub fn record_mouse_move(&mut self, x: f32, y: f32) {
-        // Skip if same position (within 0.5px)
         if let Some((lx, ly)) = self.last_mouse_pos
             && (x - lx).abs() < 0.5
             && (y - ly).abs() < 0.5
@@ -221,10 +215,8 @@ impl InputRecorder {
 
         let mut file = std::fs::File::create(&self.output_path)?;
 
-        // Convert events to actions
         let actions = self.events_to_actions();
 
-        // Write header
         writeln!(file, "//! Auto-generated robot test from recording")?;
         writeln!(file, "//! Generated at: {}", generated_timestamp())?;
         writeln!(file, "//! Events: {}", self.events.len())?;
@@ -239,7 +231,6 @@ impl InputRecorder {
         writeln!(file, "use std::time::Duration;")?;
         writeln!(file)?;
 
-        // Write the actions array
         writeln!(file, "const ACTIONS: &[RobotAction] = &[")?;
         for action in &actions {
             let action_str = match action {
@@ -254,7 +245,6 @@ impl InputRecorder {
         writeln!(file, "];")?;
         writeln!(file)?;
 
-        // Write main function
         writeln!(file, "fn main() {{")?;
         writeln!(file, "    AppLauncher::new()")?;
         writeln!(file, "        .with_headless(true)")?;
@@ -283,10 +273,6 @@ impl InputRecorder {
         Ok(())
     }
 
-    /// Convert recorded events to robot actions.
-    ///
-    /// This transforms timestamped events into a sequence of actions with
-    /// relative Sleep delays between them.
     fn events_to_actions(&self) -> Vec<RobotAction> {
         let mut actions = Vec::new();
         let mut last_time_ms = 0u64;
@@ -302,12 +288,10 @@ impl InputRecorder {
                     (*time_ms, Some(RobotAction::Key(key.clone())))
                 }
                 RecordedEvent::KeyUp { time_ms: _, key: _ } => {
-                    // Skip key up - send_key does press+release
                     continue;
                 }
             };
 
-            // Add sleep for timing (only if > 5ms to avoid noise)
             let delta = time_ms.saturating_sub(last_time_ms);
             if delta > 5 {
                 actions.push(RobotAction::Sleep(delta));
@@ -369,7 +353,6 @@ mod tests {
             recorder.record_mouse_move(100.0, 200.0);
             recorder.record_mouse_down();
             recorder.record_mouse_up();
-            // finish() called on drop
         }
 
         let mut content = String::new();
@@ -378,7 +361,6 @@ mod tests {
             .read_to_string(&mut content)
             .unwrap();
 
-        // Verify data-driven format
         assert!(content.contains("use cranpose::recorder::{RobotAction, execute_actions};"));
         assert!(content.contains("//! Generated at: unix_ms_"));
         assert!(!content.contains("//! Generated at: timestamp"));
@@ -395,7 +377,6 @@ mod tests {
     fn test_events_to_actions_conversion() {
         let mut recorder = InputRecorder::new("/dev/null");
 
-        // Simulate events with timestamps
         recorder.events.push(RecordedEvent::MouseMove {
             time_ms: 0,
             x: 100.0,
@@ -415,7 +396,6 @@ mod tests {
 
         let actions = recorder.events_to_actions();
 
-        // Verify conversion: 4 actions + 3 sleeps (first event at 0ms has no preceding sleep)
         assert_eq!(actions.len(), 7);
         assert!(matches!(actions[0], RobotAction::MouseMove(100.0, 200.0)));
         assert!(matches!(actions[1], RobotAction::Sleep(50)));
@@ -428,7 +408,6 @@ mod tests {
 
     #[test]
     fn test_robot_action_enum() {
-        // Verify enum variants can be constructed
         let actions = [
             RobotAction::Sleep(100),
             RobotAction::MouseMove(50.0, 75.5),

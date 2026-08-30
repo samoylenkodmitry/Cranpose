@@ -1,9 +1,3 @@
-//! Test for render invalidation bug
-//!
-//! This test checks if the render scene is properly invalidated and rebuilt
-//! when composition changes. The bug is that even though nodes update correctly,
-//! the visual scene doesn't get rebuilt, so the display is stale.
-
 use cranpose_core::MutableState;
 use cranpose_macros::composable;
 use cranpose_testing::ComposeTestRule;
@@ -23,7 +17,6 @@ fn test_render_invalidation_on_conditional_change() {
     let _app_context = cranpose_ui::AppContext::new();
     let _app_context_scope = _app_context.enter_scope();
     _app_context.enter(cranpose_ui::reset_render_state_for_tests);
-    // This test FAILS because render invalidation doesn't happen
 
     let mut rule = ComposeTestRule::new();
     let runtime = rule.runtime_handle();
@@ -43,10 +36,8 @@ fn test_render_invalidation_on_conditional_change() {
     })
     .expect("initial render succeeds");
 
-    // Clear any previous render invalidation
     rule.with_app_context(cranpose_ui::take_render_invalidation);
 
-    // Verify we're starting clean
     let before_change = rule.with_app_context(cranpose_ui::peek_render_invalidation);
     eprintln!(
         "Before state change - render invalidated: {}",
@@ -57,21 +48,18 @@ fn test_render_invalidation_on_conditional_change() {
         "Should start with no pending render invalidation"
     );
 
-    // Change state - this should trigger render invalidation
     eprintln!("\n=== Changing counter from 0 to 1 ===");
     counter.set(1);
 
     eprintln!("=== Running recomposition ===");
     rule.pump_until_idle().expect("recompose");
 
-    // Check if render was invalidated after recomposition
     let after_change = rule.with_app_context(cranpose_ui::peek_render_invalidation);
     eprintln!(
         "\nAfter recomposition - render invalidated: {}",
         after_change
     );
 
-    // THIS ASSERTION SHOULD FAIL - exposing the bug
     assert!(
         after_change,
         "\n\n\

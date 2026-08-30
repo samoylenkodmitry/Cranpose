@@ -101,8 +101,6 @@ impl GraphUpdateReport {
     }
 }
 
-// Counts full layer lowerings so tests can assert what a scoped update did
-// NOT rebuild — the scroll fast path's whole contract.
 #[cfg(test)]
 thread_local! {
     static LOWERED_LAYER_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -289,10 +287,6 @@ fn update_graph_from_applier_report_into_inner(
     }
 }
 
-/// Both scoped walks end the same way: the walk either failed outright, or it
-/// succeeded and left dirty nodes it could not find a layer for. Either way the
-/// caller rebuilds the whole scene, and the reason is the only thing that says
-/// which.
 fn classify_walk(walked: bool, remaining_dirty_nodes: &HashSet<NodeId>) -> GraphUpdate {
     if !walked {
         GraphUpdate::NeedsRebuild(GraphRebuildReason::DirtyLayerUnavailable)
@@ -354,13 +348,8 @@ fn replace_dirty_layers_from_applier(
                     },
                 },
             ) {
-                // Retained hit nodes moved with their layers; the hit graph
-                // must be re-collected against the new transforms.
                 report.hit_graph_dirty = true;
                 report.updated = true;
-                // Dirty descendants inside the patched container get the
-                // ordinary treatment, with this container's freshly patched
-                // origins as their ancestor context.
                 let child_report = replace_dirty_layers_from_applier(
                     applier,
                     child_layer,
@@ -379,11 +368,6 @@ fn replace_dirty_layers_from_applier(
                     .expect("dirty layer must have a node id"),
                 parent.motion_context_animated,
                 child_inherited_translated_content_context,
-                // Resolve live window origins in the dirty subtree from the (clean)
-                // parent's remembered child origin, so a `BasicTextField`'s
-                // `node_origin` — and thus its overlay selection-handle / menu
-                // `Popup`s — stay glued to the glyphs during a fling (which
-                // rebuilds only the scrolling subtree, not the whole tree).
                 Some(AbsOrigin {
                     content_origin: parent.scene_children_origin,
                     layer_translation: parent.scene_children_layer_translation,
@@ -438,16 +422,6 @@ fn replace_dirty_layers_from_applier(
     Some(report)
 }
 
-/// The frame a scroll produces: a container is dirty, its children are clean,
-/// and they only moved. Re-lowering the visible subtree for that frame was
-/// the largest single CPU item on a profiled device (5.8 ms of a 17 ms
-/// Kirin 980 frame) for content the replay layer then recognized as
-/// unchanged. This patches the retained children's transforms in place —
-/// their own raster-cache hashes exclude placement, so every cache survives
-/// the move — and bails to the ordinary rebuild on anything it cannot prove:
-/// a container with its own draw content, a changed child set, a resized
-/// child, a dirty descendant, or a subtree that publishes live window
-/// origins (whose sinks only a full lowering rewrites).
 fn translate_bail(reason: &str) -> bool {
     if cranpose_core::env_flag!("CRANPOSE_SCENE_UPDATE_DIAG") {
         eprintln!("[scene-update-diag] translate bail: {reason}");
@@ -455,8 +429,6 @@ fn translate_bail(reason: &str) -> bool {
     false
 }
 
-/// Everything a container's own lowering would have inherited from its
-/// parent: the ancestor context a scoped translate runs under.
 #[derive(Clone, Copy)]
 struct TranslateAncestorContext {
     ancestor_hashed: bool,
@@ -478,8 +450,6 @@ fn try_translate_scrolled_layer(
         parent_content_offset,
         parent_abs,
     } = ancestors;
-    // Ablation switch: measure or bisect against the pre-translate world
-    // (every scrolled frame re-lowers) without a rebuild.
     if cranpose_core::env_flag!("CRANPOSE_DISABLE_SCROLL_TRANSLATE") {
         return translate_bail("fast path disabled by ablation switch");
     }
@@ -527,14 +497,6 @@ fn try_translate_scrolled_layer(
     if graphics_layer != container.graphics_layer {
         return translate_bail("container graphics layer changed");
     }
-    // A scroll may slide a lazy window: children retained across the frame
-    // move, entering ones are lowered fresh below, leaving ones drop. The
-    // scene's child set is the PLACED fresh children in fresh order — a
-    // child whose layout cannot be read or that is not placed is absent,
-    // exactly as a full lowering leaves it. A retained child that is
-    // itself dirty (a recycled lazy slot recomposed to new content) keeps
-    // its old subtree here — the caller recurses into it and the ordinary
-    // dirty handling rebuilds it with a fresh transform.
     let mut old_ids = Vec::with_capacity(container.children.len());
     for child in &container.children {
         let RenderNode::Layer(layer) = child else {
@@ -568,7 +530,6 @@ fn try_translate_scrolled_layer(
     let fresh_id_set: HashSet<NodeId> = placed_fresh.iter().map(|(id, _)| *id).collect();
     for (child_id, state) in &placed_fresh {
         let Some(&old_index) = old_index_by_id.get(child_id) else {
-            // Entering: lowered fresh below, its own layout is its business.
             continue;
         };
         let RenderNode::Layer(layer) = &container.children[old_index] else {
@@ -587,8 +548,6 @@ fn try_translate_scrolled_layer(
         }
     }
 
-    // Everything the patch needs, computed before any mutation so a failed
-    // entering-child lowering leaves the graph untouched.
     let content_offset = layout_state.content_offset;
     let (translation_x, translation_y) = modifier_slices
         .graphics_layer()
@@ -615,10 +574,6 @@ fn try_translate_scrolled_layer(
         y: layer_translation.y - container.scene_children_layer_translation.y,
     };
 
-    // Entering children (the lazy window slid) are lowered fresh with the
-    // container's NEW origins as ancestor context — the exact lowering a
-    // dirty-child replacement runs, just scoped to the rows that actually
-    // appeared.
     let child_inherited_translated_content_context =
         inherited_translated_content_context || container.translated_content_context;
     let children_ancestor_hashed =
@@ -639,7 +594,6 @@ fn try_translate_scrolled_layer(
                 layer_translation,
             }),
         ) else {
-            // Absent from the scene exactly as a full lowering leaves it.
             continue;
         };
         if content_offset != Point::default() {
@@ -658,8 +612,6 @@ fn try_translate_scrolled_layer(
         entering.insert(*child_id, lowered);
     }
 
-    // Everything checks out — mutate, mirroring exactly what a rebuild
-    // computes for each field.
     let mut transform = layer_transform_to_parent(
         container.local_bounds,
         layout_state.position(),
@@ -679,9 +631,6 @@ fn try_translate_scrolled_layer(
             .unwrap_or(content_offset);
     }
 
-    // Live origins, exactly as the full build publishes them: the
-    // container's own sinks now, and the remembered child origins through
-    // the subtree so a later scoped rebuild inside it resolves correctly.
     if let Some(sink) = modifier_slices.text_field_window_origin() {
         sink.set(window_origin);
     }
@@ -696,22 +645,16 @@ fn try_translate_scrolled_layer(
     container.scene_children_origin = child_origin;
     container.scene_children_layer_translation = layer_translation;
 
-    // The children, in the fresh frame's order: retained layers move (their
-    // own raster hashes exclude placement, so every cache survives),
-    // entering ones land already lowered, leaving ones drop.
     let mut old_by_id: std::collections::HashMap<NodeId, Box<LayerNode>> =
         std::collections::HashMap::new();
     for child in container.children.drain(..) {
         let RenderNode::Layer(layer) = child else {
-            // Checked above; a non-layer child bailed before any mutation.
             continue;
         };
         let child_id = layer.node_id.expect("checked above");
         if fresh_id_set.contains(&child_id) {
             old_by_id.insert(child_id, layer);
         } else {
-            // Leaving: its layers are gone from the scene; the replay layer
-            // must forget them.
             collect_layer_node_ids(&layer, changed_nodes);
         }
     }
@@ -740,35 +683,20 @@ fn try_translate_scrolled_layer(
                     y: new_children_origin.y - layer.scene_children_origin.y,
                 };
                 offset_scene_origins(&mut layer, origin_delta, translation_delta);
-                // The renderer memoizes per-node facts DERIVED from a
-                // layer's own transform (surface requirements carry its
-                // direct translation), evicting per changed node. A moved
-                // child must be reported or the collector keeps compositing
-                // it at the stale offset — the frame then freezes while
-                // layout walks on (robot_scroll_decoration_invariance's
-                // anti-correlated underline). Descendants keep their own
-                // transforms, so the moved child alone is stale.
                 if let Some(moved_id) = layer.node_id {
                     changed_nodes.push(moved_id);
                 }
             }
-            // A dirty retained child keeps its old content; the caller's
-            // recursion rebuilds it with a fresh transform of its own.
             new_children.push(RenderNode::Layer(layer));
         } else if let Some(lowered) = entering.remove(child_id) {
-            // The fresh lowering satisfied this subtree's dirt, its own
-            // node's included.
             dirty_nodes.remove(child_id);
             remove_dirty_descendants(&lowered, dirty_nodes);
             collect_layer_node_ids(&lowered, changed_nodes);
             new_children.push(RenderNode::Layer(Box::new(lowered)));
         }
-        // Neither retained nor lowered: absent from the scene, exactly as a
-        // full lowering leaves it.
     }
     container.children = new_children;
 
-    // Entering and leaving children can change what the subtree carries.
     container.has_hit_targets = container.hit_test.is_some()
         || container.children.iter().any(|child| match child {
             RenderNode::Layer(child_layer) => child_layer.has_hit_targets,
@@ -780,16 +708,11 @@ fn try_translate_scrolled_layer(
             RenderNode::Primitive(_) | RenderNode::DrawRun(_) => false,
         });
 
-    // The container's own hash covers its children's transforms; the moved
-    // children's own hashes exclude placement and stay valid as they are.
     crate::graph_hash::refresh_layer_own_raster_cache_hashes(container, container_ancestor_hashed);
     changed_nodes.push(node_id);
     true
 }
 
-/// Shifts a retained subtree's remembered window origins by the rigid
-/// translation its root just took, keeping them as live as a full build
-/// would have left them.
 fn offset_scene_origins(layer: &mut LayerNode, origin_delta: Point, translation_delta: Point) {
     layer.scene_children_origin.x += origin_delta.x;
     layer.scene_children_origin.y += origin_delta.y;
@@ -972,10 +895,6 @@ fn build_layer_node_internal(
         } else {
             Point::default()
         },
-        // The `LayoutBox` snapshot path does not carry live window origins (the
-        // app runtime uses the applier path instead), so leave these at the
-        // identity — origin sinks in this path are written by the layout `place`
-        // pass.
         scene_children_origin: Point::default(),
         scene_children_layer_translation: Point::default(),
         graphics_layer,
@@ -992,16 +911,6 @@ fn build_layer_node_internal(
     }
 }
 
-/// The composited window-space origin accumulated for a node while walking the
-/// render graph. `content_origin` is where this node's own top-left sits before
-/// its graphics-layer translation; `layer_translation` is the accumulated
-/// ancestor graphics-layer translation. Mirrors the layout `place` pass, but is
-/// computed during the per-frame scene build (which is the only pass that runs
-/// in the app runtime — `build_layout_tree` is disabled there) so a scrolling
-/// field's window-origin / a scroll container's viewport-rect sinks stay live
-/// even during a fling (no re-layout, no pointer events). `None` in the partial
-/// (dirty-subtree) rebuild path, where the ancestor origin is not known — the
-/// sinks then keep their last full-build value rather than being corrupted.
 #[derive(Clone, Copy)]
 struct AbsOrigin {
     content_origin: Point,
@@ -1137,12 +1046,6 @@ fn build_layer_node_from_data(
         clip: (clip_to_bounds || graphics_layer.clip).then_some(local_bounds),
     });
 
-    // Publish this node's resolved size to its `pointer_input` handlers, so
-    // `PointerInputScope::size()` reports the node's real dimensions — the same
-    // box the events dispatched to those handlers are made local to. This is the
-    // only pass that runs in the app runtime, and it runs before the frame's
-    // pointer dispatch, so handlers see the current size (and track resizes)
-    // whether or not an event has arrived yet.
     modifier_slices.publish_pointer_input_size(layout_state.size());
 
     let node_motion_context_animated =
@@ -1154,20 +1057,6 @@ fn build_layer_node_from_data(
     let child_translated_content_context =
         inherited_translated_content_context || local_translated_content_context;
 
-    // Publish this node's LIVE composited window origin during the per-frame
-    // scene build. This is the only pass that runs in the app runtime
-    // (`build_layout_tree` is disabled there), and it uses `local_translated_
-    // content_offset` — the SAME live scroll/graphics-layer translation the
-    // renderer applies to the content — so:
-    //  * a `BasicTextField`'s `node_origin` (read by its draw closure to anchor
-    //    the overlay selection-handle / context-menu `Popup`s) tracks the field
-    //    through a fling, even though the in-content caret/highlight already
-    //    follow via the layer transform; and
-    //  * a scroll container's viewport rect is known for its
-    //    `BringIntoViewResponder`.
-    // `parent_abs` is `None` in the partial (dirty-subtree) rebuild path where
-    // the ancestor origin is unknown; the sinks then keep their last full-build
-    // value instead of being written wrong.
     let this_abs = parent_abs.map(|parent| {
         let (tx, ty) = modifier_slices
             .graphics_layer()
@@ -1200,13 +1089,6 @@ fn build_layer_node_from_data(
             });
         }
     }
-    // Children inherit this node's content origin plus its `content_offset` —
-    // the SAME translation this build applies to child layer transforms below
-    // (a `LazyColumn`/`vertical_scroll` bakes the live scroll into its children's
-    // placement, so this tracks the scroll frame-to-frame). Using the layout
-    // content offset (not the snap-anchor `translated_content_offset`, which is
-    // a raster pixel-snap detail) keeps `node_origin` exactly on the rendered
-    // glyphs, so the overlay handle/menu `Popup`s stay glued to the text.
     let child_abs = this_abs.map(|(top_left, layer_translation)| AbsOrigin {
         content_origin: Point {
             x: top_left.x + layout_state.content_offset.x,
@@ -1294,9 +1176,6 @@ fn build_layer_node_from_data(
         } else {
             Point::default()
         },
-        // Remember where this layer places its children so a later partial
-        // rebuild of a dirty descendant subtree can resolve live window origins
-        // without re-walking from the root (see `AbsOrigin`).
         scene_children_origin: child_abs.map(|c| c.content_origin).unwrap_or_default(),
         scene_children_layer_translation: child_abs
             .map(|c| c.layer_translation)
@@ -1316,85 +1195,24 @@ fn build_layer_node_from_data(
     Some(layer)
 }
 
-/// Reusable per-command recording buffers, keyed by the command's stable
-/// identity. The graph shares each primitive vector AND each compact
-/// recording (`Rc`) and still holds last frame's buffers while this frame
-/// records, so each command keeps two of each: the frame-before-last's is
-/// the free one, and steady-state re-recording ping-pongs between the two
-/// with no buffer allocation. A handle a live graph node still shares is
-/// never written through — reuse requires sole ownership, checked at
-/// acquisition.
 struct RecorderSlot {
     generation: u64,
     handles: [Option<Rc<Vec<cranpose_ui_graphics::DrawPrimitive>>>; 2],
-    /// The command's compact recording buffers (tape + typed stores), under
-    /// the same double-buffer discipline as `handles`: the graph frame owns
-    /// a handle to the exact recording it was built from (its bypassed
-    /// spans' only rematerialization source — see
-    /// [`cranpose_ui_graphics::CommandReplayFrame::fallback`]), so a
-    /// recording a live frame still shares is never written through, and
-    /// steady-state re-recording ping-pongs between the pair with no buffer
-    /// allocation.
     recordings: [Option<Rc<cranpose_ui_graphics::CommandRecording>>; 2],
-    /// Per-command similarity verification state: the retained snapshot and
-    /// its segments. Advances every time the command re-records while a
-    /// retained feed is active.
     replay: cranpose_ui_graphics::CommandReplayState,
-    /// The feed epoch `replay` was built under; `None` before the first
-    /// verified recording. See [`set_retained_feed_epoch`].
     replay_epoch: Option<u64>,
-    /// The previous build's emission in re-emittable form, for the
-    /// stale-transition serve (see [`SavedReplayEmission`]). `None` unless
-    /// the flag is on and the last build emitted a replay frame.
     saved_emission: Option<SavedReplayEmission>,
 }
 
-/// One command's emitted frame, saved so the NEXT build can re-emit it
-/// byte-for-byte if its verification collapses — the stale-transition
-/// serve. A collapse frame otherwise re-materializes and re-encodes the
-/// whole tape at once (22-75 ms against a ~17k-record scene on a
-/// watch-class core); re-emitting the previous frame's output costs one
-/// frame of lag on the collapsing command instead. Valid only when exactly
-/// one build has passed since the save (`generation`) under the same
-/// renderer slot universe (`epoch`); the serve TAKES the emission, so two
-/// consecutive stale frames are unconstructible — the one-frame cap is
-/// structural, not a counter.
-///
-/// In the steady state the `Rc`s alias the registry's live handles, so a
-/// save is two refcount bumps plus one small sanitized span vector — never
-/// a copy of the primitives or the tape.
 struct SavedReplayEmission {
-    /// The frame's primitive-space spans, sanitized for re-emission by
-    /// [`sanitized_replay_spans`]: recolors emptied, capture spans
-    /// downgraded to dynamic draws.
     spans: Vec<cranpose_ui_graphics::FrameSpan>,
-    /// The similarity pivot the spans' transforms rotate and scale about.
     center: cranpose_ui_graphics::Point,
-    /// The emission's materialized primitives — the exact vector the
-    /// spans' `range`s address.
     primitives: Rc<Vec<cranpose_ui_graphics::DrawPrimitive>>,
-    /// The emission's published recording — the exact tape the spans'
-    /// `tape_range`s address, re-attached as the re-emitted frame's
-    /// `fallback` so bypassed spans keep their rematerialization source.
     recording: Rc<cranpose_ui_graphics::CommandRecording>,
-    /// Retained feed epoch at save: a different epoch means the renderer's
-    /// slot universe died, and the spans' slot references with it.
     epoch: u64,
-    /// [`RECORDING_GENERATION`] at save. Serving requires
-    /// `generation + 1 == current`: only the immediately following build
-    /// may re-emit, so a served frame is never more than one frame stale.
     generation: u64,
 }
 
-/// Kill switch for the stale-transition serve, default OFF: set
-/// `CRANPOSE_STALE_TRANSITION` (to anything but `0` or empty) to let a
-/// command's replay collapse frame re-emit the previous build's emission
-/// instead of re-materializing its whole tape. Gates BOTH the save and the
-/// serve, so OFF is today's behavior byte-for-byte with zero saved-state
-/// cost. Read fresh (not cached) so an A/B comparison can flip it
-/// mid-process, exactly like the renderer's `CRANPOSE_COMMAND_FEED`; one
-/// environment lookup per build is noise against the multi-vsync frame
-/// this exists to remove.
 fn stale_transition_enabled() -> bool {
     matches!(
         crate::debug_toggles::debug_toggle("CRANPOSE_STALE_TRANSITION").as_deref(),
@@ -1402,21 +1220,6 @@ fn stale_transition_enabled() -> bool {
     )
 }
 
-/// Frame spans prepared for re-emission on a later build. Two rewrites,
-/// both required for the re-emitted frame to redraw the previous frame's
-/// pixels exactly:
-///
-/// - Recolors are emptied. The renderer's slot paint is a patched mirror
-///   of absolute color writes, so the previous frame's recolors still
-///   stand; re-sending them would be redundant patch traffic, and a
-///   re-emission with them emptied redraws the same colors by
-///   construction.
-/// - Capture spans (`capture: true`) become plain dynamic draws over the
-///   same materialized range. Their content was already offered for
-///   capture when the frame first rendered; a re-emission must draw the
-///   same pixels — capture frames render their content ordinarily, so a
-///   dynamic draw of the same primitives is byte-identical — without
-///   re-queuing a capture under a recorder state that has since moved on.
 fn sanitized_replay_spans(
     spans: &[cranpose_ui_graphics::FrameSpan],
 ) -> Vec<cranpose_ui_graphics::FrameSpan> {
@@ -1453,11 +1256,6 @@ fn sanitized_replay_spans(
         .collect()
 }
 
-/// Whether `id` holds a saved emission the CURRENT build may serve: saved
-/// exactly one recording generation ago, under the currently declared feed
-/// epoch. Anything else — older, consumed by a previous serve, from a dead
-/// slot universe, or no feed at all — is not servable, which is what caps
-/// staleness at one frame structurally.
 fn saved_emission_available(id: DrawCommandId) -> bool {
     let Some(epoch) = RETAINED_FEED_EPOCH.with(std::cell::Cell::get) else {
         return false;
@@ -1473,10 +1271,6 @@ fn saved_emission_available(id: DrawCommandId) -> bool {
     })
 }
 
-/// Takes `id`'s saved emission for serving. Consuming it (rather than
-/// cloning) is deliberate: with the emission gone, a second collapse on
-/// the very next build finds nothing to serve and pays the ordinary
-/// collapse — the one-frame staleness cap needs no counter.
 fn take_saved_emission(id: DrawCommandId) -> Option<SavedReplayEmission> {
     COMMAND_RECORDINGS.with(|map| {
         map.borrow_mut()
@@ -1485,10 +1279,6 @@ fn take_saved_emission(id: DrawCommandId) -> Option<SavedReplayEmission> {
     })
 }
 
-/// Stores (or clears, with `None`) `id`'s saved emission. Clearing on
-/// frame-less builds matters: without it a command that stops emitting
-/// replay frames would pin its last emission's primitives and tape
-/// indefinitely.
 fn store_saved_emission(id: DrawCommandId, saved: Option<SavedReplayEmission>) {
     COMMAND_RECORDINGS.with(|map| {
         if let Some(slot) = map.borrow_mut().get_mut(&id) {
@@ -1581,24 +1371,11 @@ pub fn verify_executor() -> Option<&'static dyn cranpose_ui_graphics::VerifyExec
     VERIFY_EXECUTOR.with(|cell| cell.get())
 }
 
-/// Test hook: drops every command recording on this thread, severing every
-/// AMBIENT rematerialization source. Frame-owned fallbacks
-/// ([`cranpose_ui_graphics::CommandReplayFrame::fallback`]) are unaffected
-/// by construction — which is exactly what the fail-closed tests prove.
 #[doc(hidden)]
 pub fn clear_command_recordings_for_tests() {
     COMMAND_RECORDINGS.with(|map| map.borrow_mut().clear());
 }
 
-/// Called once per graph build/update. The sweep is pure capacity
-/// management: it drops slots whose commands stopped recording long ago
-/// (screen navigated away). A slot's shared `handles` and `recordings` only
-/// die here if no graph frame shares them — a frame that still needs its
-/// recording (bypassed spans) owns its own handle
-/// ([`cranpose_ui_graphics::CommandReplayFrame::fallback`]), so nothing the
-/// sweep does can ever remove a frame's rematerialization source.
-/// Clean-but-live commands losing their slot merely re-earn capacity if
-/// they ever re-record.
 fn bump_recording_generation() {
     let generation = RECORDING_GENERATION.with(|cell| {
         let next = cell.get().wrapping_add(1);
@@ -1630,10 +1407,6 @@ fn acquire_recording(
                 feed_epoch.map(|_| cranpose_ui_graphics::CommandReplayState::default()),
             );
         };
-        // First recording of the pair the registry solely owns; one a live
-        // graph frame still shares (its `fallback`) is never written
-        // through. `DrawScopeDefault` clears the contents on construction,
-        // so only the capacity survives the unwrap.
         let mut recording = cranpose_ui_graphics::CommandRecording::default();
         for shared in &mut slot.recordings {
             if shared
@@ -1645,9 +1418,6 @@ fn acquire_recording(
                 break;
             }
         }
-        // A state from another slot universe (renderer dropped its retained
-        // slots wholesale) restarts from scratch — its slot ids reference
-        // buffers that no longer exist.
         let replay = feed_epoch.map(|epoch| {
             if slot.replay_epoch == Some(epoch) {
                 std::mem::take(&mut slot.replay)
@@ -1669,12 +1439,6 @@ fn acquire_recording(
     })
 }
 
-/// Publishes the command's finished frame into the registry and returns the
-/// shared handles the graph rides: the materialized primitives and the
-/// recording they came from. The recording MOVES into its handle — the
-/// multi-thousand-record tape is never cloned — and the frame that keeps
-/// the returned handle owns its rematerialization source outright, immune
-/// to anything the registry does afterwards.
 fn publish_recording(
     id: DrawCommandId,
     recording: cranpose_ui_graphics::CommandRecording,
@@ -1702,8 +1466,6 @@ fn publish_recording(
             slot.replay = replay;
             slot.replay_epoch = RETAINED_FEED_EPOCH.with(std::cell::Cell::get);
         }
-        // Newest first; the displaced oldest handle drops out of the
-        // registry, and its buffer lives on only while a graph node holds it.
         slot.recordings[1] = slot.recordings[0].take();
         slot.recordings[0] = Some(recording.clone());
         slot.handles[1] = slot.handles[0].take();
@@ -1746,14 +1508,6 @@ fn draw_nodes(
             Some(id),
         );
         if ctx.is_some_and(|ctx| ctx.serve_stale) {
-            // The stale-transition serve: verification collapsed out of its
-            // capture, nothing was materialized, and the node re-emits the
-            // PREVIOUS build's emission byte-for-byte — same primitives,
-            // same sanitized spans, same fallback recording. Publishing
-            // still happens first: the (empty) recording and storage
-            // buffers return to the registry for the command's steady-state
-            // ping-pong, and the advanced replay state is stored back so
-            // re-convergence proceeds on the next builds.
             publish_recording(id, recording, primitives, replay);
             if let Some(saved) = take_saved_emission(id) {
                 let frame = cranpose_ui_graphics::CommandReplayFrame {
@@ -1768,35 +1522,17 @@ fn draw_nodes(
                     Some(Box::new(frame)),
                 )));
             } else {
-                // Unreachable: `stale_available` was read from this same
-                // thread-local slot within this build and nothing between
-                // consumes it. Fail soft — one frame without this command —
-                // rather than panic in a renderer.
                 debug_assert!(false, "serve_stale without a saved emission");
             }
             continue;
         }
-        // A bypassed span leaves no primitives behind, so emptiness alone no
-        // longer means the command drew nothing in this placement.
         let has_replay_spans = frame.as_ref().is_some_and(|frame| !frame.spans.is_empty());
-        // An empty recording with no earned capacity is what a command's
-        // mismatched placement pass produces every rebuild; keeping those out
-        // of the registry halves its population. An empty recording WITH
-        // capacity is still published so the buffer waits for the frame this
-        // command draws again.
         if primitives.is_empty() && primitives.capacity() == 0 && !has_replay_spans {
             retain_empty_draw_command(&mut nodes, phase, id, placement, command);
             continue;
         }
         let (shared, published_recording) = publish_recording(id, recording, primitives, replay);
         if stale_transition {
-            // Save this build's emission in re-emittable form — or clear a
-            // previous save when this build emitted no replay frame, so a
-            // command that stops emitting does not pin its last frame's
-            // buffers. The save is what the NEXT build's collapse frame
-            // may serve; a build where the emission was itself served
-            // stale never reaches this point, which is the other half of
-            // the one-frame staleness cap.
             let saved = frame.as_ref().and_then(|frame| {
                 RETAINED_FEED_EPOCH
                     .with(std::cell::Cell::get)
@@ -1815,17 +1551,10 @@ fn draw_nodes(
             retain_empty_draw_command(&mut nodes, phase, id, placement, command);
             continue;
         }
-        // The frame owns a pinned handle to the exact recording it was
-        // built from: its bypassed spans' rematerialization source travels
-        // WITH the frame, so rendering never has to look it up through the
-        // sweepable ambient registry.
         let frame = frame.map(|mut frame| {
             frame.fallback = Some(published_recording);
             frame
         });
-        // The recorded vector rides into the graph whole: a single canvas
-        // command can carry thousands of primitives, and wrapping each in its
-        // own node moved every one of them an extra time each frame.
         nodes.push(RenderNode::DrawRun(DrawRunNode::for_command_replayed(
             phase,
             Some(id),
@@ -1857,11 +1586,6 @@ fn retain_empty_draw_command(
     }
 }
 
-/// The real [`draw_nodes`] path — acquire, record, verify, publish, and
-/// the stale-transition save/serve — exposed so integration tests can
-/// drive a command through the production seam build by build. Each call
-/// is one build: the recording generation advances exactly as
-/// [`build_graph_from_layout_tree`] and friends advance it.
 #[doc(hidden)]
 pub fn draw_command_nodes_for_tests(
     node_id: NodeId,
@@ -1908,9 +1632,6 @@ fn text_node_from_parts(parts: TextNodeParts<'_>) -> Option<TextPrimitiveNode> {
         return None;
     }
 
-    // Single-line text fields pan horizontally to keep the cursor visible:
-    // the text is laid out unconstrained (no wrapping), shifted left by the
-    // pan offset, and clipped to the field bounds.
     let pan_offset = text_pan
         .as_ref()
         .map(|resolve| resolve(content_width))
@@ -2024,10 +1745,6 @@ fn layout_box_to_snapshot(node: &LayoutBox, parent: Option<&LayoutBox>) -> Build
     }
 }
 
-/// Whether this node publishes a live window origin during the scene build —
-/// a text field's popup anchor or a scroll container's viewport rect. Layers
-/// over such nodes must be re-lowered when they move, never translated in
-/// place, or the sinks go stale.
 fn modifier_slices_have_origin_sinks(slices: &ModifierNodeSlices) -> bool {
     slices.text_field_window_origin().is_some() || slices.viewport_window_rect().is_some()
 }
@@ -2190,10 +1907,6 @@ pub fn text_align_fraction(text_style: &TextStyle, text: &str) -> f32 {
     match paragraph_style.text_align {
         TextAlign::Center => 0.5,
         TextAlign::End | TextAlign::Right => 1.0,
-        // `Left` follows the direction here rather than being absolute. That
-        // is not what Compose means by `TextAlign.Left`, but it is what this
-        // function has always done and no Wear screen is RTL; changing it is a
-        // separate question from where a wrapped line starts.
         TextAlign::Start | TextAlign::Left | TextAlign::Justify | TextAlign::Unspecified => {
             if rtl {
                 1.0
@@ -3073,13 +2786,6 @@ mod tests {
         assert_dirty_hash_road_matches_full_walk(&graph);
     }
 
-    /// The per-frame scene build must publish a node's LIVE composited window
-    /// rect into its `report_window_rect` sink — even when the layout tree is
-    /// NOT built (`build_layout_tree: false`, exactly how the app runtime
-    /// measures). This is the mechanism both bug 2 (a scroll container's
-    /// `BringIntoViewResponder` viewport rect) and bug 3 (a text field's live
-    /// `node_origin`, which anchors the overlay selection-handle / menu popups)
-    /// rely on, since the layout `place` pass never runs in the runtime.
     #[test]
     fn scene_build_publishes_live_window_rect_without_layout_tree() {
         use std::cell::Cell;
@@ -3123,8 +2829,6 @@ mod tests {
         let handle = composition.runtime_handle();
         let mut applier = composition.applier_mut();
         applier.set_runtime_handle(handle);
-        // Measure like the runtime: DO NOT build the layout tree, so the layout
-        // `place` pass never writes the sink. Only the scene build can.
         measure_layout_with_options(
             &mut applier,
             root,
@@ -3135,7 +2839,6 @@ mod tests {
             },
         )
         .expect("layout");
-        // Sanity: nothing has written the sink yet.
         assert_eq!(
             sink.get().height,
             0.0,
@@ -3352,12 +3055,6 @@ mod tests {
         assert_dirty_hash_road_matches_full_walk(&graph);
     }
 
-    /// The device's real dirty shape: structural bookkeeping marks the whole
-    /// ancestor chain above a scrolling list on every scrolled frame
-    /// (`[2, 36, 41]` in the profiled trace), even when no child set changed.
-    /// Each container in the chain must be walked through, not rebuilt, or
-    /// the "scoped" update rebuilds from the outermost ancestor — which is
-    /// exactly what the Kirin 980 was paying.
     #[test]
     fn an_overmarked_ancestor_chain_still_translates_instead_of_relowering() {
         let scroll_holder: Rc<RefCell<Option<ScrollState>>> = Rc::new(RefCell::new(None));
@@ -3422,8 +3119,6 @@ mod tests {
             .expect("scroll state should be captured");
         let consumed_scroll = scroll_state.dispatch_raw_delta(96.0);
         assert!(consumed_scroll > 0.0, "test scroll must be consumed");
-        // The chain the device over-marks: the scrolling column plus every
-        // ancestor up to and including the root.
         let mut dirty_nodes = cranpose_ui::pending_layout_repass_nodes_snapshot();
         dirty_nodes.push(graph.root.node_id.expect("root id"));
         let mut cursor = &graph.root;
@@ -3469,12 +3164,6 @@ mod tests {
         assert_dirty_hash_road_matches_full_walk(&graph);
     }
 
-    /// The frame a scroll produces: the container is dirty, its children are
-    /// clean, and they only moved. A device profile put the cost of
-    /// re-lowering the visible subtree on every scrolled frame at 5.8 ms of a
-    /// 17 ms Kirin 980 frame — the largest single CPU item — for content the
-    /// replay layer then recognized as unchanged. The scoped update must
-    /// translate the retained children, not rebuild them.
     #[test]
     fn a_scrolled_container_translates_clean_children_instead_of_relowering() {
         let scroll_holder: Rc<RefCell<Option<ScrollState>>> = Rc::new(RefCell::new(None));
@@ -3568,12 +3257,6 @@ mod tests {
         assert_dirty_hash_road_matches_full_walk(&graph);
     }
 
-    /// The row-boundary frame of a lazy scroll: the window slides, a row
-    /// leaves, a row enters, and every retained row only moves. On the
-    /// device these frames still pay a full re-lowering of the visible
-    /// subtree (scene 6.0-6.5 ms while translated frames sit under 2 ms) —
-    /// the scoped update must lower ONLY the entering rows and translate
-    /// the rest.
     #[test]
     fn a_sliding_lazy_window_lowers_only_the_entering_rows() {
         let state_holder: Rc<RefCell<Option<LazyListState>>> = Rc::new(RefCell::new(None));
@@ -3618,8 +3301,6 @@ mod tests {
             .expect("initial lazy layout");
         let mut graph = build_graph_from_applier(&mut applier, root, 1.0).expect("initial graph");
         graph.root.recompute_raster_cache_hashes();
-        // Drain the structural bookkeeping the initial build already
-        // satisfied, exactly as the shell's first frame does.
         let _ = applier.take_structural_change_parents_attached_to(root);
         let initial_row_top = find_text_top(&graph.root, "row 4").expect("initial row text");
         applier.clear_runtime_handle();
@@ -3628,8 +3309,6 @@ mod tests {
         let list_state = (*state_holder.borrow()).expect("list state should be captured");
         let consumed = list_state.dispatch_scroll_delta(-96.0);
         assert!(consumed != 0.0, "the lazy scroll must consume the delta");
-        // The shell folds layout and measure repasses into one scoped set —
-        // a lazy scroll arrives as a measure repass on the list node.
         let mut dirty_nodes = cranpose_ui::pending_layout_repass_nodes_snapshot();
         dirty_nodes.extend(cranpose_ui::pending_measure_repass_nodes_snapshot());
 
@@ -3639,8 +3318,6 @@ mod tests {
         applier
             .compute_layout(root, viewport)
             .expect("scrolled lazy layout");
-        // The window slid during measure; the shell folds the structural
-        // parents into the same scoped update.
         dirty_nodes.extend(applier.take_structural_change_parents_attached_to(root));
         dirty_nodes.sort_unstable();
         dirty_nodes.dedup();
@@ -3677,8 +3354,6 @@ mod tests {
         assert_dirty_hash_road_matches_full_walk(&graph);
     }
 
-    /// Every visible text with its mapped top, for whole-scene content
-    /// comparison between a patched graph and a from-scratch build.
     fn collect_text_tops(layer: &LayerNode) -> std::collections::BTreeMap<String, i64> {
         fn walk(
             layer: &LayerNode,
@@ -3695,8 +3370,6 @@ mod tests {
                                 .map(|point| point[1])
                                 .fold(f32::INFINITY, f32::min);
                             if top.is_finite() {
-                                // Tenth-of-a-point buckets: parity, not
-                                // float-identical arithmetic.
                                 out.insert(text.text.text.clone(), (top * 10.0).round() as i64);
                             }
                         }
@@ -3716,13 +3389,6 @@ mod tests {
 
     #[test]
     fn a_lazy_jump_of_any_distance_patches_to_what_a_fresh_build_shows() {
-        // Lowered-layer counts do not scale with scroll distance (a 300pt
-        // jump lowers fewer than a 96pt nudge), because a large jump lands
-        // every entering row in a recycled, already-dirty slot that rebuilds
-        // through the ordinary dirty path instead of the translate path's
-        // entering-row lowering. That accounting is fine ONLY if the patched
-        // scene's content is indistinguishable from a from-scratch build at
-        // every distance — which is what this pins, text by text.
         for delta in [-30.0f32, -60.0, -96.0, -180.0, -300.0] {
             let state_holder: Rc<RefCell<Option<LazyListState>>> = Rc::new(RefCell::new(None));
             let state_holder_for_comp = state_holder.clone();
@@ -3790,11 +3456,6 @@ mod tests {
             let report =
                 update_graph_from_applier_report(&mut applier, &mut graph, &dirty_nodes, 1.0);
             assert!(report.applied(), "delta {delta}: boundary frame must apply");
-            // The rebound-slot recording must stay proportional to real
-            // content change: a scroll the beyond-bounds buffer absorbs
-            // rebinds nothing and must lower nothing — the recording
-            // firing on steady-state frames would re-lower unchanged rows
-            // on every scrolled frame.
             if delta == -30.0 {
                 assert_eq!(
                     lowered_layer_count(),
@@ -4320,9 +3981,6 @@ mod tests {
         assert_eq!(overlay.phase, PrimitivePhase::AfterChildren);
     }
 
-    /// The recording registry's whole contract: a command re-recording on a
-    /// rebuild reuses the buffer of a recording the graph has let go of, and
-    /// never writes through one anything else still shares.
     #[test]
     fn command_recordings_reuse_buffers_across_rebuilds() {
         let snapshot = || BuildNodeSnapshot {
@@ -4371,7 +4029,6 @@ mod tests {
         let graph_a = build_layer_node_for_test(snapshot(), 1.0, false);
         let ptr_a = run_of(&graph_a).primitives.as_ptr();
 
-        // Graph A is still alive, so its buffer must not be lent out.
         let graph_b = build_layer_node_for_test(snapshot(), 1.0, false);
         let ptr_b = run_of(&graph_b).primitives.as_ptr();
         assert_ne!(
@@ -4384,9 +4041,6 @@ mod tests {
             "re-recording must reproduce the recording"
         );
 
-        // With graph A gone, its buffer is the registry's to lend again. The
-        // registry still holds a handle, so the allocator cannot have
-        // recycled this address: pointer equality here is reuse, not luck.
         drop(graph_a);
         let graph_c = build_layer_node_for_test(snapshot(), 1.0, false);
         assert_eq!(
@@ -4395,8 +4049,6 @@ mod tests {
             "the released buffer must be reused for the next recording"
         );
 
-        // A recording shared outside the graph (renderer caches, tests)
-        // keeps its buffer out of circulation even after the node drops.
         let held = std::rc::Rc::clone(&run_of(&graph_c).primitives);
         drop(graph_c);
         let graph_d = build_layer_node_for_test(snapshot(), 1.0, false);
@@ -4625,9 +4277,6 @@ mod tests {
         );
     }
 
-    /// Single-line text fields provide a pan resolver: the glyphs must be
-    /// laid out unconstrained (no wrapping), shifted left by the pan offset,
-    /// and clipped to the field bounds.
     #[test]
     fn text_field_pan_shifts_glyphs_and_clips_to_field_bounds() {
         let pan_offset = 25.0_f32;
@@ -5309,28 +4958,6 @@ mod tests {
         );
     }
 
-    /// A wrapping paragraph must PAINT the height it MEASURED, so the sibling
-    /// the column placed after it is not drawn over.
-    ///
-    /// Regression. A `Text` without `fill_max_width` is placed at its own
-    /// `metrics.width` — the widest line it wrapped into. The paint pass then
-    /// re-wrapped at that placed width, and because the widest line is exactly
-    /// the one that fills the limit, measuring it against itself pushed its
-    /// last word onto a new line: measured 6 lines, painted 7. The extra line
-    /// was clipped away (silent truncation) and it ran past the next sibling's
-    /// box, which the column had placed from the 6-line height.
-    ///
-    /// Asserts RENDERED GEOMETRY, not `resolve_text_measure_width`'s return
-    /// value: the two pipelines already had unit tests for the correct rule and
-    /// shipped this anyway, because those tests exercised a `#[cfg(test)]`
-    /// replica rather than the scene builder that paints.
-    ///
-    /// Driven by the REAL font backend (`SoftwareTextMeasurer`, the measurer
-    /// `WgpuRenderer::attach_app_context_services` installs). A stub measurer
-    /// cannot show this: the defect lives in the disagreement between two wrap
-    /// widths, and a stub that returns the same answer for both hides it by
-    /// construction. The string is mixed Latin/Cyrillic because that is what
-    /// the reporting app puts in these paragraphs.
     #[test]
     fn wrapped_paragraph_paints_the_height_it_measured() {
         const BODY: &str = "fed back картица scored fp32 износ once paper fed Vision dropped \
@@ -5403,8 +5030,6 @@ mod tests {
             let graph = build_graph_from_applier(&mut applier, root, 1.0).expect("render graph");
             applier.clear_runtime_handle();
 
-            // The painted string carries the wrap points as newlines, so it is
-            // compared with whitespace stripped rather than verbatim.
             fn squashed(value: &str) -> String {
                 value.chars().filter(|c| !c.is_whitespace()).collect()
             }
@@ -5458,13 +5083,10 @@ mod tests {
         set_retained_feed_epoch(Some(7));
         confirm_retained_slot(command, 3, 7);
         assert!(retained_slot_confirmed(command, 3));
-        // A new epoch (renderer swap, device loss) makes the word stale.
         set_retained_feed_epoch(Some(8));
         assert!(!retained_slot_confirmed(command, 3));
-        // No declared epoch means no consumer: never confirmed.
         set_retained_feed_epoch(None);
         assert!(!retained_slot_confirmed(command, 3));
-        // Back on the stored generation the buffer is live again.
         set_retained_feed_epoch(Some(7));
         assert!(retained_slot_confirmed(command, 3));
         revoke_retained_slot(command, 3);
@@ -5473,11 +5095,6 @@ mod tests {
         clear_retained_slot_confirmations();
     }
 
-    /// Draws enough similar arcs for the replay verifier to engage
-    /// (`MIN_REPLAY_COMMAND_RECORDS`) and to carve several segments —
-    /// partial arcs, because a chain anchor must pin rotation and circles
-    /// cannot. Static across frames, so every segment verifies under the
-    /// identity transform from the first replay frame on.
     fn record_sweep_test_rings(scope: &mut DrawScopeDefault) {
         let count = 600usize;
         let sweep = std::f32::consts::TAU / count as f32 * 0.8;
@@ -5494,13 +5111,6 @@ mod tests {
         }
     }
 
-    /// The FLIP of the old sweep-exemption test: with the frame owning a
-    /// pinned handle to the exact recording it was built from, the idle
-    /// sweep is pure capacity management again — a live confirmation no
-    /// longer pins the registry slot, the sweep drops it anyway, and the
-    /// frame's bypassed spans still rematerialize byte-identically from the
-    /// handle the frame owns. Sweeping can categorically never sever a
-    /// frame's rematerialization source.
     #[test]
     fn recording_sweep_cannot_sever_a_frames_fallback() {
         let command = DrawCommandId {
@@ -5513,10 +5123,6 @@ mod tests {
             confirm_retained_slot(command, slot, 41);
         }
 
-        // The production seam order, driven by hand: acquire buffers,
-        // record, verify, finish with the confirmed slots bypassed, publish
-        // — and the frame keeps the published recording handle, exactly as
-        // `draw_nodes` attaches it.
         let mut state = cranpose_ui_graphics::CommandReplayState::default();
         let mut published = None;
         for _frame in 0..4 {
@@ -5569,10 +5175,6 @@ mod tests {
             })
             .collect();
 
-        // 1024 builds without re-recording: both sweeps (512, 1024) run with
-        // the slot idle far past the 64-build window, confirmations still
-        // live. The slot must be GONE — capacity management owes the frame
-        // nothing anymore.
         for _ in 0..1024 {
             bump_recording_generation();
         }
@@ -5582,8 +5184,6 @@ mod tests {
              no longer pins the registry slot"
         );
 
-        // The categorical property: the frame's own handle survives any
-        // sweep, and its bypassed spans rematerialize byte-identically.
         for (tape_range, expected) in bypassed.iter().zip(&expected) {
             let after = fallback
                 .materialize_range(tape_range.0 as usize, tape_range.1 as usize)
@@ -5597,13 +5197,6 @@ mod tests {
         clear_retained_slot_confirmations();
     }
 
-    /// [`command_recordings_reuse_buffers_across_rebuilds`] for the compact
-    /// recording pair: a graph frame owns last build's recording (its
-    /// `fallback`) while this build records, so steady-state publishes
-    /// ping-pong between exactly two allocations — `Rc::try_unwrap`
-    /// succeeds at every acquisition after warmup and no recording buffer
-    /// is ever reallocated — and a recording a live frame still shares is
-    /// never written through.
     #[test]
     fn command_recordings_reuse_recording_buffers_across_rebuilds() {
         let command = DrawCommandId {
@@ -5611,8 +5204,6 @@ mod tests {
             command_index: 0,
             placement: DrawPlacement::Behind,
         };
-        // Simulates the installed graph: it holds the newest build's
-        // handles, and the previous build's drop when it is replaced.
         let mut held = None;
         let mut ptrs = Vec::new();
         for _build in 0..8 {
@@ -5639,9 +5230,6 @@ mod tests {
             held = Some((primitives, recording));
         }
         drop(held);
-        // Every buffer in play stays alive for the whole loop (registry pair
-        // or in-flight scope), so pointer equality here is reuse, not an
-        // allocator recycling a freed address.
         for build in 2..8 {
             assert_eq!(
                 ptrs[build],
@@ -5692,15 +5280,8 @@ mod tests {
             },
         ];
         let sanitized = sanitized_replay_spans(&spans);
-        // The dynamic span passes through untouched.
         assert_eq!(sanitized[0], FrameSpan::Dynamic { range: (0, 5) });
-        // The capture span becomes a plain dynamic draw of the SAME
-        // materialized range: re-emitting it must redraw its pixels
-        // without re-queuing a capture.
         assert_eq!(sanitized[1], FrameSpan::Dynamic { range: (5, 105) });
-        // The retained span keeps its identity and transform but sheds its
-        // recolors: the renderer's slot paint is persistent, so the
-        // previous frame's absolute writes already show them.
         match &sanitized[2] {
             FrameSpan::Retained {
                 slot,
@@ -5722,10 +5303,6 @@ mod tests {
         }
     }
 
-    /// The one-frame staleness cap, at the registry seam it lives on: a
-    /// saved emission serves on the IMMEDIATELY following build only, and
-    /// serving consumes it — so two consecutive collapses can produce at
-    /// most one stale frame, with no counter anywhere.
     #[test]
     fn a_saved_emission_serves_the_next_build_once() {
         let command = DrawCommandId {
@@ -5734,7 +5311,6 @@ mod tests {
             placement: DrawPlacement::Behind,
         };
         set_retained_feed_epoch(Some(77));
-        // Materialize the slot the save writes into.
         publish_recording(
             command,
             cranpose_ui_graphics::CommandRecording::default(),
@@ -5750,20 +5326,13 @@ mod tests {
             generation: RECORDING_GENERATION.with(std::cell::Cell::get),
         };
 
-        // Saved this build: not servable within the SAME build...
         store_saved_emission(command, Some(saved()));
         assert!(!saved_emission_available(command));
-        // ...servable on the next...
         bump_recording_generation();
         assert!(saved_emission_available(command));
-        // ...and expired one build later: only the immediately following
-        // build may re-emit, so a served frame is never more than one
-        // frame stale.
         bump_recording_generation();
         assert!(!saved_emission_available(command));
 
-        // A fresh save served on time is CONSUMED by the take: the second
-        // of two consecutive collapse builds finds nothing to serve.
         store_saved_emission(command, Some(saved()));
         bump_recording_generation();
         assert!(saved_emission_available(command));
@@ -5774,7 +5343,6 @@ mod tests {
         );
         assert!(take_saved_emission(command).is_none());
 
-        // A dead slot universe invalidates the save wholesale.
         store_saved_emission(command, Some(saved()));
         bump_recording_generation();
         set_retained_feed_epoch(Some(78));

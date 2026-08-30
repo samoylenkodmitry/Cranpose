@@ -1,12 +1,3 @@
-//! Robot test to verify recorder generates valid output
-//!
-//! Uses with_test_driver + with_recording together
-//!
-//! Run with:
-//! ```bash
-//! cargo run --package desktop-app --example robot_test_recorder --features robot-app
-//! ```
-
 mod output_paths;
 
 use std::time::Duration;
@@ -29,7 +20,6 @@ fn main() {
             std::thread::sleep(Duration::from_millis(500));
             let _ = robot.wait_for_idle();
 
-            // Do some mouse movements
             let _ = robot.mouse_move(100.0, 100.0);
             std::thread::sleep(Duration::from_millis(50));
             let _ = robot.mouse_move(200.0, 200.0);
@@ -42,7 +32,6 @@ fn main() {
 
             println!("✓ Recorded some mouse events");
 
-            // Exit - this will trigger recording save
             std::thread::sleep(Duration::from_millis(500));
             let _ = robot.exit();
         })

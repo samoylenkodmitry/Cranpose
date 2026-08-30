@@ -410,25 +410,18 @@ fn slot_pass_wrapper_returns_body_result_after_finalization_error() {
     teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
 }
 
-/// Test that emit_node rejects reuse when the parent's previous children list
-/// didn't contain the candidate node. This prevents nodes from "teleporting"
-/// between parents.
 #[test]
 fn emit_node_rejects_reuse_when_parent_did_not_own_child() {
     let (handle, _runtime) = runtime_handle();
     let mut slots = SlotTable::default();
     let mut applier = test_applier();
 
-    // Create a parent and child node in the applier
     let parent_a = applier.create(Box::new(RecordingNode::default()));
     let parent_b = applier.create(Box::new(RecordingNode::default()));
 
-    // Setup the test: we'll push parent_b and try to reuse a child that was
-    // previously under parent_a. The emit_node should reject the reuse.
     let (composer, slots_host, applier_host) =
         setup_composer(&mut slots, &mut applier, handle.clone(), Some(parent_a));
 
-    // First, emit a child under parent_a's context
     let (child_id, _) = composer.with_slot_host_pass(
         Rc::clone(&slots_host),
         crate::slot::SlotPassMode::Compose,
@@ -436,11 +429,9 @@ fn emit_node_rejects_reuse_when_parent_did_not_own_child() {
             composer.with_group(location_key(file!(), line!(), column!()), |composer| {
                 let child_id = composer.emit_node(|| TestDummyNode);
 
-                // Now push parent_b with last_node_reused=false (simulating new parent)
                 composer.core.last_node_reused.set(Some(false));
                 composer.push_parent(parent_b);
 
-                // The parent_b's previous children should be empty since it wasn't reused
                 {
                     let stack = composer.parent_stack();
                     let frame = stack.last().expect("parent frame should exist");
@@ -458,13 +449,9 @@ fn emit_node_rejects_reuse_when_parent_did_not_own_child() {
     drop(composer);
     teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
 
-    // Verify child was created
     assert!(child_id > 0, "Child should have been created");
 }
 
-/// Test that push_parent uses empty previous children when the parent node
-/// was not reused (last_node_reused = false). This ensures new parents start
-/// fresh and don't inherit children from a different node.
 #[test]
 fn push_parent_uses_empty_previous_when_not_reused() {
     let (handle, _runtime) = runtime_handle();
@@ -476,11 +463,9 @@ fn push_parent_uses_empty_previous_when_not_reused() {
     let (composer, slots_host, applier_host) =
         setup_composer(&mut slots, &mut applier, handle.clone(), Some(parent_id));
 
-    // Simulate: last node was NOT reused (new node created)
     composer.core.last_node_reused.set(Some(false));
     composer.push_parent(parent_id);
 
-    // Verify that previous is empty when node was not reused
     {
         let stack = composer.parent_stack();
         let frame = stack.last().expect("parent frame should exist");
@@ -1623,9 +1608,6 @@ fn remove_balanced_tree_uses_depth_bounded_traversal_stack() {
     assert!(applier.is_empty(), "all nodes should be removed");
 }
 
-/// Test that push_parent reuses previous children when the parent node
-/// was reused (last_node_reused = true). This ensures stable parents
-/// correctly track their children across recompositions.
 #[test]
 fn push_parent_inherits_previous_when_reused() {
     let (handle, _runtime) = runtime_handle();
@@ -1639,11 +1621,9 @@ fn push_parent_inherits_previous_when_reused() {
         let (composer, slots_host, applier_host) =
             setup_composer(&mut slots, &mut applier, handle.clone(), Some(parent_id));
 
-        // First pass: establish children
-        composer.core.last_node_reused.set(Some(true)); // Pretend parent was reused
+        composer.core.last_node_reused.set(Some(true));
         composer.push_parent(parent_id);
 
-        // Add a real child node
         {
             let mut stack = composer.parent_stack();
             let frame = stack.last_mut().expect("parent frame should exist");
@@ -1655,7 +1635,6 @@ fn push_parent_inherits_previous_when_reused() {
         teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
     }
 
-    // Manually record the child on the parent node so push_parent reads it back
     applier
         .with_node(parent_id, |node: &mut RecordingNode| {
             if !node.children.contains(&child_id) {
@@ -1668,11 +1647,9 @@ fn push_parent_inherits_previous_when_reused() {
         let (composer, slots_host, applier_host) =
             setup_composer(&mut slots, &mut applier, handle.clone(), Some(parent_id));
 
-        // Second pass: parent is reused, should inherit previous children
         composer.core.last_node_reused.set(Some(true));
         composer.push_parent(parent_id);
 
-        // Verify that previous contains the child from first pass
         {
             let stack = composer.parent_stack();
             let frame = stack.last().expect("parent frame should exist");
@@ -1689,16 +1666,6 @@ fn push_parent_inherits_previous_when_reused() {
     }
 }
 
-/// Regression test: emit_node should successfully create/reuse nodes
-/// even when push_parent starts with empty previous children (new parent case).
-/// This was broken when we added a parent_contains check to emit_node that
-/// prevented node creation when previous was empty.
-///
-/// Scenario (simulates tab switch):
-/// 1. Render a parent with a child
-/// 2. Remove the parent (tab switch away)  
-/// 3. Restore the parent (tab switch back)
-/// 4. Child should be created/reused successfully (functionality preserved)
 #[test]
 fn emit_node_creates_nodes_when_parent_restored_after_conditional_removal() {
     let mut composition = test_composition();
@@ -1707,10 +1674,8 @@ fn emit_node_creates_nodes_when_parent_restored_after_conditional_removal() {
 
     let key = location_key(file!(), line!(), column!());
 
-    // Track child node IDs across renders
     let child_ids: Rc<RefCell<Vec<NodeId>>> = Rc::new(RefCell::new(Vec::new()));
 
-    // First render: parent visible with child
     println!("=== First render: parent visible ===");
     {
         let child_ids = Rc::clone(&child_ids);
@@ -1718,12 +1683,10 @@ fn emit_node_creates_nodes_when_parent_restored_after_conditional_removal() {
             .render(key, move || {
                 if toggle.value() {
                     with_current_composer(|composer| {
-                        // Parent node
                         let _parent = composer.emit_node(|| TestDummyNode);
                         composer.core.last_node_reused.set(Some(true));
                         composer.push_parent(_parent);
 
-                        // Child node - track its ID
                         let child = composer.emit_node(|| TestTextNode {
                             text: "Reusable Child".to_string(),
                         });
@@ -1740,22 +1703,14 @@ fn emit_node_creates_nodes_when_parent_restored_after_conditional_removal() {
     println!("First child ID: {}", first_child_id);
     assert!(first_child_id > 0, "First child should be created");
 
-    // Second render: parent removed (simulate tab switch away)
     println!("=== Second render: parent hidden ===");
     toggle.set_value(false);
     {
         composition
-            .render(key, move || {
-                if toggle.value() {
-                    // Not rendered - parent is hidden
-                }
-            })
+            .render(key, move || if toggle.value() {})
             .expect("second render");
     }
 
-    // Third render: parent restored (simulate tab switch back)
-    // This is where the regression occurred - emit_node was failing
-    // when parent's previous children was empty
     println!("=== Third render: parent restored ===");
     toggle.set_value(true);
     {
@@ -1764,15 +1719,11 @@ fn emit_node_creates_nodes_when_parent_restored_after_conditional_removal() {
             .render(key, move || {
                 if toggle.value() {
                     with_current_composer(|composer| {
-                        // Parent node - may be recreated due to conditional
                         let _parent = composer.emit_node(|| TestDummyNode);
                         let reused = composer.core.last_node_reused.get();
                         println!("Parent reused: {:?}", reused);
                         composer.push_parent(_parent);
 
-                        // CRITICAL: Child node should be successfully created/reused
-                        // even though parent's previous children list may be empty.
-                        // This is what broke when we added the parent_contains check.
                         let child = composer.emit_node(|| TestTextNode {
                             text: "Reusable Child".to_string(),
                         });
@@ -1789,13 +1740,11 @@ fn emit_node_creates_nodes_when_parent_restored_after_conditional_removal() {
     let third_child_id = child_ids.borrow().last().copied().unwrap();
     println!("Third child ID: {}", third_child_id);
 
-    // The child should exist in the applier after parent restoration.
     assert!(
         composition.applier_mut().get_mut(third_child_id).is_ok(),
         "Child node should be successfully created after parent restoration."
     );
 
-    // Verify we got two child IDs (one from first render, one from third render)
     assert_eq!(
         child_ids.borrow().len(),
         2,
@@ -1803,9 +1752,6 @@ fn emit_node_creates_nodes_when_parent_restored_after_conditional_removal() {
     );
 }
 
-/// Test that nodes can be emitted under a new parent without requiring
-/// the parent to have had them previously. This is the core invariant
-/// that broke when emit_node checked parent_contains too strictly.
 #[test]
 fn emit_node_works_with_new_parent_having_empty_previous() {
     let (handle, _runtime) = runtime_handle();
@@ -1822,11 +1768,9 @@ fn emit_node_works_with_new_parent_having_empty_previous() {
         crate::slot::SlotPassMode::Compose,
         |composer| {
             composer.with_group(location_key(file!(), line!(), column!()), |composer| {
-                // Simulate a NEW parent (not reused) - this gives empty previous children
                 composer.core.last_node_reused.set(Some(false));
                 composer.push_parent(parent_id);
 
-                // Verify previous is empty (this is the push_parent conditional behavior)
                 {
                     let stack = composer.parent_stack();
                     let frame = stack.last().expect("parent frame should exist");
@@ -1853,38 +1797,26 @@ fn emit_node_works_with_new_parent_having_empty_previous() {
     teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
 }
 
-/// Test that state changes made in frame callbacks are visible globally.
-///
-/// This is a regression test for a bug where fling animation scroll state
-/// would reset because frame callback state writes weren't being applied
-/// to the global snapshot.
 #[test]
 fn frame_callback_state_changes_are_visible_globally() {
     let (handle, _runtime) = runtime_handle();
     let state = MutableState::with_runtime(0i32, handle.clone());
 
-    // Register a frame callback that updates state
     let state_for_callback = state;
     let callback_ran = Rc::new(Cell::new(false));
     let callback_ran_for_closure = callback_ran.clone();
 
     let _registration = handle.frame_clock().with_frame_nanos(move |_| {
-        // This state change should be visible after drain_frame_callbacks completes
         state_for_callback.set(42);
         callback_ran_for_closure.set(true);
     });
 
-    // Before draining, state should be 0
     assert_eq!(state.get(), 0);
 
-    // Drain frame callbacks - this should apply state changes to global snapshot
     handle.drain_frame_callbacks(1);
 
-    // Verify callback ran
     assert!(callback_ran.get(), "Frame callback should have run");
 
-    // CRITICAL: State change from callback should be visible
-    // Before the fix, this would return 0 because the write was isolated
     assert_eq!(
         state.get(),
         42,
@@ -1892,31 +1824,25 @@ fn frame_callback_state_changes_are_visible_globally() {
     );
 }
 
-/// Test that multiple frame callbacks in sequence all have their state changes visible.
 #[test]
 fn multiple_frame_callbacks_state_visibility() {
     let (handle, _runtime) = runtime_handle();
     let state = MutableState::with_runtime(0i32, handle.clone());
 
-    // First frame callback increments by 10
     let state1 = state;
     let _reg1 = handle.frame_clock().with_frame_nanos(move |_| {
         let current = state1.get();
         state1.set(current + 10);
     });
 
-    // Second frame callback increments by 5
     let state2 = state;
     let _reg2 = handle.frame_clock().with_frame_nanos(move |_| {
         let current = state2.get();
         state2.set(current + 5);
     });
 
-    // Drain all callbacks
     handle.drain_frame_callbacks(1);
 
-    // Both callbacks should have run and their changes should be visible
-    // The first sets to 10, the second reads 10 and sets to 15
     assert_eq!(
         state.get(),
         15,
@@ -1924,35 +1850,21 @@ fn multiple_frame_callbacks_state_visibility() {
     );
 }
 
-/// Verifies that `MutableState::set` on a released state handle does not panic.
-///
-/// This reproduces a real crash: a SideEffect closure captures a `MutableState`
-/// handle whose underlying `OwnedMutableState` is dropped (by group disposal)
-/// before the side effect runs. The `set` call must silently skip the write.
 #[test]
 fn test_stale_state_handle_set_does_not_panic() {
     let _guard = reset_snapshot_runtime();
     let test_runtime = crate::runtime::TestRuntime::new();
     let handle = test_runtime.handle();
 
-    // Allocate a state and get a handle, then release the underlying cell.
     let lease = handle.alloc_state(42u32);
     let state: MutableState<u32> = MutableState::from_lease(&lease);
     assert_eq!(state.get(), 42);
 
-    // Drop the lease → releases the state arena slot
     drop(lease);
 
-    // Setting a released state should NOT panic — it should be a no-op
     state.set(99);
 }
 
-/// Verifies that `MutableState::try_with` and `is_alive` work correctly
-/// on released state handles.
-///
-/// This reproduces a real crash: a fling animation frame callback captures a
-/// `MutableState` handle. A tab switch disposes the composition group (releasing
-/// the state), but the frame callback still fires and tries to read the state.
 #[test]
 fn test_stale_state_handle_try_with_returns_none() {
     let _guard = reset_snapshot_runtime();
@@ -1965,7 +1877,6 @@ fn test_stale_state_handle_try_with_returns_none() {
     assert_eq!(state.try_value(), Some(42));
     assert_eq!(state.try_with(|v| *v + 1), Some(43));
 
-    // Drop the lease → releases the state arena slot
     drop(lease);
 
     assert!(!state.is_alive());
@@ -1997,11 +1908,6 @@ fn param_state_update_reuses_existing_buffer_via_clone_from() {
     );
 }
 
-/// A structural change costs the renderer a full re-lowering of the parent's
-/// subtree, so it must be recorded only when the child list actually changed.
-/// A steady scroll re-attaches retained children and detaches already-detached
-/// ones every frame; recording those marked the list structurally dirty on
-/// every frame and rebuilt ~51 layers for a frame in which one row moved.
 #[test]
 fn reattaching_a_child_to_its_current_parent_records_no_structural_change() {
     let mut applier = test_applier();
@@ -2035,8 +1941,6 @@ fn detaching_a_child_that_is_not_attached_records_no_structural_change() {
     );
 }
 
-/// The positive control for the two guards above: without it they would pass
-/// just as well if structural changes were never recorded at all.
 #[test]
 fn a_real_attach_and_a_real_detach_each_record_a_structural_change() {
     let mut applier = test_applier();
@@ -2083,11 +1987,6 @@ struct DirtyFlagNode {
     parent: Option<NodeId>,
     needs_measure: Cell<bool>,
     needs_layout: Cell<bool>,
-    // True by default, like production nodes: a real LayoutNode starts
-    // semantics-dirty and stays so until a semantics tree is built, which
-    // never happens while semantics are off. Any re-attach logic that treats
-    // "child is semantics-dirty" as a reason to walk ancestors therefore
-    // walks on EVERY no-op re-attach of a steady scroll.
     needs_semantics: Cell<bool>,
     semantics_marks: Cell<usize>,
 }
@@ -2179,15 +2078,6 @@ fn dirty_flag_tree(applier: &mut MemoryApplier) -> (NodeId, NodeId, NodeId) {
     (grandparent, parent, child)
 }
 
-/// One wrong assumption implemented twice: "the child list did not change,
-/// therefore there is nothing to invalidate". A child can grow without
-/// membership changing. This is the core-side enforcement point of that
-/// invariant (the scene-side one is the app shell's
-/// `sibling_moved_by_another_rows_growth_reaches_the_scoped_scene_update`):
-/// re-attaching a child that carries pending measure or layout dirt must
-/// still bubble, because the attach-time bubble is the only road that dirt
-/// has to the root's layout gate — swallow it and the grown subtree keeps its
-/// old geometry until an unrelated pass runs.
 #[test]
 fn reattaching_a_dirty_child_still_bubbles_to_ancestors() {
     let mut applier = test_applier();
@@ -2219,9 +2109,6 @@ fn reattaching_a_dirty_child_still_bubbles_to_ancestors() {
     }
 }
 
-/// The guard the test above must not undo: a re-attach of a CLEAN child is
-/// the steady-state scroll pattern, and bubbling it re-measures the whole
-/// tree every frame for nothing (#534's win).
 #[test]
 fn reattaching_a_clean_child_bubbles_nothing() {
     let mut applier = test_applier();

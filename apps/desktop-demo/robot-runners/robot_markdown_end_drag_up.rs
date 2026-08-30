@@ -1,13 +1,3 @@
-//! Robot repro for markdown end-of-list reverse drag bug.
-//!
-//! Flow:
-//! 1. Use scrollbar to force absolute bottom.
-//! 2. Drag/fling markdown content downward until it stalls at end.
-//! 3. Try reverse drag (drag downward in viewport) and verify content moves.
-//!
-//! Run with:
-//! `cargo run --package desktop-app --example robot_markdown_end_drag_up --features robot-app`
-
 use std::{cmp::Ordering, fs, sync::Arc, time::Duration};
 
 use cranpose::AppLauncher;
@@ -366,7 +356,6 @@ fn reverse_drag_moves_content(
     reverse_drag_to_frac: f32,
     reverse_attempts: u32,
 ) -> bool {
-    // Defensive release in case a previous drag left the pointer captured.
     let _ = robot.mouse_up();
     std::thread::sleep(Duration::from_millis(16));
 
@@ -387,8 +376,6 @@ fn reverse_drag_moves_content(
         let _ = robot.mouse_up();
         std::thread::sleep(Duration::from_millis(8));
 
-        // Use scrollbar for reverse movement validation. In large sequential suites
-        // viewport drag at end-of-list can intermittently deadlock in headless mode.
         drag_scrollbar(
             robot,
             rail_bounds,

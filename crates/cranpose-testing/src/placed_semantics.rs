@@ -185,12 +185,6 @@ fn index_layout_bounds(layout_box: &LayoutBox, out: &mut HashMap<NodeId, Rect>) 
     }
 }
 
-/// Keeps the FIRST region pushed for a node.
-///
-/// `collect_hits_from_graph` walks in paint order and a node can reach the sink
-/// more than once when it carries both a click handler and a pointer input; the
-/// geometry is the same either way, and taking the first keeps the result
-/// independent of how many handlers a widget happened to install.
 struct TouchBoundsSink<'a> {
     bounds: &'a mut HashMap<NodeId, Rect>,
 }
@@ -209,13 +203,6 @@ impl HitGraphSink for TouchBoundsSink<'_> {
     }
 }
 
-/// Refuses rather than invents.
-///
-/// The semantics walk and the layout walk apply the SAME `is_placed` filter to
-/// the same retained children, so a semantics node without a layout box cannot
-/// happen while the two agree. Handing back a zero rect for one would turn a
-/// framework divergence into a caller-side "0x0dp control", which is the wrong
-/// bug to go and look for.
 fn join(
     node: &SemanticsNode,
     layout_bounds: &HashMap<NodeId, Rect>,

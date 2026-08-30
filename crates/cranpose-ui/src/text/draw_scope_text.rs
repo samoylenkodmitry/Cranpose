@@ -40,8 +40,6 @@ pub fn text_style_for_draw_style(style: &DrawTextStyle) -> TextStyle {
         font_weight: Some(FontWeight::new(style.font_weight.value())),
         font_style: Some(match style.font_style {
             DrawFontStyle::Normal => FontStyle::Normal,
-            // No font in the stack ships an oblique face; the renderer
-            // synthesizes both the same way.
             DrawFontStyle::Italic | DrawFontStyle::Oblique => FontStyle::Italic,
         }),
         ..SpanStyle::default()
@@ -107,9 +105,6 @@ impl AppContextTextMeasurer {
 
 impl DrawTextMeasurer for AppContextTextMeasurer {
     fn measure_text(&self, text: &str, style: &DrawTextStyle) -> TextMeasurement {
-        // Draw closures normally run inside the app context that owns the
-        // fonts. Tooling that runs one standalone gets the font-free estimate
-        // rather than a panic.
         if crate::render_state::current_app_context().is_none() {
             return estimate_text_measurement(text, style);
         }
@@ -131,9 +126,6 @@ impl DrawTextMeasurer for AppContextTextMeasurer {
 
         let line_count = metrics.line_count.max(1);
         TextMeasurement {
-            // Height comes from the line box, not from `metrics.height`: a
-            // measurer is free to report a taller box for `min_lines`, and the
-            // rasterizer only ever advances by `line_height` per line.
             size: Size::new(metrics.width.max(0.0), line_count as f32 * line_height),
             line_height,
             first_baseline,
@@ -181,10 +173,6 @@ mod tests {
 
     #[test]
     fn a_drawn_run_and_a_composed_text_resolve_the_same_line_box() {
-        // The defect this field exists for: a canvas and a `Text` on one screen
-        // took different line-box rules, so every drawn row landed a device
-        // pixel off the composed rows beside it. Roboto at 16sp on a density-2
-        // watch, in device pixels.
         use crate::{
             text::line_box::{FontExtent, line_box},
             widgets::wear::wear_line_height_style,
@@ -203,13 +191,9 @@ mod tests {
             1.0,
         );
         assert_eq!(resolved, composed);
-        // And it is the platform's answer, not the plain split: the font's own
-        // extent is 38px, which a 36px line height does not shrink.
         assert_eq!(resolved.height, 38.0);
         assert_eq!(resolved.baseline, 30.0);
 
-        // Without the policy the same run takes the plain branch and sits half
-        // a device pixel higher, which is what put the two paths out of step.
         let unstyled = line_box(
             &text_style_for_draw_style(&DrawTextStyle::new(32.0).with_line_height(36.0)),
             extent,
@@ -221,8 +205,6 @@ mod tests {
 
     #[test]
     fn alignment_never_reaches_the_paragraph_style() {
-        // A draw scope resolves alignment into the primitive's rect; letting it
-        // through here would align the text twice.
         let style = DrawTextStyle::new(14.0)
             .with_align(TextAlign::Center)
             .with_vertical_align(TextVerticalAlign::Bottom);

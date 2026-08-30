@@ -1,9 +1,3 @@
-//! Robot test for the Shader Rect tab — validates both the SDF halo border
-//! and fire shader effects render correctly.
-//!
-//! Run with:
-//! `cargo run --package desktop-app --example robot_shader_rect --features robot-app`
-
 mod perf_contract;
 
 use std::time::Duration;
@@ -169,7 +163,6 @@ fn main() {
             }
             std::thread::sleep(Duration::from_millis(300));
 
-            // Verify tab content loaded
             if wait_for_text(&robot, "SDF Halo Border", 30, Duration::from_millis(100)).is_none() {
                 println!("FATAL: Tab header text not found");
                 robot.exit().ok();
@@ -178,7 +171,6 @@ fn main() {
             println!("OK: Tab loaded, header text found");
             assert_shader_rect_performance(&robot, "Shader Rect animation");
 
-            // ========== Halo border test ==========
             let Some((box1_x, box1_y, box1_w, box1_h)) = find_text_in_semantics(&robot, "Box 1")
             else {
                 println!("FATAL: Box 1 text not found");
@@ -203,7 +195,6 @@ fn main() {
                 }
             };
 
-            // Verify halo is visible outside content rect
             let mut halo_found = false;
             for &offset in &[4.0, 8.0, 16.0] {
                 let sx = content_right + offset;
@@ -225,14 +216,10 @@ fn main() {
             }
             println!("OK: Halo glow detected");
 
-            // ========== Fire shader test ==========
-            // Wait a frame for the fire animation to produce some output
             std::thread::sleep(Duration::from_millis(200));
 
-            // The fire shader box should be visible (may need to scroll)
             let fire_text = find_in_semantics(&robot, |elem| find_text_exact(elem, "Classic Fire"));
             if fire_text.is_none() {
-                // Try scrolling down
                 robot.mouse_scroll(0.0, -300.0).ok();
                 std::thread::sleep(Duration::from_millis(400));
             }
@@ -260,11 +247,8 @@ fn main() {
 
             let fire_cx = fire_x + fire_w / 2.0;
             let fire_cy = fire_y + fire_h / 2.0;
-            // Content is 280x140, padding is 48, so content edge is ~140dp from center
             let fire_content_right = fire_cx + 140.0;
 
-            // Sample the fire halo region — flame pixels should have warm colors
-            // (high red, some green, lower blue — fire ramp produces magenta/orange/yellow)
             let mut fire_found = false;
             println!("\n--- Fire shader pixel samples (right edge) ---");
             for &offset in &[4.0, 10.0, 20.0, 30.0, 40.0] {
@@ -274,8 +258,7 @@ fn main() {
                         "  fire right +{:.0}dp: rgba({}, {}, {}, {})",
                         offset, pixel[0], pixel[1], pixel[2], pixel[3]
                     );
-                    // Fire pixels: red channel dominant or any visible non-background color
-                    let bg_approx = [69u8, 75, 97]; // tab background in sRGB
+                    let bg_approx = [69u8, 75, 97];
                     let diff_r = (pixel[0] as i16 - bg_approx[0] as i16).unsigned_abs();
                     let diff_g = (pixel[1] as i16 - bg_approx[1] as i16).unsigned_abs();
                     let diff_b = (pixel[2] as i16 - bg_approx[2] as i16).unsigned_abs();
@@ -285,7 +268,6 @@ fn main() {
                 }
             }
 
-            // Also sample top edge
             let fire_content_top = fire_cy - 70.0;
             println!("\n--- Fire shader pixel samples (top edge) ---");
             for &offset in &[4.0, 10.0, 20.0, 30.0] {
@@ -308,7 +290,6 @@ fn main() {
             if !fire_found {
                 println!("\nFATAL: No fire shader pixels detected outside fire box content rect");
 
-                // Debug scan
                 println!("\n--- Debug: horizontal scan from fire center to right ---");
                 for i in 0..50 {
                     let dx = i as f32 * 5.0;

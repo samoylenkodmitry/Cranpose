@@ -1,37 +1,10 @@
-//! Reads Android's system font-size setting, and the conversion behind it.
-//!
-//! `Configuration.fontScale` is the multiplier behind Settings → Display →
-//! Font size. It is not in the NDK's `AConfiguration`, so it comes over JNI,
-//! and it changes while the app runs — the platform delivers a configuration
-//! change rather than restarting the process — so it is read again on every
-//! `ConfigChanged`.
-//!
-//! The multiplier alone is not enough. Since Android 14 a size in `sp` is not
-//! `sp * fontScale`: above a threshold setting the platform runs it through a
-//! piecewise-linear table, so small text grows by the whole setting and large
-//! text grows by less (see [`cranpose_ui::font_scale`]). The table is not
-//! public API, but the conversion is: `TypedValue.applyDimension` performs it.
-//! So the conversion is sampled rather than reimplemented — no table is copied
-//! into this repository, and a device shipping its own answers for itself.
-//!
-//! Wear OS quality guideline WO-V1 asks that text follow this setting, and an
-//! app cannot honour it if the framework never tells it what the setting is.
-
 use std::cell::Cell;
 
 use cranpose_ui::FontScaleCurve;
 use jni::{jni_sig, jni_str, objects::JObject};
 
-/// `TypedValue.COMPLEX_UNIT_SP`.
 const COMPLEX_UNIT_SP: i32 = 2;
 
-/// The sizes the platform's conversion is sampled at, in sp.
-///
-/// Dense over the range text is actually set in and sparse above it, because
-/// the platform's own table bends only in the former. The samples are reduced
-/// to the points that bend before they are stored, so this ladder costs knots
-/// only where the curve has them — a device whose conversion is a straight line
-/// comes back as two points.
 const SAMPLE_SP: [f32; 36] = [
     1.0, 2.0, 4.0, 6.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0, 19.0, 20.0,
     21.0, 22.0, 23.0, 24.0, 26.0, 28.0, 30.0, 32.0, 36.0, 40.0, 48.0, 56.0, 64.0, 80.0, 96.0,
@@ -39,23 +12,13 @@ const SAMPLE_SP: [f32; 36] = [
 ];
 
 thread_local! {
-    /// Last conversion read from the platform. The geometry update that hands
-    /// it to the shell runs from call sites that do not all hold an
-    /// `AndroidApp`, and a JNI round trip does not belong on a per-frame path
-    /// anyway, so it is refreshed at startup and on configuration changes and
-    /// read from here in between.
     static FONT_SCALE: Cell<FontScaleCurve> = const { Cell::new(FontScaleCurve::linear(1.0)) };
 }
 
-/// The most recently read conversion, the identity until the first read.
 pub(crate) fn font_scale_curve() -> FontScaleCurve {
     FONT_SCALE.with(Cell::get)
 }
 
-/// Re-reads the setting and its conversion, and returns true when either moved.
-///
-/// A failure is not fatal: the last value stands, which at worst is the `1.0`
-/// the app behaved as before the setting was readable at all.
 pub(crate) fn refresh_font_scale(app: &android_activity::AndroidApp) -> bool {
     match query_font_scale(app) {
         Ok(curve) => {
@@ -119,9 +82,6 @@ fn query_font_scale(app: &android_activity::AndroidApp) -> Result<FontScaleCurve
         match sample_curve(env, &metrics, scale, density) {
             Ok(curve) => Ok(curve),
             Err(error) => {
-                // The setting is still known; only the shape of the conversion
-                // is not. Multiplying is what every Android before 14 does, so
-                // it is the right thing to fall back to rather than to refuse.
                 log::warn!("[android-font-scale] sampling TypedValue.applyDimension: {error}");
                 Ok(FontScaleCurve::linear(scale))
             }
@@ -129,8 +89,6 @@ fn query_font_scale(app: &android_activity::AndroidApp) -> Result<FontScaleCurve
     })
 }
 
-/// Asks `TypedValue.applyDimension` what each sample size comes to, and builds
-/// the curve through the answers.
 fn sample_curve(
     env: &mut jni::Env<'_>,
     metrics: &JObject<'_>,

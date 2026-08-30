@@ -1,11 +1,3 @@
-//! The layer-affine, brush-resolution, raster-bucket and image-compare rules.
-//!
-//! Each of these sits under the renderer rather than beside it, so a mistake
-//! shows up as a picture that is subtly wrong rather than a test that fails:
-//! a point mapped about the wrong pivot, a solid colour that ignores the
-//! layer's alpha, or two scales sharing one raster-cache bucket. They are
-//! cheap to state exactly, so they are stated exactly.
-
 use cranpose_render_common::{
     image_compare::pixel_difference,
     layer_transform::apply_layer_affine_to_point,
@@ -49,7 +41,6 @@ fn a_scaled_layer_scales_about_its_pivot_and_leaves_the_pivot_alone() {
         scale_y: 2.0,
         ..GraphicsLayer::default()
     };
-    // The default pivot is the centre of the bounds.
     let pivot = Point::new(50.0, 50.0);
     assert_eq!(
         apply_layer_affine_to_point(pivot, bounds(), &layer),
@@ -96,7 +87,6 @@ fn identical_pixels_differ_by_nothing_and_opposites_differ_by_everything() {
         255 * 4,
         "the difference must sum every channel"
     );
-    // The measure is symmetric, or a comparison would depend on argument order.
     assert_eq!(
         pixel_difference([10, 20, 30, 40], [40, 30, 20, 10]),
         pixel_difference([40, 30, 20, 10], [10, 20, 30, 40])
@@ -130,7 +120,6 @@ fn verification_is_serial_until_an_executor_is_lent() {
         verify_executor().is_none(),
         "a verify executor was installed on a thread nobody lent one to"
     );
-    // The setter takes `None` back, which is what a host does on teardown.
     set_verify_executor(None);
     assert!(verify_executor().is_none());
 }
@@ -140,8 +129,6 @@ fn a_font_registry_rejects_fallback_bytes_that_are_not_a_font() {
     use cranpose_render_common::font_source::SoftwareTextFontRegistry;
 
     let mut registry = SoftwareTextFontRegistry::default();
-    // A fallback is what every unnamed request lands on, so accepting rubbish
-    // here would make every style resolve to a face that cannot be shaped.
     assert!(
         registry
             .register_fallback_bytes(b"not a font".to_vec())

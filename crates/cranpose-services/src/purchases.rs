@@ -221,7 +221,6 @@ pub trait Purchases: Send + Sync {
 /// Shared handle to the active [`Purchases`] backend.
 pub type PurchasesRef = Arc<dyn Purchases>;
 
-/// The no-store backend: nothing is for sale and nothing is owned.
 struct NoPurchases;
 
 impl Purchases for NoPurchases {
@@ -299,7 +298,6 @@ impl Purchases for PlatformPurchases {
     }
 }
 
-/// Installs a platform purchase backend, replacing any previous one.
 #[cfg(not(target_arch = "wasm32"))]
 type StoreListener = Arc<dyn Fn() + Send + Sync>;
 #[cfg(target_arch = "wasm32")]
@@ -463,8 +461,6 @@ pub fn rememberStoreState() -> cranpose_core::State<StoreState> {
 pub fn rememberPurchaseEvents() -> cranpose_core::EventStream<PurchaseEvent> {
     cranpose_core::rememberEventStream((), |sender| {
         observe_store_news(move || {
-            // The backend queues events and nudges; draining here is the
-            // framework's job, and the application only ever sees the stream.
             while let Some(event) = take_event() {
                 sender.send(event);
             }
@@ -487,7 +483,6 @@ mod tests {
         assert!(state.owned.is_empty());
         assert!(!state.owns("com.example.pro"));
         assert!(!store_available());
-        // Calling through with no backend must not panic.
         configure(&["com.example.pro"]);
         purchase("com.example.pro");
         restore();
@@ -512,8 +507,6 @@ mod tests {
 
     #[test]
     fn nothing_is_owned_by_default_and_blocked_is_not_the_default() {
-        // The default has to stay the phase that invites a retry: a backend
-        // that has not answered yet must not read as one that refused.
         assert_eq!(StorePhase::default(), StorePhase::Unavailable);
     }
 
@@ -556,8 +549,6 @@ mod tests {
         assert_eq!(state.phase, StorePhase::Ready);
         assert!(state.owns("com.example.pro"));
         assert_eq!(state.order_id("com.example.pro"), Some("GPA.1234-5678"));
-        // Absent is normal: a backend can know a product is owned without
-        // knowing what paid for it, so this must never read as "not owned".
         assert_eq!(state.order_id("com.example.free"), None);
         assert_eq!(state.display_price("com.example.pro"), Some("34,99 €"));
         assert_eq!(state.display_price("com.example.nope"), None);

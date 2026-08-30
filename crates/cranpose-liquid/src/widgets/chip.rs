@@ -1,5 +1,3 @@
-//! Filter chip: a pill that lifts onto glass when selected.
-
 use std::{cell::RefCell, rc::Rc};
 
 use cranpose_animation::animateColorAsState;

@@ -1,7 +1,3 @@
-//! Fill modifier implementation following Jetpack Compose's layout/Size.kt (fillMax* modifiers)
-//!
-//! Reference: /media/huge/composerepo/compose/foundation/foundation-layout/src/commonMain/kotlin/androidx/compose/foundation/layout/Size.kt
-
 use super::{DimensionConstraint, Modifier, inspector_metadata};
 use crate::modifier_nodes::FillElement;
 

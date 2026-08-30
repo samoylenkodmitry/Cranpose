@@ -48,19 +48,12 @@ struct PopupEntry {
     id: u64,
     position: Point,
     content: Rc<dyn Fn()>,
-    /// When set, the host renders a viewport-filling scrim beneath this popup
-    /// that invokes the callback on an outside tap (Compose's
-    /// `onDismissRequest`).
     on_dismiss: Option<Rc<dyn Fn()>>,
 }
 
 struct PopupRegistryState {
     entries: RefCell<Vec<PopupEntry>>,
     next_id: Cell<u64>,
-    /// Reactive dirtiness signal. `Some` for a hosted registry (created by a
-    /// [`PopupHost`]); `None` for the detached default registry used when no
-    /// host is present, so `Popup` calls without a host are inert instead of
-    /// panicking.
     revision: Option<MutableState<u64>>,
 }
 
@@ -88,8 +81,6 @@ impl PopupRegistry {
         }
     }
 
-    /// The default registry when no [`PopupHost`] is installed: it accepts
-    /// registrations but is never rendered, so stray `Popup` calls are no-ops.
     fn detached() -> Self {
         Self {
             inner: Rc::new(PopupRegistryState {
@@ -106,19 +97,12 @@ impl PopupRegistry {
         id
     }
 
-    /// Marks the registry dirty so the host recomposes. Safe to call from a
-    /// [`SideEffect`]/dispose callback (uses a non-subscribing update).
     fn bump(&self) {
         if let Some(revision) = self.inner.revision.as_ref() {
             revision.update(|value| *value = value.wrapping_add(1));
         }
     }
 
-    /// Inserts a new popup or updates an existing one. Structural changes (a
-    /// new id), a moved position, or re-registered content (a new closure —
-    /// the caller recomposed) dirty the host so the overlay re-renders with
-    /// the fresh content. A popup whose caller did not recompose never calls
-    /// this, so resting frames do not spin recomposition.
     fn upsert(
         &self,
         id: u64,
@@ -161,7 +145,6 @@ impl PopupRegistry {
         }
     }
 
-    /// Subscribes the current recompose scope to add/remove/move events.
     fn subscribe(&self) {
         if let Some(revision) = self.inner.revision.as_ref() {
             let _ = revision.value();
@@ -244,11 +227,7 @@ where
                     local_popup_viewport().provides(viewport),
                 ],
                 || {
-                    // App content: `Popup` calls inside here register into `registry`.
                     content();
-                    // The overlay is its own recompose scope: registry bumps
-                    // re-render the popups without re-running the app content
-                    // (which would re-register fresh popup content and spin).
                     PopupOverlay(registry.clone());
                 },
             );
@@ -263,12 +242,6 @@ fn PopupOverlay(registry: PopupRegistry) {
     registry.subscribe();
     for entry in registry.snapshot() {
         if let Some(on_dismiss) = entry.on_dismiss {
-            // Outside-tap scrim: fills the host (the viewport), beneath the
-            // popup content, so any tap that misses the popup dismisses it.
-            // Consume the press as well as the release: a regular `clickable`
-            // leaves Down unconsumed so scroll ancestors can participate, but
-            // a modal scrim has no such ancestor and must not capture covered
-            // sibling controls (for example a tab bar) into the same gesture.
             Box(
                 Modifier::empty()
                     .fill_max_size()
@@ -421,11 +394,6 @@ fn popup_impl(
 ) {
     let registry = local_popup_registry().current();
     let id = remember(|| registry.allocate_id()).with(|id| *id);
-    // The freshly captured closure is registered on every recomposition so
-    // popup content follows the caller's state (an animating menu morph, a
-    // changing label). The host is only dirtied when the popup moved or its
-    // content was re-registered — a popup whose caller did not recompose
-    // costs nothing.
     let position = Point {
         x: anchor.x + offset.x,
         y: anchor.y + offset.y,

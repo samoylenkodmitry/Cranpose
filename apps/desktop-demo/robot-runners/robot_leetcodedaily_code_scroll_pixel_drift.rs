@@ -1,7 +1,3 @@
-//! Robot test: capture screenshots of a leetcodedaily-style Code layout while scrolling by
-//! exactly one logical pixel per step and require stable overlap inside the code workspace
-//! viewport.
-
 mod output_paths;
 mod scroll_stability_external_helpers;
 mod text_showcase_external_helpers;

@@ -1,131 +1,19 @@
-//! Retained-segment surface caching under rigid similarity motion.
-//!
-//! The command-replay machinery already proves, per frame and per retained
-//! span, that a stretch of content moved by exactly one similarity transform
-//! (uniform scale + rotation about a shared center) with byte-verified
-//! content stability. The replay path exploits that on the CPU side — the
-//! shapes convert once and re-draw from retained GPU buffers — but it still
-//! SUBMITS every member quad every frame: on the mega scene ~14k retained
-//! shapes cost ~0.79 Mpx of translucent SrcOver read-modify-write per frame
-//! on a tiler. This module removes the fragments: a qualifying span renders
-//! ONCE into a pooled offscreen surface (in its capture space) and each
-//! following frame draws as ONE textured quad under the span's per-frame
-//! transform.
-//!
-//! ## Why compositing the flattened span preserves z order exactly
-//!
-//! Every retained-span pipeline blends SrcOver, and SrcOver over
-//! premultiplied alpha is ASSOCIATIVE: for any draws A, B and destination D,
-//! `over(A, over(B, D)) == over(over(A, B), D)`. The capture pass renders
-//! the span's members (in their exact order) onto a transparent surface with
-//! the ordinary `ALPHA_BLENDING` state, which accumulates exactly
-//! `over(A_n, ... over(A_1, transparent))` — the premultiplied flattening of
-//! the span. Compositing that surface with `PREMULTIPLIED_ALPHA_BLENDING`
-//! at the span's own position in the fused pass therefore produces the same
-//! blending result as drawing the members inline, REGARDLESS of what dynamic
-//! content sits below or above the span — including dynamic spans whose
-//! footprints overlap the segment's. The planner already emits each maximal
-//! consecutive retained stretch as its own `SegmentBatchPlan::Retained`
-//! batch at its exact z position between the dynamic batches, and the
-//! composite quad is drawn at precisely that point in the pass, so strict
-//! interleave holds BY CONSTRUCTION and admission needs no footprint
-//! constraint. The only divergence from analytic redraw is resampling under
-//! rotation/scale and the 8-bit quantization of the intermediate surface
-//! (the same class of quantization Compose's own layer surfaces have) —
-//! bounded and asserted by the parity suite, never a reordering.
-//!
-//! ## Economics (why admission is content-conditional)
-//!
-//! Per frame, the direct path pays roughly
-//! `member_px = Σ member-quad pixels` of SrcOver RMW, where every fragment
-//! also evaluates the arc/rect SDF, its AA band and (when present) the
-//! gradient + dither chain. The cached path pays `surface_px = capture-rect
-//! pixels` of one bilinear fetch + SrcOver RMW, once per frame, plus a
-//! recapture (`member_px` worth of the direct cost, into the offscreen) on
-//! invalidation. A thin ring inscribed in its bounding box has
-//! `surface_px / member_px ≈ 2·r / (π·band)` — for the mega rings that is
-//! roughly 2-3× more pixels touched — but each surface pixel runs a flat
-//! textured-blit fragment where each member pixel runs the SDF shape shader,
-//! which the arc-mesh work measured as the dominant per-pixel cost on the
-//! watch's Adreno 702. The default admission ratio (`surface_px ≤ 3 ×
-//! member_px`, env-overridable) encodes that fragment-cost asymmetry; the
-//! watch A/B, not this comment, decides the flip. Segments whose geometry
-//! makes the surface strictly larger than that (sparse content in a huge
-//! box) stay on the direct path.
-//!
-//! Two other Cranpose apps that win from this, content-conditionally: any
-//! watch face or dashboard with rotating complication rings (bezel ticks,
-//! rotating gauges) whose ring content is retained and rigid, and any data
-//! visualization that spins or zooms a static radial gauge/dial under user
-//! input. Nothing here consults the app: admission reads only the span's
-//! own measured geometry, churn and transform.
-//!
-//! ## Recolor churn
-//!
-//! Recolor patches (twinkles) rewrite a member's 16-byte paint record; a
-//! cached surface of that member is stale the moment the patch lands, so a
-//! patched segment recaptures IN THE SAME FRAME (the capture pass encodes
-//! after the staged-upload flush that carries the patch, before the fused
-//! pass that samples it). A segment recoloring every frame would therefore
-//! recapture every frame and pay `member_px + surface_px` — strictly worse
-//! than direct. Measured on the command-feed parity scene (the synthetic
-//! mega boss, 120 frames): ring segments recolor on 0/119 frames while the
-//! twinkle segment recolors on 108/119 frames (~200 records per recoloring
-//! frame) — the distribution is fully bimodal, so any threshold between
-//! ~0.05 and ~0.9 separates the classes. The default admits a segment only
-//! when it recolored on at most 1/8 of recently observed frames
-//! (`CRANPOSE_SEGMENT_SURFACE_RECOLOR_RATE`), which admits every ring and
-//! rejects the twinkle field with a wide margin on both sides.
-//!
-//! Kill switch: DEFAULT ON, earned by measurement — Pixel Watch 3 mega
-//! scene, alternating pairs off-charger: ON 59.01/58.53 fps vs OFF
-//! 53.73/52.37 (+5.3/+6.2, ten times the protocol noise floor), with
-//! engagement proven live (captures + composites counting, ~2.1k churn
-//! rejections keeping the twinkle field direct, zero economics
-//! rejections at the default ratio) and the full scene visually intact.
-//! `CRANPOSE_SEGMENT_SURFACE=0` disables (property
-//! `debug.cranpose.segment_surface`). The watch A/B earns any flip.
-
 use crate::offscreen::OffscreenTarget;
 
-/// How many segment captures one frame may encode. Also sizes the reserved
-/// capture-transform slots appended to the replay transform buffer and the
-/// capture viewport-uniform slots. Excess captures defer to later frames
-/// (the segments draw direct meanwhile), which staggers capture cost across
-/// frames instead of spiking one.
 pub(crate) const SEGMENT_CAPTURE_SLOTS: u32 = 8;
 
-/// Uniform stride for the capture viewport slots — the strictest
-/// `min_uniform_buffer_offset_alignment` any backend reports.
 pub(crate) const SEGMENT_CAPTURE_UNIFORM_STRIDE: u64 = 256;
 
-/// Total cached-surface byte budget. Mega-scale ring segments measure
-/// ~0.3-0.5 MB each at watch resolution, so this holds a whole scene of
-/// them with room while staying far below the layer-surface cache's 128 MiB.
 const MAX_SEGMENT_SURFACE_BYTES: u64 = 32 * 1024 * 1024;
 
-/// Per-entry byte cap: a segment whose padded capture rect exceeds this
-/// would also fail the economics gate for any plausible member set; the cap
-/// just fails it before a texture is sized.
 const MAX_SEGMENT_SURFACE_ENTRY_BYTES: u64 = 8 * 1024 * 1024;
 
-/// Frames a key must be observed before its churn window is trusted. Below
-/// this the segment draws direct — a segment that dies young never pays a
-/// capture — unless the waiver (`waiver_ratio`) admits a never-recolored
-/// candidate whose capture pays for itself within about one frame.
 const ADMISSION_WARMUP_FRAMES: u32 = 8;
 
-/// An entry unseen for this many frames is dropped in the periodic sweep.
 const ENTRY_IDLE_EVICT_FRAMES: u64 = 600;
 
-/// Transparent padding around the capture rect: one texel of guard band for
-/// bilinear sampling plus one for the conservative snap. Member quads
-/// already cover their own AA footprint, so ink never reaches the pad.
 const CAPTURE_PAD_PX: f32 = 2.0;
 
-/// Master switch, read once per frame (`begin_frame`): default OFF, `=1`
-/// opts in. Mirrored from `debug.cranpose.segment_surface` on Android. Read
-/// per frame, not latched, so the parity harness can flip it between arms.
 fn segment_surface_enabled() -> bool {
     crate::debug_toggles::debug_toggle("CRANPOSE_SEGMENT_SURFACE").as_deref() != Some("0")
 }
@@ -137,8 +25,6 @@ fn env_f32(name: &'static str, default: f32) -> f32 {
         .unwrap_or(default)
 }
 
-/// As [`env_f32`], except zero is a meaningful value (a kill switch), not a
-/// malformed one.
 fn env_f32_zero_ok(name: &'static str, default: f32) -> f32 {
     crate::debug_toggles::debug_toggle(name)
         .and_then(|value| value.parse::<f32>().ok())
@@ -146,26 +32,12 @@ fn env_f32_zero_ok(name: &'static str, default: f32) -> f32 {
         .unwrap_or(default)
 }
 
-/// Per-frame snapshot of the module's tunables.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct SegmentSurfaceConfig {
     pub enabled: bool,
-    /// Admit while `surface_px <= cost_ratio * member_px` — see the module
-    /// economics comment for the derivation of the default.
     pub cost_ratio: f32,
-    /// During warmup only: a candidate never observed to recolor may be
-    /// admitted immediately while `surface_px <= waiver_ratio * member_px`
-    /// — a strictly tighter bar than `cost_ratio`, payback within about
-    /// one frame. At or below zero the waiver is off and warmup admits
-    /// nothing, as before.
     pub waiver_ratio: f32,
-    /// Admit while the key's recolored-frame rate over its observation
-    /// window stays at or below this. Default sits far inside the measured
-    /// bimodal gap (rings 0.0, twinkles ~0.9).
     pub recolor_rate: f32,
-    /// Recapture when the span's scale drifts this far from the captured
-    /// scale (resampling quality bound, not a correctness bound — the quad
-    /// is drawn under the CURRENT transform either way).
     pub scale_eps: f32,
 }
 
@@ -192,19 +64,13 @@ impl SegmentSurfaceConfig {
     }
 }
 
-/// A 2D affine map `p -> L·p + t` in device pixels. Similarity transforms
-/// compose into these; keeping the general form means a span whose pivot
-/// moved between capture and now (layer translation) still composites
-/// exactly, with no recapture.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Affine2 {
-    /// Row-major linear part: `[[l00, l01], [l10, l11]]`.
     pub l: [[f32; 2]; 2],
     pub t: [f32; 2],
 }
 
 impl Affine2 {
-    /// The similarity `p -> c + R·s·(p - c)` with `rot = (cos, sin)`.
     pub(crate) fn from_similarity(center: [f32; 2], rot: [f32; 2], scale: f32) -> Self {
         let (cos, sin) = (rot[0], rot[1]);
         let l = [[cos * scale, -sin * scale], [sin * scale, cos * scale]];
@@ -224,7 +90,6 @@ impl Affine2 {
         ]
     }
 
-    /// `self ∘ other` — apply `other` first.
     pub(crate) fn compose(&self, other: &Self) -> Self {
         let a = &self.l;
         let b = &other.l;
@@ -275,7 +140,6 @@ impl Affine2 {
     }
 }
 
-/// Integer-snapped, padded capture rect in capture device space.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct CaptureRect {
     pub origin: [f32; 2],
@@ -289,9 +153,6 @@ impl CaptureRect {
     }
 }
 
-/// Snaps the union of member AABBs (already transformed to capture space)
-/// to whole device pixels with the transparent guard pad. Integer origin is
-/// what makes the identity composite land texel-exact.
 pub(crate) fn snap_capture_rect(
     min: [f32; 2],
     max: [f32; 2],
@@ -322,9 +183,6 @@ pub(crate) fn snap_capture_rect(
     })
 }
 
-/// The capture identity of one retained span's shape range. `slot` is the
-/// renderer replay-slot id; split pieces of one segment share the slot and
-/// address disjoint ranges, so the range is part of the identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct SegmentSurfaceKey {
     pub slot: u32,
@@ -332,8 +190,6 @@ pub(crate) struct SegmentSurfaceKey {
     pub shape_count: u32,
 }
 
-/// Sliding 64-frame churn window for one key. A frame's bit is set when the
-/// key received at least one recolor patch that frame.
 #[derive(Clone, Copy, Debug, Default)]
 struct AdmissionTrack {
     window: u64,
@@ -344,9 +200,6 @@ struct AdmissionTrack {
 impl AdmissionTrack {
     fn note_frame(&mut self, frame: u64, recolored: bool) {
         if self.last_noted_frame == frame && self.observed > 0 {
-            // Same frame re-noted (a span drawn twice per frame does not
-            // exist today, but the guard keeps the window honest if one
-            // ever does): only an upgrade to "recolored" sticks.
             if recolored {
                 self.window |= 1;
             }
@@ -379,15 +232,9 @@ impl AdmissionTrack {
     }
 }
 
-/// One cached segment surface.
 pub(crate) struct SegmentSurfaceEntry {
     pub texture: OffscreenTarget,
-    /// The slot capture epoch the surface was rendered from — a released
-    /// and re-captured slot id can never be composited through a stale
-    /// surface.
     pub capture_epoch: u64,
-    /// The span transform baked into the surface: capture space is the
-    /// span's shapes under exactly this similarity.
     pub cap_center: [f32; 2],
     pub cap_rot: [f32; 2],
     pub cap_scale: f32,
@@ -395,9 +242,6 @@ pub(crate) struct SegmentSurfaceEntry {
     last_seen_frame: u64,
 }
 
-/// The per-frame lookup maps are keyed by small POD keys and hit on every
-/// retained item every frame; std's SipHash showed up at ~0.2 ms/frame on
-/// the watch profile. FxHasher is the crate's convention for exactly this.
 type FxMap<K, V> =
     std::collections::HashMap<K, V, std::hash::BuildHasherDefault<cranpose_ui_graphics::FxHasher>>;
 
@@ -413,9 +257,6 @@ pub(crate) struct SegmentSurfaceStats {
     pub waived_captures: u64,
 }
 
-/// A capture the frame must encode for a `Composite` decision: the claimed
-/// per-frame capture slot and the measured geometry the entry is installed
-/// with.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct CapturePlan {
     pub index: u32,
@@ -423,20 +264,12 @@ pub(crate) struct CapturePlan {
     pub member_px: f32,
 }
 
-/// What the prepare arm decided for one retained item this frame.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum SegmentSurfaceDecision {
-    /// Draw the member quads as before.
     Direct,
-    /// Composite the cached surface (fresh from this frame's capture pass
-    /// when `capture` is `Some`).
     Composite { capture: Option<CapturePlan> },
 }
 
-/// The renderer-side cache. GPU resources (offscreen textures, the capture
-/// viewport-uniform buffer) are owned here; the capture-transform slots live
-/// in the replay transform buffer, which the renderer sizes with
-/// [`SEGMENT_CAPTURE_SLOTS`] extra strides.
 #[derive(Default)]
 pub(crate) struct SegmentSurfaceCache {
     entries: FxMap<SegmentSurfaceKey, SegmentSurfaceEntry>,
@@ -444,12 +277,8 @@ pub(crate) struct SegmentSurfaceCache {
     bytes: u64,
     frame: u64,
     config: Option<SegmentSurfaceConfig>,
-    /// Capture slots claimed this frame, across all partitions.
     capture_cursor: u32,
     capture_uniforms: Option<CaptureUniforms>,
-    /// This frame's recolor-patched shape indices per slot, memoized on the
-    /// FIRST partition that plans (the prepare arms drain the renderer's
-    /// parked patch list, so later partitions could no longer read it).
     dirty_by_slot: FxMap<u32, Vec<u32>>,
     dirty_ready: bool,
     pub(crate) stats: SegmentSurfaceStats,
@@ -461,7 +290,6 @@ pub(crate) struct CaptureUniforms {
 }
 
 impl SegmentSurfaceCache {
-    /// Once per frame: refresh config, advance the frame counter, sweep.
     pub(crate) fn begin_frame(&mut self) {
         self.frame = self.frame.wrapping_add(1);
         self.capture_cursor = 0;
@@ -476,8 +304,6 @@ impl SegmentSurfaceCache {
             return;
         }
         self.config = Some(config);
-        // Cheap periodic sweep: entries and admission tracks the scene
-        // stopped producing decay away instead of pinning VRAM.
         if self.frame.is_multiple_of(64) {
             let frame = self.frame;
             let bytes = &mut self.bytes;
@@ -499,9 +325,6 @@ impl SegmentSurfaceCache {
         self.config.unwrap_or_else(SegmentSurfaceConfig::load)
     }
 
-    /// Test-only frame advance that keeps an explicit config instead of
-    /// reloading it from the environment (which would disable the cache
-    /// and clear the admission state mid-test).
     #[cfg(test)]
     fn advance_frame_for_tests(&mut self, config: SegmentSurfaceConfig) {
         self.frame = self.frame.wrapping_add(1);
@@ -520,8 +343,6 @@ impl SegmentSurfaceCache {
         self.bytes = 0;
     }
 
-    /// Drops every entry captured from `slot` — called when the renderer
-    /// releases the replay slot (segment death).
     pub(crate) fn drop_slot(&mut self, slot: u32) {
         let bytes = &mut self.bytes;
         let stats = &mut self.stats;
@@ -540,9 +361,6 @@ impl SegmentSurfaceCache {
         self.entries.get(key)
     }
 
-    /// Memoizes this frame's recolor-patch coverage from the renderer's
-    /// parked patch list; `patches` is consulted only on the frame's first
-    /// call (later partitions reuse the memo — see `dirty_by_slot`).
     pub(crate) fn ensure_dirty_map<'a>(&mut self, patches: impl Iterator<Item = (u32, u32)> + 'a) {
         if self.dirty_ready {
             return;
@@ -557,21 +375,12 @@ impl SegmentSurfaceCache {
         }
     }
 
-    /// Whether any of this frame's recolor patches lands inside the key's
-    /// shape range.
     pub(crate) fn range_dirty(&self, slot: u32, first: u32, last: u32) -> bool {
         self.dirty_by_slot
             .get(&slot)
             .is_some_and(|indices| indices.iter().any(|index| *index >= first && *index < last))
     }
 
-    /// Decides one retained item's path this frame and updates the churn
-    /// window. `capture_epoch` is the slot's current epoch, `dirty` whether
-    /// a recolor patch touches the range this frame, `scale` the span's
-    /// current similarity scale, and `plan` a closure that measures the
-    /// capture-space geometry ONLY when a capture is actually wanted —
-    /// `(rect, member_px)` of the padded capture rect and the member-quad
-    /// pixel sum.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn decide(
         &mut self,
@@ -590,22 +399,11 @@ impl SegmentSurfaceCache {
         track.note_frame(frame, dirty);
         let warm = track.warm();
         let rate = track.recolor_rate();
-        // Warmup waiver: at bootstrap frame rates the warmup window is
-        // wall-SECONDS during which every frame redraws the whole scene
-        // direct, so a candidate with no recolor history may capture
-        // before the window fills when the capture pays for itself within
-        // about one frame (the tighter `waiver_ratio` bar below). Waste is
-        // bounded: a churny key has no recolor history at bootstrap and
-        // can waive at most once — its first recolor invalidates the entry
-        // in that same frame, within ~2 frames its rate crosses the churn
-        // gate and the key leaves the cache — and `SEGMENT_CAPTURE_SLOTS`
-        // caps any one frame's capture cost.
         let waived = !warm
             && !track.has_recolored()
             && config.waiver_ratio > 0.0
             && !self.entries.contains_key(&key);
 
-        // A live entry serves the frame unless something invalidates it.
         let (stale, drifted) = match self.entries.get_mut(&key) {
             Some(entry) if entry.capture_epoch == capture_epoch => {
                 let drift = if entry.cap_scale > f32::EPSILON {
@@ -624,10 +422,6 @@ impl SegmentSurfaceCache {
             None => (false, false),
         };
 
-        // Anything below needs a (re)capture. Gate on churn first: a stale
-        // entry whose segment now churns must LEAVE the cache, not
-        // recapture forever. A waived candidate falls through to buy in at
-        // the tighter bar.
         if (!warm && !waived) || rate > config.recolor_rate {
             if stale || drifted {
                 self.remove(&key);
@@ -638,9 +432,6 @@ impl SegmentSurfaceCache {
             return SegmentSurfaceDecision::Direct;
         }
         if self.capture_cursor >= SEGMENT_CAPTURE_SLOTS {
-            // No capture slot left this frame. A merely drifted entry still
-            // composites (quality bound, not correctness); a stale one must
-            // not be sampled and its range draws direct.
             if stale {
                 self.remove(&key);
                 self.stats.rejected_capacity += 1;
@@ -691,11 +482,6 @@ impl SegmentSurfaceCache {
         if waived {
             self.stats.waived_captures += 1;
         }
-        // Always-on engagement proof for device logs, mirroring the
-        // [command-replay] health line: captures are rare (one per admitted
-        // segment per invalidation), so one warn per capture is bounded by
-        // the mechanism itself, and an on-watch A/B arm that never prints
-        // this line provably measured a vacuous mechanism.
         log::warn!(
             "[segment-surface] capture #{}: composites {} dirty {} rejected churn {} econ {} cap {} evictions {} waived {}",
             self.stats.captures,
@@ -720,8 +506,6 @@ impl SegmentSurfaceCache {
         }
     }
 
-    /// Installs (or replaces) the entry a `Composite { capture: Some }`
-    /// decision promised.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn install_entry(
         &mut self,
@@ -758,9 +542,6 @@ impl SegmentSurfaceCache {
         }
     }
 
-    /// Takes an existing entry's texture for size-matched reuse during
-    /// recapture (avoids an offscreen-pool round trip for the common
-    /// same-size recapture).
     pub(crate) fn take_texture_for_recapture(
         &mut self,
         key: &SegmentSurfaceKey,
@@ -905,9 +686,6 @@ mod tests {
 
     #[test]
     fn churn_window_separates_rings_from_twinkles() {
-        // The measured distribution: rings recolor never, twinkles on ~91%
-        // of frames. Both must classify correctly well before the window
-        // saturates.
         let mut ring = AdmissionTrack::default();
         let mut twinkle = AdmissionTrack::default();
         for frame in 1..=16u64 {
@@ -921,8 +699,6 @@ mod tests {
     #[test]
     fn decide_admits_only_warm_clean_segments_that_pay() {
         let mut cache = SegmentSurfaceCache::default();
-        // Waiver held shut: the warmup count itself is what this test
-        // pins; the waiver's own admissions are pinned below.
         let config = SegmentSurfaceConfig {
             waiver_ratio: 0.0,
             ..SegmentSurfaceConfig::test_default()
@@ -937,14 +713,11 @@ mod tests {
             width: 300,
             height: 300,
         };
-        // Cold: direct, no capture, until the observation that completes
-        // the warmup window.
         for _ in 0..ADMISSION_WARMUP_FRAMES - 1 {
             cache.advance_frame_for_tests(config);
             let decision = cache.decide(key, 7, false, 1.0, || Some((rect, 40_000.0)));
             assert_eq!(decision, SegmentSurfaceDecision::Direct);
         }
-        // Warm and clean: capture.
         cache.advance_frame_for_tests(config);
         let decision = cache.decide(key, 7, false, 1.0, || Some((rect, 40_000.0)));
         assert_eq!(
@@ -957,7 +730,6 @@ mod tests {
                 })
             }
         );
-        // Economics: a sparse segment in the same box is rejected.
         let sparse = SegmentSurfaceKey {
             slot: 4,
             first_shape: 0,
@@ -1005,9 +777,6 @@ mod tests {
             width: 300,
             height: 300,
         };
-        // 90k surface px against 120k member px: the capture pays for
-        // itself within one frame, and the key has never recolored — the
-        // waiver must not wait out the warmup window.
         cache.advance_frame_for_tests(SegmentSurfaceConfig::test_default());
         let mut decision = cache.decide(key, 7, false, 1.0, || Some((rect, 120_000.0)));
         if decision == SegmentSurfaceDecision::Direct {
@@ -1041,9 +810,6 @@ mod tests {
             width: 300,
             height: 300,
         };
-        // One recolor on the first observed frame disqualifies the key
-        // from waiving for the rest of the warmup window, paying
-        // economics notwithstanding.
         for frame in 0..ADMISSION_WARMUP_FRAMES - 1 {
             cache.advance_frame_for_tests(SegmentSurfaceConfig::test_default());
             let decision = cache.decide(key, 7, frame == 0, 1.0, || Some((rect, 120_000.0)));
@@ -1066,9 +832,6 @@ mod tests {
             width: 300,
             height: 300,
         };
-        // 90k surface px against 40k member px sits between the bars:
-        // over the waiver's 1.0, under the steady-state 3.0 — direct
-        // through warmup, admitted once warm.
         for _ in 0..ADMISSION_WARMUP_FRAMES - 1 {
             cache.advance_frame_for_tests(SegmentSurfaceConfig::test_default());
             let decision = cache.decide(key, 7, false, 1.0, || Some((rect, 40_000.0)));
@@ -1106,8 +869,6 @@ mod tests {
             width: 300,
             height: 300,
         };
-        // The candidate would waive on economics; the kill switch must
-        // hold warmup admission exactly where it was.
         for _ in 0..ADMISSION_WARMUP_FRAMES - 1 {
             cache.advance_frame_for_tests(config);
             let decision = cache.decide(key, 7, false, 1.0, || Some((rect, 120_000.0)));

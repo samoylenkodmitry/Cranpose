@@ -355,10 +355,6 @@ pub fn estimate_text_measurement(text: &str, style: &TextStyle) -> TextMeasureme
     for line in text.split('\n') {
         line_count += 1;
         let chars = line.chars().count();
-        // One letter space per character, not per gap: Android's Minikin puts
-        // half a letter space on each side of every cluster, so a run of `n`
-        // characters carries `n` of them. See `run_tracking` in
-        // `cranpose-render-common`'s `software_text_raster`.
         let advance = chars as f32 * (font_size * CHAR_WIDTH_RATIO + letter_spacing);
         width = width.max(advance);
     }
@@ -374,9 +370,6 @@ pub fn estimate_text_measurement(text: &str, style: &TextStyle) -> TextMeasureme
 #[cfg(test)]
 mod tests {
 
-    /// A measurer must never be handed a spacing it cannot use. A style built
-    /// from an unset or arithmetic-error value resolves to no spacing rather
-    /// than laying every glyph out at NaN, which renders as nothing at all.
     #[test]
     fn letter_spacing_resolves_to_something_a_measurer_can_use() {
         let style = TextStyle::default().with_font_size(18.0);
@@ -409,8 +402,6 @@ mod tests {
             );
         }
 
-        // And a font size that is not a size falls back rather than producing
-        // NaN geometry for every glyph.
         for broken in [0.0, -12.0, f32::NAN, f32::INFINITY] {
             assert_eq!(
                 TextStyle::default()
@@ -445,7 +436,6 @@ mod tests {
                 .resolved_line_height(28.0),
             40.0
         );
-        // A non-finite request is refused at the builder, not silently kept.
         assert_eq!(
             style.with_line_height(f32::NAN).resolved_line_height(28.0),
             28.0

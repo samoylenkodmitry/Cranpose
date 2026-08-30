@@ -1,7 +1,3 @@
-//! Auto-generated robot test from recording
-//! Generated at: timestamp
-//! Events: 437
-
 use std::time::Duration;
 
 use cranpose::AppLauncher;

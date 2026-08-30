@@ -1,36 +1,3 @@
-//! The liquid tab bar's painted footprint must not grow when the selection
-//! settles on an end cell.
-//!
-//! The bar draws a pill exactly as wide as its cell strip plus one margin a
-//! side, and rests its glass bubble centered on the selected cell. The bubble
-//! is wider than a cell, so on the first or last cell it overhangs the strip —
-//! and it is legal only while that overhang stays inside the margin. Nothing
-//! enforced that: the rest width was a fixed 1.10 multiple of the cell, so a
-//! bar built with cells wider than 80dp rested its end bubbles *outside* its
-//! own pill, glass floating over the backdrop past the pill's rounded end.
-//! The one unit test asserting the rule hardcoded the default 78dp cell, which
-//! is the single width where it happened to hold.
-//!
-//! The contract is stated without reaching for any framework internal: the
-//! bar is handed a box, and nothing it draws may land outside that box. The
-//! pill fills the box, so a bubble that stays inside the box is a bubble
-//! inside the pill.
-//!
-//! Finding the bubble by comparing against the backdrop does not work — a
-//! lens is nearly transparent at its meniscus, so its outermost few pixels
-//! barely move anything and the escape reads as one or two pixels instead of
-//! six. What isolates it exactly is comparing two selections of the *same*
-//! scene: the stripes, the pill and its shadow are identical in both, so
-//! every column that changes between them is the bubble and nothing else.
-//!
-//! The backdrop is striped because glass over a flat color is close to
-//! invisible — there is nothing for it to refract.
-//!
-//! Run with:
-//! ```bash
-//! cargo run --package desktop-app --example robot_liquid_tab_bar_pill_containment --features desktop,robot-app
-//! ```
-
 use std::{
     path::{Path, PathBuf},
     process::ExitCode,
@@ -47,39 +14,18 @@ use cranpose::{
 
 const WINDOW_WIDTH: u32 = 880;
 const WINDOW_HEIGHT: u32 = 260;
-/// Well past the 80dp at which a 1.10 rest factor overhangs a 4dp margin. A
-/// caller may ask for exactly this: `LiquidTabBarSpec::new` bounds nothing
-/// from above, and a tablet-width bar is an ordinary thing to want.
-///
-/// The width is chosen so the defect is unmistakable rather than marginal.
-/// The bar insets its own strip by one margin a side, so cells come out at
-/// (200·4 − 8)/4 = 198dp, and a 1.10 rest factor overhangs those by 9.9dp
-/// against a 4dp margin — 5.9dp of glass outside the pill, far clear of the
-/// antialiasing budget below. At 120dp cells the same defect is only 1.9dp
-/// and would hide inside that budget.
 const WIDE_TAB: f32 = 200.0;
 const TAB_COUNT: usize = 4;
 const BAR_HEIGHT: f32 = 64.0;
 const BAR_TOP: f32 = 90.0;
 const BAR_WIDTH: f32 = WIDE_TAB * TAB_COUNT as f32;
 const BAR_LEFT: f32 = (WINDOW_WIDTH as f32 - BAR_WIDTH) * 0.5;
-/// Stripe pitch: fine enough that a bubble covers several, wide enough to
-/// survive the screenshot's own filtering.
 const STRIPE: f32 = 8.0;
 const DARK_STRIPE: Color = Color(0.05, 0.05, 0.08, 1.0);
 const LIGHT_STRIPE: Color = Color(0.92, 0.94, 0.99, 1.0);
-/// A channel moving by more than this between two renders of the same scene
-/// is the bubble, not the renderer's dithering. Both shots are settled and
-/// differ only in where the bubble rests, so there is no other source of
-/// change to talk down.
 const CHANGE_FLOOR: i32 = 6;
-/// A column counts as changed only when this many of its pixels moved, which
-/// rejects a stray antialiased sample without rejecting a real lens edge.
 const CHANGED_PIXELS_PER_COLUMN: usize = 3;
-/// Antialiasing may put the bubble's own edge one pixel past the box it is
-/// allowed to fill. Six pixels of glass outside it is the defect.
 const ESCAPE_BUDGET_PX: f32 = 2.0;
-/// A settled glide. The lens spring converges well inside this.
 const SETTLE_MS: u64 = 900;
 
 static FAILED: AtomicBool = AtomicBool::new(false);
@@ -107,9 +53,6 @@ fn main() -> ExitCode {
             std::thread::sleep(Duration::from_millis(700));
             settle(&robot, SETTLE_MS);
 
-            // The bar opens on cell 1, an interior cell: the bubble cannot
-            // overhang the strip from there, and everything except the bubble
-            // is identical between this and any other selection.
             let interior = robot.screenshot().expect("interior selection shot");
             save(&interior, &shot_dir, "0-interior-cell.png");
             let scale = interior.width as f32 / interior.logical_width;
@@ -149,8 +92,6 @@ fn main() -> ExitCode {
                     );
                 }
 
-                // Back to the interior cell, so each end is measured from the
-                // same settled starting point.
                 click_cell(&robot, 1);
                 settle(&robot, SETTLE_MS);
             }
@@ -169,8 +110,6 @@ fn main() -> ExitCode {
                     }),
                     BoxSpec::default(),
                     move || {
-                        // Vertical stripes: this test can only see the bubble
-                        // where the bubble moves something.
                         let stripes = (WINDOW_WIDTH as f32 / STRIPE).ceil() as usize;
                         for index in 0..stripes {
                             let color = if index % 2 == 0 {
@@ -234,9 +173,6 @@ fn click_cell(robot: &cranpose::Robot, cell: usize) {
     robot.click(x, y).expect("click a tab cell");
 }
 
-/// The first and last screen column that differs between two settled shots of
-/// the same scene — which, when the only thing that moved is the selection, is
-/// exactly the span the bubble occupies in one of them.
 fn changed_span(before: &RobotScreenshot, after: &RobotScreenshot) -> Option<(u32, u32)> {
     let width = before.width.min(after.width);
     let height = before.height.min(after.height);

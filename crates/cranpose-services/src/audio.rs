@@ -215,7 +215,6 @@ impl PlaybackParams {
     /// Computed on the caller's thread so the audio callback only multiplies.
     pub fn gains(self) -> (f32, f32) {
         let params = self.sanitized();
-        // pan -1..1 maps to 0..PI/2, so cos/sin sweep one full constant-power arc.
         let angle = (params.pan + 1.0) * std::f32::consts::FRAC_PI_4;
         (params.volume * angle.cos(), params.volume * angle.sin())
     }
@@ -756,9 +755,6 @@ impl SoundBank {
                     bus: spec.bus,
                 }),
                 Err(error) => {
-                    // A missing cue must not take the rest of the bank with it:
-                    // the entry keeps its slot with `SoundId::NONE` so every
-                    // later index still lines up with the app's cue enum.
                     entries.push(SoundBankEntry {
                         name: spec.name,
                         id: SoundId::NONE,
@@ -917,8 +913,6 @@ pub fn rememberSoundBank(specs: &[SoundSpec<'_>]) -> SoundBank {
     })
 }
 
-/// A cheap fingerprint of a spec list: its length plus an FNV-1a hash of the
-/// cue names, so a changed cue set reloads without hashing megabytes of PCM.
 fn sound_bank_key(specs: &[SoundSpec<'_>]) -> (usize, u64) {
     let mut hash = 0xcbf2_9ce4_8422_2325u64;
     for spec in specs {
@@ -941,7 +935,6 @@ mod tests {
     use super::*;
     use crate::run_test_composition;
 
-    /// A minimal single-frame mono WAVE stream.
     fn tiny_wav() -> Vec<u8> {
         let data = 0i16.to_le_bytes();
         let mut out = Vec::new();
@@ -1067,7 +1060,6 @@ mod tests {
         let second = player.load(&tiny_wav()).expect("no-op load succeeds");
         assert_ne!(id, second);
 
-        // None of these do anything, and none of them panic.
         player.play(id, PlaybackParams::new());
         let voice = player.play_loop(id, PlaybackParams::new());
         assert!(voice.is_valid());

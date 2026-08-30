@@ -1,8 +1,3 @@
-//! A continuous slider: capsule track with a filled portion and a round
-//! draggable thumb. Touching the thumb lifts it into a magnifying glass
-//! lens (the reference "seek" thumb liquifies under the finger and rides
-//! the drag); releasing lets the lens decay back into the white thumb.
-
 use std::{cell::Cell, rc::Rc};
 
 use cranpose_animation::{animateFloatAsState, spring};
@@ -23,10 +18,7 @@ use crate::{
 const TRACK_HEIGHT: f32 = 6.0;
 const THUMB_SIZE: f32 = 24.0;
 const SLIDER_HEIGHT: f32 = 32.0;
-/// The pressed lens circle riding the thumb (the reference seek thumb grows
-/// ~1.4× and magnifies the track through itself).
 const LENS_SIZE: f32 = 34.0;
-/// Glass node span beyond the lens shape (rim glow + bulge live here).
 const LENS_PAD: f32 = 10.0;
 
 fn slider_deformation(pose: crate::dynamics::LiquidPose) -> crate::material::GlassDeformation {
@@ -44,8 +36,6 @@ pub fn LiquidSlider(modifier: Modifier, value: f32, on_change: impl Fn(f32) + 's
     let pressed = remember(|| mutableStateOf(false)).with(|s| *s);
     let active_pointer = remember(|| Rc::new(Cell::new(Option::<PointerId>::None))).with(Rc::clone);
 
-    // Lens presence: fast on press, slow decay after release (the lens
-    // lingers briefly, like the toggle's).
     let lens_progress = animateFloatAsState(
         if pressed.get() { 1.0 } else { 0.0 },
         if pressed.get() {
@@ -71,8 +61,6 @@ pub fn LiquidSlider(modifier: Modifier, value: f32, on_change: impl Fn(f32) + 's
                 let thumb_x = lens_axis.value();
                 let liquid_pose = lens_axis.liquid_pose();
 
-                // Interactive surface spanning the whole control: tap or drag
-                // anywhere on the track.
                 let on_drag = Rc::clone(&on_change);
                 let active_pointer = Rc::clone(&active_pointer);
                 let gesture_axis = Rc::clone(&lens_axis);
@@ -144,7 +132,6 @@ pub fn LiquidSlider(modifier: Modifier, value: f32, on_change: impl Fn(f32) + 's
                     });
 
                 Box(surface, BoxSpec::default(), move || {
-                    // Track.
                     let track_fill = colors.fill;
                     let track = Modifier::empty()
                         .size(Size::new(width, TRACK_HEIGHT))
@@ -157,7 +144,6 @@ pub fn LiquidSlider(modifier: Modifier, value: f32, on_change: impl Fn(f32) + 's
                         });
                     Box(track, BoxSpec::default(), || {});
 
-                    // Filled portion up to the thumb.
                     let accent = colors.accent;
                     let filled_width = (thumb_x + THUMB_SIZE * 0.5).max(TRACK_HEIGHT);
                     let filled = Modifier::empty()
@@ -171,9 +157,6 @@ pub fn LiquidSlider(modifier: Modifier, value: f32, on_change: impl Fn(f32) + 's
                         });
                     Box(filled, BoxSpec::default(), || {});
 
-                    // Thumb: a plain white circle that dissolves into the
-                    // glass as soon as the lens is up (the lens takes over
-                    // the thumb's role while touched).
                     let lens_for_thumb = lens_progress;
                     let thumb = Modifier::empty()
                         .size(Size::new(THUMB_SIZE, THUMB_SIZE))
@@ -204,14 +187,9 @@ pub fn LiquidSlider(modifier: Modifier, value: f32, on_change: impl Fn(f32) + 's
                         });
                     Box(thumb, BoxSpec::default(), || {});
 
-                    // The interaction lens riding the thumb: the SDF circle
-                    // inflates from thumb-size to the lens with a viscous
-                    // bulge along the travel direction.
                     let node = LENS_SIZE + LENS_PAD * 2.0;
                     let lens_for_layer = lens_progress;
                     let lens = Modifier::empty()
-                        // required_size: the lens node exceeds the 32dp
-                        // control; the fixed-height host keeps layout put.
                         .required_size(Size::new(node, node))
                         .offset(0.0, (SLIDER_HEIGHT - node) * 0.5)
                         .graphics_layer(move || GraphicsLayer {
@@ -228,10 +206,6 @@ pub fn LiquidSlider(modifier: Modifier, value: f32, on_change: impl Fn(f32) + 's
                             move || {
                                 let grow = lens_for_layer.get().clamp(0.0, 1.2);
                                 let d = THUMB_SIZE + (LENS_SIZE - THUMB_SIZE) * grow;
-                                // Droplet law over the thumb ride
-                                // (crate::dynamics): drag speed stretches
-                                // the circle into a travel-axis oval,
-                                // braking swells its leading edge.
                                 let pose = liquid_pose;
                                 GlassDynamics {
                                     activity: Some(grow.clamp(0.0, 1.0)),

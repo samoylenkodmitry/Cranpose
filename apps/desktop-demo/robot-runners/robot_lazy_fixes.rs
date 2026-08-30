@@ -1,13 +1,3 @@
-//! Robot test to validate P1 lazy list fixes:
-//! 1. DEFAULT_ITEM_SIZE_ESTIMATE constant works (scroll estimation)
-//! 2. Dead code removal didn't break anything
-//! 3. Subcompose reuse stats tracking works
-//!
-//! Run with:
-//! ```bash
-//! cargo run --package desktop-app --example robot_lazy_fixes --features robot-app
-//! ```
-
 use std::time::Duration;
 
 use cranpose::AppLauncher;
@@ -49,7 +39,6 @@ fn main() {
                 items
             };
 
-            // Step 1: Navigate to LazyList tab
             println!("\n--- PHASE 1: Navigate to LazyList ---");
             if !click_button("Lazy List") {
                 println!("FATAL: Could not find 'Lazy List' tab");
@@ -58,7 +47,6 @@ fn main() {
             }
             std::thread::sleep(Duration::from_millis(300));
 
-            // Step 2: Verify initial rendering (DEFAULT_ITEM_SIZE_ESTIMATE working)
             println!("\n--- PHASE 2: Verify Initial Rendering ---");
             println!("  (validates DEFAULT_ITEM_SIZE_ESTIMATE constant)");
             let initial_items = find_visible_items();
@@ -80,13 +68,10 @@ fn main() {
                 initial_items.len()
             );
 
-            // Step 3: Test scroll estimation (uses cached sizes + constant)
             println!("\n--- PHASE 3: Test Scroll Behavior ---");
             println!("  (validates scroll estimation with DEFAULT_ITEM_SIZE_ESTIMATE)");
 
-            // Find an item to scroll from
             if let Some((_, y, _, _)) = find_text_in_semantics(&robot, "Item #3") {
-                // Scroll down using drag gesture
                 robot.drag(600.0, y, 600.0, y - 200.0).ok();
                 std::thread::sleep(Duration::from_millis(300));
 
@@ -99,7 +84,6 @@ fn main() {
                     std::process::exit(1);
                 }
 
-                // After scrolling down, first visible should be > 0
                 if !after_scroll.is_empty() && after_scroll[0] > 0 {
                     println!(
                         "  ✓ Scroll works (first visible: Item #{})",
@@ -112,14 +96,12 @@ fn main() {
                 println!("  ⚠ Could not find Item #3 to scroll from");
             }
 
-            // Step 4: Test with large item count (validates no dead code issues)
             println!("\n--- PHASE 4: Test Large Item Count ---");
             println!("  (validates dead code removal didn't break anything)");
 
             if click_button("Set usize::MAX") {
                 std::thread::sleep(Duration::from_millis(500));
 
-                // App should still be responsive
                 if cranpose_testing::find_text_by_prefix_in_semantics(
                     &robot,
                     "Virtualized list with",
@@ -136,7 +118,6 @@ fn main() {
                 println!("  ⚠ 'Set usize::MAX' button not found, skipping");
             }
 
-            // Step 5: Jump to middle (validates scroll estimation at scale)
             println!("\n--- PHASE 5: Jump to Middle ---");
             println!("  (validates NearestRangeState + scroll estimation)");
 
@@ -151,10 +132,8 @@ fn main() {
                     println!("  ⚠ Jump took {:?} (may be slow)", jump_time);
                 }
 
-                // Verify we're near the middle
                 let middle_items = find_visible_items();
                 if middle_items.is_empty() {
-                    // Look for large indices
                     let mut found_large = false;
                     for check in [
                         9223372036854775807_usize,
@@ -176,7 +155,6 @@ fn main() {
                 println!("  ⚠ 'Jump to Middle' button not found, skipping");
             }
 
-            // Summary
             println!("\n=== SUMMARY ===");
             println!("✓ DEFAULT_ITEM_SIZE_ESTIMATE constant: Working");
             println!("✓ Dead code removal: No regressions");

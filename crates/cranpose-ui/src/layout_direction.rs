@@ -103,15 +103,11 @@ mod tests {
                 Rc::clone(&after),
             );
             let mut render = move || {
-                // Nothing provided: the interface reads the default way.
                 outer.set(layout_direction());
                 ProvideLayoutDirection(LayoutDirection::Rtl, || {
                     inside.set(layout_direction());
-                    // A screen can pin a direction back the other way without
-                    // reversing what surrounds it.
                     ProvideLayoutDirection(LayoutDirection::Ltr, || nested.set(layout_direction()));
                 });
-                // The provision is scoped to the content, not to what follows.
                 after.set(layout_direction());
             };
             composition.render(key, &mut render).expect("render");
@@ -129,9 +125,6 @@ mod tests {
 
         use cranpose_core::{Composition, MemoryApplier, location_key};
 
-        // Two calls that returned different locals would each carry their own
-        // value, and a provision made through one would be invisible to the
-        // other -- which is what a lazily-created local gets wrong.
         let mut composition = Composition::new(MemoryApplier::new());
         let seen = Rc::new(Cell::new(LayoutDirection::Ltr));
         let recorder = Rc::clone(&seen);

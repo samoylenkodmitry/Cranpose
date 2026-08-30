@@ -1,15 +1,3 @@
-//! Robot test for LazyList performance validation
-//!
-//! Validates that:
-//! 1. Compose count is bounded (not linear with scroll distance)
-//! 2. Effects count matches compose count
-//! 3. Slot composition reuse works (items in reuse pool keep effects alive)
-//!
-//! Run with:
-//! ```bash
-//! cargo run --package desktop-app --example robot_lazy_perf_validation --features robot-app
-//! ```
-
 use std::time::Duration;
 
 use cranpose::AppLauncher;
@@ -32,7 +20,6 @@ fn main() {
                     &robot,
                     "Lifecycle totals: C=",
                 ) {
-                    // Parse "Lifecycle totals: C=X E=Y D=Z"
                     let parts: Vec<&str> = text.split_whitespace().collect();
                     if parts.len() >= 4 {
                         let c = parts[2].strip_prefix("C=")?.parse().ok()?;
@@ -44,7 +31,6 @@ fn main() {
                 None
             };
 
-            // Step 1: Initial state
             println!("\n--- Step 1: Initial state ---");
             let initial_stats = read_stats();
             if let Some((c, e, d)) = initial_stats {
@@ -54,16 +40,13 @@ fn main() {
             }
             let initial_composes = initial_stats.map(|(c, _, _)| c).unwrap_or(0);
 
-            // Step 2: Scroll down using drag gestures
             println!("\n--- Step 2: Rapid scroll down ---");
 
-            // Find an item to drag on
             if let Some((x, y, w, h)) = find_text_in_semantics(&robot, "Item #0") {
                 let center_x = x + w / 2.0;
                 let center_y = y + h / 2.0;
 
                 let start = std::time::Instant::now();
-                // Do multiple drags to simulate extended scrolling
                 for _ in 0..5 {
                     robot
                         .drag(center_x, center_y + 50.0, center_x, center_y - 150.0)
@@ -83,7 +66,6 @@ fn main() {
                     c, e, d
                 );
 
-                // Key assertion: composes should be bounded, not grow linearly
                 let new_composes = c - initial_composes;
                 println!("  New composes during scroll: {}", new_composes);
 
@@ -95,7 +77,6 @@ fn main() {
                 assert_eq!(c, e, "Composes should equal effects");
             }
 
-            // Step 3: Scroll back up
             println!("\n--- Step 3: Scroll back up ---");
             if let Some((x, y, w, h)) = find_text_in_semantics(&robot, "Item #") {
                 let center_x = x + w / 2.0;
@@ -117,12 +98,8 @@ fn main() {
                     c, e, d
                 );
 
-                // Composes should equal effects
                 assert_eq!(c, e, "Composes should equal effects");
 
-                // Note: With slot composition reuse, items in the reuse pool keep their
-                // composition state (effects stay alive). Disposes only happen when items
-                // exceed the pool capacity. Short scrolls may not trigger any disposes.
                 println!("\n=== PERFORMANCE ASSERTIONS PASSED ===");
                 println!("  Total composes: {}", c);
                 println!("  Total effects: {}", e);

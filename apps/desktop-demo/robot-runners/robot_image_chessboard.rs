@@ -1,8 +1,3 @@
-//! Robot test validating image rendering and screenshot pixel assertions.
-//!
-//! Run with:
-//! `cargo run --package desktop-app --example robot_image_chessboard --features robot-app`
-
 use std::time::Duration;
 
 use cranpose::AppLauncher;

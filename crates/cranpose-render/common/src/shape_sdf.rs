@@ -46,8 +46,6 @@ pub fn sdf_stroked_rounded_rect(
 
     let mut outer_radii = [radii[0] + hw, radii[1] + hw, radii[2] + hw, radii[3] + hw];
     if join != StrokeJoin::Round {
-        // Miter/bevel keep a square corner square; an already-rounded corner
-        // has no join and keeps the true parallel offset.
         for (out, r) in outer_radii.iter_mut().zip(radii.iter()) {
             if *r < 0.0001 {
                 *out = 0.0;
@@ -88,12 +86,9 @@ pub fn sdf_arc_band(p: Point, arc: &ArcGeometry) -> f32 {
     let (sm, cm) = mid.sin_cos();
     let dx = p.x - arc.center.x;
     let dy = p.y - arc.center.y;
-    // Rotate into the frame the analytic arc SDF expects: band straddling +Y.
     let qx = (-sm * dx + cm * dy).abs();
     let qy = cm * dx + sm * dy;
 
-    // sin() of a half sweep in [0, PI] is non-negative in exact math; the max()
-    // pins a full turn to exactly (0, -1) so a closed ring has no seam.
     let sc = (half_sweep.sin().max(0.0), half_sweep.cos());
 
     let mut dist = if sc.1 * qx > sc.0 * qy {
@@ -102,7 +97,6 @@ pub fn sdf_arc_band(p: Point, arc: &ArcGeometry) -> f32 {
         ((qx * qx + qy * qy).sqrt() - ra).abs() - rb
     };
 
-    // Distance to the radial boundary plane, positive outside the wedge.
     let plane = sc.1 * qx - sc.0 * qy;
     match arc.cap {
         StrokeCap::Butt => dist = dist.max(plane),
@@ -172,8 +166,6 @@ mod tests {
 
     #[test]
     fn rounded_rect_sdf_matches_known_distances() {
-        // A 20x20 box, no radii: the center is 10 inside, a point 5 to the
-        // right of the right edge is 5 outside.
         let d_center = sdf_rounded_rect(Point::ZERO, (10.0, 10.0), [0.0; 4]);
         assert!((d_center + 10.0).abs() < 1e-4, "{d_center}");
         let d_outside = sdf_rounded_rect(Point::new(15.0, 0.0), (10.0, 10.0), [0.0; 4]);
@@ -182,7 +174,6 @@ mod tests {
 
     #[test]
     fn stroked_rect_covers_only_the_band_around_the_edge() {
-        // Geometry is 20x20 (half 10), stroke width 4 => inflated half 12.
         let half = (12.0, 12.0);
         let on_edge = sdf_stroked_rounded_rect(
             Point::new(10.0, 0.0),
@@ -207,8 +198,6 @@ mod tests {
 
     #[test]
     fn miter_join_keeps_a_square_corner_round_join_does_not() {
-        // Geometry 20x20 (half 10), width 4 (hw 2) => inflated half 12.
-        // The outer miter corner is exactly (12, 12).
         let corner = Point::new(11.9, 11.9);
         let miter =
             sdf_stroked_rounded_rect(corner, (12.0, 12.0), [0.0; 4], 2.0, StrokeJoin::Miter);
@@ -219,8 +208,6 @@ mod tests {
         assert!(miter < 0.0, "miter fills the corner point: {miter}");
         assert!(round > 0.0, "round cuts the corner off: {round}");
         assert!(bevel > 0.0, "bevel cuts the corner off: {bevel}");
-        // The bevel is the chord between the two arc endpoints, so along the
-        // diagonal it sits *inside* the round join's arc and cuts more.
         assert!(
             bevel > round,
             "the bevel chord must cut deeper than the round arc: \
@@ -231,7 +218,6 @@ mod tests {
     #[test]
     fn full_ring_has_no_seam_at_the_wrap_point() {
         let ring = arc(8.0, 12.0, 0.0, TAU, StrokeCap::Butt);
-        // Sample all the way round, including exactly at the wrap angle.
         for step in 0..64 {
             let angle = step as f32 / 64.0 * TAU;
             let (sin, cos) = angle.sin_cos();
@@ -246,18 +232,14 @@ mod tests {
 
     #[test]
     fn butt_caps_cut_the_band_at_the_radial_ends() {
-        // 0 -> 90 degrees, band 8..12.
         let band = arc(8.0, 12.0, 0.0, FRAC_PI_2, StrokeCap::Butt);
-        // Just inside the sweep at 45 degrees, on the centerline.
         let inside = Point::new(10.0 * INV_SQRT2, 10.0 * INV_SQRT2);
         assert!(sdf_arc_band(inside, &band) < 0.0);
-        // Just past the end cap (angle slightly > 90 degrees) must be empty.
         let past_end = Point::new(-1.0, 10.0);
         assert!(
             sdf_arc_band(past_end, &band) > 0.0,
             "butt cap must not bulge past the radial end"
         );
-        // Just before the start cap likewise.
         let before_start = Point::new(10.0, -1.0);
         assert!(sdf_arc_band(before_start, &band) > 0.0);
     }
@@ -266,7 +248,6 @@ mod tests {
     fn round_caps_bulge_past_the_radial_ends_and_square_caps_project() {
         let round = arc(8.0, 12.0, 0.0, FRAC_PI_2, StrokeCap::Round);
         let square = arc(8.0, 12.0, 0.0, FRAC_PI_2, StrokeCap::Square);
-        // 1 unit before the start angle, on the centerline (radius 10).
         let before_start = Point::new(10.0, -1.0);
         assert!(
             sdf_arc_band(before_start, &round) < 0.0,
@@ -276,7 +257,6 @@ mod tests {
             sdf_arc_band(before_start, &square) < 0.0,
             "square cap must cover the projection past the end"
         );
-        // 3 units before the start is past both caps (rb = 2).
         let far = Point::new(10.0, -3.0);
         assert!(sdf_arc_band(far, &round) > 0.0);
         assert!(sdf_arc_band(far, &square) > 0.0);
@@ -284,18 +264,13 @@ mod tests {
 
     #[test]
     fn annular_sector_has_flat_radial_edges() {
-        // The defining property: at the start angle the boundary is a straight
-        // radial line, so points at the same angle but different radii are all
-        // exactly on the edge.
         let sector = arc(6.0, 12.0, 0.0, PI, StrokeCap::Butt);
         for radius in [6.5, 8.0, 10.0, 11.5] {
-            // Just inside the sweep.
             let p = Point::new(radius * (0.01f32).cos(), radius * (0.01f32).sin());
             assert!(
                 sdf_arc_band(p, &sector) < 0.0,
                 "radius {radius} just inside the sweep must be covered"
             );
-            // Just outside the sweep (negative angle).
             let q = Point::new(radius * (-0.2f32).cos(), radius * (-0.2f32).sin());
             assert!(
                 sdf_arc_band(q, &sector) > 0.0,
@@ -337,7 +312,6 @@ mod tests {
 
     #[test]
     fn stroked_rect_coverage_uses_the_inflated_bounds() {
-        // Geometry (10,10)-(30,30) stroked at width 4 => bounds (8,8)-(32,32).
         let bounds = Rect {
             x: 8.0,
             y: 8.0,

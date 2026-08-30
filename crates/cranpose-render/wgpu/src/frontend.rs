@@ -1,14 +1,3 @@
-//! Producer frontend of the renderer (pipeline steps 6a/6b).
-//!
-//! [`RendererFrontend`] owns everything the producer stage needs to lower a
-//! frame into a [`FramePacket`]: the retained scene graph, the text layout
-//! state, the producer-side lowering memos, and the direct-scene recycling
-//! pool. [`WgpuRenderer`](crate::WgpuRenderer) drives it as
-//! `build_frame_packet -> GpuRenderer::render(packet) -> apply_returns`.
-//! Every frame lowers entirely before the present backend runs: direct
-//! roots, non-direct root surfaces, and the dev overlay all become packet
-//! payloads here — the present backend never touches the retained graph.
-
 use std::rc::Weak;
 
 use cranpose_core::collections::map::HashMap;
@@ -42,9 +31,6 @@ use crate::{
     surface_requirements::SurfaceRequirement,
 };
 
-/// Direct scenes kept for recycling: one per packet that can be in flight
-/// (depth-one publishing allows one rendering and one waiting) plus the one
-/// being filled. Beyond that the buffers are dropped rather than hoarded.
 const MAX_RETAINED_DIRECT_SCENES: usize = 3;
 
 #[derive(Clone, Debug)]
@@ -54,34 +40,17 @@ pub(crate) struct DevOverlayCache {
     pub(crate) viewport_height_bits: u32,
 }
 
-/// The producer half of [`WgpuRenderer`](crate::WgpuRenderer): scene inputs,
-/// text layout, and the direct-root lowering stage that publishes
-/// [`FramePacket`]s for the present backend to consume.
 pub(crate) struct RendererFrontend {
     pub(crate) scene: Scene,
     pub(crate) text_state: TextSystemState,
     pub(crate) text_fonts: SoftwareTextFontSet,
     pub(crate) app_context: Option<Weak<cranpose_ui::AppContext>>,
-    /// Root scale factor for text rendering (use for density scaling)
     pub(crate) root_scale: f32,
     pub(crate) dev_overlay_cache: Option<DevOverlayCache>,
     pub(crate) dev_overlay_graph: Option<RenderGraph>,
-    /// Last frame's direct-root scene, kept so its (potentially multi-MB)
-    /// draw vectors are reused instead of reallocated every frame. Returned
-    /// by the present stage through [`RenderReturns`].
-    /// Recycled direct-root scenes. Depth-one publishing keeps up to two
-    /// packets in flight (one rendering, one waiting), so ONE spare scene
-    /// would leave the producer allocating a fresh multi-megabyte
-    /// `CompositorScene` on every other frame — the mmap churn the
-    /// recycling exists to prevent. The pool holds one scene per in-flight
-    /// packet plus the one being filled.
     pub(crate) retained_direct_scenes: Vec<CompositorScene>,
     pub(crate) direct_scene_capacity: SceneCapacityHint,
-    /// Monotone id stamped on each [`FramePacket`] this producer publishes.
     pub(crate) frame_sequence: u64,
-    /// The renderer's only lowering-memo pair (the present backend lowers
-    /// nothing since step 6b), cleared per frame — the memos key on node
-    /// addresses and must never survive into a frame with another graph.
     pub(crate) layer_surface_rect_cache: HashMap<usize, Rect>,
     pub(crate) layer_surface_requirements_cache: HashMap<usize, LayerSurfaceRequirements>,
     pub(crate) overlay_surface_requirements_cache: HashMap<usize, LayerSurfaceRequirements>,
@@ -108,11 +77,6 @@ impl RendererFrontend {
         }
     }
 
-    /// Lower the current scene graph into a [`FramePacket`] using the
-    /// frontend's configured root scale.
-    ///
-    /// `None` means there is no graph at all; every frame with a graph
-    /// becomes a packet (direct or root-surface).
     pub(crate) fn build_frame_packet(
         &mut self,
         width: u32,
@@ -131,9 +95,6 @@ impl RendererFrontend {
         )
     }
 
-    /// [`build_frame_packet`](Self::build_frame_packet) with an explicit
-    /// root scale — the screenshot capture path lowers at a caller-chosen
-    /// scale instead of the configured one.
     pub(crate) fn build_frame_packet_with_scale(
         &mut self,
         width: u32,
@@ -144,9 +105,6 @@ impl RendererFrontend {
         surface_epoch: u64,
     ) -> Option<FramePacket> {
         self.scene.graph.as_ref()?;
-        // Lowering must run under the app context: text layout branches on
-        // the `has_current_app_context` thread-local (see
-        // `TextLayoutResolver for TextSystemState`).
         let app_context = self.app_context.as_ref().and_then(Weak::upgrade);
         let packet = if let Some(app_context) = app_context {
             app_context.enter(|| {
@@ -169,11 +127,6 @@ impl RendererFrontend {
                 surface_epoch,
             )
         };
-        // Per-frame memo hygiene, mirroring the present backend's
-        // end-of-render clears: the rect memo keys on node addresses, so it
-        // must never survive into a frame with a different graph. The
-        // requirements memo keys on layout node ids and is dropped per node
-        // by the scene patch instead.
         self.layer_surface_rect_cache.clear();
         self.overlay_surface_requirements_cache.clear();
         if self.overlay_surface_requirements_cache.capacity() > RETAINED_LAYER_REQUIREMENTS_CAPACITY
@@ -215,10 +168,6 @@ impl RendererFrontend {
                 None,
                 None,
                 TranslationRenderContext::default(),
-                // The direct-root path renders each collected child with the
-                // default request context (see `render_root_direct`), so the
-                // child sources must be collected under it as-is rather than
-                // the surface-derived context.
                 TranslationRenderContext::default(),
                 &mut self.layer_surface_rect_cache,
                 &mut self.layer_surface_requirements_cache,
@@ -230,10 +179,6 @@ impl RendererFrontend {
             {
                 Some(collected)
             } else {
-                // The collected scene will not render this frame, so any
-                // capture requests recorded against its shape indices are
-                // void; the replay state re-bootstraps on the next direct
-                // frame.
                 #[cfg(not(target_arch = "wasm32"))]
                 crate::shape_replay::SHAPE_REPLAY.with(|state| state.borrow_mut().retire_all());
                 if self.retained_direct_scenes.len() < MAX_RETAINED_DIRECT_SCENES {
@@ -244,11 +189,6 @@ impl RendererFrontend {
         } else {
             None
         };
-        // The producer's complete output for this frame, owned and Send.
-        // Built before the present backend runs so a later step can publish
-        // it to a present thread; consumed synchronously today. Building a
-        // direct packet closes the frame's replay window: the planner emits
-        // its plan into `replay` and stops accepting retained ops.
         let (root, replay) = match direct_root {
             Some(root) => {
                 #[cfg(not(target_arch = "wasm32"))]
@@ -262,14 +202,6 @@ impl RendererFrontend {
                 (PacketRoot::Direct(Box::new(root)), replay)
             }
             None => {
-                // A non-direct-eligible root and a rejected direct collect
-                // both used to render through the present backend's graph
-                // fallback; both now lower into a Surface packet here. A
-                // Surface frame never touches the planner: its pending
-                // queues simply wait for the next direct frame, as they
-                // always did, and the packet carries the empty default
-                // replay plan (generation 0), which the present store must
-                // not consume.
                 let surface = lower_root_surface_packet(
                     &graph.root,
                     &mut self.text_state,
@@ -288,10 +220,6 @@ impl RendererFrontend {
         };
         let after_root_collect = Instant::now();
         let overlay = if let Some(overlay_graph) = self.dev_overlay_graph.as_ref() {
-            // The dev overlay is a different graph: the rect memo keys on node
-            // addresses, so the root graph's entries must not leak into the
-            // overlay collect (mirrors the present backend's old per-path
-            // clears), and the overlay plans into a map of its own.
             self.layer_surface_rect_cache.clear();
             self.overlay_surface_requirements_cache.clear();
             Some(
@@ -332,15 +260,6 @@ impl RendererFrontend {
         Some(packet)
     }
 
-    /// Fold the present stage's [`RenderReturns`] back into producer state:
-    /// stash the rendered packet's scene buffers for recycling and apply the
-    /// replay ack to the planner. Returns the planner-drained confirmations
-    /// buffer (capacity intact) for the caller to hand back to the store.
-    ///
-    /// Applying the ack after render is equivalent to the store-side
-    /// application it replaces: both points sit after this frame's graph
-    /// build and before the next collect, which is where the bypass gate
-    /// and `feed_slots` are read.
     pub(crate) fn apply_returns(
         &mut self,
         returns: RenderReturns,
@@ -354,20 +273,13 @@ impl RendererFrontend {
             #[cfg(not(target_arch = "wasm32"))]
                 timings: _,
         } = returns;
-        if let Some(scene) = scene {
-            // The packet's scene buffers return to the producer pool — for
-            // a heavy animated frame they are megabytes of Vec. A cancelled
-            // packet returns its scene the same way as a presented one.
-            if self.retained_direct_scenes.len() < MAX_RETAINED_DIRECT_SCENES {
-                self.retained_direct_scenes.push(scene);
-            }
+        if let Some(scene) = scene
+            && self.retained_direct_scenes.len() < MAX_RETAINED_DIRECT_SCENES
+        {
+            self.retained_direct_scenes.push(scene);
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
-            // A cancelled packet's replay plan never reached the store:
-            // re-queue its releases (slot ids must not leak — the pool is
-            // finite), purge its unconfirmable awaiting entries, and
-            // recycle its buffers.
             if let Some(ops) = cancelled_replay {
                 crate::shape_replay::SHAPE_REPLAY
                     .with(|state| state.borrow_mut().reclaim_cancelled_ops(ops));
@@ -379,8 +291,6 @@ impl RendererFrontend {
         }
         #[cfg(target_arch = "wasm32")]
         {
-            // wasm has no retained replay path; a present stage there never
-            // produces an ack or a cancelled replay plan.
             let _ = ack;
             let _ = cancelled_replay;
             None
@@ -388,14 +298,6 @@ impl RendererFrontend {
     }
 }
 
-/// Lowers a non-direct root into a [`RootSurfacePacket`]: the producer-side
-/// equivalent of the present backend's old `render_root_layer_surface`
-/// prologue. The request context matches the old graph-fallback call exactly
-/// (`allow_runtime_cache=false`, `logical_rect_override=Some(viewport_rect)`,
-/// `activates_nested_capture=false`, default translation context), and the
-/// derivation mirrors its shadowing of the translation context BEFORE the
-/// collect; `target_scale` and the composite sample mode are recomputed
-/// present-side by `render_layer_surface` from the same snapshot.
 fn lower_root_surface_packet(
     root: &LayerNode,
     text_state: &mut TextSystemState,
@@ -405,10 +307,6 @@ fn lower_root_surface_packet(
     height: u32,
     root_scale: f32,
 ) -> RootSurfacePacket {
-    // The root layer's visible area is always the viewport — content
-    // outside the screen is invisible regardless of scroll offsets or
-    // inflated scene bounds.  Pass the viewport rect as an explicit
-    // surface rect to prevent offscreen inflation on constrained GPUs.
     let viewport_rect = Rect {
         x: 0.0,
         y: 0.0,

@@ -33,9 +33,7 @@ use std::{
 struct Ring<T> {
     slots: Box<[UnsafeCell<MaybeUninit<T>>]>,
     mask: usize,
-    /// Index of the next element to read. Written only by the consumer.
     head: AtomicUsize,
-    /// Index of the next slot to write. Written only by the producer.
     tail: AtomicUsize,
 }
 
@@ -53,9 +51,6 @@ unsafe impl<T: Send> Sync for Ring<T> {}
 
 impl<T> Drop for Ring<T> {
     fn drop(&mut self) {
-        // Both halves are gone by now, so the indices are stable and every slot
-        // in `[head, tail)` still holds an initialized value that must be
-        // dropped.
         let head = self.head.load(Ordering::Relaxed);
         let tail = self.tail.load(Ordering::Relaxed);
         let mut index = head;
@@ -136,8 +131,6 @@ impl<T> Consumer<T> {
             return None;
         }
         let slot = &ring.slots[head & ring.mask];
-        // Reading moves ownership out; the release store below is what lets the
-        // producer reuse the slot afterwards.
         // SAFETY: `head != tail` means the producer published this slot with a
         // release store that the acquire load above synchronizes with, so the
         // slot holds an initialized `T` that no one else reads.

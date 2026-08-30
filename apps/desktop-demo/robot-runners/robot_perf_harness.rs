@@ -1,11 +1,3 @@
-//! Robot performance harness for CPU profiling and memory growth validation.
-//!
-//! Run with:
-//! ```bash
-//! cargo run --package desktop-app --example robot_perf_harness --features robot-app
-//! CRANPOSE_PERF_SCENARIO=backdrop_blur cargo run --package desktop-app --example robot_perf_harness --features robot-app
-//! ```
-
 mod markdown_fixture_client;
 mod perf_robot_stats;
 
@@ -317,11 +309,6 @@ fn PerfScenarioItem(index: usize, scenario: PerfScenario) {
     }
 }
 
-/// The document-list shape a scanner app scrolls all day: an opaque
-/// elevated rounded card. Every visible card composites an ambient and a
-/// spot shadow from the shape-shadow cache, which a device profile put at
-/// twice the screen's own pixels per frame before the composites were
-/// banded to the caster's visible ring.
 #[composable]
 #[allow(non_snake_case)]
 fn ShadowedCardRow(index: usize) {
@@ -622,10 +609,6 @@ fn GlassRow(index: usize) {
         2 => Color(0.18, 0.32, 0.30, 0.55),
         _ => Color(0.32, 0.26, 0.20, 0.55),
     };
-    // Every row blurs what is behind it. That is the difference from
-    // `backdrop_blur`, where one overlay blurs once per frame: here the cost
-    // scales with the number of rows the viewport holds, which is what a real
-    // glass list does.
     Box(
         Modifier::empty()
             .fill_max_width()
@@ -666,8 +649,6 @@ fn GlassRow(index: usize) {
     );
 }
 
-/// A glass card that never stops moving, so the scenario measures animation
-/// alongside blur rather than a still frame that happens to contain both.
 #[composable]
 #[allow(non_snake_case)]
 fn AnimatedGlassOverlay() {

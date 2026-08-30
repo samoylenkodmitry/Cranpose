@@ -110,13 +110,10 @@ pub enum DemoTab {
     Shaders,
     ShaderRect,
     Liquid,
-    /// Fixed glass chrome over a scrolling lazy list (issue #500's dominant
-    /// scroll-cost topology).
     GlassFeed,
     MarkdownViewer,
     FilePicker,
     Rotary,
-    /// A round-watch Credits list: the demo's heaviest text page.
     Wear,
 }
 
@@ -451,9 +448,6 @@ fn TabBarHorizontal(
                     for tab in DEMO_TABS {
                         TabButton(tab, active_tab, 10.0);
                     }
-                    // Last in the strip: the tabs keep their positions, the
-                    // content below keeps its height, and nothing is drawn
-                    // over a tab that has to stay clickable.
                     source_view::SourceToggleButton(showing_source, Modifier::empty());
                 },
             );
@@ -564,10 +558,6 @@ fn TabContent(
     modifier: Modifier,
 ) {
     let active = active_tab.get();
-    // The source panel replaces the tab's content rather than sitting above it.
-    // A control that pushes every tab down costs each one a row of height for
-    // a button they are not using, and moves content the renderer's e2e suite
-    // measures against the window.
     cranpose_ui::Box(modifier.clip_to_bounds(), BoxSpec::default(), move || {
         if showing_source.get() {
             source_view::SourcePanel(active);
@@ -728,11 +718,6 @@ fn render_active_tab(active: DemoTab, startup: StartupSelection, winamp_tab_stat
     }
 }
 
-/// Demonstrates the framework-owned chooser launchers.
-///
-/// Every button is a composition-owned launcher: it presents the system chooser
-/// and receives its result through a callback, even when the host destroyed and
-/// recreated the composition while the chooser was in front.
 #[composable]
 fn file_picker_tab() {
     let status =
@@ -859,10 +844,8 @@ fn picker_button(label: &'static str, on_click: impl FnMut() + 'static) {
     );
 }
 
-/// Text Input Demo Tab - showcases BasicTextField functionality
 #[composable]
 fn text_input_example() {
-    // Create text field states using cranpose_core::remember
     let text_state1 =
         cranpose_core::remember(|| TextFieldState::new("Type here...")).with(|state| *state);
     let text_state2 = cranpose_core::remember(|| TextFieldState::new("")).with(|state| *state);
@@ -889,7 +872,6 @@ fn text_input_example() {
                 height: 24.0,
             });
 
-            // First text field with label
             Text(
                 "Basic Text Field:",
                 Modifier::empty().padding(4.0),
@@ -901,7 +883,6 @@ fn text_input_example() {
                 height: 8.0,
             });
 
-            // Text field with background styling
             BasicTextField(
                 text_state1,
                 Modifier::empty()
@@ -917,9 +898,7 @@ fn text_input_example() {
                 height: 16.0,
             });
 
-            // Show current text value - this now updates when version changes
             {
-                // Reading text() creates composition dependency - scope recomposes when text changes
                 let current_text = text_state1.text();
                 Text(
                     format!("Current value: \"{}\"", current_text),
@@ -936,7 +915,6 @@ fn text_input_example() {
                 height: 24.0,
             });
 
-            // Second text field
             Text(
                 "Empty Text Field:",
                 Modifier::empty().padding(4.0),
@@ -963,7 +941,6 @@ fn text_input_example() {
                 height: 24.0,
             });
 
-            // Buttons to manipulate text programmatically
             Text(
                 "Programmatic Actions:",
                 Modifier::empty().padding(4.0),
@@ -980,7 +957,6 @@ fn text_input_example() {
                 RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(8.0)),
                 {
                     move || {
-                        // Clear button
                         {
                             Button(
                                 Modifier::empty()
@@ -1006,7 +982,6 @@ fn text_input_example() {
                             );
                         }
 
-                        // Add text button
                         {
                             Button(
                                 Modifier::empty()
@@ -1024,7 +999,6 @@ fn text_input_example() {
                                         buffer.place_cursor_at_end();
                                         buffer.insert("!");
                                     });
-                                    // No version.set() needed - TextFieldState triggers recomposition
                                 },
                                 || {
                                     Text(
@@ -1036,7 +1010,6 @@ fn text_input_example() {
                             );
                         }
 
-                        // Copy to second field
                         {
                             Button(
                                 Modifier::empty()
@@ -1052,7 +1025,6 @@ fn text_input_example() {
                                 move || {
                                     let text = text_state1.text();
                                     text_state2.set_text(text);
-                                    // No version.set() needed - TextFieldState triggers recomposition
                                 },
                                 || {
                                     Text(
@@ -1067,12 +1039,6 @@ fn text_input_example() {
                 },
             );
 
-            // Touch-selection showcase: the full liquid-glass text chrome —
-            // double-tap a word to raise the finger handles and the glass
-            // edit menu, drag a handle to float the magnifier loupe (uniform
-            // 1.25x lens with the chromatic fold band), release to watch it
-            // plunge back. Multi-line with the recording's line pitch so the
-            // fold mirrors the next line like the reference.
             Text(
                 "Touch Selection (double-tap, then drag a handle):",
                 Modifier::empty().padding(4.0),
@@ -1103,8 +1069,6 @@ fn text_input_example() {
                         .rounded_corners(10.0),
                     BasicTextFieldOptions {
                         text_style: style,
-                        // The reference recording's pink accent: one color
-                        // drives the caret, both handles and the highlight.
                         cursor_color: Color(0.965, 0.208, 0.557, 1.0),
                         ..BasicTextFieldOptions::default()
                     },
@@ -1116,11 +1080,6 @@ fn text_input_example() {
                 height: 16.0,
             });
 
-            // Adaptive-on-light showcase: the SAME liquid-glass text chrome
-            // over a WHITE surface. Providing local_on_light_surface(true)
-            // flips the transparent glass's ink — the edit menu's labels,
-            // hairlines and chevron go dark so they stay readable over the
-            // light backdrop, and the field text is dark too.
             Text(
                 "On a light surface (double-tap — the glass ink flips dark):",
                 Modifier::empty().padding(4.0),
@@ -1722,7 +1681,6 @@ pub(crate) fn AsyncRuntimeEngine(
     let running = is_running.get();
     let reset_key = reset_signal.get();
 
-    // Handle reset via LaunchedEffect (only triggers on reset_key change)
     cranpose_core::LaunchedEffect!((reset_key,), move |_scope| {
         if last_reset.get() != reset_key {
             last_reset.set(reset_key);
@@ -1732,8 +1690,6 @@ pub(crate) fn AsyncRuntimeEngine(
         }
     });
 
-    // Per-frame progress tracking: computed inline during composition,
-    // not in a LaunchedEffect (which would re-launch every frame and leak).
     if running {
         let previous = last_progress.get();
         let delta = progress_value - previous;
@@ -1799,7 +1755,6 @@ fn counter_app() {
                 if token.is_cancelled() {
                     return String::new();
                 }
-                // Simulate background work with a delay on native
                 #[cfg(not(target_arch = "wasm32"))]
                 {
                     use std::thread;
@@ -2263,7 +2218,6 @@ fn modifier_showcase_tab() {
             .horizontal_arrangement(LinearArrangement::SpacedBy(12.0))
             .vertical_alignment(VerticalAlignment::Top),
         move || {
-            // Left panel - showcase selector
             Column(
                 Modifier::empty()
                     .width(180.0)
@@ -2335,7 +2289,6 @@ fn modifier_showcase_tab() {
                 },
             );
 
-            // Right panel - showcase content
             Column(
                 Modifier::empty()
                     .fill_max_width()
@@ -2377,7 +2330,6 @@ pub fn simple_card_showcase() {
             height: 16.0,
         });
 
-        // Card with border effect (outer box creates border)
         cranpose_ui::Box(
             Modifier::empty()
                 .padding(3.0)
@@ -2425,7 +2377,6 @@ pub fn simple_card_showcase() {
                                     height: 12.0,
                                 });
 
-                                // Action buttons row
                                 Row(Modifier::empty(), RowSpec::default(), || {
                                     Text(
                                         "Action 1",
@@ -2476,8 +2427,6 @@ pub fn positioned_boxes_showcase() {
             height: 16.0,
         });
 
-        // Wrap positioned boxes in a container with explicit size
-        // This allows overlapping boxes with offset positioning
         cranpose_ui::Box(
             Modifier::empty()
                 .size_points(360.0, 280.0)
@@ -2485,7 +2434,6 @@ pub fn positioned_boxes_showcase() {
                 .rounded_corners(8.0),
             BoxSpec::default(),
             || {
-                // Box A - Purple, top-left
                 cranpose_ui::Box(
                     Modifier::empty()
                         .size_points(100.0, 100.0)
@@ -2503,7 +2451,6 @@ pub fn positioned_boxes_showcase() {
                     },
                 );
 
-                // Box B - Green, bottom-right
                 cranpose_ui::Box(
                     Modifier::empty()
                         .size_points(100.0, 100.0)
@@ -2521,7 +2468,6 @@ pub fn positioned_boxes_showcase() {
                     },
                 );
 
-                // Box C - Orange, center-top (smaller)
                 cranpose_ui::Box(
                     Modifier::empty()
                         .size_points(80.0, 60.0)
@@ -2535,7 +2481,6 @@ pub fn positioned_boxes_showcase() {
                     },
                 );
 
-                // Box D - Blue, center-left (larger)
                 cranpose_ui::Box(
                     Modifier::empty()
                         .size_points(120.0, 80.0)
@@ -2574,20 +2519,17 @@ pub fn item_list_showcase() {
             height: 16.0,
         });
 
-        // List with alternating colors and borders
         Column(
             Modifier::empty().padding(16.0),
             ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(8.0)),
             || {
                 for i in 0..5 {
-                    // Alternate colors: even = blue-ish, odd = purple-ish
                     let (bg_color, border_color) = if i % 2 == 0 {
                         (Color(0.12, 0.16, 0.28, 0.8), Color(0.3, 0.5, 0.8, 0.9))
                     } else {
                         (Color(0.18, 0.12, 0.28, 0.8), Color(0.5, 0.3, 0.8, 0.9))
                     };
 
-                    // Border wrapper
                     cranpose_ui::Box(
                         Modifier::empty()
                             .padding(2.0)
@@ -2622,13 +2564,12 @@ pub fn item_list_showcase() {
                                         height: 0.0,
                                     });
 
-                                    // Status indicator
                                     let status_color = if i % 3 == 0 {
-                                        Color(0.2, 0.8, 0.3, 0.9) // Green
+                                        Color(0.2, 0.8, 0.3, 0.9)
                                     } else if i % 3 == 1 {
-                                        Color(0.9, 0.7, 0.2, 0.9) // Yellow
+                                        Color(0.9, 0.7, 0.2, 0.9)
                                     } else {
-                                        Color(0.8, 0.3, 0.2, 0.9) // Red
+                                        Color(0.8, 0.3, 0.2, 0.9)
                                     };
 
                                     cranpose_ui::Box(
@@ -2677,8 +2618,6 @@ pub fn complex_chain_showcase() {
             height: 12.0,
         });
 
-        // Nested backgrounds showcase - creates visible colored borders
-        // Red outer layer
         cranpose_ui::Box(
             Modifier::empty()
                 .padding(8.0)
@@ -2686,7 +2625,6 @@ pub fn complex_chain_showcase() {
                 .rounded_corners(16.0),
             BoxSpec::default(),
             || {
-                // Green middle layer
                 cranpose_ui::Box(
                     Modifier::empty()
                         .padding(6.0)
@@ -2694,7 +2632,6 @@ pub fn complex_chain_showcase() {
                         .rounded_corners(12.0),
                     BoxSpec::default(),
                     || {
-                        // Blue inner layer
                         cranpose_ui::Box(
                             Modifier::empty()
                                 .padding(12.0)
@@ -2726,7 +2663,6 @@ pub fn complex_chain_showcase() {
             height: 12.0,
         });
 
-        // Complex modifier chain with offset and sizing - Orange outer, Purple inner
         cranpose_ui::Box(
             Modifier::empty()
                 .offset(20.0, 0.0)
@@ -2774,7 +2710,6 @@ pub fn dynamic_modifiers_showcase() {
         let x = (current_frame as f32 * 10.0) % 200.0;
         let y = 50.0;
 
-        // Wrap moving box in a container with explicit size to prevent overflow
         cranpose_ui::Box(
             Modifier::empty()
                 .size_points(250.0, 150.0)

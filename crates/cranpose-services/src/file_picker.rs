@@ -135,22 +135,11 @@ impl SaveDocumentRequest {
     }
 }
 
-/// A chooser result the host recovered after the composition that requested it
-/// was destroyed.
-///
-/// Android can destroy and recreate the activity — and with it the native app —
-/// while the system chooser is in front. The platform backend records the
-/// granted selection and the framework's launchers redeliver it. This type is
-/// the framework's own transport; applications never construct or drain it.
 #[doc(hidden)]
 pub enum RecoveredPick {
-    /// A single recovered file.
     File(ContentHandle),
-    /// Recovered files from a multi-selection.
     Files(Vec<ContentHandle>),
-    /// A recovered folder grant.
     Folder(ContentFolderRef),
-    /// A recovered persistent writable-folder grant, as its durable handle.
     WritableFolder(String),
 }
 
@@ -203,9 +192,6 @@ pub trait FilePicker {
         Box::pin(async { Err(FilePickerError::UnsupportedPlatform) })
     }
 
-    /// Hands back a selection the host recovered after the requesting
-    /// composition was destroyed. Framework-internal; the launchers call it.
-    /// Backends that never lose a result keep the default.
     #[doc(hidden)]
     fn take_recovered_pick(&self) -> Option<RecoveredPick> {
         None
@@ -237,8 +223,6 @@ fn registered_platform_file_picker() -> Option<FilePickerRef> {
     PLATFORM_FILE_PICKER.with(|cell| cell.borrow().clone())
 }
 
-/// The chooser installed by [`ProvideFilePicker`]: a registered platform
-/// chooser if present, otherwise the built-in backend for this target.
 struct PlatformFilePicker;
 
 impl FilePicker for PlatformFilePicker {

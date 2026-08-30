@@ -16,8 +16,6 @@ use cranpose::SemanticElement;
 
 use crate::robot_assertions::{Bounds, SemanticElementLike};
 
-// Implement SemanticElementLike for cranpose::SemanticElement
-// This allows using the generic assertion helpers from robot_assertions
 impl SemanticElementLike for SemanticElement {
     fn text(&self) -> Option<&str> {
         self.text.as_deref()

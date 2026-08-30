@@ -1,16 +1,3 @@
-//! Every Liquid widget, composed.
-//!
-//! A widget library's unit tests can only reach the arithmetic behind a
-//! component — a spec's clamping, a lens's geometry — and those are already
-//! covered where they live. What they cannot reach is whether the component
-//! composes at all: a `#[composable]` that panics on a missing local, reads a
-//! theme that was never provided, or remembers state under a key it shares with
-//! a sibling fails only when something actually runs it.
-//!
-//! So each test here runs one. `run_test_composition` builds an in-memory
-//! composition, renders the content once, and hands back the root; a widget that
-//! cannot be composed never reaches the assertion.
-
 use std::{cell::Cell, rc::Rc};
 
 use cranpose_foundation::text::TextFieldState;
@@ -18,11 +5,6 @@ use cranpose_liquid::prelude::*;
 use cranpose_ui::{Modifier, run_test_composition, widgets::popup::PopupHost};
 use cranpose_ui_graphics::Color;
 
-/// Runs `content` inside a Liquid theme.
-///
-/// Nothing is asserted about the tree: content that only reads the theme or
-/// remembers a value emits no layout node, and demanding one of it would be
-/// asserting the harness rather than the library.
 fn in_theme(content: impl FnMut() + 'static) {
     let mut content = content;
     run_test_composition(move || {
@@ -30,7 +12,6 @@ fn in_theme(content: impl FnMut() + 'static) {
     });
 }
 
-/// Composes `content` inside a Liquid theme and asserts it produced a tree.
 fn themed(content: impl FnMut() + 'static) {
     let mut content = content;
     let composition = run_test_composition(move || {
@@ -42,11 +23,6 @@ fn themed(content: impl FnMut() + 'static) {
     );
 }
 
-/// Composes `content` inside a Liquid theme and a popup host, and asserts the
-/// tree measures. `LiquidMenu` and `LiquidDropdownMenu` place their expanded
-/// surface through `cranpose_ui`'s `Popup`, which registers into the nearest
-/// host rather than composing inline — without one the registration is inert
-/// and the menu's own body never runs.
 fn composed_in_theme_and_popup_host(content: impl Fn() + 'static) {
     let content = Rc::new(content);
     let mut composition = run_test_composition(move || {
@@ -357,8 +333,6 @@ fn the_theme_answers_colours_and_typography_inside_composition() {
             !typography.body.span_style.font_size.is_unspecified(),
             "the body style has no size"
         );
-        // A scheme has to distinguish its surface from what sits on it, or
-        // every label the library draws is invisible.
         assert_ne!(
             colors.label, colors.surface,
             "the scheme cannot tell content from surface"
@@ -392,11 +366,6 @@ fn a_button_spec_carries_the_glass_it_is_given() {
         "with_glass did not record the material"
     );
 }
-
-// The rest of the Liquid widget surface `widget_composition.rs` did not yet
-// reach: the full `GlassButton` (only its `GlassButtonLabel` sub-piece was
-// composed above), the plain `Card`/`Surface` containers, the two menu
-// entry points, the search field family, and the accessory-less `LiquidTabBar`.
 
 #[test]
 fn a_glass_button_composes_its_content() {

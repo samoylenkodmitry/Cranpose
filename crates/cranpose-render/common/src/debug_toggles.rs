@@ -9,9 +9,6 @@ fn overrides() -> &'static Mutex<BTreeMap<&'static str, OsString>> {
     OVERRIDES.get_or_init(|| Mutex::new(BTreeMap::new()))
 }
 
-/// The value of a debug toggle: a test override if one is set, else the
-/// process environment. Toggles are read where they act, every time, so a
-/// parity comparison can flip them mid-process.
 #[doc(hidden)]
 pub fn debug_toggle(name: &'static str) -> Option<String> {
     let map = overrides().lock().unwrap_or_else(PoisonError::into_inner);
@@ -22,9 +19,6 @@ pub fn debug_toggle(name: &'static str) -> Option<String> {
     std::env::var(name).ok()
 }
 
-/// As [`debug_toggle`], for settings whose values are paths: overrides and
-/// the environment fallback keep their platform encoding instead of
-/// demanding UTF-8.
 #[doc(hidden)]
 pub fn debug_toggle_os(name: &'static str) -> Option<OsString> {
     let map = overrides().lock().unwrap_or_else(PoisonError::into_inner);
@@ -35,15 +29,11 @@ pub fn debug_toggle_os(name: &'static str) -> Option<OsString> {
     std::env::var_os(name)
 }
 
-/// Test-side control of a debug toggle without mutating the process
-/// environment; `None` clears the override.
 #[doc(hidden)]
 pub fn set_debug_toggle(name: &'static str, value: Option<&str>) {
     set_debug_toggle_os(name, value.map(OsStr::new));
 }
 
-/// As [`set_debug_toggle`], for path-valued settings whose bytes must
-/// survive in their platform encoding.
 #[doc(hidden)]
 pub fn set_debug_toggle_os(name: &'static str, value: Option<&OsStr>) {
     let mut map = overrides().lock().unwrap_or_else(PoisonError::into_inner);

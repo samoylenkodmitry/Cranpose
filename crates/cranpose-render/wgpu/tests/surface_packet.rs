@@ -1,9 +1,3 @@
-//! Present-side contract of pipeline step 6b: non-direct roots arrive as
-//! producer-lowered Surface packets. The backend renders them from the
-//! packet source, honors the raster cache (dropping the unused source on a
-//! hit), never feeds their default replay plans to the store, and renders
-//! the producer-lowered dev overlay.
-
 mod support;
 
 use cranpose_core::NodeId;
@@ -66,8 +60,6 @@ fn rect_primitive(rect: Rect, color: Color) -> RenderNode {
     })
 }
 
-/// A root the direct gate rejects (root shadow), forcing the Surface packet
-/// path, with a bright rect the frame must show.
 fn shadowed_root_graph(cache_policy: CachePolicy) -> RenderGraph {
     let bounds = Rect {
         x: 0.0,
@@ -221,8 +213,6 @@ fn dev_overlay_packet_renders_over_both_root_kinds() {
         height: FRAME_HEIGHT as f32,
     };
 
-    // Direct root without overlay, then with: the producer-lowered overlay
-    // must change the frame.
     let direct_graph = || {
         RenderGraph::new(test_layer(
             Some(4_200),
@@ -260,7 +250,6 @@ fn dev_overlay_packet_renders_over_both_root_kinds() {
         "the packet-carried dev overlay must draw over a direct root"
     );
 
-    // The overlay must also ride Surface packets.
     renderer.scene_mut().graph = Some(shadowed_root_graph(CachePolicy::None));
     renderer.draw_dev_overlay("FPS 60.0", viewport);
     renderer

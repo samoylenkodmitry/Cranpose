@@ -8,7 +8,6 @@ pub mod animation;
 pub mod color;
 pub mod decay_spec;
 
-// Re-export animation system
 pub use animation::*;
 pub use color::animateColorAsState;
 pub use decay_spec::{

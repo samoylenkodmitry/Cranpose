@@ -38,9 +38,6 @@ pub struct ScrollState {
 
 pub(crate) struct ScrollStateInner {
     max_value: RefCell<f32>,
-    /// How much of the content the last measure pass put on screen. Needed by
-    /// anything that reports the scroll position — a scrollbar's thumb is the
-    /// share of the content visible, which `max_value` alone cannot say.
     viewport_extent: RefCell<f32>,
     invalidate_callbacks: RefCell<HashMap<u64, Rc<dyn Fn()>>>,
     next_invalidate_callback_id: Cell<u64>,
@@ -98,18 +95,8 @@ impl ScrollMetrics {
 /// half-faded.
 pub type ScrollSettlePolicy = Rc<dyn Fn(f32, f32) -> f32>;
 
-/// `UIScrollView`'s rubber-band constant. Matches the published WebKit/UIKit
-/// value (0.55) and was independently reproduced by least-squares fit
-/// against a drag-past-the-top-edge trace recorded on the iOS 26.5 Simulator
-/// (fit c=0.5499, residual <=0.18pt) — see `ios_fling_measurement.rs`.
 const RUBBER_BAND_COEFFICIENT: f32 = 0.55;
 
-/// Maps a raw (unresisted) pull `x` past the edge to the on-screen overscroll
-/// offset via `UIScrollView`'s rubber-band curve, `f(x) = x*d*c/(d+c*x)`,
-/// where `d` is the scrollable viewport's main-axis extent and `c` is
-/// [`RUBBER_BAND_COEFFICIENT`]. This asymptotically approaches `d` as `x`
-/// grows rather than hard-clamping, matching the measured curve exactly
-/// (unlike a linear-resistance-then-clamp model).
 fn rubber_band(raw: f32, dimension: f32) -> f32 {
     if !dimension.is_finite() || dimension <= 0.0 {
         return raw;
@@ -119,12 +106,6 @@ fn rubber_band(raw: f32, dimension: f32) -> f32 {
     (x * dimension * c / (dimension + c * x)).copysign(raw)
 }
 
-/// Inverse of [`rubber_band`]: recovers the raw pull that produced a given
-/// on-screen `visible` offset. Used to keep the raw accumulator consistent
-/// whenever something other than [`OverscrollEffect::apply_drag_delta`]
-/// writes the visible offset directly (the settle/bounce-back animation), so
-/// a drag resuming right after an interrupted settle composes smoothly
-/// instead of jumping.
 fn rubber_band_inverse(visible: f32, dimension: f32) -> f32 {
     if !dimension.is_finite() || dimension <= 0.0 {
         return visible;
@@ -140,13 +121,8 @@ pub(crate) struct OverscrollEffect {
 }
 
 struct OverscrollEffectInner {
-    /// Cumulative raw (unresisted) pull past the edge; the single source of
-    /// truth `visible` is derived from via [`rubber_band`].
     raw: Cell<f32>,
-    /// What's actually rendered as the overscroll translation.
     visible: Cell<f32>,
-    /// The scrollable viewport's main-axis extent, i.e. `d` in the
-    /// rubber-band formula.
     dimension: Cell<f32>,
     invalidate_callbacks: RefCell<HashMap<u64, Rc<dyn Fn()>>>,
     next_callback_id: Cell<u64>,
@@ -280,8 +256,6 @@ impl OverscrollEffect {
 }
 
 impl PartialEq for ScrollState {
-    /// Two handles are equal when they share the same underlying state
-    /// (identity, not value — composable-skip semantics).
     fn eq(&self, other: &Self) -> bool {
         self.inner == other.inner
     }
@@ -359,7 +333,6 @@ impl ScrollState {
         let actual_delta = new_value - current;
 
         if actual_delta.abs() > 0.001 {
-            // Use MutableState::set which triggers snapshot observers for reactive updates
             self.value.set(new_value);
 
             self.invalidate();
@@ -395,12 +368,10 @@ impl ScrollState {
         }
     }
 
-    /// Sets the maximum scroll value (internal use by ScrollNode).
     pub(crate) fn set_max_value(&self, max: f32) {
         *self.inner().max_value.borrow_mut() = max;
     }
 
-    /// Records the measured viewport extent (internal use by ScrollNode).
     pub(crate) fn set_viewport_extent(&self, extent: f32) {
         *self.inner().viewport_extent.borrow_mut() = extent;
     }
@@ -415,7 +386,6 @@ impl ScrollState {
         self.invalidate();
     }
 
-    /// Adds an invalidation callback and returns its ID
     pub(crate) fn add_invalidate_callback(&self, callback: Box<dyn Fn()>) -> u64 {
         let inner = self.inner();
         let id = inner.next_invalidate_callback_id.get();
@@ -431,7 +401,6 @@ impl ScrollState {
         id
     }
 
-    /// Removes an invalidation callback by ID
     pub(crate) fn remove_invalidate_callback(&self, id: u64) {
         self.inner().invalidate_callbacks.borrow_mut().remove(&id);
     }
@@ -469,9 +438,6 @@ pub(crate) enum ScrollMotionContextKey {
         is_vertical: bool,
         reverse_scrolling: bool,
     },
-    /// A control dragged directly rather than a scrolling container. It has no
-    /// edge to overscroll, but it shares the motion context so the renderer
-    /// sees the same "a gesture is in flight" signal it does for a scroll.
     Draggable {
         state_identity: usize,
         is_vertical: bool,
@@ -670,7 +636,6 @@ impl std::fmt::Debug for ScrollElement {
 
 impl PartialEq for ScrollElement {
     fn eq(&self, other: &Self) -> bool {
-        // ScrollStates are equal if they point to the same underlying state
         self.state == other.state
             && self.is_vertical == other.is_vertical
             && self.reverse_scrolling == other.reverse_scrolling
@@ -691,7 +656,6 @@ impl ModifierNodeElement for ScrollElement {
     type Node = ScrollNode;
 
     fn create(&self) -> Self::Node {
-        // println!("ScrollElement::create");
         ScrollNode::new(
             self.state,
             self.overscroll.clone(),
@@ -735,10 +699,8 @@ pub struct ScrollNode {
     is_vertical: bool,
     reverse_scrolling: bool,
     node_state: NodeState,
-    /// ID of the invalidation callback registered with ScrollState
     invalidation_callback_id: Option<u64>,
     overscroll_callback_id: Option<u64>,
-    /// We capture the NodeId when attached to ensure correct invalidation scope
     node_id: Option<NodeId>,
 }
 
@@ -775,15 +737,11 @@ impl DelegatableNode for ScrollNode {
 
 impl ModifierNode for ScrollNode {
     fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
-        // Set up the invalidation callback to trigger layout when scroll state changes.
-        // We capture the node_id directly from the context, avoiding any global registry.
-
         let node_id = context.node_id();
         self.node_id = node_id;
 
         if let Some(node_id) = node_id {
             let callback_id = self.state.add_invalidate_callback(Box::new(move || {
-                // Schedule scoped layout repass for this node
                 crate::schedule_layout_repass(node_id);
             }));
             self.invalidation_callback_id = Some(callback_id);
@@ -797,12 +755,10 @@ impl ModifierNode for ScrollNode {
             );
         }
 
-        // Initial invalidation
         context.invalidate(cranpose_foundation::InvalidationKind::Layout);
     }
 
     fn on_detach(&mut self) {
-        // Remove invalidation callback
         if let Some(id) = self.invalidation_callback_id.take() {
             self.state.remove_invalidate_callback(id);
         }
@@ -827,7 +783,6 @@ impl LayoutModifierNode for ScrollNode {
         measurable: &dyn Measurable,
         constraints: Constraints,
     ) -> LayoutModifierMeasureResult {
-        // Step 1: Give child infinite space in scroll direction
         let scroll_constraints = if self.is_vertical {
             Constraints {
                 min_height: 0.0,
@@ -842,22 +797,17 @@ impl LayoutModifierNode for ScrollNode {
             }
         };
 
-        // Step 2: Measure child
         let placeable = measurable.measure(scroll_constraints);
 
-        // Step 3: Calculate viewport size (constrained size)
         let width = placeable.width().min(constraints.max_width);
         let height = placeable.height().min(constraints.max_height);
 
-        // Step 4: Calculate max scroll
         let max_scroll = if self.is_vertical {
             (placeable.height() - height).max(0.0)
         } else {
             (placeable.width() - width).max(0.0)
         };
 
-        // Step 5: Update state with max scroll value
-        // Only update if the viewport is constrained (not infinite probe)
         if (self.is_vertical && constraints.max_height.is_finite())
             || (!self.is_vertical && constraints.max_width.is_finite())
         {
@@ -868,8 +818,6 @@ impl LayoutModifierNode for ScrollNode {
                 .set_dimension(if self.is_vertical { height } else { width });
         }
 
-        // Step 6: Read scroll value and calculate offset
-        // IMPORTANT: Use value_non_reactive() during measure to avoid triggering recomposition
         let scroll = self.state.value_non_reactive().clamp(0.0, max_scroll);
 
         let abs_scroll = if self.reverse_scrolling {
@@ -885,9 +833,6 @@ impl LayoutModifierNode for ScrollNode {
             (abs_scroll, 0.0)
         };
 
-        // Step 7: Return result with viewport size and scroll offset as placement_offset
-        // This makes the scroll offset part of the layout modifier's placement, which will be
-        // correctly applied to children by the layout system
         LayoutModifierMeasureResult::new(Size { width, height }, x_offset, y_offset)
     }
 

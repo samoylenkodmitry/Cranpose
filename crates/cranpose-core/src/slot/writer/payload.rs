@@ -13,9 +13,6 @@ impl SlotWriteSession<'_> {
             .debug_assert_no_pending_payload_location_refreshes("payload location flush");
     }
 
-    /// Thin monomorphic shim: the payload machinery below works on a
-    /// [`PayloadInit`] so it is compiled once instead of once per remembered
-    /// value type.
     pub(crate) fn value_slot_with_kind<T: 'static>(
         &mut self,
         kind: PayloadKind,
@@ -30,8 +27,6 @@ impl SlotWriteSession<'_> {
         self.value_slot_with_kind_dyn(kind, &mut init)
     }
 
-    /// `inline(never)`: keep one compiled copy of the payload machinery
-    /// instead of re-inlining it into every monomorphic shim under fat LTO.
     #[inline(never)]
     fn value_slot_with_kind_dyn(
         &mut self,
@@ -160,8 +155,6 @@ impl SlotWriteSession<'_> {
         init: impl FnOnce() -> T,
     ) -> Owned<T> {
         let slot = self.value_slot_with_kind(kind, source, || Owned::new(init()));
-        // The current payload anchor is activated before the coalesced range
-        // refresh is flushed, so remember can read the value it just requested.
         #[cfg(any(test, debug_assertions))]
         debug_assert!(
             self.table

@@ -159,16 +159,8 @@ pub fn dispatch_ui_event<T>(block: impl FnOnce() -> T) -> Option<T> {
     run_in_mutable_snapshot(block).ok()
 }
 
-// ─── Event Handler Context Tracking ─────────────────────────────────────────
-//
-// These thread-locals track whether code is running in an event handler context
-// and whether it's properly wrapped in run_in_mutable_snapshot. This allows
-// debug-mode warnings when state is modified without proper snapshot handling.
-
 thread_local! {
-    /// Tracks if we're in a UI event handler context (keyboard, mouse, etc.)
     pub(crate) static IN_EVENT_HANDLER: Cell<bool> = const { Cell::new(false) };
-    /// Tracks if we're in a properly-applied mutable snapshot
     pub(crate) static IN_APPLIED_SNAPSHOT: Cell<bool> = const { Cell::new(false) };
 }
 
@@ -412,7 +404,6 @@ pub struct AnchorId {
 }
 
 impl AnchorId {
-    /// Invalid anchor that represents no anchor.
     pub(crate) const INVALID: AnchorId = AnchorId {
         id: 0,
         generation: 0,
@@ -443,10 +434,6 @@ impl LocalKey {
         Self(Rc::new(()))
     }
 
-    /// A slot source unique among live locals — the identity allocation every
-    /// clone shares — so entries for two same-typed locals never adopt each
-    /// other when a neighboring provider leaves. Allocation-backed rather
-    /// than counted: creating a local depends on nothing global.
     pub(crate) fn entry_source(&self) -> Key {
         avalanche_location_key(Rc::as_ptr(&self.0) as usize as u64)
     }
@@ -727,14 +714,7 @@ impl RecomposeScope {
         *self.inner.recompose.borrow_mut() = Some(RecomposeCallback::Static(callback));
     }
 
-    /// Returns true if a callback was found and executed, false if no callback was registered.
     fn run_recompose(&self, composer: &Composer) -> bool {
-        // Take the callback for the duration of the run (it may re-enter
-        // `set_recompose` on this scope), but RE-ARM it afterwards if the
-        // run didn't install a fresh one: a skipped body leaves the slot
-        // empty, and a scope whose callback is lost can only recompose
-        // again through ancestor promotion — which swallows invalidations
-        // when the ancestor skips the (arg-equal) group.
         let callback = self.inner.recompose.borrow_mut().take();
         if let Some(callback) = callback {
             let callback = match callback {
@@ -870,9 +850,6 @@ impl RecomposeScope {
         self.inner.pending_recompose.set(true);
     }
 
-    /// Ask for another recomposition of this scope as soon as the current
-    /// one finishes: `mark_recomposed` re-invalidates pending scopes instead
-    /// of letting the invalid flag drop.
     pub(crate) fn request_pending_recompose(&self) {
         self.inner.pending_recompose.set(true);
     }
@@ -1125,8 +1102,6 @@ where
     K: PartialEq + 'static,
     F: FnOnce(DisposableEffectScope) -> DisposableEffectResult + 'static,
 {
-    // Create a group using the caller's location to ensure each DisposableEffect
-    // gets its own slot table entry, even in conditional branches
     with_current_composer(|composer| {
         composer.with_group(group_key, |composer| {
             let key = effect_key::EffectKey::new(keys);
@@ -1188,10 +1163,6 @@ pub fn push_parent(id: NodeId) {
 pub fn pop_parent() {
     with_current_composer(|composer| composer.pop_parent());
 }
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Public slot storage helper types
-// ═══════════════════════════════════════════════════════════════════════════
 
 pub trait Node: Any {
     fn mount(&mut self) {}
@@ -1416,17 +1387,12 @@ pub fn bubble_semantics_dirty_in_composer<N: Node + 'static>(node_id: NodeId) {
     bubble_semantics_dirty_composer::<N>(node_id);
 }
 
-/// Internal implementation for applier-based bubbling.
 fn bubble_layout_dirty_applier(applier: &mut dyn Applier, mut node_id: NodeId) {
-    // First, mark the starting node dirty (critical!)
-    // This ensures root gets marked even if it has no parent
     if let Ok(node) = applier.get_mut(node_id) {
         node.mark_needs_layout();
     }
 
-    // Then bubble up to ancestors
     loop {
-        // Get parent of current node
         let parent_id = match applier.get_mut(node_id) {
             Ok(node) => node.parent(),
             Err(_) => None,
@@ -1434,7 +1400,6 @@ fn bubble_layout_dirty_applier(applier: &mut dyn Applier, mut node_id: NodeId) {
 
         match parent_id {
             Some(pid) => {
-                // Mark parent as needing layout
                 if let Ok(parent) = applier.get_mut(pid) {
                     let parent_already_dirty = parent.needs_layout();
                     if !parent_already_dirty {
@@ -1445,21 +1410,17 @@ fn bubble_layout_dirty_applier(applier: &mut dyn Applier, mut node_id: NodeId) {
                     break;
                 }
             }
-            None => break, // No parent, stop
+            None => break,
         }
     }
 }
 
-/// Internal implementation for applier-based bubbling of measure dirtiness.
 fn bubble_measure_dirty_applier(applier: &mut dyn Applier, mut node_id: NodeId) {
-    // First, mark the starting node as needing measure
     if let Ok(node) = applier.get_mut(node_id) {
         node.mark_needs_measure();
     }
 
-    // Then bubble up to ancestors
     loop {
-        // Get parent of current node
         let parent_id = match applier.get_mut(node_id) {
             Ok(node) => node.parent(),
             Err(_) => None,
@@ -1467,7 +1428,6 @@ fn bubble_measure_dirty_applier(applier: &mut dyn Applier, mut node_id: NodeId) 
 
         match parent_id {
             Some(pid) => {
-                // Mark parent as needing measure
                 if let Ok(parent) = applier.get_mut(pid) {
                     if !parent.needs_measure() {
                         parent.mark_needs_measure();
@@ -1478,13 +1438,12 @@ fn bubble_measure_dirty_applier(applier: &mut dyn Applier, mut node_id: NodeId) 
                 }
             }
             None => {
-                break; // No parent, stop
+                break;
             }
         }
     }
 }
 
-/// Internal implementation for applier-based bubbling of semantics dirtiness.
 fn bubble_semantics_dirty_applier(applier: &mut dyn Applier, mut node_id: NodeId) {
     if let Ok(node) = applier.get_mut(node_id) {
         node.mark_needs_semantics();
@@ -1512,20 +1471,14 @@ fn bubble_semantics_dirty_applier(applier: &mut dyn Applier, mut node_id: NodeId
     }
 }
 
-/// Internal implementation for composer-based bubbling.
-/// This uses with_node_mut and works during composition with a concrete node type.
-/// The node type N must implement Node (which includes mark_needs_layout, parent, etc.).
 fn bubble_layout_dirty_composer<N: Node + 'static>(mut node_id: NodeId) {
-    // Mark the starting node dirty
     let _ = with_node_mut(node_id, |node: &mut N| {
         node.mark_needs_layout();
     });
 
-    // Then bubble up to ancestors
     while let Ok(Some(pid)) = with_node_mut(node_id, |node: &mut N| node.parent()) {
         let parent_id = pid;
 
-        // Mark parent as needing layout
         let advanced = with_node_mut(parent_id, |node: &mut N| {
             if !node.needs_layout() {
                 node.mark_needs_layout();
@@ -1542,9 +1495,7 @@ fn bubble_layout_dirty_composer<N: Node + 'static>(mut node_id: NodeId) {
     }
 }
 
-/// Internal implementation for composer-based bubbling of semantics dirtiness.
 fn bubble_semantics_dirty_composer<N: Node + 'static>(mut node_id: NodeId) {
-    // Mark the starting node semantics-dirty.
     let _ = with_node_mut(node_id, |node: &mut N| {
         node.mark_needs_semantics();
     });
@@ -1921,24 +1872,9 @@ impl Command {
                 child_id,
                 bubble,
             } => {
-                // Bubbling marks every ancestor up to the root as needing
-                // measure, and re-measuring a tree that did not change is the
-                // most expensive way to do nothing. An insert that changed the
-                // child list has something to invalidate — and so does a
-                // re-attach of a child that carries pending measure or layout
-                // dirt: an unchanged list says nothing about unchanged
-                // geometry, and the attach-time bubble is the only road that
-                // child's dirt has to the root. Swallowing it strands a grown
-                // subtree at its old geometry until an unrelated pass runs.
                 if insert_child_with_reparenting(applier, parent_id, child_id) {
                     bubble.apply(applier, parent_id);
                 } else if let Ok(child) = applier.get_mut(child_id) {
-                    // Semantics stays out of this bubble: attach never bubbled
-                    // it (LAYOUT_AND_MEASURE carries semantics: false), and
-                    // production nodes START semantics-dirty until a semantics
-                    // tree is built — with semantics off, "is the child
-                    // semantics-dirty" is always yes, which would turn every
-                    // clean re-attach on a steady scroll into an ancestor walk.
                     let dirty_bubble = DirtyBubble {
                         layout: child.needs_layout(),
                         measure: child.needs_measure(),
@@ -2566,9 +2502,6 @@ fn insert_child_with_reparenting(
         }
     }
 
-    // Only record a structural change if the list actually gained the child.
-    // Re-attaching a child to the parent it already has is a no-op, and a
-    // structural change re-lowers the parent's whole subtree.
     let inserted = applier
         .get_mut(parent_id)
         .is_ok_and(|parent_node| parent_node.insert_child(child_id));
@@ -2605,11 +2538,6 @@ fn detach_child_from_parent(
     parent_id: NodeId,
     child_id: NodeId,
 ) -> Result<(), NodeError> {
-    // Ask the parent whether its list changed rather than inferring it from the
-    // child's parent pointer: a child reparented while still listed here must
-    // still count, or its layers stay in the render graph as a ghost. A repeat
-    // detach of an already-detached child removes nothing and must not count,
-    // or the parent is structurally dirty every frame for nothing.
     let removed = applier
         .get_mut(parent_id)
         .is_ok_and(|parent_node| parent_node.remove_child(child_id));
@@ -2854,17 +2782,11 @@ fn reconcile_children(
 #[derive(Default)]
 pub struct MemoryApplier {
     nodes: Vec<Option<Box<dyn Node>>>,
-    /// Stable node ID occupying each physical slot.
     physical_stable_ids: Vec<u32>,
     physical_warm_recycled_origins: Vec<bool>,
-    /// Physical storage location for each live stable node ID.
     stable_to_physical: HashMap<NodeId, usize>,
-    /// Generation counter per stable node ID.
     stable_generations: HashMap<NodeId, u32>,
-    /// Lowest free physical slots are reused first so the dense storage stays compact.
     free_ids: BinaryHeap<Reverse<usize>>,
-    /// Storage for high-ID nodes (like virtual nodes with IDs starting at 0xFFFFFFFF00000000)
-    /// that can't be stored in the Vec without causing capacity overflow.
     high_id_nodes: HashMap<NodeId, Box<dyn Node>>,
     high_id_warm_recycled_origins: HashMap<NodeId, bool>,
     high_id_generations: HashMap<NodeId, u32>,
@@ -2878,14 +2800,7 @@ pub struct MemoryApplier {
     warm_recycled_node_targets: HashMap<TypeId, usize>,
     fresh_recyclable_creations: HashMap<TypeId, usize>,
     recycled_node_prototypes: HashMap<TypeId, Box<dyn Node>>,
-    /// Parents whose child lists changed structurally since the last drain
-    /// (see [`Applier::record_structural_change`]).
     structural_change_parents: Vec<NodeId>,
-    /// Nodes inserted with a pre-assigned id ([`Applier::insert_with_id`]) —
-    /// subcompose slot wrappers. They never appear in the render graph, so a
-    /// structural change recorded against one is reported as its nearest
-    /// non-virtual ancestor (the node whose graph child set the change
-    /// actually altered).
     virtual_node_ids: HashSet<NodeId>,
 }
 
@@ -3059,8 +2974,6 @@ impl MemoryApplier {
 
     fn first_non_virtual_ancestor(&mut self, node_id: NodeId) -> Option<NodeId> {
         let mut current = node_id;
-        // Parent chains are tree-shaped; the guard only bounds a corrupted
-        // cyclic chain so the walk cannot spin forever.
         for _ in 0..100_000 {
             if !self.virtual_node_ids.contains(&current) {
                 return Some(current);
@@ -3075,8 +2988,6 @@ impl MemoryApplier {
 
     fn is_attached_to(&mut self, node_id: NodeId, root: NodeId) -> bool {
         let mut current = node_id;
-        // Parent chains are tree-shaped; the guard only bounds a corrupted
-        // cyclic chain so the walk cannot spin forever.
         for _ in 0..100_000 {
             if current == root {
                 return true;
@@ -3783,7 +3694,6 @@ impl Applier for MemoryApplier {
     }
 
     fn get_mut(&mut self, id: NodeId) -> Result<&mut dyn Node, NodeError> {
-        // Try Vec first (common case for normal nodes), then HashMap for virtual nodes.
         if let Some(physical_id) = self.resolve_node_index(id) {
             let slot = self.nodes[physical_id]
                 .as_deref_mut()
@@ -3938,9 +3848,6 @@ impl Applier for MemoryApplier {
             self.compact_idle_warm_pool(key);
         }
         self.prune_stable_generations();
-        // Compact the dense physical storage if it has grown very large relative
-        // to the live node count (e.g. after a spike of recyclable nodes that
-        // were all removed). This keeps warm_recycled_node_id_capacity bounded.
         self.compact();
     }
 }
@@ -4539,20 +4446,12 @@ pub mod test_scratch;
 #[cfg(any(test, feature = "test-helpers"))]
 pub use test_scratch::test_scratch_dir;
 
-/// Traces every structural change back to the operation that recorded it.
-///
-/// A structural change re-lowers the parent's whole subtree, so what matters is
-/// not how many are recorded but which operation keeps recording them: an
-/// aggregate count hides a single child cycling every frame, and the sequence
-/// makes it obvious.
 pub(crate) fn note_structural(reason: &str, parent_id: NodeId, child_id: NodeId) {
     if env_flag!("CRANPOSE_STRUCTURAL_DIAG") {
         eprintln!("[structural] {reason} parent={parent_id} child={child_id}");
     }
 }
 
-/// A move names indices rather than a child, so it gets its own line instead of
-/// a placeholder id that would read as a real node.
 pub(crate) fn note_structural_move(parent_id: NodeId, from_index: usize, to_index: usize) {
     if env_flag!("CRANPOSE_STRUCTURAL_DIAG") {
         eprintln!("[structural] move parent={parent_id} from={from_index} to={to_index}");

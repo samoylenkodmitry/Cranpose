@@ -2,7 +2,6 @@ use std::{cell::RefCell, rc::Rc};
 
 use crate::{Composer, ComposerCore};
 
-// Thread-local stack of Composer handles (safe, no raw pointers).
 thread_local! {
     static COMPOSER_STACK: RefCell<Vec<Rc<ComposerCore>>> = const { RefCell::new(Vec::new()) };
 }

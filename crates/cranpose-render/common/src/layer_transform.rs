@@ -14,10 +14,6 @@ pub fn layer_uniform_scale(layer: &GraphicsLayer) -> f32 {
     layer_scale_x(layer).min(layer_scale_y(layer))
 }
 
-/// True when the layer's affine part moves nothing: unit scale and zero
-/// translation. A plain draw canvas — the layer under every game scene —
-/// looks like this, and the per-primitive transform helpers below run once
-/// per recorded shape per frame, so the scan matters at scene scale.
 pub(crate) fn layer_affine_is_identity(layer: &GraphicsLayer) -> bool {
     layer.scale == 1.0
         && layer.scale_x == 1.0

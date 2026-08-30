@@ -1,5 +1,3 @@
-//! Android floating overlay window bridge.
-
 use std::{
     collections::VecDeque,
     sync::{Arc, Mutex, MutexGuard},

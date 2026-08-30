@@ -1,9 +1,3 @@
-//! External X11 contract for manual shader dragging.
-//!
-//! This runner does not install a Cranpose robot controller. It launches the
-//! normal desktop event loop, drives the visible X11 window with `xdotool`, and
-//! validates presented-frame telemetry during a held primary-pointer drag.
-
 mod external_x11_frame_telemetry;
 mod output_paths;
 mod perf_contract;

@@ -105,10 +105,6 @@ impl LockedRenderer {
 }
 
 pub fn headless_renderer() -> Result<LockedRenderer, String> {
-    // The segment-surface cache is default-ON since its watch win, and its
-    // in-footprint tolerance would leak into every byte-exact suite built on
-    // this helper. Pin it OFF at construction; suites that test the cache
-    // set "1" per arm after obtaining the renderer, which overrides this.
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_SEGMENT_SURFACE", Some("0"));
     let lock = lock_gpu_test();
     let mut renderer = create_headless_renderer()?;
@@ -140,16 +136,6 @@ pub fn headless_renderer_parts() -> Result<(MutexGuard<'static, ()>, WgpuRendere
     Ok((lock, renderer))
 }
 
-/// Re-initializes an already-initialized renderer's GPU on a fresh headless
-/// device — the same `init_gpu`-over-live-renderer replacement semantics as
-/// Android's surface recreation path (`renderer_needs_init`).
-/// [`headless_renderer_parts`], with `configure` run under the GPU-test lock
-/// before the renderer is constructed. This is the only safe window for
-/// flipping a global debug toggle that renderer construction reads: parallel
-/// tests build their renderers under the same lock, so a toggle set outside
-/// it leaks into whichever renderer happens to be constructing. The
-/// configured value is returned so a guard can outlive the renderer and
-/// restore the toggle on drop.
 pub fn headless_renderer_parts_configured<T>(
     configure: impl FnOnce() -> T,
 ) -> Result<(MutexGuard<'static, ()>, T, WgpuRenderer), String> {
@@ -188,15 +174,6 @@ pub fn reinit_gpu(renderer: &mut LockedRenderer) -> Result<(), String> {
     Ok(())
 }
 
-/// A headless renderer whose surface format is `Bgra8Unorm` rather than the
-/// shared harness's `Bgra8UnormSrgb`.
-///
-/// An `*UnormSrgb` target makes the GPU gamma-encode whatever the shader wrote
-/// on the way into the texture, so a readback is the encoding of the colour
-/// rather than the colour. That is fine for tests that count lit pixels and
-/// useless for a test that has to compare a composited channel against an exact
-/// value: the encode-then-quantise destroys the very level the comparison is
-/// about. This gives back the shader's own bytes.
 pub fn headless_renderer_parts_unencoded() -> Result<(MutexGuard<'static, ()>, WgpuRenderer), String>
 {
     let lock = lock_gpu_test();

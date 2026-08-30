@@ -1,15 +1,3 @@
-//! Display surface format policy shared by every platform shell.
-//!
-//! The framework's color pipeline is sRGB-native: `Color` values, gradient
-//! stops, text colors and runtime-shader uniforms are all authored and
-//! blended in sRGB space, and the fragment shaders write them through
-//! unconverted. The swapchain must therefore be a NON-sRGB view — an
-//! `*UnormSrgb` surface would treat those values as linear and gamma-encode
-//! them a second time, washing out every color on screen (a solid
-//! `(52, 199, 89)` fill would display as `(125, 229, 160)`).
-
-/// Picks the swapchain format for a display surface: the first non-sRGB
-/// 8-bit color format, falling back to the first reported format.
 pub(crate) fn select_display_surface_format(
     formats: &[wgpu::TextureFormat],
 ) -> Option<wgpu::TextureFormat> {

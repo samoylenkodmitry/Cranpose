@@ -230,13 +230,10 @@ mod tests {
         assets.add_root(&second);
         assert_eq!(assets.roots(), &[first.clone(), second.clone()]);
 
-        // An overlay root is how a product replaces a framework asset, so the
-        // one registered first has to win rather than the one found last.
         assert_eq!(
             assets.load_bytes("shared.txt").expect("shared").as_ref(),
             b"first"
         );
-        // And a file only the later root has is still reachable.
         assert_eq!(
             assets.load_bytes("only.txt").expect("only").as_ref(),
             b"only"

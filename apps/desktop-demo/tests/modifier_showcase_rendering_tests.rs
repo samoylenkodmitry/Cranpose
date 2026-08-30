@@ -1,12 +1,7 @@
-/// Integration tests that validate modifier showcases render correctly using dump_tree()
-/// These tests verify the actual rendering output, not just structure.
 use cranpose_core::MutableState;
 use cranpose_macros::composable;
 use cranpose_testing::ComposeTestRule;
 use cranpose_ui::*;
-
-// Import showcase composables from app
-// For testing purposes, we recreate them here to avoid module visibility issues
 
 #[composable]
 fn simple_card_showcase() {
@@ -181,13 +176,11 @@ fn test_simple_card_renders_correctly() {
     let tree = rule.dump_tree();
     println!("=== Simple Card Tree Structure ===\n{}", tree);
 
-    // Validate structure exists
     assert!(
         tree.contains("dyn cranpose_core::Node"),
         "Should contain Node"
     );
 
-    // Count nodes - should have consistent structure
     let root = rule.root_id();
     assert!(root.is_some(), "Should have root node");
 }
@@ -204,7 +197,6 @@ fn test_positioned_boxes_renders_correctly() {
     let tree = rule.dump_tree();
     println!("=== Positioned Boxes Tree Structure ===\n{}", tree);
 
-    // Validate structure
     assert!(
         tree.contains("dyn cranpose_core::Node"),
         "Should contain Node"
@@ -213,7 +205,6 @@ fn test_positioned_boxes_renders_correctly() {
     let initial_count = rule.applier_mut().len();
     println!("Total nodes in positioned boxes: {}", initial_count);
 
-    // Should have at least 7 nodes (Column, Text, Spacer, Box A with Text, Box B with Text)
     assert!(
         initial_count >= 7,
         "Should have at least 7 nodes, got {}",
@@ -237,7 +228,6 @@ fn test_dynamic_modifiers_recomposition_preserves_structure() {
     let count_frame0 = rule.applier_mut().len();
     println!("=== Frame 0 ===\nNodes: {}\n{}", count_frame0, tree_frame0);
 
-    // Advance to frame 5
     frame.set(5);
     rule.pump_until_idle()
         .expect("Should recompose for frame 5");
@@ -246,13 +236,11 @@ fn test_dynamic_modifiers_recomposition_preserves_structure() {
     let count_frame5 = rule.applier_mut().len();
     println!("=== Frame 5 ===\nNodes: {}\n{}", count_frame5, tree_frame5);
 
-    // Node count should be stable across frames
     assert_eq!(
         count_frame0, count_frame5,
         "Node count should remain stable across recomposition"
     );
 
-    // Advance to frame 10
     frame.set(10);
     rule.pump_until_idle()
         .expect("Should recompose for frame 10");
@@ -311,7 +299,6 @@ fn test_item_list_with_spacing() {
     let node_count = rule.applier_mut().len();
     println!("Total nodes: {}", node_count);
 
-    // Should have Column + 5 Rows + 5 Texts = at least 11 nodes
     assert!(
         node_count >= 11,
         "Should have at least 11 nodes for 5-item list, got {}",
@@ -347,7 +334,6 @@ fn test_complex_modifier_chain_ordering() {
     let tree = rule.dump_tree();
     println!("=== Complex Chain Tree Structure ===\n{}", tree);
 
-    // Should render successfully with nested Text
     let node_count = rule.applier_mut().len();
     assert!(node_count >= 2, "Should have Box + Text at minimum");
 }
@@ -420,7 +406,6 @@ fn test_long_list_performance_and_structure() {
         &tree[..tree.len().min(500)]
     );
 
-    // Should have Column + 50 Rows + 50 Texts = at least 101 nodes
     assert!(
         node_count >= 101,
         "Should have at least 101 nodes for 50-item list, got {}",
@@ -430,7 +415,6 @@ fn test_long_list_performance_and_structure() {
 
 #[test]
 fn test_modifier_showcase_recomposition_stability() {
-    // Test that changing between different showcases maintains stable node counts
     let mut rule = ComposeTestRule::new();
     let showcase_index = MutableState::with_runtime(0, rule.runtime_handle());
 
@@ -453,34 +437,29 @@ fn test_modifier_showcase_recomposition_stability() {
     let count0 = rule.applier_mut().len();
     println!("Showcase 0 (simple card): {} nodes", count0);
 
-    // Switch to positioned boxes
     showcase_index.set(1);
     rule.pump_until_idle()
         .expect("Should switch to positioned boxes");
     let count1 = rule.applier_mut().len();
     println!("Showcase 1 (positioned boxes): {} nodes", count1);
 
-    // Switch to dynamic modifiers
     showcase_index.set(2);
     rule.pump_until_idle()
         .expect("Should switch to dynamic modifiers");
     let count2 = rule.applier_mut().len();
     println!("Showcase 2 (dynamic modifiers): {} nodes", count2);
 
-    // Switch back to simple card
     showcase_index.set(0);
     rule.pump_until_idle()
         .expect("Should switch back to simple card");
     let count0_again = rule.applier_mut().len();
     println!("Showcase 0 again: {} nodes", count0_again);
 
-    // Node count should be stable when returning to the same showcase
     assert_eq!(
         count0, count0_again,
         "Node count should be stable when switching back to same showcase"
     );
 
-    // Rapid switching should not cause duplication
     for i in 0..10 {
         let idx = i % 3;
         showcase_index.set(idx);
@@ -489,7 +468,6 @@ fn test_modifier_showcase_recomposition_stability() {
 
         let current_count = rule.applier_mut().len();
 
-        // Each showcase should have a consistent node count
         let expected = match idx {
             0 => count0,
             1 => count1,

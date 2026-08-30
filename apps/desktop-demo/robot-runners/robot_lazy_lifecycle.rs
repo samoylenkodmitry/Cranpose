@@ -1,13 +1,3 @@
-//! Robot test for LazyList lifecycle tracking - validates item compose/reuse/dispose
-//!
-//! This test tracks lifecycle transitions to verify that items are properly composed
-//! and disposed when scrolling.
-//!
-//! Run with:
-//! ```bash
-//! cargo run --package desktop-app --example robot_lazy_lifecycle --features robot-app
-//! ```
-
 use std::time::Duration;
 
 use cranpose::{AppLauncher, LazyItems};
@@ -20,7 +10,6 @@ use cranpose_ui::{
     VerticalAlignment,
 };
 
-/// Lifecycle stats stored in compose state
 #[derive(Clone, Default, PartialEq)]
 struct LifecycleStats {
     total_composes: usize,
@@ -28,7 +17,6 @@ struct LifecycleStats {
     total_disposes: usize,
 }
 
-/// Stats display component - isolated so only this recomposes when stats change
 #[composable]
 fn stats_display(stats: MutableState<LifecycleStats>) {
     let current = stats.get();
@@ -45,7 +33,6 @@ fn stats_display(stats: MutableState<LifecycleStats>) {
     );
 }
 
-/// Lazy list component - NOT composable (LazyListState doesn't impl PartialEq)
 fn lifecycle_lazy_list(state: LazyListState, stats: MutableState<LifecycleStats>) {
     LazyColumn(
         Modifier::empty()
@@ -88,7 +75,6 @@ fn lifecycle_test_app() {
                 TextStyle::default(),
             );
 
-            // Stats display - isolated component, only this recomposes on stats change
             stats_display(stats);
 
             Text(
@@ -97,7 +83,6 @@ fn lifecycle_test_app() {
                 TextStyle::default(),
             );
 
-            // Lazy list - should not recompose when stats change
             lifecycle_lazy_list(state, stats);
         },
     );
@@ -106,7 +91,6 @@ fn lifecycle_test_app() {
 #[composable]
 fn lifecycle_item(index: usize, stats: MutableState<LifecycleStats>) {
     println!("  [COMPOSE] Item {} composition", index);
-    // Track FIRST composition - remember only runs initializer once per slot
     let item_cranpose_count: MutableState<usize> = cranpose_core::remember(|| {
         stats.update(|s| s.total_composes += 1);
         println!("  [COMPOSE] Item {} first composition", index);
@@ -114,7 +98,6 @@ fn lifecycle_item(index: usize, stats: MutableState<LifecycleStats>) {
     })
     .with(|s| *s);
 
-    // Track effects and disposal
     DisposableEffect!(index, move |_key| {
         stats.update(|s| s.total_effects += 1);
         println!("  [EFFECT] Item {} effect started", index);
@@ -125,7 +108,6 @@ fn lifecycle_item(index: usize, stats: MutableState<LifecycleStats>) {
         })
     });
 
-    // Display item
     Row(
         Modifier::empty()
             .fill_max_width()
@@ -181,11 +163,9 @@ fn main() {
             };
 
             let read_stats = || -> Option<(usize, usize, usize)> {
-                // Find any text starting with "Stats: C=" and parse the values
                 if let Some((_, _, _, _, text)) =
                     cranpose_testing::find_text_by_prefix_in_semantics(&robot, "Stats: C=")
                 {
-                    // Parse "Stats: C=X E=Y D=Z"
                     let parts: Vec<&str> = text.split_whitespace().collect();
                     if parts.len() >= 4 {
                         let c = parts[1].strip_prefix("C=")?.parse().ok()?;
@@ -197,7 +177,6 @@ fn main() {
                 None
             };
 
-            // Step 1: Initial state
             println!("\n--- Step 1: Initial state ---");
             let initial_items = find_visible_items();
             println!("  Visible items: {:?}", initial_items);
@@ -205,7 +184,6 @@ fn main() {
                 println!("  Stats: Composes={} Effects={} Disposes={}", c, e, d);
             }
 
-            // Step 2: Scroll down
             println!("\n--- Step 2: Scroll down ---");
             if let Some((x, y, w, h)) = find_text_in_semantics(&robot, "Item #0") {
                 robot
@@ -224,7 +202,6 @@ fn main() {
                 println!("  Stats: Composes={} Effects={} Disposes={}", c, e, d);
             }
 
-            // Step 3: Scroll back
             println!("\n--- Step 3: Scroll back ---");
             if let Some((x, y, w, h)) = find_text_in_semantics(
                 &robot,
@@ -238,7 +215,6 @@ fn main() {
             let after_back = find_visible_items();
             println!("  Visible after scroll back: {:?}", after_back);
 
-            // Final stats
             if let Some((c, e, d)) = read_stats() {
                 println!("\n=== FINAL STATS ===");
                 println!("  Total Composes: {}", c);

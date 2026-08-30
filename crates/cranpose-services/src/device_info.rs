@@ -95,11 +95,6 @@ impl DeviceInfo for DefaultDeviceInfo {
     }
 }
 
-/// The second field of `/proc/self/statm` is the resident set in pages.
-///
-/// Split out because the parse is the part worth pinning: a file that is
-/// shorter than expected, or holds something that is not a number, has to read
-/// as "unknown" rather than as zero pages.
 #[cfg(any(target_os = "linux", target_os = "android", test))]
 fn resident_bytes_from_statm(text: &str, page_size: u64) -> Option<u64> {
     text.split_whitespace()
@@ -109,13 +104,6 @@ fn resident_bytes_from_statm(text: &str, page_size: u64) -> Option<u64> {
         .checked_mul(page_size)
 }
 
-/// The page size `/proc/self/statm` counts in.
-///
-/// 4 KiB everywhere Cranpose runs on Linux today, and the 16 KiB pages Android
-/// 15 introduced are the reason this is not simply written as a constant at the
-/// call site. Reading it needs `sysconf`, which is not available from safe
-/// code, so the platform backend supplies the real value and this is the
-/// fallback that is right on every device that has not moved.
 #[cfg(any(target_os = "linux", target_os = "android", test))]
 const fn page_size_bytes() -> u64 {
     4096
@@ -171,9 +159,6 @@ mod tests {
         clear_platform_device_info();
     }
 
-    /// Everything but the total is optional, and a platform that says nothing
-    /// has to read as "unknown" rather than as zero — an application sizing
-    /// work against a zero headroom would refuse to do any.
     #[test]
     fn a_platform_that_will_not_say_reports_nothing_rather_than_zero() {
         clear_platform_device_info();
@@ -228,11 +213,8 @@ mod tests {
 
     #[test]
     fn the_resident_set_is_the_second_field_of_statm_in_pages() {
-        // size resident shared text lib data dirty
         let statm = "123456 2048 512 64 0 1024 0\n";
         assert_eq!(resident_bytes_from_statm(statm, 4096), Some(2048 * 4096));
-        // Android 15 devices page in 16 KiB, and the same line then means four
-        // times the memory.
         assert_eq!(resident_bytes_from_statm(statm, 16384), Some(2048 * 16384));
     }
 

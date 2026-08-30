@@ -1,10 +1,3 @@
-//! Robot test: text decoration (underline) must not change appearance with scroll position.
-//!
-//! Takes a screenshot of "This is red, italic, and underlined!" at its initial position,
-//! then scrolls by a small amount and takes another screenshot. Normalizes both to the
-//! text's bounding box and asserts pixel-identical output. Repeats for multiple sub-pixel
-//! scroll offsets to catch device-pixel-boundary artifacts.
-
 mod output_paths;
 
 use std::{path::Path, time::Duration};
@@ -21,15 +14,9 @@ const WINDOW_WIDTH: u32 = 1200;
 const WINDOW_HEIGHT: u32 = 900;
 const TARGET_TEXT: &str =
     "This is bold green and this is normal text. This is red, italic, and underlined!";
-// Capture at 2x to reproduce the HiDPI underline thickness artifact
 const CAPTURE_SCALE: f32 = 2.0;
 const UNDERLINE_TRACK_STEPS: usize = 12;
 const UNDERLINE_TRACK_SCROLL_DELTA_Y: f32 = -0.7;
-/// The underline is rasterised onto the pixel grid while the semantic bounds
-/// it is measured against stay unsnapped, so their difference must swing by up
-/// to one snap step as a fractional scroll sweeps the phase. That swing is
-/// correct rendering. What must not happen is the swing widening, or the row
-/// walking away from the text.
 const UNDERLINE_LOCAL_Y_SPREAD: f32 = 0.5;
 const UNDERLINE_LOCAL_Y_TREND: f32 = 0.25;
 const MIN_NORMALIZED_TEXT_INK_PIXELS: usize = 500;
@@ -97,11 +84,6 @@ fn verify_underline_row_tracks_fractional_scroll(robot: &cranpose::Robot) {
         }
     }
 
-    // Anchoring on samples[0] would make this test pass or fail on where the
-    // first sample happened to land in that swing: with a 0.40-wide swing and
-    // a 0.35 tolerance, a run starting at the floor of the swing failed while
-    // the identical rendering starting mid-swing passed. Both bounds below are
-    // independent of where the sweep starts.
     let min = samples.iter().copied().fold(f32::INFINITY, f32::min);
     let max = samples.iter().copied().fold(f32::NEG_INFINITY, f32::max);
     let spread = max - min;
@@ -110,9 +92,6 @@ fn verify_underline_row_tracks_fractional_scroll(robot: &cranpose::Robot) {
         "underlined span decoration row swings wider than one snap step: min={min:.3} max={max:.3} spread={spread:.3} samples={samples:?}"
     );
 
-    // A row that is slowly walking away from its text stays inside the spread
-    // bound for as long as the walk is smaller than a snap step per sweep, so
-    // compare where the sweep starts against where it ends.
     let half = samples.len() / 2;
     let mean = |values: &[f32]| values.iter().sum::<f32>() / values.len() as f32;
     let first_half = mean(&samples[..half]);
@@ -193,22 +172,10 @@ fn is_red_decoration_pixel(screenshot: &cranpose::RobotScreenshot, x: usize, y: 
 fn verify_scroll_decoration_invariance(robot: &cranpose::Robot) {
     println!("\n--- Scroll decoration invariance ---");
 
-    // Scroll in small fractional increments to sweep through sub-pixel positions.
-    // The invariant: consecutive small scrolls must produce CONSISTENT, BOUNDED
-    // differences. A snap-based renderer would show zero diff for some steps then
-    // a huge spike when crossing a grid boundary — that's the artifact.
-    let scroll_step = -0.7_f32; // fractional to hit all sub-pixel alignments
+    let scroll_step = -0.7_f32;
     let num_steps = 20;
-    // Per-channel tolerance for individual pixel comparison.
-    // Sub-pixel rendering variation causes small channel diffs (typically 1-3 per channel).
     let per_step_tolerance: u32 = 4;
-    // Max differing pixels between consecutive 0.7px scrolls at 2x, expressed as a
-    // share of the normalized capture. Font rasterization differs across CI hosts;
-    // the invariant is bounded, consistent variation rather than a fixed pixel count.
     let max_consecutive_diff_ratio: f32 = 0.35;
-    // Spike detection: if any step has dramatically more differing pixels than average,
-    // that indicates a discrete jump (snap artifact) rather than smooth variation.
-    // With smooth rendering, the coefficient of variation should be low.
     let spike_ratio_threshold: f32 = 3.0;
 
     let initial_capture = capture_visible_text_region(robot).expect("initial visible text region");
@@ -276,9 +243,6 @@ fn verify_scroll_decoration_invariance(robot: &cranpose::Robot) {
         prev_shot = curr_shot;
     }
 
-    // Spike detection: check for discrete jumps in the diff sequence.
-    // With smooth rendering, consecutive diffs should be relatively uniform.
-    // With snap artifacts, some diffs are 0 and others spike dramatically.
     let nonzero_diffs: Vec<usize> = diffs.iter().copied().filter(|&d| d > 0).collect();
     if nonzero_diffs.len() >= 3 {
         let avg = nonzero_diffs.iter().sum::<usize>() as f32 / nonzero_diffs.len() as f32;
@@ -500,7 +464,6 @@ fn best_red_decoration_row_in_screenshot(screenshot: &RobotScreenshot) -> Option
 }
 
 fn text_capture_region(bounds: (f32, f32, f32, f32)) -> (f32, f32, f32, f32) {
-    // Include padding around the text to capture the underline and any anti-aliasing edges
     let pad = 4.0;
     (
         bounds.0 - pad,
@@ -511,7 +474,6 @@ fn text_capture_region(bounds: (f32, f32, f32, f32)) -> (f32, f32, f32, f32) {
 }
 
 fn region_output_size(region: (f32, f32, f32, f32)) -> (u32, u32) {
-    // Output at device pixel resolution to catch sub-pixel artifacts
     (
         (region.2 * CAPTURE_SCALE).ceil() as u32,
         (region.3 * CAPTURE_SCALE).ceil() as u32,
@@ -550,7 +512,6 @@ fn scroll_text_into_view(robot: &cranpose::Robot, text: &str, max_attempts: usiz
                 return;
             }
         }
-        // Scroll down to find the text
         robot
             .mouse_move(600.0, 450.0)
             .expect("move cursor to center");

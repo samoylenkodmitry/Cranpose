@@ -70,8 +70,6 @@ pub enum LaunchArgValue {
 /// parameters change (Android `onNewIntent`); it never mutates one in place.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct LaunchArgs {
-    /// Insertion-ordered; a launch carries a handful of arguments, so a linear
-    /// scan beats a map that would have to be allocated and hashed.
     entries: Vec<(Box<str>, LaunchArgValue)>,
     debuggable: bool,
 }
@@ -218,10 +216,7 @@ fn parse_boolean(text: &str) -> Option<bool> {
 }
 
 thread_local! {
-    /// Snapshot pushed by the platform backend (Android intent extras today).
     static PLATFORM_LAUNCH_ARGS: RefCell<Option<LaunchArgsRef>> = const { RefCell::new(None) };
-    /// The command-line default, parsed once: `launch_args()` is called from
-    /// composition, which must not walk argv on every frame.
     static DEFAULT_LAUNCH_ARGS: RefCell<Option<LaunchArgsRef>> = const { RefCell::new(None) };
 }
 

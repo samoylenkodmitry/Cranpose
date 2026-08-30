@@ -37,19 +37,7 @@ use crate::{
     },
 };
 
-/// GPU resources for the current Android surface and its reusable WGPU device.
-///
-/// In threaded present mode (`CRANPOSE_PRESENT_THREAD`, step 7b) the
-/// `wgpu::Surface` itself is NOT held here: it is created on this thread
-/// and immediately moved to the present runtime (`ReplaceSurface`), which
-/// exclusively owns acquisition, encoding and `present()`. The producer
-/// keeps the device/queue for window recreation, its own copy of the
-/// surface configuration (it stamps resizes into the `Reconfigure` control
-/// messages), and the present bookkeeping. In the default synchronous mode
-/// the surface lives in `surface`, exactly as before.
 struct GpuResources {
-    /// The synchronous path's surface. `None` in threaded present mode
-    /// (the present runtime owns it) — the modes never mix within one run.
     surface: Option<wgpu::Surface<'static>>,
     native_window_ptr: Option<NonNull<c_void>>,
     adapter: Arc<wgpu::Adapter>,
@@ -59,64 +47,31 @@ struct GpuResources {
     backend: wgpu::Backend,
     config: wgpu::SurfaceConfiguration,
     _native_window: Option<NativeWindow>,
-    /// Set when the surface is (re)created or reconfigured (every control
-    /// send) and cleared after a successful present, forcing the first
-    /// frame to reach the screen even when `update()` reports no visual
-    /// work (mirrors the desktop/web `surface_dirty` flag).
     surface_dirty: bool,
 }
 
 impl GpuResources {
-    /// Whether a window's surface currently exists — locally (sync mode)
-    /// or on the present runtime (threaded mode). Both modes key this off
-    /// the window pointer, which is `Some` exactly while a surface lives.
     fn has_surface(&self) -> bool {
         self.native_window_ptr.is_some()
     }
 }
 
-/// Pending input event to be processed outside poll_events callback.
-/// This prevents blocking the main thread during input event acknowledgment.
-///
-/// Pointer variants carry the MotionEvent's own timestamp in milliseconds
-/// (uptime clock). Android delivers touch input batched/frame-aligned, so
-/// several samples are processed back-to-back in one loop iteration;
-/// stamping them with the delivery time instead of the event time makes
-/// gesture velocity computations wildly wrong (dt collapses to ~0).
 enum PendingInput {
     PointerDown(f32, f32, Option<i64>, PointerSource),
     PointerUp(f32, f32, Option<i64>, PointerSource),
     PointerMove(f32, f32, Option<i64>, PointerSource),
     PointerCancel,
-    /// Translated key event (physical keyboard or soft-keyboard fallback
-    /// input), routed to the focused text field via `AppShell::on_key_event`.
     Key(KeyEvent),
-    /// Additional finger of a multi-touch gesture (pinch/zoom). The first
-    /// field is the shell pointer id (never 0, which is the primary finger).
     SecondaryPointerDown(u64, f32, f32, Option<i64>),
     SecondaryPointerUp(u64, f32, f32, Option<i64>),
     SecondaryPointerMove(u64, f32, f32, Option<i64>),
-    /// Rotary encoder step (Wear OS crown / rotating bezel). The first field is
-    /// the raw `AXIS_SCROLL` value in detents (converted to pixels by the shell
-    /// using its rotary scroll factor); the second is the event's uptime in
-    /// milliseconds.
     RotaryScroll(f32, u64),
 }
 
-/// Converts an Android event time (nanoseconds, `java.lang.System.nanoTime()`
-/// base) into milliseconds for gesture velocity tracking.
 fn android_event_time_ms(event_time_ns: i64) -> i64 {
     event_time_ns / 1_000_000
 }
 
-/// Maps an Android `MotionEvent` pointer onto the framework [`PointerSource`]
-/// so text fields can show finger handles only for touch/stylus input.
-///
-/// The per-pointer tool type is the most specific signal, but many devices and
-/// the Android emulator report `TOOL_TYPE_UNKNOWN` for genuine finger touches;
-/// in that case the whole-event input source class (`getSource`) is consulted
-/// so a touchscreen press is still stamped [`PointerSource::Touch`]. Without
-/// this fallback the finger selection/cursor handles (touch-only) never appear.
 fn android_pointer_source(
     pointer: &android_activity::input::Pointer<'_>,
     event_source: android_activity::input::Source,
@@ -140,15 +95,6 @@ fn android_pointer_source(
     resolve_pointer_source(tool, source)
 }
 
-/// Translates one Android `KeyEvent` into a pending framework key event.
-///
-/// System keys (back, volume, media, ...) are reported as unhandled so the
-/// platform keeps processing them. The back key is special: while the app has
-/// back interception enabled (see [`cranpose_services::set_back_interception`])
-/// it is consumed and forwarded to [`cranpose_services::push_back_request`],
-/// mirroring Compose's `BackHandler`; otherwise it stays with the system so
-/// the default leave-the-activity behavior keeps working. Returns `true` when
-/// the event was consumed.
 fn push_pending_input_from_android_key_event(
     key_event: &android_activity::input::KeyEvent<'_>,
     key_translator: &mut AndroidKeyTranslator,
@@ -156,8 +102,6 @@ fn push_pending_input_from_android_key_event(
 ) -> bool {
     if key_event.key_code() == android_activity::input::Keycode::Back {
         if cranpose_services::back_interception_enabled() {
-            // Act on key-up (Android convention) but consume the whole
-            // down/up pair so the system never sees a half-handled back.
             if key_event.action() == android_activity::input::KeyAction::Up {
                 cranpose_services::push_back_request();
             }
@@ -176,29 +120,19 @@ fn push_pending_input_from_android_key_event(
 }
 
 thread_local! {
-    /// Live platform environment (IME/safe-area insets in *logical* px, system
-    /// theme) shared between the shell content wrapper — which provides the
-    /// values to composition — and the event loop, which updates them from
-    /// Java-forwarded keyboard heights, content-rect changes, and
-    /// configuration changes.
     static ANDROID_PLATFORM_ENV: Rc<crate::platform_env::PlatformEnvironment> =
         crate::platform_env::PlatformEnvironment::new();
-    /// Density used to convert Java's physical keyboard height to logical px.
     static ANDROID_IME_DENSITY: Cell<f32> = const { Cell::new(1.0) };
 }
 
-/// Shared handle to the live platform environment.
 pub(crate) fn android_platform_env() -> Rc<crate::platform_env::PlatformEnvironment> {
     ANDROID_PLATFORM_ENV.with(Rc::clone)
 }
 
-/// Records the density used to convert the Java keyboard height to logical px.
 fn set_android_ime_density(density: f32) {
     ANDROID_IME_DENSITY.with(|cell| cell.set(density.max(f32::EPSILON)));
 }
 
-/// Stores the keyboard's covered height (physical px, `0` when hidden) as
-/// bottom IME insets in logical px. Returns whether the value changed.
 fn set_android_ime_bottom_px(bottom_px: i32) -> bool {
     let density = ANDROID_IME_DENSITY.with(|cell| cell.get());
     let bottom = (bottom_px.max(0) as f32) / density;
@@ -209,7 +143,6 @@ fn set_android_ime_bottom_px(bottom_px: i32) -> bool {
     android_platform_env().set_ime_insets(insets)
 }
 
-/// Maps the Android night-mode configuration onto the framework system theme.
 fn system_theme_from_android(
     night: ndk::configuration::UiModeNight,
 ) -> cranpose_services::SystemTheme {
@@ -219,19 +152,11 @@ fn system_theme_from_android(
     }
 }
 
-/// `EditorInfo.IME_ACTION_DONE`: the user tapped the keyboard's Done action.
 const IME_ACTION_DONE: i32 = 6;
 
-/// Applies one editing operation forwarded by the Java `InputConnection`
-/// (see [`crate::android_text_input`]) to the focused text field.
 fn dispatch_android_ime_event(shell: &mut AppShell<WgpuRenderer>, event: AndroidImeEvent) {
     match event {
         AndroidImeEvent::CommitText { text, .. } => {
-            // commitText replaces the composing text (if any); clearing the
-            // preedit first deletes it, then the final text is inserted.
-            // `new_cursor_position` values other than 1 are not honored yet;
-            // the editor-state sync restarts the IME session if the cursor
-            // ends up somewhere the IME did not expect.
             let _ = shell.on_ime_preedit("", None);
             let _ = shell.on_paste(&text);
         }
@@ -272,12 +197,6 @@ fn dispatch_android_ime_event(shell: &mut AppShell<WgpuRenderer>, event: Android
             }
         }
         AndroidImeEvent::EditorAction { action } => {
-            // Done follows the platform convention of dismissing the
-            // keyboard (focus stays in the field). Other actions are
-            // surfaced as an Enter key press: single-line fields ignore it
-            // and apps can react through their key handlers. A dedicated
-            // per-field ime-action callback (Compose `KeyboardActions`) is
-            // not modeled yet.
             if action == IME_ACTION_DONE {
                 let _ = shell.on_ime_finish_composing();
                 shell.clear_text_field_focus();
@@ -297,9 +216,6 @@ fn dispatch_android_ime_event(shell: &mut AppShell<WgpuRenderer>, event: Android
             }
         }
         AndroidImeEvent::ImeInsetsChanged { bottom_px } => {
-            // Publish the keyboard height as IME insets and force a root render
-            // so the content wrapper re-provides `local_ime_insets` (a plain
-            // shared cell is not itself reactive).
             if set_android_ime_bottom_px(bottom_px) {
                 shell.request_root_render();
             }
@@ -307,9 +223,6 @@ fn dispatch_android_ime_event(shell: &mut AppShell<WgpuRenderer>, event: Android
     }
 }
 
-/// Maps an Android pointer id to the shell's pointer id space: the finger
-/// that started the gesture (`ACTION_DOWN`) is the shell's primary pointer
-/// `0`; every other finger gets a stable non-zero id.
 fn shell_pointer_id(android_pointer_id: i32, primary_pointer_id: i32) -> u64 {
     if android_pointer_id == primary_pointer_id {
         0
@@ -318,16 +231,6 @@ fn shell_pointer_id(android_pointer_id: i32, primary_pointer_id: i32) -> u64 {
     }
 }
 
-/// Translates one Android input event into pending framework inputs.
-///
-/// The finger that started the gesture (`ACTION_DOWN`) is tracked in
-/// `primary_pointer_id` and forwarded as the shell's primary pointer; its
-/// Move events unpack the batched *historical* samples first (oldest to
-/// newest, each with its own timestamp) and then the current sample, so the
-/// velocity tracker sees every real touch sample instead of only the last
-/// position of each batch. Additional fingers (`ACTION_POINTER_DOWN`) are
-/// forwarded as secondary pointers with their ids so multi-touch gestures
-/// (pinch/zoom) see them. Returns `true` when the event was consumed.
 fn push_pending_inputs_from_android_event(
     event: &android_activity::input::InputEvent<'_>,
     android_platform: &AndroidPlatform,
@@ -348,8 +251,6 @@ fn push_pending_inputs_from_android_event(
     };
 
     let time_ms = Some(android_event_time_ms(motion_event.event_time()));
-    // The whole-event input source class; used to recover a touch classification
-    // when the per-pointer tool type is unreported (see `android_pointer_source`).
     let event_source = motion_event.source();
     let logical_of = |x: f32, y: f32| {
         let logical = android_platform.pointer_position(x as f64, y as f64);
@@ -388,9 +289,6 @@ fn push_pending_inputs_from_android_event(
             let (x, y) = logical_of(pointer.x(), pointer.y());
             match *primary_pointer_id {
                 Some(primary) if pointer.pointer_id() != primary => {
-                    // The gesture ends with a finger that is not the one that
-                    // started it (the primary lifted earlier without ending
-                    // the stream). Close the secondary, then the gesture.
                     pending_inputs.push(PendingInput::SecondaryPointerUp(
                         shell_pointer_id(pointer.pointer_id(), primary),
                         x,
@@ -416,10 +314,6 @@ fn push_pending_inputs_from_android_event(
             };
             let (x, y) = logical_of(pointer.x(), pointer.y());
             if pointer.pointer_id() == primary {
-                // The first finger lifted while others are still down. The
-                // shell's gesture is anchored to the primary pointer, so end
-                // the whole gesture: close the remaining secondaries, then
-                // release the primary. New touches start a fresh gesture.
                 for other in motion_event.pointers() {
                     if other.pointer_id() == primary {
                         continue;
@@ -488,14 +382,6 @@ fn push_pending_inputs_from_android_event(
             *primary_pointer_id = None;
             true
         }
-        // Rotary input (Pixel Watch crown, Galaxy Watch rotating bezel) arrives
-        // as a *generic* motion event with ACTION_SCROLL from the
-        // SOURCE_ROTARY_ENCODER class, carrying its delta on AXIS_SCROLL in
-        // detents. NativeActivity's AInputQueue delivers generic motion events
-        // through the same queue as touch, so no extra plumbing is needed --
-        // but the activity's view must be focusable and focused or the platform
-        // never dispatches them at all (see the module docs on
-        // `push_rotary_pending_input`).
         android_activity::input::MotionAction::Scroll => {
             push_rotary_pending_input(motion_event, event_source, time_ms, pending_inputs)
         }
@@ -503,20 +389,6 @@ fn push_pending_inputs_from_android_event(
     }
 }
 
-/// Translates an Android rotary `ACTION_SCROLL` motion event into a pending
-/// rotary input.
-///
-/// Returns `true` only when the event really came from a rotary encoder, so a
-/// mouse-wheel `ACTION_SCROLL` stays unhandled and keeps its default platform
-/// behavior.
-///
-/// # Host requirements
-///
-/// Wear OS delivers rotary events **only to a focused, focusable view**. The
-/// host activity must, on its `NativeActivity` content view:
-/// `setFocusable(true)`, `setFocusableInTouchMode(true)`, and `requestFocus()`.
-/// Without focus, `AInputQueue` receives nothing and this function is never
-/// reached.
 fn push_rotary_pending_input(
     motion_event: &android_activity::input::MotionEvent<'_>,
     event_source: android_activity::input::Source,
@@ -526,11 +398,9 @@ fn push_rotary_pending_input(
     use crate::android_input::is_rotary_encoder_source;
 
     if !is_rotary_encoder_source(u32::from(event_source)) {
-        // A non-rotary scroll (mouse wheel); leave it to the platform.
         return false;
     }
 
-    // The rotary delta lives on AXIS_SCROLL of pointer 0, in detents.
     let Some(pointer) = motion_event.pointers().next() else {
         return true;
     };
@@ -589,8 +459,6 @@ struct PendingHostWindowSizeRequest {
 struct AndroidFrameDriver {
     need_frame: Arc<AtomicBool>,
     app_waker: android_activity::AndroidAppWaker,
-    /// The thread running the frame loop, so a request raised *by* the loop can
-    /// be told apart from one raised by a worker. Only the latter needs a wake.
     loop_thread: std::thread::ThreadId,
     next_deadline: Cell<Option<web_time::Instant>>,
 }
@@ -605,15 +473,6 @@ impl AndroidFrameDriver {
         }
     }
 
-    /// Raises a frame request, waking the looper only when the request came
-    /// from somewhere other than the frame loop itself.
-    ///
-    /// A request raised on the loop's own thread - the shell re-arming its
-    /// frame callback, an input handler, an effect resuming inside `update` -
-    /// is picked up by the very iteration that raised it. Waking the looper for
-    /// it leaves a byte in `android-activity`'s wake pipe that makes the next
-    /// poll return instantly, which cancels the vsync wait the loop was about
-    /// to enter and turns an idle app into a busy loop.
     fn raise_frame_request(
         need_frame: &AtomicBool,
         app_waker: &android_activity::AndroidAppWaker,
@@ -632,13 +491,6 @@ impl AndroidFrameDriver {
         move || Self::raise_frame_request(&need_frame, &app_waker, loop_thread)
     }
 
-    /// The waker for the display's own frame callback, which always wakes.
-    ///
-    /// The choreographer delivers on the looper of the thread that posted, so
-    /// this fires on the frame loop's thread - and it is the one same-thread
-    /// request that must *not* be folded into the current iteration, because
-    /// the loop is asleep waiting for exactly this and has no iteration left to
-    /// fold it into.
     fn vsync_waker(&self) -> impl Fn() + Send + Sync + 'static {
         let need_frame = self.need_frame.clone();
         let app_waker = self.app_waker.clone();
@@ -675,8 +527,6 @@ impl PlatformFrameDriver for AndroidFrameDriver {
     }
 }
 
-/// Delay of the follow-up composition pass after one that carried work while
-/// the app runs with no surface (see the main loop).
 const OFFSCREEN_UPDATE_PERIOD: Duration = Duration::from_millis(16);
 
 fn duration_until_frame_deadline(deadline: web_time::Instant) -> Duration {
@@ -696,39 +546,19 @@ fn earliest_android_poll_timeout(
     }
 }
 
-/// Get display density from Android NDK Configuration.
-///
-/// Uses the NDK's AConfiguration_getDensity which returns density constants
-/// mapped to the standard Android density classes:
-/// - mdpi: 1.0 (160 dpi baseline)
-/// - hdpi: 1.5 (240 dpi)
-/// - xhdpi: 2.0 (320 dpi) - most common modern phones
-/// - xxhdpi: 3.0 (480 dpi)
-/// - xxxhdpi: 4.0 (640 dpi)
-///
-/// The factor is calculated as DPI / 160 per Android NDK documentation.
 fn get_display_density(app: &android_activity::AndroidApp) -> f32 {
     let config = app.config();
-    let density_dpi = config.density(); // Returns Option<u32> with raw DPI value
+    let density_dpi = config.density();
 
-    // Convert DPI to scale factor (baseline is 160 dpi = 1.0x)
-    // e.g., 320 dpi / 160 = 2.0x (xhdpi)
-    density_dpi.map(|dpi| dpi as f32 / 160.0).unwrap_or(2.0) // Fallback to xhdpi (2.0) if density unavailable
+    density_dpi.map(|dpi| dpi as f32 / 160.0).unwrap_or(2.0)
 }
 
-/// The freeform/DeX shadow-margin inset (in physical px) between the render
-/// buffer and the on-screen frame. The native window buffer is enlarged by this
-/// margin on every side; the renderer fills the buffer from (0,0) while pointer
-/// events are frame-relative, so this is exactly the offset to add to pointers.
-/// Returns `(0, 0)` when there is no margin (fullscreen: buffer == frame).
 fn surface_inset_px(app: &android_activity::AndroidApp) -> (f64, f64) {
     let Some(window) = app.native_window() else {
         return (0.0, 0.0);
     };
     let buffer_w = window.width() as f64;
     let buffer_h = window.height() as f64;
-    // `content_rect`'s right/bottom edges are the frame's size (the caption only
-    // insets the top, so the content still reaches the frame's right and bottom).
     let content = app.content_rect();
     let frame_w = content.right as f64;
     let frame_h = content.bottom as f64;
@@ -748,16 +578,6 @@ fn update_android_platform_geometry(
     let density = get_display_density(app);
     android_platform.set_scale_factor(density as f64);
 
-    // A freeform/DeX window's render surface is LARGER than its on-screen frame:
-    // the system adds a shadow/resize margin (the window `surfaceInsets`), so the
-    // native buffer we draw into is e.g. 525x879 px while the visible frame is
-    // only 447x801. The renderer fills the whole buffer starting at (0,0), which
-    // lands at `frame_origin - inset` on screen — but pointer coordinates arrive
-    // relative to the *frame*. Without correction every touch is off by that inset
-    // (~39 px / 24 dp), so controls near the edges become unreachable. We recover
-    // the inset as half the difference between the buffer and the frame, and add
-    // it to incoming pointers so they map into the same surface space the renderer
-    // draws in. Fullscreen (phone) has buffer == frame, so this is a no-op there.
     let (offset_x, offset_y) = surface_inset_px(app);
     android_platform.set_input_surface_offset_px(offset_x, offset_y);
 
@@ -771,14 +591,7 @@ fn update_android_shell_geometry(
 ) -> Option<Size> {
     shell.renderer().set_root_scale(density);
     shell.set_density(density);
-    // The user's font-size setting. Sizes in Sp follow it, sizes in Dp do not,
-    // and above a threshold setting Android converts an Sp through a table
-    // rather than by multiplying — so the conversion goes over, not the scalar.
     shell.set_font_scale_curve(crate::android_font_scale::font_scale_curve());
-    // Rotary detents are reported in device-independent units; the shell needs
-    // a pixels-per-detent factor to match Compose. Approximates
-    // `ViewConfiguration.getScaledVerticalScrollFactor()`; a host that reads
-    // the exact platform value over JNI can overwrite this afterwards.
     shell.set_rotary_scroll_factor(crate::android_input::android_rotary_scroll_factor(density));
 
     let (width, height) = shell.buffer_size();
@@ -787,8 +600,6 @@ fn update_android_shell_geometry(
         let height_dp = height as f32 / density;
         shell.set_viewport(width_dp, height_dp);
         let actual = Size::new(width_dp, height_dp);
-        // The host surface every target reports the same way, so an application
-        // reads its density and viewport without an Android API in its own code.
         cranpose_services::publish_host_surface_size(
             cranpose_services::host_surface::HostSurfaceSize {
                 width: width_dp,
@@ -803,15 +614,6 @@ fn update_android_shell_geometry(
     }
 }
 
-/// Hands the renderer the platform's truth about the display panel's
-/// visible region. The round display is the first provider of that
-/// region: when `AConfiguration` reports a round screen AND this activity
-/// owns the whole display (a multi-window activity's surface is not the
-/// panel, so its inscribed circle would mean nothing), the visible region
-/// is the surface's inscribed circle; otherwise the full surface. The
-/// renderer then culls the pixels the panel physically never shows — a
-/// framework capability for any app and any layout; app content never
-/// participates in this decision.
 fn apply_display_visible_region(
     app: &android_activity::AndroidApp,
     app_shell: &mut Option<AppShell<WgpuRenderer>>,
@@ -828,8 +630,6 @@ fn apply_display_visible_region(
     });
 }
 
-/// Renders a single frame (synchronous mode). Returns true if out of
-/// memory (should exit).
 fn render_once(
     resources: &mut GpuResources,
     shell: &mut AppShell<WgpuRenderer>,
@@ -837,8 +637,6 @@ fn render_once(
     timings: &mut crate::android_frame_telemetry::FrameTimings,
 ) -> bool {
     let Some(surface) = resources.surface.as_ref() else {
-        // Sync mode always holds its surface while resources exist; this
-        // arm is unreachable there and threaded mode never calls here.
         telemetry.note_idle_iteration();
         return false;
     };
@@ -873,15 +671,10 @@ fn render_once(
             resources.config.width = width;
             resources.config.height = height;
             surface.configure(&resources.device, &resources.config);
-            // The reconfigured surface has not presented yet. Unlike web/desktop,
-            // the android render block is gated behind `shell.needs_update()`, so
-            // marking the shell dirty is what both wakes the looper and re-enters
-            // the present path on the next iteration to flush the new swapchain.
             resources.surface_dirty = true;
             shell.mark_dirty();
             false
         }
-        // Surface unavailable this tick; retry the present on the next frame.
         SurfaceFrame::Skip => {
             telemetry.note_idle_iteration();
             resources.surface_dirty = true;
@@ -890,14 +683,6 @@ fn render_once(
     }
 }
 
-/// Folds one drained batch of present-runtime returns into the loop's
-/// bookkeeping: presented frames complete their telemetry record and clear
-/// `surface_dirty`; refused frames (cancelled/errored) re-dirty the
-/// surface and re-mark the shell so the next iteration republishes —
-/// the depth-one replacement for `render_once`'s Reconfigure/Skip arms.
-/// Returns the instant the latest drained frame presented at (present
-/// thread's timestamp, mapped into this thread's `Instant` domain), for
-/// the catch-up pacing bookkeeping the sync path feeds directly.
 fn drain_present_returns_into_loop(
     shell: &mut AppShell<WgpuRenderer>,
     gpu_resources: &mut Option<GpuResources>,
@@ -910,11 +695,6 @@ fn drain_present_returns_into_loop(
     shell
         .renderer()
         .drain_present_returns_with(&mut |frame_id, outcome, timings| {
-            // Depth-one publishing keeps up to TWO frames in flight (one
-            // rendering, one waiting), so the producer timestamps are a
-            // small id-keyed list, not a single slot — a slot would be
-            // overwritten by frame N+1's publish before frame N's returns
-            // drain, and every record would be lost in steady overlap.
             let producer_timings = pending_present_timings
                 .iter()
                 .position(|(id, _)| *id == frame_id)
@@ -930,8 +710,6 @@ fn drain_present_returns_into_loop(
                         telemetry.record_frame(&frame_timings);
                     }
                 }
-                // A cancelled or errored frame never reached the screen;
-                // its buffers already recycled through `apply_returns`.
                 PresentOutcome::Cancelled(_) | PresentOutcome::NotRun => {
                     refused = true;
                     telemetry.note_idle_iteration();
@@ -948,10 +726,6 @@ fn drain_present_returns_into_loop(
         shell.mark_dirty();
     }
     presented.then(|| {
-        // The present happened on the present thread up to a few ms before
-        // this drain; back-date the pacing timestamp by its age so the
-        // catch-up detector measures present-to-present cadence, not
-        // drain-to-drain jitter. Both timestamps share `monotonic_nanos`.
         let now = web_time::Instant::now();
         let age_ns = telemetry.now().saturating_sub(presented_at_ns);
         if presented_at_ns > 0 && age_ns > 0 {
@@ -965,9 +739,6 @@ fn drain_present_returns_into_loop(
 
 struct AndroidGpuSetup {
     resources: GpuResources,
-    /// A freshly created surface for the present runtime (`ReplaceSurface`
-    /// carries it); `None` when the runtime already holds this window's
-    /// surface and only needs a `Reconfigure`.
     surface: Option<wgpu::Surface<'static>>,
     renderer_needs_init: bool,
 }
@@ -986,18 +757,6 @@ impl AndroidGpuBackend {
         }
     }
 
-    /// The backend to probe first, honouring `CRANPOSE_ANDROID_GPU_BACKEND`.
-    ///
-    /// Vulkan is the default and the only backend the fallback below can arrive
-    /// at on its own, which makes the two impossible to compare on one device:
-    /// whichever one Vulkan probing picks is the one you measure. The two have
-    /// genuinely different CPU costs per frame — a Mali Vulkan driver rebuilds
-    /// its command list every submit, where the GLES driver keeps more state —
-    /// so which is cheaper is a question about the device, not one we can settle
-    /// by reasoning. This switch exists so it can be measured instead.
-    ///
-    /// Unrecognised values fall back to Vulkan rather than failing, since a
-    /// mistyped diagnostic should not stop an app from starting.
     fn preferred() -> Self {
         Self::preferred_from(
             std::env::var("CRANPOSE_ANDROID_GPU_BACKEND")
@@ -1058,7 +817,6 @@ impl AndroidWgpuContext {
     fn new(backend: AndroidGpuBackend) -> Self {
         let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
         descriptor.backends = backend.wgpu_backends();
-        // No debug/validation: emulator Vulkan debug utils can crash on null labels.
         descriptor.flags = wgpu::InstanceFlags::empty();
         Self {
             instance: wgpu::Instance::new(descriptor),
@@ -1067,11 +825,6 @@ impl AndroidWgpuContext {
     }
 }
 
-/// Starts (or restarts) the threaded present runtime for the Android
-/// renderer: device/queue/format/backend cross to the present thread —
-/// which constructs its own `GpuRenderer` — the frame driver's waker wakes
-/// the looper after every present, and the telemetry clock keeps
-/// present-side timings in the producer's monotonic clock domain.
 fn init_gpu_threaded_for_android(
     renderer: &mut WgpuRenderer,
     resources: &GpuResources,
@@ -1163,9 +916,6 @@ where
             renderer,
             default_root_key(),
             move || {
-                // Provide the live platform environment (IME/safe-area insets,
-                // system theme) to composition. Read on every recomposition;
-                // the event loop forces a root render when a value changes.
                 platform_env.compose_root(|| content_clone.borrow_mut()());
             },
             (width, height),
@@ -1201,12 +951,6 @@ where
     }
 
     if present_thread {
-        // Hand the surface to the present runtime. Every message that
-        // changes the surface's identity or configuration bumps the surface
-        // epoch FIRST so any packet still in flight cancels instead of
-        // drawing, and the send waits for the runtime's ack: nothing
-        // publishes under the new epoch until the runtime holds the new
-        // state (tofable §4).
         if let Some(shell) = app_shell.as_mut() {
             let renderer = shell.renderer();
             renderer.note_surface_reconfigured();
@@ -1214,8 +958,6 @@ where
                 Some(surface) => {
                     renderer.present_replace_surface(surface, setup.resources.config.clone());
                 }
-                // Same-window reuse: the runtime already holds the surface;
-                // only the configuration travels.
                 None => {
                     renderer.present_reconfigure(setup.resources.config.clone());
                 }
@@ -1224,21 +966,9 @@ where
             shell.mark_dirty();
         }
     } else {
-        // Synchronous mode: the surface stays on this thread, configured
-        // here exactly as it was before the present runtime existed (the
-        // configure moved a few lines later than its historical spot in
-        // `create_android_gpu_resources`; nothing reads the surface in
-        // between).
         match setup.surface.take() {
             Some(surface) => {
                 surface.configure(&setup.resources.device, &setup.resources.config);
-                // Closes the black-screen gap at its root: the compositor
-                // must never show whatever the swapchain held right after
-                // `configure` for however long this window's first real
-                // frame takes to reach the screen (its shape/text
-                // pipelines may still be compiling on the prewarm
-                // thread) — the exact failure mode reported on a GL
-                // fallback device with no Vulkan adapter.
                 present_initial_placeholder_frame(
                     &surface,
                     &setup.resources.device,
@@ -1248,7 +978,6 @@ where
                 );
                 setup.resources.surface = Some(surface);
             }
-            // Same-window reuse: reconfigure the surface already held.
             None => {
                 if let Some(surface) = setup.resources.surface.as_ref() {
                     surface.configure(&setup.resources.device, &setup.resources.config);
@@ -1329,12 +1058,6 @@ where
         present_thread,
     ) {
         Err(AndroidSurfaceError::RequestAdapter(error)) => {
-            // Keep the two backends in separate instances. On Android emulators
-            // where Vulkan probing fails, a combined Vulkan|GL instance can keep
-            // the ANativeWindow connected while WGPU falls through to EGL. EGL
-            // then aborts with BAD_ALLOC because the window belongs to another
-            // graphics API. Dropping the Vulkan-only instance before constructing
-            // the GL surface gives the fallback a clean native window.
             log::warn!("No compatible Vulkan adapter ({error}); retrying with a fresh GL instance");
             *wgpu_context = AndroidWgpuContext::new(AndroidGpuBackend::Gl);
             initialize_android_rendering(
@@ -1367,10 +1090,6 @@ fn create_android_gpu_resources(
 ) -> Result<AndroidGpuSetup, AndroidSurfaceError> {
     if let Some(mut resources) = existing_resources {
         if resources.native_window_ptr == Some(native_window_ptr) {
-            // Same window: the surface already exists (held locally in sync
-            // mode, on the present runtime in threaded mode); only the
-            // configuration is updated here and (re)applied by the caller —
-            // locally or through a `Reconfigure` control message.
             resources.config.width = width;
             resources.config.height = height;
             if let Some(native_window_owner) = native_window_owner {
@@ -1405,10 +1124,6 @@ fn create_android_gpu_resources(
     log::info!("Found adapter: {:?}", adapter_info.backend);
     let adapter = Arc::new(adapter);
 
-    // Name the pipeline disk cache's blob now that the adapter is known: the
-    // file is keyed by adapter identity (vendor, device, driver strings), so
-    // a driver update or a different GPU starts cold instead of feeding wgpu
-    // a stale blob. `run` decided the directory; a pre-set full path wins.
     if cranpose_render_wgpu::debug_toggle_os("CRANPOSE_PIPELINE_CACHE_FILE").is_none()
         && let Some(cache_dir) =
             cranpose_render_wgpu::debug_toggle_os("CRANPOSE_PIPELINE_CACHE_DIR")
@@ -1444,14 +1159,10 @@ fn create_android_gpu_resources(
 
     let device = Arc::new(device);
     let queue = Arc::new(queue);
-    // The runtime configures the surface when `ReplaceSurface` delivers it
-    // together with this config.
     let config = create_android_surface_config(&surface, &adapter, width, height)?;
 
     Ok(AndroidGpuSetup {
         resources: GpuResources {
-            // Sync mode adopts the surface in `initialize_android_rendering`;
-            // threaded mode ships it to the present runtime instead.
             surface: None,
             native_window_ptr: Some(native_window_ptr),
             adapter,
@@ -1483,8 +1194,6 @@ fn create_android_gpu_resources_for_existing_device(
 
     Ok(AndroidGpuSetup {
         resources: GpuResources {
-            // Sync mode adopts the surface in `initialize_android_rendering`;
-            // threaded mode ships it to the present runtime instead.
             surface: None,
             native_window_ptr: Some(native_window_ptr),
             adapter: existing.adapter.clone(),
@@ -1501,17 +1210,6 @@ fn create_android_gpu_resources_for_existing_device(
     })
 }
 
-/// Swapchain depth: three images, the platform's own buffering depth.
-///
-/// Android has composited through a triple-buffered BufferQueue since Project
-/// Butter, and every View or Compose app runs at that depth. At depth 2 a GPU
-/// still holding the previous frame stalls the next acquire: on a Kirin 980
-/// scrolling a glass-chrome list, acquire p90 was 10.8 ms and the scroll held
-/// 47-49 fps; at depth 3 the same scene acquires in 0.9 ms and holds 53-55 fps.
-/// The cost is the one extra frame of latency every Android app already pays.
-///
-/// `debug.cranpose.frame_latency` (1..=3) overrides this on device without a
-/// rebuild.
 fn android_frame_latency(requested: Option<&str>) -> u32 {
     requested
         .and_then(|value| value.trim().parse::<u32>().ok())
@@ -1543,17 +1241,6 @@ mod frame_latency_tests {
     }
 }
 
-/// Whether the threaded present runtime runs, from the override and the
-/// core count.
-///
-/// Both sides of the default's boundary are device measurements. Pixel
-/// Watch 3 (4x in-order A53, CPU already saturated by the stage-executor
-/// pool): 38.7/38.4 fps threaded against 53.5 sync — a thread adds no
-/// cores, so the overlap buys context switches and cache pressure. Mate
-/// 20 X (Kirin 980, 8-core big.LITTLE, alternating A/B rounds with temps
-/// logged): +4-7 fps from the thread alone, everything else held constant,
-/// because idle cores run the present half. Six cores splits the measured
-/// classes; a new class earns its side with an A/B, not arithmetic.
 fn resolve_present_thread(requested: Option<&str>, available_cores: usize) -> bool {
     match requested.map(str::trim) {
         Some("1") | Some("true") | Some("on") => true,
@@ -1754,21 +1441,6 @@ fn confirm_android_host_window_request(
     }
 }
 
-/// Whether the activity is currently in multi-window mode (split-screen,
-/// freeform, or desktop windowing such as Samsung DeX).
-///
-/// A fullscreen phone activity's window is laid out edge-to-edge across the
-/// whole display (`PhoneWindow.generateLayout` sets `FLAG_LAYOUT_IN_SCREEN |
-/// FLAG_LAYOUT_INSET_DECOR` and clears `fitInsetsTypes` for every non-floating
-/// window), so its `ANativeWindow` buffer already covers the areas behind the
-/// status and navigation bars. Calling `Window.setLayout` with a fixed pixel
-/// size on that window replaces `MATCH_PARENT`; devices that honor it shrink
-/// and center the surface, leaving uncovered strips of raw display that show
-/// as black bands at the top and bottom. Host-window sizing is therefore only
-/// meaningful in multi-window modes, where the window is genuinely resizable.
-///
-/// Returns `false` when the query fails (including API < 24, where
-/// `isInMultiWindowMode` does not exist and multi-window is unavailable).
 fn android_activity_in_multi_window_mode(app: &android_activity::AndroidApp) -> bool {
     use jni::{jni_sig, jni_str};
 
@@ -1826,13 +1498,6 @@ fn set_android_window_layout_px(
     })
 }
 
-/// Runs an Android Compose application with wgpu rendering.
-///
-/// Called by `AppLauncher::run_android()`. This is the framework-level
-/// entrypoint that manages the Android lifecycle and event loop.
-///
-/// The tag log lines carry when an application does not name one with
-/// [`AppLauncher::with_log_tag`](crate::AppLauncher::with_log_tag).
 const DEFAULT_LOG_TAG: &str = "Cranpose";
 
 /// **Note:** Applications should use `AppLauncher` instead of calling this directly.
@@ -1843,8 +1508,6 @@ pub fn run(
 ) {
     use android_activity::{MainEvent, PollEvent};
 
-    // Logging first: the registrations below already have failure paths worth
-    // hearing about (a launch-args read that fails here is otherwise silent).
     android_logger::init_once(
         android_logger::Config::default()
             .with_max_level(log::LevelFilter::Info)
@@ -1855,47 +1518,19 @@ pub fn run(
                     .filter_module("wgpu_core", log::LevelFilter::Warn)
                     .filter_module("wgpu_hal", log::LevelFilter::Warn)
                     .filter_module("naga", log::LevelFilter::Warn)
-                    // `AChoreographer` registers its display-event fd with this
-                    // thread's looper, so every vsync makes `ALooper_pollOnce`
-                    // return `ALOOPER_POLL_CALLBACK`. android-activity 0.6.1
-                    // believes that return value is impossible and logs it at
-                    // `error!` — once per frame, which is a synchronous
-                    // `writev` to logd plus a tag property lookup 60 times a
-                    // second. The event is genuinely harmless (the crate
-                    // ignores it and polls again), but the logging is not, so
-                    // the module stays quiet. Frame pacing lives in
-                    // `android_vsync`, which reports its own failures.
                     .filter_module("android_activity::activity_impl", log::LevelFilter::Off)
                     .build(),
             ),
     );
 
-    // Mirror the `debug.cranpose.*` diagnostic properties into the environment
-    // before anything reads it, so the renderer's and app shell's existing
-    // environment-gated telemetry is reachable on device.
     crate::android_frame_telemetry::seed_env_from_system_properties();
 
-    // The machine's core count, read before the fast-core pin below:
-    // `available_parallelism` reports the calling thread's *eligible* set,
-    // so after the pin it would answer 4 on an 8-core big.LITTLE phone and
-    // silently flip the present-thread class — measured on the Mate 20 X
-    // as the present thread never spawning at all.
     let machine_parallelism = std::thread::available_parallelism()
         .map(std::num::NonZeroUsize::get)
         .unwrap_or(1);
 
-    // After the property seeding (`debug.cranpose.core_pin` must be
-    // readable), before the renderer exists: in the non-threaded present
-    // mode the GPU driver's workers spawn from this thread and inherit
-    // the mask. The threaded mode's present thread pins itself.
     cranpose_render_wgpu::pin_current_thread_to_fast_cores("producer");
 
-    // Give the renderer's pipeline disk cache a writable home. Only the
-    // directory is decided here — the blob's file name is keyed by adapter
-    // identity, which is not known until device setup composes
-    // `CRANPOSE_PIPELINE_CACHE_FILE` from this directory. Seeded properties
-    // (above) and pre-set environments win, so tests and debugging can
-    // redirect or disable it.
     if cranpose_render_wgpu::debug_toggle_os("CRANPOSE_PIPELINE_CACHE_DIR").is_none()
         && let Some(data_path) = app.internal_data_path()
     {
@@ -1906,23 +1541,6 @@ pub fn run(
         );
     }
 
-    // Threaded present runtime (pipeline step 7b): the frame is split at
-    // the packet boundary and acquire/encode/submit/present move to a
-    // dedicated present thread, overlapping with the producer's
-    // update/lowering of the next frame. CRANPOSE_PRESENT_THREAD
-    // (`adb shell setprop debug.cranpose.present_thread 1`/`0`) overrides
-    // in either direction; read once — the mode must not change while a
-    // renderer is live.
-    //
-    // The default is decided by core count, and both sides of the boundary
-    // are measurements, not arithmetic. Pixel Watch 3 (4x in-order A53,
-    // CPU already 100-108% with the stage-executor pool fanned out):
-    // 38.7/38.4 fps threaded vs 53.5 sync — a dedicated thread adds no
-    // cores, so depth-one just buys context switches and cache pressure.
-    // Mate 20 X (Kirin 980, 8-core big.LITTLE, alternating A/B rounds,
-    // temps logged): +4-7 fps from the thread alone with everything else
-    // held constant, because the phone has idle cores to run the present
-    // half. Six cores splits the measured classes.
     let present_thread = resolve_present_thread(
         std::env::var("CRANPOSE_PRESENT_THREAD").ok().as_deref(),
         machine_parallelism,
@@ -1931,42 +1549,19 @@ pub fn run(
         log::info!("[present-runtime] threaded present enabled");
     }
 
-    // Register the SAF document picker as the platform file picker. Requires the
-    // app's activity to be `dev.cranpose.android.CranposeActivity`.
     crate::android_file_picker::register(app.clone());
-    // Register the SAF writable-folder backend (write-side complement, used for
-    // cross-device sync into a user-granted folder).
     crate::android_writable_folder::register(app.clone());
-    // Haptics, share sheet, notifier, network status (JNI backends of the
-    // CranposeActivity capability hooks).
     crate::android_services::register(app.clone());
     crate::android_host::install(app.clone());
-    // What this process is using, over the top of whatever the services above
-    // registered: the resident set Android kills by, and the allocator purge
-    // that is the only way to shrink it.
     crate::process_info::install();
 
-    // Seed the system theme from the boot configuration; live switches arrive
-    // as `MainEvent::ConfigChanged`.
     android_platform_env()
         .set_system_theme(system_theme_from_android(app.config().ui_mode_night()));
 
-    // Same for the font-size setting, which the NDK configuration does not
-    // carry — it is read over JNI here and again on every configuration
-    // change. The shell picks it up with the rest of the geometry.
     crate::android_font_scale::refresh_font_scale(&app);
 
-    // What Play actually packaged, which a version compiled into the binary
-    // cannot know: Gradle's `versionNameSuffix` and a CI-stamped version code
-    // are both applied after the compiler has been and gone. Read once — the
-    // packaged identity of a running process does not change.
     crate::android_app_info::install_app_info(&app);
 
-    // Install a panic hook for crash logging in Logcat. `take_hook()` grabs
-    // whatever hook the application installed before handing control to
-    // `AppLauncher::run_android()` (e.g. its own crash reporter), and
-    // `chained_panic_hook` wraps the framework's hook around it so both run
-    // instead of the framework's silently winning.
     let previous_hook = std::panic::take_hook();
     std::panic::set_hook(crate::android_panic_hook::chained_panic_hook(
         |panic_info| {
@@ -1991,10 +1586,8 @@ pub fn run(
         previous_hook,
     ));
 
-    // Wrap content in Rc<RefCell> for reuse across window recreations
     let content = std::rc::Rc::new(std::cell::RefCell::new(content));
 
-    // App shell (created once, persists across window recreations)
     let mut app_shell: Option<AppShell<WgpuRenderer>> = None;
     let mut accessibility_elements = Vec::new();
     let mut accessibility_revision = None;
@@ -2005,17 +1598,7 @@ pub fn run(
 
     let android_frame_driver = AndroidFrameDriver::new(app.create_waker());
     let mut frame_rate_voter = crate::android_frame_rate::FrameRateVoter::default();
-    // The ADPF hint session opens lazily on the first presented frame — the
-    // vsync period is a live estimate by then, and `open` must run on this
-    // loop thread (the session names the calling thread). `Some(None)`
-    // remembers an absent/refused ADPF so it is probed exactly once.
     let mut perf_hint: Option<Option<crate::android_perf_hint::PerfHintSession>> = None;
-    // How long after the last input event the Auto frame-rate vote keeps the
-    // panel's fast rate. SurfaceFlinger's own touch boost holds for seconds,
-    // and a shorter hold-off measurably hurts: at 1 s the display mode
-    // flip-flopped between gestures and the switch hiccups pulled presented
-    // fps *below* 60 (55.9 measured); at 3 s a continuously-driven scene
-    // holds the fast rate while an untouched animation still settles quickly.
     const FRAME_RATE_BOOST_HOLD_OFF: Duration = Duration::from_secs(3);
     let mut last_interaction: Option<Instant> = None;
     crate::android_vsync::install_waker(android_frame_driver.vsync_waker());
@@ -2023,23 +1606,15 @@ pub fn run(
     let host_window_registry = Rc::new(android_host_window::AndroidHostWindowRegistry::default());
     let overlay_event_queue = Arc::new(android_overlay_window::AndroidOverlayEventQueue::default());
 
-    // IME editor bridge (InputConnection-backed text input). The queue crosses
-    // the JNI/UI-thread boundary; the session state stays on this thread.
     let ime_event_queue = Arc::new(android_text_input::AndroidImeEventQueue::new());
     ime_event_queue.set_waker(app.create_waker());
     let ime_session =
         android_keyboard::AndroidImeSession::new(app.clone(), Arc::clone(&ime_event_queue));
 
-    // Exit flag for Destroy event (can't break from inside poll_events closure)
     let should_exit = Arc::new(AtomicBool::new(false));
 
-    // Probe Vulkan first, then create a fresh GL-only instance if no compatible
-    // adapter exists. Keeping the backends separate is important on emulators:
-    // a failed Vulkan probe can otherwise leave the ANativeWindow connected and
-    // make EGL surface creation abort with `EGL_BAD_ALLOC`.
     let mut wgpu_context = AndroidWgpuContext::new(AndroidGpuBackend::preferred());
 
-    // Platform abstraction for density/pointer conversion
     let mut android_platform = AndroidPlatform::new();
     let mut current_host_window_size = Size::ZERO;
     let mut initial_host_window_size = settings.initial_size_explicit.then(|| {
@@ -2054,42 +1629,22 @@ pub fn run(
     let mut overlay_window_options = settings.android_overlay_window;
     let mut overlay_window_requested = false;
 
-    // GPU resources (recreated when window is destroyed/created)
     let mut gpu_resources: Option<GpuResources> = None;
 
-    // Queue for input events (processed outside poll_events to prevent ANR)
     let mut pending_inputs: Vec<PendingInput> = Vec::new();
-    // Android pointer id of the finger that started the current gesture
-    // (the shell's primary pointer). None while no gesture is in progress.
     let mut primary_pointer_id: Option<i32> = None;
 
-    // Key-event translation (KeyCharacterMap lookups, dead-key state)
     let mut key_translator = AndroidKeyTranslator::new(app.clone());
-    // The soft-keyboard handler is installed once the app shell exists
     let mut soft_keyboard_installed = false;
-    // When the next off-screen composition pass may run (see below).
     let mut next_offscreen_update: Option<web_time::Instant> = None;
 
-    // Per-stage frame telemetry (system-property gated; free when off).
     let mut frame_telemetry =
         crate::android_frame_telemetry::AndroidFrameTelemetry::from_system_properties();
     crate::android_frame_telemetry::start_vsync_probe_if_enabled();
 
-    /// How many turns of the loop an unhonoured exit request is retried for.
-    /// Enough to ride out a transient JNI thread-attach failure, few enough
-    /// that a permanent one is not a call and a log line every frame.
     const MAX_EXIT_ATTEMPTS: u32 = 3;
     let mut exit_attempts = 0u32;
 
-    // Catch-up pacing (kill switch CRANPOSE_CATCHUP_PACING=0 /
-    // debug.cranpose.catchup_pacing): when the previous iteration's present
-    // landed more than a refresh period after the one before it, the frame
-    // already missed its vsync — sleeping until the NEXT choreographer tick
-    // would round that miss up to a whole extra period, turning an 18 ms
-    // frame into a 33 ms one. Behind-deadline iterations poll immediately
-    // instead; `Fifo` present back-pressure paces them. Any iteration that
-    // does not present resets to vsync pacing, so an idle app that skips
-    // presents can never busy-loop on the zero poll.
     let catchup_pacing = !matches!(std::env::var("CRANPOSE_CATCHUP_PACING").as_deref(), Ok("0"));
     if catchup_pacing {
         log::info!("[pacing] catch-up pacing enabled");
@@ -2098,27 +1653,15 @@ pub fn run(
     let mut behind_deadline = false;
     let mut catchup_coasts = 0u32;
 
-    // The producer-side timestamps of the frames currently in flight on
-    // the present thread (depth-one publishing: one rendering plus one
-    // waiting), completed with the runtime's acquire/render/present
-    // timestamps when each frame's returns drain. Threaded present mode
-    // only; the sync path records its telemetry in `render_once` as
-    // always.
     let mut pending_present_timings =
         Vec::<(u64, crate::android_frame_telemetry::FrameTimings)>::with_capacity(2);
 
-    // Main event loop
     loop {
         let mut frame_timings = crate::android_frame_telemetry::FrameTimings {
             iteration_start_ns: frame_telemetry.now(),
             ..Default::default()
         };
 
-        // Drain present-runtime returns FIRST — before the frame schedule
-        // reads `needs_redraw` (fresh warmup state) and before the credit
-        // gate below, so a completed frame frees its publish credit for
-        // this very iteration. No-op (and `None`) in sync mode, which has
-        // no present runtime to drain.
         let drained_present_at = match app_shell.as_mut() {
             Some(shell) => drain_present_returns_into_loop(
                 shell,
@@ -2135,9 +1678,6 @@ pub fn run(
                 .unwrap_or(Duration::ZERO)
         });
 
-        // A frame deadline with no surface asks for a frame nothing will draw,
-        // and an app with a running animation asks for one every turn of the
-        // loop, which is a spun core for as long as the app is off screen.
         let no_surface = gpu_resources
             .as_ref()
             .is_none_or(|resources| !resources.has_surface());
@@ -2157,9 +1697,6 @@ pub fn run(
                 .as_ref()
                 .is_some_and(|shell| shell.has_pending_ui());
         let offscreen_timeout = next_offscreen_update.map(duration_until_frame_deadline);
-        // A deferred accessibility publish (throttle window still closed when
-        // the last semantics change arrived) bounds the sleep so its trailing
-        // flush cannot wait on the next app-driven frame.
         let accessibility_flush_timeout = accessibility_policy
             .wake_deadline()
             .map(|deadline| deadline.saturating_duration_since(std::time::Instant::now()));
@@ -2171,16 +1708,6 @@ pub fn run(
             ),
         };
 
-        // Vote the display frame rate the way HWUI does: the panel's fastest
-        // rate while the user is interacting, the quiet rate while an
-        // untouched animation runs, no preference when still. The interaction
-        // gate matters for fidelity both ways — Compose runs an untouched
-        // infinite animation at the display's quiet rate (measured: its
-        // spinning title holds 60 on a 120 Hz panel) and bursts on touch, so
-        // a vote tied to animation alone would overshoot it. Without any vote
-        // at all, SurfaceFlinger infers a rate from our cadence and pins us
-        // via frameRateOverride, choreographer included, so the inferred 60
-        // is self-reinforcing and even SF's own touch boost cannot lift it.
         if let Some(shell) = app_shell.as_ref() {
             let preference = shell.frame_rate_preference();
             let producing_frames = android_frame_driver.frame_requested();
@@ -2206,17 +1733,7 @@ pub fn run(
                 false => idle_timeout,
             }
         } else if android_frame_driver.frame_requested() {
-            // A frame request is satisfied at the next vsync, not immediately.
-            // Spinning here is only invisible while every iteration ends in a
-            // blocking `Fifo` present; the moment the loop starts skipping
-            // presents for frames identical to the one on screen, a zero poll
-            // turns an idle app into a busy loop. Fall back to the zero poll
-            // when the display cannot wake us, so a device without a
-            // choreographer keeps the behaviour it had.
             if behind_deadline {
-                // The last present already missed its vsync (see the
-                // catch-up pacing note above the loop); every behind
-                // iteration presents, so the busy-loop hazard cannot arise.
                 Some(Duration::ZERO)
             } else if crate::android_vsync::request_wake_at_next_vsync() {
                 idle_timeout
@@ -2228,8 +1745,8 @@ pub fn run(
         };
 
         app.poll_events(poll_duration, |event| {
-            match event {
-                PollEvent::Main(main_event) => match main_event {
+            if let PollEvent::Main(main_event) = event {
+                match main_event {
                     MainEvent::InitWindow { .. } => {
                         log::info!("Window initialized, setting up rendering");
 
@@ -2309,13 +1826,6 @@ pub fn run(
                                             density
                                         );
 
-                                        // Only forward the launcher's initial size to the host
-                                        // window in multi-window/freeform modes. A fullscreen
-                                        // activity's window already spans the entire display
-                                        // (edge-to-edge, including behind the system bars);
-                                        // shrinking it with `Window.setLayout` pulls the native
-                                        // surface away from the display edges and the uncovered
-                                        // strips render as black bands.
                                         if let Some(requested) = initial_host_window_size.take() {
                                             if !android_activity_in_multi_window_mode(&app) {
                                                 log::info!(
@@ -2398,11 +1908,6 @@ pub fn run(
                                         resources.config.width = width;
                                         resources.config.height = height;
                                         if present_thread {
-                                            // Epoch bump first (in-flight packets
-                                            // cancel), then the runtime applies the
-                                            // new configuration and acks before
-                                            // anything publishes under the new
-                                            // epoch.
                                             let renderer = shell.renderer();
                                             renderer.note_surface_reconfigured();
                                             renderer.present_reconfigure(resources.config.clone());
@@ -2411,7 +1916,6 @@ pub fn run(
                                             surface.configure(&resources.device, &resources.config);
                                         }
 
-                                        // Set buffer_size to physical pixels
                                         shell.set_buffer_size(width, height);
 
                                         if let Some(actual_size) =
@@ -2457,10 +1961,6 @@ pub fn run(
                         cranpose_services::dispatch_lifecycle_state(
                             cranpose_services::LifecycleState::Paused,
                         );
-                        // Withdraw any outstanding soft-keyboard request and
-                        // close the IME editor session so the OS cannot restore
-                        // the keyboard on resume for an editor view the
-                        // framework no longer considers focused.
                         if let Some(shell) = &mut app_shell {
                             shell.notify_app_paused();
                         }
@@ -2471,12 +1971,6 @@ pub fn run(
                         cranpose_services::dispatch_lifecycle_state(
                             cranpose_services::LifecycleState::Resumed,
                         );
-                        // Never auto-reopen the soft keyboard on resume, even if a
-                        // field is still focused: a warm resume keeps the field's
-                        // caret/focus but must not resurrect the keyboard (the OS
-                        // InputMethodManager would otherwise pop it back). The user
-                        // taps the field to bring it back. `notify_app_resumed`
-                        // always returns false, so we force the keyboard hidden.
                         let reopened = app_shell
                             .as_mut()
                             .map(|shell| shell.notify_app_resumed())
@@ -2520,34 +2014,20 @@ pub fn run(
                         );
                     }
                     MainEvent::ConfigChanged { .. } => {
-                        // Follow OS light/dark switches live (uiMode arrives as
-                        // a configuration change).
                         let theme = system_theme_from_android(app.config().ui_mode_night());
                         if android_platform_env().set_system_theme(theme)
                             && let Some(shell) = &mut app_shell {
                                 shell.request_root_render();
                             }
-                        // So does the font-size setting: the platform changes
-                        // the configuration rather than restarting the process,
-                        // so an app that never re-read it would keep laying
-                        // text out at the size the user just moved away from.
                         if crate::android_font_scale::refresh_font_scale(&app)
                             && let Some(shell) = &mut app_shell {
                                 shell.set_font_scale_curve(
                                     crate::android_font_scale::font_scale_curve(),
                                 );
                             }
-                        // Multi-window transitions arrive as configuration
-                        // changes too, and they gate the renderer's
-                        // round-display corner cull: re-read the platform
-                        // truth.
                         apply_display_visible_region(&app, &mut app_shell);
                     }
                     _ => {}
-                },
-                _ => {
-                    // Non-main poll events do not own Android NativeActivity
-                    // input. Native input is delivered as MainEvent::InputAvailable.
                 }
             }
         });
@@ -2655,17 +2135,12 @@ pub fn run(
                 }
                 android_overlay_window::AndroidOverlayWindowEvent::Pointer { action, x, y } => {
                     let logical = android_platform.pointer_position(x as f64, y as f64);
-                    // Overlay pointer events cross a JNI bridge that does not
-                    // forward MotionEvent timestamps; velocity tracking falls
-                    // back to delivery-time stamping for them.
                     match action {
                         android_overlay_window::AndroidOverlayPointerAction::Down => {
                             pending_inputs.push(PendingInput::PointerDown(
                                 logical.x,
                                 logical.y,
                                 None,
-                                // The overlay JNI bridge does not forward tool
-                                // type; overlay surfaces are touch in practice.
                                 PointerSource::Touch,
                             ));
                         }
@@ -2693,8 +2168,6 @@ pub fn run(
             }
         }
 
-        // Install the soft-keyboard focus hook as soon as the shell exists so
-        // the first tap on a text field already opens the keyboard.
         if !soft_keyboard_installed && let Some(shell) = &mut app_shell {
             shell.set_platform_text_input(Rc::new(AndroidSoftKeyboard::new(Rc::clone(
                 &ime_session,
@@ -2702,8 +2175,6 @@ pub fn run(
             soft_keyboard_installed = true;
             log::info!("Android soft keyboard focus hook installed");
 
-            // The system clipboard is per-AppContext (it backs the text
-            // selection menu), so it registers once the shell exists.
             let clipboard_app = app.clone();
             shell.app_context().enter(move || {
                 cranpose_ui::clipboard_session::set_platform_clipboard(Rc::new(
@@ -2711,30 +2182,18 @@ pub fn run(
                 ));
             });
 
-            // Cold-start guard (bug 5): on a fresh launch the OS can restore
-            // the soft keyboard left over from the previous process — even on
-            // a screen with no text field. Re-request it only if a field is
-            // genuinely focused this launch; otherwise force it hidden so the
-            // keyboard does not resurrect on relaunch. `notify_app_resumed`
-            // returns whether a focused field re-opened it.
             if !shell.notify_app_resumed() {
                 ime_session.ensure_hidden();
                 log::info!("No focused field at launch; ensured soft keyboard hidden");
             }
         }
 
-        // Apply editing operations forwarded by the IME InputConnection
-        // (commit/compose/delete/key/editor-action), in arrival order.
         if let Some(shell) = &mut app_shell {
             for (x, y) in crate::android_accessibility::drain_activations() {
                 shell.set_cursor(x, y);
                 shell.pointer_pressed();
                 shell.pointer_released_at_position(x, y);
             }
-            // A custom action has no position to synthesise a tap at — it is
-            // the screen reader's way to reach a command with no on-screen
-            // control — so it is dispatched by identity instead, against the
-            // semantics tree as it stands this frame.
             for (virtual_id, action_index) in crate::android_accessibility::drain_custom_actions() {
                 let Some((node_id, canvas_key)) =
                     crate::accessibility::resolve_element_id(&accessibility_elements, virtual_id)
@@ -2756,14 +2215,11 @@ pub fn run(
             }
         }
 
-        // Apply capability signals parked by the Java UI thread (window
-        // insets → safe area).
         crate::android_services::apply_pending_platform_signals(
             get_display_density(&app),
             &mut app_shell,
         );
 
-        // Process pending input events outside poll_events to prevent ANR
         if !pending_inputs.is_empty() {
             last_interaction = Some(Instant::now());
             if let Some(shell) = &mut app_shell {
@@ -2776,10 +2232,6 @@ pub fn run(
                             shell.pointer_pressed_at_event_time(event_time);
                         }
                         PendingInput::PointerUp(x, y, time_ms, source) => {
-                            // ACTION_UP coordinates carry lift-off roll-back
-                            // jitter; they must NOT become a velocity sample
-                            // (a synthesized Move here can flip the fling
-                            // direction), so release without a Move dispatch.
                             shell.set_pointer_source(source);
                             let event_time = shell.realtime_pointer_event_time(time_ms);
                             shell.pointer_released_at_position_event_time(x, y, event_time);
@@ -2796,7 +2248,6 @@ pub fn run(
                             shell.on_key_event(&event);
                         }
                         PendingInput::SecondaryPointerDown(id, x, y, time_ms) => {
-                            // Additional fingers of a multi-touch gesture: touch.
                             shell.set_pointer_source(PointerSource::Touch);
                             shell.secondary_pointer_pressed(id, x, y, time_ms);
                         }
@@ -2809,8 +2260,6 @@ pub fn run(
                             shell.secondary_pointer_moved(id, x, y, time_ms);
                         }
                         PendingInput::RotaryScroll(detents, uptime_ms) => {
-                            // Detents -> pixels happens in the shell so the
-                            // scroll factor can be refined at runtime.
                             shell.rotary_scrolled_by_detents(detents, uptime_ms);
                         }
                     }
@@ -2818,17 +2267,12 @@ pub fn run(
             }
         }
 
-        // Mirror the editor state back to the Java InputConnection after
-        // input handling: refreshes the IME's selection view and restarts
-        // the input session when the field content diverged from the mirror
-        // (e.g. the app transformed or rejected input).
         if ime_session.is_active()
             && let Some(shell) = &mut app_shell
         {
             ime_session.sync_editor_state(shell.ime_editor_state());
         }
 
-        // Check if app side requested a frame (animations, state changes)
         if android_frame_driver.take_frame_request()
             && let Some(shell) = &mut app_shell
         {
@@ -2840,20 +2284,6 @@ pub fn run(
             current_host_window_size,
         );
 
-        // The app asked to be closed -- `cranpose_services::request_exit`. Not
-        // a break: this loop leaving would drop the surface while the activity
-        // is still up. `Activity.finish()` asks the platform to tear the
-        // activity down, which arrives back here as `MainEvent::Destroy` and
-        // takes the ordinary exit below. So the app's request and the system's
-        // own back both end the same way.
-        //
-        // The flag is consumed only when the call lands. Taking it first and
-        // ignoring the result means a JNI failure -- a thread that could not
-        // attach, most plausibly -- swallows the app's one record that it
-        // wanted to close: it stays open, the user's gesture did nothing, and
-        // nothing will ever ask again. The retry is bounded so a permanent
-        // failure does not become a JNI call and a log line every frame for
-        // the rest of the process.
         if cranpose_services::exit_requested() && exit_attempts < MAX_EXIT_ATTEMPTS {
             exit_attempts += 1;
             log::info!("App requested exit; finishing the activity");
@@ -2868,17 +2298,11 @@ pub fn run(
             }
         }
 
-        // Check if Destroy event requested exit
         if should_exit.load(Ordering::Relaxed) {
             log::info!("Exiting cleanly after Destroy event");
             break;
         }
 
-        // Work waiting on the UI thread earns a pass. A running animation does
-        // not: nothing is drawn, and paying for a composition per animation
-        // frame off screen is how an app burns a core behind the user's back.
-        // One follow-up pass is armed after a pass that carried work, so a
-        // recomposition that work asked for still runs.
         let offscreen_due = next_offscreen_update.is_some_and(|at| at <= web_time::Instant::now());
         if offscreen && (offscreen_pending_ui || offscreen_due) {
             if let Some(shell) = &mut app_shell
@@ -2895,13 +2319,6 @@ pub fn run(
             };
         }
 
-        // Render outside event callback if needed. In threaded present mode
-        // the depth-one credit gate wraps the WHOLE update block: without
-        // credit (a frame is still in flight on the present thread) the
-        // producer skips even `shell.update()` — backpressure lands before
-        // the expensive update/lowering work, and the present thread's
-        // completion wakes the looper through the frame waker. In sync mode
-        // `has_frame_credit` is constant `true` and this is today's block.
         let mut adpf_work_started: Option<web_time::Instant> = None;
         let mut adpf_sync_presented = false;
         if let (Some(resources), Some(shell)) = (&mut gpu_resources, &mut app_shell) {
@@ -2943,9 +2360,6 @@ pub fn run(
                         let (width, height) = shell.buffer_size();
                         match shell.renderer().publish_frame(width, height) {
                             PublishOutcome::Published => {
-                                // The runtime finishes acquire/render/present;
-                                // this frame's producer timestamps wait for its
-                                // returns to complete the telemetry record.
                                 pending_present_timings.push((
                                     shell.renderer().last_published_frame_id(),
                                     frame_timings,
@@ -2961,12 +2375,8 @@ pub fn run(
                         &mut frame_telemetry,
                         &mut frame_timings,
                     ) {
-                        break; // Out of memory, exit
+                        break;
                     } else {
-                        // Presented exactly when the render arm cleared the
-                        // dirty flag — Reconfigure and Skip both re-set it.
-                        // The telemetry stamps cannot carry this signal:
-                        // they are property-gated zeros in production.
                         adpf_sync_presented = !resources.surface_dirty;
                     }
                 } else {
@@ -2974,9 +2384,6 @@ pub fn run(
                 }
             } else {
                 frame_telemetry.note_idle_iteration();
-                // An accessibility publish deferred by the throttle window
-                // must not be lost to an idle loop: once the window opens,
-                // flush it even though no frame is being produced.
                 if accessibility_policy
                     .wake_deadline()
                     .is_some_and(|deadline| deadline <= std::time::Instant::now())
@@ -2996,24 +2403,11 @@ pub fn run(
             frame_telemetry.note_idle_iteration();
         }
 
-        // Catch-up pacing bookkeeping (see the note above the loop):
-        // `after_present_ns` is stamped only by a successful present, and
-        // `FrameTimings` is fresh per iteration, so a nonzero value is the
-        // exact "this iteration presented" signal (sync mode). In threaded
-        // mode presents complete on the present thread and are observed
-        // when their returns drain at the head of the iteration, carrying
-        // the back-dated present instant; the two signals are exclusive
-        // (one mode per run).
         let presented_at = if frame_timings.after_present_ns != 0 {
             Some(web_time::Instant::now())
         } else {
             drained_present_at
         };
-        // The frame's declared work for the ADPF session: update through
-        // present returning, measured with the loop's own clock — the
-        // telemetry stamps are property-gated and read zero in production.
-        // Threaded-present frames complete elsewhere and report nothing
-        // rather than a made-up number.
         if adpf_sync_presented && let Some(started) = adpf_work_started {
             let reported = crate::android_frame_telemetry::vsync_period_ns();
             let period = if reported > 0 {
@@ -3030,32 +2424,17 @@ pub fn run(
         if let Some(now) = presented_at {
             behind_deadline = catchup_pacing
                 && last_present_at.is_some_and(|previous| {
-                    // Display-reported period first (vsync-probe builds),
-                    // then the always-on estimate from consecutive
-                    // choreographer callback deltas, then the 60 Hz default.
                     let reported = crate::android_frame_telemetry::vsync_period_ns();
                     let period = if reported > 0 {
                         reported
                     } else {
                         crate::android_vsync::observed_vsync_period_ns().unwrap_or(16_666_667)
                     };
-                    // period/16 of slack (~1 ms at 60 Hz) keeps at-rate
-                    // presentation jitter from triggering catch-up.
                     now.duration_since(previous).as_nanos() as i64 > period + period / 16
                 });
             catchup_coasts = 0;
             last_present_at = Some(now);
         } else if behind_deadline {
-            // Frame telemetry caught the original reset-on-any-idle rule
-            // defeating catch-up once per frame: a zero-poll iteration can
-            // land before the update clock has advanced, skip its present
-            // as "nothing changed", and the reset then handed the NEXT
-            // iteration back to the choreographer — a measured p50 10.9 ms
-            // poll sleep per presented frame at 33 fps. Behind-deadline now
-            // survives a bounded number of non-presenting iterations; the
-            // bound keeps the original guarantee that an idle app skipping
-            // presents for identical frames returns to vsync pacing after
-            // at most a few immediate polls instead of busy-looping.
             catchup_coasts += 1;
             if catchup_coasts >= 3 {
                 behind_deadline = false;
@@ -3063,9 +2442,6 @@ pub fn run(
         }
     }
 
-    // Loop exited (`Destroy`): stop the present thread. Outstanding
-    // returns drain into the frontend and the thread joins; the surface
-    // and the GpuRenderer die on the present thread, as they lived.
     if let Some(shell) = app_shell.as_mut() {
         shell.renderer().shutdown_present_runtime();
     }

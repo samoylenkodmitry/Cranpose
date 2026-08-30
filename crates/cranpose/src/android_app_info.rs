@@ -1,15 +1,3 @@
-//! Reads Android's packaged `versionName` and `versionCode`.
-//!
-//! Both live in the manifest of the installed APK, not in anything the Rust
-//! compiler saw: Gradle can add a `versionNameSuffix` per build type, and CI
-//! commonly stamps the version code at package time. So a version baked into
-//! the binary is the version the *source* wanted, and the one `PackageManager`
-//! reports is the version the user actually has — which is the one an About
-//! screen should print and a bug report should quote.
-//!
-//! Read once at startup: the packaged identity of a running process cannot
-//! change, and a JNI round trip does not belong on any repeated path.
-
 use std::rc::Rc;
 
 use cranpose_services::app_info::{AppInfo, set_platform_app_info};
@@ -30,12 +18,6 @@ impl AppInfo for AndroidAppInfo {
     }
 }
 
-/// Reads the packaged version and installs it as the platform app info.
-///
-/// A failure is not fatal — the app keeps whatever fallback it had, which is
-/// the behaviour before this was readable at all — but it is worth a log,
-/// because a version screen that quietly shows the wrong number is worse than
-/// one that shows nothing.
 pub(crate) fn install_app_info(app: &android_activity::AndroidApp) {
     match query_app_info(app) {
         Ok((version_name, build_version)) => {
@@ -86,8 +68,6 @@ fn query_app_info(
             .and_then(|value| value.l())
             .map_err(|error| describe(env, "PackageManager.getPackageInfo", error))?;
 
-        // `versionName` is nullable in the manifest, so an absent one is a
-        // legitimate answer rather than a failure.
         let name_object = env
             .get_field(
                 &info,
@@ -104,8 +84,6 @@ fn query_app_info(
                 .ok()
         };
 
-        // `getLongVersionCode` since API 28; below that the `int` field is the
-        // whole story, and the same number.
         let build_version = env
             .call_method(&info, jni_str!("getLongVersionCode"), jni_sig!("()J"), &[])
             .and_then(|value| value.j())

@@ -1,26 +1,7 @@
-//! Offscreen render target pool for effect layers.
-//!
-//! Provides reusable GPU textures that can be both rendered to (as a color
-//! attachment) and sampled from (as a texture binding). Used by blur and
-//! custom shader effects that need to capture a subtree's rendered output.
-
 use std::cell::OnceCell;
 
 use crate::gpu_stats::FrameStats;
 
-/// The format every offscreen surface and the persistent composition target
-/// share, latched at first use — render pipelines bake their target format,
-/// so it cannot change mid-process.
-///
-/// `Rgba16Float` (8 B/px) keeps composition exact; on a bandwidth-starved
-/// mobile GPU those 8 bytes double the cost of every pass in the frame. On
-/// Android the default is `Rgba8Unorm` — the platform composites its own UI
-/// through 8-bit `RGBA_8888` surfaces, and on a Kirin 980 scrolling a
-/// glass-chrome list the 4 B/px pipeline measured present p50 7.2→5.4 ms
-/// with no visible difference on the panel. Desktop, iOS and web keep the
-/// float pipeline. `CRANPOSE_COMPOSITION_8BIT=1`/`0`
-/// (`debug.cranpose.composition_8bit` over adb) overrides in either
-/// direction without a rebuild.
 pub(crate) fn composition_format() -> wgpu::TextureFormat {
     static FORMAT: std::sync::OnceLock<wgpu::TextureFormat> = std::sync::OnceLock::new();
     *FORMAT.get_or_init(|| {
@@ -44,16 +25,12 @@ fn resolve_composition_format(requested: Option<&str>, android: bool) -> wgpu::T
     }
 }
 
-/// A GPU texture that can serve as both a render target and a texture source.
 pub(crate) struct OffscreenTarget {
-    // Texture kept alive for the view's lifetime; the view borrows from it implicitly.
     texture: wgpu::Texture,
     pub view: wgpu::TextureView,
     pub width: u32,
     pub height: u32,
     bytes_per_pixel: u64,
-    /// Lazily-cached bind group for sampling this target as a texture.
-    /// Valid as long as the underlying texture is alive (i.e. while this target exists).
     cached_bind_group: OnceCell<wgpu::BindGroup>,
 }
 
@@ -102,19 +79,10 @@ impl OffscreenTarget {
         }
     }
 
-    /// Returns true if this target exactly matches the requested dimensions.
-    ///
-    /// Effects rely on a 1:1 mapping between render target texels and viewport
-    /// coordinates, so larger pooled textures are not considered compatible.
     fn matches_size(&self, width: u32, height: u32) -> bool {
         self.width == width && self.height == height
     }
 
-    /// Get the cached texture bind group, creating it on first access.
-    ///
-    /// The bind group binds this target's texture view and the provided sampler
-    /// for use in effect fragment shaders. Since the underlying texture never
-    /// changes while this target is alive, the bind group is valid for reuse.
     pub fn get_or_create_bind_group(
         &self,
         device: &wgpu::Device,
@@ -148,29 +116,14 @@ pub(crate) fn composition_bytes_per_pixel() -> u64 {
     crate::frame_graph::texture_format_bytes_per_pixel(composition_format())
 }
 
-/// Pool of reusable offscreen render targets.
-///
-/// Targets are returned to the pool after use and reused when a suitable size
-/// is available, avoiding per-frame GPU texture allocation. Capped to prevent
-/// unbounded GPU memory growth from accumulating targets of varying sizes.
 pub(crate) struct OffscreenPool {
     available: Vec<OffscreenTarget>,
     format: wgpu::TextureFormat,
     max_texture_dim: u32,
 }
 
-/// Backstop on pooled targets, so a pathological frame cannot grow the pool
-/// without bound even when every target is small.
 const MAX_POOLED_TARGETS: usize = 64;
 
-/// Memory the pool may hold. A count-only cap cannot bound memory, because a
-/// target is anything from 132x132 to full screen; a byte budget can.
-///
-/// A screen of frosted controls asks for one surface per control every frame:
-/// a scrolling list on a 1080x2244 phone acquired thirteen, and a cap of
-/// sixteen targets kept the wrong ones, so twelve of the thirteen were created
-/// again on every frame. 128 MB holds a frame's worth of surfaces on that phone
-/// with room for the blur scratch.
 const MAX_POOLED_BYTES: u64 = 128 * 1024 * 1024;
 
 fn target_bytes(width: u32, height: u32, bytes_per_pixel: u64) -> u64 {
@@ -195,17 +148,14 @@ impl OffscreenPool {
         }
     }
 
-    /// Maximum texture dimension supported by the GPU.
     pub fn max_texture_dim(&self) -> u32 {
         self.max_texture_dim
     }
 
-    /// Number of targets currently in the pool.
     pub fn pool_size(&self) -> usize {
         self.available.len()
     }
 
-    /// Approximate GPU memory held by pooled targets (bytes).
     pub fn estimated_bytes(&self) -> usize {
         self.available
             .iter()
@@ -217,10 +167,6 @@ impl OffscreenPool {
             .sum()
     }
 
-    /// Acquire an offscreen target for the given dimensions.
-    ///
-    /// Returns a pooled target when dimensions exactly match, otherwise creates
-    /// a new target for the requested size.
     pub fn acquire(
         &mut self,
         device: &wgpu::Device,
@@ -247,11 +193,6 @@ impl OffscreenPool {
         }
     }
 
-    /// Return a target to the pool for future reuse.
-    ///
-    /// The pool keeps the most recently returned targets, since those are the
-    /// sizes the next frame asks for, and drops the oldest ones once it is
-    /// over its budget.
     pub fn release(&mut self, target: OffscreenTarget) {
         self.available.push(target);
         while self.available.len() > MAX_POOLED_TARGETS
@@ -272,10 +213,6 @@ impl OffscreenPool {
         crate::frame_graph::texture_format_bytes_per_pixel(self.format)
     }
 
-    /// The bind group layout for sampling offscreen textures.
-    ///
-    /// Provides: `@group(N) @binding(0) var input_texture: texture_2d<f32>`
-    ///           `@group(N) @binding(1) var input_sampler: sampler`
     pub fn texture_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Effect Texture Bind Group Layout"),
@@ -300,9 +237,6 @@ impl OffscreenPool {
         })
     }
 
-    /// The bind group layout for RuntimeShader uniforms.
-    ///
-    /// Provides: `@group(N) @binding(0) var<uniform> u: array<vec4<f32>, 64>`
     pub fn uniform_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Effect Uniform Bind Group Layout"),
@@ -360,9 +294,6 @@ mod tests {
         );
     }
 
-    /// A frame of frosted controls returns more surfaces than the old count
-    /// cap held, and the sizes it returns are the sizes the next frame asks
-    /// for.
     #[test]
     fn a_frame_worth_of_small_surfaces_stays_pooled() {
         let bytes: u64 = (0..20)
@@ -372,8 +303,6 @@ mod tests {
             bytes < MAX_POOLED_BYTES,
             "twenty control surfaces must fit the pool budget"
         );
-        // `const_assert`-shaped on purpose: both sides are constants, so this
-        // is a compile-time claim about the budget, not a runtime check.
         const _: () = assert!(20 < MAX_POOLED_TARGETS);
     }
 

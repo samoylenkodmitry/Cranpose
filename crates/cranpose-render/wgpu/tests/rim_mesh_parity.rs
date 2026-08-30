@@ -1,28 +1,3 @@
-//! Pixel parity for the transient rim band mesh.
-//!
-//! A huge stroked round-rect whose corner radius equals its geometry
-//! half-extent is a circle ring — an arena "rim". The fused shape path
-//! detects such shapes per frame (`rim_mesh_band`) and rasterizes only the
-//! annulus band ± the antialiasing margin through the retained-mesh
-//! machinery (`vs_mesh` + `fs_main`), instead of the ~100k-px bounding quad
-//! whose fragments the stroked-round-rect SDF almost entirely discards.
-//!
-//! The bar is ZERO differing bytes against the quad-expansion arm: for a
-//! radius equal to the half-extent the SDF degenerates exactly to an
-//! annulus, the band mesh contains every pixel with `|dist| < 0.5`
-//! (over-inclusion is free — the SDF discards those pixels identically),
-//! and `fs_solid` is pinned byte-exact against `fs_main` by
-//! `solid_fs_parity`. Arm separation is by the `CRANPOSE_RIM_MESH` kill
-//! switch, which is read per fused-chunk prepare — no renderer relatch is
-//! involved, but each arm still renders a throwaway warm pass plus two
-//! byte-stable controls (the same-position-control discipline
-//! `command_feed_parity` documents).
-//!
-//! The scene surrounds the rim with small solid circles on BOTH z sides,
-//! several overlapping the ring itself, so the draw split (instances below
-//! the rim, band mesh, instances above) is exercised and any z-order
-//! mistake shows up as differing bytes.
-
 mod support;
 
 use cranpose_render_common::{
@@ -38,10 +13,6 @@ use cranpose_ui_graphics::{
 };
 
 const SIZE: u32 = 400;
-/// The rim's geometry rect: 320 × 320 at (40, 40). The emitted shape is
-/// inflated by half the 8 px stroke (device box 328 × 328 ≈ 107k px², past
-/// the 65536 px² gate), and the corner radius 160 equals the geometry
-/// half-extent — the outline is a circle of diameter 320 about (200, 200).
 const RIM_RECT: Rect = Rect {
     x: 40.0,
     y: 40.0,
@@ -61,8 +32,6 @@ fn record_scene(scope: &mut DrawScopeDefault) {
         },
         Brush::solid(Color(0.03, 0.03, 0.06, 1.0)),
     );
-    // Neighbors BELOW the rim in z, several sitting on the ring itself so
-    // the rim must cover them.
     for i in 0..5u32 {
         let angle = i as f32 * (std::f32::consts::TAU / 5.0);
         scope.draw_circle(
@@ -74,7 +43,6 @@ fn record_scene(scope: &mut DrawScopeDefault) {
             7.0,
         );
     }
-    // The rim itself: a solid stroked circle round-rect, SrcOver, no clip.
     scope.draw_round_rect_at_stroked(
         RIM_RECT,
         Brush::solid(Color(0.35, 0.75, 0.95, 1.0)),
@@ -84,9 +52,6 @@ fn record_scene(scope: &mut DrawScopeDefault) {
             ..Default::default()
         },
     );
-    // Neighbors ABOVE the rim in z: semi-transparent and overlapping the
-    // band, so a draw-order mistake changes blended bytes, not just AA
-    // fringes.
     for i in 0..5u32 {
         let angle = (i as f32 + 0.5) * (std::f32::consts::TAU / 5.0);
         scope.draw_circle(
@@ -144,8 +109,6 @@ fn rim_graph() -> RenderGraph {
     })
 }
 
-/// Warm pass (never compared), then two controls asserted byte-stable; the
-/// second control is the arm's frame.
 fn render_arm(renderer: &mut support::LockedRenderer, graph: &RenderGraph) -> Vec<u8> {
     let mut passes = Vec::new();
     for _ in 0..3 {
@@ -165,7 +128,6 @@ fn render_arm(renderer: &mut support::LockedRenderer, graph: &RenderGraph) -> Ve
 
 #[test]
 fn rim_band_mesh_matches_the_quad_expansion() {
-    // Arm A must run under the DEFAULT switch state.
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_RIM_MESH", None);
     let mut renderer = match support::headless_renderer() {
         Ok(renderer) => renderer,
@@ -175,8 +137,6 @@ fn rim_band_mesh_matches_the_quad_expansion() {
         }
     };
     if !renderer.instanced_quads_active() {
-        // The rim path exists only where the instanced/storage shape path
-        // does; a uniform-mode device draws every rim as a quad already.
         eprintln!("skipping rim mesh parity: instanced quads inactive (uniform mode)");
         return;
     }
@@ -191,9 +151,6 @@ fn rim_band_mesh_matches_the_quad_expansion() {
         "arm A must actually draw the rim as a band mesh (counter stayed at {emitted_before})"
     );
 
-    // The switch is read per fused-chunk prepare, so no renderer relatch is
-    // needed; one throwaway frame after flipping keeps the arms' warm
-    // discipline identical anyway.
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_RIM_MESH", Some("0"));
     let quad = render_arm(&mut renderer, &graph);
     let emitted_after_off = renderer.rim_meshes_emitted();

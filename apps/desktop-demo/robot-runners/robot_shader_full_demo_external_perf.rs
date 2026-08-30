@@ -1,9 +1,3 @@
-//! External X11 performance contract for the normal desktop demo shader paths.
-//!
-//! This runner launches the full demo shell with the FPS overlay enabled, walks
-//! the user-visible tabs, then validates Shader Rect animation and Shaders glass
-//! dragging through desktop frame telemetry.
-
 mod external_x11_frame_telemetry;
 mod output_paths;
 mod perf_contract;

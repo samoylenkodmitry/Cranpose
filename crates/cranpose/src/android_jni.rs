@@ -1,4 +1,3 @@
-//! Shared Android JNI helpers.
 #![allow(unsafe_code)]
 
 use std::sync::Arc;
@@ -24,11 +23,6 @@ where
 {
     let vm = JavaVM::singleton()
         .map_err(|error| format!("Android JavaVM is not available on android_main: {error}"))?;
-    // Attach the current thread to the JVM rather than assuming it already is:
-    // callers such as the audio engine reach this from worker threads they
-    // spawned, where `with_local_frame` would fail with `ThreadDetached`.
-    // `attach_current_thread` is cheap when the thread is already attached and
-    // pushes a local frame for us, so scoped local references are still released.
     vm.attach_current_thread(|env| -> jni::errors::Result<Result<T, String>> {
         let raw_activity_global = app.activity_as_ptr() as jni::sys::jobject;
         // SAFETY: android-activity owns this unowned global Activity reference for the
@@ -48,12 +42,6 @@ pub(crate) fn clear_pending_android_jni_exception(env: &mut Env<'_>) {
     }
 }
 
-/// Loads a cranpose Java helper class (`dev.cranpose.android.*`) through the
-/// activity's class loader.
-///
-/// `FindClass` cannot be used from native (non-Java) threads because they have
-/// no application class loader; going through the Activity works everywhere.
-/// `class_name` uses JNI slash notation (`dev/cranpose/android/Foo`).
 pub(crate) fn load_cranpose_java_class<'local>(
     env: &mut Env<'local>,
     activity: &jni::objects::JObject<'local>,

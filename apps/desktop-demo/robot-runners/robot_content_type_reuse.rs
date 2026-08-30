@@ -1,15 +1,3 @@
-//! Robot test for content-type-based slot reuse validation
-//!
-//! Validates that:
-//! 1. Slots with matching content types can be reused across different item indices
-//! 2. The reuse mechanism works correctly after the refactoring from SlotReusePool to SubcomposeState
-//! 3. Content-type based reuse reduces compose counts during scrolling
-//!
-//! Run with:
-//! ```bash
-//! cargo run --package desktop-app --example robot_content_type_reuse --features robot-app
-//! ```
-
 use std::time::Duration;
 
 use cranpose::AppLauncher;
@@ -35,7 +23,6 @@ fn main() {
                     &robot,
                     "Lifecycle totals: C=",
                 ) {
-                    // Parse "Lifecycle totals: C=X E=Y D=Z"
                     let parts: Vec<&str> = text.split_whitespace().collect();
                     if parts.len() >= 4 {
                         let c = parts[2].strip_prefix("C=")?.parse().ok()?;
@@ -47,7 +34,6 @@ fn main() {
                 None
             };
 
-            // Step 1: Initial state
             println!("\n--- Step 1: Initial state ---");
             let initial_stats = read_stats();
             if let Some((c, e, d)) = initial_stats {
@@ -57,17 +43,13 @@ fn main() {
             }
             let initial_composes = initial_stats.map(|(c, _, _)| c).unwrap_or(0);
 
-            // Step 2: Extended scroll to trigger slot reuse
             println!("\n--- Step 2: Extended scroll (triggers content-type reuse) ---");
 
-            // Find an item to drag on
             if let Some((x, y, w, h)) = find_text_in_semantics(&robot, "Item #0") {
                 let center_x = x + w / 2.0;
                 let center_y = y + h / 2.0;
 
                 let start = std::time::Instant::now();
-                // Do many drags to simulate extended scrolling through many items
-                // With content-type reuse, items with same type (index % 5) reuse each other's slots
                 for _ in 0..10 {
                     robot
                         .drag(center_x, center_y + 100.0, center_x, center_y - 200.0)
@@ -90,8 +72,6 @@ fn main() {
                 let new_composes = c - initial_composes;
                 println!("  New composes during scroll: {}", new_composes);
 
-                // Key assertion: composes should be bounded. Headless drag distance
-                // varies by host load, so the exact reuse percentage is diagnostic only.
                 assert!(
                     new_composes < MAX_NEW_COMPOSES_DURING_SCROLL,
                     "Too many composes during scroll: {} (expected <{})",
@@ -101,7 +81,6 @@ fn main() {
                 assert_eq!(c, e, "Composes should equal effects");
             }
 
-            // Step 3: Scroll back and verify reuse efficiency
             println!("\n--- Step 3: Scroll back ---");
             if let Some((x, y, w, h)) = find_text_in_semantics(&robot, "Item #") {
                 let center_x = x + w / 2.0;

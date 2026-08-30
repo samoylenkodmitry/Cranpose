@@ -77,15 +77,13 @@ impl LongPressWatcher {
             watcher.tick(now);
         });
         *self.registration.borrow_mut() = Some(registration);
-        // The watcher only advances while frames run; keep them coming for
-        // the (otherwise idle) stationary hold.
         crate::request_render_invalidation();
     }
 
     fn tick(self: Rc<Self>, now: u64) {
         self.registration.borrow_mut().take();
         let Some(press) = self.controller.press() else {
-            return; // press ended — the composition slot will drop us
+            return;
         };
         let moved = (press.position.x - self.start.x)
             .abs()
@@ -94,7 +92,7 @@ impl LongPressWatcher {
             || (press.start.y - self.start.y).abs() > 0.5
             || moved > TEXT_LONG_PRESS_SLOP
         {
-            return; // a different/dragging gesture
+            return;
         }
         let start = match self.start_nanos.get() {
             Some(value) => value,
@@ -107,9 +105,6 @@ impl LongPressWatcher {
             self.arm();
             return;
         }
-        // Hold elapsed: claim the gesture and select the word under the
-        // press. The selection-range side effect opens the menu; the node
-        // stops drag-selecting under the claim.
         self.controller.claim_gesture();
         let Some(metrics) = self.controller.metrics() else {
             return;
@@ -137,9 +132,6 @@ fn handle_tip_window_pos(
     affinity: LineAffinity,
 ) -> Point {
     let offset = offset.min(text.len());
-    // Resolve the caret's VISUAL (wrapped) line so the handle tip anchors on the
-    // same glyph as the drawn caret (the field wraps long lines; counting only
-    // logical `\n` lines would place the handle on the wrong line, far right).
     let (line_index, line_start) = crate::text_field_modifier_node::caret_visual_line_for_offset(
         text,
         style,
@@ -151,8 +143,6 @@ fn handle_tip_window_pos(
     let caret_x = measure_text(&AnnotatedString::from(&text[line_start..offset]), style).width;
     Point {
         x: metrics.node_origin.x + metrics.padding_left + caret_x - metrics.scroll_offset,
-        // The tip rides the TIGHT glyph box bottom, not the slot bottom —
-        // handles (and the caret) anchor on the glyphs like the reference.
         y: metrics.node_origin.y
             + metrics.padding_top
             + line_index as f32 * metrics.line_height
@@ -177,17 +167,11 @@ fn window_pos_to_offset(
     let local_x = (window_pos.x - metrics.node_origin.x - metrics.padding_left
         + metrics.scroll_offset)
         .max(0.0);
-    // The biased y lands on the grabbed line's bottom; sample half a line up
-    // to hit the line's middle.
     let local_y = (window_pos.y + y_bias
         - 0.5 * metrics.line_height
         - metrics.node_origin.y
         - metrics.padding_top)
         .max(0.0);
-    // Resolve the VISUAL (wrapped) line the same way the drawn caret and
-    // `handle_tip_window_pos` do. The plain measurer maps `y` through logical
-    // `\n` lines only, so on wrapped text a handle drag lands on the wrong line
-    // (an offset that grows with each wrapped line above the finger).
     crate::text::offset_for_position_wrapped(
         text,
         style,
@@ -242,8 +226,6 @@ impl Default for BasicTextFieldOptions {
     fn default() -> Self {
         Self {
             text_style: TextStyle::default(),
-            // The field accent: caret + selection handles solid, selection
-            // highlight at [`SELECTION_HIGHLIGHT_ALPHA`] (the reference blue).
             cursor_color: Color(0.0, 0.478, 1.0, 1.0),
             line_limits: TextFieldLineLimits::default(),
         }
@@ -303,21 +285,12 @@ pub fn BasicTextFieldWithOptions(
     modifier: Modifier,
     options: BasicTextFieldOptions,
 ) -> NodeId {
-    // Read text + selection to create composition dependencies: the field (and
-    // its finger handles) recompose when either changes.
     let _text = state.text();
     let _selection = state.selection();
 
-    // Shared channel through which the field node publishes live handle geometry
-    // (focus, direct manipulation, on-screen origin, metrics). Remembered so it is stable
-    // across recompositions.
     let controller =
         remember(TextFieldHandleController::new).with(TextFieldHandleController::clone);
 
-    // Build the text field element with line limits + the handle controller.
-    // The modal depth this field was composed at (see `local_modal_depth`)
-    // travels with it into the focus request, so a field behind an open
-    // dialog cannot steal focus from it.
     let modal_depth = crate::modal::local_modal_depth().current();
     let text_field_element = TextFieldElement::new(state, options.text_style.clone())
         .with_cursor_color(options.cursor_color)
@@ -325,25 +298,14 @@ pub fn BasicTextFieldWithOptions(
         .with_handle_controller(controller.clone())
         .with_modal_depth(modal_depth);
 
-    // Wrap it in a modifier
     let text_field_modifier = modifier_element(text_field_element);
     let final_modifier = Modifier::from_parts(vec![text_field_modifier]);
     let combined_modifier = modifier.then(final_modifier);
 
     let node = Layout(combined_modifier, EmptyMeasurePolicy, || {});
 
-    // Scroll the focused field's caret above the soft keyboard (bug 2): asks the
-    // nearest scroll container's `BringIntoViewResponder` to reveal the caret on
-    // focus / caret move / keyboard animation. No-op without a scrollable
-    // ancestor or when the caret already fits.
     BringCaretIntoView(state, options.text_style.clone(), controller.clone());
 
-    // Direct-manipulation selection handles: a caret handle for a collapsed
-    // selection, start/end lollipops for a range. Mouse, touch and pen share
-    // this path. Rendered in the top-level
-    // overlay via `Popup` so they escape the field's clip and hang outside the
-    // line. A `PopupHost` at the app root (installed by the shell) is
-    // required for them to appear.
     SelectionHandles(state, options.text_style, controller, options.cursor_color);
 
     node
@@ -377,8 +339,6 @@ fn caret_window_rect(
     metrics: &TextFieldHandleMetrics,
     offset: usize,
 ) -> Rect {
-    // `handle_tip_window_pos` returns the tight glyph-box BOTTOM (the handle
-    // tip); the caret rect spans that box.
     let tip = handle_tip_window_pos(text, style, metrics, offset, LineAffinity::Upstream);
     Rect {
         x: tip.x,
@@ -406,8 +366,6 @@ fn BringCaretIntoView(
     let Some(metrics) = controller.metrics() else {
         return;
     };
-    // Read the keyboard inset and responder unconditionally so the composable
-    // re-runs when either changes even before the field is focused.
     let ime_bottom = local_ime_insets().current().bottom;
     let responder = local_bring_into_view_responder().current();
 
@@ -415,8 +373,6 @@ fn BringCaretIntoView(
         remember(|| Rc::new(Cell::new(None))).with(Rc::clone);
 
     if !metrics.focused {
-        // Reset so the next focus re-requests even if the caret/keyboard match a
-        // previous request.
         previous.set(None);
         return;
     }
@@ -428,9 +384,6 @@ fn BringCaretIntoView(
     let selection = state.selection();
     let caret = caret_window_rect(&text, &style, &metrics, selection.start);
 
-    // Trigger key: caret position + keyboard inset (quantised). Deliberately
-    // excludes the field's scroll-driven window origin so scrolling does not
-    // re-fire the request.
     let key = (
         selection.start,
         selection.end,
@@ -459,17 +412,8 @@ fn SelectionHandles(
     let current_range = (selection.min(), selection.max());
     let active_press = controller.press();
 
-    // Whether the contextual menu is open. Reopens whenever the selection range
-    // changes (a fresh selection), so tapping an action dismisses it until the
-    // next selection.
     let menu_open = remember(|| mutableStateOf(true)).with(|state| *state);
-    // Whether the collapsed-caret action popup (Paste / Select all / Undo /
-    // Redo) is open. Opened by tapping the cursor handle; closed by an action or
-    // when the caret leaves the offset it was opened at (typing / tapping
-    // elsewhere). Kept out of the range branch so hook order stays stable.
     let caret_menu_open = remember(|| mutableStateOf(false)).with(|state| *state);
-    // The caret offset the popup was opened at, so it auto-dismisses once the
-    // caret moves away.
     let caret_menu_offset: Rc<Cell<usize>> =
         remember(|| Rc::new(Cell::new(0usize))).with(Rc::clone);
     let previous_range: Rc<Cell<(usize, usize)>> =
@@ -483,8 +427,6 @@ fn SelectionHandles(
             }
         });
     }
-    // Auto-dismiss the caret popup once the caret moves off the offset it was
-    // opened at (the user typed or tapped elsewhere), matching Android.
     {
         let caret_menu_offset = Rc::clone(&caret_menu_offset);
         let caret_start = selection.start;
@@ -506,11 +448,6 @@ fn SelectionHandles(
 
     let text = state.text();
 
-    // Long-press → slide-to-menu: when the field node publishes a fresh pointer
-    // press, arm a frame-clock watcher that claims the gesture after the hold
-    // threshold (word select; the range-change side effect opens the menu
-    // while the finger is still down). The slot holds the watcher's only
-    // strong reference: replacing/clearing it cancels the pending callback.
     let press_watcher: Rc<Cell<Option<(u32, u32)>>> =
         remember(|| Rc::new(Cell::new(None))).with(Rc::clone);
     let press_watcher_ref: Rc<RefCell<Option<Rc<LongPressWatcher>>>> =
@@ -542,19 +479,10 @@ fn SelectionHandles(
         }
     }
 
-    // Window position of an in-progress handle drag, or `None` when no
-    // handle is being dragged. Drives the glass loupe (below) so it floats
-    // above the finger while the caret/selection edge is being placed.
     let drag_pos: MutableState<Option<Point>> =
         remember(|| mutableStateOf(None::<Point>)).with(|state| *state);
-    // One displacement-based grab relationship serves all handles; only one
-    // can own the pointer at a time.
     let drag_bias: Rc<Cell<Option<HandleGrabOffset>>> =
         remember(|| Rc::new(Cell::new(None))).with(Rc::clone);
-    // Which handle the user moved last: the contextual menu rises above it
-    // (the reference re-anchors the actions near the finger's work). A
-    // fresh selection (range changed with no handle drag in flight, e.g. a
-    // double-tap) re-centers the menu.
     let last_dragged: Rc<Cell<Option<HandleKind>>> =
         remember(|| Rc::new(Cell::new(None))).with(Rc::clone);
     let menu_anchor_range: Rc<Cell<(usize, usize)>> =
@@ -571,19 +499,11 @@ fn SelectionHandles(
             }
         });
     }
-    // LIVE tip-y holders, refreshed every composition. The pointer-input
-    // gesture task starts once per handle kind and holds its first
-    // composition's closures — a tip snapshot captured by value goes stale
-    // the moment the handle moves to another wrapped line, and the next
-    // grab computes its finger-to-line bias against the OLD line (taps on
-    // the handle land on the wrong Y; drags fight the selection and read
-    // as a stuck handle). The closures read these cells at event time.
     let cursor_tip_y: Rc<Cell<f32>> = remember(|| Rc::new(Cell::new(0.0f32))).with(Rc::clone);
     let start_tip_y: Rc<Cell<f32>> = remember(|| Rc::new(Cell::new(0.0f32))).with(Rc::clone);
     let end_tip_y: Rc<Cell<f32>> = remember(|| Rc::new(Cell::new(0.0f32))).with(Rc::clone);
 
     if selection.collapsed() {
-        // Collapsed caret: a single cursor handle (a dot below the caret).
         let tip = handle_tip_window_pos(
             &text,
             &style,
@@ -597,8 +517,6 @@ fn SelectionHandles(
             controller.clone(),
             Rc::clone(&drag_bias),
         );
-        // Tapping the cursor handle opens the caret action popup, anchored at
-        // the caret's current offset so it auto-dismisses when the caret moves.
         let open_caret_menu = {
             let caret_menu_offset = Rc::clone(&caret_menu_offset);
             move || {
@@ -626,18 +544,12 @@ fn SelectionHandles(
             move || {
                 drag_pos.set(None);
                 end_bias.set(None);
-                // The released caret resumes a clean blink cycle: solid
-                // for one full interval, then blinking on schedule.
                 crate::cursor_animation::reset_cursor_blink();
             },
             on_long_press,
             on_tap,
         );
 
-        // The caret action popup (Paste / Select all / Undo / Redo), floating
-        // just above the caret. It dissolves the moment a handle drag starts
-        // and rematerializes after release (the widget runs the measured
-        // timings; it stays composed while fading).
         if caret_menu_open.value() {
             let can_paste = clipboard_can_paste();
             let can_undo = state.can_undo();
@@ -672,7 +584,6 @@ fn SelectionHandles(
             );
         }
     } else {
-        // Range selection: start (leftmost) and end (rightmost) lollipops.
         let start = selection.min();
         let end = selection.max();
         let start_tip =
@@ -713,11 +624,7 @@ fn SelectionHandles(
                 drag_pos.set(None);
                 end_bias.set(None);
             },
-            // Long-pressing a handle re-opens the contextual menu even when the
-            // selection range has not changed (e.g. after it was dismissed by a
-            // previous action), so the text actions stay reachable.
             move || menu_open.set(true),
-            // A tap on a selection-edge handle also re-opens the menu.
             move || menu_open.set(true),
         );
 
@@ -757,23 +664,13 @@ fn SelectionHandles(
             move || menu_open.set(true),
         );
 
-        // Contextual menu (Copy / Cut / Paste / Select all) floating above the
-        // selection. Actions run against the focused field and dismiss the
-        // menu. It dissolves the moment a handle drag starts and
-        // rematerializes after release (the widget runs the measured timings;
-        // it stays composed while fading).
         if menu_open.value() {
             let can_paste = clipboard_can_paste();
-            // A claimed long-press feeds the menu its live finger position:
-            // sliding over items highlights them, the release fires.
             let slide_point = if controller.gesture_claimed() {
                 active_press.map(|press| press.position)
             } else {
                 None
             };
-            // The menu rises above the handle the user moved last (their
-            // attention is there); a fresh selection centers over its
-            // first line as before.
             let (menu_x, menu_top) = match last_dragged.get() {
                 Some(HandleKind::SelectionStart) => {
                     (start_tip.x, start_tip.y - metrics.glyph_box.1)
@@ -816,17 +713,9 @@ fn SelectionHandles(
         }
     }
 
-    // The glass loupe: while a handle drag covers the text line, a liquid
-    // glass bubble floats over the dragged line magnifying the live scene
-    // under the finger (text, highlight, the handle itself — it is a backdrop
-    // lens). Dragging by the dot below the line magnifies nothing. Emitted
-    // unconditionally so the bubble stays mounted through its release
-    // deflation.
     let loupe_target = drag_pos.value().and_then(|finger| {
         let bias = drag_bias.get().map_or(0.0, |grab| grab.bias());
         let offset = window_pos_to_offset(&text, &style, &metrics, finger, bias);
-        // Upstream: the loupe magnifies the line the FINGER rides — at a
-        // shared wrap boundary that is the upper line the mapping sampled.
         let line_bottom =
             handle_tip_window_pos(&text, &style, &metrics, offset, LineAffinity::Upstream).y;
         loupe_target_for_drag(finger, line_bottom, metrics.glyph_box.1)
@@ -840,8 +729,6 @@ fn track_handle_grab(
     handle_tip_y: f32,
     finger_y: f32,
 ) -> f32 {
-    // Only handles whose dot hangs below the line drift clear of the
-    // finger; the start handle follows it directly.
     let drifts = kind != HandleKind::SelectionStart;
     let mut grab = drag_bias
         .get()
@@ -868,9 +755,6 @@ fn drag_caret_closure(
         let bias = drag_bias.get().map_or(0.0, |grab| grab.bias());
         let offset = window_pos_to_offset(&text, &style, &metrics, window_pos, bias);
         state.set_selection(TextRange::new(offset, offset));
-        // A dragged caret never blinks: suspend the cycle entirely while
-        // the finger owns it; the release restarts a clean cycle (per-event
-        // resets fought the scheduler and produced irregular periods).
         crate::cursor_animation::suspend_cursor_blink();
         crate::request_render_invalidation();
     })
@@ -911,11 +795,6 @@ mod tests {
 
     #[test]
     fn handle_grab_bias_reads_the_live_tip_not_a_snapshot() {
-        // The pointer gesture task holds its first composition's closures;
-        // a tip-y captured by value goes stale when the handle moves to
-        // another wrapped line and the next grab computes its bias against
-        // the OLD line (wrong-Y taps, stuck-handle drags). The closures
-        // read a live Cell that composition refreshes.
         let tip_y: Rc<Cell<f32>> = Rc::new(Cell::new(100.0));
         let drag_bias: Rc<Cell<Option<HandleGrabOffset>>> = Rc::new(Cell::new(None));
         let grab = {
@@ -926,8 +805,6 @@ mod tests {
             }
         };
 
-        // The handle has since moved two wrapped lines down (tip 100 -> 148);
-        // composition refreshed the cell, the gesture task did not restart.
         tip_y.set(148.0);
         let bias = grab(160.0);
         assert_eq!(
@@ -940,15 +817,11 @@ mod tests {
 
     use cranpose_core::{Composition, DefaultScheduler, MemoryApplier, Runtime, location_key};
 
-    /// Sets up a test runtime and keeps it alive for the duration of the test.
     fn with_test_runtime<T>(f: impl FnOnce() -> T) -> T {
         let _runtime = Runtime::new(Arc::new(DefaultScheduler));
         f()
     }
 
-    /// Composes just the finger handles for a collapsed caret with the given
-    /// published metrics, and returns the rendered scene. The teardrop
-    /// rasterizes to an image primitive, so counting images counts handles.
     fn render_collapsed_handles(direct_manipulation: bool) -> crate::renderer::RecordedRenderScene {
         use cranpose_ui_graphics::Size;
 
@@ -1006,8 +879,6 @@ mod tests {
         HeadlessRenderer::new().render(&layout)
     }
 
-    /// Composes the handles + contextual menu for a range selection with the
-    /// given metrics, returning the rendered scene.
     fn render_range_menu(direct_manipulation: bool) -> crate::renderer::RecordedRenderScene {
         use cranpose_ui_graphics::Size;
 
@@ -1068,11 +939,6 @@ mod tests {
         HeadlessRenderer::new().render(&layout)
     }
 
-    /// Like [`render_range_menu`], but the metrics + `SelectionHandles` are
-    /// composed inside a `BoxWithConstraints` (which subcomposes its content off
-    /// the measure pass), mirroring a real app where text fields live inside
-    /// `BoxWithConstraints`/`LazyColumn`. The overlay `Popup`s must still reach
-    /// the enclosing `PopupHost` across the subcomposition boundary.
     fn render_range_menu_subcomposed(
         direct_manipulation: bool,
     ) -> crate::renderer::RecordedRenderScene {
@@ -1127,9 +993,6 @@ mod tests {
         let root = composition.root().expect("root");
         let handle = composition.runtime_handle();
         let mut scene = None;
-        // The Popups register during the measure-pass subcomposition, so a
-        // follow-up frame (reconcile + layout) is needed for the host to render
-        // them. Alternate the two a few times, as real frames do.
         for _ in 0..8 {
             for _ in 0..16 {
                 if !composition.should_render() {
@@ -1155,12 +1018,6 @@ mod tests {
         scene.expect("scene")
     }
 
-    /// Like [`render_range_menu_subcomposed`], but the field lives inside a
-    /// `LazyColumn` *item* — the exact shape of the reported device bug (a
-    /// multi-line field in a lazy list). The item is subcomposed off the
-    /// measure pass through `LazyColumn`'s own `SubcomposeLayoutNode`, so the
-    /// overlay `Popup`s (handles + menu) only reach the enclosing `PopupHost`
-    /// once the item subcomposition inherits the call-site composition locals.
     fn render_range_menu_lazy_column(
         direct_manipulation: bool,
     ) -> crate::renderer::RecordedRenderScene {
@@ -1246,14 +1103,6 @@ mod tests {
         scene.expect("scene")
     }
 
-    /// Regression for the core device bug: a `BasicTextField` inside a
-    /// vertically-scrolled container must publish its TRUE composited window
-    /// origin so the finger selection/cursor handles anchor on the glyphs and
-    /// follow the list as it scrolls. Before the fix the field origin was only
-    /// ever sampled from the last pointer event, so it went stale on scroll —
-    /// the handles rendered offset from the text, did not move while scrolling,
-    /// and the window→offset inverse mapping (drag → text offset, and the
-    /// handle-grab hit region) pointed at the wrong character.
     #[test]
     fn field_window_origin_follows_vertical_scroll() {
         use std::cell::RefCell;
@@ -1271,14 +1120,10 @@ mod tests {
 
         let _app_context = crate::render_state::app_context_test_scope();
 
-        // `Composition::new` installs the runtime `TextFieldState`/`ScrollState`
-        // need, so build it before allocating any state.
         let mut composition = Composition::new(MemoryApplier::new());
         let state = TextFieldState::new("hello world");
         let controller_slot: Rc<RefCell<Option<TextFieldHandleController>>> =
             Rc::new(RefCell::new(None));
-        // `ScrollState` allocates a `MutableState`, so it must be created inside
-        // the composition's runtime; publish it out through a slot to drive it.
         let scroll_slot: Rc<RefCell<Option<ScrollState>>> = Rc::new(RefCell::new(None));
 
         let spacer_before = 200.0_f32;
@@ -1324,7 +1169,6 @@ mod tests {
             }
         };
 
-        // The field node is the only one carrying a window-origin sink.
         fn find_field_rect(node: &LayoutBox) -> Option<cranpose_ui_graphics::Rect> {
             if node
                 .node_data
@@ -1383,8 +1227,6 @@ mod tests {
 
         let (origin0, field_y0) =
             layout_and_read(&mut composition, key, &mut content, &controller_slot);
-        // The published origin must equal the field's real placed window rect
-        // (not a stale pointer sample), and start below the leading spacer.
         assert!(
             (origin0.y - field_y0).abs() < 0.5,
             "published node_origin.y {} must equal the field's placed window-y {}",
@@ -1397,8 +1239,6 @@ mod tests {
             origin0.y
         );
 
-        // Scroll the list down by 50px; the field must move up by exactly 50px
-        // and the published origin must track it live.
         let scroll = *scroll_slot.borrow().as_ref().expect("scroll state");
         scroll.scroll_to(50.0);
         assert!(
@@ -1424,17 +1264,11 @@ mod tests {
         );
     }
 
-    /// After a scroll, the window→offset inverse mapping must still resolve the
-    /// character the finger is over, because it reads the same live composited
-    /// origin the handles are placed at. Uses the published post-scroll metrics
-    /// to round-trip every caret offset through
-    /// `handle_tip_window_pos` → `window_pos_to_offset`.
     #[test]
     fn window_offset_roundtrip_holds_under_scroll_offset() {
         let _app_context = crate::render_state::app_context_test_scope();
         let text = "hello world";
         let style = TextStyle::default();
-        // Two different composited origins (as if the list scrolled between them).
         for node_origin in [Point { x: 12.0, y: 240.0 }, Point { x: 12.0, y: 190.0 }] {
             let metrics = TextFieldHandleMetrics {
                 focused: true,
@@ -1451,8 +1285,6 @@ mod tests {
                 if !text.is_char_boundary(offset) {
                     continue;
                 }
-                // A grab exactly at the tip (the line bottom) captures a zero
-                // bias; the mapping still resolves the grabbed line's offset.
                 let tip =
                     handle_tip_window_pos(text, &style, &metrics, offset, LineAffinity::Downstream);
                 let resolved = window_pos_to_offset(text, &style, &metrics, tip, 0.0);
@@ -1465,13 +1297,6 @@ mod tests {
         }
     }
 
-    /// A long unbroken word wraps MID-WORD, so consecutive visual lines share
-    /// their boundary byte. A selection END dragged along the upper line's
-    /// right edge produces exactly that byte — its handle (and the loupe line)
-    /// must anchor to the UPPER line's end, never one line down at the left
-    /// edge (the wrapped-multiline handle Y-offset bug reported on device).
-    /// The START handle at the same byte anchors downstream where the first
-    /// highlighted glyph renders.
     #[test]
     fn shared_wrap_boundary_anchors_by_handle_affinity() {
         let _app_context = crate::render_state::app_context_test_scope();
@@ -1480,7 +1305,6 @@ mod tests {
             let style = TextStyle::default();
             let annotated = crate::text::AnnotatedString::from(text);
             let full = crate::text::measure_text(&annotated, &style);
-            // Tight enough to split the word across ≥2 visual lines.
             let wrap_width = full.width / 3.0;
             let ranges = crate::text::wrapped_line_ranges(
                 None,
@@ -1539,11 +1363,6 @@ mod tests {
                 start_tip.x
             );
 
-            // The inverse mapping must preserve finger-to-handle coordination
-            // through every grab phase. The finger moves down while the handle
-            // drifts into view; the resolved visual-line bottom must remain
-            // nearest `finger + bias` instead of accumulating one line of Y
-            // error for every soft wrap above it.
             let mut grab = HandleGrabOffset::begin(end_tip.y, end_tip.y);
             for finger_y in [
                 end_tip.y,
@@ -1588,9 +1407,6 @@ mod tests {
             .collect()
     }
 
-    /// Composes the caret action popup directly inside a `PopupHost` (as the
-    /// cursor-handle tap does once `caret_menu_open` is set) and returns the
-    /// rendered scene, so the item labels can be asserted.
     fn render_caret_action_menu(
         can_paste: bool,
         can_undo: bool,
@@ -1645,9 +1461,6 @@ mod tests {
         HeadlessRenderer::new().render(&layout)
     }
 
-    /// Bug (b): the caret action popup offers Paste / Select all / Undo / Redo.
-    /// Paste is hidden when the clipboard is empty, and Undo/Redo when the
-    /// field's history has nothing to undo/redo.
     #[test]
     fn caret_action_menu_shows_paste_select_all_undo_redo() {
         let _app_context = crate::render_state::app_context_test_scope();
@@ -1660,7 +1473,6 @@ mod tests {
             );
         }
 
-        // Nothing on the clipboard and an empty history: only Select all.
         let bare = text_values(&render_caret_action_menu(false, false, false));
         assert!(
             bare.iter().any(|t| t == "Select all"),
@@ -1706,11 +1518,6 @@ mod tests {
 
     #[test]
     fn selection_handles_and_menu_survive_subcomposition() {
-        // Regression: the selection handles and the contextual menu (all drawn
-        // through `Popup`) must reach the enclosing `PopupHost` even when the
-        // text field lives inside a `BoxWithConstraints`/`LazyColumn`, which
-        // subcomposes its content off the measure pass. Both the two teardrop
-        // handles and the menu items are expected.
         let _app_context = crate::render_state::app_context_test_scope();
         let scene = render_range_menu_subcomposed(true);
 
@@ -1734,12 +1541,6 @@ mod tests {
 
     #[test]
     fn selection_handles_and_menu_survive_lazy_column_item() {
-        // Regression for the reported device bug: a text field inside a
-        // `LazyColumn` item shows neither its selection handles nor its context
-        // menu, because the item is subcomposed off the list's measure pass and
-        // the overlay `Popup`s lose the enclosing `PopupHost` registry across
-        // that boundary. After capturing the call-site locals in `LazyColumn`
-        // the handles + menu reach the host, just like a top-level field.
         let _app_context = crate::render_state::app_context_test_scope();
         let scene = render_range_menu_lazy_column(true);
 
@@ -1830,14 +1631,6 @@ mod tests {
         });
     }
 
-    /// Bug 2 end-to-end (headless): a `LazyColumn` provides a
-    /// `BringIntoViewResponder`; its viewport rect is filled by the layout pass;
-    /// asking it to reveal a caret hidden behind the keyboard scrolls the list
-    /// FORWARD (revealing lower content), while asking it to reveal an
-    /// already-visible caret does nothing. This pins the whole responder path:
-    /// provision through the item subcomposition, the `report_window_rect`
-    /// viewport sink, `scroll_delta_to_reveal`, and the `dispatch_scroll_delta`
-    /// sign.
     #[test]
     fn lazy_column_responder_scrolls_a_hidden_caret_into_view() {
         use std::cell::RefCell;
@@ -1860,8 +1653,6 @@ mod tests {
             Rc::new(RefCell::new(None));
         let state_slot: Rc<RefCell<Option<LazyListState>>> = Rc::new(RefCell::new(None));
 
-        // Viewport 300x400 at window origin (0,0); 30 items of 80px each = 2400px
-        // of content, so the list can scroll far forward.
         let mut content = {
             let responder_slot = Rc::clone(&responder_slot);
             let state_slot = Rc::clone(&state_slot);
@@ -1945,8 +1736,6 @@ mod tests {
         let offset0 = list_state.first_visible_item_scroll_offset();
         let index0 = list_state.first_visible_item_index();
 
-        // A caret already inside the viewport (y=100, above the fold) must not
-        // scroll the list.
         responder.bring_into_view(
             Rect {
                 x: 10.0,
@@ -1967,8 +1756,6 @@ mod tests {
             "an already-visible caret must not scroll the list"
         );
 
-        // A caret hidden behind a keyboard covering the bottom 250px (usable
-        // region 0..150) sitting at y=360 must scroll the list forward.
         responder.bring_into_view(
             Rect {
                 x: 10.0,

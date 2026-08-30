@@ -65,7 +65,6 @@ pub use local::{ModifierLocalKey, ModifierLocalReadScope};
 #[allow(unused_imports)]
 pub use pointer_input::{AwaitPointerEventScope, PointerInputScope};
 pub use rotary_input::RotaryInputModifierNode;
-// Test accessibility for fling velocity (only with test-helpers feature)
 #[cfg(feature = "test-helpers")]
 pub use scroll::{last_fling_velocity, reset_last_fling_velocity};
 use semantics::SemanticsElement;
@@ -81,7 +80,6 @@ pub use slices::{
 pub use crate::draw::{DrawCacheBuilder, DrawCommand};
 use crate::modifier_nodes::ClipToBoundsElement;
 
-/// Minimal inspector metadata storage.
 #[derive(Clone, Debug, Default)]
 pub struct InspectorInfo {
     properties: Vec<InspectorProperty>,
@@ -129,21 +127,18 @@ impl InspectorInfo {
     }
 }
 
-/// Single inspector entry recording a property exposed by a modifier.
 #[derive(Clone, Debug, PartialEq)]
 pub struct InspectorProperty {
     pub name: &'static str,
     pub value: String,
 }
 
-/// Structured inspector payload describing a modifier element.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ModifierInspectorRecord {
     pub name: &'static str,
     pub properties: Vec<InspectorProperty>,
 }
 
-/// Helper describing the metadata contributed by a modifier factory.
 #[derive(Clone, Debug)]
 pub(crate) struct InspectorMetadata {
     name: &'static str,
@@ -185,8 +180,6 @@ pub(crate) fn inspector_metadata<F>(name: &'static str, recorder: F) -> Inspecto
 where
     F: FnOnce(&mut InspectorInfo),
 {
-    // Inspector metadata is debug tooling. Avoid building string-heavy metadata in
-    // optimized runtime unless modifier debugging is explicitly enabled.
     if !inspector_metadata_enabled() {
         return InspectorMetadata::new(name, |_| {});
     }
@@ -208,16 +201,9 @@ fn inspector_metadata_enabled() -> bool {
     cfg!(test) || modifier_debug_enabled()
 }
 
-/// Internal representation of modifier composition structure.
-///
-/// All modifiers are either empty or a flat vector of elements. The `then()`
-/// method eagerly concatenates elements, eliminating recursive tree traversal
-/// and Rc drop overhead.
 #[derive(Clone)]
 enum ModifierKind {
-    /// Empty modifier (like Modifier.companion in Kotlin)
     Empty,
-    /// Flat modifier with all elements and inspector metadata concatenated
     Single {
         elements: Rc<Vec<DynModifierElement>>,
         inspector: Rc<Vec<InspectorMetadata>>,
@@ -329,8 +315,6 @@ fn single_fingerprints(elements: &[DynModifierElement]) -> ModifierFingerprints 
     append_fingerprints(single_fingerprint_seed(), elements)
 }
 
-/// Iterator over modifier elements — simple slice iteration since modifiers
-/// are always flat after `then()` eagerly concatenates.
 pub struct ModifierElementIterator<'a> {
     inner: std::slice::Iter<'a, DynModifierElement>,
 }
@@ -351,7 +335,6 @@ impl<'a> Iterator for ModifierElementIterator<'a> {
 
 impl ExactSizeIterator for ModifierElementIterator<'_> {}
 
-/// Iterator over inspector metadata — simple slice iteration.
 pub(crate) struct ModifierInspectorIterator<'a> {
     inner: std::slice::Iter<'a, InspectorMetadata>,
 }
@@ -458,11 +441,6 @@ impl Modifier {
         F: Fn(&mut SemanticsConfiguration) + 'static,
     {
         let recorder: std::rc::Rc<dyn Fn(&mut SemanticsConfiguration)> = std::rc::Rc::new(recorder);
-        // Run the recorder for the inspector only when the inspector is on. A
-        // recorder that publishes canvas semantics allocates one node per drawn
-        // control, and this modifier is rebuilt on every recomposition, so the
-        // preview used to double that cost on every frame of a scrolling list
-        // for metadata nothing was reading.
         let metadata = if inspector_metadata_enabled() {
             let mut preview = SemanticsConfiguration::default();
             recorder(&mut preview);
@@ -684,7 +662,6 @@ impl Modifier {
         }
     }
 
-    /// Returns an iterator over the modifier elements without allocation.
     pub(crate) fn iter_elements(&self) -> ModifierElementIterator<'_> {
         match &self.kind {
             ModifierKind::Empty => ModifierElementIterator { inner: [].iter() },
@@ -703,9 +680,6 @@ impl Modifier {
         }
     }
 
-    /// Returns the list of elements in this modifier chain.
-    ///
-    /// **Note:** Consider using `iter_elements()` instead to avoid cloning.
     #[cfg(test)]
     pub(crate) fn elements(&self) -> Vec<DynModifierElement> {
         match &self.kind {
@@ -714,7 +688,6 @@ impl Modifier {
         }
     }
 
-    /// Returns the list of inspector metadata in this modifier chain.
     pub(crate) fn inspector_metadata(&self) -> Vec<InspectorMetadata> {
         match &self.kind {
             ModifierKind::Empty => Vec::new(),
@@ -907,9 +880,6 @@ impl Modifier {
                 }
 
                 for (a, b) in e1.iter().zip(e2.iter()) {
-                    // structural_eq() is used for layout decisions, so draw-only
-                    // elements of the same type are considered structurally equal
-                    // even when their draw-time payload differs.
                     if !consider_always_update
                         && a.element_type() == b.element_type()
                         && a.capabilities() == NodeCapabilities::DRAW

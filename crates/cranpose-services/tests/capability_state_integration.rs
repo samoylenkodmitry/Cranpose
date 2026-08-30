@@ -1,12 +1,3 @@
-//! What every service says when this platform has no backend for it.
-//!
-//! A service that quietly returns a plausible default when nothing is
-//! registered is worse than one that says so: a screen greys out no control,
-//! the user presses it, and nothing happens. The rule the whole registry is
-//! built on is that a platform without the concept reports it — `false`,
-//! `None`, `Unsupported` — and this pins it for every service at once, so a
-//! backend added later cannot quietly become the thing that hides an absence.
-
 use std::{
     sync::{Mutex, MutexGuard},
     time::Duration,
@@ -22,8 +13,6 @@ use cranpose_services::{
     set_media_speed, start_camera, store_available,
 };
 
-/// The services are one registry for the process, so tests that clear it take
-/// turns rather than clearing each other's backends mid-assertion.
 fn one_registry_at_a_time() -> MutexGuard<'static, ()> {
     static REGISTRY: Mutex<()> = Mutex::new(());
     REGISTRY.lock().unwrap_or_else(|error| error.into_inner())
@@ -93,9 +82,6 @@ fn a_platform_that_cannot_install_updates_refuses_before_it_downloads() {
     );
 }
 
-/// A window nobody can resize is the ordinary case on a phone and on a watch.
-/// The surface still exists — the size is published either way — so what is
-/// absent is the resize, and only that.
 #[test]
 fn a_host_that_cannot_be_resized_refuses_the_request_rather_than_dropping_it() {
     let _registry = one_registry_at_a_time();
@@ -109,8 +95,6 @@ fn a_host_that_cannot_be_resized_refuses_the_request_rather_than_dropping_it() {
     );
 }
 
-/// A package the framework cannot check is a package it will not install,
-/// whatever the release feed said about it.
 #[test]
 fn a_package_nobody_can_verify_is_one_nobody_installs() {
     let _registry = one_registry_at_a_time();

@@ -15,11 +15,6 @@ where
         let mut event = PointerEvent::new(kind, position, global_position)
             .with_time_ms(event_time.platform_time_ms)
             .with_animation_time_nanos(event_time.animation_time_nanos);
-        // Unlike `source` (stamped per call site because it varies per
-        // event -- a touch vs. a mouse sample), modifiers track continuously
-        // and every PointerEvent the shell builds goes through this one
-        // constructor, so this is the single choke point to stamp it from:
-        // no call site below can forget it, including ones added later.
         event.modifiers = self.modifiers;
         event
     }
@@ -31,12 +26,6 @@ where
         self.resolve_hit_path(pointer)
     }
 
-    /// Resolves cached NodeIds to fresh HitTargets from the current scene.
-    ///
-    /// This is the key to avoiding stale geometry during scroll/layout changes:
-    /// - We cache NodeIds on PointerDown (stable identity)
-    /// - On Move/Up/Cancel, we call find_target() to get fresh geometry
-    /// - Handler closures are preserved (same Rc), so gesture state survives
     fn resolve_hit_path(
         &self,
         pointer: PointerId,
@@ -156,9 +145,6 @@ where
     fn set_cursor_inner(&mut self, x: f32, y: f32, event_time: PointerEventTime) -> bool {
         self.cursor = (x, y);
 
-        // During a gesture (button pressed), ONLY dispatch to the tracked hit path.
-        // Never fall back to hover hit-testing while buttons are down.
-        // This maintains the invariant: the path that receives Down must receive Move and Up/Cancel.
         if self.buttons_pressed != PointerButtons::NONE {
             if self.hit_path_tracker.has_path(PointerId::PRIMARY) {
                 let targets = self.resolve_gesture_targets(PointerId::PRIMARY);
@@ -179,17 +165,12 @@ where
                 return false;
             }
 
-            // Button is down but we have no recorded path inside this app
-            // (e.g. drag started outside). Do not dispatch anything.
             return false;
         }
 
-        // No gesture in progress: regular hover move using hit-test.
-        // Diff against previous hover set to synthesize Enter/Exit events.
         let hits = self.renderer.scene().hit_test(x, y);
         let new_ids: Vec<NodeId> = hits.iter().map(|h| h.node_id()).collect();
 
-        // Dispatch Exit to nodes that are no longer hovered
         let pos = Point { x, y };
         let previously_hovered = self.hovered_nodes.clone();
         for old_id in previously_hovered {
@@ -204,7 +185,6 @@ where
             }
         }
 
-        // Dispatch Enter to newly hovered nodes
         for hit in &hits {
             if !self.hovered_nodes.contains(&hit.node_id()) {
                 let enter_event = self
@@ -242,9 +222,6 @@ where
 
     /// Dispatch primary-button down with an already resolved event timestamp.
     pub fn pointer_pressed_at_event_time(&mut self, event_time: PointerEventTime) -> bool {
-        // The dev overlay is drawn over the composition and is not part of it,
-        // so it gets the press first and keeps it. Nothing below it is armed:
-        // no button state, no hit path, so the matching release is inert.
         if self.dev_overlay_press(self.cursor.0, self.cursor.1) {
             return true;
         }
@@ -266,16 +243,8 @@ where
     }
 
     fn pointer_pressed_inner(&mut self, event_time: PointerEventTime) -> bool {
-        // Track button state
         self.buttons_pressed.insert(PointerButton::Primary);
 
-        // Hit-test against the current (last rendered) scene.
-        // Even if the app is dirty, this scene is what the user actually saw and clicked.
-        // Frame N is rendered → user sees frame N and taps → we hit-test frame N's geometry.
-        // The pointer event may mark dirty → next frame runs update() → renders N+1.
-
-        // Perform hit test and cache the NodeIds (not geometry!)
-        // The key insight from Jetpack Compose: cache identity, resolve fresh geometry per dispatch
         let hits = self.renderer.scene().hit_test(self.cursor.0, self.cursor.1);
         if hits.is_empty() {
             self.hit_path_tracker.remove_path(PointerId::PRIMARY);
@@ -415,13 +384,10 @@ where
     }
 
     fn pointer_released_inner(&mut self, event_time: PointerEventTime) -> bool {
-        // UP events report buttons as "currently pressed" (after release),
-        // matching typical platform semantics where primary is already gone.
         self.buttons_pressed.remove(PointerButton::Primary);
         let corrected_buttons = self.buttons_pressed;
         let targets = self.resolve_gesture_targets(PointerId::PRIMARY);
 
-        // Always remove the path, even if targets is empty (node may have been removed)
         self.hit_path_tracker.remove_path(PointerId::PRIMARY);
 
         if !targets.is_empty() {
@@ -824,8 +790,6 @@ where
             return false;
         }
 
-        // Leaf-first dispatch order (children before their ancestors), the
-        // same ordering pointer events use.
         let bubble_order = self.rotary_dispatch_order();
         let position = Point {
             x: self.cursor.0,
@@ -833,7 +797,6 @@ where
         };
 
         if !bubble_order.is_empty() {
-            // Capture pass: root -> leaf, so ancestors can intercept first.
             let capture_targets = bubble_order
                 .iter()
                 .rev()
@@ -847,7 +810,6 @@ where
                 return true;
             }
 
-            // Bubble pass: leaf -> root.
             let bubble_targets = bubble_order
                 .iter()
                 .filter_map(|&node_id| self.renderer.scene().find_target(node_id))
@@ -861,7 +823,6 @@ where
             }
         }
 
-        // Window-level escape hatch for single-canvas apps.
         if let Some(handler) = self.on_rotary_scroll.clone() {
             return handler(rotary);
         }
@@ -869,11 +830,6 @@ where
         false
     }
 
-    /// Resolves the leaf-to-root node order rotary events are dispatched over.
-    ///
-    /// Prefers the focused node's capture path; falls back to the chain under
-    /// the current cursor so rotary remains usable on a build where nothing has
-    /// claimed focus (the common case today).
     fn rotary_dispatch_order(&self) -> Vec<NodeId> {
         if let Some(focused) = cranpose_ui::active_focus_target()
             && let Some(target) = self.renderer.scene().find_target(focused)
@@ -914,7 +870,6 @@ where
     fn cancel_gesture_inner(&mut self, event_time: PointerEventTime) {
         let targets = self.resolve_gesture_targets(PointerId::PRIMARY);
 
-        // Clear tracker and button state
         self.hit_path_tracker.clear();
         self.buttons_pressed = PointerButtons::NONE;
 
@@ -937,7 +892,6 @@ where
             self.dispatch_targets(targets, event, false);
         }
 
-        // Dispatch Exit to all previously hovered nodes
         let pos = Point {
             x: self.cursor.0,
             y: self.cursor.1,
@@ -1004,11 +958,9 @@ where
         app_context.enter(|| self.on_key_event_inner(event))
     }
 
-    /// Internal keyboard event handler wrapped by on_key_event.
     fn on_key_event_inner(&mut self, event: &KeyEvent) -> bool {
         use KeyEventType::KeyDown;
 
-        // Only process KeyDown events for clipboard shortcuts
         if event.event_type == KeyDown && event.modifiers.command_or_ctrl() {
             #[cfg(all(
                 feature = "clipboard-native",
@@ -1018,14 +970,12 @@ where
             ))]
             {
                 match event.key_code {
-                    // Ctrl+C - Copy
                     KeyCode::C => {
                         if let Some(text) = self.on_copy_inner() {
                             cranpose_ui::clipboard_session::clipboard_write_text(&text);
                             return true;
                         }
                     }
-                    // Ctrl+X - Cut
                     KeyCode::X => {
                         if let Some(text) = self.on_cut_inner() {
                             cranpose_ui::clipboard_session::clipboard_write_text(&text);
@@ -1034,7 +984,6 @@ where
                             return true;
                         }
                     }
-                    // Ctrl+V - Paste
                     KeyCode::V => {
                         if let Some(text) = cranpose_ui::clipboard_session::clipboard_read_text()
                             && self.on_paste_inner(&text)
@@ -1047,23 +996,15 @@ where
             }
         }
 
-        // Pure O(1) dispatch - no tree walking needed
         if !cranpose_ui::text_field_focus::has_focused_field() {
             return false;
         }
 
-        // Wrap key event handling in a mutable snapshot so changes are atomically applied.
-        // This ensures keyboard input modifications are visible to subsequent snapshot contexts
-        // (like button click handlers that run in their own mutable snapshots).
-        let handled = run_in_mutable_snapshot(|| {
-            // O(1) dispatch via stored handler - handles ALL text input key events
-            // No fallback needed since handler now handles arrows, Home/End, word nav
-            cranpose_ui::text_field_focus::dispatch_key_event(event)
-        })
-        .unwrap_or(false);
+        let handled =
+            run_in_mutable_snapshot(|| cranpose_ui::text_field_focus::dispatch_key_event(event))
+                .unwrap_or(false);
 
         if handled {
-            // Mark both dirty (for redraw) and request a layout pass to rebuild semantics.
             self.mark_dirty();
             self.request_layout_pass();
         }
@@ -1081,9 +1022,6 @@ where
     }
 
     fn on_paste_inner(&mut self, text: &str) -> bool {
-        // Wrap paste in a mutable snapshot so changes are atomically applied.
-        // This ensures paste modifications are visible to subsequent snapshot contexts
-        // (like button click handlers that run in their own mutable snapshots).
         let handled =
             run_in_mutable_snapshot(|| cranpose_ui::text_field_focus::dispatch_paste(text))
                 .unwrap_or(false);
@@ -1105,7 +1043,6 @@ where
     }
 
     fn on_copy_inner(&mut self) -> Option<String> {
-        // Use O(1) dispatch instead of tree scan
         cranpose_ui::text_field_focus::dispatch_copy()
     }
 
@@ -1146,7 +1083,6 @@ where
                 .clipboard(LinuxClipboardKind::Primary)
                 .text(text.to_string());
             if let Err(e) = result {
-                // Primary selection may not be available on all systems
                 log::debug!("Primary selection set failed: {:?}", e);
             }
         }
@@ -1213,7 +1149,6 @@ where
     }
 
     fn on_ime_preedit_inner(&mut self, text: &str, cursor: Option<(usize, usize)>) -> bool {
-        // Wrap in mutable snapshot for atomic changes
         let handled = run_in_mutable_snapshot(|| {
             cranpose_ui::text_field_focus::dispatch_ime_preedit(text, cursor)
         })
@@ -1221,7 +1156,6 @@ where
 
         if handled {
             self.mark_dirty();
-            // IME composition changes the visible text, needs layout update
             self.request_layout_pass();
         }
 
@@ -1287,8 +1221,6 @@ where
             })
             .unwrap_or(false);
 
-            // A selection-only change never reflows text, so it needs a redraw
-            // but not a layout pass.
             if handled {
                 self.mark_dirty();
             }

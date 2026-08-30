@@ -1,10 +1,3 @@
-//! Records the commit the demo was built from.
-//!
-//! The Source view fetches each tab's file from GitHub at this ref rather than
-//! at `main`, so what a reader sees is the code that is actually running. A
-//! build outside a git checkout, or one that wants to pin a published tag,
-//! sets `CRANPOSE_SOURCE_REF` instead.
-
 use std::{path::Path, process::Command};
 
 fn main() {
@@ -24,8 +17,6 @@ fn main() {
         .ok()
         .filter(|value| !value.trim().is_empty())
         .or_else(|| head_commit(workspace.as_deref()))
-        // A tarball with no git and no override: the default branch is the only
-        // honest guess left, and the view says so rather than implying a match.
         .unwrap_or_else(|| String::from("main"));
 
     println!("cargo:rustc-env=CRANPOSE_SOURCE_REF={reference}");

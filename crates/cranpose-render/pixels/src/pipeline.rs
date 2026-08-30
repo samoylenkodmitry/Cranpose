@@ -397,8 +397,6 @@ fn push_layer_shadow(
 }
 
 pub(crate) fn render_layout_tree(root: &LayoutBox, scene: &mut Scene) {
-    // This backend draws every primitive; graphs built for it must not
-    // carry retained-span structure (and must not pay for verification).
     cranpose_render_common::scene_builder::set_retained_feed_epoch(None);
     let graph = cranpose_render_common::scene_builder::build_graph_from_layout_tree(root, 1.0);
     collect_hits_from_graph(&graph.root, ProjectiveTransform::identity(), scene, None);
@@ -639,7 +637,6 @@ fn push_text_decorations(
                 .unwrap_or_else(|| text_brush.clone())
         });
 
-        // Using y for single line since we don't map wrapping correctly without layout runs yet
         let line_top = text_rect.y;
 
         if decoration.contains(TextDecoration::UNDERLINE) {
@@ -683,8 +680,6 @@ fn text_decoration_rect(x: f32, y: f32, width: f32, thickness: f32) -> Rect {
     }
 }
 
-// See the note in the wgpu pipeline: these tests call the rule the scene
-// builder paints with, not a `#[cfg(test)]` replica of it.
 #[cfg(test)]
 use cranpose_render_common::scene_builder::resolve_text_measure_width;
 
@@ -719,12 +714,6 @@ fn resolve_text_horizontal_offset(
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Direct LayoutNode Tree Rendering (from Applier)
-// ═══════════════════════════════════════════════════════════════════════════
-
-/// Renders the scene by traversing the LayoutNode tree directly via Applier.
-/// This eliminates the need for per-frame LayoutTree reconstruction.
 pub(crate) fn render_from_applier(applier: &mut MemoryApplier, root: NodeId, scene: &mut Scene) {
     cranpose_render_common::scene_builder::set_retained_feed_epoch(None);
     let Some(graph) =
@@ -809,9 +798,6 @@ impl RasterLayerBounds {
         }
     }
 
-    // The software raster path anchors local primitive coordinates at a device-space origin and
-    // applies one axis-aligned scale from there. This is not a world-space rect and should only
-    // cross helper boundaries through this explicit conversion.
     fn raster_rect(self) -> Rect {
         Rect {
             x: self.device_origin.x,
@@ -832,9 +818,6 @@ struct RasterLayerMapping {
 }
 
 fn raster_layer_scale(transformed_bounds: Rect, local_bounds: Rect) -> (f32, f32) {
-    // The software raster path only models axis-aligned translation and scale. For rotated or
-    // projective transforms this falls back to the transformed AABB, which is exact for the shared
-    // Pixels/WGPU overlap but intentionally not a full rotation implementation.
     let scale_x = if local_bounds.width.abs() <= f32::EPSILON {
         1.0
     } else {
@@ -941,8 +924,6 @@ fn populate_draws_from_graph(
         return;
     }
 
-    // GraphicsLayer clipping clips content, but should not clip its own shadow.
-    // Explicit clip-to-bounds modifiers still clip both.
     let shadow_clip = resolve_clip(
         context.parent_visual_clip,
         layer
@@ -1025,14 +1006,11 @@ fn populate_draws_from_graph(
             RenderNode::DrawRun(run) => {
                 render_graph_draw_run(scene, run, primitive_context);
             }
-            // Only primitive and run nodes are ever deferred.
             RenderNode::Layer(_) => {}
         }
     }
 }
 
-/// [`render_graph_primitive`]'s draw arm for every primitive of a
-/// [`DrawRunNode`] — run draws never carry a per-primitive clip.
 fn render_graph_draw_run(
     scene: &mut RasterScene,
     run: &cranpose_render_common::graph::DrawRunNode,
@@ -1135,8 +1113,6 @@ fn render_graph_text(
     );
 }
 
-/// Node id recorded for text that came from a draw primitive rather than a
-/// `Text` node — a draw primitive belongs to its layer, not to a text node.
 const DRAW_PRIMITIVE_TEXT_NODE_ID: cranpose_core::NodeId = 0;
 
 pub(crate) fn push_draw_primitive(
@@ -1191,8 +1167,6 @@ pub(crate) fn push_draw_primitive(
         }
 
         fn push_text(&mut self, params: TextDrawParams) {
-            // Same list `Text` nodes land in, so the run goes through the
-            // backend's own glyph raster cache rather than a second path.
             self.scene.push_text(
                 DRAW_PRIMITIVE_TEXT_NODE_ID,
                 params.rect,
@@ -1240,7 +1214,6 @@ fn push_shadow_primitive(
                 snap_to_pixel_grid: false,
                 brush: params.brush.into_brush(),
                 shape: params.shape,
-                // A stroked or arc caster must cast a stroked or arc shadow.
                 stroke: params.stroke,
                 arc: params.arc,
                 z_index: 0,
@@ -2134,8 +2107,6 @@ mod tests {
         let Brush::Solid(background) = &scene.shapes[0].brush else {
             panic!("background draw should use a solid brush");
         };
-        // Painted colours arrive at eight bits per channel, which is where the
-        // platform's own colour type already is — see `Color::srgb_8bit`.
         assert_eq!(*background, Color(0.2, 0.3, 0.52, 0.55).srgb_8bit());
 
         assert_eq!(scene.texts.len(), 2, "shadow + content text expected");

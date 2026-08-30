@@ -1,11 +1,3 @@
-//! Real-window pixel-stability contract for the complete Liquid UI tab.
-//!
-//! Six independent scenes are scrolled by exactly one physical pixel per
-//! frame. After compensating for that translation, every adjacent capture in
-//! the shared viewport must remain pixel-stable. This catches coordinate
-//! discontinuities shared by layout, ordinary draw layers, backdrop effects,
-//! and runtime shaders instead of pinning one widget implementation.
-
 mod output_paths;
 mod scroll_stability_external_helpers;
 mod text_showcase_external_helpers;
@@ -30,9 +22,6 @@ const SCROLL_STEPS: usize = 10;
 const LOGICAL_PHASE_SWEEP_STEPS: usize = 10;
 const STEP_EPSILON: f32 = 0.02;
 const COMPARE_SEARCH_OFFSET_PX: u32 = 32;
-// Total absolute RGBA delta across the full comparison crop. This permits at
-// most 48 one-level 8-bit sampling differences among roughly 900,000 pixels;
-// a moving edge or layer exceeds it by orders of magnitude.
 const COMPARE_MAX_ADJACENT_SCORE: u32 = 48;
 
 #[derive(Clone, Copy)]
@@ -47,8 +36,6 @@ const SCENES: [LiquidScrollScene; 6] = [
     LiquidScrollScene {
         name: "optical_shader_body",
         target_text: "wcKSRD OPTICS",
-        // Keep the navigation title beyond its intentional 52dp collapse
-        // transition so this scene isolates scrolling shader content.
         target_center_range: (280.0, 390.0),
         trim: (180, 180, 0, 0),
     },
@@ -56,8 +43,6 @@ const SCENES: [LiquidScrollScene; 6] = [
         name: "optical_shader_left_edge",
         target_text: "wcKSRD OPTICS",
         target_center_range: (280.0, 390.0),
-        // Keep the complete shader-card edge while excluding the
-        // viewport-fixed floating tab bar from the translated comparison.
         trim: (180, 180, 0, 548),
     },
     LiquidScrollScene {
@@ -118,9 +103,6 @@ fn main() {
                 "density={density:.4} logical_delta_for_one_physical_pixel={physical_pixel_delta:.6}"
             );
 
-            // Put both large shader cards across the viewport boundary. This
-            // makes a one-row clip/surface seam visible without confusing it
-            // with content legitimately entering the viewport.
             scroll_text_into_view_between(&robot, "wcKSRD OPTICS", 180.0, 230.0, 80);
             settle(&robot);
             let viewport = semantics_bounds_for_exact_text(&robot, LIQUID_SCROLL_VIEWPORT_TAG);
@@ -192,9 +174,6 @@ fn main() {
                 );
                 settle(&robot);
 
-                // Cross multiple fractional-density rounding phases before
-                // comparing complete scene crops. The viewport seam only
-                // appears at particular logical scroll offsets.
                 advance_scroll_with_app_hook(
                     &robot,
                     ExactScrollStepConfig {
@@ -286,9 +265,6 @@ fn viewport_boundary_has_no_full_width_seam(
         .round()
         .clamp(2.0, image.height().saturating_sub(5) as f32) as u32;
     let mut seam = false;
-    // Both shader cards cover every row immediately inside this boundary, so
-    // their orange/purple split prevents any legitimate dominant full-width
-    // color. This catches an exposed row regardless of its actual color.
     for row in boundary.saturating_sub(3)..boundary {
         let (color, fraction) = dominant_row_color(&image, left, right, row);
         println!(

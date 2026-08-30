@@ -1,20 +1,3 @@
-//! Pixel parity for the retained-segment surface cache.
-//!
-//! Both arms drive the REAL recorder machinery exactly as
-//! `command_feed_parity` does — commands record into a `DrawScopeDefault`,
-//! a `CommandReplayState` verifies each frame, the resulting replay frame
-//! rides the graph — and both arms render with the command feed ON. The
-//! baseline arm is the retained instanced-quad path the cache REPLACES
-//! (`CRANPOSE_SEGMENT_SURFACE=0` — the compiled default is ON); the cached arm opts in. The delta
-//! between the arms is therefore exactly what the surface cache adds:
-//! nothing on identity frames beyond the 8-bit premultiplied intermediate,
-//! bounded resampling under rotation.
-//!
-//! The z-interleave bar rides the rotating scene: the spark span draws
-//! BETWEEN two cached ring segments in z, its footprint overlapping both
-//! rings' bands, with translucent color — any blending reorder would blow
-//! the per-pixel bound by an order of magnitude.
-
 mod support;
 
 use cranpose_render_common::{
@@ -33,11 +16,6 @@ use cranpose_ui_graphics::{
 const SIZE: u32 = 408;
 const CENTER: f32 = 204.0;
 
-/// One frame of the synthetic boss. `rotate` spins the rings at distinct
-/// speeds (the similarity-motion case); `false` freezes every segment at
-/// identity. Twinkles recolor per frame when `twinkle_churn`, else they
-/// hold one palette until `recolor_at` and flip once (the
-/// invalidate-within-one-frame case).
 fn record_frame(
     frame: usize,
     rotate: bool,
@@ -72,7 +50,6 @@ fn record_frame(
             }
         }
     }
-    // Leading dynamic span: movers whose count changes every frame.
     for m in 0..(2 + frame % 3) {
         let x = 30.0 + frame as f32 * 7.0 + m as f32 * 15.0;
         scope.draw_circle(
@@ -111,9 +88,6 @@ fn record_frame(
             );
         }
         if ring == 1 {
-            // The interleaved dynamic span: churning translucent sparks
-            // whose orbits (60..150) overlap BOTH the 90 and the 120 ring
-            // bands, drawn between them in z.
             for s in 0..(30 + (frame * 13) % 25) {
                 let a = s as f32 * 0.7 + frame as f32 * 0.31;
                 let r = 60.0 + ((s * 17 + frame * 29) % 90) as f32;
@@ -231,16 +205,11 @@ fn render_sequence(renderer: &mut support::LockedRenderer, graphs: &[RenderGraph
 }
 
 struct FrameDelta {
-    /// Channels differing at all.
     differing: usize,
     worst: u8,
-    /// Differing pixels outside the segments' dilated footprint (the
-    /// center-annulus that covers every ring band and the twinkle orbit).
     outside_footprint: usize,
 }
 
-/// The segments all live in center-annuli; a diff pixel outside every
-/// dilated annulus cannot be resampling and means the composite leaked.
 fn frame_delta(a: &[u8], b: &[u8]) -> FrameDelta {
     const FOOTPRINT_PAD: f32 = 4.0;
     let mut delta = FrameDelta {
@@ -260,7 +229,6 @@ fn frame_delta(a: &[u8], b: &[u8]) -> FrameDelta {
         let r = ((x - CENTER).powi(2) + (y - CENTER).powi(2)).sqrt();
         let in_ring =
             |inner: f32, outer: f32| r >= inner - FOOTPRINT_PAD && r <= outer + FOOTPRINT_PAD;
-        // Ring bands 140..150, 111..120, 82..90; twinkle orbit 52..76.
         let inside = in_ring(140.0, 150.0)
             || in_ring(111.0, 120.0)
             || in_ring(82.0, 90.0)
@@ -273,23 +241,9 @@ fn frame_delta(a: &[u8], b: &[u8]) -> FrameDelta {
 }
 
 fn set_common_env() {
-    // The feed ON in both arms: the baseline is the retained instanced-quad
-    // path the surface cache replaces, so the delta isolates the cache.
-    // Arc meshes off for the same reason command_feed_parity keeps them
-    // off: their interpolation envelope is measured in arc_mesh_parity.
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_COMMAND_FEED", Some("1"));
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ARC_MESH", Some("0"));
-    // The synthetic bricks are much sparser than the mega scene's (1.8 px
-    // chords in 10 px bands), so the r=150 ring prices at ~3.9x its member
-    // pixels and the DEFAULT ratio (3.0) correctly rejects it. These tests
-    // pin CORRECTNESS of the composite path, not the default economics —
-    // the module unit tests pin the gate — so they widen the ratio to
-    // admit all three rings.
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_SEGMENT_SURFACE_COST_RATIO", Some("6.0"));
-    // The cache defaults ON since the watch A/B earned the flip, so every
-    // baseline arm must hold the kill switch shut EXPLICITLY — an unset
-    // variable now measures cache against cache and proves nothing. The
-    // active arms open it with "1" right before their cached run.
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_SEGMENT_SURFACE", Some("0"));
 }
 
@@ -300,15 +254,6 @@ fn clear_env() {
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_SEGMENT_SURFACE_COST_RATIO", None);
 }
 
-/// Identity transforms end-to-end: static rings, one twinkle palette flip.
-/// Bar (MEASURED): the composite frames are byte-identical to the retained
-/// path outside the segments' footprint, and inside it deviate by at most
-/// 2 levels. The ±2 (not ±1) is the 8-bit premultiplied intermediate — the
-/// same quantization class Compose's own layer surfaces carry — rounding
-/// once per member blended at a pixel: this scene's bricks sit 0.45 px
-/// apart at r=150, so adjacent AA fringes overlap and two members land on
-/// one texel. Frames before engagement measure 0 differing channels, and
-/// the flip frame must recapture WITHIN that frame.
 #[test]
 fn identity_segments_composite_within_one_level_and_recolor_recaptures_same_frame() {
     let mut renderer = match support::headless_renderer() {
@@ -322,11 +267,6 @@ fn identity_segments_composite_within_one_level_and_recolor_recaptures_same_fram
     const RECOLOR_AT: usize = 16;
     set_common_env();
     let graphs = build_sequence(FRAMES, false, false, false, Some(RECOLOR_AT), false);
-    // First run warms the flat detector's pass-position state; the CONTROL
-    // is the second run, exactly as command_feed_parity compares bypassed
-    // frames against `fed2`, not the first fed run — the detector renders
-    // the two pre-retention frames up to 2/255 differently between a cold
-    // and a warmed renderer, which has nothing to do with this cache.
     let _warmup = render_sequence(&mut renderer, &graphs);
     let baseline = render_sequence(&mut renderer, &graphs);
     let stats_before = renderer.segment_surface_stats();
@@ -413,13 +353,6 @@ fn fractional_alpha_retained_surface_matches_float_blending() {
     );
 }
 
-/// Rings rotating at distinct speeds, translucent sparks interleaved
-/// between two cached rings in z with overlapping footprint, twinkles
-/// recoloring EVERY frame. Bars: churn is rejected (twinkles never
-/// capture), rotation resampling stays inside a measured envelope within
-/// the dilated footprint, and the interleaved blending survives — a
-/// z-reorder under the 0.8-alpha sparks would deviate by far more than the
-/// resampling bound.
 #[test]
 fn rotating_segments_stay_inside_the_resampling_envelope_and_churn_is_rejected() {
     let mut renderer = match support::headless_renderer() {
@@ -432,7 +365,6 @@ fn rotating_segments_stay_inside_the_resampling_envelope_and_churn_is_rejected()
     const FRAMES: usize = 24;
     set_common_env();
     let graphs = build_sequence(FRAMES, true, false, true, None, false);
-    // Warmed control — see the identity test.
     let _warmup = render_sequence(&mut renderer, &graphs);
     let baseline = render_sequence(&mut renderer, &graphs);
 
@@ -473,10 +405,6 @@ fn rotating_segments_stay_inside_the_resampling_envelope_and_churn_is_rejected()
         worst = worst.max(delta.worst);
         worst_differing = worst_differing.max(delta.differing);
     }
-    // MEASURED envelope (lavapipe, this scene, 24 frames), asserted at a
-    // small multiple: bilinear resampling of the rotated ring bands against
-    // analytic redraw. A z-order defect under the interleaved sparks blows
-    // these by an order of magnitude.
     assert!(
         worst <= SEGMENT_ROTATION_WORST_BOUND,
         "rotation resampling worst delta {worst} exceeded the measured envelope"
@@ -487,13 +415,9 @@ fn rotating_segments_stay_inside_the_resampling_envelope_and_churn_is_rejected()
     );
 }
 
-/// Measured on lavapipe (24 frames: worst 132, differing 71,280 channels
-/// of 666k) and asserted at a 1.5x margin; see the test.
 const SEGMENT_ROTATION_WORST_BOUND: u8 = 200;
 const SEGMENT_ROTATION_DIFFERING_BOUND: usize = 110_000;
 
-/// Breathing scale: the span's scale drifts from its captured scale until
-/// the threshold recaptures at the new scale.
 #[test]
 fn scale_drift_beyond_the_threshold_recaptures() {
     let mut renderer = match support::headless_renderer() {
@@ -505,9 +429,6 @@ fn scale_drift_beyond_the_threshold_recaptures() {
     };
     const FRAMES: usize = 48;
     set_common_env();
-    // A tight drift threshold makes the recapture land well inside the
-    // breathing run: the rings shrink 0.1% per frame, so from a capture at
-    // scale s0 the drift crosses 0.004 roughly every four frames.
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_SEGMENT_SURFACE_SCALE_EPS", Some("0.004"));
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_SEGMENT_SURFACE", Some("1"));
     let graphs = build_sequence(FRAMES, false, true, false, None, false);

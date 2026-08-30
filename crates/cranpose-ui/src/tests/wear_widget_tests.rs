@@ -1,14 +1,3 @@
-//! Wear widgets, measured against a real Wear OS screen.
-//!
-//! The numbers asserted here are not "what the code does today". They are the
-//! accessibility-node bounds and framebuffer colours of the Settings and
-//! Credits screens of a shipping Wear app, captured on a 454x454 emulator at
-//! density 2. Where a test names a pixel, that pixel was measured.
-//!
-//! Everything is stated in **layout points** and converted with `PX`, because a
-//! Cranpose point is a dp: the 454px display is 227 points across, and 175px is
-//! 87.5 points.
-
 use std::{cell::RefCell, rc::Rc};
 
 use cranpose_core::NodeId;
@@ -34,24 +23,17 @@ use crate::{
     },
 };
 
-/// Device pixels per layout point on the watch these numbers came from.
 const PX: f32 = 2.0;
-/// The display, in layout points: 454px at density 2.
 const WATCH: f32 = 227.0;
-/// Settings' horizontal content padding.
 const SETTINGS_SIDE: f32 = 18.0;
-/// Both screens' vertical content padding.
 const SCREEN_VERTICAL: f32 = 34.0;
-/// `ListHeaderTokens.Height`.
 const HEADER_HEIGHT: f32 = 48.0;
-/// `FilledButtonTokens.ContainerHeight`, and `SwitchButton`'s `MIN_HEIGHT`.
 const ROW_HEIGHT: f32 = 52.0;
 
 thread_local! {
     static LAST_STATE: RefCell<Option<WearScalingListState>> = const { RefCell::new(None) };
 }
 
-/// The palette the screens were measured in, straight out of the spec.
 fn measured_colors() -> WearColors {
     WearColors {
         primary: Color::from_rgb_u8(0xB9, 0xF2, 0xFF),
@@ -74,8 +56,6 @@ fn settings_spec() -> WearScalingLazyColumnSpec {
     WearScalingLazyColumnSpec::default().content_padding(SETTINGS_SIDE, SCREEN_VERTICAL)
 }
 
-/// A list of fixed-height rows, so the geometry under test is the list's and
-/// not the text measurer's.
 fn compose_fixed_rows(heights: Vec<f32>, spec: WearScalingLazyColumnSpec) -> TestComposition {
     run_test_composition(move || {
         crate::set_density(PX);
@@ -127,8 +107,6 @@ fn tree(composition: &mut TestComposition, root: NodeId) -> crate::LayoutTree {
     tree
 }
 
-/// Every placed node that carries a graphics layer, in tree order — one per
-/// visible list item.
 fn item_layers(tree: &crate::LayoutTree) -> Vec<(f32, f32, Rc<ModifierNodeSlices>)> {
     fn walk(node: &crate::LayoutBox, out: &mut Vec<(f32, f32, Rc<ModifierNodeSlices>)>) {
         if node.node_data.modifier_slices().graphics_layer().is_some() {
@@ -147,18 +125,8 @@ fn item_layers(tree: &crate::LayoutTree) -> Vec<(f32, f32, Rc<ModifierNodeSlices
     out
 }
 
-// ── The list ────────────────────────────────────────────────────────────────
-
 #[test]
 fn the_settings_screen_puts_its_first_two_rows_where_the_framebuffer_has_them() {
-    // Measured on the device: the "SETTINGS" header row spans y = 71..167 and
-    // the "Haptics" switch row y = 175..279. Both the accessibility tree
-    // (`[120,71][334,167]`, `[36,175][418,279]`) and the framebuffer — the
-    // #0F364E card band runs 175..278 inclusive — say so. Everything that
-    // produces those two numbers is under test here at once: the 48dp and 52dp
-    // floors, the 4dp item spacing, `AutoCenteringParams(itemIndex = 1)`, and
-    // the fact that the 34dp vertical content padding is absorbed rather than
-    // added.
     let mut composition = compose_fixed_rows(vec![HEADER_HEIGHT, ROW_HEIGHT], settings_spec());
     let root = composition.root().expect("list root");
     let tree = tree(&mut composition, root);
@@ -172,18 +140,6 @@ fn the_settings_screen_puts_its_first_two_rows_where_the_framebuffer_has_them() 
 
 #[test]
 fn content_padding_is_absorbed_by_auto_centring_rather_than_stacking_on_it() {
-    // The anchored item's centre lands on H/2 and nowhere else, whatever the
-    // vertical content padding is. Wear's `LazyColumn` pushes item 0 down by
-    // `beforeContentPadding`, and `scrollToItem` subtracts the same
-    // `beforeContentPaddingPx` from the offset it asks for
-    // (`ScalingLazyListState.kt:499`), so the two cancel. The auto-centring
-    // spacer never gets in the way: it holds `centreLine - size/2` of content
-    // above the anchor and the scroll wants `centreLine - padding - size/2`,
-    // so the scroll is never clamped short.
-    //
-    // Reading it the other way — as padding stacked on top of auto-centring —
-    // puts every row 68px too LOW, which is what the composed Credits screen
-    // did.
     let mut composition = compose_fixed_rows(vec![HEADER_HEIGHT, ROW_HEIGHT], settings_spec());
     let root = composition.root().expect("list root");
     let tree = tree(&mut composition, root);
@@ -195,10 +151,6 @@ fn content_padding_is_absorbed_by_auto_centring_rather_than_stacking_on_it() {
 
 #[test]
 fn a_list_with_no_content_padding_centres_its_anchor_in_the_same_place() {
-    // The other half of the previous test, and the reason it has to be a
-    // separate one: a `TestComposition` owns the app context while it lives,
-    // so two of them cannot be built side by side. Padding or no padding, the
-    // anchored item's centre is the centre line.
     let mut composition = compose_fixed_rows(
         vec![HEADER_HEIGHT, ROW_HEIGHT],
         WearScalingLazyColumnSpec::default(),
@@ -211,8 +163,6 @@ fn a_list_with_no_content_padding_centres_its_anchor_in_the_same_place() {
 
 #[test]
 fn a_top_aligned_list_still_starts_one_content_padding_down() {
-    // `autoCentering = null` leaves a plain `LazyColumn`, and there the
-    // padding is the whole story: item 0's top is `beforeContentPadding`.
     let mut composition = compose_fixed_rows(
         vec![HEADER_HEIGHT, ROW_HEIGHT],
         settings_spec().auto_centering(None),
@@ -225,10 +175,6 @@ fn a_top_aligned_list_still_starts_one_content_padding_down() {
 
 #[test]
 fn a_row_is_placed_from_the_full_heights_above_it_not_the_scaled_ones() {
-    // Six rows, scrolled far enough that the ramp has hold of the top ones.
-    // However much a row shrank, the row below it sits a full row plus a gap
-    // lower — stacking scaled heights instead makes the list drift further out
-    // of place with every row.
     let mut composition = compose_fixed_rows(vec![ROW_HEIGHT; 6], settings_spec());
     let root = composition.root().expect("list root");
     let _ = tree(&mut composition, root);
@@ -246,9 +192,6 @@ fn a_row_is_placed_from_the_full_heights_above_it_not_the_scaled_ones() {
         scales.iter().any(|scale| *scale < 1.0),
         "the ramp has hold of something: {scales:?}"
     );
-    // Two rows the ramp left alone are exactly one row and one gap apart. A
-    // scaled row's own top moves — above the centre line it keeps its bottom
-    // edge — but that movement never reaches the row below it.
     let unscaled: Vec<f32> = layers
         .iter()
         .zip(scales.iter())
@@ -263,22 +206,11 @@ fn a_row_is_placed_from_the_full_heights_above_it_not_the_scaled_ones() {
 
 #[test]
 fn a_row_shrinks_and_fades_by_the_amounts_the_pixels_show() {
-    // Measured at rest on `sdk_gwear`: the third switch row starts at
-    // y = 287 and the ramp leaves it alone — `[36,287][418,391]`, the full
-    // 382x104 — while the fourth starts at 399 and draws `[78,399][376,454]`,
-    // 298px wide against an unscaled 382. Both are the ramp's answer at the
-    // edge of where it starts to bite, so they pin the transition point from
-    // either side.
     let untouched = scale_and_alpha(454.0, 287.0, 287.0 + 104.0).expect("in range");
     assert_eq!(untouched.scale, 1.0);
     let biting = scale_and_alpha(454.0, 399.0, 399.0 + 104.0).expect("in range");
     assert_eq!((382.0 * biting.scale).round(), 298.0);
 
-    // And the row the spec validated its colour prediction with. That capture
-    // had the list scrolled, so 355 is not where this row sits at rest — but
-    // the ramp's answer at a given top is the ramp's answer: unscaled
-    // 382x104px at y = 355 draws 340x92px and its #0F364E container comes out
-    // #0C2C40.
     let top_px = 355.0;
     let height_px = 104.0;
     let transform = scale_and_alpha(454.0, top_px, top_px + height_px).expect("in range");
@@ -292,11 +224,8 @@ fn a_row_shrinks_and_fades_by_the_amounts_the_pixels_show() {
         "alpha {}",
         transform.alpha
     );
-    // 382 x 0.89166 = 340.6, and the device reports 340.
     assert_eq!((382.0 * transform.scale).floor(), 340.0);
     assert_eq!((104.0 * transform.scale).floor(), 92.0);
-    // And the faded container matches on all three channels. This is the
-    // prediction the spec validated itself with.
     let container = measured_colors().primary_container;
     let faded = |channel: f32| ((channel * 255.0).round() * transform.alpha).round() as u8;
     assert_eq!(
@@ -307,10 +236,6 @@ fn a_row_shrinks_and_fades_by_the_amounts_the_pixels_show() {
 
 #[test]
 fn the_scale_a_frame_draws_with_is_the_scale_that_frame_measured() {
-    // The experiment the design called for. A layer resolver runs at scene
-    // build, after measure, so driving a scroll ramp and re-reading the layer
-    // must give the CURRENT frame's scale — not the previous frame's, which is
-    // what a channel filled during composition would give.
     let mut composition = compose_fixed_rows(vec![ROW_HEIGHT; 8], settings_spec());
     let root = composition.root().expect("list root");
     let state = state();
@@ -325,10 +250,6 @@ fn the_scale_a_frame_draws_with_is_the_scale_that_frame_measured() {
         }
         let tree = tree(&mut composition, root);
         let layers = item_layers(&tree);
-        // What this frame's anchor says every row should be, worked out from
-        // the library geometry rather than from the widget — then narrowed to
-        // the rows the viewport can see, because those are the ones the list
-        // places. The rest are the list's business and nobody else's.
         let expected: Vec<_> = expected_rows(8, state.anchor())
             .into_iter()
             .filter(|row| row.top < WATCH && row.top + row.height > 0.0)
@@ -360,18 +281,11 @@ fn the_scale_a_frame_draws_with_is_the_scale_that_frame_measured() {
     );
 }
 
-/// What the library geometry says a list of equal rows should look like, given
-/// an anchor. Deliberately written from `round_scaling_list` directly, so the
-/// widget is checked against the geometry rather than against itself.
 fn expected_rows(count: usize, anchor: CentreAnchor) -> Vec<crate::round_scaling_list::PlacedRow> {
     use crate::round_scaling_list::{RowRun, Slot, centre_offset, place_rows, stack_into};
     let mut slots: Vec<Slot> = Vec::new();
     stack_into(std::iter::repeat_n(ROW_HEIGHT, count), 4.0, &mut slots);
-    // No content padding term: auto-centring absorbs it. See
-    // `content_padding_is_absorbed_by_auto_centring_rather_than_stacking_on_it`.
     let offset = centre_offset(&slots, WATCH, anchor, PX);
-    // The anchored row is the only one whose slot IS its cursor; every other
-    // row is walked out from it against the scaled sizes in between.
     let index = anchor.index.min(count.saturating_sub(1));
     let mut rows = Vec::new();
     place_rows(
@@ -390,9 +304,6 @@ fn expected_rows(count: usize, anchor: CentreAnchor) -> Vec<crate::round_scaling
 
 #[test]
 fn a_shrunk_item_reaches_the_renderer_through_a_layer_pinned_to_its_top_edge() {
-    // `transformOrigin` is (0.5, 0.0) on every item. The pinning of whichever
-    // edge faces the centre line is already in the placed top; doing it with
-    // the origin as well would pin the row twice.
     let mut composition = compose_fixed_rows(vec![ROW_HEIGHT; 6], settings_spec());
     let root = composition.root().expect("list root");
     let tree = tree(&mut composition, root);
@@ -407,13 +318,6 @@ fn a_shrunk_item_reaches_the_renderer_through_a_layer_pinned_to_its_top_edge() {
 
 #[test]
 fn an_item_off_the_bottom_is_neither_composed_nor_placed() {
-    // This used to assert the opposite — that all thirty rows were placed, on
-    // the reasoning that an unplaced node would keep last frame's rectangle.
-    // That reasoning was wrong twice over: a subcomposing list disposes the
-    // slot rather than leaving a node behind, and a placed off-screen row at an
-    // alpha below one still buys an offscreen render target under
-    // `CompositingStrategy::Auto` for pixels the clip then discards. Twenty-six
-    // of those, on a screen showing four rows, is what this list used to cost.
     let mut composition = compose_fixed_rows(vec![ROW_HEIGHT; 30], settings_spec());
     let root = composition.root().expect("list root");
     let tree = tree(&mut composition, root);
@@ -431,8 +335,6 @@ fn an_item_off_the_bottom_is_neither_composed_nor_placed() {
         .filter(|(top, height, _)| *top < WATCH && top + height > 0.0)
         .count();
     assert_eq!(on_screen, info.visible);
-    // And the composed window is the visible rows plus the beyond-bounds band
-    // at each end, not the list.
     assert!(
         info.composed >= info.visible && info.composed <= info.visible + 4,
         "{info:?}"
@@ -442,9 +344,6 @@ fn an_item_off_the_bottom_is_neither_composed_nor_placed() {
 
 #[test]
 fn the_composed_window_does_not_grow_with_the_list() {
-    // The measured regression this whole pass exists for: the cost tracked item
-    // count rather than visible count, so Settings' 24 rows cost three times
-    // what Credits' 9 did with the same four rows on screen.
     let mut short = compose_fixed_rows(vec![ROW_HEIGHT; 9], settings_spec());
     let root = short.root().expect("list root");
     let _ = tree(&mut short, root);
@@ -467,15 +366,6 @@ fn the_composed_window_does_not_grow_with_the_list() {
 
 #[test]
 fn the_anchored_items_top_does_not_depend_on_the_heights_above_it() {
-    // The arithmetic the virtualising walk rests on. `centre_offset` subtracts
-    // the anchored slot's top and the placement adds it straight back; that
-    // cancels exactly — rather than nearly — because every slot top is a whole
-    // number of device pixels and `round_to_px` commutes with a whole pixel.
-    // If it did not, the walk would have to measure everything above the anchor
-    // to place the anchor, which is the thing it exists not to do.
-    //
-    // Two lists with wildly different rows above the anchor, and one identical
-    // anchored row: its top has to land in the same place.
     let mut thin = compose_fixed_rows(vec![7.5, ROW_HEIGHT, ROW_HEIGHT], settings_spec());
     let root = thin.root().expect("list root");
     let tree_thin = tree(&mut thin, root);
@@ -486,8 +376,6 @@ fn the_anchored_items_top_does_not_depend_on_the_heights_above_it() {
     let root = fat.root().expect("list root");
     let tree_fat = tree(&mut fat, root);
     let fat_layers = item_layers(&tree_fat);
-    // The tall first row is off the top of the screen, so the anchored row is
-    // whichever layer sits on the centre line.
     let fat_anchor = fat_layers
         .iter()
         .map(|(top, _, _)| *top)
@@ -511,11 +399,8 @@ fn the_indicator_travel_runs_between_the_first_and_last_row_centres() {
     let _ = tree(&mut composition, root);
     let info = state().layout_info();
     assert_eq!(info.item_count, 10);
-    // Nine gaps of one row plus one spacing between ten centres.
     assert_eq!(info.travel(), 9.0 * (ROW_HEIGHT + 4.0));
 }
-
-// ── The row widgets ─────────────────────────────────────────────────────────
 
 fn compose_widget(mut build: impl FnMut() + 'static) -> TestComposition {
     run_test_composition(move || {
@@ -573,8 +458,6 @@ fn a_wear_button_is_at_least_fifty_two_dp_tall_and_fills_the_width_it_is_given()
     });
     let size = root_size(&mut composition);
     assert_eq!(size.height, ROW_HEIGHT);
-    // `fillMaxWidth` is outermost and pins min == max, so the intrinsic width
-    // never gets a say. 191dp is 382px, the measured row width.
     assert_eq!(size.width, WATCH - SETTINGS_SIDE * 2.0);
     assert_eq!(size.width * PX, 382.0);
 }
@@ -645,7 +528,6 @@ fn a_switch_row_is_fifty_two_dp_tall_and_its_switch_sits_two_dp_above_centre() {
     let row = tree.root().rect;
     assert_eq!(row.height, ROW_HEIGHT);
 
-    // The switch is the child sized exactly 32x22.
     fn find_switch(node: &crate::LayoutBox) -> Option<crate::modifier::Rect> {
         if (node.rect.width - 32.0).abs() < 1e-3 && (node.rect.height - 22.0).abs() < 1e-3 {
             return Some(node.rect);
@@ -661,7 +543,6 @@ fn a_switch_row_is_fifty_two_dp_tall_and_its_switch_sits_two_dp_above_centre() {
         "the 22dp graphic is top-aligned in a 24dp slot, so its centre is 1dp high"
     );
     assert_eq!((row_centre - switch_centre) * PX, 2.0, "2px, as measured");
-    // And it is flush with the row's end padding.
     assert_eq!(row.width - (switch.x + switch.width), 14.0);
 }
 
@@ -682,9 +563,6 @@ fn a_switch_row_is_toggleable_and_reports_the_value_it_is_moving_to() {
     });
     let root = composition.root().expect("switch root");
     let tree = tree(&mut composition, root);
-    // A composed row's click arrives as a pointer input on its node chain,
-    // not as a raw click slice: the slice is what a bare `Modifier` exposes,
-    // and the chain is what a node actually runs.
     fn find_pointer(node: &crate::LayoutBox) -> Option<Rc<dyn Fn(PointerEvent)>> {
         if let Some(handler) = node.node_data.modifier_slices().pointer_inputs().first() {
             return Some(Rc::clone(handler));
@@ -704,8 +582,6 @@ fn a_switch_row_is_toggleable_and_reports_the_value_it_is_moving_to() {
         "checked, so a tap turns it off"
     );
 }
-
-// ── The scaffold and the indicator ──────────────────────────────────────────
 
 #[test]
 fn a_scaffold_draws_its_indicator_over_the_content_and_not_beside_it() {
@@ -744,8 +620,6 @@ fn a_scaffold_draws_its_indicator_over_the_content_and_not_beside_it() {
         "the scaffold fills the watch"
     );
     assert_eq!(tree.root().rect.height, WATCH);
-    // Two children in one box: the list and the indicator, stacked rather than
-    // laid out side by side.
     assert_eq!(tree.root().children.len(), 2);
     for child in &tree.root().children {
         assert_eq!(child.rect.x, 0.0);
@@ -753,9 +627,6 @@ fn a_scaffold_draws_its_indicator_over_the_content_and_not_beside_it() {
     }
 }
 
-/// The shape both list screens have: a header, then rows. Uniform rows are the
-/// one case where every model of a scroll indicator agrees, so a list under
-/// test must not have them.
 fn header_and_rows() -> Vec<f32> {
     let mut heights = vec![HEADER_HEIGHT];
     heights.extend([ROW_HEIGHT; 9]);
@@ -772,18 +643,12 @@ fn indicator_at_vertical_padding(vertical: f32) -> IndicatorGeometry {
 
 #[test]
 fn the_composed_indicator_reads_item_indices_where_the_flat_model_reads_pixels() {
-    // The composed path shipped on `indicator_geometry`, the flat model: the
-    // thumb is the share of the CONTENT on screen and it moves with the pixels.
-    // Wear's own adapter works in fractional item indices, and the two agree
-    // only on a list of uniform rows — so the flat model looked right until the
-    // header was a different height from the rows under it.
     let mut composition = compose_fixed_rows(header_and_rows(), settings_spec());
     let root = composition.root().expect("list root");
     let _ = tree(&mut composition, root);
     let list = state();
     let wear = indicator_for_scaling_list(&list).expect("a ten-row list is scrollable");
 
-    // The length is the span of the visible rows over the item COUNT.
     let span = list.with_indicator_list(|_, items| {
         (decimal_last_item_index(items) - decimal_first_item_index(items)) / items.total as f32
     });
@@ -792,9 +657,6 @@ fn the_composed_indicator_reads_item_indices_where_the_flat_model_reads_pixels()
         "{wear:?} against an item span of {span}"
     );
 
-    // And neither number is the flat model's. The gap is far wider than the rim
-    // can hide: the whole track is about a hundred device pixels long, so a
-    // tenth of it is ten pixels of thumb in the wrong place.
     let info = list.layout_info();
     let flat = indicator_geometry(info.content, info.viewport, info.scrolled())
         .expect("the flat model has an answer too");
@@ -810,11 +672,6 @@ fn the_composed_indicator_reads_item_indices_where_the_flat_model_reads_pixels()
 
 #[test]
 fn the_window_the_indicator_reads_carries_the_lists_own_item_indices() {
-    // A virtualised list hands the indicator a window that starts wherever the
-    // measure walk started, and `scaling_list_items` numbers what it is handed
-    // from zero. Without the list's own base put back, every scroll position
-    // reports "item 0 is on screen" — which is a thumb pinned to the top of the
-    // track for the whole length of a long list.
     let mut composition = compose_fixed_rows(header_and_rows(), settings_spec());
     let root = composition.root().expect("list root");
     let _ = tree(&mut composition, root);
@@ -853,10 +710,6 @@ fn the_window_the_indicator_reads_carries_the_lists_own_item_indices() {
 
 #[test]
 fn the_thumb_keeps_the_length_it_was_first_measured_at() {
-    // `previousItemsCount` in the adapter, and the reason the cache is threaded
-    // through the widget at all rather than being worked out per frame. It is
-    // not an optimisation: the thumb is measured once per list and does not
-    // breathe as rows of different heights scroll past it.
     let mut composition = compose_fixed_rows(header_and_rows(), settings_spec());
     let root = composition.root().expect("list root");
     let _ = tree(&mut composition, root);
@@ -873,8 +726,6 @@ fn the_thumb_keeps_the_length_it_was_first_measured_at() {
     assert_eq!(scrolled.thumb, at_rest.thumb, "the thumb changed length");
     assert!(scrolled.offset > at_rest.offset, "and it did move");
 
-    // What it would be without the cache, so this cannot pass by measuring the
-    // same number twice.
     let remeasured = list.with_indicator_list(|_, items| ThumbLength::default().of(items));
     assert!(
         (remeasured - at_rest.thumb).abs() > 0.05,
@@ -885,12 +736,6 @@ fn the_thumb_keeps_the_length_it_was_first_measured_at() {
 
 #[test]
 fn the_indicator_counts_the_vertical_padding_this_list_was_given() {
-    // `decimalFirstItemIndex` adds `beforeContentPadding +
-    // beforeAutoCenteringPadding` to the first row's span while that row is on
-    // screen, which is what makes a list that cannot quite reach its own end
-    // report that it has not. It has to be the padding THIS list was handed:
-    // a widget that reaches for the number an app happens to use is right by
-    // coincidence and wrong for the next caller.
     let bare = indicator_at_vertical_padding(0.0);
     let padded = indicator_at_vertical_padding(SCREEN_VERTICAL);
     let deeper = indicator_at_vertical_padding(60.0);
@@ -898,8 +743,6 @@ fn the_indicator_counts_the_vertical_padding_this_list_was_given() {
         bare.offset, 0.0,
         "with no blank above it, a list at rest is at its own top"
     );
-    // With one, it is not: the list has already scrolled past that blank to put
-    // the anchored row on the centre line, and the indicator says so.
     assert!(padded.offset > bare.offset, "{padded:?} against {bare:?}");
     assert!(
         deeper.offset > padded.offset,
@@ -913,9 +756,6 @@ fn the_indicator_counts_the_vertical_padding_this_list_was_given() {
 
 #[test]
 fn a_list_that_fits_on_its_screen_has_no_indicator_at_all() {
-    // Whether a list scrolls is `ScreenScaffold`'s question in Wear, not the
-    // adapter's, so the geometry answers a short list rather than declining to
-    // — and the widget is where the declining happens.
     let mut composition = compose_fixed_rows(vec![ROW_HEIGHT; 2], settings_spec());
     let root = composition.root().expect("list root");
     let _ = tree(&mut composition, root);
@@ -924,8 +764,6 @@ fn a_list_that_fits_on_its_screen_has_no_indicator_at_all() {
 
 #[test]
 fn the_indicator_sweep_is_the_one_measured_on_a_454_pixel_watch() {
-    // 30.536 degrees at r = 113.5dp. The two other implementations of this in
-    // the same family compute 26.64 and are wrong by 3.90 degrees of sweep.
     let arc = crate::round_scroll_indicator::indicator_arc(113.5);
     let degrees = arc.sweep().to_degrees();
     assert!((degrees - 30.536).abs() < 0.01, "{degrees}");
@@ -933,14 +771,10 @@ fn the_indicator_sweep_is_the_one_measured_on_a_454_pixel_watch() {
     assert_eq!(arc.width(), 6.0, "6dp on a large screen");
 }
 
-// ── Typography ──────────────────────────────────────────────────────────────
-
 #[test]
 fn a_wear_text_style_asks_for_the_line_box_rule_that_gives_a_38_pixel_header() {
     use crate::text::line_box::{FontExtent, line_box};
     let style = WearTextStyle::TITLE_MEDIUM.resolve(measured_colors().on_background);
-    // Roboto's hhea metrics at 16sp on a density-2 watch: 32px of glyph,
-    // ascender 1900/2048 and descender 500/2048.
     let extent = FontExtent::new(32.0 * 1900.0 / 2048.0, 32.0 * 500.0 / 2048.0, 0.0);
     let resolved = line_box(&style, extent, 36.0, 1.0);
     assert_eq!(
@@ -948,12 +782,10 @@ fn a_wear_text_style_asks_for_the_line_box_rule_that_gives_a_38_pixel_header() {
         "titleMedium overflows its own 18sp line height"
     );
 
-    // labelMedium does not, which is why only the header exposes it.
     let label = WearTextStyle::LABEL_MEDIUM.resolve(measured_colors().on_surface);
     let label_extent = FontExtent::new(30.0 * 1900.0 / 2048.0, 30.0 * 500.0 / 2048.0, 0.0);
     assert_eq!(line_box(&label, label_extent, 36.0, 1.0).height, 36.0);
 
-    // And a 12sp bare Text in an inherited 16sp line box measures 32px.
     let bare = WearTextStyle::BODY_LARGE
         .at_size(12.0)
         .with_line_height(16.0)
@@ -964,17 +796,6 @@ fn a_wear_text_style_asks_for_the_line_box_rule_that_gives_a_38_pixel_header() {
 
 #[test]
 fn wear_tracking_widens_a_string_by_one_letter_space_per_character() {
-    // Every entry in the Wear type scale sets `letterSpacing = 0.4.sp`, and
-    // Android resolves that in Minikin, which puts HALF a letter space on each
-    // side of every cluster. A run of n characters is therefore n letter
-    // spaces wider than an untracked one -- not the n-1 a "spacing between
-    // letters" reading gives, which is what this framework used to do.
-    //
-    // "SETTINGS" is the header the widget spec measured: 8 characters at 0.4sp
-    // is 3.2 points, which on the density-2 watch it was captured on is 6.4
-    // device pixels. The old rule made it 5.6, and `ListHeader` wraps its
-    // content width, so that shortfall moved the header's box as well as its
-    // glyphs.
     const HEADER: &str = "SETTINGS";
     let width = |tracking_sp: f32| {
         let mut style = WearTextStyle::TITLE_MEDIUM;
@@ -1022,13 +843,6 @@ fn the_switch_slots_resolve_to_the_colours_the_framebuffer_shows() {
     );
 }
 
-/// A whole Credits screen: a scaffold over a list of real, text-measured rows.
-///
-/// Every other test here feeds the list `Spacer`s of a fixed height, so that
-/// what is under test is the list's geometry and not the text measurer's. This
-/// one deliberately does the opposite, because an app does: a `ListHeader`, a
-/// pile of wrapping `Text`, and a `WearButton`, all sized by measuring their
-/// own strings.
 fn compose_credits_screen() -> TestComposition {
     run_test_composition(|| {
         crate::set_density(PX);
@@ -1046,13 +860,6 @@ fn compose_credits_screen() -> TestComposition {
                     inner,
                     WearScalingLazyColumnSpec::default().content_padding(30.0, SCREEN_VERTICAL),
                     move |scope| {
-                        // Six lines and then the button, rather than four: a
-                        // scaling list stacks its DRAWN boxes a gap apart, so a
-                        // shrunken row does not push the one after it down and
-                        // a short list keeps more of itself on the first
-                        // screen. `a_row_below_the_fold_paints_once_it_is_scrolled_to`
-                        // needs the button genuinely off screen at rest, and
-                        // with four lines above it no longer is.
                         let lines = [
                             "ORBIT BREAKER",
                             "Version 1.0.0-debug",
@@ -1126,7 +933,6 @@ fn a_credits_screen_of_text_measured_rows_places_rows_that_are_not_empty() {
              is zero draws nothing, which is what an empty screen looks like"
         );
     }
-    // And they are stacked, not piled on one coordinate.
     let tops: Vec<f32> = layers.iter().map(|(y, _, _)| *y).collect();
     assert!(
         tops.windows(2).all(|pair| pair[1] > pair[0]),
@@ -1136,14 +942,6 @@ fn a_credits_screen_of_text_measured_rows_places_rows_that_are_not_empty() {
 
 #[test]
 fn a_credits_screen_emits_a_text_primitive_for_every_row_it_placed() {
-    // Layout is not paint. Every other test here stops at the layout tree,
-    // which is why a screen whose rows measure perfectly and rasterise to
-    // nothing passes all of them and shows a blank watch face.
-    //
-    // The "Back" button is asserted in
-    // `a_row_below_the_fold_paints_once_it_is_scrolled_to` rather than here: at
-    // rest it is below the fold, so a virtualising list neither places nor
-    // paints it — which is the point, not a regression.
     let mut composition = compose_credits_screen();
     let root = composition.root().expect("credits root");
     let tree = tree(&mut composition, root);
@@ -1160,10 +958,6 @@ fn a_credits_screen_emits_a_text_primitive_for_every_row_it_placed() {
 
 #[test]
 fn a_row_below_the_fold_paints_once_it_is_scrolled_to() {
-    // The other half of virtualisation, and the half that actually breaks: a
-    // row the first frame never composed has to compose, place and paint when
-    // the list reaches it. Asserting only that off-screen rows are skipped
-    // would pass on a list that never shows anything but its first screen.
     let mut composition = compose_credits_screen();
     let root = composition.root().expect("credits root");
     let list = state();
@@ -1172,7 +966,6 @@ fn a_row_below_the_fold_paints_once_it_is_scrolled_to() {
         "the button starts below the fold, or this test proves nothing"
     );
 
-    // Scroll to the end of the travel the list reports.
     let travel = list.layout_info().travel();
     assert!(travel > 0.0, "the credits list has to be scrollable");
     list.scroll_by(travel);

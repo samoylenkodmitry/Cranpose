@@ -14,8 +14,6 @@ pub use android_file_picker::open_content_uri;
     all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
 ))]
 mod accessibility;
-/// When a platform accessibility bridge may publish a semantics snapshot.
-/// Built on the host as well so its decision tests run everywhere.
 #[cfg(any(
     test,
     all(feature = "android", feature = "renderer-wgpu", target_os = "android")
@@ -23,9 +21,6 @@ mod accessibility;
 mod accessibility_publish_policy;
 #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
 mod android_accessibility;
-/// The Android accessibility wire format behind `CranposeActivity`'s
-/// `AccessibilityNodeProvider`. Built on the host as well so its encoding
-/// tests run everywhere.
 #[cfg(any(
     test,
     all(feature = "android", feature = "renderer-wgpu", target_os = "android")
@@ -35,11 +30,6 @@ mod android_accessibility_wire;
 mod android_app_info;
 #[cfg(all(feature = "android", target_os = "android"))]
 mod android_camera;
-#[cfg(all(feature = "android", feature = "media", target_os = "android"))]
-mod android_media;
-// `android_main!` expands to nothing off Android, so the macro itself is always
-// compiled: an application writes the invocation once and every target accepts
-// it.
 #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
 mod android_display;
 mod android_entry;
@@ -51,8 +41,6 @@ mod android_font_scale;
 mod android_frame_rate;
 #[cfg(all(feature = "android", target_os = "android"))]
 mod android_frame_telemetry;
-/// The bounded command queue behind the Android haptics delivery thread.
-/// Built on the host as well so its ordering/coalescing test runs everywhere.
 #[cfg(any(
     test,
     all(feature = "android", feature = "renderer-wgpu", target_os = "android")
@@ -67,20 +55,16 @@ mod android_input;
 mod android_jni;
 #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
 mod android_keyboard;
-/// The Android intent-extra wire format behind `cranpose_services::launch_args`.
-/// Built on the host as well so its decoding tests run everywhere.
 #[cfg(any(test, all(feature = "android", target_os = "android")))]
 mod android_launch_args;
+#[cfg(all(feature = "android", feature = "media", target_os = "android"))]
+mod android_media;
 #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
 mod android_overlay_window;
-/// Panic-hook chaining behind `android.rs`'s `run()`. Built on the host as
-/// well so the chaining logic's test runs everywhere.
 #[cfg(any(test, all(feature = "android", target_os = "android")))]
 mod android_panic_hook;
 #[cfg(all(feature = "android", target_os = "android"))]
 mod android_perf_hint;
-/// The Play Billing wire format behind `cranpose_services::purchases`. Built on
-/// the host as well so its decoding tests run everywhere.
 #[cfg(any(
     test,
     all(feature = "android", feature = "playbilling", target_os = "android")
@@ -287,11 +271,6 @@ pub fn BackHandler(enabled: bool, mut on_back: impl FnMut() + 'static) {
             _registration: registration,
         })
     });
-    // Only a handler that is switched on collects. A collector is a runtime
-    // task parked on a stream for as long as it is composed, and the shell
-    // composes a `BackHandler` at the root of every application — so collecting
-    // while disabled meant every Cranpose app carried one parked task for its
-    // whole life, for a handler that had nothing to receive.
     if enabled {
         cranpose_core::CollectEvents(requests, enabled, move |count: usize| {
             for _ in 0..count {
@@ -301,8 +280,6 @@ pub fn BackHandler(enabled: bool, mut on_back: impl FnMut() + 'static) {
     }
 }
 
-/// Holds the platform back registration and releases the interception flag when
-/// the last handler leaves the composition.
 struct BackInterception {
     _registration: cranpose_services::BackRequestObserver,
 }
@@ -407,7 +384,6 @@ pub mod prelude {
     };
 }
 
-// Platform-specific runtime modules
 #[cfg(any(
     all(feature = "desktop-shell", feature = "renderer-wgpu"),
     all(feature = "android", feature = "renderer-wgpu", target_os = "android"),
@@ -443,10 +419,6 @@ mod desktop_input;
 #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
 mod desktop_power;
 
-/// What this process is using: the memory and processor-time readings whose
-/// platform calls need `libc`, so no application writes them. Compiled with
-/// the platform shells that install it — a target with no shell has nothing to
-/// install it into.
 #[cfg(all(
     unix,
     feature = "renderer-wgpu",
@@ -458,18 +430,12 @@ mod desktop_power;
 ))]
 mod process_info;
 
-/// Compiled with the shells that translate winit input. Both need a renderer:
-/// a shell with nothing to draw with never opens a window to receive a pointer
-/// event, so building this without one leaves it with no callers at all.
 #[cfg(any(
     all(feature = "desktop-shell", feature = "renderer-wgpu"),
     all(feature = "ios", feature = "renderer-wgpu", target_os = "ios")
 ))]
 mod winit_pointer;
 
-/// Multi-touch id routing for the winit ingress. Only the iOS shell consumes it
-/// today (desktop pointers are single-finger), but it is built on every target
-/// that compiles the winit translation so its tests run on the host.
 #[cfg(any(
     all(feature = "desktop-shell", feature = "renderer-wgpu"),
     all(feature = "ios", feature = "renderer-wgpu", target_os = "ios")
@@ -477,11 +443,9 @@ mod winit_pointer;
 #[cfg_attr(not(all(feature = "ios", target_os = "ios")), allow(dead_code))]
 mod winit_touch;
 
-/// winit's mouse wheel, normalized into the shell's shared wheel sample.
 #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
 mod winit_wheel;
 
-/// Renderer-agnostic robot testing harness shared by the desktop shells.
 #[cfg(all(
     feature = "robot",
     feature = "desktop-shell",
@@ -525,7 +489,6 @@ mod ios_app_info;
 #[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
 mod ios_device_info;
 
-/// Thermal pressure, which both Apple shells read from the same Foundation call.
 #[cfg(any(
     all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),
     all(
@@ -539,10 +502,6 @@ mod apple_thermal;
 #[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
 mod ios_writable_folder;
 
-// One AVFoundation backend for both Apple targets. The macOS half is opt-in
-// through `camera-desktop` and rides the desktop shell, so the condition here
-// matches the two places that call `register` exactly; a module compiled with
-// no caller is dead code, which is how a warning gets into a release.
 #[cfg(any(
     all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),
     all(
@@ -572,18 +531,12 @@ pub mod recorder;
 #[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
 pub mod web;
 
-// The canvas drawing-buffer sizing policy is pure arithmetic shared with the
-// web runtime. Compile it for the wasm web build (where `web` consumes it) and
-// under `test` so its HiDPI regression guards run in the host test suite.
 #[cfg(any(
     all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"),
     test
 ))]
 mod web_surface_scale;
 
-// The browser's wheel units and sign convention are likewise pure arithmetic,
-// and likewise silent when wrong: compile them under `test` so the host suite
-// pins the direction the web scrolls.
 #[cfg(any(
     all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"),
     test
@@ -611,8 +564,6 @@ mod web_power;
 #[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
 mod web_drop;
 
-// Re-export the renderer-agnostic robot harness so applications and the
-// testing crate can drive either desktop shell through a single path.
 /// Development frame pacing and FPS statistics types.
 #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
 pub use cranpose_app_shell::{DevOptions, FpsStats, FramePacingMode};
@@ -625,12 +576,6 @@ pub use robot::{
     Robot, RobotScreenshot, RobotTimelineAction, RobotTimelineStep, SemanticElement, SemanticRect,
 };
 
-/// A unique, empty directory under the workspace `target/test-output` for a
-/// test in this crate that needs real files. See
-/// [`cranpose_core::test_scratch_dir`].
-///
-/// Gated the way its callers are: the tests that need real files are the
-/// desktop shell's own, and an iOS or web build compiles neither them nor this.
 #[cfg(all(test, feature = "desktop-shell", feature = "renderer-wgpu"))]
 pub(crate) fn test_scratch_dir(tag: &str) -> std::path::PathBuf {
     cranpose_core::test_scratch_dir(env!("CARGO_MANIFEST_DIR"), tag)

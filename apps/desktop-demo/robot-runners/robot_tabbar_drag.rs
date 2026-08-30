@@ -1,8 +1,3 @@
-//! Robot test verifying tabbar horizontal scroll works.
-//!
-//! This test catches regressions where horizontal_scroll using ScrollState
-//! doesn't update visually when dragged.
-
 use std::time::Duration;
 
 use cranpose::AppLauncher;
@@ -68,7 +63,6 @@ fn main() {
                 std::process::exit(1);
             }
 
-            // Find a tab near the left to start dragging from
             if let Some((x, y, w, h)) = counter_before {
                 let start_x = x + w / 2.0;
                 let start_y = y + h / 2.0;
@@ -78,7 +72,6 @@ fn main() {
                     start_x, start_y
                 );
 
-                // Perform drag: press, move LEFT, release
                 let _ = robot.mouse_move(start_x, start_y);
                 std::thread::sleep(Duration::from_millis(50));
                 let _ = robot.mouse_down();
@@ -87,14 +80,12 @@ fn main() {
                 if overflow {
                     match axis {
                         TabAxis::Horizontal => {
-                            // Drag LEFT by 200px (should scroll tabs right)
                             for i in 0..20 {
                                 let _ = robot.mouse_move(start_x - (i as f32 * 10.0), start_y);
                                 std::thread::sleep(Duration::from_millis(20));
                             }
                         }
                         TabAxis::Vertical => {
-                            // Drag UP by 200px (should scroll tabs down)
                             for i in 0..20 {
                                 let _ = robot.mouse_move(start_x, start_y - (i as f32 * 10.0));
                                 std::thread::sleep(Duration::from_millis(20));
@@ -137,7 +128,6 @@ fn main() {
                 after_axis
             );
 
-            // ===== CRITICAL ASSERTION =====
             if overflow {
                 match (before_axis, after_axis) {
                     (Some(before), Some(after)) => {

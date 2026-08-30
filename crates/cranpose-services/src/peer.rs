@@ -139,8 +139,6 @@ impl PeerServer {
                     let Ok(stream) = stream else { continue };
                     let token = token.clone();
                     let resolver = resolver.clone();
-                    // One thread per connection so a long stream never blocks
-                    // other peers' requests.
                     let _ = std::thread::Builder::new()
                         .name("cranpose-peer-conn".to_string())
                         .spawn(move || {
@@ -167,7 +165,6 @@ impl PeerServer {
 impl Drop for PeerServer {
     fn drop(&mut self) {
         self.running.store(false, Ordering::SeqCst);
-        // Wake the blocking `accept()` so the loop observes the flag and exits.
         let _ = TcpStream::connect(self.addr);
     }
 }
@@ -182,7 +179,7 @@ fn handle_connection(
 
     let mut request_line = String::new();
     if reader.read_line(&mut request_line)? == 0 {
-        return Ok(()); // Connection closed (e.g. the shutdown self-connect).
+        return Ok(());
     }
     let mut parts = request_line.split_whitespace();
     let method = parts.next().unwrap_or("");
@@ -245,10 +242,8 @@ fn serve_source(
             return write_status(stream, 416, "Range Not Satisfiable");
         }
         (_, Some(total)) => (200, "OK", 0, total),
-        // Unknown length and a range request: refuse rather than guess.
         (Some(_), None) => return write_status(stream, 416, "Range Not Satisfiable"),
         (None, None) => {
-            // Unknown length, full GET: stream until the source is exhausted.
             return serve_unknown_length(stream, source);
         }
     };
@@ -269,7 +264,6 @@ fn serve_source(
 }
 
 fn serve_unknown_length(stream: &mut TcpStream, source: &dyn ByteSource) -> Result<(), PeerError> {
-    // No Content-Length: use chunked-free "read until EOF, then close".
     let header =
         "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n";
     stream.write_all(header.as_bytes())?;
@@ -313,7 +307,6 @@ fn write_status(stream: &mut TcpStream, code: u16, reason: &str) -> Result<(), P
     Ok(())
 }
 
-/// Parses `bytes=START-END` / `bytes=START-` into `(start, Some(end)|None)`.
 fn parse_range_header(value: &str) -> Option<(u64, Option<u64>)> {
     let spec = value.trim().strip_prefix("bytes=")?;
     let (start, end) = spec.split_once('-')?;
@@ -326,10 +319,6 @@ fn parse_range_header(value: &str) -> Option<(u64, Option<u64>)> {
     };
     Some((start, end))
 }
-
-// ---------------------------------------------------------------------------
-// Client
-// ---------------------------------------------------------------------------
 
 /// Result of a [`fetch_range`] call.
 pub struct FetchResult {
@@ -345,9 +334,6 @@ struct ResponseHead {
     reader: BufReader<TcpStream>,
 }
 
-/// Connects to `base`, sends the range GET, parses the status line + headers,
-/// and returns a reader positioned at the response body. Maps 401/404 to typed
-/// errors and rejects any non-2xx.
 fn open_request(
     base: &str,
     token: &str,
@@ -477,7 +463,6 @@ fn parse_status(line: &str) -> Result<u16, PeerError> {
 }
 
 fn parse_content_range_total(value: &str) -> Option<u64> {
-    // "bytes START-END/TOTAL"
     value.rsplit('/').next()?.trim().parse::<u64>().ok()
 }
 

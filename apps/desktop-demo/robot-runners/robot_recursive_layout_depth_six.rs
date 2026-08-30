@@ -1,10 +1,3 @@
-//! Robot test for the Recursive Layout depth controls.
-//!
-//! Repro:
-//! 1. Switch to Recursive Layout
-//! 2. Increase depth from 3 to 6
-//! 3. Verify the app stays alive and the recursive viewport still renders
-
 mod regression_robot_support;
 
 use std::time::Duration;

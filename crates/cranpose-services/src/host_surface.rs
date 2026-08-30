@@ -88,8 +88,6 @@ pub type HostSurfaceRef = Arc<dyn HostSurface>;
 
 struct NoHostSurface;
 
-/// A host that owns its own window: a fullscreen activity, a maximised window,
-/// a canvas the page sizes.
 impl HostSurface for NoHostSurface {}
 
 static PLATFORM_HOST_SURFACE: ServiceRegistry<dyn HostSurface> = ServiceRegistry::new();
@@ -221,7 +219,6 @@ mod tests {
 
     struct FixedSurface;
 
-    /// A host that owns its own window and answers no to being resized.
     impl HostSurface for FixedSurface {}
 
     struct ResizableSurface {
@@ -331,7 +328,6 @@ mod tests {
             scale: 1.0,
         };
         publish_host_surface_size(first);
-        // The same size again is not a change, so nothing is told about it.
         publish_host_surface_size(first);
         assert_eq!(
             seen.lock().unwrap_or_else(|e| e.into_inner()).as_slice(),

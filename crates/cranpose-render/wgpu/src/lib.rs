@@ -104,7 +104,6 @@ pub fn optional_device_features(adapter: &wgpu::Adapter) -> wgpu::Features {
     adapter.features() & (wgpu::Features::PIPELINE_CACHE | wgpu::Features::TIMESTAMP_QUERY)
 }
 
-/// Convert an axis-aligned rectangle to four corner positions (TL, TR, BL, BR).
 pub(crate) fn rect_to_quad(rect: Rect) -> [[f32; 2]; 4] {
     [
         [rect.x, rect.y],
@@ -235,19 +234,9 @@ pub fn headless_text_measurer_with_fonts(fonts: &[&[u8]]) -> Rc<dyn TextMeasurer
     Rc::new(SoftwareTextMeasurer::from_fonts_or_default(fonts, 8192))
 }
 
-/// Which present stage a [`WgpuRenderer`] drives.
-///
-/// `Sync` is today's synchronous path (desktop, web, iOS, tests): the
-/// producer builds a packet and consumes it in the same call. `Threaded`
-/// is the Android depth-one runtime: the `GpuRenderer` lives on the
-/// present thread and only a `PresentHandle` stays here. Boxed because a
-/// `GpuRenderer` is kilobytes of retained state, moved only at init.
 enum PresentBackend {
-    /// No GPU yet (`init_gpu`/`init_gpu_threaded` not called).
     None,
-    /// The synchronous present stage, consumed in `render`.
     Sync(Box<GpuRenderer>),
-    /// The spawned (or inline-for-tests) present runtime.
     #[cfg(not(target_arch = "wasm32"))]
     Threaded(PresentHandle),
 }
@@ -272,32 +261,12 @@ pub enum PublishOutcome {
 /// - GPU text rendering via retained raster image batches
 /// - Cross-platform support (Desktop, Web, Android)
 pub struct WgpuRenderer {
-    /// Producer stage: scene graph, text layout, and the lowering of every
-    /// frame into a [`frame_packet::FramePacket`].
     frontend: RendererFrontend,
-    /// Present stage: consumes packets and draws; it never lowers.
     backend: PresentBackend,
-    /// Threaded mode: the emptied ack-confirmations buffer drained from
-    /// the planner, parked here until the next packet carries it back to
-    /// the present-side store (capacity round-trip, no per-frame alloc).
     #[cfg(not(target_arch = "wasm32"))]
     pending_recycled_confirmations: Option<Vec<ReplayConfirmation>>,
-    /// Which `GpuRenderer` instance packets are currently built against:
-    /// bumped by every [`init_gpu`][Self::init_gpu] (first init → 1) and
-    /// stamped into each packet, so a packet that outlives its renderer is
-    /// cancelled by the present stage instead of drawn.
     renderer_epoch: u64,
-    /// Which surface configuration packets are currently built against:
-    /// bumped by [`note_surface_reconfigured`][Self::note_surface_reconfigured]
-    /// and stamped into each packet, so a packet that straddles a surface
-    /// reconfigure is cancelled by the present stage instead of drawn.
     surface_epoch: u64,
-    /// The display's visible region from
-    /// [`set_display_visible_region`][Self::set_display_visible_region]:
-    /// the part of the surface the panel physically shows. Held here so a
-    /// `GpuRenderer` replaced by `init_gpu` inherits it. Never derived
-    /// from app content — only the platform layer (or a host standing in
-    /// for it) may set it.
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     display_visible_region: DisplayVisibleRegion,
 }
@@ -369,7 +338,6 @@ impl WgpuRenderer {
         }
     }
 
-    /// The synchronous present backend, when that is what is live.
     fn sync_gpu_renderer(&self) -> Option<&GpuRenderer> {
         match &self.backend {
             PresentBackend::Sync(gpu_renderer) => Some(gpu_renderer.as_ref()),
@@ -385,7 +353,6 @@ impl WgpuRenderer {
         }
     }
 
-    /// The threaded present handle, when that is what is live.
     #[cfg(not(target_arch = "wasm32"))]
     fn present_handle_mut(&mut self) -> Option<&mut PresentHandle> {
         match &mut self.backend {
@@ -394,12 +361,6 @@ impl WgpuRenderer {
         }
     }
 
-    /// Retire whatever present backend is live before a replacement init:
-    /// drain and fold in any pending threaded returns (their buffers are
-    /// still recyclable), shut the runtime down, and run the planner's
-    /// renderer-replacement hygiene — retained slots retired, confirmations
-    /// revoked, feed generation bumped — exactly as `init_gpu` always did
-    /// for a live sync renderer.
     fn retire_live_backend(&mut self) {
         #[allow(unused_mut)]
         let mut backend = std::mem::replace(&mut self.backend, PresentBackend::None);
@@ -409,10 +370,6 @@ impl WgpuRenderer {
         #[cfg(not(target_arch = "wasm32"))]
         {
             if let PresentBackend::Threaded(handle) = &mut backend {
-                // Early acks first (they precede their frames' returns);
-                // the imminent `renderer_replaced` revokes every
-                // confirmation anyway, but the buffers are still worth
-                // recycling.
                 while let Some((ack, recycled)) = handle.try_drain_ack() {
                     let confirmations = crate::shape_replay::SHAPE_REPLAY
                         .with(|state| state.borrow_mut().apply_ack(ack, recycled));
@@ -434,8 +391,6 @@ impl WgpuRenderer {
         drop(backend);
     }
 
-    /// Park a planner-drained confirmations buffer for the next packet,
-    /// keeping the larger capacity if one is somehow already parked.
     #[cfg(not(target_arch = "wasm32"))]
     fn stash_recycled_confirmations(&mut self, confirmations: Vec<ReplayConfirmation>) {
         match &self.pending_recycled_confirmations {
@@ -444,19 +399,6 @@ impl WgpuRenderer {
         }
     }
 
-    /// Threaded mode: fold every pending early [`ReplayAck`] into the
-    /// planner (`frame_packet::ReplayAck` — confirmations register feed
-    /// slots, the batch's emptied buffers recycle). The present thread
-    /// sends these BEFORE surface acquire, so draining here — ahead of
-    /// the next `build_frame_packet` — gives a capture the same one-frame
-    /// confirmation latency the synchronous path has. Returns how many
-    /// acks were applied; no-op outside threaded mode.
-    ///
-    /// `pub` + hidden for the contract tests, which pin the ack arriving
-    /// AHEAD of its frame's returns; the renderer's own callers are
-    /// `publish_frame` and `drain_present_returns_with`
-    /// (`retire_live_backend` drains the channel inline while the backend
-    /// is detached).
     #[cfg(not(target_arch = "wasm32"))]
     #[doc(hidden)]
     pub fn drain_replay_acks(&mut self) -> usize {
@@ -498,9 +440,6 @@ impl WgpuRenderer {
     ) {
         self.retire_live_backend();
         self.renderer_epoch = self.renderer_epoch.wrapping_add(1);
-        // The new store adopts the producer's CURRENT feed generation —
-        // read after `renderer_replaced` bumped it, so packets planned
-        // against the dead store fail the store's generation gate.
         #[cfg(not(target_arch = "wasm32"))]
         let store_feed_generation = pipeline::retained_feed_generation();
         #[cfg(target_arch = "wasm32")]
@@ -582,7 +521,6 @@ impl WgpuRenderer {
     ) -> Result<(), WgpuRendererError> {
         self.retire_live_backend();
         self.renderer_epoch = self.renderer_epoch.wrapping_add(1);
-        // As in `init_gpu`: read AFTER the hygiene bump.
         let store_feed_generation = pipeline::retained_feed_generation();
         let init = PresentRuntimeInit {
             device,
@@ -601,10 +539,6 @@ impl WgpuRenderer {
         Ok(())
     }
 
-    /// [`init_gpu_threaded`][Self::init_gpu_threaded] without the thread:
-    /// the state machine and its message queue are handed back for the
-    /// test to pump by hand — the same prepare/validate/present protocol,
-    /// deterministically observable.
     #[cfg(not(target_arch = "wasm32"))]
     #[doc(hidden)]
     pub fn init_gpu_inline_for_tests(
@@ -705,9 +639,6 @@ impl WgpuRenderer {
             .ok_or_else(|| WgpuRendererError::Wgpu("scene graph is missing".to_string()))?;
         let frontend = &mut self.frontend;
         let mut returns = RenderReturns::default();
-        // Packet consumption runs OUTSIDE the producer's app context on
-        // purpose: the packet is the complete frame, so the present stage
-        // must never need the context — running bare proves it every frame.
         let result = gpu_renderer.render(
             view,
             width,
@@ -759,8 +690,6 @@ impl WgpuRenderer {
             .ok_or_else(|| WgpuRendererError::Wgpu("scene graph is missing".to_string()))?;
         let frontend = &mut self.frontend;
         let mut returns = RenderReturns::default();
-        // Bare like `render`: the capture path consumes the packet with no
-        // producer app context current.
         let result = gpu_renderer.render_to_rgba_pixels(
             width,
             height,
@@ -798,11 +727,6 @@ impl WgpuRenderer {
     /// is not in threaded mode.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn publish_frame(&mut self, width: u32, height: u32) -> PublishOutcome {
-        // Fold in every early replay ack BEFORE lowering: the collect
-        // inside `build_frame_packet` is where the bypass gate and
-        // `feed_slots` are read, so an ack applied here serves the very
-        // frame about to be planned — the same one-frame confirmation
-        // latency the sync path has (see `PresentState::consume_packet`).
         self.drain_replay_acks();
         let PresentBackend::Threaded(handle) = &mut self.backend else {
             log::error!("publish_frame called without a threaded present runtime");
@@ -828,8 +752,6 @@ impl WgpuRenderer {
         match handle.publish(packet) {
             Ok(()) => PublishOutcome::Published,
             Err(mut packet) => {
-                // The runtime is gone (panic/shutdown race). Recover every
-                // buffer the packet carried instead of leaking it.
                 if let Some(confirmations) = packet.recycled_confirmations.take() {
                     self.pending_recycled_confirmations = Some(confirmations);
                 }
@@ -865,14 +787,9 @@ impl WgpuRenderer {
         &mut self,
         on_return: &mut dyn FnMut(u64, PresentOutcome, PresentTimings),
     ) -> usize {
-        // Acks first: a frame's early ack always precedes its returns, and
-        // draining both here keeps the ack channel empty across idle
-        // iterations that never reach `publish_frame`.
         self.drain_replay_acks();
         let mut drained = 0;
         loop {
-            // Scoped so the handle borrow ends before `apply_returns`
-            // needs the frontend through `&mut self`.
             let returns = {
                 let PresentBackend::Threaded(handle) = &mut self.backend else {
                     break;
@@ -962,8 +879,6 @@ impl WgpuRenderer {
         }
     }
 
-    /// Test hook: attach the present runtime's offscreen surrogate target
-    /// so packets render headlessly, and wait for the acknowledgement.
     #[cfg(not(target_arch = "wasm32"))]
     #[doc(hidden)]
     pub fn present_attach_offscreen_for_tests(&mut self, width: u32, height: u32) -> bool {
@@ -976,8 +891,6 @@ impl WgpuRenderer {
         )
     }
 
-    /// Test hook: send the offscreen-target attach WITHOUT waiting for
-    /// the ack — the inline mode has no thread to ack until pumped.
     #[cfg(not(target_arch = "wasm32"))]
     #[doc(hidden)]
     pub fn send_attach_offscreen_unacked_for_tests(
@@ -993,9 +906,6 @@ impl WgpuRenderer {
         })
     }
 
-    /// Test hook: send a `Reconfigure` WITHOUT waiting for the ack,
-    /// returning the ack receiver — the inline protocol tests assert the
-    /// invalidation-before-ack ordering with it.
     #[cfg(not(target_arch = "wasm32"))]
     #[doc(hidden)]
     pub fn send_reconfigure_unacked_for_tests(
@@ -1011,7 +921,6 @@ impl WgpuRenderer {
         })
     }
 
-    /// Test hook: send a `DropSurface` WITHOUT waiting for the ack.
     #[cfg(not(target_arch = "wasm32"))]
     #[doc(hidden)]
     pub fn send_drop_surface_unacked_for_tests(&mut self) -> Option<std::sync::mpsc::Receiver<()>> {
@@ -1027,19 +936,12 @@ impl WgpuRenderer {
         self.frontend.frame_sequence
     }
 
-    /// Test hook: park a recycled-confirmations buffer with `capacity` as
-    /// if a previous frame's ack had been drained — the capacity
-    /// round-trip test's deterministic seed (a real confirmed capture
-    /// needs the multi-frame verification heuristics).
     #[cfg(not(target_arch = "wasm32"))]
     #[doc(hidden)]
     pub fn seed_recycled_confirmations_for_tests(&mut self, capacity: usize) {
         self.pending_recycled_confirmations = Some(Vec::with_capacity(capacity));
     }
 
-    /// Test inspector: capacity of the parked recycled-confirmations
-    /// buffer (`None` when nothing is parked — e.g. right after a publish
-    /// carried it back to the store).
     #[cfg(not(target_arch = "wasm32"))]
     #[doc(hidden)]
     pub fn pending_recycled_confirmations_capacity_for_tests(&self) -> Option<usize> {
@@ -1048,9 +950,6 @@ impl WgpuRenderer {
             .map(Vec::capacity)
     }
 
-    /// Test inspector: the shared present-status snapshot's
-    /// (needs_frame_warmup, replay_supported, presented_frames,
-    /// placeholder_frames) quadruple.
     #[cfg(not(target_arch = "wasm32"))]
     #[doc(hidden)]
     pub fn present_status_snapshot_for_tests(&self) -> Option<(bool, bool, u64, u64)> {
@@ -1113,9 +1012,6 @@ impl WgpuRenderer {
         stats.scene_hits_cap = self.frontend.scene.hits.capacity();
         stats.scene_node_index_len = self.frontend.scene.node_index.len();
         stats.scene_node_index_cap = self.frontend.scene.node_index.capacity();
-        // The producer frontend owns the renderer's only lowering-memo
-        // pair (the present backend reports zeros); add it here so its
-        // retained capacity stays visible to leak tooling.
         stats.layer_surface_rect_cache_len += self.frontend.layer_surface_rect_cache.len();
         stats.layer_surface_rect_cache_cap += self.frontend.layer_surface_rect_cache.capacity();
         stats.layer_surface_requirements_cache_len +=
@@ -1132,9 +1028,6 @@ impl WgpuRenderer {
         self.sync_gpu_renderer().map(|r| &*r.device)
     }
 
-    /// Test/diagnostic view of the device-error sentry: lifetime
-    /// uncaptured wgpu errors recorded on the sync renderer's device
-    /// (`CRANPOSE_SURVIVE_GPU_ERRORS` kill switch).
     #[doc(hidden)]
     pub fn device_error_count_for_tests(&self) -> u64 {
         self.sync_gpu_renderer()
@@ -1142,10 +1035,6 @@ impl WgpuRenderer {
             .unwrap_or(0)
     }
 
-    /// Test/diagnostic view of the latched instanced-quad selection: `true`
-    /// when the live GPU renderer's ordinary shape draws ride
-    /// `vs_shape_instanced` (storage mode && `CRANPOSE_INSTANCED_QUADS` != 0
-    /// at construction).
     #[cfg(not(target_arch = "wasm32"))]
     #[doc(hidden)]
     pub fn instanced_quads_active(&self) -> bool {
@@ -1153,8 +1042,6 @@ impl WgpuRenderer {
             .is_some_and(GpuRenderer::instanced_quads_active)
     }
 
-    /// Test/diagnostic view of retained arc meshes: (slots holding a mesh,
-    /// total live replay slots).
     #[cfg(not(target_arch = "wasm32"))]
     #[doc(hidden)]
     pub fn replay_slot_mesh_stats(&self) -> (usize, usize) {
@@ -1163,9 +1050,6 @@ impl WgpuRenderer {
             .unwrap_or((0, 0))
     }
 
-    /// Test/diagnostic view of the retained capture size gate, summed over
-    /// live slots holding a mesh: (arc bands meshed, stroked-circle rim
-    /// bands meshed, passthrough quads).
     #[cfg(not(target_arch = "wasm32"))]
     #[doc(hidden)]
     pub fn replay_slot_mesh_engagement(&self) -> (usize, usize, usize) {
@@ -1174,8 +1058,6 @@ impl WgpuRenderer {
             .unwrap_or((0, 0, 0))
     }
 
-    /// Test/diagnostic view of the retained bundle cache: lifetime
-    /// (rebuilds, cached executes).
     #[cfg(not(target_arch = "wasm32"))]
     #[doc(hidden)]
     pub fn retained_bundle_stats(&self) -> (u64, u64) {
@@ -1184,9 +1066,6 @@ impl WgpuRenderer {
             .unwrap_or((0, 0))
     }
 
-    /// Test/diagnostic view of the transient rim mesh path: lifetime count
-    /// of dynamic circle rims drawn as band meshes instead of full bounding
-    /// quads (`CRANPOSE_RIM_MESH` kill switch).
     #[cfg(not(target_arch = "wasm32"))]
     #[doc(hidden)]
     pub fn rim_meshes_emitted(&self) -> u64 {
@@ -1195,10 +1074,6 @@ impl WgpuRenderer {
             .unwrap_or(0)
     }
 
-    /// Test/diagnostic view of the opaque static leading-span cache:
-    /// lifetime (hits, recaptures) — frames drawn with the cached
-    /// full-target blit standing in for the leading span, and capture
-    /// passes rendered (`CRANPOSE_STATIC_SPAN` kill switch).
     #[cfg(not(target_arch = "wasm32"))]
     #[doc(hidden)]
     pub fn static_span_stats(&self) -> (u64, u64) {
@@ -1207,9 +1082,6 @@ impl WgpuRenderer {
             .unwrap_or((0, 0))
     }
 
-    /// Test/diagnostic view of the retained-segment surface cache
-    /// (`CRANPOSE_SEGMENT_SURFACE` opt-in): lifetime (captures, composite
-    /// draws, dirty recaptures, churn rejections, economics rejections).
     #[cfg(not(target_arch = "wasm32"))]
     #[doc(hidden)]
     pub fn segment_surface_stats(&self) -> (u64, u64, u64, u64, u64) {
@@ -1218,10 +1090,6 @@ impl WgpuRenderer {
             .unwrap_or((0, 0, 0, 0, 0))
     }
 
-    /// Test/diagnostic view of the present store's lifetime count of
-    /// replay-ops batches dropped by the generation check. Surface (non
-    /// direct) frames must never move it: their packets carry the default
-    /// plan, which the consume gate never feeds to the store.
     #[cfg(not(target_arch = "wasm32"))]
     #[doc(hidden)]
     pub fn replay_generation_drops_for_tests(&self) -> u64 {
@@ -1230,13 +1098,6 @@ impl WgpuRenderer {
             .unwrap_or(0)
     }
 
-    /// Test hook for the replay message protocol: one planner→store→planner
-    /// cycle outside a frame, the batch's generation skewed by
-    /// `generation_skew` from the store's own; returns how many captures
-    /// the store confirmed. A skew landing BELOW the store's generation
-    /// manufactures the fail-closed drop; one landing above it exercises
-    /// adopt-forward. Neither is producible synchronously through the
-    /// public render path.
     #[cfg(not(target_arch = "wasm32"))]
     #[doc(hidden)]
     pub fn replay_ops_roundtrip_for_tests(&mut self, generation_skew: u64) -> usize {
@@ -1245,11 +1106,6 @@ impl WgpuRenderer {
             .replay_ops_roundtrip_for_tests(generation_skew)
     }
 
-    /// Test hook for the cancellation protocol: builds a packet NOW,
-    /// stamped with the current epochs, and hands it to the caller instead
-    /// of rendering it — the public render path builds and consumes
-    /// atomically, so a packet in flight across an epoch change is only
-    /// constructible here.
     #[doc(hidden)]
     pub fn build_frame_packet_for_tests(
         &mut self,
@@ -1276,9 +1132,6 @@ impl WgpuRenderer {
             .map(HeldFramePacket)
     }
 
-    /// Test hook: consumes a held packet through the exact production seam
-    /// (`GpuRenderer::render` + `apply_returns` + ack-buffer restore) and
-    /// reports the present outcome.
     #[doc(hidden)]
     pub fn render_held_packet_for_tests(
         &mut self,
@@ -1311,22 +1164,15 @@ impl WgpuRenderer {
         Ok(outcome)
     }
 
-    /// Test hook: whether the producer pool holds a recycled direct scene —
-    /// the cancellation contract's proof the packet's scene came back.
     #[doc(hidden)]
     pub fn has_retained_direct_scene_for_tests(&self) -> bool {
         !self.frontend.retained_direct_scenes.is_empty()
     }
 }
 
-/// Opaque handle to a built-but-unrendered frame packet, for the
-/// cancellation-protocol tests only.
 #[doc(hidden)]
 pub struct HeldFramePacket(frame_packet::FramePacket);
 
-/// The present runtime's state machine WITHOUT its thread, handed out by
-/// [`WgpuRenderer::init_gpu_inline_for_tests`]: the protocol tests pump
-/// the message queue by hand and inspect present-side state directly.
 #[cfg(not(target_arch = "wasm32"))]
 #[doc(hidden)]
 pub struct InlinePresentRuntime {
@@ -1337,10 +1183,6 @@ pub struct InlinePresentRuntime {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl InlinePresentRuntime {
-    /// Process every pending message exactly like one wakeful pass of the
-    /// present thread's loop (controls drained against the waiting packet
-    /// first, then the packet consumes). Returns `false` once `Shutdown`
-    /// has been processed.
     pub fn pump(&mut self) -> bool {
         if self.shutdown_seen {
             return false;
@@ -1355,15 +1197,10 @@ impl InlinePresentRuntime {
         true
     }
 
-    /// Whether a packet sits unconsumed in the depth-one slot (only
-    /// observable between a partial pump's steps; `pump` always consumes).
     pub fn has_waiting_packet(&self) -> bool {
         self.state.has_waiting_packet()
     }
 
-    /// Receive and process exactly one queued message (no packet
-    /// consumption) — for tests that need to interleave control against a
-    /// waiting packet.
     pub fn step_one_message(&mut self) -> bool {
         if self.shutdown_seen {
             return false;
@@ -1379,14 +1216,10 @@ impl InlinePresentRuntime {
         }
     }
 
-    /// Consume the waiting packet, if any, exactly like the thread loop's
-    /// idle branch.
     pub fn consume_waiting(&mut self) {
         self.state.consume_waiting();
     }
 
-    /// Store-side ack confirmations buffer capacity — the threaded
-    /// capacity round-trip's observable end state.
     pub fn store_ack_confirmations_capacity(&self) -> usize {
         self.state.store_ack_confirmations_capacity()
     }
@@ -1427,7 +1260,6 @@ impl Renderer for WgpuRenderer {
         self.frontend.layer_surface_requirements_cache.clear();
         self.frontend.dev_overlay_graph = None;
         self.frontend.dev_overlay_cache = None;
-        // Build scene in logical dp - scaling happens in GPU vertex upload
         pipeline::render_layout_tree(layout_tree.root(), &mut self.frontend.scene);
         Ok(())
     }
@@ -1442,8 +1274,6 @@ impl Renderer for WgpuRenderer {
         self.frontend.layer_surface_requirements_cache.clear();
         self.frontend.dev_overlay_graph = None;
         self.frontend.dev_overlay_cache = None;
-        // Build scene in logical dp - scaling happens in GPU vertex upload
-        // Traverse layout nodes via applier instead of rebuilding LayoutTree
         pipeline::render_from_applier(applier, root, &mut self.frontend.scene, 1.0);
         Ok(())
     }
@@ -1509,9 +1339,6 @@ impl Renderer for WgpuRenderer {
     fn needs_frame_warmup(&self) -> bool {
         match &self.backend {
             PresentBackend::Sync(gpu_renderer) => gpu_renderer.needs_frame_warmup(),
-            // The producer reads this every loop iteration; in threaded
-            // mode it is the present thread's atomic snapshot, never the
-            // renderer itself.
             #[cfg(not(target_arch = "wasm32"))]
             PresentBackend::Threaded(handle) => handle
                 .status()

@@ -7,9 +7,6 @@ use super::{
 use crate::{AnchorId, collections::map::HashMap};
 
 const DEFAULT_SIBLING_INDEX_THRESHOLD: usize = 16;
-// `option_env!` is evaluated by rustc. Changing this variable requires a
-// rebuild; perf scripts isolate target directories so matrix runs do not reuse
-// an already-compiled threshold.
 const COMPILED_SIBLING_INDEX_THRESHOLD: usize =
     parse_sibling_index_threshold(option_env!("CRANPOSE_SIBLING_INDEX_THRESHOLD"));
 

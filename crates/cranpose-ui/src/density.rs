@@ -48,9 +48,6 @@ impl Density {
     /// read the density -- use [`density`] for that, so a subtree provided its
     /// own grid is honoured.
     pub fn from_host() -> Self {
-        // A composition can run without a shell -- a test, a golden, a headless
-        // measurement -- and asking the render state for a grid there panics.
-        // The unit grid is the honest answer when no host has stated one.
         if crate::render_state::has_current_app_context() {
             Self::with_curve(current_density(), current_font_scale_curve())
         } else {
@@ -293,9 +290,6 @@ mod tests {
         );
     }
 
-    /// Density was a value read from the shell, so a subtree could not be
-    /// measured on a different grid. Reading it through the local is what lets a
-    /// preview or a golden state its own grid without moving the whole shell.
     #[test]
     fn a_provided_density_reaches_the_content_and_ends_with_it() {
         use std::{cell::Cell, rc::Rc};
@@ -336,7 +330,6 @@ mod tests {
         let density = Density::new(2.0, 1.0);
         assert_eq!(density.dp(13.3), 13.5);
         assert_eq!(density.to_px(density.dp(13.3)), 27.0);
-        // An exact half goes up, as Kotlin's `roundToInt` does.
         assert_eq!(density.dp(0.25), 0.5);
     }
 
@@ -344,15 +337,12 @@ mod tests {
     fn a_text_size_moves_with_the_font_scale_and_a_dp_length_does_not() {
         let density = Density::new(2.0, 1.24);
         assert_eq!(density.dp(15.0), 15.0);
-        // 15sp at 1.24 is 18.6dp = 37.2px, which is 37px.
         assert_eq!(density.to_px(density.sp(15.0)), 37.0);
     }
 
     #[test]
     fn centring_puts_the_leading_gap_on_a_pixel_boundary() {
         let density = Density::new(2.0, 1.0);
-        // 104px of room, 93px of content: 5.5px above, which rounds up to a
-        // whole 6px rather than landing across a pixel boundary.
         let leading = density.centre(52.0, 46.5);
         assert_eq!(density.to_px(leading), 6.0);
     }

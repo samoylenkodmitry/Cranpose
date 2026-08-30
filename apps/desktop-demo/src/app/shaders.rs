@@ -1,5 +1,3 @@
-//! Shaders demo tab: sweep gradient and interactive backdrop effects showcase.
-
 #![allow(non_snake_case)]
 
 use cranpose_foundation::{
@@ -69,7 +67,6 @@ fn RenderShaderSection(section: ShaderSection) {
     }
 }
 
-/// Build a smooth rounded blur by chaining framework blur + rounded alpha mask.
 fn smooth_rect_blur_effect(
     width: f32,
     height: f32,
@@ -96,7 +93,6 @@ fn half_cut_mask_effect(width: f32, height: f32) -> RenderEffect {
     )
 }
 
-/// Build a local liquid-glass effect sized to the composable bounds.
 fn liquid_glass_local_effect(width: f32, height: f32, corner: f32) -> RenderEffect {
     let glass_rect = LiquidGlassRect {
         left: 0.0,
@@ -294,9 +290,6 @@ fn ValueSlider(
     );
 }
 
-// ── Composables ─────────────────────────────────────────────────────────────
-
-/// Main shaders demo tab composable.
 #[composable]
 pub(crate) fn ShadersTab(initial_section: Option<ShaderSection>) {
     Column(
@@ -344,7 +337,6 @@ pub(crate) fn ShadersTab(initial_section: Option<ShaderSection>) {
     );
 }
 
-/// Demo: rainbow circle using SweepGradient brush.
 #[composable]
 fn SweepGradientDemo() {
     Column(
@@ -392,10 +384,6 @@ fn SweepGradientDemo() {
     );
 }
 
-/// Interactive demo: checkerboard background with two draggable overlay rects.
-/// One applies a rect-masked blur, the other applies LiquidGlass refraction.
-/// The label text inside each rect is NOT affected by the effect — it floats
-/// on top as a sibling outside the effect layer.
 #[composable]
 fn InteractiveEffectsDemo() {
     let area_w = 400.0;
@@ -428,7 +416,6 @@ fn InteractiveEffectsDemo() {
             let checkerboard: ImageBitmap =
                 cranpose_core::remember(|| generate_chessboard_bitmap(24, 17)).with(|b| b.clone());
 
-            // Clipping parent — everything is positioned inside this box
             Box(
                 Modifier::empty()
                     .size_points(area_w, area_h)
@@ -451,7 +438,6 @@ fn InteractiveEffectsDemo() {
                                     1.0,
                                     None,
                                 );
-                                // Colorful text rows to make effects visible
                                 Column(
                                     Modifier::empty().absolute_offset(12.0, 12.0),
                                     ColumnSpec::new()
@@ -493,10 +479,6 @@ fn InteractiveEffectsDemo() {
                         },
                     );
 
-                    // ── Draggable overlay rects ─────────────────────────
-                    // These are SIBLINGS of the effect box, so their content
-                    // (border + label) is rendered normally — not affected
-                    // by the blur/glass effects.
                     DraggableOverlay(
                         blur_pos,
                         blur_fx.clone(),
@@ -1926,9 +1908,6 @@ fn DstOutDrawWithContentCard(
             Box(
                 Modifier::empty()
                     .size_points(preview_w, preview_h)
-                    // Compose parity:
-                    // graphicsLayer { compositingStrategy = Offscreen } +
-                    // drawWithContent { drawContent(); drawRect(Brush.verticalGradient(...), DstOut) }
                     .graphics_layer({
                         move || GraphicsLayer {
                             alpha: preview_alpha.get().clamp(0.0, 1.0),
@@ -2289,8 +2268,6 @@ fn NestedLayerEventDemo(
     );
 }
 
-/// A draggable overlay rect with a border and centered label.
-/// Handles pointer drag to update `pos` state.
 #[composable]
 #[allow(clippy::too_many_arguments)]
 fn DraggableOverlay(
@@ -2314,12 +2291,10 @@ fn DraggableOverlay(
             })
             .backdrop_effect(backdrop_effect)
             .draw_behind(move |scope| {
-                // Rounded border to show the rect boundary
                 scope.draw_round_rect(Brush::solid(border_color), CornerRadii::uniform(corner));
             })
             .padding(2.0)
             .draw_behind(move |scope| {
-                // Inner transparent fill (cut out the border)
                 scope.draw_round_rect(
                     Brush::solid(Color(0.0, 0.0, 0.0, 0.0)),
                     CornerRadii::uniform(corner - 2.0),

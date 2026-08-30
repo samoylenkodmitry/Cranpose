@@ -54,7 +54,6 @@ pub const EDIT: &str = "M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.
 pub const GEAR: &str = SETTINGS;
 pub const FILTER: &str = "M10 18h4v-2h-4v2zM3 6v2h18V6H3zm3 7h12v-2H6v2z";
 
-/// The icon path data's design grid.
 const ICON_VIEW_BOX: f32 = 24.0;
 
 /// A tinted vector icon. `path` is 24×24 viewBox path data (one of this
@@ -63,10 +62,6 @@ const ICON_VIEW_BOX: f32 = 24.0;
 #[composable]
 #[allow(non_snake_case)]
 pub fn Icon(path: &'static str, size: f32, color: Color) {
-    // The parse cache is keyed on the path: a position-only remember served
-    // a STALE glyph when a reused slot changed icons (the accordion's
-    // "Sections" row inherited the collapsed row's chevron). Scaling happens
-    // at draw time so a size change on recomposition is honored.
     let parsed = rememberKeyed(path, |path| VectorPath::parse(path).ok());
     Box(
         Modifier::empty()

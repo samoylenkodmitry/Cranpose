@@ -33,24 +33,14 @@ use std::sync::Arc;
 use ab_glyph::{CodepointIdIter, Font, FontArc, GlyphId, GlyphSvg, Outline, v2};
 use ttf_parser::{Face, NormalizedCoordinate, Tag};
 
-/// `ValueRecord` field flags, in the order the fields appear in the record.
 const VALUE_FIELDS: [u16; 8] = [
-    0x0001, // XPlacement
-    0x0002, // YPlacement
-    0x0004, // XAdvance
-    0x0008, // YAdvance
-    0x0010, // XPlacementDevice
-    0x0020, // YPlacementDevice
-    0x0040, // XAdvanceDevice
-    0x0080, // YAdvanceDevice
+    0x0001, 0x0002, 0x0004, 0x0008, 0x0010, 0x0020, 0x0040, 0x0080,
 ];
 const X_ADVANCE: u16 = 0x0004;
 const X_ADVANCE_DEVICE: u16 = 0x0040;
 
-/// `deltaFormat` of a `VariationIndex` table, as opposed to a `Device` table.
 const VARIATION_INDEX: u16 = 0x8000;
 
-/// A lookup's worth of pair-adjustment subtables, in application order.
 #[derive(Debug, Clone)]
 struct PairLookup {
     subtables: Vec<PairSubtable>,
@@ -58,24 +48,18 @@ struct PairLookup {
 
 #[derive(Debug, Clone)]
 enum PairSubtable {
-    /// `PairPosFormat1` — an explicit list of pairs.
     Specific {
-        /// `(first << 16 | second) -> x advance`, sorted by key.
         pairs: Vec<(u32, f32)>,
     },
-    /// `PairPosFormat2` — a class matrix gated by the first glyph's coverage.
     Class {
-        /// First glyphs the subtable applies to, ascending.
         coverage: Vec<u16>,
         first: ClassDef,
         second: ClassDef,
         second_count: u16,
-        /// `first_count * second_count` x advances, row-major.
         matrix: Vec<f32>,
     },
 }
 
-/// A class definition flattened to ascending, non-overlapping ranges.
 #[derive(Debug, Clone, Default)]
 struct ClassDef {
     ranges: Vec<(u16, u16, u16)>,
@@ -97,10 +81,6 @@ impl ClassDef {
         }
     }
 
-    /// Collapse a glyph-to-class map into ascending runs of equal class.
-    ///
-    /// Class 0 is the default for anything not listed, so runs of it are
-    /// dropped rather than stored.
     fn from_pairs(mut pairs: Vec<(u16, u16)>) -> Self {
         pairs.sort_unstable();
         let mut ranges: Vec<(u16, u16, u16)> = Vec::new();
@@ -194,7 +174,6 @@ impl GposKerning {
             for subtable in &lookup.subtables {
                 if let Some(value) = subtable.lookup(first, second) {
                     total += value;
-                    // First subtable that covers the pair ends this lookup.
                     break;
                 }
             }
@@ -251,7 +230,6 @@ fn u32_at(data: &[u8], offset: usize) -> Option<u32> {
     Some(u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
 }
 
-/// Feature indices tagged `kern` under any script's default language system.
 fn kern_feature_indices(gpos: &[u8], script_list: usize, feature_list: usize) -> Option<Vec<u16>> {
     let script_count = u16_at(gpos, script_list)?;
     let mut reachable = Vec::new();
@@ -317,9 +295,6 @@ fn pair_lookup(
     for slot in 0..subtable_count {
         let mut offset = lookup + usize::from(u16_at(gpos, lookup + 6 + usize::from(slot) * 2)?);
         let mut resolved = kind;
-        // Lookup type 9 wraps another type so a subtable can sit beyond the
-        // 16-bit offset a lookup record can hold. Roboto does not use it;
-        // plenty of large fonts do.
         if resolved == 9 {
             resolved = u16_at(gpos, offset + 2)?;
             offset += u32_at(gpos, offset + 4)? as usize;
@@ -362,14 +337,10 @@ fn pair_subtable(
                     let Some(second) = u16_at(gpos, at) else {
                         continue;
                     };
-                    // HarfBuzz resolves this record's device offsets against
-                    // the PairSet, not the subtable.
                     let value = x_advance(gpos, at + 2, value_format_1, set, gdef, coordinates);
                     pairs.push(((u32::from(first) << 16) | u32::from(second), value));
                 }
             }
-            // Stable, so a font that lists one pair twice keeps the first
-            // record — which is the one HarfBuzz's binary search settles on.
             pairs.sort_by_key(|(key, _)| *key);
             pairs.dedup_by_key(|(key, _)| *key);
             (!pairs.is_empty()).then_some(PairSubtable::Specific { pairs })
@@ -405,16 +376,10 @@ fn pair_subtable(
     }
 }
 
-/// A value record's size in bytes. Only the low byte carries fields.
 fn value_size(format: u16) -> usize {
     usize::try_from((format & 0xFF).count_ones()).unwrap_or(0) * 2
 }
 
-/// The x advance a value record carries, with its variation delta applied.
-///
-/// A classic `Device` table — per-ppem hinting deltas — is ignored. Skia does
-/// not apply those in the path this framework mirrors, and a delta chosen by
-/// pixel size would make a measurement depend on the size it is taken at.
 fn x_advance(
     gpos: &[u8],
     at: usize,
@@ -450,8 +415,6 @@ fn x_advance(
     advance
 }
 
-/// Glyphs a coverage table covers, in coverage-index order (which the
-/// specification requires to be ascending glyph order).
 fn coverage_glyphs(gpos: &[u8], offset: usize) -> Option<Vec<u16>> {
     match u16_at(gpos, offset)? {
         1 => {
@@ -583,11 +546,6 @@ impl Font for KernedFont {
         self.font.v_side_bearing_unscaled(id)
     }
 
-    /// The whole point of the wrapper.
-    ///
-    /// Falls back to the face's own answer when there is no GPOS pair kerning,
-    /// which keeps a font that really does carry a TrueType `kern` table working
-    /// exactly as it did.
     fn kern_unscaled(&self, first: GlyphId, second: GlyphId) -> f32 {
         match &self.kerning {
             Some(kerning) => kerning.kern_unscaled(first.0, second.0),
@@ -636,8 +594,6 @@ mod tests {
 
     #[test]
     fn embedded_font_has_no_truetype_kern_table() {
-        // The premise of the whole module: `ab_glyph::Font::kern_unscaled`
-        // reads this table, and it is not there.
         assert!(face().raw_face().table(Tag::from_bytes(b"kern")).is_none());
     }
 
@@ -666,8 +622,6 @@ mod tests {
         let kerning = GposKerning::parse(&face).expect("GPOS kerning");
         let forward = kerning.kern_unscaled(glyph(&face, 'A'), glyph(&face, 'V'));
         let backward = kerning.kern_unscaled(glyph(&face, 'V'), glyph(&face, 'A'));
-        // Both tuck, but a font is free to tuck them by different amounts, and
-        // a reader that ignored order would return the same number twice.
         assert!(forward < 0.0 && backward < 0.0);
     }
 

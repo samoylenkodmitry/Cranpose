@@ -51,7 +51,6 @@ pub enum PathFillRule {
 /// A parsed SVG path: subpaths flattened to polylines, ready to fill.
 #[derive(Debug, Clone)]
 pub struct VectorPath {
-    /// Flattened subpaths. Fill treats every subpath as closed.
     subpaths: Vec<Vec<Point>>,
     fill_rule: PathFillRule,
     bounds: Rect,
@@ -161,12 +160,9 @@ impl VectorPath {
             return mask;
         }
 
-        // Collect pixel-space edges from all subpaths (implicitly closed).
         struct Edge {
             top: Point,
             bottom: Point,
-            /// +1 when the original edge points downward (top -> bottom),
-            /// -1 when it points upward.
             winding: i32,
         }
         let mut edges = Vec::new();
@@ -224,7 +220,6 @@ impl VectorPath {
                 }
                 crossings.sort_by(|a, b| a.0.total_cmp(&b.0));
 
-                // Walk crossings, accumulating spans per fill rule.
                 let mut winding = 0i32;
                 let mut span_start = 0.0f32;
                 for &(x, direction) in crossings.iter() {
@@ -289,10 +284,6 @@ fn accumulate_span(row_coverage: &mut [f32], x0: f32, x1: f32, weight: f32, widt
     true
 }
 
-// ============================================================================
-// Path data parsing
-// ============================================================================
-
 struct PathLexer<'a> {
     bytes: &'a [u8],
     pos: usize,
@@ -320,7 +311,6 @@ impl<'a> PathLexer<'a> {
         self.bytes.get(self.pos).copied()
     }
 
-    /// Whether the next token can start a number.
     fn at_number(&mut self) -> bool {
         matches!(self.peek(), Some(b'0'..=b'9' | b'.' | b'-' | b'+'))
     }
@@ -335,8 +325,6 @@ impl<'a> PathLexer<'a> {
         }
     }
 
-    /// Parses one SVG number: `[+-]? (digits [. digits?]? | . digits) exponent?`.
-    /// A second `.` terminates the number, so `1.5.5` lexes as `1.5`, `.5`.
     fn next_number(&mut self) -> Result<f32, SvgPathError> {
         self.skip_separators();
         let start = self.pos;
@@ -382,7 +370,6 @@ impl<'a> PathLexer<'a> {
         *pos - start
     }
 
-    /// Arc flags are single characters and may be packed (`110 10` etc).
     fn next_flag(&mut self) -> Result<bool, SvgPathError> {
         self.skip_separators();
         match self.bytes.get(self.pos) {
@@ -408,7 +395,6 @@ struct PathBuilder {
     current: Vec<Point>,
     position: Point,
     subpath_start: Point,
-    /// Reflection anchors for smooth curves (S/T).
     last_cubic_control: Option<Point>,
     last_quad_control: Option<Point>,
 }
@@ -451,7 +437,6 @@ impl PathBuilder {
     fn close(&mut self) {
         self.position = self.subpath_start;
         self.flush_subpath();
-        // Commands after Z continue from the subpath start.
         self.current.push(self.subpath_start);
     }
 
@@ -503,7 +488,6 @@ fn parse_path_data(d: &str) -> Result<Vec<Vec<Point>>, SvgPathError> {
                 seen_moveto = true;
                 builder.last_cubic_control = None;
                 builder.last_quad_control = None;
-                // Extra coordinate pairs are implicit linetos.
                 command = Some(if relative { b'l' } else { b'L' });
             }
             b'L' => {
@@ -569,7 +553,6 @@ fn parse_path_data(d: &str) -> Result<Vec<Vec<Point>>, SvgPathError> {
                 builder.close();
                 builder.last_cubic_control = None;
                 builder.last_quad_control = None;
-                // Z takes no arguments; require an explicit next command.
                 command = None;
             }
             other => {
@@ -606,7 +589,6 @@ fn emit_cubic(builder: &mut PathBuilder, c1: Point, c2: Point, end: Point) {
 }
 
 fn emit_quad(builder: &mut PathBuilder, control: Point, end: Point) {
-    // Elevate the quadratic to a cubic and reuse the cubic flattener.
     let start = builder.position;
     let c1 = Point::new(
         start.x + 2.0 / 3.0 * (control.x - start.x),
@@ -691,13 +673,11 @@ fn emit_arc(
     let phi = x_rotation_deg.to_radians();
     let (sin_phi, cos_phi) = phi.sin_cos();
 
-    // Step 1: half the vector between endpoints, in the rotated frame.
     let dx2 = (start.x - end.x) * 0.5;
     let dy2 = (start.y - end.y) * 0.5;
     let x1p = cos_phi * dx2 + sin_phi * dy2;
     let y1p = -sin_phi * dx2 + cos_phi * dy2;
 
-    // Correct out-of-range radii.
     let lambda = (x1p * x1p) / (rx * rx) + (y1p * y1p) / (ry * ry);
     if lambda > 1.0 {
         let scale = lambda.sqrt();
@@ -705,7 +685,6 @@ fn emit_arc(
         ry *= scale;
     }
 
-    // Step 2: center in the rotated frame.
     let rx_sq = rx * rx;
     let ry_sq = ry * ry;
     let numerator = (rx_sq * ry_sq - rx_sq * y1p * y1p - ry_sq * x1p * x1p).max(0.0);
@@ -721,11 +700,9 @@ fn emit_arc(
     let cxp = coefficient * rx * y1p / ry;
     let cyp = -coefficient * ry * x1p / rx;
 
-    // Step 3: center in the original frame.
     let cx = cos_phi * cxp - sin_phi * cyp + (start.x + end.x) * 0.5;
     let cy = sin_phi * cxp + cos_phi * cyp + (start.y + end.y) * 0.5;
 
-    // Step 4: start angle and sweep extent.
     let angle_of = |x: f32, y: f32| y.atan2(x);
     let theta1 = angle_of((x1p - cxp) / rx, (y1p - cyp) / ry);
     let theta2 = angle_of((-x1p - cxp) / rx, (-y1p - cyp) / ry);
@@ -747,7 +724,6 @@ fn emit_arc(
         let y = sin_phi * rx * cos_theta + cos_phi * ry * sin_theta + cy;
         builder.line_to(Point::new(x, y));
     }
-    // Land exactly on the endpoint despite floating-point sampling error.
     builder.line_to(end);
     builder.position = end;
 }
@@ -759,8 +735,6 @@ mod tests {
     fn mask_at(mask: &[u8], width: usize, x: usize, y: usize) -> u8 {
         mask[y * width + x]
     }
-
-    // ── parser ──────────────────────────────────────────────────────────
 
     #[test]
     fn parses_absolute_triangle() {
@@ -795,7 +769,6 @@ mod tests {
 
     #[test]
     fn parses_packed_numbers_and_negative_shorthand() {
-        // "10-5" is two numbers; ".5.5" is (0.5, 0.5).
         let path = VectorPath::parse("M10-5L.5.5Z").expect("valid path");
         assert_eq!(
             path.subpaths()[0],
@@ -817,7 +790,6 @@ mod tests {
         assert_eq!(points[0], Point::new(0.0, 0.0));
         assert_eq!(*points.last().unwrap(), Point::new(10.0, 0.0));
         assert!(points.len() > 4, "curve must be subdivided");
-        // The curve midpoint of this symmetric cubic is (5, 7.5).
         let mid = points
             .iter()
             .min_by(|a, b| (a.x - 5.0).abs().total_cmp(&(b.x - 5.0).abs()))
@@ -830,8 +802,6 @@ mod tests {
 
     #[test]
     fn smooth_cubic_reflects_control_point() {
-        // S after C reflects the previous control point; the joined curves
-        // are C1-continuous, so the polyline has no kink at the join (5,5).
         let path = VectorPath::parse("M 0 0 C 0 5 2 5 5 5 S 10 5 10 10").expect("valid path");
         let points = &path.subpaths()[0];
         assert_eq!(*points.last().unwrap(), Point::new(10.0, 10.0));
@@ -847,13 +817,11 @@ mod tests {
         let path = VectorPath::parse("M 0 0 Q 5 10 10 0 T 20 0").expect("valid path");
         let points = &path.subpaths()[0];
         assert_eq!(*points.last().unwrap(), Point::new(20.0, 0.0));
-        // Quadratic apex at t=0.5 is (5, 5).
         assert!(
             points
                 .iter()
                 .any(|p| (p.x - 5.0).abs() < 0.3 && (p.y - 5.0).abs() < 0.3)
         );
-        // T mirrors the control: the second hump dips to (15, -5).
         assert!(
             points
                 .iter()
@@ -863,7 +831,6 @@ mod tests {
 
     #[test]
     fn arc_travels_through_expected_quadrant() {
-        // Half circle of radius 5 from (0,0) to (10,0), sweeping below.
         let path = VectorPath::parse("M 0 0 A 5 5 0 0 1 10 0").expect("valid path");
         let points = &path.subpaths()[0];
         assert_eq!(*points.last().unwrap(), Point::new(10.0, 0.0));
@@ -919,8 +886,6 @@ mod tests {
         );
     }
 
-    // ── rasterizer ──────────────────────────────────────────────────────
-
     #[test]
     fn fills_axis_aligned_rectangle() {
         let path = VectorPath::parse("M 2 2 H 8 V 8 H 2 Z").expect("valid path");
@@ -939,7 +904,6 @@ mod tests {
 
         assert_eq!(mask_at(&mask, 8, 1, 1), 255, "deep interior is opaque");
         assert_eq!(mask_at(&mask, 8, 7, 7), 0, "far corner is empty");
-        // Pixels straddling the diagonal must have partial coverage.
         let diagonal = mask_at(&mask, 8, 4, 3);
         assert!(
             diagonal > 30 && diagonal < 225,
@@ -949,8 +913,6 @@ mod tests {
 
     #[test]
     fn even_odd_ring_has_a_hole() {
-        // Outer square with an inner square drawn in the SAME winding
-        // direction: even-odd punches the hole, non-zero fills it solid.
         let d = "M 0 0 H 12 V 12 H 0 Z M 4 4 H 8 V 8 H 4 Z";
         let even_odd =
             VectorPath::parse_with_fill_rule(d, PathFillRule::EvenOdd).expect("valid path");
@@ -966,7 +928,6 @@ mod tests {
 
     #[test]
     fn non_zero_ring_with_reversed_inner_winding_has_a_hole() {
-        // Inner square wound the opposite way: non-zero also punches it.
         let d = "M 0 0 H 12 V 12 H 0 Z M 4 4 V 8 H 8 V 4 Z";
         let path = VectorPath::parse(d).expect("valid path");
         let mask = path.coverage_mask(12, 12, Point::ZERO, 1.0);
@@ -976,7 +937,6 @@ mod tests {
 
     #[test]
     fn circle_from_arcs_fills_center_and_respects_radius() {
-        // Full circle of radius 8 centered at (8, 8) from two arcs.
         let path =
             VectorPath::parse("M 0 8 A 8 8 0 1 1 16 8 A 8 8 0 1 1 0 8 Z").expect("valid path");
         let mask = path.coverage_mask(16, 16, Point::ZERO, 1.0);
@@ -984,7 +944,6 @@ mod tests {
         assert_eq!(mask_at(&mask, 16, 8, 8), 255, "circle center is opaque");
         assert_eq!(mask_at(&mask, 16, 0, 0), 0, "circle corner is empty");
         assert_eq!(mask_at(&mask, 16, 15, 0), 0, "circle corner is empty");
-        // Roughly correct area: sum of coverage ~ pi * r^2.
         let area: f32 = mask.iter().map(|&value| value as f32 / 255.0).sum();
         let expected = std::f32::consts::PI * 8.0 * 8.0;
         assert!(
@@ -996,7 +955,6 @@ mod tests {
     #[test]
     fn scale_and_origin_map_path_units_to_pixels() {
         let path = VectorPath::parse("M 10 10 H 14 V 14 H 10 Z").expect("valid path");
-        // Rasterize the 4x4 square at 2x with the mask origin at (10, 10).
         let mask = path.coverage_mask(8, 8, Point::new(10.0, 10.0), 2.0);
         assert_eq!(mask_at(&mask, 8, 4, 4), 255, "scaled interior");
         let full: usize = mask.iter().filter(|&&value| value == 255).count();

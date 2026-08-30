@@ -1,10 +1,3 @@
-//! Robot test for Positioned Boxes after visiting LazyList.
-//!
-//! Run with:
-//! ```bash
-//! cargo run --package desktop-app --example robot_positioned_boxes_after_lazy_list --features robot-app
-//! ```
-
 use std::time::Duration;
 
 use cranpose::{AppLauncher, SemanticElement};
@@ -115,7 +108,6 @@ fn main() {
                     "  ✓ Found 'Box A' at ({:.1}, {:.1})",
                     elem.bounds.x, elem.bounds.y
                 );
-                // Box A offset 50 + padding 8 (approx) + header/other layout offsets
                 if elem.bounds.x < 50.0 {
                     println!(
                         "  ✗ Box A x-coordinate too small (expected > 50, got {:.1})",

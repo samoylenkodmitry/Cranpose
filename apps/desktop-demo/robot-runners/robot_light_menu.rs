@@ -1,12 +1,3 @@
-//! Adaptive edit-menu capture: the SAME liquid-glass text menu over a
-//! WHITE surface, wrapping the field in `local_on_light_surface(true)`.
-//! Verifies the menu's ink flips dark so it stays readable on a light
-//! backdrop (the dark-surface capture keeps its near-white ink).
-//!
-//! Run:
-//! `cargo run -p desktop-app --example robot_light_menu --features desktop,robot-app`
-//! Screenshots land in `ROBOT_SHOT_DIR` (default `target/light-menu`).
-
 use std::{path::PathBuf, process::ExitCode, time::Duration};
 
 use cranpose::{
@@ -65,7 +56,6 @@ fn main() -> ExitCode {
             let word_x = FIELD_X + 0.5 * (width_of("Silence. ") + width_of("Silence. Melody"));
             let mid = FIELD_Y + 0.5 * line_h;
 
-            // Double-tap the word to arm the selection + raise the menu.
             robot.drag(word_x, mid, word_x, mid).expect("tap 1");
             std::thread::sleep(Duration::from_millis(120));
             robot.drag(word_x, mid, word_x, mid).expect("tap 2");
@@ -94,8 +84,6 @@ fn content() {
             .background(Color(1.0, 1.0, 1.0, 1.0)),
         BoxSpec::default(),
         || {
-            // Page content behind the menu's anchor so the glass body shows
-            // it ghosting through.
             let ghost = {
                 let mut s = TextStyle::default();
                 s.span_style.color = Some(Color(0.55, 0.55, 0.6, 1.0));

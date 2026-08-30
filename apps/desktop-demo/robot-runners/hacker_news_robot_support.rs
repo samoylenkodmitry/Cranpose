@@ -92,7 +92,6 @@ impl MockHackerNewsClient {
 }
 
 impl MockHackerNewsClient {
-    /// The payload this fixture answers `url` with.
     fn text_for(&self, url: &str) -> Result<String, HttpError> {
         if url.ends_with("/topstories.json") {
             return Ok(self.topstories_json());
@@ -115,7 +114,6 @@ impl MockHackerNewsClient {
         }
     }
 
-    /// This fixture as an HTTP client.
     pub(crate) fn into_client(self) -> HttpClientRef {
         std::sync::Arc::new(StubHttpClient::from_text(move |url| self.text_for(url)))
     }

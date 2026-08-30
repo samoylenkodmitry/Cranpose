@@ -1,5 +1,3 @@
-//! E2E regression contract for tab-row scroll geometry and scroll-position retention.
-
 mod output_paths;
 
 use std::{path::Path, time::Duration};
@@ -168,18 +166,6 @@ fn main() {
                 if visible_in_root(hacker_news, root) {
                     break;
                 }
-                // Wheel (momentum-free) toward the target: right of the
-                // viewport → scroll left; left of it (the row can overshoot
-                // once enough tabs exist, and a drag's release fling slams it
-                // end to end) → scroll right. Keeps the contract independent
-                // of the tab count.
-                //
-                // The wheel is aimed at the middle of the tab row rather than
-                // at whichever tab happens to be on screen. After a long fling
-                // the first visible tab can be one whose centre sits a few
-                // pixels from the window edge, and a horizontal wheel there
-                // does not reach the row at all — the recovery would then spin
-                // out its whole budget without moving a pixel.
                 let row_y = tab_row_y(&tabs);
                 let row_height = tabs
                     .iter()

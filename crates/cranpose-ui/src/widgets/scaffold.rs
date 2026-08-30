@@ -140,7 +140,6 @@ impl ScaffoldContentInsets {
         }
     }
 
-    /// Keeps only the sides this asked for.
     fn filter(self, insets: PaddingValues) -> PaddingValues {
         PaddingValues::new(
             if self.start { insets.start } else { 0.0 },
@@ -289,8 +288,6 @@ fn ScaffoldImpl(modifier: Modifier, spec: ScaffoldSpec, slots: ScaffoldSlots) ->
             bottom_placeables.push(placeable);
         }
 
-        // A bar already covers the window inset behind it, so the content is
-        // pushed past whichever is larger rather than past both.
         let padding = window_padding.max(PaddingValues::new(0.0, top_height, 0.0, bottom_height));
         let content_slot = Rc::clone(&content);
         let content_nodes =
@@ -313,8 +310,6 @@ fn ScaffoldImpl(modifier: Modifier, spec: ScaffoldSpec, slots: ScaffoldSlots) ->
             ));
         }
 
-        // The floating action sits above everything, inside the bottom bar and
-        // the window insets, on the reading-order end side.
         let floating_content = Rc::clone(&floating_action);
         let floating_nodes = scope.subcompose(SlotId::new(3), (), move || floating_content());
         for node in floating_nodes {

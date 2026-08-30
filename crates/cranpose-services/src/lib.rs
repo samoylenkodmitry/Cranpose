@@ -227,18 +227,14 @@ pub use writable_folder::{
     WritableFolderStoreRef, open_writable_folder, set_writable_folder_store_factory,
 };
 
-/// Convenience alias used in unit tests.
 #[cfg(test)]
 pub(crate) type TestComposition = Composition<MemoryApplier>;
 
-/// A unique, empty directory under the workspace `target/test-output` for a
-/// test that needs real files. See [`cranpose_core::test_scratch_dir`].
 #[cfg(test)]
 pub(crate) fn test_scratch_dir(tag: &str) -> std::path::PathBuf {
     cranpose_core::test_scratch_dir(env!("CARGO_MANIFEST_DIR"), tag)
 }
 
-/// Build a composition with a simple in-memory applier and run the provided closure once.
 #[cfg(test)]
 pub(crate) fn run_test_composition(build: impl FnMut()) -> TestComposition {
     let mut composition = Composition::new(MemoryApplier::new());

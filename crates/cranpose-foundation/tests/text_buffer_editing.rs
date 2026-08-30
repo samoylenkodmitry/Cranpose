@@ -1,10 +1,3 @@
-//! The editing buffer behind every text field.
-//!
-//! Everything a keypress does to a field ends here: what the cursor deletes,
-//! how a selection grows, and whether the buffer admits it has been touched.
-//! These are the operations a user notices immediately when they are one byte
-//! out, so each one is stated exactly rather than exercised through a widget.
-
 use cranpose_foundation::text::{TextFieldBuffer, TextRange};
 
 #[test]
@@ -56,8 +49,6 @@ fn deleting_after_the_cursor_at_the_end_does_nothing() {
 
 #[test]
 fn deleting_after_the_cursor_removes_a_whole_character_not_a_byte() {
-    // "é" is two bytes in UTF-8. Removing one of them would leave the buffer
-    // holding text that is not valid UTF-8 at all.
     let mut buffer = TextFieldBuffer::with_selection("éa", TextRange::cursor(0));
     buffer.delete_after_cursor();
     assert_eq!(buffer.text(), "a");
@@ -94,9 +85,6 @@ fn extending_the_selection_left_stops_at_the_start() {
 
 #[test]
 fn extending_left_and_then_right_returns_to_where_it_began() {
-    // Shift-left then shift-right is the commonest correction a user makes in
-    // a text field. It only collapses back if both operations move the same
-    // end of the range and leave the anchor alone.
     let mut buffer = TextFieldBuffer::with_selection("hello", TextRange::cursor(2));
     buffer.extend_selection_left();
     assert!(buffer.has_selection());

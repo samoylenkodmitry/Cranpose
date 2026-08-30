@@ -5,8 +5,6 @@ fn crate_source(path: &str) -> String {
     std::fs::read_to_string(crate_dir.join(path)).expect("failed to read cranpose source file")
 }
 
-/// Manifest comments explain what the framework contributes, and name the very
-/// declarations an application must not make. Only the markup is asserted on.
 fn strip_xml_comments(source: &str) -> String {
     let mut remaining = source;
     let mut out = String::with_capacity(source.len());
@@ -21,21 +19,17 @@ fn strip_xml_comments(source: &str) -> String {
     out
 }
 
-/// The one place the Cranpose native build is configured.
 const CRANPOSE_GRADLE_PLUGIN: &str = "crates/cranpose/android/cranpose-gradle-plugin/src/main/kotlin/dev/cranpose/gradle/CranposeAndroidPlugin.kt";
 
-/// Where the plugin reads a service's manifest fragment from, by service name.
 fn cranpose_manifest(service: &str) -> String {
     format!("crates/cranpose/android/manifests/{service}.xml")
 }
 
-/// Every Android application built from this repository.
 const ANDROID_APPLICATION_BUILD_FILES: [&str; 2] = [
     "apps/android-demo/android/app/build.gradle.kts",
     "apps/isolated-demo/android/app/build.gradle.kts",
 ];
 
-/// Their manifests, which state only what is specific to each application.
 const ANDROID_APPLICATION_MANIFESTS: [&str; 2] = [
     "apps/android-demo/android/app/src/main/AndroidManifest.xml",
     "apps/isolated-demo/android/app/src/main/AndroidManifest.xml",
@@ -68,11 +62,6 @@ fn ci_architecture_budget_runs_required_gates() {
         "Rust CI should keep a dedicated architecture budget job"
     );
 
-    // The gates themselves live in the justfile, and CI invokes the recipe. That
-    // is the point of the justfile: a gate spelled in two places drifts, and this
-    // repository had nine such divergences before it existed. So assert the
-    // command in the justfile and the invocation in the workflow, never the
-    // command in the workflow.
     for recipe in [
         "run: just fmt-check",
         "run: just typos",
@@ -152,13 +141,6 @@ fn ci_architecture_budget_runs_required_gates() {
     );
 }
 
-/// Every GitHub Action is pinned to a commit, not to a movable tag.
-///
-/// A tag like `@v6` is a pointer its owner can repoint at any commit. These
-/// workflows run on persistent self-hosted machines that keep their workspaces
-/// and caches between runs, so a repointed tag executes with far more reach
-/// than it would on a throwaway cloud runner. The version stays in a trailing
-/// comment so the pin is still readable.
 #[test]
 fn workflow_actions_are_pinned_to_commit_shas() {
     let mut unpinned = Vec::new();
@@ -182,7 +164,6 @@ fn workflow_actions_are_pinned_to_commit_shas() {
             };
             let reference = reference.trim();
             seen += 1;
-            // Local composite actions are referenced by path, not by ref.
             if reference.starts_with('.') {
                 continue;
             }
@@ -198,9 +179,6 @@ fn workflow_actions_are_pinned_to_commit_shas() {
         }
     }
 
-    // A sweep that matches nothing passes for the wrong reason. This test was
-    // once deleted wholesale and its absence looked exactly like success, so
-    // pin the fact that it is still looking at something.
     assert!(
         seen >= 10,
         "expected to inspect many action references, saw only {seen}: the parser has drifted"
@@ -307,10 +285,6 @@ fn desktop_no_vsync_chains_dirty_presented_frames_only() {
 
 #[test]
 fn surface_present_decision_is_shared_across_platform_loops() {
-    // The first-present / warmup decision lives once in wgpu_surface
-    // (compiled for every wgpu shell: desktop, web, iOS, Android) so the
-    // render loops cannot drift apart (the web loop "white until scroll"
-    // bug was a desktop/web divergence).
     let shared = crate_source("src/wgpu_surface.rs");
     assert!(
         shared.contains("pub(crate) fn surface_present_required(")
@@ -339,10 +313,6 @@ fn desktop_renderer_warmup_reaches_primary_and_native_surfaces() {
 
 #[test]
 fn web_first_frame_is_forced_through_surface_dirty() {
-    // Regression guard for the "white until scroll" bug: the web render loop must
-    // present the scene built during construction on the first frame even though
-    // `update()` reports no visual work, by starting `surface_dirty` true and
-    // only clearing it after a successful present.
     let source = crate_source("src/web.rs");
 
     assert!(
@@ -363,8 +333,6 @@ fn web_first_frame_is_forced_through_surface_dirty() {
 
 #[test]
 fn android_first_frame_is_forced_through_surface_dirty() {
-    // The android render loop shares the desktop/web first-present contract: the
-    // surface starts dirty and is cleared only after a successful present.
     let source = crate_source("src/android.rs");
 
     assert!(
@@ -707,11 +675,6 @@ fn android_play_billing_reaches_the_purchase_registry() {
     );
 }
 
-/// The accessibility payload is a positional record split on tabs on the Java
-/// side, so the two ends have to agree on how many fields there are. Rust
-/// builds the record and Java rejects any record of the wrong width, which
-/// means a field added on one side alone does not fail loudly — it makes the
-/// app silently unreachable to a screen reader. Hence this check.
 #[test]
 fn android_accessibility_record_width_agrees_across_the_jni_boundary() {
     let wire_source = crate_source("src/android_accessibility_wire.rs");
@@ -744,10 +707,6 @@ fn android_accessibility_record_width_agrees_across_the_jni_boundary() {
     );
 }
 
-/// A custom action is the only screen-reader command with no position to
-/// synthesise a tap at, so it is the one that needs a dispatch path of its
-/// own — declared in Java, exported from the JNI boundary, and resolved back
-/// to a handler on the frame loop.
 #[test]
 fn android_accessibility_custom_actions_reach_the_frame_loop() {
     let java_source =
@@ -781,14 +740,6 @@ fn android_accessibility_custom_actions_reach_the_frame_loop() {
     );
 }
 
-/// The writer's half of the owned row's order id.
-///
-/// Nothing in CI compiles or runs `CranposeBilling.java` -- no app in this
-/// workspace enables the `playbilling` feature -- so the decoder's tests are
-/// the only executable coverage the wire has, and they would keep passing with
-/// the Java side of the field deleted: `order_id()` would simply return `None`
-/// on every Android device, forever, which is also what a legitimately absent
-/// order id looks like.
 #[test]
 fn the_play_billing_bridge_sends_the_order_id_that_granted_each_entitlement() {
     let java_source = workspace_source(
@@ -805,9 +756,6 @@ fn the_play_billing_bridge_sends_the_order_id_that_granted_each_entitlement() {
          tab separated and nothing in Play's format forbids a tab"
     );
 
-    // The two maps are one fact split in half. Refilling `owned` without
-    // refilling `orders` in the same breath leaves an order id outliving the
-    // purchase that produced it -- a paper trail pointing at the wrong sale.
     let apply = java_source
         .split("private int apply(")
         .nth(1)
@@ -931,8 +879,6 @@ fn desktop_x11_client_is_app_owned() {
 
 #[test]
 fn ios_backend_is_wired_without_aliasing_desktop() {
-    // The cranpose iOS feature is wired to a real winit-based backend: it is no
-    // longer reserved, and it does not alias the desktop feature.
     let cranpose_manifest = crate_source("Cargo.toml");
     assert!(
         !cranpose_manifest.contains("ios = []"),
@@ -943,7 +889,6 @@ fn ios_backend_is_wired_without_aliasing_desktop() {
         "ios must not alias the desktop feature"
     );
 
-    // The facade exposes the backend module instead of an unavailable stub.
     let facade = crate_source("src/lib.rs");
     assert!(
         facade.contains("pub mod ios;"),
@@ -954,8 +899,6 @@ fn ios_backend_is_wired_without_aliasing_desktop() {
         "the iOS-unavailable compile_error must be gone"
     );
 
-    // The backend drives its own winit UIKit event loop (a real surface, not a
-    // reuse of the desktop multi-window runtime).
     let ios = crate_source("src/ios.rs");
     assert!(
         ios.contains("ApplicationHandler") && ios.contains("winit"),
@@ -968,7 +911,6 @@ fn ios_backend_is_wired_without_aliasing_desktop() {
         .and_then(Path::parent)
         .expect("cranpose crate should live under workspace crates directory");
 
-    // The demo advertises an iOS app feature and ships the iOS entry binary.
     let demo_manifest = std::fs::read_to_string(workspace_dir.join("apps/desktop-demo/Cargo.toml"))
         .expect("failed to read desktop-demo manifest");
     assert!(
@@ -982,7 +924,6 @@ fn ios_backend_is_wired_without_aliasing_desktop() {
         "desktop-demo should declare the cranpose-ios binary"
     );
 
-    // The iOS build script builds the ios feature instead of failing.
     let build_script =
         std::fs::read_to_string(workspace_dir.join("apps/ios-demo/ios/build-app.sh"))
             .expect("failed to read ios build script");
@@ -1391,48 +1332,23 @@ fn unsafe_code_stays_in_reviewed_platform_boundary_modules() {
     let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let source_dir = crate_dir.join("src");
     let allowed = [
-        // The display-shape read behind the renderer's visible-region cull:
-        // one `dlsym`-resolved `AConfiguration_getScreenRound` call (the
-        // symbol is API 30+, so it must not be linked) and the call through
-        // it.
         "android_display.rs",
-        // The entry-point macro: the `#[unsafe(no_mangle)]` in the expansion it writes
-        // is the symbol `NativeActivity` resolves after loading the library.
         "android_entry.rs",
-        // The display refresh-rate vote: `dlsym`/`dlopen` resolution of the
-        // `ANativeWindow_setFrameRate*` NDK symbols and the calls through
-        // them, mirroring how HWUI votes the panel's frame rate.
         "android_frame_rate.rs",
-        // The ADPF hint session: dlsym-resolved APerformanceHint_* calls and
-        // the sessions they manage; absent symbols degrade to a no-op.
         "android_perf_hint.rs",
         "android_frame_telemetry.rs",
         "android_jni.rs",
         "android_accessibility.rs",
-        // Camera and host JNI calls stay behind the same reviewed activity
-        // boundary as the other Android services.
         "android_camera.rs",
         "android_host.rs",
-        // The media JNI surface: the exported symbols `CranposeMedia` pushes
-        // playback state, position, focus and lock-screen buttons through.
         "android_media.rs",
         "android_services.rs",
         "android_surface.rs",
         "android_file_picker.rs",
-        // The Play Billing bridge: the exported symbols
-        // `dev.cranpose.android.CranposeBilling` calls back through. Decoding
-        // what they carry lives in safe Rust next door, in
-        // android_purchase_wire.rs.
         "android_purchases.rs",
         "android_text_input.rs",
-        // One `AChoreographer_postFrameCallback64` and the callback it posts,
-        // which is how the frame loop learns when the display is ready for the
-        // next frame.
         "android_vsync.rs",
         "android_writable_folder.rs",
-        // The process readings every application that watches its own
-        // footprint would otherwise write for itself: `getrusage`, `sysconf`,
-        // `mallopt` and `os_proc_available_memory`, each behind one contract.
         "process_info.rs",
         "ios_file_picker.rs",
         "ios_uri_handler.rs",
@@ -1442,9 +1358,6 @@ fn unsafe_code_stays_in_reviewed_platform_boundary_modules() {
         "ios_notifier.rs",
         "ios_writable_folder.rs",
         "apple_camera.rs",
-        // AVAudioPlayer, the audio-session interruption observer and the
-        // MediaPlayer remote commands, behind the same reviewed boundary as
-        // the other iOS services.
         "ios_media.rs",
         "ios_keyboard.rs",
         "ios_back_gesture.rs",
@@ -1611,52 +1524,24 @@ fn workspace_ffi_boundaries_are_explicit() {
         .expect("cranpose crate should live under workspace crates directory");
     let source_roots = ["crates", "apps", "xtask"];
     let allowed = [
-        // The display-shape read behind the renderer's visible-region cull:
-        // one `dlsym`-resolved `AConfiguration_getScreenRound` call (the
-        // symbol is API 30+, so it must not be linked) and the call through
-        // it.
         "crates/cranpose/src/android_display.rs",
-        // The entry-point macro: one `#[unsafe(no_mangle)]` in the expansion it writes,
-        // which is the symbol `NativeActivity` resolves after loading the
-        // library. It replaced the same attribute in every application.
         "crates/cranpose/src/android_entry.rs",
-        // The display refresh-rate vote: `dlsym`/`dlopen` resolution of the
-        // `ANativeWindow_setFrameRate*` NDK symbols and the calls through
-        // them, mirroring how HWUI votes the panel's frame rate.
         "crates/cranpose/src/android_frame_rate.rs",
         "crates/cranpose/src/android_perf_hint.rs",
         "crates/cranpose/src/android_frame_telemetry.rs",
         "crates/cranpose/src/android_jni.rs",
         "crates/cranpose/src/android_accessibility.rs",
-        // Camera and host JNI calls stay behind the same reviewed activity
-        // boundary as the other Android services.
         "crates/cranpose/src/android_camera.rs",
         "crates/cranpose/src/android_host.rs",
-        // The media JNI surface: the exported symbols `CranposeMedia` pushes
-        // playback state, position, focus and lock-screen buttons through.
         "crates/cranpose/src/android_media.rs",
         "crates/cranpose/src/android_services.rs",
         "crates/cranpose/src/android_surface.rs",
         "crates/cranpose/src/android_file_picker.rs",
-        // The Play Billing bridge: the exported symbols
-        // `dev.cranpose.android.CranposeBilling` calls back through, and
-        // nothing else. Decoding the payloads they carry lives in safe Rust in
-        // android_purchase_wire.rs, which is built and tested on the host.
         "crates/cranpose/src/android_purchases.rs",
         "crates/cranpose/src/android_text_input.rs",
-        // Not a boundary: the `unsafe` tokens are parse-only fixtures in the
-        // injector's tests, pinning that a naked function's body — which must
-        // stay a single `naked_asm!` call — receives no instrumentation. The
-        // macro compiles no unsafe code of its own.
         "crates/cranpose-macros/src/branch_groups.rs",
-        // One `AChoreographer_postFrameCallback64` and the callback it posts,
-        // which is how the frame loop learns when the display is ready for the
-        // next frame.
         "crates/cranpose/src/android_vsync.rs",
         "crates/cranpose/src/android_writable_folder.rs",
-        // The process readings every application that watches its own
-        // footprint would otherwise write for itself: `getrusage`, `sysconf`,
-        // `mallopt` and `os_proc_available_memory`, each behind one contract.
         "crates/cranpose/src/process_info.rs",
         "crates/cranpose/src/ios_file_picker.rs",
         "crates/cranpose/src/ios_uri_handler.rs",
@@ -1666,9 +1551,6 @@ fn workspace_ffi_boundaries_are_explicit() {
         "crates/cranpose/src/ios_notifier.rs",
         "crates/cranpose/src/ios_writable_folder.rs",
         "crates/cranpose/src/apple_camera.rs",
-        // AVAudioPlayer, the audio-session interruption observer and the
-        // MediaPlayer remote commands, behind the same reviewed boundary as
-        // the other iOS services.
         "crates/cranpose/src/ios_media.rs",
         "crates/cranpose/src/ios_keyboard.rs",
         "crates/cranpose/src/ios_back_gesture.rs",
@@ -1676,41 +1558,12 @@ fn workspace_ffi_boundaries_are_explicit() {
         "crates/cranpose/src/ios_host.rs",
         "crates/cranpose/src/ios_accessibility.rs",
         "crates/cranpose/src/desktop_accessibility.rs",
-        // The StoreKit 2 bridge: `extern "C"` declarations for the Swift shim
-        // plus the callback it invokes. The crate root denies unsafe code and
-        // opts this one module back in by name.
         "crates/cranpose-storekit/src/apple.rs",
-        // The audio engine's two boundaries: the lock-free queue that carries
-        // commands to the real-time thread, and the AAudio callback that turns
-        // the device's raw output pointer into a slice. The crate root denies
-        // unsafe code and opts these back in by name.
         "crates/cranpose-audio/src/ring.rs",
         "crates/cranpose-audio/src/backend/aaudio.rs",
-        // The renderer's fixed frame worker pool: lending frame-local borrows
-        // to persistent parked workers cannot be expressed safely in std (the
-        // problem rayon exists for). The unsafety is two pointer wrappers
-        // whose invariants the pool's completion barrier enforces; the crate
-        // root denies unsafe code and opts this one module back in by name.
         "crates/cranpose-render/wgpu/src/worker_pool.rs",
-        // The pipeline disk cache: one wgpu create_pipeline_cache call,
-        // unsafe because seeding data is trusted; the module writes that
-        // data itself from get_data, keys the file by adapter identity,
-        // and asks wgpu to validate the header besides (fallback: true).
         "crates/cranpose-render/wgpu/src/pipeline_disk_cache.rs",
-        // The shape-run entry borrows its DrawPrimitive, whose TYPE is !Sync
-        // (the Text variant holds Rc) even though the constructor only ever
-        // admits the Sync-payload shape variants. The module is kept tiny so
-        // the constructor invariant and the two manual Send/Sync impls stay
-        // on one screen; the crate root denies unsafe code and opts this one
-        // module back in by name.
         "crates/cranpose-render/wgpu/src/run_entry.rs",
-        // The stage executor's spare-capacity map_fill: chunks write map
-        // results straight into the output vec's reserved capacity, which
-        // std vectors cannot express safely. The unsafety lives in the
-        // constructor-limited spare_fill module — claim flags turn a
-        // double-filled chunk into a panic, per-chunk watermarks bound the
-        // unwind path's drops — and the crate root denies unsafe code and
-        // opts this one module back in by name.
         "crates/cranpose-render/wgpu/src/stage_executor.rs",
     ];
     let guard_source = Path::new("crates/cranpose/tests/platform_scheduling_static.rs");
@@ -1756,8 +1609,6 @@ fn unsafe_blocks_have_nearby_safety_invariants() {
         "crates/cranpose-audio/src/ring.rs",
         "crates/cranpose-audio/src/backend/aaudio.rs",
         "crates/cranpose-render/wgpu/src/pipeline_disk_cache.rs",
-        // The exported `android_main` symbol, written once by the framework's
-        // `android_main!` macro rather than once per application.
         "crates/cranpose/src/android_entry.rs",
     ];
     let mut offenders = Vec::new();
@@ -1828,14 +1679,6 @@ fn workspace_sources_do_not_cfg_on_robot_app_feature() {
     );
 }
 
-/// Unsafe code is denied once, by the workspace, for every member.
-///
-/// This used to be thirty-one copies of `#![deny(unsafe_code)]`, one per crate
-/// root, so a new crate stayed unprotected until somebody remembered the line.
-/// Cargo applies `[workspace.lints]` instead, and the only thing a new crate
-/// carries is `[lints] workspace = true`. The FFI modules that genuinely need
-/// unsafe still opt in with a module-level `#![allow(unsafe_code)]`: a source
-/// attribute outranks a lint level Cargo passes on the command line.
 #[test]
 fn every_workspace_member_inherits_the_unsafe_code_denial() {
     let cranpose_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -1878,7 +1721,6 @@ fn every_workspace_member_inherits_the_unsafe_code_denial() {
     );
 }
 
-/// The member paths declared in the workspace manifest's `members` array.
 fn workspace_members(manifest: &str) -> Vec<String> {
     let Some(rest) = manifest.split_once("members = [").map(|(_, rest)| rest) else {
         return Vec::new();
@@ -1895,7 +1737,6 @@ fn workspace_members(manifest: &str) -> Vec<String> {
         .collect()
 }
 
-/// Whether a member manifest opts in to the workspace lint table.
 fn manifest_inherits_workspace_lints(manifest: &str) -> bool {
     let Some(rest) = manifest.split_once("[lints]").map(|(_, rest)| rest) else {
         return false;
@@ -1975,9 +1816,6 @@ fn source_has_unsafe_boundary_escape(source: &str) -> bool {
     })
 }
 
-/// The `unsafe` keyword always stands alone as a token, so an ordinary
-/// identifier that merely contains the letters — `unsafe_code` in a lint
-/// name, an `unsafe_block` binding — is not a boundary.
 fn line_has_unsafe_token(line: &str) -> bool {
     let bytes = line.as_bytes();
     let mut from = 0;
@@ -2275,17 +2113,6 @@ fn rust_sources(root: &Path) -> Vec<PathBuf> {
     out
 }
 
-/// Every store backend has to announce news, not only wake the loop.
-///
-/// `observe_store_news` exists because `take_event`/`store_state` are polling
-/// APIs and an idle app has no frame loop to poll from. A backend that only
-/// calls `wake_native_loop()` leaves the app to notice on some later frame it
-/// may never run: measured on a watch app, zero CPU jiffies over ten seconds on
-/// the screen showing a price, so a purchase approved while sitting there would
-/// never have been seen. iOS announced from the day the listener landed and
-/// Android did not, which is the asymmetry this pins down -- one backend
-/// growing a new decode path and forgetting to tell anyone is the same bug
-/// again.
 #[test]
 fn every_store_backend_tells_the_app_rather_than_leaving_it_to_ask() {
     let android = crate_source("src/android_purchases.rs");
@@ -2298,8 +2125,6 @@ fn every_store_backend_tells_the_app_rather_than_leaving_it_to_ask() {
         );
     }
 
-    // Both JNI entry points, not just whichever one was noticed first: a
-    // snapshot and an event are separate ways for the store to have news.
     for entry_point in [
         "Java_dev_cranpose_android_CranposeBilling_nativeBillingSnapshot",
         "Java_dev_cranpose_android_CranposeBilling_nativeBillingEvent",
@@ -2339,29 +2164,6 @@ fn android_service_registration_replaces_the_relaunch_waker() {
     assert!(!services.contains("let _ = LOOP_WAKER.set"));
 }
 
-/// The Gradle task that runs `cargo ndk` must declare the directory it writes
-/// as an output.
-///
-/// The `.so` lands in a directory the Android plugin has already been told to
-/// read as `jniLibs`, and the merge/package tasks depend on the cargo task, so
-/// the ordering looks right. It is not enough: a task that writes files outside
-/// its declared outputs leaves Gradle's file-system snapshot of that directory
-/// untouched, so the packaging tasks downstream check a pre-cargo snapshot,
-/// report UP-TO-DATE, and build the APK around the PREVIOUS run's library.
-///
-/// Nothing about that is visible from the build log — it says BUILD SUCCESSFUL
-/// — and nothing is visible on device either, beyond code behaving as it did
-/// one build ago. It costs whole debugging sessions: a fix verified on the host
-/// "does not reproduce" on the phone or the watch, which reads as a
-/// platform-specific defect and sends the search into the framework. Run the
-/// build twice and the symptom evaporates, which makes it look intermittent on
-/// top of that.
-///
-/// `outputs.upToDateWhen { false }` does not cover this. It decides whether the
-/// cargo task itself re-runs; it says nothing about what the task changed.
-///
-/// One Gradle plugin registers that task for every Cranpose application, so
-/// this is asserted once, where it is written.
 #[test]
 fn the_gradle_plugin_declares_the_jni_library_directory_cargo_writes() {
     let plugin = workspace_source(CRANPOSE_GRADLE_PLUGIN);
@@ -2383,10 +2185,6 @@ fn the_gradle_plugin_declares_the_jni_library_directory_cargo_writes() {
          directory happens to be unchanged"
     );
 
-    // `mergeJniLibFolders` collects the source directories and `mergeNativeLibs`
-    // collects the libraries inside them; both read the directory cargo writes,
-    // so both have to wait for it. Wiring only one is what Gradle reports as an
-    // implicit dependency once the output is declared above.
     assert!(
         plugin.contains("task.name.contains(\"NativeLibs\")")
             && plugin.contains("task.name.contains(\"JniLibFolders\")"),
@@ -2395,11 +2193,6 @@ fn the_gradle_plugin_declares_the_jni_library_directory_cargo_writes() {
     );
 }
 
-/// No application re-implements the native build the plugin owns.
-///
-/// A hand-rolled `cargo ndk` task in an application's build file is how the
-/// stale-`.so` failure above comes back: the fix lives in the plugin, and a
-/// copy that predates it keeps shipping the previous build.
 #[test]
 fn android_applications_build_their_native_library_through_the_plugin() {
     for relative in ANDROID_APPLICATION_BUILD_FILES {
@@ -2423,9 +2216,6 @@ fn android_applications_build_their_native_library_through_the_plugin() {
     }
 }
 
-/// The activity, its launcher entry and the `android.app.lib_name` metadata are
-/// the framework's contract with `NativeActivity`. An application that declares
-/// its own copy silently owns a contract it cannot see change.
 #[test]
 fn android_applications_do_not_declare_the_framework_activity() {
     for relative in ANDROID_APPLICATION_MANIFESTS {
@@ -2443,11 +2233,6 @@ fn android_applications_do_not_declare_the_framework_activity() {
     }
 }
 
-/// `web.rs` compiles only for `wasm32`, so nothing in `cargo test` links it —
-/// reading the source is the only guard available on the host, and the
-/// alternative is finding out in a browser. This contract regressed silently
-/// once already: the wheel listener grew its own copy of the desktop's policy,
-/// inverted, and never offered the wheel to rotary at all.
 #[test]
 fn the_browser_host_shares_the_wheel_policy() {
     let web = crate_source("src/web.rs");
@@ -2464,10 +2249,6 @@ fn the_browser_host_shares_the_wheel_policy() {
     );
 }
 
-/// The same unreachable-source problem for the clipboard: with no bridge
-/// installed the in-tree selection menu's Copy reaches an in-process clipboard
-/// that nothing outside the page can read, and every platform but the browser
-/// had one.
 #[test]
 fn the_browser_host_installs_a_platform_clipboard() {
     assert!(
@@ -2488,14 +2269,6 @@ fn collect_rust_sources(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// Density, the viewport, the platform's fonts and the log tag are all things
-/// an application needs and none of them are things it should discover for
-/// itself: each answer sits behind a different platform API, and a call site
-/// that reaches for one is wrong on the target it did not write.
-///
-/// Every host therefore publishes its surface the same way, and the launcher
-/// resolves the font directory and the log tag, so no application repeats any
-/// of it.
 #[test]
 fn every_host_reports_its_surface_the_same_way() {
     for (relative, host) in [
@@ -2513,9 +2286,6 @@ fn every_host_reports_its_surface_the_same_way() {
     }
 }
 
-/// The framework owns where a platform keeps its fonts, so an application never
-/// names a system path and never draws in the wrong typeface on the target it
-/// did not name one for.
 #[test]
 fn the_launcher_resolves_the_platform_font_directory_itself() {
     let launcher = crate_source("src/app_launcher.rs");
@@ -2530,9 +2300,6 @@ fn the_launcher_resolves_the_platform_font_directory_itself() {
     );
 }
 
-/// An application that wants its own name on its log lines had to initialise the
-/// platform logger before the framework did and hope the ordering held; the tag
-/// is a launcher setting instead.
 #[test]
 fn the_android_host_takes_its_log_tag_from_the_launcher() {
     let android = crate_source("src/android.rs");
@@ -2547,14 +2314,6 @@ fn the_android_host_takes_its_log_tag_from_the_launcher() {
     );
 }
 
-/// No application writes the Android entry point by hand.
-///
-/// It cost every application the same four lines — an `unsafe_code` allowance
-/// for the export attribute, a `#[unsafe(no_mangle)]` it must not misspell, a
-/// dependency on `android_activity` for nothing but a parameter type, and a
-/// `target_os` guard — none of which is about the application. It is one macro
-/// now, and the `#[unsafe(no_mangle)]` lives in one reviewed module rather than in
-/// every consumer.
 #[test]
 fn applications_declare_their_android_entry_through_the_macro() {
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -2595,15 +2354,6 @@ fn applications_declare_their_android_entry_through_the_macro() {
     );
 }
 
-/// An application update is the one download that can replace the application,
-/// so what arrives is checked against what the release feed promised *before*
-/// it reaches the platform installer.
-///
-/// Android's own signature check still runs afterwards and catches a package
-/// signed by someone else. It does not catch one that arrived corrupted, or one
-/// swapped for a differently-signed build the device would happily install as a
-/// new application. Committing the session first and finding out afterwards is
-/// not a check.
 #[test]
 fn the_android_installer_verifies_a_package_before_committing_it() {
     let java =
@@ -2640,8 +2390,6 @@ fn the_android_installer_verifies_a_package_before_committing_it() {
     );
 }
 
-/// The framework computes a digest one way, so no platform's installer can
-/// compute it differently and disagree with the one the release feed published.
 #[test]
 fn the_framework_owns_one_package_digest() {
     let update = workspace_source("crates/cranpose-services/src/app_update.rs");
@@ -2667,16 +2415,6 @@ fn the_framework_owns_one_package_digest() {
     );
 }
 
-/// A camera preview is the highest-rate path in the framework, so what it does
-/// per frame is worth pinning down.
-///
-/// Routing frames through the filesystem — JPEG-compress on the Java side,
-/// write to the cache directory, rename, read back, decode — costs an encode, a
-/// write, a rename, a read and a decode on every single frame, which is a bill
-/// only a preview capped at fifteen frames a second can pay. Waiting for a
-/// still the same way means sleeping in twenty-millisecond steps until a marker
-/// file appears, on whichever thread asked for it. This test pins down that
-/// neither happens.
 #[test]
 fn the_android_camera_pushes_frames_rather_than_writing_them_to_files() {
     let camera =
@@ -2709,9 +2447,6 @@ fn the_android_camera_pushes_frames_rather_than_writing_them_to_files() {
     );
 }
 
-/// The framework's camera contract has no method that hands back a frame or a
-/// picture, because both would mean waiting: a poll returns whatever was there
-/// and a blocking capture stops whoever asked for as long as the device takes.
 #[test]
 fn the_camera_service_is_published_to_rather_than_polled() {
     let camera = workspace_source("crates/cranpose-services/src/camera.rs");
@@ -2730,8 +2465,6 @@ fn the_camera_service_is_published_to_rather_than_polled() {
     );
 }
 
-/// Every media backend the framework ships, so a contract test covers all of
-/// them rather than whichever one was written last.
 const MEDIA_BACKENDS: [&str; 4] = [
     "crates/cranpose-media/src/player.rs",
     ANDROID_MEDIA_BACKEND,
@@ -2739,10 +2472,6 @@ const MEDIA_BACKENDS: [&str; 4] = [
     "crates/cranpose/src/web_media.rs",
 ];
 
-/// The backends that carry the transport themselves. Android's is not one of
-/// them: it is the in-process player wearing the platform's session, so it
-/// delegates the answers these give directly. See
-/// [`the_android_media_backend_wraps_the_in_process_player_rather_than_decoding`].
 const TRANSPORT_BACKENDS: [&str; 3] = [
     "crates/cranpose-media/src/player.rs",
     "crates/cranpose/src/ios_media.rs",
@@ -2751,10 +2480,6 @@ const TRANSPORT_BACKENDS: [&str; 3] = [
 
 const ANDROID_MEDIA_BACKEND: &str = "crates/cranpose/src/android_media.rs";
 
-/// A media player that is asked "where are you now?" every frame does that work
-/// whether or not anything moved, and learns about a failure only by noticing
-/// that the position stopped. The contract is the other way round: the backend
-/// publishes, and a screen reacts.
 #[test]
 fn the_media_service_is_published_to_rather_than_polled() {
     let media = workspace_source("crates/cranpose-services/src/media.rs");
@@ -2776,11 +2501,6 @@ fn the_media_service_is_published_to_rather_than_polled() {
     }
 }
 
-/// Android's backend is the framework's own decoder wearing the platform's
-/// session, not a second transport. What it must not go back to is decoding
-/// with `android.media.MediaPlayer`: that plays a file, and a document provider
-/// whose bytes come off a network hands back a pipe instead — which is how a
-/// network library stopped playing between 0.1.41 and 0.1.42.
 #[test]
 fn the_android_media_backend_wraps_the_in_process_player_rather_than_decoding() {
     let source = workspace_source(ANDROID_MEDIA_BACKEND);
@@ -2801,9 +2521,6 @@ fn the_android_media_backend_wraps_the_in_process_player_rather_than_decoding() 
     );
 }
 
-/// A control the device will not honour is worse than a control that is not
-/// there: the user presses it and nothing happens. Every backend states what it
-/// can do so a screen can leave out the rest.
 #[test]
 fn every_media_backend_states_what_it_can_do() {
     for backend in MEDIA_BACKENDS {
@@ -2815,11 +2532,6 @@ fn every_media_backend_states_what_it_can_do() {
     }
 }
 
-/// An equalizer has the bands its implementation has: ten octave bands where
-/// the framework builds the filters, whatever the device offers where the
-/// platform owns the effect, and none at all on a backend with nowhere to put
-/// one. Every backend has to say which of those it is, because a screen draws
-/// as many controls as there are bands.
 #[test]
 fn every_media_backend_states_the_equalizer_it_has() {
     for backend in TRANSPORT_BACKENDS {
@@ -2828,7 +2540,6 @@ fn every_media_backend_states_the_equalizer_it_has() {
             source.contains("equalizer:"),
             "{backend} must state whether it has an equalizer in its capabilities"
         );
-        // A backend that claims one has to be able to report its bands.
         if source.contains("equalizer: false") {
             continue;
         }
@@ -2843,9 +2554,6 @@ fn every_media_backend_states_the_equalizer_it_has() {
     }
 }
 
-/// Ducking and forgetting to un-duck, or resuming after a phone call that was
-/// never paused for, is the same bug written once per application. The policy
-/// lives in the framework; a backend only reports what the platform told it.
 #[test]
 fn the_audio_focus_policy_lives_in_the_framework() {
     let media = workspace_source("crates/cranpose-services/src/media.rs");
@@ -2866,9 +2574,6 @@ fn the_audio_focus_policy_lives_in_the_framework() {
     }
 }
 
-/// Media that carries on with the app off screen is the one service Android
-/// requires a typed foreground service for, and `dataSync` — what the
-/// background-work lease starts — is not that type.
 #[test]
 fn android_media_declares_the_foreground_service_it_needs() {
     let manifest = workspace_source(&cranpose_manifest("media"));
@@ -2887,16 +2592,6 @@ fn android_media_declares_the_foreground_service_it_needs() {
     );
 }
 
-/// `startForegroundService` is a promise: something must call `startForeground`
-/// within the framework's window, or the process is ended with
-/// `ForegroundServiceDidNotStartInTimeException`. Two launch shapes break the
-/// promise through no fault of the service, because Android accepts the call
-/// and then never creates the service class: a screen-off launch pauses without
-/// ever resuming (Pixel 9 Pro, Android 16), and an EMUI launch delivers a
-/// pause/resume pair together (EVR-AL00, Android 10). Both were process kills
-/// on real devices, so the ask itself is guarded: only a lifetime that actually
-/// reached the foreground may ask, the ask waits out launch-shaped pauses on a
-/// handler where a resume cancels it, and it re-checks the world when it fires.
 #[test]
 fn the_android_background_service_ask_survives_launch_shaped_pauses() {
     let java =
@@ -2972,15 +2667,6 @@ fn the_android_background_service_ask_survives_launch_shaped_pauses() {
     );
 }
 
-/// Stopping a started foreground service before it calls `startForeground` is
-/// itself a process kill: `ActiveServices.bringDownServiceLocked` crashes the
-/// app on purpose ("Bringing down service while still waiting for start
-/// foreground"). A background-work lease that closes moments after it opened —
-/// an import spinning up its queue does exactly this — turns start-then-stop
-/// into that kill, reproduced on a Pixel 9 Pro where the stop landed 18 ms
-/// after the accepted start. So the activity never calls `stopService` on the
-/// background service: every stop routes through the service's own handshake,
-/// which waits for `onCreate` to meet the obligation and then stops itself.
 #[test]
 fn the_android_background_service_never_stops_before_start_foreground() {
     let activity =
@@ -3023,8 +2709,6 @@ fn the_android_background_service_never_stops_before_start_foreground() {
     );
 }
 
-/// The body of the first Java method declared with `signature`, up to its
-/// closing brace at the declaration's depth.
 fn method_body<'a>(java: &'a str, signature: &str) -> &'a str {
     let start = java
         .find(signature)
@@ -3049,10 +2733,6 @@ fn method_body<'a>(java: &'a str, signature: &str) -> &'a str {
     panic!("`{signature}` body should close");
 }
 
-/// A permission an application writes into its own manifest is a permission the
-/// framework's module system cannot leave out of an application that does not
-/// use the service. Applications ask by service name; the module contributes
-/// the permission.
 #[test]
 fn applications_ask_for_platform_permissions_by_service() {
     for relative in ANDROID_APPLICATION_MANIFESTS {
@@ -3073,10 +2753,6 @@ fn applications_ask_for_platform_permissions_by_service() {
     }
 }
 
-/// `CranposeBilling` is the one framework class that needs the Play Billing
-/// library. The plugin contributes both directly to the `billing` service, so
-/// an application that sells something adds a service name — not a source
-/// directory pointing into the framework's tree and a third-party dependency.
 #[test]
 fn the_framework_packages_its_own_billing_java() {
     let plugin = workspace_source(CRANPOSE_GRADLE_PLUGIN);
@@ -3097,11 +2773,6 @@ fn the_framework_packages_its_own_billing_java() {
     }
 }
 
-/// Sharing a file out needs a content provider, because a `file://` URI has
-/// been refused since Android 7. The provider is the framework's own class, so
-/// the framework's manifest declares it -- an application that shares a file
-/// writes nothing, and two Cranpose applications installed together do not
-/// collide over one authority.
 #[test]
 fn the_framework_declares_the_provider_its_own_sharing_needs() {
     let library = workspace_source(&cranpose_manifest("base"));
@@ -3122,10 +2793,6 @@ fn the_framework_declares_the_provider_its_own_sharing_needs() {
     }
 }
 
-/// Installing a downloaded package is a framework capability, and Android
-/// refuses the installer session without a permission for it. It rides on its
-/// own service module rather than the library, so an application that never
-/// updates itself does not ask to install packages.
 #[test]
 fn installing_an_update_asks_for_its_permission_through_a_service() {
     let module = workspace_source(&cranpose_manifest("update"));
@@ -3147,10 +2814,6 @@ fn installing_an_update_asks_for_its_permission_through_a_service() {
     }
 }
 
-/// The architectures a release carries are stated once, in `releaseAbis`. An
-/// application that ships one APK per architecture says only that it does: the
-/// plugin writes the same list into the split, so a split can never name an
-/// architecture the native build never produced a library for.
 #[test]
 fn the_plugin_drives_abi_splits_from_the_architectures_it_builds() {
     let plugin = workspace_source(CRANPOSE_GRADLE_PLUGIN);
@@ -3167,9 +2830,6 @@ fn the_plugin_drives_abi_splits_from_the_architectures_it_builds() {
     }
 }
 
-/// Every service the plugin knows how to add must have a manifest fragment for
-/// the plugin to contribute, or an application naming it gets a missing-file
-/// failure instead of a permission.
 #[test]
 fn every_service_the_plugin_offers_has_a_manifest() {
     let plugin = workspace_source(CRANPOSE_GRADLE_PLUGIN);

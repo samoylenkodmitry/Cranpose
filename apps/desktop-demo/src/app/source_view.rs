@@ -1,13 +1,3 @@
-//! Every demo tab can show the source that produces it.
-//!
-//! A demo answers "what does this look like"; the source answers "how do I
-//! write it", which is the question a reader of a UI framework's demo actually
-//! has. Fetching it rather than embedding it keeps the file out of the binary
-//! and the wasm bundle, both of which are under a size budget.
-//!
-//! The ref comes from `build.rs`, so the file on screen is the file the running
-//! binary was built from rather than whatever `main` holds today.
-
 use std::rc::Rc;
 
 use cranpose::LazyItems;
@@ -25,11 +15,6 @@ use super::DemoTab;
 
 const REPOSITORY: &str = "https://raw.githubusercontent.com/samoylenkodmitry/cranpose";
 
-/// The file that implements a tab, relative to the repository root.
-///
-/// Tabs whose body is written inline in `app.rs` point at `app.rs`. That is
-/// less precise than a dedicated file, but it is true, and a reader who opens
-/// it can search for the tab's function.
 pub(crate) fn source_path(tab: DemoTab) -> &'static str {
     match tab {
         DemoTab::Counter
@@ -60,13 +45,10 @@ pub(crate) fn source_path(tab: DemoTab) -> &'static str {
     }
 }
 
-/// The commit the demo was built from, recorded by `build.rs`.
 pub(crate) fn source_ref() -> &'static str {
     env!("CRANPOSE_SOURCE_REF")
 }
 
-/// A short form for display. Commit hashes get their first seven characters;
-/// a branch or tag name is already short enough.
 fn short_ref() -> &'static str {
     let reference = source_ref();
     let looks_like_a_commit =
@@ -78,8 +60,6 @@ fn short_ref() -> &'static str {
     }
 }
 
-/// GitHub serves `raw.githubusercontent.com` with `Access-Control-Allow-Origin:
-/// *`, so the browser build fetches it directly and needs no CORS proxy.
 fn source_url(tab: DemoTab) -> String {
     format!("{REPOSITORY}/{}/{}", source_ref(), source_path(tab))
 }
@@ -91,7 +71,6 @@ enum SourceState {
     Error(String),
 }
 
-/// Toggles the source panel for the active tab.
 #[allow(non_snake_case)]
 #[composable]
 pub(crate) fn SourceToggleButton(showing: MutableState<bool>, modifier: Modifier) {
@@ -110,11 +89,6 @@ pub(crate) fn SourceToggleButton(showing: MutableState<bool>, modifier: Modifier
     );
 }
 
-/// The source panel itself: header, then the file, one line per lazy item.
-///
-/// A lazy list rather than one paragraph because these files run to thousands
-/// of lines, and composing all of them to show forty is the mistake the lazy
-/// list exists to prevent.
 #[allow(non_snake_case)]
 #[composable]
 pub(crate) fn SourcePanel(tab: DemoTab) {

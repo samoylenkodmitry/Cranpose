@@ -62,17 +62,13 @@ pub trait SlotReusePolicy: 'static {
     /// should override this to record the type. The default implementation is a no-op.
     ///
     /// Call this before subcomposing an item to enable content-type-aware slot reuse.
-    fn register_content_type(&self, _slot_id: SlotId, _content_type: u64) {
-        // Default: no-op for policies that don't care about content types
-    }
+    fn register_content_type(&self, _slot_id: SlotId, _content_type: u64) {}
 
     /// Removes the content type for a slot (e.g., when transitioning to None).
     ///
     /// Policies that track content types should override this to clean up.
     /// The default implementation is a no-op.
-    fn remove_content_type(&self, _slot_id: SlotId) {
-        // Default: no-op for policies that don't track content types
-    }
+    fn remove_content_type(&self, _slot_id: SlotId) {}
 }
 
 /// Default reuse policy that mirrors Jetpack Compose behaviour: dispose
@@ -114,7 +110,6 @@ impl SlotReusePolicy for DefaultSlotReusePolicy {
 /// assert!(policy.are_compatible(SlotId::new(2), SlotId::new(1)));
 /// ```
 pub struct ContentTypeReusePolicy {
-    /// Maps slot ID to content type.
     slot_types: std::cell::RefCell<HashMap<SlotId, u64>>,
 }
 
@@ -167,7 +162,6 @@ impl ContentTypeReusePolicy {
 impl SlotReusePolicy for ContentTypeReusePolicy {
     fn get_slots_to_retain(&self, active: &[SlotId]) -> HashSet<SlotId> {
         let _ = active;
-        // Don't retain any - let SubcomposeState manage reusable pool
         HashSet::default()
     }
 
@@ -242,7 +236,6 @@ impl NodeSlotMapping {
                 }
                 if nodes.is_empty() {
                     self.slot_to_nodes.remove(&slot);
-                    // Also clean up slot_to_scopes when slot becomes empty
                     self.slot_to_scopes.remove(&slot);
                 }
             }
@@ -298,50 +291,26 @@ pub struct SubcomposeState {
     active_order: Vec<SlotId>,
     live_slots: HashSet<SlotId>,
     current_pass_active_slots: HashSet<SlotId>,
-    /// Per-content-type reusable node pools used to narrow compatible node lookup.
-    /// Key is content type, value is a deque of (SlotId, NodeId) pairs.
-    /// Nodes without content type go to `reusable_nodes_untyped`.
     reusable_by_type: HashMap<u64, VecDeque<(SlotId, NodeId)>>,
-    /// Reusable nodes without a content type (fallback pool).
     reusable_nodes_untyped: VecDeque<(SlotId, NodeId)>,
     reusable_node_counts: HashMap<SlotId, usize>,
     exact_reactivation_slots: HashSet<SlotId>,
-    /// Maps slot to its content type for efficient lookup during reuse.
     slot_content_types: HashMap<SlotId, u64>,
     precomposed_nodes: HashMap<SlotId, Vec<NodeId>>,
     policy: Box<dyn SlotReusePolicy>,
     pub(crate) current_index: usize,
     pub(crate) reusable_count: usize,
     pub(crate) precomposed_count: usize,
-    /// Per-slot SlotsHost for isolated compositions.
-    /// Each SlotId gets its own slot table, avoiding cursor-based conflicts
-    /// when items are subcomposed in different orders.
     slot_compositions: HashMap<SlotId, Rc<SlotsHost>>,
-    /// Latest slot root callbacks keyed by slot id.
     slot_callbacks: HashMap<SlotId, CallbackHolder>,
-    /// Maximum number of reusable slots to keep cached per content type.
     max_reusable_per_type: usize,
-    /// Maximum number of reusable slots for the untyped pool.
     max_reusable_untyped: usize,
-    /// Whether the last slot registered via register_active was reused.
-    /// Set during register_active, read via was_last_slot_reused().
     last_slot_reused: Option<bool>,
-    /// Capture key stored at the last composition of each slot. A retained
-    /// slot may skip recomposition on a measure pass only while the caller
-    /// presents an equal key (see `retained_capture_key_matches`).
     retained_capture_keys: HashMap<SlotId, RetainedCaptureKey>,
-    /// Bumped by `invalidate_scopes`; slots must re-compose once per bump
-    /// before clean-slot reuse may skip them again.
     content_generation: std::cell::Cell<u64>,
-    /// The (content generation, owner-chain deactivation epoch) each slot
-    /// last composed under.
     slot_composed_generation: HashMap<SlotId, (u64, u64)>,
 }
 
-/// Type-erased capture key recorded when a slot composes. Values that flow
-/// into slot content from the measure policy itself (a scaffold's computed
-/// padding, a box's constraints) never invalidate a recompose scope when they
-/// change, so slot reuse must compare them explicitly.
 struct RetainedCaptureKey {
     value: Box<dyn Any>,
     eq: fn(&dyn Any, &dyn Any) -> bool,
@@ -376,13 +345,8 @@ impl Default for SubcomposeState {
     }
 }
 
-/// Default maximum reusable slots to cache per content type.
-/// With multiple content types, total reusable = this * number_of_types.
 const DEFAULT_MAX_REUSABLE_PER_TYPE: usize = 5;
 
-/// Default maximum reusable slots for the untyped pool.
-/// This is higher than per-type since all items without content types share this pool.
-/// Matches RecyclerView's default cache size.
 const DEFAULT_MAX_REUSABLE_UNTYPED: usize = 10;
 
 impl SubcomposeState {
@@ -833,9 +797,7 @@ impl SubcomposeState {
         reused
     }
 
-    /// Removes a node from whatever reusable pool it's in.
     fn remove_from_reusable_pools(&mut self, node_id: NodeId) -> Option<SlotId> {
-        // Check typed pools
         let mut typed_match = None;
         for (&content_type, pool) in &self.reusable_by_type {
             if let Some(position) = pool
@@ -855,7 +817,6 @@ impl SubcomposeState {
             self.decrement_reusable_slot(slot);
             return Some(slot);
         }
-        // Check untyped pool
         if let Some(position) = self
             .reusable_nodes_untyped
             .iter()
@@ -868,7 +829,6 @@ impl SubcomposeState {
         None
     }
 
-    /// Moves a node from one slot to another, updating mappings.
     fn move_node_to_slot(&mut self, node_id: NodeId, old_slot: SlotId, new_slot: SlotId) {
         if old_slot == new_slot {
             return;
@@ -980,7 +940,6 @@ impl SubcomposeState {
             disposed.push(node_id);
         }
 
-        // Enforce limit on untyped pool (uses separate, larger limit)
         while self.reusable_nodes_untyped.len() > self.max_reusable_untyped {
             if let Some((slot, node_id)) = self.reusable_nodes_untyped.pop_front() {
                 self.decrement_reusable_slot(slot);
@@ -1119,7 +1078,6 @@ impl SubcomposeState {
             self.precomposed_nodes.remove(&slot);
             self.prune_slot_if_unused(slot);
         }
-        // disposed.len() is the exact count of nodes removed
         self.precomposed_count = self.precomposed_count.saturating_sub(disposed.len());
         disposed
     }

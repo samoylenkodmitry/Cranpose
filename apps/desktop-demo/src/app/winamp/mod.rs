@@ -1,8 +1,3 @@
-//! Winamp skin renderer demo tab.
-//!
-//! UI is intentionally split into per-control composables instead of a
-//! monolithic draw pass so interactions and sprite mapping stay explicit.
-
 #![allow(non_snake_case)]
 
 mod skin;
@@ -1736,9 +1731,6 @@ fn winamp_window_modifier(
 }
 
 fn ui_scale() -> f32 {
-    // Skin pixel coordinates map directly to dp.  On high-density screens the
-    // renderer upscales automatically, keeping the skin at the same visual
-    // size as on a 1× desktop display.
     1.0
 }
 

@@ -1,5 +1,3 @@
-//! Declarative native window support.
-
 #[cfg(all(
     feature = "desktop-shell",
     feature = "renderer-wgpu",
@@ -64,47 +62,28 @@ impl WindowGroupId {
     }
 }
 
-/// Coordinate space used by a native window's configured position.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NativeWindowPositionOrigin {
-    /// Position is expressed in operating-system screen coordinates.
     Screen,
-    /// Position is expressed relative to the owning application window.
     HostWindow,
 }
 
-/// Configuration for a declarative native window.
 #[derive(Clone, Debug, PartialEq)]
 pub struct NativeWindowOptions {
-    /// Window title exposed to the operating system.
     pub title: String,
-    /// Initial content width in logical pixels.
     pub width: f32,
-    /// Initial content height in logical pixels.
     pub height: f32,
-    /// Optional initial outer-window x position in the configured coordinate space.
     pub x: Option<f32>,
-    /// Optional initial outer-window y position in the configured coordinate space.
     pub y: Option<f32>,
-    /// Coordinate space used by `x` and `y`.
     pub position_origin: NativeWindowPositionOrigin,
-    /// Whether the operating system should draw window decorations.
     pub decorations: bool,
-    /// Whether the window surface requests compositor transparency.
     pub transparent: bool,
-    /// Whether the operating system should allow interactive resizing.
     pub resizable: bool,
-    /// Whether the window should be visible when created.
     pub visible: bool,
-    /// Whether the window should be kept above normal windows.
     pub always_on_top: bool,
-    /// Optional minimum content width in logical pixels.
     pub min_width: Option<f32>,
-    /// Optional minimum content height in logical pixels.
     pub min_height: Option<f32>,
-    /// Optional maximum content width in logical pixels.
     pub max_width: Option<f32>,
-    /// Optional maximum content height in logical pixels.
     pub max_height: Option<f32>,
 }
 
@@ -123,7 +102,6 @@ impl WindowMoveMode {
         feature = "renderer-wgpu",
         not(target_arch = "wasm32")
     ))]
-    // Consumed by the wgpu shell; the slim shell adopts window-graph docking in the parity phase.
     fn moves_attached_component(&self, window_id: WindowId) -> bool {
         match self {
             Self::AllAttached => true,
@@ -176,7 +154,6 @@ pub(crate) struct NativeWindowGroupMembership {
 }
 
 impl NativeWindowOptions {
-    /// Creates a decorated native window with a fixed initial size.
     pub fn new(title: impl Into<String>, width: f32, height: f32) -> Self {
         Self {
             title: title.into(),
@@ -197,7 +174,6 @@ impl NativeWindowOptions {
         }
     }
 
-    /// Creates a borderless, non-resizable native window with a fixed initial size.
     pub fn borderless(title: impl Into<String>, width: f32, height: f32) -> Self {
         Self {
             decorations: false,
@@ -206,7 +182,6 @@ impl NativeWindowOptions {
         }
     }
 
-    /// Sets the initial outer-window position in logical screen coordinates.
     pub fn with_position(mut self, x: f32, y: f32) -> Self {
         self.x = Some(x);
         self.y = Some(y);
@@ -214,7 +189,6 @@ impl NativeWindowOptions {
         self
     }
 
-    /// Sets the initial outer-window position relative to the host application window.
     pub fn with_host_window_position(mut self, x: f32, y: f32) -> Self {
         self.x = Some(x);
         self.y = Some(y);
@@ -222,38 +196,32 @@ impl NativeWindowOptions {
         self
     }
 
-    /// Sets whether compositor transparency should be requested.
     pub fn with_transparent(mut self, transparent: bool) -> Self {
         self.transparent = transparent;
         self
     }
 
-    /// Sets whether the operating system should allow interactive resizing.
     pub fn with_resizable(mut self, resizable: bool) -> Self {
         self.resizable = resizable;
         self
     }
 
-    /// Sets whether the window should be visible when created.
     pub fn with_visible(mut self, visible: bool) -> Self {
         self.visible = visible;
         self
     }
 
-    /// Sets whether the window should be kept above normal windows.
     pub fn with_always_on_top(mut self, always_on_top: bool) -> Self {
         self.always_on_top = always_on_top;
         self
     }
 
-    /// Sets the minimum content size in logical pixels.
     pub fn with_min_size(mut self, width: f32, height: f32) -> Self {
         self.min_width = Some(width);
         self.min_height = Some(height);
         self
     }
 
-    /// Sets the maximum content size in logical pixels.
     pub fn with_max_size(mut self, width: f32, height: f32) -> Self {
         self.max_width = Some(width);
         self.max_height = Some(height);
@@ -261,7 +229,6 @@ impl NativeWindowOptions {
     }
 }
 
-/// Event callbacks emitted by a declarative native window.
 #[derive(Clone, Default)]
 pub(crate) struct NativeWindowEvents {
     pub(crate) on_moved: Option<Rc<dyn Fn(f32, f32)>>,
@@ -662,9 +629,7 @@ pub(crate) struct NativeWindowRequest {
     pub(crate) key: NativeWindowKey,
     pub(crate) options: NativeWindowOptions,
     pub(crate) events: NativeWindowEvents,
-    // Consumed by the wgpu shell; the slim shell adopts window-graph docking in the parity phase.
     pub(crate) state: Option<WindowState>,
-    // Consumed by the wgpu shell; the slim shell adopts window-graph docking in the parity phase.
     pub(crate) group: Option<NativeWindowGroupMembership>,
     pub(crate) content: NativeWindowContent,
     pub(crate) revision: u64,
@@ -878,10 +843,6 @@ fn NativeWindowWithEvents(
     }
 }
 
-/// Requests that the current native window begin an operating-system window drag.
-///
-/// This returns `true` when a desktop native window is currently dispatching the
-/// pointer event and the request was forwarded to the platform window.
 fn request_native_window_drag() -> bool {
     current_native_window_dispatch_context()
         .and_then(|context| context.drag_handler)
@@ -988,7 +949,6 @@ fn current_native_window_dispatch_context() -> Option<NativeWindowDispatchContex
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
-// Consumed by the wgpu shell; the slim shell adopts window-graph docking in the parity phase.
 fn with_native_window_dispatch_context<R>(
     context: NativeWindowDispatchContext,
     f: impl FnOnce() -> R,
@@ -1015,7 +975,6 @@ fn with_native_window_dispatch_context<R>(
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
-// Consumed by the wgpu shell; the slim shell adopts window-graph docking in the parity phase.
 pub(crate) fn with_native_window_drag_handler<R>(
     handler: NativeWindowDragHandler,
     resize_handler: NativeWindowResizeHandler,
@@ -1032,7 +991,6 @@ pub(crate) fn with_native_window_drag_handler<R>(
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
-// Consumed by the wgpu shell; the slim shell adopts window-graph docking in the parity phase.
 pub(crate) fn with_native_window_surface_origin<R>(
     origin: Option<Point>,
     f: impl FnOnce() -> R,
@@ -1132,7 +1090,6 @@ fn hash_id(id: &'static str) -> u64 {
     not(target_arch = "wasm32")
 ))]
 #[derive(Clone, Copy, Debug, PartialEq)]
-// Consumed by the wgpu shell; the slim shell adopts window-graph docking in the parity phase.
 pub(crate) struct WindowGraphNodeSnapshot {
     pub(crate) id: WindowId,
     pub(crate) position: Point,
@@ -1145,7 +1102,6 @@ pub(crate) struct WindowGraphNodeSnapshot {
     not(target_arch = "wasm32")
 ))]
 #[derive(Clone, Debug, PartialEq)]
-// Consumed by the wgpu shell; the slim shell adopts window-graph docking in the parity phase.
 pub(crate) struct WindowGraphPeerSnapshot {
     pub(crate) node: WindowGraphNodeSnapshot,
     pub(crate) group: Option<NativeWindowGroupMembership>,
@@ -1157,7 +1113,6 @@ pub(crate) struct WindowGraphPeerSnapshot {
     not(target_arch = "wasm32")
 ))]
 #[derive(Clone, Copy, Debug, PartialEq)]
-// Consumed by the wgpu shell; the slim shell adopts window-graph docking in the parity phase.
 pub(crate) struct WindowGraphMove {
     pub(crate) id: WindowId,
     pub(crate) position: Point,
@@ -1169,7 +1124,6 @@ pub(crate) struct WindowGraphMove {
     not(target_arch = "wasm32")
 ))]
 #[derive(Clone, Debug)]
-// Consumed by the wgpu shell; the slim shell adopts window-graph docking in the parity phase.
 struct WindowGraphDragSession {
     group: Option<NativeWindowGroupMembership>,
     dragged: WindowId,
@@ -1177,14 +1131,12 @@ struct WindowGraphDragSession {
     captured: Vec<WindowGraphNodeSnapshot>,
 }
 
-/// Framework-owned topology and drag state for peer operating-system windows.
 #[cfg(all(
     feature = "desktop-shell",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
 #[derive(Default)]
-// Consumed by the wgpu shell; the slim shell adopts window-graph docking in the parity phase.
 pub(crate) struct WindowGraphState {
     active_drag: Option<WindowGraphDragSession>,
 }
@@ -1194,9 +1146,7 @@ pub(crate) struct WindowGraphState {
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
-// Consumed by the wgpu shell; the slim shell adopts window-graph docking in the parity phase.
 impl WindowGraphState {
-    // Consumed by the wgpu shell; the slim shell adopts window-graph docking in the parity phase.
     pub(crate) fn start_drag(&mut self, windows: &[WindowGraphPeerSnapshot], dragged: WindowId) {
         let Some(dragged_window) = windows.iter().find(|window| window.node.id == dragged) else {
             self.active_drag = None;
@@ -1351,7 +1301,6 @@ impl WindowGraphState {
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
-// Consumed by the wgpu shell; the slim shell adopts window-graph docking in the parity phase.
 fn group_windows(
     windows: &[WindowGraphPeerSnapshot],
     group: &NativeWindowGroupMembership,
@@ -1373,7 +1322,6 @@ fn group_windows(
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
-// Consumed by the wgpu shell; the slim shell adopts window-graph docking in the parity phase.
 fn attached_component(
     windows: &[WindowGraphNodeSnapshot],
     dragged: WindowId,
@@ -1407,7 +1355,6 @@ fn attached_component(
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
-// Consumed by the wgpu shell; the slim shell adopts window-graph docking in the parity phase.
 fn rects_attached(
     child: &WindowGraphNodeSnapshot,
     main: &WindowGraphNodeSnapshot,
@@ -1446,7 +1393,6 @@ fn rects_attached(
     not(target_arch = "wasm32")
 ))]
 #[derive(Clone, Copy, Debug, PartialEq)]
-// Consumed by the wgpu shell; the slim shell adopts window-graph docking in the parity phase.
 struct GraphSnap {
     target: WindowId,
     delta: Point,
@@ -1460,7 +1406,6 @@ struct GraphSnap {
     not(target_arch = "wasm32")
 ))]
 #[derive(Clone, Copy, Debug, PartialEq)]
-// Consumed by the wgpu shell; the slim shell adopts window-graph docking in the parity phase.
 struct GraphSnapCandidate {
     delta: Point,
     contact: f32,
@@ -1471,7 +1416,6 @@ struct GraphSnapCandidate {
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
-// Consumed by the wgpu shell; the slim shell adopts window-graph docking in the parity phase.
 fn closest_snap(
     windows: &[WindowGraphNodeSnapshot],
     component: &[WindowId],
@@ -1512,7 +1456,6 @@ fn closest_snap(
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
-// Consumed by the wgpu shell; the slim shell adopts window-graph docking in the parity phase.
 fn snap_candidates(
     moving: &WindowGraphNodeSnapshot,
     stationary: &WindowGraphNodeSnapshot,
@@ -1569,7 +1512,6 @@ fn snap_candidates(
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
-// Consumed by the wgpu shell; the slim shell adopts window-graph docking in the parity phase.
 fn translate_nodes(windows: &mut [WindowGraphNodeSnapshot], component: &[WindowId], delta: Point) {
     if delta.x.abs() <= f32::EPSILON && delta.y.abs() <= f32::EPSILON {
         return;
@@ -1587,7 +1529,6 @@ fn translate_nodes(windows: &mut [WindowGraphNodeSnapshot], component: &[WindowI
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
-// Consumed by the wgpu shell; the slim shell adopts window-graph docking in the parity phase.
 fn near(a: f32, b: f32, distance: f32) -> bool {
     (a - b).abs() <= distance
 }

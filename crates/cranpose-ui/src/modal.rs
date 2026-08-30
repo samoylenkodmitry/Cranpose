@@ -21,11 +21,7 @@ struct ModalEntry {
 thread_local! {
     static MODALS: RefCell<Vec<ModalEntry>> = const { RefCell::new(Vec::new()) };
     static NEXT_ID: Cell<u64> = const { Cell::new(1) };
-    /// The count, always accurate whether or not a runtime exists.
     static DEPTH_COUNT: Cell<usize> = const { Cell::new(0) };
-    /// Observable depth, so a composable that reads it recomposes when a modal
-    /// opens or closes. Allocated on the first read that has a runtime to
-    /// allocate from; a unit test with no runtime still sees the count.
     static DEPTH: RefCell<Option<MutableState<usize>>> = const { RefCell::new(None) };
 }
 
@@ -52,11 +48,6 @@ fn publish_depth() {
 /// Keeps a modal surface on the stack until it is dropped.
 pub struct ModalRegistration {
     id: u64,
-    /// The depth this registration occupied when it was pushed — fixed for
-    /// its lifetime, not recomputed from its (possibly shifting) position in
-    /// the stack. [`local_modal_depth`] readers inside this modal's content
-    /// are given this same value, so a field's recorded depth and its modal's
-    /// registration depth always mean the same thing when compared.
     depth: usize,
 }
 
@@ -64,11 +55,6 @@ impl Drop for ModalRegistration {
     fn drop(&mut self) {
         MODALS.with(|modals| modals.borrow_mut().retain(|entry| entry.id != self.id));
         publish_depth();
-        // A field focused at exactly this depth lived inside the content this
-        // registration guarded, which is now gone with it — leaving focus
-        // pointed at it would strand the platform keyboard open with no
-        // field behind it. A field at another depth (outside this modal, or
-        // inside a sibling modal open at the same time) is untouched.
         if crate::render_state::has_current_app_context() {
             crate::text_field_focus::clear_focus_for_closed_modal(self.depth);
         }
@@ -101,16 +87,6 @@ pub fn modal_depth() -> usize {
     }
 }
 
-/// How many modal surfaces are open, read without subscribing to it.
-///
-/// [`modal_depth`] is the composable's read: it goes through the observable
-/// mirror so that a reader recomposes when a modal opens or closes, and that
-/// mirror belongs to whichever runtime was current when it was first
-/// allocated. A pointer callback is not a composable and is not guaranteed to
-/// be on that runtime — a focus request arriving under a different one would
-/// reach a state whose runtime is gone. So the paths that only need the
-/// number read the count itself, which is the stack's own length and is
-/// correct whether a runtime exists or not.
 pub(crate) fn current_modal_depth() -> usize {
     DEPTH_COUNT.with(Cell::get)
 }
@@ -209,8 +185,6 @@ mod tests {
         let inner = register_modal(Rc::new(|| {}));
         assert_eq!(modal_depth(), 2);
 
-        // Dropping a registration is what closes a modal, so the depth the
-        // shell's back handler reads has to follow the drop rather than a call.
         drop(inner);
         assert_eq!(modal_depth(), 1);
         drop(outer);

@@ -1,24 +1,3 @@
-//! Android soft-keyboard visibility and key-event translation.
-//!
-//! Two halves of Android text input live here:
-//!
-//! 1. [`AndroidSoftKeyboard`] implements the framework's
-//!    [`PlatformTextInputHandler`] hook: when a `BasicTextField` gains focus
-//!    the framework calls `show_keyboard` and we open an IME editor session
-//!    through the `CranposeTextInput` Java helper (a real `InputConnection`,
-//!    see [`crate::android_text_input`]); when text-field focus is cleared
-//!    (or goes stale) the session is closed again. Apps that do not compile
-//!    the `cranpose/android/java` sources fall back to the plain
-//!    [`AndroidApp::show_soft_input`] path.
-//!
-//! 2. [`AndroidKeyTranslator`] converts [`android_activity`] `KeyEvent`s into
-//!    the framework [`KeyEvent`] consumed by the focused text field. Printable
-//!    characters are resolved through the device [`KeyCharacterMap`]
-//!    (including dead-key/combining-accent composition), while editing keys
-//!    (backspace, enter, arrows, ...) are mapped to framework [`KeyCode`]s.
-//!    This remains the path for hardware keyboards, and the whole-app
-//!    fallback when the Java IME helper is unavailable.
-
 use std::{
     cell::{Cell, RefCell},
     collections::{HashMap, hash_map::Entry},
@@ -39,25 +18,14 @@ use crate::android_text_input::{
     update_android_text_input_state,
 };
 
-/// Android `KeyEvent` action constants (`ACTION_DOWN` / `ACTION_UP`).
 const ANDROID_KEY_ACTION_DOWN: i32 = 0;
 const ANDROID_KEY_ACTION_UP: i32 = 1;
 
-/// State of the IME editor session shared between the focus-driven
-/// [`AndroidSoftKeyboard`] handler and the main loop (which drains IME events
-/// and pushes editor-state updates back to the Java mirror).
-///
-/// Main-thread only (`Rc`); the cross-thread part is the event queue.
 pub(crate) struct AndroidImeSession {
     app: AndroidApp,
     queue: Arc<AndroidImeEventQueue>,
-    /// A Java editor session is currently open.
     active: Cell<bool>,
-    /// The Java helper class could not be used; stick to the plain
-    /// `show_soft_input` path for the rest of the process lifetime.
     bridge_failed: Cell<bool>,
-    /// Editor state last pushed to (or seeded into) the Java mirror. Used to
-    /// skip redundant JNI round-trips on every frame.
     last_synced: RefCell<Option<ImeEditorState>>,
 }
 
@@ -72,21 +40,15 @@ impl AndroidImeSession {
         })
     }
 
-    /// Whether the Java editor session is open (and therefore editor-state
-    /// syncing is worthwhile).
     pub(crate) fn is_active(&self) -> bool {
         self.active.get() && !self.bridge_failed.get()
     }
 
-    /// Pushes the current editor state to the Java mirror when it changed
-    /// since the last push. Called from the main loop after input handling.
     pub(crate) fn sync_editor_state(&self, state: Option<ImeEditorState>) {
         if !self.is_active() {
             return;
         }
         let Some(state) = state else {
-            // No focused field: the session is about to be closed by the
-            // focus-loss notification; nothing to sync.
             return;
         };
         if self.last_synced.borrow().as_ref() == Some(&state) {
@@ -108,12 +70,7 @@ impl AndroidImeSession {
             return;
         }
 
-        // Seed the Java mirror with the focused field's state. This runs
-        // inside the app context (the focus manager invokes the platform
-        // handler synchronously), so the focused handler is accessible.
         let state = cranpose_ui::text_field_focus::focused_editor_state().unwrap_or_else(|| {
-            // Focus notifications only fire for text fields; an absent state
-            // still opens a session so the keyboard appears.
             ImeEditorState {
                 text: String::new(),
                 selection_start: 0,
@@ -141,7 +98,6 @@ impl AndroidImeSession {
 
     fn hide(&self) {
         if self.bridge_failed.get() {
-            // `false` = do not restrict to implicitly-shown keyboards; always hide.
             self.app.hide_soft_input(false);
             return;
         }
@@ -154,35 +110,18 @@ impl AndroidImeSession {
     }
 
     fn show_soft_input_only(&self) {
-        // `true` requests SHOW_IMPLICIT: the system may coordinate visibility
-        // with hardware keyboards / display modes instead of forcing the IME.
         self.app.show_soft_input(true);
     }
 
-    /// Ensures the soft keyboard is hidden. Called on app pause, on resume with
-    /// no focused field, and once at startup so a relaunch never resurrects the
-    /// keyboard.
-    ///
-    /// When a Java editor session is open it is closed (detaching the invisible
-    /// editor view so the OS cannot restore the IME for it). When none is open
-    /// the keyboard is still force-hidden via `hide_soft_input`: on a COLD start
-    /// the OS may restore the soft keyboard from the previous process even though
-    /// no editor session or focused field exists yet, and only an explicit hide
-    /// dismisses it. Idempotent.
     pub(crate) fn ensure_hidden(&self) {
         if !self.bridge_failed.get() && self.active.get() {
             self.hide();
         } else {
-            // No live Java editor session (cold start, or the `show_soft_input`
-            // fallback path). Force the IME hidden directly. `false` = do not
-            // restrict to implicitly-shown keyboards; always hide.
             self.app.hide_soft_input(false);
         }
     }
 }
 
-/// Shows/hides the Android soft keyboard in response to text-field focus
-/// changes. Installed on the `AppShell` via `set_platform_text_input`.
 pub(crate) struct AndroidSoftKeyboard {
     session: Rc<AndroidImeSession>,
 }
@@ -203,12 +142,6 @@ impl PlatformTextInputHandler for AndroidSoftKeyboard {
     }
 }
 
-/// Translates a raw key event forwarded by the IME through
-/// `InputConnection.sendKeyEvent` (some keyboards deliver backspace/enter
-/// this way even with a real editor attached) into a framework [`KeyEvent`].
-///
-/// Returns `None` for events the text pipeline cannot use; system keys are
-/// never expected through this path and are dropped defensively.
 pub(crate) fn ime_key_event(
     action: i32,
     key_code: i32,
@@ -228,7 +161,6 @@ pub(crate) fn ime_key_event(
     let key_code = map_keycode(keycode);
     let modifiers = map_modifiers(MetaState(meta_state.max(0) as u32));
 
-    // Characters commit on key-down only, mirroring the hardware-key path.
     let text = if event_type == KeyEventType::KeyDown {
         u32::try_from(unicode_char)
             .ok()
@@ -247,17 +179,9 @@ pub(crate) fn ime_key_event(
     Some(KeyEvent::new(key_code, text, modifiers, event_type))
 }
 
-/// Translates Android key events into framework [`KeyEvent`]s.
-///
-/// Keeps per-device [`KeyCharacterMap`]s cached (the lookup crosses JNI) and
-/// carries dead-key state so accent + base-letter sequences compose (for
-/// example `¨` then `o` produces `ö`).
 pub(crate) struct AndroidKeyTranslator {
     app: AndroidApp,
-    /// Character maps by input-device id. `None` caches a failed lookup so a
-    /// misbehaving device does not retry JNI on every keystroke.
     key_maps: HashMap<i32, Option<KeyCharacterMap>>,
-    /// Pending dead-key accent awaiting its base character.
     combining_accent: Option<char>,
 }
 
@@ -270,12 +194,6 @@ impl AndroidKeyTranslator {
         }
     }
 
-    /// Converts an Android key event into a framework key event.
-    ///
-    /// Returns `None` for events the text pipeline cannot use (unknown keys
-    /// producing no character, and the `Multiple` batch action of Android 2.x
-    /// IMEs); the caller should report those as unhandled so the system can
-    /// process them.
     pub(crate) fn translate(
         &mut self,
         event: &android_activity::input::KeyEvent<'_>,
@@ -289,8 +207,6 @@ impl AndroidKeyTranslator {
         let key_code = map_keycode(event.key_code());
         let modifiers = map_modifiers(event.meta_state());
 
-        // Character lookup only for key-down: the text field commits
-        // characters on KeyDown, and dead-key state must not advance twice.
         let text = if event_type == KeyEventType::KeyDown {
             self.key_character(event)
         } else {
@@ -304,8 +220,6 @@ impl AndroidKeyTranslator {
         Some(KeyEvent::new(key_code, text, modifiers, event_type))
     }
 
-    /// Resolves the unicode character for a key-down via the device
-    /// [`KeyCharacterMap`], composing dead keys.
     fn key_character(&mut self, event: &android_activity::input::KeyEvent<'_>) -> String {
         let device_id = event.device_id();
         let key_map = match self.key_maps.entry(device_id) {
@@ -339,16 +253,12 @@ impl AndroidKeyTranslator {
                     None => ch,
                 };
                 if ch.is_control() {
-                    // Control characters (\n, \t, backspace, ...) are handled
-                    // through their KeyCode, mirroring the desktop path where
-                    // only printable keys carry text.
                     String::new()
                 } else {
                     ch.to_string()
                 }
             }
             Ok(KeyMapChar::CombiningAccent(accent)) => {
-                // Dead key: remember the accent, emit no character yet.
                 self.combining_accent = Some(accent);
                 String::new()
             }
@@ -361,10 +271,6 @@ impl AndroidKeyTranslator {
     }
 }
 
-/// Keys the app must leave to the system (navigation, volume, media, ...).
-///
-/// Consuming these would break the back gesture, volume rockers, and media
-/// controls, so the input loop reports them as unhandled without translation.
 pub(crate) fn is_system_key(keycode: Keycode) -> bool {
     matches!(
         keycode,
@@ -401,11 +307,6 @@ fn map_modifiers(meta_state: MetaState) -> Modifiers {
     }
 }
 
-/// Maps Android keycodes onto framework physical key codes.
-///
-/// Only keys the text pipeline reacts to need mapping; everything else falls
-/// through to [`KeyCode::Unknown`] and relies on the character-map text (the
-/// focused field inserts `KeyEvent::text` for unknown key codes).
 fn map_keycode(keycode: Keycode) -> KeyCode {
     match keycode {
         Keycode::A => KeyCode::A,

@@ -1,13 +1,3 @@
-//! Robot test to verify offset modifier positioning in the combined app
-//!
-//! This test validates that the offset modifier correctly positions elements
-//! by navigating to the Modifiers Showcase tab and checking actual positions.
-//!
-//! Run with:
-//! ```bash
-//! cargo run --package desktop-app --example robot_offset_test --features robot-app
-//! ```
-
 use std::time::Duration;
 
 use cranpose::{AppLauncher, SemanticElement};
@@ -54,9 +44,6 @@ fn main() {
             })
             .expect("Failed to observe initial tab bar");
 
-            // =====================================================
-            // Step 1: Navigate to Modifiers Showcase tab
-            // =====================================================
             println!("\n📌 Step 1: Navigate to Modifiers Showcase tab");
             if let Some((x, y, w, h)) = find_button_in_semantics(&robot, "Modifiers Showcase") {
                 let cx = x + w / 2.0;
@@ -80,9 +67,6 @@ fn main() {
             .ok();
             println!("   Tab ready");
 
-            // =====================================================
-            // Step 2: Select "Positioned Boxes" showcase
-            // =====================================================
             println!("\n📌 Step 2: Select 'Positioned Boxes' showcase");
             if let Err(err) = robot.click_by_text("Positioned Boxes") {
                 println!("   ✗ Failed to click Positioned Boxes: {err}");
@@ -99,7 +83,6 @@ fn main() {
             })
             .ok();
 
-            // Validate positioned boxes
             println!("\n   Validating positioned boxes:");
             let semantics = robot.get_semantics().expect("Failed to get semantics");
             if find_exact_text(&semantics, "=== Positioned Boxes ===").is_none() {
@@ -109,21 +92,13 @@ fn main() {
                 std::process::exit(1);
             }
 
-            // The positioned boxes showcase has:
-            // - Box A at offset(20, 20) - Purple, top-left
-            // - Box B at offset(220, 160) - Green, bottom-right
-            // - C at offset(140, 30) - Orange, center-top
-            // - Box D at offset(40, 140) - Blue, center-left
-
             let mut test_passed = true;
 
-            // Box A should be at offset(20, 20)
             if let Some(elem) = find_by_text_recursive(&semantics, "Box A") {
                 println!(
                     "   ✓ Found 'Box A' at x={:.1}, y={:.1}",
                     elem.bounds.x, elem.bounds.y
                 );
-                // Box A is at offset(20, 20), plus container/padding offsets
                 if elem.bounds.x > 0.0 && elem.bounds.x < 500.0 {
                     println!("     ✓ PASS: Box A has positive x offset");
                 } else {
@@ -135,13 +110,11 @@ fn main() {
                 test_passed = false;
             }
 
-            // Box B should be at offset(220, 160) - significantly more to the right
             if let Some(elem) = find_by_text_recursive(&semantics, "Box B") {
                 println!(
                     "   ✓ Found 'Box B' at x={:.1}, y={:.1}",
                     elem.bounds.x, elem.bounds.y
                 );
-                // Box B should be significantly to the right of Box A
                 if let Some(box_a) = find_by_text_recursive(&semantics, "Box A") {
                     if elem.bounds.x > box_a.bounds.x + 100.0 {
                         println!(
@@ -158,7 +131,6 @@ fn main() {
                 test_passed = false;
             }
 
-            // C (small box) should be at offset(140, 30)
             if let Some(elem) = find_by_text_recursive(&semantics, "C") {
                 println!(
                     "   ✓ Found 'C' at x={:.1}, y={:.1}",
@@ -166,7 +138,6 @@ fn main() {
                 );
             }
 
-            // Box D should be at offset(40, 140)
             if let Some(elem) = find_by_text_recursive(&semantics, "Box D") {
                 println!(
                     "   ✓ Found 'Box D' at x={:.1}, y={:.1}",
@@ -184,9 +155,6 @@ fn main() {
 
             std::thread::sleep(Duration::from_secs(1));
 
-            // =====================================================
-            // Step 3: Select "Dynamic Modifiers" showcase
-            // =====================================================
             println!("\n📌 Step 3: Select 'Dynamic Modifiers' showcase");
             if let Err(err) = robot.click_by_text("Dynamic Modifiers") {
                 println!("   ✗ Failed to click Dynamic Modifiers: {err}");
@@ -210,12 +178,8 @@ fn main() {
                 std::process::exit(1);
             }
 
-            // =====================================================
-            // Step 4: Press "Advance Frame" 3 times and validate
-            // =====================================================
             println!("\n📌 Step 4: Press 'Advance Frame' 3 times and validate positions");
 
-            // Get initial position of the "Move" box
             let semantics_before = robot.get_semantics().expect("Failed to get semantics");
             let move_elem_before = find_by_text_recursive(&semantics_before, "Move");
             if let Some(ref elem) = move_elem_before {
@@ -227,7 +191,6 @@ fn main() {
             for i in 1..=3 {
                 println!("\n   --- Frame {} ---", i);
 
-                // Click Advance Frame button
                 if let Err(err) = robot.click_by_text("Advance Frame") {
                     println!("   ✗ Failed to click Advance Frame: {err}");
                     robot.exit().ok();
@@ -236,14 +199,11 @@ fn main() {
                 std::thread::sleep(Duration::from_millis(300));
                 std::thread::sleep(Duration::from_millis(200));
 
-                // Get semantics and check dynamic element positions
                 let semantics = robot.get_semantics().expect("Failed to get semantics");
 
-                // Check the "Move" box position
                 if let Some(elem) = find_by_text_recursive(&semantics, "Move") {
                     println!("   'Move' box at x={:.1}", elem.bounds.x);
 
-                    // Verify the box moved (x should increase by 10)
                     if elem.bounds.x > prev_x {
                         println!("   ✓ PASS: Box moved right");
                     } else {
@@ -255,7 +215,6 @@ fn main() {
                     prev_x = elem.bounds.x;
                 }
 
-                // Check frame indicator text
                 if let Some(elem) = find_by_text_recursive(&semantics, "Frame:") {
                     println!("   Frame indicator: {:?}", elem.text);
                 }

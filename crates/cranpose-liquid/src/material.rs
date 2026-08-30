@@ -17,15 +17,6 @@ use cranpose_ui_graphics::{
 
 use crate::theme::LiquidColors;
 
-// The ambient light environment shared by every glass material. The
-// reference material's bevel arcs rotate with the device: platforms feed
-// the current attitude here (Android: rotation sensor; desktop: the
-// default overhead light) and every glass surface re-lights on the next
-// frame — materials read it in their per-frame effect resolvers.
-//
-// The vector is the light's RETURN direction in screen space (where the
-// wide bright glow lands); the default (0, 1) is the reference's overhead
-// light with the return at the bottom rim.
 thread_local! {
     static GLASS_LIGHT_RETURN: Cell<(f32, f32)> = const { Cell::new((0.0, 1.0)) };
 }
@@ -41,17 +32,10 @@ pub fn glass_light_direction() -> (f32, f32) {
     GLASS_LIGHT_RETURN.with(|cell| cell.get())
 }
 
-/// Corner radius large enough that [`cranpose_ui_graphics::CornerRadii::resolve`]
-/// clamps it to half the shape's size — i.e. a capsule.
 const CAPSULE_CLIP_RADIUS: f32 = 1.0e6;
 
-/// Shader sentinel requesting the capsule radius (resolved against the node's
-/// size at render time; see `liquid_glass.wgsl` cover mode).
 const CAPSULE_SHADER_RADIUS: f32 = -1.0;
 
-/// wcKSRD uses a tightly sampled 9x9 footprint (four half-pixel steps in
-/// either direction). Larger frost radii belong in the renderer's Gaussian
-/// pass; spreading those 81 taps over a large radius produces a visible grid.
 const WCKSRD_OPTICAL_BLUR_RADIUS_PX: f32 = 2.0;
 
 /// The shape of a glass element (also its clip and shadow shape).
@@ -82,7 +66,6 @@ impl LiquidShape {
         LayerShape::Rounded(self.clip_shape())
     }
 
-    /// The radius uniform for the lens shader, in px (negative = capsule).
     fn shader_radius_px(&self, density: f32) -> f32 {
         match self {
             LiquidShape::Capsule | LiquidShape::Circle => CAPSULE_SHADER_RADIUS,
@@ -568,14 +551,7 @@ impl Glass {
         }
     }
 
-    /// Theme-resolved material constants captured at composition time.
     pub(crate) fn resolve(&self, colors: &LiquidColors) -> ResolvedGlass {
-        // Screen-lift keeps the blurred backdrop's colors alive while reading
-        // bright (the reference material is far whiter than an alpha tint
-        // could get without going milky).
-        // The reference menu/bar glass shows blurred content smudges through
-        // its body — lift bright but never opaque; the lens lightens what it
-        // magnifies noticeably (the pressed toggle's green reads lifted).
         let lift = self.lift.unwrap_or(match (self.variant, colors.is_dark) {
             (GlassVariant::Regular, false) => 0.42,
             (GlassVariant::Regular, true) => -0.38,
@@ -657,8 +633,6 @@ impl Default for Glass {
     }
 }
 
-/// A theme-resolved glass material; density and dynamics are applied per
-/// frame in the lazy graphics-layer resolver.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ResolvedGlass {
     pub shape: LiquidShape,
@@ -679,23 +653,16 @@ pub(crate) struct ResolvedGlass {
     pub contrast: f32,
     pub shadow: bool,
     pub clip: bool,
-    /// 0 = surface glass (soft white spec rim); 1 = interactive lens (thin
-    /// bright line + stronger dark outline, chroma does the color).
     pub rim_style: f32,
     pub foreground_luma: f32,
     pub adaptive_frost: f32,
     pub shadow_color: Color,
-    /// Variant-scaled drop shadow geometry: the lens bubble carries a tight
-    /// contact hint, large surfaces a soft wide ambient.
     pub shadow_radius: f32,
     pub shadow_offset_y: f32,
     pub shadow_spread: f32,
 }
 
 impl ResolvedGlass {
-    /// Builds the wcKSRD shader for the current density and
-    /// per-frame dynamics. Cover mode keeps geometry in pixels with the
-    /// container uniform zeroed; the shader owns all backdrop samples.
     pub(crate) fn backdrop_effect(&self, density: f32, dynamics: GlassDynamics) -> RenderEffect {
         self.runtime_effect(density, dynamics, false)
     }
@@ -718,11 +685,6 @@ impl ResolvedGlass {
             .clamp(0.0, 1.0);
         let mut shader = RuntimeShader::new(LIQUID_GLASS_WGSL);
         if let Some(morph) = dynamics.morph.as_ref() {
-            // Morph glass: the container carries the node size in dp and ALL
-            // geometry is dp — the shader divides the renderer-injected node
-            // pixel rect by the container, so the field lands correctly at
-            // any render scale (density-scaled packing broke every capture
-            // whose render scale differed from the platform density).
             let (node_w, node_h) = morph.node_size;
             let (cx, cy, w, h, radius) = morph.primary;
             shader.set_float2(0, node_w.max(1.0), node_h.max(1.0));
@@ -755,10 +717,7 @@ impl ResolvedGlass {
                 shader.set_float2(106, 1.0, 0.0);
                 shader.set_float2(108, 1.0, 1.0);
             }
-            // Bezel in dp: the shader scales by px-per-dp.
         } else {
-            // Cover mode marker: container size stays zero. Geometry is px at
-            // the platform density (node size only known at render time).
             shader.set_float2(0, 0.0, 0.0);
             shader.set_float(6, self.shape.shader_radius_px(density));
         }
@@ -776,17 +735,10 @@ impl ResolvedGlass {
             GLASS_TRANSMISSION_REFRACTION_UNIFORM,
             self.transmission_refraction * activity,
         );
-        // Meniscus energy rides the dome depth like the fold: a shallow
-        // settled bead keeps only a whisper of its rim absorption.
         shader.set_float(
             GLASS_MENISCUS_ABSORPTION_UNIFORM,
             self.meniscus_absorption * press_depth,
         );
-        // Always write optional channels — a conditional write leaves stale
-        // values behind if a shader instance is ever pooled or reused, and
-        // that leak class renders one surface with another's optics.
-        // The fold band is part of the dome: a shallow bead folds shallow,
-        // so the rim band rides the same press-depth as the refraction.
         shader.set_float(
             GLASS_FOLD_DEPTH_UNIFORM,
             self.fold_depth.max(0.0) * press_depth,
@@ -853,12 +805,6 @@ impl ResolvedGlass {
         } else {
             self.blur_radius_dp * density * activity
         };
-        // A blur past the optical cap rides the separable Gaussian pass
-        // ENTIRELY. Stacking the capped optical tap on top of a Gaussian
-        // that is already 3-10x wider moves the effective radius by under a
-        // percent (sigmas add in quadrature) while costing a 25-tap loop on
-        // every glass pixel of every frame — fixed glass over a scrolling
-        // list re-runs it per frame with no cache to hide behind.
         let (wcksrd_blur_radius, gaussian_blur_radius) =
             if requested_blur_radius_px > WCKSRD_OPTICAL_BLUR_RADIUS_PX {
                 (0.0, requested_blur_radius_px)
@@ -890,9 +836,6 @@ impl ResolvedGlass {
         shader.set_float(103, self.shadow_radius);
         shader.set_float(104, self.shadow_offset_y);
         shader.set_float(105, self.shadow_spread);
-        // Morph padding: wobble reach plus how far any scene shape (plus its
-        // glue neck) extends beyond the primary rect — the capture and the
-        // composite surface must cover the whole glued field.
         let morph_pad = dynamics
             .morph
             .as_ref()
@@ -918,12 +861,7 @@ impl ResolvedGlass {
                 morph.wobble_amplitude * 2.0 + morph.bulge_amplitude + shape_reach + glue_pad
             })
             .unwrap_or(0.0);
-        // Paddings are consumed in LOGICAL units by the backdrop capture and
-        // output rects — dp, never density-scaled.
         shader.set_input_padding(self.input_padding() + morph_pad + wcksrd_blur_radius / density);
-        // Morphing glass WRITES outside the node rect (wobble, bulge, glued
-        // neighbors, plus the ~2px antialiased rim); declare it so the
-        // composite scissor doesn't clip the field at the node edge.
         if dynamics.morph.is_some() {
             let shadow_reach = if dynamic_shadow {
                 self.shadow_radius + self.shadow_offset_y.abs() + self.shadow_spread.max(0.0)
@@ -935,12 +873,6 @@ impl ResolvedGlass {
 
         let optical_effect = RenderEffect::runtime_shader(shader);
         if gaussian_blur_radius > f32::EPSILON {
-            // Mirror at the capture boundary: a backdrop capture is clipped
-            // at the surface's own edge (a top nav band's capture cannot
-            // extend above the page), and clamp-to-edge there stretches a
-            // single jittering content row across half the kernel — the
-            // band's top pixels pulse ~12 gray levels per scroll step
-            // (measured live). Mirroring keeps the edge statistics stable.
             RenderEffect::blur_with_edge_treatment(gaussian_blur_radius, TileMode::Mirror)
                 .then(optical_effect)
         } else {
@@ -948,14 +880,7 @@ impl ResolvedGlass {
         }
     }
 
-    /// Backdrop capture padding (px) covering the largest refracted sample
-    /// (see `liquid_glass_input_padding` for the explicit-rect twin). Padded
-    /// for tilt up to ±1 per axis so per-frame tilt never outruns the capture.
     fn input_padding(&self) -> f32 {
-        // wcKSRD maps every refracted coordinate toward the center of the
-        // already-captured backdrop. Only its minimum 9x9 sample footprint
-        // extends beyond that segment; blur and morph reach are added by the
-        // caller from their actual runtime values.
         2.0
     }
 }
@@ -1006,8 +931,6 @@ impl LiquidModifierExt for Modifier {
                 scope.spread = spread;
                 scope.offset.y = offset_y;
                 scope.color = shadow_color;
-                // Glass samples the backdrop behind itself — knock the shape
-                // out of its own shadow so the material stays bright.
                 scope.cutout = true;
             });
         }
@@ -1056,8 +979,6 @@ mod tests {
         assert_eq!(u[GLASS_LIGHT_DIRECTION_UNIFORM], 0.0);
         assert_eq!(u[GLASS_LIGHT_DIRECTION_UNIFORM + 1], 1.0);
 
-        // Rotating the environment (device attitude) re-lights the next
-        // resolved effect.
         set_glass_light_direction((1.0, 0.0));
         let effect = resolved.backdrop_effect(2.0, GlassDynamics::default());
         let u_rotated = terminal_shader(effect);
@@ -1219,10 +1140,6 @@ mod tests {
 
     #[test]
     fn heavy_backdrop_blur_rides_the_gaussian_pass_alone() {
-        // Regular glass at phone density: 8dp x 3 = 24px. The Gaussian
-        // carries the whole radius; the shader's per-pixel tap loop must
-        // stay out of the steady-state frame cost (uniform 93 at zero takes
-        // the single-tap path).
         let effect = Glass::regular()
             .resolve(&light_colors())
             .backdrop_effect(3.0, GlassDynamics::default());
@@ -1245,8 +1162,6 @@ mod tests {
 
     #[test]
     fn featherweight_backdrop_blur_stays_in_the_optical_tap() {
-        // At or below the optical cap there is no Gaussian pass to ride:
-        // the whole radius stays on the shader uniform, chain-free.
         let RenderEffect::Shader { shader } = Glass::regular()
             .blur_radius(0.5)
             .resolve(&light_colors())
@@ -1375,8 +1290,6 @@ mod tests {
         assert_eq!(uniforms[GLASS_REFRACTION_CURVE_UNIFORM], 0.8);
         assert_eq!(uniforms[GLASS_DISPERSION_UNIFORM], 0.42);
         assert_eq!(uniforms[GLASS_TRANSMISSION_REFRACTION_UNIFORM], 1.0);
-        // 3dp x 2 = 6px outgrows the optical cap, so the Gaussian pre-pass
-        // owns the whole radius and the optical tap stays off.
         assert_eq!(uniforms[GLASS_BLUR_RADIUS_UNIFORM], 0.0);
     }
 

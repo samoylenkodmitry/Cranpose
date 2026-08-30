@@ -382,8 +382,6 @@ mod tests {
     use super::*;
     use crate::run_test_composition;
 
-    /// A backend that implements only `perform`, exactly as one written before
-    /// the waveform methods existed would.
     #[derive(Default)]
     struct Rec {
         events: Mutex<Vec<HapticFeedback>>,
@@ -399,7 +397,7 @@ mod tests {
     fn registered_haptics_receives_events() {
         let _guard = crate::registry::test_service_guard();
         clear_platform_haptics();
-        default_haptics().perform(HapticFeedback::Selection); // no-op, no panic
+        default_haptics().perform(HapticFeedback::Selection);
 
         struct Counter(Arc<Mutex<u32>>);
         impl Haptics for Counter {

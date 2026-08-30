@@ -93,9 +93,6 @@ fn snapshot_state_child_apply_after_parent_history() {
     assert_eq!(state.get(), 42);
 }
 
-// Note: Tests for ComposeTestRule and run_test_composition have been moved to
-// the cranpose-testing crate to avoid circular dependencies.
-
 #[composable]
 fn anchor_progress_content(toggle: MutableState<bool>, stats: MutableState<i32>) {
     let show_progress = toggle.value();
@@ -407,5 +404,3 @@ fn dropping_scope_after_state_release_is_a_noop() {
     drop(state);
     drop(scope);
 }
-
-// ============================================================================

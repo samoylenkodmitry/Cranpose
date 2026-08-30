@@ -1,65 +1,25 @@
-//! Hit path tracking for pointer input capture.
-//!
-//! This module implements a Jetpack Compose-style `HitPathTracker` that stores
-//! stable `NodeId` capture paths instead of caching `HitRegion` geometry.
-//!
-//! Key insight from JC: cache **node identity**, not geometry. Fresh geometry
-//! is resolved from the current scene on each dispatch, avoiding stale coordinates
-//! during scroll/layout changes while still preserving per-hit capture ordering.
-
 use std::collections::HashMap;
 
 use cranpose_core::NodeId;
 
-/// Pointer ID type for tracking multi-touch gestures.
-/// Currently we only use a single primary pointer (id=0), but this design
-/// supports future multi-touch expansion.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct PointerId(pub u32);
 
 impl PointerId {
-    /// The primary pointer (mouse button 1, first touch)
     pub const PRIMARY: PointerId = PointerId(0);
 }
 
-/// Tracks which nodes were hit on PointerDown, keyed by pointer ID.
-///
-/// This mirrors Jetpack Compose's `HitPathTracker`:
-/// - Stores stable `NodeId` references, NOT geometry
-/// - Fresh geometry is resolved from the current scene on each dispatch
-/// - Handler closures are preserved because they're `Rc` references
-///
-/// ## Design Rationale
-///
-/// The problem with caching `HitRegion` directly:
-/// - `HitRegion` contains `rect` (geometry) from the frame when Down occurred
-/// - When scroll moves content, layout re-runs, element positions change
-/// - But cached `rect` still has old coordinates
-/// - Local position computation uses stale geometry → wrong coordinates
-///
-/// The solution (matching JC):
-/// - Cache only `NodeId` (stable identity) on Down
-/// - On Move/Up, call `scene.find_target(node_id)` to get fresh `HitRegion`
-/// - Fresh `HitRegion` has current geometry from this frame
-/// - Handler closure is same `Rc`, so internal state (press_position) is preserved
 pub struct HitPathTracker {
-    /// Maps pointer IDs to their capture paths, ordered top-to-bottom by hit z-index.
     paths: HashMap<PointerId, Vec<Vec<NodeId>>>,
 }
 
 impl HitPathTracker {
-    /// Creates a new empty tracker.
     pub fn new() -> Self {
         Self {
             paths: HashMap::new(),
         }
     }
 
-    /// Records which capture paths were hit for a pointer.
-    /// Called on PointerDown after hit-testing.
-    ///
-    /// The `capture_paths` should be ordered by z-index (top-to-bottom). Each
-    /// path is leaf-first, followed by its pointer-input ancestors.
     pub fn add_hit_path(&mut self, pointer: PointerId, capture_paths: Vec<Vec<NodeId>>) {
         if capture_paths.is_empty() {
             self.paths.remove(&pointer);
@@ -68,38 +28,26 @@ impl HitPathTracker {
         }
     }
 
-    /// Gets the cached capture paths for a pointer.
-    /// Returns None if no path exists (no active gesture for this pointer).
     pub fn get_path(&self, pointer: PointerId) -> Option<&[Vec<NodeId>]> {
         self.paths.get(&pointer).map(Vec::as_slice)
     }
 
-    /// Returns the dispatch order for a pointer using a merged capture tree.
-    ///
-    /// Shared ancestors are dispatched after all of their surviving children,
-    /// which preserves hit z-order instead of interleaving ancestors between
-    /// overlapping sibling hits.
     pub fn dispatch_order(&self, pointer: PointerId) -> Option<Vec<NodeId>> {
         self.get_path(pointer).map(dispatch_order_for_paths)
     }
 
-    /// Removes and returns the hit path for a pointer.
-    /// Called on PointerUp/Cancel to end the gesture.
     pub fn remove_path(&mut self, pointer: PointerId) -> Option<Vec<Vec<NodeId>>> {
         self.paths.remove(&pointer)
     }
 
-    /// Returns true if there's an active gesture for this pointer.
     pub fn has_path(&self, pointer: PointerId) -> bool {
         self.paths.contains_key(&pointer)
     }
 
-    /// Clears all tracked paths. Called on gesture cancel.
     pub fn clear(&mut self) {
         self.paths.clear();
     }
 
-    /// Returns true if there are any active gestures being tracked.
     #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.paths.is_empty()
@@ -169,11 +117,6 @@ mod tests {
 
     #[test]
     fn a_dispatch_order_puts_a_shared_ancestor_after_every_child_that_survived() {
-        // A capture path runs leaf-first, so these are two overlapping
-        // siblings, 2 and 4, sharing ancestor 1. The ancestor has to be
-        // dispatched once, after both of them: interleaving it between the
-        // siblings would deliver to a parent before a child it still covers,
-        // which is hit z-order inverted.
         let mut tracker = HitPathTracker::new();
         tracker.add_hit_path(PointerId::PRIMARY, vec![vec![2, 1], vec![4, 1]]);
 

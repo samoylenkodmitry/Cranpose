@@ -1,5 +1,3 @@
-//! External X11 contract for Text tab line-through rendering.
-
 mod output_paths;
 mod text_showcase_external_helpers;
 
@@ -151,9 +149,6 @@ fn strikeout_row_metrics(
                 count += 1;
             }
         }
-        // The decoration core is 1px at UI text sizes — with pass-through
-        // colors its anti-aliasing halo sits below the brightness threshold,
-        // so a single lit row within the window is the line.
         *bright_slot = count >= 1;
     }
 

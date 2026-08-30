@@ -1,4 +1,3 @@
-//! Android implementation of the framework host services.
 #![allow(unsafe_code)]
 use std::sync::Arc;
 
@@ -60,15 +59,10 @@ impl HostController for AndroidHost {
     }
 
     fn durable_save_deadline(&self) -> std::time::Duration {
-        // `onPause` is the last callback guaranteed before the process may be
-        // killed, and it is on the critical path of the transition, so the
-        // budget is short; overruns keep running under the background-work
-        // lease the foreground service holds.
         std::time::Duration::from_secs(2)
     }
 }
 
-/// Reads the packaged application id (the Android package name).
 fn package_name(app: &android_activity::AndroidApp) -> Option<String> {
     with_android_activity_env(app, |env, activity| {
         let value = env

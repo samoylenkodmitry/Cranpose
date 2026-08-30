@@ -971,13 +971,6 @@ fn idle_ui_task_wakes_for_an_update_without_scheduling_a_frame() {
     assert!(!settled.needs_frame);
 }
 
-/// A device trace of a Library scroll showed 13 of 155 frames answering a
-/// bare render invalidation — every tracked dirty set empty — with a full
-/// scene rebuild costing 11 ms of scene time apiece. A render invalidation
-/// with nothing dirty is a frame REQUEST: the retained scene must be
-/// re-presented, and no scene recording of any kind may run. Everything
-/// that changes recorded draws names its node — draw observations for
-/// snapshot reads, scoped repasses for caret, focus, and press state.
 #[test]
 fn a_bare_render_invalidation_re_presents_without_scene_work() {
     let _guard = test_guard();
@@ -1007,10 +1000,6 @@ fn a_bare_render_invalidation_re_presents_without_scene_work() {
         shell.update();
     }
     assert!(rebuilds.get() > 0, "settling must have built the scene");
-    // The first frame request after a build legitimately flushes the
-    // needs_redraw flags composition left behind (a scoped re-record of
-    // those nodes). Steady state — the shape the device traces show — is
-    // every request after that.
     shell.debug_enter_app_context(cranpose_ui::request_render_invalidation);
     shell.update();
     let settled = (rebuilds.get(), updates.get(), visual_updates.get());
@@ -1087,7 +1076,6 @@ fn app_shell_font_scale_is_per_app_context_and_asks_for_a_frame() {
     second.update();
     assert_eq!(first.debug_current_font_scale(), 1.0);
 
-    // The user moved the system font-size slider.
     first.set_font_scale(1.3);
     assert_eq!(first.debug_current_font_scale(), 1.3);
     assert_eq!(second.debug_current_font_scale(), 1.0);
@@ -1100,12 +1088,9 @@ fn app_shell_font_scale_is_per_app_context_and_asks_for_a_frame() {
     first.update();
     assert!(!first.needs_redraw());
 
-    // Setting the same value again is not a change and must not cost a frame.
     first.set_font_scale(1.3);
     assert!(!first.needs_redraw());
 
-    // Values no platform reports are refused rather than allowed to collapse
-    // every layout that reads them.
     first.set_font_scale(0.0);
     assert_eq!(first.debug_current_font_scale(), 1.0);
     first.set_font_scale(f32::NAN);
@@ -1643,9 +1628,6 @@ impl Renderer for ScopedUpdateCountingRenderer {
             )
         });
         if !updated {
-            // A failed scoped update falls back to a whole-scene rebuild, and
-            // that IS a rebuild: tests asserting `rebuilds == 0` mean "the
-            // scoped path carried it", so the fallback must not hide here.
             self.rebuilds.set(self.rebuilds.get() + 1);
             self.scene.clear();
             if let Some(graph) =
@@ -1675,9 +1657,6 @@ impl Renderer for ScopedUpdateCountingRenderer {
             )
         });
         if !updated {
-            // A failed scoped update falls back to a whole-scene rebuild, and
-            // that IS a rebuild: tests asserting `rebuilds == 0` mean "the
-            // scoped path carried it", so the fallback must not hide here.
             self.rebuilds.set(self.rebuilds.get() + 1);
             self.scene.clear();
             if let Some(graph) =
@@ -1961,8 +1940,6 @@ fn one_shot_frame_request_content() {
     );
 }
 
-/// A game loop with nothing to say: it holds a frame await open forever and
-/// never writes state. Ticking it is mandatory; presenting it is waste.
 #[composable]
 fn silent_frame_loop_content() {
     launched_effect_async_impl(
@@ -2646,8 +2623,6 @@ impl cranpose_ui::PlatformTextInputHandler for SoftKeyboardProbe {
     }
 }
 
-/// Text-field focus transitions must reach the installed platform handler:
-/// this is what opens/closes the Android soft keyboard.
 #[test]
 fn text_field_focus_drives_platform_soft_keyboard() {
     let _guard = test_guard();
@@ -2670,9 +2645,6 @@ fn text_field_focus_drives_platform_soft_keyboard() {
     assert_eq!(*keyboard.calls.borrow(), vec!["show", "hide"]);
 }
 
-/// When the focused field disappears without an explicit clear_focus (for
-/// example the composition removed it), the next key event's stale-focus
-/// detection must hide the soft keyboard.
 #[test]
 fn key_event_after_field_removal_hides_soft_keyboard() {
     let _guard = test_guard();
@@ -2693,7 +2665,6 @@ fn key_event_after_field_removal_hides_soft_keyboard() {
                 0,
             );
         });
-        // focus_flag drops here: the focus manager's weak reference goes stale.
     }
 
     let event = KeyEvent::key_down(KeyCode::A, "a");
@@ -2701,8 +2672,6 @@ fn key_event_after_field_removal_hides_soft_keyboard() {
     assert_eq!(*keyboard.calls.borrow(), vec!["show", "hide"]);
 }
 
-/// Even without further key events, the per-frame stale-focus check must
-/// release the soft keyboard once the focused field leaves the composition.
 #[test]
 fn frame_update_after_field_removal_hides_soft_keyboard() {
     let _guard = test_guard();
@@ -2723,7 +2692,6 @@ fn frame_update_after_field_removal_hides_soft_keyboard() {
                 0,
             );
         });
-        // focus_flag drops here: the focus manager's weak reference goes stale.
     }
     assert_eq!(*keyboard.calls.borrow(), vec!["show"]);
 
@@ -2751,9 +2719,6 @@ fn ime_delete_surrounding_marks_dirty() {
     shell.debug_enter_app_context(cranpose_ui::text_field_focus::clear_focus);
 }
 
-/// The InputConnection-facing shell methods (finish-composing, composing
-/// region, editor-state snapshot, focus clearing for the Done action) must
-/// dispatch to the focused field and drive the platform keyboard.
 #[test]
 fn ime_session_shell_methods_dispatch_to_focused_field() {
     let _guard = test_guard();
@@ -2764,7 +2729,6 @@ fn ime_session_shell_methods_dispatch_to_focused_field() {
     let keyboard = Rc::new(SoftKeyboardProbe::default());
     shell.set_platform_text_input(keyboard.clone());
 
-    // Without a focused field nothing dispatches.
     assert!(!shell.on_ime_finish_composing());
     assert!(!shell.on_ime_set_composing_region(0, 1));
     assert!(!shell.on_ime_set_selection(0, 1));
@@ -2783,7 +2747,6 @@ fn ime_session_shell_methods_dispatch_to_focused_field() {
     assert!(shell.on_ime_set_composing_region(2, 5));
     assert_eq!(handler.last_composing_region.get(), Some((2, 5)));
 
-    // Gboard's spacebar-swipe scrubs the caret via setSelection.
     assert!(shell.on_ime_set_selection(3, 3));
     assert_eq!(handler.last_selection.get(), Some((3, 3)));
 
@@ -2793,7 +2756,6 @@ fn ime_session_shell_methods_dispatch_to_focused_field() {
     assert_eq!(state.composition, Some((0, 3)));
     assert!(state.single_line);
 
-    // The IME Done action clears focus, which hides the soft keyboard.
     shell.clear_text_field_focus();
     assert!(!*focus_flag.borrow());
     assert_eq!(*keyboard.calls.borrow(), vec!["show", "hide"]);
@@ -3461,24 +3423,6 @@ fn consumed_child_drag_does_not_scroll_parent_vertical_scroll() {
     );
 }
 
-/// Regression test for reversed consecutive flings on Android
-/// (device report: "several flings in one direction — one of them wrongly
-/// goes to the opposite direction").
-///
-/// Root cause: the Android runtime dispatched the ACTION_UP sample as a
-/// trailing Move (`set_cursor_at_time` before `pointer_released_at_time`).
-/// Lift-off positions routinely roll back a few dp against the travel
-/// direction as the finger peels off; fed into the impulse velocity tracker
-/// as a final sample, a >=3dp roll-back flips the sign of the whole computed
-/// gesture velocity, so the fling runs backwards. The fix releases via
-/// `pointer_released_at_position_time`, which never feeds the up sample into
-/// velocity tracking (matching Jetpack Compose).
-///
-/// This test replays three identical Android-timed flings (8ms input samples,
-/// ~104ms gesture, ~300ms between gestures, previous fling still animating
-/// when the next finger lands) with a realistic 4dp lift-off roll-back, and
-/// asserts every computed velocity has the same sign and every fling keeps
-/// scrolling in the gesture direction.
 #[test]
 fn android_style_consecutive_flings_keep_direction() {
     let _guard = test_guard();
@@ -3503,16 +3447,13 @@ fn android_style_consecutive_flings_keep_direction() {
         "probe content must leave plenty of scroll room"
     );
 
-    // Android uptime-based MotionEvent timestamps (arbitrary base).
     let mut event_ms = 5_000_000i64;
     let mut velocities = Vec::new();
 
     for gesture in 0..3 {
-        // ACTION_DOWN: the runtime updates the cursor, then presses.
         shell.set_cursor_at_time(160.0, 600.0, Some(event_ms));
         shell.pointer_pressed_at_time(Some(event_ms));
 
-        // Finger flicks UP at ~1000 dp/s: 12 samples, 8dp every 8ms.
         let mut y = 600.0f32;
         for _ in 0..12 {
             event_ms += 8;
@@ -3520,8 +3461,6 @@ fn android_style_consecutive_flings_keep_direction() {
             shell.set_cursor_at_time(160.0, y, Some(event_ms));
         }
 
-        // ACTION_UP one input period later, with a 4dp lift-off roll-back
-        // (the finger peels off and the reported centroid slips downward).
         event_ms += 8;
         shell.pointer_released_at_position_time(160.0, y + 4.0, Some(event_ms));
 
@@ -3529,8 +3468,6 @@ fn android_style_consecutive_flings_keep_direction() {
 
         let offset_at_release = scroll_state.value_non_reactive();
 
-        // ~300ms pass before the next finger lands; the fling keeps
-        // animating during that window (its duration is >500ms).
         for _ in 0..19 {
             frame_ns += 16_000_000;
             shell.update_at_frame_time_nanos(frame_ns);
@@ -3554,8 +3491,6 @@ fn android_style_consecutive_flings_keep_direction() {
     );
 }
 
-/// End-to-end pinch: two Android fingers routed through the shell's primary
-/// and secondary pointer paths must drive `ZoomState` on a zoomable element.
 #[test]
 fn two_finger_pinch_reaches_zoomable_state_through_shell() {
     let _guard = test_guard();
@@ -3578,18 +3513,15 @@ fn two_finger_pinch_reaches_zoomable_state_through_shell() {
 
     let mut event_ms = 9_000_000i64;
 
-    // First finger lands (primary pointer, id 0).
     shell.set_cursor_at_time(140.0, 300.0, Some(event_ms));
     shell.pointer_pressed_at_time(Some(event_ms));
 
-    // Second finger lands 80dp to the right (secondary pointer).
     event_ms += 16;
     assert!(
         shell.secondary_pointer_pressed(2, 220.0, 300.0, Some(event_ms)),
         "secondary pointer must reach the primary gesture's hit path"
     );
 
-    // Pinch out: the second finger doubles the spread over a few samples.
     for step in 1..=5i64 {
         event_ms += 8;
         shell.secondary_pointer_moved(2, 220.0 + step as f32 * 16.0, 300.0, Some(event_ms));
@@ -3607,7 +3539,6 @@ fn two_finger_pinch_reaches_zoomable_state_through_shell() {
     );
 }
 
-/// Ctrl+wheel zoom steps must reach a zoomable element under the cursor.
 #[test]
 fn pointer_zoomed_reaches_zoomable_state() {
     let _guard = test_guard();
@@ -4133,9 +4064,6 @@ fn keyed_page_switch_app(
         draw_observed_width_app(width_state);
         cranpose_core::with_key(&tab.get(), || {
             if tab.get() == 0 {
-                // Page A is deliberately larger than page B so the swap can
-                // not recycle every removed node id into the new page: the
-                // uncovered layers are the ones that ghost.
                 Column(Modifier::empty(), ColumnSpec::default(), || {
                     for index in 0..3 {
                         Box(
@@ -4158,8 +4086,6 @@ fn keyed_page_switch_app(
                     }
                 });
             }
-            // tab != 0 composes nothing: the removal is covered by no
-            // insertion, so no dirty id can accidentally patch it away.
         });
     });
 }
@@ -4197,12 +4123,6 @@ fn graph_layer_contains_rect_color(
     false
 }
 
-/// A keyed subtree swap (tab switch) landing on the same frame as pending
-/// scoped layout repasses must still evict the removed subtree's layers from
-/// the incrementally-updated render graph. This is the presented-path
-/// cross-tab ghost: the scene update was scoped to the repass nodes, the
-/// removed page's layers were never dropped, and they kept compositing every
-/// frame until an unrelated full rebuild (e.g. a window resize).
 #[test]
 fn keyed_subtree_swap_with_pending_scoped_repass_evicts_stale_layers() {
     let _guard = test_guard();
@@ -4250,7 +4170,6 @@ fn keyed_subtree_swap_with_pending_scoped_repass_evicts_stale_layers() {
         "page A must be in the graph after the initial frame"
     );
 
-    // Learn the sibling's node id from a draw-only repass frame.
     let width_state = width_holder
         .borrow()
         .as_ref()
@@ -4268,9 +4187,6 @@ fn keyed_subtree_swap_with_pending_scoped_repass_evicts_stale_layers() {
     visual_updates.set(0);
     last_dirty_nodes.borrow_mut().clear();
 
-    // Switch the keyed page while a scoped layout repass is pending on the
-    // sibling — the exact frame shape produced by "scroll (or a text field
-    // measuring) + tab click" in the demo.
     let tab = tab_holder
         .borrow()
         .as_ref()
@@ -4386,17 +4302,6 @@ fn lazy_column_scroll_repass_uses_scoped_renderer_update_without_stale_rows() {
     );
 }
 
-/// A steady-state lazy-list scroll must reach the renderer as a *scoped*
-/// update, never a full-tree rebuild.
-///
-/// `LazyColumn` invalidates through `schedule_measure_repass`, and the scene
-/// phase only ever learns node ids from *layout* repasses. When the measure
-/// repass ids are dropped the scene phase sees no dirty nodes at all, decides
-/// the whole scene is dirty, and rebuilds the graph from the composition root
-/// on every scrolled frame — O(whole app) where the work is O(visible rows).
-/// The sibling `graphics_layer` repass tests below already assert this bound;
-/// the lazy list is the path that lost it, and it is the path every scrolling
-/// screen in a real app takes.
 #[test]
 fn lazy_column_scroll_never_rebuilds_the_whole_scene() {
     let _guard = test_guard();
@@ -4425,8 +4330,6 @@ fn lazy_column_scroll_never_rebuilds_the_whole_scene() {
         .with(|slot| *slot.borrow())
         .expect("lazy scroll probe should expose its list state");
 
-    // Several steady-state scroll frames, so this cannot pass on a first-frame
-    // special case: every one of them must stay scoped.
     for step in 0..3 {
         rebuilds.set(0);
         updates.set(0);
@@ -4936,19 +4839,11 @@ fn AppShellGrowingFirstRow() {
     let expanded = rememberMutableStateOf(|| false);
     APP_SHELL_EXPANSION_STATE.with(|slot| *slot.borrow_mut() = Some(expanded));
     let list_state = rememberLazyListState();
-    // A lazy list, not a plain Column: each item composes in its own scope, so
-    // growing item 0 recomposes NOTHING in its siblings — exactly the
-    // isolation that makes the moved sibling invisible to compose-derived
-    // dirt. A plain Column would recompose the whole body and hide the hole.
     LazyColumn(
         Modifier::empty().fill_max_size(),
         list_state,
         LazyColumnSpec::default(),
         |scope| {
-            // Each item wraps its content in its own Column, like a real list
-            // row: the strip's attach then lands on item 0's wrapper, not on
-            // the lazy container, so no structural dirt reaches the node whose
-            // re-lowering would refresh the siblings.
             scope.items(3, move |index| {
                 Column(Modifier::empty(), ColumnSpec::default(), move || {
                     if index == 0 {
@@ -5006,13 +4901,6 @@ const ORDINARY_SIBLING_COLOR: cranpose_ui::Color = cranpose_ui::Color(0.9, 0.05,
 #[composable]
 #[allow(non_snake_case)]
 fn AppShellOrdinaryColumnSiblings() {
-    // A plain Column, NOT a lazy list: ordinary children are placed through
-    // the layout engine's direct `LayoutState` handle, not through the node
-    // setters. The growth state is read inside the grower's own scope, so the
-    // siblings recompose nothing when it flips. The moved sibling is a solid
-    // Box, NOT a Text: re-measuring a text re-shapes it and schedules a draw
-    // repass, which sneaks the row into the scene scope and hides a missing
-    // geometry record — a plain box has no such rescue.
     Column(
         Modifier::empty().fill_max_size(),
         ColumnSpec::default(),
@@ -5050,12 +4938,6 @@ fn AppShellSizeReactiveTopology() {
     );
 }
 
-/// The correctness test for replacing a `BoxWithConstraints` wrapper with
-/// `report_size_state`: the work the wrapper was doing is switching composed
-/// topology when the available size crosses a threshold, so THAT is what the
-/// replacement must be shown to still do — and a resize must SETTLE, because
-/// an unconditional state write during measure would recompose, re-measure
-/// and loop, a frame-rate collapse no pixel assertion sees.
 #[test]
 fn size_reactive_topology_switches_on_resize_and_settles() {
     let _guard = test_guard();
@@ -5115,10 +4997,6 @@ fn size_reactive_topology_switches_on_resize_and_settles() {
 #[allow(non_snake_case)]
 fn AppShellSelfReferentialSize() {
     let size = rememberMutableStateOf(cranpose_ui::Size::default);
-    // The onSizeChanged self-reference hazard, on purpose: the reported size
-    // decides the content's height, so the node's own measured size flips
-    // between two values forever — a cross-frame livelock no equality gate
-    // can decide, because every write IS a genuine change.
     let height = if size.get().height < 100.0 {
         200.0
     } else {
@@ -5137,10 +5015,6 @@ fn AppShellSelfReferentialSize() {
     );
 }
 
-/// The class the settle test cannot see: self-referential sizing is a
-/// livelock of genuine changes, one recomposition per frame forever, with no
-/// diagnostic in release. The debug ceiling converts it into a panic naming
-/// the two alternating sizes.
 #[test]
 #[cfg_attr(
     not(debug_assertions),
@@ -5295,9 +5169,6 @@ fn a_scroll_measure_repass_does_not_recompose_a_subcompose_slot_that_read_no_scr
         measures_after - settled_measures,
     );
 
-    // Debug builds shadow-compose every skipped slot to catch stale
-    // non-reactive reads, so the closure legitimately re-runs there; the
-    // no-recompose guarantee on the closure itself is release behavior.
     #[cfg(not(debug_assertions))]
     {
         let composes_after = CLEAN_SLOT_COMPOSE_COUNT.with(Cell::get);
@@ -5777,11 +5648,6 @@ fn graph_scene_solid_rect_y(
     walk(&graph.root, 0.0, color)
 }
 
-/// Finding 1 of the #538 review: ordinary (non-lazy) children are placed by
-/// writing the shared `LayoutState` directly, bypassing the instrumented node
-/// setters — so a sibling moved by an ordinary row's growth recorded nothing
-/// and kept stale scene geometry exactly like the lazy case this branch
-/// already fixes.
 #[test]
 fn sibling_in_an_ordinary_column_moves_in_the_scene_when_a_row_grows() {
     let _guard = test_guard();
@@ -5864,12 +5730,6 @@ fn AppShellGrowerAboveNestedLazy() {
     );
 }
 
-/// The mutation this pins: strip the recording from ONLY the
-/// SubcomposeLayoutNode setters and every other test in this diff stays
-/// green, because they move ordinary rows inside a stationary lazy list.
-/// Here the moving node IS a SubcomposeLayoutNode — a nested LazyColumn
-/// pushed down by an ordinary sibling's growth — so its content drifts if
-/// that half of the recorder disappears.
 #[test]
 fn a_nested_lazy_list_moves_in_the_scene_when_the_row_above_grows() {
     let _guard = test_guard();
@@ -5929,8 +5789,6 @@ fn graph_scene_text_y(
         offset_y: f32,
         needle: &str,
     ) -> Option<f32> {
-        // A layer's position lives in its transform (pure translation in this
-        // scene); local_bounds always starts at the origin.
         let base = offset_y
             + layer
                 .transform_to_parent
@@ -5961,15 +5819,6 @@ fn graph_scene_text_y(
     walk(&graph.root, 0.0, needle)
 }
 
-/// One wrong assumption implemented twice: "the child list did not change,
-/// therefore there is nothing to invalidate". A child can grow without any
-/// membership changing, and a sibling pushed down by that growth recomposes
-/// nothing and raises no repass of its own — the only party that knows it
-/// moved is the layout pass that moved it. This is the scene-side enforcement
-/// point of that invariant (the core-side one is
-/// `reattaching_a_dirty_child_still_bubbles_to_ancestors`): the moved
-/// sibling's geometry must reach the scoped scene update, without the rescue
-/// of a full rebuild.
 #[test]
 fn sibling_moved_by_another_rows_growth_reaches_the_scoped_scene_update() {
     let _guard = test_guard();
@@ -6141,15 +5990,6 @@ fn app_shell_new_drains_root_render_requests_before_first_frame() {
 
 #[test]
 fn first_update_after_construction_reports_no_visual_work() {
-    // Regression guard for the web "white until scroll" bug.
-    //
-    // `AppShell::new*` eagerly builds the scene during construction
-    // (`process_frame`), so the *first* platform `update()` finds a clean tree
-    // and reports `visual_changed: false`. A platform render loop that gates the
-    // surface present solely on `visual_changed` would therefore never present
-    // the freshly built scene until some later event marks the tree dirty -
-    // leaving the canvas blank. Platforms must instead force the initial present
-    // via a `surface_dirty` flag (see `wgpu_surface::surface_present_required`).
     let _guard = test_guard();
     let root_key = location_key(file!(), line!(), column!());
     let rebuilds = Rc::new(Cell::new(0));
@@ -6179,12 +6019,6 @@ fn first_update_after_construction_reports_no_visual_work() {
 
 #[test]
 fn an_open_frame_await_asks_for_ticks_but_not_for_pixels() {
-    // `needs_update` and `needs_redraw` must stay separate predicates. Ending
-    // both in `Composition::should_render` makes an app that holds a frame
-    // await open - every game loop, every polling effect - report "redraw
-    // needed" on every frame forever, and a platform present gate built from
-    // that presents a byte-identical frame 60 times a second on a screen
-    // standing perfectly still.
     let _guard = test_guard();
     let root_key = location_key(file!(), line!(), column!());
     let rebuilds = Rc::new(Cell::new(0));
@@ -6194,7 +6028,6 @@ fn an_open_frame_await_asks_for_ticks_but_not_for_pixels() {
         silent_frame_loop_content,
     );
 
-    // Let the effect start and park on its first await.
     for _ in 0..3 {
         shell.update();
     }
@@ -6352,10 +6185,6 @@ fn a_press_on_a_pacing_control_changes_the_mode_whatever_produced_the_press() {
         .dev_overlay_control_center(FramePacingMode::NoVsync)
         .expect("the overlay must lay out a control for every pacing mode");
 
-    // A robot injects presses straight into the shell, exactly like a touch
-    // screen does. When the overlay was hit-tested by the desktop shell's mouse
-    // path instead, every one of those presses went through the controls into
-    // the app underneath and the mode never changed.
     shell.set_cursor(x, y);
     assert!(
         shell.pointer_pressed(),
@@ -6369,7 +6198,6 @@ fn a_press_on_a_pacing_control_changes_the_mode_whatever_produced_the_press() {
         "the overlay has to redraw to show which mode is now selected"
     );
 
-    // A press that misses every control is the app's, as before.
     shell.update();
     shell.set_cursor(x, y + 400.0);
     shell.pointer_pressed();
@@ -6842,8 +6670,6 @@ fn draw_refresh_scope_only_contains_dirty_ancestors() {
 
     shell.update();
     let layout_tree = shell.layout_tree().expect("expected layout tree");
-    // The shell wraps app content in a top-level `PopupHost` overlay Box, so
-    // the app's own root sits at path `[0]` under the true layout root.
     let root = node_id_at_path(layout_tree.root(), &[0]);
     let left = node_id_at_path(layout_tree.root(), &[0, 0]);
     let left_leaf = node_id_at_path(layout_tree.root(), &[0, 0, 0]);
@@ -6886,8 +6712,6 @@ fn layout_bounds_index_matches_cached_layout_tree() {
             .layout_tree
             .as_ref()
             .expect("expected cached layout tree");
-        // App content sits at `[0]` beneath the shell's top-level `PopupHost`
-        // overlay Box (the true layout root).
         let root = layout_box_at_path(layout_tree.root(), &[]);
         let left_leaf = layout_box_at_path(layout_tree.root(), &[0, 0, 0]);
         let right = layout_box_at_path(layout_tree.root(), &[0, 1]);
@@ -8767,8 +8591,6 @@ thread_local! {
         const { RefCell::new(Vec::new()) };
 }
 
-/// A full-screen pointer surface — the shape of a round-watch game that draws
-/// its whole UI into one canvas and derives its geometry from the scope size.
 #[composable]
 fn app_shell_pointer_scope_size_probe() {
     Box(
@@ -8797,13 +8619,6 @@ fn app_shell_pointer_scope_size_probe() {
     );
 }
 
-/// `PointerInputScope::size()` must report the node's real size in the running
-/// shell — the per-frame scene build is the only pass that publishes it there
-/// (`build_layout_tree` is off in the app runtime).
-///
-/// Regression: the size was permanently `0x0`, so a handler that treats
-/// `size / 2` as its centre took its geometry from the node's top-left corner
-/// instead (a centre tap on a round watch face read as a full-radius offset).
 #[test]
 fn pointer_input_scope_reports_node_size_in_running_shell() {
     let _guard = test_guard();
@@ -8825,8 +8640,6 @@ fn pointer_input_scope_reports_node_size_in_running_shell() {
         .with(|slot| slot.borrow().clone())
         .expect("pointer input handler should have started");
 
-    // Read before any pointer event: Compose handlers read `size` before they
-    // await, so a laid-out node must already report its size.
     assert_eq!(
         scope.size(),
         Size {
@@ -8836,8 +8649,6 @@ fn pointer_input_scope_reports_node_size_in_running_shell() {
         "scope.size() must report the node's size after the first frame, with no pointer event"
     );
 
-    // A tap at the true centre must land at `size / 2` in the handler's own
-    // coordinates — the invariant the broken `0x0` size destroyed.
     assert!(
         shell.set_cursor(204.0, 204.0),
         "cursor should hover the full-screen pointer surface"
@@ -8866,7 +8677,6 @@ fn pointer_input_scope_reports_node_size_in_running_shell() {
         "a centre tap must land at size/2 in scope coordinates, got {event_position:?} for {event_size:?}"
     );
 
-    // The same scope must follow a resize.
     shell.set_viewport(300.0, 200.0);
     shell.update();
     assert_eq!(
@@ -8890,17 +8700,10 @@ thread_local! {
     static APP_SHELL_ROUTER_ARENA_DOWNS: Cell<u32> = const { Cell::new(0) };
 }
 
-/// A screen router: one full-screen gesture surface for a ring menu and
-/// another for a game arena, picked by a plain `if`/`else`, each asking for
-/// gestures with `pointer_input((), ..)` — the key that means "this gesture
-/// outlives recomposition". Compose's compiler plugin gives each branch its
-/// own group, so switching branches is a new node and a new gesture.
 #[composable]
 fn app_shell_router_branch_probe() {
     let arena = rememberMutableStateOf(|| false);
     APP_SHELL_ROUTER_ARENA.with(|slot| *slot.borrow_mut() = Some(arena));
-    // Each branch is its own call site, the way an app writes two different
-    // screen composables — the only thing they share is the slot position.
     if arena.get() {
         Box(
             Modifier::empty().fill_max_size().pointer_input(
@@ -8946,17 +8749,6 @@ fn app_shell_router_branch_probe() {
     }
 }
 
-/// Reported from a Pixel Watch 3: starting the Daily run from cranorbit's
-/// title ring left the ball parked on the paddle, and no number of taps
-/// launched it, while the same tap worked in Campaign. Campaign reaches the
-/// arena through an intervening screen; Daily goes straight from the ring to
-/// the arena, and that is the branch switch below.
-///
-/// `pointer_input` restarts its handler only when the key changes, which is
-/// Compose's contract. It holds only because Compose gives each conditional
-/// branch its own group, so the branch that leaves takes its node with it.
-/// Reuse the node across the switch and the departed branch's gesture loop is
-/// still the one reading the events.
 #[test]
 fn a_branch_switch_hands_the_gesture_to_the_branch_that_is_on_screen() {
     let _guard = test_guard();
@@ -8996,7 +8788,6 @@ fn a_branch_switch_hands_the_gesture_to_the_branch_that_is_on_screen() {
         "the menu owns the gesture while the menu is what is on screen"
     );
 
-    // The menu's own tap is what moves to the arena.
     APP_SHELL_ROUTER_ARENA
         .with(|slot| *slot.borrow())
         .expect("the probe publishes its route")
@@ -9495,8 +9286,6 @@ thread_local! {
         const { RefCell::new(None) };
 }
 
-/// A probe that records the `PointerSource` of every pointer-down it receives,
-/// exposing it via a thread-local so the test can assert what the shell stamped.
 fn app_shell_pointer_source_probe() {
     let captured = Rc::new(Cell::new(PointerSource::Unknown));
     POINTER_SOURCE_PROBE.with(|slot| *slot.borrow_mut() = Some(Rc::clone(&captured)));
@@ -9527,9 +9316,6 @@ fn app_shell_pointer_source_probe() {
     );
 }
 
-/// A probe that records the `Modifiers` of every pointer-down it receives via
-/// `Modifier::pointer_input` -- the surface an app reads to implement
-/// shift/ctrl-click multi-select without touching a platform API.
 fn app_shell_pointer_modifiers_probe() {
     let captured = Rc::new(Cell::new(None::<Modifiers>));
     POINTER_MODIFIERS_PROBE.with(|slot| *slot.borrow_mut() = Some(Rc::clone(&captured)));
@@ -9654,7 +9440,6 @@ fn shell_stamps_pointer_source_on_dispatched_events() {
         .with(|slot| slot.borrow().as_ref().map(Rc::clone))
         .expect("probe should install its capture cell");
 
-    // A touch press must reach the handler stamped as Touch.
     shell.set_pointer_source(PointerSource::Touch);
     assert!(shell.set_cursor(50.0, 50.0));
     assert!(shell.pointer_pressed(), "down should hit the probe");
@@ -9665,7 +9450,6 @@ fn shell_stamps_pointer_source_on_dispatched_events() {
     );
     shell.pointer_released();
 
-    // A subsequent mouse press updates the stamped source.
     shell.set_pointer_source(PointerSource::Mouse);
     assert!(shell.set_cursor(50.0, 50.0));
     assert!(shell.pointer_pressed());
@@ -9678,14 +9462,6 @@ fn shell_stamps_pointer_source_on_dispatched_events() {
 
 #[test]
 fn shift_click_reaches_the_pointer_input_handler_through_the_shell() {
-    // Pins the bug: PointerEvent carried no keyboard-modifier state, so an app
-    // implementing shift/ctrl-click multi-select had to read the keyboard
-    // itself through a platform API. This proves the whole path instead: the
-    // platform tells the shell what is held via `set_modifiers` (the same
-    // per-shell cell the wheel path's `WheelScroll::with_modifiers` already
-    // threads through), and a plain `Modifier::pointer_input` handler -- the
-    // surface every app already reads pointer events from -- sees it on the
-    // dispatched event with no platform-specific code of its own.
     let _guard = test_guard();
     POINTER_MODIFIERS_PROBE.with(|slot| slot.borrow_mut().take());
 
@@ -9703,8 +9479,6 @@ fn shift_click_reaches_the_pointer_input_handler_through_the_shell() {
         .with(|slot| slot.borrow().as_ref().map(Rc::clone))
         .expect("probe should install its capture cell");
 
-    // Before any platform ever reports modifiers, a press must arrive with
-    // `None` -- honestly "unreported", never a silently wrong "none held".
     assert_eq!(shell.modifiers(), None);
     assert!(shell.set_cursor(50.0, 50.0));
     assert!(shell.pointer_pressed(), "down should hit the probe");
@@ -9715,7 +9489,6 @@ fn shift_click_reaches_the_pointer_input_handler_through_the_shell() {
     );
     shell.pointer_released();
 
-    // A shift-held press must reach the handler with shift set.
     shell.set_modifiers(Modifiers {
         shift: true,
         ..Modifiers::NONE
@@ -9739,7 +9512,6 @@ fn shift_click_reaches_the_pointer_input_handler_through_the_shell() {
     assert!(!modifiers.ctrl);
     shell.pointer_released();
 
-    // Releasing shift and holding ctrl instead must update what the handler sees.
     shell.set_modifiers(Modifiers {
         ctrl: true,
         ..Modifiers::NONE
@@ -9753,10 +9525,6 @@ fn shift_click_reaches_the_pointer_input_handler_through_the_shell() {
         "stale shift must not survive a modifier change"
     );
 }
-
-// ---------------------------------------------------------------------------
-// Rotary input (Wear OS crown / rotating bezel)
-// ---------------------------------------------------------------------------
 
 fn rotary_scene(targets: Vec<RecordingHitTarget>) -> RecordingScene {
     RecordingScene::with_hits(targets)
@@ -9798,7 +9566,6 @@ fn rotary_scrolled_runs_capture_then_bubble_passes() {
     let consumed = shell.rotary_scrolled(RotaryScrollEvent::new(-64.0, 0.0, 11));
     assert!(!consumed, "nothing consumed the event");
 
-    // Each node sees both passes: capture (pre) then bubble.
     let child_kinds: Vec<_> = child_events.borrow().iter().map(|e| e.kind).collect();
     let ancestor_kinds: Vec<_> = ancestor_events.borrow().iter().map(|e| e.kind).collect();
     assert_eq!(
@@ -9838,7 +9605,6 @@ fn rotary_capture_pass_runs_root_to_leaf() {
 
     shell.rotary_scrolled(RotaryScrollEvent::new(-8.0, 0.0, 1));
 
-    // Capture reached the ancestor; bubble reached the child.
     assert!(
         child_events
             .borrow()
@@ -9858,8 +9624,6 @@ fn rotary_capture_consumption_stops_the_bubble_pass() {
     let _guard = test_guard();
     let child_events = Rc::new(RefCell::new(Vec::new()));
     let ancestor_events = Rc::new(RefCell::new(Vec::new()));
-    // The ancestor consumes. During capture (root -> leaf) it runs first, so
-    // the child must never see the event at all.
     let scene = RecordingScene::with_hit_node_ids(
         vec![
             rotary_target(1, false, child_events.clone(), vec![1, 99]),
@@ -9890,9 +9654,6 @@ fn rotary_bubble_consumption_stops_at_the_consuming_node() {
     let _guard = test_guard();
     let child_events = Rc::new(RefCell::new(Vec::new()));
     let ancestor_events = Rc::new(RefCell::new(Vec::new()));
-    // Child consumes. Capture pass runs both (nobody consumes there, because
-    // RecordingHitTarget consumes on every dispatch -- so make only the child
-    // consuming and assert the ancestor never sees a bubble event).
     let scene = RecordingScene::with_hit_node_ids(
         vec![
             rotary_target(1, true, child_events.clone(), vec![1, 99]),
@@ -9910,7 +9671,6 @@ fn rotary_bubble_consumption_stops_at_the_consuming_node() {
     let consumed = shell.rotary_scrolled(RotaryScrollEvent::new(-16.0, 0.0, 5));
 
     assert!(consumed);
-    // Capture: ancestor (no consume) then child (consumes) -> capture ends.
     assert_eq!(ancestor_events.borrow().len(), 1);
     assert_eq!(
         ancestor_events.borrow()[0].kind,
@@ -9980,8 +9740,6 @@ fn window_level_rotary_handler_receives_unconsumed_events() {
 #[test]
 fn window_level_rotary_handler_runs_with_no_hit_targets() {
     let _guard = test_guard();
-    // The single-canvas game case: nothing in the tree handles rotary, and the
-    // scene may not even hit-test. The escape hatch must still fire.
     let scene = rotary_scene(Vec::new());
     let root_key = location_key(file!(), line!(), column!());
     let mut shell = AppShell::new(ScrollDispatchRenderer::new(scene), root_key, empty_content);
@@ -10054,7 +9812,6 @@ fn rotary_detents_are_converted_with_the_scroll_factor() {
     shell.set_rotary_scroll_factor(10.0);
     assert_eq!(shell.rotary_scroll_factor(), 10.0);
 
-    // Positive detents (crown up/away) -> negative pixels, per Compose.
     assert!(shell.rotary_scrolled_by_detents(1.0, 5));
     assert!(shell.rotary_scrolled_by_detents(-2.0, 6));
 
@@ -10148,20 +9905,14 @@ fn the_shell_stores_the_frame_rate_preference_it_is_given() {
 }
 
 thread_local! {
-    /// (position, global_position) of every Down the translated node saw.
     static TRANSLATED_LAYER_POINTER_EVENTS: RefCell<Vec<(Point, Point)>> =
         const { RefCell::new(Vec::new()) };
-    /// The same, from a handler outside the translated node.
     static UNTRANSLATED_PARENT_POINTER_EVENTS: RefCell<Vec<(Point, Point)>> =
         const { RefCell::new(Vec::new()) };
 }
 
-/// How far the inner node is pushed right. Any non-zero value does; 60 is far
-/// enough that a shifted reading cannot be mistaken for rounding.
 const TRANSLATED_LAYER_OFFSET: f32 = 60.0;
 
-/// A pointer handler on a translated node, and another on its untranslated
-/// parent — the two places a drag gesture can be read from.
 #[composable]
 fn translated_layer_pointer_probe() {
     Box(
@@ -10214,16 +9965,6 @@ fn translated_layer_pointer_probe() {
     );
 }
 
-/// A pointer position is in its own node's space, so a translated node reports
-/// a finger short by the translation — while `global_position` does not move.
-///
-/// This is the contract a drag gesture is built on, and getting it wrong is
-/// silent: put the handler on the node the drag itself translates and the
-/// offset ends up measuring itself (`offset = (finger - start) / 2`), so it
-/// converges on half the travel and a half-width dismiss threshold can never
-/// be crossed. `SwipeToDismiss` avoids it both ways at once — the gesture is
-/// read on the outer node, and it reads `global_position` — and the
-/// `graphics_layer` docs say so. This is what holds them to it.
 #[test]
 fn a_pointer_inside_a_translated_layer_reports_the_translation() {
     let _guard = test_guard();
@@ -10271,11 +10012,6 @@ fn a_pointer_inside_a_translated_layer_reports_the_translation() {
     );
 }
 
-// A screen that is one `Canvas`: its layout never changes, its frame loop draws
-// rather than recomposes, and its semantics recorder reads app state the
-// composition does not observe. Before `SemanticsRequester` this shape published
-// its tree once — at boot, before there was anything on screen — and then kept
-// republishing that same stale tree for the rest of the process.
 thread_local! {
     static LIVE_RECORDER_LABEL: RefCell<String> = const { RefCell::new(String::new()) };
     static LIVE_RECORDER_REQUESTER: RefCell<Option<cranpose_ui::SemanticsRequester>> =
@@ -10325,8 +10061,6 @@ fn a_live_semantics_recorder_is_stale_until_its_requester_says_otherwise() {
         "the first collection publishes what the recorder reported"
     );
 
-    // The app's own state moved. Nothing recomposed and nothing relaid out, so
-    // without a request the framework has no way to know, and must not guess.
     set_live_recorder_label("settings");
     for _ in 0..3 {
         shell.process_frame();
@@ -10337,7 +10071,6 @@ fn a_live_semantics_recorder_is_stale_until_its_requester_says_otherwise() {
         "an unrequested change must not cost a re-collection every frame"
     );
 
-    // The app says so, and the very next frame republishes.
     LIVE_RECORDER_REQUESTER.with(|slot| {
         slot.borrow()
             .as_ref()
@@ -10386,15 +10119,6 @@ fn a_pending_semantics_request_wakes_the_shell_without_dirtying_a_pixel() {
     );
 }
 
-// ===========================================================================
-// The surfaces a host, a devtool or a robot reaches for.
-//
-// None of these draw anything, which is exactly why nothing else exercises
-// them: a debug report that panics on an empty tree, or a copy handler that
-// answers with the wrong field's text, is only discovered by the tool that
-// needed it. These tests are that tool.
-// ===========================================================================
-
 #[test]
 fn a_debug_report_describes_the_screen_and_says_so_when_there_is_none() {
     let _guard = test_guard();
@@ -10415,7 +10139,6 @@ fn a_debug_report_describes_the_screen_and_says_so_when_there_is_none() {
         "the report described no layout: {report}"
     );
 
-    // The logging form returns the same text it logs, so a caller can do both.
     assert_eq!(shell.log_debug_info(), shell.debug_info_report());
 }
 
@@ -10450,9 +10173,6 @@ fn the_slot_table_dump_describes_the_groups_the_composition_holds() {
         !groups.is_empty(),
         "a composed screen reported an empty slot table"
     );
-    // Every group starts inside the table and covers a run that stays inside
-    // it: a group whose length ran past the end would walk off the table when
-    // a devtool followed it.
     let entries = shell.debug_slot_entries().len();
     for (index, _key, _scope, length) in &groups {
         assert!(
@@ -10473,8 +10193,6 @@ fn subcompose_debug_readers_answer_none_for_a_node_that_is_not_one() {
     shell.update();
 
     let live = shell.debug_live_subcompose_scope_ids();
-    // The default test content has no subcompose layout in it, so there is
-    // nothing to report — and asking must answer, not panic.
     assert!(live.is_empty());
 
     let root = shell
@@ -10500,8 +10218,6 @@ fn a_copy_with_no_focused_field_answers_none_and_syncs_nothing() {
         shell.on_copy().is_none(),
         "a copy with nothing focused produced text"
     );
-    // The primary-selection sync is driven by the same handler, so with
-    // nothing focused it must be a no-op rather than clearing the selection.
     shell.sync_selection_to_primary();
 
     assert!(

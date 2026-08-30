@@ -1,21 +1,3 @@
-//! Robot test for TextField reactive state integration.
-//!
-//! This test verifies that TextFieldState properly integrates with the composition
-//! snapshot state system, triggering recomposition when text changes.
-//!
-//! Test case:
-//! 1. Navigate to Text Input tab
-//! 2. Find initial text field with "Type here..."
-//! 3. Type "abc" via keyboard (appends to end)
-//! 4. Verify "Current value: ..." label shows "Type here...abc" (reactive update)
-//! 5. Press "Add !" button
-//! 6. Verify "Current value: ..." label shows "Type here...abc!" (button update)
-//!
-//! Run with:
-//! ```bash
-//! cargo run --package desktop-app --example robot_reactive_state --features robot-app
-//! ```
-
 use std::time::Duration;
 
 use cranpose::AppLauncher;
@@ -32,7 +14,6 @@ fn main() {
         .with_size(900, 700)
         .with_headless(true)
         .with_test_driver(|robot| {
-            // Timeout after 20 seconds
             std::thread::spawn(|| {
                 std::thread::sleep(Duration::from_secs(20));
                 eprintln!("TIMEOUT: Test exceeded 20 seconds");
@@ -44,9 +25,6 @@ fn main() {
 
             let mut all_passed = true;
 
-            // =========================================================
-            // Step 1: Navigate to Text Input Tab
-            // =========================================================
             println!("--- Step 1: Navigate to Text Input Tab ---");
             if let Some((x, y, w, h)) =
                 find_in_semantics(&robot, |elem| find_text(elem, "Text Input"))
@@ -64,14 +42,10 @@ fn main() {
                 all_passed = false;
             }
 
-            // =========================================================
-            // Step 2: Find and click text field with "Type here..."
-            // =========================================================
             println!("--- Step 2: Click text field and type 'abc' ---");
             if let Some((x, y, w, h)) =
                 find_in_semantics(&robot, |elem| find_text(elem, "Type here..."))
             {
-                // Click near right edge to position cursor at end
                 let _ = robot.mouse_move(x + w - 5.0, y + h / 2.0);
                 std::thread::sleep(Duration::from_millis(30));
                 let _ = robot.mouse_down();
@@ -84,22 +58,16 @@ fn main() {
                     y + h / 2.0
                 );
 
-                // Type "abc"
                 let _ = robot.type_text("abc");
                 let _ = robot.wait_for_idle();
                 std::thread::sleep(Duration::from_millis(300));
                 println!("  Typed 'abc' via keyboard (NO button press!)\n");
 
-                // =========================================================
-                // Step 3: Verify "Current value" shows "abc" (reactive)
-                // =========================================================
                 println!("--- Step 3: Verify 'Current value' shows 'abc' (reactive update) ---");
 
-                // Wait for semantics tree to rebuild after typing
                 let _ = robot.wait_for_idle();
                 std::thread::sleep(Duration::from_millis(300));
 
-                // Helper to find element with BOTH patterns (recursive search)
                 fn find_dual_text(
                     elem: &cranpose::SemanticElement,
                     pat1: &str,
@@ -134,9 +102,6 @@ fn main() {
                     all_passed = false;
                 }
 
-                // =========================================================
-                // Step 4: Press "Add !" button
-                // =========================================================
                 println!("--- Step 4: Press 'Add !' button ---");
                 if let Some((bx, by, bw, bh)) =
                     find_in_semantics(&robot, |elem| find_button(elem, "Add !"))
@@ -150,16 +115,11 @@ fn main() {
                     let _ = robot.wait_for_idle();
                     println!("  ✓ Clicked 'Add !' button\n");
 
-                    // =========================================================
-                    // Step 5: Verify "Current value" shows "abc!" (after Add !)
-                    // =========================================================
                     println!("--- Step 5: Verify 'Current value' shows 'abc!' (after Add !) ---");
 
-                    // Wait for recomposition after button click
                     let _ = robot.wait_for_idle();
                     std::thread::sleep(Duration::from_millis(300));
 
-                    // Use same recursive finder as Step 3
                     let found_abc_exclaim = find_in_semantics(&robot, |elem| {
                         find_dual_text(elem, "Current value:", "abc!")
                     });
@@ -179,9 +139,6 @@ fn main() {
                 all_passed = false;
             }
 
-            // =========================================================
-            // Summary
-            // =========================================================
             println!("=== Test Summary ===");
             if all_passed {
                 println!("✓ ALL TESTS PASSED - TextFieldState snapshot integration works!");

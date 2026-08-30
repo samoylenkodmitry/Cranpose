@@ -1,7 +1,3 @@
-//! Minimal lens-glass probe: one morphing lens node overhanging a two-tone
-//! background, captured at several times after mount. Isolates the pressed
-//! toggle's "white box" overhang artifact from the demo page.
-
 use std::{path::PathBuf, time::Duration};
 
 use cranpose::{
@@ -25,10 +21,6 @@ fn ProbeApp() {
             }),
             BoxSpec::default(),
             || {
-                // Toggle gray-HOLD backdrop, exactly like the live widget at
-                // 132ms: white card, light-gray track capsule, NO thumb (it
-                // melts into the glass). The only content transitions are the
-                // track<->card edges — the ring must be built from them.
                 CBox(
                     Modifier::empty()
                         .offset(80.0, 100.0)
@@ -55,8 +47,6 @@ fn ProbeApp() {
                     BoxSpec::default(),
                     || {},
                 );
-                // The lens node: the hold dome centered on the track's thumb
-                // side, node padded like the widget's headroom.
                 let lens = Modifier::empty()
                     .required_size(Size::new(NODE_W, NODE_H))
                     .offset(120.0, 140.0 + (28.0 - NODE_H) * 0.5)

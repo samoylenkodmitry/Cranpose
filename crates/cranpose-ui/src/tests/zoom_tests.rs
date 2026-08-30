@@ -34,24 +34,16 @@ fn touch(kind: PointerEventKind, id: u64, x: f32, y: f32) -> PointerEvent {
         .with_id(id)
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// ZoomState transform math
-// ─────────────────────────────────────────────────────────────────────────────
-
 #[test]
 fn apply_transform_zooms_about_the_centroid() {
     let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
         let state = ZoomState::with_scale_range(0.5, 8.0);
 
-        // Zoom 2x about (100, 50). The content point that was displayed at
-        // (100, 50) must still be displayed at (100, 50) afterwards.
         state.apply_transform(Point { x: 100.0, y: 50.0 }, Point { x: 0.0, y: 0.0 }, 2.0);
 
         assert_eq!(state.scale_non_reactive(), 2.0);
         let offset = state.offset_non_reactive();
-        // Content point c = (100,50) (scale was 1, offset 0). New display
-        // position: c * 2 + offset must equal (100, 50).
         assert!(
             (100.0 * 2.0 + offset.x - 100.0).abs() < 1e-4
                 && (50.0 * 2.0 + offset.y - 50.0).abs() < 1e-4,
@@ -67,8 +59,7 @@ fn apply_transform_focal_point_stays_fixed_across_steps() {
         let state = ZoomState::with_scale_range(0.5, 8.0);
         let focal = Point { x: 40.0, y: 200.0 };
 
-        // The content point rendered at `focal` before the gesture:
-        let content = focal; // identity transform
+        let content = focal;
         for zoom_step in [1.3f32, 1.3, 0.9, 1.1] {
             state.apply_transform(focal, Point { x: 0.0, y: 0.0 }, zoom_step);
             let scale = state.scale_non_reactive();
@@ -146,10 +137,6 @@ fn layer_reflects_scale_offset_with_top_left_origin() {
     });
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// zoomable modifier gesture handling
-// ─────────────────────────────────────────────────────────────────────────────
-
 #[test]
 fn two_finger_pinch_out_scales_up_and_consumes_moves() {
     let _app_context = crate::render_state::app_context_test_scope();
@@ -160,7 +147,6 @@ fn two_finger_pinch_out_scales_up_and_consumes_moves() {
         handler(touch(PointerEventKind::Down, 0, 100.0, 100.0));
         handler(touch(PointerEventKind::Down, 1, 200.0, 100.0));
 
-        // Spread the second finger out: distance 100 -> 200.
         let pinch_move = touch(PointerEventKind::Move, 1, 300.0, 100.0);
         handler(pinch_move.clone());
 
@@ -188,14 +174,11 @@ fn pinch_keeps_content_under_the_fingers() {
 
         handler(touch(PointerEventKind::Down, 0, 100.0, 100.0));
         handler(touch(PointerEventKind::Down, 1, 200.0, 100.0));
-        // Symmetric pinch out about (150, 100).
         handler(touch(PointerEventKind::Move, 0, 50.0, 100.0));
         handler(touch(PointerEventKind::Move, 1, 250.0, 100.0));
 
         let scale = state.scale_non_reactive();
         let offset = state.offset_non_reactive();
-        // The content point that started under the pinch center (150, 100)
-        // must still render at the pinch center.
         let display_x = 150.0 * scale + offset.x;
         let display_y = 100.0 * scale + offset.y;
         assert!(
@@ -237,8 +220,6 @@ fn single_finger_drag_pans_only_when_transformed() {
         let state = ZoomState::new();
         let (handler, _chain) = pointer_handler_for(Modifier::empty().zoomable(state));
 
-        // At identity: a one-finger drag must NOT pan (enclosing scrollables
-        // own plain drags).
         handler(touch(PointerEventKind::Down, 0, 100.0, 100.0));
         let plain_drag = touch(PointerEventKind::Move, 0, 100.0, 160.0);
         handler(plain_drag.clone());
@@ -249,10 +230,9 @@ fn single_finger_drag_pans_only_when_transformed() {
             "identity zoomable must not steal plain drags"
         );
 
-        // Zoomed in: the same drag pans the content.
         state.set_scale(2.0);
         handler(touch(PointerEventKind::Down, 0, 100.0, 100.0));
-        handler(touch(PointerEventKind::Move, 0, 100.0, 120.0)); // crosses slop
+        handler(touch(PointerEventKind::Move, 0, 100.0, 120.0));
         handler(touch(PointerEventKind::Move, 0, 100.0, 160.0));
         handler(touch(PointerEventKind::Up, 0, 100.0, 160.0));
 
@@ -266,10 +246,6 @@ fn single_finger_drag_pans_only_when_transformed() {
 
 #[test]
 fn two_finger_centroid_pan_at_identity_scale_is_inert() {
-    // Two fingers moving in parallel are a net centroid pan. While the
-    // content is not zoomed in, that pan must not displace it. The fingers
-    // move one event at a time (like real dispatch), so the range allows
-    // sub-1 scales to keep the shrink/grow spread steps symmetric.
     let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
         let state = ZoomState::with_scale_range(0.5, 8.0);
@@ -277,7 +253,6 @@ fn two_finger_centroid_pan_at_identity_scale_is_inert() {
 
         handler(touch(PointerEventKind::Down, 0, 100.0, 100.0));
         handler(touch(PointerEventKind::Down, 1, 200.0, 100.0));
-        // Both fingers translate by (+40, +25): spread unchanged overall.
         handler(touch(PointerEventKind::Move, 0, 140.0, 125.0));
         handler(touch(PointerEventKind::Move, 1, 240.0, 125.0));
         handler(touch(PointerEventKind::Up, 1, 240.0, 125.0));
@@ -305,14 +280,10 @@ fn released_pinch_that_zoomed_back_out_leaves_no_offset() {
 
         handler(touch(PointerEventKind::Down, 0, 100.0, 100.0));
         handler(touch(PointerEventKind::Down, 1, 200.0, 100.0));
-        // Pinch out: spread 100 -> 200 (scale 2), off-center so the focal
-        // anchoring produces a non-zero offset.
         handler(touch(PointerEventKind::Move, 1, 300.0, 100.0));
         assert!(state.is_zoomed_in(), "pinch out must zoom in");
-        // Drag both fingers (centroid pan while zoomed): offset changes.
         handler(touch(PointerEventKind::Move, 0, 130.0, 140.0));
         handler(touch(PointerEventKind::Move, 1, 330.0, 140.0));
-        // Pinch back in past identity: spread 200 -> 80 (scale clamps to 1).
         handler(touch(PointerEventKind::Move, 1, 210.0, 140.0));
         handler(touch(PointerEventKind::Up, 1, 210.0, 140.0));
         handler(touch(PointerEventKind::Up, 0, 130.0, 140.0));
@@ -329,8 +300,6 @@ fn released_pinch_that_zoomed_back_out_leaves_no_offset() {
 
 #[test]
 fn one_finger_drag_does_not_pan_offset_only_state() {
-    // Pan is gated on scale > 1, not on "any transform": a programmatic
-    // offset at identity scale must not turn drags into pans.
     let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
         let state = ZoomState::new();
@@ -392,7 +361,6 @@ fn slow_second_tap_does_not_reset() {
 
         handler(timed_touch(PointerEventKind::Down, 100.0, 100.0, 0));
         handler(timed_touch(PointerEventKind::Up, 100.0, 100.0, 50));
-        // Second tap lands after the double-tap timeout.
         handler(timed_touch(PointerEventKind::Down, 100.0, 100.0, 500));
         handler(timed_touch(PointerEventKind::Up, 100.0, 100.0, 550));
 
@@ -455,8 +423,6 @@ fn zoom_events_scale_about_the_cursor() {
 
 #[test]
 fn scroll_ignores_secondary_pointer_events() {
-    // A second finger joining mid-drag must not jerk an enclosing scroll:
-    // the scroll detector tracks the primary pointer only.
     let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
         let scroll_state = crate::ScrollState::new(100.0);
@@ -465,10 +431,9 @@ fn scroll_ignores_secondary_pointer_events() {
             pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state, false));
 
         handler(touch(PointerEventKind::Down, 0, 0.0, 100.0));
-        handler(touch(PointerEventKind::Move, 0, 0.0, 80.0)); // drag starts
+        handler(touch(PointerEventKind::Move, 0, 0.0, 80.0));
         let before = scroll_state.value_non_reactive();
 
-        // Secondary finger lands far away and moves wildly.
         handler(touch(PointerEventKind::Down, 1, 0.0, 300.0));
         handler(touch(PointerEventKind::Move, 1, 0.0, 500.0));
         handler(touch(PointerEventKind::Up, 1, 0.0, 500.0));
@@ -479,7 +444,6 @@ fn scroll_ignores_secondary_pointer_events() {
             "secondary pointer events must not scroll"
         );
 
-        // The primary drag continues smoothly from its own last position.
         handler(touch(PointerEventKind::Move, 0, 0.0, 60.0));
         assert!(
             (scroll_state.value_non_reactive() - (before + 20.0)).abs() < 1e-3,

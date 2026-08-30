@@ -9,7 +9,6 @@ pub mod robot_assertions;
 pub mod robot_helpers;
 pub mod testing;
 
-// Re-export testing utilities
 pub use placed_semantics::{PlacedSemanticsNode, placed_semantics_from_applier};
 pub use robot::*;
 #[cfg(feature = "desktop-robot")]

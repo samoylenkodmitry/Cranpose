@@ -1,22 +1,3 @@
-//! The desktop output device: `cpal` (CoreAudio, WASAPI, ALSA).
-//!
-//! This exists so a developer on macOS, Windows or Linux hears the same mix the
-//! device will produce. It shares the renderer with the Android backend, so the
-//! only thing that differs between the two is how the callback arrives.
-//!
-//! Linux builds link ALSA, which needs `libasound2-dev` (or the distribution's
-//! equivalent) present at build time. That is why the feature is off by
-//! default.
-//!
-//! One thing does differ, and it is worth stating rather than hiding: a cpal
-//! data callback returns nothing, so unlike AAudio it cannot give the device
-//! up from the inside. The renderer still publishes that it has gone idle, and
-//! the engine pauses the stream from the UI thread on its next call — which
-//! means a desktop app that plays a sound and then never touches the engine
-//! again keeps its stream open a while longer than an Android one would. That
-//! is a deliberate trade: desktop has no always-on audio DSP to keep awake,
-//! and a timer thread to close the gap would cost more than it saves.
-
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cranpose_services::AudioError;
 
@@ -25,8 +6,6 @@ use crate::{
     mixer::RenderStatus,
 };
 
-/// Scratch used when the device wants integer samples. Allocated once, before
-/// the stream starts, and reused for every callback.
 const SCRATCH_SAMPLES: usize = 8192;
 
 pub(crate) fn open(mut renderer: Box<dyn Renderer>) -> Result<Box<dyn AudioSink>, AudioError> {
@@ -41,8 +20,6 @@ pub(crate) fn open(mut renderer: Box<dyn Renderer>) -> Result<Box<dyn AudioSink>
     let config: cpal::StreamConfig = supported.into();
     let channels = usize::from(config.channels).max(1);
     let sample_rate = config.sample_rate as f32;
-    // cpal negotiates before the stream exists, so the renderer starts on the
-    // real format rather than correcting an assumption in its first callback.
     renderer.set_device_format(sample_rate, channels);
 
     let error_callback = |error| log::warn!("cranpose audio stream error: {error}");
@@ -50,9 +27,6 @@ pub(crate) fn open(mut renderer: Box<dyn Renderer>) -> Result<Box<dyn AudioSink>
     let stream = match sample_format {
         cpal::SampleFormat::F32 => device.build_output_stream(
             config,
-            // The idle verdict is dropped here on purpose: `render` has already
-            // published it for the engine, and this callback has no way to stop
-            // its own stream. See the module comment.
             move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
                 let _ = renderer.render(data);
             },
@@ -94,11 +68,6 @@ fn unwritable_sample_format(format: cpal::SampleFormat) -> AudioError {
     ))
 }
 
-/// Renders through the preallocated scratch buffer and converts, in whole
-/// frames, so no allocation happens inside the callback.
-///
-/// The verdict of the last chunk is the one that counts: an earlier chunk that
-/// still had a voice in it is precisely what stops the renderer going idle.
 fn render_into_integer<T>(
     renderer: &mut dyn Renderer,
     scratch: &mut [f32],
@@ -141,8 +110,6 @@ impl AudioSink for CpalSink {
     }
 
     fn park(&self) {
-        // cpal has no stop, only pause; it releases the callback thread, which
-        // is the part that costs anything on a desktop.
         if let Err(error) = self.stream.pause() {
             log::warn!("failed to release the idle output stream: {error}");
         }

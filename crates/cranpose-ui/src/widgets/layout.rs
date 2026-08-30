@@ -57,9 +57,6 @@ where
             },
         )
     });
-    // Read while the composition is still running: measurement happens after it
-    // and cannot reach a composition local. Reading here also subscribes, so a
-    // subtree given a different grid recomposes and re-captures.
     let composed_density = crate::density::density();
     if let Err(err) = cranpose_core::with_node_mut(id, |node: &mut LayoutNode| {
         node.set_modifier(modifier.clone());
@@ -111,14 +108,8 @@ pub fn SubcomposeLayout(
     let id = cranpose_core::with_current_composer(|composer| {
         composer.emit_node(|| SubcomposeLayoutNode::new(modifier.clone(), Rc::clone(&policy)))
     });
-    // Measure-time composition inherits both locals and the source scope. The
-    // ownership link prevents secondary-host callbacks from outliving this
-    // composition while preserving the call-site local providers.
     let captured_context =
         cranpose_core::with_current_composer(|composer| composer.capture_composition_context());
-    // Read while the composition is still running, same as `Layout`: measurement
-    // happens after it and cannot reach a composition local. Reading here also
-    // subscribes, so a subtree given a different grid recomposes and re-captures.
     let composed_density = crate::density::density();
     if let Err(err) = cranpose_core::with_node_mut(id, |node: &mut SubcomposeLayoutNode| {
         node.set_modifier(modifier.clone());

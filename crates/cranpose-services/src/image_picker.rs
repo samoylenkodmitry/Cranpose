@@ -77,8 +77,6 @@ impl ImagePicker for PlatformImagePicker {
         if let Some(picker) = registered_platform_image_picker() {
             return picker.pick_image(source);
         }
-        // No platform picker: a live camera needs one, but a library pick can
-        // fall back to the file picker filtered to images.
         if source == ImageSource::Camera {
             return Box::pin(async { Err(ImagePickerError::Unsupported) });
         }

@@ -346,14 +346,12 @@ impl AnnotatedString {
             hasher.write_usize(span.range.start);
             hasher.write_usize(span.range.end);
 
-            // Hash measurement-affecting fields
             let dummy = crate::text::TextStyle {
                 span_style: span.item.clone(),
                 ..Default::default()
             };
             hasher.write_u64(dummy.measurement_hash());
 
-            // Hash visually-affecting fields ignored by measurement
             if let Some(c) = &span.item.color {
                 hasher.write_u32(c.0.to_bits());
                 hasher.write_u32(c.1.to_bits());
@@ -729,7 +727,6 @@ impl Builder {
 
     /// Completes the builder, resolving open styles to the end of the text.
     pub fn to_annotated_string(mut self) -> AnnotatedString {
-        // Resolve unclosed styles
         while let Some(record) = self.style_stack.pop() {
             match record.style_type {
                 StyleType::Span => {
@@ -862,7 +859,6 @@ mod tests {
         assert_eq!(annotated.text, "Visit Android Developers.");
         assert_eq!(annotated.link_annotations.len(), 1);
         let ann = &annotated.link_annotations[0];
-        // "Android Developers" starts at byte 6
         assert_eq!(ann.range, 6..24);
         assert_eq!(ann.item, LinkAnnotation::Url(url.into()));
     }
@@ -884,7 +880,6 @@ mod tests {
             .to_annotated_string();
 
         assert_eq!(annotated.link_annotations.len(), 1);
-        // Invoke the handler
         let ann = &annotated.link_annotations[0];
         if let LinkAnnotation::Clickable { handler, .. } = &ann.item {
             handler();
@@ -902,8 +897,7 @@ mod tests {
             .append(" post")
             .to_annotated_string();
 
-        // Take subsequence covering only the link text
-        let sub = annotated.subsequence(4..8); // "link"
+        let sub = annotated.subsequence(4..8);
         assert_eq!(sub.link_annotations.len(), 1);
         assert_eq!(sub.link_annotations[0].range, 0..4);
     }

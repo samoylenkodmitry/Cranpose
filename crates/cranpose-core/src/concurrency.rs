@@ -73,8 +73,6 @@ impl CoroutineScope {
             log::warn!("cranpose: a coroutine scope with no runtime dropped its work");
             return;
         };
-        // Finished tasks are pruned on every launch so a long-lived screen that
-        // starts many short jobs does not accumulate handles.
         self.inner
             .tasks
             .borrow_mut()
@@ -109,8 +107,6 @@ pub fn rememberCoroutineScope() -> CoroutineScope {
     })
     .with(|scope| scope.clone())
 }
-
-// ---- Timers --------------------------------------------------------------
 
 /// Resolves after `duration` has elapsed.
 ///
@@ -163,7 +159,6 @@ pub async fn interval(period: Duration, mut tick: impl FnMut()) {
     }
 }
 
-/// A wake-up the timer owes a waiting future.
 #[cfg(not(target_arch = "wasm32"))]
 struct Alarm {
     deadline: Instant,
@@ -171,12 +166,6 @@ struct Alarm {
     fired: Arc<AtomicBool>,
 }
 
-/// One process-wide timer serving every [`Delay`].
-///
-/// On a threaded target it owns a single thread parked on a condition variable
-/// until the earliest deadline, so an idle application has one sleeping thread
-/// and no periodic work at all. On the web, where there is only one thread, each
-/// alarm is handed to the browser's own `setTimeout`.
 struct Timer {
     #[cfg(not(target_arch = "wasm32"))]
     alarms: Mutex<Vec<Alarm>>,
@@ -209,14 +198,6 @@ impl Timer {
             .expect("the timer thread starts");
     }
 
-    /// Fires alarms as they come due, sleeping until the next deadline.
-    ///
-    /// The lock is held continuously from taking the due alarms to entering the
-    /// wait, and `wait` releases it atomically. That is what makes an [`arm`]
-    /// racing this loop impossible to miss: it cannot take the lock until the
-    /// thread is already waiting, and the notify then lands.
-    ///
-    /// [`arm`]: Timer::arm
     fn run(&self) {
         let mut alarms = self
             .alarms
@@ -238,8 +219,6 @@ impl Timer {
             });
 
             if !due.is_empty() {
-                // Waking runs application code, so the lock is released first;
-                // the loop then re-checks rather than sleeping on stale state.
                 drop(alarms);
                 for (waker, fired) in due {
                     fired.store(true, Ordering::Release);
@@ -311,8 +290,6 @@ impl Timer {
         }
     }
 }
-
-// ---- Event streams -------------------------------------------------------
 
 /// The producing half of an [`EventStream`].
 ///
@@ -494,8 +471,6 @@ where
     state.as_state()
 }
 
-// ---- Cross-thread event bridges ------------------------------------------
-
 /// A `Send` publishing handle for a composition-scoped [`EventStream`].
 ///
 /// Platform services publish events from whatever thread they run on — a JNI
@@ -504,8 +479,6 @@ where
 /// composition is collecting, so no service and no application ever writes that
 /// hop again.
 pub struct EventSender<T: Send + 'static> {
-    /// The hop onto the UI thread. The web runs the whole application on one
-    /// thread, so there is nothing to hop and no dispatcher to carry.
     #[cfg(not(target_arch = "wasm32"))]
     dispatcher: crate::runtime::UiDispatcher,
     bridge: u64,
@@ -536,8 +509,6 @@ impl<T: Send + 'static> EventSender<T> {
 }
 
 thread_local! {
-    /// Live bridges on this UI thread, by id. A bridge is registered while its
-    /// composition holds it and removed when that slot is discarded.
     static BRIDGES: RefCell<std::collections::HashMap<u64, Rc<dyn std::any::Any>>> =
         RefCell::new(std::collections::HashMap::new());
 }
@@ -547,8 +518,6 @@ static NEXT_BRIDGE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64:
 fn deliver_bridged<T: Send + 'static>(bridge: u64, event: T) {
     let channel = BRIDGES.with(|bridges| bridges.borrow().get(&bridge).cloned());
     let Some(channel) = channel else {
-        // The composition that asked for these events is gone; dropping the
-        // event here is the whole point of scoping the stream to it.
         log::debug!("event bridge {bridge} is gone, one event dropped");
         return;
     };
@@ -557,8 +526,6 @@ fn deliver_bridged<T: Send + 'static>(bridge: u64, event: T) {
     }
 }
 
-/// The composition-owned half of a bridge: a channel registered for delivery
-/// for exactly as long as the composition holds it.
 struct Bridge<T: Send + 'static> {
     id: u64,
     channel: Rc<EventChannel<T>>,
@@ -622,8 +589,6 @@ where
 
     stream
 }
-
-// ---- Blocking work -------------------------------------------------------
 
 /// Runs `work` off the UI thread and resolves with its result on the UI thread.
 ///
@@ -708,18 +673,6 @@ where
     dispatcher.post_invoke(continuation, work());
 }
 
-/// The pool [`withBlocking`] runs its work on.
-///
-/// A thread per call is what this replaced. It costs a stack and a kernel
-/// thread for every file read, and an application that starts a hundred of
-/// them — a scanner walking a folder, a list loading thumbnails — starts a
-/// hundred threads. Reusing them costs one channel send.
-///
-/// The pool grows on demand rather than being sized up front: work handed to
-/// it blocks by definition, so a fixed count of workers would let one slow
-/// read hold up every other. A new worker starts only when every existing one
-/// is busy, and it is kept afterwards. The cap is what stops a runaway from
-/// spawning without end; past it, work queues.
 #[cfg(not(target_arch = "wasm32"))]
 struct BlockingPool {
     sender: std::sync::mpsc::Sender<BlockingJob>,
@@ -727,13 +680,6 @@ struct BlockingPool {
     state: Arc<Mutex<PoolState>>,
 }
 
-/// What the pool knows about itself.
-///
-/// `outstanding` counts work submitted and not yet finished - queued as well as
-/// running. Counting only what a worker has already picked up would be a number
-/// that lags every submission: the job that needs a new worker is precisely the
-/// one no worker has looked at yet, so a pool deciding from that count refuses
-/// to grow exactly when it must.
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy, Default)]
 struct PoolState {
@@ -744,15 +690,9 @@ struct PoolState {
 #[cfg(not(target_arch = "wasm32"))]
 type BlockingJob = Box<dyn FnOnce() + Send + 'static>;
 
-/// How far the pool may grow. Blocking work is waiting, not computing, so this
-/// is not a core count; it is the point past which an application is doing
-/// something other than what this is for.
 #[cfg(not(target_arch = "wasm32"))]
 const MAX_BLOCKING_WORKERS: usize = 64;
 
-/// A pool that cannot grow runs nothing, and one that grows without bound is
-/// not a pool. Checked here rather than in a test, because the answer cannot
-/// change at run time.
 #[cfg(not(target_arch = "wasm32"))]
 const _: () = assert!(MAX_BLOCKING_WORKERS > 0 && MAX_BLOCKING_WORKERS <= 256);
 
@@ -776,16 +716,12 @@ impl BlockingPool {
         if self.take_slot() {
             self.start_worker();
         }
-        // A closed channel means every worker is gone, which only happens if
-        // the process is tearing down. Running the work here is still correct.
         if let Err(returned) = self.sender.send(job) {
             self.release_slot();
             (returned.0)();
         }
     }
 
-    /// Records one more piece of outstanding work, and answers whether it needs
-    /// a worker of its own.
     fn take_slot(&self) -> bool {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         state.outstanding += 1;
@@ -801,7 +737,6 @@ impl BlockingPool {
         state.outstanding = state.outstanding.saturating_sub(1);
     }
 
-    /// Starts a worker for a slot [`take_slot`](Self::take_slot) already claimed.
     fn start_worker(&self) {
         let receiver = Arc::clone(&self.receiver);
         let counters = Arc::clone(&self.state);
@@ -853,7 +788,6 @@ impl<T> Future for BlockingWork<T> {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .push(context.waker().clone());
-        // The worker may have finished between the check and the registration.
         if self.done.load(Ordering::Acquire)
             && let Some(value) = self
                 .slot
@@ -866,8 +800,6 @@ impl<T> Future for BlockingWork<T> {
         Poll::Pending
     }
 }
-
-// ---- Produced state ------------------------------------------------------
 
 /// Runs `producer` when `key` changes and exposes what it publishes as state.
 ///
@@ -963,7 +895,6 @@ mod stream_tests {
 
         channel.send(8);
         channel.close();
-        // Queued events survive the close, then the stream finishes.
         assert_eq!(pollster::block_on(stream.next()), Some(8));
         assert_eq!(pollster::block_on(stream.next()), None);
         assert_eq!(stream.delivered(), 2);
@@ -1001,9 +932,6 @@ mod stream_tests {
 mod timer_race_tests {
     use super::*;
 
-    /// Arming from many threads while the timer loop is between firing and
-    /// sleeping must never lose a wake-up. Before the timer held its lock
-    /// across that boundary, a delay armed in that window slept forever.
     #[test]
     fn concurrent_arming_never_loses_a_wake_up() {
         let rounds = 40;
@@ -1027,14 +955,8 @@ mod timer_race_tests {
     fn blocking_work_reuses_its_threads_instead_of_one_per_call() {
         use std::{collections::HashSet, sync::mpsc};
 
-        // A pool of this test's own: the process-wide one is shared with every
-        // other test in the binary, and they run at the same time, so what it
-        // has grown to is not this test's to assert on.
         let pool = BlockingPool::new();
 
-        // Serial calls: each one finds an idle worker, so the pool never grows
-        // past the one thread. A thread per call would report as many distinct
-        // thread ids as there were calls.
         let (sender, receiver) = mpsc::channel();
         for _ in 0..16 {
             let done = Arc::new((Mutex::new(false), Condvar::new()));
@@ -1067,8 +989,6 @@ mod timer_race_tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn blocking_work_grows_so_one_slow_job_cannot_hold_up_another() {
-        // The whole reason the pool grows: work handed to it blocks, so a
-        // worker sitting in a long read must not be the only one there is.
         let pool = BlockingPool::new();
         let started = Arc::new((Mutex::new(0usize), Condvar::new()));
         let release = Arc::new((Mutex::new(false), Condvar::new()));
@@ -1090,8 +1010,6 @@ mod timer_race_tests {
             }));
         }
 
-        // All four must be running at once, which cannot happen unless the
-        // pool grew for them.
         let (count, signal) = &*started;
         let mut running = count.lock().unwrap_or_else(|error| error.into_inner());
         while *running < 4 {

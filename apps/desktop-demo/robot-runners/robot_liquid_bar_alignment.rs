@@ -1,16 +1,3 @@
-//! Resting-bubble alignment for every liquid tab bar in the demo: after a
-//! selection settles, the glass lens must center on the selected cell —
-//! on the 3-tab translate bar, the 5-tab store bars, and the accessory
-//! (Discover) bar alike. Detection is selection-diff based: the pixels
-//! that change between two settled selections cluster around the old and
-//! new bubble positions, and each cluster's centroid must sit on its
-//! cell's center.
-//!
-//! Run with:
-//! ```bash
-//! cargo run --package desktop-app --example robot_liquid_bar_alignment --features robot-app
-//! ```
-
 use std::{
     path::{Path, PathBuf},
     process::ExitCode,
@@ -23,12 +10,8 @@ use image::RgbaImage;
 
 const WINDOW_WIDTH: u32 = 900;
 const WINDOW_HEIGHT: u32 = 640;
-/// A settled glide: the lens spring converges well inside this window.
 const SETTLE_MS: u64 = 900;
-/// Diff columns must change by at least this many pixels to count as part
-/// of a bubble cluster (filters antialiasing noise).
 const COLUMN_CHANGE_FLOOR: usize = 6;
-/// Alignment budget in dp: bubble centroid vs cell center.
 const ALIGNMENT_BUDGET_DP: f32 = 5.0;
 
 fn main() -> ExitCode {
@@ -67,7 +50,6 @@ fn main() -> ExitCode {
 
             let mut failures = Vec::new();
 
-            // 5-tab store bar (over the tile artwork).
             check_bar(
                 &robot,
                 &shot_dir,
@@ -77,7 +59,6 @@ fn main() -> ExitCode {
                 &mut failures,
             );
 
-            // 3-tab translate bar on white.
             check_bar(
                 &robot,
                 &shot_dir,
@@ -106,8 +87,6 @@ fn settle(robot: &Robot, ms: u64) {
     let _ = robot.wait_for_idle();
 }
 
-/// Density under test: the dp/px-mixing bug class only shows at scale ≠ 1
-/// (the user's desktop runs ≈1.354), so CI probes a non-unit scale too.
 fn capture_scale() -> f32 {
     std::env::var("CRANPOSE_ROBOT_CAPTURE_SCALE")
         .ok()
@@ -122,10 +101,6 @@ fn capture(robot: &Robot) -> RobotScreenshot {
         .expect("settled frame")
 }
 
-/// Measures every cell of one bar. Each measurement anchors the selection
-/// on a FAR cell first (≥2 cells away, so the departed and arrived change
-/// clusters can never merge into one band), then selects the target and
-/// checks the arrived cluster's centroid against the cell center.
 fn check_bar(
     robot: &Robot,
     shot_dir: &Path,
@@ -140,9 +115,6 @@ fn check_bar(
     };
 
     for (target, label) in labels.iter().enumerate() {
-        // Anchor at the far end from the target: never adjacent. A cell
-        // with no anchor ≥2 away (the middle of a 3-tab bar) is skipped —
-        // its neighbors pin the same linear placement formula.
         let anchor = if target < labels.len() / 2 {
             labels.len() - 1
         } else {
@@ -170,9 +142,6 @@ fn check_bar(
         let shot = capture(robot);
         save(&shot, shot_dir, &format!("{bar}-{target}-{label}"));
 
-        // The bubble settles to the WIDGET's own resting rule: interior
-        // cells center exactly, end cells pull inboard so the wide bubble
-        // stays inside the pill (cranpose::liquid::tab_lens_resting_left).
         let Some(first) = cell_center(robot, labels[0]) else {
             failures.push(format!("{bar}: {} has no bounds", labels[0]));
             return;
@@ -185,13 +154,9 @@ fn check_bar(
         let expected =
             first.0 + cranpose::liquid::tab_lens_resting_left(target, pitch, labels.len());
 
-        // The expected bubble span: the widget's resting rule ± the rest
-        // half-width, both from the public resting contract.
         let half_rest = cranpose::liquid::tab_lens_rest_width(pitch) * 0.5;
         let span = (expected - half_rest, expected + half_rest);
 
-        // Band the columns whose pixels changed between the two settled
-        // frames, inside the bar's vertical strip.
         let bands = changed_column_bands(&baseline, &shot, center.1 - 60.0, center.1 + 60.0);
         let arrived = nearest_band(&bands, expected);
         println!(
@@ -200,12 +165,6 @@ fn check_bar(
         );
 
         match arrived {
-            // A locally flat backdrop can hide one side of the zoom-free
-            // lens from the diff, so alignment is proven by EITHER band
-            // edge landing on its expected bubble edge; the resting edge
-            // FEATHER also shaves the detected band symmetrically on
-            // low-contrast renderers, so an on-center band of plausible
-            // width proves alignment equally.
             Some(band)
                 if (band.0 - span.0).abs() <= ALIGNMENT_BUDGET_DP
                     || (band.1 - span.1).abs() <= ALIGNMENT_BUDGET_DP
@@ -224,8 +183,6 @@ fn cell_center(robot: &Robot, label: &str) -> Option<(f32, f32)> {
     Some((bounds.0 + bounds.2 * 0.5, bounds.1 + bounds.3 * 0.5))
 }
 
-/// Contiguous column ranges (logical px) with meaningful pixel change
-/// between two frames, restricted to the bar's vertical strip.
 fn changed_column_bands(
     before: &RobotScreenshot,
     after: &RobotScreenshot,

@@ -58,10 +58,6 @@ fn pixels_renderer_matches_shared_render_contracts() {
     }
 }
 
-/// The stroke/arc contract, isolated from the font-dependent text cases so a
-/// missing system font can never mask a geometry regression. Both backends run
-/// the same assertions; a backend that filled these shapes instead of stroking
-/// them fails here.
 #[test]
 fn pixels_renderer_matches_shared_stroke_and_arc_contracts() {
     let app_context = cranpose_ui::AppContext::new();

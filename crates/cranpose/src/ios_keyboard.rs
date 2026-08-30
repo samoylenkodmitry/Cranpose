@@ -1,17 +1,3 @@
-//! iOS soft keyboard + full text input.
-//!
-//! winit-uikit renders to a Metal layer with no editable views, so there is no
-//! first responder to raise the keyboard. This installs a hidden view that
-//! conforms to `UITextInput` (a superset of `UIKeyInput`): focusing a Cranpose
-//! text field makes it first responder (the keyboard rises), and UIKit's text
-//! reads/edits are bridged to the framework's IME state.
-//!
-//! `UITextInput` is synchronous, but the composition's text model is only
-//! touched per frame, so a synchronous [`mirror`](Mirror) of the focused field's
-//! text + selection is kept: it is refreshed from `AppShell::ime_editor_state`
-//! each frame (see `ios.rs`), read synchronously by the protocol methods, and
-//! updated optimistically on edits (which are also queued to the shell). This is
-//! what makes swipe-the-spacebar cursor movement and selection work.
 #![allow(unsafe_code)]
 
 use std::{
@@ -36,11 +22,6 @@ use objc2_ui_kit::{
     UITextSelectionRect, UITextStorageDirection, UIView,
 };
 
-// --------------------------------------------------------------- text mirror
-
-/// A synchronous snapshot of the focused field's text + selection (byte offsets
-/// into `text`, `sel.0 <= sel.1`). Read by `UITextInput` methods; refreshed from
-/// the shell each frame and updated optimistically on edits.
 #[derive(Default, Clone)]
 struct Mirror {
     text: String,
@@ -52,7 +33,6 @@ fn mirror() -> &'static Mutex<Mirror> {
     M.get_or_init(|| Mutex::new(Mirror::default()))
 }
 
-/// Refresh the mirror from the composition (called each frame in `ios.rs`).
 pub(crate) fn set_mirror(text: String, sel_start: usize, sel_end: usize) {
     if let Ok(mut m) = mirror().lock() {
         let len = text.len();
@@ -65,13 +45,6 @@ fn read_mirror() -> Mirror {
     mirror().lock().map(|m| m.clone()).unwrap_or_default()
 }
 
-// ---------------------------------------------- caret geometry mirror
-
-/// Window-space caret geometry of the focused single-line field, refreshed each
-/// frame from `AppShell::ime_caret_geometry`. `caret_xs[k]` is the caret x (in
-/// the view's coordinate space, which matches the window) after `k` characters,
-/// so `caret_xs.len() == chars + 1`. Read by the `UITextInput` geometry methods
-/// so the iOS spacebar-trackpad cursor and tap-to-position can place the caret.
 #[derive(Default, Clone)]
 struct CaretGeom {
     caret_xs: Vec<f32>,
@@ -84,7 +57,6 @@ fn caret_geom() -> &'static Mutex<CaretGeom> {
     G.get_or_init(|| Mutex::new(CaretGeom::default()))
 }
 
-/// Refresh the caret geometry from the composition (called each frame in `ios.rs`).
 pub(crate) fn set_caret_geometry(caret_xs: Vec<f32>, top: f32, line_height: f32) {
     if let Ok(mut g) = caret_geom().lock() {
         g.caret_xs = caret_xs;
@@ -97,7 +69,6 @@ fn read_caret_geom() -> CaretGeom {
     caret_geom().lock().map(|g| g.clone()).unwrap_or_default()
 }
 
-/// Height to draw the caret at, guarding against an unmeasured (zero) line.
 fn caret_height(geom: &CaretGeom) -> f64 {
     if geom.line_height > 0.5 {
         geom.line_height as f64
@@ -106,8 +77,6 @@ fn caret_height(geom: &CaretGeom) -> f64 {
     }
 }
 
-/// Caret x (window space) for a byte offset: map the byte to a character index
-/// into `caret_xs`. Falls back to the last known x when geometry is unavailable.
 fn caret_x_for_byte(geom: &CaretGeom, text: &str, byte: usize) -> f32 {
     if geom.caret_xs.is_empty() {
         return 0.0;
@@ -121,8 +90,6 @@ fn caret_x_for_byte(geom: &CaretGeom, text: &str, byte: usize) -> f32 {
         .unwrap_or(0.0)
 }
 
-/// Byte offset whose caret x is closest to `x` (window space) — the inverse of
-/// [`caret_x_for_byte`], used for tap-to-position and trackpad cursor movement.
 fn byte_for_x(geom: &CaretGeom, text: &str, x: f32) -> usize {
     if geom.caret_xs.is_empty() {
         return text.len();
@@ -136,19 +103,14 @@ fn byte_for_x(geom: &CaretGeom, text: &str, x: f32) -> usize {
             best_k = k;
         }
     }
-    // `caret_xs[k]` is the caret after `k` characters, i.e. the start byte of the
-    // k-th character (or the text end when `k == chars`).
     text.char_indices()
         .nth(best_k)
         .map(|(b, _)| b)
         .unwrap_or(text.len())
 }
 
-/// An edit forwarded to the composition, applied on the next frame.
 pub(crate) enum ImeOp {
-    /// Replace `start..end` (bytes) with `text`.
     Replace(usize, usize, String),
-    /// Move the selection to `start..end` (bytes).
     SetSelection(usize, usize),
 }
 
@@ -157,7 +119,6 @@ fn ops() -> &'static Mutex<Vec<ImeOp>> {
     Q.get_or_init(|| Mutex::new(Vec::new()))
 }
 
-/// Drain queued IME edits (called by the iOS event loop each frame).
 pub(crate) fn take_ime_ops() -> Vec<ImeOp> {
     ops()
         .lock()
@@ -172,8 +133,6 @@ fn wake_slot() -> &'static Mutex<Option<WakeFn>> {
     W.get_or_init(|| Mutex::new(None))
 }
 
-/// Installs a callback that wakes the iOS event loop so a queued edit is applied
-/// on the next frame instead of waiting for the cursor-blink timer.
 pub(crate) fn set_wake(wake: WakeFn) {
     if let Ok(mut w) = wake_slot().lock() {
         *w = Some(wake);
@@ -187,7 +146,6 @@ fn queue_op(op: ImeOp) {
     wake();
 }
 
-/// Apply an optimistic edit to the mirror and queue it for the composition.
 fn apply_replace(start: usize, end: usize, text: &str) {
     if let Ok(mut m) = mirror().lock() {
         let (start, end) = (start.min(m.text.len()), end.min(m.text.len()));
@@ -208,11 +166,6 @@ fn set_selection(start: usize, end: usize) {
     queue_op(ImeOp::SetSelection(start, end));
 }
 
-// ---------------------------------------------------- UTF-16-aware offsets
-
-/// Byte offset that is `count` UTF-16 code units after `from` (or before, if
-/// negative), clamped to the text and to a char boundary. UIKit counts text
-/// positions in UTF-16 units (NSString), while the mirror stores UTF-8 bytes.
 fn shift_utf16(text: &str, from: usize, count: isize) -> usize {
     if count >= 0 {
         let mut remaining = count as usize;
@@ -247,7 +200,6 @@ fn shift_utf16(text: &str, from: usize, count: isize) -> usize {
     }
 }
 
-/// UTF-16 code-unit distance between two byte offsets (`to - from`).
 fn utf16_offset(text: &str, from: usize, to: usize) -> isize {
     if from <= to {
         text[from..to].chars().map(|c| c.len_utf16() as isize).sum()
@@ -258,8 +210,6 @@ fn utf16_offset(text: &str, from: usize, to: usize) -> isize {
             .sum::<isize>()
     }
 }
-
-// ------------------------------------------------- UITextPosition subclass
 
 define_class!(
     #[unsafe(super(UITextPosition))]
@@ -282,8 +232,6 @@ impl TextPosition {
             .unwrap_or(0)
     }
 }
-
-// -------------------------------------------------- UITextRange subclass
 
 define_class!(
     #[unsafe(super(UITextRange))]
@@ -339,8 +287,6 @@ fn upos(pos: Retained<TextPosition>) -> Retained<UITextPosition> {
 fn urange(range: Retained<TextRange>) -> Retained<UITextRange> {
     unsafe { Retained::cast_unchecked(range) }
 }
-
-// ----------------------------------------------------------- the input view
 
 thread_local! {
     static VIEW: RefCell<Option<Retained<KeyInputView>>> = const { RefCell::new(None) };
@@ -435,7 +381,6 @@ define_class!(
 
         #[unsafe(method(setMarkedText:selectedRange:))]
         fn set_marked_text_selected_range(&self, marked: Option<&NSString>, _sel: NSRange) {
-            // No composition model: commit the text directly at the caret.
             let text = marked.map(|t| t.to_string()).unwrap_or_default();
             let m = read_mirror();
             apply_replace(m.sel.0, m.sel.1, &text);
@@ -485,7 +430,6 @@ define_class!(
             direction: UITextLayoutDirection,
             offset: isize,
         ) -> Option<Retained<UITextPosition>> {
-            // Left/Up move back, Right/Down move forward (single line).
             let signed = match direction {
                 UITextLayoutDirection::Left | UITextLayoutDirection::Up => -offset,
                 _ => offset,
@@ -645,7 +589,6 @@ define_class!(
         }
     }
 
-    // A plain UIView cannot become first responder; opt in so the keyboard rises.
     impl KeyInputView {
         #[unsafe(method(canBecomeFirstResponder))]
         fn can_become_first_responder(&self) -> bool {
@@ -675,7 +618,6 @@ impl PlatformTextInputHandler for IosKeyboard {
             root_view.addSubview(&self.view);
         }
         self.view.becomeFirstResponder();
-        // Track the keyboard rising: poll the layout guide over the animation.
         KEYBOARD_HIDING.store(false, Ordering::Relaxed);
         kick_keyboard_poll();
     }
@@ -683,20 +625,13 @@ impl PlatformTextInputHandler for IosKeyboard {
     fn hide_keyboard(&self) {
         KEYBOARD_HIDING.store(true, Ordering::Relaxed);
         self.view.resignFirstResponder();
-        // Resigning our proxy view isn't enough: the winit content view is also
-        // in the responder chain and keeps the software keyboard up (our resign
-        // returns true and `isFirstResponder` is false, yet the keyboard stays).
-        // `-[UIView endEditing:]` on the window force-resigns *whatever* is the
-        // first responder in the window, which reliably dismisses the keyboard.
         if let Some(window) = self.view.window() {
             let _: bool = unsafe { msg_send![&*window, endEditing: true] };
         }
-        // Track the keyboard falling: poll the layout guide back down to zero.
         kick_keyboard_poll();
     }
 }
 
-/// Installs the iOS keyboard handler for the current app context.
 pub(crate) fn register() {
     let Some(mtm) = MainThreadMarker::new() else {
         return;
@@ -713,24 +648,12 @@ pub(crate) fn register() {
     );
 }
 
-// --------------------------------------------------- soft-keyboard inset (poll)
-
-/// Frames of polling a show/hide kicks off — 45 (~0.75s at 60fps) covers the
-/// keyboard rise/fall animation with margin.
 const KEYBOARD_POLL_BURST: u32 = 45;
 
-/// Frames still owed in the current keyboard-inset poll burst.
 static POLL_FRAMES: AtomicU32 = AtomicU32::new(0);
 
-/// True between a hide request and the next show. The layout guide reliably
-/// tracks the keyboard *rising* (reads its docked height) but does not reliably
-/// fall back to zero when the keyboard is force-dismissed in the winit run loop
-/// — the guide's frame stays at the old docked height, so the inset would keep a
-/// blank gap where the keyboard was. A dismissal is deterministic (target is
-/// zero), so the poll reports zero directly while this is set.
 static KEYBOARD_HIDING: AtomicBool = AtomicBool::new(false);
 
-/// Wakes the iOS event loop (if a waker is installed) so the next frame runs.
 fn wake() {
     if let Ok(w) = wake_slot().lock()
         && let Some(wake) = w.as_ref()
@@ -739,20 +662,11 @@ fn wake() {
     }
 }
 
-/// Starts a per-frame keyboard-inset poll burst. Called synchronously the moment
-/// the keyboard is asked to show or hide, so the render loop tracks the whole
-/// animation. The keyboard-frame *notifications* are delivered late and batched
-/// by the winit run loop — driving the inset off them lags a full show/hide
-/// behind reality and leaves a blank gap after the keyboard hides — so the inset
-/// is polled from the layout guide instead (see [`poll_keyboard_bottom_inset`]).
 pub(crate) fn kick_keyboard_poll() {
     POLL_FRAMES.store(KEYBOARD_POLL_BURST, Ordering::Relaxed);
     wake();
 }
 
-/// Whether the render loop should poll the keyboard inset this frame, consuming
-/// one frame of the burst. Returns false once the burst is spent so the loop can
-/// go idle.
 pub(crate) fn keyboard_poll_active() -> bool {
     let remaining = POLL_FRAMES.load(Ordering::Relaxed);
     if remaining == 0 {
@@ -762,11 +676,6 @@ pub(crate) fn keyboard_poll_active() -> bool {
     true
 }
 
-/// Reads the soft-keyboard's covered height (points) straight from the root
-/// view's `keyboardLayoutGuide` (iOS 15+), whose frame UIKit keeps current, so
-/// polling it each frame is exact. Returns `None` before the root view exists.
-/// The guide's top edge is the keyboard's top when docked, and collapses to the
-/// view's bottom (reading ~0) when the keyboard is hidden.
 pub(crate) fn poll_keyboard_bottom_inset() -> Option<f32> {
     if KEYBOARD_HIDING.load(Ordering::Relaxed) {
         return Some(0.0);

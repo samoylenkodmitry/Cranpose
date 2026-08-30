@@ -1,8 +1,3 @@
-//! Robot test for fling + button click race condition
-//!
-//! Run with:
-//! cargo run --package desktop-app --example robot_fling_interrupt --features robot-app
-
 use std::time::Duration;
 
 use cranpose::AppLauncher;
@@ -20,7 +15,6 @@ fn main() {
             std::thread::sleep(Duration::from_millis(500));
             let _ = robot.wait_for_idle();
 
-            // Navigate to Lazy List tab
             println!("Navigating to Lazy List Tab...");
             if let Some((x, y, w, h)) = find_button_in_semantics(&robot, "Lazy List")
                 .or_else(|| find_text_in_semantics(&robot, "Lazy List"))
@@ -56,7 +50,6 @@ fn main() {
             let click_x = start_x + start_w / 2.0;
             let click_y = start_y + start_h / 2.0;
 
-            // Run fling + interrupt cycles
             for cycle in 0..8 {
                 println!("--- Cycle {} ---", cycle + 1);
 
@@ -66,7 +59,6 @@ fn main() {
                     return;
                 }
 
-                // Perform fling gesture
                 let fling_x = 400.0;
                 let _ = robot.mouse_move(fling_x, 450.0);
                 let _ = robot.mouse_down();
@@ -80,7 +72,6 @@ fn main() {
                 let _ = robot.mouse_up();
                 println!("  Fling released");
 
-                // Immediately click Start button multiple times
                 std::thread::sleep(Duration::from_millis(20));
                 for _ in 0..2 {
                     if let Err(err) = robot.click(click_x, click_y) {
@@ -90,7 +81,6 @@ fn main() {
                     std::thread::sleep(Duration::from_millis(20));
                 }
 
-                // Allow UI to process without blocking on a full idle wait.
                 std::thread::sleep(Duration::from_millis(120));
                 println!("  Cycle {} complete", cycle + 1);
             }

@@ -1,16 +1,3 @@
-//! Rotary input demo (Wear OS crown / rotating bezel).
-//!
-//! On a watch this screen is driven by the Pixel Watch crown or the Galaxy
-//! Watch rotating bezel. On the desktop the mouse wheel stands in for the
-//! crown: `dispatch_mouse_wheel` translates every `WindowEvent::MouseWheel`
-//! into a `RotaryScrollEvent` and offers it to rotary handlers before falling
-//! back to ordinary scrolling. Scrolling the wheel anywhere over this screen
-//! moves the value below.
-//!
-//! Scroll the wheel **up** and the accumulated value goes **down**: a positive
-//! Android `AXIS_SCROLL` detent maps to a negative `vertical_scroll_pixels`,
-//! which is Compose's convention.
-
 use cranpose_core::rememberMutableStateOf;
 use cranpose_ui::{
     composable, text::TextUnit, Color, Column, ColumnSpec, Modifier, Text, TextStyle,
@@ -23,11 +10,6 @@ fn heading_style(size: f32, color: Color) -> TextStyle {
     style
 }
 
-/// Demo screen showing raw rotary deltas and an accumulated value.
-///
-/// Demonstrates both phases of the Compose rotary API:
-/// `on_pre_rotary_scroll_event` (capture) and `on_rotary_scroll_event`
-/// (bubble).
 #[composable]
 pub fn rotary_tab() {
     let accumulated = rememberMutableStateOf(|| 0.0f32);
@@ -35,9 +17,6 @@ pub fn rotary_tab() {
     let events = rememberMutableStateOf(|| 0u32);
     let pre_events = rememberMutableStateOf(|| 0u32);
 
-    // Capture (pre) pass, root -> focused. Returning `false` lets the event
-    // continue on to the bubble handler below; returning `true` would consume
-    // it and the bubble handler would never run.
     let pre_counter = pre_events;
     let modifier = Modifier::empty()
         .fill_max_size()
@@ -45,12 +24,10 @@ pub fn rotary_tab() {
             pre_counter.set(pre_counter.get() + 1);
             false
         })
-        // Bubble pass, focused -> root: the normal place to handle rotary.
         .on_rotary_scroll_event(move |event| {
             accumulated.set(accumulated.get() + event.vertical_scroll_pixels);
             last_delta.set(event.vertical_scroll_pixels);
             events.set(events.get() + 1);
-            // Consume, so the wheel does not additionally scroll a parent.
             true
         });
 

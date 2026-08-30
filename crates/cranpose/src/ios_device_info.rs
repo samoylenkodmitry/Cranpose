@@ -1,8 +1,3 @@
-//! iOS device information via `NSProcessInfo`.
-//!
-//! Registered as the platform device info (see
-//! [`cranpose_services::set_platform_device_info`]) by the iOS backend.
-
 use std::{rc::Rc, sync::Arc};
 
 use cranpose_services::{
@@ -11,7 +6,6 @@ use cranpose_services::{
 };
 use objc2_foundation::NSProcessInfo;
 
-/// Installs the iOS device info as the platform device info.
 pub(crate) fn register() {
     set_platform_device_info(Rc::new(IosDeviceInfo));
     set_platform_power_monitor(Arc::new(IosPowerMonitor));
@@ -32,8 +26,6 @@ impl PowerMonitor for IosPowerMonitor {
         PowerCapabilities {
             thermal: true,
             battery: true,
-            // iOS has Low Power Mode but no per-app background restriction to
-            // report, so the framework says so rather than guessing.
             background_restriction: false,
         }
     }
@@ -44,8 +36,6 @@ impl PowerMonitor for IosPowerMonitor {
 
     fn battery_status(&self) -> PowerReading<BatteryStatus> {
         let Some(marker) = objc2::MainThreadMarker::new() else {
-            // Battery level is main-thread only on UIKit; off it, the platform
-            // has an answer this call cannot reach.
             return PowerReading::Unknown;
         };
         use objc2_ui_kit::{UIDevice, UIDeviceBatteryState};

@@ -301,7 +301,6 @@ impl PressInteractionNode {
         active_press: Rc<RefCell<Option<PressInteractionPress>>>,
     ) -> Rc<dyn Fn(PointerEvent)> {
         Rc::new(move |event: PointerEvent| {
-            // Press interactions track the primary pointer only.
             if event.id != 0 {
                 return;
             }

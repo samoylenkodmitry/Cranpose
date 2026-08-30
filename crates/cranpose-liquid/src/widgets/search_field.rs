@@ -1,5 +1,3 @@
-//! A pill search field on glass.
-
 use cranpose_foundation::text::TextFieldState;
 use cranpose_macros::composable;
 use cranpose_ui::{
@@ -84,10 +82,6 @@ pub fn LiquidSearchField(modifier: Modifier, state: TextFieldState, spec: Liquid
                         ..body.clone()
                     };
                     let placeholder = placeholder.clone();
-                    // The field must fill the pill so it has a non-zero width
-                    // (and stays hit-testable) even when empty — otherwise an
-                    // empty search field measures to 0px and rejects every tap,
-                    // so focus + the soft keyboard never fire.
                     Box(
                         Modifier::empty().weight(1.0),
                         BoxSpec::default(),

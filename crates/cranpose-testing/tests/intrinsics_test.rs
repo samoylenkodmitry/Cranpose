@@ -1,9 +1,3 @@
-//! Tests for intrinsic size measurements.
-//!
-//! This test file demonstrates the IntrinsicSize API which mirrors Jetpack Compose's
-//! intrinsic measurement system. The tests verify that components can size themselves
-//! based on the intrinsic measurements of their children.
-
 use cranpose_ui::*;
 
 #[test]
@@ -11,7 +5,6 @@ fn intrinsic_size_modifiers_accept_values() {
     let _app_context = cranpose_ui::AppContext::new();
     let _app_context_scope = _app_context.enter_scope();
     _app_context.enter(cranpose_ui::reset_render_state_for_tests);
-    // Test that the API accepts intrinsic size values
     let _width_min = Modifier::empty().width_intrinsic(IntrinsicSize::Min);
     let _width_max = Modifier::empty().width_intrinsic(IntrinsicSize::Max);
     let _height_min = Modifier::empty().height_intrinsic(IntrinsicSize::Min);
@@ -23,7 +16,6 @@ fn intrinsic_size_can_be_combined_with_other_modifiers() {
     let _app_context = cranpose_ui::AppContext::new();
     let _app_context_scope = _app_context.enter_scope();
     _app_context.enter(cranpose_ui::reset_render_state_for_tests);
-    // Test that intrinsic size modifiers can be combined
     let _combined = Modifier::empty()
         .width_intrinsic(IntrinsicSize::Max)
         .then(Modifier::empty().padding(8.0))
@@ -35,11 +27,7 @@ fn equal_width_buttons_api_demonstration() {
     let _app_context = cranpose_ui::AppContext::new();
     let _app_context_scope = _app_context.enter_scope();
     _app_context.enter(cranpose_ui::reset_render_state_for_tests);
-    // This test demonstrates the equal-width buttons use case from the roadmap.
-    // The actual intrinsic measurement calculation will be implemented in the layout engine.
     let composition = run_test_composition(|| {
-        // Using Row with equal-width buttons via IntrinsicSize.Max
-        // This would make all buttons as wide as the widest button
         Row(Modifier::empty(), RowSpec::default(), || {
             Button(
                 Modifier::empty().width_intrinsic(IntrinsicSize::Max),
@@ -68,7 +56,6 @@ fn equal_width_buttons_api_demonstration() {
         });
     });
 
-    // Verify that the composition was created successfully
     assert!(composition.root().is_some());
 }
 
@@ -77,7 +64,6 @@ fn column_with_intrinsic_width() {
     let _app_context = cranpose_ui::AppContext::new();
     let _app_context_scope = _app_context.enter_scope();
     _app_context.enter(cranpose_ui::reset_render_state_for_tests);
-    // Test Column with intrinsic width - should size to fit widest child
     let composition = run_test_composition(|| {
         Column(
             Modifier::empty()
@@ -100,7 +86,6 @@ fn row_with_intrinsic_height() {
     let _app_context = cranpose_ui::AppContext::new();
     let _app_context_scope = _app_context.enter_scope();
     _app_context.enter(cranpose_ui::reset_render_state_for_tests);
-    // Test Row with intrinsic height - should size to fit tallest child
     let composition = run_test_composition(|| {
         Row(
             Modifier::empty()
@@ -144,7 +129,6 @@ fn min_intrinsic_vs_max_intrinsic() {
     let _app_context = cranpose_ui::AppContext::new();
     let _app_context_scope = _app_context.enter_scope();
     _app_context.enter(cranpose_ui::reset_render_state_for_tests);
-    // Demonstrate the difference between Min and Max intrinsic sizes
     let comp_min = run_test_composition(|| {
         Column(
             Modifier::empty().width_intrinsic(IntrinsicSize::Min),
@@ -174,7 +158,6 @@ fn intrinsic_size_with_padding() {
     let _app_context = cranpose_ui::AppContext::new();
     let _app_context_scope = _app_context.enter_scope();
     _app_context.enter(cranpose_ui::reset_render_state_for_tests);
-    // Test that padding is correctly applied when using intrinsic sizing
     let composition = run_test_composition(|| {
         Column(
             Modifier::empty()
@@ -197,7 +180,6 @@ fn nested_intrinsic_sizing() {
     let _app_context = cranpose_ui::AppContext::new();
     let _app_context_scope = _app_context.enter_scope();
     _app_context.enter(cranpose_ui::reset_render_state_for_tests);
-    // Test nested layouts with intrinsic sizing
     let composition = run_test_composition(|| {
         Column(Modifier::empty(), ColumnSpec::default(), || {
             Row(

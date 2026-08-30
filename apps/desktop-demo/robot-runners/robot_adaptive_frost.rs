@@ -1,10 +1,3 @@
-//! Adaptive-frost contract: glass protects both light foreground over a
-//! bright backdrop and dark foreground over a dark backdrop. Each result is
-//! measured against an identical non-adaptive glass in the same scene.
-//!
-//! Run with:
-//! `cargo run --package desktop-app --example robot_adaptive_frost --features desktop,robot-app`
-
 use std::{
     path::PathBuf,
     process::ExitCode,
@@ -32,12 +25,6 @@ static FAILED: AtomicBool = AtomicBool::new(false);
 
 fn main() -> ExitCode {
     let _ = env_logger::try_init();
-    // GitHub-hosted runners misrender this scene's plain capsules on their
-    // software-vulkan stack (deterministic, machine-specific): the identical
-    // prebuilt binary + the exact Ubuntu mesa pass byte-identically to real
-    // GPUs everywhere else, including the self-hosted runner — see
-    // TIME_WASTERS.md. This luma-contrast contract needs a real GPU; the
-    // heavy self-hosted workflow keeps covering it.
     if std::env::var("CRANPOSE_ROBOT_SOFTWARE_RENDERER").as_deref() == Ok("1") {
         println!("PASS: adaptive frost contract (skipped on software renderer)");
         return ExitCode::SUCCESS;
@@ -55,11 +42,6 @@ fn main() -> ExitCode {
         .with_test_driver(move |robot| {
             std::thread::sleep(Duration::from_millis(900));
             let _ = robot.wait_for_idle();
-            // Slow software-GPU hosts (CI lavapipe) can present frames before
-            // the backdrop composite is warm — both capsules then read a
-            // fallback face (~140 luma) while the raw panels render fine.
-            // Poll the RAW panel strips (above the capsules, clear of glass)
-            // until the scene actually reads settled, then measure.
             let mut shot = robot.screenshot().expect("shot");
             for _ in 0..60 {
                 let bright_panel = mean_luma(&shot, PANEL_W * 0.5 - 30.0, 6.0, 60.0, 18.0);
@@ -81,8 +63,6 @@ fn main() -> ExitCode {
                 .expect("save adaptive frost proof");
 
             let sample = |x: f32, y: f32| -> f32 {
-                // Mean luma at the left of the capsule, clear of rim and the
-                // centered foreground label.
                 mean_luma(&shot, x + 18.0, y + 14.0, 22.0, GLASS_H - 28.0)
             };
             let white_cx = (PANEL_W - GLASS_W) * 0.5;
@@ -162,7 +142,6 @@ fn main() -> ExitCode {
                     }),
                     BoxSpec::default(),
                     || {
-                        // Bright and dark backdrops side by side.
                         CBox(
                             Modifier::empty()
                                 .size(Size {

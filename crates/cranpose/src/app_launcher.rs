@@ -1,8 +1,3 @@
-//! Platform-agnostic application launcher with inversion of control.
-//!
-//! This module provides the `AppLauncher` API that allows apps to configure
-//! and launch on multiple platforms without knowing platform-specific details.
-
 use std::path::Path;
 #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
 use std::path::PathBuf;
@@ -175,8 +170,6 @@ impl AppSettings {
             }
         }
         let fonts = registry.into_font_set_or_default(self.fonts.unwrap_or(&[]));
-        // Which typeface text actually landed on is otherwise invisible until
-        // someone compares screenshots, so say it once at startup.
         log::info!(
             "Text fonts: {} face(s) [{}]",
             fonts.faces().len(),
@@ -883,10 +876,6 @@ impl AppLauncher {
     ))]
     pub fn with_test_driver(mut self, driver: impl FnOnce(crate::Robot) + Send + 'static) -> Self {
         self.settings.test_driver = Some(Box::new(driver));
-        // Robot harnesses measure work throughput and high-refresh cadence
-        // contracts; lift the vsync cap unless the harness pinned a mode. The
-        // slim Vulkan shell presents on demand and carries no frame-pacing
-        // controls, so this only applies to the wgpu desktop shell.
         #[cfg(feature = "renderer-wgpu")]
         if !self.settings.frame_pacing_explicit {
             self.settings.frame_pacing_mode = FramePacingMode::NoVsync;
@@ -1090,9 +1079,6 @@ mod tests {
 
     #[test]
     fn a_font_registration_that_fails_leaves_a_usable_launcher() {
-        // A missing or unreadable font is a warning, not a launch failure: an
-        // app that cannot find one face still has to start and draw with the
-        // fallbacks.
         let launcher = AppLauncher::new()
             .with_fonts_from(|_registry| Err(FontLoadError::EmptyFamily))
             .with_title("still here");
@@ -1144,9 +1130,6 @@ mod tests {
     #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
     #[test]
     fn production_apps_default_to_vsync_frame_pacing() {
-        // A desktop UI app must not render animations uncapped (hundreds of fps
-        // on a 60Hz panel saturates the GPU and ruins scroll latency). Vsync is
-        // the production default; harnesses opt out explicitly.
         assert_eq!(
             AppSettings::default().frame_pacing_mode,
             FramePacingMode::Vsync
@@ -1161,9 +1144,6 @@ mod tests {
     ))]
     #[test]
     fn robot_test_driver_defaults_to_uncapped_frame_pacing() {
-        // Robot/perf harnesses measure work throughput and 120Hz cadence
-        // contracts; installing a test driver lifts the vsync cap unless the
-        // harness chose a pacing mode explicitly.
         let launcher = AppLauncher::new().with_test_driver(|_| {});
         assert_eq!(
             launcher.settings.frame_pacing_mode,

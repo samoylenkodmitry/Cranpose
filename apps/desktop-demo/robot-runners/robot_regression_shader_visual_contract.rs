@@ -1,5 +1,3 @@
-//! E2E visual contracts for Shaders tab regressions.
-
 mod output_paths;
 mod text_showcase_external_helpers;
 mod visual_contract_metrics;
@@ -112,10 +110,6 @@ fn run_interactive_overlap() {
                 150,
                 110,
             );
-            // Slow software-GPU hosts (CI lavapipe) can capture before the
-            // dragged rects and their backdrop composite settle: poll the
-            // SAME metrics the contract asserts until they read composed
-            // (with a deadline), then judge the final capture.
             let measure = |image: &image::RgbaImage| {
                 let left_half =
                     crop_rgba(image, (glass_crop.0, glass_crop.1, 75, glass_crop.3));
@@ -151,14 +145,6 @@ fn run_interactive_overlap() {
                     right_blue_blur_pixels,
                 )
             };
-            // The regression guard is the RATIO (backdrop detail present
-            // in the right half) plus edges and labels; the absolute count
-            // is only a some-content sanity floor — software renderers
-            // legitimately color ~4x fewer pixels than real GPUs here
-            // (CI 376 vs NVIDIA 1466 on the same scene). The poll gate and
-            // the final assert MUST share this floor: when they diverged
-            // (poll 200, assert 500) every CI run landing between them
-            // polled to "composed" and then failed the contract.
             const RIGHT_BLUE_FLOOR: usize = 200;
             let composed = |metrics: &(f32, f32, usize, usize, usize)| {
                 let (left_edge, right_edge, labels, left_blue, right_blue) = *metrics;
@@ -517,9 +503,6 @@ fn is_scrollbar_thumb_pixel(pixel: [u8; 4]) -> bool {
 }
 
 fn is_blue_blur_pixel(pixel: [u8; 4]) -> bool {
-    // The blurred overlap is cyan-blue, while the mint glass over the bare
-    // checker remains green-dominant. Relative chroma keeps the classifier
-    // valid when the glass material changes overall luminance.
     let [red, green, blue, alpha] = pixel;
     alpha > 170 && blue > 140 && green > 105 && blue > red.saturating_add(10) && blue > green
 }

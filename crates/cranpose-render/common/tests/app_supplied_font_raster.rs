@@ -1,11 +1,3 @@
-//! App-supplied fonts through the production measurer and atlas collector.
-//!
-//! The contract is that a family an app registers reaches the rasterizer, that
-//! measurement resolves the same face the drawing does, and that none of it
-//! costs work on repeat frames. These run against real files on disk, so a
-//! missing or corrupt one fails the way it would in an app rather than through
-//! a stub.
-
 #![cfg(feature = "embedded-default-font")]
 
 use std::path::{Path, PathBuf};
@@ -27,8 +19,6 @@ const FONT_SIZE: f32 = 20.0;
 const REGULAR: &[u8] = include_bytes!("../assets/NotoSansMerged.ttf");
 const BOLD: &[u8] = include_bytes!("../assets/NotoSansBold.ttf");
 
-/// Somewhere under the workspace `target/test-output` to stand in for an app's
-/// own font directory.
 fn font_dir(name: &str) -> PathBuf {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../../target/test-output/cranpose-app-fonts")
@@ -44,7 +34,6 @@ fn write_font(dir: &Path, name: &str, bytes: &[u8]) -> String {
     path.to_string_lossy().into_owned()
 }
 
-/// The two-weight family a Compose port would declare.
 fn app_family(dir: &Path) -> FontFamily {
     FontFamily::file_backed(vec![
         FontFile::new(write_font(dir, "App-Regular.ttf", REGULAR)),
@@ -71,7 +60,6 @@ fn style_for(family: &FontFamily, weight: FontWeight) -> TextStyle {
     }
 }
 
-/// The block box the draw scope would emit, measured exactly as production does.
 fn measured_block(fonts: &SoftwareTextFontSet, text: &str, style: &TextStyle) -> Rect {
     let metrics =
         SoftwareTextMeasurer::from_font_set(fonts.clone(), 256).measure(&text.into(), style);
@@ -83,7 +71,6 @@ fn measured_block(fonts: &SoftwareTextFontSet, text: &str, style: &TextStyle) ->
     }
 }
 
-/// Runs the atlas collector exactly as the renderer does for a text draw.
 fn collect(
     fonts: &SoftwareTextFontSet,
     rect: Rect,
@@ -292,9 +279,6 @@ fn characters_the_app_face_cannot_draw_measure_and_collect_without_panicking() {
     let family = app_family(&dir);
     let fonts = font_set(&family);
     let style = style_for(&family, FontWeight::NORMAL);
-    // Private-use codepoints have no outline in any shipped face, and there is
-    // no per-glyph fallback across families: they are skipped, and the run
-    // carries the letters that did resolve.
     let text = "A\u{E000}\u{10FFFD}B";
 
     let rect = measured_block(&fonts, text, &style);

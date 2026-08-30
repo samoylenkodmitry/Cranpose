@@ -1,28 +1,3 @@
-//! Pixel parity for the `fs_solid` fragment entry.
-//!
-//! A batch whose shapes carry no gradient stops draws through `fs_solid`,
-//! whose coverage math is copied from `fs_main` line for line. The
-//! `instanced_quad_parity` precedent says textually identical bodies in one
-//! module contract identically on this compiler, so the bar here is ZERO
-//! differing bytes. If a toolchain update ever splits the contraction, this
-//! fails with a handful of ±1 bytes on AA edges — re-measure and pin the
-//! envelope per the `arc_mesh_parity` discipline; anything larger is a real
-//! defect (wrong entry point wiring, a batch misrouted).
-//!
-//! Arm separation is by scene composition, not environment: the solid arm
-//! is the scene as recorded; the mixed arm appends one 8×8 rect painted
-//! with a two-stop, all-transparent linear gradient. Every stop has alpha
-//! zero, so its SrcOver blend leaves every destination byte unchanged —
-//! but its stops flip the batch's `has_gradient`, forcing the WHOLE batch
-//! (the identical solid shapes included) back through `fs_main`. The
-//! primitives are hand-built `DrawRunNode::new` runs with no command id,
-//! so no feed, no retention, no replay slots: every pass renders through
-//! the fresh-batch path, the exact pipeline-selection site under test.
-//!
-//! `trimmed_varyings_do_not_move_a_byte` is the one environmental exception:
-//! `CRANPOSE_SOLID_TRIM_VARYINGS` latches at pipeline build, so its arms are
-//! whole fresh renderers, per the `instanced_quad_parity` discipline.
-
 mod support;
 
 use cranpose_render_common::{
@@ -39,8 +14,6 @@ use cranpose_ui_graphics::{Brush, Color, DrawScope, DrawScopeDefault, GraphicsLa
 const SIZE: u32 = 256;
 const CENTER: f32 = 128.0;
 
-/// Solid shapes through all four fragment coverage branches: plain rect,
-/// rounded rect, stroked rect, and arc bands with both cap styles.
 fn record_solid_scene(scope: &mut DrawScopeDefault) {
     scope.draw_rect_at(
         Rect {
@@ -98,9 +71,6 @@ fn record_solid_scene(scope: &mut DrawScopeDefault) {
     );
 }
 
-/// The invisible gradient: two stops, both alpha zero. Its SrcOver blend is
-/// `dst + src * 0`, byte-neutral on every pixel it covers, but its stops
-/// force the batch onto `fs_main`.
 fn record_transparent_gradient(scope: &mut DrawScopeDefault) {
     scope.draw_rect_at(
         Rect {
@@ -153,10 +123,6 @@ fn graph_for(with_gradient: bool) -> RenderGraph {
     })
 }
 
-/// Warm pass (never compared — first-render cache warmup renders
-/// differently, the same-position-control trap `command_feed_parity`
-/// documents), then two controls asserted byte-stable; the second control
-/// is the arm's frame.
 fn render_arm(renderer: &mut support::LockedRenderer, graph: &RenderGraph) -> Vec<u8> {
     let mut passes = Vec::new();
     for _ in 0..3 {
@@ -174,24 +140,7 @@ fn render_arm(renderer: &mut support::LockedRenderer, graph: &RenderGraph) -> Ve
     passes.pop().unwrap()
 }
 
-/// How far the two entry points may disagree.
-///
-/// Not zero, and it cannot be. `fs_solid` and `fs_main` are two shader
-/// *programs*, and no driver promises they contract floats identically — the
-/// same expression may become an fma in one and a multiply-add in the other
-/// depending on register pressure, which differs precisely because one of them
-/// carries the gradient code. Measured on Linux/Vulkan: **3 bytes apart, worst
-/// 2 levels**, from a 128x128 frame, and unchanged when the coverage math was
-/// factored into a single shared function called by both — the duplication was
-/// not the cause. macOS/Metal, which is where CI runs the workspace tests, sees
-/// zero, which is why this shipped looking exact.
-///
-/// The bound stays three orders of magnitude below what it has to catch: the
-/// negative control for this test — dimming `fs_solid`'s return — moves ~13000
-/// bytes. Anything approaching that is a shading difference, not arithmetic
-/// noise. A divergence visible to anyone would be far larger still.
 const MAX_DIVERGING_BYTES: usize = 16;
-/// Per-byte ceiling: a level or two of rounding, never a visible step.
 const MAX_DIVERGING_LEVEL: u8 = 2;
 
 #[test]
@@ -231,12 +180,6 @@ fn solid_fragment_entry_matches_fs_main() {
     );
 }
 
-/// One trim arm: a fresh renderer (the instanced selection latches at
-/// construction, the trim at first solid pipeline build), captured three
-/// ways — the solid scene flat, the solid scene under the display-clip cull
-/// (the depth-variant pipelines), and the mixed scene (the gradient batch
-/// that must keep riding `fs_main` untouched). The renderer drops before the
-/// caller starts the next arm, releasing the GPU lock.
 fn capture_trim_arm() -> Option<(Vec<u8>, Vec<u8>, Vec<u8>)> {
     let mut renderer = match support::headless_renderer() {
         Ok(renderer) => renderer,
@@ -255,7 +198,6 @@ fn capture_trim_arm() -> Option<(Vec<u8>, Vec<u8>, Vec<u8>)> {
     Some((flat, culled, mixed))
 }
 
-/// Zero-byte compare with a diff report worth reading on failure.
 fn assert_no_byte_moved(label: &str, full: &[u8], trimmed: &[u8]) {
     assert_eq!(full.len(), trimmed.len(), "{label}: capture sizes differ");
     let mut differing = 0usize;
@@ -277,16 +219,6 @@ fn assert_no_byte_moved(label: &str, full: &[u8], trimmed: &[u8]) {
     );
 }
 
-/// The step-2 bar: `CRANPOSE_SOLID_TRIM_VARYINGS` must not move a byte.
-///
-/// Unlike `solid_fragment_entry_matches_fs_main` above — which compares two
-/// different fragment PROGRAMS and pins a measured contraction envelope —
-/// this compares the same shared coverage body over identically interpolated
-/// inputs, so the bar is zero, on every vertex path: six-vertex `vs_solid`
-/// (`CRANPOSE_INSTANCED_QUADS=0`), instanced `vs_solid_instanced` (default),
-/// and the display-clip depth variants of both (the culled arm). The mixed
-/// captures double as the negative control's negative: a gradient batch must
-/// render identically because it never touches the trimmed pipelines.
 #[test]
 fn trimmed_varyings_do_not_move_a_byte() {
     for instanced in ["0", "1"] {
@@ -296,8 +228,6 @@ fn trimmed_varyings_do_not_move_a_byte() {
             cranpose_render_wgpu::set_debug_toggle("CRANPOSE_INSTANCED_QUADS", None);
             return;
         };
-        // The culled capture must actually have culled something, or its
-        // compare proves nothing about the depth-variant pipelines.
         assert_ne!(
             full_flat, full_culled,
             "instanced={instanced}: the display-clip cull never engaged"

@@ -1,9 +1,3 @@
-//! External X11 contract for the Counter App pointer highlight.
-//!
-//! The visible pointer highlight must brighten while the primary button is
-//! pressed and return to its hover intensity after mouseup, even when the
-//! pointer is released over the Increment button that also handles the click.
-
 mod output_paths;
 mod text_showcase_external_helpers;
 

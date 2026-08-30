@@ -32,9 +32,6 @@ pub(crate) fn liquid_visual_index(
     if !lens_owns_selection || !lens_position.is_finite() || item_width <= f32::EPSILON {
         return selected;
     }
-    // The cell containing the lens CENTER: flooring the left edge promoted
-    // the destination label the instant a leftward flight departed (the
-    // reference promotes as the bubble crosses into the cell, mid-flight).
     ((lens_position + item_width * 0.5) / item_width)
         .floor()
         .clamp(0.0, count.saturating_sub(1) as f32) as usize
@@ -91,9 +88,6 @@ impl LiquidMotion {
     }
 }
 
-/// One travelling coordinate with strict direct-manipulation semantics.
-/// Pointer samples are visible immediately; the animation channel is used
-/// only after release or for controlled-state changes while idle.
 pub(crate) struct LiquidDragAxis {
     animation: RefCell<Animatable<f32>>,
     pointer: Cell<Option<f32>>,
@@ -185,9 +179,6 @@ impl LiquidDragAxis {
             .animate_to_with_velocity(target, release_velocity, animation);
     }
 
-    /// End direct manipulation at its final sample without creating a
-    /// translational spring flight. Continuous controls stop at the finger,
-    /// while the fluid integrator retains and relaxes the sampled velocity.
     pub(crate) fn finish_at(&self, position: f32, event_time_ms: Option<i64>) {
         let Some(_) = self.pointer.get() else {
             self.animation.borrow_mut().snapTo(position);
@@ -242,28 +233,15 @@ pub(crate) fn remember_liquid_drag_axis(initial: f32) -> Rc<LiquidDragAxis> {
     })
 }
 
-/// Wiring for [`liquid_lens_gesture`]: the one tap/swipe state machine every
-/// lens-carrying strip control shares (tab bar, segmented control).
 pub(crate) struct LiquidLensGesture {
     pub axis: Rc<LiquidDragAxis>,
-    /// Cell pitch, for committing a release position to an index.
     pub cell_width: f32,
     pub count: usize,
-    /// Pointer travel below this is a tap, not a swipe.
     pub tap_slop: f32,
-    /// Clamped lens-left for a live pointer x (drag bounds — may allow
-    /// overdrag past the ends, e.g. toward a bar accessory).
     pub drag_left: Rc<dyn Fn(f32) -> f32>,
-    /// Settled lens-left for a committed index (rest bounds — keeps the
-    /// bubble inside the pill).
     pub rest_left: Rc<dyn Fn(usize) -> f32>,
-    /// The index the control rests on if the gesture cancels.
     pub selected: usize,
-    /// Pressed-state feedback (lift, highlight). Called with `true` on
-    /// touch-down and `false` on release/cancel.
     pub on_pressed: Rc<dyn Fn(bool)>,
-    /// Live touch point feedback (the under-finger glow). No-op for
-    /// controls without one.
     pub on_touch: Rc<dyn Fn(f32, f32)>,
     pub on_select: Rc<dyn Fn(usize)>,
 }
@@ -275,15 +253,6 @@ impl LiquidLensGesture {
     }
 }
 
-/// Drives one pointer interaction for a lens strip: touch-down lifts the
-/// lens IN PLACE (the reference press swells the selected pill where it
-/// rests — segmented tap-flight 0-380ms, on-white f_0040 — the finger's
-/// hold duration IS the visible dwell), movement past the slop ATTRACTS
-/// the lens toward the finger (a glide, never a teleport) and attaches it
-/// once caught, release commits the covered cell and FLIES the lens there,
-/// cancel returns to the controlled selection. The tab bar and segmented
-/// control both run exactly this machine — only their clamp rules and
-/// feedback hooks differ.
 pub(crate) async fn liquid_lens_gesture(
     scope: cranpose_ui::PointerInputScope,
     gesture: LiquidLensGesture,
@@ -303,11 +272,6 @@ pub(crate) async fn liquid_lens_gesture(
                         active_pointer = Some(event.id);
                         down_x = event.position.x;
                         moved = false;
-                        // The press lifts the pill where it RESTS — no axis
-                        // motion. The reference tap charges the selected
-                        // pill in place for the whole hold and only flies on
-                        // release; gliding toward the finger here departed
-                        // the origin within a frame of touch-down.
                         (gesture.on_pressed)(true);
                         (gesture.on_touch)(event.position.x, event.position.y);
                         default_haptics().perform(HapticFeedback::Selection);
@@ -315,10 +279,6 @@ pub(crate) async fn liquid_lens_gesture(
                     }
                     PointerEventKind::Move if active_pointer == Some(event.id) => {
                         moved |= (event.position.x - down_x).abs() > gesture.tap_slop;
-                        // Below the slop this is still a tap: keep the lens
-                        // anchored so release FLIES it. Feeding micro-jitter
-                        // into the direct axis teleports the lens to the
-                        // finger — the intermittent "snap instead of flight".
                         if moved {
                             let target = (gesture.drag_left)(event.position.x);
                             if gesture.axis.is_dragging() {
@@ -326,12 +286,9 @@ pub(crate) async fn liquid_lens_gesture(
                             } else if (gesture.axis.value() - target).abs()
                                 <= gesture.cell_width * 0.6
                             {
-                                // Caught up with the finger: attach directly.
                                 gesture.axis.begin(gesture.axis.value(), event.time_ms);
                                 gesture.axis.move_to(target, event.time_ms);
                             } else {
-                                // Far grab: ATTRACT the lens toward the
-                                // finger first (a glide, never a teleport).
                                 gesture.axis.settle_to(target, LiquidMotion::glide());
                             }
                         }
@@ -394,8 +351,6 @@ pub fn liquid_press_scale(
         "liquid-press-scale",
     );
     let content_alpha = cranpose_animation::animateFloatAsState(
-        // The reference down-state ghosts glyphs hard (the menu button's
-        // dots drop to ~30% while held).
         if pressed.get() { 0.35 } else { 1.0 },
         LiquidMotion::smooth(),
         "liquid-press-content",
@@ -434,9 +389,7 @@ mod tests {
     #[test]
     fn direct_manipulation_owns_visual_selection_until_the_lens_reaches_state() {
         assert_eq!(liquid_visual_index(2, 0.0, 78.0, 4, false), 2);
-        // Center-based: the lens LEFT at 2.0 cells puts its center in cell 2.
         assert_eq!(liquid_visual_index(0, 2.0 * 78.0, 78.0, 4, true), 2);
-        // A leftward flight departing cell 2 keeps cell 2 until mid-crossing.
         assert_eq!(liquid_visual_index(0, 1.6 * 78.0, 78.0, 4, true), 2);
         assert_eq!(liquid_visual_index(0, 1.4 * 78.0, 78.0, 4, true), 1);
         assert_eq!(liquid_visual_index(0, 2.71 * 78.0, 78.0, 4, true), 3);
@@ -526,8 +479,6 @@ mod tests {
 
     #[test]
     fn released_flight_is_critically_damped() {
-        // Stiffness 500 ~= 90% travel at ~175 ms: the reference bottom-bar
-        // transfer arrives in ~170 ms with no visible overshoot.
         let AnimationType::Spring(spec) = LiquidMotion::glide() else {
             panic!("released flight must use a spring");
         };

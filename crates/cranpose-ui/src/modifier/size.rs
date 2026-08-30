@@ -1,7 +1,3 @@
-//! Size modifier implementations following Jetpack Compose's layout/Size.kt
-//!
-//! Reference: /media/huge/composerepo/compose/foundation/foundation-layout/src/commonMain/kotlin/androidx/compose/foundation/layout/Size.kt
-
 use cranpose_ui_layout::IntrinsicSize;
 
 use super::{DimensionConstraint, Modifier, Size, inspector_metadata};

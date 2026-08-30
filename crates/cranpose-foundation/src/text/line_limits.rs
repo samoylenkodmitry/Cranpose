@@ -1,12 +1,3 @@
-//! Line limit configuration for text fields.
-//!
-//! This module provides `TextFieldLineLimits` which controls whether a text field
-//! is single-line (horizontal scroll, no newlines) or multi-line with optional
-//! min/max line constraints.
-//!
-//! Matches Jetpack Compose's `TextFieldLineLimits` from
-//! `compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/text/input/TextFieldLineLimits.kt`.
-
 /// Line limit configuration for text fields.
 ///
 /// Controls whether a text field allows multiple lines of input and how many

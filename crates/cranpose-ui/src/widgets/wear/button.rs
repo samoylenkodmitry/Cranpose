@@ -101,7 +101,6 @@ where
         })
         .clickable(move |_point| on_click())
         .semantics(move |config: &mut SemanticsConfiguration| {
-            // `Role.Button` on the `combinedClickable`.
             config.role = Some(SemanticsWidgetRole::Button);
             config.is_clickable = true;
             config.content_description = Some(description.clone());
@@ -189,15 +188,10 @@ impl MeasurePolicy for WearButtonMeasurePolicy {
             .max(density.ceil(column) + vertical)
             .clamp(constraints.min_height, constraints.max_height);
 
-        // The label column is centred in the content area, not in the whole
-        // capsule: the vertical padding is taken off first and the slack is
-        // then split on a whole pixel.
         let content = height - vertical;
         let mut y = density.dp(self.spec.padding_vertical) + density.centre(content, column);
         let x = density.dp(self.spec.padding_horizontal);
         for placeable in &placeables {
-            // The label column has no weight, so it wraps its content and sits
-            // at the start; the text inside is start-aligned too.
             placements.push(Placement::new(placeable.node_id(), x, y, 0));
             y += density.ceil(placeable.height()) + spacing;
         }

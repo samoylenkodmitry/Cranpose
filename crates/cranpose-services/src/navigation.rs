@@ -32,7 +32,6 @@ type BackListener = std::rc::Rc<dyn Fn() + 'static>;
 static BACK_REQUESTS: AtomicUsize = AtomicUsize::new(0);
 static BACK_INTERCEPTION: AtomicBool = AtomicBool::new(false);
 static NEXT_LISTENER_ID: AtomicU64 = AtomicU64::new(1);
-/// A flag rather than a count: closing twice is closing once.
 static EXIT_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 /// Record a system back request (called by the platform backend's gesture /
@@ -183,9 +182,6 @@ pub fn back_interception_enabled() -> bool {
 pub fn request_exit() {
     EXIT_REQUESTED.store(true, Ordering::SeqCst);
     if let Some(listener) = latest_back_listener() {
-        // The same nudge a back request gets, and for the same reason: an app
-        // that has gone idle has no frame loop to notice the flag, and the
-        // platform drains it from that loop.
         listener();
     }
 }
@@ -220,12 +216,6 @@ mod tests {
 
     use super::*;
 
-    /// Every global in this module is process-wide and the runner is threaded,
-    /// so the tests take turns. They share one lock rather than one each: the
-    /// back-request counter, the exit flag and the listener are entangled --
-    /// `request_exit` nudges the listener, so a test asserting on the listener
-    /// count is moved by a test that only meant to touch the exit flag. One
-    /// failure in twenty, which is the worst rate for anyone to debug.
     fn navigation_lock() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
         LOCK.lock().unwrap_or_else(|e| e.into_inner())
@@ -234,17 +224,13 @@ mod tests {
     #[test]
     fn requests_accumulate_and_drain() {
         let _guard = navigation_lock();
-        let _ = take_back_requests(); // clear any residue
+        let _ = take_back_requests();
         push_back_request();
         push_back_request();
         assert_eq!(take_back_requests(), 2);
         assert_eq!(take_back_requests(), 0);
     }
 
-    /// The listener is a `OnceLock`, so exactly one test in this process can
-    /// own it -- a second registration is silently ignored, and a test that
-    /// registered its own would sit there hearing nothing. Everything that has
-    /// to observe the nudge is therefore checked here.
     #[test]
     fn a_registered_listener_hears_every_request() {
         let _guard = navigation_lock();
@@ -259,10 +245,6 @@ mod tests {
         assert_eq!(heard.load(Ordering::SeqCst), before + 2);
         let _ = take_back_requests();
 
-        // An exit request nudges it too. The flag is drained from the frame
-        // loop, and an app with nothing moving has parked that loop; without
-        // the nudge the request would sit there until something unrelated
-        // woke the app.
         let before = heard.load(Ordering::SeqCst);
         request_exit();
         assert_eq!(
@@ -299,11 +281,9 @@ mod tests {
     #[test]
     fn an_exit_request_is_taken_once() {
         let _guard = navigation_lock();
-        let _ = take_exit_request(); // clear any residue
+        let _ = take_exit_request();
         assert!(!take_exit_request());
         request_exit();
-        // Twice, because closing twice is closing once and a settle animation
-        // can easily ask on two consecutive frames.
         request_exit();
         assert!(take_exit_request());
         assert!(
@@ -315,10 +295,6 @@ mod tests {
     #[test]
     fn a_backend_can_look_at_the_request_without_consuming_it() {
         let _guard = navigation_lock();
-        // The Android backend's way of closing is a JNI call that can fail.
-        // Consuming the flag first and then discovering the call did not land
-        // loses the app's only record that it asked to close: it stays open,
-        // the gesture the user made did nothing, and nothing asks again.
         let _ = take_exit_request();
         assert!(!exit_requested());
 

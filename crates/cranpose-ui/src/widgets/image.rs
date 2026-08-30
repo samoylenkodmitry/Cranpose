@@ -1,7 +1,7 @@
 //! Image composable and painter primitives.
 
 #![allow(non_snake_case)]
-#![allow(clippy::too_many_arguments)] // API matches Jetpack Compose Image signature.
+#![allow(clippy::too_many_arguments)]
 
 #[cfg(feature = "svg")]
 use std::sync::{Mutex, MutexGuard};
@@ -562,12 +562,9 @@ impl MeasurePolicy for ImageMeasurePolicy {
             };
         }
 
-        // Clamp each axis to its constraint range.
         let cw = iw.clamp(constraints.min_width, constraints.max_width);
         let ch = ih.clamp(constraints.min_height, constraints.max_height);
 
-        // If either axis had to shrink, scale both by the smaller factor
-        // so the aspect ratio is preserved.
         let scale_x = cw / iw;
         let scale_y = ch / ih;
 
@@ -969,8 +966,6 @@ where
     P: Into<Painter> + Clone + PartialEq + 'static,
 {
     let painter = painter.into();
-    // Painter intrinsic units are logical dp. Bitmap painters use 1 source pixel
-    // per dp; SVG painters rasterize at draw size and current density.
     let intrinsic_dp = painter.intrinsic_size();
     let draw_alpha = alpha.clamp(0.0, 1.0);
     let draw_painter = painter.clone();
@@ -1605,8 +1600,6 @@ mod tests {
         approx_eq(mapped.height, src.height);
     }
 
-    // --- ImageMeasurePolicy tests ---
-
     fn measure_image(intrinsic: Size, constraints: Constraints) -> Size {
         let policy = ImageMeasurePolicy {
             intrinsic_size: intrinsic,
@@ -1626,7 +1619,6 @@ mod tests {
 
     #[test]
     fn image_measure_width_constrained_preserves_aspect_ratio() {
-        // 800×600 constrained to max_width=400 → should scale to 400×300
         let size = measure_image(
             Size::new(800.0, 600.0),
             Constraints::loose(400.0, f32::INFINITY),
@@ -1636,7 +1628,6 @@ mod tests {
 
     #[test]
     fn image_measure_height_constrained_preserves_aspect_ratio() {
-        // 800×600 constrained to max_height=300 → should scale to 400×300
         let size = measure_image(
             Size::new(800.0, 600.0),
             Constraints::loose(f32::INFINITY, 300.0),
@@ -1646,15 +1637,12 @@ mod tests {
 
     #[test]
     fn image_measure_both_constrained_uses_smaller_factor() {
-        // 800×600 constrained to 200×400 → width is the bottleneck (0.25)
-        // scaled: 200×150
         let size = measure_image(Size::new(800.0, 600.0), Constraints::loose(200.0, 400.0));
         assert_eq!(size, Size::new(200.0, 150.0));
     }
 
     #[test]
     fn image_measure_fits_within_constraints() {
-        // 200×100 in a 400×400 container → stays at intrinsic size
         let size = measure_image(Size::new(200.0, 100.0), Constraints::loose(400.0, 400.0));
         assert_eq!(size, Size::new(200.0, 100.0));
     }

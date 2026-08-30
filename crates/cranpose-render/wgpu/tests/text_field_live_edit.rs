@@ -17,7 +17,6 @@ const FRAME_WIDTH: u32 = 400;
 const FRAME_HEIGHT: u32 = 500;
 
 fn newline_preedit() -> String {
-    // Explicit newlines so the field's line count (and measured height) grows.
     (0..8)
         .map(|i| format!("composed line {i}"))
         .collect::<Vec<_>>()
@@ -25,7 +24,6 @@ fn newline_preedit() -> String {
 }
 
 fn wrapping_transcript() -> String {
-    // ~260 chars, no newlines: must wrap to many lines inside the field width.
     "the quick brown fox jumps over the lazy dog ".repeat(6)
 }
 
@@ -51,7 +49,6 @@ fn deepest_text_field_height(root: &LayoutBox) -> Option<f32> {
     found
 }
 
-/// Bright glyph pixels (the field text is a bright warm color on a dark field).
 fn bright_pixels_below(frame: &CapturedFrame, min_y: u32) -> usize {
     let width = frame.width as usize;
     frame
@@ -83,8 +80,6 @@ fn Field(state: TextFieldState, style: TextStyle) {
 
 type Shell = cranpose_app_shell::AppShell<cranpose_render_wgpu::WgpuRenderer>;
 
-/// Holds the GPU test lock alongside the shell so the serialized GPU access
-/// stays live for the whole test.
 struct TestApp {
     _lock: std::sync::MutexGuard<'static, ()>,
     shell: Shell,
@@ -134,9 +129,6 @@ fn focus_field(shell: &mut Shell) {
     shell.update();
 }
 
-/// Regression: composing text into a focused multi-line field (via the IME
-/// path used by both desktop winit and the Android InputConnection) must grow
-/// and relayout the field on the next frame, not only after the field blurs.
 fn assert_typing_grows_field(lazy: bool) {
     let Some(mut app) = build_shell(lazy, String::new()) else {
         return;
@@ -179,10 +171,6 @@ fn typing_grows_multiline_text_field_in_lazy_item() {
     assert_typing_grows_field(true);
 }
 
-/// Regression: a long single-paragraph transcript (no newlines) seeded into a
-/// multi-line field must wrap to many lines and render them all, not clip
-/// everything past the first line. Before the fix the field measured a single
-/// line tall and the wrapped glyphs were clipped away.
 #[test]
 fn seeded_wrapping_transcript_renders_all_lines() {
     let Some(mut app) = build_shell(false, wrapping_transcript()) else {
@@ -199,7 +187,6 @@ fn seeded_wrapping_transcript_renders_all_lines() {
         "wrapping transcript must measure several lines tall, got {height:.1}"
     );
 
-    // Text must actually be rasterized well below the first line.
     let frame = shell
         .renderer()
         .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)

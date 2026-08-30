@@ -1,5 +1,3 @@
-//! iOS implementation of framework host controls.
-
 #![allow(unsafe_code)]
 
 use std::sync::Arc;
@@ -38,14 +36,10 @@ impl HostController for IosHost {
     fn background(&self) {}
 
     fn durable_save_deadline(&self) -> std::time::Duration {
-        // iOS grants roughly five seconds when the app moves to the background
-        // before it may be suspended; longer work continues under the
-        // background-task lease.
         std::time::Duration::from_secs(5)
     }
 }
 
-/// The packaged bundle identifier, used to scope framework-owned storage.
 fn bundle_identifier() -> Option<String> {
     let bundle = NSBundle::mainBundle();
     bundle

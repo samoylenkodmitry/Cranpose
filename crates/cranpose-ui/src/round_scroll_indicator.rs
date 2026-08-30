@@ -55,14 +55,9 @@ pub fn indicator_width_dp(display_dp: f32) -> f32 {
 /// Where the track sits on a display of the given radius.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct IndicatorArc {
-    /// Radius of the stroke's centreline, in the same unit as the radius given.
     centreline: f32,
-    /// Stroke width, same unit.
     width: f32,
-    /// Half the angle the whole track covers, in radians.
     half_sweep: f32,
-    /// Angular amount removed from every segment before round caps are drawn.
-    /// Wear derives this from the stroke width plus the visible gap.
     segment_inset: f32,
 }
 
@@ -404,15 +399,10 @@ pub fn scaling_list_items_with<I>(
     if !viewport.is_finite() || !density.is_finite() {
         return;
     }
-    // A caller working in continuous coordinates gets the same rule with the
-    // integer steps taken out, which is what `place_row` does with the same
-    // argument.
     let pixels = density > 0.0;
     let to_px = |value: f32| if pixels { value * density } else { value };
     let round_px = |value: f32| if pixels { value.round() } else { value };
     let viewport_px = round_px(to_px(viewport));
-    // `viewportCenterLinePx()`: half the viewport rounded DOWN, so an odd
-    // viewport gives its spare pixel to the half below the line.
     let centre_line = if pixels {
         (viewport_px * 0.5).floor()
     } else {
@@ -426,15 +416,6 @@ pub fn scaling_list_items_with<I>(
         };
         let height_px = round_px(to_px(height));
         let size = round_px(height_px * placed.scale);
-        // `place_row` answers where the row is DRAWN, and Compose's drawn
-        // position carries half a pixel that the reported offset does not: the
-        // graphics layer's `translationY` is
-        // `startOffset - unadjustedStartOffset`, and each of those halves an
-        // integer height twice — once with integer division inside
-        // `convertToCenterOffset`, once in floating point inside `startOffset`
-        // — so the unadjusted row's half survives into the drawing and cancels
-        // out of the report. Undoing it here is what keeps the two coordinate
-        // systems from sitting half a pixel apart per row.
         let drawn_top = to_px(placed.top);
         let carried = if pixels { odd_pixel(height_px) } else { 0.0 };
         let stacked_top = drawn_top - carried + if pixels { odd_pixel(size) } else { 0.0 };
@@ -452,7 +433,6 @@ pub fn scaling_list_items_with<I>(
     }
 }
 
-/// Half a pixel when a pixel height is odd, nothing when it is even.
 fn odd_pixel(pixels: f32) -> f32 {
     let half = pixels * 0.5;
     half - half.floor()
@@ -551,7 +531,6 @@ pub fn indicator_segments(
     ]
 }
 
-/// One segment, with Wear's cap inset applied and its too-short case handled.
 fn segment(start: f32, sweep: f32, width: f32, inset: f32, alpha: f32) -> IndicatorSegment {
     if sweep <= 0.0 || inset <= 0.0 {
         return IndicatorSegment::Arc {
@@ -561,9 +540,6 @@ fn segment(start: f32, sweep: f32, width: f32, inset: f32, alpha: f32) -> Indica
         };
     }
     if sweep < inset {
-        // Below one stroke width Wear stops drawing an arc and draws a circle
-        // that shrinks and fades on the same fraction, so a segment leaves the
-        // screen smoothly instead of collapsing into a dash.
         let fill = sweep / inset;
         return IndicatorSegment::Dot {
             angle: start + sweep * 0.5,
@@ -571,8 +547,6 @@ fn segment(start: f32, sweep: f32, width: f32, inset: f32, alpha: f32) -> Indica
             alpha: alpha * fill,
         };
     }
-    // `drawCurvedIndicatorSegment` starts half an inset in and runs a whole
-    // inset shorter; round caps restore the stroke share and leave the gap.
     IndicatorSegment::Arc {
         start: start + inset * 0.5,
         sweep: sweep - inset,
@@ -584,9 +558,8 @@ fn segment(start: f32, sweep: f32, width: f32, inset: f32, alpha: f32) -> Indica
 mod tests {
     use super::*;
 
-    /// The two displays Google Play requires a Wear app to support, in dp.
-    const LARGE_RADIUS_DP: f32 = 113.5; // 454px at density 2
-    const SMALL_RADIUS_DP: f32 = 96.0; // 384px at density 2
+    const LARGE_RADIUS_DP: f32 = 113.5;
+    const SMALL_RADIUS_DP: f32 = 96.0;
 
     #[test]
     fn stroke_width_switches_at_the_wear_large_screen_breakpoint() {
@@ -597,9 +570,6 @@ mod tests {
 
     #[test]
     fn the_track_lands_where_the_shipping_compose_build_draws_it() {
-        // Measured off the Compose build itself: the stroke's centreline sits
-        // at 108.5dp on a 454px display and 91.5dp on a 384px one, and the
-        // stroke is 6dp on the first and 5dp on the second.
         let large = indicator_arc(LARGE_RADIUS_DP);
         assert!((large.centreline() - 108.5).abs() < 0.01, "{large:?}");
         assert!((large.width() - 6.0).abs() < 0.01, "{large:?}");
@@ -611,8 +581,6 @@ mod tests {
 
     #[test]
     fn the_sweep_is_a_height_in_dp_not_a_fixed_angle() {
-        // The same 50dp track covers a wider angle on a smaller watch, which is
-        // the whole point of storing a height rather than an angle.
         let large = indicator_arc(LARGE_RADIUS_DP).sweep().to_degrees();
         let small = indicator_arc(SMALL_RADIUS_DP).sweep().to_degrees();
         assert!((large - 30.54).abs() < 0.05, "{large}");
@@ -630,11 +598,8 @@ mod tests {
 
     #[test]
     fn the_thumb_is_the_viewport_share_clamped_at_both_ends() {
-        // Half the content visible is half the track...
         let half = indicator_geometry(200.0, 100.0, 0.0).unwrap();
         assert!((half.thumb - 0.5).abs() < 1e-6, "{half:?}");
-        // ...but a very long list never shrinks it past the floor, and a barely
-        // scrolling one never grows it past the ceiling.
         let long = indicator_geometry(10_000.0, 100.0, 0.0).unwrap();
         assert!((long.thumb - INDICATOR_MIN_THUMB).abs() < 1e-6, "{long:?}");
         let short = indicator_geometry(105.0, 100.0, 0.0).unwrap();
@@ -651,7 +616,6 @@ mod tests {
             (bottom.offset + bottom.thumb - 1.0).abs() < 1e-6,
             "{bottom:?}"
         );
-        // Overscrolling past the end must not push it off the track.
         let past = indicator_geometry(200.0, 100.0, 500.0).unwrap();
         assert_eq!(past, bottom);
     }
@@ -668,9 +632,6 @@ mod tests {
         assert_eq!(parts[1].0, IndicatorPart::Thumb);
         assert_eq!(parts[2].0, IndicatorPart::Track);
 
-        // Every piece is an arc at this size, and the ink they cover — the
-        // nominal bounds, once the round caps undo the inset — must stay inside
-        // the track with the gaps left blank.
         let ink_bounds = |segment: IndicatorSegment| match segment {
             IndicatorSegment::Arc { start, sweep, .. } => {
                 (start - arc.cap_sweep() * 0.5, sweep + arc.cap_sweep())
@@ -695,7 +656,6 @@ mod tests {
     #[test]
     fn a_segment_shorter_than_its_stroke_becomes_a_shrinking_dot() {
         let arc = indicator_arc(LARGE_RADIUS_DP);
-        // Thumb hard against the top: the track above it has almost no room.
         let parts = indicator_segments(
             arc,
             IndicatorGeometry {
@@ -740,7 +700,6 @@ mod tests {
         assert_eq!(tiny.centreline(), 0.0);
         assert_eq!(tiny.sweep(), 0.0);
         assert_eq!(tiny.cap_sweep(), 0.0);
-        // And asking for its segments must not divide by that zero.
         let parts = indicator_segments(
             tiny,
             IndicatorGeometry {
@@ -754,9 +713,6 @@ mod tests {
         }
     }
 
-    /// A synthetic list to hang the adapter's arithmetic on: a 400px viewport,
-    /// so the centre line is 200 and `startOffset` is a row's top edge measured
-    /// from there, and ten rows of 100px.
     const VIEWPORT: f32 = 400.0;
 
     fn list<'a>(visible: &'a [IndicatorItem]) -> ScalingList<'a> {
@@ -779,25 +735,18 @@ mod tests {
 
     #[test]
     fn a_row_flush_with_the_top_of_the_screen_is_a_whole_index() {
-        // Its top edge is 200px above the centre line, which is the top of the
-        // display, so none of it has scrolled away.
         let rows = [row(3, -200.0), row(6, 100.0)];
         assert_eq!(decimal_first_item_index(list(&rows)), 3.0);
     }
 
     #[test]
     fn a_row_half_off_the_top_reads_half_an_index() {
-        // 250 above the centre line is 50 above the display, half of a 100px
-        // row -- and the answer is in ITEM units, which is the whole point of
-        // this model: 3.5 means "three and a half items have gone past".
         let rows = [row(3, -250.0), row(6, 100.0)];
         assert_eq!(decimal_first_item_index(list(&rows)), 3.5);
     }
 
     #[test]
     fn the_last_index_counts_how_much_of_the_row_is_on_screen() {
-        // Bottom half of the display is 0..200 below the centre line; a row
-        // starting at 150 has 50 of its 100 showing.
         let rows = [row(3, -200.0), row(6, 150.0)];
         assert_eq!(decimal_last_item_index(list(&rows)), 6.5);
     }
@@ -810,13 +759,9 @@ mod tests {
             after_padding: 60.0,
             ..list(&rows)
         };
-        // The first row's own span grows by the blank above it, and so does the
-        // distance it has travelled: (200 - 250 + 80) / (100 + 80).
         assert!((decimal_first_item_index(padded) - 130.0 / 180.0).abs() < 1e-6);
-        // The last row's span grows by the blank below it: 1 - (310 - 200)/160.
         assert!((decimal_last_item_index(padded) - (9.0 + 0.3125)).abs() < 1e-6);
 
-        // The same geometry in the middle of the list ignores both.
         let inner = [row(3, -250.0), row(6, 150.0)];
         let inner = ScalingList {
             before_padding: 80.0,
@@ -829,8 +774,6 @@ mod tests {
 
     #[test]
     fn the_thumb_is_the_share_of_the_items_on_screen_not_of_the_pixels() {
-        // Five of ten items on screen is half the track, whatever those items
-        // are worth in pixels.
         let rows = [row(3, -250.0), row(8, 150.0)];
         let mut thumb = ThumbLength::default();
         assert!((thumb.of(list(&rows)) - 0.5).abs() < 1e-6);
@@ -849,9 +792,6 @@ mod tests {
 
     #[test]
     fn the_thumb_is_measured_once_and_then_only_when_the_list_changes_length() {
-        // `previousItemsCount` in the adapter. Not an optimisation: a thumb
-        // remeasured every frame breathes as rows of different heights scroll
-        // past, and the shipping build's does not move at all.
         let mut thumb = ThumbLength::default();
         let five = [row(3, -250.0), row(8, 150.0)];
         assert!((thumb.of(list(&five)) - 0.5).abs() < 1e-6);
@@ -874,7 +814,6 @@ mod tests {
 
     #[test]
     fn the_position_is_how_many_items_are_left_not_how_far_the_pixels_went() {
-        // Three and a half items above the window, three and a half below it.
         let rows = [row(3, -250.0), row(6, 150.0)];
         assert!((position_fraction(list(&rows)) - 0.5).abs() < 1e-6);
     }
@@ -886,8 +825,6 @@ mod tests {
         let geometry = scaling_list_geometry(&mut thumb, list(&top)).unwrap();
         assert_eq!(geometry.offset, 0.0);
 
-        // The last row measured fully in leaves nothing after it, so the thumb
-        // is flush with the end of the track.
         let mut thumb = ThumbLength::default();
         let end = [row(6, -250.0), row(9, 100.0)];
         let geometry = scaling_list_geometry(&mut thumb, list(&end)).unwrap();
@@ -909,12 +846,6 @@ mod tests {
 
     #[test]
     fn the_two_models_disagree_the_moment_the_rows_are_not_all_the_same_height() {
-        // This is the whole reason the second entry point exists. One tall row
-        // and nine short ones: the pixel model says the thumb is the share of
-        // the CONTENT on screen, the adapter says it is the share of the ITEMS,
-        // and the tall row counts for one item and for six rows' worth of
-        // pixels. A caller that reaches for the flat model on a Wear list gets
-        // an answer that happens to look right on a list of uniform rows.
         let heights: Vec<f32> = std::iter::once(600.0).chain([100.0; 9]).collect();
         let content: f32 = heights.iter().sum();
         let pixel = indicator_geometry(content, VIEWPORT, 0.0).unwrap();
@@ -929,9 +860,6 @@ mod tests {
 
     #[test]
     fn a_reported_row_is_not_the_row_as_it_is_drawn() {
-        // `place_row` answers where a row is DRAWN and the adapter reads what
-        // the layout REPORTS, and Compose's two halvings of an odd pixel height
-        // put half a pixel between them. 103px is odd; 104px is not.
         let mut out = Vec::new();
         let density = 2.0;
         let viewport = 227.0;
@@ -946,19 +874,12 @@ mod tests {
                 item.start_offset,
                 drawn.top * density
             );
-            // And the size it reports is the drawn height rounded to a pixel,
-            // which is not the height the graphics layer scales to.
             assert_eq!(item.size, (drawn.height * density).round());
         }
     }
 
     #[test]
     fn a_list_that_does_not_scale_its_rows_reports_them_at_full_height() {
-        // `scaling_list_items` baked in `ScalingParams::WEAR`, so a list under
-        // `LocalReduceMotion` — where the ramp is off and every row keeps its
-        // size — was described to the indicator as though its edge rows had
-        // shrunk. Identical for every list Cranpose ships and wrong for that
-        // one, which is the shape of defect a `_with` variant exists to stop.
         let mut wear = Vec::new();
         let mut still = Vec::new();
         let rows = [(4.0, 52.0), (60.0, 52.0), (116.0, 52.0)];
@@ -979,7 +900,6 @@ mod tests {
             still[0].size
         );
         assert_eq!(still[0].size, 104.0, "52dp at density 2, unscaled");
-        // And the default entry point is still the Wear ramp.
         let mut default = Vec::new();
         scaling_list_items_with(ScalingParams::WEAR, 227.0, 2.0, rows, &mut default);
         assert_eq!(default, wear);
@@ -987,10 +907,6 @@ mod tests {
 
     #[test]
     fn the_window_is_the_rows_that_still_meet_the_display() {
-        // Ten 40dp rows down a 227dp screen, the list scrolled so row 0 starts
-        // 100dp above the top. Wear walks out from the centre item and stops at
-        // the first row whose edge has left the viewport, which is the same
-        // contiguous run.
         let mut out = Vec::new();
         let rows: Vec<(f32, f32)> = (0..10)
             .map(|index| (index as f32 * 40.0 - 100.0, 40.0))

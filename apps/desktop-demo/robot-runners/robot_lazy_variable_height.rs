@@ -16,14 +16,12 @@ fn main() {
         .with_size(400, 600)
         .with_headless(true)
         .with_test_driver(|robot| {
-             // Step 1: Verify Initial Layout Offsets
-             std::thread::sleep(Duration::from_millis(500)); // Wait for first frame
+             std::thread::sleep(Duration::from_millis(500));
 
              let check_item = |name: &str, expected_y: f32, _expected_height: f32| {
                  if let Some((_, y, _, h)) = find_text_in_semantics(&robot, name) {
                      println!("Found {} at y={:.1}, h={:.1}", name, y, h);
 
-                     // Check position
                      let y_diff = (y - expected_y).abs();
                      if y_diff > 1.0 {
                          println!("  BUG: {} y={:.1} but expected {:.1}", name, y, expected_y);
@@ -33,10 +31,8 @@ fn main() {
                  }
              };
 
-             // Item 0: h=100. Text centered -> ~40.2
              check_item("Item0", 40.2, 19.6);
 
-             // Item 1: starts at 100. h=50. Text centered -> 100 + (50-19.6)/2 = 115.2
              if let Some((_, y, _, _)) = find_text_in_semantics(&robot, "Item1") {
                  if y < 99.0 {
                     panic!("CONFIRMED BUG: Item1 is at y={:.1}, expected > 100.0. Measuring is broken!", y);
@@ -50,7 +46,6 @@ fn main() {
              robot.exit().ok();
         })
         .run(|| {
-            // Define the UI within the app
             let state = rememberLazyListState();
 
             LazyColumn(
@@ -58,7 +53,6 @@ fn main() {
                 state,
                 LazyColumnSpec::default(),
                 |scope| {
-                    // Item 0: Height 100
                     scope.item_keyed(Some(0), None, move || {
                         Box(
                             Modifier::default()
@@ -69,7 +63,6 @@ fn main() {
                         );
                     });
 
-                    // Item 1: Height 50
                     scope.item_keyed(Some(1), None, move || {
                         Box(
                             Modifier::default()
@@ -80,7 +73,6 @@ fn main() {
                         );
                     });
 
-                    // Item 2: Height 200
                     scope.item_keyed(Some(2), None, move || {
                          Box(
                             Modifier::default()

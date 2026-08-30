@@ -1,10 +1,3 @@
-//! Pair kerning, through the production measurer rather than the reader.
-//!
-//! The reader has its own unit tests; what these pin is that the value reaches
-//! a measured width. It used not to: `ab_glyph::Font::kern_unscaled` reads the
-//! TrueType `kern` table, the embedded fallback carries none, and neither does
-//! the Roboto a Wear device ships — so every string measured wide.
-
 #![cfg(feature = "embedded-default-font")]
 
 use cranpose_render_common::{
@@ -44,7 +37,6 @@ fn width(measurer: &SoftwareTextMeasurer, text: &str) -> f32 {
         .width
 }
 
-/// The kerning the font declares for a pair, in pixels at `FONT_SIZE`.
 fn expected_kern_px(pair: [char; 2]) -> f32 {
     let face = ttf_parser::Face::parse(DEFAULT_SOFTWARE_TEXT_FONT_BYTES, 0).expect("face");
     let kerning = GposKerning::parse(&face).expect("the fallback font has GPOS kerning");
@@ -80,15 +72,12 @@ fn an_unkerned_pair_is_exactly_its_two_glyphs() {
     );
 }
 
-/// The regression this whole rule exists for: a string of kerning pairs used to
-/// measure as if the font declared none.
 #[test]
 fn kerning_accumulates_across_a_string() {
     let measurer = measurer();
     let kerned = width(&measurer, "AVAVAV");
     let unkerned: f32 = 3.0 * (width(&measurer, "A") + width(&measurer, "V"));
     let kern = expected_kern_px(['A', 'V']);
-    // Five gaps in "AVAVAV": AV, VA, AV, VA, AV.
     assert!(
         kerned < unkerned + 4.0 * kern,
         "a six-glyph run should carry at least five kerns: {kerned} vs {unkerned}"

@@ -82,7 +82,6 @@ fn padding_node_adds_space_to_content() {
     assert_eq!(chain.len(), 1);
     assert!(chain.has_nodes_for_invalidation(cranpose_foundation::InvalidationKind::Layout));
 
-    // Test that padding node correctly implements layout
     let node = chain.node_mut::<PaddingNode>(0).unwrap();
     let measurable = TestMeasurable {
         intrinsic_width: 50.0,
@@ -96,7 +95,6 @@ fn padding_node_adds_space_to_content() {
     };
 
     let result = node.measure(&mut context, &measurable, constraints);
-    // Content is 50x50, padding is 10 on each side, so total is 70x70
     assert_eq!(result.size.width, 70.0);
     assert_eq!(result.size.height, 70.0);
 }
@@ -141,10 +139,8 @@ fn fractional_offset_node_places_content_by_fraction_of_measured_size() {
 
     let result = node.measure(&mut context, &measurable, constraints);
 
-    // Offset never affects measurement, only placement.
     assert_eq!(result.size.width, 80.0);
     assert_eq!(result.size.height, 40.0);
-    // Placement offset resolves the fractions against the measured size.
     assert_eq!(result.placement_offset_x, 0.25 * 80.0);
     assert_eq!(result.placement_offset_y, -0.5 * 40.0);
 }
@@ -173,12 +169,10 @@ fn padding_node_respects_intrinsics() {
         intrinsic_height: 30.0,
     };
 
-    // Intrinsic widths should include padding
-    assert_eq!(node.min_intrinsic_width(&measurable, 100.0), 70.0); // 50 + 20
+    assert_eq!(node.min_intrinsic_width(&measurable, 100.0), 70.0);
     assert_eq!(node.max_intrinsic_width(&measurable, 100.0), 70.0);
 
-    // Intrinsic heights should include padding
-    assert_eq!(node.min_intrinsic_height(&measurable, 100.0), 50.0); // 30 + 20
+    assert_eq!(node.min_intrinsic_height(&measurable, 100.0), 50.0);
     assert_eq!(node.max_intrinsic_height(&measurable, 100.0), 50.0);
 }
 
@@ -218,7 +212,6 @@ fn modifier_chain_reuses_padding_nodes() {
     let mut chain = ModifierNodeChain::new();
     let mut context = BasicModifierNodeContext::new();
 
-    // Initial padding
     let elements = vec![modifier_element(PaddingElement::new(EdgeInsets::uniform(
         10.0,
     )))];
@@ -230,7 +223,6 @@ fn modifier_chain_reuses_padding_nodes() {
 
     context.clear_invalidations();
 
-    // Update with different padding - should reuse the same node
     let elements = vec![modifier_element(PaddingElement::new(EdgeInsets::uniform(
         20.0,
     )))];
@@ -240,7 +232,6 @@ fn modifier_chain_reuses_padding_nodes() {
         &*node_ref as *const _
     };
 
-    // Same node instance should be reused
     assert_eq!(initial_node, updated_node);
     {
         let node_ref = chain.node::<PaddingNode>(0).unwrap();
@@ -290,7 +281,6 @@ fn clickable_node_handles_pointer_events() {
 
     assert!(chain.has_nodes_for_invalidation(cranpose_foundation::InvalidationKind::PointerInput));
 
-    // Simulate a pointer Down event - should NOT fire click yet
     let mut node = chain.node_mut::<ClickableNode>(0).unwrap();
     let mut down_event = PointerEvent::new(
         PointerEventKind::Down,
@@ -300,10 +290,9 @@ fn clickable_node_handles_pointer_events() {
     down_event.buttons = PointerButtons::new().with(PointerButton::Primary);
 
     let consumed = node.on_pointer_event(&mut context, &down_event);
-    assert!(!consumed); // Down should NOT be consumed
-    assert!(!clicked.get()); // Click should NOT fire yet
+    assert!(!consumed);
+    assert!(!clicked.get());
 
-    // Simulate a pointer Up event - should fire click
     let mut up_event = PointerEvent::new(
         PointerEventKind::Up,
         Point { x: 10.0, y: 20.0 },
@@ -312,8 +301,8 @@ fn clickable_node_handles_pointer_events() {
     up_event.buttons = PointerButtons::new().with(PointerButton::Primary);
 
     let consumed = node.on_pointer_event(&mut context, &up_event);
-    assert!(consumed); // Up should be consumed
-    assert!(clicked.get()); // Click should fire on Up
+    assert!(consumed);
+    assert!(clicked.get());
 }
 
 #[test]
@@ -359,7 +348,6 @@ fn clickable_node_cancels_click_on_drag() {
     }))];
     chain.update_from_slice(&elements, &mut context);
 
-    // Simulate a pointer Down event
     let mut node = chain.node_mut::<ClickableNode>(0).unwrap();
     let mut down_event = PointerEvent::new(
         PointerEventKind::Down,
@@ -370,17 +358,15 @@ fn clickable_node_cancels_click_on_drag() {
     node.on_pointer_event(&mut context, &down_event);
     assert!(!clicked.get());
 
-    // Simulate a Move event that exceeds drag threshold (8px)
     let mut move_event = PointerEvent::new(
         PointerEventKind::Move,
-        Point { x: 20.0, y: 20.0 }, // Moved 10px horizontally, beyond 8px threshold
+        Point { x: 20.0, y: 20.0 },
         Point { x: 20.0, y: 20.0 },
     );
     move_event.buttons = PointerButtons::new().with(PointerButton::Primary);
     node.on_pointer_event(&mut context, &move_event);
-    assert!(!clicked.get()); // Still no click
+    assert!(!clicked.get());
 
-    // Simulate a pointer Up event - should NOT fire click because we dragged
     let mut up_event = PointerEvent::new(
         PointerEventKind::Up,
         Point { x: 20.0, y: 20.0 },
@@ -389,8 +375,8 @@ fn clickable_node_cancels_click_on_drag() {
     up_event.buttons = PointerButtons::new().with(PointerButton::Primary);
 
     let consumed = node.on_pointer_event(&mut context, &up_event);
-    assert!(!consumed); // Up should NOT be consumed (click cancelled)
-    assert!(!clicked.get()); // Click should NOT fire because we dragged
+    assert!(!consumed);
+    assert!(!clicked.get());
 }
 
 #[test]
@@ -399,8 +385,7 @@ fn alpha_node_clamps_values() {
     let mut chain = ModifierNodeChain::new();
     let mut context = BasicModifierNodeContext::new();
 
-    // Test clamping to valid range
-    let elements = vec![modifier_element(AlphaElement::new(1.5))]; // > 1.0
+    let elements = vec![modifier_element(AlphaElement::new(1.5))];
     chain.update_from_slice(&elements, &mut context);
 
     {
@@ -410,7 +395,6 @@ fn alpha_node_clamps_values() {
 
     context.clear_invalidations();
 
-    // Test negative clamping
     let elements = vec![modifier_element(AlphaElement::new(-0.5))];
     chain.update_from_slice(&elements, &mut context);
 
@@ -442,7 +426,6 @@ fn mixed_modifier_chain_tracks_all_capabilities() {
     let clicked = Rc::new(Cell::new(false));
     let clicked_clone = clicked.clone();
 
-    // Create a chain with layout, draw, and pointer input nodes
     let elements = vec![
         modifier_element(PaddingElement::new(EdgeInsets::uniform(10.0))),
         modifier_element(AlphaElement::new(0.8)),
@@ -458,7 +441,6 @@ fn mixed_modifier_chain_tracks_all_capabilities() {
     assert!(chain.has_nodes_for_invalidation(cranpose_foundation::InvalidationKind::Draw));
     assert!(chain.has_nodes_for_invalidation(cranpose_foundation::InvalidationKind::PointerInput));
 
-    // Verify correct node counts by type
     let mut layout_nodes = 0;
     chain.for_each_forward_matching(NodeCapabilities::LAYOUT, |_| {
         layout_nodes += 1;
@@ -481,35 +463,28 @@ fn mixed_modifier_chain_tracks_all_capabilities() {
 #[test]
 fn toggling_background_color_reuses_node() {
     let _app_context = crate::render_state::app_context_test_scope();
-    // This test verifies the gate condition:
-    // "Toggling Modifier.background(color) allocates 0 new nodes; only update() runs"
     let mut chain = ModifierNodeChain::new();
     let mut context = BasicModifierNodeContext::new();
 
-    // Initial background
     let red = Color(1.0, 0.0, 0.0, 1.0);
     let elements = vec![modifier_element(BackgroundElement::new(red))];
     chain.update_from_slice(&elements, &mut context);
 
-    // Get pointer to the node
     let initial_node_ptr = {
         let node_ref = chain.node::<BackgroundNode>(0).unwrap();
         &*node_ref as *const _
     };
 
-    // Toggle to different color - should reuse same node
     let blue = Color(0.0, 0.0, 1.0, 1.0);
     let elements = vec![modifier_element(BackgroundElement::new(blue))];
     chain.update_from_slice(&elements, &mut context);
 
-    // Verify same node instance (zero allocations)
     let updated_node_ptr = {
         let node_ref = chain.node::<BackgroundNode>(0).unwrap();
         &*node_ref as *const _
     };
     assert_eq!(initial_node_ptr, updated_node_ptr, "Node should be reused");
 
-    // Verify color was updated
     {
         let node_ref = chain.node::<BackgroundNode>(0).unwrap();
         assert_eq!(node_ref.color, blue);
@@ -519,15 +494,12 @@ fn toggling_background_color_reuses_node() {
 #[test]
 fn reordering_modifiers_with_stable_reuse() {
     let _app_context = crate::render_state::app_context_test_scope();
-    // This test verifies the gate condition:
-    // "Reordering modifiers: stable reuse when elements equal (by type + key)"
     let mut chain = ModifierNodeChain::new();
     let mut context = BasicModifierNodeContext::new();
 
     let padding = EdgeInsets::uniform(10.0);
     let color = Color(1.0, 0.0, 0.0, 1.0);
 
-    // Initial order: padding then background
     let elements = vec![
         modifier_element(PaddingElement::new(padding)),
         modifier_element(BackgroundElement::new(color)),
@@ -540,14 +512,12 @@ fn reordering_modifiers_with_stable_reuse() {
         (&*padding_ref as *const _, &*background_ref as *const _)
     };
 
-    // Reverse order: background then padding
     let elements = vec![
         modifier_element(BackgroundElement::new(color)),
         modifier_element(PaddingElement::new(padding)),
     ];
     chain.update_from_slice(&elements, &mut context);
 
-    // Nodes should still be reused (matched by type)
     let (new_background_ptr, new_padding_ptr) = {
         let background_ref = chain.node::<BackgroundNode>(0).unwrap();
         let padding_ref = chain.node::<PaddingNode>(1).unwrap();
@@ -688,15 +658,6 @@ fn pointer_input_restarts_on_key_change() {
     assert_eq!(starts.get(), 2);
 }
 
-/// `PointerInputScope::size()` must report the node's real layout size.
-///
-/// Regression: the scope's size cell had no writer anywhere in the workspace,
-/// so `size()` was permanently `0x0` on every platform. Anything deriving
-/// geometry from it (a full-screen canvas taking its centre as `size / 2`) read
-/// the node's top-left corner instead.
-///
-/// The size must be readable without any pointer event having arrived — Compose
-/// handlers read `size` before they await — and must track resizes.
 #[test]
 fn pointer_input_scope_reports_published_layout_size() {
     let _app_context = crate::render_state::app_context_test_scope();
@@ -748,8 +709,6 @@ fn pointer_input_scope_reports_published_layout_size() {
         "an unmeasured node has no size yet"
     );
 
-    // The layout pass publishes the node's resolved size; no pointer event has
-    // been dispatched at this point.
     slices.publish_pointer_input_size(Size {
         width: 240.0,
         height: 160.0,
@@ -763,7 +722,6 @@ fn pointer_input_scope_reports_published_layout_size() {
         "scope.size() must report the laid-out size before any pointer event"
     );
 
-    // A resize must be observed by the same scope.
     slices.publish_pointer_input_size(Size {
         width: 100.0,
         height: 50.0,
@@ -777,7 +735,6 @@ fn pointer_input_scope_reports_published_layout_size() {
         "scope.size() must track resizes"
     );
 
-    // The awaiting scope reports the same size as the outer scope.
     slices.pointer_inputs()[0](PointerEvent::new(
         PointerEventKind::Down,
         Point { x: 10.0, y: 20.0 },
@@ -793,9 +750,6 @@ fn pointer_input_scope_reports_published_layout_size() {
     );
 }
 
-/// The published size lives on the node, not on the per-run scope, so a handler
-/// restart (a key change) hands the fresh scope the size the node already has —
-/// the node was not re-measured, so its size must not fall back to `0x0`.
 #[test]
 fn pointer_input_scope_size_survives_handler_restart() {
     let _app_context = crate::render_state::app_context_test_scope();
@@ -841,9 +795,6 @@ fn pointer_input_scope_size_survives_handler_restart() {
     );
 }
 
-/// End-to-end through the real layout pipeline: measuring and placing the tree
-/// is what fills `PointerInputScope::size()`, and re-laying out at a new
-/// viewport updates it.
 #[test]
 fn pointer_input_scope_size_is_filled_by_the_layout_pass() {
     let captured: Rc<RefCell<Option<PointerInputScope>>> = Rc::new(RefCell::new(None));
@@ -925,17 +876,13 @@ fn pointer_input_scope_size_is_filled_by_the_layout_pass() {
     );
 }
 
-/// Pointer input handlers extracted from a modifier slice keep their task alive
-/// until explicit cancellation, even after the temporary collection chain drops.
 #[test]
 fn pointer_input_handlers_survive_temporary_chain_drop() {
     let _app_context = crate::render_state::app_context_test_scope();
     use std::{cell::RefCell, rc::Rc};
 
-    // Track received events
     let received_events = Rc::new(RefCell::new(Vec::new()));
 
-    // Create a modifier with pointer input
     let modifier = Modifier::empty().pointer_input(42u32, {
         let events = received_events.clone();
         move |scope: PointerInputScope| {
@@ -953,14 +900,12 @@ fn pointer_input_handlers_survive_temporary_chain_drop() {
 
     let slices = collect_slices_from_modifier(&modifier);
 
-    // Verify we got a handler
     assert_eq!(
         slices.pointer_inputs().len(),
         1,
         "Should have extracted one pointer input handler"
     );
 
-    // Extract the handler - this is what the renderer does
     let handler = slices.pointer_inputs()[0].clone();
 
     handler(PointerEvent::new(
@@ -981,7 +926,6 @@ fn pointer_input_handlers_survive_temporary_chain_drop() {
         Point { x: 10.0, y: 20.0 },
     ));
 
-    // Verify all events were received by the async handler
     let events = received_events.borrow();
     assert_eq!(
         *events,
@@ -994,7 +938,6 @@ fn pointer_input_handlers_survive_temporary_chain_drop() {
     );
 }
 
-/// Test that multiple temporary chains can coexist without interfering with each other.
 #[test]
 fn multiple_temporary_chains_dont_interfere() {
     let _app_context = crate::render_state::app_context_test_scope();
@@ -1003,7 +946,6 @@ fn multiple_temporary_chains_dont_interfere() {
     let events1 = Rc::new(RefCell::new(Vec::new()));
     let events2 = Rc::new(RefCell::new(Vec::new()));
 
-    // Create first modifier
     let modifier1 = Modifier::empty().pointer_input(1u32, {
         let events = events1.clone();
         move |scope: PointerInputScope| {
@@ -1019,7 +961,6 @@ fn multiple_temporary_chains_dont_interfere() {
         }
     });
 
-    // Create second modifier
     let modifier2 = Modifier::empty().pointer_input(2u32, {
         let events = events2.clone();
         move |scope: PointerInputScope| {
@@ -1035,14 +976,12 @@ fn multiple_temporary_chains_dont_interfere() {
         }
     });
 
-    // Collect slices from both modifiers
     let slices1 = collect_slices_from_modifier(&modifier1);
     let slices2 = collect_slices_from_modifier(&modifier2);
 
     let handler1 = slices1.pointer_inputs()[0].clone();
     let handler2 = slices2.pointer_inputs()[0].clone();
 
-    // Send events to both handlers
     handler1(PointerEvent::new(
         PointerEventKind::Move,
         Point { x: 1.0, y: 1.0 },
@@ -1061,7 +1000,6 @@ fn multiple_temporary_chains_dont_interfere() {
         Point { x: 1.0, y: 1.0 },
     ));
 
-    // Verify each handler only received its own events
     let ev1 = events1.borrow();
     let ev2 = events2.borrow();
 
@@ -1073,8 +1011,6 @@ fn multiple_temporary_chains_dont_interfere() {
     assert_eq!(ev2[0], ("handler2", PointerEventKind::Down));
 }
 
-/// Custom user-defined layout modifiers participate in the retained coordinator
-/// chain without being hardcoded into the framework.
 #[test]
 fn custom_layout_modifier_works_through_retained_chain() {
     let _app_context = crate::render_state::app_context_test_scope();
@@ -1085,7 +1021,6 @@ fn custom_layout_modifier_works_through_retained_chain() {
         ModifierNodeElement, NodeCapabilities, NodeState,
     };
 
-    // Define a custom layout modifier that adds extra width
     #[derive(Debug)]
     struct CustomWidthNode {
         extra_width: f32,
@@ -1152,7 +1087,6 @@ fn custom_layout_modifier_works_through_retained_chain() {
         }
     }
 
-    // Define the element
     #[derive(Debug, Clone, PartialEq)]
     struct CustomWidthElement {
         extra_width: f32,
@@ -1182,7 +1116,6 @@ fn custom_layout_modifier_works_through_retained_chain() {
         }
     }
 
-    // Test the custom modifier
     let mut chain = ModifierNodeChain::new();
     let mut context = BasicModifierNodeContext::new();
 
@@ -1192,7 +1125,6 @@ fn custom_layout_modifier_works_through_retained_chain() {
     assert_eq!(chain.len(), 1);
     assert!(chain.has_nodes_for_invalidation(cranpose_foundation::InvalidationKind::Layout));
 
-    // Test that the custom modifier correctly adds width
     let node = chain.node_mut::<CustomWidthNode>(0).unwrap();
     let measurable = TestMeasurable {
         intrinsic_width: 100.0,
@@ -1206,13 +1138,11 @@ fn custom_layout_modifier_works_through_retained_chain() {
     };
 
     let result = node.measure(&mut context, &measurable, constraints);
-    // Content is 100x50, we add 20 to width, so result is 120x50
     assert_eq!(result.size.width, 120.0);
     assert_eq!(result.size.height, 50.0);
 
-    // Test intrinsics
     let intrinsic_width = node.min_intrinsic_width(&measurable, 100.0);
-    assert_eq!(intrinsic_width, 120.0); // 100 + 20
+    assert_eq!(intrinsic_width, 120.0);
 }
 
 #[test]
@@ -1226,7 +1156,6 @@ fn draw_command_updates_on_closure_change() {
     let mut context = BasicModifierNodeContext::new();
     let executed = Rc::new(Cell::new(0));
 
-    // Element 1: Increments executed by 1
     let executed_1 = executed.clone();
     let element_1 = modifier_element(DrawCommandElement::new(DrawCommand::Behind(Rc::new(
         move |_scope: &mut cranpose_ui_graphics::DrawScopeDefault| {
@@ -1234,7 +1163,6 @@ fn draw_command_updates_on_closure_change() {
         },
     ))));
 
-    // Element 2: Increments executed by 10
     let executed_2 = executed.clone();
     let element_2 = modifier_element(DrawCommandElement::new(DrawCommand::Behind(Rc::new(
         move |_scope: &mut cranpose_ui_graphics::DrawScopeDefault| {
@@ -1242,12 +1170,8 @@ fn draw_command_updates_on_closure_change() {
         },
     ))));
 
-    // Verify elements are "equal" (PartialEq ignores closures)
-
-    // Initial update
     chain.update_from_slice(&[element_1], &mut context);
 
-    // Execute command from node
     {
         let node = chain.node::<DrawCommandNode>(0).unwrap();
         if let DrawCommand::Behind(ref func) = node.commands()[0] {
@@ -1256,11 +1180,9 @@ fn draw_command_updates_on_closure_change() {
     }
     assert_eq!(executed.get(), 1);
 
-    // Second update with different closure
     executed.set(0);
     chain.update_from_slice(&[element_2], &mut context);
 
-    // Verify node updated to new closure despite equality
     let node = chain.node::<DrawCommandNode>(0).unwrap();
     if let DrawCommand::Behind(ref func) = node.commands()[0] {
         func(&mut crate::draw::command_draw_scope(Size::ZERO));
@@ -1272,8 +1194,6 @@ fn draw_command_updates_on_closure_change() {
     );
 }
 
-/// Stateful layout modifier nodes retain their internal state across repeated
-/// measurement because the coordinator chain invokes the live retained node.
 #[test]
 fn stateful_measure_uses_live_retained_node_state() {
     let _app_context = crate::render_state::app_context_test_scope();
@@ -1284,13 +1204,10 @@ fn stateful_measure_uses_live_retained_node_state() {
         ModifierNodeContext, ModifierNodeElement, NodeCapabilities, NodeState, Size,
     };
 
-    /// A layout modifier node that counts how many times it has been measured.
     #[derive(Debug)]
     struct StatefulMeasureNode {
         state: NodeState,
-        /// Counter that tracks measure calls (simulates node internal state)
         measure_count: Cell<i32>,
-        /// Initial value to add to width (demonstrates parameter capture)
         initial_value: i32,
     }
 
@@ -1327,11 +1244,9 @@ fn stateful_measure_uses_live_retained_node_state() {
             measurable: &dyn Measurable,
             constraints: Constraints,
         ) -> cranpose_ui_layout::LayoutModifierMeasureResult {
-            // Increment the measure count - this is the state we want to preserve
             let count = self.measure_count.get();
             self.measure_count.set(count + 1);
 
-            // Measure wrapped content and add initial_value to demonstrate state capture
             let placeable = measurable.measure(constraints);
             cranpose_ui_layout::LayoutModifierMeasureResult::with_size(Size {
                 width: placeable.width() + self.initial_value as f32,
@@ -1367,7 +1282,6 @@ fn stateful_measure_uses_live_retained_node_state() {
         }
     }
 
-    // Test setup: Create a node via the modifier chain
     let mut chain = ModifierNodeChain::new();
     let mut context = BasicModifierNodeContext::new();
 
@@ -1377,7 +1291,6 @@ fn stateful_measure_uses_live_retained_node_state() {
 
     assert_eq!(chain.len(), 1);
 
-    // First measurement: Measure directly through the node
     let node = chain.node::<StatefulMeasureNode>(0).unwrap();
     let measurable = TestMeasurable {
         intrinsic_width: 100.0,
@@ -1391,10 +1304,9 @@ fn stateful_measure_uses_live_retained_node_state() {
     };
 
     let size1 = node.measure(&mut context, &measurable, constraints);
-    assert_eq!(size1.size.width, 110.0); // 100 + 10
+    assert_eq!(size1.size.width, 110.0);
     assert_eq!(size1.size.height, 50.0);
 
-    // Check that measure_count was incremented
     let count_after_first = node.measure_count.get();
     assert_eq!(
         count_after_first, 1,
@@ -1402,7 +1314,7 @@ fn stateful_measure_uses_live_retained_node_state() {
     );
 
     let size2 = node.measure(&mut context, &measurable, constraints);
-    assert_eq!(size2.size.width, 110.0); // Still 100 + 10 (initial_value preserved)
+    assert_eq!(size2.size.width, 110.0);
     assert_eq!(size2.size.height, 50.0);
 
     let count_after_second = node.measure_count.get();

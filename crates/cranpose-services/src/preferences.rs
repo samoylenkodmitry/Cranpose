@@ -322,7 +322,6 @@ impl PreferencesStore for FilePreferences {
     }
 }
 
-/// Encodes entries as `key=value` lines, escaping the separators.
 #[cfg(not(target_arch = "wasm32"))]
 fn encode(entries: &BTreeMap<String, String>) -> String {
     let mut text = String::new();
@@ -386,8 +385,6 @@ fn unescape(value: &str) -> String {
     out
 }
 
-// ---- Saveable state ------------------------------------------------------
-
 /// Converts a value to and from the string form preferences store.
 ///
 /// A saver is deliberately explicit rather than derived: the stored form is a
@@ -397,9 +394,7 @@ pub struct Saver<T> {
     restore: RestoreFn<T>,
 }
 
-/// Turns a value into its stored form.
 type SaveFn<T> = Box<dyn Fn(&T) -> String + 'static>;
-/// Reads a value back out of its stored form.
 type RestoreFn<T> = Box<dyn Fn(&str) -> Option<T> + 'static>;
 
 impl<T> Saver<T> {

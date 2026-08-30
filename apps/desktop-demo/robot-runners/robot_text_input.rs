@@ -1,17 +1,3 @@
-//! Robot test for BasicTextField and text input functionality
-//!
-//! This test validates:
-//! 1. Text Input tab can be opened
-//! 2. Initial text field value is displayed correctly
-//! 3. "Add !" button appends text
-//! 4. "Clear" button empties the text field
-//! 5. "Copy ↓" button copies text to second field
-//!
-//! Run with:
-//! ```bash
-//! cargo run --package desktop-app --example robot_text_input --features robot-app
-//! ```
-
 use std::time::Duration;
 
 use cranpose::AppLauncher;
@@ -30,7 +16,6 @@ fn main() {
         .with_size(900, 700)
         .with_headless(true)
         .with_test_driver(|robot| {
-            // Timeout after a full robot run budget.
             std::thread::spawn(|| {
                 std::thread::sleep(Duration::from_secs(TEST_TIMEOUT_SECS));
                 println!("✗ Test timed out after {} seconds", TEST_TIMEOUT_SECS);
@@ -47,9 +32,6 @@ fn main() {
 
             let mut all_passed = true;
 
-            // =========================================================
-            // TEST 1: Switch to Text Input tab
-            // =========================================================
             println!("--- Test 1: Switch to Text Input Tab ---");
 
             if let Some((x, y, w, h)) = find_button_in_semantics(&robot, "Text Input") {
@@ -64,7 +46,6 @@ fn main() {
                 let _ = robot.mouse_up();
                 std::thread::sleep(Duration::from_millis(500));
 
-                // Verify we switched
                 if find_in_semantics(&robot, |elem| find_text(elem, "Text Input Demo")).is_some() {
                     println!("  ✓ PASS: Switched to Text Input tab\n");
                 } else {
@@ -76,9 +57,6 @@ fn main() {
                 all_passed = false;
             }
 
-            // =========================================================
-            // TEST 2: Verify initial text field value
-            // =========================================================
             println!("--- Test 2: Verify Initial Text Value ---");
 
             std::thread::sleep(Duration::from_millis(300));
@@ -89,7 +67,6 @@ fn main() {
                 println!("  ? Note: Could not find initial text (may be in different format)\n");
             }
 
-            // Look for "Current value" display
             if find_in_semantics(&robot, |elem| {
                 find_text(elem, "Current value: \"Type here...\"")
             })
@@ -100,9 +77,6 @@ fn main() {
                 println!("  ? Note: Current value display may have different format\n");
             }
 
-            // =========================================================
-            // TEST 3: Click "Add !" button and verify text appended
-            // =========================================================
             println!("--- Test 3: Add ! Button ---");
 
             if let Some((x, y, w, h)) =
@@ -112,7 +86,6 @@ fn main() {
                 let cy = y + h / 2.0;
                 println!("  Found 'Add !' button at ({:.1}, {:.1})", cx, cy);
 
-                // Click the button
                 let _ = robot.mouse_move(cx, cy);
                 std::thread::sleep(Duration::from_millis(50));
                 let _ = robot.mouse_down();
@@ -120,7 +93,6 @@ fn main() {
                 let _ = robot.mouse_up();
                 std::thread::sleep(Duration::from_millis(300));
 
-                // Verify text was appended
                 if find_in_semantics(&robot, |elem| {
                     find_text(elem, "Current value: \"Type here...!\"")
                 })
@@ -128,7 +100,6 @@ fn main() {
                 {
                     println!("  ✓ PASS: Text appended with '!'\n");
                 } else {
-                    // Try alternative - just check if ! was added somewhere
                     if find_in_semantics(&robot, |elem| find_text(elem, "Type here...!")).is_some()
                     {
                         println!("  ✓ PASS: Text field shows appended '!'\n");
@@ -142,9 +113,6 @@ fn main() {
                 all_passed = false;
             }
 
-            // =========================================================
-            // TEST 4: Click "Clear" button and verify text emptied
-            // =========================================================
             println!("--- Test 4: Clear Button ---");
 
             if let Some((x, y, w, h)) =
@@ -154,7 +122,6 @@ fn main() {
                 let cy = y + h / 2.0;
                 println!("  Found 'Clear' button at ({:.1}, {:.1})", cx, cy);
 
-                // Click the button
                 let _ = robot.mouse_move(cx, cy);
                 std::thread::sleep(Duration::from_millis(50));
                 let _ = robot.mouse_down();
@@ -162,7 +129,6 @@ fn main() {
                 let _ = robot.mouse_up();
                 std::thread::sleep(Duration::from_millis(300));
 
-                // Verify text was cleared
                 if find_in_semantics(&robot, |elem| find_text(elem, "Current value: \"\""))
                     .is_some()
                 {
@@ -176,19 +142,14 @@ fn main() {
                 all_passed = false;
             }
 
-            // =========================================================
-            // TEST 5: Add text and Copy to second field
-            // =========================================================
             println!("--- Test 5: Copy Button ---");
 
-            // First add some text to copy
             if let Some((x, y, w, h)) =
                 find_in_semantics(&robot, |elem| find_button(elem, "Add !"))
             {
                 let cx = x + w / 2.0;
                 let cy = y + h / 2.0;
 
-                // Click Add ! twice to have "!!" in the field
                 for i in 0..2 {
                     let _ = robot.mouse_move(cx, cy);
                     std::thread::sleep(Duration::from_millis(30));
@@ -203,7 +164,6 @@ fn main() {
                 println!("  Text should now be '!!'");
             }
 
-            // Now click Copy
             if let Some((x, y, w, h)) =
                 find_in_semantics(&robot, |elem| find_button(elem, "Copy"))
             {
@@ -218,11 +178,8 @@ fn main() {
                 let _ = robot.mouse_up();
                 std::thread::sleep(Duration::from_millis(300));
 
-                // The copy should have worked - we can see '!!' in semantics now
-                // (Second field should have the same text)
                 println!("  ✓ PASS: Copy button clicked successfully\n");
             } else {
-                // Try finding by partial match
                 if let Some((x, y, w, h)) =
                     find_in_semantics(&robot, |elem| find_text(elem, "Copy"))
                 {
@@ -243,12 +200,8 @@ fn main() {
                 }
             }
 
-            // =========================================================
-            // TEST 6: Keyboard Typing
-            // =========================================================
             println!("--- Test 6: Keyboard Typing ---");
 
-            // First clear and add some text so we have a known state
             if let Some((x, y, w, h)) =
                 find_in_semantics(&robot, |elem| find_button(elem, "Clear"))
             {
@@ -263,7 +216,6 @@ fn main() {
                 println!("  Cleared text field");
             }
 
-            // Add "!!" to have some text in the field
             if let Some((x, y, w, h)) =
                 find_in_semantics(&robot, |elem| find_button(elem, "Add !"))
             {
@@ -281,17 +233,13 @@ fn main() {
             }
             std::thread::sleep(Duration::from_millis(300));
 
-            // Now find and click the text field to focus it
-            // The text field should show "!!" now
             let text_field_found = if let Some((x, y, w, h)) =
                 find_in_semantics(&robot, |elem| find_text(elem, "!!"))
             {
-                // Click at the RIGHT edge of the text field to position cursor at end
-                let cx = x + w - 2.0;  // Near right edge
+                let cx = x + w - 2.0;
                 let cy = y + h / 2.0;
                 println!("  Found text field '!!' at ({:.1}, {:.1}) SIZE: w={:.1} h={:.1}", cx, cy, w, h);
 
-                // Click to focus and position cursor at end
                 let _ = robot.mouse_move(cx, cy);
                 std::thread::sleep(Duration::from_millis(30));
                 let _ = robot.mouse_down();
@@ -300,7 +248,6 @@ fn main() {
                 std::thread::sleep(Duration::from_millis(200));
                 println!("  Clicked at right edge to focus and position cursor at end");
 
-                // Type some text
                 match robot.type_text("abc") {
                     Ok(_) => println!("  Typed 'abc'"),
                     Err(e) => {
@@ -309,10 +256,8 @@ fn main() {
                     }
                 }
 
-                // Wait for UI to update
                 let _ = robot.wait_for_idle();
 
-                // Check size AFTER typing
                 if let Some((_x2, _y2, w2, h2)) = find_in_semantics(&robot, |elem| find_text(elem, "!!abc")) {
                     println!("  After typing: '!!abc' SIZE: w={:.1} h={:.1} (was w={:.1} h={:.1})", w2, h2, w, h);
                     if (w2 - w).abs() > 1.0 {
@@ -322,7 +267,6 @@ fn main() {
                     }
                 }
 
-                // Verify the typed text appears (should be "!!abc" now)
                 if find_in_semantics(&robot, |elem| find_text(elem, "!!abc")).is_some()
                     || find_in_semantics(&robot, |elem| {
                         find_text(elem, "Current value: \"!!abc\"")
@@ -331,7 +275,6 @@ fn main() {
                     println!("  ✓ PASS: Typed text 'abc' appended to field -> '!!abc'\n");
                     true
                 } else {
-                    // Check if field still shows "!!" (typing failed)
                     if find_in_semantics(&robot, |elem| find_text(elem, "!!")).is_some() {
                         println!("  ✗ FAIL: Typed text not added - field still shows '!!'\n");
                         all_passed = false;
@@ -345,15 +288,10 @@ fn main() {
                 false
             };
 
-            let _ = text_field_found; // Suppress unused warning
+            let _ = text_field_found;
 
-            // =========================================================
-            // Test 7: Focus Switching Between Text Fields
-            // =========================================================
             println!("--- Test 7: Focus Switching ---");
 
-            // First, clear both fields and set up for the test
-            // Click "Clear" button to reset
             if let Some((x, y, w, h)) =
                 find_in_semantics(&robot, |elem| find_button(elem, "Clear"))
             {
@@ -365,7 +303,6 @@ fn main() {
                 std::thread::sleep(Duration::from_millis(200));
             }
 
-            // Add text to first field using "Add !" button
             if let Some((x, y, w, h)) =
                 find_in_semantics(&robot, |elem| find_button(elem, "Add !"))
             {
@@ -379,7 +316,6 @@ fn main() {
                 }
             }
 
-            // Now find and click first text field (should contain "!!")
             if let Some((x1, y1, w1, h1)) =
                 find_in_semantics(&robot, |elem| find_text(elem, "!!"))
             {
@@ -387,7 +323,6 @@ fn main() {
                 let cy1 = y1 + h1 / 2.0;
                 println!("  Found first field '!!' at ({:.1}, {:.1})", cx1, cy1);
 
-                // Click first field
                 let _ = robot.mouse_move(cx1, cy1);
                 std::thread::sleep(Duration::from_millis(30));
                 let _ = robot.mouse_down();
@@ -396,16 +331,12 @@ fn main() {
                 std::thread::sleep(Duration::from_millis(200));
                 println!("  Clicked first field to focus");
 
-                // Type in first field
                 let _ = robot.type_text("X");
                 let _ = robot.wait_for_idle();
                 println!("  Typed 'X' in first field");
 
-                // Now find second field (empty text field)
-                // Look for the empty field - it should have an empty string or placeholder
                 if let Some((x2, y2, w2, h2)) =
                     find_in_semantics(&robot, |elem| {
-                        // Find element that's NOT the first field and contains empty or minimal text
                         if let Some(ref text) = elem.text {
                             if text.is_empty() {
                                 return Some((elem.bounds.x, elem.bounds.y, elem.bounds.width, elem.bounds.height));
@@ -418,7 +349,6 @@ fn main() {
                     let cy2 = y2 + h2 / 2.0;
                     println!("  Found second field at ({:.1}, {:.1})", cx2, cy2);
 
-                    // Click second field - this should unfocus first
                     let _ = robot.mouse_move(cx2, cy2);
                     std::thread::sleep(Duration::from_millis(30));
                     let _ = robot.mouse_down();
@@ -427,13 +357,10 @@ fn main() {
                     std::thread::sleep(Duration::from_millis(200));
                     println!("  Clicked second field");
 
-                    // Type in second field
                     let _ = robot.type_text("Y");
                     let _ = robot.wait_for_idle();
                     println!("  Typed 'Y' in second field");
 
-                    // Verify: Second field should now contain "Y"
-                    // and first field should NOT have gotten the "Y"
                     let second_has_y = find_in_semantics(&robot, |elem| find_text(elem, "Y")).is_some();
                     let first_has_extra = find_in_semantics(&robot, |elem| find_text(elem, "!!XY")).is_some();
 
@@ -452,12 +379,8 @@ fn main() {
                 println!("  ? Note: Could not find first text field\n");
             }
 
-            // =========================================================
-            // TEST 8: Cursor Blink Animation
-            // =========================================================
             println!("--- Test 8: Cursor Blink Animation ---");
 
-            // Find the text field and click to focus
             if let Some((x, y, w, h)) = find_in_semantics(&robot, |elem| find_text(elem, "!")) {
                 let cx = x + w / 2.0;
                 let cy = y + h / 2.0;
@@ -470,21 +393,16 @@ fn main() {
                 println!("  has_focused_field() = {}", has_focus);
 
                 if has_focus {
-                    // Wait for a few blink cycles and check if render is happening
-                    // We check by seeing if wait_for_idle times out (it should, since we're constantly redrawing)
                     println!("  Checking continuous rendering during 1.5 seconds...");
 
                     let start = std::time::Instant::now();
                     let mut render_count = 0;
 
-                    // Poll needs_redraw over time to verify continuous rendering is being requested
                     while start.elapsed() < Duration::from_millis(1500) {
-                        // Force an update cycle
                         std::thread::sleep(Duration::from_millis(50));
                         render_count += 1;
                     }
 
-                    // Check if focus is still active
                     let still_focused = robot.has_focused_text_field().unwrap_or(false);
                     println!("  After wait: has_focused_field() = {}", still_focused);
                     println!("  Polled {} times over 1.5s", render_count);
@@ -503,20 +421,14 @@ fn main() {
                 println!("  ? Note: Could not find text field for blink test");
             }
 
-            // =========================================================
-            // TEST 9: Click-Drag Text Selection
-            // =========================================================
             println!("\n--- Test 9: Click-Drag Text Selection ---");
 
-            // First, let's add some text to select
-            // Click "Add !" a few times to have some text
             if let Some((x, y, w, h)) =
                 find_in_semantics(&robot, |elem| find_button(elem, "Add !"))
             {
                 let cx = x + w / 2.0;
                 let cy = y + h / 2.0;
 
-                // Click Add ! 5 times to get "!!!!!"
                 for i in 0..5 {
                     let _ = robot.mouse_move(cx, cy);
                     std::thread::sleep(Duration::from_millis(30));
@@ -529,22 +441,18 @@ fn main() {
                 std::thread::sleep(Duration::from_millis(200));
             }
 
-            // Now find the text field and perform click-drag selection
             if let Some((x, y, w, h)) =
                 find_in_semantics(&robot, |elem| find_text(elem, "!!!!!"))
             {
                 println!("  Found text field with '!!!!!' at ({:.1}, {:.1}, {:.1}x{:.1})", x, y, w, h);
 
-                // Click at the right side of the text field
                 let start_x = x + w - 10.0;
                 let center_y = y + h / 2.0;
 
-                // Then drag to the left side
                 let end_x = x + 10.0;
 
                 println!("  Drag from ({:.1}, {:.1}) to ({:.1}, {:.1})", start_x, center_y, end_x, center_y);
 
-                // Mouse down at start position
                 let _ = robot.mouse_move(start_x, center_y);
                 std::thread::sleep(Duration::from_millis(50));
 
@@ -552,11 +460,9 @@ fn main() {
                 let _ = robot.mouse_down();
                 std::thread::sleep(Duration::from_millis(100));
 
-                // Check selection state before drag
                 let sel_before = robot.has_focused_text_field().unwrap_or(false);
                 println!("  has_focused_field() after mouse down: {}", sel_before);
 
-                // Drag across the text field (multiple move events)
                 let steps = 10;
                 for step in 1..=steps {
                     let t = step as f32 / steps as f32;
@@ -568,23 +474,18 @@ fn main() {
 
                 std::thread::sleep(Duration::from_millis(100));
 
-                // Check text field state during drag (before release)
                 println!(
                     "  has_focused_field() during drag: {}",
                     robot.has_focused_text_field().unwrap_or(false)
                 );
 
-                // Mouse up at end position
                 println!("  Mouse UP at end position");
                 let _ = robot.mouse_up();
                 std::thread::sleep(Duration::from_millis(200));
 
-                // Check final state
                 let focused_after = robot.has_focused_text_field().unwrap_or(false);
                 println!("  has_focused_field() after drag: {}", focused_after);
 
-                // Try to find any selection indicator
-                // For now, just verify the drag completed without crash
                 if focused_after {
                     println!("  ✓ PASS: Click-drag completed, field still focused");
                 } else {
@@ -592,7 +493,6 @@ fn main() {
                     println!("  ✓ PASS: Click-drag completed (focus check skipped due to test limitation)");
                 }
             } else {
-                // Try finding any text field
                 println!("  Could not find text with '!!!!!', looking for any text field...");
                 if let Some((x, y, _w, _h)) =
                     find_in_semantics(&robot, |elem| find_text(elem, ""))
@@ -603,17 +503,8 @@ fn main() {
                 }
             }
 
-            // =========================================================
-            // Test 10: Reactive "Current Value" Label Update
-            // This test verifies the composition snapshot state integration:
-            // 1. Type 'abc' via keyboard
-            // 2. Verify "Current value: ..." label shows 'abc' (reactive update)
-            // 3. Press "Add !" button
-            // 4. Verify "Current value: ..." label shows 'abc!' (button update)
-            // =========================================================
             println!("\n--- Test 10: Reactive Current Value Update ---");
 
-            // First clear the text field
             if let Some((x, y, w, h)) =
                 find_in_semantics(&robot, |elem| find_button(elem, "Clear"))
             {
@@ -627,14 +518,9 @@ fn main() {
                 println!("  Step 1: Cleared text field");
             }
 
-            // Click first input field to focus
-            // Look for the text field - it should have specific dimensions typical of text fields
-            // After clear the text is empty ("") which appears in semantics
             if let Some((x, y, w, h)) =
                 find_in_semantics(&robot, |elem| {
-                    // Text fields have text content (even if empty "") and specific dimensions
                     if let Some(ref text) = elem.text {
-                        // Look for text field by size and by excluding known labels/buttons
                         if elem.bounds.width > 100.0
                             && elem.bounds.height > 30.0
                             && elem.bounds.height < 60.0
@@ -653,7 +539,6 @@ fn main() {
                     None
                 })
             {
-                // Click center of text field to focus
                 let _ = robot.mouse_move(x + w / 2.0, y + h / 2.0);
                 std::thread::sleep(Duration::from_millis(30));
                 let _ = robot.mouse_down();
@@ -662,13 +547,11 @@ fn main() {
                 std::thread::sleep(Duration::from_millis(200));
                 println!("  Step 2: Clicked text field to focus at ({:.1}, {:.1})", x + w / 2.0, y + h / 2.0);
 
-                // Type "abc" via keyboard (NO button press!)
                 let _ = robot.type_text("abc");
                 let _ = robot.wait_for_idle();
                 std::thread::sleep(Duration::from_millis(300));
                 println!("  Step 3: Typed 'abc' via keyboard (NO button press)");
 
-                // CHECK 1: The "Current value" label should show "abc" reactively
                 if find_in_semantics(&robot, |elem| {
                     find_text(elem, "Current value: \"abc\"")
                 }).is_some() {
@@ -679,7 +562,6 @@ fn main() {
                     all_passed = false;
                 }
 
-                // Step 4: Press "Add !" button
                 if let Some((bx, by, bw, bh)) =
                     find_in_semantics(&robot, |elem| find_button(elem, "Add !"))
                 {
@@ -692,7 +574,6 @@ fn main() {
                     let _ = robot.wait_for_idle();
                     println!("  Step 4: Pressed 'Add !' button");
 
-                    // CHECK 2: The "Current value" label should now show "abc!"
                     if find_in_semantics(&robot, |elem| {
                         find_text(elem, "Current value: \"abc!\"")
                     }).is_some() {
@@ -706,13 +587,11 @@ fn main() {
                     println!("  ? Note: Could not find 'Add !' button");
                 }
             } else {
-                // Try finding text field by looking for any small text element
                 println!("  Could not find empty text field, looking for text field...");
                 if let Some((x, y, w, h)) =
                     find_in_semantics(&robot, |elem| {
                         if elem.bounds.width > 100.0 && elem.bounds.height > 30.0 && elem.bounds.height < 60.0 {
                             if let Some(ref text) = elem.text {
-                                // Look for text field (not labels)
                                 if !text.contains("Current value") && !text.contains("Text Input") && !text.contains("Basic") {
                                     return Some((elem.bounds.x, elem.bounds.y, elem.bounds.width, elem.bounds.height));
                                 }
@@ -722,7 +601,6 @@ fn main() {
                     })
                 {
                     println!("  Found text field at ({:.1}, {:.1}) with size ({:.1}x{:.1})", x, y, w, h);
-                    // Try the test with this field...
                     let _ = robot.mouse_move(x + w / 2.0, y + h / 2.0);
                     std::thread::sleep(Duration::from_millis(30));
                     let _ = robot.mouse_down();
@@ -734,7 +612,6 @@ fn main() {
                     let _ = robot.wait_for_idle();
                     std::thread::sleep(Duration::from_millis(300));
 
-                    // Check for the label
                     if find_in_semantics(&robot, |elem| {
                         if let Some(ref text) = elem.text {
                             if text.contains("abc") {
@@ -753,9 +630,6 @@ fn main() {
                 }
             }
 
-            // =========================================================
-            // Summary
-            // =========================================================
             println!("\n=== Test Summary ===");
             if all_passed {
                 println!("✓ ALL TESTS PASSED");

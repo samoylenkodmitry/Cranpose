@@ -1,11 +1,3 @@
-//! iOS local notifications via `UNUserNotificationCenter`.
-//!
-//! Registered as the platform notifier (see
-//! [`cranpose_services::set_platform_notifier`]) by the iOS backend. iOS has no
-//! ongoing/foreground-service notification, so `ongoing` requests post a normal
-//! notification. A delegate is installed so notifications also present while the
-//! app is foregrounded (CranScan runs OCR in-app) and so a tapped notification's
-//! deep-link payload reaches [`cranpose_services::push_notification_deeplink`].
 #![allow(unsafe_code)]
 
 use std::{
@@ -30,18 +22,11 @@ use objc2_user_notifications::{
     UNNotificationSound, UNUserNotificationCenter, UNUserNotificationCenterDelegate,
 };
 
-/// Maps a delivered notification's identifier to its deep-link payload, so a
-/// tap can recover it without touching the `userInfo` dictionary (whose objc2
-/// typing is awkward). Populated on `notify`, drained on tap. In-process only:
-/// a cold launch straight from a notification does not repopulate it (that path
-/// is already unsupported by the pure-Rust UIKit backend).
 fn deeplink_map() -> &'static Mutex<HashMap<String, String>> {
     static MAP: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
     MAP.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Installs the iOS notifier as the platform notifier and its presentation /
-/// tap delegate.
 pub(crate) fn register() {
     set_platform_notifier(Arc::new(IosNotifier));
     install_delegate();
@@ -55,8 +40,6 @@ impl Notifier for IosNotifier {
         let options = UNAuthorizationOptions::Alert
             | UNAuthorizationOptions::Sound
             | UNAuthorizationOptions::Badge;
-        // The completion handler is required; a denied permission simply drops
-        // any posted notification.
         let handler = RcBlock::new(|_granted: Bool, _error: *mut NSError| {});
         center.requestAuthorizationWithOptions_completionHandler(options, &handler);
     }
@@ -74,7 +57,6 @@ impl Notifier for IosNotifier {
         }
 
         let id = NSString::from_str(&request.id);
-        // A nil trigger delivers immediately.
         let un_request =
             UNNotificationRequest::requestWithIdentifier_content_trigger(&id, &content, None);
         center.addNotificationRequest_withCompletionHandler(&un_request, None);
@@ -92,7 +74,6 @@ impl Notifier for IosNotifier {
 }
 
 thread_local! {
-    /// Keeps the delegate alive (the center holds it weakly).
     static DELEGATE: RefCell<Option<Retained<NotificationDelegate>>> = const { RefCell::new(None) };
 }
 
@@ -113,8 +94,6 @@ define_class!(
     unsafe impl NSObjectProtocol for NotificationDelegate {}
 
     unsafe impl UNUserNotificationCenterDelegate for NotificationDelegate {
-        // Present notifications even while the app is foregrounded (banner +
-        // sound), so a "document ready" note shows during in-app OCR.
         #[unsafe(method(userNotificationCenter:willPresentNotification:withCompletionHandler:))]
         fn will_present(
             &self,
@@ -127,7 +106,6 @@ define_class!(
             completion.call((options,));
         }
 
-        // The user tapped a notification: forward its deep-link payload.
         #[unsafe(method(userNotificationCenter:didReceiveNotificationResponse:withCompletionHandler:))]
         fn did_receive(
             &self,

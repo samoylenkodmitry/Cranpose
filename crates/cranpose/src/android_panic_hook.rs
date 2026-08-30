@@ -1,33 +1,5 @@
-//! Panic-hook chaining for the Android runtime.
-//!
-//! An application installs its own panic hook — for crash reporting, say —
-//! before handing control to `AppLauncher::run_android()`. `android.rs`'s
-//! `run()` used to call `std::panic::set_hook()` unconditionally, silently
-//! replacing whatever the application had installed. [`chained_panic_hook`]
-//! fixes that: it wraps the framework's own diagnostic hook around the hook
-//! that was already installed (captured via `std::panic::take_hook()`
-//! before the framework installs its own), so both run.
-//!
-//! `android.rs` is gated to `target_os = "android"` and cannot be unit
-//! tested on the host. The chaining itself is plain `std::panic`, nothing
-//! Android-specific, so it lives here instead, where it is also built on
-//! the host under `cfg(test)`.
-
 use std::panic::PanicHookInfo;
 
-/// Wraps `own_hook` so it runs, then `previous_hook` runs — the hook
-/// returned by `std::panic::take_hook()` right before the framework installs
-/// its own — producing a single hook that runs both instead of one
-/// replacing the other.
-///
-/// `own_hook` must not panic. A panic raised while a panic hook is already
-/// running for the panic it was called for is an unrecoverable nested panic:
-/// the process aborts immediately, before unwinding starts, so not even
-/// `catch_unwind` around `own_hook` can stop it from also taking
-/// `previous_hook` — and with it, the application's own crash reporting —
-/// down. Keep `own_hook` to operations that cannot panic (plain getters,
-/// `downcast_ref`, `format!`, `std::backtrace::Backtrace::force_capture()`,
-/// logging), the same way `own_hook` in `android.rs` does.
 pub(crate) fn chained_panic_hook(
     own_hook: impl Fn(&PanicHookInfo<'_>) + Sync + Send + 'static,
     previous_hook: Box<dyn Fn(&PanicHookInfo<'_>) + Sync + Send>,
@@ -47,8 +19,6 @@ mod tests {
 
     use super::*;
 
-    // `std::panic::set_hook`/`take_hook` mutate process-global state, so
-    // tests that install a hook must not run concurrently with each other.
     static HOOK_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
@@ -58,9 +28,6 @@ mod tests {
             .unwrap_or_else(|poison| poison.into_inner());
         let saved_hook = std::panic::take_hook();
 
-        // Stand in for an application's own hook, installed before the
-        // framework runs and captured here exactly as `android.rs` captures
-        // it: via `take_hook()`.
         let marker_fired = Arc::new(AtomicBool::new(false));
         let marker_for_previous = Arc::clone(&marker_fired);
         std::panic::set_hook(Box::new(move |_| {

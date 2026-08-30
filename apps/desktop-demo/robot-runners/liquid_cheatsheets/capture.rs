@@ -1,5 +1,3 @@
-//! Real-X11 capture support for the static Liquid cheatsheet fixtures.
-
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -276,9 +274,6 @@ impl CaptureGate {
     }
 }
 
-/// Captures fresh cursor-free X11 snapshots at absolute interaction-relative
-/// deadlines. A new X11 client is used for every frame because persistent X11
-/// drawable capture does not observe Cranpose's transient overlay surfaces.
 pub(crate) fn capture_x11_keyframes<Trigger, Continue>(
     robot: &Robot,
     request: CaptureRequest<'_>,
@@ -302,8 +297,6 @@ where
     )
 }
 
-/// Captures one settled fixture state without implying that an interaction
-/// triggered a new presentation immediately before the snapshot.
 pub(crate) fn capture_x11_static_keyframe(request: CaptureRequest<'_>) -> Result<PathBuf> {
     if request.keyframes.len() != 1 {
         bail!("a static X11 capture requires exactly one keyframe");
@@ -485,7 +478,6 @@ fn collect_capture_workers(
     }
 }
 
-/// Builds `actual-sheet.png` and appends it below the checked-in target sheet.
 pub(crate) fn compose_comparison(
     target_sheet: &Path,
     actual_frames: &[PathBuf],

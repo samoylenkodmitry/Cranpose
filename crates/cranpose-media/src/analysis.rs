@@ -1,11 +1,3 @@
-//! The sample tap a visualiser reads.
-//!
-//! The samples a visualiser wants are the ones on their way to the device, so
-//! the tap sits in the output callback — which is a real-time thread. Nothing
-//! here allocates, blocks or logs on that side: a full block is copied into a
-//! slot the progress thread drains, and a block that arrives while the slot is
-//! held is counted and dropped rather than made to wait.
-
 use std::{
     sync::{
         Arc,
@@ -19,14 +11,8 @@ use parking_lot::Mutex;
 
 use crate::source::{ChannelCount, Sample, SampleRate, SampleSource, SeekError};
 
-/// How many frames make up one published block.
-///
-/// 1024 frames is ~23 ms at 44.1 kHz: short enough that a visualiser drawn at
-/// 60 Hz has a fresh block most frames, long enough to be a useful window for
-/// a spectrum.
 pub(crate) const ANALYSIS_FRAMES: usize = 1024;
 
-/// The slot the output callback fills and the progress thread drains.
 pub(crate) struct AnalysisTap {
     enabled: AtomicBool,
     filled: AtomicBool,
@@ -59,9 +45,6 @@ impl AnalysisTap {
         }
     }
 
-    /// Sizes the slot for the item about to play. Called from the UI thread,
-    /// before the source reaches the device, so the output callback never has
-    /// to grow anything.
     fn prepare(&self, sample_rate: u32, channels: u16) {
         self.sample_rate.store(sample_rate, Ordering::Release);
         self.channels.store(channels, Ordering::Release);
@@ -71,11 +54,6 @@ impl AnalysisTap {
         ready.resize(ANALYSIS_FRAMES * channels.max(1) as usize, 0.0);
     }
 
-    /// Takes a full block from the output callback.
-    ///
-    /// `try_lock` rather than `lock`: the drain side holds the slot for the
-    /// length of one copy, and waiting for it here would be waiting inside the
-    /// device callback.
     fn offer(&self, block: &[f32]) {
         let Some(mut ready) = self.ready.try_lock() else {
             record_dropped_media_samples();
@@ -90,8 +68,6 @@ impl AnalysisTap {
         self.filled.store(true, Ordering::Release);
     }
 
-    /// Publishes whatever the output callback left, if anything. Called from
-    /// the progress thread.
     pub(crate) fn drain(&self) {
         if !self.filled.swap(false, Ordering::AcqRel) {
             return;
@@ -108,8 +84,6 @@ impl AnalysisTap {
         }
     }
 
-    /// Wraps `inner` so its samples pass through this tap on their way to the
-    /// device.
     pub(crate) fn wrap<S: SampleSource>(self: &Arc<Self>, inner: S) -> AnalysisSource<S> {
         let sample_rate = inner.sample_rate();
         let channels = inner.channels();
@@ -123,7 +97,6 @@ impl AnalysisTap {
     }
 }
 
-/// A source that copies what passes through it into an [`AnalysisTap`].
 pub(crate) struct AnalysisSource<S> {
     inner: S,
     tap: Arc<AnalysisTap>,
@@ -206,7 +179,6 @@ mod tests {
         let mut source = tap.wrap(tone(ANALYSIS_FRAMES * 2, 2));
         tap.set_enabled(true);
 
-        // One frame short of a block: nothing to drain yet.
         for _ in 0..ANALYSIS_FRAMES * 2 - 2 {
             source.next().expect("samples");
         }

@@ -15,16 +15,6 @@ use cranpose_ui_graphics::Color;
 use crate::animation::{Animatable, AnimationType, Lerp, SpringScalar};
 
 impl Lerp for Color {
-    /// Linearly interpolate each RGBA channel, including alpha.
-    ///
-    /// Jetpack Compose's default `Color` lerp converts through the Oklab
-    /// color space before interpolating. Cranpose colors carry no color-space
-    /// information, so this implementation interpolates each channel linearly
-    /// in the color's own (linear RGBA) space instead. For typical UI fades
-    /// between colors in the same space this closely matches Compose's
-    /// behavior; the results are clamped to `[0.0, 1.0]` per channel so
-    /// overshooting springs still produce valid colors, matching Compose's
-    /// gamut coercion.
     fn lerp(&self, target: &Self, fraction: f32) -> Self {
         Color(
             self.0.lerp(&target.0, fraction).clamp(0.0, 1.0),

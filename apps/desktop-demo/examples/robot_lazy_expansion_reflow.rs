@@ -1,18 +1,4 @@
 #![allow(non_snake_case)]
-//! A lazy row that grows in place must push its siblings' pixels, not only
-//! their layout bounds.
-//!
-//! Reproduces the cranscan "..." regression: after one expansion has settled,
-//! expanding a second row updates layout (semantics move) while the scoped
-//! scene update applies in place without refreshing the shifted siblings, so
-//! the screen keeps the old geometry until a scroll forces a full pass. The
-//! first expansion after launch tends to ride a full rebuild and look correct,
-//! which is why this test expands twice: cold start, expand once, expand
-//! again — the second expansion is the pin.
-//!
-//! The assertion is pixels-versus-semantics: semantics report where layout put
-//! a row, the screenshot reports what the scene drew there. On a stale scene
-//! they disagree.
 
 use cranpose::AppLauncher;
 use cranpose_core::rememberMutableStateOf;
@@ -109,9 +95,6 @@ fn assert_swatch_drawn_at_semantic_bounds(
         .find_button_bounds_exact(&format!("more{index}"))?
         .ok_or_else(|| format!("{stage}: button more{index} not found in semantics"))?;
     let shot = robot.screenshot()?;
-    // The swatch sits in the same row, 8dp after the button; its top aligns
-    // with the row top and it is at least as tall as the button, so a point a
-    // few pixels into it is inside the swatch no matter which is taller.
     let x = bx + bw + 8.0 + 20.0;
     let y = by + (bh.min(SWATCH_HEIGHT)) / 2.0;
     let (r, g, b) = color_at(&shot, x, y);
@@ -148,9 +131,6 @@ fn main() {
                     .expect("resting frame agrees with semantics");
             }
 
-            // First expansion: often correct even on broken builds, because
-            // launch-time dirt forces the scoped scene update to give up and
-            // fully rebuild. It is part of the recipe, not the pin.
             robot.click_by_text("more0").expect("expand row 0");
             robot.pump_frames(6).expect("compose the first strip");
             robot.wait_for_idle().expect("settle the first expansion");
@@ -159,8 +139,6 @@ fn main() {
                     .expect("first expansion reflows");
             }
 
-            // Second expansion: the pin. Layout shifts rows 2 and 3 down by the
-            // strip height; the scene must follow.
             robot.click_by_text("more1").expect("expand row 1");
             robot.pump_frames(6).expect("compose the second strip");
             robot.wait_for_idle().expect("settle the second expansion");

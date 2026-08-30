@@ -1,11 +1,6 @@
-//! Present mode selection helpers for WGPU surfaces.
-
 #[cfg(any(test, feature = "desktop-shell"))]
 use cranpose_app_shell::FramePacingMode;
 
-/// Selects the present mode based on `CRANPOSE_PRESENT_MODE` and surface capabilities.
-///
-/// Supported values: `auto_no_vsync`, `auto_vsync`, `fifo`, `mailbox`, `immediate`.
 #[cfg_attr(target_os = "android", allow(dead_code))]
 pub(crate) fn select_present_mode(caps: &wgpu::SurfaceCapabilities) -> wgpu::PresentMode {
     let requested = std::env::var("CRANPOSE_PRESENT_MODE")
@@ -14,33 +9,6 @@ pub(crate) fn select_present_mode(caps: &wgpu::SurfaceCapabilities) -> wgpu::Pre
     select_present_mode_for_request(caps, requested)
 }
 
-/// Android presents through `Fifo`, not the cross-platform `AutoNoVsync`
-/// default.
-///
-/// Android Vulkan surfaces advertise `[Mailbox, Fifo]`, so `AutoNoVsync`
-/// resolves to `Mailbox`: neither `get_current_texture` nor `present` ever
-/// blocks, and the event loop free-runs. On a Pixel 9 Pro that produced 473 fps
-/// against a 60 Hz display at 107% CPU — roughly 87% of every rendered frame
-/// discarded by SurfaceFlinger — and the frame's phase relative to vsync was
-/// uniformly distributed across the whole 16.7 ms period, i.e. no alignment at
-/// all. On slower hardware the same free-run beats against the display and the
-/// presented cadence alternates between one and two vsyncs.
-///
-/// `Fifo` blocks the acquire until the display has consumed a buffer, which
-/// both caps the work at one frame per refresh and pins the loop's phase — the
-/// same thing Jetpack Compose gets from driving composition off `Choreographer`.
-///
-/// `debug.cranpose.present_mode` (`fifo`, `mailbox`, `immediate`, `auto_vsync`,
-/// `auto_no_vsync`) overrides this on device without a rebuild.
-///
-/// The override is a request, not a guarantee: `[Mailbox, Fifo]` is what
-/// *recent* Android Vulkan surfaces advertise, and `Fifo` is the only mode
-/// Vulkan requires. The Mate 20 X (Kirin 980, EMUI) offers `Fifo` alone —
-/// `mailbox` and `immediate` requests fall back, `get_current_texture`
-/// blocks ~5 ms at 60 Hz, and no swapchain configuration can free-run
-/// there. Measuring render throughput on such a device means frame-capacity
-/// math from the stage telemetry (the longest pipeline stage bounds
-/// capacity), never an uncapped fps number.
 #[cfg(target_os = "android")]
 pub(crate) fn select_android_present_mode(caps: &wgpu::SurfaceCapabilities) -> wgpu::PresentMode {
     let requested = crate::android_frame_telemetry::system_property("debug.cranpose.present_mode")
@@ -199,9 +167,6 @@ mod tests {
 
     #[test]
     fn android_defaults_to_fifo_rather_than_the_free_running_auto_no_vsync() {
-        // Android Vulkan surfaces advertise exactly this pair, and AutoNoVsync
-        // would resolve to Mailbox, which never blocks and lets the event loop
-        // render several times per refresh.
         let caps = caps(&[PresentMode::Mailbox, PresentMode::Fifo]);
 
         assert_eq!(

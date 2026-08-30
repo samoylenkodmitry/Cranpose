@@ -1,10 +1,3 @@
-//! The state hooks, exercised through a real composition.
-//!
-//! Each of these reaches for the composer, allocates against the runtime, and
-//! hands back a handle whose identity has to survive recomposition. None of that
-//! can be checked by calling the function — it has to be composed, recomposed,
-//! and asked whether it is still the same state.
-
 use std::{cell::RefCell, rc::Rc};
 
 use cranpose_core::{
@@ -13,7 +6,6 @@ use cranpose_core::{
     rememberMutableStateOfNeverEqual, rememberUpdatedState, try_mutableStateOf,
 };
 
-/// Renders `content` `passes` times over one composition, as recomposition does.
 fn compose(passes: usize, mut content: impl FnMut()) {
     let mut composition = Composition::new(MemoryApplier::new());
     let key = location_key(file!(), line!(), column!());
@@ -26,9 +18,6 @@ fn compose(passes: usize, mut content: impl FnMut()) {
 
 #[test]
 fn a_state_list_is_allocated_per_pass_and_remembered_only_when_asked() {
-    // `mutableStateList` allocates, the way `mutableStateOf` does; it is
-    // `remember` that makes a list survive recomposition. Pinning both halves
-    // here is what stops the two from being confused for each other.
     let fresh = Rc::new(RefCell::new(Vec::new()));
     let sink = Rc::clone(&fresh);
     compose(3, move || {
@@ -110,8 +99,6 @@ fn an_updated_state_follows_the_value_it_was_given_this_pass() {
         sink.borrow_mut().push(latest.get());
     });
 
-    // `remember` alone would freeze the first value. The point of
-    // `rememberUpdatedState` is that the handle is stable and the value is not.
     assert_eq!(*observed.borrow(), vec![1, 2, 3]);
 }
 
@@ -121,7 +108,6 @@ fn a_never_equal_state_notifies_even_when_the_value_does_not_change() {
     let counter = Rc::clone(&writes);
     compose(1, move || {
         let state = rememberMutableStateOfNeverEqual(|| 7u32);
-        // Structural equality would drop both of these as no-ops.
         state.set(7);
         state.set(7);
         counter.set(state.get());
@@ -138,7 +124,6 @@ fn a_structurally_equal_state_holds_the_value_it_was_given() {
         state.set(state.get() + 1);
         sink.set(state.get());
     });
-    // Two passes over one remembered state: 1 -> 2 -> 3.
     assert_eq!(seen.get(), 3);
 }
 
@@ -160,9 +145,6 @@ fn an_owned_state_outlives_the_composer_that_made_it() {
 
 #[test]
 fn a_fallible_state_allocation_answers_none_with_no_runtime() {
-    // Outside a composition and outside a runtime there is nothing to allocate
-    // against, and the fallible form is the one that says so instead of
-    // panicking.
     assert!(
         try_mutableStateOf(0u32).is_none(),
         "a state was allocated with no runtime to own it"

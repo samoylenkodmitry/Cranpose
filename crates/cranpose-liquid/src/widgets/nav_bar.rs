@@ -1,7 +1,3 @@
-//! Navigation bar with the large-title collapse: the big title shrinks into
-//! the inline bar as content scrolls under, while a progressive glass blur
-//! fades in behind the bar.
-
 use std::{cell::RefCell, rc::Rc};
 
 use cranpose_macros::composable;
@@ -69,13 +65,10 @@ pub fn LiquidNavBar(
     }
     let scroll_offset = scroll.value();
 
-    // 0 = fully large, 1 = collapsed into the inline bar.
     let progress = (scroll_offset / spec.collapse_range.max(1.0)).clamp(0.0, 1.0);
     let title = spec.title.clone();
 
     Box(modifier, BoxSpec::default(), move || {
-        // Large title first (z below the band + inline bar): it slides up
-        // and under the frost as content scrolls.
         let large_alpha = (1.0 - progress * 1.6).clamp(0.0, 1.0);
         if large_alpha > 0.0 {
             let style = TextStyle {
@@ -105,18 +98,12 @@ pub fn LiquidNavBar(
             );
         }
 
-        // Glass band behind the inline bar. Keeping one capture layer mounted
-        // avoids a top-edge flash when scrolling crosses the collapse onset;
-        // the complete material resolves to transparent identity at zero.
         let band = Modifier::empty()
             .fill_max_width()
             .height(BAR_HEIGHT)
             .glass_effect_with(
                 Glass::regular()
                     .shape(LiquidShape::RoundedRect(0.0))
-                    // Strong diffusion: passing section headers must melt
-                    // into the material — at 16dp they stayed readable and
-                    // pulsed the band during scroll (the reported flicker).
                     .blur_radius(30.0)
                     .saturation(1.15)
                     .refraction_depth(0.0)
@@ -131,7 +118,6 @@ pub fn LiquidNavBar(
             );
         Box(band, BoxSpec::default(), || {});
 
-        // Inline bar row: leading / inline title / trailing.
         let inline_alpha = ((progress - 0.5) * 2.0).clamp(0.0, 1.0);
         let inline_title = title.clone();
         let inline_typography = typography.clone();
@@ -166,9 +152,6 @@ pub fn LiquidNavBar(
     });
 }
 
-/// The nav bar's settle policy: a rest position inside the large-title
-/// collapse band snaps to the nearest edge (expanded or collapsed); deeper
-/// offsets are untouched.
 pub fn large_title_settle_policy(collapse_range: f32) -> cranpose_ui::ScrollSettlePolicy {
     let range = collapse_range.max(1.0);
     Rc::new(move |proposed: f32, _velocity: f32| {

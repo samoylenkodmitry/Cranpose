@@ -1,14 +1,3 @@
-//! Robot test for button click drag cancellation and tab switching
-//!
-//! This test validates:
-//! 1. Dragging on a button SHOULD NOT trigger a click (drag cancellation)
-//! 2. Buttons SHOULD still work after switching to/from Async Runtime tab
-//!
-//! Run with:
-//! ```bash
-//! cargo run --package desktop-app --example robot_click_drag --features robot-app
-//! ```
-
 use std::time::Duration;
 
 use cranpose::AppLauncher;
@@ -27,7 +16,6 @@ fn main() {
         .with_size(800, 600)
         .with_headless(true)
         .with_test_driver(|robot| {
-            // Timeout after a full robot run budget.
             std::thread::spawn(|| {
                 std::thread::sleep(Duration::from_secs(TEST_TIMEOUT_SECS));
                 println!("✗ Test timed out after {} seconds", TEST_TIMEOUT_SECS);
@@ -44,19 +32,14 @@ fn main() {
 
             let mut all_passed = true;
 
-            // =========================================================
-            // TEST 1: Verify click works initially (baseline)
-            // =========================================================
             println!("--- Test 1: Baseline Click Test ---");
             println!("Verifying that clicking Increment button works initially...\n");
 
-            // Find the initial counter value
             let initial_counter = find_in_semantics(&robot, |elem| find_text(elem, "Counter:"));
             if let Some((x, y, _w, _h)) = initial_counter {
                 println!("  Initial counter found at ({:.1}, {:.1})", x, y);
             }
 
-            // Find and click the Increment button
             if let Some((x, y, w, h)) = find_in_semantics(&robot, |elem| find_button(elem, "Increment")) {
                 let cx = x + w / 2.0;
                 let cy = y + h / 2.0;
@@ -69,7 +52,6 @@ fn main() {
                 let _ = robot.mouse_up();
                 std::thread::sleep(Duration::from_millis(200));
 
-                // Verify counter incremented
                 if find_in_semantics(&robot, |elem| find_text(elem, "Counter: 1")).is_some() {
                     println!("  ✓ PASS: Counter incremented to 1\n");
                 } else {
@@ -81,25 +63,19 @@ fn main() {
                 all_passed = false;
             }
 
-            // =========================================================
-            // TEST 2: Drag on button should NOT trigger click
-            // =========================================================
             println!("--- Test 2: Drag Should Cancel Click ---");
             println!("Dragging 20px on 'Increment' button should NOT increment counter...\n");
 
-            // Get current counter value (should be 1)
             if let Some((x, y, w, h)) = find_in_semantics(&robot, |elem| find_button(elem, "Increment")) {
                 let cx = x + w / 2.0;
                 let cy = y + h / 2.0;
                 println!("  Found 'Increment' button at center ({:.1}, {:.1})", cx, cy);
 
-                // Drag 20px to the right (beyond 8px threshold)
                 let _ = robot.mouse_move(cx, cy);
                 std::thread::sleep(Duration::from_millis(50));
                 let _ = robot.mouse_down();
                 std::thread::sleep(Duration::from_millis(50));
 
-                // Move beyond threshold
                 for i in 1..=10 {
                     let _ = robot.mouse_move(cx + (i as f32 * 2.0), cy);
                     std::thread::sleep(Duration::from_millis(10));
@@ -108,7 +84,6 @@ fn main() {
                 let _ = robot.mouse_up();
                 std::thread::sleep(Duration::from_millis(200));
 
-                // Verify counter did NOT increment (should still be 1)
                 if find_in_semantics(&robot, |elem| find_text(elem, "Counter: 1")).is_some() {
                     println!("  ✓ PASS: Counter still at 1 (drag cancelled click)\n");
                 } else if find_in_semantics(&robot, |elem| find_text(elem, "Counter: 2")).is_some() {
@@ -119,9 +94,6 @@ fn main() {
                 }
             }
 
-            // =========================================================
-            // TEST 3: Switch to Async Runtime tab and back
-            // =========================================================
             println!("--- Test 3: Switch to Async Runtime Tab ---");
 
             if let Some((x, y, w, h)) = find_button_in_semantics(&robot, "Async Runtime") {
@@ -136,7 +108,6 @@ fn main() {
                 let _ = robot.mouse_up();
                 std::thread::sleep(Duration::from_millis(500));
 
-                // Verify we switched
                 if find_in_semantics(&robot, |elem| find_text(elem, "Async Runtime Demo")).is_some() {
                     println!("  ✓ Switched to Async Runtime tab\n");
                 } else {
@@ -146,9 +117,6 @@ fn main() {
                 println!("  ✗ Could not find 'Async Runtime' tab\n");
             }
 
-            // =========================================================
-            // TEST 4: Switch back to Counter App tab
-            // =========================================================
             println!("--- Test 4: Switch Back to Counter App Tab ---");
 
             if let Some((x, y, w, h)) = find_button_in_semantics(&robot, "Counter App") {
@@ -163,7 +131,6 @@ fn main() {
                 let _ = robot.mouse_up();
                 std::thread::sleep(Duration::from_millis(500));
 
-                // Verify we switched back - counter resets to 0 after tab switch
                 if find_in_semantics(&robot, |elem| find_text(elem, "Counter: 0")).is_some() {
                     println!("  ✓ Switched back to Counter App, counter reset to 0\n");
                 } else {
@@ -173,13 +140,9 @@ fn main() {
                 println!("  ✗ Could not find 'Counter App' tab\n");
             }
 
-            // =========================================================
-            // TEST 5: Click should STILL work after tab switching
-            // =========================================================
             println!("--- Test 5: Click Should Still Work After Tab Switching ---");
             println!("Clicking 'Increment' button after visiting Async Runtime tab...\n");
 
-            // Wait longer for recomposition after tab switch
             std::thread::sleep(Duration::from_millis(1000));
 
             if let Some((x, y, w, h)) = find_in_semantics(&robot, |elem| find_button(elem, "Increment")) {
@@ -194,11 +157,9 @@ fn main() {
                 let _ = robot.mouse_up();
                 std::thread::sleep(Duration::from_millis(500));
 
-                // Verify counter incremented to 1 (from 0 after tab reset)
                 if find_in_semantics(&robot, |elem| find_text(elem, "Counter: 1")).is_some() {
                     println!("  ✓ PASS: Counter incremented to 1 (buttons still work after tab switch)\n");
                 } else {
-                    // Check what the counter actually shows
                     if find_in_semantics(&robot, |elem| find_text(elem, "Counter: 0")).is_some() {
                         println!("  ✗ FAIL: Counter still at 0 (button click did not work after tab switch!)\n");
                         all_passed = false;
@@ -211,9 +172,6 @@ fn main() {
                 all_passed = false;
             }
 
-            // =========================================================
-            // Summary
-            // =========================================================
             println!("\n=== Test Summary ===");
             if all_passed {
                 println!("✓ ALL TESTS PASSED");

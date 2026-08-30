@@ -36,13 +36,11 @@ fn test_rich_text_bounds() {
         .expect("text bounds");
     println!("Text bounds: {:?}", bounds);
 
-    // "BIG" is 30sp, "small" is 10sp. Total height should be >=30.
     assert!(
         bounds.height >= 30.0,
         "Height should wrap largest span. Expected >= 30, got {}",
         bounds.height
     );
-    // Width should not take the whole screen!
     assert!(
         bounds.width < 800.0,
         "Width should not take the full space. Got {}",

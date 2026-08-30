@@ -1,7 +1,3 @@
-//! Parses every `api/current.txt` metalava signature file found under a
-//! given AndroidX Compose checkout into structured JSON: one entry per
-//! class declaration, method, field, property, constructor, and enum
-//! constant. See `docs/compose_api_parity.md`.
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -20,10 +16,6 @@ struct Entry {
     experimental: bool,
 }
 
-/// Removes every `@Annotation` or `@Annotation(...)` token from `line`,
-/// with one exception: the bare keyword `@interface` (Java's
-/// annotation-type declaration) is left in place because it is part of the
-/// class-kind grammar, not an annotation usage.
 fn strip_annotations(line: &str) -> String {
     let chars: Vec<char> = line.chars().collect();
     let mut out = String::with_capacity(line.len());
@@ -115,9 +107,6 @@ fn match_class_decl(stripped: &str) -> Option<(String, String)> {
     Some((kind.to_string(), name))
 }
 
-/// A `typealias` is a single-line, package-level declaration -- unlike
-/// `class`/`interface`/`enum`, it never opens a `{ ... }` block, so a match
-/// here must not become the parser's `cur_class`.
 fn match_typealias(stripped: &str) -> Option<String> {
     let tokens: Vec<&str> = stripped.trim().split(' ').collect();
     let mut i = 0;
@@ -150,10 +139,6 @@ fn member_name(kind: &str, rest: &str) -> String {
     field_or_property_name(rest)
 }
 
-/// A field, property, or enum constant is `<modifiers...> <type> <name>`,
-/// optionally followed by `= <default value>` -- the name is the last
-/// whitespace-separated token before that, not the first one (which is a
-/// modifier keyword such as `public` or `static`).
 fn field_or_property_name(rest: &str) -> String {
     let before_eq = rest.split('=').next().unwrap_or(rest).trim();
     before_eq

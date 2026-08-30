@@ -1,4 +1,3 @@
-// Complex types are inherent to the observer pattern with nested callbacks and state tracking
 #![allow(clippy::type_complexity)]
 
 use std::{
@@ -19,7 +18,6 @@ use crate::{
     state::StateObject,
 };
 
-/// Executes a callback once changes are delivered.
 type Executor = dyn Fn(Box<dyn FnOnce() + 'static>) + 'static;
 
 /// Observer that records state object reads performed inside a given scope and
@@ -124,7 +122,6 @@ impl SnapshotStateObserver {
         self.inner.debug_stats()
     }
 
-    /// Test-only helper to simulate snapshot changes.
     #[cfg(test)]
     pub fn notify_changes(&self, modified: &[Arc<dyn StateObject>]) {
         self.inner.handle_apply(modified);
@@ -132,19 +129,6 @@ impl SnapshotStateObserver {
 }
 
 struct SnapshotStateObserverInner {
-    // Borrowing invariants:
-    // - `observe_reads` may push/pop `active_read_targets`, but it must not hold that
-    //   RefCell borrow across the user-provided `block`; the scoped guard only keeps
-    //   ownership of the target handle, not an active borrow.
-    // - `read_dispatcher` borrows `active_read_targets` just long enough to clone the
-    //   current target, then mutates only the selected `ObservedIds`.
-    // - `handle_apply` snapshots `observed_to_scopes` and `indexed_scopes` into a
-    //   separate notification list before borrowing any `ScopeEntry`, so map borrows
-    //   are never held while callbacks may inspect or mutate entry state.
-    // - `replace_observed_ids`, `clear`, `clear_if`, and `prune_dead_scopes` may borrow
-    //   scope maps mutably, but they must release any `ScopeEntry` borrow before removing
-    //   the entry from `indexed_scopes`, `fast_scopes`, `owned_scopes`, or
-    //   `observed_to_scopes`.
     executor: Rc<Executor>,
     owned_scopes: RefCell<HashMap<OwnedScopeIndexKey, OwnedScopeBucket>>,
     fast_scopes: RefCell<HashMap<ScopeId, Rc<RefCell<ScopeEntry>>>>,
@@ -534,12 +518,8 @@ impl SnapshotStateObserverInner {
     }
 
     fn run_with_read_observer<R>(&self, block: impl FnOnce() -> R) -> R {
-        // Kotlin uses Snapshot.observeInternal which creates a TransparentObserverMutableSnapshot,
-        // not a readonly snapshot. This allows writes to happen during observation (composition).
         use crate::snapshot_v2::take_transparent_observer_mutable_snapshot;
 
-        // Create a transparent mutable snapshot (not readonly!) for observation
-        // This matches Kotlin's Snapshot.observeInternal behavior
         let snapshot =
             take_transparent_observer_mutable_snapshot(Some(self.read_dispatcher.clone()), None);
         let result = snapshot.enter(block);
@@ -688,8 +668,6 @@ impl ObservedIds {
                 }
             }
             ObservedIds::Large(large) => {
-                // One lookup rather than two: this runs per observed state per
-                // read, which is the hottest path the observer has.
                 large.entry(id).or_insert_with(|| state.observation_lease());
             }
         }

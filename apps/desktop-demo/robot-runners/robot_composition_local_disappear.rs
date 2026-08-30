@@ -1,21 +1,3 @@
-//! Robot test for CompositionLocal green box disappearing bug
-//!
-//! BUG: In CompositionLocal Test tab, clicking "Increment" twice
-//! causes the green "READING..." box to disappear.
-//!
-//! Steps to reproduce:
-//! 1. Go to CompositionLocal Test tab
-//! 2. Verify green "READING..." box is visible
-//! 3. Click "Increment" button once
-//! 4. Verify green box still visible
-//! 5. Click "Increment" button again
-//! 6. Green box DISAPPEARS (BUG)
-//!
-//! Run with:
-//! ```bash
-//! cargo run --package desktop-app --example robot_composition_local_disappear --features robot-app
-//! ```
-
 use std::time::Duration;
 
 use cranpose::AppLauncher;
@@ -50,15 +32,10 @@ fn main() {
 
             let mut all_passed = true;
 
-            // Helper to find "READING" text (the green box content)
-            // Uses find_text which recursively searches children
             let find_reading_box = |robot: &cranpose::Robot| -> Option<(f32, f32, f32, f32)> {
                 find_in_semantics(robot, |elem| find_text(elem, "READING"))
             };
 
-            // =========================================================
-            // STEP 1: Navigate to CompositionLocal Test tab
-            // =========================================================
             println!("--- Step 1: Navigate to CompositionLocal Test tab ---");
 
             if let Some((x, y, w, h)) = find_button_in_semantics(&robot, "CompositionLocal Test") {
@@ -78,16 +55,12 @@ fn main() {
                 all_passed = false;
             }
 
-            // =========================================================
-            // STEP 2: Verify green "READING" box is visible initially
-            // =========================================================
             println!("--- Step 2: Verify 'READING' box is visible ---");
 
             let reading_box_initial = find_reading_box(&robot);
             if reading_box_initial.is_some() {
                 println!("  ✓ 'READING...' box is visible initially\n");
             } else {
-                // Try to find what IS visible
                 println!("  Looking for any text containing 'READING' or 'Local'...");
                 if let Ok(semantics) = robot.get_semantics() {
                     fn dump(elem: &cranpose::SemanticElement, depth: usize) {
@@ -111,9 +84,6 @@ fn main() {
                 all_passed = false;
             }
 
-            // =========================================================
-            // STEP 3: Click "Increment" button once
-            // =========================================================
             println!("--- Step 3: Click 'Increment' button (first time) ---");
 
             if let Some((x, y, w, h)) =
@@ -132,9 +102,6 @@ fn main() {
                 all_passed = false;
             }
 
-            // =========================================================
-            // STEP 4: Verify green box still visible after first click
-            // =========================================================
             println!("--- Step 4: Verify 'READING' box after 1st click ---");
 
             let reading_box_after_1 = find_reading_box(&robot);
@@ -145,9 +112,6 @@ fn main() {
                 all_passed = false;
             }
 
-            // =========================================================
-            // STEP 5: Click "Increment" button again
-            // =========================================================
             println!("--- Step 5: Click 'Increment' button (second time) ---");
 
             if let Some((x, y, w, h)) =
@@ -166,9 +130,6 @@ fn main() {
                 all_passed = false;
             }
 
-            // =========================================================
-            // STEP 6: Verify green box STILL visible after second click
-            // =========================================================
             println!("--- Step 6: Verify 'READING' box after 2nd click ---");
 
             let reading_box_after_2 = find_reading_box(&robot);
@@ -181,7 +142,6 @@ fn main() {
                 );
                 all_passed = false;
 
-                // Dump what IS visible now
                 println!("  Current semantics:");
                 if let Ok(semantics) = robot.get_semantics() {
                     fn dump(elem: &cranpose::SemanticElement, depth: usize) {
@@ -199,9 +159,6 @@ fn main() {
                 }
             }
 
-            // =========================================================
-            // SUMMARY
-            // =========================================================
             println!("\n=== Test Summary ===");
             if all_passed {
                 println!("✓ ALL TESTS PASSED");

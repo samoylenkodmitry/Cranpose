@@ -5,18 +5,13 @@ use crate::{
     state::{MutationPolicy, OwnedMutableState},
 };
 
-/// The identity of one `provides` call: the local's own salt and the call
-/// site. Same-local providers at different sites must not adopt each other's
-/// entries when a neighbor leaves. Deliberately composer-free: a provider may
-/// be constructed anywhere, including inside a slot initializer that already
-/// holds the writer.
 fn provider_entry_source(key: &LocalKey, caller: crate::Key) -> crate::Key {
     (key.entry_source() ^ caller).wrapping_mul(0x0000_0100_0000_01b3)
 }
 
 pub struct ProvidedValue {
     key: LocalKey,
-    #[allow(clippy::type_complexity)] // Closure returns trait object for flexible local values
+    #[allow(clippy::type_complexity)]
     apply: Box<dyn Fn(&Composer, crate::Key) -> Rc<dyn Any>>,
 }
 
@@ -25,8 +20,6 @@ impl ProvidedValue {
         &self.key
     }
 
-    /// `site` is the provider call this value is applied under: two sibling
-    /// provider scopes fed from one construction site must not share entries.
     pub(crate) fn into_entry(
         self,
         composer: &Composer,

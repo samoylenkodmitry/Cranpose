@@ -97,7 +97,6 @@ impl<T: 'static> Hash for ModifierLocalKey<T> {
     }
 }
 
-/// Node responsible for providing a modifier local value.
 pub struct ModifierLocalProviderNode {
     token: ModifierLocalToken,
     value_factory: Rc<dyn Fn() -> Box<dyn Any>>,
@@ -152,7 +151,6 @@ impl DelegatableNode for ModifierLocalProviderNode {
 
 impl ModifierNode for ModifierLocalProviderNode {}
 
-/// Node responsible for observing modifier local changes.
 pub struct ModifierLocalConsumerNode {
     callback: Rc<dyn for<'a> Fn(&mut ModifierLocalReadScope<'a>)>,
     state: NodeState,
@@ -359,8 +357,6 @@ impl fmt::Debug for ModifierLocalProviderElement {
 
 impl PartialEq for ModifierLocalProviderElement {
     fn eq(&self, other: &Self) -> bool {
-        // Type-based matching: compare only tokens, not factory closures
-        // Nodes are updated via update() method, preserving behavior
         self.token == other.token
     }
 }
@@ -369,7 +365,6 @@ impl Eq for ModifierLocalProviderElement {}
 
 impl Hash for ModifierLocalProviderElement {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        // Consistent hash based on token only
         "modifier_local_provider".hash(state);
         self.token.hash(state);
     }
@@ -391,7 +386,6 @@ impl ModifierNodeElement for ModifierLocalProviderElement {
     }
 
     fn always_update(&self) -> bool {
-        // Factory closure might change even if token is same
         true
     }
 }
@@ -420,8 +414,6 @@ impl fmt::Debug for ModifierLocalConsumerElement {
 
 impl PartialEq for ModifierLocalConsumerElement {
     fn eq(&self, _other: &Self) -> bool {
-        // Type-based matching: always equal for same type
-        // Nodes are updated via update() method, preserving behavior
         true
     }
 }
@@ -430,7 +422,6 @@ impl Eq for ModifierLocalConsumerElement {}
 
 impl Hash for ModifierLocalConsumerElement {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        // Consistent hash for type-based matching
         "modifier_local_consumer".hash(state);
     }
 }
@@ -451,7 +442,6 @@ impl ModifierNodeElement for ModifierLocalConsumerElement {
     }
 
     fn always_update(&self) -> bool {
-        // Callback closure might change
         true
     }
 }

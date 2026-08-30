@@ -1,5 +1,3 @@
-//! Reads the version identity from the running iOS application bundle.
-
 use std::rc::Rc;
 
 use cranpose_services::{AppInfo, set_platform_app_info};
@@ -28,7 +26,6 @@ fn bundle_string(key: &NSString) -> Option<String> {
         .map(|value| value.to_string())
 }
 
-/// Installs the immutable packaged identity of the running application.
 pub(crate) fn register() {
     set_platform_app_info(Rc::new(IosAppInfo {
         version_name: bundle_string(ns_string!("CFBundleShortVersionString")),

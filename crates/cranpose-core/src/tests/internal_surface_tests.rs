@@ -1,10 +1,3 @@
-//! The surfaces a host or a devtool reaches for, and nothing else does.
-//!
-//! Frame-clock registration, subcompose reuse policy and the slot-table debug
-//! readers are gated behind `internal` because they are a host's business
-//! rather than an application's — which is exactly why nothing in the
-//! application-facing test suite touches them, and why they need a test here.
-
 use std::{
     cell::Cell,
     rc::Rc,
@@ -36,8 +29,6 @@ fn a_frame_callback_fires_once_for_the_frame_it_registered_for() {
     assert_eq!(millis.load(Ordering::SeqCst), 1);
     assert_eq!(nanos.load(Ordering::SeqCst), 1);
 
-    // One registration is one delivery: a callback already handed its frame
-    // must not be handed the next one as well.
     clock.runtime_handle().drain_frame_callbacks(32_000_000);
     assert_eq!(millis.load(Ordering::SeqCst), 1);
     assert_eq!(nanos.load(Ordering::SeqCst), 1);
@@ -49,8 +40,6 @@ fn a_perpetual_frame_keeps_asking_after_every_dispatch() {
     let clock = FrameClock::new(composition.runtime_handle());
     let seen = Rc::new(Cell::new(0usize));
 
-    // Unlike a one-shot callback, the perpetual future is re-armed by whoever
-    // awaits it, so two dispatches reach two awaits.
     for frame in 1..=2u64 {
         let mut next = Box::pin(clock.next_perpetual_frame());
         let waker = std::task::Waker::noop().clone();
@@ -76,11 +65,9 @@ fn a_snapshot_id_range_adds_every_id_in_it_and_nothing_outside() {
     let set = SnapshotIdSet::EMPTY.add_range(3, 7);
     assert_eq!(set.to_list(), vec![3, 4, 5, 6], "the range is half-open");
 
-    // An empty or reversed range is a no-op rather than an infinite walk.
     assert_eq!(set.add_range(5, 5).to_list(), set.to_list());
     assert_eq!(set.add_range(9, 2).to_list(), set.to_list());
 
-    // Adding overlapping ranges is idempotent where they overlap.
     let widened = set.add_range(5, 9);
     assert_eq!(widened.to_list(), vec![3, 4, 5, 6, 7, 8]);
 }
@@ -94,8 +81,6 @@ fn a_callback_holder_forwards_to_whichever_closure_was_last_stored() {
     let holder = CallbackHolder::new();
     let calls = Rc::new(Cell::new(0u32));
 
-    // A fresh holder is callable before anything is stored, which is what lets
-    // a generated composable hand the forwarder out before the body runs.
     let forward = holder.clone_rc();
     forward();
     assert_eq!(calls.get(), 0);
@@ -105,8 +90,6 @@ fn a_callback_holder_forwards_to_whichever_closure_was_last_stored() {
     forward();
     assert_eq!(calls.get(), 1);
 
-    // Storing again replaces rather than accumulates: two callbacks firing per
-    // click is the bug this guards.
     let second = Rc::clone(&calls);
     holder.update_boxed(Box::new(move || second.set(second.get() + 10)));
     forward();
@@ -126,8 +109,6 @@ fn a_ui_task_label_is_taken_by_the_next_task_and_not_the_one_after() {
     let runtime = composition.runtime_handle();
     let order = Arc::new(AtomicU32::new(0));
 
-    // The label is consumed by whichever task is posted next; posting two and
-    // draining must run both regardless of which one carried the label.
     label_next_ui_task("labelled");
     let first = Arc::clone(&order);
     runtime.post_ui(move || {

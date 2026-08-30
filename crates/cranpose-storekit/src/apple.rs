@@ -1,8 +1,3 @@
-//! The Apple half: FFI to `swift/storekit.swift` plus the
-//! [`cranpose_services::purchases::Purchases`] implementation.
-//!
-//! The reviewed FFI boundary for this crate — the crate root denies unsafe
-//! code and this is the only module that opts back in.
 #![allow(unsafe_code)]
 
 use std::{
@@ -33,7 +28,6 @@ const EVENT_PENDING: i32 = 2;
 const EVENT_FAILED: i32 = 3;
 const EVENT_RESTORED: i32 = 4;
 
-/// `(ctx, kind, arg0, arg1, a, b, c, d)` — see `swift/storekit.swift`.
 type StoreCallback = unsafe extern "C" fn(
     *mut c_void,
     i32,
@@ -52,11 +46,6 @@ unsafe extern "C" {
     fn cranpose_storekit_restore();
 }
 
-/// Everything the Swift side has told us.
-///
-/// A snapshot arrives as `begin`, a run of `product`/`owned` rows, then
-/// `phase`, which swaps the staged rows into `live` in one step — so a reader
-/// never observes a half-built product list.
 struct Shared {
     staging: bool,
     staged_products: Vec<Product>,
@@ -88,19 +77,10 @@ impl Shared {
 
 static SHARED: Mutex<Shared> = Mutex::new(Shared::new());
 
-/// A poisoned mutex would mean a panic inside the callback; the state is
-/// plain data, so recovering and carrying on is strictly better for the user
-/// than propagating the panic through a StoreKit executor.
 fn shared() -> std::sync::MutexGuard<'static, Shared> {
     SHARED.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// Borrow a C string as an owned `String`. `None` for null.
-///
-/// # Safety
-/// `ptr` is either null or a NUL-terminated string valid for this call, which
-/// is what the Swift side guarantees (its buffers live for the callback's
-/// duration only, so the copy here is required, not an optimization).
 unsafe fn take(ptr: *const c_char) -> Option<String> {
     unsafe {
         if ptr.is_null() {
@@ -110,7 +90,6 @@ unsafe fn take(ptr: *const c_char) -> Option<String> {
     }
 }
 
-/// The one callback the Swift side pushes everything through.
 unsafe extern "C" fn on_message(
     _ctx: *mut c_void,
     kind: i32,
@@ -257,8 +236,6 @@ pub fn register() {
 mod tests {
     use super::*;
 
-    /// Drive the callback exactly as Swift does and assert the snapshot is
-    /// committed atomically, with prices surviving a bare phase update.
     #[test]
     fn snapshot_commits_on_phase_and_survives_a_bare_ping() {
         let id = CString::new("com.example.pro").unwrap();

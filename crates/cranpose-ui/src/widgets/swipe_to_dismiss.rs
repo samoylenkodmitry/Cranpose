@@ -91,9 +91,6 @@ pub struct SwipeToDismissSpec {
     /// Fraction of the content width the offset must exceed on release for
     /// the row to dismiss (default `0.5`). Clamped to `(0, 1]`.
     pub threshold_fraction: f32,
-    /// Optional content drawn behind the swiped row (e.g. a delete bin),
-    /// revealed as the row slides away. Receives the [`SwipeDismissSide`] the
-    /// row is being swiped toward so the reveal can follow the swipe direction.
     background: Option<BackgroundFn>,
     /// Identity of the wrapped content (e.g. the row's database id). When a
     /// composition slot is reused for a DIFFERENT item — unkeyed lazy-list
@@ -277,44 +274,19 @@ static NEXT_SWIPE_ID: AtomicU64 = AtomicU64::new(0);
 /// State shared between the composable (which reads the animated offset) and
 /// the pointer-input handler (which drives it). Main-thread only.
 struct SwipeToDismissController {
-    /// Stable key for the pointer-input modifier.
     id: u64,
     runtime: RuntimeHandle,
-    /// Animated horizontal offset of the content in logical px.
     offset: RefCell<Animatable<f32>>,
-    /// Reactive flag mirroring `|offset| > 0`, read inside the subcompose so
-    /// the row's background is *composed* only while the row is displaced.
-    /// Conditional composition (adding/removing the background node) re-applies
-    /// when the slot recomposes, unlike a layout-offset value change which is
-    /// placement-cached — so this bool, not the raw offset, gates the reveal.
-    /// A plain bool also recomposes only on rest/displaced transitions rather
-    /// than on every drag frame. Without gating, the always-composed background
-    /// flashes through content that fades in with alpha < 1 during an entrance.
     revealed: OwnedMutableState<bool>,
-    /// Height scale of the row (fraction of its natural height). `1.0` at rest;
-    /// after a successful dismiss it animates to `0.0` so the row collapses and
-    /// leaves no gap — and no red background strip — even if the host removes
-    /// the item a few frames later.
     collapse: RefCell<Animatable<f32>>,
     phase: Cell<SwipePhase>,
-    /// Content width in logical px, refreshed from the incoming constraints.
     width_px: Cell<f32>,
     threshold_fraction: Cell<f32>,
-    /// Refreshed every recomposition so the latest captured environment runs.
     on_dismiss: RefCell<Option<Rc<dyn Fn()>>>,
-    /// `on_dismiss` fired for the current dismissal (fires at most once).
-    /// Observable: a caller watching [`SwipeDismissState`] reacts to a row
-    /// leaving without being handed a callback.
     dismissed: OwnedMutableState<bool>,
-    /// The row's layout node, so the collapse watcher can force a re-measure
-    /// each frame as the height shrinks. Set on every recomposition.
     node_id: Cell<Option<NodeId>>,
-    /// Frame callback watching the dismiss animation for completion.
     settle_watcher: RefCell<Option<FrameCallbackRegistration>>,
-    /// Frame callback driving the post-dismiss height collapse.
     collapse_watcher: RefCell<Option<FrameCallbackRegistration>>,
-    /// Identity of the content this controller's state belongs to (from
-    /// [`SwipeToDismissSpec::with_key`]); state resets when it changes.
     identity: Cell<Option<u64>>,
     active_pointer: Cell<Option<u64>>,
     direction: Cell<SwipeDismissDirection>,
@@ -350,10 +322,6 @@ impl SwipeToDismissController {
         })
     }
 
-    /// Instantly return to the untouched state. Used when the composition
-    /// slot is reused for a different item (the spec key changed): the new
-    /// item must not inherit the old item's displacement, reveal, collapse
-    /// or a pending dismissal.
     fn reset_to_rest(&self) {
         self.settle_watcher.borrow_mut().take();
         self.collapse_watcher.borrow_mut().take();
@@ -369,8 +337,6 @@ impl SwipeToDismissController {
         self.offset.borrow().state().value()
     }
 
-    /// The edge the background is revealed on, from the current displacement:
-    /// a rightward offset reveals the start edge, a leftward offset the end.
     fn revealed_side(&self) -> SwipeDismissSide {
         if self.current_offset() >= 0.0 {
             SwipeDismissSide::Start
@@ -379,26 +345,20 @@ impl SwipeToDismissController {
         }
     }
 
-    /// Current row height scale (`1.0` at rest, `0.0` fully collapsed).
     fn collapse_fraction(&self) -> f32 {
         self.collapse.borrow().state().value()
     }
 
-    /// Reactive read of the revealed flag; subscribes the reading scope (the
-    /// subcompose slot) so it recomposes when the background reveal toggles.
     fn revealed(&self) -> bool {
         self.revealed.value()
     }
 
-    /// Updates the revealed flag (only writes on change, to avoid needless
-    /// recompositions each drag frame while already displaced).
     fn set_revealed(&self, revealed: bool) {
         if self.revealed.get_non_reactive() != revealed {
             self.revealed.set_value(revealed);
         }
     }
 
-    /// Updates the dismissed flag, writing only on change.
     fn set_dismissed(&self, dismissed: bool) {
         if self.dismissed.get_non_reactive() != dismissed {
             self.dismissed.set_value(dismissed);
@@ -407,17 +367,11 @@ impl SwipeToDismissController {
 
     fn snap_to(&self, offset: f32) {
         self.offset.borrow_mut().snapTo(offset);
-        // A live drag frame: the background is revealed exactly while the row
-        // is displaced. Rest (offset 0) hides it, even mid-entrance.
         self.set_revealed(offset != 0.0);
     }
 
     fn animate_to(&self, target: f32) {
         self.offset.borrow_mut().animateTo(target, swipe_spring());
-        // A dismissal fling keeps the row displaced, so reveal immediately.
-        // A spring-back keeps the reveal on until the settle watcher observes
-        // the row return to rest (so the background does not vanish out from
-        // under the still-sliding content).
         if target != 0.0 {
             self.set_revealed(true);
         }
@@ -439,8 +393,6 @@ pub struct SwipeDismissState {
 }
 
 impl PartialEq for SwipeDismissState {
-    /// Identity, not value: a composable taking one skips while it is the same
-    /// row, however far that row has been swiped.
     fn eq(&self, other: &Self) -> bool {
         Rc::ptr_eq(&self.controller, &other.controller)
     }
@@ -577,8 +529,6 @@ fn handle_swipe_event(controller: &Rc<SwipeToDismissController>, event: &Pointer
                 return;
             }
             controller.active_pointer.set(Some(event.id));
-            // Catch an in-flight spring: pressing pins the content where it
-            // currently is, like Compose's swipeable.
             let current = controller.current_offset();
             controller.snap_to(current);
             controller.phase.set(SwipePhase::Tracking {
@@ -586,12 +536,9 @@ fn handle_swipe_event(controller: &Rc<SwipeToDismissController>, event: &Pointer
                 down_y: event.global_position.y,
                 start_offset: current,
             });
-            // Down is never consumed: taps must keep reaching clickables.
         }
         PointerEventKind::Move => {
             if event.is_consumed() {
-                // Another handler owns this sequence (parent scroll started,
-                // or a sibling captured); abandon and rest.
                 if matches!(controller.phase.get(), SwipePhase::Dragging { .. }) {
                     animate_spring_back(controller);
                 }
@@ -715,24 +662,15 @@ fn watch_settle(controller: &Rc<SwipeToDismissController>, dismissing: bool) {
                 if dismissing && controller.dismissed.get_non_reactive() {
                     return;
                 }
-                // A new gesture retargeted the animation; a fresh snap already
-                // owns the reveal flag, so stop watching.
                 if matches!(controller.phase.get(), SwipePhase::Dragging { .. }) {
                     return;
                 }
                 let target = controller.offset.borrow().target();
                 let value = controller.current_offset();
                 if (value - target).abs() <= DISMISS_SETTLE_EPSILON {
-                    // The row has settled. Stop drawing the background in every
-                    // case: a spring-back rests at 0 (nothing revealed), and a
-                    // dismissal must *not* leave the red strip behind while it
-                    // waits for the host to drop the item.
                     controller.set_revealed(false);
                     if dismissing && !controller.dismissed.get_non_reactive() {
                         controller.set_dismissed(true);
-                        // Collapse the row to zero height so no empty gap (or
-                        // background strip) lingers if the host removes the item
-                        // a frame or two later, then notify the host.
                         if controller.collapse_after_dismiss.get() {
                             start_collapse(&controller);
                         }
@@ -740,15 +678,6 @@ fn watch_settle(controller: &Rc<SwipeToDismissController>, dismissing: bool) {
                         if let Some(on_dismiss) = on_dismiss {
                             on_dismiss();
                         }
-                        // A navigation dismissal returns to rest AFTER the host
-                        // has been told. The host may answer by unmounting this
-                        // content, in which case the reset costs nothing, or by
-                        // staying composed -- backing out of a pause overlay
-                        // resumes the game in the same root composable -- in
-                        // which case leaving the content translated off screen
-                        // is a blank, unrecoverable screen. Ordered after the
-                        // callback so a host that reads the state during it
-                        // still observes the dismissal.
                         if controller.reset_after_dismiss.get() {
                             controller.reset_to_rest();
                         }
@@ -786,15 +715,6 @@ fn watch_collapse(controller: &Rc<SwipeToDismissController>) {
                 };
                 controller.collapse_watcher.borrow_mut().take();
                 if let Some(node_id) = controller.node_id.get() {
-                    // Re-measure the row as it collapses. A plain layout repass
-                    // only bubbles *layout* (placement) dirtiness up the tree,
-                    // which does not set the row node's own `needs_measure` flag —
-                    // and that flag is exactly what an enclosing `LazyColumn`
-                    // consults (`children_need_relayout`) before reusing a cached
-                    // item slot. `schedule_measure_repass` bubbles *measure*
-                    // dirtiness so the list actually re-measures the shrinking
-                    // row; otherwise the pre-dismiss height and the still-composed
-                    // red background linger until the whole list is rebuilt.
                     crate::schedule_measure_repass(node_id);
                 }
                 crate::request_render_invalidation();
@@ -839,19 +759,12 @@ where
         None => owned_controller,
     };
 
-    // Content identity: when this composition slot is reused for a different
-    // item (unkeyed lazy rows shifting up after a removal), the remembered
-    // controller must not leak the old item's swipe state onto the new one.
-    // A row inside a keyed lazy list is identified by the list's own key, so
-    // an application does not repeat it here.
     let identity = spec.key.or_else(crate::lazy_item::lazy_item_key);
     if controller.identity.get() != identity {
         controller.reset_to_rest();
         controller.identity.set(identity);
     }
 
-    // Refresh the per-recomposition inputs so the pointer handler (which
-    // lives across recompositions) observes the latest values.
     controller
         .threshold_fraction
         .set(spec.threshold_fraction.clamp(f32::EPSILON, 1.0));
@@ -867,22 +780,10 @@ where
     let background = spec.background.clone();
     let content = Rc::new(RefCell::new(content));
 
-    // The gesture area is the whole (un-offset) row: like a scroll
-    // container, the handler sits on the ancestor node so descendants
-    // (clickables) see events first, and the hit region stays put while the
-    // content slides away.
     let gesture_modifier = swipe_gesture_modifier(modifier, Rc::clone(&controller));
 
-    // Outer collapsing layout: it measures the row and reports the row's height
-    // scaled by the collapse fraction, so a dismissed row shrinks to nothing —
-    // even when the row has a fixed height. It carries no user modifier: the
-    // user modifier, the gesture handler and any fixed size stay on the *row*
-    // (below), so the hit region and layout still belong to the row while only
-    // the reported height is scaled here.
     let controller_for_layout = Rc::clone(&controller);
     let node = SubcomposeLayout(Modifier::empty(), move |scope, constraints| {
-        // Height scale for the post-dismiss collapse (1.0 until dismissed), read
-        // before measuring so the reported height tracks the animation.
         let collapse = controller_for_layout.collapse_fraction().clamp(0.0, 1.0);
 
         let gesture_modifier = gesture_modifier.clone();
@@ -890,10 +791,6 @@ where
         let content = Rc::clone(&content);
         let controller_for_row = Rc::clone(&controller_for_layout);
         let measurables = scope.subcompose(SlotId::new(0), (), move || {
-            // The row itself: a `BoxWithConstraints` (so it can read its own
-            // width for the dismiss threshold) carrying the user modifier + the
-            // swipe pointer handler, overlaying the optional background and the
-            // finger-translated content.
             let background = background.clone();
             let content = Rc::clone(&content);
             let controller_for_row = Rc::clone(&controller_for_row);
@@ -902,12 +799,6 @@ where
                     .width_px
                     .set(row_scope.constraints().max_width);
 
-                // Only compose the background while the row is displaced (and
-                // never once dismissed — the reveal flag is cleared on settle).
-                // Reading it inside the subcompose subscribes this slot, so it
-                // recomposes when the row leaves/returns to rest. At rest the
-                // background is not composed at all, so it cannot flash through
-                // content that fades in with alpha < 1 during an entrance.
                 if controller_for_row.revealed() {
                     if let Some(background) = &background {
                         let background = Rc::clone(background);
@@ -918,12 +809,6 @@ where
                     }
                 }
 
-                // Translate the content with the finger via a graphics-layer
-                // resolver. The resolver re-reads the live offset on every draw
-                // pass, and an offset write schedules a draw repass for this
-                // node, so the content follows the finger 1:1 in real time and
-                // settles with the spring on release — without re-measuring the
-                // subcompose each frame.
                 let content = Rc::clone(&content);
                 let controller_for_layer = Rc::clone(&controller_for_row);
                 Box(
@@ -956,9 +841,6 @@ where
             placements.push(Placement::new(placeable.node_id(), 0.0, 0.0, 0));
         }
         width = width.clamp(constraints.min_width, constraints.max_width);
-        // Collapse the row height after a dismiss so the slot shrinks to
-        // nothing: the content is already translated off-screen and the
-        // background hidden, so scaling the reported height just closes the gap.
         let height = (natural_height * collapse).clamp(0.0, constraints.max_height);
         scope.layout(width, height, placements)
     });

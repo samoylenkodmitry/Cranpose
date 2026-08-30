@@ -1,40 +1,9 @@
-//! What does one more render pass cost the CPU?
-//!
-//! The frame attribution says pass count is the CPU term: the library screen
-//! runs 13 passes at 5.1 draws each, and per-glass-element pass classes cost
-//! 3.76 / 4.53 / 5.99 ms at 5 / 9 / 13 passes. That yields ~0.24 ms per pass,
-//! but only by differencing whole frames that also differ in what they draw.
-//! Nobody has measured the pass itself.
-//!
-//! This submits N empty full-surface passes against one attachment and times
-//! encode, submit and finish separately. Empty is the point: a pass with no
-//! draws still costs the driver a begin/end and costs a tiler a tile load and
-//! store, so what is left is exactly the per-pass overhead that folding passes
-//! would remove. The slope is the fold ceiling — no folding change can win
-//! more than `slope * passes_removed`.
-//!
-//! ```sh
-//! cargo run --release -p cranpose-render-wgpu --example pass_count_submit_cost
-//! ```
-//!
-//! What transfers off this host and what does not: the SHAPE transfers — if
-//! cost is linear in N here it is linear on the target, and if it is flat then
-//! pass count is not a CPU term at all and folding is not worth building. The
-//! CONSTANT does not transfer. A Mali-G76 on its Vulkan driver is not this
-//! adapter, and the Mate cannot be asked directly (`timestampValidBits = 0` on
-//! every queue there, which is why `pass_timing_profile` exists at all). Read
-//! the slope as an argument about shape, and re-run it on device for a number.
-
 use std::time::{Duration, Instant};
 
 const WIDTH: u32 = 1080;
 const HEIGHT: u32 = 2244;
 const PASS_COUNTS: &[u32] = &[0, 1, 2, 3, 5, 9, 13, 17, 25, 33];
 const WARMUP: usize = 10;
-/// Submissions per timed batch. A single submit-then-wait pays a fixed
-/// round-trip -- ~1.5 ms on this adapter, unmoved by adding 33 full-surface
-/// clears -- which buries any GPU-side per-pass cost. Batching amortises that
-/// floor so the GPU term, if there is one, can show above it.
 const BATCH: usize = 20;
 
 fn iterations() -> usize {
@@ -55,7 +24,6 @@ fn median(mut values: Vec<Duration>) -> f64 {
     values[values.len() / 2].as_secs_f64() * 1000.0
 }
 
-/// Least-squares slope and intercept of `points` as (pass_count, ms).
 fn linear_fit(points: &[(f64, f64)]) -> (f64, f64) {
     let n = points.len() as f64;
     let sum_x: f64 = points.iter().map(|(x, _)| x).sum();
@@ -105,9 +73,6 @@ fn main() {
     });
     let view = target.create_view(&wgpu::TextureViewDescriptor::default());
 
-    // One clear so every timed pass can Load without reading uninitialised
-    // memory. Load/Store is the representative case: it is what forces a tile
-    // load and store on a tiling GPU, which is the cost folding removes.
     {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("initial clear"),
@@ -137,12 +102,6 @@ fn main() {
             .expect("initial clear");
     }
 
-    // Two modes, because one of them is the control. An empty Load/Store pass
-    // is what folding removes, but a driver is free to notice it does nothing
-    // and drop it -- in which case a flat `finish` means "no passes ran", not
-    // "passes are free". A Clear/Store pass cannot be dropped: it must write
-    // the surface. If the clear curve rises with N and the empty curve does
-    // not, the empty passes were elided and only their CPU cost is real.
     let encode_one = |pass_count: u32, load: wgpu::LoadOp<wgpu::Color>, store: wgpu::StoreOp| {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("timed passes"),
@@ -165,8 +124,6 @@ fn main() {
         encoder.finish()
     };
 
-    // One batch: BATCH submissions encoded and queued, then a single wait.
-    // Reported per submission.
     let run = |pass_count: u32, load: wgpu::LoadOp<wgpu::Color>, store: wgpu::StoreOp| -> Sample {
         let encode_start = Instant::now();
         let buffers: Vec<_> = (0..BATCH)
@@ -201,21 +158,12 @@ fn main() {
     );
     println!("surface: {WIDTH}x{HEIGHT}, {iterations} batches of {BATCH} submissions per point\n");
     const ARMS: usize = 2;
-    // There is deliberately no `StoreOp::Discard` arm. It looks like the way to
-    // price a pass boundary without its tile store, and it measures 2x a
-    // Load/Store pass instead -- reproducibly, and not from cold start. A
-    // discard leaves the texture uninitialised in wgpu's tracker, so the next
-    // `LoadOp::Load` drags in wgpu's initialisation clear, and the arm prices
-    // that clear rather than a cheaper boundary. Separating boundary from store
-    // needs a different instrument than this one.
     let arms = [
         (
             "empty (Load/Store)",
             wgpu::LoadOp::Load,
             wgpu::StoreOp::Store,
         ),
-        // Adds a full-surface write the driver cannot elide -- the control that
-        // proves the passes really executed.
         (
             "clearing (Clear/Store)",
             wgpu::LoadOp::Clear(wgpu::Color::BLACK),
@@ -223,10 +171,6 @@ fn main() {
         ),
     ];
 
-    // Warm every arm before timing any of them. Run sequentially and cold, the
-    // FIRST arm measured twice the cost of the second -- a Load/Discard pass
-    // cannot cost more than a Load/Store one, so that was start-up being
-    // charged to whichever arm went first, not a property of the arm.
     for (_, load, store) in arms {
         for _ in 0..WARMUP {
             let _ = run(13, load, store);

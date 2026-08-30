@@ -49,7 +49,6 @@ impl PrefetchStrategy {
 /// to pre-compose before they become visible.
 #[derive(Debug, Default)]
 pub struct PrefetchScheduler {
-    /// Queue of indices to prefetch, ordered by priority.
     prefetch_queue: VecDeque<usize>,
 }
 
@@ -85,7 +84,6 @@ impl PrefetchScheduler {
         let prefetch_count = strategy.prefetch_count;
 
         if scroll_direction >= 0.0 {
-            // Scrolling forward - prefetch items after visible area
             for i in 1..=prefetch_count {
                 let index = last_visible_index.saturating_add(i);
                 if index < total_items {
@@ -93,7 +91,6 @@ impl PrefetchScheduler {
                 }
             }
         } else {
-            // Scrolling backward - prefetch items before visible area
             for i in 1..=prefetch_count {
                 if first_visible_index >= i {
                     let index = first_visible_index - i;
@@ -142,10 +139,8 @@ mod tests {
         let mut scheduler = PrefetchScheduler::new();
         let strategy = PrefetchStrategy::new(2);
 
-        // At end of list
         scheduler.update(95, 99, 100, 1.0, &strategy);
 
-        // Should not prefetch beyond list bounds
         assert_eq!(scheduler.next_prefetch(), None);
     }
 

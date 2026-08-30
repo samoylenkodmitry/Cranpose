@@ -152,14 +152,12 @@ pub fn liquid_glass_effect(
 ) -> RenderEffect {
     let mut shader = RuntimeShader::new(LIQUID_GLASS_WGSL);
 
-    // Compute center in dp
     let cx = rect.left + rect.width * 0.5;
     let cy = rect.top + rect.height * 0.5;
 
-    // Uniform layout — see doc comment on LIQUID_GLASS_WGSL
-    shader.set_float2(0, area_width, area_height); // container size
-    shader.set_float2(2, cx, cy); // rect center
-    shader.set_float2(4, rect.width, rect.height); // rect size
+    shader.set_float2(0, area_width, area_height);
+    shader.set_float2(2, cx, cy);
+    shader.set_float2(4, rect.width, rect.height);
     shader.set_float(6, spec.corner_radius);
     shader.set_float(9, spec.refraction_depth.clamp(0.0, 2.0));
     shader.set_float(
@@ -230,8 +228,6 @@ impl Default for LiquidLoupeSpec {
             magnification: 1.25,
             focus_offset: (0.0, 75.0),
             dispersion: 0.36,
-            // The rim is a distinct light path, but its gain stays low enough
-            // that the transmitted face remains transparent and high-contrast.
             highlight: 0.42,
             activity: 1.0,
             corner_radius: 0.0,
@@ -248,13 +244,13 @@ pub fn liquid_loupe_effect(node_size: (f32, f32), spec: &LiquidLoupeSpec) -> Ren
     let (w, h) = (node_size.0.max(1.0), node_size.1.max(1.0));
     let activity = spec.activity.clamp(0.0, 1.0);
     let mut shader = RuntimeShader::new(LIQUID_GLASS_WGSL);
-    shader.set_float2(0, w, h); // container = node size dp
-    shader.set_float2(2, w * 0.5, h * 0.5); // capsule centered in the node
+    shader.set_float2(0, w, h);
+    shader.set_float2(2, w * 0.5, h * 0.5);
     shader.set_float2(4, w, h);
     if spec.corner_radius > 0.0 {
         shader.set_float(6, spec.corner_radius.min(0.5 * h.min(w)));
     } else {
-        shader.set_float(6, -1.0); // capsule radius sentinel
+        shader.set_float(6, -1.0);
     }
     shader.set_float(9, 0.34 * activity);
     shader.set_float(GLASS_REFRACTION_CURVE_UNIFORM, 0.25);
@@ -267,18 +263,16 @@ pub fn liquid_loupe_effect(node_size: (f32, f32), spec: &LiquidLoupeSpec) -> Ren
     shader.set_float(GLASS_MENISCUS_ABSORPTION_UNIFORM, 1.0);
     shader.set_float(GLASS_ACTIVITY_UNIFORM, 1.0);
     shader.set_float(11, spec.highlight * activity);
-    shader.set_float4(14, 1.0, 1.0, 1.0, 0.0); // no tint
-    shader.set_float(18, 1.0); // saturation neutral
-    shader.set_float(20, 0.0); // no lift
-    shader.set_float(21, 0.5); // dither
-    shader.set_float(24, 1.0); // contrast neutral
-    shader.set_float(28, activity); // interactive-lens rim style
-    shader.set_float(80, 1.0); // loupe mode
+    shader.set_float4(14, 1.0, 1.0, 1.0, 0.0);
+    shader.set_float(18, 1.0);
+    shader.set_float(20, 0.0);
+    shader.set_float(21, 0.5);
+    shader.set_float(24, 1.0);
+    shader.set_float(28, activity);
+    shader.set_float(80, 1.0);
     shader.set_float2(81, spec.focus_offset.0, spec.focus_offset.1);
     shader.set_float(83, 1.0 + (spec.magnification.max(0.2) - 1.0) * activity);
     shader.set_float(90, activity);
-    // The capture must cover the farthest sample: the single field never
-    // reaches beyond the focus offset plus the node's own footprint.
     let focus_reach = (spec.focus_offset.0.powi(2) + spec.focus_offset.1.powi(2)).sqrt();
     shader.set_input_padding((focus_reach + 8.0).ceil());
     RenderEffect::runtime_shader(shader)
@@ -300,44 +294,26 @@ pub fn liquid_menu_glass_effect(
     let (w, h) = (node_size.0.max(1.0), node_size.1.max(1.0));
     let p = progress.clamp(0.0, 1.0);
     let mut shader = RuntimeShader::new(LIQUID_GLASS_WGSL);
-    shader.set_float2(0, w, h); // container = node size dp
+    shader.set_float2(0, w, h);
     shader.set_float2(2, w * 0.5, h * 0.5);
     shader.set_float2(4, w, h);
-    shader.set_float(6, -1.0); // capsule
+    shader.set_float(6, -1.0);
     shader.set_float(9, 0.10 * p);
     shader.set_float(GLASS_REFRACTION_CURVE_UNIFORM, 0.25);
     shader.set_float(GLASS_TRANSMISSION_REFRACTION_UNIFORM, 1.0);
     shader.set_float(GLASS_EFFECT_DENSITY_UNIFORM, 1.0);
     shader.set_float(GLASS_ACTIVITY_UNIFORM, 1.0);
-    shader.set_float(11, 0.19 * p); // rim intensity (the reference settled
-    // pill peaks ~x1.9 of its baseline on
-    // BOTH long edges)
-    // Settled material (measured on the reference still: white text behind
-    // the pill reads ~242/255 through it, the dark card dims ~x0.78): a
-    // WHISPER of dark tint plus a mild contrast pivot — not the heavy
-    // dim+lift that flattened ghosts into an opaque-looking fill.
+    shader.set_float(11, 0.19 * p);
     shader.set_float4(14, 0.0, 0.0, 0.0, 0.04 * p);
-    shader.set_float(18, 1.0 + 0.10 * p); // mild vibrancy
+    shader.set_float(18, 1.0 + 0.10 * p);
     shader.set_float(20, -0.06 * p);
-    shader.set_float(24, 1.0 + 0.05 * p); // gentle contrast pivot
+    shader.set_float(24, 1.0 + 0.05 * p);
     shader.set_float(21, 0.5);
-    // The settled reference capsule keeps a HEAVY backdrop blur: the
-    // "Styles" pill behind it reads as an illegible ~10%-contrast smudge
-    // (menu-materialize c_072). The old (1-p) ramp drained the blur to
-    // ~1px at settle, so backdrop text interleaved sharply with the menu
-    // labels. Materialize still starts at full smudge and relaxes a
-    // little as the labels sharpen.
     let requested_blur = if blur_radius_px > 0.5 {
         blur_radius_px * (1.0 - 0.4 * p)
     } else {
         0.0
     };
-    // Route the blur exactly like the morph-glass material path: the wcKSRD
-    // optical blur quantizes into a visible GRID past a couple of pixels
-    // (the "lines instead of blur" on the edit menu), so anything heavier
-    // rides the smooth separable Gaussian pass ENTIRELY — the wider kernel
-    // swallows the capped optical tap's contribution (sigmas add in
-    // quadrature), and skipping it saves the per-pixel tap loop.
     const WCKSRD_OPTICAL_BLUR_RADIUS_PX: f32 = 2.0;
     let (wcksrd_blur, gaussian_blur) = if requested_blur > WCKSRD_OPTICAL_BLUR_RADIUS_PX {
         (0.0, requested_blur)
@@ -480,11 +456,6 @@ mod tests {
         assert_eq!(loupe.uniforms()[80], 1.0);
         assert!(loupe.input_padding() >= 75.0);
 
-        // Settled blur stays heavy (reference c_072: backdrop text is an
-        // illegible smudge through the settled capsule) — and heavy blur
-        // routes through a Gaussian pass chained INTO the optical shader:
-        // the wcKSRD 9x9 tap caps at its safe radius, so the remainder
-        // never quantizes into the grid the edit menu showed.
         let RenderEffect::Chain { first, second } =
             liquid_menu_glass_effect((240.0, 44.0), 8.0, 1.0)
         else {

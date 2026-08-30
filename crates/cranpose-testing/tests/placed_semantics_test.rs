@@ -1,11 +1,3 @@
-//! The join between semantics and geometry, checked on the widget it exists for.
-//!
-//! A Wear scaling list is the case that separates the two boxes a
-//! [`PlacedSemanticsNode`] carries: every row is measured at the same size and
-//! the ones away from the centre line are DRAWN — and therefore hit — smaller.
-//! A harness that reported one box for both would be indistinguishable from a
-//! correct one on any other widget, and useless on this one.
-
 use cranpose_foundation::lazy::LazyItems;
 use cranpose_testing::{ComposeTestRule, PlacedSemanticsNode};
 use cranpose_ui::{
@@ -17,10 +9,7 @@ use cranpose_ui::{
     },
 };
 
-/// The watch these widgets are dimensioned for, in layout points.
 const WATCH: f32 = 454.0;
-/// Every row's height, stated rather than text-measured so what is asserted
-/// here is the ramp's geometry and not a font's.
 const ROW: f32 = 52.0;
 const ROWS: usize = 6;
 
@@ -92,11 +81,6 @@ fn every_row_reaches_the_tree_with_a_box_and_a_description() {
 
 #[test]
 fn a_row_away_from_the_centre_line_is_drawn_smaller_than_it_was_measured() {
-    // The claim the two boxes exist for. `layout_bounds` is what the row asked
-    // for and gets, everywhere on the list; `touch_bounds` is the quad the
-    // renderer draws and the hit test inverts, which the scaling ramp shrinks.
-    // Reading only the first would report a 52pt target for a row that is 38pt
-    // of screen.
     let root = tappable_list(WATCH);
     let controls = root.controls();
     let shrunk: Vec<f32> = controls
@@ -123,9 +107,6 @@ fn a_row_away_from_the_centre_line_is_drawn_smaller_than_it_was_measured() {
 
 #[test]
 fn a_node_that_is_not_interactive_has_no_touch_box() {
-    // The distinction the whole audit turns on: `touch_bounds` is `None` for a
-    // node the hit graph carries no region for, so a caller cannot mistake a
-    // label for a control that merely happens to be small.
     let root = tappable_list(WATCH);
     let non_interactive: Vec<&PlacedSemanticsNode> = root
         .flatten()

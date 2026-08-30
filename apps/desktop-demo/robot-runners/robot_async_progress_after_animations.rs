@@ -1,11 +1,3 @@
-//! Robot regression test for Async Runtime progress after visiting Animations.
-//!
-//! Reproduces the user-visible bug:
-//! 1. Launch the demo app.
-//! 2. Tap the `Animations` tab.
-//! 3. Tap the `Async Runtime` tab.
-//! 4. Verify the async progress leaves `0%`.
-
 use std::time::Duration;
 
 use cranpose::AppLauncher;

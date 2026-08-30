@@ -24,7 +24,7 @@ pub struct ComposeTestRule {
     _scope: cranpose_ui::AppContextScope,
     app_context: StdRc<AppContext>,
     composition: Composition<MemoryApplier>,
-    content: Option<Box<dyn FnMut()>>, // Stored user content for reuse across recompositions.
+    content: Option<Box<dyn FnMut()>>,
     initial_root_key: Key,
 }
 
@@ -103,7 +103,6 @@ impl ComposeTestRule {
             if handle.has_invalid_scopes() {
                 let changed = self.composition.process_invalid_scopes()?;
                 if changed {
-                    // Request render invalidation so tests can detect composition changes
                     request_render_invalidation();
                 }
                 if self.composition.take_root_render_request() {
@@ -194,8 +193,6 @@ impl ComposeTestRule {
             if let Some(content) = self.content.as_mut() {
                 self.composition.render(key, &mut **content)?;
                 self.drain_root_render_requests()?;
-                // After composition runs, request render invalidation
-                // so that tests can detect when content has changed
                 request_render_invalidation();
             }
             Ok(())

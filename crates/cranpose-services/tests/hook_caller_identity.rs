@@ -1,17 +1,5 @@
-//! Every service hook keys its composition state by the application's call
-//! site, not by its own source line.
-//!
-//! `rememberEventStream` takes its identity from `#[track_caller]`. A wrapper
-//! that omits the attribute hands the framework its own line instead, so two
-//! calls to that wrapper in one composition collapse onto a single key and
-//! fall back to sibling position — the fragility the source-keyed hooks exist
-//! to remove. Every wrapper in this crate carries it; this keeps the next one
-//! from landing without it.
-
 use std::{fs, path::PathBuf};
 
-/// Returns the wrappers that call `rememberEventStream` without declaring
-/// `#[track_caller]` on the enclosing `pub fn`.
 fn wrappers_missing_track_caller() -> Vec<String> {
     let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut offenders = Vec::new();
@@ -27,8 +15,6 @@ fn wrappers_missing_track_caller() -> Vec<String> {
             continue;
         }
 
-        // Walk each `pub fn`, and report the ones whose body reaches
-        // rememberEventStream while their attributes omit #[track_caller].
         let lines: Vec<&str> = source.lines().collect();
         for (index, line) in lines.iter().enumerate() {
             if !line.trim_start().starts_with("pub fn ") {
@@ -78,7 +64,6 @@ fn every_event_stream_wrapper_keys_by_its_caller() {
 
 #[test]
 fn the_scan_actually_finds_wrappers_to_check() {
-    // A scan that matched nothing would pass the test above forever.
     let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut wrappers = 0usize;
     for entry in fs::read_dir(&src).expect("read src") {

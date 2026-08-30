@@ -162,13 +162,10 @@ where
     ///
     /// This simulates a pointer down, move, and up sequence.
     pub fn drag(&mut self, from_x: f32, from_y: f32, to_x: f32, to_y: f32) {
-        // Move to start position
         self.shell.set_cursor(from_x, from_y);
 
-        // Press
         self.shell.pointer_pressed();
 
-        // Move in steps to simulate smooth drag
         let steps = 10;
         for i in 1..=steps {
             let t = i as f32 / steps as f32;
@@ -178,7 +175,6 @@ where
             self.shell.update();
         }
 
-        // Release
         self.shell.pointer_released();
         self.wait_for_idle();
     }
@@ -261,7 +257,6 @@ where
         &mut self.shell
     }
 
-    /// Get the render scene for hit testing and queries.
     fn get_scene(&self) -> &R::Scene {
         self.shell.scene()
     }
@@ -321,9 +316,6 @@ where
                     .into_iter()
                     .map(|(rect, _)| rect)
                     .filter(|rect| rect.contains(x, y))
-                    // The innermost box under the point is the one a caller
-                    // means; an ancestor covers the point too and would answer
-                    // with the whole screen.
                     .min_by(|a, b| {
                         (a.width * a.height)
                             .partial_cmp(&(b.width * b.height))
@@ -371,7 +363,6 @@ where
             self.robot.shell_mut().set_cursor(center.x, center.y);
             self.robot.shell_mut().pointer_pressed();
 
-            // Hold for 500ms (simulated by multiple updates)
             for _ in 0..50 {
                 self.robot.shell_mut().update();
             }
@@ -411,14 +402,12 @@ fn extract_text_from_layout(layout: &LayoutTree) -> Vec<String> {
 /// Extract all rectangles with optional text from a layout tree.
 fn extract_rects_from_layout(layout: &LayoutTree) -> Vec<(Rect, Option<String>)> {
     fn collect_rects(node: &cranpose_ui::LayoutBox, results: &mut Vec<(Rect, Option<String>)>) {
-        // Get the text content if present in modifier slices
         let text = node
             .node_data
             .modifier_slices()
             .text_content()
             .map(|s| s.to_string());
 
-        // Get the rect, including content_offset for proper positioning
         let rect = Rect {
             x: node.rect.x,
             y: node.rect.y,
@@ -428,7 +417,6 @@ fn extract_rects_from_layout(layout: &LayoutTree) -> Vec<(Rect, Option<String>)>
 
         results.push((rect, text));
 
-        // Recurse into children
         for child in &node.children {
             collect_rects(child, results);
         }
@@ -562,31 +550,22 @@ mod tests {
 
     #[test]
     fn test_robot_creation() {
-        // Create a simple headless robot test
-        let robot = create_headless_robot_test(800, 600, || {
-            // Empty app for testing
-        });
+        let robot = create_headless_robot_test(800, 600, || {});
 
         assert_eq!(robot.viewport_size(), (800, 600));
     }
 
     #[test]
     fn test_robot_click() {
-        let mut robot = create_headless_robot_test(800, 600, || {
-            // Empty app
-        });
+        let mut robot = create_headless_robot_test(800, 600, || {});
 
-        // Should not panic
         robot.click_at(100.0, 100.0);
     }
 
     #[test]
     fn test_robot_drag() {
-        let mut robot = create_headless_robot_test(800, 600, || {
-            // Empty app
-        });
+        let mut robot = create_headless_robot_test(800, 600, || {});
 
-        // Should not panic
         robot.drag(0.0, 0.0, 100.0, 100.0);
     }
 
@@ -603,11 +582,6 @@ mod tests {
 
     #[test]
     fn robot_idle_pump_settles_a_healthy_app_far_inside_its_budget() {
-        // The budget is an iteration count because every turn here is
-        // synchronous work with nothing to block on, so what a healthy app
-        // needs does not move with host load. Pin that it is a budget with
-        // room rather than one the suite runs up against: an app that settles
-        // must not depend on where in the budget it lands.
         let mut robot = create_headless_robot_test(800, 600, || {});
 
         for _ in 0..HEADLESS_IDLE_UPDATE_LIMIT {
@@ -616,10 +590,6 @@ mod tests {
         }
     }
 
-    /// A renderer that never finishes warming up, so `needs_redraw` stays true
-    /// however many turns it is given. `needs_frame_warmup` is the hook a real
-    /// renderer uses to demand initial frames, which makes this the shape a
-    /// wedged shell actually takes.
     #[derive(Default)]
     struct NeverWarmRenderer {
         inner: TestRenderer,
@@ -667,10 +637,6 @@ mod tests {
     #[test]
     #[should_panic(expected = "still wants a redraw after")]
     fn robot_idle_pump_fails_loudly_when_the_shell_never_settles() {
-        // Exhausting the budget used to `break` and return, handing the caller
-        // a tree that had not settled and moving the failure to whichever
-        // assertion read it next -- which is the harder bug to find. It has to
-        // fail here instead, where the diagnostic can say what is still dirty.
         let mut robot = RobotTestRule::new(800, 600, NeverWarmRenderer::default(), || {});
 
         robot.wait_for_idle();

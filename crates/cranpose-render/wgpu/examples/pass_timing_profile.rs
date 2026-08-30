@@ -1,16 +1,3 @@
-//! Headless GPU pass-timing profile of the shadowed-card scroll — the
-//! document-list workload behind issue #500 — at handset resolution.
-//!
-//! The Huawei Mate 20 X target cannot time passes at all (its Mali-G76
-//! Vulkan driver reports `timestampValidBits = 0` on every queue), so the
-//! attribution loop runs here on Metal — a tile-based GPU like the target —
-//! and the device stays the fps gate. Run with:
-//!
-//! ```sh
-//! CRANPOSE_GPU_PASS_TIMING=1 cargo run --release -p cranpose-render-wgpu \
-//!     --example pass_timing_profile
-//! ```
-
 use std::{cell::RefCell, rc::Rc};
 
 use cranpose_app_shell::AppShell;
@@ -68,8 +55,6 @@ fn chrome_blur_radius() -> f32 {
         .unwrap_or(36.0)
 }
 
-/// The glass-material effect chain cranscan's fixed chrome builds: a
-/// separable Gaussian pre-blur feeding the liquid-glass optical shader.
 fn chrome_glass_effect(rect_width: f32, rect_height: f32) -> RenderEffect {
     let optical = liquid_glass_effect(
         &LiquidGlassRect {
@@ -90,9 +75,6 @@ fn chrome_glass_effect(rect_width: f32, rect_height: f32) -> RenderEffect {
     RenderEffect::blur_with_edge_treatment(chrome_blur_radius(), TileMode::Mirror).then(optical)
 }
 
-/// Shaped like the device chrome: shape clip + shadow + own content, so the
-/// bar renders as a child layer surface with a backdrop, exactly the
-/// uncacheable topology cranscan's toolbar and tab bar force each frame.
 #[composable]
 #[allow(non_snake_case)]
 fn GlassBar(x: f32, y: f32, width: f32, height: f32) {
@@ -137,11 +119,6 @@ fn CardListScene(list_state: LazyListState) {
                     scope.items(LazyItems::new(400).key(|i: usize| i as u64), CardRow);
                 },
             );
-            // The fixed glass chrome cranscan holds over its Library scroll:
-            // a toolbar and a tab bar, each an uncacheable backdrop that
-            // re-captures and re-blurs every scrolled frame. PROFILE_BARS
-            // (default 2) sizes the chrome so the per-backdrop-boundary cost
-            // can be measured by delta.
             let bars: usize = std::env::var("PROFILE_BARS")
                 .ok()
                 .and_then(|raw| raw.parse().ok())
@@ -217,9 +194,6 @@ fn main() {
         shell.debug_enter_app_context(|| state.dispatch_scroll_delta(SCROLL_DELTA_PER_FRAME));
     };
 
-    // Render straight to a texture with no readback: a per-frame readback
-    // serializes the CPU on the GPU and buries every real hot path under
-    // semwait in a CPU profile.
     let target = {
         let device = shell.renderer().try_device().expect("device");
         device.create_texture(&wgpu::TextureDescriptor {
@@ -247,7 +221,6 @@ fn main() {
             .render(&view, FRAME_WIDTH, FRAME_HEIGHT)
             .expect("frame render");
     }
-    // A fresh window after warmup: everything cached that will ever cache.
     let start = std::time::Instant::now();
     let measured_frames = measured_frames();
     for _ in 0..measured_frames {

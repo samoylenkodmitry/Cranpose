@@ -43,9 +43,6 @@ fn decode_bitmap(bytes: &[u8]) -> anyhow::Result<ImageBitmap> {
         .map_err(|err| anyhow!("invalid RGBA bitmap: {err}"))
 }
 
-/// On WASM, route through our Cloudflare Worker CORS proxy since xkcd.com
-/// doesn't serve `Access-Control-Allow-Origin` headers and browser fetch
-/// blocks the response. Native builds hit xkcd directly.
 fn cors_url(url: &str) -> String {
     #[cfg(target_arch = "wasm32")]
     {
@@ -60,7 +57,6 @@ fn cors_url(url: &str) -> String {
     }
 }
 
-/// Percent-encode a URL for use as a query parameter.
 #[cfg(target_arch = "wasm32")]
 fn url_encode(input: &str) -> String {
     let mut encoded = String::with_capacity(input.len() * 2);

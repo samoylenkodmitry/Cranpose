@@ -1,25 +1,12 @@
-//! The composition-scoped effects an application uses to reach the host.
-//!
-//! Each of these takes a platform allowance — the screen staying awake, the
-//! back gesture, the frame clock, the lifecycle stream — and ties it to the
-//! composition that asked, so leaving the screen gives it back. That tie is
-//! the whole contract, and it only exists if the effect actually composes.
-
 use std::{cell::Cell, rc::Rc};
 
 use cranpose_ui::run_test_composition;
 
 #[test]
 fn keeping_the_screen_on_composes_enabled_and_disabled() {
-    // Disabled is not the same as absent: an effect that is composed while
-    // disabled must not take the allowance, and must still be there to take it
-    // when the flag flips.
     for enabled in [false, true] {
         run_test_composition(move || cranpose::KeepScreenOn(enabled));
     }
-    // Composing and dropping an enabled effect must give the allowance back,
-    // or the screen stays awake for the rest of the process. With no host
-    // controller registered the flag is the only observable half.
     cranpose_services::set_keep_screen_on(false);
 }
 
@@ -74,8 +61,6 @@ fn a_frame_effect_composes_running_and_stopped() {
 fn the_update_state_is_readable_from_composition_and_starts_unknown() {
     run_test_composition(|| {
         let status = cranpose::rememberAppUpdateState();
-        // With no platform update backend registered there is nothing to
-        // report, and the state has to say so rather than claim an update.
         assert_eq!(
             status.get(),
             cranpose_services::AppUpdateStatus::default(),

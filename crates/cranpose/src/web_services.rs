@@ -1,11 +1,3 @@
-//! Browser-backed implementations of the cranpose service registry: Web Share
-//! API, Notifications API, vibration haptics, and online/connection status.
-//!
-//! Registered once at web startup (see [`crate::web::run`]). Each backend is
-//! honest about capability: `is_supported` reflects what the browser actually
-//! exposes, and unsupported operations return the service's error type instead
-//! of silently pretending.
-
 use std::{
     cell::RefCell,
     collections::HashMap,
@@ -37,8 +29,6 @@ pub(crate) fn register() {
 fn navigator() -> Option<web_sys::Navigator> {
     web_sys::window().map(|window| window.navigator())
 }
-
-// --- Share -----------------------------------------------------------------
 
 struct WebShareSheet;
 
@@ -78,22 +68,15 @@ impl ShareSheet for WebShareSheet {
         }
         let data = Self::build_share_data(&content)?;
         if !navigator.can_share_with_data(&data) {
-            // The browser supports the Share API but refuses this payload
-            // (typically file sharing on desktop browsers).
             return Err(ShareError::Failed(
                 "browser cannot share this file payload".to_string(),
             ));
         }
-        // Fire and forget, matching the trait contract ("resolves once
-        // presented"); the promise rejects if the user dismisses the sheet,
-        // which is not an error for us.
         let _ = navigator.share_with_data(&data);
         Ok(())
     }
 
     fn is_supported(&self) -> bool {
-        // `navigator.share` is absent on browsers without the Web Share API;
-        // probe the property instead of calling it.
         navigator().is_some_and(|navigator| {
             js_sys::Reflect::get(navigator.as_ref(), &JsValue::from_str("share"))
                 .map(|value| value.is_function())
@@ -101,8 +84,6 @@ impl ShareSheet for WebShareSheet {
         })
     }
 }
-
-// --- Notifications ----------------------------------------------------------
 
 struct WebNotifier;
 
@@ -120,8 +101,6 @@ impl WebNotifier {
 
 impl Notifier for WebNotifier {
     fn request_permission(&self) {
-        // Fire and forget; the promise resolves with the user's choice and
-        // `Notification::permission()` reflects it from then on.
         let _ = web_sys::Notification::request_permission();
     }
 
@@ -132,8 +111,6 @@ impl Notifier for WebNotifier {
         }
         let options = web_sys::NotificationOptions::new();
         options.set_body(&request.body);
-        // Same tag replaces the previous notification with that tag — this is
-        // exactly the trait's "re-posting with the same id replaces" contract.
         options.set_tag(&request.id);
         options.set_require_interaction(request.ongoing);
         let Ok(notification) = web_sys::Notification::new_with_options(&request.title, &options)
@@ -159,8 +136,6 @@ impl Notifier for WebNotifier {
                 .insert(request.id.clone(), (notification, on_click))
         });
         if let Some((previous, _closure)) = previous {
-            // Replaced by tag already, but close defensively so the old one
-            // cannot linger on browsers that ignore tags.
             previous.close();
         }
     }
@@ -173,8 +148,6 @@ impl Notifier for WebNotifier {
         }
     }
 }
-
-// --- Haptics ----------------------------------------------------------------
 
 struct WebHaptics;
 
@@ -189,7 +162,6 @@ impl Haptics for WebHaptics {
             HapticFeedback::Error => 35,
         };
         if let Some(navigator) = navigator() {
-            // No-ops on browsers/devices without a vibrator (desktop).
             let _ = navigator.vibrate_with_duration(duration_ms);
         }
     }
@@ -203,9 +175,6 @@ impl Haptics for WebHaptics {
         }
     }
 
-    /// The Vibration API takes exactly the alternating-duration array a
-    /// [`HapticPattern`] carries, so the timings survive the trip; amplitudes
-    /// do not, because the browser has no way to express them.
     fn play_pattern(&self, pattern: &HapticPattern) {
         let Some(navigator) = navigator() else {
             return;
@@ -221,7 +190,6 @@ impl Haptics for WebHaptics {
         self.perform(effect.closest_feedback());
     }
 
-    /// An empty pattern is how the Vibration API cancels a running one.
     fn cancel(&self) {
         if let Some(navigator) = navigator() {
             let _ = navigator.vibrate_with_duration(0);
@@ -233,32 +201,10 @@ impl Haptics for WebHaptics {
     }
 }
 
-// --- Device info --------------------------------------------------------------
-
-/// Every [`DeviceInfo`] method besides [`total_memory_bytes`](DeviceInfo::total_memory_bytes)
-/// keeps its trait default (`None`/`false`) here rather than reading
-/// something that only sounds like an answer:
-///
-/// * `resident_memory_bytes`/`process_cpu_time` have no browser counterpart —
-///   `performance.memory` is a non-standard, Chrome-only JS heap size, not
-///   this process's resident set, and the standard replacement
-///   (`performance.measureUserAgentSpecificMemory`) is async, cross-origin-
-///   isolation-gated, and answers in a shape this trait's synchronous methods
-///   cannot represent.
-/// * `available_memory_bytes` has no signal a page can read at all; a
-///   browser tab is not told how much more it may allocate before it is
-///   killed.
-/// * `release_free_memory` has no allocator hook a page can reach from safe
-///   Rust; `wee_alloc`/`dlmalloc`-style wasm allocators expose nothing like
-///   `malloc_trim`.
 struct WebDeviceInfo;
 
 impl DeviceInfo for WebDeviceInfo {
     fn total_memory_bytes(&self) -> Option<u64> {
-        // `navigator.deviceMemory` (Device Memory API): GiB, quantized and
-        // capped by the browser for privacy. Read reflectively — the property
-        // is absent on Firefox/Safari, and web-sys gates its typed accessor
-        // behind unstable APIs.
         let navigator = navigator()?;
         let value = js_sys::Reflect::get(navigator.as_ref(), &JsValue::from_str("deviceMemory"))
             .ok()?
@@ -270,16 +216,12 @@ impl DeviceInfo for WebDeviceInfo {
     }
 }
 
-// --- Network status ----------------------------------------------------------
-
 struct WebNetworkMonitor;
 
 impl NetworkMonitor for WebNetworkMonitor {
     fn status(&self) -> NetworkStatus {
         NetworkStatus {
             online: NETWORK_ONLINE.load(Ordering::Acquire),
-            // Browsers expose no reliable metered signal on the stable
-            // Network Information API surface; report unmetered.
             metered: false,
         }
     }

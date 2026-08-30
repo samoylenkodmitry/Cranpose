@@ -308,8 +308,6 @@ fn binary_size_budget_targets_minimal_isolated_app() {
         .and_then(std::path::Path::parent)
         .expect("desktop demo should live under workspace/apps")
         .to_path_buf();
-    // The gate moved into the justfile, which CI invokes as `just budgets`.
-    // Assert it where it now lives, and that CI still calls it.
     let workflow = fs::read_to_string(workspace_root.join(".github/workflows/rust.yml"))
         .expect("failed to read rust workflow");
     let justfile =
@@ -759,17 +757,6 @@ fn assert_shell_entrypoint_guarded(
     );
 }
 
-/// The wasm build must see the same `web_sys` bindings an application sees.
-///
-/// `--cfg web_sys_unstable_apis` is not a neutral opt-in: it swaps whole method
-/// signatures. `MouseEvent::offset_x`/`offset_y` return `i32` without it and
-/// `f64` with it, so framework source written -- or clippy-corrected -- under
-/// the flag compiles here and fails in every project that consumes the
-/// published crates, which carry none of this repository's cargo configuration.
-/// A release built that way is broken for the web and nothing upstream of the
-/// consumer notices. `web_media` states the rule this guards: an application
-/// should not have to set a rustc flag to get a lock screen, so the framework
-/// reaches unstable browser APIs by name through `js_sys::Reflect` instead.
 #[test]
 fn no_cargo_config_enables_unstable_web_sys_bindings() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -804,8 +791,6 @@ fn no_cargo_config_enables_unstable_web_sys_bindings() {
     );
 }
 
-/// Walks every `.cargo/config.toml` the workspace carries, skipping build
-/// output and version-control directories.
 fn collect_cargo_configs(root: &std::path::Path, visit: &mut impl FnMut(&std::path::Path)) {
     let config = root.join(".cargo/config.toml");
     if config.is_file() {

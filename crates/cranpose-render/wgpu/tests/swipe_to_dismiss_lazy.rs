@@ -70,9 +70,6 @@ fn SwipeRows() {
     );
 }
 
-/// Regression for issue #305: a `SwipeToDismiss` row inside a `LazyColumn` item
-/// slot must both compose (layout/semantics) and rasterize its content. Before
-/// the fix these rows vanished entirely inside lazy slots.
 #[test]
 fn swipe_to_dismiss_rows_render_inside_lazy_column() {
     let (_lock, renderer) = match support::headless_renderer_parts() {
@@ -89,7 +86,6 @@ fn swipe_to_dismiss_rows_render_inside_lazy_column() {
     shell.set_buffer_size(FRAME_WIDTH, FRAME_HEIGHT);
     shell.update();
 
-    // Composition/layout: the row content must be present in the layout tree.
     let texts = shell
         .layout_tree()
         .map(|tree| layout_texts(tree.root()))
@@ -99,7 +95,6 @@ fn swipe_to_dismiss_rows_render_inside_lazy_column() {
         "SwipeToDismiss content must compose inside a LazyColumn item, got {texts:?}"
     );
 
-    // Scene/render: the content must actually rasterize.
     let frame = shell
         .renderer()
         .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)

@@ -2,10 +2,6 @@ use std::{hash::Hash, num::NonZeroUsize};
 
 use cranpose_core::collections::map::HashMap;
 
-/// One cached entry, and its neighbours in recency order.
-///
-/// The links are indices into `slots` rather than references, so the structure
-/// stays safe Rust and a slot never cares where it lives in memory.
 struct CacheSlot<K, V> {
     key: K,
     value: V,
@@ -34,9 +30,7 @@ pub struct BoundedLruCache<K, V> {
     index: HashMap<K, usize>,
     slots: Vec<Option<CacheSlot<K, V>>>,
     free: Vec<usize>,
-    /// Most recently used: the end entries are added to.
     newest: Option<usize>,
-    /// Least recently used: the next entry to be evicted.
     oldest: Option<usize>,
     cap: NonZeroUsize,
 }
@@ -141,7 +135,6 @@ where
         })
     }
 
-    /// An index recorded in `index` or in a link always names a live slot.
     fn slot(&self, slot: usize) -> &CacheSlot<K, V> {
         self.slots[slot]
             .as_ref()
@@ -154,7 +147,6 @@ where
             .expect("a linked cache slot is always occupied")
     }
 
-    /// Move a slot to the newest end. A slot already there costs nothing.
     fn promote(&mut self, slot: usize) {
         if self.newest == Some(slot) {
             return;
@@ -194,10 +186,6 @@ where
         }
     }
 
-    /// A slot for a new entry, reusing one an eviction left behind.
-    ///
-    /// Slots are vacated rather than removed, so every index already handed out
-    /// stays valid for as long as its entry lives.
     fn claim_slot(&mut self, key: K, value: V) -> usize {
         let entry = CacheSlot {
             key,
@@ -286,9 +274,6 @@ mod tests {
 
     #[test]
     fn a_full_cache_that_only_misses_keeps_evicting_in_order() {
-        // The shape a scaling list produces: every insert is new, so every
-        // insert evicts. What must hold is that the entry dropped is always the
-        // oldest, however many times the slots have been recycled.
         let mut cache = cache(4);
         for step in 0..4 {
             assert_eq!(cache.push(step, step * 10), None);
@@ -316,13 +301,11 @@ mod tests {
         cache.push("c", 3);
 
         assert_eq!(cache.pop(&"b"), Some(2));
-        // "d" lands in the slot "b" vacated.
         assert_eq!(cache.push("d", 4), None);
 
         assert!(!cache.contains(&"b"));
         assert_eq!(cache.peek(&"d"), Some(&4));
         assert_eq!(cache.len(), 3);
-        // Recency survived the reuse: "a" is still the oldest.
         assert_eq!(cache.pop_lru(), Some(("a", 1)));
         assert_eq!(cache.pop_lru(), Some(("c", 3)));
         assert_eq!(cache.pop_lru(), Some(("d", 4)));
@@ -340,7 +323,6 @@ mod tests {
         assert_eq!(cache.get(&"a"), Some(&1));
         assert_eq!(cache.get_mut(&"b").map(|value| *value), Some(2));
 
-        // "c" is now the oldest despite having been inserted last.
         assert_eq!(cache.push("d", 4), Some(("c", 3)));
         assert!(cache.contains(&"a"));
         assert!(cache.contains(&"b"));

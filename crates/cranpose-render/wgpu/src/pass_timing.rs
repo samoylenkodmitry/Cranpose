@@ -1,22 +1,3 @@
-//! Per-pass GPU time attribution.
-//!
-//! The counters in [`crate::gpu_stats`] say how many passes ran and how many
-//! pixels they filled; they cannot say which pass the GPU spent its
-//! milliseconds in, and fill-pixel proxies mislead on tile-based GPUs where a
-//! megapixel of flat translucent fill costs a fraction of a megapixel of
-//! blur. This module answers the time question directly: with
-//! `CRANPOSE_GPU_PASS_TIMING=1` (`debug.cranpose.pass_timing` over adb),
-//! every render pass writes begin/end timestamps
-//! ([`wgpu::Features::TIMESTAMP_QUERY`]), the deltas are aggregated by pass
-//! label, and a `[GPU-PASS]` line prints every 60 frames beside the
-//! `[GPU f#]` counter line.
-//!
-//! One caveat travels with the numbers: GPUs overlap adjacent passes — a
-//! tiler shades one pass's fragments while binning the next — so per-pass
-//! times measure occupancy, not exclusive wall time, and can sum past the
-//! frame. They rank passes and size their work; frame-level wall time still
-//! comes from the frame telemetry.
-
 use std::{
     cell::{Cell, RefCell},
     sync::{
@@ -25,14 +6,8 @@ use std::{
     },
 };
 
-/// Two timestamps per pass; 256 passes a frame is an order of magnitude above
-/// any frame the counters have recorded. Passes beyond it go untimed and are
-/// reported as `dropped=`.
 const QUERY_CAPACITY: u32 = 512;
 
-/// Readback buffers cycling through frames in flight. With triple buffering a
-/// resolve is mapped well within three frames; a slot shortage means the GPU
-/// stalled, and the frame is dropped from the aggregate rather than waited on.
 const READBACK_SLOTS: usize = 4;
 
 const SLOT_FREE: u8 = 0;
@@ -79,20 +54,15 @@ struct LabelTotal {
 struct ReadbackSlot {
     buffer: wgpu::Buffer,
     state: Arc<AtomicU8>,
-    /// The `(label id, begin query index)` pairs of the frame resolved into
-    /// `buffer`, kept until the mapping is read back.
     passes: RefCell<Vec<(u16, u32)>>,
 }
 
 pub(crate) struct PassTimer {
     query_set: wgpu::QuerySet,
     resolve_buffer: wgpu::Buffer,
-    /// Nanoseconds per timestamp tick, from [`wgpu::Queue::get_timestamp_period`].
     period_ns: f32,
-    /// Next free query index this frame; each pass takes two.
     cursor: Cell<u32>,
     frame_passes: RefCell<Vec<(u16, u32)>>,
-    /// Interned pass labels; `totals` is parallel to it.
     labels: RefCell<Vec<String>>,
     totals: RefCell<Vec<LabelTotal>>,
     slots: Vec<ReadbackSlot>,
@@ -104,9 +74,6 @@ pub(crate) struct PassTimer {
 }
 
 impl PassTimer {
-    /// The timer for a device that granted [`wgpu::Features::TIMESTAMP_QUERY`];
-    /// `None` — with a one-line notice, since the caller asked to profile —
-    /// when the adapter cannot time passes.
     pub(crate) fn for_device(device: &wgpu::Device, queue: &wgpu::Queue) -> Option<Self> {
         if !device.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
             eprintln!(
@@ -159,8 +126,6 @@ impl PassTimer {
         &self.query_set
     }
 
-    /// Reserves the `(begin, end)` query indices for one pass, or `None` when
-    /// the frame already timed [`QUERY_CAPACITY`]`/2` passes.
     pub(crate) fn begin_pass(&self, label: &str) -> Option<(u32, u32)> {
         let begin = self.cursor.get();
         if begin + 2 > QUERY_CAPACITY {
@@ -183,9 +148,6 @@ impl PassTimer {
         (labels.len() - 1) as u16
     }
 
-    /// Folds every completed readback into the label totals, freeing its
-    /// slot. Call once per frame, after a non-blocking device poll gave the
-    /// mapping callbacks a chance to fire.
     pub(crate) fn harvest_completed(&self) {
         for slot in &self.slots {
             match slot.state.load(Ordering::Acquire) {
@@ -215,13 +177,6 @@ impl PassTimer {
         }
     }
 
-    /// The frame's resolve work — which queries to copy into which readback
-    /// slot — or `None` when nothing was timed or every slot is still in
-    /// flight (that frame is counted dropped rather than waited on).
-    ///
-    /// Encoding and submitting the resolve stay with the frame-graph
-    /// executor: it is the sole owner of command encoders and submits, and
-    /// the render-contract suite holds that boundary.
     pub(crate) fn frame_resolve(&self) -> Option<PendingResolve<'_>> {
         let used = self.cursor.get();
         if used == 0 {
@@ -242,8 +197,6 @@ impl PassTimer {
         })
     }
 
-    /// Resets the per-frame query cursor and prints the aggregate on the
-    /// [`PRINT_CADENCE_FRAMES`] cadence. The frame's last timing call.
     pub(crate) fn finish_frame(&self) {
         self.cursor.set(0);
         self.frame_passes.borrow_mut().clear();
@@ -254,8 +207,6 @@ impl PassTimer {
         }
     }
 
-    /// The current window's aggregate, for harnesses and tests; printing
-    /// resets it on its own cadence.
     pub(crate) fn report(&self) -> GpuPassTimingReport {
         let labels = self.labels.borrow();
         let totals = self.totals.borrow();
@@ -315,9 +266,6 @@ impl PassTimer {
     }
 }
 
-/// One frame's resolve, handed to the frame-graph executor to encode and
-/// submit: [`Self::encode`] onto the executor's encoder, then
-/// [`Self::arm_readback`] once that encoder is submitted.
 pub(crate) struct PendingResolve<'timer> {
     timer: &'timer PassTimer,
     slot_index: usize,
@@ -342,9 +290,6 @@ impl PendingResolve<'_> {
         );
     }
 
-    /// Hands the frame's pass list to the slot and requests the mapping.
-    /// Only valid after the encoded resolve was submitted — a mapping
-    /// requested before the copy is enqueued would race it.
     pub(crate) fn arm_readback(self) {
         let slot = &self.timer.slots[self.slot_index];
         slot.passes
@@ -365,12 +310,6 @@ impl PendingResolve<'_> {
     }
 }
 
-/// Begins `descriptor`'s pass on `encoder`, timing it when a timer is on.
-///
-/// The single choke point behind
-/// [`FrameCommandRecorder::begin_timed_render_pass`][crate::frame_graph::FrameCommandRecorder::begin_timed_render_pass]:
-/// both recorder impls split their own fields into this call, which keeps the
-/// query-set borrow and the encoder borrow disjoint.
 pub(crate) fn begin_timed_render_pass<'encoder>(
     pass_timer: Option<&PassTimer>,
     encoder: &'encoder mut wgpu::CommandEncoder,
@@ -393,11 +332,6 @@ pub(crate) fn begin_timed_render_pass<'encoder>(
     })
 }
 
-/// Folds one frame's resolved timestamps into the label totals and returns
-/// the frame's GPU busy span (first begin to last end) in nanoseconds.
-///
-/// `mapped` holds little-endian `u64` ticks, two per recorded pass; a pair
-/// whose end precedes its begin (a reset counter mid-frame) is skipped.
 fn accumulate_frame(
     totals: &mut [LabelTotal],
     passes: &[(u16, u32)],
@@ -445,15 +379,8 @@ mod tests {
     #[test]
     fn accumulate_frame_attributes_ticks_by_label() {
         let mut totals = vec![LabelTotal::default(); 2];
-        // Label 0 at queries 0/1 (100 ticks), label 1 at 2/3 (50), label 0
-        // again at 4/5 (10).
         let mapped = ticks(&[1_000, 1_100, 1_100, 1_150, 1_150, 1_160]);
-        accumulate_frame(
-            &mut totals,
-            &[(0, 0), (1, 2), (0, 4)],
-            &mapped,
-            2.0, // 2ns per tick
-        );
+        accumulate_frame(&mut totals, &[(0, 0), (1, 2), (0, 4)], &mapped, 2.0);
         assert_eq!(totals[0].nanoseconds, 220);
         assert_eq!(totals[0].passes, 2);
         assert_eq!(totals[1].nanoseconds, 100);

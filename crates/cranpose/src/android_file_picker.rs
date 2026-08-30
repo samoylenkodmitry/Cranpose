@@ -1,21 +1,3 @@
-//! Android file, folder and document choosers built on the Storage Access
-//! Framework.
-//!
-//! `cranposePickFile` / `cranposePickFiles` / `cranposePickFolder` /
-//! `cranposeCreateDocument` on
-//! [`CranposeActivity`](https://github.com/samoylenkodmitry/cranpose)
-//! launch `ACTION_OPEN_DOCUMENT` / `ACTION_OPEN_DOCUMENT_TREE` /
-//! `ACTION_CREATE_DOCUMENT`, so the user can choose from any document provider
-//! the device exposes (local storage, cloud, or a mounted WebDAV share). The
-//! Java side reports the chosen `content://` document URIs back through the
-//! `native*` callbacks below; nothing is copied. Content is read and written on
-//! demand through descriptors opened from the provider, so even a
-//! multi-gigabyte folder is chosen instantly and each file streams only when it
-//! is used.
-//!
-//! Java callbacks run on the Android UI thread (or a worker it spawns) while
-//! `android_main` runs on its own thread, so results travel through `Send`
-//! globals and wake the awaiting future.
 #![allow(unsafe_code)]
 
 use std::{
@@ -46,23 +28,18 @@ use jni::{
     sys::{jboolean, jint, jlong},
 };
 
-/// Mirrors the `FLAG_*` request flags in `CranposeActivity`.
 const FLAG_FOLDER: i32 = 1;
 const FLAG_WRITABLE: i32 = 4;
 
 static APP: OnceLock<android_activity::AndroidApp> = OnceLock::new();
 static NEXT_TOKEN: AtomicI64 = AtomicI64::new(1);
 
-/// Installs the Android chooser as the platform file picker and the Storage
-/// Access Framework as the platform content resolver.
 pub(crate) fn register(app: android_activity::AndroidApp) {
     let _ = APP.set(app);
     set_platform_file_picker(Rc::new(AndroidFilePicker));
     set_platform_content_resolver(Rc::new(AndroidContentResolver));
 }
 
-/// Resolves a `content://` URI — a shared item, a document intent, a dropped
-/// file — into readable content by asking the provider to describe it.
 struct AndroidContentResolver;
 
 impl ContentResolver for AndroidContentResolver {
@@ -81,7 +58,6 @@ impl ContentResolver for AndroidContentResolver {
     }
 }
 
-/// Asks the provider to describe one document, as `name\tmime\tsize\tmodified`.
 fn document_info(uri: &str) -> Option<ContentMetadata> {
     let row = call_activity(|env, activity| {
         let argument = env.new_string(uri).map_err(|error| error.to_string())?;
@@ -114,12 +90,6 @@ fn app() -> Result<&'static android_activity::AndroidApp, String> {
         .ok_or_else(|| "Android file picker was not registered".to_string())
 }
 
-// ---- Document rows -------------------------------------------------------
-//
-// Every Java callback that carries documents uses the same newline-separated
-// `uri\tname\tmime\tsize\tmodified` row format, so one parser serves picking,
-// folder enumeration and resume.
-
 fn parse_documents(text: &str) -> Vec<ContentMetadata> {
     text.lines().filter_map(parse_document).collect()
 }
@@ -147,7 +117,6 @@ fn parse_document(row: &str) -> Option<ContentMetadata> {
     })
 }
 
-/// Whether a document row describes a directory rather than a file.
 fn is_directory(metadata: &ContentMetadata) -> bool {
     metadata.mime_type.as_deref() == Some("vnd.android.document/directory")
 }
@@ -155,8 +124,6 @@ fn is_directory(metadata: &ContentMetadata) -> bool {
 fn content_of(metadata: ContentMetadata) -> ContentHandle {
     Rc::new(AndroidDocument { metadata })
 }
-
-// ---- Picker --------------------------------------------------------------
 
 struct AndroidFilePicker;
 
@@ -212,7 +179,6 @@ impl FilePicker for AndroidFilePicker {
     }
 }
 
-/// Shared slot between a Java callback and the future awaiting it.
 struct Slot<T> {
     result: Option<T>,
     waker: Option<Waker>,
@@ -261,7 +227,6 @@ fn deliver<T>(registry: &'static Registry<T>, token: i64, value: T) {
     }
 }
 
-/// Future resolved when the Java callback reports a result for `token`.
 struct SlotFuture<T: 'static> {
     registry: &'static Registry<T>,
     token: i64,
@@ -279,8 +244,6 @@ impl<T: 'static> Future for SlotFuture<T> {
         match slot.result.take() {
             Some(value) => {
                 registry.remove(&self.token);
-                // Delivered live: drop the resume copy recorded in
-                // `onActivityResult` so it is never replayed.
                 clear_recovered();
                 Poll::Ready(value)
             }
@@ -292,15 +255,12 @@ impl<T: 'static> Future for SlotFuture<T> {
     }
 }
 
-/// Registers a pending request and launches the Java entry point.
 fn begin<T: 'static>(
     registry: &'static Registry<T>,
     launch: impl FnOnce(i64) -> Result<(), String>,
     failed: fn(String) -> T,
     missing: fn() -> T,
 ) -> PickerFuture<T> {
-    // Discard any orphaned selection from an earlier abandoned request; this
-    // fresh one becomes the only thing the resume inbox can hold.
     clear_recovered();
     let token = NEXT_TOKEN.fetch_add(1, Ordering::Relaxed);
     registry
@@ -321,19 +281,15 @@ fn begin<T: 'static>(
     })
 }
 
-/// How many documents an open chooser accepts.
 #[derive(Clone, Copy)]
 enum Selection {
     Single,
     Multiple,
 }
 
-/// Which tree grant a folder chooser takes.
 #[derive(Clone, Copy)]
 enum Grant {
-    /// Read-only, for browsing a folder's contents.
     ReadOnly,
-    /// Persisted read/write, for a folder the app keeps writing to.
     Persistent,
 }
 
@@ -439,8 +395,6 @@ fn present_create_document(
     )
 }
 
-/// Calls into the activity on whatever thread the caller is on, attaching to
-/// the JVM as needed.
 fn call_activity<T>(
     body: impl FnOnce(&mut jni::Env<'_>, JObject<'_>) -> Result<T, String>,
 ) -> Result<T, String> {
@@ -448,17 +402,6 @@ fn call_activity<T>(
     crate::android_jni::with_android_activity_env(app, body)
 }
 
-// ---- Resume inbox --------------------------------------------------------
-//
-// Some Android devices destroy and recreate the activity (and with it the
-// native app and its composition) when a system chooser covers it. A request in
-// flight at that moment loses both its Java request token (a fresh activity
-// instance starts at token 0) and the composition that was awaiting the result.
-// The Java `onActivityResult` still runs on the recreated activity and records
-// the granted selection here; the framework's launchers redeliver it. A live
-// resolution clears the inbox, so a selection is never replayed.
-
-/// A granted selection recorded for redelivery after an activity recreation.
 struct Recoverable {
     flags: i32,
     entries: String,
@@ -493,10 +436,6 @@ fn take_recovered() -> Option<RecoveredPick> {
     }
 }
 
-// ---- Content -------------------------------------------------------------
-
-/// A document addressed by a `content://` URI. It is opened on demand through
-/// the provider's descriptor and never copied to the cache.
 struct AndroidDocument {
     metadata: ContentMetadata,
 }
@@ -549,7 +488,6 @@ impl ContentReader for DescriptorReader {
     }
 }
 
-/// A document being written through the provider's descriptor.
 struct AndroidSink {
     uri: String,
     file: std::cell::RefCell<Option<File>>,
@@ -598,8 +536,6 @@ impl ContentSink for AndroidSink {
 
     fn finish(&self) -> ContentFuture<'_, Result<(), ContentError>> {
         Box::pin(async move {
-            // Opening lazily means an empty document still needs a descriptor
-            // so the chosen file exists and is truncated.
             let mut slot = self.writer()?;
             let Some(mut file) = slot.take() else {
                 return Ok(());
@@ -612,14 +548,10 @@ impl ContentSink for AndroidSink {
     }
 }
 
-// ---- Folders -------------------------------------------------------------
-
 fn folder_of(tree_uri: String) -> ContentFolderRef {
     Rc::new(AndroidFolder { tree_uri })
 }
 
-/// A granted document tree. Immediate children are queried synchronously;
-/// the whole tree is streamed by the Java walker.
 struct AndroidFolder {
     tree_uri: String,
 }
@@ -717,8 +649,6 @@ impl ContentFolder for AndroidFolder {
     }
 }
 
-/// Per-token state for a streaming folder walk, written by the Java callbacks
-/// and drained by the awaiting collector.
 #[derive(Default)]
 struct FolderWalk {
     documents: std::collections::VecDeque<ContentMetadata>,
@@ -733,8 +663,6 @@ fn folder_walks() -> &'static Mutex<HashMap<i64, FolderWalk>> {
     SLOT.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Streams files discovered under a granted tree. Dropping it discards the
-/// registry slot, and the Java walker stops when its next batch is refused.
 struct AndroidFolderStream {
     token: i64,
 }
@@ -791,12 +719,6 @@ impl Future for FolderNext {
     }
 }
 
-/// How many bytes the provider says the document at `uri` is, or `None` where
-/// it does not say.
-///
-/// The provider's own answer rather than the descriptor's: one that fetches its
-/// bytes over a network hands back a pipe, which cannot be stat-ed, while still
-/// listing a size for the document.
 #[cfg(feature = "media")]
 pub fn content_uri_length(uri: &str) -> Option<u64> {
     let length = call_activity(|env, activity| {
@@ -845,8 +767,6 @@ pub fn open_content_uri(uri: &str) -> io::Result<File> {
     Ok(unsafe { File::from_raw_fd(fd) })
 }
 
-// ---- Java callbacks ------------------------------------------------------
-
 fn read_optional_jstring(env: &mut EnvUnowned<'_>, value: JString<'_>) -> Option<String> {
     if value.is_null() {
         return None;
@@ -860,7 +780,6 @@ fn read_optional_jstring(env: &mut EnvUnowned<'_>, value: JString<'_>) -> Option
     }
 }
 
-/// Java callback: records a granted selection in the resume inbox (see above).
 #[doc(hidden)]
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeRecordResumablePick<
@@ -880,7 +799,6 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeRecordRe
         .push(Recoverable { flags, entries });
 }
 
-/// Java callback delivering a document chooser result.
 #[doc(hidden)]
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnFilePicked<'local>(
@@ -903,7 +821,6 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnFilePi
     deliver(document_picks(), token, value);
 }
 
-/// Java callback: a folder (or persistent writable folder) was granted.
 #[doc(hidden)]
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnFolderPicked<'local>(
@@ -921,7 +838,6 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnFolder
     );
 }
 
-/// Java callback: a persistent writable folder was granted.
 #[doc(hidden)]
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnWritableFolderPicked<
@@ -941,7 +857,6 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnWritab
     );
 }
 
-/// Java callback: a save destination was created.
 #[doc(hidden)]
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnDocumentCreated<
@@ -978,8 +893,6 @@ fn tree_result(
     Ok(uri)
 }
 
-/// Java callback: a batch of newly-discovered files. Returns `false` once the
-/// collector has dropped the stream, so the Java walker can stop.
 #[doc(hidden)]
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnFolderEntries<'local>(
@@ -1006,7 +919,6 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnFolder
     }
 }
 
-/// Java callback: the walk finished, with an optional error.
 #[doc(hidden)]
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnFolderFinished<'local>(
@@ -1042,7 +954,6 @@ mod tests {
         assert_eq!(documents[0].mime_type.as_deref(), Some("application/pdf"));
         assert_eq!(documents[0].len, Some(2048));
         assert_eq!(documents[0].modified_millis, Some(1_700_000_000_000));
-        // A provider that reports nothing still yields a usable display name.
         assert_eq!(documents[1].name, "2");
         assert_eq!(documents[1].len, None);
     }

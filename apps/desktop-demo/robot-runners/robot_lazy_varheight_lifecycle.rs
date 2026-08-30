@@ -1,14 +1,3 @@
-//! Robot test for LazyList variable height lifecycle
-//!
-//! Tests that items with varying heights trigger correct compose/dispose behavior.
-//! Validates that items are composed correctly with varying viewport capacity.
-//! With slot composition reuse, items in the reuse pool keep their effects alive.
-//!
-//! Run with:
-//! ```bash
-//! cargo run --package desktop-app --example robot_lazy_varheight_lifecycle --features robot-app
-//! ```
-
 use std::time::Duration;
 
 use cranpose::{AppLauncher, LazyItems};
@@ -21,7 +10,6 @@ use cranpose_ui::{
     VerticalAlignment,
 };
 
-/// Lifecycle stats stored in compose state
 #[derive(Clone, Default, PartialEq)]
 struct LifecycleStats {
     total_composes: usize,
@@ -29,13 +17,10 @@ struct LifecycleStats {
     total_disposes: usize,
 }
 
-/// Variable height based on index - ensures different items per viewport
-/// Heights: 40, 60, 80, 100, 120, 40, 60, 80... (5 variations)
 fn item_height(index: usize) -> f32 {
     40.0 + (index % 5) as f32 * 20.0
 }
 
-/// Stats display component
 #[composable]
 fn stats_display(stats: MutableState<LifecycleStats>) {
     let current = stats.get();
@@ -52,12 +37,11 @@ fn stats_display(stats: MutableState<LifecycleStats>) {
     );
 }
 
-/// Lazy list with variable height items
 fn variable_height_lazy_list(state: LazyListState, stats: MutableState<LifecycleStats>) {
     LazyColumn(
         Modifier::empty()
             .fill_max_width()
-            .height(300.0) // Shorter height to see more scrolling behavior
+            .height(300.0)
             .background(Color(0.05, 0.05, 0.1, 1.0))
             .rounded_corners(12.0),
         state,
@@ -65,13 +49,9 @@ fn variable_height_lazy_list(state: LazyListState, stats: MutableState<Lifecycle
             .vertical_arrangement(LinearArrangement::SpacedBy(4.0))
             .content_padding(8.0, 8.0),
         |scope| {
-            scope.items(
-                // More items to test with variable heights.
-                LazyItems::new(30).key(|i: usize| i as u64),
-                move |index| {
-                    variable_height_item(index, stats);
-                },
-            );
+            scope.items(LazyItems::new(30).key(|i: usize| i as u64), move |index| {
+                variable_height_item(index, stats);
+            });
         },
     );
 }
@@ -117,13 +97,11 @@ fn variable_height_item(index: usize, stats: MutableState<LifecycleStats>) {
     let height = item_height(index);
     println!("  [COMPOSE] Item {} (h={})", index, height);
 
-    // Track compositions (including reuse)
     cranpose_core::SideEffect(move || {
         stats.update(|s| s.total_composes += 1);
         println!("  [COMPOSE] Item {} composition", index);
     });
 
-    // Track effects and disposal
     DisposableEffect!(index, move |_key| {
         stats.update(|s| s.total_effects += 1);
         println!("  [EFFECT] Item {} effect started", index);
@@ -218,7 +196,6 @@ fn main() {
                 None
             };
 
-            // Step 1: Initial state
             println!("\n--- Step 1: Initial state ---");
             let _ = robot.wait_for_idle();
             let initial_items = find_visible_items();
@@ -236,7 +213,6 @@ fn main() {
                 0
             };
 
-            // Step 2: Scroll down significantly
             println!("\n--- Step 2: Scroll down ---");
             if let Some((x, y, w, h)) = find_text_in_semantics(&robot, "Item #0") {
                 for _ in 0..5 {
@@ -257,12 +233,9 @@ fn main() {
             println!("  Visible after scroll: {:?}", after_scroll);
             if let Some((c, e, d)) = read_stats() {
                 println!("  Stats: Composes={} Effects={} Disposes={}", c, e, d);
-                // With slot composition reuse, items may be reused without new composes.
-                // Key assertion: composes should equal effects (lifecycle consistency).
                 assert_eq!(c, e, "Composes should equal effects after scroll");
             }
 
-            // Step 3: Scroll back to top
             println!("\n--- Step 3: Scroll back ---");
             if let Some((x, y, w, h)) = find_text_in_semantics(
                 &robot,
@@ -277,23 +250,16 @@ fn main() {
             let after_back = find_visible_items();
             println!("  Visible after scroll back: {:?}", after_back);
 
-            // Final stats - verify JC-matching behavior
             if let Some((c, e, d)) = read_stats() {
                 println!("\n=== FINAL STATS ===");
                 println!("  Total Composes: {}", c);
                 println!("  Total Effects: {}", e);
                 println!("  Total Disposes: {}", d);
 
-                // Key assertions:
-                // 1. Composes == Effects
                 assert_eq!(c, e, "Composes should equal effects");
 
-                // 2. With slot composition reuse, items in reuse pool keep effects alive.
-                //    Disposes only happen when items exceed pool capacity.
-                //    Short scrolls may not trigger any disposes.
                 println!("  Note: Disposes={} (items in reuse pool keep effects)", d);
 
-                // 3. Total composes should show new items were composed
                 println!("\n✓ Variable height lifecycle test PASSED!");
             }
 

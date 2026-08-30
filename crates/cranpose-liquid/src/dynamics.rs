@@ -21,40 +21,22 @@ use cranpose_macros::composable;
 
 use crate::material::GlassDeformation;
 
-/// Stretch gained per dp/s of travel speed. The target redistributes volume
-/// visibly but remains a landscape lens through launch and cruise.
 const STRETCH_PER_SPEED: f32 = 3.2e-4;
-/// Stretch removed per dp/s² of forward acceleration (and added back per
-/// dp/s² of braking): launch blunts the bubble, arrival elongates it.
 const STRETCH_PER_ACCEL: f32 = 3.5e-5;
 /// The droplet never deforms past these bounds, however violent the fling.
 /// Public so hosting nodes can budget layout headroom for the extremes.
 pub const STRETCH_MIN: f32 = 0.78;
 pub const STRETCH_MAX: f32 = 1.50;
-/// Perimeter displacement per dp/s² of acceleration. Launch inertia trails
-/// opposite the acceleration; braking inertia runs ahead of the bubble.
 const BULGE_PER_ACCELERATION: f32 = 4.5e-4;
 pub const BULGE_MAX: f32 = 8.0;
-/// Low-pass time constants (s): the fluid's visual inertia is asymmetric —
-/// excitation grabs the droplet fast, but it relaxes back viscously (the
-/// reference arrival swell stays visible for a beat before rounding off).
 const ATTACK_TAU: f32 = 0.03;
 const RELEASE_TAU: f32 = 0.11;
-/// Direct input arrives independently from rendering. Preserve the last
-/// observed finger velocity across short gaps instead of interpreting every
-/// intervening render as an instantaneous stop.
 const POINTER_VELOCITY_TAU: f32 = 0.045;
 const POINTER_STOP_HORIZON_NANOS: u64 = 40_000_000;
 const POINTER_COAST_TAU: f32 = 0.10;
-/// Below this speed (dp/s) the motion axis holds its last direction, so a
-/// settling bubble relaxes in place instead of flipping its axis on noise.
 const AXIS_MIN_SPEED: f32 = 60.0;
-/// Frame deltas are clamped here (s): a paused scene must not integrate one
-/// giant step, and a double-pumped frame must not divide by ~zero.
 const DT_MIN: f32 = 1.0 / 1000.0;
 const DT_MAX: f32 = 1.0 / 15.0;
-/// A position step implying more than this speed (dp/s) is a teleport
-/// (window relayout, snap), not motion: state re-anchors without energy.
 const TELEPORT_SPEED: f32 = 30_000.0;
 
 /// Motion-derived deformation of a liquid lens for one frame.
@@ -242,7 +224,6 @@ impl LiquidDynamics {
         };
         match self.last_nanos.get() {
             Some(last) if last == now => {
-                // Same frame (second glass closure read): no time passed.
                 self.last_pos.set(Some(pos));
                 self.pose.get()
             }
@@ -295,7 +276,6 @@ impl LiquidDynamics {
             axis = (velocity.0 / raw_speed, velocity.1 / raw_speed);
             self.axis.set(axis);
         }
-        // Signed acceleration along travel: positive while gaining speed.
         let accel_along = accel.0 * axis.0 + accel.1 * axis.1;
 
         let target_stretch = (1.0 + STRETCH_PER_SPEED * raw_speed
@@ -304,8 +284,6 @@ impl LiquidDynamics {
         let signed_bulge = (-BULGE_PER_ACCELERATION * accel_along).clamp(-BULGE_MAX, BULGE_MAX);
         let target_bulge = (axis.0 * signed_bulge, axis.1 * signed_bulge);
 
-        // Excitation (moving away from neutral) is fast; relaxation back is
-        // viscous, so a brake swell lingers a beat like the reference.
         let follow = |current: f32, target: f32, neutral: f32| {
             let tau = if (target - neutral).abs() > (current - neutral).abs() {
                 ATTACK_TAU
@@ -389,7 +367,6 @@ mod tests {
         pose
     }
 
-    /// Drive at constant velocity and return the steady pose.
     fn cruise(d: &LiquidDynamics, speed_dp_s: f32, frames: usize) -> LiquidPose {
         let dt = 1.0 / 60.0;
         let mut x = 0.0;
@@ -429,8 +406,6 @@ mod tests {
     fn launch_compresses_before_cruise_stretch_wins() {
         let d = dynamics();
         d.advance((0.0, 0.0), 1.0 / 60.0);
-        // Hard launch: 0 → 1500 dp/s in one frame (a = 90k dp/s²) — the
-        // instantaneous target is compression-dominated.
         let dt = 1.0 / 60.0;
         let pose = d.advance((1500.0 * dt, 0.0), dt);
         assert!(pose.stretch < 1.0, "launch stretch {}", pose.stretch);
@@ -484,7 +459,6 @@ mod tests {
     fn braking_decompresses_past_cruise_and_swells_leading_edge() {
         let d = dynamics();
         let cruise_pose = cruise(&d, 1200.0, 40);
-        // Brake to a stop over two frames.
         let dt = 1.0 / 60.0;
         let x = d.last_pos.get().unwrap().0;
         let brake = d.advance((x + 300.0 * dt, 0.0), dt);
@@ -504,7 +478,6 @@ mod tests {
             "brake ortho {}",
             brake.ortho
         );
-        // Leading edge = travel direction (+x).
         assert!(brake.bulge_direction.abs() < 1e-3);
     }
 
@@ -538,7 +511,6 @@ mod tests {
             pose.bulge_direction.abs() < 0.1,
             "leftward launch inertia must trail toward +x: {pose:?}"
         );
-        // Stopping keeps the last axis instead of flipping on noise.
         let held = settle(&d, (x, 0.0), 30);
         assert!((held.axis.0 + 1.0).abs() < 1e-4);
     }
@@ -574,7 +546,6 @@ mod tests {
             "teleport {}",
             pose.stretch
         );
-        // Motion resumes cleanly from the new anchor.
         let resumed = cruise(&d, 800.0, 30);
         assert!(resumed.stretch > 1.01);
     }

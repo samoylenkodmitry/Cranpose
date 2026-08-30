@@ -2240,8 +2240,6 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     impl TrackingHttpClient {
-        /// This fixture as an HTTP client. The fixture itself stays reachable,
-        /// so a test can still ask it what it saw.
         fn as_client(self: &Arc<Self>) -> HttpClientRef {
             let inner = Arc::clone(self);
             Arc::new(cranpose_services::StubHttpClient::from_text(move |url| {
@@ -2284,8 +2282,6 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     impl CommentThreadHttpClient {
-        /// This fixture as an HTTP client. The fixture itself stays reachable,
-        /// so a test can still ask it what it saw.
         fn as_client(self: &Arc<Self>) -> HttpClientRef {
             let inner = Arc::clone(self);
             Arc::new(cranpose_services::StubHttpClient::from_text(move |url| {
@@ -2422,8 +2418,6 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     impl RegressionHttpClient {
-        /// This fixture as an HTTP client. The fixture itself stays reachable,
-        /// so a test can still ask it what it saw.
         fn as_client(self: &Arc<Self>) -> HttpClientRef {
             let inner = Arc::clone(self);
             Arc::new(cranpose_services::StubHttpClient::from_text(move |url| {

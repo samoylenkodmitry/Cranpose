@@ -1,29 +1,3 @@
-//! Frame-critical threads opt out of the little cores.
-//!
-//! On big.LITTLE devices the kernel places a thread by its observed
-//! utilization, and a frame thread that sleeps until the next vsync looks
-//! small. Measured on a Kirin 980 phone (4×A55 + 4×A76): the present
-//! thread — acquire, encode, submit — spent 81% of its busy time on the
-//! A55 cluster, and the same command stream stretched from 4–5ms on an
-//! A76 to 10–13ms there. Content per frame was flat (batch count varied
-//! by ±1), so the bimodal frame cost was placement, not workload.
-//!
-//! The remedy is an affinity mask, not a priority: the threads were
-//! already at nice −10 and still landed little, because priority ranks
-//! runnable threads on a core while capacity-aware placement follows
-//! utilization. Each frame-critical thread pins itself to the CPUs whose
-//! published capacity is above the weakest cluster's, read from
-//! `/sys/devices/system/cpu/cpu*/cpu_capacity`. Threads spawned later
-//! inherit the mask, which is deliberate: the GPU driver's own workers
-//! (a Mali command-marshalling thread burned 70% as much CPU as the
-//! whole producer) and the stage-executor pool start under a pinned
-//! thread and stay off the little cluster with it.
-//!
-//! Where the topology is symmetric or unpublished — desktops, watches,
-//! every non-Linux OS — this is a no-op, so callers do not gate on
-//! platform. `CRANPOSE_CORE_PIN=0` (`debug.cranpose.core_pin` on
-//! Android) disables it for A/B measurement.
-
 /// Restricts the calling thread to the fast-capacity CPUs, when the
 /// machine has distinguishable ones. `role` names the thread in the log
 /// line so an A/B trace shows who pinned where.
@@ -62,8 +36,6 @@ mod imp {
         }
     }
 
-    /// The per-CPU capacities the kernel publishes, `(cpu index, capacity)`.
-    /// CPUs without a readable `cpu_capacity` are simply absent.
     pub(super) fn read_cpu_capacities(base: &Path) -> Vec<(usize, u64)> {
         let mut capacities = Vec::new();
         let Ok(entries) = std::fs::read_dir(base) else {
@@ -90,10 +62,6 @@ mod imp {
         capacities
     }
 
-    /// Which CPUs a frame thread should stay on: everything faster than
-    /// the weakest cluster. `None` means "do not pin" — the topology is
-    /// symmetric or unknown, or the fast set is a single core, where
-    /// pinning would serialize the producer and present threads onto it.
     pub(super) fn fast_cpus(capacities: &[(usize, u64)]) -> Option<Vec<usize>> {
         let min = capacities.iter().map(|&(_, capacity)| capacity).min()?;
         let max = capacities.iter().map(|&(_, capacity)| capacity).max()?;
@@ -118,9 +86,6 @@ mod imp {
 mod tests {
     use super::imp::{fast_cpus, read_cpu_capacities};
 
-    /// Workspace-relative scratch root: the tmpfs hygiene gate bans the
-    /// process temp dir, so fabricated sysfs trees live under the
-    /// workspace `target/test-output` like every other test artifact.
     fn scratch_root() -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../../target/test-output/fast-cores")
@@ -167,8 +132,6 @@ mod tests {
             std::fs::create_dir_all(&dir).unwrap();
             std::fs::write(dir.join("cpu_capacity"), capacity).unwrap();
         }
-        // Present but not a CPU, and a CPU directory without the file:
-        // both must be skipped, not misread.
         std::fs::create_dir_all(base.join("cpufreq")).unwrap();
         std::fs::create_dir_all(base.join("cpu2")).unwrap();
 

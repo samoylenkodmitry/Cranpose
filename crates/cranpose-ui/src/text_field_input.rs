@@ -1,10 +1,3 @@
-//! Keyboard input handling for text fields.
-//!
-//! This module contains the shared keyboard event handling logic used by both
-//! `TextFieldHandler` (O(1) dispatch) and `TextFieldModifierNode::handle_key_event`.
-//!
-//! Having a single implementation prevents behavioral drift between the two paths.
-
 use cranpose_foundation::text::{TextFieldLineLimits, TextFieldState, TextRange};
 
 use crate::{
@@ -12,25 +5,14 @@ use crate::{
     word_boundaries::{find_word_end, find_word_start},
 };
 
-/// Shared keyboard event handling implementation.
-///
-/// This function contains the core keyboard handling logic used by both
-/// `TextFieldHandler::handle_key` and `TextFieldModifierNode::handle_key_event`.
-/// Having a single implementation prevents behavioral drift between the two paths.
-///
-/// The `line_limits` parameter controls whether newlines are allowed (MultiLine)
-/// or blocked (SingleLine).
 pub(crate) fn handle_key_event_impl(
     state: &TextFieldState,
     event: &KeyEvent,
     line_limits: TextFieldLineLimits,
 ) -> bool {
     match event.key_code {
-        // Enter - insert newline (only for MultiLine mode)
         KeyCode::Enter => {
             if line_limits.is_single_line() {
-                // In SingleLine mode, Enter does NOT insert newline
-                // Could be used for submit action in the future
                 false
             } else {
                 state.edit(|buffer| buffer.insert("\n"));
@@ -39,28 +21,24 @@ pub(crate) fn handle_key_event_impl(
             }
         }
 
-        // Character input (most common case)
         _ if !event.text.is_empty() && !event.modifiers.command_or_ctrl() => {
             state.edit(|buffer| buffer.insert(&event.text));
             state.set_desired_column(None);
             true
         }
 
-        // Backspace
         KeyCode::Backspace => {
             state.edit(|buffer| buffer.delete_before_cursor());
             state.set_desired_column(None);
             true
         }
 
-        // Delete
         KeyCode::Delete => {
             state.edit(|buffer| buffer.delete_after_cursor());
             state.set_desired_column(None);
             true
         }
 
-        // Arrow Left
         KeyCode::ArrowLeft => {
             state.set_desired_column(None);
             if event.modifiers.command_or_ctrl() && !event.modifiers.shift {
@@ -88,7 +66,6 @@ pub(crate) fn handle_key_event_impl(
             true
         }
 
-        // Arrow Right
         KeyCode::ArrowRight => {
             state.set_desired_column(None);
             if event.modifiers.command_or_ctrl() && !event.modifiers.shift {
@@ -116,7 +93,6 @@ pub(crate) fn handle_key_event_impl(
             true
         }
 
-        // Arrow Up (previous line)
         KeyCode::ArrowUp => {
             let text = state.text();
             let sel = state.selection();
@@ -144,7 +120,6 @@ pub(crate) fn handle_key_event_impl(
             true
         }
 
-        // Arrow Down (next line)
         KeyCode::ArrowDown => {
             let text = state.text();
             let sel = state.selection();
@@ -179,7 +154,6 @@ pub(crate) fn handle_key_event_impl(
             true
         }
 
-        // Home
         KeyCode::Home => {
             state.set_desired_column(None);
             if event.modifiers.command_or_ctrl() {
@@ -196,7 +170,6 @@ pub(crate) fn handle_key_event_impl(
             true
         }
 
-        // End
         KeyCode::End => {
             state.set_desired_column(None);
             if event.modifiers.command_or_ctrl() {
@@ -213,19 +186,16 @@ pub(crate) fn handle_key_event_impl(
             true
         }
 
-        // Select all (Ctrl+A)
         KeyCode::A if event.modifiers.command_or_ctrl() => {
             state.edit(|buffer| buffer.select_all());
             true
         }
 
-        // Undo (Ctrl+Z)
         KeyCode::Z if event.modifiers.command_or_ctrl() && !event.modifiers.shift => {
             state.undo();
             true
         }
 
-        // Redo (Ctrl+Shift+Z or Ctrl+Y)
         KeyCode::Z if event.modifiers.command_or_ctrl() && event.modifiers.shift => {
             state.redo();
             true
@@ -235,7 +205,6 @@ pub(crate) fn handle_key_event_impl(
             true
         }
 
-        // Ctrl+C/X/V - DO NOT handle here! Let platform handle clipboard
         _ => false,
     }
 }

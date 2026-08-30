@@ -1,22 +1,3 @@
-//! The output device and the thread that feeds it.
-//!
-//! Three participants, and it is worth naming what each may do:
-//!
-//! * The **decode thread** owns the [`SampleSource`] chain. It is the only
-//!   thread that touches the decoder, so seeking is a message to it rather than
-//!   a lock around it. It converts the item's rate and channel layout to the
-//!   device's and pushes the result into the ring.
-//! * The **device callback** owns the consuming half of the ring. It pops,
-//!   scales by the volume, and writes. It allocates nothing, locks nothing and
-//!   never blocks — an underrun is silence, not a stall. The device it runs on
-//!   is [`cranpose_audio::backend`], the same AAudio-or-cpal stream the audio
-//!   engine uses, so there is one output device per platform in the workspace.
-//! * The **transport** (whatever thread calls [`Sink`]'s methods) owns neither.
-//!   It reads atomics and sends commands.
-//!
-//! The ring is [`cranpose_audio::ring`], the same wait-free queue the audio
-//! engine feeds its own callback through.
-
 use std::{
     sync::{
         Arc,
@@ -39,28 +20,14 @@ use crate::{
     spool::SpoolCancel,
 };
 
-/// How much decoded audio the ring holds, as a fraction of a second.
-///
-/// Long enough that a decode thread descheduled for an ordinary time slice does
-/// not underrun, short enough that discarding it after a seek costs a fraction
-/// of a callback's budget.
 const BUFFER_SECONDS: f32 = 0.2;
 
-/// The smallest ring worth allocating, for a device that reports an
-/// implausibly low rate.
 const MIN_BUFFER_SAMPLES: usize = 4096;
 
-/// The highest rate the ring is sized to hold [`BUFFER_SECONDS`] of. Above it a
-/// device gets a proportionally shorter buffer, which is still many times the
-/// decode thread's nap.
 const MAX_DEVICE_RATE: u32 = 96_000;
 
-/// How long the decode thread sleeps when the ring is full or playback is
-/// paused. A fraction of the buffer, so it wakes with room to spare.
 const DECODE_IDLE_NAP: Duration = Duration::from_millis(5);
 
-/// Volume is shared with the callback as a bit pattern because there is no
-/// atomic `f32`.
 struct AtomicVolume(AtomicU32);
 
 impl AtomicVolume {
@@ -77,38 +44,21 @@ impl AtomicVolume {
     }
 }
 
-/// What the three participants share.
 struct Shared {
-    /// Bumped by the decode thread after a seek. The callback discards
-    /// everything queued under an older generation, which is what stops audio
-    /// from before the seek being heard after it.
     generation: AtomicU64,
-    /// Device frames the callback has written since the position was last
-    /// rebased.
     frames_written: AtomicU64,
-    /// Media position at the last rebase, in nanoseconds.
     base_nanos: AtomicU64,
-    /// Device frames the decode thread has pushed, and frames the callback has
-    /// taken. The item has finished when the source is done and these meet.
     frames_pushed: AtomicU64,
     frames_taken: AtomicU64,
     source_done: AtomicBool,
     paused: AtomicBool,
     volume: AtomicVolume,
-    /// Playback rate, read by the decode thread on every block.
     speed: AtomicVolume,
-    /// The format the device actually negotiated, published by the callback
-    /// the first time it runs and re-published if the device ever changes it.
-    ///
-    /// Zero until then. AAudio only reports the rate once the stream is open,
-    /// so the callback is the one participant that always knows, and the decode
-    /// thread waits for it rather than converting to a guess.
     device_rate: AtomicU32,
     device_channels: AtomicU32,
 }
 
 impl Shared {
-    /// A sink's shared state before anything has been decoded or played.
     fn new(volume: f32, speed: f32) -> Shared {
         Shared {
             generation: AtomicU64::new(0),
@@ -125,8 +75,6 @@ impl Shared {
         }
     }
 
-    /// Media position: where the last rebase put us, plus the device frames
-    /// written since, converted through the speed those frames were produced at.
     fn position(&self) -> Duration {
         let base = Duration::from_nanos(self.base_nanos.load(Ordering::Relaxed));
         let frames = self.frames_written.load(Ordering::Relaxed);
@@ -138,7 +86,6 @@ impl Shared {
         base.saturating_add(Duration::from_secs_f64(elapsed.max(0.0)))
     }
 
-    /// The negotiated format, or `None` until the callback has published it.
     fn device_format(&self) -> Option<(u32, usize)> {
         let rate = self.device_rate.load(Ordering::Acquire);
         let channels = self.device_channels.load(Ordering::Acquire);
@@ -148,9 +95,6 @@ impl Shared {
         Some((rate, channels as usize))
     }
 
-    /// Moves the position to `position` and starts counting from zero again.
-    /// Called whenever the mapping from written frames to media time changes:
-    /// after a seek, and after a speed change.
     fn rebase(&self, position: Duration) {
         self.base_nanos.store(
             position.as_nanos().min(u128::from(u64::MAX)) as u64,
@@ -166,31 +110,21 @@ impl Shared {
     }
 }
 
-/// What the transport asks the decode thread to do.
 enum Command {
     Seek(Duration),
     Stop,
 }
 
-/// An open item on an open device.
 pub(crate) struct Sink {
-    /// Held for its lifetime: dropping it stops the stream and drops the
-    /// renderer, and with it the consuming half of the ring.
     device: Box<dyn AudioSink>,
     shared: Arc<Shared>,
     commands: Sender<Command>,
-    /// Joined on drop so the decode thread never outlives the sink that owns
-    /// its ring.
     decoder: Option<std::thread::JoinHandle<()>>,
     seekable: Arc<AtomicBool>,
-    /// Stops the decode thread waiting on a stream that has gone quiet, so
-    /// ending an item never waits on a provider.
     spool: SpoolCancel,
 }
 
 impl Sink {
-    /// Opens the platform output device and starts decoding `source` into it,
-    /// paused at its start.
     pub(crate) fn open(
         source: Box<dyn SampleSource>,
         spool: SpoolCancel,
@@ -242,9 +176,6 @@ impl Sink {
         self.shared.volume.set(volume);
     }
 
-    /// Changes the playback rate and rebases the position, because the frames
-    /// written from here on convert to media time at a different ratio than the
-    /// ones already counted.
     pub(crate) fn set_speed(&self, speed: f32) {
         let position = self.shared.position();
         self.shared.speed.set(speed);
@@ -272,10 +203,6 @@ impl Sink {
 impl Drop for Sink {
     fn drop(&mut self) {
         let _ = self.commands.send(Command::Stop);
-        // The order matters: a decode thread waiting for bytes from a provider
-        // that stopped talking would not reach the command until the wait timed
-        // out, and this runs on whichever thread ended the item -- usually the
-        // one drawing the screen.
         self.spool.cancel();
         if let Some(decoder) = self.decoder.take() {
             let _ = decoder.join();
@@ -283,15 +210,10 @@ impl Drop for Sink {
     }
 }
 
-/// What the device callback runs: pop what the decode thread has ready, scale
-/// it, and write silence for whatever is missing.
 struct MediaRenderer {
     consumer: ring::Consumer<f32>,
     shared: Arc<Shared>,
-    /// The seek generation this callback has already flushed to.
     generation: u64,
-    /// The device's channel count, kept here so the callback does not read an
-    /// atomic per block to convert samples into frames.
     channels: usize,
 }
 
@@ -303,8 +225,6 @@ impl Renderer for MediaRenderer {
             return;
         }
         self.channels = channels;
-        // Channels first, rate last: the decode thread reads the rate first and
-        // takes a non-zero one as the promise that both are published.
         self.shared
             .device_channels
             .store(channels as u32, Ordering::Release);
@@ -314,8 +234,6 @@ impl Renderer for MediaRenderer {
     fn render(&mut self, out: &mut [f32]) -> RenderStatus {
         let generation = self.shared.generation.load(Ordering::Acquire);
         if generation != self.generation {
-            // Everything still queued belongs to the position we seeked away
-            // from.
             let mut discarded = 0u64;
             while self.consumer.pop().is_some() {
                 discarded += 1;
@@ -344,32 +262,15 @@ impl Renderer for MediaRenderer {
                 .frames_written
                 .fetch_add(frames, Ordering::Relaxed);
         }
-        // Never idle: a media sink lives exactly as long as the item it plays,
-        // so the stream it holds is released by dropping the sink rather than
-        // by the callback giving it up mid-track.
         RenderStatus::Continue
     }
 }
 
-/// Ring size: [`BUFFER_SECONDS`] of device audio, never below a floor that
-/// keeps a small or oddly-configured device from underrunning every callback.
-///
-/// The ring is allocated before the device says what it negotiated — AAudio
-/// only reports its rate once the stream is open — so it is sized for
-/// [`MAX_DEVICE_RATE`]. A slower device gets a longer buffer than
-/// [`BUFFER_SECONDS`], which costs nothing but the memory.
 fn ring_capacity() -> usize {
     let samples = (MAX_DEVICE_RATE as f32 * BUFFER_SECONDS) as usize * backend::NOMINAL_CHANNELS;
     samples.max(MIN_BUFFER_SAMPLES).next_power_of_two()
 }
 
-/// The decode thread: convert the item to the device's shape and keep the ring
-/// as full as it will go.
-///
-/// It does not know the device's shape when it starts. The callback publishes
-/// the negotiated format the first time it runs, and the converter is built
-/// then — and rebuilt if the device ever reports a different one, which is what
-/// keeps a track playing at the right pitch across a route change.
 fn decode_loop(
     mut source: Box<dyn SampleSource>,
     mut producer: ring::Producer<f32>,
@@ -393,8 +294,6 @@ fn decode_loop(
                         pending = None;
                         shared.source_done.store(false, Ordering::Release);
                         shared.rebase(position);
-                        // Publishing the new generation last is what makes the
-                        // callback's discard cover exactly the stale samples.
                         shared.generation.fetch_add(1, Ordering::AcqRel);
                     }
                     Err(SeekError::Unsupported) => {
@@ -416,8 +315,6 @@ fn decode_loop(
         }
 
         let Some(negotiated) = shared.device_format() else {
-            // The device has not run its first callback yet, so there is
-            // nothing to convert to.
             std::thread::sleep(DECODE_IDLE_NAP);
             continue;
         };
@@ -449,8 +346,6 @@ fn decode_loop(
                 shared.frames_pushed.fetch_add(1, Ordering::AcqRel);
             }
             Err(sample) => {
-                // The ring is full, which is the healthy state. Hold the sample
-                // so it is not lost and wait for the callback to make room.
                 pending = Some(sample);
                 std::thread::sleep(DECODE_IDLE_NAP);
             }
@@ -458,22 +353,14 @@ fn decode_loop(
     }
 }
 
-/// Turns the item's rate and channel layout into the device's.
-///
-/// Linear interpolation between the two frames either side of the read
-/// position. Speed folds into the same step: playing twice as fast is
-/// advancing the read position twice as far per output frame.
 struct Converter {
     source_rate: f32,
     source_channels: usize,
     device_rate: f32,
     device_channels: usize,
-    /// The two source frames the current output frame sits between.
     previous: Vec<f32>,
     next: Vec<f32>,
-    /// How far between them, in source frames.
     fraction: f32,
-    /// The output frame being handed out one sample at a time.
     frame: Vec<f32>,
     emitted: usize,
     primed: bool,
@@ -507,7 +394,6 @@ impl Converter {
         self.done = false;
     }
 
-    /// The next device sample, or `None` once the source has run out.
     fn next(&mut self, source: &mut dyn SampleSource, speed: f32) -> Option<f32> {
         if self.emitted >= self.device_channels && !self.advance(source, speed) {
             return None;
@@ -517,8 +403,6 @@ impl Converter {
         Some(sample)
     }
 
-    /// Produces one output frame, pulling source frames until the read position
-    /// is between `previous` and `next`.
     fn advance(&mut self, source: &mut dyn SampleSource, speed: f32) -> bool {
         if self.done {
             return false;
@@ -556,8 +440,6 @@ impl Converter {
     }
 }
 
-/// Reads one interleaved source frame. `false` once the source is exhausted,
-/// including a partial frame at the end, which is not a frame.
 fn read_frame(source: &mut dyn SampleSource, frame: &mut [f32]) -> bool {
     for slot in frame.iter_mut() {
         match source.next() {
@@ -568,11 +450,6 @@ fn read_frame(source: &mut dyn SampleSource, frame: &mut [f32]) -> bool {
     true
 }
 
-/// One device channel, interpolated between two source frames.
-///
-/// Mono into anything wider plays on every channel; anything wider into mono
-/// is the mean of what the source has; otherwise channels line up by index and
-/// a device channel the source does not reach stays silent.
 fn map_channel(
     previous: &[f32],
     next: &[f32],
@@ -599,8 +476,6 @@ mod tests {
     use super::*;
     use crate::source::SamplesBuffer;
 
-    /// A sink's shared state as it is once the device has published a format,
-    /// which is what every position and end-of-item question is asked about.
     fn playing_at(device_rate: u32) -> Shared {
         let shared = Shared::new(1.0, 1.0);
         shared.paused.store(false, Ordering::Release);
@@ -626,8 +501,6 @@ mod tests {
     fn the_format_is_unknown_until_the_callback_publishes_it() {
         let shared = Shared::new(1.0, 1.0);
         assert_eq!(shared.device_format(), None);
-        // A position asked for before the first callback is the base, not a
-        // division by a rate of zero.
         shared.frames_written.store(24_000, Ordering::Relaxed);
         assert_eq!(shared.position(), Duration::ZERO);
 
@@ -646,8 +519,6 @@ mod tests {
         while let Some(sample) = converter.next(&mut *source, 1.0) {
             produced.push(sample);
         }
-        // The converter reads one frame ahead, so the last frame is the one it
-        // cannot interpolate past and is not emitted.
         assert_eq!(produced.len(), 4);
         for (index, sample) in produced.iter().enumerate() {
             assert!(

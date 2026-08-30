@@ -1,24 +1,3 @@
-//! Files dropped onto the canvas.
-//!
-//! A drag-and-drop is the browser's version of a share or a document intent:
-//! content arriving from outside the running composition, named and typed by
-//! whoever dropped it rather than picked through
-//! [`cranpose_services::FilePicker`]. It travels the same
-//! [`IncomingContent`] pipeline as an Android `ACTION_SEND` share (see
-//! `nativeOnIncomingContent` in `android_services.rs`), so application code
-//! that already collects [`cranpose_services::rememberIncomingContent`] sees
-//! a drop without knowing the web target exists.
-//!
-//! Reading a dropped `File`'s bytes uses `Blob.arrayBuffer()` rather than the
-//! `FileReader` dance `cranpose-services`' web file picker uses internally to
-//! read an `rfd::FileHandle`. `rfd` builds that handle from a `web_sys::File`
-//! through a constructor private to its own crate, so nothing outside it can
-//! wrap a dropped `File` the same way; `arrayBuffer()` is the promise-native
-//! read the picker's `FileReader` code predates, not a second, divergent
-//! reimplementation of it. Both paths still end at the same
-//! `BytesContent::new(ContentMetadata::named(name), bytes)` shape a picked
-//! file resolves through, by way of [`IncomingContent::content`].
-
 use std::rc::Rc;
 
 use cranpose_services::{IncomingContent, publish_incoming_content};
@@ -26,15 +5,10 @@ use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 use wasm_bindgen_futures::{JsFuture, spawn_local};
 use web_sys::{DragEvent, File, HtmlCanvasElement};
 
-/// Wires `dragenter`/`dragover`/`drop` on `canvas` so files dropped onto it
-/// arrive as [`IncomingContent`], and wakes `request_frame` once each is read.
 pub(crate) fn install(
     canvas: &HtmlCanvasElement,
     request_frame: Rc<dyn Fn()>,
 ) -> Result<(), JsValue> {
-    // A browser refuses to fire `drop` unless something upstream calls
-    // `prevent_default` on both `dragenter` and `dragover` — Firefox in
-    // particular ignores a drop whose `dragenter` was left at the default.
     for event_name in ["dragenter", "dragover"] {
         let closure = Closure::wrap(Box::new(move |event: DragEvent| {
             event.prevent_default();
@@ -71,8 +45,6 @@ pub(crate) fn install(
     Ok(())
 }
 
-/// Reads one dropped `File`'s bytes into an [`IncomingContent`], or reports
-/// why it could not be read and drops it.
 async fn read_dropped_file(file: File) -> Option<IncomingContent> {
     let name = file.name();
     let mime_type = file.type_();

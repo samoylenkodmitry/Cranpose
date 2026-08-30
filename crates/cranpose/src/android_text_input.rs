@@ -1,32 +1,3 @@
-//! Android IME bridge: real `InputConnection` support for text fields.
-//!
-//! A `NativeActivity` has no Java view overriding `onCreateInputConnection`,
-//! so IMEs run in fallback mode and can only deliver plain key events (the
-//! [`crate::android_keyboard`] `KeyCharacterMap` path). This module drives the
-//! `dev.cranpose.android.CranposeTextInput` Java helper, which attaches an
-//! invisible focusable view to the activity and returns a
-//! `BaseInputConnection` subclass when the soft keyboard opens. Editing
-//! operations flow back through the JNI callbacks below into an event queue
-//! drained by the Android main loop:
-//!
-//! - `commitText` → [`AndroidImeEvent::CommitText`] → `AppShell::on_paste`
-//! - `setComposingText` → [`AndroidImeEvent::SetComposingText`] →
-//!   `AppShell::on_ime_preedit`
-//! - `setComposingRegion` → [`AndroidImeEvent::SetComposingRegion`] →
-//!   `AppShell::on_ime_set_composing_region`
-//! - `finishComposingText` → [`AndroidImeEvent::FinishComposing`] →
-//!   `AppShell::on_ime_finish_composing`
-//! - `deleteSurroundingText` → [`AndroidImeEvent::DeleteSurrounding`] →
-//!   `AppShell::on_ime_delete_surrounding`
-//! - `sendKeyEvent` → [`AndroidImeEvent::Key`] → `AppShell::on_key_event`
-//! - `performEditorAction` → [`AndroidImeEvent::EditorAction`]
-//!
-//! The Java side keeps a UTF-16 `Editable` mirror so IME text queries are
-//! answered synchronously; the Rust text field remains the source of truth
-//! and pushes its state back through [`update_android_text_input_state`]
-//! (selection updates, or an input-session restart when the contents
-//! diverged). All boundary offsets are converted at this JNI layer: Rust
-//! works in UTF-8 bytes, Java in UTF-16 code units.
 #![allow(unsafe_code)]
 
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
@@ -45,59 +16,43 @@ use crate::android_jni::{
 
 const TEXT_INPUT_CLASS: &str = "dev/cranpose/android/CranposeTextInput";
 
-/// One editing operation forwarded from the Java `InputConnection`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum AndroidImeEvent {
-    /// `commitText`: replace the composing text (if any) with `text` and move
-    /// the cursor after it. `new_cursor_position` follows the Android
-    /// contract; values other than 1 are currently treated as 1 (cursor
-    /// after the committed text) and self-correct through the state sync.
     CommitText {
         text: String,
         new_cursor_position: i32,
     },
-    /// `setComposingText`: replace the current preedit with `text`;
-    /// `cursor_bytes` is the caret offset inside `text` in UTF-8 bytes.
-    SetComposingText { text: String, cursor_bytes: usize },
-    /// `setComposingRegion`: mark existing text as composing (UTF-8 bytes).
+    SetComposingText {
+        text: String,
+        cursor_bytes: usize,
+    },
     SetComposingRegion {
         start_bytes: usize,
         end_bytes: usize,
     },
-    /// `setSelection`: move the selection/caret without editing text (UTF-8
-    /// bytes). Gboard's spacebar-swipe cursor control scrubs the caret this way.
     SetSelection {
         start_bytes: usize,
         end_bytes: usize,
     },
-    /// `finishComposingText`: keep the composed text, clear the region.
     FinishComposing,
-    /// `deleteSurroundingText`, already converted to UTF-8 byte counts.
     DeleteSurrounding {
         before_bytes: usize,
         after_bytes: usize,
     },
-    /// `sendKeyEvent`: editing keys some IMEs deliver as key events
-    /// (backspace, enter). Raw Android values; translated by
-    /// [`crate::android_keyboard::ime_key_event`].
     Key {
         action: i32,
         key_code: i32,
         meta_state: i32,
         unicode_char: i32,
     },
-    /// `performEditorAction` with an `EditorInfo.IME_ACTION_*` code.
-    EditorAction { action: i32 },
-    /// The on-screen keyboard's height (physical px) at the bottom of the
-    /// window changed. `0` when the keyboard is hidden. Forwarded from a Java
-    /// `View.OnApplyWindowInsetsListener` / visible-frame listener so the shell
-    /// can expose it as IME insets to composition.
-    ImeInsetsChanged { bottom_px: i32 },
+    EditorAction {
+        action: i32,
+    },
+    ImeInsetsChanged {
+        bottom_px: i32,
+    },
 }
 
-/// Cross-thread queue for IME events (pushed on the Android UI thread,
-/// drained by the native main loop). Pushes wake the main-loop looper so
-/// events are handled without waiting for the next frame.
 pub(crate) struct AndroidImeEventQueue {
     events: Mutex<Vec<AndroidImeEvent>>,
     waker: OnceLock<AndroidAppWaker>,
@@ -111,8 +66,6 @@ impl AndroidImeEventQueue {
         }
     }
 
-    /// Installs the main-loop waker. Events pushed before this are delivered
-    /// on the next natural poll.
     pub(crate) fn set_waker(&self, waker: AndroidAppWaker) {
         let _ = self.waker.set(waker);
     }
@@ -135,7 +88,6 @@ impl AndroidImeEventQueue {
     }
 }
 
-/// Opaque `jlong` wrapper over a retained `Arc<AndroidImeEventQueue>`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct AndroidImeQueueHandle(jlong);
 
@@ -179,8 +131,6 @@ fn push_ime_event_for_handle(handle: jlong, event: AndroidImeEvent) {
     queue.push(event);
 }
 
-/// Converts a UTF-8 byte offset into `text` to UTF-16 code units, clamping
-/// into the valid range (and down to a character boundary).
 fn utf16_offset(text: &str, byte_offset: usize) -> i32 {
     let mut offset = byte_offset.min(text.len());
     while offset > 0 && !text.is_char_boundary(offset) {
@@ -189,12 +139,6 @@ fn utf16_offset(text: &str, byte_offset: usize) -> i32 {
     text[..offset].encode_utf16().count() as i32
 }
 
-/// Opens (or reseeds) the Java text-input session for the focused field.
-///
-/// Transfers one retained queue handle to Java on success; on failure the
-/// handle is released here. Errors are returned so the caller can fall back
-/// to the plain `show_soft_input` path (for apps that do not ship the
-/// `cranpose/android/java` sources).
 pub(crate) fn show_android_text_input(
     app: &android_activity::AndroidApp,
     queue: &Arc<AndroidImeEventQueue>,
@@ -244,8 +188,6 @@ pub(crate) fn show_android_text_input(
     }
 }
 
-/// Closes the Java text-input session (hides the IME, detaches the editor
-/// view, releases the queue handle owned by the session).
 pub(crate) fn hide_android_text_input(app: &android_activity::AndroidApp) -> Result<(), String> {
     with_android_activity_env(app, |env, activity| {
         let class = load_cranpose_java_class(env, &activity, TEXT_INPUT_CLASS)?;
@@ -263,9 +205,6 @@ pub(crate) fn hide_android_text_input(app: &android_activity::AndroidApp) -> Res
     })
 }
 
-/// Pushes the Rust-side editor state into the Java mirror. Java refreshes the
-/// IME's selection view, or restarts the input session when the text content
-/// diverged from the mirror.
 pub(crate) fn update_android_text_input_state(
     app: &android_activity::AndroidApp,
     state: &ImeEditorState,
@@ -307,10 +246,6 @@ pub(crate) fn update_android_text_input_state(
         Ok(())
     })
 }
-
-// ---------------------------------------------------------------------------
-// JNI callbacks from dev.cranpose.android.CranposeTextInput (UI thread)
-// ---------------------------------------------------------------------------
 
 fn jstring_to_string(env: &mut EnvUnowned<'_>, text: JString<'_>) -> Option<String> {
     match env
@@ -500,19 +435,15 @@ mod tests {
 
     #[test]
     fn utf16_offset_converts_and_clamps() {
-        // "aé漢x" - 'a'=1 byte/1 unit, 'é'=2 bytes/1 unit, '漢'=3 bytes/1 unit.
         let text = "a\u{00e9}\u{6f22}x";
         assert_eq!(utf16_offset(text, 0), 0);
         assert_eq!(utf16_offset(text, 1), 1);
         assert_eq!(utf16_offset(text, 3), 2);
         assert_eq!(utf16_offset(text, 6), 3);
         assert_eq!(utf16_offset(text, 7), 4);
-        // Past the end clamps to the full length.
         assert_eq!(utf16_offset(text, 100), 4);
-        // Mid-character offsets clamp down to the previous boundary.
         assert_eq!(utf16_offset(text, 2), 1);
         assert_eq!(utf16_offset(text, 4), 2);
-        // Supplementary-plane characters count as two UTF-16 units.
         let emoji = "\u{1f600}b";
         assert_eq!(utf16_offset(emoji, 4), 2);
         assert_eq!(utf16_offset(emoji, 5), 3);

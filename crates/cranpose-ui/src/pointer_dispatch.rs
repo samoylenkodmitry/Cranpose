@@ -1,23 +1,7 @@
-//! Pointer input dispatch manager for Cranpose.
-//!
-//! This module manages pointer input invalidations across the UI tree.
-//! Hit path tracking for gesture state preservation is handled by
-//! `AppShell::cached_hits` which caches hit targets on pointer DOWN
-//! and dispatches subsequent MOVE/UP events to the same cached nodes.
-
 use std::{cell::RefCell, collections::HashSet};
 
 use cranpose_core::NodeId;
 
-// ============================================================================
-// PointerDispatchManager - Invalidation tracking
-// ============================================================================
-
-/// Manages pointer input invalidations across the UI tree.
-///
-/// Similar to Kotlin's pointer input invalidation system, this tracks
-/// which layout nodes need pointer input reprocessing and provides
-/// hooks for the runtime to service those invalidations.
 struct PointerDispatchManager {
     dirty_nodes: HashSet<NodeId>,
     is_processing: bool,

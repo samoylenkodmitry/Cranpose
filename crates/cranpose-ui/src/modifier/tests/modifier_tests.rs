@@ -17,8 +17,6 @@ use super::{
     collect_slices_from_modifier, inspector_metadata, modifier_element,
 };
 
-/// Records a draw command into a fresh consumer-owned scope, the way the
-/// renderers do, and returns what it recorded.
 fn run_draw(func: &crate::draw::DrawCommandFn, size: Size) -> Vec<DrawPrimitive> {
     use cranpose_ui_graphics::DrawScope as _;
     let mut scope = crate::draw::command_draw_scope(size);
@@ -315,11 +313,9 @@ fn graphics_layer_modifier_creates_node() {
     };
     let modifier = Modifier::empty().graphics_layer(move || layer.clone());
 
-    // Graphics layer is now tracked in the modifier node chain, not ResolvedModifiers
     let mut handle = ModifierChainHandle::new();
     let _ = handle.update(&modifier);
 
-    // Verify the node exists in the chain by checking for DRAW capability
     let chain = handle.chain();
     let mut has_graphics_layer = false;
     chain.for_each_node_with_capability(
@@ -1681,7 +1677,6 @@ fn inspector_snapshot_includes_delegate_depth_and_capabilities() {
     );
     let mut handle = ModifierChainHandle::new();
     let _ = handle.update(&modifier);
-    // Use test-only method to populate snapshot without triggering global trace
     handle.refresh_inspector_snapshot(&modifier);
 
     let snapshot = handle.inspector_snapshot();
@@ -1960,7 +1955,6 @@ fn padding_relative_follows_the_direction_its_composition_provides() {
     {
         let (ltr, rtl) = (Rc::clone(&ltr), Rc::clone(&rtl));
         let mut render = move || {
-            // No provision: a composition reads left-to-right.
             ltr.set(resolved(
                 &Modifier::empty().padding_relative(16.0, 2.0, 4.0, 3.0),
             ));

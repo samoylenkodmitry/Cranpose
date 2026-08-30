@@ -12,7 +12,6 @@ pub fn color_to_rgba(color: Color) -> [f32; 4] {
     ]
 }
 
-/// One output level, the step an 8-bit render target quantises to.
 const LEVEL: f32 = 1.0 / 255.0;
 
 /// The ordered-dither offset a gradient gets at device pixel `(x, y)`, in
@@ -72,14 +71,6 @@ pub fn gradient_dither_offset(x: f32, y: f32) -> f32 {
     m as f32 * (1.0 / 16.0) - (15.0 / 32.0)
 }
 
-/// `rgba` with the gradient dither for `(x, y)` folded in.
-///
-/// Alpha is left alone — Skia perturbs only the colour channels — and the
-/// result is clamped, so a stop already at black or white cannot be pushed
-/// outside the gamut by half a level. A pixel the gradient did not paint at
-/// all is returned untouched: half a level of colour under zero alpha is
-/// invisible on screen but not in a buffer, and an empty gradient has to stay
-/// exactly transparent.
 fn dither_gradient(rgba: [f32; 4], x: f32, y: f32) -> [f32; 4] {
     if rgba[3] <= 0.0 {
         return rgba;
@@ -280,9 +271,6 @@ mod tests {
             Point::new(0.0, 0.0),
             Point::new(100.0, 0.0),
         );
-        // Past the end the stop is pure blue. The dither moves every channel
-        // by less than half a level, so the colour that reaches an 8-bit
-        // target is still pure blue whatever cell the pixel falls in.
         for y in 0..4 {
             for x in 0..4 {
                 let sampled = sample_brush_rgba(&brush, sample_rect(), 120.0 + x as f32, y as f32);
@@ -298,9 +286,6 @@ mod tests {
         assert_eq!(normalize_gradient_t(1.75, TileMode::Mirror), Some(0.25));
     }
 
-    /// The matrix, spelled out. Written down rather than recomputed from the
-    /// same bit-twiddle it is checking, so a "simplification" of the striping
-    /// has something to fail against.
     const BAYER_4X4: [[u32; 4]; 4] = [[0, 4, 1, 5], [8, 12, 9, 13], [2, 6, 3, 7], [10, 14, 11, 15]];
 
     #[test]
@@ -308,9 +293,6 @@ mod tests {
         for y in 0..4u32 {
             for x in 0..4u32 {
                 let expected = BAYER_4X4[y as usize][x as usize] as f32 / 16.0 - 15.0 / 32.0;
-                // The one-pixel phase is undone here, so this test is about the
-                // matrix and `the_dither_is_a_pixel_ahead_of_the_fragment` is
-                // about where it sits.
                 assert_eq!(
                     gradient_dither_offset(x as f32 - 1.0 + 4.0, y as f32 - 1.0 + 4.0),
                     expected,
@@ -346,8 +328,6 @@ mod tests {
             .flat_map(|y| (0..4).map(move |x| gradient_dither_offset(x as f32, y as f32)))
             .collect();
         assert!(offsets.iter().all(|offset| offset.abs() < 0.5));
-        // Half a level either way, and centred: the dither must not shift a
-        // gradient's average brightness, only break up where it steps.
         let mean = offsets.iter().sum::<f32>() / offsets.len() as f32;
         assert!(mean.abs() < 1e-6, "mean offset {mean}");
     }
@@ -367,9 +347,6 @@ mod tests {
 
     #[test]
     fn the_dither_moves_a_flat_gradient_off_one_value_onto_two() {
-        // A ramp so slow that a whole 4x4 block samples the same colour is
-        // exactly where undithered output bands. Rounded to bytes, the block
-        // has to come out as two neighbouring levels, not one flat one.
         let grey = 100.4 / 255.0;
         let brush = Brush::linear_gradient_range(
             vec![Color(grey, grey, grey, 1.0), Color(grey, grey, grey, 1.0)],

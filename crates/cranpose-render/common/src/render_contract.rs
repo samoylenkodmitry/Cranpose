@@ -22,16 +22,10 @@ const BACKGROUND_COLOR: Color = Color(18.0 / 255.0, 18.0 / 255.0, 24.0 / 255.0, 
 const FOREGROUND_COLOR: Color = Color::WHITE;
 const PIXEL_DIFFERENCE_TOLERANCE: u32 = 24;
 
-// These budgets sit just above the currently observed normalized diffs from both backends.
-// They still reject material subtree motion or distortion while tolerating the bounded edge drift
-// that comes from comparing root-space rasterization at different fractional translations.
 const TRANSLATED_SUBTREE_BUDGET: NormalizedDifferenceBudget = NormalizedDifferenceBudget {
     max_differing_pixels: 270,
     max_pixel_difference: 360,
 };
-// Active scroll motion intentionally remains unsnapped, while rested translated content snaps
-// through a shared content-origin anchor. The normalized comparison tolerates bounded active
-// motion drift while still catching material subtree regressions.
 const TRANSLATED_PLAIN_TEXT_BUDGET: NormalizedDifferenceBudget = NormalizedDifferenceBudget {
     max_differing_pixels: 550,
     max_pixel_difference: 360,
@@ -572,9 +566,6 @@ fn text_node_with_style(
     })
 }
 
-/// A stroked rounded rect must be *hollow*. Both backends evaluate the same
-/// stroke SDF, so a backend that quietly filled the shape instead would light
-/// up the center pixel and fail here.
 fn stroked_round_rect_fixture() -> RenderFixture {
     build_fixture(
         72,
@@ -596,12 +587,7 @@ fn stroked_round_rect_fixture() -> RenderFixture {
     )
 }
 
-/// An annular sector: a ring band cut to a quarter turn with flat radial ends.
-/// This is the shape a chain of circles cannot produce, so both backends must
-/// render the hole, the band and the two straight edges.
 fn annular_sector_fixture() -> RenderFixture {
-    // Center (36, 36), inner radius 12, outer radius 24, 0 -> 90 degrees, so
-    // the band occupies the +X/+Y quadrant in screen space.
     build_fixture(
         72,
         72,
@@ -673,7 +659,6 @@ fn assert_annular_sector_frame(pixels: &[u8], width: u32, height: u32) {
     assert_eq!((width, height), (72, 72));
     let background = sample_pixel(pixels, width, 2, 2);
 
-    // Centerline radius 18, inside the 0..90 degree sweep.
     assert_pixel_matches_background(
         pixels,
         width,
@@ -701,7 +686,6 @@ fn assert_annular_sector_frame(pixels: &[u8], width: u32, height: u32) {
         true,
         "the annulus hole must stay empty",
     );
-    // Same radius, but the other side of the flat radial start edge.
     assert_pixel_matches_background(
         pixels,
         width,
@@ -921,9 +905,6 @@ fn assert_normalized_region_matches(
         height,
         PIXEL_DIFFERENCE_TOLERANCE,
     );
-    // Fractional parent motion changes root-space sampling phase. The shared contract tolerates the
-    // bounded edge drift that both backends currently produce after normalization, while still
-    // rejecting regressions that move or distort the local picture materially.
     if stats.differing_pixels > budget.max_differing_pixels
         || stats.max_difference > budget.max_pixel_difference
     {

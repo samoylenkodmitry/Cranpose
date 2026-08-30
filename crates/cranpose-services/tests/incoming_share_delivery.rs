@@ -1,13 +1,3 @@
-//! A share must reach the application's collector no matter when it arrives:
-//! before the first composition, during one, or between two of them.
-//!
-//! These tests walk the same road the Android host walks:
-//! `publish_incoming_content` from a platform thread, and an application
-//! composition that collects `rememberIncomingContent()` with `CollectEvents`.
-//! They live in one file on purpose: the inbox is process-global, and this
-//! binary runs its tests one at a time via a shared lock so two tests never
-//! interleave their publishes.
-
 use std::{
     cell::RefCell,
     rc::Rc,

@@ -1,18 +1,3 @@
-//! Robot test for tab selection state visual changes
-//!
-//! This test validates that when a tab is clicked:
-//! 1. The clicked tab becomes visually selected (highlighted)
-//! 2. The previously selected tab becomes visually unselected
-//! 3. The content area changes to show the selected tab's content
-//!
-//! This test was created to catch a regression where clicks worked but
-//! visual state updates did not reflect in the UI.
-//!
-//! Run with:
-//! ```bash
-//! cargo run --package desktop-app --example robot_tab_selection --features robot-app
-//! ```
-
 use std::time::Duration;
 
 use cranpose::AppLauncher;
@@ -41,12 +26,10 @@ fn main() {
                 Err(e) => println!("Note: {}\n", e),
             }
 
-            // Helper to find tab button by text and return center coordinates
             let find_tab_center = |robot: &cranpose::Robot, name: &str| -> Option<(f32, f32)> {
                 find_button_in_semantics(robot, name).map(|(x, y, w, h)| (x + w / 2.0, y + h / 2.0))
             };
 
-            // Helper to check if content text exists
             let content_exists = |robot: &cranpose::Robot, text: &str| -> bool {
                 find_text_in_semantics(robot, text).is_some()
             };
@@ -63,8 +46,6 @@ fn main() {
 
             println!("--- Test 1: Verify Initial State (Counter App Tab) ---");
 
-            // Counter App should be initially selected
-            // We should see the "Counter App" tab and counter-related content
             if content_exists(&robot, "Counter:") || content_exists(&robot, "Increment") {
                 println!("  ✓ Counter App content is visible (initial state correct)");
             } else {
@@ -92,9 +73,7 @@ fn main() {
                 println!("  Active tab state after click: {:?}", active);
             }
 
-            // After clicking Async Runtime, we should see its content
             println!("\n--- Test 3: Verify Content Changed to Async Runtime ---");
-            // The Async Runtime tab should show "Pause" or "Resume" button, or animation status
             let async_content_visible = content_exists(&robot, "Pause")
                 || content_exists(&robot, "Resume")
                 || content_exists(&robot, "Animation")
@@ -106,7 +85,6 @@ fn main() {
                 println!("  ✗ FAIL: Async Runtime content NOT visible");
                 println!("        This indicates the UI did not update after click");
 
-                // Check what content IS visible
                 if content_exists(&robot, "Counter:") || content_exists(&robot, "Increment") {
                     println!("        Counter App content is still visible (stale UI)");
                 }
@@ -136,7 +114,6 @@ fn main() {
             }
 
             println!("\n--- Test 5: Verify Content Changed to Modifiers Showcase ---");
-            // The Modifiers Showcase tab should show showcase options like "Simple Card" etc.
             let showcase_content_visible = wait_for_text(&robot, "Select Showcase")
                 || content_exists(&robot, "Simple Card")
                 || content_exists(&robot, "Positioned Boxes")
@@ -180,7 +157,6 @@ fn main() {
                 }
             }
 
-            // Summary
             println!("\n=== Test Summary ===");
             if async_content_visible && showcase_content_visible && counter_content_visible {
                 println!("✓ ALL TESTS PASSED");

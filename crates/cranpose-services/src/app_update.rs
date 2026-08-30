@@ -397,15 +397,6 @@ pub fn app_update_checks_supported() -> bool {
     app_update_capabilities().check
 }
 
-/// Publishes a failure as the update status and hands it back.
-///
-/// Every way these two entry points can fail goes through here, so the
-/// observable status is the whole story: an application that only observes
-/// [`app_update_status`] sees a host that cannot check just as it sees a
-/// download that failed. Without this, the failures that never reach a
-/// backend — no updater registered, or one that does not claim this half —
-/// would return an error into a caller that has nowhere to put it, and every
-/// application would mirror the `Result` into the status by hand.
 fn publish_failure(error: AppUpdateError) -> Result<(), AppUpdateError> {
     set_app_update_status(AppUpdateStatus::Error(error.to_string()));
     Err(error)
@@ -614,8 +605,6 @@ mod tests {
         }
     }
 
-    /// The digest of the empty input, which is the one value every SHA-256
-    /// implementation agrees on and the one a broken wiring gets wrong.
     const EMPTY_SHA256: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
     const ABC_SHA256: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
 
@@ -670,7 +659,6 @@ mod tests {
         }
     }
 
-    /// A package can be larger than memory, so it is checked as it is read.
     #[test]
     fn a_package_read_in_chunks_verifies_the_same_as_one_read_whole() {
         let mut verifier =
@@ -735,9 +723,6 @@ mod tests {
         assert!(!app_updates_supported());
     }
 
-    /// Nobody waits for two hundred megabytes to learn the release feed was
-    /// misconfigured, and nothing reaches an installer unchecked because its
-    /// digest could not be read.
     #[test]
     fn a_package_with_an_uncheckable_digest_is_refused_before_it_is_downloaded() {
         let _guard = crate::registry::test_service_guard();
@@ -754,16 +739,10 @@ mod tests {
         clear_platform_app_updater();
     }
 
-    /// The defect a consumer application found: a host that cannot check or
-    /// install returned an error and published nothing, so a screen observing
-    /// the update status showed the state it was already in. Every failure
-    /// reaches the status, or an application has to mirror the `Result` into
-    /// it by hand — which is what the framework owning this is meant to stop.
     #[test]
     fn a_host_that_cannot_update_says_so_through_the_status_and_not_only_the_result() {
         let _guard = crate::registry::test_service_guard();
 
-        // No backend at all.
         clear_platform_app_updater();
         set_app_update_status(AppUpdateStatus::Idle);
         assert_eq!(
@@ -772,8 +751,6 @@ mod tests {
         );
         assert!(matches!(app_update_status(), AppUpdateStatus::Error(_)));
 
-        // A backend that discovers releases but cannot install one, which is
-        // every desktop and iOS host.
         struct CheckOnlyUpdater;
         impl AppUpdater for CheckOnlyUpdater {
             fn capabilities(&self) -> AppUpdateCapabilities {
@@ -800,8 +777,6 @@ mod tests {
         clear_platform_app_updater();
     }
 
-    /// An application replacing itself with bytes off the network is the one
-    /// download that must not be taken on trust.
     #[test]
     fn a_package_with_no_digest_at_all_never_reaches_the_installer() {
         let _guard = crate::registry::test_service_guard();

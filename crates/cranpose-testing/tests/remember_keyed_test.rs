@@ -1,8 +1,3 @@
-//! `rememberKeyed` contract: a slot reused with a DIFFERENT key re-runs
-//! its initializer, while a stable key never recomputes. The position-only
-//! `remember` served a stale parsed icon when the accordion's "Sections" row
-//! took over the slot of a row that had cached a chevron path.
-
 use std::{cell::Cell, rc::Rc};
 
 use cranpose_core::{MutableState, rememberKeyed};
@@ -47,12 +42,9 @@ fn remember_keyed_recomputes_on_key_change_only() {
     assert_eq!(init_runs.get(), 1);
     assert_eq!(seen.get(), "chevron".len());
 
-    // Same key: recomposition must NOT recompute.
     rule.pump_until_idle().expect("idle");
     assert_eq!(init_runs.get(), 1);
 
-    // The slot is reused with a different key: the value must be recomputed
-    // (the stale-icon class this API exists to prevent).
     key.set("list-outline");
     rule.pump_until_idle().expect("recompose after key change");
     assert_eq!(init_runs.get(), 2);

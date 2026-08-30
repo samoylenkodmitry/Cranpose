@@ -848,8 +848,6 @@ fn launched_effect_background_ignores_late_result_after_cancel() {
 
 #[test]
 fn launched_effect_relaunches_on_branch_change() {
-    // Test that LaunchedEffect with same key relaunches when switching if/else branches
-    // This matches Jetpack Compose behavior
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();
     let _state = MutableState::with_runtime(false, runtime.clone());
@@ -865,13 +863,11 @@ fn launched_effect_relaunches_on_branch_change() {
                 let runs = Arc::clone(&runs);
                 let recorded_scopes = Rc::clone(&recorded_scopes);
                 if show_first {
-                    // Branch A with LaunchedEffect("") - macro captures call site location
                     LaunchedEffect!("", move |scope| {
                         runs.fetch_add(1, Ordering::SeqCst);
                         recorded_scopes.borrow_mut().push((true, scope));
                     });
                 } else {
-                    // Branch B with LaunchedEffect("") - different call site, separate group
                     LaunchedEffect!("", move |scope| {
                         runs.fetch_add(1, Ordering::SeqCst);
                         recorded_scopes.borrow_mut().push((false, scope));
@@ -881,7 +877,6 @@ fn launched_effect_relaunches_on_branch_change() {
             .expect("render succeeds");
     };
 
-    // First render - branch A
     render(&mut composition, true);
     assert_eq!(runs.load(Ordering::SeqCst), 1, "First effect should run");
     {
@@ -891,7 +886,6 @@ fn launched_effect_relaunches_on_branch_change() {
         assert!(scopes[0].1.is_active());
     }
 
-    // Switch to branch B - should relaunch even with same key
     render(&mut composition, false);
     assert_eq!(
         runs.load(Ordering::SeqCst),
@@ -1209,7 +1203,6 @@ fn launched_effect_async_keeps_frames_after_backward_forward_flip() {
                 });
             }
 
-            // Touch stats to subscribe the current scope.
             let _stats = stats.value();
         }
     };
@@ -1581,9 +1574,6 @@ fn draining_callbacks_clears_needs_frame() {
     assert!(!runtime.needs_frame());
 }
 
-/// A future that parks on the first poll and is only ever resumed by waking
-/// the `Waker` it hands back, standing in for an effect waiting on a back
-/// gesture, a network reply, or any other off-frame event.
 struct ParkOnce {
     waker: Rc<RefCell<Option<std::task::Waker>>>,
     parked: bool,
@@ -1703,21 +1693,6 @@ fn disposing_scope_cancels_pending_frame_callback() {
     assert!(events.borrow().is_empty());
 }
 
-// ---- Effect keys are compared by value, not by hash digest ---------------
-//
-// `LaunchedEffect`/`LaunchedEffectAsync`/`DisposableEffect` mirror Jetpack
-// Compose's `remember(key1) { ... }` contract: whether to re-run is decided
-// by `equals()` on the key, i.e. exact structural equality. The tests below
-// pin a regression where the framework instead hashed the key to a `u64`
-// and compared digests, so two *distinct* keys that happened to hash
-// identically were wrongly treated as unchanged.
-
-/// A key whose `Hash` impl writes identical bytes for every value, so it
-/// produces the same digest under *any* correct `Hasher` regardless of
-/// `tag` — a genuine, deterministic collision rather than one found by
-/// chance, and stable across both hasher backends the crate can be built
-/// with (`ahash` by default, `DefaultHasher` under the `std-hash` feature).
-/// `PartialEq` still distinguishes values by `tag`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct HashCollidingKey {
     tag: u32,
@@ -1775,15 +1750,10 @@ fn disposable_effect_reruns_on_hash_colliding_but_unequal_keys() {
     assert_eq!(starts.get(), 1);
     assert_eq!(cleanups.get(), 0);
 
-    // Re-rendering with the same value must not relaunch, hashed digest or not.
     render(&mut composition);
     assert_eq!(starts.get(), 1);
     assert_eq!(cleanups.get(), 0);
 
-    // A distinct key whose digest collides with the previous one (proven by
-    // `hash_colliding_key_produces_identical_digests_for_unequal_values`).
-    // The digest comparison this test pins the regression of would have
-    // missed this change entirely; comparing by value must not.
     tag.set(2);
     render(&mut composition);
     assert_eq!(
@@ -1849,13 +1819,6 @@ fn launched_effect_reruns_on_hash_colliding_but_unequal_keys() {
     assert!(scopes[1].is_active());
 }
 
-// A keyed DisposableEffect whose key changes in the same recomposition pass
-// that removes its host must end that pass with the resource released. The
-// eager cleanup runs during composition, the replacement body is deferred to
-// the side-effect drain — if the removal lands between the two, the deferred
-// body must not acquire a resource that no live slot will ever dispose.
-// (Found live on a device: a camera restarted by exactly this interleaving
-// kept streaming behind an unrelated screen.)
 fn removal_races_keyed_effect_rerun(flip_key_first: bool) {
     thread_local! {
         static LIVE: Cell<i32> = const { Cell::new(0) };

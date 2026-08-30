@@ -1214,11 +1214,6 @@ fn gpu_stats_env_flag_is_not_process_cached() {
         "GPU stats env flag must not be latched in a process-global cache"
     );
 
-    // A cache does not have to be process-global to latch the toggle: a
-    // renderer that copies the answer into a struct field at construction
-    // freezes `debug.cranpose.gpu_stats` for its lifetime, while this test's
-    // name promises the opposite. The flag is read where it is used — once
-    // per sixty frames, so there is nothing to cache.
     let render_source = std::fs::read_to_string(crate_dir.join("src/render.rs"))
         .expect("failed to read WGPU renderer source");
     assert!(
@@ -1489,8 +1484,6 @@ fn text_rendering_uses_cached_raster_image_batches() {
 #[test]
 fn wgpu_text_system_uses_one_shared_state_for_measure_and_render() {
     let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    // The renderer's producer half lives in frontend.rs (text state, app
-    // context, scene); the shared-text-state contract spans both files.
     let source = format!(
         "{}{}",
         std::fs::read_to_string(crate_dir.join("src/lib.rs")).expect("failed to read lib.rs"),
@@ -1579,10 +1572,6 @@ fn wgpu_renderer_matches_shared_render_contracts() {
     }
 }
 
-/// The stroke/arc contract, isolated from the font-dependent text cases so a
-/// missing system font can never mask a geometry regression. These assertions
-/// are shared verbatim with the pixels backend, which is what proves the CPU
-/// rasterizer is not silently falling back to filled shapes.
 #[test]
 fn wgpu_renderer_matches_shared_stroke_and_arc_contracts() {
     let mut renderer = match support::headless_renderer() {
