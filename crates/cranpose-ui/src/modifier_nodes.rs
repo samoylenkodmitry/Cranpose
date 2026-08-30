@@ -158,6 +158,163 @@ fn hash_alignment<H: Hasher>(state: &mut H, alignment: Alignment) {
     hash_vertical_alignment(state, alignment.vertical);
 }
 
+macro_rules! impl_layout_modifier_node {
+    ($ty:ty) => {
+        impl ModifierNode for $ty {
+            fn as_layout_node(&self) -> Option<&dyn LayoutModifierNode> {
+                Some(self)
+            }
+
+            fn as_layout_node_mut(&mut self) -> Option<&mut dyn LayoutModifierNode> {
+                Some(self)
+            }
+        }
+    };
+    ($ty:ty, invalidate = $invalidation:expr) => {
+        impl ModifierNode for $ty {
+            fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
+                context.invalidate($invalidation);
+            }
+
+            fn as_layout_node(&self) -> Option<&dyn LayoutModifierNode> {
+                Some(self)
+            }
+
+            fn as_layout_node_mut(&mut self) -> Option<&mut dyn LayoutModifierNode> {
+                Some(self)
+            }
+        }
+    };
+}
+
+macro_rules! impl_draw_modifier_node {
+    ($ty:ty) => {
+        impl ModifierNode for $ty {
+            fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
+                context.invalidate(InvalidationKind::Draw);
+            }
+
+            fn as_draw_node(&self) -> Option<&dyn DrawModifierNode> {
+                Some(self)
+            }
+
+            fn as_draw_node_mut(&mut self) -> Option<&mut dyn DrawModifierNode> {
+                Some(self)
+            }
+        }
+
+        impl DrawModifierNode for $ty {
+            fn draw(&self, _draw_scope: &mut dyn DrawScope) {}
+        }
+    };
+}
+
+macro_rules! forward_intrinsics_to_child {
+    () => {
+        fn min_intrinsic_width(&self, measurable: &dyn Measurable, height: f32) -> f32 {
+            measurable.min_intrinsic_width(height)
+        }
+
+        fn max_intrinsic_width(&self, measurable: &dyn Measurable, height: f32) -> f32 {
+            measurable.max_intrinsic_width(height)
+        }
+
+        fn min_intrinsic_height(&self, measurable: &dyn Measurable, width: f32) -> f32 {
+            measurable.min_intrinsic_height(width)
+        }
+
+        fn max_intrinsic_height(&self, measurable: &dyn Measurable, width: f32) -> f32 {
+            measurable.max_intrinsic_height(width)
+        }
+    };
+}
+
+macro_rules! impl_sink_reporter_element {
+    ($element:ty, $node:ty) => {
+        impl ModifierNodeElement for $element {
+            type Node = $node;
+
+            fn create(&self) -> Self::Node {
+                <$node>::new(self.sink.clone())
+            }
+
+            fn update(&self, node: &mut Self::Node) {
+                node.sink = self.sink.clone();
+            }
+
+            fn capabilities(&self) -> NodeCapabilities {
+                NodeCapabilities::LAYOUT
+            }
+        }
+    };
+}
+
+fn measure_pass_through(
+    measurable: &dyn Measurable,
+    constraints: Constraints,
+    offset: impl FnOnce(Size) -> (f32, f32),
+) -> cranpose_ui_layout::LayoutModifierMeasureResult {
+    let placeable = measurable.measure(constraints);
+    let size = Size {
+        width: placeable.width(),
+        height: placeable.height(),
+    };
+    let (x, y) = offset(size);
+    cranpose_ui_layout::LayoutModifierMeasureResult::new(size, x, y)
+}
+
+fn attach_draw_observer(
+    node_id_cell: &Cell<Option<NodeId>>,
+    context: &mut dyn ModifierNodeContext,
+) {
+    node_id_cell.set(context.node_id());
+    context.invalidate(InvalidationKind::Draw);
+}
+
+fn detach_draw_observer(node_id_cell: &Cell<Option<NodeId>>) {
+    if let Some(node_id) = node_id_cell.replace(None) {
+        crate::render_state::clear_draw_observations_for_node(node_id);
+    }
+}
+
+enum SizeAxis {
+    Width,
+    Height,
+}
+
+fn size_intrinsic(
+    target: Constraints,
+    axis: SizeAxis,
+    enforce_incoming: bool,
+    cross: f32,
+    intrinsic: impl FnOnce(f32) -> f32,
+) -> f32 {
+    let (target_min, target_max, cross_min, cross_max) = match axis {
+        SizeAxis::Width => (
+            target.min_width,
+            target.max_width,
+            target.min_height,
+            target.max_height,
+        ),
+        SizeAxis::Height => (
+            target.min_height,
+            target.max_height,
+            target.min_width,
+            target.max_width,
+        ),
+    };
+    if target_min == target_max && target_max != f32::INFINITY {
+        target_max
+    } else {
+        let child_cross = if enforce_incoming {
+            cross
+        } else {
+            cross.clamp(cross_min, cross_max)
+        };
+        intrinsic(child_cross).clamp(target_min, target_max)
+    }
+}
+
 /// Node that adds padding around its content.
 #[derive(Debug)]
 pub struct PaddingNode {
@@ -184,19 +341,7 @@ impl DelegatableNode for PaddingNode {
     }
 }
 
-impl ModifierNode for PaddingNode {
-    fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
-        context.invalidate(cranpose_foundation::InvalidationKind::Layout);
-    }
-
-    fn as_layout_node(&self) -> Option<&dyn LayoutModifierNode> {
-        Some(self)
-    }
-
-    fn as_layout_node_mut(&mut self) -> Option<&mut dyn LayoutModifierNode> {
-        Some(self)
-    }
-}
+impl_layout_modifier_node!(PaddingNode, invalidate = InvalidationKind::Layout);
 
 impl LayoutModifierNode for PaddingNode {
     fn measure(
@@ -331,23 +476,7 @@ impl DelegatableNode for BackgroundNode {
     }
 }
 
-impl ModifierNode for BackgroundNode {
-    fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
-        context.invalidate(cranpose_foundation::InvalidationKind::Draw);
-    }
-
-    fn as_draw_node(&self) -> Option<&dyn DrawModifierNode> {
-        Some(self)
-    }
-
-    fn as_draw_node_mut(&mut self) -> Option<&mut dyn DrawModifierNode> {
-        Some(self)
-    }
-}
-
-impl DrawModifierNode for BackgroundNode {
-    fn draw(&self, _draw_scope: &mut dyn DrawScope) {}
-}
+impl_draw_modifier_node!(BackgroundNode);
 
 /// Element that creates and updates background nodes.
 #[derive(Debug, Clone, PartialEq)]
@@ -414,23 +543,7 @@ impl DelegatableNode for CornerShapeNode {
     }
 }
 
-impl ModifierNode for CornerShapeNode {
-    fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
-        context.invalidate(cranpose_foundation::InvalidationKind::Draw);
-    }
-
-    fn as_draw_node(&self) -> Option<&dyn DrawModifierNode> {
-        Some(self)
-    }
-
-    fn as_draw_node_mut(&mut self) -> Option<&mut dyn DrawModifierNode> {
-        Some(self)
-    }
-}
-
-impl DrawModifierNode for CornerShapeNode {
-    fn draw(&self, _draw_scope: &mut dyn DrawScope) {}
-}
+impl_draw_modifier_node!(CornerShapeNode);
 
 /// Element that creates and updates corner shape nodes.
 #[derive(Debug, Clone, PartialEq)]
@@ -555,14 +668,11 @@ impl DelegatableNode for GraphicsLayerNode {
 
 impl ModifierNode for GraphicsLayerNode {
     fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
-        self.node_id.set(context.node_id());
-        context.invalidate(cranpose_foundation::InvalidationKind::Draw);
+        attach_draw_observer(&self.node_id, context);
     }
 
     fn on_detach(&mut self) {
-        if let Some(node_id) = self.node_id.replace(None) {
-            crate::render_state::clear_draw_observations_for_node(node_id);
-        }
+        detach_draw_observer(&self.node_id);
     }
 }
 
@@ -760,19 +870,7 @@ impl DelegatableNode for SizeNode {
     }
 }
 
-impl ModifierNode for SizeNode {
-    fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
-        context.invalidate(cranpose_foundation::InvalidationKind::Layout);
-    }
-
-    fn as_layout_node(&self) -> Option<&dyn LayoutModifierNode> {
-        Some(self)
-    }
-
-    fn as_layout_node_mut(&mut self) -> Option<&mut dyn LayoutModifierNode> {
-        Some(self)
-    }
-}
+impl_layout_modifier_node!(SizeNode, invalidate = InvalidationKind::Layout);
 
 impl LayoutModifierNode for SizeNode {
     fn measure(
@@ -865,67 +963,43 @@ impl LayoutModifierNode for SizeNode {
     }
 
     fn min_intrinsic_width(&self, measurable: &dyn Measurable, height: f32) -> f32 {
-        let target = self.target_constraints();
-        if target.min_width == target.max_width && target.max_width != f32::INFINITY {
-            target.max_width
-        } else {
-            let child_height = if self.enforce_incoming {
-                height
-            } else {
-                height.clamp(target.min_height, target.max_height)
-            };
-            measurable
-                .min_intrinsic_width(child_height)
-                .clamp(target.min_width, target.max_width)
-        }
+        size_intrinsic(
+            self.target_constraints(),
+            SizeAxis::Width,
+            self.enforce_incoming,
+            height,
+            |h| measurable.min_intrinsic_width(h),
+        )
     }
 
     fn max_intrinsic_width(&self, measurable: &dyn Measurable, height: f32) -> f32 {
-        let target = self.target_constraints();
-        if target.min_width == target.max_width && target.max_width != f32::INFINITY {
-            target.max_width
-        } else {
-            let child_height = if self.enforce_incoming {
-                height
-            } else {
-                height.clamp(target.min_height, target.max_height)
-            };
-            measurable
-                .max_intrinsic_width(child_height)
-                .clamp(target.min_width, target.max_width)
-        }
+        size_intrinsic(
+            self.target_constraints(),
+            SizeAxis::Width,
+            self.enforce_incoming,
+            height,
+            |h| measurable.max_intrinsic_width(h),
+        )
     }
 
     fn min_intrinsic_height(&self, measurable: &dyn Measurable, width: f32) -> f32 {
-        let target = self.target_constraints();
-        if target.min_height == target.max_height && target.max_height != f32::INFINITY {
-            target.max_height
-        } else {
-            let child_width = if self.enforce_incoming {
-                width
-            } else {
-                width.clamp(target.min_width, target.max_width)
-            };
-            measurable
-                .min_intrinsic_height(child_width)
-                .clamp(target.min_height, target.max_height)
-        }
+        size_intrinsic(
+            self.target_constraints(),
+            SizeAxis::Height,
+            self.enforce_incoming,
+            width,
+            |w| measurable.min_intrinsic_height(w),
+        )
     }
 
     fn max_intrinsic_height(&self, measurable: &dyn Measurable, width: f32) -> f32 {
-        let target = self.target_constraints();
-        if target.min_height == target.max_height && target.max_height != f32::INFINITY {
-            target.max_height
-        } else {
-            let child_width = if self.enforce_incoming {
-                width
-            } else {
-                width.clamp(target.min_width, target.max_width)
-            };
-            measurable
-                .max_intrinsic_height(child_width)
-                .clamp(target.min_height, target.max_height)
-        }
+        size_intrinsic(
+            self.target_constraints(),
+            SizeAxis::Height,
+            self.enforce_incoming,
+            width,
+            |w| measurable.max_intrinsic_height(w),
+        )
     }
 }
 
@@ -1259,23 +1333,7 @@ impl DelegatableNode for AlphaNode {
     }
 }
 
-impl ModifierNode for AlphaNode {
-    fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
-        context.invalidate(cranpose_foundation::InvalidationKind::Draw);
-    }
-
-    fn as_draw_node(&self) -> Option<&dyn DrawModifierNode> {
-        Some(self)
-    }
-
-    fn as_draw_node_mut(&mut self) -> Option<&mut dyn DrawModifierNode> {
-        Some(self)
-    }
-}
-
-impl DrawModifierNode for AlphaNode {
-    fn draw(&self, _draw_scope: &mut dyn DrawScope) {}
-}
+impl_draw_modifier_node!(AlphaNode);
 
 /// Element that creates and updates alpha nodes.
 #[derive(Debug, Clone, PartialEq)]
@@ -1335,23 +1393,7 @@ impl DelegatableNode for ClipToBoundsNode {
     }
 }
 
-impl ModifierNode for ClipToBoundsNode {
-    fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
-        context.invalidate(cranpose_foundation::InvalidationKind::Draw);
-    }
-
-    fn as_draw_node(&self) -> Option<&dyn DrawModifierNode> {
-        Some(self)
-    }
-
-    fn as_draw_node_mut(&mut self) -> Option<&mut dyn DrawModifierNode> {
-        Some(self)
-    }
-}
-
-impl DrawModifierNode for ClipToBoundsNode {
-    fn draw(&self, _draw_scope: &mut dyn DrawScope) {}
-}
+impl_draw_modifier_node!(ClipToBoundsNode);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ClipToBoundsElement;
@@ -1418,15 +1460,7 @@ impl DelegatableNode for WindowRectReporterNode {
     }
 }
 
-impl ModifierNode for WindowRectReporterNode {
-    fn as_layout_node(&self) -> Option<&dyn LayoutModifierNode> {
-        Some(self)
-    }
-
-    fn as_layout_node_mut(&mut self) -> Option<&mut dyn LayoutModifierNode> {
-        Some(self)
-    }
-}
+impl_layout_modifier_node!(WindowRectReporterNode);
 
 impl LayoutModifierNode for WindowRectReporterNode {
     fn measure(
@@ -1435,15 +1469,7 @@ impl LayoutModifierNode for WindowRectReporterNode {
         measurable: &dyn Measurable,
         constraints: Constraints,
     ) -> cranpose_ui_layout::LayoutModifierMeasureResult {
-        let placeable = measurable.measure(constraints);
-        cranpose_ui_layout::LayoutModifierMeasureResult::new(
-            Size {
-                width: placeable.width(),
-                height: placeable.height(),
-            },
-            0.0,
-            0.0,
-        )
+        measure_pass_through(measurable, constraints, |_| (0.0, 0.0))
     }
 }
 
@@ -1484,21 +1510,7 @@ impl Hash for WindowRectReporterElement {
     }
 }
 
-impl ModifierNodeElement for WindowRectReporterElement {
-    type Node = WindowRectReporterNode;
-
-    fn create(&self) -> Self::Node {
-        WindowRectReporterNode::new(self.sink.clone())
-    }
-
-    fn update(&self, node: &mut Self::Node) {
-        node.sink = self.sink.clone();
-    }
-
-    fn capabilities(&self) -> NodeCapabilities {
-        NodeCapabilities::LAYOUT
-    }
-}
+impl_sink_reporter_element!(WindowRectReporterElement, WindowRectReporterNode);
 
 pub trait SizeSink {
     fn set(&self, size: Size);
@@ -1565,15 +1577,7 @@ impl DelegatableNode for SizeReporterNode {
     }
 }
 
-impl ModifierNode for SizeReporterNode {
-    fn as_layout_node(&self) -> Option<&dyn LayoutModifierNode> {
-        Some(self)
-    }
-
-    fn as_layout_node_mut(&mut self) -> Option<&mut dyn LayoutModifierNode> {
-        Some(self)
-    }
-}
+impl_layout_modifier_node!(SizeReporterNode);
 
 impl LayoutModifierNode for SizeReporterNode {
     fn measure(
@@ -1582,15 +1586,12 @@ impl LayoutModifierNode for SizeReporterNode {
         measurable: &dyn Measurable,
         constraints: Constraints,
     ) -> cranpose_ui_layout::LayoutModifierMeasureResult {
-        let placeable = measurable.measure(constraints);
-        let size = Size {
-            width: placeable.width(),
-            height: placeable.height(),
-        };
-        #[cfg(debug_assertions)]
-        self.check_oscillation(size);
-        self.sink.set(size);
-        cranpose_ui_layout::LayoutModifierMeasureResult::new(size, 0.0, 0.0)
+        measure_pass_through(measurable, constraints, |size| {
+            #[cfg(debug_assertions)]
+            self.check_oscillation(size);
+            self.sink.set(size);
+            (0.0, 0.0)
+        })
     }
 }
 
@@ -1629,21 +1630,7 @@ impl Hash for SizeReporterElement {
     }
 }
 
-impl ModifierNodeElement for SizeReporterElement {
-    type Node = SizeReporterNode;
-
-    fn create(&self) -> Self::Node {
-        SizeReporterNode::new(self.sink.clone())
-    }
-
-    fn update(&self, node: &mut Self::Node) {
-        node.sink = self.sink.clone();
-    }
-
-    fn capabilities(&self) -> NodeCapabilities {
-        NodeCapabilities::LAYOUT
-    }
-}
+impl_sink_reporter_element!(SizeReporterElement, SizeReporterNode);
 
 pub struct DrawCommandNode {
     commands: Vec<DrawCommand>,
@@ -1684,14 +1671,11 @@ impl DelegatableNode for DrawCommandNode {
 
 impl ModifierNode for DrawCommandNode {
     fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
-        self.node_id.set(context.node_id());
-        context.invalidate(cranpose_foundation::InvalidationKind::Draw);
+        attach_draw_observer(&self.node_id, context);
     }
 
     fn on_detach(&mut self) {
-        if let Some(node_id) = self.node_id.replace(None) {
-            crate::render_state::clear_draw_observations_for_node(node_id);
-        }
+        detach_draw_observer(&self.node_id);
     }
 
     fn as_draw_node(&self) -> Option<&dyn DrawModifierNode> {
@@ -1853,19 +1837,7 @@ impl DelegatableNode for OffsetNode {
     }
 }
 
-impl ModifierNode for OffsetNode {
-    fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
-        context.invalidate(cranpose_foundation::InvalidationKind::Layout);
-    }
-
-    fn as_layout_node(&self) -> Option<&dyn LayoutModifierNode> {
-        Some(self)
-    }
-
-    fn as_layout_node_mut(&mut self) -> Option<&mut dyn LayoutModifierNode> {
-        Some(self)
-    }
-}
+impl_layout_modifier_node!(OffsetNode, invalidate = InvalidationKind::Layout);
 
 impl LayoutModifierNode for OffsetNode {
     fn measure(
@@ -1874,33 +1846,10 @@ impl LayoutModifierNode for OffsetNode {
         measurable: &dyn Measurable,
         constraints: Constraints,
     ) -> cranpose_ui_layout::LayoutModifierMeasureResult {
-        let placeable = measurable.measure(constraints);
-
-        cranpose_ui_layout::LayoutModifierMeasureResult::new(
-            Size {
-                width: placeable.width(),
-                height: placeable.height(),
-            },
-            self.x,
-            self.y,
-        )
+        measure_pass_through(measurable, constraints, |_| (self.x, self.y))
     }
 
-    fn min_intrinsic_width(&self, measurable: &dyn Measurable, height: f32) -> f32 {
-        measurable.min_intrinsic_width(height)
-    }
-
-    fn max_intrinsic_width(&self, measurable: &dyn Measurable, height: f32) -> f32 {
-        measurable.max_intrinsic_width(height)
-    }
-
-    fn min_intrinsic_height(&self, measurable: &dyn Measurable, width: f32) -> f32 {
-        measurable.min_intrinsic_height(width)
-    }
-
-    fn max_intrinsic_height(&self, measurable: &dyn Measurable, width: f32) -> f32 {
-        measurable.max_intrinsic_height(width)
-    }
+    forward_intrinsics_to_child!();
 }
 
 /// Element that creates and updates offset nodes.
@@ -1988,19 +1937,7 @@ impl DelegatableNode for FractionalOffsetNode {
     }
 }
 
-impl ModifierNode for FractionalOffsetNode {
-    fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
-        context.invalidate(cranpose_foundation::InvalidationKind::Layout);
-    }
-
-    fn as_layout_node(&self) -> Option<&dyn LayoutModifierNode> {
-        Some(self)
-    }
-
-    fn as_layout_node_mut(&mut self) -> Option<&mut dyn LayoutModifierNode> {
-        Some(self)
-    }
-}
+impl_layout_modifier_node!(FractionalOffsetNode, invalidate = InvalidationKind::Layout);
 
 impl LayoutModifierNode for FractionalOffsetNode {
     fn measure(
@@ -2009,33 +1946,12 @@ impl LayoutModifierNode for FractionalOffsetNode {
         measurable: &dyn Measurable,
         constraints: Constraints,
     ) -> cranpose_ui_layout::LayoutModifierMeasureResult {
-        let placeable = measurable.measure(constraints);
-
-        cranpose_ui_layout::LayoutModifierMeasureResult::new(
-            Size {
-                width: placeable.width(),
-                height: placeable.height(),
-            },
-            self.x_fraction * placeable.width(),
-            self.y_fraction * placeable.height(),
-        )
+        measure_pass_through(measurable, constraints, |size| {
+            (self.x_fraction * size.width, self.y_fraction * size.height)
+        })
     }
 
-    fn min_intrinsic_width(&self, measurable: &dyn Measurable, height: f32) -> f32 {
-        measurable.min_intrinsic_width(height)
-    }
-
-    fn max_intrinsic_width(&self, measurable: &dyn Measurable, height: f32) -> f32 {
-        measurable.max_intrinsic_width(height)
-    }
-
-    fn min_intrinsic_height(&self, measurable: &dyn Measurable, width: f32) -> f32 {
-        measurable.min_intrinsic_height(width)
-    }
-
-    fn max_intrinsic_height(&self, measurable: &dyn Measurable, width: f32) -> f32 {
-        measurable.max_intrinsic_height(width)
-    }
+    forward_intrinsics_to_child!();
 }
 
 /// Element that creates and updates fractional offset nodes.
@@ -2127,19 +2043,7 @@ impl DelegatableNode for FillNode {
     }
 }
 
-impl ModifierNode for FillNode {
-    fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
-        context.invalidate(cranpose_foundation::InvalidationKind::Layout);
-    }
-
-    fn as_layout_node(&self) -> Option<&dyn LayoutModifierNode> {
-        Some(self)
-    }
-
-    fn as_layout_node_mut(&mut self) -> Option<&mut dyn LayoutModifierNode> {
-        Some(self)
-    }
-}
+impl_layout_modifier_node!(FillNode, invalidate = InvalidationKind::Layout);
 
 impl LayoutModifierNode for FillNode {
     fn measure(
@@ -2211,21 +2115,7 @@ impl LayoutModifierNode for FillNode {
         })
     }
 
-    fn min_intrinsic_width(&self, measurable: &dyn Measurable, height: f32) -> f32 {
-        measurable.min_intrinsic_width(height)
-    }
-
-    fn max_intrinsic_width(&self, measurable: &dyn Measurable, height: f32) -> f32 {
-        measurable.max_intrinsic_width(height)
-    }
-
-    fn min_intrinsic_height(&self, measurable: &dyn Measurable, width: f32) -> f32 {
-        measurable.min_intrinsic_height(width)
-    }
-
-    fn max_intrinsic_height(&self, measurable: &dyn Measurable, width: f32) -> f32 {
-        measurable.max_intrinsic_height(width)
-    }
+    forward_intrinsics_to_child!();
 }
 
 /// Element that creates and updates fill nodes.

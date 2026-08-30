@@ -2085,28 +2085,45 @@ fn apply_line_overflow<M: TextMeasurer + ?Sized>(
     }
 }
 
+fn measured_width<M: TextMeasurer + ?Sized>(measurer: &M, text: &str, style: &TextStyle) -> f32 {
+    measurer
+        .measure(&crate::text::AnnotatedString::from(text), style)
+        .width
+}
+
+enum EllipsisTruncation {
+    NotNeeded,
+    ImpossibleFit,
+    Truncate(Vec<usize>),
+}
+
+fn ellipsis_truncation<M: TextMeasurer + ?Sized>(
+    measurer: &M,
+    line: &str,
+    style: &TextStyle,
+    max_width: f32,
+) -> EllipsisTruncation {
+    if measured_width(measurer, line, style) <= max_width + WRAP_EPSILON {
+        return EllipsisTruncation::NotNeeded;
+    }
+    if measured_width(measurer, ELLIPSIS, style) > max_width + WRAP_EPSILON {
+        return EllipsisTruncation::ImpossibleFit;
+    }
+    EllipsisTruncation::Truncate(char_boundaries(line))
+}
+
 fn fit_end_ellipsis<M: TextMeasurer + ?Sized>(
     measurer: &M,
     line: &str,
     style: &TextStyle,
     max_width: f32,
 ) -> String {
-    if measurer
-        .measure(&crate::text::AnnotatedString::from(line), style)
-        .width
-        <= max_width + WRAP_EPSILON
-    {
-        return line.to_string();
-    }
+    let boundaries = match ellipsis_truncation(measurer, line, style, max_width) {
+        EllipsisTruncation::NotNeeded => return line.to_string(),
+        EllipsisTruncation::ImpossibleFit => return String::new(),
+        EllipsisTruncation::Truncate(boundaries) => boundaries,
+    };
 
-    let ellipsis_width = measurer
-        .measure(&crate::text::AnnotatedString::from(ELLIPSIS), style)
-        .width;
-    if ellipsis_width > max_width + WRAP_EPSILON {
-        return String::new();
-    }
-
-    let boundaries = char_boundaries(line);
     let mut low = 0usize;
     let mut high = boundaries.len() - 1;
     let mut best = 0usize;
@@ -2115,13 +2132,7 @@ fn fit_end_ellipsis<M: TextMeasurer + ?Sized>(
         let mid = (low + high) / 2;
         let prefix = &line[..boundaries[mid]];
         let candidate = format!("{prefix}{ELLIPSIS}");
-        let width = measurer
-            .measure(
-                &crate::text::AnnotatedString::from(candidate.as_str()),
-                style,
-            )
-            .width;
-        if width <= max_width + WRAP_EPSILON {
+        if measured_width(measurer, &candidate, style) <= max_width + WRAP_EPSILON {
             best = mid;
             low = mid + 1;
         } else if mid == 0 {
@@ -2140,22 +2151,12 @@ fn fit_start_ellipsis<M: TextMeasurer + ?Sized>(
     style: &TextStyle,
     max_width: f32,
 ) -> String {
-    if measurer
-        .measure(&crate::text::AnnotatedString::from(line), style)
-        .width
-        <= max_width + WRAP_EPSILON
-    {
-        return line.to_string();
-    }
+    let boundaries = match ellipsis_truncation(measurer, line, style, max_width) {
+        EllipsisTruncation::NotNeeded => return line.to_string(),
+        EllipsisTruncation::ImpossibleFit => return String::new(),
+        EllipsisTruncation::Truncate(boundaries) => boundaries,
+    };
 
-    let ellipsis_width = measurer
-        .measure(&crate::text::AnnotatedString::from(ELLIPSIS), style)
-        .width;
-    if ellipsis_width > max_width + WRAP_EPSILON {
-        return String::new();
-    }
-
-    let boundaries = char_boundaries(line);
     let mut low = 0usize;
     let mut high = boundaries.len() - 1;
     let mut best = boundaries.len() - 1;
@@ -2164,13 +2165,7 @@ fn fit_start_ellipsis<M: TextMeasurer + ?Sized>(
         let mid = (low + high) / 2;
         let suffix = &line[boundaries[mid]..];
         let candidate = format!("{ELLIPSIS}{suffix}");
-        let width = measurer
-            .measure(
-                &crate::text::AnnotatedString::from(candidate.as_str()),
-                style,
-            )
-            .width;
-        if width <= max_width + WRAP_EPSILON {
+        if measured_width(measurer, &candidate, style) <= max_width + WRAP_EPSILON {
             best = mid;
             if mid == 0 {
                 break;
@@ -2190,22 +2185,12 @@ fn fit_middle_ellipsis<M: TextMeasurer + ?Sized>(
     style: &TextStyle,
     max_width: f32,
 ) -> String {
-    if measurer
-        .measure(&crate::text::AnnotatedString::from(line), style)
-        .width
-        <= max_width + WRAP_EPSILON
-    {
-        return line.to_string();
-    }
+    let boundaries = match ellipsis_truncation(measurer, line, style, max_width) {
+        EllipsisTruncation::NotNeeded => return line.to_string(),
+        EllipsisTruncation::ImpossibleFit => return String::new(),
+        EllipsisTruncation::Truncate(boundaries) => boundaries,
+    };
 
-    let ellipsis_width = measurer
-        .measure(&crate::text::AnnotatedString::from(ELLIPSIS), style)
-        .width;
-    if ellipsis_width > max_width + WRAP_EPSILON {
-        return String::new();
-    }
-
-    let boundaries = char_boundaries(line);
     let total_chars = boundaries.len().saturating_sub(1);
     for keep in (0..=total_chars).rev() {
         let keep_start = keep.div_ceil(2);
@@ -2214,14 +2199,7 @@ fn fit_middle_ellipsis<M: TextMeasurer + ?Sized>(
         let end_start = boundaries[total_chars.saturating_sub(keep_end)];
         let end = &line[end_start..];
         let candidate = format!("{start}{ELLIPSIS}{end}");
-        if measurer
-            .measure(
-                &crate::text::AnnotatedString::from(candidate.as_str()),
-                style,
-            )
-            .width
-            <= max_width + WRAP_EPSILON
-        {
+        if measured_width(measurer, &candidate, style) <= max_width + WRAP_EPSILON {
             return candidate;
         }
     }
@@ -2455,6 +2433,34 @@ mod tests {
         }
     }
 
+    fn monospaced_measure(text: &crate::text::AnnotatedString, style: &TextStyle) -> TextMetrics {
+        MonospacedTextMeasurer.measure(text, style)
+    }
+
+    fn monospaced_offset_for_position(
+        text: &crate::text::AnnotatedString,
+        style: &TextStyle,
+        x: f32,
+        y: f32,
+    ) -> usize {
+        MonospacedTextMeasurer.get_offset_for_position(text, style, x, y)
+    }
+
+    fn monospaced_cursor_x_for_offset(
+        text: &crate::text::AnnotatedString,
+        style: &TextStyle,
+        offset: usize,
+    ) -> f32 {
+        MonospacedTextMeasurer.get_cursor_x_for_offset(text, style, offset)
+    }
+
+    fn monospaced_layout(
+        text: &crate::text::AnnotatedString,
+        style: &TextStyle,
+    ) -> TextLayoutResult {
+        MonospacedTextMeasurer.layout(text, style)
+    }
+
     struct CountingTextMeasurer {
         measure_calls: Rc<Cell<usize>>,
         layout_calls: Rc<Cell<usize>>,
@@ -2472,7 +2478,7 @@ mod tests {
     impl TextMeasurer for CountingTextMeasurer {
         fn measure(&self, text: &crate::text::AnnotatedString, style: &TextStyle) -> TextMetrics {
             self.measure_calls.set(self.measure_calls.get() + 1);
-            MonospacedTextMeasurer.measure(text, style)
+            monospaced_measure(text, style)
         }
 
         fn get_offset_for_position(
@@ -2482,7 +2488,7 @@ mod tests {
             x: f32,
             y: f32,
         ) -> usize {
-            MonospacedTextMeasurer.get_offset_for_position(text, style, x, y)
+            monospaced_offset_for_position(text, style, x, y)
         }
 
         fn get_cursor_x_for_offset(
@@ -2491,7 +2497,7 @@ mod tests {
             style: &TextStyle,
             offset: usize,
         ) -> f32 {
-            MonospacedTextMeasurer.get_cursor_x_for_offset(text, style, offset)
+            monospaced_cursor_x_for_offset(text, style, offset)
         }
 
         fn layout(
@@ -2500,7 +2506,7 @@ mod tests {
             style: &TextStyle,
         ) -> TextLayoutResult {
             self.layout_calls.set(self.layout_calls.get() + 1);
-            MonospacedTextMeasurer.layout(text, style)
+            monospaced_layout(text, style)
         }
     }
 
@@ -2530,7 +2536,7 @@ mod tests {
 
     impl TextMeasurer for PrefixWidthCountingMeasurer {
         fn measure(&self, text: &crate::text::AnnotatedString, style: &TextStyle) -> TextMetrics {
-            MonospacedTextMeasurer.measure(text, style)
+            monospaced_measure(text, style)
         }
 
         fn measure_subsequence(
@@ -2560,7 +2566,7 @@ mod tests {
             x: f32,
             y: f32,
         ) -> usize {
-            MonospacedTextMeasurer.get_offset_for_position(text, style, x, y)
+            monospaced_offset_for_position(text, style, x, y)
         }
 
         fn get_cursor_x_for_offset(
@@ -2569,7 +2575,7 @@ mod tests {
             style: &TextStyle,
             offset: usize,
         ) -> f32 {
-            MonospacedTextMeasurer.get_cursor_x_for_offset(text, style, offset)
+            monospaced_cursor_x_for_offset(text, style, offset)
         }
 
         fn layout(
@@ -2577,7 +2583,7 @@ mod tests {
             text: &crate::text::AnnotatedString,
             style: &TextStyle,
         ) -> TextLayoutResult {
-            MonospacedTextMeasurer.layout(text, style)
+            monospaced_layout(text, style)
         }
     }
 
@@ -2612,7 +2618,7 @@ mod tests {
     impl TextMeasurer for LineHeightCountingMeasurer {
         fn measure(&self, text: &crate::text::AnnotatedString, style: &TextStyle) -> TextMetrics {
             self.measure_calls.set(self.measure_calls.get() + 1);
-            MonospacedTextMeasurer.measure(text, style)
+            monospaced_measure(text, style)
         }
 
         fn measure_line_prefix_widths(
@@ -2636,7 +2642,7 @@ mod tests {
             x: f32,
             y: f32,
         ) -> usize {
-            MonospacedTextMeasurer.get_offset_for_position(text, style, x, y)
+            monospaced_offset_for_position(text, style, x, y)
         }
 
         fn get_cursor_x_for_offset(
@@ -2645,7 +2651,7 @@ mod tests {
             style: &TextStyle,
             offset: usize,
         ) -> f32 {
-            MonospacedTextMeasurer.get_cursor_x_for_offset(text, style, offset)
+            monospaced_cursor_x_for_offset(text, style, offset)
         }
 
         fn layout(
@@ -2653,13 +2659,13 @@ mod tests {
             text: &crate::text::AnnotatedString,
             style: &TextStyle,
         ) -> TextLayoutResult {
-            MonospacedTextMeasurer.layout(text, style)
+            monospaced_layout(text, style)
         }
     }
 
     impl TextMeasurer for FitProbeCountingMeasurer {
         fn measure(&self, text: &crate::text::AnnotatedString, style: &TextStyle) -> TextMetrics {
-            MonospacedTextMeasurer.measure(text, style)
+            monospaced_measure(text, style)
         }
 
         fn measure_line_width(
@@ -2689,7 +2695,7 @@ mod tests {
             x: f32,
             y: f32,
         ) -> usize {
-            MonospacedTextMeasurer.get_offset_for_position(text, style, x, y)
+            monospaced_offset_for_position(text, style, x, y)
         }
 
         fn get_cursor_x_for_offset(
@@ -2698,7 +2704,7 @@ mod tests {
             style: &TextStyle,
             offset: usize,
         ) -> f32 {
-            MonospacedTextMeasurer.get_cursor_x_for_offset(text, style, offset)
+            monospaced_cursor_x_for_offset(text, style, offset)
         }
 
         fn layout(
@@ -2706,13 +2712,13 @@ mod tests {
             text: &crate::text::AnnotatedString,
             style: &TextStyle,
         ) -> TextLayoutResult {
-            MonospacedTextMeasurer.layout(text, style)
+            monospaced_layout(text, style)
         }
     }
 
     impl TextMeasurer for CountingPreparedTextMeasurer {
         fn measure(&self, text: &crate::text::AnnotatedString, style: &TextStyle) -> TextMetrics {
-            MonospacedTextMeasurer.measure(text, style)
+            monospaced_measure(text, style)
         }
 
         fn prepare_with_options_for_node(
@@ -2734,7 +2740,7 @@ mod tests {
             x: f32,
             y: f32,
         ) -> usize {
-            MonospacedTextMeasurer.get_offset_for_position(text, style, x, y)
+            monospaced_offset_for_position(text, style, x, y)
         }
 
         fn get_cursor_x_for_offset(
@@ -2743,7 +2749,7 @@ mod tests {
             style: &TextStyle,
             offset: usize,
         ) -> f32 {
-            MonospacedTextMeasurer.get_cursor_x_for_offset(text, style, offset)
+            monospaced_cursor_x_for_offset(text, style, offset)
         }
 
         fn layout(
@@ -2751,7 +2757,7 @@ mod tests {
             text: &crate::text::AnnotatedString,
             style: &TextStyle,
         ) -> TextLayoutResult {
-            MonospacedTextMeasurer.layout(text, style)
+            monospaced_layout(text, style)
         }
     }
 

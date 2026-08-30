@@ -393,6 +393,54 @@ fn PrimitiveScrollReactiveStoriesBranch(list_state: LazyListState, captures: Cap
 }
 
 #[composable]
+fn PrimitiveLazyColumnWithScrollIndicator(
+    list_state: LazyListState,
+    captures: CapturedLazyListSlot,
+) {
+    let captures = captures.clone();
+    Row(
+        Modifier::empty().fill_max_width().weight(1.0),
+        RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(8.0)),
+        move || {
+            let captures = captures.clone();
+            Column(
+                Modifier::empty().weight(1.0).fill_max_height(),
+                ColumnSpec::default(),
+                move || {
+                    let node_id = LazyColumn(
+                        Modifier::empty().fill_max_size(),
+                        list_state,
+                        LazyColumnSpec::default(),
+                        |scope| {
+                            scope.items(40, |index| {
+                                Text(
+                                    format!("Item {}", index),
+                                    Modifier::empty(),
+                                    TextStyle::default(),
+                                );
+                            });
+                        },
+                    );
+                    *captures.state.borrow_mut() = Some(list_state);
+                    *captures.node_id.borrow_mut() = Some(node_id);
+                },
+            );
+            Column(
+                Modifier::empty().width(28.0).fill_max_height(),
+                ColumnSpec::default(),
+                move || {
+                    Text(
+                        format!("At {}", list_state.first_visible_item_index()),
+                        Modifier::empty(),
+                        TextStyle::default(),
+                    );
+                },
+            );
+        },
+    );
+}
+
+#[composable]
 fn PrimitiveStoriesPaneWithIndicator(
     modifier: Modifier,
     list_state: LazyListState,
@@ -404,47 +452,7 @@ fn PrimitiveStoriesPaneWithIndicator(
         move || {
             Text("Top stories", Modifier::empty(), TextStyle::default());
             Text("40 loaded of 40", Modifier::empty(), TextStyle::default());
-            let captures = captures.clone();
-            Row(
-                Modifier::empty().fill_max_width().weight(1.0),
-                RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(8.0)),
-                move || {
-                    let captures = captures.clone();
-                    Column(
-                        Modifier::empty().weight(1.0).fill_max_height(),
-                        ColumnSpec::default(),
-                        move || {
-                            let node_id = LazyColumn(
-                                Modifier::empty().fill_max_size(),
-                                list_state,
-                                LazyColumnSpec::default(),
-                                |scope| {
-                                    scope.items(40, |index| {
-                                        Text(
-                                            format!("Item {}", index),
-                                            Modifier::empty(),
-                                            TextStyle::default(),
-                                        );
-                                    });
-                                },
-                            );
-                            *captures.state.borrow_mut() = Some(list_state);
-                            *captures.node_id.borrow_mut() = Some(node_id);
-                        },
-                    );
-                    Column(
-                        Modifier::empty().width(28.0).fill_max_height(),
-                        ColumnSpec::default(),
-                        move || {
-                            Text(
-                                format!("At {}", list_state.first_visible_item_index()),
-                                Modifier::empty(),
-                                TextStyle::default(),
-                            );
-                        },
-                    );
-                },
-            );
+            PrimitiveLazyColumnWithScrollIndicator(list_state, captures.clone());
         },
     );
 }
@@ -466,49 +474,18 @@ fn PrimitiveStoriesPaneWithDynamicStatus(
                 Modifier::empty(),
                 TextStyle::default(),
             );
-            let captures = captures.clone();
-            Row(
-                Modifier::empty().fill_max_width().weight(1.0),
-                RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(8.0)),
-                move || {
-                    let captures = captures.clone();
-                    Column(
-                        Modifier::empty().weight(1.0).fill_max_height(),
-                        ColumnSpec::default(),
-                        move || {
-                            let node_id = LazyColumn(
-                                Modifier::empty().fill_max_size(),
-                                list_state,
-                                LazyColumnSpec::default(),
-                                |scope| {
-                                    scope.items(40, |index| {
-                                        Text(
-                                            format!("Item {}", index),
-                                            Modifier::empty(),
-                                            TextStyle::default(),
-                                        );
-                                    });
-                                },
-                            );
-                            *captures.state.borrow_mut() = Some(list_state);
-                            *captures.node_id.borrow_mut() = Some(node_id);
-                        },
-                    );
-                    Column(
-                        Modifier::empty().width(28.0).fill_max_height(),
-                        ColumnSpec::default(),
-                        move || {
-                            Text(
-                                format!("At {}", list_state.first_visible_item_index()),
-                                Modifier::empty(),
-                                TextStyle::default(),
-                            );
-                        },
-                    );
-                },
-            );
+            PrimitiveLazyColumnWithScrollIndicator(list_state, captures.clone());
         },
     );
+}
+
+fn find_layout(node: &LayoutBox, target: NodeId) -> Option<&LayoutBox> {
+    if node.node_id == target {
+        return Some(node);
+    }
+    node.children
+        .iter()
+        .find_map(|child| find_layout(child, target))
 }
 
 fn captured_conditional_lazy_list_state(captured_state: &CapturedLazyListState) -> LazyListState {
@@ -536,6 +513,82 @@ fn settle_scroll_recomposition(
         measure_root(composition, root, size);
     }
     measure_root(composition, root, size);
+}
+
+fn assert_lazy_list_host_survives_one_scroll(
+    composition: &mut Composition<MemoryApplier>,
+    root: NodeId,
+    size: Size,
+    list_state: LazyListState,
+    captures: &CapturedLazyListSlot,
+    message: &str,
+) {
+    let fresh_node_id = captured_conditional_lazy_list_node_id(&captures.node_id);
+    let fresh_generation = node_generation(composition, fresh_node_id);
+
+    list_state.dispatch_scroll_delta(-120.0);
+    settle_scroll_recomposition(composition, root, size);
+
+    let fresh_after_node_id = captured_conditional_lazy_list_node_id(&captures.node_id);
+    let fresh_after_generation = node_generation(composition, fresh_after_node_id);
+    assert_eq!(
+        (fresh_after_node_id, fresh_after_generation),
+        (fresh_node_id, fresh_generation),
+        "{message}"
+    );
+}
+
+fn assert_branch_round_trip_preserves_lazy_list_host(
+    composition: &mut Composition<MemoryApplier>,
+    root: NodeId,
+    size: Size,
+    selected_story: cranpose_core::MutableState<Option<u64>>,
+) {
+    selected_story.set_value(Some(1));
+    while composition
+        .process_invalid_scopes()
+        .expect("switch to thread branch")
+    {
+        settle_scroll_recomposition(composition, root, size);
+    }
+    settle_scroll_recomposition(composition, root, size);
+
+    selected_story.set_value(None);
+    while composition
+        .process_invalid_scopes()
+        .expect("restore stories branch")
+    {
+        settle_scroll_recomposition(composition, root, size);
+    }
+    settle_scroll_recomposition(composition, root, size);
+}
+
+fn assert_lazy_list_host_stable_across_scrolls(
+    composition: &mut Composition<MemoryApplier>,
+    root: NodeId,
+    size: Size,
+    list_state: LazyListState,
+    captures: &CapturedLazyListSlot,
+    scroll_count: usize,
+    message: &str,
+) {
+    let restored_node_id = captured_conditional_lazy_list_node_id(&captures.node_id);
+    let restored_generation = node_generation(composition, restored_node_id);
+
+    let mut seen = Vec::new();
+    for _ in 0..scroll_count {
+        list_state.dispatch_scroll_delta(-120.0);
+        settle_scroll_recomposition(composition, root, size);
+        let node_id = captured_conditional_lazy_list_node_id(&captures.node_id);
+        let generation = node_generation(composition, node_id);
+        seen.push((node_id, generation));
+    }
+
+    assert_eq!(
+        seen,
+        vec![(restored_node_id, restored_generation); seen.len()],
+        "{message}; restored=({restored_node_id}, {restored_generation}) seen={seen:?}",
+    );
 }
 
 #[test]
@@ -997,54 +1050,25 @@ fn box_with_constraints_restored_lazy_list_branch_keeps_host_generation_during_s
     settle_scroll_recomposition(&mut composition, root, size);
 
     let list_state = captured_conditional_lazy_list_state(&captures.state);
-    let fresh_node_id = captured_conditional_lazy_list_node_id(&captures.node_id);
-    let fresh_generation = node_generation(&mut composition, fresh_node_id);
-
-    list_state.dispatch_scroll_delta(-120.0);
-    settle_scroll_recomposition(&mut composition, root, size);
-
-    let fresh_after_node_id = captured_conditional_lazy_list_node_id(&captures.node_id);
-    let fresh_after_generation = node_generation(&mut composition, fresh_after_node_id);
-    assert_eq!(
-        (fresh_after_node_id, fresh_after_generation),
-        (fresh_node_id, fresh_generation),
-        "fresh scroll should not recreate the lazy list host"
+    assert_lazy_list_host_survives_one_scroll(
+        &mut composition,
+        root,
+        size,
+        list_state,
+        &captures,
+        "fresh scroll should not recreate the lazy list host",
     );
 
-    selected_story.set_value(Some(1));
-    while composition
-        .process_invalid_scopes()
-        .expect("switch to thread branch")
-    {
-        settle_scroll_recomposition(&mut composition, root, size);
-    }
-    settle_scroll_recomposition(&mut composition, root, size);
+    assert_branch_round_trip_preserves_lazy_list_host(&mut composition, root, size, selected_story);
 
-    selected_story.set_value(None);
-    while composition
-        .process_invalid_scopes()
-        .expect("restore stories branch")
-    {
-        settle_scroll_recomposition(&mut composition, root, size);
-    }
-    settle_scroll_recomposition(&mut composition, root, size);
-
-    let restored_node_id = captured_conditional_lazy_list_node_id(&captures.node_id);
-    let restored_generation = node_generation(&mut composition, restored_node_id);
-
-    let mut seen = Vec::new();
-    for _ in 0..4 {
-        list_state.dispatch_scroll_delta(-120.0);
-        settle_scroll_recomposition(&mut composition, root, size);
-        let node_id = captured_conditional_lazy_list_node_id(&captures.node_id);
-        let generation = node_generation(&mut composition, node_id);
-        seen.push((node_id, generation));
-    }
-
-    assert_eq!(
-        seen,
-        vec![(restored_node_id, restored_generation); seen.len()],
-        "restored lazy-list host changed across scroll-driven recompositions; restored=({restored_node_id}, {restored_generation}) seen={seen:?}",
+    assert_lazy_list_host_stable_across_scrolls(
+        &mut composition,
+        root,
+        size,
+        list_state,
+        &captures,
+        4,
+        "restored lazy-list host changed across scroll-driven recompositions",
     );
 }
 
@@ -1101,54 +1125,25 @@ fn box_with_constraints_restored_weighted_lazy_list_branch_keeps_host_generation
     settle_scroll_recomposition(&mut composition, root, size);
 
     let list_state = captured_conditional_lazy_list_state(&captures.state);
-    let fresh_node_id = captured_conditional_lazy_list_node_id(&captures.node_id);
-    let fresh_generation = node_generation(&mut composition, fresh_node_id);
-
-    list_state.dispatch_scroll_delta(-120.0);
-    settle_scroll_recomposition(&mut composition, root, size);
-
-    let fresh_after_node_id = captured_conditional_lazy_list_node_id(&captures.node_id);
-    let fresh_after_generation = node_generation(&mut composition, fresh_after_node_id);
-    assert_eq!(
-        (fresh_after_node_id, fresh_after_generation),
-        (fresh_node_id, fresh_generation),
-        "fresh weighted scroll should not recreate the lazy list host"
+    assert_lazy_list_host_survives_one_scroll(
+        &mut composition,
+        root,
+        size,
+        list_state,
+        &captures,
+        "fresh weighted scroll should not recreate the lazy list host",
     );
 
-    selected_story.set_value(Some(1));
-    while composition
-        .process_invalid_scopes()
-        .expect("switch to thread branch")
-    {
-        settle_scroll_recomposition(&mut composition, root, size);
-    }
-    settle_scroll_recomposition(&mut composition, root, size);
+    assert_branch_round_trip_preserves_lazy_list_host(&mut composition, root, size, selected_story);
 
-    selected_story.set_value(None);
-    while composition
-        .process_invalid_scopes()
-        .expect("restore stories branch")
-    {
-        settle_scroll_recomposition(&mut composition, root, size);
-    }
-    settle_scroll_recomposition(&mut composition, root, size);
-
-    let restored_node_id = captured_conditional_lazy_list_node_id(&captures.node_id);
-    let restored_generation = node_generation(&mut composition, restored_node_id);
-
-    let mut seen = Vec::new();
-    for _ in 0..4 {
-        list_state.dispatch_scroll_delta(-120.0);
-        settle_scroll_recomposition(&mut composition, root, size);
-        let node_id = captured_conditional_lazy_list_node_id(&captures.node_id);
-        let generation = node_generation(&mut composition, node_id);
-        seen.push((node_id, generation));
-    }
-
-    assert_eq!(
-        seen,
-        vec![(restored_node_id, restored_generation); seen.len()],
-        "restored weighted lazy-list host changed across scroll-driven recompositions; restored=({restored_node_id}, {restored_generation}) seen={seen:?}",
+    assert_lazy_list_host_stable_across_scrolls(
+        &mut composition,
+        root,
+        size,
+        list_state,
+        &captures,
+        4,
+        "restored weighted lazy-list host changed across scroll-driven recompositions",
     );
 }
 
@@ -1206,23 +1201,7 @@ fn box_with_constraints_restored_weighted_lazy_list_branch_keeps_host_during_sta
     };
     settle_scroll_recomposition(&mut composition, root, size);
 
-    selected_story.set_value(Some(1));
-    while composition
-        .process_invalid_scopes()
-        .expect("switch to thread branch")
-    {
-        settle_scroll_recomposition(&mut composition, root, size);
-    }
-    settle_scroll_recomposition(&mut composition, root, size);
-
-    selected_story.set_value(None);
-    while composition
-        .process_invalid_scopes()
-        .expect("restore stories branch")
-    {
-        settle_scroll_recomposition(&mut composition, root, size);
-    }
-    settle_scroll_recomposition(&mut composition, root, size);
+    assert_branch_round_trip_preserves_lazy_list_host(&mut composition, root, size, selected_story);
 
     let restored_node_id = captured_conditional_lazy_list_node_id(&captures.node_id);
     let restored_generation = node_generation(&mut composition, restored_node_id);
@@ -1293,57 +1272,25 @@ fn box_with_constraints_restored_weighted_branch_after_header_toggle_keeps_host_
     settle_scroll_recomposition(&mut composition, root, size);
 
     let list_state = captured_conditional_lazy_list_state(&captures.state);
-    let fresh_node_id = captured_conditional_lazy_list_node_id(&captures.node_id);
-    let fresh_generation = node_generation(&mut composition, fresh_node_id);
-
-    list_state.dispatch_scroll_delta(-120.0);
-    settle_scroll_recomposition(&mut composition, root, size);
-    assert_eq!(
-        (
-            captured_conditional_lazy_list_node_id(&captures.node_id),
-            node_generation(
-                &mut composition,
-                captured_conditional_lazy_list_node_id(&captures.node_id)
-            )
-        ),
-        (fresh_node_id, fresh_generation),
+    assert_lazy_list_host_survives_one_scroll(
+        &mut composition,
+        root,
+        size,
+        list_state,
+        &captures,
         "fresh scroll should not recreate the lazy list host",
     );
 
-    selected_story.set_value(Some(1));
-    while composition
-        .process_invalid_scopes()
-        .expect("switch to thread branch")
-    {
-        settle_scroll_recomposition(&mut composition, root, size);
-    }
-    settle_scroll_recomposition(&mut composition, root, size);
+    assert_branch_round_trip_preserves_lazy_list_host(&mut composition, root, size, selected_story);
 
-    selected_story.set_value(None);
-    while composition
-        .process_invalid_scopes()
-        .expect("restore stories branch")
-    {
-        settle_scroll_recomposition(&mut composition, root, size);
-    }
-    settle_scroll_recomposition(&mut composition, root, size);
-
-    let restored_node_id = captured_conditional_lazy_list_node_id(&captures.node_id);
-    let restored_generation = node_generation(&mut composition, restored_node_id);
-
-    let mut seen = Vec::new();
-    for _ in 0..4 {
-        list_state.dispatch_scroll_delta(-120.0);
-        settle_scroll_recomposition(&mut composition, root, size);
-        let node_id = captured_conditional_lazy_list_node_id(&captures.node_id);
-        let generation = node_generation(&mut composition, node_id);
-        seen.push((node_id, generation));
-    }
-
-    assert_eq!(
-        seen,
-        vec![(restored_node_id, restored_generation); seen.len()],
-        "restored weighted branch after header toggle changed host across scroll-driven recompositions; restored=({restored_node_id}, {restored_generation}) seen={seen:?}",
+    assert_lazy_list_host_stable_across_scrolls(
+        &mut composition,
+        root,
+        size,
+        list_state,
+        &captures,
+        4,
+        "restored weighted branch after header toggle changed host across scroll-driven recompositions",
     );
 }
 
@@ -1435,15 +1382,6 @@ fn test_fill_max_width_respects_parent_bounds() {
         .expect("compute layout");
 
     let root_layout = layout_tree.root();
-
-    fn find_layout(node: &LayoutBox, target: NodeId) -> Option<&LayoutBox> {
-        if node.node_id == target {
-            return Some(node);
-        }
-        node.children
-            .iter()
-            .find_map(|child| find_layout(child, target))
-    }
 
     let column_node_id = column_id
         .borrow()
@@ -1578,15 +1516,6 @@ fn test_fill_max_width_with_background_and_double_padding() {
 
     let root_layout = layout_tree.root();
 
-    fn find_layout(node: &LayoutBox, target: NodeId) -> Option<&LayoutBox> {
-        if node.node_id == target {
-            return Some(node);
-        }
-        node.children
-            .iter()
-            .find_map(|child| find_layout(child, target))
-    }
-
     let outer_column_node = outer_column_id
         .borrow()
         .as_ref()
@@ -1718,15 +1647,6 @@ fn fill_max_width_tracks_bounded_parent_width() {
 
     let root_layout = layout_tree.root();
 
-    fn find_layout(node: &LayoutBox, target: NodeId) -> Option<&LayoutBox> {
-        if node.node_id == target {
-            return Some(node);
-        }
-        node.children
-            .iter()
-            .find_map(|child| find_layout(child, target))
-    }
-
     let outer_node = outer_column_id.borrow().as_ref().copied().expect("outer");
     let inner_node = inner_column_id.borrow().as_ref().copied().expect("inner");
     let row_node = row_id.borrow().as_ref().copied().expect("row");
@@ -1828,15 +1748,6 @@ fn wrap_column_with_fill_child_uses_bounded_width() {
             },
         )
         .expect("compute layout");
-
-    fn find_layout(node: &LayoutBox, target: NodeId) -> Option<&LayoutBox> {
-        if node.node_id == target {
-            return Some(node);
-        }
-        node.children
-            .iter()
-            .find_map(|child| find_layout(child, target))
-    }
 
     let root_layout = layout_tree.root();
     let column_layout = find_layout(
@@ -1952,15 +1863,6 @@ fn fill_child_respects_explicit_parent_width() {
         )
         .expect("compute layout");
 
-    fn find_layout(node: &LayoutBox, target: NodeId) -> Option<&LayoutBox> {
-        if node.node_id == target {
-            return Some(node);
-        }
-        node.children
-            .iter()
-            .find_map(|child| find_layout(child, target))
-    }
-
     let root_layout = layout_tree.root();
     let column_layout = find_layout(
         root_layout,
@@ -2046,15 +1948,6 @@ fn fill_max_height_child_clamps_to_parent() {
             },
         )
         .expect("compute layout");
-
-    fn find_layout(node: &LayoutBox, target: NodeId) -> Option<&LayoutBox> {
-        if node.node_id == target {
-            return Some(node);
-        }
-        node.children
-            .iter()
-            .find_map(|child| find_layout(child, target))
-    }
 
     let root_layout = layout_tree.root();
     let row_layout = find_layout(
