@@ -86,7 +86,9 @@ fn direct_scene_range_cache_enabled() -> bool {
 
 fn direct_scene_range_cache_enable_all() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var_os("CRANPOSE_ENABLE_DIRECT_SCENE_RANGE_CACHE").is_some())
+    *ENABLED.get_or_init(|| {
+        crate::debug_toggles::debug_toggle("CRANPOSE_ENABLE_DIRECT_SCENE_RANGE_CACHE").is_some()
+    })
 }
 
 fn direct_scene_range_coalesce_enabled() -> bool {
