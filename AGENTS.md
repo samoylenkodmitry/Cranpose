@@ -60,14 +60,26 @@
   queue is queueing, not a stall: the jobs API lags the runner by minutes, so
   read that runner's own `_diag/Runner_*.log` for JobDispatcher lines and check
   its load before diagnosing one.
-- clean up after yourself: when you finish with a worktree, remove its `target/`
-  and `build/` directories. Each agent worktree builds a full Rust target tree
-  (15-100GB for this workspace) and nothing reclaims them; on 2026-08-29 they
-  reached ~350GB across `.claude/worktrees/` and filled this Mac to 100%, which
-  hard-stopped a running agent mid-investigation. Build artifacts are
-  regenerable by definition, so removing them is safe -- but never remove a
-  worktree's source or anything uncommitted, and check `df -h /` before starting
-  a large build
+- reclaim build artifacts with `just gc` (report) and `just gc-apply` (reclaim);
+  never hand-delete a `target/` or `build/` directory. Each agent worktree
+  builds a full Rust target tree (15-100GB for this workspace) and nothing used
+  to reclaim them; on 2026-08-29 they reached ~350GB across `.claude/worktrees/`
+  and filled this Mac to 100%, which hard-stopped a running agent
+  mid-investigation. Do not judge for yourself when a worktree is finished:
+  `cargo test` writes nothing to `target/` while it RUNS the binaries it has
+  already built, so an idle-looking `target/` may belong to a suite that is
+  mid-run, and deleting it gives a neighbour `could not execute process
+  target/ci/deps/<test>-<hash> ... No such file or directory (os error 2)`,
+  which reads exactly like a test bug and is not one. `just gc` decides from
+  live processes and write recency instead of from anyone's belief about being
+  done: it protects any worktree with a live process, protects any target
+  written recently, only ever removes directories carrying cargo's own
+  `CACHEDIR.TAG` marker, and is dry-run by default. It sweeps the repository you
+  are standing in, so run it from the worktree you mean. Never remove a
+  worktree's source or anything uncommitted. Check `df -h /` before a large
+  build -- `just test`, `just clippy`, `just web`, `just android` and
+  `just robot` do it for you and refuse rather than dying as
+  `No space left on device`
 - `scripts/ci/with_host_lock.sh` gates samarch-1's CPU: `--shared` for a
   build (any number concurrently), `--exclusive` for a measurement or a robot
   suite (one at a time, nothing else running beside it). It is flock-based, so
