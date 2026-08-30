@@ -48,6 +48,26 @@ enable_local_sccache() {
     esac
     command -v "$sccache_bin" >/dev/null 2>&1 || return 0
     "$sccache_bin" --start-server >/dev/null 2>&1 || true
+
+    # sccache cannot cache an incremental compile, and this workspace asks for
+    # one: [profile.robot] sets `incremental = true` and [profile.ci] inherits
+    # dev, which enables it by default. Setting RUSTC_WRAPPER without settling
+    # this does not fail -- it silently produces a cache that never hits.
+    # Measured on this workspace before the export below existed:
+    #
+    #   Compile requests        6
+    #   Cache hits              0
+    #   Non-cacheable calls     6
+    #
+    # CARGO_INCREMENTAL takes precedence over the profile setting, so one export
+    # here makes every sccache-enabled build actually cacheable without editing
+    # a profile that also serves builds running without a wrapper. It also stops
+    # incremental directories accumulating, which is the larger half of a target
+    # dir on disk -- 37.3G of one 80.8G worktree target when this was written.
+    #
+    # Opting out of sccache (CRANPOSE_USE_SCCACHE=0) leaves incremental alone,
+    # because then there is nothing to trade it against.
+    export CARGO_INCREMENTAL=0
 }
 
 local_temp_root() {
