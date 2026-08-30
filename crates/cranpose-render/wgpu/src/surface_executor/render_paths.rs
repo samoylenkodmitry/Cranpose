@@ -84,10 +84,17 @@ fn direct_scene_range_cache_enabled() -> bool {
     })
 }
 
-fn direct_scene_range_cache_enable_all() -> bool {
-    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        crate::debug_toggles::debug_toggle("CRANPOSE_ENABLE_DIRECT_SCENE_RANGE_CACHE").is_some()
+/// Per-entry admission ceiling as a percentage of the render target's own
+/// byte size (`CRANPOSE_DIRECT_SCENE_RANGE_CACHE_VIEWPORT_PCT`, mirrored as
+/// `debug.cranpose.range_cache_pct` on Android). `0` restores the flat
+/// 2 MB floor for A/B arms; the default admits a fullscreen chunk with
+/// headroom for snap rounding.
+fn direct_scene_range_cache_viewport_pct() -> u64 {
+    static PCT: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *PCT.get_or_init(|| {
+        crate::debug_toggles::debug_toggle("CRANPOSE_DIRECT_SCENE_RANGE_CACHE_VIEWPORT_PCT")
+            .and_then(|value| value.trim().parse().ok())
+            .unwrap_or(DEFAULT_DIRECT_SCENE_RANGE_CACHE_VIEWPORT_PCT)
     })
 }
 
@@ -132,20 +139,39 @@ impl DirectChunkRunCoalescer {
     }
 }
 
-fn direct_scene_range_cache_enabled_for_entry_bytes(byte_size: u64) -> bool {
+fn direct_scene_range_cache_enabled_for_entry_bytes(byte_size: u64, surface_bytes: u64) -> bool {
     direct_scene_range_cache_enabled_for_policy(
-        direct_scene_range_cache_enable_all(),
+        direct_scene_range_cache_viewport_pct(),
         !direct_scene_range_cache_enabled(),
         byte_size,
+        surface_bytes,
     )
 }
 
+/// Admission is viewport-relative so the same rule derives the same behavior
+/// on every display class: a fullscreen chunk is ~1x its target's bytes
+/// whether that is 0.64 MB on a watch or 9.24 MB on a 1080x2244 phone. An
+/// absolute ceiling tuned on one class is implicitly conditional on it — the
+/// old flat 2 MB admitted every Wear fullscreen chunk with 3x headroom while
+/// excluding fullscreen on phones entirely, which is where the Mate 20 X
+/// measured the exclusion at 1.4-2.6 ms of present per frame (A/B'd both on a
+/// frozen backdrop and under quantized-animation store churn). The flat floor
+/// below keeps small entries admitted inside small offscreen targets exactly
+/// as before; the hard per-entry and total caps in
+/// [`crate::layer_surface_cache`] stay as the memory-safety line, so displays
+/// whose fullscreen exceeds them (4K class) keep today's behavior until
+/// someone measures one.
 fn direct_scene_range_cache_enabled_for_policy(
-    enable_all: bool,
+    viewport_pct: u64,
     disable_all: bool,
     byte_size: u64,
+    surface_bytes: u64,
 ) -> bool {
-    !disable_all && (enable_all || byte_size <= DEFAULT_DIRECT_SCENE_RANGE_CACHE_BYTES)
+    if disable_all {
+        return false;
+    }
+    let viewport_ceiling = surface_bytes.saturating_mul(viewport_pct) / 100;
+    byte_size <= DIRECT_SCENE_RANGE_CACHE_FLOOR_BYTES.max(viewport_ceiling)
 }
 
 fn direct_scene_range_hash_diag_enabled() -> bool {
@@ -165,7 +191,8 @@ const MIN_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS: usize = 2;
 const MAX_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS: usize = 64;
 const MIN_SINGLE_DRAW_DIRECT_SCENE_RANGE_CACHE_BYTES: u64 = 512 * 1024;
 const MAX_MOTION_SENSITIVE_DIRECT_SCENE_CACHE_DRAW_BYTES: u64 = 2_097_152;
-const DEFAULT_DIRECT_SCENE_RANGE_CACHE_BYTES: u64 = 2 * 1024 * 1024;
+const DIRECT_SCENE_RANGE_CACHE_FLOOR_BYTES: u64 = 2 * 1024 * 1024;
+const DEFAULT_DIRECT_SCENE_RANGE_CACHE_VIEWPORT_PCT: u64 = 125;
 const MAX_DIRECT_SCENE_RANGE_CACHE_BYTES: u64 = MAX_SCENE_RANGE_CACHE_ENTRY_BYTES;
 const RENDER_STRING_HASH_CACHE_CAPACITY: usize = 2048;
 
@@ -1442,16 +1469,17 @@ fn direct_scene_range_chunk_fits_cache_entry(
     max_texture_dim: u32,
     snapped_bounds: Option<Rect>,
     root_scale: f32,
+    surface_bytes: u64,
 ) -> bool {
     let Some(logical_rect) = snapped_bounds else {
         return false;
     };
     let (target_width, target_height) =
         surface_target_size(logical_rect, root_scale, max_texture_dim);
-    direct_scene_range_cache_enabled_for_entry_bytes(offscreen_byte_size(
-        target_width,
-        target_height,
-    ))
+    direct_scene_range_cache_enabled_for_entry_bytes(
+        offscreen_byte_size(target_width, target_height),
+        surface_bytes,
+    )
 }
 
 fn direct_scene_range_cache_chunk_end(
@@ -4355,6 +4383,7 @@ fn cached_direct_scene_range_surface<B: SurfaceExecutionBackend>(
     z_end: usize,
     root_scale: f32,
     snapped_bounds: Option<Rect>,
+    surface_bytes: u64,
 ) -> Result<Option<LayerSurface>, String> {
     // `snapped_bounds` is the caller's [`direct_scene_range_snapped_bounds`]
     // for exactly this range — the same value this function used to derive
@@ -4371,11 +4400,11 @@ fn cached_direct_scene_range_surface<B: SurfaceExecutionBackend>(
     let (target_width, target_height) =
         surface_target_size(logical_rect, root_scale, backend.max_texture_dim());
     let target_bytes = offscreen_byte_size(target_width, target_height);
-    if !direct_scene_range_cache_enabled_for_entry_bytes(target_bytes) {
+    if !direct_scene_range_cache_enabled_for_entry_bytes(target_bytes, surface_bytes) {
         if layer_render_diag_enabled() {
             let draw_ops = scene_range_draw_op_count(scene, z_start, z_end);
             log::warn!(
-                "[wgpu-render-stage:direct-scene-cache] skip reason=default-entry-budget z_start={z_start} z_end={z_end} draw_ops={draw_ops} rect=({:.1},{:.1},{:.1},{:.1}) target={}x{} bytes={target_bytes}",
+                "[wgpu-render-stage:direct-scene-cache] skip reason=admission-budget z_start={z_start} z_end={z_end} draw_ops={draw_ops} rect=({:.1},{:.1},{:.1},{:.1}) target={}x{} bytes={target_bytes}",
                 logical_rect.x,
                 logical_rect.y,
                 logical_rect.width,
@@ -4534,6 +4563,7 @@ fn queue_cached_direct_scene_range<B: SurfaceExecutionBackend>(
     z_end: usize,
     root_scale: f32,
     snapped_bounds: Option<Rect>,
+    surface_bytes: u64,
     pending_composites: &mut Vec<PendingLayerComposite>,
     composite_seq: &mut usize,
     pending_composite_load_op: &mut Option<wgpu::LoadOp<wgpu::Color>>,
@@ -4546,6 +4576,7 @@ fn queue_cached_direct_scene_range<B: SurfaceExecutionBackend>(
         z_end,
         root_scale,
         snapped_bounds,
+        surface_bytes,
     )?
     else {
         return Ok(false);
@@ -4591,6 +4622,7 @@ fn render_direct_scene_range_with_pending_composites<B: SurfaceExecutionBackend>
     next_load_op: &mut wgpu::LoadOp<wgpu::Color>,
 ) -> Result<(), String> {
     let cache_enabled = direct_scene_range_cache_enabled();
+    let surface_bytes = offscreen_byte_size(width, height);
     let mut cursor_z = z_start;
     let mut direct_run = DirectChunkRunCoalescer::default();
     while cursor_z < z_end {
@@ -4613,11 +4645,13 @@ fn render_direct_scene_range_with_pending_composites<B: SurfaceExecutionBackend>
         // store. When the chunk is too big to be admitted anyway, the split
         // buys nothing and costs a whole render pass — and on a tile-based
         // mobile GPU a render pass is a tile store and reload of the entire
-        // target. An animated scene is the worst case: every chunk covers the
-        // whole surface, so every one is refused, and a game frame of ~640
-        // draw ops was being cut into ten passes that all wrote the same
-        // pixels. Rendering the remainder in one pass measured 18% less CPU
-        // on a Pixel 9 Pro.
+        // target. A game frame of ~640 full-surface draw ops was being cut
+        // into ten passes that all wrote the same pixels; rendering the
+        // remainder in one pass measured 18% less CPU on a Pixel 9 Pro. The
+        // viewport-relative admission means an in-budget chunk always fits
+        // its own surface, so this widen engages when an operator narrows
+        // admission (`range_cache_pct` A/B arms, or the kill switch making
+        // `chunk_can_cache` false above).
         let mut chunk_can_cache = cache_enabled;
         if chunk_end < z_end
             && !(cache_enabled
@@ -4625,6 +4659,7 @@ fn render_direct_scene_range_with_pending_composites<B: SurfaceExecutionBackend>
                     backend.max_texture_dim(),
                     chunk_bounds,
                     root_scale,
+                    surface_bytes,
                 ))
         {
             chunk_end = z_end;
@@ -4643,6 +4678,7 @@ fn render_direct_scene_range_with_pending_composites<B: SurfaceExecutionBackend>
                 chunk_end,
                 root_scale,
                 chunk_bounds,
+                surface_bytes,
                 pending_composites,
                 composite_seq,
                 pending_composite_load_op,
@@ -6527,23 +6563,23 @@ mod tests {
     };
 
     use super::{
-        BackdropPrefixChildContribution, DEFAULT_DIRECT_SCENE_RANGE_CACHE_BYTES,
-        DirectChunkRunCoalescer, MAX_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS,
-        MAX_MOTION_SENSITIVE_DIRECT_SCENE_CACHE_DRAW_BYTES, MIN_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS,
-        SceneBrush, anchored_composite_dest_quad, axis_aligned_backdrop_copy_region,
-        axis_aligned_backdrop_snapshot_copy_plan, backdrop_effect_cache_key,
-        backdrop_effect_cache_key_for_effect_hash, backdrop_scene_prefix_hash,
-        backdrop_underlay_is_covered_by_local_content, child_composite_visible,
-        composite_dest_viewport, dest_quad_intersects_rect, direct_scene_range_cache_chunk_end,
-        direct_scene_range_cache_enabled_for_policy, direct_scene_range_cache_key,
-        direct_scene_range_chunk_fits_cache_entry, direct_scene_range_snapped_bounds,
-        exact_translation_sample_mode, layer_source_cache_key,
+        BackdropPrefixChildContribution, DEFAULT_DIRECT_SCENE_RANGE_CACHE_VIEWPORT_PCT,
+        DIRECT_SCENE_RANGE_CACHE_FLOOR_BYTES, DirectChunkRunCoalescer,
+        MAX_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS, MAX_MOTION_SENSITIVE_DIRECT_SCENE_CACHE_DRAW_BYTES,
+        MIN_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS, SceneBrush, anchored_composite_dest_quad,
+        axis_aligned_backdrop_copy_region, axis_aligned_backdrop_snapshot_copy_plan,
+        backdrop_effect_cache_key, backdrop_effect_cache_key_for_effect_hash,
+        backdrop_scene_prefix_hash, backdrop_underlay_is_covered_by_local_content,
+        child_composite_visible, composite_dest_viewport, dest_quad_intersects_rect,
+        direct_scene_range_cache_chunk_end, direct_scene_range_cache_enabled_for_policy,
+        direct_scene_range_cache_key, direct_scene_range_chunk_fits_cache_entry,
+        direct_scene_range_snapped_bounds, exact_translation_sample_mode, layer_source_cache_key,
         layer_source_uses_external_backdrop_underlay, layer_surface_dest_quad,
-        layer_surface_translation_context, minimum_surface_scale_for_composite, quad_bounds_rect,
-        rects_intersect, render_string_scene_hash, retained_render_effect_hash,
-        rounded_fill_covers_rect, scene_backdrop_input_hashes, snapped_backdrop_geometry,
-        split_backdrop_effect, surface_target_size, underlay_fill_scissor, underlay_sample_rect,
-        visible_backdrop_capture_rect,
+        layer_surface_translation_context, minimum_surface_scale_for_composite,
+        offscreen_byte_size, quad_bounds_rect, rects_intersect, render_string_scene_hash,
+        retained_render_effect_hash, rounded_fill_covers_rect, scene_backdrop_input_hashes,
+        snapped_backdrop_geometry, split_backdrop_effect, surface_target_size,
+        underlay_fill_scissor, underlay_sample_rect, visible_backdrop_capture_rect,
     };
     use crate::{
         effect_renderer::CompositeSampleMode,
@@ -6637,34 +6673,79 @@ mod tests {
     }
 
     #[test]
-    fn direct_scene_range_cache_policy_keeps_default_entries_small() {
-        let small_entry = DEFAULT_DIRECT_SCENE_RANGE_CACHE_BYTES;
-        let large_entry = DEFAULT_DIRECT_SCENE_RANGE_CACHE_BYTES + 1;
+    fn a_fullscreen_chunk_is_admitted_on_every_display_class() {
+        let phone_surface = offscreen_byte_size(1080, 2244);
+        let watch_surface = offscreen_byte_size(408, 408);
+        let pct = DEFAULT_DIRECT_SCENE_RANGE_CACHE_VIEWPORT_PCT;
 
+        // The Mate 20 X measurement: a fullscreen entry equals its surface's
+        // bytes and must be admitted, where the flat 2 MB rule refused it.
         assert!(direct_scene_range_cache_enabled_for_policy(
+            pct,
             false,
-            false,
-            small_entry
-        ));
-        assert!(!direct_scene_range_cache_enabled_for_policy(
-            false,
-            false,
-            large_entry
+            phone_surface,
+            phone_surface
         ));
         assert!(direct_scene_range_cache_enabled_for_policy(
-            true,
+            pct,
             false,
-            large_entry
+            watch_surface,
+            watch_surface
         ));
+    }
+
+    #[test]
+    fn the_viewport_ceiling_refuses_an_entry_larger_than_its_surface() {
+        let phone_surface = offscreen_byte_size(1080, 2244);
+        let oversized = phone_surface * 2;
         assert!(!direct_scene_range_cache_enabled_for_policy(
-            true,
-            true,
-            small_entry
-        ));
-        assert!(!direct_scene_range_cache_enabled_for_policy(
+            DEFAULT_DIRECT_SCENE_RANGE_CACHE_VIEWPORT_PCT,
             false,
+            oversized,
+            phone_surface
+        ));
+    }
+
+    #[test]
+    fn the_flat_floor_preserves_small_display_admission() {
+        // A watch entry between 1.25x its viewport and the 2 MB floor was
+        // admitted under the old flat rule and must stay admitted: the
+        // viewport term only ever widens admission, never narrows it.
+        let watch_surface = offscreen_byte_size(408, 408);
+        let between = DIRECT_SCENE_RANGE_CACHE_FLOOR_BYTES - 1;
+        assert!(between > watch_surface);
+        assert!(direct_scene_range_cache_enabled_for_policy(
+            DEFAULT_DIRECT_SCENE_RANGE_CACHE_VIEWPORT_PCT,
+            false,
+            between,
+            watch_surface
+        ));
+    }
+
+    #[test]
+    fn pct_zero_restores_the_flat_floor_for_ab_arms() {
+        let phone_surface = offscreen_byte_size(1080, 2244);
+        assert!(!direct_scene_range_cache_enabled_for_policy(
+            0,
+            false,
+            phone_surface,
+            phone_surface
+        ));
+        assert!(direct_scene_range_cache_enabled_for_policy(
+            0,
+            false,
+            DIRECT_SCENE_RANGE_CACHE_FLOOR_BYTES,
+            phone_surface
+        ));
+    }
+
+    #[test]
+    fn the_kill_switch_refuses_everything() {
+        assert!(!direct_scene_range_cache_enabled_for_policy(
+            DEFAULT_DIRECT_SCENE_RANGE_CACHE_VIEWPORT_PCT,
             true,
-            small_entry
+            1,
+            offscreen_byte_size(1080, 2244)
         ));
     }
 
@@ -7393,11 +7474,12 @@ mod tests {
     }
 
     #[test]
-    fn a_chunk_too_large_to_cache_is_not_worth_splitting_for() {
-        // Every shape covers the full 1280x2856 surface, the way a game frame's
-        // moving objects do once their bounds are unioned. Each 64-op chunk is
-        // then far past the entry budget, so the cache would refuse it and the
-        // split would buy a render pass for nothing.
+    fn a_full_surface_chunk_fits_inside_its_own_surface_budget() {
+        // Every shape covers the full 1280x2856 surface. Under the flat 2 MB
+        // rule each 64-op chunk was refused and the walk widened past it; the
+        // viewport-relative rule admits a chunk up to its surface's own byte
+        // size, which is what the Mate 20 X A/B measured as a 1.4-2.6 ms
+        // present win for a stable fullscreen backdrop.
         let mut scene = CompositorScene::new();
         for z_index in 0..(MAX_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS * 2) {
             let mut shape = prefix_shape(z_index, Color::BLACK);
@@ -7419,7 +7501,7 @@ mod tests {
         scene.next_z = MAX_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS * 2;
 
         assert!(
-            !direct_scene_range_chunk_fits_cache_entry(
+            direct_scene_range_chunk_fits_cache_entry(
                 8192,
                 direct_scene_range_snapped_bounds(
                     &scene,
@@ -7428,8 +7510,9 @@ mod tests {
                     1.0,
                 ),
                 1.0,
+                offscreen_byte_size(1280, 2856),
             ),
-            "a full-surface chunk is far past the per-entry byte budget"
+            "a fullscreen chunk equals its surface's bytes and must be admitted"
         );
     }
 
@@ -7446,6 +7529,7 @@ mod tests {
                     1.0,
                 ),
                 1.0,
+                offscreen_byte_size(1280, 2856),
             ),
             "a small range is exactly what the range cache is for"
         );
