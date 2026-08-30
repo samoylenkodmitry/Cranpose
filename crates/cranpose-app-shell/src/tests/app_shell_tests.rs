@@ -5169,9 +5169,6 @@ fn a_scroll_measure_repass_does_not_recompose_a_subcompose_slot_that_read_no_scr
         measures_after - settled_measures,
     );
 
-    // Debug builds shadow-compose every skipped slot to catch stale
-    // non-reactive reads, so the closure legitimately re-runs there; the
-    // no-recompose guarantee on the closure itself is release behavior.
     #[cfg(not(debug_assertions))]
     {
         let composes_after = CLEAN_SLOT_COMPOSE_COUNT.with(Cell::get);

@@ -107,9 +107,6 @@ fn match_class_decl(stripped: &str) -> Option<(String, String)> {
     Some((kind.to_string(), name))
 }
 
-/// A `typealias` is a single-line, package-level declaration -- unlike
-/// `class`/`interface`/`enum`, it never opens a `{ ... }` block, so a match
-/// here must not become the parser's `cur_class`.
 fn match_typealias(stripped: &str) -> Option<String> {
     let tokens: Vec<&str> = stripped.trim().split(' ').collect();
     let mut i = 0;

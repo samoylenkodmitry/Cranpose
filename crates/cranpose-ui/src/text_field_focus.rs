@@ -171,7 +171,6 @@ impl TextFieldFocusState {
         false
     }
 
-    /// Whether the registered field's weak handle still resolves to a live field.
     fn focused_field_is_live(&self) -> bool {
         self.focused_field
             .borrow()
@@ -179,9 +178,6 @@ impl TextFieldFocusState {
             .is_some_and(|weak| weak.upgrade().is_some())
     }
 
-    /// Drops a registration whose field was torn down without going through
-    /// [`Self::clear_focus`] (e.g. composition removed the node). A no-op
-    /// when nothing is registered.
     fn clear_stale_focus(&self) {
         let stale_node = self
             .focused_handler

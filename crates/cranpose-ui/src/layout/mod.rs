@@ -1246,13 +1246,6 @@ impl LayoutBuilderState {
         let Some(data) = Self::layout_child_measure_data(applier, node_id)? else {
             return Ok(None);
         };
-        // needs_layout without needs_measure is a pending placement-only
-        // repass (scroll offsets, text panning): the cached SIZE may be
-        // right, but the subtree still has placement work to run, so serving
-        // the cache here — let alone clearing the flag — swallows the repass.
-        // The epoch must be CURRENT: invalidate_all_layout_caches advances
-        // the global epoch precisely so entries cached before it stop being
-        // served, and this gate reads the node's cache without activating it.
         if data.needs_measure
             || data.needs_layout
             || data.cache.epoch() == 0

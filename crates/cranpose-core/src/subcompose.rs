@@ -306,22 +306,11 @@ pub struct SubcomposeState {
     max_reusable_per_type: usize,
     max_reusable_untyped: usize,
     last_slot_reused: Option<bool>,
-    /// Capture key stored at the last composition of each slot. A retained
-    /// slot may skip recomposition on a measure pass only while the caller
-    /// presents an equal key (see `retained_capture_key_matches`).
     retained_capture_keys: HashMap<SlotId, RetainedCaptureKey>,
-    /// Bumped by `invalidate_scopes`; slots must re-compose once per bump
-    /// before clean-slot reuse may skip them again.
     content_generation: std::cell::Cell<u64>,
-    /// The (content generation, owner-chain deactivation epoch) each slot
-    /// last composed under.
     slot_composed_generation: HashMap<SlotId, (u64, u64)>,
 }
 
-/// Type-erased capture key recorded when a slot composes. Values that flow
-/// into slot content from the measure policy itself (a scaffold's computed
-/// padding, a box's constraints) never invalidate a recompose scope when they
-/// change, so slot reuse must compare them explicitly.
 struct RetainedCaptureKey {
     value: Box<dyn Any>,
     eq: fn(&dyn Any, &dyn Any) -> bool,
