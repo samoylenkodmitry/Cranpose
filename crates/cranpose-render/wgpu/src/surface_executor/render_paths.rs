@@ -784,35 +784,60 @@ fn axis_aligned_backdrop_snapshot_copy_plan(
 
     let capture_pixel_rect = surface_pixel_rect(capture_rect, root_scale);
     let effect_pixel_rect = surface_pixel_rect(effect_rect, root_scale);
-    let left = capture_pixel_rect.x.floor();
-    let top = capture_pixel_rect.y.floor();
-    let right = (capture_pixel_rect.x + capture_pixel_rect.width).ceil();
-    let bottom = (capture_pixel_rect.y + capture_pixel_rect.height).ceil();
-    if left < 0.0 || top < 0.0 || right <= left || bottom <= top {
-        return None;
-    }
-
-    let origin = (left as u32, top as u32);
-    let size = ((right - left) as u32, (bottom - top) as u32);
-    if size.0 == 0 || size.1 == 0 || size.0 > max_texture_dim || size.1 > max_texture_dim {
-        return None;
-    }
-    if origin.0.checked_add(size.0)? > source_size.0
-        || origin.1.checked_add(size.1)? > source_size.1
+    if capture_pixel_rect.x.floor() < 0.0
+        || capture_pixel_rect.y.floor() < 0.0
+        || capture_pixel_rect.width <= 0.0
+        || capture_pixel_rect.height <= 0.0
     {
         return None;
     }
 
+    // The window's size is a function of the capture's SIZE alone — the
+    // ceiled span plus the one pixel a fractional phase can add — never of
+    // its position. A floor/ceil span flips by one pixel as translation
+    // crosses pixel boundaries, and that flip churns the cache key and
+    // defeats pool recycling for content that did not change. A capture
+    // spanning the whole axis takes the whole axis (its clipped position is
+    // zero at every phase), and a window that would overhang the source
+    // shifts inward instead of falling off the copy path, so the fast-path
+    // choice is phase-independent too.
+    let axis = |span: f32, position: f32, source: u32| -> Option<(u32, u32)> {
+        let span = span.ceil() as u32;
+        let size = if span >= source {
+            source
+        } else {
+            span.saturating_add(1)
+        };
+        if size == 0 || size > source {
+            return None;
+        }
+        let origin = (position.floor() as u32).min(source - size);
+        Some((origin, size))
+    };
+    let (left, width) = axis(
+        capture_pixel_rect.width,
+        capture_pixel_rect.x,
+        source_size.0,
+    )?;
+    let (top, height) = axis(
+        capture_pixel_rect.height,
+        capture_pixel_rect.y,
+        source_size.1,
+    )?;
+    if width > max_texture_dim || height > max_texture_dim {
+        return None;
+    }
+
     Some(BackdropSnapshotCopyPlan {
-        source_origin: origin,
-        size,
+        source_origin: (left, top),
+        size: (width, height),
         effect_pixel_rect: [
-            effect_pixel_rect.x - left,
-            effect_pixel_rect.y - top,
+            effect_pixel_rect.x - left as f32,
+            effect_pixel_rect.y - top as f32,
             effect_pixel_rect.width,
             effect_pixel_rect.height,
         ],
-        dest_viewport: (left, top, right - left, bottom - top),
+        dest_viewport: (left as f32, top as f32, width as f32, height as f32),
     })
 }
 
@@ -903,32 +928,6 @@ fn visible_backdrop_capture_rect(
         root_scale,
         target_size,
     ))
-}
-
-#[cfg(test)]
-fn axis_aligned_backdrop_copy_region(
-    visible_rect: Rect,
-    root_scale: f32,
-    source_size: (u32, u32),
-    target_size: (u32, u32),
-) -> Option<((u32, u32), (u32, u32))> {
-    const PIXEL_EPSILON: f32 = 0.01;
-    let plan = axis_aligned_backdrop_snapshot_copy_plan(
-        visible_rect,
-        visible_rect,
-        root_scale,
-        source_size,
-        target_size.0.max(target_size.1),
-    )?;
-    if plan.size != target_size
-        || plan.effect_pixel_rect[0].abs() > PIXEL_EPSILON
-        || plan.effect_pixel_rect[1].abs() > PIXEL_EPSILON
-        || (plan.effect_pixel_rect[2] - target_size.0 as f32).abs() > PIXEL_EPSILON
-        || (plan.effect_pixel_rect[3] - target_size.1 as f32).abs() > PIXEL_EPSILON
-    {
-        return None;
-    }
-    Some((plan.source_origin, plan.size))
 }
 
 fn flush_pending_clear<B: SurfaceExecutionBackend>(
@@ -6557,14 +6556,13 @@ mod tests {
         BackdropPrefixChildContribution, DIRECT_SCENE_RANGE_CACHE_FLOOR_BYTES,
         DirectChunkRunCoalescer, MAX_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS,
         MAX_MOTION_SENSITIVE_DIRECT_SCENE_CACHE_DRAW_BYTES, MIN_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS,
-        SceneBrush, anchored_composite_dest_quad, axis_aligned_backdrop_copy_region,
-        axis_aligned_backdrop_snapshot_copy_plan, backdrop_effect_cache_key,
-        backdrop_effect_cache_key_for_effect_hash, backdrop_scene_prefix_hash,
-        backdrop_underlay_is_covered_by_local_content, child_composite_visible,
-        composite_dest_viewport, dest_quad_intersects_rect, direct_scene_range_cache_chunk_end,
-        direct_scene_range_cache_enabled_for_policy, direct_scene_range_cache_key,
-        direct_scene_range_chunk_fits_cache_entry, direct_scene_range_snapped_bounds,
-        exact_translation_sample_mode, layer_source_cache_key,
+        SceneBrush, anchored_composite_dest_quad, axis_aligned_backdrop_snapshot_copy_plan,
+        backdrop_effect_cache_key, backdrop_effect_cache_key_for_effect_hash,
+        backdrop_scene_prefix_hash, backdrop_underlay_is_covered_by_local_content,
+        child_composite_visible, composite_dest_viewport, dest_quad_intersects_rect,
+        direct_scene_range_cache_chunk_end, direct_scene_range_cache_enabled_for_policy,
+        direct_scene_range_cache_key, direct_scene_range_chunk_fits_cache_entry,
+        direct_scene_range_snapped_bounds, exact_translation_sample_mode, layer_source_cache_key,
         layer_source_uses_external_backdrop_underlay, layer_surface_dest_quad,
         layer_surface_translation_context, minimum_surface_scale_for_composite,
         prefix_snapshot_key, prefix_snapshot_range_end, quad_bounds_rect, rects_intersect,
@@ -7114,7 +7112,7 @@ mod tests {
     }
 
     #[test]
-    fn fractional_origin_backdrop_snapshot_spans_more_than_ceiled_extent() {
+    fn every_translation_phase_pays_the_same_one_texel_snapshot_margin() {
         let capture = Rect {
             x: 53.0,
             y: 95.435,
@@ -7125,8 +7123,12 @@ mod tests {
             axis_aligned_backdrop_snapshot_copy_plan(capture, capture, 2.0, (1800, 1600), 4096)
                 .expect("axis-aligned capture must plan a 1:1 copy");
         let ceiled = surface_target_size(capture, 2.0, 4096);
-        assert_eq!(plan.size.1, ceiled.1 + 1, "fractional origin adds a texel");
-        assert_eq!(plan.size.0, ceiled.0, "integral axis stays equal");
+        assert_eq!(plan.size.1, ceiled.1 + 1);
+        assert_eq!(
+            plan.size.0,
+            ceiled.0 + 1,
+            "the margin is constant, not phase-dependent — an integral axis pays it too"
+        );
     }
 
     #[test]
@@ -8706,37 +8708,27 @@ mod tests {
     }
 
     #[test]
-    fn integer_aligned_backdrop_copy_region_is_copyable() {
-        let region = axis_aligned_backdrop_copy_region(
-            Rect {
-                x: 12.0,
+    fn integer_and_fractional_phases_share_one_enclosing_copy_plan() {
+        let plan_at = |x: f32| {
+            let capture = Rect {
+                x,
                 y: 20.0,
                 width: 140.0,
                 height: 100.0,
-            },
-            2.0,
-            (800, 600),
-            (280, 200),
-        );
+            };
+            axis_aligned_backdrop_snapshot_copy_plan(capture, capture, 2.0, (800, 600), 4096)
+                .expect("in-viewport capture stays on the copy path at every phase")
+        };
+        let integer = plan_at(12.0);
+        let fractional = plan_at(12.25);
 
-        assert_eq!(region, Some(((24, 40), (280, 200))));
-    }
-
-    #[test]
-    fn fractional_backdrop_copy_region_requires_render_pass_fallback() {
-        let region = axis_aligned_backdrop_copy_region(
-            Rect {
-                x: 12.25,
-                y: 20.0,
-                width: 140.0,
-                height: 100.0,
-            },
-            2.0,
-            (800, 600),
-            (280, 200),
-        );
-
-        assert_eq!(region, None);
+        assert_eq!(integer.size, fractional.size);
+        for (plan, x) in [(integer, 12.0f32), (fractional, 12.25)] {
+            let left_px = (x * 2.0).floor() as u32;
+            let right_px = ((x + 140.0) * 2.0).ceil() as u32;
+            assert!(plan.source_origin.0 <= left_px);
+            assert!(plan.source_origin.0 + plan.size.0 >= right_px);
+        }
     }
 
     #[test]
@@ -8763,9 +8755,9 @@ mod tests {
         );
 
         assert_eq!(plan.source_origin, (24, 41));
-        assert_eq!(plan.size, (281, 200));
+        assert_eq!(plan.size, (281, 201));
         assert_eq!(plan.effect_pixel_rect, [0.5, 0.0, 280.0, 200.0]);
-        assert_eq!(plan.dest_viewport, (24.0, 41.0, 281.0, 200.0));
+        assert_eq!(plan.dest_viewport, (24.0, 41.0, 281.0, 201.0));
     }
 
     #[test]
@@ -8839,6 +8831,29 @@ mod tests {
     }
 
     #[test]
+    fn a_backdrop_copy_plan_size_never_depends_on_translation_phase() {
+        let mut sizes = std::collections::BTreeSet::new();
+        for step in 0..12 {
+            let capture = Rect {
+                x: 260.0,
+                y: 100.0 + step as f32 * 0.1,
+                width: 92.0,
+                height: 92.0,
+            };
+            let plan =
+                axis_aligned_backdrop_snapshot_copy_plan(capture, capture, 3.0, (1080, 2244), 4096)
+                    .expect("mid-viewport capture must stay on the copy path at every phase");
+            sizes.insert(plan.size);
+        }
+        assert_eq!(
+            sizes.len(),
+            1,
+            "translation phase leaked into the snapshot size: {sizes:?} — a moving \
+             backdrop churns cache keys and defeats pool recycling"
+        );
+    }
+
+    #[test]
     fn padded_backdrop_snapshot_copy_plan_offsets_effect_rect_inside_capture() {
         let plan = axis_aligned_backdrop_snapshot_copy_plan(
             Rect {
@@ -8860,9 +8875,9 @@ mod tests {
         .expect("padded backdrop capture should be copyable");
 
         assert_eq!(plan.source_origin, (4, 28));
-        assert_eq!(plan.size, (328, 248));
+        assert_eq!(plan.size, (329, 249));
         assert_eq!(plan.effect_pixel_rect, [24.0, 24.0, 280.0, 200.0]);
-        assert_eq!(plan.dest_viewport, (4.0, 28.0, 328.0, 248.0));
+        assert_eq!(plan.dest_viewport, (4.0, 28.0, 329.0, 249.0));
     }
 
     #[test]
