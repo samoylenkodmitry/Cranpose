@@ -2887,7 +2887,7 @@ fn retained_branch_hides_without_running_disposable_effect_cleanup() {
                             RecomposeOptions::default(),
                             move |_composer| {
                                 let cleanup_calls = Rc::clone(&cleanup_calls);
-                                DisposableEffect!((), move |_| {
+                                DisposableEffect((), move |_| {
                                     let cleanup_calls = Rc::clone(&cleanup_calls);
                                     DisposableEffectResult::new(move || {
                                         cleanup_calls.set(cleanup_calls.get() + 1);
@@ -2939,7 +2939,7 @@ fn conditional_branch_without_retention_runs_disposable_effect_cleanup() {
                     with_current_composer(|composer| {
                         composer.with_group(branch_key, |_composer| {
                             let cleanup_calls = Rc::clone(&cleanup_calls);
-                            DisposableEffect!((), move |_| {
+                            DisposableEffect((), move |_| {
                                 let cleanup_calls = Rc::clone(&cleanup_calls);
                                 DisposableEffectResult::new(move || {
                                     cleanup_calls.set(cleanup_calls.get() + 1);
@@ -4630,5 +4630,113 @@ fn sibling_provider_scopes_from_one_construction_site_stay_distinct() {
         20,
         "two sibling provider scopes fed from one construction site must not \
          share entries; the survivor keeps its reader's subscription"
+    );
+}
+
+#[test]
+fn key_preserves_state_when_unchanged_and_discards_when_key_changes() {
+    thread_local! {
+        static SLOT: RefCell<Option<Owned<i32>>> = const { RefCell::new(None) };
+    }
+
+    let mut composition = test_composition();
+    let runtime = composition.runtime_handle();
+    let variant = MutableState::with_runtime(1u32, runtime.clone());
+    let root_key = location_key(file!(), line!(), column!());
+
+    #[composable]
+    fn root(variant: MutableState<u32>) {
+        cranpose_core::key(variant.value(), || {
+            let slot = with_current_composer(|composer| composer.remember(|| 0_i32));
+            SLOT.with(|cell| cell.replace(Some(slot)));
+        });
+    }
+
+    let pass = |composition: &mut Composition<MemoryApplier>| {
+        composition.render(root_key, || root(variant))
+    };
+
+    pass(&mut composition).expect("initial composition");
+    let slot = SLOT
+        .with(|cell| cell.borrow().clone())
+        .expect("slot captured");
+    slot.replace(42);
+
+    pass(&mut composition).expect("recompose with unchanged key");
+    let unchanged = SLOT
+        .with(|cell| cell.borrow().clone())
+        .expect("slot recaptured");
+    assert_eq!(
+        unchanged.with(|value| *value),
+        42,
+        "state inside key(..) must survive recomposition when the key is unchanged"
+    );
+
+    variant.set_value(2);
+    pass(&mut composition).expect("recompose with changed key");
+    let changed = SLOT
+        .with(|cell| cell.borrow().clone())
+        .expect("slot recaptured after key change");
+    assert_eq!(
+        changed.with(|value| *value),
+        0,
+        "state inside key(..) must be discarded when the key changes"
+    );
+}
+
+#[test]
+fn sibling_key_blocks_with_different_keys_do_not_share_state() {
+    thread_local! {
+        static SLOTS: RefCell<Vec<Owned<i32>>> = const { RefCell::new(Vec::new()) };
+    }
+
+    let mut composition = test_composition();
+    let runtime = composition.runtime_handle();
+    let tick = MutableState::with_runtime(0u32, runtime.clone());
+    let root_key = location_key(file!(), line!(), column!());
+
+    #[composable]
+    fn root(tick: MutableState<u32>) {
+        let _ = tick.value();
+        cranpose_core::key("first", || {
+            let slot = with_current_composer(|composer| composer.remember(|| 1_i32));
+            SLOTS.with(|cell| cell.borrow_mut().push(slot));
+        });
+        cranpose_core::key("second", || {
+            let slot = with_current_composer(|composer| composer.remember(|| 2_i32));
+            SLOTS.with(|cell| cell.borrow_mut().push(slot));
+        });
+    }
+
+    let pass =
+        |composition: &mut Composition<MemoryApplier>| composition.render(root_key, || root(tick));
+
+    pass(&mut composition).expect("initial composition");
+
+    let (first, second) = SLOTS.with(|cell| {
+        let slots = cell.borrow();
+        (slots[0].clone(), slots[1].clone())
+    });
+    SLOTS.with(|cell| cell.borrow_mut().clear());
+
+    first.replace(100);
+    second.replace(200);
+    tick.set_value(1);
+
+    pass(&mut composition).expect("recompose after mutating both siblings");
+    let (first_after, second_after) = SLOTS.with(|cell| {
+        let slots = cell.borrow();
+        (slots[0].clone(), slots[1].clone())
+    });
+
+    assert_eq!(
+        first_after.with(|value| *value),
+        100,
+        "the first sibling key(..) block must keep its own state"
+    );
+    assert_eq!(
+        second_after.with(|value| *value),
+        200,
+        "the second sibling key(..) block must keep its own state, not the first's"
     );
 }

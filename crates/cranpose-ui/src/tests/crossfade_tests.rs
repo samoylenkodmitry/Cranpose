@@ -47,7 +47,7 @@ fn CrossfadeHost(target: MutableState<u32>, alive: Rc<RefCell<Vec<u32>>>) {
         tween(CROSSFADE_MILLIS, Easing::LinearEasing),
         move |value: u32| {
             let alive = Rc::clone(&alive_for_content);
-            cranpose_core::DisposableEffect!(value, move |_scope| {
+            cranpose_core::DisposableEffect(value, move |_scope| {
                 alive.borrow_mut().push(value);
                 let alive = Rc::clone(&alive);
                 DisposableEffectResult::new(move || {

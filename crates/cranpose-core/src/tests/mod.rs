@@ -695,7 +695,7 @@ fn side_effect_component() -> NodeId {
 fn disposable_effect_host() -> NodeId {
     let state = cranpose_core::rememberMutableStateOf(|| 0);
     DISPOSABLE_STATE.with(|slot| *slot.borrow_mut() = Some(state));
-    DisposableEffect!(state.value(), |scope| {
+    DisposableEffect(state.value(), |scope| {
         DISPOSABLE_EFFECT_LOG.with(|log| log.borrow_mut().push("start"));
         scope.on_dispose(|| {
             DISPOSABLE_EFFECT_LOG.with(|log| log.borrow_mut().push("dispose"));

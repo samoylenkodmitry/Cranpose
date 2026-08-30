@@ -601,7 +601,7 @@ fn disposable_effect_cleanup_can_update_use_state_during_group_removal() {
                 if show.get() {
                     let local = rememberMutableStateOf(|| 0usize);
                     let cleanup_calls = Rc::clone(&cleanup_calls);
-                    DisposableEffect!((), move |_| {
+                    DisposableEffect((), move |_| {
                         let cleanup_calls = Rc::clone(&cleanup_calls);
                         DisposableEffectResult::new(move || {
                             local.set(local.get() + 1);
@@ -639,7 +639,7 @@ fn launched_effect_runs_and_cancels() {
                 let key = state.value();
                 let runs = Arc::clone(&runs);
                 let captured_scopes = Rc::clone(&scopes_for_render);
-                LaunchedEffect!(key, move |scope| {
+                LaunchedEffect(key, move |scope| {
                     runs.fetch_add(1, Ordering::SeqCst);
                     captured_scopes.borrow_mut().push(scope);
                 });
@@ -687,7 +687,7 @@ fn launched_effect_runs_side_effect_body() {
                 let key = state.value();
                 let tx = tx.clone();
                 let captured_scopes = Rc::clone(&captured_scopes);
-                LaunchedEffect!(key, move |scope| {
+                LaunchedEffect(key, move |scope| {
                     let _ = tx.send("start");
                     captured_scopes.borrow_mut().push(scope);
                 });
@@ -722,7 +722,7 @@ fn launched_effect_background_updates_ui() {
         composition
             .render(0, move || {
                 let receiver = Rc::clone(&receiver);
-                LaunchedEffect!((), move |scope| {
+                LaunchedEffect((), move |scope| {
                     if let Some(rx) = receiver.borrow_mut().take() {
                         scope.launch_background(
                             move |_| async move { rx.recv().expect("value available") },
@@ -760,7 +760,7 @@ fn launched_effect_background_async_updates_ui() {
         composition
             .render(0, move || {
                 let receiver = Rc::clone(&receiver);
-                LaunchedEffect!((), move |scope| {
+                LaunchedEffect((), move |scope| {
                     if let Some(rx) = receiver.borrow_mut().take() {
                         scope.launch_background(
                             move |_| async move { rx.recv().expect("value available") },
@@ -800,7 +800,7 @@ fn launched_effect_background_ignores_late_result_after_cancel() {
             .render(0, move || {
                 let key = key_state.value();
                 let receiver = Rc::clone(&receiver);
-                LaunchedEffect!(key, move |scope| {
+                LaunchedEffect(key, move |scope| {
                     if key == 0
                         && let Some(rx) = receiver.borrow_mut().take()
                     {
@@ -822,7 +822,7 @@ fn launched_effect_background_ignores_late_result_after_cancel() {
             .render(0, move || {
                 let key = key_state.value();
                 let receiver = Rc::clone(&receiver);
-                LaunchedEffect!(key, move |scope| {
+                LaunchedEffect(key, move |scope| {
                     if key == 0
                         && let Some(rx) = receiver.borrow_mut().take()
                     {
@@ -863,12 +863,12 @@ fn launched_effect_relaunches_on_branch_change() {
                 let runs = Arc::clone(&runs);
                 let recorded_scopes = Rc::clone(&recorded_scopes);
                 if show_first {
-                    LaunchedEffect!("", move |scope| {
+                    LaunchedEffect("", move |scope| {
                         runs.fetch_add(1, Ordering::SeqCst);
                         recorded_scopes.borrow_mut().push((true, scope));
                     });
                 } else {
-                    LaunchedEffect!("", move |scope| {
+                    LaunchedEffect("", move |scope| {
                         runs.fetch_add(1, Ordering::SeqCst);
                         recorded_scopes.borrow_mut().push((false, scope));
                     });
@@ -935,7 +935,7 @@ fn anchor_survives_conditional_removal() {
 
                 let runs_for_effect = Arc::clone(&runs);
                 let scope_slot = Rc::clone(&captured_scope);
-                LaunchedEffect!((), move |scope| {
+                LaunchedEffect((), move |scope| {
                     runs_for_effect.fetch_add(1, Ordering::SeqCst);
                     scope_slot.borrow_mut().replace(scope);
                 });
@@ -1026,7 +1026,7 @@ fn launched_effect_async_survives_conditional_cycle() {
 
             let log = log.clone();
             let spawns = Arc::clone(&spawns);
-            cranpose_core::LaunchedEffectAsync!((), move |scope| {
+            cranpose_core::LaunchedEffectAsync((), move |scope| {
                 spawns.fetch_add(1, Ordering::SeqCst);
                 let log = log.clone();
                 Box::pin(async move {
@@ -1157,7 +1157,7 @@ fn launched_effect_async_keeps_frames_after_backward_forward_flip() {
 
     let mut render = {
         move || {
-            cranpose_core::LaunchedEffectAsync!((), move |scope| {
+            cranpose_core::LaunchedEffectAsync((), move |scope| {
                 Box::pin(async move {
                     let clock = scope.runtime().frame_clock();
                     let mut last_time: Option<u64> = None;
@@ -1506,7 +1506,7 @@ fn launched_effect_async_restarts_on_key_change() {
         move || {
             let key = key_state.value();
             let log = log.clone();
-            cranpose_core::LaunchedEffectAsync!(key, move |scope| {
+            cranpose_core::LaunchedEffectAsync(key, move |scope| {
                 let log = log.clone();
                 Box::pin(async move {
                     let clock = scope.runtime().frame_clock();
@@ -1653,7 +1653,7 @@ fn a_task_awaiting_a_frame_still_asks_for_frames() {
 #[composable]
 fn frame_callback_node(events: Rc<RefCell<Vec<&'static str>>>) -> NodeId {
     let runtime = cranpose_core::with_current_composer(|composer| composer.runtime_handle());
-    DisposableEffect!((), move |scope| {
+    DisposableEffect((), move |scope| {
         let clock = runtime.frame_clock();
         let events = events.clone();
         let registration = clock.with_frame_nanos(move |_| {
@@ -1735,7 +1735,7 @@ fn disposable_effect_reruns_on_hash_colliding_but_unequal_keys() {
                 let starts = Rc::clone(&starts);
                 let cleanups = Rc::clone(&cleanups);
                 let key = HashCollidingKey { tag: tag.get() };
-                DisposableEffect!(key, move |_| {
+                DisposableEffect(key, move |_| {
                     starts.set(starts.get() + 1);
                     let cleanups = Rc::clone(&cleanups);
                     DisposableEffectResult::new(move || {
@@ -1785,7 +1785,7 @@ fn launched_effect_reruns_on_hash_colliding_but_unequal_keys() {
                 let runs = Arc::clone(&runs);
                 let scopes = Rc::clone(&scopes);
                 let key = HashCollidingKey { tag: tag.get() };
-                LaunchedEffect!(key, move |scope| {
+                LaunchedEffect(key, move |scope| {
                     runs.fetch_add(1, Ordering::SeqCst);
                     scopes.borrow_mut().push(scope);
                 });
@@ -1830,7 +1830,7 @@ fn removal_races_keyed_effect_rerun(flip_key_first: bool) {
     #[composable]
     fn holder(key: MutableState<u32>) {
         let k = key.value();
-        DisposableEffect!(k, move |_| {
+        DisposableEffect(k, move |_| {
             STARTS.with(|c| c.set(c.get() + 1));
             LIVE.with(|c| c.set(c.get() + 1));
             DisposableEffectResult::new(move || LIVE.with(|c| c.set(c.get() - 1)))

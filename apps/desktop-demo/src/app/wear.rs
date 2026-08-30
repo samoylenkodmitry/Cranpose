@@ -152,7 +152,7 @@ pub fn wear_tab() {
     let list = rememberWearScalingListState(CentreAnchor::default());
 
     let tick_state = state.clone();
-    LaunchedEffectAsync!((), move |scope| {
+    LaunchedEffectAsync((), move |scope| {
         Box::pin(async move {
             let clock = scope.runtime().frame_clock();
             loop {

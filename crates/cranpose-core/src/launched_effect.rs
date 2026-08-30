@@ -414,15 +414,19 @@ where
     });
 }
 
-#[macro_export]
-macro_rules! LaunchedEffect {
-    ($keys:expr, $effect:expr) => {
-        $crate::__launched_effect_impl(
-            $crate::location_key(file!(), line!(), column!()),
-            $keys,
-            $effect,
-        )
-    };
+/// Runs `effect` when this call site first enters composition, and again
+/// whenever `keys` no longer equals the value it ran with last time.
+///
+/// `keys` may be a tuple to depend on more than one value, matching Jetpack
+/// Compose's `LaunchedEffect(vararg keys)`.
+#[allow(non_snake_case)]
+#[track_caller]
+pub fn LaunchedEffect<K, F>(keys: K, effect: F)
+where
+    K: PartialEq + 'static,
+    F: FnOnce(LaunchedEffectScope) + 'static,
+{
+    __launched_effect_impl(crate::caller_location_key(), keys, effect);
 }
 
 /// `site` is where the effect was written. It travels onto the task the effect
@@ -456,14 +460,16 @@ where
     });
 }
 
-#[macro_export]
-macro_rules! LaunchedEffectAsync {
-    ($keys:expr, $future:expr) => {
-        $crate::__launched_effect_async_impl(
-            $crate::location_key(file!(), line!(), column!()),
-            $crate::TaskSite::new(file!(), line!()),
-            $keys,
-            $future,
-        )
-    };
+/// Like [`LaunchedEffect`], but `mk_future` builds the future to drive rather
+/// than receiving a scope to call back into synchronously.
+#[allow(non_snake_case)]
+#[track_caller]
+pub fn LaunchedEffectAsync<K, F>(keys: K, mk_future: F)
+where
+    K: PartialEq + 'static,
+    F: FnOnce(LaunchedEffectScope) -> Pin<Box<dyn Future<Output = ()>>> + 'static,
+{
+    let caller = std::panic::Location::caller();
+    let group_key = crate::location_key(caller.file(), caller.line(), caller.column());
+    __launched_effect_async_impl(group_key, TaskSite::from(caller), keys, mk_future);
 }

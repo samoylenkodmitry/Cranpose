@@ -819,7 +819,7 @@ fn NativeWindowWithEvents(
 
         {
             let owner = Rc::clone(&owner);
-            cranpose_core::DisposableEffect!(key, move |scope| {
+            cranpose_core::DisposableEffect(key, move |scope| {
                 scope.on_dispose(move || unregister_native_window(key, owner))
             });
         }

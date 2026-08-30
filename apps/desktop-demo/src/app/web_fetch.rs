@@ -44,7 +44,7 @@ pub(crate) fn web_fetch_example() {
     let uri_handler = local_uri_handler().current();
     let http_client = local_http_client().current();
 
-    cranpose_core::LaunchedEffect!(request_counter.get(), move |scope| {
+    cranpose_core::LaunchedEffect(request_counter.get(), move |scope| {
         let request_key = request_counter.get();
         if request_key == 0 {
             return;

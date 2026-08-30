@@ -1722,7 +1722,7 @@ pub(crate) fn AsyncRuntimeEngine(
     let running = is_running.get();
     let reset_key = reset_signal.get();
 
-    cranpose_core::LaunchedEffect!((reset_key,), move |_scope| {
+    cranpose_core::LaunchedEffect((reset_key,), move |_scope| {
         if last_reset.get() != reset_key {
             last_reset.set(reset_key);
             animation.set(AnimationState::default());
@@ -1787,7 +1787,7 @@ fn counter_app() {
     };
     let wave_state = animateFloatAsState(target_wave, AnimationType::default(), "wave");
     let fetch_key = fetch_request.get();
-    LaunchedEffect!(fetch_key, move |_scope| {
+    LaunchedEffect(fetch_key, move |_scope| {
         if fetch_key == 0 {
             return;
         }
@@ -2220,7 +2220,7 @@ fn counter_app() {
 #[composable]
 fn composition_local_observer() {
     let state = cranpose_core::rememberMutableStateOf(|| 0);
-    DisposableEffect!((), move |_| {
+    DisposableEffect((), move |_| {
         state.set(state.get() + 1);
         DisposableEffectResult::default()
     });

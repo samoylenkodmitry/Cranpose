@@ -96,7 +96,7 @@ pub(crate) fn SourcePanel(tab: DemoTab) {
     let http_client = local_http_client().current();
     let list_state = rememberLazyListState();
 
-    cranpose_core::LaunchedEffect!(tab, move |scope| {
+    cranpose_core::LaunchedEffect(tab, move |scope| {
         state.set(SourceState::Loading);
         let client = http_client.clone();
         let url = source_url(tab);

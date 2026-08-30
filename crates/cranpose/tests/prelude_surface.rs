@@ -63,6 +63,26 @@ fn app_owned_map_data_composes_from_the_prelude_alone() {
 }
 
 #[test]
+fn effects_and_key_scope_compose_from_the_prelude_alone() {
+    let ran = std::rc::Rc::new(std::cell::Cell::new(0u32));
+    let effect_ran = std::rc::Rc::clone(&ran);
+    run_test_composition(move || {
+        let effect_ran = std::rc::Rc::clone(&effect_ran);
+        key("scoped", || {
+            LaunchedEffect((), move |_scope| {
+                effect_ran.set(effect_ran.get() + 1);
+            });
+        });
+        DisposableEffect((), |scope| scope.on_dispose(|| {}));
+    });
+    assert_eq!(
+        ran.get(),
+        1,
+        "LaunchedEffect nested in key(..) must run once, using only cranpose::prelude::*"
+    );
+}
+
+#[test]
 fn blocking_work_starts_from_the_prelude_alone() {
     let result = std::rc::Rc::new(std::cell::Cell::new(0u32));
     let sink = std::rc::Rc::clone(&result);
