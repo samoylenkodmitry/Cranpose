@@ -89,10 +89,10 @@ impl HyphenationDictionaryStore {
     }
 
     fn get_dictionary(&self, language: Language) -> Option<Standard> {
-        if let Ok(read_guard) = self.dictionaries.read() {
-            if let Some(dict) = read_guard.get(&language) {
-                return Some(dict.clone());
-            }
+        if let Ok(read_guard) = self.dictionaries.read()
+            && let Some(dict) = read_guard.get(&language)
+        {
+            return Some(dict.clone());
         }
 
         #[cfg(feature = "text-hyphenation-embedded")]
