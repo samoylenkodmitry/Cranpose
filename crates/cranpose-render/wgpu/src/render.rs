@@ -96,7 +96,7 @@ use crate::{
     gpu_stats::gpu_stats_enabled,
     layer_events::{LayerEvent, LayerEventKind, collect_effect_ranges, collect_layer_events},
     layer_surface_cache::LayerSurfaceCache,
-    lazy_resource::PassPipeline,
+    lazy_resource::{PassPipeline, SharedPassPipeline},
     normalized_scene::{ChildLayerComposite, CollectedLayer, translate_quad},
     offscreen::{OffscreenTarget, composition_bytes_per_pixel, composition_format},
     output_conversion::OutputConverter,
@@ -1718,24 +1718,31 @@ fn pipeline_prewarm_enabled() -> bool {
 struct PipelinePrewarmInputs {
     device: Arc<wgpu::Device>,
     cache: Option<wgpu::PipelineCache>,
+    adapter_backend: wgpu::Backend,
     surface_format: wgpu::TextureFormat,
     uniform_layout: wgpu::BindGroupLayout,
     shape_layout: wgpu::BindGroupLayout,
     image_layout: wgpu::BindGroupLayout,
     batch_limits: ShapeBatchLimits,
-    instanced: bool,
+    pipeline: SharedPassPipeline,
+    pipeline_solid: SharedPassPipeline,
+    mesh_pipeline: SharedPassPipeline,
+    instanced: Option<(SharedPassPipeline, SharedPassPipeline)>,
+    glyph_atlas_pipeline: SharedPassPipeline,
 }
 
-/// Builds the pipelines a first frame reaches for — off the render thread,
-/// concurrent with app startup — and drops them. The point is the shared
-/// device pipeline cache: the render thread's own `get_or_init` creates then
-/// find the driver's compiled code instead of paying for it mid-frame
-/// (measured on a Pixel Watch 3: 661 + 496 + 552 ms for the three shape
-/// pipelines alone, each one swallowed frame). The set is the framework's
-/// own base family with the flags the accessors would latch — same inputs,
-/// same permutations, so the cache keys match. Spawned only when the device
-/// has a pipeline cache; without one, warming another thread's `wgpu`
-/// objects would leave nothing behind for the render thread to find.
+/// Fills the flat (non-depth) slot of every `PassPipeline` a first frame
+/// reaches for — off the render thread, racing the render thread's own
+/// first-use `get_or_init` on the SAME `OnceLock`. Whichever side gets
+/// there first wins; the other blocks on `OnceLock`'s own wait instead of
+/// compiling a redundant pipeline (measured on a Pixel Watch 3: 661 + 496 +
+/// 552 ms for the three shape pipelines alone, each one a swallowed frame).
+/// Racing a shared slot — rather than building a throwaway pipeline that
+/// only pays off through a device-level `wgpu::PipelineCache` — is what lets
+/// this run on every backend: `cache` is `Some` on Vulkan and `None` on GL,
+/// Metal, DX12 and wasm's WebGL/WebGPU (wgpu grants
+/// `Features::PIPELINE_CACHE` on Vulkan only), and prewarming still removes
+/// the compile from the frame-critical path either way.
 #[cfg(not(target_arch = "wasm32"))]
 fn spawn_pipeline_prewarm(inputs: PipelinePrewarmInputs) {
     if !pipeline_prewarm_enabled() {
@@ -1747,94 +1754,109 @@ fn spawn_pipeline_prewarm(inputs: PipelinePrewarmInputs) {
             let started = Instant::now();
             let cache = inputs.cache.as_ref();
             let device = &inputs.device;
+            let backend = inputs.adapter_backend;
             let solid_trim = solid_trim_varyings_enabled();
             let mut built = 0_u32;
-            if inputs.instanced {
+            if let Some((instanced_pipeline, instanced_pipeline_solid)) = &inputs.instanced {
                 let (vertex_entry, fragment_entry) = if solid_trim {
                     ("vs_solid_instanced", "fs_solid_trim")
                 } else {
                     ("vs_shape_instanced", "fs_solid")
                 };
-                drop(create_instanced_shape_pipeline(
-                    device,
-                    cache,
-                    inputs.surface_format,
-                    &inputs.uniform_layout,
-                    &inputs.shape_layout,
-                    BlendMode::SrcOver,
-                    inputs.batch_limits,
-                    solid_trim,
-                    vertex_entry,
-                    fragment_entry,
-                    false,
-                ));
-                drop(create_instanced_shape_pipeline(
-                    device,
-                    cache,
-                    inputs.surface_format,
-                    &inputs.uniform_layout,
-                    &inputs.shape_layout,
-                    BlendMode::SrcOver,
-                    inputs.batch_limits,
-                    false,
-                    "vs_shape_instanced",
-                    "fs_main",
-                    false,
-                ));
+                instanced_pipeline_solid.get_or_init(backend, false, |depth| {
+                    create_instanced_shape_pipeline(
+                        device,
+                        cache,
+                        inputs.surface_format,
+                        &inputs.uniform_layout,
+                        &inputs.shape_layout,
+                        BlendMode::SrcOver,
+                        inputs.batch_limits,
+                        solid_trim,
+                        vertex_entry,
+                        fragment_entry,
+                        depth,
+                    )
+                });
+                instanced_pipeline.get_or_init(backend, false, |depth| {
+                    create_instanced_shape_pipeline(
+                        device,
+                        cache,
+                        inputs.surface_format,
+                        &inputs.uniform_layout,
+                        &inputs.shape_layout,
+                        BlendMode::SrcOver,
+                        inputs.batch_limits,
+                        false,
+                        "vs_shape_instanced",
+                        "fs_main",
+                        depth,
+                    )
+                });
             } else {
                 let (vertex_entry, fragment_entry) = if solid_trim {
                     ("vs_solid", "fs_solid_trim")
                 } else {
                     ("vs_main", "fs_solid")
                 };
-                drop(create_shape_pipeline(
-                    device,
-                    cache,
-                    inputs.surface_format,
-                    &inputs.uniform_layout,
-                    &inputs.shape_layout,
-                    BlendMode::SrcOver,
-                    inputs.batch_limits,
-                    solid_trim,
-                    vertex_entry,
-                    fragment_entry,
-                    false,
-                ));
-                drop(create_shape_pipeline(
-                    device,
-                    cache,
-                    inputs.surface_format,
-                    &inputs.uniform_layout,
-                    &inputs.shape_layout,
-                    BlendMode::SrcOver,
-                    inputs.batch_limits,
-                    false,
-                    "vs_main",
-                    "fs_main",
-                    false,
-                ));
+                inputs.pipeline_solid.get_or_init(backend, false, |depth| {
+                    create_shape_pipeline(
+                        device,
+                        cache,
+                        inputs.surface_format,
+                        &inputs.uniform_layout,
+                        &inputs.shape_layout,
+                        BlendMode::SrcOver,
+                        inputs.batch_limits,
+                        solid_trim,
+                        vertex_entry,
+                        fragment_entry,
+                        depth,
+                    )
+                });
+                inputs.pipeline.get_or_init(backend, false, |depth| {
+                    create_shape_pipeline(
+                        device,
+                        cache,
+                        inputs.surface_format,
+                        &inputs.uniform_layout,
+                        &inputs.shape_layout,
+                        BlendMode::SrcOver,
+                        inputs.batch_limits,
+                        false,
+                        "vs_main",
+                        "fs_main",
+                        depth,
+                    )
+                });
             }
             built += 2;
             if inputs.batch_limits.storage {
-                drop(create_mesh_shape_pipeline(
-                    device,
-                    cache,
-                    inputs.surface_format,
-                    &inputs.uniform_layout,
-                    &inputs.shape_layout,
-                    inputs.batch_limits,
-                    false,
-                ));
+                inputs.mesh_pipeline.get_or_init(backend, false, |depth| {
+                    create_mesh_shape_pipeline(
+                        device,
+                        cache,
+                        inputs.surface_format,
+                        &inputs.uniform_layout,
+                        &inputs.shape_layout,
+                        inputs.batch_limits,
+                        depth,
+                    )
+                });
                 built += 1;
             }
-            drop(create_glyph_atlas_pipeline(
-                device,
-                cache,
-                inputs.surface_format,
-                &inputs.uniform_layout,
-                &inputs.image_layout,
-                false,
-            ));
+            inputs
+                .glyph_atlas_pipeline
+                .get_or_init(backend, false, |depth| {
+                    create_glyph_atlas_pipeline(
+                        device,
+                        cache,
+                        inputs.surface_format,
+                        &inputs.uniform_layout,
+                        &inputs.image_layout,
+                        depth,
+                    )
+                });
             built += 1;
             log::info!(
                 "[pipeline-prewarm] {built} pipelines in {:.1} ms",
@@ -5086,12 +5108,12 @@ const INSTANCED_QUAD_INDICES: [u16; 6] = [0, 1, 2, 2, 1, 3];
 /// uniform-mode path) still has its six-vertex draws.
 #[cfg(not(target_arch = "wasm32"))]
 struct InstancedQuadPipelines {
-    pipeline: PassPipeline,
-    pipeline_dst_out: PassPipeline,
+    pipeline: SharedPassPipeline,
+    pipeline_dst_out: SharedPassPipeline,
     /// `fs_solid` twin of `pipeline` (SrcOver only): chosen for draws whose
     /// shapes carry no gradient stops, which is nearly every draw of an
     /// arc-heavy scene.
-    pipeline_solid: PassPipeline,
+    pipeline_solid: SharedPassPipeline,
     /// Static `[0, 1, 2, 2, 1, 3]` u16 index buffer, created once and shared
     /// by every instanced draw.
     index_buffer: wgpu::Buffer,
@@ -5099,11 +5121,11 @@ struct InstancedQuadPipelines {
 
 #[cfg(not(target_arch = "wasm32"))]
 struct SegmentCapturePipelines {
-    expanded: PassPipeline,
-    expanded_solid: PassPipeline,
-    mesh: PassPipeline,
-    instanced: PassPipeline,
-    instanced_solid: PassPipeline,
+    expanded: SharedPassPipeline,
+    expanded_solid: SharedPassPipeline,
+    mesh: SharedPassPipeline,
+    instanced: SharedPassPipeline,
+    instanced_solid: SharedPassPipeline,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -6051,15 +6073,15 @@ pub struct GpuRenderer {
     /// reuse compiled code across creates — and across launches once
     /// [`crate::pipeline_disk_cache`] persists the blob.
     pipeline_cache: Option<wgpu::PipelineCache>,
-    pipeline: PassPipeline,
-    pipeline_dst_out: PassPipeline,
+    pipeline: SharedPassPipeline,
+    pipeline_dst_out: SharedPassPipeline,
     /// `fs_solid` twin of `pipeline` (SrcOver only), for gradient-free draws.
-    pipeline_solid: PassPipeline,
+    pipeline_solid: SharedPassPipeline,
     /// `Some` exactly in storage mode: the retained-mesh pipeline (`vs_mesh`
     /// over a vertex buffer) that replay slots with a captured arc mesh draw
     /// through. Uniform-mode devices never host retained slots.
     #[cfg(not(target_arch = "wasm32"))]
-    mesh_pipeline: PassPipeline,
+    mesh_pipeline: SharedPassPipeline,
     /// `Some` exactly when this renderer latched the instanced-quad path at
     /// construction (storage mode && `CRANPOSE_INSTANCED_QUADS` != 0). Read
     /// ONCE per renderer lifetime — cached retained bundles encode the
@@ -6079,11 +6101,11 @@ pub struct GpuRenderer {
     identity_similarity_buffer: wgpu::Buffer,
     #[cfg(not(target_arch = "wasm32"))]
     replay_slots: ReplaySlotStore,
-    image_pipeline: PassPipeline,
-    image_pipeline_dst_out: PassPipeline,
-    glyph_atlas_pipeline: PassPipeline,
+    image_pipeline: SharedPassPipeline,
+    image_pipeline_dst_out: SharedPassPipeline,
+    glyph_atlas_pipeline: SharedPassPipeline,
     #[cfg(not(target_arch = "wasm32"))]
-    retained_glyph_atlas_pipeline: PassPipeline,
+    retained_glyph_atlas_pipeline: SharedPassPipeline,
     image_bind_group_layout: wgpu::BindGroupLayout,
     #[cfg(not(target_arch = "wasm32"))]
     retained_glyph_uniform_bind_group_layout: wgpu::BindGroupLayout,
@@ -6824,12 +6846,12 @@ impl GpuRenderer {
                 }],
             });
 
-        // The cache handle costs nothing to create and pays on every device:
-        // in-process, the shape family's permutations share most of their
-        // compiled code; across launches, the persisted blob turns first-use
-        // compiles (2.0 s of render thread inside the first six seconds on a
-        // Pixel Watch 3) into cache hits. `None` where the device lacks the
-        // feature — every creation site then behaves exactly as before.
+        // The cache handle costs nothing to create and pays on Vulkan: the
+        // persisted blob turns first-use compiles (2.0 s of render thread
+        // inside the first six seconds on a Pixel Watch 3) into cache hits
+        // across launches. `None` where the device lacks the feature (every
+        // non-Vulkan backend) — every creation site then behaves exactly as
+        // before, and the prewarm below carries the whole load instead.
         #[cfg(not(target_arch = "wasm32"))]
         let pipeline_cache = crate::pipeline_disk_cache::load(&device);
         #[cfg(target_arch = "wasm32")]
@@ -6837,17 +6859,28 @@ impl GpuRenderer {
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(cache) = pipeline_cache.clone() {
             crate::pipeline_disk_cache::spawn_persist_schedule(cache);
-            spawn_pipeline_prewarm(PipelinePrewarmInputs {
-                device: Arc::clone(&device),
-                cache: pipeline_cache.clone(),
-                surface_format: composition_format,
-                uniform_layout: uniform_bind_group_layout.clone(),
-                shape_layout: shape_bind_group_layout.clone(),
-                image_layout: image_bind_group_layout.clone(),
-                batch_limits: shape_batch_limits,
-                instanced: instanced_quads.is_some(),
-            });
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        spawn_pipeline_prewarm(PipelinePrewarmInputs {
+            device: Arc::clone(&device),
+            cache: pipeline_cache.clone(),
+            adapter_backend,
+            surface_format: composition_format,
+            uniform_layout: uniform_bind_group_layout.clone(),
+            shape_layout: shape_bind_group_layout.clone(),
+            image_layout: image_bind_group_layout.clone(),
+            batch_limits: shape_batch_limits,
+            pipeline: Arc::clone(&pipeline),
+            pipeline_solid: Arc::clone(&pipeline_solid),
+            mesh_pipeline: Arc::clone(&mesh_pipeline),
+            instanced: instanced_quads.as_ref().map(|quads| {
+                (
+                    Arc::clone(&quads.pipeline),
+                    Arc::clone(&quads.pipeline_solid),
+                )
+            }),
+            glyph_atlas_pipeline: Arc::clone(&glyph_atlas_pipeline),
+        });
 
         let effects_started = Instant::now();
         let effect_renderer = EffectRenderer::new(
@@ -25478,5 +25511,111 @@ mod tests {
 
         cache.clear();
         assert!(!cache.hit(&live), "clear must drop every entry");
+    }
+
+    /// A real device that was never granted `Features::PIPELINE_CACHE` —
+    /// every backend except Vulkan: GL (the Android fallback that reported
+    /// tens of seconds of black screen per shader-pipeline compile), Metal,
+    /// DX12. Requesting zero features forces this regardless of what the
+    /// adapter under the test runner actually supports, so the assertion
+    /// below exercises the no-device-cache path on every CI host.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn headless_device_without_pipeline_cache_feature() -> Option<(
+        Arc<wgpu::Device>,
+        Arc<wgpu::Queue>,
+        wgpu::Backend,
+        wgpu::DownlevelFlags,
+    )> {
+        let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+        instance_descriptor.backends = wgpu::Backends::all();
+        let instance = wgpu::Instance::new(instance_descriptor);
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::LowPower,
+            compatible_surface: None,
+            force_fallback_adapter: false,
+        }))
+        .ok()?;
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("pipeline-prewarm-contract-test-device"),
+            required_features: wgpu::Features::empty(),
+            required_limits: wgpu::Limits::default(),
+            experimental_features: wgpu::ExperimentalFeatures::disabled(),
+            memory_hints: wgpu::MemoryHints::default(),
+            trace: wgpu::Trace::Off,
+        }))
+        .ok()?;
+        Some((
+            Arc::new(device),
+            Arc::new(queue),
+            adapter.get_info().backend,
+            adapter.get_downlevel_capabilities().flags,
+        ))
+    }
+
+    /// The bug this guards: a background prewarm thread that only paid off
+    /// through a device-level `wgpu::PipelineCache` blob helped Vulkan and
+    /// did nothing on every other backend, so a device without the feature
+    /// — the reported black screen was GL, with no Vulkan adapter at all —
+    /// got no mitigation whatsoever. Prewarming now races the render
+    /// thread's own `get_or_init` on the SAME shared slot instead of
+    /// building a throwaway pipeline, so it must fill that slot even when
+    /// `pipeline_cache` is `None`.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn pipeline_prewarm_fills_the_shared_slot_without_a_device_pipeline_cache() {
+        let Some((device, queue, backend, downlevel)) =
+            headless_device_without_pipeline_cache_feature()
+        else {
+            eprintln!(
+                "no GPU adapter available in this environment; skipping pipeline prewarm contract test"
+            );
+            return;
+        };
+        let renderer = GpuRenderer::new(
+            device,
+            queue,
+            wgpu::TextureFormat::Bgra8UnormSrgb,
+            backend,
+            downlevel,
+            SoftwareTextFontSet::empty(),
+            1,
+            0,
+        );
+        assert!(
+            renderer.pipeline_cache.is_none(),
+            "the test device requested zero features, so it must not have been granted \
+             PIPELINE_CACHE — this test is meaningless if it was"
+        );
+
+        // Storage-capable devices default to the instanced-quad path
+        // (`CRANPOSE_INSTANCED_QUADS`, ON unless disabled), which prewarms
+        // `instanced_quads`'s own pipelines instead of the plain ones —
+        // check whichever pair this device actually latched, exactly as
+        // `Self::shape_pipeline`/`Self::instanced_pipeline` do at draw time.
+        let (base, solid): (&PassPipeline, &PassPipeline) = match &renderer.instanced_quads {
+            Some(instanced) => (&instanced.pipeline, &instanced.pipeline_solid),
+            None => (&renderer.pipeline, &renderer.pipeline_solid),
+        };
+
+        // The prewarm thread builds the shape pair before the glyph atlas
+        // pipeline (see `spawn_pipeline_prewarm`), so waiting on the last
+        // one it touches is enough to know the whole set has landed.
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while renderer.glyph_atlas_pipeline.get(false).is_none() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+
+        assert!(
+            base.get(false).is_some(),
+            "prewarm must fill the base shape pipeline even without a device pipeline cache"
+        );
+        assert!(
+            solid.get(false).is_some(),
+            "prewarm must fill the solid shape pipeline even without a device pipeline cache"
+        );
+        assert!(
+            renderer.glyph_atlas_pipeline.get(false).is_some(),
+            "prewarm must fill the glyph atlas pipeline even without a device pipeline cache"
+        );
     }
 }

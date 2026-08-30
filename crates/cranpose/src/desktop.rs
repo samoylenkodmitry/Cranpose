@@ -37,7 +37,10 @@ use crate::{
         NativeWindowRequest, WindowGraphMove, WindowGraphNodeSnapshot, WindowGraphPeerSnapshot,
         WindowGraphState, WindowGroupId, WindowResizeDirection, WindowState,
     },
-    wgpu_surface::{SurfaceFrame, current_surface_texture, surface_present_required},
+    wgpu_surface::{
+        SurfaceFrame, current_surface_texture, present_initial_placeholder_frame,
+        surface_present_required,
+    },
     winit_pointer::{
         is_primary_pointer_button, pointer_source_from_button, pointer_source_from_winit,
     },
@@ -1593,6 +1596,18 @@ impl App {
             self.frame_pacing_mode(),
         )?;
         surface.configure(&context.device, &surface_config);
+        // Closes the black-screen gap at its root: the compositor must
+        // never show whatever the swapchain held right after `configure`
+        // for however long this window's first real frame takes to
+        // reach the screen (its shape/text pipelines may still be
+        // compiling on the prewarm thread).
+        present_initial_placeholder_frame(
+            &surface,
+            &context.device,
+            &context.queue,
+            surface_format,
+            "native window initial present",
+        );
         trace_native_window_timing(format_args!(
             "{} configure {}ms",
             options.title,
@@ -4384,6 +4399,18 @@ impl ApplicationHandler for App {
         let queue = Arc::new(queue);
 
         surface.configure(&device, &surface_config);
+        // Closes the black-screen gap at its root: the window is made
+        // visible below, before this app's first real content frame can
+        // possibly be ready (its shape/text pipelines may still be
+        // compiling on the prewarm thread), so the compositor must never
+        // show whatever the swapchain held right after `configure`.
+        present_initial_placeholder_frame(
+            &surface,
+            &device,
+            &queue,
+            surface_format,
+            "primary window initial present",
+        );
 
         // Create renderer with the app's fonts: registered families first,
         // then the static `with_fonts()` slices, then the embedded fallback.

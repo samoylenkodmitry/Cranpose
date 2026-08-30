@@ -200,6 +200,76 @@ fn drain_outcomes(renderer: &mut WgpuRenderer) -> Vec<(u64, PresentOutcome)> {
     outcomes
 }
 
+/// The black-screen invariant this runtime exists to protect on the
+/// Android threaded path: the instant a surface (or, headlessly, the
+/// offscreen surrogate) is installed, a placeholder frame must already be
+/// on it — acknowledged only after the clear, so a caller that waits for
+/// the ack (the real `ReplaceSurface`/`present_replace_surface` path)
+/// never observes a configured-but-blank surface. This holds regardless
+/// of whether a single content `PassPipeline` has finished compiling,
+/// because the placeholder touches none. `placeholder_frames` is counted
+/// separately from `presented_frames` (real content packets only), so
+/// this also proves the two are never conflated.
+#[test]
+fn a_surface_never_sits_configured_with_nothing_presented_to_it() {
+    let (_lock, mut renderer, device, queue, backend, downlevel) =
+        inline_runtime_or_skip!("placeholder frame");
+    let mut runtime = renderer.init_gpu_inline_for_tests(
+        device,
+        queue,
+        wgpu::TextureFormat::Bgra8UnormSrgb,
+        backend,
+        downlevel,
+    );
+
+    let (_, _, presented_before, placeholder_before) = renderer
+        .present_status_snapshot_for_tests()
+        .expect("threaded mode must expose the status snapshot");
+    assert_eq!(
+        (presented_before, placeholder_before),
+        (0, 0),
+        "nothing has been installed yet"
+    );
+
+    let ack = renderer
+        .send_attach_offscreen_unacked_for_tests(WIDTH, HEIGHT)
+        .expect("inline runtime must accept controls");
+    runtime.pump();
+    ack.try_recv()
+        .expect("the attach must ack only after the placeholder clear runs");
+
+    let (_, _, presented_frames, placeholder_frames) = renderer
+        .present_status_snapshot_for_tests()
+        .expect("threaded mode must expose the status snapshot");
+    assert_eq!(
+        placeholder_frames, 1,
+        "installing the surface must fire exactly one placeholder clear,          before the producer could possibly have a real packet ready"
+    );
+    assert_eq!(
+        presented_frames, 0,
+        "the placeholder must not be counted as a real content frame"
+    );
+
+    // A real content frame afterward still counts on its own side of the
+    // ledger — the two counters track genuinely different events, not the
+    // same one under two names.
+    renderer.scene_mut().graph = Some(direct_graph());
+    assert_eq!(
+        renderer.publish_frame(WIDTH, HEIGHT),
+        PublishOutcome::Published
+    );
+    runtime.pump();
+    assert_eq!(renderer.drain_present_returns(), 1);
+    let (_, _, presented_frames, placeholder_frames) = renderer
+        .present_status_snapshot_for_tests()
+        .expect("threaded mode must expose the status snapshot");
+    assert_eq!(presented_frames, 1);
+    assert_eq!(
+        placeholder_frames, 1,
+        "a real frame publishing must not fire another placeholder clear"
+    );
+}
+
 /// 7b-1: depth-one credit — one packet rendering AND one waiting. Two
 /// publishes fit (that pair is what lets the producer lower N+1 while the
 /// present thread draws N); the THIRD reports `NoCredit` WITHOUT lowering
@@ -597,7 +667,7 @@ fn needs_frame_warmup_reads_present_thread_atomic() {
     runtime.pump();
     assert_eq!(renderer.drain_present_returns(), 1);
 
-    let (atomic_warmup, _, _) = renderer
+    let (atomic_warmup, _, _, _) = renderer
         .present_status_snapshot_for_tests()
         .expect("threaded mode must expose the status snapshot");
     assert!(
@@ -623,7 +693,7 @@ fn needs_frame_warmup_reads_present_thread_atomic() {
         runtime.pump();
         assert_eq!(renderer.drain_present_returns(), 1);
     }
-    let (atomic_warmup, _, _) = renderer
+    let (atomic_warmup, _, _, _) = renderer
         .present_status_snapshot_for_tests()
         .expect("threaded mode must expose the status snapshot");
     assert_eq!(renderer.needs_frame_warmup(), atomic_warmup);
@@ -699,7 +769,7 @@ fn real_thread_runtime_smoke() {
         vec![(2, PresentOutcome::Presented)],
         "the real present thread must render against the offscreen target"
     );
-    let (_, _, presented_frames) = renderer
+    let (_, _, presented_frames, _) = renderer
         .present_status_snapshot_for_tests()
         .expect("threaded mode must expose the status snapshot");
     assert_eq!(presented_frames, 1);

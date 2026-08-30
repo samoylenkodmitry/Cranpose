@@ -30,7 +30,10 @@ use winit::{
 
 use crate::{
     app_launcher::{AppSettings, LaunchError},
-    wgpu_surface::{SurfaceFrame, current_surface_texture, surface_present_required},
+    wgpu_surface::{
+        SurfaceFrame, current_surface_texture, present_initial_placeholder_frame,
+        surface_present_required,
+    },
     winit_pointer::{
         is_primary_pointer_button, pointer_source_from_button, pointer_source_from_winit,
     },
@@ -407,6 +410,18 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
         let device = Arc::new(device);
         let queue = Arc::new(queue);
         surface.configure(&device, &config);
+        // Closes the black-screen gap at its root: the compositor must
+        // never show whatever the swapchain held right after `configure`
+        // for however long this window's first real frame takes to
+        // reach the screen (its shape/text pipelines may still be
+        // compiling on the prewarm thread).
+        present_initial_placeholder_frame(
+            &surface,
+            &device,
+            &queue,
+            config.format,
+            "ios initial present",
+        );
 
         let scale_factor = window.scale_factor();
         let density = (scale_factor as f32).max(f32::EPSILON);

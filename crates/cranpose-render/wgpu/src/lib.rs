@@ -15,6 +15,7 @@ mod frame_graph;
 mod frame_packet;
 mod frontend;
 pub(crate) mod gpu_stats;
+mod initial_present;
 mod layer_events;
 mod layer_surface_cache;
 mod lazy_resource;
@@ -68,6 +69,7 @@ use frame_packet::ReplayConfirmation;
 pub use frame_packet::{CancelReason, PresentOutcome};
 use frontend::{DevOverlayCache, RendererFrontend};
 pub use gpu_stats::FrameStatsSnapshot as RenderStatsSnapshot;
+pub use initial_present::clear_to_default_background;
 pub use pass_timing::{GpuPassTimingEntry, GpuPassTimingReport};
 #[doc(hidden)]
 #[cfg(not(target_arch = "wasm32"))]
@@ -1044,10 +1046,11 @@ impl WgpuRenderer {
     }
 
     /// Test inspector: the shared present-status snapshot's
-    /// (needs_frame_warmup, replay_supported, presented_frames) triple.
+    /// (needs_frame_warmup, replay_supported, presented_frames,
+    /// placeholder_frames) quadruple.
     #[cfg(not(target_arch = "wasm32"))]
     #[doc(hidden)]
-    pub fn present_status_snapshot_for_tests(&self) -> Option<(bool, bool, u64)> {
+    pub fn present_status_snapshot_for_tests(&self) -> Option<(bool, bool, u64, u64)> {
         match &self.backend {
             PresentBackend::Threaded(handle) => {
                 let status = handle.status();
@@ -1060,6 +1063,9 @@ impl WgpuRenderer {
                         .load(std::sync::atomic::Ordering::Relaxed),
                     status
                         .presented_frames
+                        .load(std::sync::atomic::Ordering::Relaxed),
+                    status
+                        .placeholder_frames
                         .load(std::sync::atomic::Ordering::Relaxed),
                 ))
             }

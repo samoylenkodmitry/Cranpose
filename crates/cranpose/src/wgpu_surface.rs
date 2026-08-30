@@ -39,6 +39,38 @@ pub(crate) fn current_surface_texture(surface: &wgpu::Surface<'_>, context: &str
     }
 }
 
+/// Clears a freshly configured surface to the framework's own default
+/// background and presents it — the one-shot every surface-installation
+/// call site needs immediately after `wgpu::Surface::configure`, before
+/// the app's first real content frame can possibly be ready. Without it
+/// the compositor shows whatever the swapchain held right after
+/// `configure` (undefined memory, or the previous window's content) for
+/// however long the first frame's shape/text pipelines take to compile —
+/// on a slow driver, the black screen this exists to close out.
+///
+/// `context` labels this surface for the same acquire-failure logging
+/// `current_surface_texture` already does. A failed acquire (`Skip`, or
+/// `Reconfigure` this function does not retry) leaves nothing to clear;
+/// the window's first real frame still reaches the screen through the
+/// normal render loop once the surface recovers, so this is a head
+/// start, not a load-bearing guarantee.
+pub(crate) fn present_initial_placeholder_frame(
+    surface: &wgpu::Surface<'_>,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    format: wgpu::TextureFormat,
+    context: &str,
+) {
+    if let SurfaceFrame::Ready(frame) = current_surface_texture(surface, context) {
+        let view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
+            format: Some(format.remove_srgb_suffix()),
+            ..Default::default()
+        });
+        cranpose_render_wgpu::clear_to_default_background(device, queue, &view);
+        frame.present();
+    }
+}
+
 /// True when a frame must actually be presented. Skipping idle frames
 /// keeps vsync-off runs from spinning; presenting on visual changes
 /// prevents the blank-until-event bug.

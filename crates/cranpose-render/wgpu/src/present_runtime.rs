@@ -152,6 +152,12 @@ pub(crate) struct PresentStatus {
     pub(crate) replay_supported: AtomicBool,
     /// Lifetime count of packets that reached `PresentOutcome::Presented`.
     pub(crate) presented_frames: AtomicU64,
+    /// Lifetime count of one-shot placeholder clears
+    /// ([`PresentState::present_placeholder_frame`]) fired the instant a
+    /// surface or the test offscreen target was installed, before the
+    /// producer could possibly have a real packet ready. Separate from
+    /// `presented_frames`, which counts real content packets only.
+    pub(crate) placeholder_frames: AtomicU64,
     /// The last consumed packet's outcome, encoded with its frame id — see
     /// [`encode_present_outcome`].
     pub(crate) last_present_outcome: AtomicU64,
@@ -340,6 +346,11 @@ impl PresentState {
                 self.surface = Some(surface);
                 self.config = Some(config);
                 self.offscreen_target = None;
+                // The invariant this closes: a surface must never sit
+                // configured and showing whatever the swapchain held
+                // before `configure` while the producer's first real
+                // packet is still frames or seconds away.
+                self.present_placeholder_frame();
                 let _ = ack.send(());
                 true
             }
@@ -386,6 +397,7 @@ impl PresentState {
                 self.surface = None;
                 self.config = None;
                 self.offscreen_target = Some((width, height));
+                self.present_placeholder_frame();
                 let _ = ack.send(());
                 true
             }
@@ -545,6 +557,59 @@ impl PresentState {
                 .store(returns.frame_id.max(1), Ordering::Relaxed);
         }
         self.finish_returns(returns);
+    }
+
+    /// Clears the just-installed surface (or, in tests, the offscreen
+    /// surrogate) to the framework's default background and — for a real
+    /// surface — presents it, before the caller acks the control message
+    /// that installed it. No `PassPipeline` is reachable from here (see
+    /// `crate::initial_present`), so this never waits on a shader compile.
+    /// A failed acquire (Timeout/Occluded/Validation, or a Lost/Outdated
+    /// surface that fails its one reconfigure retry) leaves nothing to
+    /// clear; the very next real packet's own acquire will surface the
+    /// same condition, so it is not treated as an error here.
+    fn present_placeholder_frame(&mut self) {
+        if self.surface.is_some() {
+            if let Some(frame) = self.acquire_with_one_retry() {
+                let view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
+                    format: Some(self.gpu_renderer.surface_format().remove_srgb_suffix()),
+                    ..Default::default()
+                });
+                crate::initial_present::clear_to_default_background(
+                    &self.device,
+                    &self.gpu_renderer.queue,
+                    &view,
+                );
+                frame.present();
+                self.status
+                    .placeholder_frames
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+        } else if let Some((width, height)) = self.offscreen_target {
+            let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("Present Runtime Placeholder Offscreen Target"),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: self.gpu_renderer.surface_format(),
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            });
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            crate::initial_present::clear_to_default_background(
+                &self.device,
+                &self.gpu_renderer.queue,
+                &view,
+            );
+            self.status
+                .placeholder_frames
+                .fetch_add(1, Ordering::Relaxed);
+        }
     }
 
     /// The `current_surface_texture` semantics, runtime-owned: Ready →
