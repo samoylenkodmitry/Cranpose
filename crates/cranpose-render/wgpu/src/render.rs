@@ -9069,18 +9069,8 @@ impl GpuRenderer {
                 &mut glyph_cmds,
             )?;
             let mut shape_refs = Vec::with_capacity(budget.shape_count);
-            for batch in chunk.iter() {
-                let SegmentBatchPlan::Shape { start, end, .. } = batch else {
-                    continue;
-                };
-                for (_, item) in &ordered_items[start..end] {
-                    let SegmentDrawItem::Shape(shape_index) = item else {
-                        return Err(format!(
-                            "shape batch contains non-shape draw item: {item:?}"
-                        ));
-                    };
-                    shape_refs.push(&shapes[*shape_index]);
-                }
+            for shape_index in chunk.shape_indices(ordered_items) {
+                shape_refs.push(&shapes[shape_index?]);
             }
             let after_shape_refs = Instant::now();
 
@@ -13035,36 +13025,26 @@ impl GpuRenderer {
         );
     }
 
-    fn prepare_image_draw_cmds<'a, I>(
-        &mut self,
-        layer_images: I,
-        viewport: ViewportUniformParams,
-        root_scale: f32,
-        staged_uploads: &mut StagedBufferUploads,
-    ) -> Result<PreparedImageBatch, String>
-    where
-        I: Iterator<Item = &'a ImageDraw>,
-    {
-        #[cfg(target_arch = "wasm32")]
-        let _ = staged_uploads;
-
+    fn take_scratch_image_buffers(&mut self) -> (Vec<Vertex>, Vec<u32>, Vec<ImageDrawCmd>) {
         let mut image_vertices = std::mem::take(&mut self.scratch_image_vertices);
         let mut image_indices = std::mem::take(&mut self.scratch_image_indices);
         let mut image_cmds = std::mem::take(&mut self.scratch_image_cmds);
         image_vertices.clear();
         image_indices.clear();
         image_cmds.clear();
+        (image_vertices, image_indices, image_cmds)
+    }
 
-        for image_draw in layer_images {
-            self.append_image_draw_cmd(
-                image_draw,
-                viewport,
-                root_scale,
-                &mut image_vertices,
-                &mut image_indices,
-                &mut image_cmds,
-            )?;
-        }
+    fn finish_image_batch(
+        &mut self,
+        viewport: ViewportUniformParams,
+        staged_uploads: &mut StagedBufferUploads,
+        image_vertices: Vec<Vertex>,
+        image_indices: Vec<u32>,
+        image_cmds: Vec<ImageDrawCmd>,
+    ) -> PreparedImageBatch {
+        #[cfg(target_arch = "wasm32")]
+        let _ = staged_uploads;
 
         #[cfg(not(target_arch = "wasm32"))]
         if !image_cmds.is_empty() {
@@ -13103,13 +13083,46 @@ impl GpuRenderer {
 
         self.scratch_image_vertices = image_vertices;
         self.scratch_image_indices = image_indices;
-        Ok(PreparedImageBatch {
+        PreparedImageBatch {
             cmds: image_cmds,
             #[cfg(target_arch = "wasm32")]
             image_slot,
             #[cfg(target_arch = "wasm32")]
             uniform_slot,
-        })
+        }
+    }
+
+    fn prepare_image_draw_cmds<'a, I>(
+        &mut self,
+        layer_images: I,
+        viewport: ViewportUniformParams,
+        root_scale: f32,
+        staged_uploads: &mut StagedBufferUploads,
+    ) -> Result<PreparedImageBatch, String>
+    where
+        I: Iterator<Item = &'a ImageDraw>,
+    {
+        let (mut image_vertices, mut image_indices, mut image_cmds) =
+            self.take_scratch_image_buffers();
+
+        for image_draw in layer_images {
+            self.append_image_draw_cmd(
+                image_draw,
+                viewport,
+                root_scale,
+                &mut image_vertices,
+                &mut image_indices,
+                &mut image_cmds,
+            )?;
+        }
+
+        Ok(self.finish_image_batch(
+            viewport,
+            staged_uploads,
+            image_vertices,
+            image_indices,
+            image_cmds,
+        ))
     }
 
     fn glyph_atlas_entry_for(
@@ -14180,15 +14193,8 @@ impl GpuRenderer {
     where
         I: Iterator<Item = &'a TextDraw>,
     {
-        #[cfg(target_arch = "wasm32")]
-        let _ = staged_uploads;
-
-        let mut image_vertices = std::mem::take(&mut self.scratch_image_vertices);
-        let mut image_indices = std::mem::take(&mut self.scratch_image_indices);
-        let mut image_cmds = std::mem::take(&mut self.scratch_image_cmds);
-        image_vertices.clear();
-        image_indices.clear();
-        image_cmds.clear();
+        let (mut image_vertices, mut image_indices, mut image_cmds) =
+            self.take_scratch_image_buffers();
 
         self.append_text_image_draw_cmds(
             layer_texts,
@@ -14199,50 +14205,13 @@ impl GpuRenderer {
             &mut image_cmds,
         )?;
 
-        #[cfg(not(target_arch = "wasm32"))]
-        if !image_cmds.is_empty() {
-            self.stage_native_image_buffers(
-                staged_uploads,
-                viewport,
-                &image_vertices,
-                &image_indices,
-            );
-        }
-
-        #[cfg(target_arch = "wasm32")]
-        let image_slot = if image_cmds.is_empty() {
-            0
-        } else {
-            let slot = self.claim_wasm_image_batch();
-            {
-                let buffers = &mut self.wasm_image_batches[slot];
-                buffers.ensure_capacity(&self.device, image_vertices.len(), image_indices.len());
-            }
-            let buffers = &self.wasm_image_batches[slot];
-            self.write_wasm_buffer(
-                &buffers.vertex_buffer,
-                bytemuck::cast_slice(&image_vertices),
-            );
-            self.write_wasm_buffer(&buffers.index_buffer, bytemuck::cast_slice(&image_indices));
-            slot
-        };
-
-        #[cfg(target_arch = "wasm32")]
-        let uniform_slot = if image_cmds.is_empty() {
-            0
-        } else {
-            self.prepare_wasm_viewport_uniforms(viewport)
-        };
-
-        self.scratch_image_vertices = image_vertices;
-        self.scratch_image_indices = image_indices;
-        Ok(PreparedImageBatch {
-            cmds: image_cmds,
-            #[cfg(target_arch = "wasm32")]
-            image_slot,
-            #[cfg(target_arch = "wasm32")]
-            uniform_slot,
-        })
+        Ok(self.finish_image_batch(
+            viewport,
+            staged_uploads,
+            image_vertices,
+            image_indices,
+            image_cmds,
+        ))
     }
 
     fn text_raster_geometry(
@@ -14832,6 +14801,24 @@ impl SegmentDrawChunkPlan {
     fn iter(&self) -> impl Iterator<Item = SegmentBatchPlan> + '_ {
         self.batches.iter().copied()
     }
+
+    fn shape_indices<'a>(
+        &'a self,
+        ordered_items: &'a [(usize, SegmentDrawItem)],
+    ) -> impl Iterator<Item = Result<usize, String>> + 'a {
+        self.iter().flat_map(move |batch| {
+            let range = match batch {
+                SegmentBatchPlan::Shape { start, end, .. } => start..end,
+                _ => 0..0,
+            };
+            ordered_items[range].iter().map(|(_, item)| match item {
+                SegmentDrawItem::Shape(shape_index) => Ok(*shape_index),
+                other => Err(format!(
+                    "shape batch contains non-shape draw item: {other:?}"
+                )),
+            })
+        })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -14976,21 +14963,11 @@ fn native_segment_fusion_budget(
     let mut shape_count = 0usize;
     let mut gradient_stop_count = 0usize;
 
-    for batch in chunk.iter() {
-        let SegmentBatchPlan::Shape { start, end, .. } = batch else {
-            continue;
-        };
-        for (_, item) in &ordered_items[start..end] {
-            let SegmentDrawItem::Shape(shape_index) = item else {
-                return Err(format!(
-                    "shape batch contains non-shape draw item: {item:?}"
-                ));
-            };
-            let shape = &shapes[*shape_index];
-            shape_count = shape_count.saturating_add(1);
-            gradient_stop_count =
-                gradient_stop_count.saturating_add(gradient_stop_count_for_shape(shape, brushes));
-        }
+    for shape_index in chunk.shape_indices(ordered_items) {
+        let shape = &shapes[shape_index?];
+        shape_count = shape_count.saturating_add(1);
+        gradient_stop_count =
+            gradient_stop_count.saturating_add(gradient_stop_count_for_shape(shape, brushes));
     }
 
     if shape_count > batch_limits.max_shapes_per_batch
