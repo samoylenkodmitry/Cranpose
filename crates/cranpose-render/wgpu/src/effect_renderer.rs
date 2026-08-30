@@ -43,12 +43,28 @@ pub(crate) fn direct_tail_intermediate_size(
     (width, height)
 }
 
+/// Diagnostic-only escape hatch for PR #542's glass-backdrop-scroll-continuity
+/// investigation: forces the blur scratch texture to full resolution
+/// (downscale factor 1) so a run can be compared against the normal
+/// downscaled path with everything else held fixed. This is a falsification
+/// probe, not a candidate fix — it throws away the whole point of
+/// `blur_scratch_size` (a radius-16+ Gaussian over a full-res scratch is a
+/// 25-tap loop per pixel every frame, with no cache to hide behind for glass
+/// fixed over a scrolling list) and must never ship gated off by default.
+fn force_blur_scale_1_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("CRANPOSE_FORCE_BLUR_SCALE_1").is_some())
+}
+
 pub(crate) fn blur_scratch_size(
     radius_x: f32,
     radius_y: f32,
     width: u32,
     height: u32,
 ) -> (u32, u32) {
+    if force_blur_scale_1_enabled() {
+        return (width, height);
+    }
     let radius = radius_x.max(radius_y);
     let mut scale = if radius < 6.0 {
         1
