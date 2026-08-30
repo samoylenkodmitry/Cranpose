@@ -715,16 +715,8 @@ pub(crate) fn optimistic_merges(
     result
 }
 
-/// Merge two read observers into one.
-///
-/// # Thread Safety
-/// The resulting Arc-wrapped closure may capture non-Send closures. This is safe
-/// because observers are only invoked on the UI thread where they were created.
 #[allow(clippy::arc_with_non_send_sync)]
-pub fn merge_read_observers(
-    a: Option<ReadObserver>,
-    b: Option<ReadObserver>,
-) -> Option<ReadObserver> {
+fn merge_observers(a: Option<ReadObserver>, b: Option<ReadObserver>) -> Option<ReadObserver> {
     match (a, b) {
         (None, None) => None,
         (Some(a), None) => Some(a),
@@ -736,25 +728,28 @@ pub fn merge_read_observers(
     }
 }
 
+/// Merge two read observers into one.
+///
+/// # Thread Safety
+/// The resulting Arc-wrapped closure may capture non-Send closures. This is safe
+/// because observers are only invoked on the UI thread where they were created.
+pub fn merge_read_observers(
+    a: Option<ReadObserver>,
+    b: Option<ReadObserver>,
+) -> Option<ReadObserver> {
+    merge_observers(a, b)
+}
+
 /// Merge two write observers into one.
 ///
 /// # Thread Safety
 /// The resulting Arc-wrapped closure may capture non-Send closures. This is safe
 /// because observers are only invoked on the UI thread where they were created.
-#[allow(clippy::arc_with_non_send_sync)]
 pub fn merge_write_observers(
     a: Option<WriteObserver>,
     b: Option<WriteObserver>,
 ) -> Option<WriteObserver> {
-    match (a, b) {
-        (None, None) => None,
-        (Some(a), None) => Some(a),
-        (None, Some(b)) => Some(b),
-        (Some(a), Some(b)) => Some(Arc::new(move |state: &dyn StateObject| {
-            a(state);
-            b(state);
-        })),
-    }
+    merge_observers(a, b)
 }
 
 pub(crate) struct SnapshotState {
@@ -877,8 +872,78 @@ impl SnapshotState {
     }
 }
 
+pub(crate) trait NestedMutableHost {
+    fn snapshot_state(&self) -> &SnapshotState;
+    fn nested_count(&self) -> &Cell<usize>;
+}
+
+pub(crate) fn clear_nested_child_on_dispose<P>(
+    parent: &Arc<P>,
+    child_id: SnapshotId,
+) -> impl FnOnce() + 'static
+where
+    P: NestedMutableHost + 'static,
+{
+    let weak = Arc::downgrade(parent);
+    move || {
+        if let Some(parent) = weak.upgrade() {
+            let nested_count = parent.nested_count();
+            if nested_count.get() > 0 {
+                nested_count.set(nested_count.get().saturating_sub(1));
+            }
+            let state = parent.snapshot_state();
+            let new_invalid = state.invalid.borrow().clone().clear(child_id);
+            state.invalid.replace(new_invalid);
+            state.remove_pending_child(child_id);
+        }
+    }
+}
+
+pub(crate) fn allocate_nested_mutable_snapshot<P>(
+    parent: &Arc<P>,
+    root: Weak<MutableSnapshot>,
+    read_observer: Option<ReadObserver>,
+    write_observer: Option<WriteObserver>,
+) -> Arc<NestedMutableSnapshot>
+where
+    P: NestedMutableHost + 'static,
+{
+    let state = parent.snapshot_state();
+    let merged_read = merge_read_observers(read_observer, state.read_observer.borrow().clone());
+    let merged_write = merge_write_observers(write_observer, state.write_observer.borrow().clone());
+
+    let parent_id = state.id.get();
+    let current_invalid = state.invalid.borrow().clone();
+
+    let (new_id, _runtime_invalid) = allocate_snapshot();
+
+    let parent_invalid_with_child = current_invalid.set(new_id);
+    state.invalid.replace(parent_invalid_with_child);
+
+    let invalid = current_invalid.add_range(parent_id + 1, new_id);
+
+    let nested = NestedMutableSnapshot::new(
+        new_id,
+        invalid,
+        merged_read,
+        merged_write,
+        root,
+        state.id.get(),
+    );
+
+    let nested_count = parent.nested_count();
+    nested_count.set(nested_count.get() + 1);
+    state.add_pending_child(new_id);
+
+    nested.set_on_dispose(clear_nested_child_on_dispose(parent, new_id));
+
+    nested
+}
+
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use super::*;
 
     #[test]
@@ -1108,26 +1173,20 @@ mod tests {
         assert_eq!(*call_count.lock().unwrap(), 1);
     }
 
+    fn register_counting_observer(calls: &Arc<Mutex<Vec<i32>>>, tag: i32) -> ObserverHandle {
+        let calls = calls.clone();
+        register_apply_observer(Rc::new(move |_, _| {
+            calls.lock().unwrap().push(tag);
+        }))
+    }
+
     #[test]
     fn test_observer_handle_drop_removes_correct_observer() {
-        use std::sync::Mutex;
-
         let calls = Arc::new(Mutex::new(Vec::new()));
 
-        let calls1 = calls.clone();
-        let handle1 = register_apply_observer(Rc::new(move |_, _| {
-            calls1.lock().unwrap().push(1);
-        }));
-
-        let calls2 = calls.clone();
-        let handle2 = register_apply_observer(Rc::new(move |_, _| {
-            calls2.lock().unwrap().push(2);
-        }));
-
-        let calls3 = calls.clone();
-        let handle3 = register_apply_observer(Rc::new(move |_, _| {
-            calls3.lock().unwrap().push(3);
-        }));
+        let handle1 = register_counting_observer(&calls, 1);
+        let handle2 = register_counting_observer(&calls, 2);
+        let handle3 = register_counting_observer(&calls, 3);
 
         notify_apply_observers(&[], 1);
         let result = calls.lock().unwrap().clone();
@@ -1163,25 +1222,12 @@ mod tests {
 
     #[test]
     fn test_observer_handle_drop_in_different_orders() {
-        use std::sync::Mutex;
-
         {
             let calls = Arc::new(Mutex::new(Vec::new()));
 
-            let calls1 = calls.clone();
-            let h1 = register_apply_observer(Rc::new(move |_, _| {
-                calls1.lock().unwrap().push(1);
-            }));
-
-            let calls2 = calls.clone();
-            let h2 = register_apply_observer(Rc::new(move |_, _| {
-                calls2.lock().unwrap().push(2);
-            }));
-
-            let calls3 = calls.clone();
-            let h3 = register_apply_observer(Rc::new(move |_, _| {
-                calls3.lock().unwrap().push(3);
-            }));
+            let h1 = register_counting_observer(&calls, 1);
+            let h2 = register_counting_observer(&calls, 2);
+            let h3 = register_counting_observer(&calls, 3);
 
             drop(h3);
             notify_apply_observers(&[], 1);
@@ -1204,20 +1250,9 @@ mod tests {
         {
             let calls = Arc::new(Mutex::new(Vec::new()));
 
-            let calls1 = calls.clone();
-            let h1 = register_apply_observer(Rc::new(move |_, _| {
-                calls1.lock().unwrap().push(1);
-            }));
-
-            let calls2 = calls.clone();
-            let h2 = register_apply_observer(Rc::new(move |_, _| {
-                calls2.lock().unwrap().push(2);
-            }));
-
-            let calls3 = calls.clone();
-            let h3 = register_apply_observer(Rc::new(move |_, _| {
-                calls3.lock().unwrap().push(3);
-            }));
+            let h1 = register_counting_observer(&calls, 1);
+            let h2 = register_counting_observer(&calls, 2);
+            let h3 = register_counting_observer(&calls, 3);
 
             drop(h1);
             notify_apply_observers(&[], 1);
@@ -1308,51 +1343,9 @@ mod tests {
 
     #[test]
     fn test_state_object_storage_in_modified_set() {
-        use crate::state::StateObject;
-
-        struct TestState;
-
-        impl StateObject for TestState {
-            fn object_id(&self) -> crate::state::ObjectId {
-                crate::state::ObjectId(12345)
-            }
-
-            fn first_record(&self) -> Rc<crate::state::StateRecord> {
-                unimplemented!("Not needed for this test")
-            }
-
-            fn try_readable_record(
-                &self,
-                _snapshot_id: SnapshotId,
-                _invalid: &SnapshotIdSet,
-            ) -> Option<Rc<crate::state::StateRecord>> {
-                None
-            }
-
-            fn readable_record(
-                &self,
-                _snapshot_id: SnapshotId,
-                _invalid: &SnapshotIdSet,
-            ) -> Rc<crate::state::StateRecord> {
-                unimplemented!("Not needed for this test")
-            }
-
-            fn prepend_state_record(&self, _record: Rc<crate::state::StateRecord>) {
-                unimplemented!("Not needed for this test")
-            }
-
-            fn promote_record(&self, _child_id: SnapshotId) -> Result<(), &'static str> {
-                unimplemented!("Not needed for this test")
-            }
-
-            fn as_any(&self) -> &dyn std::any::Any {
-                self
-            }
-        }
-
         let state = SnapshotState::new(1, SnapshotIdSet::new(), None, None, false);
 
-        let state_obj = Arc::new(TestState) as Arc<dyn StateObject>;
+        let state_obj = TestStateObject::new(12345) as Arc<dyn StateObject>;
 
         state.record_write(state_obj.clone(), 1);
 
@@ -1367,50 +1360,8 @@ mod tests {
 
     #[test]
     fn test_multiple_writes_to_same_state_object() {
-        use crate::state::StateObject;
-
-        struct TestState;
-
-        impl StateObject for TestState {
-            fn object_id(&self) -> crate::state::ObjectId {
-                crate::state::ObjectId(99999)
-            }
-
-            fn first_record(&self) -> Rc<crate::state::StateRecord> {
-                unimplemented!()
-            }
-
-            fn try_readable_record(
-                &self,
-                _snapshot_id: SnapshotId,
-                _invalid: &SnapshotIdSet,
-            ) -> Option<Rc<crate::state::StateRecord>> {
-                None
-            }
-
-            fn readable_record(
-                &self,
-                _snapshot_id: SnapshotId,
-                _invalid: &SnapshotIdSet,
-            ) -> Rc<crate::state::StateRecord> {
-                unimplemented!()
-            }
-
-            fn prepend_state_record(&self, _record: Rc<crate::state::StateRecord>) {
-                unimplemented!()
-            }
-
-            fn promote_record(&self, _child_id: SnapshotId) -> Result<(), &'static str> {
-                unimplemented!()
-            }
-
-            fn as_any(&self) -> &dyn std::any::Any {
-                self
-            }
-        }
-
         let state = SnapshotState::new(1, SnapshotIdSet::new(), None, None, false);
-        let state_obj = Arc::new(TestState) as Arc<dyn StateObject>;
+        let state_obj = TestStateObject::new(99999) as Arc<dyn StateObject>;
 
         state.record_write(state_obj.clone(), 1);
         assert_eq!(state.modified.borrow().len(), 1);

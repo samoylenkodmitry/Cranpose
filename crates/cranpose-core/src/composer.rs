@@ -325,6 +325,23 @@ impl ComposerRuntimeState {
         self.clear_host_storage_key(host_key);
     }
 
+    fn deactivate_and_queue_subtrees(
+        &self,
+        retention: RetentionManager,
+        table: &mut SlotTable,
+        lifecycle: &mut crate::slot::SlotLifecycleCoordinator,
+    ) {
+        for subtree in retention.into_subtrees() {
+            for scope_id in subtree.scope_ids() {
+                if let Some(scope) = self.remove_scope(scope_id) {
+                    scope.deactivate();
+                }
+            }
+            table.invalidate_detached_subtree_anchors(&subtree);
+            lifecycle.queue_subtree_disposal(subtree);
+        }
+    }
+
     pub(crate) fn dispose_retained_subtrees_for_host(
         &self,
         host_key: usize,
@@ -349,15 +366,7 @@ impl ComposerRuntimeState {
         let Some(retention) = self.retention_by_host.borrow_mut().remove(&host_key) else {
             return Ok(());
         };
-        for subtree in retention.into_subtrees() {
-            for scope_id in subtree.scope_ids() {
-                if let Some(scope) = self.remove_scope(scope_id) {
-                    scope.deactivate();
-                }
-            }
-            table.invalidate_detached_subtree_anchors(&subtree);
-            lifecycle.queue_subtree_disposal(subtree);
-        }
+        self.deactivate_and_queue_subtrees(retention, table, lifecycle);
         Ok(())
     }
 
@@ -371,15 +380,7 @@ impl ComposerRuntimeState {
             self.clear_host_storage_key(host_key);
             return;
         };
-        for subtree in retention.into_subtrees() {
-            for scope_id in subtree.scope_ids() {
-                if let Some(scope) = self.remove_scope(scope_id) {
-                    scope.deactivate();
-                }
-            }
-            table.invalidate_detached_subtree_anchors(&subtree);
-            lifecycle.queue_subtree_disposal(subtree);
-        }
+        self.deactivate_and_queue_subtrees(retention, table, lifecycle);
         self.clear_host_storage_key(host_key);
     }
 
@@ -510,6 +511,19 @@ fn take_subcompose_frame(core: &ComposerCore, operation: &str) -> SubcomposeFram
         None => {
             log::error!("subcompose stack underflow while finishing {operation}");
             SubcomposeFrame::default()
+        }
+    }
+}
+
+struct SubcomposeStackGuard {
+    core: Rc<ComposerCore>,
+    leaked: bool,
+}
+
+impl Drop for SubcomposeStackGuard {
+    fn drop(&mut self) {
+        if !self.leaked {
+            self.core.subcompose_stack.borrow_mut().pop();
         }
     }
 }
@@ -1541,18 +1555,7 @@ impl Composer {
         }
 
         self.subcompose_stack().push(SubcomposeFrame::default());
-        struct StackGuard {
-            core: Rc<ComposerCore>,
-            leaked: bool,
-        }
-        impl Drop for StackGuard {
-            fn drop(&mut self) {
-                if !self.leaked {
-                    self.core.subcompose_stack.borrow_mut().pop();
-                }
-            }
-        }
-        let mut guard = StackGuard {
+        let mut guard = SubcomposeStackGuard {
             core: self.clone_core(),
             leaked: false,
         };
@@ -1588,15 +1591,14 @@ impl Composer {
         (result, roots)
     }
 
-    pub fn subcompose_in<R>(
+    fn spin_up_subcompose_core(
         &self,
         slots: &Rc<SlotsHost>,
         root: Option<NodeId>,
-        f: impl FnOnce(&Composer) -> R,
-    ) -> Result<R, NodeError> {
-        let runtime_handle = self.runtime_handle();
+        runtime_handle: &RuntimeHandle,
+        locals: LocalStackSnapshot,
+    ) -> Rc<ComposerCore> {
         let phase = self.phase();
-        let locals = self.current_local_stack();
         let shared_state = slots
             .runtime_state()
             .unwrap_or_else(|| Rc::clone(&self.core.shared_state));
@@ -1611,17 +1613,16 @@ impl Composer {
         ));
         core.phase.set(phase);
         *core.local_stack.borrow_mut() = locals;
-        let composer = Composer::from_core(core);
-        let (result, commands, side_effects, compact_applier) = composer.install(|composer| {
-            let (output, outcome) = composer.try_with_slot_host_pass(
-                Rc::clone(slots),
-                crate::slot::SlotPassMode::Compose,
-                |composer| f(composer),
-            )?;
-            let commands = composer.take_commands();
-            let side_effects = composer.take_side_effects();
-            Ok((output, commands, side_effects, outcome.compacted))
-        })?;
+        core
+    }
+
+    fn flush_subcompose_pass(
+        &self,
+        commands: CommandQueue,
+        runtime_handle: &RuntimeHandle,
+        compact_applier: bool,
+        side_effects: Vec<Box<dyn FnOnce()>>,
+    ) -> Result<(), NodeError> {
         {
             let mut applier = self.borrow_applier();
             commands.apply(&mut *applier)?;
@@ -1638,6 +1639,30 @@ impl Composer {
             effect();
         }
         runtime_handle.drain_ui();
+        Ok(())
+    }
+
+    pub fn subcompose_in<R>(
+        &self,
+        slots: &Rc<SlotsHost>,
+        root: Option<NodeId>,
+        f: impl FnOnce(&Composer) -> R,
+    ) -> Result<R, NodeError> {
+        let runtime_handle = self.runtime_handle();
+        let locals = self.current_local_stack();
+        let core = self.spin_up_subcompose_core(slots, root, &runtime_handle, locals);
+        let composer = Composer::from_core(core);
+        let (result, commands, side_effects, compact_applier) = composer.install(|composer| {
+            let (output, outcome) = composer.try_with_slot_host_pass(
+                Rc::clone(slots),
+                crate::slot::SlotPassMode::Compose,
+                |composer| f(composer),
+            )?;
+            let commands = composer.take_commands();
+            let side_effects = composer.take_side_effects();
+            Ok((output, commands, side_effects, outcome.compacted))
+        })?;
+        self.flush_subcompose_pass(commands, &runtime_handle, compact_applier, side_effects)?;
         Ok(result)
     }
 
@@ -1685,22 +1710,8 @@ impl Composer {
         f: impl FnOnce(&Composer) -> R,
     ) -> Result<(R, Vec<RecomposeScope>), NodeError> {
         let runtime_handle = self.runtime_handle();
-        let phase = self.phase();
         let locals = context.locals.clone();
-        let shared_state = slots
-            .runtime_state()
-            .unwrap_or_else(|| Rc::clone(&self.core.shared_state));
-        let core = Rc::new(ComposerCore::new(
-            shared_state,
-            Rc::clone(slots),
-            Rc::clone(&self.core.applier),
-            runtime_handle.clone(),
-            self.observer(),
-            root,
-            InitialParentFrame::RealParent,
-        ));
-        core.phase.set(phase);
-        *core.local_stack.borrow_mut() = locals;
+        let core = self.spin_up_subcompose_core(slots, root, &runtime_handle, locals);
         *core.subcomposition_owner_scope.borrow_mut() = context
             .owner_scope
             .as_ref()
@@ -1708,18 +1719,7 @@ impl Composer {
             .map(|inner| RecomposeScope { inner });
         let composer = Composer::from_core(core);
         composer.subcompose_stack().push(SubcomposeFrame::default());
-        struct StackGuard {
-            core: Rc<ComposerCore>,
-            leaked: bool,
-        }
-        impl Drop for StackGuard {
-            fn drop(&mut self) {
-                if !self.leaked {
-                    self.core.subcompose_stack.borrow_mut().pop();
-                }
-            }
-        }
-        let mut guard = StackGuard {
+        let mut guard = SubcomposeStackGuard {
             core: composer.clone_core(),
             leaked: false,
         };
@@ -1746,22 +1746,7 @@ impl Composer {
             frame
         };
 
-        {
-            let mut applier = self.borrow_applier();
-            commands.apply(&mut *applier)?;
-            for update in runtime_handle.take_updates() {
-                update.apply(&mut *applier)?;
-            }
-        }
-        if compact_applier {
-            self.core.applier.compact();
-            self.core.applier.borrow_dyn().clear_recycled_nodes();
-        }
-        runtime_handle.drain_ui();
-        for effect in side_effects {
-            effect();
-        }
-        runtime_handle.drain_ui();
+        self.flush_subcompose_pass(commands, &runtime_handle, compact_applier, side_effects)?;
         Ok((result, frame.scopes))
     }
 

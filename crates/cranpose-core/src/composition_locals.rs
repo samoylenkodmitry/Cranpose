@@ -149,15 +149,19 @@ impl<T: Clone + 'static> CompositionLocal<T> {
 }
 
 #[cfg(test)]
-pub(crate) fn malformed_composition_local_for_test<T: Clone + 'static>(
-    local: &CompositionLocal<T>,
-    entry: Rc<dyn Any>,
-) -> ProvidedValue {
-    let key = local.key.clone();
+fn malformed_provided_value_for_test(key: LocalKey, entry: Rc<dyn Any>) -> ProvidedValue {
     ProvidedValue {
         key,
         apply: Box::new(move |_, _| entry.clone()),
     }
+}
+
+#[cfg(test)]
+pub(crate) fn malformed_composition_local_for_test<T: Clone + 'static>(
+    local: &CompositionLocal<T>,
+    entry: Rc<dyn Any>,
+) -> ProvidedValue {
+    malformed_provided_value_for_test(local.key.clone(), entry)
 }
 
 #[allow(non_snake_case)]
@@ -234,11 +238,7 @@ pub(crate) fn malformed_static_composition_local_for_test<T: Clone + 'static>(
     local: &StaticCompositionLocal<T>,
     entry: Rc<dyn Any>,
 ) -> ProvidedValue {
-    let key = local.key.clone();
-    ProvidedValue {
-        key,
-        apply: Box::new(move |_, _| entry.clone()),
-    }
+    malformed_provided_value_for_test(local.key.clone(), entry)
 }
 
 #[allow(non_snake_case)]
