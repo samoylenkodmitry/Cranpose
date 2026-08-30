@@ -86,6 +86,10 @@ jobs:
         # this job is the one that never skips.
         run: just test-ci-filters
 
+      - name: Test the shell helpers
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
+        run: just test-shell-helpers
+
       - name: Check cyclomatic complexity of changed functions
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         run: just complexity-gate

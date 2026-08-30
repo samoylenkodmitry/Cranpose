@@ -175,6 +175,10 @@ test-features:
 test-ci-filters:
     scripts/ci/docs_only_change_test.sh
 
+# The shell helpers agents run by hand, pinned so they cannot rot.
+test-shell-helpers:
+    scripts/wait_until_quiet_test.sh
+
 # The deterministic slot-table model check, at the frame count CI uses.
 test-property:
     cargo test --profile ci -p cranpose-core deterministic_model_render_frames_match_slot_table
@@ -394,7 +398,7 @@ perf-heap *args:
 # Excludes the jobs that need a GPU, an Android SDK or an iOS toolchain.
 
 # What a pull request is gated on. Run this before pushing.
-ci: fmt-check typos versions test clippy clippy-robot doc budgets test-quality-gates complexity-gate duplication-gate
+ci: fmt-check typos versions test clippy clippy-robot doc budgets test-quality-gates test-shell-helpers complexity-gate duplication-gate
 
 # Needs a Linux box with the X11 stack, an Android SDK and (on macOS) Xcode.
 
