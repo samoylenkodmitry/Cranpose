@@ -353,11 +353,6 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
         let device = Arc::new(device);
         let queue = Arc::new(queue);
         surface.configure(&device, &config);
-        // Closes the black-screen gap at its root: the compositor must
-        // never show whatever the swapchain held right after `configure`
-        // for however long this window's first real frame takes to
-        // reach the screen (its shape/text pipelines may still be
-        // compiling on the prewarm thread).
         present_initial_placeholder_frame(
             &surface,
             &device,

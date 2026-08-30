@@ -969,13 +969,6 @@ where
         match setup.surface.take() {
             Some(surface) => {
                 surface.configure(&setup.resources.device, &setup.resources.config);
-                // Closes the black-screen gap at its root: the compositor
-                // must never show whatever the swapchain held right after
-                // `configure` for however long this window's first real
-                // frame takes to reach the screen (its shape/text
-                // pipelines may still be compiling on the prewarm
-                // thread) — the exact failure mode reported on a GL
-                // fallback device with no Vulkan adapter.
                 present_initial_placeholder_frame(
                     &surface,
                     &setup.resources.device,

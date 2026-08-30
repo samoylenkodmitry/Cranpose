@@ -1449,11 +1449,6 @@ impl App {
             self.frame_pacing_mode(),
         )?;
         surface.configure(&context.device, &surface_config);
-        // Closes the black-screen gap at its root: the compositor must
-        // never show whatever the swapchain held right after `configure`
-        // for however long this window's first real frame takes to
-        // reach the screen (its shape/text pipelines may still be
-        // compiling on the prewarm thread).
         present_initial_placeholder_frame(
             &surface,
             &context.device,
@@ -4164,11 +4159,6 @@ impl ApplicationHandler for App {
         let queue = Arc::new(queue);
 
         surface.configure(&device, &surface_config);
-        // Closes the black-screen gap at its root: the window is made
-        // visible below, before this app's first real content frame can
-        // possibly be ready (its shape/text pipelines may still be
-        // compiling on the prewarm thread), so the compositor must never
-        // show whatever the swapchain held right after `configure`.
         present_initial_placeholder_frame(
             &surface,
             &device,

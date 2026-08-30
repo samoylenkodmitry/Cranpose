@@ -1,11 +1,3 @@
-//! `cranpose_render_wgpu::clear_to_default_background` — the zero-pipeline
-//! clear every platform's surface installation uses to close the
-//! black-screen gap: nothing is presented until a first real content
-//! frame's pipelines finish compiling. The function's signature has
-//! nowhere to put a `PassPipeline`, so "no pipeline touched" is a
-//! structural guarantee; this test is about the pixels it actually
-//! produces.
-
 use std::{sync::mpsc, time::Duration};
 
 use cranpose_render_wgpu::clear_to_default_background;
@@ -31,10 +23,6 @@ fn headless_device() -> Option<(wgpu::Device, wgpu::Queue)> {
     .ok()
 }
 
-/// `clear_to_default_background` must produce exactly
-/// `cranpose_render_common::FRAME_CLEAR_COLOR` — the same base every real
-/// frame clears to underneath its own content — so a placeholder frame
-/// never flashes a different colour than the content that replaces it.
 #[test]
 fn clears_every_pixel_to_the_frameworks_default_background() {
     let Some((device, queue)) = headless_device() else {
