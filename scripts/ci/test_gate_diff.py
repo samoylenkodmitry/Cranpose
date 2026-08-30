@@ -31,7 +31,7 @@ import duplication_gate
 import gate_diff
 
 
-class ParseUnifiedDiffZeroContext(unittest.TestCase):
+class ParseHunkSpans(unittest.TestCase):
     def test_single_hunk_modified_file(self) -> None:
         diff = "\n".join(
             [
@@ -45,11 +45,11 @@ class ParseUnifiedDiffZeroContext(unittest.TestCase):
             ]
         )
         self.assertEqual(
-            gate_diff.parse_unified_diff_zero_context(diff),
-            {"src/lib.rs": [(10, 12)]},
+            gate_diff.parse_hunk_spans(diff),
+            {"src/lib.rs": [((10, 11), (10, 12))]},
         )
 
-    def test_single_added_line_omits_count(self) -> None:
+    def test_single_line_hunk_omits_count(self) -> None:
         # unified diff omits the trailing ",1" when a hunk covers one line.
         diff = "\n".join(
             [
@@ -61,11 +61,11 @@ class ParseUnifiedDiffZeroContext(unittest.TestCase):
             ]
         )
         self.assertEqual(
-            gate_diff.parse_unified_diff_zero_context(diff),
-            {"src/lib.rs": [(5, 5)]},
+            gate_diff.parse_hunk_spans(diff),
+            {"src/lib.rs": [((5, 5), (5, 5))]},
         )
 
-    def test_pure_deletion_hunk_has_no_new_side_range(self) -> None:
+    def test_pure_deletion_hunk_has_no_new_side_span(self) -> None:
         diff = "\n".join(
             [
                 "--- src/lib.rs",
@@ -76,7 +76,24 @@ class ParseUnifiedDiffZeroContext(unittest.TestCase):
                 "-and this",
             ]
         )
-        self.assertEqual(gate_diff.parse_unified_diff_zero_context(diff), {})
+        self.assertEqual(
+            gate_diff.parse_hunk_spans(diff),
+            {"src/lib.rs": [((20, 22), None)]},
+        )
+
+    def test_pure_addition_hunk_has_no_old_side_span(self) -> None:
+        diff = "\n".join(
+            [
+                "--- src/lib.rs",
+                "+++ src/lib.rs",
+                "@@ -50,0 +52,1 @@",
+                "+a3",
+            ]
+        )
+        self.assertEqual(
+            gate_diff.parse_hunk_spans(diff),
+            {"src/lib.rs": [(None, (52, 52))]},
+        )
 
     def test_deleted_file_is_skipped(self) -> None:
         diff = "\n".join(
@@ -89,7 +106,7 @@ class ParseUnifiedDiffZeroContext(unittest.TestCase):
                 "-c",
             ]
         )
-        self.assertEqual(gate_diff.parse_unified_diff_zero_context(diff), {})
+        self.assertEqual(gate_diff.parse_hunk_spans(diff), {})
 
     def test_multiple_hunks_and_files(self) -> None:
         diff = "\n".join(
@@ -109,8 +126,302 @@ class ParseUnifiedDiffZeroContext(unittest.TestCase):
             ]
         )
         self.assertEqual(
-            gate_diff.parse_unified_diff_zero_context(diff),
-            {"src/a.rs": [(1, 2), (52, 52)], "src/b.rs": [(3, 3)]},
+            gate_diff.parse_hunk_spans(diff),
+            {
+                "src/a.rs": [(None, (1, 2)), (None, (52, 52))],
+                "src/b.rs": [((3, 3), (3, 3))],
+            },
+        )
+
+
+class CodeTokensByLine(unittest.TestCase):
+    def test_plain_code_line(self) -> None:
+        self.assertEqual(
+            gate_diff.code_tokens_by_line("let x = 1;"),
+            [["let", "x", "=", "1", ";"]],
+        )
+
+    def test_blank_line(self) -> None:
+        self.assertEqual(gate_diff.code_tokens_by_line(""), [[]])
+        self.assertEqual(gate_diff.code_tokens_by_line("   \t  "), [[]])
+
+    def test_pure_line_comment(self) -> None:
+        self.assertEqual(gate_diff.code_tokens_by_line("// just a note"), [[]])
+
+    def test_code_with_trailing_comment_yields_only_the_codes_tokens(self) -> None:
+        self.assertEqual(
+            gate_diff.code_tokens_by_line("let x = 1; // trailing"),
+            [["let", "x", "=", "1", ";"]],
+        )
+
+    def test_slash_slash_inside_a_string_is_one_string_token_not_a_comment(self) -> None:
+        text = 'let url = "https://example.com";'
+        self.assertEqual(
+            gate_diff.code_tokens_by_line(text),
+            [["let", "url", "=", '"https://example.com"', ";"]],
+        )
+
+    def test_string_spanning_a_naive_comment_check_does_not_start_one(self) -> None:
+        # A string literal containing `//` followed by a real comment on the
+        # next line: the `//` inside the string must not be mistaken for the
+        # start of a comment that swallows the rest of the string plus the
+        # next, genuinely-commented, line.
+        text = "\n".join(['let s = "a // b";', "// this really is a comment"])
+        self.assertEqual(
+            gate_diff.code_tokens_by_line(text),
+            [["let", "s", "=", '"a // b"', ";"], []],
+        )
+
+    def test_single_line_block_comment(self) -> None:
+        self.assertEqual(gate_diff.code_tokens_by_line("/* note */"), [[]])
+
+    def test_single_line_block_comment_with_trailing_code(self) -> None:
+        self.assertEqual(
+            gate_diff.code_tokens_by_line("/* note */ let x = 1;"),
+            [["let", "x", "=", "1", ";"]],
+        )
+
+    def test_multi_line_block_comment_is_all_blank(self) -> None:
+        text = "\n".join(["/* start", "middle line", "end */"])
+        self.assertEqual(gate_diff.code_tokens_by_line(text), [[], [], []])
+
+    def test_multi_line_block_comment_with_code_before_and_after(self) -> None:
+        text = "\n".join(["let a = 1; /* start", "middle line", "end */ let b = 2;"])
+        self.assertEqual(
+            gate_diff.code_tokens_by_line(text),
+            [["let", "a", "=", "1", ";"], [], ["let", "b", "=", "2", ";"]],
+        )
+
+    def test_nested_block_comments(self) -> None:
+        # Rust block comments nest, unlike C's.
+        text = "\n".join(["/* outer /* inner */ still commented", "*/ let x = 1;"])
+        self.assertEqual(
+            gate_diff.code_tokens_by_line(text),
+            [[], ["let", "x", "=", "1", ";"]],
+        )
+
+    def test_raw_string_containing_slashes_and_quotes_is_one_token(self) -> None:
+        text = 'let s = r#"// not a comment, and "quoted" too"#;'
+        raw_token = 'r#"// not a comment, and "quoted" too"#'
+        self.assertEqual(
+            gate_diff.code_tokens_by_line(text),
+            [["let", "s", "=", raw_token, ";"]],
+        )
+
+    def test_raw_string_spanning_lines_is_one_token_on_its_start_line(self) -> None:
+        text = "\n".join(['let s = r"line one', "// still string content", 'line three";'])
+        raw_token = 'r"line one\n// still string content\nline three"'
+        self.assertEqual(
+            gate_diff.code_tokens_by_line(text),
+            [["let", "s", "=", raw_token], [], [";"]],
+        )
+
+    def test_raw_string_prefix_not_misdetected_mid_identifier(self) -> None:
+        # `bar` ends in `r`; the `"` that follows belongs to a separate,
+        # ordinary string literal, not a raw string starting at that `r`.
+        text = 'let bar = 1; let s = "text";'
+        self.assertEqual(
+            gate_diff.code_tokens_by_line(text),
+            [["let", "bar", "=", "1", ";", "let", "s", "=", '"text"', ";"]],
+        )
+
+    def test_char_literal_does_not_start_a_comment(self) -> None:
+        text = "let c = '/';"
+        self.assertEqual(
+            gate_diff.code_tokens_by_line(text),
+            [["let", "c", "=", "'/'", ";"]],
+        )
+
+    def test_escaped_char_literal(self) -> None:
+        text = r"let c = '\n';"
+        self.assertEqual(
+            gate_diff.code_tokens_by_line(text),
+            [["let", "c", "=", r"'\n'", ";"]],
+        )
+
+    def test_lifetime_is_not_treated_as_an_unterminated_char_literal(self) -> None:
+        # If `'a` were treated as opening a char literal that never closes,
+        # scanning would run past the real comment below looking for a
+        # closing quote, hiding it from the result. The exact token
+        # breakdown of the lifetime-heavy line is not the point (each bare
+        # `'` and the identifier after it fall out as separate tokens); what
+        # matters is that it terminates and the comment on the next line is
+        # correctly seen as holding no code at all.
+        text = "\n".join(["fn f<'a>(x: &'a str) -> &'a str { x }", "// a real comment"])
+        tokens = gate_diff.code_tokens_by_line(text)
+        self.assertTrue(tokens[0], "the code line must yield at least one token")
+        self.assertEqual(tokens[1], [])
+
+    def test_string_containing_an_escaped_quote_is_one_token(self) -> None:
+        text = r'let s = "she said \"hi\"";'
+        string_token = r'"she said \"hi\""'
+        self.assertEqual(
+            gate_diff.code_tokens_by_line(text),
+            [["let", "s", "=", string_token, ";"]],
+        )
+
+
+class DropTrailingCommas(unittest.TestCase):
+    def test_comma_before_closing_paren_is_dropped(self) -> None:
+        self.assertEqual(
+            gate_diff._drop_trailing_commas(["f", "(", "a", ",", ")"]),
+            ["f", "(", "a", ")"],
+        )
+
+    def test_comma_before_closing_bracket_is_dropped(self) -> None:
+        self.assertEqual(
+            gate_diff._drop_trailing_commas(["[", "1", ",", "]"]),
+            ["[", "1", "]"],
+        )
+
+    def test_comma_before_closing_brace_is_dropped(self) -> None:
+        self.assertEqual(
+            gate_diff._drop_trailing_commas(["{", "x", ":", "1", ",", "}"]),
+            ["{", "x", ":", "1", "}"],
+        )
+
+    def test_comma_between_arguments_is_kept(self) -> None:
+        self.assertEqual(
+            gate_diff._drop_trailing_commas(["f", "(", "a", ",", "b", ")"]),
+            ["f", "(", "a", ",", "b", ")"],
+        )
+
+    def test_trailing_comma_at_the_very_end_of_the_list_is_kept(self) -> None:
+        # No token follows it at all, so there is no closing delimiter to
+        # confirm it precedes -- the conservative, safe default is to leave
+        # it as a real token rather than guess.
+        self.assertEqual(gate_diff._drop_trailing_commas(["a", ","]), ["a", ","])
+
+
+class SemanticRanges(unittest.TestCase):
+    def test_comment_only_edit_is_dropped(self) -> None:
+        hunk_spans = {"src/lib.rs": [((2, 2), (2, 2))]}
+        old = {"src/lib.rs": "fn f() {\n    let x = 1;  // set x\n}\n"}
+        new = {"src/lib.rs": "fn f() {\n    let x = 1;\n}\n"}
+        self.assertEqual(gate_diff.semantic_ranges(hunk_spans, old.get, new.get), {})
+
+    def test_hunk_with_a_real_code_change_is_kept_in_full(self) -> None:
+        hunk_spans = {"src/lib.rs": [((2, 3), (2, 3))]}
+        old = {"src/lib.rs": "fn f() {\n    // a comment\n    let x = 0;\n}\n"}
+        new = {"src/lib.rs": "fn f() {\n    // updated comment\n    let x = 1;\n}\n"}
+        self.assertEqual(
+            gate_diff.semantic_ranges(hunk_spans, old.get, new.get),
+            {"src/lib.rs": [(2, 3)]},
+        )
+
+    def test_only_the_semantically_unchanged_hunk_is_dropped_others_survive(self) -> None:
+        hunk_spans = {"src/lib.rs": [((2, 2), (2, 2)), ((4, 4), (4, 4))]}
+        old = {"src/lib.rs": "fn f() {\n    // comment\n    let x = 1;\n    let y = 1;\n}\n"}
+        new = {"src/lib.rs": "fn f() {\n    // different comment\n    let x = 1;\n    let y = 2;\n}\n"}
+        self.assertEqual(
+            gate_diff.semantic_ranges(hunk_spans, old.get, new.get),
+            {"src/lib.rs": [(4, 4)]},
+        )
+
+    def test_file_with_no_surviving_ranges_is_dropped_entirely(self) -> None:
+        hunk_spans = {"src/only_comments.rs": [((1, 1), (1, 1))]}
+        old = {"src/only_comments.rs": "// nothing but this\n"}
+        new = {"src/only_comments.rs": "// nothing but this, reworded\n"}
+        self.assertEqual(gate_diff.semantic_ranges(hunk_spans, old.get, new.get), {})
+
+    def test_pure_deletion_hunk_contributes_no_range_regardless_of_content(self) -> None:
+        hunk_spans = {"src/lib.rs": [((5, 7), None)]}
+        old = {"src/lib.rs": "fn f() {\n    let x = 1;\n    let y = 2;\n    let z = 3;\n}\n"}
+        new = {"src/lib.rs": "fn f() {\n}\n"}
+        self.assertEqual(gate_diff.semantic_ranges(hunk_spans, old.get, new.get), {})
+
+    def test_comment_removal_that_collapses_a_block_onto_one_line_is_dropped(self) -> None:
+        # The mechanism actually found in #540's diff: an `if` block whose
+        # only content is a comment collapses, once the comment is deleted
+        # and the formatter merges the now-empty block, from three lines to
+        # one (`if cond {\n    // ...\n}` -> `if cond {}`). The surviving
+        # line still contains code bytes (`if cond {}`), so a check that
+        # only asked "does the new side have code" would keep this hunk in
+        # scope for no reason -- the fix has to compare old and new tokens,
+        # not just ask whether the new side is nonempty.
+        hunk_spans = {"src/lib.rs": [((2, 4), (2, 2))]}
+        old = {
+            "src/lib.rs": "\n".join(
+                [
+                    "fn f(cond: bool) {",
+                    "    if cond {",
+                    "        // Found something",
+                    "    }",
+                    "}",
+                    "",
+                ]
+            )
+        }
+        new = {
+            "src/lib.rs": "\n".join(
+                [
+                    "fn f(cond: bool) {",
+                    "    if cond {}",
+                    "}",
+                    "",
+                ]
+            )
+        }
+        self.assertEqual(gate_diff.semantic_ranges(hunk_spans, old.get, new.get), {})
+
+    def test_whitespace_reorder_bundled_with_a_real_token_change_is_kept(self) -> None:
+        # Pinned safety property: normalizing away comments/whitespace must
+        # never mask an actual token-level change riding along with a
+        # reformat.
+        hunk_spans = {"src/lib.rs": [((1, 1), (1, 2))]}
+        old = {"src/lib.rs": "let x = 1;\n"}
+        new = {"src/lib.rs": "let   x =\n    2;\n"}
+        self.assertEqual(
+            gate_diff.semantic_ranges(hunk_spans, old.get, new.get),
+            {"src/lib.rs": [(1, 2)]},
+        )
+
+    def test_string_literal_content_is_compared_not_discarded(self) -> None:
+        # Pinned safety property: a string literal that itself contains
+        # comment-like or whitespace-significant text is a single atomic
+        # token, never split or normalized internally -- so two different
+        # string values are never mistaken for the same code just because
+        # both superficially resemble a comment.
+        hunk_spans = {"src/lib.rs": [((1, 1), (1, 1))]}
+        old = {"src/lib.rs": 'let s = "// keep me A";\n'}
+        new = {"src/lib.rs": 'let s = "// keep me B";\n'}
+        self.assertEqual(
+            gate_diff.semantic_ranges(hunk_spans, old.get, new.get),
+            {"src/lib.rs": [(1, 1)]},
+        )
+
+    def test_call_reformatted_onto_fewer_lines_drops_only_its_trailing_comma(self) -> None:
+        # The exact mechanism found in #540's diff (e.g. `tab_bar.rs`): a
+        # leading comment on one call argument holds the call multi-line;
+        # once it is deleted, rustfmt's line-length heuristic reflows the
+        # call, which also removes the trailing comma before the closing
+        # paren that a multi-line call gets and a single-line one does not.
+        # Nothing about the call's arguments changed.
+        hunk_spans = {"src/lib.rs": [((1, 5), (1, 1))]}
+        old = {
+            "src/lib.rs": "\n".join(
+                [
+                    "f(",
+                    "    // pick the material",
+                    "    material(),",
+                    "    move || dynamics(),",
+                    ");",
+                    "",
+                ]
+            )
+        }
+        new = {"src/lib.rs": "f(material(), move || dynamics());\n"}
+        self.assertEqual(gate_diff.semantic_ranges(hunk_spans, old.get, new.get), {})
+
+    def test_trailing_comma_change_bundled_with_a_real_edit_is_still_kept(self) -> None:
+        # Pinned safety property: dropping one grammar-insignificant comma
+        # must never mask an actual argument change riding along with it.
+        hunk_spans = {"src/lib.rs": [((1, 1), (1, 1))]}
+        old = {"src/lib.rs": "f(a, b,);\n"}
+        new = {"src/lib.rs": "f(a, c);\n"}
+        self.assertEqual(
+            gate_diff.semantic_ranges(hunk_spans, old.get, new.get),
+            {"src/lib.rs": [(1, 1)]},
         )
 
 
@@ -266,6 +577,173 @@ class MergeBaseShallowHistory(unittest.TestCase):
                 with self.assertRaises(SystemExit) as raised:
                     gate_diff.merge_base("origin/main")
             self.assertIn("share no common ancestor", str(raised.exception))
+
+
+class ChangedRangesExcludesSemanticallyUnchangedHunks(unittest.TestCase):
+    """The end-to-end fixture: a real repo, a real over-limit function, and
+    the exact `changed_ranges` pipeline `complexity_gate`/`duplication_gate`
+    call in CI -- not a synthetic diff string standing in for one.
+    """
+
+    _OVER_LIMIT_FUNCTION = "\n".join(
+        [
+            "fn deeply_branching(x: i32) -> i32 {",
+            "    if x == 0 { return 0; }",
+            "    if x == 1 { return 1; }",
+            "    if x == 2 { return 2; }",
+            "    if x == 3 { return 3; }",
+            "    if x == 4 { return 4; }",
+            "    if x == 5 { return 5; }",
+            "    if x == 6 { return 6; }",
+            "    if x == 7 { return 7; }",
+            "    if x == 8 { return 8; }",
+            "    if x == 9 { return 9; }",
+            "    x",
+            "}",
+        ]
+    )
+
+    def _git(self, args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True)
+
+    def _init_repo_with_base_commit(self, repo: Path) -> None:
+        repo.mkdir()
+        self._git(["init", "--quiet", "-b", "main"], repo)
+        self._git(["config", "user.email", "test@example.com"], repo)
+        self._git(["config", "user.name", "Test"], repo)
+        (repo / "src").mkdir()
+        (repo / "src" / "lib.rs").write_text(self._OVER_LIMIT_FUNCTION + "\n")
+        self._git(["add", "."], repo)
+        self._git(["commit", "--quiet", "-m", "base"], repo)
+
+    def _write_and_commit(self, repo: Path, contents: str, message: str) -> None:
+        (repo / "src" / "lib.rs").write_text(contents)
+        self._git(["add", "."], repo)
+        self._git(["commit", "--quiet", "-m", message], repo)
+
+    def test_removing_a_comment_inside_the_function_does_not_touch_it(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "repo"
+            self._init_repo_with_base_commit(repo)
+
+            with_comment = self._OVER_LIMIT_FUNCTION.replace(
+                "    x\n}", "    // fall through for anything else\n    x\n}"
+            )
+            self._write_and_commit(repo, with_comment + "\n", "add a comment")
+
+            comment_removed = with_comment.replace(
+                "    // fall through for anything else\n", ""
+            )
+            self._write_and_commit(repo, comment_removed + "\n", "remove only the comment")
+
+            with mock.patch("gate_diff.ROOT", repo):
+                ranges = gate_diff.changed_ranges("HEAD~1")
+
+            self.assertEqual(
+                ranges,
+                {},
+                "a hunk that only deleted a comment line must not touch anything",
+            )
+
+    def test_a_genuine_logic_edit_in_the_same_function_still_touches_it(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "repo"
+            self._init_repo_with_base_commit(repo)
+
+            edited = self._OVER_LIMIT_FUNCTION.replace(
+                "    if x == 9 { return 9; }", "    if x == 9 { return 90; }"
+            )
+            self._write_and_commit(repo, edited + "\n", "change a return value")
+
+            with mock.patch("gate_diff.ROOT", repo):
+                ranges = gate_diff.changed_ranges("HEAD~1")
+
+            self.assertIn("src/lib.rs", ranges)
+            touched = ranges["src/lib.rs"]
+            self.assertTrue(
+                gate_diff.any_intersect(touched, (1, 13)),
+                f"a real logic edit must still land inside the function's span, got {touched}",
+            )
+
+    def test_mixed_hunk_of_comment_and_logic_still_touches_it(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "repo"
+            self._init_repo_with_base_commit(repo)
+
+            edited = self._OVER_LIMIT_FUNCTION.replace(
+                "    x\n}",
+                "    // fall through for anything else\n    x + 1\n}",
+            )
+            self._write_and_commit(repo, edited + "\n", "comment plus a real edit, one hunk")
+
+            with mock.patch("gate_diff.ROOT", repo):
+                ranges = gate_diff.changed_ranges("HEAD~1")
+
+            self.assertIn("src/lib.rs", ranges)
+            self.assertTrue(gate_diff.any_intersect(ranges["src/lib.rs"], (1, 13)))
+
+    def test_comment_deletion_that_collapses_a_branch_onto_one_line_does_not_touch_it(
+        self,
+    ) -> None:
+        # This is the pattern #540's real diff actually hits: a branch whose
+        # body is only a comment collapses from multiple lines to one empty
+        # block once the comment goes and a format/clippy pass merges the
+        # braces. The surviving line still contains code bytes (`{}`), so a
+        # rule that only asked "does the new side have code" -- the first,
+        # too-narrow fix -- kept this hunk in scope for no reason.
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "repo"
+            self._init_repo_with_base_commit(repo)
+
+            with_comment_block = self._OVER_LIMIT_FUNCTION.replace(
+                "    if x == 9 { return 9; }",
+                "\n".join(
+                    [
+                        "    if x == 9 {",
+                        "        // nothing special about nine",
+                        "    }",
+                    ]
+                ),
+            )
+            self._write_and_commit(repo, with_comment_block + "\n", "expand nine's branch")
+
+            collapsed = self._OVER_LIMIT_FUNCTION.replace(
+                "    if x == 9 { return 9; }", "    if x == 9 {}"
+            )
+            self._write_and_commit(repo, collapsed + "\n", "delete the comment, collapse the block")
+
+            with mock.patch("gate_diff.ROOT", repo):
+                ranges = gate_diff.changed_ranges("HEAD~1")
+
+            self.assertEqual(
+                ranges,
+                {},
+                "deleting a comment and collapsing its now-empty block is not a "
+                f"logic edit, got {ranges}",
+            )
+
+    def test_reformatting_a_line_while_also_changing_it_still_touches_it(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "repo"
+            self._init_repo_with_base_commit(repo)
+
+            edited = self._OVER_LIMIT_FUNCTION.replace(
+                "    if x == 9 { return 9; }",
+                "    if x == 9 {\n        return 90;\n    }",
+            )
+            self._write_and_commit(
+                repo, edited + "\n", "reformat the branch onto three lines and change its value"
+            )
+
+            with mock.patch("gate_diff.ROOT", repo):
+                ranges = gate_diff.changed_ranges("HEAD~1")
+
+            self.assertIn("src/lib.rs", ranges)
+            self.assertTrue(
+                gate_diff.any_intersect(ranges["src/lib.rs"], (1, 13)),
+                "a real value change bundled with a reformat must not be normalized away, "
+                f"got {ranges}",
+            )
 
 
 class ComplexityFindViolations(unittest.TestCase):
