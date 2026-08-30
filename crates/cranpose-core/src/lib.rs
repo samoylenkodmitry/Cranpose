@@ -4501,7 +4501,10 @@ fn move_child_in_diff_state(
 }
 
 pub(crate) use state::MutableStateInner;
-pub use state::{MutableState, OwnedMutableState, SnapshotStateList, SnapshotStateMap, State};
+pub use state::{
+    MutableState, OwnedMutableState, SnapshotStateList, SnapshotStateMap, State,
+    StateSubscriptionHold,
+};
 
 fn hash_key<K: Hash>(key: &K) -> Key {
     let mut hasher = hash::default::new();

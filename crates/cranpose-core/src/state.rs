@@ -1583,6 +1583,31 @@ impl<T: Clone + 'static> State<T> {
                 .subscriber_callback(callback, inner.has_subscribers())
         });
     }
+
+    /// Counts this state as subscribed for as long as the returned guard
+    /// lives, without observing it from any scope.
+    ///
+    /// Snapshot observers subscribe reads made under composition or the
+    /// draw phase, and producers gated on [`State::has_subscribers`] — an
+    /// infinite transition, for one — stop themselves when the last such
+    /// subscriber leaves. A consumer that reads the value from a polling
+    /// context (a frame effect stepping it into a derived state, a
+    /// background task) is invisible to that accounting and would starve
+    /// the producer it depends on. Holding this guard keeps the producer
+    /// alive; dropping it releases the count.
+    pub fn subscription_hold(&self) -> StateSubscriptionHold {
+        StateSubscriptionHold {
+            _lease: self
+                .try_with_inner(|inner| inner.state.observation_lease())
+                .flatten(),
+        }
+    }
+}
+
+/// Keeps a [`State`] counted as subscribed while alive; see
+/// [`State::subscription_hold`].
+pub struct StateSubscriptionHold {
+    _lease: Option<Box<dyn Any>>,
 }
 
 impl<T: Clone + 'static> MutableState<T> {
