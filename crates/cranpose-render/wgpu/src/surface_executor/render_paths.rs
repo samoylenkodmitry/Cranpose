@@ -4938,6 +4938,42 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
                     dependency_rect,
                     target_scale,
                 )?;
+                // Falsification probe for the capture-timing hypothesis
+                // (PR #542, following on from PR #536's composite-queue
+                // fusion): re-derive the SAME intersection check
+                // flush_pending_queues_for_backdrop_capture just used to
+                // decide whether to flush, and verify nothing that should
+                // have been painted before this capture is STILL pending
+                // afterward. If this ever fires, the flush gate itself has
+                // a real bug -- the capture-copy right after this is about
+                // to read `target` before dependent content landed in it.
+                if cranpose_core::env_flag!("CRANPOSE_BACKDROP_DIAG")
+                    && dependency_rect.y < 180.0
+                    && dependency_rect.y + dependency_rect.height > 90.0
+                {
+                    let dependency_pixels = surface_pixel_rect(dependency_rect, target_scale);
+                    let still_pending_composite = pending_composites.iter().any(|pending| {
+                        pending_write_intersects_rect(
+                            pending.dest_quad,
+                            pending.scissor,
+                            dependency_pixels,
+                        )
+                    });
+                    let still_pending_shader = pending_shader_composites.iter().any(|pending| {
+                        pending_write_intersects_rect(
+                            pending.dest_quad,
+                            pending.scissor,
+                            dependency_pixels,
+                        )
+                    });
+                    eprintln!(
+                        "[backdrop-diag] capture-timing node={:?} dependency_rect={dependency_rect:?} still_pending_composite={still_pending_composite} still_pending_shader={still_pending_shader} pending_composites_len={} pending_shader_composites_len={} cursor_z={cursor_z} child_z={}",
+                        child.node_id,
+                        pending_composites.len(),
+                        pending_shader_composites.len(),
+                        child.z_index,
+                    );
+                }
             }
             let backdrop_layer = BackdropLayer {
                 node_id: child.node_id,

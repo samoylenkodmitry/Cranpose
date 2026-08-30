@@ -6,6 +6,27 @@
 //! on without it. robot_scroll_decoration_invariance caught exactly that:
 //! an underline row anti-correlated with its text's semantic position by
 //! precisely the per-step scroll delta, meaning nothing on screen moved.
+//!
+//! This list of three consumers is NOT known to be exhaustive — read the
+//! rest of this note before trusting it the way PR #542's investigation
+//! initially did. That investigation measured a real, reproduced,
+//! frozen/overshoot/converge scroll-tracking defect (a glass backdrop
+//! failing to track scrolled content beneath it) and instrumented all
+//! three consumers named above, one at a time, on the exact run that
+//! reproduced the bug: cached-layer composites tracked the confirmed
+//! scroll position exactly on every step (206 samples, zero deviation);
+//! retained span replay never engaged for the failing content at all
+//! (structurally absent, not stale); and dynamic conversion also tracked
+//! exactly on every step, including the frozen and overshooting ones (see
+//! PR #542's comments for the per-step numbers and the code paths
+//! instrumented for each). All three came back clean on a run that still
+//! failed. Whatever was placing that content, it was not named here. If
+//! you are chasing a similar symptom and have ruled out all three
+//! consumers above on your own failing run, the bug is not in this list —
+//! look at capture/paint timing (does the consumer reading the retained
+//! scene's transform run before or after the frame's own content actually
+//! lands in the shared render target) before assuming a fourth transform
+//! consumer exists to find.
 
 mod support;
 
