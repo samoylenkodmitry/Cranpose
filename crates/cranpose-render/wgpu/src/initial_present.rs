@@ -26,10 +26,10 @@ use crate::{
 };
 
 /// Clears `view` to the framework's default background and submits the
-/// work, through the same [`WgpuFrameGraph`] every other command encoder
+/// work, through the same `WgpuFrameGraph` every other command encoder
 /// and submission in this crate is required to go through (enforced by
 /// `render_contract.rs`'s `wgpu_command_buffers_are_owned_by_frame_graph_executor`)
-/// — a fresh, one-shot [`WgpuFrameGraphExecutor`], since a placeholder
+/// — a fresh, one-shot `WgpuFrameGraphExecutor`, since a placeholder
 /// clear has no frame-to-frame state worth pooling. Does not present or
 /// acquire anything itself — callers that mean to show the clear on
 /// screen still acquire a frame and call `wgpu::SurfaceTexture::present`
