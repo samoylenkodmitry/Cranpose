@@ -113,12 +113,13 @@ pub use modal::{
 };
 pub use modifier::{
     BlendMode, Brush, Color, CompositingStrategy, CornerRadii, DpOffset, EdgeInsets,
-    FocusDirection, GlassMaterial, GraphicsLayer, LayerShape, Modifier, ModifierLocalKey,
-    ModifierLocalReadScope, ModifierNodeSlices, ModifierNodeSlicesDebugStats, Point, PointerEvent,
-    PointerEventKind, PointerInputScope, PointerSource, Rect, RenderEffect, ResolvedBackground,
-    ResolvedModifiers, RotaryInputModifierNode, RotaryScrollEvent, RoundedCornerShape,
-    RuntimeShader, SemanticsRequester, Shadow, ShadowScope, Size, TransformOrigin,
-    collect_modifier_slices, collect_semantics_from_modifier, collect_slices_from_modifier,
+    FocusDirection, FocusRequestError, FocusRequester, GlassMaterial, GraphicsLayer, LayerShape,
+    Modifier, ModifierLocalKey, ModifierLocalReadScope, ModifierNodeSlices,
+    ModifierNodeSlicesDebugStats, Point, PointerEvent, PointerEventKind, PointerInputScope,
+    PointerSource, Rect, RenderEffect, ResolvedBackground, ResolvedModifiers,
+    RotaryInputModifierNode, RotaryScrollEvent, RoundedCornerShape, RuntimeShader,
+    SemanticsRequester, Shadow, ShadowScope, Size, TransformOrigin, collect_modifier_slices,
+    collect_semantics_from_modifier, collect_slices_from_modifier,
 };
 #[cfg(feature = "test-helpers")]
 pub use modifier::{last_fling_velocity, reset_last_fling_velocity};
