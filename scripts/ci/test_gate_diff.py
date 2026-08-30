@@ -746,38 +746,211 @@ class ChangedRangesExcludesSemanticallyUnchangedHunks(unittest.TestCase):
             )
 
 
+class FunctionsIn(unittest.TestCase):
+    def _func_space(self, name: str | None, start: int, end: int, cyclomatic: int, children=()) -> dict:
+        return {
+            "kind": "function",
+            "name": name,
+            "start_line": start,
+            "end_line": end,
+            "metrics": {"cyclomatic": {"sum": cyclomatic}},
+            "spaces": list(children),
+        }
+
+    def test_named_function_with_no_closures_is_reported_once(self) -> None:
+        out: list[dict] = []
+        complexity_gate.functions_in(self._func_space("f", 1, 10, 5), out)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["name"], "f")
+
+    def test_closure_nested_in_a_named_function_is_not_reported_separately(self) -> None:
+        # The exact bug: `main` containing a closure that is essentially its
+        # whole body must be one violation, not two, when both are over the
+        # limit -- the closure is not independently-invocable code, it *is*
+        # `main`'s body.
+        closure = self._func_space(None, 2, 9, 25)
+        outer = self._func_space("main", 1, 10, 27, children=[closure])
+        out: list[dict] = []
+        complexity_gate.functions_in(outer, out)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["name"], "main")
+        self.assertEqual(out[0]["cyclomatic"], 27)
+
+    def test_closure_nested_in_a_closure_still_collapses_to_one_report(self) -> None:
+        inner_closure = self._func_space(None, 3, 8, 10)
+        outer_closure = self._func_space(None, 2, 9, 15, children=[inner_closure])
+        outer = self._func_space("run", 1, 10, 20, children=[outer_closure])
+        out: list[dict] = []
+        complexity_gate.functions_in(outer, out)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["name"], "run")
+
+    def test_named_function_nested_inside_a_closure_is_still_reported(self) -> None:
+        # Legal, if unusual, Rust: a closure body can define its own nested
+        # `fn`. That is independently real code -- unlike an anonymous
+        # closure, it is not "the same bytes" as anything enclosing it --
+        # so it must survive the collapse that swallows anonymous closures.
+        nested_fn = self._func_space("helper", 3, 5, 8)
+        closure = self._func_space(None, 2, 6, 9, children=[nested_fn])
+        outer = self._func_space("run", 1, 7, 12, children=[closure])
+        out: list[dict] = []
+        complexity_gate.functions_in(outer, out)
+        names = {f["name"] for f in out}
+        self.assertEqual(names, {"run", "helper"})
+
+    def test_top_level_closure_with_no_enclosing_function_is_still_reported(self) -> None:
+        # A closure with nothing to fold into (e.g. a module-level `static`
+        # initializer) is the only code there -- it must not be dropped.
+        top_level_closure = self._func_space(None, 1, 5, 12)
+        out: list[dict] = []
+        complexity_gate.functions_in(top_level_closure, out)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["name"], "<anonymous>")
+
+    def test_rust_code_analysis_cli_names_a_closure_the_literal_string_anonymous(self) -> None:
+        # The real bug, found by running the real tool rather than trusting
+        # a `None`/empty assumption: `rust-code-analysis-cli` puts the
+        # literal string "<anonymous>" in a closure's own `name` field, it
+        # does not leave it `None` or empty. A plain truthiness check on
+        # `name` treats that literal string as "named" and never collapses
+        # anything -- this pins the real value shape, not an assumed one.
+        closure = self._func_space("<anonymous>", 2, 9, 25)
+        outer = self._func_space("main", 1, 10, 27, children=[closure])
+        out: list[dict] = []
+        complexity_gate.functions_in(outer, out)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["name"], "main")
+
+    def test_sibling_functions_are_both_reported(self) -> None:
+        root = {
+            "kind": "file",
+            "spaces": [
+                self._func_space("a", 1, 5, 5),
+                self._func_space("b", 10, 15, 5),
+            ],
+        }
+        out: list[dict] = []
+        complexity_gate.functions_in(root, out)
+        self.assertEqual({f["name"] for f in out}, {"a", "b"})
+
+
 class ComplexityFindViolations(unittest.TestCase):
     def test_flags_only_functions_the_diff_touches(self) -> None:
         ranges = {"src/lib.rs": [(10, 15)]}
-        functions_by_file = {
+        new_functions = {
             "src/lib.rs": [
                 {"name": "touched_and_complex", "start": 10, "end": 15, "cyclomatic": 25},
                 {"name": "untouched_and_complex", "start": 100, "end": 120, "cyclomatic": 99},
                 {"name": "touched_but_simple", "start": 12, "end": 13, "cyclomatic": 3},
             ]
         }
-        violations = complexity_gate.find_violations(ranges, functions_by_file, max_cyclomatic=20)
+        violations = complexity_gate.find_violations(ranges, new_functions, {}, max_cyclomatic=20)
         self.assertEqual(len(violations), 1)
         self.assertIn("touched_and_complex", violations[0])
-        self.assertIn("cyclomatic complexity 25", violations[0])
+        self.assertIn("is new at 25", violations[0])
 
     def test_no_violations_when_nothing_over_the_limit(self) -> None:
         ranges = {"src/lib.rs": [(1, 100)]}
-        functions_by_file = {
-            "src/lib.rs": [{"name": "fine", "start": 1, "end": 10, "cyclomatic": 5}]
-        }
-        self.assertEqual(
-            complexity_gate.find_violations(ranges, functions_by_file, max_cyclomatic=20), []
-        )
+        new_functions = {"src/lib.rs": [{"name": "fine", "start": 1, "end": 10, "cyclomatic": 5}]}
+        self.assertEqual(complexity_gate.find_violations(ranges, new_functions, {}, 20), [])
 
     def test_untouched_file_contributes_no_violations(self) -> None:
         ranges = {"src/other.rs": [(1, 5)]}
-        functions_by_file = {
+        new_functions = {
             "src/lib.rs": [{"name": "huge", "start": 1, "end": 500, "cyclomatic": 500}]
         }
+        self.assertEqual(complexity_gate.find_violations(ranges, new_functions, {}, 20), [])
+
+    def test_already_over_limit_function_untouched_by_a_real_edit_passes(self) -> None:
+        # The load-bearing case in the other direction: `run` was 174 before
+        # this diff and is still 174 after it (the diff only deleted a
+        # comment elsewhere in its span) -- existing debt, not new, so it
+        # must not trip the gate just because a nearby hunk is in scope.
+        ranges = {"src/lib.rs": [(1, 300)]}
+        new_functions = {"src/lib.rs": [{"name": "run", "start": 1, "end": 300, "cyclomatic": 174}]}
+        old_functions = {"src/lib.rs": [{"name": "run", "start": 1, "end": 305, "cyclomatic": 174}]}
         self.assertEqual(
-            complexity_gate.find_violations(ranges, functions_by_file, max_cyclomatic=20), []
+            complexity_gate.find_violations(ranges, new_functions, old_functions, 20), []
         )
+
+    def test_already_over_limit_function_made_simpler_passes(self) -> None:
+        ranges = {"src/lib.rs": [(1, 300)]}
+        new_functions = {"src/lib.rs": [{"name": "run", "start": 1, "end": 300, "cyclomatic": 150}]}
+        old_functions = {"src/lib.rs": [{"name": "run", "start": 1, "end": 305, "cyclomatic": 174}]}
+        self.assertEqual(
+            complexity_gate.find_violations(ranges, new_functions, old_functions, 20), []
+        )
+
+    def test_already_over_limit_function_made_worse_still_trips_the_gate(self) -> None:
+        # The load-bearing test the whole before/after rule hinges on: this
+        # must still fail, or the gate stops meaning anything. Raising an
+        # already-bad function's complexity is exactly the case a reviewer
+        # needs flagged -- "already over the limit" must never become a
+        # license to make it worse for free.
+        ranges = {"src/lib.rs": [(1, 300)]}
+        new_functions = {"src/lib.rs": [{"name": "run", "start": 1, "end": 300, "cyclomatic": 180}]}
+        old_functions = {"src/lib.rs": [{"name": "run", "start": 1, "end": 305, "cyclomatic": 174}]}
+        violations = complexity_gate.find_violations(ranges, new_functions, old_functions, 20)
+        self.assertEqual(len(violations), 1)
+        self.assertIn("was 174, is now 180", violations[0])
+
+    def test_under_the_limit_before_and_over_after_still_trips_the_gate(self) -> None:
+        ranges = {"src/lib.rs": [(1, 20)]}
+        new_functions = {"src/lib.rs": [{"name": "f", "start": 1, "end": 20, "cyclomatic": 25}]}
+        old_functions = {"src/lib.rs": [{"name": "f", "start": 1, "end": 18, "cyclomatic": 18}]}
+        violations = complexity_gate.find_violations(ranges, new_functions, old_functions, 20)
+        self.assertEqual(len(violations), 1)
+        self.assertIn("was 18, is now 25", violations[0])
+
+    def test_new_function_with_no_old_counterpart_is_judged_against_the_limit(self) -> None:
+        ranges = {"src/lib.rs": [(1, 20)]}
+        new_functions = {"src/lib.rs": [{"name": "brand_new", "start": 1, "end": 20, "cyclomatic": 25}]}
+        violations = complexity_gate.find_violations(ranges, new_functions, {}, 20)
+        self.assertEqual(len(violations), 1)
+        self.assertIn("is new at 25", violations[0])
+
+    def test_same_named_functions_are_matched_by_occurrence_order(self) -> None:
+        # Two unrelated structs each define `fn new()`. The first should be
+        # compared against the first, the second against the second -- not
+        # "last one wins," which would compare the first new-side occurrence
+        # against the second old-side one.
+        ranges = {"src/lib.rs": [(1, 5), (10, 15)]}
+        new_functions = {
+            "src/lib.rs": [
+                {"name": "new", "start": 1, "end": 5, "cyclomatic": 22},
+                {"name": "new", "start": 10, "end": 15, "cyclomatic": 30},
+            ]
+        }
+        old_functions = {
+            "src/lib.rs": [
+                {"name": "new", "start": 1, "end": 5, "cyclomatic": 22},
+                {"name": "new", "start": 9, "end": 14, "cyclomatic": 18},
+            ]
+        }
+        violations = complexity_gate.find_violations(ranges, new_functions, old_functions, 20)
+        # The first `new` (22 -> 22, unchanged) passes; the second
+        # (18 -> 30, worse) fails. A "last one wins" name match would
+        # instead compare 22 against 18 and 30 against 22, getting both
+        # judgements wrong.
+        self.assertEqual(len(violations), 1)
+        self.assertIn(":10-15", violations[0])
+        self.assertIn("was 18, is now 30", violations[0])
+
+    def test_anonymous_function_has_no_old_counterpart_even_if_old_side_has_one(self) -> None:
+        # A top-level anonymous closure (see `FunctionsIn`) has no stable
+        # identity across a diff, so it is always judged against the limit
+        # directly -- it must not accidentally match some unrelated
+        # anonymous entry on the old side.
+        ranges = {"src/lib.rs": [(1, 5)]}
+        new_functions = {
+            "src/lib.rs": [{"name": "<anonymous>", "start": 1, "end": 5, "cyclomatic": 25}]
+        }
+        old_functions = {
+            "src/lib.rs": [{"name": "<anonymous>", "start": 1, "end": 5, "cyclomatic": 99}]
+        }
+        violations = complexity_gate.find_violations(ranges, new_functions, old_functions, 20)
+        self.assertEqual(len(violations), 1)
+        self.assertIn("is new at 25", violations[0])
 
 
 class DuplicationFindViolations(unittest.TestCase):
@@ -791,7 +964,7 @@ class DuplicationFindViolations(unittest.TestCase):
     def test_new_code_duplicating_old_code_fails(self) -> None:
         ranges = {"src/new.rs": [(1, 20)]}
         dup = self._dup(("src/new.rs", 5, 16), ("src/old.rs", 100, 111))
-        violations = duplication_gate.find_violations([dup], ranges)
+        violations = duplication_gate.find_violations([dup], [], ranges)
         self.assertEqual(len(violations), 1)
         self.assertIn("src/new.rs:5-16 (new)", violations[0])
         self.assertNotIn("src/old.rs:100-111 (new)", violations[0])
@@ -799,14 +972,89 @@ class DuplicationFindViolations(unittest.TestCase):
     def test_two_untouched_clones_are_not_flagged(self) -> None:
         ranges = {"src/elsewhere.rs": [(1, 5)]}
         dup = self._dup(("src/old_a.rs", 1, 12), ("src/old_b.rs", 1, 12))
-        self.assertEqual(duplication_gate.find_violations([dup], ranges), [])
+        self.assertEqual(duplication_gate.find_violations([dup], [], ranges), [])
 
     def test_new_code_duplicating_itself_flags_both_sides(self) -> None:
         ranges = {"src/new.rs": [(1, 50)]}
         dup = self._dup(("src/new.rs", 1, 12), ("src/new.rs", 20, 31))
-        violations = duplication_gate.find_violations([dup], ranges)
+        violations = duplication_gate.find_violations([dup], [], ranges)
         self.assertEqual(len(violations), 1)
         self.assertIn("(new)", violations[0])
+
+    def test_touched_clone_already_duplicated_before_passes(self) -> None:
+        # The load-bearing case: this same pair of files already duplicated
+        # each other before the diff (a nearby comment-removal collapse is
+        # what makes one side "touched," not a new clone) -- existing debt,
+        # not introduced by this diff, so it must not trip the gate.
+        ranges = {"src/a.rs": [(10, 12)]}
+        new_dup = self._dup(("src/a.rs", 10, 21), ("src/b.rs", 40, 51), lines=12)
+        old_dup = self._dup(("src/a.rs", 9, 20), ("src/b.rs", 38, 49), lines=12)
+        self.assertEqual(duplication_gate.find_violations([new_dup], [old_dup], ranges), [])
+
+    def test_touched_clone_with_no_old_counterpart_still_fails(self) -> None:
+        # The dual, equally load-bearing case: nothing comparable existed
+        # between these two files before, so this diff genuinely introduced
+        # the duplication and the gate must still catch it.
+        ranges = {"src/a.rs": [(10, 12)]}
+        new_dup = self._dup(("src/a.rs", 10, 21), ("src/b.rs", 40, 51), lines=12)
+        violations = duplication_gate.find_violations([new_dup], [], ranges)
+        self.assertEqual(len(violations), 1)
+        self.assertIn("introduced by this diff", violations[0])
+
+    def test_unrelated_old_clone_between_the_same_files_grants_no_amnesty(self) -> None:
+        # Pinned safety property: two files sharing *some* old duplication
+        # relationship must not blanket-exempt every future clone between
+        # them. A wildly different-sized old clone between the same pair is
+        # treated as a different clone, not the same one reformatted.
+        ranges = {"src/a.rs": [(10, 12)]}
+        new_dup = self._dup(("src/a.rs", 10, 21), ("src/b.rs", 40, 51), lines=12)
+        unrelated_old_dup = self._dup(("src/a.rs", 200, 299), ("src/b.rs", 300, 399), lines=100)
+        violations = duplication_gate.find_violations([new_dup], [unrelated_old_dup], ranges)
+        self.assertEqual(len(violations), 1)
+
+    def test_reformatted_clone_within_size_tolerance_still_matches(self) -> None:
+        # A comment-removal-driven collapse can shrink a clone's line count
+        # a little without changing what code it is -- the match must
+        # tolerate that instead of demanding an exact line count.
+        ranges = {"src/a.rs": [(10, 12)]}
+        new_dup = self._dup(("src/a.rs", 10, 19), ("src/b.rs", 40, 49), lines=10)
+        old_dup = self._dup(("src/a.rs", 9, 20), ("src/b.rs", 38, 49), lines=12)
+        self.assertEqual(duplication_gate.find_violations([new_dup], [old_dup], ranges), [])
+
+
+class FilePair(unittest.TestCase):
+    def test_order_independent(self) -> None:
+        a = {"firstFile": {"name": "x.rs"}, "secondFile": {"name": "y.rs"}}
+        b = {"firstFile": {"name": "y.rs"}, "secondFile": {"name": "x.rs"}}
+        self.assertEqual(duplication_gate.file_pair(a), duplication_gate.file_pair(b))
+
+
+class AlreadyDuplicatedBefore(unittest.TestCase):
+    def _dup(self, first: str, second: str, lines: int) -> dict:
+        return {
+            "firstFile": {"name": first, "start": 1, "end": 1},
+            "secondFile": {"name": second, "start": 1, "end": 1},
+            "lines": lines,
+        }
+
+    def test_no_old_duplicates_at_all(self) -> None:
+        candidate = self._dup("a.rs", "b.rs", 12)
+        self.assertFalse(duplication_gate.already_duplicated_before(candidate, []))
+
+    def test_matching_pair_within_size_tolerance(self) -> None:
+        candidate = self._dup("a.rs", "b.rs", 12)
+        old = [self._dup("a.rs", "b.rs", 10)]
+        self.assertTrue(duplication_gate.already_duplicated_before(candidate, old))
+
+    def test_matching_pair_outside_size_tolerance_does_not_count(self) -> None:
+        candidate = self._dup("a.rs", "b.rs", 12)
+        old = [self._dup("a.rs", "b.rs", 100)]
+        self.assertFalse(duplication_gate.already_duplicated_before(candidate, old))
+
+    def test_different_pair_does_not_count(self) -> None:
+        candidate = self._dup("a.rs", "b.rs", 12)
+        old = [self._dup("a.rs", "c.rs", 12)]
+        self.assertFalse(duplication_gate.already_duplicated_before(candidate, old))
 
 
 if __name__ == "__main__":
