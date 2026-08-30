@@ -1933,6 +1933,27 @@ fn collect_layer_contents_into(
                         child_layer.transform_to_parent,
                     );
                 }
+                // Falsification probe for the "cached-layer composite reads
+                // a pre-patch transform" hypothesis
+                // (scroll_translate_pixels.rs's documented invariant): log
+                // ANY child (not just backdrop-carrying ones) whose composed
+                // on-screen rect falls in the glass header's vertical band,
+                // so its Y position this frame can be cross-checked against
+                // the semantics-confirmed scroll offset for the same step
+                // from outside this process. If they always agree, this
+                // composite-building walk is not where the staleness is.
+                if cranpose_core::env_flag!("CRANPOSE_BACKDROP_DIAG") {
+                    let composed = quad_bounds(child_to_parent.map_rect(child_logical_rect));
+                    if composed.y < 180.0 && composed.y + composed.height > 90.0 {
+                        eprintln!(
+                            "[backdrop-diag] under-header-band node={:?} composed_rect={:?} transform_to_parent={:?} layer_offset={:?}",
+                            child_layer.node_id,
+                            composed,
+                            child_layer.transform_to_parent,
+                            layer_offset,
+                        );
+                    }
+                }
                 let child_contains_descendant_backdrop =
                     layer_contains_descendant_backdrop(child_layer.as_ref());
                 let child_needs_nested_underlay = child_contains_descendant_backdrop
