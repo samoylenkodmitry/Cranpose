@@ -12,6 +12,7 @@ fn create_app() -> AppLauncher {
     AppLauncher::new()
         .with_title("Cranpose Demo")
         .with_size(800, 600)
+        .with_web_fill_viewport(true)
         .with_fonts(desktop_demo::fonts::DEMO_FONTS)
         .with_fps_counter(true)
         .with_frame_pacing_controls(true)

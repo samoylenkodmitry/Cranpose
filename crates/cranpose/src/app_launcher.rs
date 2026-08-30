@@ -40,6 +40,15 @@ pub struct AppSettings {
     pub initial_height: u32,
     /// Whether the initial size was explicitly supplied by the app.
     pub initial_size_explicit: bool,
+    /// Web only: size the canvas to the full browser viewport instead of
+    /// capping it at `initial_width`/`initial_height`.
+    ///
+    /// The default keeps the historical behavior — a canvas that shrinks to
+    /// fit a narrow viewport but never grows past the requested size,
+    /// centered on the page. An app that wants the canvas to fill and track
+    /// the browser window (resizing live as the window does) opts in here;
+    /// other platforms ignore this field.
+    pub web_fill_viewport: bool,
     /// Fonts loaded for text rendering (ordered: primary first, fallbacks last).
     pub fonts: Option<&'static [&'static [u8]]>,
     /// App-supplied font families, already read and parsed.
@@ -109,6 +118,7 @@ impl Default for AppSettings {
             initial_width: 800,
             initial_height: 600,
             initial_size_explicit: false,
+            web_fill_viewport: false,
             fonts: None,
             font_registry: SoftwareTextFontRegistry::new(),
             android_use_system_fonts: false,
@@ -402,6 +412,15 @@ impl AppLauncher {
         self.settings.initial_width = width;
         self.settings.initial_height = height;
         self.settings.initial_size_explicit = true;
+        self
+    }
+
+    /// Web only: size the canvas to the full browser viewport and keep it
+    /// tracking that viewport's size as the window resizes, instead of
+    /// capping it at the size passed to [`Self::with_size`]. Other platforms
+    /// ignore this.
+    pub fn with_web_fill_viewport(mut self, fill: bool) -> Self {
+        self.settings.web_fill_viewport = fill;
         self
     }
 

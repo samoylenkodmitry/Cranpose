@@ -6,21 +6,29 @@
     <title>Cranpose Demo</title>
     <link rel="icon" href="data:,">
     <style>
-        body {
+        html, body {
             margin: 0;
             padding: 0;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            min-height: 100vh;
+            height: 100%;
+            overflow: hidden;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
         }
 
-        .container {
+        .boot-chrome {
+            position: fixed;
+            inset: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
             text-align: center;
             padding: 20px;
+            box-sizing: border-box;
+        }
+
+        body[data-phase="running"] .boot-chrome {
+            display: none;
         }
 
         h1 {
@@ -37,12 +45,10 @@
         }
 
         #cranpose-canvas {
-            border: 2px solid rgba(255, 255, 255, 0.3);
-            border-radius: 10px;
-            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
-            background: white;
+            position: fixed;
+            inset: 0;
             display: block;
-            margin: 0 auto;
+            background: white;
         }
 
         .loading {
@@ -86,11 +92,11 @@
     </style>
 </head>
 <body>
-    <div class="container">
+    <canvas id="cranpose-canvas" width="800" height="600"></canvas>
+
+    <div class="boot-chrome">
         <h1>🚀 Cranpose Demo</h1>
         <p class="subtitle">Jetpack Compose-inspired UI framework for Rust</p>
-
-        <canvas id="cranpose-canvas" width="800" height="600"></canvas>
 
         <div id="loading" class="loading">Loading WASM module...</div>
         <div id="error" class="error" style="display: none;"></div>
@@ -126,6 +132,7 @@
                 phase,
                 lastUpdatedMs: Date.now(),
             });
+            document.body.dataset.phase = phase;
         }
 
         function serializeConsoleValue(value) {

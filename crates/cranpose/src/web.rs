@@ -110,6 +110,13 @@ impl PlatformFrameDriver for WebPlatformFrameDriver<'_> {
     }
 }
 
+fn set_height_to_dynamic_viewport_height_with_static_fallback(
+    style: &web_sys::CssStyleDeclaration,
+) -> Result<(), JsValue> {
+    style.set_property("height", "100vh")?;
+    style.set_property("height", "100dvh")
+}
+
 /// Runs a web Compose application with wgpu rendering.
 ///
 /// Called by `AppLauncher::run_web()`. This is the framework-level
@@ -153,20 +160,23 @@ pub async fn run(
     // Get device pixel ratio for proper scaling
     let scale_factor = window.device_pixel_ratio();
 
-    // Keep the requested desktop-sized viewport as an upper bound while
-    // fitting phones and narrow browser windows without horizontal scrolling.
     let requested_width = settings.initial_width;
     let requested_height = settings.initial_height;
     if let Some(html_element) = canvas.dyn_ref::<web_sys::HtmlElement>() {
         let style = html_element.style();
-        style.set_property(
-            "width",
-            &format!("min({requested_width}px, calc(100vw - 36px))"),
-        )?;
-        style.set_property(
-            "height",
-            &format!("min({requested_height}px, calc(100vh - 36px))"),
-        )?;
+        if settings.web_fill_viewport {
+            style.set_property("width", "100vw")?;
+            set_height_to_dynamic_viewport_height_with_static_fallback(&style)?;
+        } else {
+            style.set_property(
+                "width",
+                &format!("min({requested_width}px, calc(100vw - 36px))"),
+            )?;
+            style.set_property(
+                "height",
+                &format!("min({requested_height}px, calc(100vh - 36px))"),
+            )?;
+        }
         style.set_property("touch-action", "none")?;
     }
     let width = canvas.client_width().max(1) as u32;

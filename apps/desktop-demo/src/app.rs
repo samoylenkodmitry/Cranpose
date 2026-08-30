@@ -74,6 +74,8 @@ use xkcd::xkcd_tab;
 const DEMO_PAGE_PADDING: f32 = 20.0;
 const DEMO_TAB_BAR_PADDING: f32 = 8.0;
 
+const COMPACT_WINDOW_SIZE_CLASS_MAX_WIDTH: f32 = 600.0;
+
 thread_local! {
     pub static TEST_COMPOSITION_LOCAL_COUNTER: RefCell<Option<MutableState<i32>>> = const { RefCell::new(None) };
     pub static TEST_ACTIVE_TAB_STATE: RefCell<Option<MutableState<DemoTab>>> = const { RefCell::new(None) };
@@ -459,6 +461,99 @@ fn TabBarHorizontal(
     );
 }
 
+fn compact_tab_row_background(is_active: bool) -> Color {
+    if is_active {
+        Color(0.2, 0.45, 0.9, 1.0)
+    } else {
+        Color(0.0, 0.0, 0.0, 0.0)
+    }
+}
+
+#[allow(non_snake_case)]
+#[composable]
+fn CompactAppBar(
+    active_tab: cranpose_core::MutableState<DemoTab>,
+    picker_open: cranpose_core::MutableState<bool>,
+    showing_source: cranpose_core::MutableState<bool>,
+) {
+    Row(
+        Modifier::empty().fill_max_width().padding_each(
+            DEMO_PAGE_PADDING,
+            DEMO_PAGE_PADDING,
+            DEMO_PAGE_PADDING,
+            DEMO_TAB_BAR_PADDING,
+        ),
+        RowSpec::new().horizontal_arrangement(LinearArrangement::SpaceBetween),
+        move || {
+            let label = active_tab.get().label();
+            let is_open = picker_open.get();
+            Button(
+                Modifier::empty()
+                    .rounded_corners(12.0)
+                    .draw_behind(move |scope| {
+                        scope.draw_round_rect(
+                            Brush::solid(Color(0.3, 0.3, 0.3, 0.5)),
+                            CornerRadii::uniform(12.0),
+                        );
+                    })
+                    .padding(10.0),
+                ButtonSpec::default(),
+                move || picker_open.set(!is_open),
+                move || {
+                    let marker = if is_open { "\u{25B4}" } else { "\u{25BE}" };
+                    Text(
+                        format!("{label} {marker}"),
+                        Modifier::empty().padding(4.0),
+                        TextStyle::default(),
+                    );
+                },
+            );
+            source_view::SourceToggleButton(showing_source, Modifier::empty());
+        },
+    );
+}
+
+#[allow(non_snake_case)]
+#[composable]
+fn CompactTabPicker(
+    active_tab: cranpose_core::MutableState<DemoTab>,
+    picker_open: cranpose_core::MutableState<bool>,
+) {
+    let scroll_state =
+        cranpose_core::remember(|| cranpose_ui::ScrollState::new(0.0)).with(|state| *state);
+    Column(
+        Modifier::empty()
+            .fill_max_width()
+            .weight(1.0)
+            .vertical_scroll(scroll_state, false),
+        ColumnSpec::new(),
+        move || {
+            for tab in DEMO_TABS {
+                let is_active = active_tab.get() == tab;
+                Button(
+                    Modifier::empty()
+                        .fill_max_width()
+                        .draw_behind(move |scope| {
+                            scope.draw_round_rect(
+                                Brush::solid(compact_tab_row_background(is_active)),
+                                CornerRadii::uniform(0.0),
+                            );
+                        })
+                        .padding_each(DEMO_PAGE_PADDING, 14.0, DEMO_PAGE_PADDING, 14.0),
+                    ButtonSpec::default(),
+                    move || {
+                        active_tab.set(tab);
+                        picker_open.set(false);
+                    },
+                    move || {
+                        Text(tab.label(), Modifier::empty(), TextStyle::default());
+                    },
+                );
+            }
+        },
+    );
+}
+
 #[allow(non_snake_case)]
 #[composable]
 fn TabContent(
@@ -517,30 +612,45 @@ pub fn combined_app_with_startup(startup: StartupSelection) {
     });
 
     let showing_source = cranpose_core::rememberMutableStateOf(|| false);
+    let picker_open = cranpose_core::rememberMutableStateOf(|| false);
+    let window_size = cranpose_core::rememberMutableStateOf(Size::default);
+    let content_modifier = Modifier::empty().fill_max_width().weight(1.0).padding_each(
+        DEMO_PAGE_PADDING,
+        0.0,
+        DEMO_PAGE_PADDING,
+        DEMO_PAGE_PADDING,
+    );
 
     Column(
-        Modifier::empty().fill_max_size(),
+        Modifier::empty()
+            .fill_max_size()
+            .report_size_state(window_size),
         ColumnSpec::default(),
         move || {
-            TabBarHorizontal(active_tab, showing_source);
+            let is_compact = window_size.get().width < COMPACT_WINDOW_SIZE_CLASS_MAX_WIDTH;
 
-            Spacer(Size {
-                width: 0.0,
-                height: 12.0,
-            });
+            if is_compact {
+                CompactAppBar(active_tab, picker_open, showing_source);
+            } else {
+                TabBarHorizontal(active_tab, showing_source);
 
-            TabContent(
-                active_tab,
-                startup,
-                winamp_tab_state,
-                showing_source,
-                Modifier::empty().fill_max_width().weight(1.0).padding_each(
-                    DEMO_PAGE_PADDING,
-                    0.0,
-                    DEMO_PAGE_PADDING,
-                    DEMO_PAGE_PADDING,
-                ),
-            );
+                Spacer(Size {
+                    width: 0.0,
+                    height: 12.0,
+                });
+            }
+
+            if is_compact && picker_open.get() {
+                CompactTabPicker(active_tab, picker_open);
+            } else {
+                TabContent(
+                    active_tab,
+                    startup,
+                    winamp_tab_state,
+                    showing_source,
+                    content_modifier.clone(),
+                );
+            }
         },
     );
 }
