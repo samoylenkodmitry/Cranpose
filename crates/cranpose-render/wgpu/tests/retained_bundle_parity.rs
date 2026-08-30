@@ -1,39 +1,3 @@
-//! Pixel parity for cached retained render bundles.
-//!
-//! Renders the same churning retained scene as `command_feed_parity` with
-//! `CRANPOSE_RETAINED_BUNDLES` off (direct per-op encoding) and on (cached
-//! bundles) and requires ZERO differing bytes. Unlike the arc-mesh change
-//! there is no rasterization difference to budget for: a bundle replays the
-//! IDENTICAL command sequence through the identical pipelines, so any
-//! divergence at all is a real defect (stale bundle, wrong dynamic offset,
-//! scissor drift, dropped op).
-//!
-//! Same-position-control discipline (documented in `command_feed_parity`):
-//! the flat detector renders pre-retention frames differently before any
-//! feed slot lives in the renderer, so a first pass must never be compared
-//! against a later one. Pass 1 warms every slot; the compared renders are
-//! passes 2/3/4, whose renderer state is stable — proven here by asserting
-//! the two OFF controls byte-equal each other before comparing the ON pass.
-//!
-//! The scene churns (recoloring twinkles, movers whose count changes every
-//! frame, recapturing spark spans), so the ON passes also exercise the
-//! rebuild path: the per-frame rebuild counters must keep moving after the
-//! initial build (churn safety), while cached executes dominate rebuilds
-//! (the cache is not vacuously rebuilding every frame).
-//!
-//! Since P1b the bundles must also cover the two new draw encodings, so
-//! every pass drives `CRANPOSE_ARC_MESH` per position: ON for the frames
-//! before the jolt (captures and revert-churn recaptures land with indexed
-//! meshes — `draw_indexed` over the slot's u32 index buffer inside the
-//! bundle) and OFF from the jolt on (its recaptures land meshless and ride
-//! the default-ON instanced-quad path — `draw_indexed(0..6, 0,
-//! first..last)` over the static u16 quad indices). Recaptures are
-//! per-position deterministic, so every pass sees the identical encoding
-//! mixture at the same frame and the same-position control holds; the
-//! per-frame slot stats assert the ON pass really bundled BOTH encodings
-//! at once. The zero-byte bar is unchanged: a bundle replays the IDENTICAL
-//! commands the direct path encodes, whatever the encoding.
-
 mod support;
 
 use cranpose_render_common::{
@@ -52,19 +16,8 @@ use cranpose_ui_graphics::{
 const SIZE: u32 = 408;
 const CENTER: f32 = 204.0;
 const FRAMES: usize = 16;
-/// Frame at which the ring bands jolt non-similarly (see `record_frame`):
-/// the recorder cannot express the change as a similarity transform, so the
-/// affected spans re-verify and RECAPTURE mid-sequence — while the previous
-/// frames' bundles are still live in the cache. That is the stale-bundle
-/// hazard this suite must prove impossible.
 const JOLT_FRAME: usize = 8;
 
-/// One frame of the synthetic boss through the RECORDING path: rings
-/// rotating at distinct speeds under a breathing scale (each backed by a
-/// full annulus big enough for the retained mesh size gate), churning
-/// sparks, recoloring twinkles, movers whose count changes every frame —
-/// plus a non-similar band jolt at `JOLT_FRAME` to force mid-sequence
-/// recaptures.
 fn record_frame(frame: usize) -> DrawScopeDefault {
     let mut scope =
         DrawScopeDefault::new(cranpose_ui_graphics::Size::new(SIZE as f32, SIZE as f32));
@@ -95,14 +48,7 @@ fn record_frame(frame: usize) -> DrawScopeDefault {
     .enumerate()
     {
         let radius = radius * breathing;
-        // Thickening the band while the radius breathes is NOT a similarity
-        // of the captured geometry: the span must recapture.
         let band = band * breathing * if frame >= JOLT_FRAME { 1.35 } else { 1.0 };
-        // A full backing annulus under each sector ring: its ~32k-90k px²
-        // quad clears the retained size gate, so pre-jolt captures still
-        // land WITH meshes now that the tiny sectors pass through — and it
-        // thickens with the same jolt, so its span recaptures mid-sequence
-        // (meshless, ARC_MESH is off from the jolt) like the rest.
         scope.draw_annular_sector(
             Brush::solid(Color(0.08, 0.12, 0.22, 1.0)),
             Point::new(CENTER, CENTER),
@@ -152,9 +98,6 @@ fn record_frame(frame: usize) -> DrawScopeDefault {
     scope
 }
 
-/// Records every frame once through one live `CommandReplayState`, exactly
-/// as the scene builder's verifier would. `node_id` keys the command
-/// identity, so this test's slots stay distinct from other suites'.
 fn build_sequence(node_id: usize) -> Vec<RenderGraph> {
     let mut state = CommandReplayState::default();
     let command = DrawCommandId {
@@ -205,19 +148,8 @@ fn build_sequence(node_id: usize) -> Vec<RenderGraph> {
         .collect()
 }
 
-/// Per-frame observations of one pass: pixels, bundle-cache (rebuilds,
-/// cached executes) deltas, and (meshed, total) replay-slot stats.
 type PassObservations = (Vec<Vec<u8>>, Vec<(u64, u64)>, Vec<(usize, usize)>);
 
-/// Renders the sequence and returns each frame's pixels, the bundle cache's
-/// per-frame (rebuilds, cached executes) deltas, and the per-frame (meshed,
-/// total) replay-slot stats.
-///
-/// `CRANPOSE_ARC_MESH` is driven per position — ON before the jolt, OFF
-/// from it — so captures land meshed while jolt recaptures land meshless.
-/// Recaptures are per-position deterministic (the graphs replay
-/// identically), so every pass sees the identical encoding mixture at the
-/// same frame index and the same-position control stays valid.
 fn render_sequence(
     renderer: &mut support::LockedRenderer,
     graphs: &[RenderGraph],
@@ -270,14 +202,9 @@ fn retained_bundles_replay_byte_exact_and_rebuild_on_churn() {
 
     let graphs = build_sequence(9);
 
-    // Pass 1 (warm): captures land, slots churn, bundles are live — its
-    // pixels are never compared, but its counters prove churn safety.
-    // (`render_sequence` drives CRANPOSE_ARC_MESH per position: meshed
-    // captures before the jolt, meshless recaptures from it.)
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_RETAINED_BUNDLES", Some("1"));
     let (_warm, warm_deltas, _warm_mesh) = render_sequence(&mut renderer, &graphs);
 
-    // Passes 2..4 at stable renderer positions: OFF control, ON, OFF control.
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_RETAINED_BUNDLES", Some("0"));
     let (off_frames, off_deltas, _off_mesh) = render_sequence(&mut renderer, &graphs);
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_RETAINED_BUNDLES", Some("1"));
@@ -292,11 +219,6 @@ fn retained_bundles_replay_byte_exact_and_rebuild_on_churn() {
     eprintln!("warm deltas (rebuilds, executes): {warm_deltas:?}");
     eprintln!("on   deltas (rebuilds, executes): {on_deltas:?}");
 
-    // Non-vacuity for the P1b encodings: within the ON pass the live slot
-    // population must have held BOTH meshed slots (indexed-mesh
-    // `draw_indexed` inside the executed bundles) and meshless slots
-    // (instanced-quad draws on the latched default-ON selection) — the
-    // per-frame stats prove the mixture existed while bundles drew.
     eprintln!("on-pass (meshed, total) slots per frame: {on_mesh:?}");
     assert!(
         renderer.instanced_quads_active(),
@@ -310,8 +232,6 @@ fn retained_bundles_replay_byte_exact_and_rebuild_on_churn() {
          slots (per-frame stats {on_mesh:?})"
     );
 
-    // The kill switch must actually kill: the OFF pass may not touch the
-    // bundle path at all.
     let off_total: (u64, u64) = off_deltas
         .iter()
         .fold((0, 0), |acc, d| (acc.0 + d.0, acc.1 + d.1));
@@ -321,32 +241,21 @@ fn retained_bundles_replay_byte_exact_and_rebuild_on_churn() {
         "CRANPOSE_RETAINED_BUNDLES=0 must bypass the bundle cache entirely"
     );
 
-    // Same-position control: two OFF passes at stable positions must agree
-    // byte-for-byte, or comparing the ON pass against either is meaningless.
     assert_byte_exact("off-vs-off2", &off_frames, &off2_frames);
-    // The parity bar itself: ZERO differing bytes, every frame, including
-    // the capture/recapture/split frames this churning scene produces.
     assert_byte_exact("on-vs-off", &on_frames, &off_frames);
 
-    // Non-vacuity: the ON pass really drew through bundles...
     let on_rebuilds: u64 = on_deltas.iter().map(|d| d.0).sum();
     let on_executes: u64 = on_deltas.iter().map(|d| d.1).sum();
     assert!(
         on_rebuilds > 0,
         "the ON pass must have built bundles (cache was evicted during the OFF pass)"
     );
-    // ...reusing them across frames rather than rebuilding every stretch
-    // every frame.
     assert!(
         on_executes > on_rebuilds,
         "cached executes ({on_executes}) should exceed rebuilds ({on_rebuilds}) — \
          a cache that rebuilds every frame is vacuous"
     );
 
-    // Churn safety: while slots recapture (warm pass frames after the first
-    // retained frame), the rebuild counter must keep moving — a recaptured
-    // slot may NEVER draw through its stale bundle, and the epoch key change
-    // shows up as a rebuild.
     let first_retained = warm_deltas
         .iter()
         .position(|d| d.0 + d.1 > 0)

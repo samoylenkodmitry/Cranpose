@@ -1,11 +1,3 @@
-//! Desktop writable-folder backend: `rfd` folder picker + `std::fs` I/O.
-//!
-//! The chosen directory may be a plain folder or a mounted network share
-//! (GVFS/rclone/davfs over the same WebDAV the app already reads). Writes use
-//! temp-file-then-rename for atomicity and fall back to a direct write when the
-//! backing filesystem rejects rename. A permission/EROFS failure maps to
-//! [`FolderError::ReadOnly`] so the caller can degrade to receive-only.
-
 use std::{
     fs::File,
     io::{Read, Write},
@@ -20,8 +12,6 @@ use super::{
 };
 use crate::content::DEFAULT_CHUNK_LEN;
 
-/// Fixed-name probe used by [`is_writable`](WritableFolderStore::is_writable);
-/// created and immediately deleted, so it never accumulates.
 const PROBE_NAME: &str = ".cranpose-write-probe";
 
 pub(super) fn open(handle: &str) -> WritableFolderStoreRef {
@@ -204,8 +194,6 @@ fn map_err(error: std::io::Error) -> FolderError {
     if error.kind() == std::io::ErrorKind::PermissionDenied {
         return FolderError::ReadOnly;
     }
-    // EACCES (13) / EROFS (30) cover read-only or unwritable mounts on
-    // Linux/Android without depending on the newer `ReadOnlyFilesystem` variant.
     #[cfg(unix)]
     if matches!(error.raw_os_error(), Some(13) | Some(30)) {
         return FolderError::ReadOnly;
@@ -222,8 +210,6 @@ mod tests {
 
     use super::*;
 
-    // Tests write under the workspace `target/test-output` (never tmpfs), per
-    // the workspace source-hygiene policy.
     fn unique_dir(tag: &str) -> PathBuf {
         static COUNTER: AtomicU32 = AtomicU32::new(0);
         let nanos = SystemTime::now()
@@ -268,7 +254,6 @@ mod tests {
             .collect();
         assert_eq!(remaining, vec!["b.bin".to_string()]);
 
-        // No probe/temp files left behind.
         let leftover: Vec<_> = std::fs::read_dir(&dir)
             .unwrap()
             .flatten()
@@ -300,7 +285,6 @@ mod tests {
         assert_eq!(sizes, vec![DEFAULT_CHUNK_LEN, 7]);
         assert_eq!(round_trip, payload);
 
-        // An abandoned writer leaves nothing behind.
         drop(store.open_write("abandoned.bin").expect("open_write"));
         assert!(!dir.join("abandoned.bin").exists());
         assert!(!dir.join("abandoned.bin.tmp").exists());

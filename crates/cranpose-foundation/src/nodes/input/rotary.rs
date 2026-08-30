@@ -232,9 +232,6 @@ mod tests {
 
     #[test]
     fn positive_detents_become_negative_pixels() {
-        // Compose: `val axisValue = -event.getAxisValue(AXIS_SCROLL)`.
-        // A crown turn that reports +1.0 detent must scroll by a NEGATIVE
-        // pixel amount.
         assert_eq!(rotary_scroll_pixels_from_detents(1.0, 64.0), -64.0);
         assert_eq!(rotary_scroll_pixels_from_detents(-1.0, 64.0), 64.0);
         assert_eq!(rotary_scroll_pixels_from_detents(0.0, 64.0), 0.0);
@@ -244,8 +241,6 @@ mod tests {
     fn from_detents_matches_compose_and_feeds_both_axes() {
         let event = RotaryScrollEvent::from_detents(2.0, 64.0, 48.0, 9);
 
-        // Same negated axis value scaled by each factor -- Compose does NOT
-        // read AXIS_HSCROLL for rotary.
         assert_eq!(event.vertical_scroll_pixels, -128.0);
         assert_eq!(event.horizontal_scroll_pixels, -96.0);
         assert_eq!(event.uptime_millis, 9);
@@ -263,8 +258,6 @@ mod tests {
 
     #[test]
     fn a_wheel_turned_up_lands_where_a_crown_turned_up_does() {
-        // The two ingresses must agree on direction or the same gesture
-        // scrolls opposite ways on a watch and on the machine it is built on.
         let wheel = RotaryScrollEvent::from_wheel_pixels(64.0, 0.0, 0);
         let crown = RotaryScrollEvent::from_detents(1.0, 64.0, 64.0, 0);
 
@@ -277,8 +270,6 @@ mod tests {
 
     #[test]
     fn a_wheel_carries_each_axis_on_its_own() {
-        // A crown has one degree of freedom and fans it across both fields; a
-        // wheel has two, and a horizontal nudge must not become a vertical one.
         let event = RotaryScrollEvent::from_wheel_pixels(12.0, -5.0, 77);
 
         assert_eq!(event.vertical_scroll_pixels, -12.0);
@@ -299,8 +290,6 @@ mod tests {
 
     #[test]
     fn event_is_copy_and_allocation_free() {
-        // Guards the "no allocation per event" constraint: a Copy struct of
-        // three scalars cannot heap-allocate on dispatch.
         fn assert_copy<T: Copy>() {}
         assert_copy::<RotaryScrollEvent>();
         assert_eq!(

@@ -1,5 +1,3 @@
-//! Mutable snapshot implementation.
-
 use std::{rc::Rc, sync::Arc};
 
 use super::*;
@@ -22,11 +20,6 @@ pub(super) fn find_record_by_id(
     None
 }
 
-/// Find the record that was readable when the snapshot was created.
-///
-/// This uses both base_snapshot_id and invalid set to find the record,
-/// matching Kotlin's `readable(first, snapshotId, applyingSnapshot.invalid)`.
-/// Records in the invalid set are filtered out even if their ID <= base_snapshot_id.
 pub(super) fn find_previous_record(
     head: &Rc<StateRecord>,
     base_snapshot_id: SnapshotId,
@@ -40,7 +33,6 @@ pub(super) fn find_previous_record(
     while let Some(record) = cursor {
         if !record.is_tombstone() {
             let id = record.snapshot_id();
-            // A record is valid if id <= base_snapshot_id AND id is NOT in invalid set
             let is_valid = id <= base_snapshot_id && !invalid.get(id);
             if is_valid {
                 found_base = true;
@@ -52,7 +44,6 @@ pub(super) fn find_previous_record(
                     best = Some(record.clone());
                 }
             }
-            // Fallback captures the first non-tombstone record regardless of validity
             if fallback.is_none() {
                 fallback = Some(record.clone());
             }
@@ -96,11 +87,8 @@ enum ApplyOperation {
 #[allow(clippy::arc_with_non_send_sync)]
 pub struct MutableSnapshot {
     state: SnapshotState,
-    /// The parent's snapshot id at the time this snapshot was created
     base_parent_id: SnapshotId,
-    /// Number of active nested snapshots
     nested_count: Cell<usize>,
-    /// Whether this snapshot has been applied
     applied: Cell<bool>,
 }
 
@@ -188,7 +176,6 @@ impl MutableSnapshot {
         let merged_observer =
             merge_read_observers(read_observer, self.state.read_observer.borrow().clone());
 
-        // Create a nested read-only snapshot
         let nested = ReadonlySnapshot::new(
             self.state.id.get(),
             self.state.invalid.borrow().clone(),
@@ -197,7 +184,6 @@ impl MutableSnapshot {
 
         self.nested_count.set(self.nested_count.get() + 1);
 
-        // When the nested snapshot is disposed, decrement this parent's nested_count
         let parent_weak = Arc::downgrade(self);
         nested.set_on_dispose(move || {
             if let Some(parent) = parent_weak.upgrade() {
@@ -247,7 +233,6 @@ impl MutableSnapshot {
     }
 
     pub fn apply(&self) -> SnapshotApplyResult {
-        // Check disposed state first - return Failure instead of panicking
         if self.state.disposed.get() {
             return SnapshotApplyResult::Failure;
         }
@@ -258,7 +243,6 @@ impl MutableSnapshot {
 
         let modified = self.state.modified.borrow();
         if modified.is_empty() {
-            // No changes to apply
             self.applied.set(true);
             self.state.dispose();
             return SnapshotApplyResult::Success;
@@ -308,8 +292,6 @@ impl MutableSnapshot {
                 );
                 return SnapshotApplyResult::Failure;
             };
-            // Use this snapshot's invalid set to find previous (matching Kotlin's
-            // `readable(first, snapshotId, applyingSnapshot.invalid)`)
             let this_invalid = self.state.invalid.borrow();
             let (previous_opt, found_base) =
                 find_previous_record(&head, self.base_parent_id, &this_invalid);
@@ -429,10 +411,6 @@ impl MutableSnapshot {
         self.applied.set(true);
         self.state.dispose();
 
-        // Track modified states for future cleanup instead of cleaning immediately.
-        // This defers the O(record_chain) work to check_and_overwrite_unused_records_locked,
-        // which runs periodically (e.g., on global snapshot advance) rather than on every apply.
-        // This prevents performance regression during rapid scrolling while still preventing leaks.
         for (_, state, _) in &applied_info {
             super::EXTRA_STATE_OBJECTS.with(|cell| {
                 cell.borrow_mut().add_trait_object(state);
@@ -460,20 +438,14 @@ impl MutableSnapshot {
         let merged_write =
             merge_write_observers(write_observer, self.state.write_observer.borrow().clone());
 
-        // Get parent's current state BEFORE allocating child
         let parent_id = self.state.id.get();
         let current_invalid = self.state.invalid.borrow().clone();
 
-        // Allocate the new child snapshot ID
         let (new_id, _runtime_invalid) = allocate_snapshot();
 
-        // Update parent's invalid to include the child
         let parent_invalid_with_child = current_invalid.set(new_id);
         self.state.invalid.replace(parent_invalid_with_child);
 
-        // Child's invalid = parent's invalid + range(parent_id + 1, new_id)
-        // This does NOT include parent_id, so child can read parent's records
-        // (matching Kotlin's currentInvalid.addRange(snapshotId + 1, newId))
         let invalid = current_invalid.add_range(parent_id + 1, new_id);
 
         let self_weak = Arc::downgrade(self);
@@ -483,7 +455,7 @@ impl MutableSnapshot {
             merged_read,
             merged_write,
             self_weak,
-            self.state.id.get(), // base_parent_id for child is this snapshot's id
+            self.state.id.get(),
         );
 
         self.nested_count.set(self.nested_count.get() + 1);
@@ -510,15 +482,10 @@ impl MutableSnapshot {
         nested
     }
 
-    /// Merge a child's modified set into this snapshot's modified set.
-    ///
-    /// Returns Ok(()) on success, or Err(()) if a conflict is detected
-    /// (i.e., this snapshot already has a modification for the same object).
     pub(crate) fn merge_child_modifications(
         &self,
         child_modified: &HashMap<StateObjectId, (Arc<dyn StateObject>, SnapshotId)>,
     ) -> Result<(), ()> {
-        // Check for conflicts
         {
             let parent_mod = self.state.modified.borrow();
             for key in child_modified.keys() {
@@ -528,7 +495,6 @@ impl MutableSnapshot {
             }
         }
 
-        // Merge entries
         let mut parent_mod = self.state.modified.borrow_mut();
         for (key, value) in child_modified.iter() {
             parent_mod.entry(*key).or_insert_with(|| value.clone());
@@ -572,7 +538,6 @@ mod tests {
         SnapshotMutableState::new_in_arc(initial, Arc::new(NeverEqual))
     }
 
-    // Mock StateObject for testing
     struct MockStateObject;
 
     fn mock_state_record() -> Rc<crate::state::StateRecord> {
@@ -740,7 +705,7 @@ mod tests {
         let mock_state = Arc::new(MockStateObject);
 
         snapshot.record_write(mock_state.clone());
-        snapshot.record_write(mock_state.clone()); // Second write should not call observer
+        snapshot.record_write(mock_state.clone());
 
         assert_eq!(*write_count.lock().unwrap(), 1);
     }

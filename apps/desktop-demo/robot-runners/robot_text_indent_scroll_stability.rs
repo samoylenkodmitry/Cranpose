@@ -1,7 +1,3 @@
-//! Robot test: capture real window screenshots of the Text showcase paragraph
-//! sample while scrolling by fractional logical pixels per step and require the
-//! paragraph crop to remain stable after alignment.
-
 mod output_paths;
 mod scroll_stability_external_helpers;
 mod text_showcase_external_helpers;

@@ -22,18 +22,10 @@ use crate::{
     },
 };
 
-/// The `requestAnimationFrame` callback, rebuilt once at startup and swapped
-/// out only when the render loop itself needs replacing (never); held behind
-/// `RefCell<Option<_>>` because it borrows the state its own frame closes
-/// over and cannot exist until that state does.
 type RenderLoop = Rc<RefCell<Option<Closure<dyn FnMut()>>>>;
 
-/// Reflows the canvas and its surface, optionally to a caller-requested CSS
-/// size, and republishes the resulting host-surface geometry.
 type ReshapeFn = Rc<dyn Fn(Option<(f32, f32)>)>;
 
-/// Maps a DOM `PointerEvent.pointerType` string onto the framework
-/// [`PointerSource`] so text fields show finger handles only for touch.
 fn web_pointer_source(event: &PointerEvent) -> PointerSource {
     match event.pointer_type().as_str() {
         "touch" => PointerSource::Touch,
@@ -43,10 +35,6 @@ fn web_pointer_source(event: &PointerEvent) -> PointerSource {
     }
 }
 
-/// The keyboard modifiers held during a mouse-class DOM event.
-///
-/// `WheelEvent` and `PointerEvent` both deref to `MouseEvent`, so one reader
-/// serves every pointer ingress.
 fn web_modifiers(event: &web_sys::MouseEvent) -> cranpose_app_shell::Modifiers {
     cranpose_app_shell::Modifiers {
         shift: event.shift_key(),
@@ -56,9 +44,6 @@ fn web_modifiers(event: &web_sys::MouseEvent) -> cranpose_app_shell::Modifiers {
     }
 }
 
-/// Monotonic milliseconds for synthesized rotary events, matching the desktop
-/// host's clock contract: the zero point is the process start and only
-/// differences between samples are meaningful.
 fn wheel_uptime_millis() -> u64 {
     thread_local! {
         static EPOCH: web_time::Instant = web_time::Instant::now();
@@ -131,11 +116,8 @@ pub async fn run(
     settings: AppSettings,
     content: impl FnMut() + 'static,
 ) -> Result<(), JsValue> {
-    // Set up console logging
     console_error_panic_hook::set_once();
 
-    // Platform environment (system theme; insets stay zero on the web) wrapped
-    // around the root content so composition observes live values.
     let platform_env = crate::platform_env::PlatformEnvironment::new();
     let mut content = content;
     let content = {
@@ -143,24 +125,19 @@ pub async fn run(
         move || env.compose_root(&mut content)
     };
 
-    // Browser-backed service implementations (share, notifications, vibration,
-    // online status) registered before the first composition.
     crate::web_services::register();
     crate::web_host_surface::install();
 
-    // Get the window and document
     let window = web_sys::window().ok_or("no global window exists")?;
     let document = window
         .document()
         .ok_or("should have a document on window")?;
 
-    // Get the canvas element
     let canvas = document
         .get_element_by_id(canvas_id)
         .ok_or_else(|| format!("canvas with id '{}' not found", canvas_id))?
         .dyn_into::<HtmlCanvasElement>()?;
 
-    // Get device pixel ratio for proper scaling
     let scale_factor = window.device_pixel_ratio();
 
     let requested_width = settings.initial_width;
@@ -211,11 +188,6 @@ pub async fn run(
         .map_err(|e| format!("failed to find suitable adapter: {:?}", e))?;
 
     let adapter_info = adapter.get_info();
-    // Both browser backends render into a canvas drawing buffer sized in
-    // physical device pixels so HiDPI displays stay crisp. The CSS box keeps
-    // the logical size set above and the browser samples the physical buffer
-    // down to fit it. Sizing the buffer at CSS resolution instead leaves the
-    // browser upscaling a low-resolution image (the blurry-canvas regression).
     let render_scale = crate::web_surface_scale::web_canvas_buffer_scale(scale_factor);
     let (buffer_width, buffer_height) =
         crate::web_surface_scale::web_canvas_buffer_dimensions(width, height, scale_factor);
@@ -270,11 +242,6 @@ pub async fn run(
     let mut surface_config = surface_config;
     let (actual_width, actual_height, effective_scale) =
         if adapter_info.backend == wgpu::Backend::BrowserWebGpu {
-            // Closes the black-screen gap at its root: the canvas must
-            // never show whatever the swapchain held right after
-            // `configure` for however long this page's first real frame
-            // takes to reach the screen (its shape/text pipelines may
-            // still be compiling).
             present_initial_placeholder_frame(
                 &surface,
                 &device,
@@ -284,14 +251,6 @@ pub async fn run(
             );
             (surface_config.width, surface_config.height, render_scale)
         } else {
-            // WebGL backends can cap the swapchain below the requested size.
-            // Probe the actual surface once so layout and root scale match the
-            // real render target instead of the requested CSS size. The probe
-            // frame is real swapchain content, so it is cleared to the
-            // framework's default background before presenting — the same
-            // black-screen fix the WebGPU branch above gets from
-            // `present_initial_placeholder_frame`, just folded into the
-            // probe this backend already needed.
             let probe = match current_surface_texture(&surface, "web probe") {
                 SurfaceFrame::Ready(probe) => probe,
                 SurfaceFrame::Reconfigure => {
@@ -334,24 +293,14 @@ pub async fn run(
         scale_factor
     );
 
-    // Create renderer with the app's fonts: registered families first,
-    // then the static `with_fonts()` slices, then the embedded fallback.
     let fonts = settings.resolve_font_set();
     let mut renderer = WgpuRenderer::with_font_set(fonts);
-    // `init_gpu` takes `Arc<Device>`/`Arc<Queue>` because every other host
-    // (desktop, Android, iOS) shares this exact renderer entry point and
-    // those `wgpu` types are genuinely `Send + Sync` there. Only the web
-    // target's WebGPU backend wraps a JS object that is not, and there is no
-    // web-only `init_gpu` to hand an `Rc` to instead.
     #[allow(clippy::arc_with_non_send_sync)]
     renderer.init_gpu(
         Arc::new(device),
         Arc::new(queue),
         crate::surface_format::display_surface_view_format(surface_format),
         adapter_info.backend,
-        // The real capabilities of this adapter, as every other host passes:
-        // the GL path gates vertex storage on them, and WebGL2 is exactly the
-        // backend that does not have it.
         adapter.get_downlevel_capabilities().flags,
     );
     renderer.set_root_scale(effective_scale as f32);
@@ -380,9 +329,6 @@ pub async fn run(
     let render_loop: RenderLoop = Rc::new(RefCell::new(None));
     let frame_pending = Rc::new(Cell::new(false));
     let frame_timer = Rc::new(WebFrameTimer::default());
-    // Starts true so the scene built during `AppShell` construction is presented
-    // on the first frame even though `update()` reports no visual work; cleared
-    // only after a successful present (mirrors the desktop `surface_dirty` flag).
     let surface_dirty = Rc::new(Cell::new(true));
     let request_frame: Rc<dyn Fn()> = {
         let frame_pending = frame_pending.clone();
@@ -395,34 +341,18 @@ pub async fn run(
         move || request_frame()
     });
 
-    // Route the in-tree selection menu's Copy/Cut/Paste through the browser
-    // clipboard; without this they reach only an in-process one, so a copy on
-    // the page could not leave it.
     crate::web_clipboard::install(&app, request_frame.clone());
 
-    // Files dropped onto the canvas arrive through the same incoming-content
-    // pipeline a share or a document intent uses on Android and iOS.
     crate::web_drop::install(&canvas, request_frame.clone())?;
 
-    // Live battery readings where the browser has the Battery Status API.
-    // Registered against the render loop (not `web_services::register()`,
-    // which runs before one exists) so a level or charging change wakes a
-    // repaint instead of waiting for one for an unrelated reason.
     crate::web_power::start_battery_probe(request_frame.clone());
 
-    // Hidden editable element backing IME composition. Browsers only start
-    // IME composition sessions (and mobile browsers only show their virtual
-    // keyboard) when an editable element is focused, so text-field focus
-    // moves DOM focus onto this textarea; its composition events feed the
-    // shared preedit/commit pipeline below.
     let ime_textarea = create_ime_textarea(&document)?;
     app.borrow_mut()
         .set_platform_text_input(Rc::new(WebTextInput {
             textarea: ime_textarea.clone(),
         }));
 
-    // System theme: seed from `prefers-color-scheme` and observe changes so
-    // theme-aware composition reacts live to OS appearance switches.
     if let Ok(Some(query)) = window.match_media("(prefers-color-scheme: dark)") {
         let initial = if query.matches() {
             cranpose_services::SystemTheme::Dark
@@ -448,10 +378,6 @@ pub async fn run(
         closure.forget();
     }
 
-    // Pointer events (below) cover mouse, touch and pen and carry the device
-    // type via `pointerType`; the separate `mouse*` listeners are intentionally
-    // not registered so a mouse click is not double-dispatched and the pointer
-    // source stays unambiguous.
     {
         let app = app.clone();
         let platform = platform.clone();
@@ -462,9 +388,6 @@ pub async fn run(
             let y = event.offset_y() as f64;
             let logical = platform.borrow().pointer_position(x, y);
 
-            // What the sample means -- zoom, rotary, axis-swapped scroll, or
-            // plain scroll -- is the shell's shared policy; this side only
-            // converts the DOM's units and sign.
             let wheel = crate::web_wheel::wheel_scroll_from_dom(
                 event.delta_x() as f32,
                 event.delta_y() as f32,
@@ -489,7 +412,6 @@ pub async fn run(
         closure.forget();
     }
 
-    // Set up pointer event handlers for touch support
     {
         let app = app.clone();
         let platform = platform.clone();
@@ -547,8 +469,6 @@ pub async fn run(
             if let Ok(mut app_mut) = app.try_borrow_mut() {
                 app_mut.set_pointer_source(web_pointer_source(&event));
                 app_mut.set_modifiers(web_modifiers(&event));
-                // Touch lift-off positions must not become velocity samples
-                // (see AppShell::pointer_released_at_position).
                 let event_time = app_mut.realtime_pointer_event_time(None);
                 app_mut.pointer_released_at_position_event_time(logical.x, logical.y, event_time);
                 request_frame();
@@ -576,27 +496,17 @@ pub async fn run(
         closure.forget();
     }
 
-    // Set up keyboard event handlers
-    // Note: We need to listen on document (not canvas) for keyboard events
-    // unless the canvas has tabindex set and is focused
     {
         let app = app.clone();
         let request_frame = request_frame.clone();
         let closure = Closure::wrap(Box::new(move |event: web_sys::KeyboardEvent| {
             use cranpose_app_shell::{KeyCode, KeyEvent, KeyEventType, Modifiers};
 
-            // During IME composition the browser owns text input: key events
-            // arrive with `isComposing` (or the synthetic 229 keyCode) and the
-            // composition listeners deliver the text. Dispatching them (or
-            // calling prevent_default) would double-commit characters and can
-            // break the composition session.
             if event.is_composing() || event.key_code() == 229 {
                 return;
             }
 
-            // Convert web key code to our KeyCode
             let key_code = match event.code().as_str() {
-                // Letters
                 "KeyA" => KeyCode::A,
                 "KeyB" => KeyCode::B,
                 "KeyC" => KeyCode::C,
@@ -623,7 +533,6 @@ pub async fn run(
                 "KeyX" => KeyCode::X,
                 "KeyY" => KeyCode::Y,
                 "KeyZ" => KeyCode::Z,
-                // Numbers
                 "Digit0" => KeyCode::Digit0,
                 "Digit1" => KeyCode::Digit1,
                 "Digit2" => KeyCode::Digit2,
@@ -634,7 +543,6 @@ pub async fn run(
                 "Digit7" => KeyCode::Digit7,
                 "Digit8" => KeyCode::Digit8,
                 "Digit9" => KeyCode::Digit9,
-                // Navigation
                 "ArrowUp" => KeyCode::ArrowUp,
                 "ArrowDown" => KeyCode::ArrowDown,
                 "ArrowLeft" => KeyCode::ArrowLeft,
@@ -643,14 +551,12 @@ pub async fn run(
                 "End" => KeyCode::End,
                 "PageUp" => KeyCode::PageUp,
                 "PageDown" => KeyCode::PageDown,
-                // Editing
                 "Backspace" => KeyCode::Backspace,
                 "Delete" => KeyCode::Delete,
                 "Enter" | "NumpadEnter" => KeyCode::Enter,
                 "Tab" => KeyCode::Tab,
                 "Space" => KeyCode::Space,
                 "Escape" => KeyCode::Escape,
-                // Punctuation
                 "Minus" => KeyCode::Minus,
                 "Equal" => KeyCode::Equal,
                 "BracketLeft" => KeyCode::BracketLeft,
@@ -672,8 +578,6 @@ pub async fn run(
                 meta: event.meta_key(),
             };
 
-            // Get the text produced by this key (from event.key)
-            // Filter out long key names like "Shift", "Control", etc.
             let text = {
                 let key = event.key();
                 if key.len() == 1 { key } else { String::new() }
@@ -703,12 +607,10 @@ pub async fn run(
         let closure = Closure::wrap(Box::new(move |event: web_sys::KeyboardEvent| {
             use cranpose_app_shell::{KeyCode, KeyEvent, KeyEventType, Modifiers};
 
-            // Skip IME-composition key events (see the keydown handler).
             if event.is_composing() || event.key_code() == 229 {
                 return;
             }
 
-            // Similar conversion for keyup
             let key_code = match event.code().as_str() {
                 "KeyA" => KeyCode::A,
                 "KeyB" => KeyCode::B,
@@ -767,7 +669,7 @@ pub async fn run(
 
             let key_event = KeyEvent {
                 key_code,
-                text: String::new(), // KeyUp doesn't produce text
+                text: String::new(),
                 modifiers,
                 event_type: KeyEventType::KeyUp,
             };
@@ -781,12 +683,10 @@ pub async fn run(
         closure.forget();
     }
 
-    // Set up paste event handler for clipboard paste
     {
         let app = app.clone();
         let request_frame = request_frame.clone();
         let closure = Closure::wrap(Box::new(move |event: web_sys::ClipboardEvent| {
-            // Get pasted text from clipboardData (synchronous!)
             if let Some(data) = event.clipboard_data()
                 && let Ok(text) = data.get_data("text/plain")
                 && !text.is_empty()
@@ -802,7 +702,6 @@ pub async fn run(
         closure.forget();
     }
 
-    // Set up copy event handler for clipboard copy
     {
         let app = app.clone();
         let request_frame = request_frame.clone();
@@ -810,7 +709,6 @@ pub async fn run(
             if let Ok(mut app_mut) = app.try_borrow_mut()
                 && let Some(text) = app_mut.on_copy()
             {
-                // Put copied text into the clipboard via the event
                 if let Some(data) = event.clipboard_data() {
                     let _ = data.set_data("text/plain", &text);
                     event.prevent_default();
@@ -822,7 +720,6 @@ pub async fn run(
         closure.forget();
     }
 
-    // Set up cut event handler for clipboard cut
     {
         let app = app.clone();
         let request_frame = request_frame.clone();
@@ -830,7 +727,6 @@ pub async fn run(
             if let Ok(mut app_mut) = app.try_borrow_mut()
                 && let Some(text) = app_mut.on_cut()
             {
-                // Put cut text into the clipboard via the event
                 if let Some(data) = event.clipboard_data() {
                     let _ = data.set_data("text/plain", &text);
                     event.prevent_default();
@@ -842,8 +738,6 @@ pub async fn run(
         closure.forget();
     }
 
-    // IME composition: the browser resends the whole preedit on every update,
-    // so `compositionupdate` maps 1:1 onto the framework preedit hook.
     {
         let app = app.clone();
         let request_frame = request_frame.clone();
@@ -861,9 +755,6 @@ pub async fn run(
         closure.forget();
     }
 
-    // Composition finished: clear the preedit (which deletes the composing
-    // text) and commit the final string, mirroring the desktop
-    // `Ime::Commit` flow.
     {
         let app = app.clone();
         let request_frame = request_frame.clone();
@@ -877,8 +768,6 @@ pub async fn run(
                 }
                 request_frame();
             }
-            // Drop the composed text from the hidden textarea so the next
-            // composition session starts from an empty mirror.
             textarea.set_value("");
         }) as Box<dyn FnMut(_)>);
         ime_textarea
@@ -886,11 +775,6 @@ pub async fn run(
         closure.forget();
     }
 
-    // The canvas follows the page: a browser-window resize, an orientation
-    // change, or a zoom that moves the device pixel ratio all reshape it. The
-    // whole reshape — CSS box, drawing buffer, swapchain, composition viewport
-    // and density — happens in one place, and the same place serves an
-    // application that asks for a size through the host-surface service.
     let reshape: ReshapeFn = {
         let canvas = canvas.clone();
         let window = window.clone();
@@ -956,8 +840,6 @@ pub async fn run(
         closure.forget();
     }
 
-    // An application's resize request is applied on the next frame, on the
-    // browser thread that owns the canvas.
     {
         let reshape = reshape.clone();
         let request_frame_for_requests = request_frame.clone();
@@ -967,8 +849,6 @@ pub async fn run(
             }
             request_frame_for_requests();
         }) as Box<dyn FnMut()>);
-        // 60 ms is far below anything a person notices for a window resize and
-        // far above anything that costs measurable battery.
         window.set_interval_with_callback_and_timeout_and_arguments_0(
             closure.as_ref().unchecked_ref(),
             60,
@@ -995,11 +875,6 @@ pub async fn run(
             log::error!("web accessibility sync failed: {error:?}");
         }
 
-        // Present when the surface still owes its first (or post-reconfigure)
-        // frame, when `update()` produced visual work, or when the app otherwise
-        // wants a redraw. Gating solely on `visual_changed` would skip the scene
-        // built during construction and leave the canvas blank until an event
-        // dirtied the tree (the "white until scroll" bug).
         let present_required = surface_present_required(
             surface_dirty_for_loop.get(),
             update_result.visual_changed,
@@ -1043,13 +918,9 @@ pub async fn run(
                             );
                         }
                     }
-                    // The reconfigured surface has not presented yet: keep it
-                    // dirty and request another frame so it flushes.
                     surface_dirty_for_loop.set(true);
                     request_frame_for_loop();
                 }
-                // Surface unavailable this tick; keep it dirty so the next
-                // scheduled frame retries the present.
                 SurfaceFrame::Skip => surface_dirty_for_loop.set(true),
             }
         }
@@ -1062,19 +933,11 @@ pub async fn run(
         app.borrow().schedule_platform_frame(&frame_driver);
     }) as Box<dyn FnMut()>));
 
-    // Start the render loop
     request_frame();
 
     Ok(())
 }
 
-/// Web text-input focus hook: moves DOM focus onto the hidden IME textarea
-/// while a cranpose text field is focused, and releases it when text-field
-/// focus is lost.
-///
-/// The browser only starts IME composition sessions for editable elements
-/// (and mobile browsers only show their virtual keyboard for them), so the
-/// canvas alone can never receive composition events.
 struct WebTextInput {
     textarea: web_sys::HtmlTextAreaElement,
 }
@@ -1090,25 +953,18 @@ impl cranpose_app_shell::PlatformTextInputHandler for WebTextInput {
     }
 }
 
-/// Creates the visually hidden, focusable textarea that backs IME
-/// composition and appends it to the document body.
 fn create_ime_textarea(
     document: &web_sys::Document,
 ) -> Result<web_sys::HtmlTextAreaElement, JsValue> {
     let textarea: web_sys::HtmlTextAreaElement = document.create_element("textarea")?.dyn_into()?;
 
-    // The composed text is delivered through composition events; browser
-    // assistance on the mirror itself would only interfere.
     textarea.set_attribute("autocomplete", "off")?;
     textarea.set_attribute("autocorrect", "off")?;
     textarea.set_attribute("autocapitalize", "off")?;
     textarea.set_attribute("spellcheck", "false")?;
-    // Programmatic focus only - the textarea must never be tab-reachable.
     textarea.set_attribute("tabindex", "-1")?;
     textarea.set_attribute("aria-hidden", "true")?;
 
-    // Visually hidden but still focusable: `display:none`/`visibility:hidden`
-    // elements refuse focus, so shrink to a transparent 1x1 point instead.
     let style = textarea.style();
     style.set_property("position", "fixed")?;
     style.set_property("top", "0")?;

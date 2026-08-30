@@ -18,20 +18,12 @@ use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
 use super::lazy_scrollbar::{LazyListWithScrollbar, LazyScrollbarStyle};
 
-// ---------------------------------------------------------------------------
-// Markdown → AnnotatedString block list
-// ---------------------------------------------------------------------------
-
-/// One rendered "block" of markdown content.
 #[derive(Clone, Debug, PartialEq)]
 enum MarkdownBlock {
-    /// A styled paragraph of inline text (may contain link annotations for clickable links).
     Text(Rc<AnnotatedString>),
-    /// A horizontal divider (---).
     Rule,
 }
 
-/// Inline style stack tracking what styles are currently open.
 #[derive(Clone, Default)]
 struct InlineStyle {
     bold: bool,
@@ -96,9 +88,6 @@ impl InlineStyle {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Thin builder wrapper: keeps style depth so we don't expose it to pulldown-cmark event handler.
-// ---------------------------------------------------------------------------
 struct BlockBuilder {
     style: InlineStyle,
     builder_raw: Option<cranpose_ui::text::annotated_string::Builder>,
@@ -208,7 +197,6 @@ impl BlockBuilder {
     }
 }
 
-/// Convert raw markdown text into a list of styled blocks.
 fn markdown_to_blocks(markdown: &str) -> Vec<MarkdownBlock> {
     let options = Options::empty();
     let parser = Parser::new_ext(markdown, options);
@@ -217,7 +205,6 @@ fn markdown_to_blocks(markdown: &str) -> Vec<MarkdownBlock> {
 
     for event in parser {
         match event {
-            // ---- Block start ----
             Event::Start(Tag::Heading { level, .. }) => {
                 b.flush_block();
                 b.style.heading = Some(level);
@@ -259,7 +246,6 @@ fn markdown_to_blocks(markdown: &str) -> Vec<MarkdownBlock> {
                 b.push_inline_style();
             }
             Event::Start(Tag::Link { dest_url, .. }) => {
-                // Store the URL as a LinkAnnotation::Url — auto-handled by LinkedText.
                 b.push_link(LinkAnnotation::Url(dest_url.to_string()));
                 b.push_span_style(SpanStyle {
                     color: Some(Color(0.35, 0.65, 0.95, 1.0)),
@@ -274,7 +260,6 @@ fn markdown_to_blocks(markdown: &str) -> Vec<MarkdownBlock> {
                 });
                 b.append("[image: ");
             }
-            // Inline code
             Event::Code(text) => {
                 b.push_span_style(SpanStyle {
                     font_family: Some(FontFamily::Monospace),
@@ -295,7 +280,6 @@ fn markdown_to_blocks(markdown: &str) -> Vec<MarkdownBlock> {
             Event::HardBreak => b.append("\n"),
             Event::Rule => b.push_rule(),
 
-            // ---- Block end ----
             Event::End(TagEnd::Heading(_)) => {
                 b.pop_style();
                 b.style.heading = None;
@@ -330,7 +314,6 @@ fn markdown_to_blocks(markdown: &str) -> Vec<MarkdownBlock> {
                 b.style.bold = false;
             }
             Event::End(TagEnd::Link) => {
-                // Pop span style then link annotation (LIFO)
                 b.pop_style();
                 b.pop_style();
             }
@@ -394,10 +377,6 @@ fn split_large_text_block(annotated: &AnnotatedString, out: &mut Vec<MarkdownBlo
     }
 }
 
-// ---------------------------------------------------------------------------
-// Fetch state
-// ---------------------------------------------------------------------------
-
 #[derive(Clone, Debug, PartialEq)]
 enum FetchState {
     Idle,
@@ -415,10 +394,6 @@ async fn fetch_markdown(client: &HttpClientRef, url: &str) -> Result<String, Str
 
 const DEFAULT_URL: &str =
     "https://raw.githubusercontent.com/samoylenkodmitry/s-a--m.github.io/refs/heads/master/_leetcode_source/2023-07-14-leetcode_daily.md";
-
-// ---------------------------------------------------------------------------
-// Composable
-// ---------------------------------------------------------------------------
 
 #[allow(non_snake_case)]
 #[composable]
@@ -447,8 +422,6 @@ pub fn markdown_viewer_tab() {
                 if url.is_empty() {
                     return Err("URL is empty".to_string());
                 }
-                // Only the raw text crosses the thread boundary — AnnotatedString
-                // (which may contain Rc inside LinkAnnotation) is built on the main thread.
                 fetch_markdown(&client, &url).await
             },
             move |result| match result {
@@ -472,7 +445,6 @@ pub fn markdown_viewer_tab() {
         ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(12.0)),
         {
             move || {
-                // ---- URL input row ----
                 Row(
                     Modifier::empty().fill_max_width(),
                     RowSpec::new()
@@ -530,7 +502,6 @@ pub fn markdown_viewer_tab() {
                     },
                 );
 
-                // ---- Status / content area ----
                 match fetch_state.get() {
                     FetchState::Idle => {
                         Text(
@@ -695,10 +666,6 @@ pub fn markdown_scroll_stress_fixture() -> String {
     markdown
 }
 
-// ---------------------------------------------------------------------------
-// Render helpers
-// ---------------------------------------------------------------------------
-
 const MARKDOWN_SCROLLBAR_RAIL_WIDTH: f32 = 16.0;
 const MARKDOWN_SCROLLBAR_THUMB_WIDTH: f32 = 8.0;
 const MARKDOWN_SCROLLBAR_MIN_THUMB_HEIGHT: f32 = 32.0;
@@ -783,8 +750,6 @@ fn render_text_block(annotated: Rc<AnnotatedString>) {
     };
 
     if !annotated.link_annotations.is_empty() {
-        // Inject the platform URI handler as the open_url callback.
-        // LinkedText dispatches Url via open_url, Clickable handlers are called directly.
         let uri_handler = local_uri_handler().current();
         LinkedText(
             (*annotated).clone(),
@@ -839,10 +804,6 @@ fn render_rule() {
         height: 4.0,
     });
 }
-
-// ---------------------------------------------------------------------------
-// Unit tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -1013,7 +974,6 @@ mod tests {
         let MarkdownBlock::Text(annotated) = &blocks[0] else {
             panic!("expected Text block");
         };
-        // Find the byte range of "link" in the text
         let start = annotated.text.find("link").expect("link text present");
         let end = start + "link".len();
         let ann = &annotated.link_annotations[0];

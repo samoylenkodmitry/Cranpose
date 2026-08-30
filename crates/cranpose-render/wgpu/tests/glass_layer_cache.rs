@@ -1,7 +1,3 @@
-//! Render-layer cache behaviour for the glass scenario: a lazy list of
-//! backdrop-blur rows under an animated glass overlay, the shape of the
-//! `glass_lazy_scroll` perf scenario.
-
 mod support;
 
 use std::{cell::RefCell, rc::Rc};
@@ -150,8 +146,6 @@ impl GlassHarness {
         }
     }
 
-    /// Advances one frame: applies the given scroll delta and animation
-    /// values, recomposes, renders, and returns that frame's cache counters.
     fn frame(&mut self, scroll_delta: f32, pulse: f32, drift: f32) -> FrameCacheStats {
         if scroll_delta != 0.0 {
             let state = self
@@ -201,15 +195,6 @@ impl GlassHarness {
 const WARMUP_FRAMES: usize = 4;
 const MEASURED_FRAMES: usize = 8;
 
-/// A still glass scene must serve every layer from the cache: zero misses,
-/// zero re-blurs, zero isolated re-renders.
-///
-/// Regression for issue #478. The retained lookup probed a full-surface key
-/// for every backdrop-carrying layer, while the render path stores those
-/// surfaces under a source-content key and never under the full-surface one.
-/// The probe therefore missed every frame forever — `cache_evictions=0` with
-/// a sub-30% hit rate in `glass_lazy_scroll` — and the phantom misses kept a
-/// still scene redrawing through the cache-miss warmup machinery.
 #[test]
 fn a_still_glass_scene_leaves_no_layer_cache_misses() {
     let (_lock, renderer) = match support::headless_renderer_parts() {
@@ -245,10 +230,6 @@ fn a_still_glass_scene_leaves_no_layer_cache_misses() {
     }
 }
 
-/// An overlay animating its blur radius and offset re-renders only itself:
-/// its own content (the pulse tints its fill) and its own backdrop blur.
-/// The still glass rows underneath must keep hitting their cached surfaces
-/// and cached backdrops.
 #[test]
 fn an_animated_overlay_leaves_still_glass_rows_fully_cached() {
     let (_lock, renderer) = match support::headless_renderer_parts() {

@@ -168,10 +168,6 @@ pub fn assert_count<T>(items: &[T], expected: usize, msg: &str) {
     );
 }
 
-// ============================================================================
-// Semantic Tree Helpers
-// ============================================================================
-
 /// Bounds of a UI element (x, y, width, height)
 #[derive(Clone, Copy, Debug)]
 pub struct Bounds {

@@ -131,8 +131,6 @@ pub fn open(renderer: Box<dyn Renderer>) -> Result<Box<dyn AudioSink>, AudioErro
     }
 }
 
-/// Opens the device with the engine's mixer on it. What
-/// [`AudioEngine::new`](crate::AudioEngine::new) hands to the sink opener.
 pub(crate) fn open_mixer(seed: MixerSeed) -> Result<Box<dyn AudioSink>, AudioError> {
     open(Box::new(Mixer::new(
         seed,
@@ -145,9 +143,6 @@ pub(crate) fn open_mixer(seed: MixerSeed) -> Result<Box<dyn AudioSink>, AudioErr
 mod tests {
     use super::*;
 
-    /// A build with no device compiled in must say so rather than pretend.
-    /// Builds that do have one are not exercised here: opening a real stream
-    /// belongs on a device, not in a unit test on a headless machine.
     #[test]
     fn a_build_without_a_device_reports_unsupported() {
         if is_compiled() {

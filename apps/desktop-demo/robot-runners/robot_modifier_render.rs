@@ -1,6 +1,3 @@
-//! Robot test to reproduce modifier showcase rendering issue
-//! Tests that clicking "Positioned Boxes" in modifier tab shows content
-
 use std::time::Duration;
 
 use cranpose::AppLauncher;
@@ -37,7 +34,6 @@ fn main() {
             });
             println!("✓ App launched");
 
-            // Click on Modifiers Showcase tab (note: with 's')
             if let Some((x, y, w, h)) = find_button_in_semantics(&robot, "Modifiers Showcase") {
                 let cx = x + w / 2.0;
                 let cy = y + h / 2.0;
@@ -55,7 +51,6 @@ fn main() {
 
             std::thread::sleep(Duration::from_millis(200));
 
-            // Look for Positioned Boxes button
             if let Some((x, y, w, h)) =
                 find_in_semantics(&robot, |elem| find_button(elem, "Positioned Boxes"))
             {
@@ -81,7 +76,6 @@ fn main() {
                     || find_in_semantics(&robot, |elem| find_text(elem, "Box")).is_some()
             });
 
-            // Check for expected content - look for "Layer" text which should appear
             let has_layer = find_in_semantics(&robot, |elem| find_text(elem, "Layer"));
             let has_box = find_in_semantics(&robot, |elem| find_text(elem, "Box"));
 
@@ -89,13 +83,11 @@ fn main() {
                 println!("  ✓ PASS: Content found after clicking Positioned Boxes");
                 println!("✓ ALL TESTS PASSED");
             } else {
-                // This is the regression - content should be visible after clicking
                 println!("  ✗ FAIL: No content visible after clicking Positioned Boxes!");
                 println!("         Expected to find 'Layer' or 'Box' text");
                 println!("         This is the recomposition regression!");
             }
 
-            // Verify Dynamic Modifiers responds to state changes without extra invalidation
             if let Some((x, y, w, h)) =
                 find_in_semantics(&robot, |elem| find_button(elem, "Dynamic Modifiers"))
             {

@@ -1,5 +1,3 @@
-/// Integration tests for modifier showcases that validate actual layout positions and sizes.
-/// These tests verify that modifiers produce correct measurements and coordinates.
 use cranpose_core::{location_key, Composition, MemoryApplier};
 use cranpose_ui::{
     composable, Box as ComposeBox, BoxSpec, Color, Column, ColumnSpec, LinearArrangement, Modifier,
@@ -15,7 +13,6 @@ fn app_context_scope() -> (
     (context, scope)
 }
 
-// Re-implement showcase functions for testing
 #[composable]
 fn simple_card_showcase() {
     Column(Modifier::empty(), ColumnSpec::default(), || {
@@ -276,7 +273,6 @@ fn dynamic_modifiers_showcase(frame: i32) {
     });
 }
 
-/// Helper to check if a node exists and count its children
 #[allow(dead_code)]
 fn count_children(applier: &mut MemoryApplier, node_id: usize) -> Option<usize> {
     applier
@@ -286,7 +282,6 @@ fn count_children(applier: &mut MemoryApplier, node_id: usize) -> Option<usize> 
         .ok()
 }
 
-/// Helper to collect all descendant nodes
 fn collect_all_nodes(applier: &mut MemoryApplier, node_id: usize) -> Vec<usize> {
     let mut nodes = vec![node_id];
     if let Ok(children) = applier.with_node(node_id, |node: &mut cranpose_ui::LayoutNode| {
@@ -313,18 +308,9 @@ fn test_simple_card_layout() {
     let root = composition.root().expect("Should have root");
     let mut applier = composition.applier_mut();
 
-    // Collect all nodes
     let all_nodes = collect_all_nodes(&mut applier, root);
     println!("Simple card: {} total nodes", all_nodes.len());
 
-    // Simple card showcase should create multiple nodes:
-    // - Column (outer container)
-    // - Text (title)
-    // - Spacer
-    // - Box (card)
-    //   - Column (inside card)
-    //     - Text (card title)
-    //     - Text (card content)
     assert!(
         all_nodes.len() >= 7,
         "Expected at least 7 nodes for simple card, got {}",
@@ -349,12 +335,6 @@ fn test_positioned_boxes_layout() {
     let all_nodes = collect_all_nodes(&mut applier, root);
     println!("Positioned boxes: {} total nodes", all_nodes.len());
 
-    // Positioned boxes showcase should create:
-    // - Column (outer)
-    // - Text (title)
-    // - Spacer
-    // - Box A with Text
-    // - Box B with Text
     assert!(
         all_nodes.len() >= 7,
         "Expected at least 7 nodes for positioned boxes, got {}",
@@ -379,13 +359,6 @@ fn test_item_list_layout() {
     let all_nodes = collect_all_nodes(&mut applier, root);
     println!("Item list: {} total nodes", all_nodes.len());
 
-    // Item list showcase should create:
-    // - Column (outer)
-    // - Text (title)
-    // - Spacer
-    // - Column (list container)
-    //   - 5 x Row (each with Text inside)
-    // Minimum nodes: ~14 (title + spacer + container + 5 items with children)
     assert!(
         all_nodes.len() >= 14,
         "Expected at least 14 nodes for 5-item list, got {}",
@@ -410,13 +383,6 @@ fn test_complex_chain_layout() {
     let all_nodes = collect_all_nodes(&mut applier, root);
     println!("Complex chain: {} total nodes", all_nodes.len());
 
-    // Complex chain showcase should create:
-    // - Column (outer)
-    // - Text (title)
-    // - Spacer
-    // - Text (description)
-    // - Spacer
-    // - Box with nested Text
     assert!(
         all_nodes.len() >= 6,
         "Expected at least 6 nodes for complex chain, got {}",
@@ -433,7 +399,6 @@ fn test_dynamic_modifiers_layout() {
     let pass = |composition: &mut Composition<MemoryApplier>, frame: i32| {
         composition.render(root_key, || dynamic_modifiers_showcase(frame))
     };
-    // Test at frame 0
     pass(&mut composition, 0).unwrap();
 
     let root = composition.root().expect("Should have root");
@@ -445,23 +410,14 @@ fn test_dynamic_modifiers_layout() {
         all_nodes_frame0.len()
     );
 
-    // Dynamic modifiers showcase should create:
-    // - Column (outer)
-    // - Text (title)
-    // - Spacer
-    // - Box (moving box with Text inside)
-    // - Spacer
-    // - Text (frame info)
     assert!(
         all_nodes_frame0.len() >= 6,
         "Expected at least 6 nodes for dynamic modifiers, got {}",
         all_nodes_frame0.len()
     );
 
-    // Drop applier so we can recompose
     drop(applier);
 
-    // Recompose at frame 5 - should maintain same structure
     pass(&mut composition, 5).unwrap();
 
     let mut applier = composition.applier_mut();
@@ -471,7 +427,6 @@ fn test_dynamic_modifiers_layout() {
         all_nodes_frame5.len()
     );
 
-    // Node count should be stable across recomposition
     assert_eq!(
         all_nodes_frame0.len(),
         all_nodes_frame5.len(),
@@ -554,10 +509,6 @@ fn test_long_list_performance() {
     let all_nodes = collect_all_nodes(&mut applier, root);
     println!("Long list: {} total nodes", all_nodes.len());
 
-    // Long list should have:
-    // - Column container
-    // - 50 x Row (each with Text inside)
-    // Minimum: ~100+ nodes
     assert!(
         all_nodes.len() >= 100,
         "Expected at least 100 nodes for 50-item list, got {}",

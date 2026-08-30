@@ -16,10 +16,6 @@ use crate::{
     http::{HttpClient, HttpClientRef, HttpControl, HttpRequest, default_http_client},
 };
 
-/// Root of the GitHub REST API this checker reads.
-///
-/// Unauthenticated, so only public repositories and the API's anonymous rate
-/// limit — the same limit a browser hits reading the same page.
 const GITHUB_API_ROOT: &str = "https://api.github.com";
 
 /// Discovers releases through a repository's public GitHub release feed.
@@ -31,14 +27,6 @@ const GITHUB_API_ROOT: &str = "https://api.github.com";
 /// tell which platform answered it.
 pub struct GitHubAppUpdater {
     client: HttpClientRef,
-    /// Whether the client behind this updater can actually make a request.
-    ///
-    /// The framework's own client needs the `http-native` feature, which is
-    /// the application's choice to enable. Without it every request fails
-    /// with [`crate::http::HttpError::UnsupportedFeature`], and an updater
-    /// that still claimed it could check would be claiming a capability the
-    /// build does not have — which is the exact thing
-    /// [`AppUpdateCapabilities`] exists to prevent.
     can_reach_network: bool,
 }
 
@@ -73,9 +61,6 @@ impl AppUpdater for GitHubAppUpdater {
     fn capabilities(&self) -> AppUpdateCapabilities {
         AppUpdateCapabilities {
             check: self.can_reach_network,
-            // Neither desktop nor iOS has a framework-owned way to replace
-            // its own binary, so this updater only ever discovers a release —
-            // it never claims it can install one.
             install: false,
         }
     }
@@ -94,9 +79,6 @@ impl AppUpdater for GitHubAppUpdater {
     }
 }
 
-/// Fetches the latest release and turns it into the status this checker
-/// publishes, folding every failure into [`AppUpdateStatus::Error`] rather
-/// than letting the worker thread's result go nowhere.
 async fn latest_release_status(
     client: &dyn HttpClient,
     source: &GitHubReleaseUpdate,
@@ -107,9 +89,6 @@ async fn latest_release_status(
     }
 }
 
-/// The fields this checker reads out of a GitHub release feed. Not every
-/// field the API returns — only what a caller of [`GitHubAppUpdater`] needs
-/// to decide whether a package is newer and to fetch it.
 struct GitHubRelease {
     tag_name: String,
     notes: Option<String>,
@@ -120,8 +99,6 @@ struct GitHubReleaseAsset {
     name: String,
     download_url: String,
     size: Option<u64>,
-    /// The `algorithm:hex` digest GitHub publishes per asset, when it did —
-    /// older releases and third-party mirrors may carry none.
     digest: Option<String>,
 }
 
@@ -165,12 +142,6 @@ impl GitHubReleaseAsset {
     }
 }
 
-/// Sends the one request this checker needs and reads its body as JSON.
-///
-/// Errors are flattened to a message rather than kept as [`crate::http::HttpError`]
-/// or [`serde_json::Error`]: the caller only ever turns them into
-/// [`AppUpdateStatus::Error`], and a status is text, not a typed error a
-/// caller branches on.
 async fn fetch_latest_release(
     client: &dyn HttpClient,
     source: &GitHubReleaseUpdate,
@@ -200,10 +171,6 @@ async fn fetch_latest_release(
     })
 }
 
-/// Turns a fetched release into the status [`GitHubAppUpdater::check`]
-/// publishes: current if nothing newer was found, available with a package
-/// when it was, or an error when the release is newer but carries none of
-/// the assets this application asked for.
 fn release_status(release: &GitHubRelease, source: &GitHubReleaseUpdate) -> AppUpdateStatus {
     let latest_version = version_from_tag(&release.tag_name);
     if !is_newer_version(latest_version, &source.current_version) {
@@ -223,11 +190,6 @@ fn release_status(release: &GitHubRelease, source: &GitHubReleaseUpdate) -> AppU
     if let Some(size) = asset.size {
         package = package.with_size(size);
     }
-    // A digest the feed did not publish, or published in a form this
-    // framework cannot check, leaves the package unverifiable — which
-    // `install_app_update` refuses rather than installing blind. Inventing
-    // one here would hide that the feed never promised anything to check
-    // against.
     if let Some(digest) = asset.digest.as_deref().and_then(PackageDigest::parse) {
         package = package.with_digest(digest);
     }
@@ -237,9 +199,6 @@ fn release_status(release: &GitHubRelease, source: &GitHubReleaseUpdate) -> AppU
     AppUpdateStatus::Available { package }
 }
 
-/// Strips a release tag's leading `v` (or `V`), the one prefix GitHub's own
-/// tagging convention adds and this application's own version string never
-/// carries.
 fn version_from_tag(tag: &str) -> &str {
     let trimmed = tag.trim();
     trimmed
@@ -248,14 +207,6 @@ fn version_from_tag(tag: &str) -> &str {
         .unwrap_or(trimmed)
 }
 
-/// Parses a version string into numeric components, so they compare the way
-/// a version number means to rather than the way its digits happen to sort:
-/// `"10"` reads as `10`, not as a string that sorts before `"9"`.
-///
-/// A component that is not purely numeric (a pre-release suffix such as
-/// `10-beta`) contributes its leading digits and drops the rest — enough to
-/// order releases correctly without a general version grammar this framework
-/// has no other use for.
 fn version_components(version: &str) -> Vec<u64> {
     version_from_tag(version)
         .split('.')
@@ -270,9 +221,6 @@ fn version_components(version: &str) -> Vec<u64> {
         .collect()
 }
 
-/// Whether `candidate` is a newer release than `current`, comparing version
-/// components numerically component by component rather than as strings or
-/// as whole numbers.
 fn is_newer_version(candidate: &str, current: &str) -> bool {
     let mut candidate = version_components(candidate);
     let mut current = version_components(current);
@@ -286,11 +234,6 @@ fn is_newer_version(candidate: &str, current: &str) -> bool {
 mod tests {
     use super::*;
 
-    /// The contract this checker relies on to decide whether a release is
-    /// worth surfacing: version numbers compare numerically, not as strings
-    /// or as whole dotted numbers, so `v0.1.10` — the release after nine
-    /// patches — is correctly newer than `v0.1.9` rather than sorting before
-    /// it the way `"10" < "9"` would as strings.
     #[test]
     fn version_comparison_is_numeric_per_component() {
         assert!(

@@ -2,7 +2,6 @@
 
 #![allow(non_snake_case)]
 
-// Re-export everything from widgets
 pub use crate::widgets::*;
 
 #[cfg(test)]

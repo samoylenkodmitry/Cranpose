@@ -101,8 +101,6 @@ pub struct Placeable {
     node_id: NodeId,
     content_offset_x: f32,
     content_offset_y: f32,
-    /// Optional side-effect executed by `place()`.  `None` for pure-value
-    /// placeables (coordinators, subcompose).
     place_fn: Option<Rc<dyn Fn(f32, f32)>>,
 }
 

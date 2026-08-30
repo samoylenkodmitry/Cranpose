@@ -1,12 +1,3 @@
-//! `Modifier::draggable` driven through real pointer events.
-//!
-//! The unit tests beside `DraggableState` cover the state; these cover the
-//! gesture around it — that a drag has to clear the touch slop, that it follows
-//! the finger sign-for-sign (unlike a scroll, where content moves against the
-//! offset), that a cross-axis drag never reaches it, that an event another
-//! modifier already consumed ends the gesture, and that a release places the
-//! control rather than flinging it onwards.
-
 use std::{cell::Cell, rc::Rc, sync::Arc};
 
 use cranpose_core::{DefaultScheduler, Runtime};
@@ -24,8 +15,6 @@ fn with_test_runtime<T>(body: impl FnOnce() -> T) -> T {
     body()
 }
 
-/// Returns (handler, chain). The chain must outlive the handler: dropping it
-/// cancels the pointer input task the gesture runs in.
 fn pointer_handler_for(modifier: Modifier) -> (Rc<dyn Fn(PointerEvent)>, ModifierNodeChain) {
     let elements = modifier.elements();
     let mut chain = ModifierNodeChain::new();
@@ -45,7 +34,6 @@ fn event(kind: PointerEventKind, x: f32, y: f32) -> PointerEvent {
         .with_buttons(PointerButtons::new().with(PointerButton::Primary))
 }
 
-/// A drag state that records everything it is told, and the total.
 fn recording_state() -> (DraggableState, Rc<Cell<f32>>) {
     let total = Rc::new(Cell::new(0.0));
     let recorder = Rc::clone(&total);
@@ -65,8 +53,6 @@ fn a_vertical_drag_follows_the_finger() {
         handler(event(PointerEventKind::Move, 0.0, 160.0));
         handler(event(PointerEventKind::Up, 0.0, 160.0));
 
-        // Down the screen is a positive delta, unlike a scroll offset, which
-        // moves against the finger.
         assert!(
             (total.get() - 60.0).abs() < 0.001,
             "a finger moved 60 down must report +60, got {}",
@@ -125,7 +111,6 @@ fn a_drag_along_the_other_axis_never_reaches_this_one() {
             pointer_handler_for(Modifier::empty().draggable(Axis::Vertical, state));
 
         handler(event(PointerEventKind::Down, 100.0, 100.0));
-        // Decisively horizontal: this detector locks out for the gesture.
         handler(event(PointerEventKind::Move, 200.0, 104.0));
         handler(event(PointerEventKind::Move, 240.0, 180.0));
 
@@ -229,9 +214,6 @@ fn a_guard_that_says_no_declines_the_gesture() {
 
 #[test]
 fn releasing_a_fast_drag_places_the_control_rather_than_flinging_it() {
-    // A scroll throws its content onwards on release. A control the user placed
-    // must stop where it was let go: a knob that keeps turning after the finger
-    // lifts reads as the control slipping out of the user's hand.
     let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
         let (state, total) = recording_state();

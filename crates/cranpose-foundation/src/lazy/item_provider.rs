@@ -41,7 +41,6 @@ pub trait LazyLayoutItemProvider {
     /// Used to find items by key for scroll-to operations.
     /// Returns `None` if the key is not found.
     fn get_index(&self, key: u64) -> Option<usize> {
-        // Default implementation: linear search using iterator
         (0..self.item_count()).find(|&i| self.get_key(i) == key)
     }
 }

@@ -1,18 +1,5 @@
-//! Reproduction test for UI breakage during parent recreation
-//!
-//! This test demonstrates a regression where reusing a child node when its parent
-//! is recreated leads to the child being destroyed (orphaned) because the
-//! parent's removal recursively removes children.
-//!
-//! Scenario:
-//! 1. Render `Column -> Box -> Text("Persistent")`.
-//! 2. Toggle state to change `Box` to `Row` (or just force recreation).
-//!    Structure becomes `Column -> Row -> Text("Persistent")`.
-//! 3. Verify `Text("Persistent")` is still visible and has valid bounds.
-
 use std::time::Duration;
 
-// use desktop_app::app;
 use cranpose::AppLauncher;
 use cranpose_core::rememberMutableStateOf;
 use cranpose_testing::find_text_in_semantics;
@@ -36,12 +23,10 @@ fn reproduction_app() {
         );
 
         if toggle.get() {
-            // State B: Row parent
             Row(Modifier::empty(), RowSpec::default(), || {
                 Text("Persistent Child", Modifier::empty(), TextStyle::default());
             });
         } else {
-            // State A: Box parent
             Box(Modifier::empty(), BoxSpec::default(), || {
                 Text("Persistent Child", Modifier::empty(), TextStyle::default());
             });
@@ -61,7 +46,6 @@ fn main() {
             println!("✓ App launched");
             std::thread::sleep(Duration::from_millis(500));
 
-            // Initial check
             if find_text_in_semantics(&robot, "Persistent Child").is_some() {
                 println!("✓ Found child initially");
             } else {
@@ -69,8 +53,6 @@ fn main() {
                 let _ = robot.exit();
             }
 
-            // Toggle to trigger parent change
-            // Find toggle button
             let (tx, ty, tw, th) =
                 cranpose_testing::find_button_in_semantics(&robot, "Toggle Parent")
                     .expect("Toggle button not found");
@@ -79,7 +61,6 @@ fn main() {
             robot.click(tx + tw / 2.0, ty + th / 2.0).ok();
             std::thread::sleep(Duration::from_millis(500));
 
-            // Check if child survived
             if let Some((x, y, w, h)) = find_text_in_semantics(&robot, "Persistent Child") {
                 println!(
                     "✓ Child survived parent recreation! Bounds: {:.1},{:.1} {}x{}",
@@ -92,7 +73,7 @@ fn main() {
             } else {
                 println!("✗ Child DISAPPEARED after parent recreation!");
                 println!("  This confirms the regression: 'UI breaks when going between tabs'");
-                let _ = robot.exit(); // Fail
+                let _ = robot.exit();
             }
 
             println!("✓ Test Passed (No regression found?)");

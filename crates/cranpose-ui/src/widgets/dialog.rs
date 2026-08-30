@@ -144,13 +144,6 @@ pub fn DialogWithScrim<C>(
 ) where
     C: Fn() + 'static,
 {
-    // The depth this dialog's own `register_modal` registration will occupy,
-    // fixed at this dialog's first composition (before `DisposableEffect`
-    // below actually registers it) and held stable for as long as the dialog
-    // stays mounted — recomputing it from the live `modal_depth()` on every
-    // recomposition would double-count this dialog's own registration once
-    // it commits. Provided to the content below so its fields (and any
-    // nested dialog) know how deep they are.
     let own_modal_depth =
         cranpose_core::remember(|| crate::modal::current_modal_depth() + 1).with(|depth| *depth);
 
@@ -165,9 +158,6 @@ pub fn DialogWithScrim<C>(
     let on_dismiss = Rc::new(on_dismiss);
     let content = Rc::new(content);
 
-    // A dialog whose outside taps do nothing still needs the scrim, or the
-    // controls behind it would keep taking input while it is open. The
-    // callback therefore always exists and only *acts* when the spec allows it.
     let dismiss_on_outside_tap = spec.dismiss_on_outside_tap;
     let scrim_dismiss = {
         let on_dismiss = Rc::clone(&on_dismiss);
@@ -178,9 +168,6 @@ pub fn DialogWithScrim<C>(
         }
     };
 
-    // The back gesture is taken while the dialog is composed. A dialog that
-    // does not close on back still takes it, because the screen behind a modal
-    // must not react to a gesture aimed at the modal.
     let dismiss_on_back = spec.dismiss_on_back;
     let back = {
         let on_dismiss = Rc::clone(&on_dismiss);
@@ -272,11 +259,6 @@ mod tests {
         assert!(!spec.with_window_insets(false).apply_window_insets);
     }
 
-    /// Pins the defect this module's doc comment promises and nothing used to
-    /// implement: a text field behind an open dialog must not be able to take
-    /// focus away from the dialog, and once the dialog closes the field
-    /// behind it must be focusable again — and the field the closed dialog
-    /// held must not be left "focused" with nothing there to receive input.
     #[test]
     fn a_dialog_traps_focus_inside_it_and_releases_it_on_close() {
         use std::cell::{Cell, RefCell};
@@ -298,8 +280,6 @@ mod tests {
         let _app_context = crate::render_state::app_context_test_scope();
         crate::modal::clear_modals();
 
-        // `Composition::new` installs the runtime `TextFieldState` needs, so
-        // it must exist before any state is allocated.
         let mut composition = Composition::new(MemoryApplier::new());
 
         let outside_state = TextFieldState::new("outside");
@@ -347,9 +327,6 @@ mod tests {
         let key = location_key(file!(), line!(), column!());
         composition.render(key, &mut content).expect("render");
 
-        // The dialog's Popup registers into the host during a subcomposition
-        // pass; a follow-up reconcile + layout is needed for it to actually
-        // place content, so settle a few frames the way a real host would.
         let mut settle = move |composition: &mut Composition<MemoryApplier>| -> LayoutTree {
             for _ in 0..16 {
                 if !composition.should_render() {
@@ -399,7 +376,6 @@ mod tests {
             layout = settle(&mut composition);
         }
 
-        // The dialog is open. Its own field can take focus...
         tap(layout.root(), &inside_id);
         assert!(has_focused_field(), "the dialog's own field must focus");
         assert_eq!(
@@ -408,7 +384,6 @@ mod tests {
             "the dialog's own field must be the one focused"
         );
 
-        // ...but the field behind the dialog must not be able to steal it.
         tap(layout.root(), &outside_id);
         assert_eq!(
             focused_editor_state().map(|s| s.text),
@@ -416,8 +391,6 @@ mod tests {
             "a field behind an open dialog must not take focus from it"
         );
 
-        // Closing the dialog must not leave focus pointing at the field that
-        // just went away with it.
         let dialog_open = dialog_open_slot
             .borrow()
             .as_ref()
@@ -430,7 +403,6 @@ mod tests {
             "closing the dialog must release focus from the field it held"
         );
 
-        // The field behind it can now take focus again.
         tap(layout.root(), &outside_id);
         assert_eq!(
             focused_editor_state().map(|s| s.text),

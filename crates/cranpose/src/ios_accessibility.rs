@@ -1,4 +1,3 @@
-//! UIKit accessibility bridge for the retained Cranpose semantics tree.
 #![allow(unsafe_code)]
 
 use std::{
@@ -33,9 +32,6 @@ use crate::{
 };
 
 struct AccessibilityElementIvars {
-    /// The shared accessibility element id, not the layout node id: a node
-    /// that publishes drawn controls owns several elements, and VoiceOver has
-    /// to activate the one it is focused on.
     element_id: i32,
     actionable: Cell<bool>,
     pending_activations: Rc<RefCell<Vec<i32>>>,
@@ -93,7 +89,6 @@ impl NativeAccessibilityElement {
     }
 }
 
-/// Owns UIKit's retained accessibility elements and dispatches their actions.
 pub(crate) struct IosAccessibilityBridge {
     host_view: Retained<UIView>,
     native_elements: HashMap<i32, Retained<NativeAccessibilityElement>>,
@@ -105,7 +100,6 @@ pub(crate) struct IosAccessibilityBridge {
 }
 
 impl IosAccessibilityBridge {
-    /// Attaches an accessibility container to winit's root UIKit view.
     pub(crate) fn new(event_proxy: EventLoopProxy) -> Option<Self> {
         let mtm = MainThreadMarker::new()?;
         let host_view = root_view_controller(mtm)?.view()?;
@@ -123,7 +117,6 @@ impl IosAccessibilityBridge {
         })
     }
 
-    /// Reconciles native elements with the current retained semantics snapshot.
     pub(crate) fn sync<R>(&mut self, shell: &mut AppShell<R>)
     where
         R: Renderer,
@@ -160,7 +153,6 @@ impl IosAccessibilityBridge {
         self.snapshot_ids = next_ids;
     }
 
-    /// Runs queued VoiceOver/XCTest activations through Cranpose pointer input.
     pub(crate) fn drain_activations<R>(&mut self, shell: &mut AppShell<R>) -> bool
     where
         R: Renderer,
@@ -242,16 +234,11 @@ fn update_native_element(
 ) {
     native.set_actionable(element.clickable || element.role == AccessibilityRole::TextField);
     native.setAccessibilityLabel(Some(&NSString::from_str(&element.label)));
-    // VoiceOver reads the value after the label, which is where Compose's
-    // `stateDescription` belongs; a text field's own text still wins, since it
-    // is the value in the literal sense.
     let value = element
         .value
         .as_deref()
         .or(element.state_description.as_deref());
     native.setAccessibilityValue(value.map(NSString::from_str).as_deref());
-    // The click label is a verb phrase ("Pause"), which is exactly what a hint
-    // is for: VoiceOver reads it as what activating will do.
     native.setAccessibilityHint(
         element
             .click_label
@@ -276,11 +263,6 @@ fn update_native_element(
             AccessibilityRole::Tab => UIAccessibilityTraitButton,
             AccessibilityRole::Image => UIAccessibilityTraitImage,
             AccessibilityRole::Header => UIAccessibilityTraitHeader,
-            // VoiceOver treats a modal container as a header-like landmark it
-            // announces on entry; the modality itself is set below through
-            // `accessibilityViewIsModal` on the element itself, since
-            // Cranpose publishes a flat sibling array rather than nested
-            // views for `accessibilityViewIsModal` to scope by containment.
             AccessibilityRole::Dialog => UIAccessibilityTraitHeader,
         }
     };
@@ -294,10 +276,6 @@ fn update_native_element(
         }
     }
     native.setAccessibilityTraits(traits);
-    // While a dialog element exists in the published array, VoiceOver must
-    // ignore its siblings in that same array — the rest of the screen behind
-    // the dialog — exactly as `aria-modal` does for the web backend's
-    // `AccessibilityRole::Dialog` case.
     native.setAccessibilityViewIsModal(element.role == AccessibilityRole::Dialog, mtm);
 }
 

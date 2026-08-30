@@ -1,10 +1,3 @@
-//! Robot test for LazyList end alignment - validates last item bottom alignment.
-//!
-//! Run with:
-//! ```bash
-//! cargo run --package desktop-app --example robot_lazy_list_end_alignment --features robot-app
-//! ```
-
 use std::time::Duration;
 
 use cranpose::AppLauncher;

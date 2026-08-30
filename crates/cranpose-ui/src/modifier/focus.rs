@@ -1,9 +1,3 @@
-//! Focus modifier nodes for Cranpose.
-//!
-//! This module implements focus management that mirrors Jetpack Compose's
-//! focus system. Focus nodes participate in focus traversal, track focus state,
-//! and integrate with the modifier chain lifecycle.
-
 use std::{
     cell::Cell,
     hash::{Hash, Hasher},
@@ -36,10 +30,6 @@ pub enum FocusDirection {
     Right,
 }
 
-/// A focus target node that can receive focus.
-///
-/// This is the core building block for focusable components. Each focus target
-/// tracks its own focus state and participates in the focus traversal system.
 pub struct FocusTargetNode {
     state: NodeState,
     focus_state: Cell<FocusState>,
@@ -66,7 +56,6 @@ impl FocusTargetNode {
         }
     }
 
-    /// Sets the focus state for this node.
     pub fn set_focus_state(&self, state: FocusState) {
         let old_state = self.focus_state.get();
         if old_state != state {
@@ -77,7 +66,6 @@ impl FocusTargetNode {
         }
     }
 
-    /// Clears focus from this node.
     pub fn clear_focus(&self) {
         self.set_focus_state(FocusState::Inactive);
     }
@@ -105,7 +93,6 @@ impl ModifierNode for FocusTargetNode {
         self.clear_focus();
     }
 
-    // Capability-driven implementation using helper macro
     impl_focus_node!();
 }
 
@@ -119,9 +106,6 @@ impl FocusNode for FocusTargetNode {
     }
 }
 
-/// Modifier element for focus targets.
-///
-/// Creates a focusable modifier that can receive and track focus.
 #[derive(Clone)]
 pub struct FocusTargetElement {
     on_focus_changed: Option<Rc<dyn Fn(FocusState)>>,
@@ -160,15 +144,12 @@ impl std::fmt::Debug for FocusTargetElement {
 
 impl PartialEq for FocusTargetElement {
     fn eq(&self, other: &Self) -> bool {
-        // Type-based matching: compare only presence of callback, not pointer
-        // Nodes are updated via update() method, preserving behavior
         self.on_focus_changed.is_some() == other.on_focus_changed.is_some()
     }
 }
 
 impl Hash for FocusTargetElement {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        // Consistent hash based on callback presence only
         "focus_target".hash(state);
         self.on_focus_changed.is_some().hash(state);
     }
@@ -201,7 +182,6 @@ impl ModifierNodeElement for FocusTargetElement {
     }
 
     fn always_update(&self) -> bool {
-        // Always update to capture new closure if it changed
         true
     }
 }

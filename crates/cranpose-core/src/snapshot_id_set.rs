@@ -1,17 +1,3 @@
-/// An optimized bit-set implementation for tracking snapshot IDs.
-///
-/// This is based on Jetpack Compose's SnapshotIdSet, optimized for:
-/// - O(1) access for the most recent 128 snapshot IDs
-/// - O(log N) access for older snapshots
-/// - Immutable copy-on-write semantics
-///
-/// The set maintains:
-/// - `lower_set`: 64 bits for IDs in range [lower_bound, lower_bound+63]
-/// - `upper_set`: 64 bits for IDs in range [lower_bound+64, lower_bound+127]
-/// - `below_bound`: sorted array for IDs below lower_bound
-///
-/// This structure is highly biased toward recent snapshots being set,
-/// with older snapshots mostly or completely clear.
 use std::fmt;
 
 pub type SnapshotId = usize;
@@ -21,13 +7,9 @@ const SNAPSHOT_ID_SIZE: usize = 64;
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct SnapshotIdSet {
-    /// Bit set from (lower_bound + 64) to (lower_bound + 127)
     upper_set: u64,
-    /// Bit set from lower_bound to (lower_bound + 63)
     lower_set: u64,
-    /// Lower bound of the bit set. All values above lower_bound+127 are clear.
     lower_bound: SnapshotId,
-    /// Sorted array of snapshot IDs below lower_bound
     below_bound: Option<Box<[SnapshotId]>>,
 }
 
@@ -50,18 +32,14 @@ impl SnapshotIdSet {
         let offset = id.wrapping_sub(self.lower_bound);
 
         if offset < BITS_PER_SET {
-            // In lower_set range
             let mask = 1u64 << offset;
             (self.lower_set & mask) != 0
         } else if offset < BITS_PER_SET * 2 {
-            // In upper_set range
             let mask = 1u64 << (offset - BITS_PER_SET);
             (self.upper_set & mask) != 0
         } else if id > self.lower_bound {
-            // Above our tracked range
             false
         } else {
-            // Below lower_bound, check the array
             self.below_bound
                 .as_ref()
                 .map(|arr| arr.binary_search(&id).is_ok())
@@ -75,11 +53,9 @@ impl SnapshotIdSet {
             if let Some(ref arr) = self.below_bound {
                 match arr.binary_search(&id) {
                     Ok(_) => {
-                        // Already present
                         return self.clone();
                     }
                     Err(insert_pos) => {
-                        // Insert at position
                         let mut new_arr = Vec::with_capacity(arr.len() + 1);
                         new_arr.extend_from_slice(&arr[..insert_pos]);
                         new_arr.push(id);
@@ -93,7 +69,6 @@ impl SnapshotIdSet {
                     }
                 }
             } else {
-                // First element below bound
                 return Self {
                     upper_set: self.upper_set,
                     lower_set: self.lower_set,
@@ -106,7 +81,6 @@ impl SnapshotIdSet {
         let offset = id - self.lower_bound;
 
         if offset < BITS_PER_SET {
-            // In lower_set range
             let mask = 1u64 << offset;
             if (self.lower_set & mask) == 0 {
                 return Self {
@@ -117,7 +91,6 @@ impl SnapshotIdSet {
                 };
             }
         } else if offset < BITS_PER_SET * 2 {
-            // In upper_set range
             let mask = 1u64 << (offset - BITS_PER_SET);
             if (self.upper_set & mask) == 0 {
                 return Self {
@@ -127,14 +100,10 @@ impl SnapshotIdSet {
                     below_bound: self.below_bound.clone(),
                 };
             }
-        } else if offset >= BITS_PER_SET * 2 {
-            // Need to shift the bit arrays
-            if !self.get(id) {
-                return self.shift_and_set(id);
-            }
+        } else if offset >= BITS_PER_SET * 2 && !self.get(id) {
+            return self.shift_and_set(id);
         }
 
-        // No change needed
         self.clone()
     }
 
@@ -143,7 +112,6 @@ impl SnapshotIdSet {
         let offset = id.wrapping_sub(self.lower_bound);
 
         if offset < BITS_PER_SET {
-            // In lower_set range
             let mask = 1u64 << offset;
             if (self.lower_set & mask) != 0 {
                 return Self {
@@ -154,7 +122,6 @@ impl SnapshotIdSet {
                 };
             }
         } else if offset < BITS_PER_SET * 2 {
-            // In upper_set range
             let mask = 1u64 << (offset - BITS_PER_SET);
             if (self.upper_set & mask) != 0 {
                 return Self {
@@ -164,28 +131,25 @@ impl SnapshotIdSet {
                     below_bound: self.below_bound.clone(),
                 };
             }
-        } else if id < self.lower_bound {
-            // Below lower_bound
-            if let Some(ref arr) = self.below_bound
-                && let Ok(pos) = arr.binary_search(&id)
-            {
-                let mut new_arr = Vec::with_capacity(arr.len() - 1);
-                new_arr.extend_from_slice(&arr[..pos]);
-                new_arr.extend_from_slice(&arr[pos + 1..]);
-                return Self {
-                    upper_set: self.upper_set,
-                    lower_set: self.lower_set,
-                    lower_bound: self.lower_bound,
-                    below_bound: if new_arr.is_empty() {
-                        None
-                    } else {
-                        Some(new_arr.into_boxed_slice())
-                    },
-                };
-            }
+        } else if id < self.lower_bound
+            && let Some(ref arr) = self.below_bound
+            && let Ok(pos) = arr.binary_search(&id)
+        {
+            let mut new_arr = Vec::with_capacity(arr.len() - 1);
+            new_arr.extend_from_slice(&arr[..pos]);
+            new_arr.extend_from_slice(&arr[pos + 1..]);
+            return Self {
+                upper_set: self.upper_set,
+                lower_set: self.lower_set,
+                lower_bound: self.lower_bound,
+                below_bound: if new_arr.is_empty() {
+                    None
+                } else {
+                    Some(new_arr.into_boxed_slice())
+                },
+            };
         }
 
-        // No change needed
         self.clone()
     }
 
@@ -198,7 +162,6 @@ impl SnapshotIdSet {
             return Self::EMPTY;
         }
 
-        // Fast path: if both have same lower_bound and below_bound, can do bitwise ops
         if self.lower_bound == other.lower_bound && self.below_bound_equals(&other.below_bound) {
             return Self {
                 upper_set: self.upper_set & !other.upper_set,
@@ -208,7 +171,6 @@ impl SnapshotIdSet {
             };
         }
 
-        // Slow path: iterate and clear each ID
         let mut result = self.clone();
         for id in other.iter() {
             result = result.clear(id);
@@ -225,7 +187,6 @@ impl SnapshotIdSet {
             return other.clone();
         }
 
-        // Fast path: if both have same lower_bound and below_bound
         if self.lower_bound == other.lower_bound && self.below_bound_equals(&other.below_bound) {
             return Self {
                 upper_set: self.upper_set | other.upper_set,
@@ -235,7 +196,6 @@ impl SnapshotIdSet {
             };
         }
 
-        // Slow path: iterate and set each ID
         let mut result = self.clone();
         for id in other.iter() {
             result = result.set(id);
@@ -245,7 +205,6 @@ impl SnapshotIdSet {
 
     /// Find the lowest snapshot ID in the set that is <= upper.
     pub fn lowest(&self, upper: SnapshotId) -> SnapshotId {
-        // Check below_bound array first
         if let Some(ref arr) = self.below_bound
             && let Some(&lowest) = arr.first()
             && lowest <= upper
@@ -253,7 +212,6 @@ impl SnapshotIdSet {
             return lowest;
         }
 
-        // Check lower_set
         if self.lower_set != 0 {
             let lowest_in_lower = self.lower_bound + self.lower_set.trailing_zeros() as usize;
             if lowest_in_lower <= upper {
@@ -261,7 +219,6 @@ impl SnapshotIdSet {
             }
         }
 
-        // Check upper_set
         if self.upper_set != 0 {
             let lowest_in_upper =
                 self.lower_bound + BITS_PER_SET + self.upper_set.trailing_zeros() as usize;
@@ -270,7 +227,6 @@ impl SnapshotIdSet {
             }
         }
 
-        // Nothing found, return upper
         upper
     }
 
@@ -304,7 +260,6 @@ impl SnapshotIdSet {
         result
     }
 
-    // Helper: check if two below_bound arrays are equal
     fn below_bound_equals(&self, other: &Option<Box<[SnapshotId]>>) -> bool {
         match (&self.below_bound, other) {
             (None, None) => true,
@@ -313,7 +268,6 @@ impl SnapshotIdSet {
         }
     }
 
-    // Helper: shift the bit arrays and set a new ID
     fn shift_and_set(&self, id: SnapshotId) -> Self {
         let target_lower_bound = (id / SNAPSHOT_ID_SIZE) * SNAPSHOT_ID_SIZE;
 
@@ -327,21 +281,18 @@ impl SnapshotIdSet {
         };
 
         while new_lower_bound < target_lower_bound {
-            // Shift lower_set into below_bound array
             if new_lower_set != 0 {
                 for bit_offset in 0..BITS_PER_SET {
                     if (new_lower_set & (1u64 << bit_offset)) != 0 {
                         let id_to_add = new_lower_bound + bit_offset;
-                        // Insert in sorted order
                         match new_below_bound.binary_search(&id_to_add) {
-                            Ok(_) => {} // Already present (shouldn't happen)
+                            Ok(_) => {}
                             Err(pos) => new_below_bound.insert(pos, id_to_add),
                         }
                     }
                 }
             }
 
-            // Shift upper_set down to lower_set
             if new_upper_set == 0 {
                 new_lower_bound = target_lower_bound;
                 new_lower_set = 0;
@@ -364,7 +315,6 @@ impl SnapshotIdSet {
             },
         };
 
-        // Now set the ID
         result.set(id)
     }
 }
@@ -414,7 +364,6 @@ impl<'a> Iterator for SnapshotIdSetIter<'a> {
     type Item = SnapshotId;
 
     fn next(&mut self) -> Option<Self::Item> {
-        // First, yield from below_bound array
         if let Some(ref arr) = self.set.below_bound
             && self.below_index < arr.len()
         {
@@ -423,7 +372,6 @@ impl<'a> Iterator for SnapshotIdSetIter<'a> {
             return Some(id);
         }
 
-        // Then yield from lower_set
         while self.current_offset < BITS_PER_SET {
             if (self.lower_set & (1u64 << self.current_offset)) != 0 {
                 let id = self.set.lower_bound + self.current_offset;
@@ -433,7 +381,6 @@ impl<'a> Iterator for SnapshotIdSetIter<'a> {
             self.current_offset += 1;
         }
 
-        // Finally yield from upper_set
         while self.current_offset < BITS_PER_SET * 2 {
             let bit_offset = self.current_offset - BITS_PER_SET;
             if (self.upper_set & (1u64 << bit_offset)) != 0 {
@@ -519,11 +466,9 @@ mod tests {
     #[test]
     fn test_below_bound_insertion() {
         let mut set = SnapshotIdSet::new();
-        // Set lower_bound to 100
         set = set.set(100);
         assert_eq!(set.lower_bound, 0);
 
-        // Now insert something below lower_bound
         set = set.set(50);
         assert!(set.get(50));
         assert!(set.get(100));
@@ -535,14 +480,12 @@ mod tests {
         assert!(set.get(75));
         assert!(set.get(100));
 
-        // Check that below_bound is sorted
         let list = set.to_list();
         assert_eq!(list, vec![25, 50, 75, 100]);
     }
 
     #[test]
     fn test_below_bound_removal() {
-        // Build incrementally to avoid stack overflow from large shifts
         let set = SnapshotIdSet::new();
         let set = set.set(25);
         let set = set.set(50);
@@ -565,12 +508,10 @@ mod tests {
         let set = set.set(10);
         assert_eq!(set.lower_bound, 0);
 
-        // Setting a value way above should shift the arrays
         let set = set.set(200);
         assert!(set.get(10));
         assert!(set.get(200));
 
-        // 10 should now be in below_bound
         assert!(set.below_bound.is_some());
     }
 
@@ -613,7 +554,6 @@ mod tests {
     #[test]
     fn test_and_not_slow_path() {
         let set1 = SnapshotIdSet::new().set(10).set(20).set(30);
-        // Create set2 with different lower_bound by setting high value first
         let set2 = SnapshotIdSet::new().set(100).set(20);
 
         let result = set1.and_not(&set2);
@@ -647,7 +587,6 @@ mod tests {
 
     #[test]
     fn test_lowest_in_below_bound() {
-        // Build incrementally to avoid deep recursion
         let set = SnapshotIdSet::new();
         let set = set.set(25);
         let set = set.set(50);
@@ -680,7 +619,6 @@ mod tests {
     fn test_iterator() {
         let set = SnapshotIdSet::new().set(10).set(20).set(5).set(30);
         let list: Vec<_> = set.iter().collect();
-        // Should be in sorted order
         assert_eq!(list, vec![5, 10, 20, 30]);
     }
 
@@ -693,11 +631,7 @@ mod tests {
 
     #[test]
     fn test_iterator_all_ranges() {
-        let set = SnapshotIdSet::new()
-            .set(5) // below_bound (after shift)
-            .set(10) // lower_set (after shift)
-            .set(70) // upper_set (after shift)
-            .set(200); // causes shift
+        let set = SnapshotIdSet::new().set(5).set(10).set(70).set(200);
 
         let list: Vec<_> = set.iter().collect();
         assert_eq!(list, vec![5, 10, 70, 200]);
@@ -718,7 +652,6 @@ mod tests {
 
     #[test]
     fn test_large_snapshot_ids() {
-        // Build incrementally to avoid deep recursion
         let set = SnapshotIdSet::new();
         let set = set.set(500);
         let set = set.set(1000);
@@ -734,13 +667,11 @@ mod tests {
     fn test_boundary_transitions() {
         let set = SnapshotIdSet::new();
 
-        // Test transition from lower to upper
         let set = set.set(63);
         let set = set.set(64);
         assert!(set.get(63));
         assert!(set.get(64));
 
-        // Test transition from upper to above
         let set = set.set(127);
         let set = set.set(128);
         assert!(set.get(127));

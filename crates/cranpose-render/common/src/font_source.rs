@@ -78,8 +78,6 @@ pub enum FontLoadError {
 #[derive(Clone, Default)]
 pub struct SoftwareTextFontRegistry {
     faces: Vec<SoftwareTextFont>,
-    /// The declared entries the system-font path has already loaded, so a
-    /// second request resolving to the same one does not copy the file again.
     system_faces: Vec<(FontFamilyKey, FontWeight, FontStyle)>,
 }
 
@@ -271,16 +269,8 @@ impl SoftwareTextFontRegistry {
         weight: FontWeight,
         style: FontStyle,
     ) -> Result<(), FontLoadError> {
-        // Resolve first, register second: what lands in the set is a weight the
-        // platform's font config declares, instanced at the axis position that
-        // config pins for it. Asking for 450 registers Android's 400 face, so
-        // no caller can reach a face the platform cannot draw.
         let weight = system_declared_weight(family, weight);
         if self.has_system_face(family, weight, style) {
-            // Two requests that resolve to one declared entry are one face, as
-            // they are one `<font>` element to Android. Registering it twice
-            // would copy the file's bytes again — 2.3 MiB for Wear's Roboto —
-            // for a face byte-identical to the one already here.
             return Ok(());
         }
         let path = system_font_file(directory, family, weight).ok_or_else(|| {
@@ -294,11 +284,6 @@ impl SoftwareTextFontRegistry {
         Ok(())
     }
 
-    /// Whether the system path already registered this declared entry.
-    ///
-    /// Only faces this registry loaded from the platform's font directory
-    /// count. A face an app registered under the same generic family is its own
-    /// font and must not be shadowed by one of ours.
     fn has_system_face(&self, family: &FontFamily, weight: FontWeight, style: FontStyle) -> bool {
         self.system_faces
             .contains(&(FontFamilyKey::of(family), weight, style))
@@ -322,7 +307,6 @@ impl SoftwareTextFontRegistry {
     /// as bytes.
     pub fn into_font_set_or_default(mut self, fonts: &[&[u8]]) -> SoftwareTextFontSet {
         for bytes in fonts {
-            // Unparsable app bytes have always been skipped rather than fatal.
             let _ = self.register_fallback_bytes((*bytes).to_vec());
         }
         if self.faces.is_empty()
@@ -334,12 +318,6 @@ impl SoftwareTextFontRegistry {
     }
 }
 
-/// Font files read during one registration call.
-///
-/// A family that instances a single variable file at several weights names that
-/// file once per weight, and on Wear the file backing `sans-serif` is 2.3 MiB —
-/// worth reading once. Each face still needs its own copy of the bytes, because
-/// `ab_glyph` bakes the axis values into the parsed face.
 #[derive(Default)]
 struct FontFileReads {
     entries: Vec<(PathBuf, Arc<[u8]>)>,
@@ -411,12 +389,10 @@ pub fn system_declared_weight(family: &FontFamily, weight: FontWeight) -> FontWe
     closest_declared_weight(files.declared, weight).unwrap_or(weight)
 }
 
-/// `getClosestMatch` over a declared weight set, at one slant.
 fn closest_declared_weight(declared: &[u16], requested: FontWeight) -> Option<FontWeight> {
     let mut best: Option<(u16, u16)> = None;
     for candidate in declared {
         let score = weight_match_score(*candidate, requested.value());
-        // Strictly better only, so the first-declared entry keeps a tie.
         if best.is_none_or(|(_, best_score)| score < best_score) {
             best = Some((*candidate, score));
         }
@@ -424,7 +400,6 @@ fn closest_declared_weight(declared: &[u16], requested: FontWeight) -> Option<Fo
     best.map(|(candidate, _)| FontWeight(candidate))
 }
 
-/// Minikin's `computeMatch`, weight half — integer hundreds, then distance.
 fn weight_match_score(declared: u16, requested: u16) -> u16 {
     (declared / 100).abs_diff(requested / 100)
 }
@@ -450,27 +425,15 @@ pub fn system_font_file(
         .find(|path| path.is_file())
 }
 
-/// Files a platform is known to back a generic family with, best first, and the
-/// weights its font config declares for that alias.
 struct SystemFamilyFiles {
     regular: &'static [&'static str],
     weighted: &'static [(u16, &'static str)],
-    /// Every `weight` an Android `<family>` element declares for this alias, in
-    /// declaration order — which is what
-    /// [`system_declared_weight`] matches against, and the order its
-    /// tie-break depends on.
     declared: &'static [u16],
 }
 
-/// The weights Android declares for an alias its font config backs with one
-/// variable file: an entry per hundred, each naming the same file at a
-/// different `wght` axis position.
 const DECLARED_HUNDREDS: &[u16] = &[100, 200, 300, 400, 500, 600, 700, 800, 900];
 
 fn system_family_files(family: &FontFamily) -> Option<SystemFamilyFiles> {
-    // Names come from Android's `/system/fonts`; the alias-to-file mapping is
-    // the one `/system/etc/fonts.xml` describes, which that file itself warns
-    // third parties not to parse.
     match family {
         FontFamily::Default | FontFamily::SansSerif => Some(SystemFamilyFiles {
             regular: &[
@@ -487,7 +450,6 @@ fn system_family_files(family: &FontFamily) -> Option<SystemFamilyFiles> {
             ],
             declared: DECLARED_HUNDREDS,
         }),
-        // Android aliases `fantasy` to `serif`.
         FontFamily::Serif | FontFamily::Fantasy => Some(SystemFamilyFiles {
             regular: &["NotoSerif-Regular.ttf", "DroidSerif-Regular.ttf"],
             weighted: &[(700, "NotoSerif-Bold.ttf"), (700, "DroidSerif-Bold.ttf")],
@@ -541,9 +503,6 @@ mod tests {
         }
     }
 
-    /// A directory that removes itself, so font-loading tests can exercise real
-    /// filesystem failures instead of a stubbed reader. Lives under the
-    /// workspace `target/test-output`, never tmpfs.
     struct ScratchDir(PathBuf);
 
     impl ScratchDir {
@@ -825,8 +784,6 @@ mod tests {
 
     #[test]
     fn a_system_weight_the_font_config_does_not_declare_resolves_to_the_declared_one() {
-        // Minikin truncates to the hundred before it compares, so against a
-        // full hundreds grid the entry below always wins outright.
         for (requested, expected) in [(450u16, 400u16), (550, 500), (401, 400), (599, 500)] {
             assert_eq!(
                 system_declared_weight(&FontFamily::SansSerif, FontWeight(requested)),
@@ -834,14 +791,12 @@ mod tests {
                 "sans-serif {requested}"
             );
         }
-        // A weight the config does declare is returned untouched.
         for weight in DECLARED_HUNDREDS {
             assert_eq!(
                 system_declared_weight(&FontFamily::SansSerif, FontWeight(*weight)),
                 FontWeight(*weight)
             );
         }
-        // Off the ends there is nothing below to fall to.
         assert_eq!(
             system_declared_weight(&FontFamily::SansSerif, FontWeight(50)),
             FontWeight(100)
@@ -854,9 +809,6 @@ mod tests {
 
     #[test]
     fn a_sparse_system_family_resolves_by_distance_and_keeps_the_lighter_face_on_a_tie() {
-        // `serif` declares 400 and 700 only. 500 is one hundred from 400 and
-        // two from 700; 600 is the other way round; 550 truncates to 5 and so
-        // is not the tie it looks like.
         for (requested, expected) in [(500u16, 400u16), (550, 400), (600, 700), (650, 700)] {
             assert_eq!(
                 system_declared_weight(&FontFamily::Serif, FontWeight(requested)),
@@ -864,8 +816,6 @@ mod tests {
                 "serif {requested}"
             );
         }
-        // The tie-break proper: equal scores keep the entry declared first,
-        // which for Android's ascending declarations is the lighter face.
         assert_eq!(
             closest_declared_weight(&[300, 500], FontWeight(400)),
             Some(FontWeight(300))
@@ -879,8 +829,6 @@ mod tests {
 
     #[test]
     fn a_family_with_no_system_files_keeps_the_weight_it_was_given() {
-        // Nothing declares a weight set for these, and nothing will register
-        // for them either, so there is no rule to apply.
         assert_eq!(
             system_declared_weight(&FontFamily::named("Roboto"), FontWeight(450)),
             FontWeight(450)
@@ -903,8 +851,6 @@ mod tests {
             .expect("system face loads");
         let fonts = registry.into_font_set_or_default(&[]);
 
-        // The assertion is on the resolved face, not on the constant that was
-        // asked for: what matters is which face text actually draws with.
         let resolved = fonts
             .resolve(&style_for(&FontFamily::SansSerif, FontWeight(450)))
             .expect("a face for the off-grid request");
@@ -960,9 +906,6 @@ mod tests {
 
     #[test]
     fn an_app_registered_face_keeps_the_weight_it_declares() {
-        // The counterpart to the system rule: an app's own file is not an entry
-        // in the platform's config, so an arbitrary axis position is legitimate
-        // and must survive registration untouched.
         let dir = ScratchDir::new("app-off-grid");
         let path = dir.write("Test-Regular.ttf", REGULAR);
         let family = FontFamily::file_backed(vec![

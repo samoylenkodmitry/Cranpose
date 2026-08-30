@@ -584,7 +584,7 @@ mod tests {
         shader.set_float4(4, 5.0, 6.0, 7.0, 8.0);
 
         assert_eq!(shader.uniforms()[0], 1.0);
-        assert_eq!(shader.uniforms()[1], 0.0); // gap
+        assert_eq!(shader.uniforms()[1], 0.0);
         assert_eq!(shader.uniforms()[2], 3.0);
         assert_eq!(shader.uniforms()[3], 4.0);
         assert_eq!(shader.uniforms()[4], 5.0);

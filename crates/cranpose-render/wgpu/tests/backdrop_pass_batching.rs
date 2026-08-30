@@ -1,11 +1,3 @@
-//! Pass structure for fixed glass over scrolling content — the uncacheable
-//! backdrop topology (issue #500). Every scrolled frame re-captures and
-//! re-blurs each fixed glass element; what must NOT scale with the element
-//! count is the number of passes that touch the root target. Each extra
-//! disjoint glass may add its own blur chain, but the optical composites
-//! belong in one batched pass, and a capture must only force pending
-//! composites out when one actually overlaps it.
-
 mod support;
 
 use std::{cell::RefCell, rc::Rc};
@@ -22,9 +14,6 @@ use cranpose_ui_graphics::{LiquidGlassRect, LiquidGlassSpec, TileMode, liquid_gl
 const FRAME_WIDTH: u32 = 640;
 const FRAME_HEIGHT: u32 = 640;
 
-/// A Regular-glass-shaped chain: separable Gaussian pre-blur feeding the
-/// liquid-glass optical shader, the exact effect shape the material builds
-/// for every fixed chrome element.
 fn chain_glass_effect(rect_width: f32, rect_height: f32, tint: Color) -> RenderEffect {
     let optical = liquid_glass_effect(
         &LiquidGlassRect {
@@ -65,8 +54,6 @@ fn ScrollRow(index: usize) {
     );
 }
 
-/// The device list shape: every card carries an elevation shadow, so the
-/// frame interleaves shadow draws between the queued composites.
 #[composable]
 #[allow(non_snake_case)]
 fn ShadowedScrollRow(index: usize) {
@@ -117,8 +104,6 @@ fn FixedGlassScene(
                     }
                 },
             );
-            // Fixed glass chrome: disjoint elements stacked down the left
-            // edge, or (for the ordering test) two elements that overlap.
             for index in 0..glass_count {
                 let (x, y) = if overlap {
                     (40.0 + index as f32 * 60.0, 40.0 + index as f32 * 30.0)
@@ -130,10 +115,6 @@ fn FixedGlassScene(
                 } else {
                     Color(0.9, 0.9, 0.95, 0.10)
                 };
-                // Shaped like the device chrome: shape clip + shadow + own
-                // content, so each element renders as a child layer surface
-                // with a backdrop (reasons: backdrop+shape_clip+
-                // immediate_shadow), not as a bare scene backdrop.
                 Box(
                     Modifier::empty()
                         .offset(x, y)
@@ -246,15 +227,6 @@ fn scrolled_pass_counts_with_rows(glass_count: usize, shadowed_rows: bool) -> Ve
         .collect()
 }
 
-/// Each extra disjoint fixed glass pays exactly its own small-target work —
-/// the separable blur pair, nothing more — and NOTHING on the root target:
-/// its capture is a copy, not a pass, the blur's second tap writes the
-/// cacheable surface directly, and its optical shader tail defers into the
-/// shared batched shader composite. Before the pre-capture flushes were
-/// dependency-gated, every capture flushed the whole pending batch, so each
-/// glass also fragmented the composites into its own root-target pass
-/// (issue #500, cause 2); before the tail deferred, each glass also paid a
-/// materialize pass baking per-frame shader dynamics into its cache key.
 #[test]
 fn each_extra_fixed_glass_adds_only_its_blur_chain() {
     let single: Vec<u32> = scrolled_pass_counts(1);
@@ -278,12 +250,6 @@ fn each_extra_fixed_glass_adds_only_its_blur_chain() {
     );
 }
 
-/// The most device-like headless scene — elevation-shadowed list cards
-/// under fixed glass — pins its scrolled pass budget exactly. Shadow
-/// draws interleave between queued composites here, so this is the scene
-/// where an ordering or flush change fragments passes first (the
-/// shadow-encode ablation once took a 13-pass frame to 25 by splitting
-/// exactly these batches).
 #[test]
 fn a_shadowed_list_under_glass_holds_its_scrolled_pass_budget() {
     let single = scrolled_pass_counts_with_rows(1, true);
@@ -294,15 +260,6 @@ fn a_shadowed_list_under_glass_holds_its_scrolled_pass_budget() {
     );
 }
 
-/// The glass element's OWN foreground must stay on top of its optical
-/// tail on every drain path. The tail (a shader-queue item) and the body
-/// (a blit-queue item) share the element's z index, and the fused segment
-/// path used to break that tie by insertion order — blits first — so the
-/// tail composited OVER the body and the white pill smeared into the
-/// blur. On the Mate 20 X this read as an unreadable nav bar and empty
-/// glass chips, flickering with whichever drain path the frame took.
-/// Pass counts and frame times were identical on the broken build; only
-/// pixels see this.
 #[test]
 fn a_glass_elements_own_content_stays_legible_on_a_scrolled_frame() {
     let (_lock, renderer) = support::headless_renderer_parts().expect("headless renderer");
@@ -312,8 +269,6 @@ fn a_glass_elements_own_content_stays_legible_on_a_scrolled_frame() {
     }
     let frame = harness.captured_frame(-12.0);
 
-    // The glass sits at (24,24), pads 12, and its first child is a white
-    // pill 90x16 — interior sample well inside the pill's edges.
     let pixel = |x: u32, y: u32| {
         let offset = ((y * frame.width + x) * 4) as usize;
         [
@@ -340,11 +295,6 @@ fn a_glass_elements_own_content_stays_legible_on_a_scrolled_frame() {
     );
 }
 
-/// Deferring the optical composites must never let a capture read stale
-/// content: when a second glass genuinely overlaps the first, its capture
-/// depends on the first's composited output, so the pending batch has to
-/// flush before the copy. A red-tinted lower glass must remain visible in
-/// what the upper glass refracts.
 #[test]
 fn an_overlapping_capture_still_sees_the_glass_below_it() {
     let overlap_pixels = {
@@ -364,9 +314,6 @@ fn an_overlapping_capture_still_sees_the_glass_below_it() {
         harness.captured_frame(-12.0)
     };
 
-    // The two scenes differ only by the red glass below; sample the region
-    // where the upper glass overlaps it. If the upper glass captured before
-    // the red glass composited, the two captures would be identical there.
     let sample_rect = (110u32, 80u32, 60u32, 30u32);
     let pixel = |frame: &cranpose_render_wgpu::CapturedFrame, x: u32, y: u32| {
         let offset = ((y * frame.width + x) * 4) as usize;

@@ -1,12 +1,3 @@
-//! iOS background execution via `UIApplication` background tasks.
-//!
-//! Registered as the platform background-activity handler (see
-//! [`cranpose_services::set_platform_background_activity`]) by the iOS backend.
-//! While the app marks work active, a background task is held so iOS grants a
-//! few extra minutes to finish (e.g. drain the recognition queue) if the user
-//! backgrounds the app mid-scan. `UIApplication` is main-thread-only, so every
-//! call hops to the main queue.
-
 use std::sync::{Arc, Mutex, OnceLock};
 
 use block2::RcBlock;
@@ -16,14 +7,11 @@ use objc2::MainThreadMarker;
 use objc2_foundation::NSString;
 use objc2_ui_kit::{UIApplication, UIApplicationState};
 
-/// The identifier of the currently-held background task (`None` = none held).
-/// Only touched on the main thread.
 fn task_slot() -> &'static Mutex<Option<usize>> {
     static SLOT: OnceLock<Mutex<Option<usize>>> = OnceLock::new();
     SLOT.get_or_init(|| Mutex::new(None))
 }
 
-/// Installs the iOS background-activity handler.
 pub(crate) fn register() {
     set_platform_background_activity(Arc::new(IosBackgroundActivity));
 }
@@ -55,7 +43,6 @@ fn begin_task(mtm: MainThreadMarker) {
     }
     let app = UIApplication::sharedApplication(mtm);
     let name = NSString::from_str("cranpose.background-activity");
-    // Expiration handler: iOS is about to suspend us; end the task cleanly.
     let handler = RcBlock::new(|| {
         if let Some(mtm) = MainThreadMarker::new() {
             end_task(mtm);
@@ -72,8 +59,6 @@ fn end_task(mtm: MainThreadMarker) {
     }
 }
 
-/// `true` when UIKit reports the app is off screen. Main thread only; anywhere
-/// else it answers `false`.
 pub(crate) fn app_is_off_screen() -> bool {
     let Some(mtm) = MainThreadMarker::new() else {
         return false;

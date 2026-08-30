@@ -1,8 +1,3 @@
-//! Robot test for the Animations tab.
-//!
-//! Verifies that the Animations tab loads and that the lazy list animation
-//! updates over time (text content changes).
-
 use std::time::Duration;
 
 use cranpose::AppLauncher;

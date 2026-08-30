@@ -1,5 +1,3 @@
-//! FPS monitoring for performance tracking.
-
 use std::collections::VecDeque;
 
 use web_time::Instant;

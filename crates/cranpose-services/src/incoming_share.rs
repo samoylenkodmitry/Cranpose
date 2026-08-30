@@ -110,9 +110,6 @@ type Observer = Arc<dyn Fn(IncomingContent) + Send + Sync>;
 
 struct Inbox {
     observers: Vec<(u64, Observer)>,
-    /// Items published before any composition was collecting. They are handed
-    /// to the first observer that registers, so a share that launched the app
-    /// is never lost.
     backlog: VecDeque<IncomingContent>,
 }
 
@@ -124,17 +121,11 @@ impl Inbox {
         }
     }
 
-    /// Registers `observer` and returns the backlog it has to replay.
-    ///
-    /// The replay is handed back rather than delivered here so the caller can
-    /// leave the lock before running application code.
     fn observe(&mut self, id: u64, observer: Observer) -> Vec<IncomingContent> {
         self.observers.push((id, observer));
         self.backlog.drain(..).collect()
     }
 
-    /// The observers `content` should reach, or `None` when it went to the
-    /// backlog because nobody is listening yet.
     fn publish(&mut self, content: IncomingContent) -> Option<Vec<Observer>> {
         if self.observers.is_empty() {
             self.backlog.push_back(content);
@@ -223,7 +214,6 @@ pub fn publish_incoming_content(content: IncomingContent) {
         content.display_name(),
         observers.len()
     );
-    // Every observer sees every item: two screens can each react to a share.
     for observer in observers {
         observer(content.clone());
     }
@@ -275,14 +265,6 @@ mod tests {
         (observer, seen)
     }
 
-    /// These exercise `Inbox` directly rather than the process-global one.
-    ///
-    /// The global is a single instance shared by every test in this binary, and
-    /// the test harness runs tests on parallel threads: one test's publish and
-    /// another's clear interleave, and the assertion fails for reasons that
-    /// have nothing to do with the code under test. Clearing at the start and
-    /// end of each test does not fix that, it only narrows the window. The
-    /// behaviour worth pinning lives in `Inbox`, which a test can own outright.
     #[test]
     fn an_item_published_before_anyone_listens_is_backlogged_once() {
         let mut inbox = Inbox::new();

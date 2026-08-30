@@ -25,12 +25,8 @@ pub enum LazyLayoutKey {
 }
 
 impl LazyLayoutKey {
-    /// Tag for user-provided keys: high 2 bits = 00
     const USER_TAG: u64 = 0b00 << 62;
-    /// Tag for index-based keys: high 2 bits = 01
     const INDEX_TAG: u64 = 0b01 << 62;
-    /// Mask for the value portion (bits 0-61).
-    /// Based on u64 output type, so this is platform-independent.
     const VALUE_MASK: u64 = (1u64 << 62) - 1;
 
     /// Converts to u64 for slot ID usage with guaranteed non-overlapping ranges.
@@ -51,7 +47,6 @@ impl LazyLayoutKey {
     #[inline]
     pub fn to_slot_id(self) -> u64 {
         match self {
-            // NOTE: Values beyond 62 bits are mixed to preserve stability.
             LazyLayoutKey::User(k) => {
                 let value = Self::normalize_value(k, "User");
                 Self::USER_TAG | value
@@ -94,7 +89,6 @@ impl LazyLayoutKey {
     }
 }
 
-/// Marker type for lazy scope DSL.
 #[doc(hidden)]
 pub struct LazyScopeMarker;
 
@@ -251,8 +245,6 @@ impl std::fmt::Debug for LazyListInterval {
 pub struct LazyListIntervalContent {
     intervals: Vec<LazyListInterval>,
     total_count: usize,
-    /// Cached slot_id→index mapping for O(1) key lookups.
-    /// Built lazily on first key lookup, invalidated when content changes.
     key_cache: RefCell<Option<HashMap<u64, usize>>>,
 }
 
@@ -266,20 +258,14 @@ impl LazyListIntervalContent {
         }
     }
 
-    /// Invalidates the key cache. Called when content is modified.
     fn invalidate_cache(&self) {
         *self.key_cache.borrow_mut() = None;
     }
 
-    /// Builds the key→index cache for O(1) lookups.
-    ///
-    /// This cache is always built regardless of list size to guarantee O(1) performance.
-    /// Memory usage is approximately 16 bytes per item (slot_id: u64 + index: usize).
-    /// For a list of 100,000 items, this is ~1.6MB of cache memory.
     fn ensure_cache(&self) {
         let mut cache = self.key_cache.borrow_mut();
         if cache.is_some() {
-            return; // Already built
+            return;
         }
 
         let mut map = HashMap::with_capacity(self.total_count);
@@ -313,7 +299,6 @@ impl LazyListIntervalContent {
         {
             return LazyLayoutKey::User(key_fn(local_index));
         }
-        // Default key wraps the index (matches JC's getDefaultLazyLayoutKey)
         LazyLayoutKey::Index(index)
     }
 
@@ -359,7 +344,6 @@ impl LazyListIntervalContent {
     /// For larger lists, use `get_index_by_key_in_range` with a `NearestRangeState`.
     #[must_use]
     pub fn get_index_by_key(&self, key: LazyLayoutKey) -> Option<usize> {
-        // Convert key to slot_id and use the cache
         let slot_id = key.to_slot_id();
         self.get_index_by_slot_id(slot_id)
     }
@@ -376,7 +360,6 @@ impl LazyListIntervalContent {
         (start..end).find(|&index| self.get_key(index) == key)
     }
 
-    /// Threshold below which linear search is faster than building a HashMap cache.
     const CACHE_THRESHOLD: usize = 64;
 
     /// Returns the index of an item with the given slot ID, or None if not found.
@@ -389,19 +372,16 @@ impl LazyListIntervalContent {
     /// For hot paths during scrolling, prefer `get_index_by_slot_id_in_range` first.
     #[must_use]
     pub fn get_index_by_slot_id(&self, slot_id: u64) -> Option<usize> {
-        // For small lists, linear search is faster than building/using the cache
         if self.total_count <= Self::CACHE_THRESHOLD {
             return (0..self.total_count)
                 .find(|&index| self.get_key(index).to_slot_id() == slot_id);
         }
 
-        // Try to use cache first (O(1) lookup)
         self.ensure_cache();
         if let Some(cache) = self.key_cache.borrow().as_ref() {
             return cache.get(&slot_id).copied();
         }
 
-        // Safety fallback: should not happen since ensure_cache always builds the map.
         log::warn!(
             "get_index_by_slot_id: cache unexpectedly missing ({} items), using linear search",
             self.total_count
@@ -420,15 +400,11 @@ impl LazyListIntervalContent {
         (start..end).find(|&index| self.get_key(index).to_slot_id() == slot_id)
     }
 
-    /// Finds the interval containing the given global index.
-    /// Returns the interval and the local index within it.
-    /// P2 FIX: Uses binary search for O(log n) instead of linear O(n).
     fn find_interval(&self, index: usize) -> Option<(&LazyListInterval, usize)> {
         if self.intervals.is_empty() || index >= self.total_count {
             return None;
         }
 
-        // Binary search to find the interval containing this index
         let pos = self
             .intervals
             .partition_point(|interval| interval.start_index + interval.count <= index);
@@ -455,7 +431,7 @@ impl LazyListScope for LazyListIntervalContent {
     where
         F: Fn() + 'static,
     {
-        self.invalidate_cache(); // Content is changing
+        self.invalidate_cache();
         let start_index = self.total_count;
         self.intervals.push(LazyListInterval {
             start_index,
@@ -478,7 +454,7 @@ impl LazyListScope for LazyListIntervalContent {
             return;
         }
 
-        self.invalidate_cache(); // Content is changing
+        self.invalidate_cache();
         let start_index = self.total_count;
         self.intervals.push(LazyListInterval {
             start_index,
@@ -502,17 +478,14 @@ impl LazyLayoutItemProvider for LazyListIntervalContent {
     }
 
     fn get_key(&self, index: usize) -> u64 {
-        // Delegate to the existing get_key and convert to slot_id
         LazyListIntervalContent::get_key(self, index).to_slot_id()
     }
 
     fn get_content_type(&self, index: usize) -> Option<u64> {
-        // Delegate to the inherent method which returns Option<u64>
         LazyListIntervalContent::get_content_type(self, index)
     }
 
     fn get_index(&self, key: u64) -> Option<usize> {
-        // Use the cached lookup
         self.get_index_by_slot_id(key)
     }
 }
@@ -559,8 +532,6 @@ pub trait LazyListScopeExt: LazyListScope {
         T: Clone + 'static,
         F: Fn(&T) + 'static,
     {
-        // Note: to_vec() is O(n) allocation + copy. This is documented above.
-        // For zero-copy, use items_slice_rc() or items_with_provider().
         let items_rc: Rc<[T]> = items.to_vec().into();
         self.items(items.len(), move |index| {
             if let Some(item) = items_rc.get(index) {
@@ -808,21 +779,18 @@ mod tests {
     fn test_mixed_intervals() {
         let mut content = LazyListIntervalContent::new();
 
-        // Header
         content.item_keyed(Some(100), None, || {});
 
-        // Items
         content.items(LazyItems::new(3).key(|i| i as u64), |_| {});
 
-        // Footer
         content.item_keyed(Some(200), None, || {});
 
         assert_eq!(content.item_count(), 5);
-        assert_eq!(content.get_key(0), LazyLayoutKey::User(100)); // Header
-        assert_eq!(content.get_key(1), LazyLayoutKey::User(0)); // First item
-        assert_eq!(content.get_key(2), LazyLayoutKey::User(1)); // Second item
-        assert_eq!(content.get_key(3), LazyLayoutKey::User(2)); // Third item
-        assert_eq!(content.get_key(4), LazyLayoutKey::User(200)); // Footer
+        assert_eq!(content.get_key(0), LazyLayoutKey::User(100));
+        assert_eq!(content.get_key(1), LazyLayoutKey::User(0));
+        assert_eq!(content.get_key(2), LazyLayoutKey::User(1));
+        assert_eq!(content.get_key(3), LazyLayoutKey::User(2));
+        assert_eq!(content.get_key(4), LazyLayoutKey::User(200));
     }
 
     #[test]
@@ -839,23 +807,17 @@ mod tests {
     fn test_user_keys_dont_collide_with_default_keys() {
         let mut content = LazyListIntervalContent::new();
 
-        // Item 0: User key = 0
         content.item_keyed(Some(0), None, || {});
-        // Item 1: No key (default Index(1))
         content.item(|| {});
-        // Item 2: User key = 1
         content.item_keyed(Some(1), None, || {});
 
-        // User key 0 should NOT equal default Index(0)
         assert_eq!(content.get_key(0), LazyLayoutKey::User(0));
         assert_eq!(content.get_key(1), LazyLayoutKey::Index(1));
         assert_eq!(content.get_key(2), LazyLayoutKey::User(1));
 
-        // Critically: User(0) != Index(1) and User(1) != Index(1)
         assert_ne!(content.get_key(0), content.get_key(1));
         assert_ne!(content.get_key(2), content.get_key(1));
 
-        // Keys should convert to different slot IDs
         assert_ne!(
             content.get_key(0).to_slot_id(),
             content.get_key(1).to_slot_id()
@@ -864,32 +826,25 @@ mod tests {
 
     #[test]
     fn test_slot_id_collision_prevention() {
-        // User(0) and Index(0) should produce different slot IDs
         let user_key = LazyLayoutKey::User(0);
         let index_key = LazyLayoutKey::Index(0);
 
         assert_ne!(user_key.to_slot_id(), index_key.to_slot_id());
 
-        // User keys have tag 0b00 in high 2 bits (bits 62-63)
-        // Index keys have tag 0b01 in high 2 bits (bit 62 set)
-        assert_eq!(user_key.to_slot_id(), 0); // 0b00 << 62 | 0 = 0
-        assert_eq!(index_key.to_slot_id(), 1u64 << 62); // 0b01 << 62 | 0
+        assert_eq!(user_key.to_slot_id(), 0);
+        assert_eq!(index_key.to_slot_id(), 1u64 << 62);
 
-        // User keys occupy range 0x0000... to 0x3FFF...
-        // Index keys occupy range 0x4000... to 0x7FFF...
         assert!(user_key.to_slot_id() < (1u64 << 62));
         assert!(index_key.to_slot_id() >= (1u64 << 62));
         assert!(index_key.to_slot_id() < (2u64 << 62));
 
-        // Any user value within 62 bits maps to the user range
         let user_max = LazyLayoutKey::User((1u64 << 62) - 1);
         assert!(
             user_max.to_slot_id() < (1u64 << 62),
             "User keys stay in user range"
         );
-        assert_eq!(user_max.to_slot_id(), (1u64 << 62) - 1); // All 62 value bits set
+        assert_eq!(user_max.to_slot_id(), (1u64 << 62) - 1);
 
-        // Any index value within 62 bits maps to the index range
         let index_large = LazyLayoutKey::Index(((1u64 << 62) - 1) as usize);
         assert!(
             index_large.to_slot_id() >= (1u64 << 62),
@@ -899,8 +854,6 @@ mod tests {
             index_large.to_slot_id() < (2u64 << 62),
             "Index keys below reserved range"
         );
-
-        // See release-only test for the documented high-bit collision behavior.
     }
 
     #[test]
@@ -923,17 +876,13 @@ mod tests {
     #[test]
     fn test_user_key_high_bits_influence_slot_id() {
         let key_low = LazyLayoutKey::User(0x0000_0000_0000_0001);
-        let key_high = LazyLayoutKey::User(0x4000_0000_0000_0001); // Differs in bit 62
+        let key_high = LazyLayoutKey::User(0x4000_0000_0000_0001);
         assert_ne!(
             key_low.to_slot_id(),
             key_high.to_slot_id(),
             "High bits are mixed into the slot id to avoid truncation collisions"
         );
     }
-
-    // ============================================================
-    // LazyListScopeExt tests
-    // ============================================================
 
     #[test]
     fn test_items_slice() {
@@ -948,7 +897,6 @@ mod tests {
 
         assert_eq!(content.item_count(), 3);
 
-        // Invoke each item and check the callback received correct values
         for i in 0..3 {
             content.invoke_content(i);
         }
@@ -960,7 +908,6 @@ mod tests {
     #[test]
     fn test_items_indexed() {
         let mut content = LazyListIntervalContent::new();
-        // Use Vec -> Into<Rc<[T]>> directly (efficient)
         let data = vec![
             "Apple".to_string(),
             "Banana".to_string(),
@@ -993,12 +940,10 @@ mod tests {
     #[test]
     fn test_items_indexed_slice() {
         let mut content = LazyListIntervalContent::new();
-        // Use Slice -> Into<Rc<[T]>> (performs copy)
         let data = vec!["Apple", "Banana", "Cherry"];
         let items_visited = Rc::new(RefCell::new(Vec::new()));
         let items_clone = items_visited.clone();
 
-        // Note: passing slice explicitly (generic bound doesn't do deref coercion from &Vec)
         content.items_indexed(data.as_slice(), move |index, item: &&str| {
             items_clone.borrow_mut().push((index, (*item).to_string()));
         });
@@ -1124,27 +1069,17 @@ mod tests {
 
     #[test]
     fn test_large_list_cache_works() {
-        // Test that get_index_by_slot_id uses O(1) cache for lists > 10k items
-        // (previously this would fall back to O(N) linear search)
         let mut content = LazyListIntervalContent::new();
 
-        // Create a list with 20,000 items (above the old 10k limit)
-        content.items(
-            // Unique keys.
-            LazyItems::new(20_000).key(|i| (i * 7) as u64),
-            |_| {},
-        );
+        content.items(LazyItems::new(20_000).key(|i| (i * 7) as u64), |_| {});
 
-        // Verify lookup works for item near the end
         let key_19999 = content.get_key(19999);
         assert_eq!(key_19999, LazyLayoutKey::User(19999 * 7));
 
-        // Verify get_index_by_slot_id finds the correct index (should be O(1) now)
         let slot_id = key_19999.to_slot_id();
         let found_index = content.get_index_by_slot_id(slot_id);
         assert_eq!(found_index, Some(19999));
 
-        // Also test a middle item
         let key_10000 = content.get_key(10000);
         let slot_id_mid = key_10000.to_slot_id();
         let found_mid = content.get_index_by_slot_id(slot_id_mid);

@@ -52,8 +52,6 @@ pub trait PlatformClipboard {
     }
 }
 
-/// Per-app-context clipboard state: an optionally-installed platform clipboard
-/// plus an in-process fallback used when none is installed.
 pub(crate) struct ClipboardSessionState {
     platform: RefCell<Option<Rc<dyn PlatformClipboard>>>,
     fallback: RefCell<Option<String>>,
@@ -72,9 +70,6 @@ impl ClipboardSessionState {
     }
 
     fn write(&self, text: &str) {
-        // Keep a local copy even when a platform bridge is installed: native
-        // clipboards may be temporarily unavailable (notably headless desktop
-        // sessions), and copy/paste must still round-trip within this app.
         *self.fallback.borrow_mut() = Some(text.to_string());
         if let Some(platform) = self.platform.borrow().clone() {
             platform.write_text(text);
@@ -227,8 +222,6 @@ mod tests {
 
     struct UnavailableClipboard;
 
-    /// A clipboard shaped like the browser's: nothing to read on the call
-    /// stack, but able to complete a paste of its own accord.
     struct AsyncOnlyClipboard {
         requests: Cell<usize>,
     }
@@ -307,8 +300,6 @@ mod tests {
             });
             set_platform_clipboard(clipboard.clone());
 
-            // A clipboard nobody can read here and now still offers Paste --
-            // hiding it would hide every real paste the browser can serve.
             assert!(clipboard_can_paste());
             clipboard_paste_into_focus();
             assert_eq!(clipboard.requests.get(), 1);
@@ -319,8 +310,6 @@ mod tests {
     fn a_readable_clipboard_pastes_without_asking_the_platform() {
         let context = crate::render_state::AppContext::new();
         context.enter(|| {
-            // No platform at all: the in-process fallback is readable, so the
-            // paste must take the synchronous path rather than vanish.
             assert!(!clipboard_can_paste());
             clipboard_write_text("pasted");
             assert!(clipboard_can_paste());

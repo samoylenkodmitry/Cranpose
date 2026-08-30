@@ -231,7 +231,6 @@ fn bench_composition(c: &mut Criterion) {
             &(sections, rows_per_section),
             |b, &(sections, rows_per_section)| {
                 let mut fixture = PipelineFixture::new(sections, rows_per_section, ROOT_SIZE);
-                // Warm up the composition so steady-state recomposition is measured.
                 fixture.compose();
 
                 b.iter(|| {

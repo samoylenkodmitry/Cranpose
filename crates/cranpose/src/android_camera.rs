@@ -1,14 +1,3 @@
-//! Android Camera2 behind the framework camera service.
-//!
-//! The session lives in `CranposeCamera` on the Java side and pushes what it
-//! produces here: preview frames as NV12 — the format the sensor already
-//! produces — a still when one is asked for, and what the session is doing.
-//! Nothing is polled, nothing is written to a file, and no call waits for a
-//! capture: the previous transport JPEG-compressed every preview frame, wrote
-//! it to the cache directory, renamed it, read it back and decoded it, and a
-//! still was waited for by sleeping in twenty-millisecond steps until a marker
-//! file appeared.
-
 #![allow(unsafe_code)]
 
 use std::sync::Arc;
@@ -79,8 +68,6 @@ impl AndroidCamera {
 
 impl Camera for AndroidCamera {
     fn start(&self) -> Result<(), CameraError> {
-        // Android answers a permission request on its own thread; the session
-        // opens once it is granted, and the state says so when it does.
         self.call_void(jni_str!("cranposeCameraStart"))
             .map_err(CameraError::Failed)
     }
@@ -146,7 +133,6 @@ impl Camera for AndroidCamera {
     }
 }
 
-/// The Java side's lens lines, one `id|facing|name` per line.
 fn parse_lenses(text: &str) -> Vec<CameraLens> {
     text.lines()
         .filter_map(|line| {
@@ -167,7 +153,6 @@ fn parse_lenses(text: &str) -> Vec<CameraLens> {
         .collect()
 }
 
-/// One preview frame, in the format the sensor produced.
 #[doc(hidden)]
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnCameraFrame<'local>(
@@ -192,15 +177,12 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnCamera
         sequence.max(0) as u64,
         bytes,
     );
-    // A frame whose bytes do not match its size is a backend bug, and letting
-    // it through reads as corrupted video rather than as a fault.
     match frame {
         Some(frame) => publish_camera_frame(frame),
         None => record_dropped_camera_frame(),
     }
 }
 
-/// A frame the device produced while the previous one was still in flight.
 #[doc(hidden)]
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnCameraFrameDropped(
@@ -210,7 +192,6 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnCamera
     record_dropped_camera_frame();
 }
 
-/// What the session is doing.
 #[doc(hidden)]
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnCameraState<'local>(
@@ -242,7 +223,6 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnCamera
     publish_camera_state(state);
 }
 
-/// A still, or the reason there is none.
 #[doc(hidden)]
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnCameraStill<'local>(
@@ -272,7 +252,6 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnCamera
     });
 }
 
-/// The devices the application may pick between, and the one in use.
 #[doc(hidden)]
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnCameraLenses<'local>(

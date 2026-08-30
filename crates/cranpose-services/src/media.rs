@@ -657,8 +657,6 @@ pub fn media_capabilities() -> MediaCapabilities {
         .unwrap_or_default()
 }
 
-// -- Published state ---------------------------------------------------------
-
 static STATE: Mutex<PlaybackState> = Mutex::new(PlaybackState::Idle);
 static PROGRESS: Mutex<PlaybackProgress> = Mutex::new(PlaybackProgress {
     position: Duration::ZERO,
@@ -668,11 +666,7 @@ static PROGRESS: Mutex<PlaybackProgress> = Mutex::new(PlaybackProgress {
 static CURRENT_ITEM: Mutex<Option<MediaItem>> = Mutex::new(None);
 static LATEST_SAMPLES: Mutex<Option<MediaSamples>> = Mutex::new(None);
 static FOCUS: Mutex<AudioFocus> = Mutex::new(AudioFocus::Gained);
-/// The volume the application asked for, before the focus gain is applied.
 static VOLUME: Mutex<f32> = Mutex::new(1.0);
-/// The equalizer curve the application asked for. Kept whether or not a
-/// platform can apply it, so a stored user setting survives a device that
-/// cannot honour it and reaches one that can.
 static EQUALIZER: Mutex<EqualizerSettings> = Mutex::new(EqualizerSettings {
     enabled: false,
     preamp_db: 0.0,
@@ -680,9 +674,6 @@ static EQUALIZER: Mutex<EqualizerSettings> = Mutex::new(EqualizerSettings {
 });
 static PAUSED_BY_FOCUS: AtomicBool = AtomicBool::new(false);
 
-/// Sample blocks produced while every observer was still busy with an earlier
-/// one. Counted rather than queued, for the same reason camera frames are: a
-/// visualiser that falls behind should draw the sound that is playing now.
 static DROPPED_SAMPLES: AtomicU64 = AtomicU64::new(0);
 
 /// What the player is doing.
@@ -724,10 +715,6 @@ pub fn media_volume() -> f32 {
     *VOLUME.lock()
 }
 
-// -- Observers ---------------------------------------------------------------
-
-/// One registry of callbacks. Every published signal has the same shape, so it
-/// is written once and instantiated per signal rather than copied per signal.
 struct ObserverList<T: ?Sized> {
     entries: Mutex<Vec<(u64, Arc<T>)>>,
 }
@@ -850,8 +837,6 @@ pub fn observe_media_samples(
         remove: |id| SAMPLE_OBSERVERS.remove(id),
     }
 }
-
-// -- Publishing (called by backends) -----------------------------------------
 
 /// Publishes what the player is doing.
 ///
@@ -998,8 +983,6 @@ pub fn publish_media_samples(samples: MediaSamples) {
 pub fn record_dropped_media_samples() {
     DROPPED_SAMPLES.fetch_add(1, Ordering::AcqRel);
 }
-
-// -- Transport (called by applications) --------------------------------------
 
 /// Opens `item`, publishing [`PlaybackState::Loading`] before the backend is
 /// asked so a screen shows the wait rather than a gap.
@@ -1228,8 +1211,6 @@ pub fn set_media_metadata(metadata: MediaMetadata) {
     }
 }
 
-// -- Lifecycle ---------------------------------------------------------------
-
 static BACKGROUND_LEASE: Mutex<Option<BackgroundWorkLease>> = Mutex::new(None);
 
 fn acquire_background_lease() {
@@ -1243,29 +1224,16 @@ fn release_background_lease() {
     BACKGROUND_LEASE.lock().take();
 }
 
-/// Whether playback is what is keeping the runtime turning.
-///
-/// The lease count is one number for the whole process — a durable save holds
-/// leases too — so this asks about the one this service took rather than about
-/// the total.
 #[cfg(test)]
 fn holds_background_work() -> bool {
     BACKGROUND_LEASE.lock().is_some()
 }
 
-/// Applies a host lifecycle transition to playback.
-///
-/// Backgrounding does **not** stop a media player: that is the difference
-/// between a media player and every other service, and it is why playback holds
-/// a background-work lease while it runs. A host being destroyed does stop it,
-/// because the device it holds outlives the surface that was drawing.
 pub(crate) fn on_lifecycle(event: LifecycleEvent) {
     if event.to == LifecycleState::Destroyed {
         stop_media();
     }
 }
-
-// -- Local-file URIs ---------------------------------------------------------
 
 /// The `file:` URI for a path, which is what [`MediaItem`] takes.
 ///
@@ -1278,8 +1246,6 @@ pub fn uri_for_path(path: &Path) -> String {
     let mut uri = String::with_capacity(text.len() + 8);
     uri.push_str("file://");
     if !text.starts_with('/') {
-        // A Windows path (`C:\Music\x.mp3`) has no leading slash of its own,
-        // and `file://C:/...` would read `C:` as a host.
         uri.push('/');
     }
     for byte in text.bytes() {
@@ -1305,15 +1271,11 @@ pub fn path_from_uri(uri: &str) -> Option<PathBuf> {
         Some(_) => return None,
         None => return non_empty_path(uri),
     };
-    // `file:///path` has an empty authority; `file://host/path` names a host
-    // no local backend can read.
     let path = rest.strip_prefix('/')?;
     let decoded = crate::content::percent_decode(path)?;
     if decoded.starts_with('/') || decoded.is_empty() {
         return non_empty_path(&decoded);
     }
-    // A Windows path came through as `C:/Music/x.mp3`; anything else that has
-    // lost its leading slash is put back where it was.
     if decoded.as_bytes().get(1) == Some(&b':') {
         non_empty_path(&decoded)
     } else {
@@ -1327,8 +1289,6 @@ fn non_empty_path(text: &str) -> Option<PathBuf> {
     }
     Some(PathBuf::from(text))
 }
-
-// -- Opening a URI for the in-process decoder --------------------------------
 
 /// A media stream the platform opened, and what it knows about it.
 #[derive(Debug)]
@@ -1396,8 +1356,6 @@ pub fn open_media_source(uri: &str) -> std::io::Result<MediaSourceHandle> {
         )),
     }
 }
-
-// -- Composables -------------------------------------------------------------
 
 /// What the player is doing, observed for as long as this call stays in the
 /// composition.
@@ -1467,8 +1425,6 @@ mod tests {
     use super::*;
     use crate::registry::test_service_guard;
 
-    /// A backend that records what it was asked and publishes what a real one
-    /// would.
     struct FakePlayer {
         capabilities: MediaCapabilities,
         calls: Mutex<Vec<String>>,
@@ -1578,8 +1534,6 @@ mod tests {
         }
 
         fn equalizer_bands(&self) -> Vec<EqualizerBand> {
-            // Three bands with a narrow range, so a test can tell a clamp from
-            // a pass-through and a band count from a hard-coded ten.
             vec![
                 EqualizerBand::new(60.0, 6.0),
                 EqualizerBand::new(1_000.0, 6.0),
@@ -1626,7 +1580,6 @@ mod tests {
         assert_eq!(metadata.album, "Record");
         assert_eq!(metadata.artwork.as_ref(), Some(&artwork));
         assert!(!metadata.is_empty());
-        // An album on its own is still something to show.
         assert!(!MediaMetadata::default().album("Record").is_empty());
         assert!(MediaMetadata::default().is_empty());
     }
@@ -1649,7 +1602,6 @@ mod tests {
         let asked = EqualizerSettings {
             enabled: true,
             preamp_db: -3.0,
-            // Too loud for these bands, and one entry too many.
             gains_db: vec![12.0, -12.0, 4.0],
         };
         let applied = asked.clamped_to(&bands);
@@ -1703,8 +1655,6 @@ mod tests {
             preamp_db: -1.0,
             gains_db: vec![4.0, -4.0],
         };
-        // No backend: the user's curve is still theirs, and reaches the next
-        // device that can honour it.
         assert!(!set_media_equalizer(asked.clone()));
         assert_eq!(media_equalizer(), asked);
         assert!(media_equalizer_bands().is_empty());
@@ -1927,8 +1877,6 @@ mod tests {
         publish_audio_focus(AudioFocus::Ducked);
         assert_eq!(*player.volume.lock(), 0.5 * DUCKED_GAIN);
 
-        // The application may still change its own volume while ducked, and
-        // doing so must not undo the duck.
         set_media_volume(1.0);
         assert_eq!(*player.volume.lock(), DUCKED_GAIN);
 
@@ -2010,8 +1958,6 @@ mod tests {
                 MediaCommand::Next,
             ]
         );
-        // `Next` needs a playlist the framework does not have, so it reached
-        // the application without touching the transport.
         assert!(player.calls().contains(&"seek 10000".to_string()));
         assert_eq!(playback_state(), PlaybackState::Paused);
     }
@@ -2035,14 +1981,6 @@ mod tests {
         assert!(!set_media_analysis_enabled(true));
     }
 
-    /// A backend states the formats it decodes, so a picker offers what will
-    /// play rather than what some list next to it once claimed.
-    ///
-    /// CranAmp shipped the second: a hardcoded list left over from decoding in
-    /// process, kept after the tracks were handed to the platform's decoder.
-    /// It went on offering AIFF and CAF on a phone whose `MediaPlayer` reads
-    /// neither, so they imported and then refused to play with nothing on
-    /// screen to say why.
     #[test]
     fn the_backend_states_which_audio_formats_it_decodes() {
         let guard = test_service_guard();
@@ -2205,9 +2143,6 @@ mod tests {
         assert!(!MediaMetadata::titled("Track").is_empty());
     }
 
-    /// Who answers for a URI: a path is opened here, and anything else is the
-    /// platform's. One test rather than three, because the opener is a process
-    /// -wide registry and three would race each other clearing it.
     #[test]
     fn a_path_opens_here_and_everything_else_is_the_platforms() {
         struct Opener;
@@ -2215,9 +2150,6 @@ mod tests {
             fn open(&self, uri: &str) -> std::io::Result<MediaSourceHandle> {
                 let path = crate::test_scratch_dir("media-source-opener").join("document.bin");
                 std::fs::write(&path, uri.as_bytes())?;
-                // A streaming provider knows the length it listed even though
-                // its descriptor cannot be stat-ed, which is the case this
-                // handle exists to carry.
                 Ok(MediaSourceHandle {
                     stream: File::open(path)?,
                     len: Some(uri.len() as u64),
@@ -2233,13 +2165,9 @@ mod tests {
         clear_platform_media_source_opener();
         let path = crate::test_scratch_dir("media-source").join("track.bin");
         std::fs::write(&path, b"bytes").expect("write the fixture");
-        // A file is a file on every target that has a filesystem, so no
-        // platform has to be asked about one.
         let file = open_media_source(&uri_for_path(&path)).expect("the file");
         assert_eq!(file.len, Some(5), "a real file states its length");
         assert_eq!(read(file), "bytes");
-        // A document URI on a platform that registered nothing says so rather
-        // than guessing at a path.
         let error = open_media_source("content://provider/document/7").expect_err("no opener");
         assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
 

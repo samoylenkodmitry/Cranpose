@@ -1,5 +1,3 @@
-//! Robot test for the Interactive Anim tab.
-
 use std::time::Duration;
 
 use cranpose::{AppLauncher, Robot, RobotScreenshot};

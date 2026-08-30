@@ -1,40 +1,18 @@
-//! The DOM's `wheel` event, normalized into the shell's wheel sample.
-//!
-//! Two things separate a browser wheel event from what the shell dispatches,
-//! and both are silent when wrong.
-//!
-//! **Units.** `WheelEvent` reports its delta in whichever of three units it
-//! feels like — pixels, lines, or pages (`deltaMode`) — and only the pixel case
-//! needs no work. A line is worth a notch; a page is worth the canvas.
-//!
-//! **Sign.** The DOM's `deltaY` is positive when the wheel is turned *down*
-//! (the content moves up). The shell's convention, which winit already speaks,
-//! is the opposite: positive means the content moves down and right. So the
-//! browser delta is negated here, at the one point where the DOM's units and
-//! signs are still visible. Without it every scrollable on the web runs
-//! backwards, and a rotary handler turns the wrong way.
-
 use cranpose_app_shell::{Modifiers, WheelScroll};
 use cranpose_ui::Point;
 
-/// Logical pixels one `DOM_DELTA_LINE` step scrolls.
 const WEB_WHEEL_LINE_DELTA_PIXELS: f32 = 40.0;
 
-/// The `deltaMode` values a `WheelEvent` can report, named as the DOM names
-/// them. Mirrored rather than imported so this policy compiles (and its guards
-/// run) on the host as well as on wasm.
 pub(crate) const DOM_DELTA_PIXEL: u32 = 0;
 pub(crate) const DOM_DELTA_LINE: u32 = 1;
 pub(crate) const DOM_DELTA_PAGE: u32 = 2;
 
-/// The size of one `DOM_DELTA_PAGE` step: the canvas's own CSS box.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct WebWheelPage {
     pub width: f32,
     pub height: f32,
 }
 
-/// Converts a raw DOM wheel sample into the shell's [`WheelScroll`].
 pub(crate) fn wheel_scroll_from_dom(
     delta_x: f32,
     delta_y: f32,
@@ -47,8 +25,6 @@ pub(crate) fn wheel_scroll_from_dom(
         DOM_DELTA_PIXEL => (1.0, 1.0),
         DOM_DELTA_LINE => (WEB_WHEEL_LINE_DELTA_PIXELS, WEB_WHEEL_LINE_DELTA_PIXELS),
         DOM_DELTA_PAGE => (page.width.max(1.0), page.height.max(1.0)),
-        // Whatever a future browser invents: read it as pixels rather than
-        // dropping the sample.
         _ => (1.0, 1.0),
     };
 
@@ -77,9 +53,6 @@ mod tests {
 
     #[test]
     fn a_wheel_turned_down_in_the_browser_scrolls_the_same_way_it_does_on_the_desktop() {
-        // The DOM reports a wheel turned DOWN as a positive deltaY; the shell
-        // and winit call that direction negative. This negation is the whole
-        // reason the two hosts scroll the same way.
         let down = dom(0.0, 100.0, DOM_DELTA_PIXEL);
         let up = dom(0.0, -100.0, DOM_DELTA_PIXEL);
 
@@ -105,8 +78,6 @@ mod tests {
 
     #[test]
     fn a_degenerate_page_size_still_scrolls() {
-        // A canvas can report a zero client box before layout settles; a page
-        // scroll then has to move by something rather than silently nothing.
         let sample = wheel_scroll_from_dom(
             0.0,
             1.0,
@@ -129,9 +100,6 @@ mod tests {
 
     #[test]
     fn a_browser_pinch_arrives_as_the_zoom_gesture_and_zooms_in_when_spread() {
-        // Trackpad pinches reach the page as ctrl+wheel, and a pinch OUT
-        // (spread, zoom in) reports a negative deltaY -- which the negation
-        // above turns into the positive delta the shell zooms in on.
         let spread = wheel_scroll_from_dom(
             0.0,
             -40.0,

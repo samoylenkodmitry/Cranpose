@@ -31,18 +31,11 @@ impl Composer {
             }
         }
 
-        // A prior callback in the same batch can detach this scope. Retained scopes
-        // keep their invalid bit so reactivation can schedule the deferred work.
         if !scope.is_effectively_active() {
             scope.defer_until_reactivated();
             return;
         }
 
-        // Check if scope is still invalid before recomposing.
-        // When parent and child scopes are both invalidated, the child may be
-        // visited (and marked recomposed) during parent's recomposition.
-        // Without this check, we'd recompose the child again with wrong parent_stack,
-        // causing nodes to get attached to root instead of their actual parent.
         if !scope.is_invalid() {
             scope.mark_recomposed();
             return;
@@ -95,21 +88,10 @@ impl Composer {
             if !callback_ran {
                 if let Some(ancestor_scope) = scope.callback_promotion_target() {
                     ancestor_scope.invalidate();
-                    // Keep this scope PENDING: the guard below clears its
-                    // invalid flag, and the (arg-equal) ancestor visit would
-                    // otherwise skip the group, silently swallowing the
-                    // invalidation that got us here — mark_recomposed
-                    // re-invalidates pending scopes, so the healing visit
-                    // finds the scope invalid and re-runs its body. Only the
-                    // ancestor path re-arms the callback; the root-render
-                    // fallback must NOT spin (an unreachable scope would
-                    // re-invalidate forever).
                     scope.request_pending_recompose();
                 } else {
                     self.request_root_render();
                 }
-                // Preserve all existing slot content until the promoted ancestor
-                // or the requested root render replays the subtree.
                 self.skip_current_group();
             }
             {

@@ -1,26 +1,3 @@
-//! iOS media playback via `AVAudioPlayer`, `AVAudioSession` and the
-//! MediaPlayer framework.
-//!
-//! Three iOS pieces stand behind the one framework contract:
-//!
-//! * `AVAudioPlayer` opens and plays the item. It takes a local file, which is
-//!   what the framework's desktop backend takes too; a network item belongs to
-//!   `AVPlayer` and is reported as
-//!   [`MediaError::UnsupportedSource`](cranpose_services::MediaError::UnsupportedSource)
-//!   rather than downloaded first.
-//! * `AVAudioSession` says when something else needs the output. Its
-//!   interruption notification is what the framework's audio-focus policy runs
-//!   on, so a call pauses playback and hanging up resumes it without an
-//!   application writing a line.
-//! * `MPNowPlayingInfoCenter` and `MPRemoteCommandCenter` are the lock screen:
-//!   what it shows, and the buttons on it coming back as
-//!   [`MediaCommand`](cranpose_services::MediaCommand)s.
-//!
-//! Analysis samples are not offered. `AVAudioPlayer`'s metering gives an
-//! average and a peak per channel, not the samples a visualiser draws, and
-//! reporting [`MediaCapabilities::analysis`] as `false` is better than
-//! publishing something else under that name.
-
 #![allow(unsafe_code)]
 
 use std::{
@@ -60,15 +37,8 @@ use objc2_media_player::{
     MPRemoteCommandCenter, MPRemoteCommandEvent, MPRemoteCommandHandlerStatus,
 };
 
-/// How often the position is published while something plays.
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(250);
 
-/// The open item and the objects iOS holds it in.
-///
-/// `AVAudioPlayer` is touched from the transport — the composition's thread —
-/// and read by the progress thread, which only asks it for its position. The
-/// mutex is what serialises the two; marking the holder `Send` is what lets it
-/// live behind one.
 struct PlayerHolder {
     player: Retained<AVAudioPlayer>,
     _delegate: Retained<EndDelegate>,
@@ -82,14 +52,11 @@ fn player_slot() -> &'static Mutex<Option<PlayerHolder>> {
     SLOT.get_or_init(|| Mutex::new(None))
 }
 
-/// Bumped whenever a session starts or ends, so the progress thread of a
-/// session that is over knows to exit.
 static GENERATION: AtomicU64 = AtomicU64::new(0);
 static VOLUME: Mutex<f32> = Mutex::new(1.0);
 static SPEED: Mutex<f32> = Mutex::new(1.0);
 static LOOPING: AtomicBool = AtomicBool::new(false);
 
-/// Installs iOS as the platform media player.
 pub(crate) fn register() {
     configure_audio_session();
     install_interruption_observer();
@@ -98,8 +65,6 @@ pub(crate) fn register() {
 }
 
 struct IosMediaPlayer;
-
-// --- The audio session --------------------------------------------------------
 
 fn configure_audio_session() {
     unsafe {
@@ -129,10 +94,6 @@ define_class!(
     unsafe impl NSObjectProtocol for SessionObserver {}
 
     impl SessionObserver {
-        /// Something else took the output, or gave it back.
-        ///
-        /// The framework's policy decides what that means for playback; this
-        /// only translates iOS's vocabulary into it.
         #[unsafe(method(cranposeAudioSessionInterrupted:))]
         fn interrupted(&self, notification: &NSNotification) {
             let Some(info) = notification.userInfo() else {
@@ -147,10 +108,6 @@ define_class!(
                 publish_audio_focus(AudioFocus::LostTransient);
                 return;
             }
-            // An interruption that ends without `ShouldResume` is one the
-            // system does not want followed by sound — an alarm the user is
-            // still looking at. Reporting it as a permanent loss is what stops
-            // the framework resuming into it.
             let resume = number_for_key(&info, unsafe { AVAudioSessionInterruptionOptionKey })
                 .map(|options| {
                     AVAudioSessionInterruptionOptions(options.unsignedLongValue() as usize)
@@ -198,17 +155,10 @@ fn install_interruption_observer() {
     }
 }
 
-/// An Objective-C object held for the life of the process.
-///
-/// The observer is registered once and never removed, and the notification
-/// centre only ever calls it on the main thread; the wrapper is what lets a
-/// `static` hold it.
 struct SendRetained<T: ?Sized>(Retained<T>);
 
 unsafe impl<T: ?Sized> Send for SendRetained<T> {}
 unsafe impl<T: ?Sized> Sync for SendRetained<T> {}
-
-// --- The lock screen ----------------------------------------------------------
 
 fn install_remote_commands() {
     unsafe {
@@ -290,8 +240,6 @@ fn publish_now_playing(metadata: &MediaMetadata, position: Duration, rate: f32) 
     }
 }
 
-// --- The item -----------------------------------------------------------------
-
 define_class!(
     #[unsafe(super(NSObject))]
     #[name = "CranposeMediaEndDelegate"]
@@ -303,8 +251,6 @@ define_class!(
     unsafe impl AVAudioPlayerDelegate for EndDelegate {
         #[unsafe(method(audioPlayerDidFinishPlaying:successfully:))]
         unsafe fn did_finish(&self, _player: &AVAudioPlayer, successfully: bool) {
-            // A looping player never reports finishing, so reaching here means
-            // the item is over — or that decoding gave up part way through.
             if successfully {
                 publish_end_of_item();
             } else {
@@ -338,7 +284,6 @@ fn duration_of_open_item() -> Option<Duration> {
         .and_then(|holder| holder.as_ref().and_then(|holder| holder.duration))
 }
 
-/// The URL an item addresses, or `None` for anything that is not a local file.
 fn url_for(uri: &str) -> Option<Retained<NSURL>> {
     let path = cranpose_services::media::path_from_uri(uri)?;
     let path = path.to_str()?;
@@ -349,7 +294,6 @@ fn progress_at(position: Duration, duration: Option<Duration>) -> PlaybackProgre
     PlaybackProgress {
         position,
         duration,
-        // A local file is entirely on disk, so it is entirely buffered.
         buffered: duration.unwrap_or(position),
     }
 }
@@ -364,9 +308,6 @@ fn start_progress_thread() {
                 if GENERATION.load(Ordering::Acquire) != generation {
                     return;
                 }
-                // Read and release before publishing: an observer reacting to the
-                // position calls straight back into the transport, and would meet
-                // this lock on the way in.
                 let Some((position, duration)) = observe_position() else {
                     return;
                 };
@@ -393,9 +334,6 @@ fn with_player<R>(action: impl FnOnce(&AVAudioPlayer) -> R) -> Option<R> {
     Some(action(&holder.player))
 }
 
-/// What Core Audio reads for `AVAudioPlayer`. Apple's own containers are here
-/// — AIFF and CAF — and the formats it never took up are not: Ogg, Vorbis and
-/// Opus play on the other three backends and not on this one.
 const IOS_AUDIO_EXTENSIONS: &[&str] = &[
     "3gp", "aac", "aif", "aiff", "caf", "flac", "m4a", "m4b", "m4v", "mov", "mp3", "mp4", "wav",
 ];
@@ -408,11 +346,7 @@ impl MediaPlayer for IosMediaPlayer {
             looping: true,
             analysis: false,
             session: true,
-            // Building an `AVAudioPlayer` reads the container's duration; no
-            // output route is claimed until something is played.
             probing: true,
-            // `AVAudioPlayer` plays a file to the output; shaping it needs an
-            // `AVAudioEngine` graph, which this backend does not build.
             equalizer: false,
         }
     }

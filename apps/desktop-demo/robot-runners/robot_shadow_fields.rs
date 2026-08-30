@@ -1,8 +1,3 @@
-//! Robot test validating GraphicsLayer shadow fields produce visible pixel changes.
-//!
-//! Run with:
-//! `cargo run --package desktop-app --example robot_shadow_fields --features robot-app`
-
 mod output_paths;
 
 use std::{fs, path::Path, time::Duration};
@@ -131,7 +126,6 @@ fn build_diff_image(
                     Rgba([20, 20, 20, 255])
                 }
             } else {
-                // Dim grayscale context for easier visual inspection.
                 let g = ((before.pixels[idx] as u16
                     + before.pixels[idx + 1] as u16
                     + before.pixels[idx + 2] as u16)
@@ -182,7 +176,6 @@ fn set_shadow_slider_fraction(robot: &cranpose::Robot, fraction: f32) -> Option<
 
 fn shadow_preview_region(shadow_label_bounds: (f32, f32, f32, f32)) -> (f32, f32, f32, f32) {
     let (x, y, w, h) = shadow_label_bounds;
-    // Keep region around the right preview rectangle only.
     ((x - 36.0).max(0.0), (y - 34.0).max(0.0), w + 70.0, h + 68.0)
 }
 
@@ -228,7 +221,6 @@ fn main() {
             let shadow_off = set_shadow_slider_fraction(&robot, 0.0);
             println!("shadow_elevation after off scrub: {:?}", shadow_off);
 
-            // Max out color alpha so shadow visibility depends mostly on elevation.
             let ambient_alpha = set_slider_fraction(&robot, "ambient_alpha", 1.0);
             let spot_alpha = set_slider_fraction(&robot, "spot_alpha", 1.0);
             println!(
@@ -238,7 +230,6 @@ fn main() {
 
             let shadow_label_bounds =
                 scroll_text_into_view(&robot, "shadow", 14, shadow_scroll_config()).or_else(|| {
-                    // Fallback: derive right-preview label area from the stable "none" label.
                     scroll_text_into_view(&robot, "none", 10, shadow_scroll_config()).map(|none| {
                         (
                             none.0 + NONE_LABEL_TO_SHADOW_LABEL_X,
@@ -256,7 +247,6 @@ fn main() {
             let shadow_rect = shadow_rect_from_label(shadow_label_bounds);
             let region = shadow_preview_region(shadow_label_bounds);
 
-            // Baseline noise in the same region.
             let Some(base_a) = capture_screenshot(&robot) else {
                 println!("FATAL: failed to capture baseline screenshot A");
                 let _ = robot.exit();
@@ -282,7 +272,6 @@ fn main() {
             let shadow_on = set_shadow_slider_fraction(&robot, 1.0);
             println!("shadow_elevation after on scrub: {:?}", shadow_on);
 
-            // Move pointer away from controls before capture to reduce hover artifacts.
             let _ = robot.click(24.0, 24.0);
             std::thread::sleep(Duration::from_millis(100));
             let _ = robot.wait_for_idle();

@@ -1,5 +1,3 @@
-//! Robot test for native Winamp sub-window geometry.
-
 mod output_paths;
 
 use std::{
@@ -24,16 +22,8 @@ const LONG_DRAG_TRACE_STEPS: usize = 128;
 const LONG_DRAG_DX: i32 = 3;
 const LONG_DRAG_DY: i32 = 1;
 const LONG_DRAG_STEP_DELAY: Duration = Duration::from_millis(5);
-// Mid-drag the X11 window manager applies moves on its own schedule — on a
-// loaded host the window transiently lags the pointer by a few extra px
-// before catching up. The monotonicity/step/offset assertions catch real
-// geometry bugs; this bound only needs to reject runaway drift.
 const LONG_DRAG_MAX_POINTER_WINDOW_DRIFT: i32 = 12;
 const LONG_DRAG_MAX_WINDOW_STEP: i32 = 18;
-/// Mid-drag, attached windows trail the dragged one by however far the WM's
-/// move scheduling lets the pair diverge for a frame (observed 6px on a
-/// loaded host). Settled offsets stay pinned to OFFSET_EPSILON — this
-/// tolerance applies ONLY to samples taken while the pointer is in motion.
 const LONG_DRAG_MAX_PAIR_LAG: i32 = 8;
 const PIXEL_TRACE_STALL_TIMEOUT: Duration = Duration::from_millis(90);
 const GROUP_MOVE_STEP_TIMEOUT: Duration = Duration::from_millis(500);

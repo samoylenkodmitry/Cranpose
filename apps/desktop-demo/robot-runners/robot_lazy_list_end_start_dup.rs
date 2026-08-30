@@ -1,10 +1,3 @@
-//! Robot test for LazyList end/start navigation - checks for duplicated height label
-//!
-//! Run with:
-//! ```bash
-//! cargo run --package desktop-app --example robot_lazy_list_end_start_dup --features robot-app
-//! ```
-
 use std::time::Duration;
 
 use cranpose::AppLauncher;

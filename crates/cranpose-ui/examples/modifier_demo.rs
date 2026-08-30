@@ -1,4 +1,3 @@
-/// Practical demonstration of the modifier system showcasing real-world patterns
 use cranpose_core::{Composition, MemoryApplier, location_key};
 use cranpose_ui::{
     Box as ComposeBox, BoxSpec, Column, ColumnSpec, Modifier, Row, RowSpec, Size, Text, TextStyle,
@@ -55,7 +54,6 @@ fn item_list(count: usize) {
                     Modifier::empty().padding(8.0).size_points(400.0, 50.0),
                     RowSpec::default(),
                     move || {
-                        // Use a closure that captures i to avoid String allocation issues
                         let text = if i < 10 {
                             match i {
                                 0 => "Item #0",
@@ -87,7 +85,6 @@ fn item_list(count: usize) {
 
 #[composable]
 fn complex_chain() {
-    // Demonstrate a deep modifier chain
     let modifier = Modifier::empty()
         .padding(10.0)
         .size_points(200.0, 100.0)
@@ -143,7 +140,6 @@ fn main() {
 
     let mut composition = Composition::new(MemoryApplier::new());
 
-    // Initial render
     println!("📊 Rendering demo...");
     let start = std::time::Instant::now();
     composition
@@ -153,13 +149,11 @@ fn main() {
 
     println!("✅ Rendered in {:?}\n", duration);
 
-    // Count nodes
     if let Some(root) = composition.root() {
         let count = count_all_nodes(&mut composition.applier_mut(), root);
         println!("📦 Created {} total nodes", count);
     }
 
-    // Test recomposition
     println!("\n🔄 Testing recomposition...");
     let recomp_start = std::time::Instant::now();
     composition
@@ -170,8 +164,8 @@ fn main() {
                     Modifier::empty().padding(10.0),
                     TextStyle::default(),
                 );
-                positioned_box("Updated", 75.0, 125.0); // Different position
-                item_list(10); // More items
+                positioned_box("Updated", 75.0, 125.0);
+                item_list(10);
             });
         })
         .unwrap();
@@ -179,7 +173,6 @@ fn main() {
 
     println!("✅ Recomposed in {:?}", recomp_duration);
 
-    // Performance test
     println!("\n💪 Performance test: 100 items...");
     let perf_start = std::time::Instant::now();
     composition

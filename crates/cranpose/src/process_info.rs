@@ -1,37 +1,14 @@
-//! What this process is using, from the calls that need `libc`.
-//!
-//! [`cranpose_services::DeviceInfo`] states the questions; the parts of the
-//! answer that can be read from safe Rust — `/proc/meminfo`, `/proc/self/statm`
-//! — are answered by its own default. This supplies the rest, which cannot be:
-//! processor time comes from `getrusage`, the page size `/proc/self/statm`
-//! counts in comes from `sysconf`, the memory an application may still have
-//! comes from `os_proc_available_memory`, resident memory on Apple targets
-//! (Darwin has no `/proc` of its own) comes from `task_info`, and returning
-//! free pages to the system is a `mallopt` extension bionic has and glibc
-//! does not.
-//!
-//! An application never writes any of this. It is the same handful of calls in
-//! every application that watches its own footprint, each needing an `unsafe`
-//! block and a platform guard, in a crate that would rather have neither.
-
 #![allow(unsafe_code)]
 
 use std::{rc::Rc, time::Duration};
 
 use cranpose_services::{DeviceInfo, DeviceInfoRef, device_info, set_platform_device_info};
 
-/// Installs the process readings over whatever device info is registered.
-///
-/// Called by each platform's startup after that platform has registered its
-/// own device info, so a target gains the process readings without losing the
-/// device-wide facts it already reported.
 pub(crate) fn install() {
     let inner = device_info();
     set_platform_device_info(Rc::new(ProcessDeviceInfo { inner }));
 }
 
-/// Reads what this process is using through `libc`, delegating the
-/// device-wide facts to the implementation it wraps.
 struct ProcessDeviceInfo {
     inner: DeviceInfoRef,
 }
@@ -58,10 +35,6 @@ impl DeviceInfo for ProcessDeviceInfo {
     }
 }
 
-/// Memory this process holds resident.
-///
-/// The services default reads the same file, assuming 4 KiB pages because
-/// reading the real page size is not something safe Rust can do. This reads it.
 fn resident_memory_bytes() -> Option<u64> {
     #[cfg(any(target_os = "linux", target_os = "android"))]
     {
@@ -84,13 +57,6 @@ fn resident_memory_bytes() -> Option<u64> {
     }
 }
 
-/// Memory this process holds resident, from the Mach kernel's own task
-/// accounting.
-///
-/// Darwin has no `/proc` for a process to read its own footprint from; the
-/// call every Apple memory profiler uses instead is `task_info` with
-/// `MACH_TASK_BASIC_INFO`, which is what this reads. A Mac and an iPhone run
-/// the same kernel here, so they read it the same way.
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 fn darwin_resident_memory_bytes() -> Option<u64> {
     use mach2::{
@@ -123,12 +89,6 @@ fn darwin_resident_memory_bytes() -> Option<u64> {
     Some(info.resident_size)
 }
 
-/// The page size `/proc/self/statm` counts in.
-///
-/// 4 KiB has been the answer for the whole of Linux's history on the
-/// architectures Cranpose runs on, and Android 15 made 16 KiB real on arm64.
-/// One `sysconf` call is cheaper than being wrong by a factor of four about
-/// how much memory the process is holding.
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn page_size_bytes() -> u64 {
     // SAFETY: `sysconf` takes an integer name and returns a long. It reads
@@ -139,7 +99,6 @@ fn page_size_bytes() -> u64 {
     if size > 0 { size as u64 } else { 4096 }
 }
 
-/// Processor time this process has used, user and system together.
 fn process_cpu_time() -> Option<Duration> {
     // SAFETY: `getrusage` fills the caller's `rusage`. `zeroed` is a valid bit
     // pattern for it beforehand — it is plain integers and `timeval`s — and
@@ -157,13 +116,9 @@ fn process_cpu_time() -> Option<Duration> {
     Some(spent(usage.ru_utime) + spent(usage.ru_stime))
 }
 
-/// Memory this process may still allocate before the platform stops it.
 fn available_memory_bytes() -> Option<u64> {
     #[cfg(target_os = "ios")]
     {
-        // The number iOS itself uses to decide when to kill an application. It
-        // is not free system memory: the limit is per-process, and a device
-        // with gigabytes free will still stop this one at its own ceiling.
         unsafe extern "C" {
             fn os_proc_available_memory() -> usize;
         }
@@ -181,18 +136,9 @@ fn available_memory_bytes() -> Option<u64> {
     }
 }
 
-/// Asks the allocator to return free pages to the system.
 fn release_free_memory() -> bool {
     #[cfg(target_os = "android")]
     {
-        // bionic's `M_PURGE`: walk the arenas and give back what is free.
-        // Android kills by resident size, and an allocator holding pages a
-        // finished decode no longer needs is counted against this process just
-        // as if they were live.
-        //
-        // Declared here because it is a bionic extension the `libc` crate does
-        // not bind, not because the signature is in doubt: `int mallopt(int,
-        // int)`, unchanged since it arrived.
         const M_PURGE: libc::c_int = -101;
         unsafe extern "C" {
             fn mallopt(param: libc::c_int, value: libc::c_int) -> libc::c_int;
@@ -231,8 +177,6 @@ mod tests {
         }
     }
 
-    /// The wrapper adds process readings without taking away what the platform
-    /// it wraps already answered.
     #[test]
     fn the_wrapped_device_info_still_answers_what_it_knew() {
         assert_eq!(wrapping(Some(6 << 30)).total_memory_bytes(), Some(6 << 30));
@@ -261,8 +205,6 @@ mod tests {
         clear_platform_device_info();
     }
 
-    /// Processor time is monotonic — a reading that went backwards would make
-    /// every rate computed from it negative.
     #[test]
     fn processor_time_only_goes_forwards() {
         let info = wrapping(None);
@@ -270,7 +212,6 @@ mod tests {
             .process_cpu_time()
             .expect("unix reports processor time");
 
-        // Something to spend time on that the optimizer cannot remove.
         let mut sum = 0u64;
         for value in 0..2_000_000u64 {
             sum = sum.wrapping_add(value * value);
@@ -298,8 +239,6 @@ mod tests {
         );
     }
 
-    /// Whether the platform can return pages is a fact about the platform, and
-    /// asking twice must give the same answer.
     #[test]
     fn releasing_free_memory_reports_whether_the_platform_has_the_call() {
         let info = wrapping(None);

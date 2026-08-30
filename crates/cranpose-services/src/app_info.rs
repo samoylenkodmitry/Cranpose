@@ -110,8 +110,6 @@ mod tests {
     fn the_platform_answer_wins_and_carries_what_packaging_added() {
         clear_platform_app_info();
         set_platform_app_info(Rc::new(Packaged));
-        // The suffix is the whole point: a compile-time constant cannot know
-        // about it, because the packaging step is what adds it.
         assert_eq!(version_name().as_deref(), Some("1.4.2-debug"));
         assert_eq!(build_version().as_deref(), Some("17.2.1"));
         clear_platform_app_info();

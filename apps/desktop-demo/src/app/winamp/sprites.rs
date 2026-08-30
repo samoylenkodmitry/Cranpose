@@ -1,13 +1,9 @@
-//! Sprite region definitions and fixed layout coordinates for Winamp 2.x skins.
-
 #![allow(dead_code)]
 
 use cranpose_ui_graphics::Rect;
 
-/// Source rectangle in a sprite sheet: `(x, y, width, height)`.
 pub type SpriteRect = (f32, f32, f32, f32);
 
-/// Converts a sprite tuple into a [`Rect`].
 pub fn to_rect(rect: SpriteRect) -> Rect {
     Rect {
         x: rect.0,
@@ -17,13 +13,11 @@ pub fn to_rect(rect: SpriteRect) -> Rect {
     }
 }
 
-// Main window geometry
 pub const MAIN_WIDTH: f32 = 275.0;
 pub const MAIN_HEIGHT: f32 = 116.0;
 pub const MAIN_WINDOW: SpriteRect = (0.0, 0.0, MAIN_WIDTH, MAIN_HEIGHT);
 pub const TITLE_DRAG_AREA: SpriteRect = (0.0, 0.0, 275.0, 14.0);
 
-// Source slices: TITLEBAR.BMP
 pub const MAIN_TITLE_BAR: SpriteRect = (27.0, 15.0, 275.0, 14.0);
 pub const MAIN_TITLE_BAR_SELECTED: SpriteRect = (27.0, 0.0, 275.0, 14.0);
 pub const MAIN_OPTIONS_BUTTON: SpriteRect = (0.0, 0.0, 9.0, 9.0);
@@ -35,7 +29,6 @@ pub const MAIN_SHADE_BUTTON_SELECTED: SpriteRect = (9.0, 18.0, 9.0, 9.0);
 pub const MAIN_CLOSE_BUTTON: SpriteRect = (18.0, 0.0, 9.0, 9.0);
 pub const MAIN_CLOSE_BUTTON_SELECTED: SpriteRect = (18.0, 9.0, 9.0, 9.0);
 
-// Source slices: CBUTTONS.BMP (136x36)
 pub const PREV_BUTTON: SpriteRect = (0.0, 0.0, 23.0, 18.0);
 pub const PREV_BUTTON_ACTIVE: SpriteRect = (0.0, 18.0, 23.0, 18.0);
 pub const PLAY_BUTTON: SpriteRect = (23.0, 0.0, 23.0, 18.0);
@@ -49,12 +42,10 @@ pub const NEXT_BUTTON_ACTIVE: SpriteRect = (92.0, 18.0, 22.0, 18.0);
 pub const EJECT_BUTTON: SpriteRect = (114.0, 0.0, 22.0, 16.0);
 pub const EJECT_BUTTON_ACTIVE: SpriteRect = (114.0, 16.0, 22.0, 16.0);
 
-// Source slices: POSBAR.BMP (307x10)
 pub const POSBAR_BG: SpriteRect = (0.0, 0.0, 248.0, 10.0);
 pub const POSBAR_THUMB: SpriteRect = (248.0, 0.0, 29.0, 10.0);
 pub const POSBAR_THUMB_ACTIVE: SpriteRect = (278.0, 0.0, 29.0, 10.0);
 
-// Source slices: SHUFREP.BMP (92x85)
 pub const REPEAT_OFF: SpriteRect = (0.0, 0.0, 28.0, 15.0);
 pub const REPEAT_OFF_ACTIVE: SpriteRect = (0.0, 15.0, 28.0, 15.0);
 pub const REPEAT_ON: SpriteRect = (0.0, 30.0, 28.0, 15.0);
@@ -72,27 +63,22 @@ pub const PL_BUTTON_OFF_ACTIVE: SpriteRect = (69.0, 61.0, 23.0, 12.0);
 pub const PL_BUTTON_ON: SpriteRect = (23.0, 73.0, 23.0, 12.0);
 pub const PL_BUTTON_ON_ACTIVE: SpriteRect = (69.0, 73.0, 23.0, 12.0);
 
-// Source slices: PLAYPAUS.BMP (42x9)
 pub const STATUS_PLAYING: SpriteRect = (0.0, 0.0, 9.0, 9.0);
 pub const STATUS_PAUSED: SpriteRect = (9.0, 0.0, 9.0, 9.0);
 pub const STATUS_STOPPED: SpriteRect = (18.0, 0.0, 9.0, 9.0);
 
-// Source slices: MONOSTER.BMP
 pub const STEREO_ON: SpriteRect = (0.0, 0.0, 29.0, 12.0);
 pub const STEREO_OFF: SpriteRect = (0.0, 12.0, 29.0, 12.0);
 pub const MONO_ON: SpriteRect = (29.0, 0.0, 27.0, 12.0);
 pub const MONO_OFF: SpriteRect = (29.0, 12.0, 27.0, 12.0);
 
-// Source slices: NUMBERS.BMP (digits are 9x13)
 pub const DIGIT_WIDTH: f32 = 9.0;
 pub const DIGIT_HEIGHT: f32 = 13.0;
 
-/// Returns the source rectangle for a digit `0..=9`.
 pub fn digit_rect(digit: u8) -> SpriteRect {
     (digit as f32 * DIGIT_WIDTH, 0.0, DIGIT_WIDTH, DIGIT_HEIGHT)
 }
 
-// Source slices: VOLUME.BMP
 pub const VOLUME_FRAMES: u32 = 28;
 pub const VOLUME_BG_WIDTH: f32 = 68.0;
 pub const VOLUME_BG_HEIGHT: f32 = 13.0;
@@ -100,7 +86,6 @@ pub const VOLUME_BG_STRIDE: f32 = 15.0;
 pub const VOLUME_THUMB: SpriteRect = (15.0, 422.0, 14.0, 11.0);
 pub const VOLUME_THUMB_ACTIVE: SpriteRect = (0.0, 422.0, 14.0, 11.0);
 
-// Source slices: BALANCE.BMP
 pub const BALANCE_FRAMES: u32 = 28;
 pub const BALANCE_BG_WIDTH: f32 = 38.0;
 pub const BALANCE_BG_HEIGHT: f32 = 13.0;
@@ -109,7 +94,6 @@ pub const BALANCE_BG_X: f32 = 9.0;
 pub const BALANCE_THUMB: SpriteRect = (15.0, 422.0, 14.0, 11.0);
 pub const BALANCE_THUMB_ACTIVE: SpriteRect = (0.0, 422.0, 14.0, 11.0);
 
-// Fixed layout coordinates in the 275x116 main window
 pub const POS_STATUS: (f32, f32) = (26.0, 28.0);
 pub const POS_TIME_DIGITS: [(f32, f32); 4] =
     [(48.0, 26.0), (60.0, 26.0), (78.0, 26.0), (90.0, 26.0)];
@@ -131,10 +115,8 @@ pub const POS_MINIMIZE_BUTTON: (f32, f32) = (244.0, 3.0);
 pub const POS_SHADE_BUTTON: (f32, f32) = (254.0, 3.0);
 pub const POS_CLOSE_BUTTON: (f32, f32) = (264.0, 3.0);
 
-// EQ/PL panel windows (275x116 top section)
 pub const PANEL_WINDOW: SpriteRect = (0.0, 0.0, 275.0, 116.0);
 
-// Equalizer window geometry and source slices (EQMAIN.BMP)
 pub const EQ_WIDTH: f32 = 275.0;
 pub const EQ_HEIGHT: f32 = 116.0;
 pub const EQ_WINDOW: SpriteRect = (0.0, 0.0, EQ_WIDTH, EQ_HEIGHT);
@@ -182,7 +164,6 @@ pub const EQ_THUMB_XS: [f32; 11] = [
     22.0, 79.0, 97.0, 115.0, 133.0, 151.0, 169.0, 187.0, 205.0, 223.0, 241.0,
 ];
 
-// Playlist window geometry and source slices (PLEDIT.BMP)
 pub const PLAYLIST_WIDTH: f32 = 275.0;
 pub const PLAYLIST_HEIGHT: f32 = 203.0;
 pub const PLAYLIST_DRAG_AREA: SpriteRect = (0.0, 0.0, PLAYLIST_WIDTH, 20.0);

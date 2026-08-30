@@ -1,24 +1,3 @@
-//! Text modifier node implementation following Jetpack Compose's TextStringSimpleNode architecture.
-//!
-//! This module implements text content as a modifier node rather than as a measure policy,
-//! matching the Jetpack Compose pattern where text is treated as visual content (like background)
-//! rather than as a layout strategy.
-//!
-//! # Architecture
-//!
-//! In Jetpack Compose, `BasicText` uses:
-//! ```kotlin
-//! Layout(modifier.then(TextStringSimpleElement(...)), EmptyMeasurePolicy)
-//! ```
-//!
-//! Where `TextStringSimpleNode` implements:
-//! - `LayoutModifierNode` - handles text measurement
-//! - `DrawModifierNode` - handles text drawing
-//! - `SemanticsModifierNode` - provides text content for accessibility
-//!
-//! This follows the principle that `MeasurePolicy` is for child layout, while modifier nodes
-//! handle content rendering and measurement.
-
 use std::{
     cell::{Cell, RefCell},
     hash::{Hash, Hasher},
@@ -122,8 +101,6 @@ impl TextPreparedLayoutOwner {
         let normalized_max_width = max_width.filter(|width| width.is_finite() && *width > 0.0);
         let max_width_bits = normalized_max_width.map(f32::to_bits);
         let text_generation = crate::text::measure::current_text_generation();
-        // Keyed on the whole conversion and not on the setting alone: two
-        // curves can share a scale and resolve an `Sp` differently.
         let font_scale_fingerprint = crate::current_font_scale_curve().fingerprint();
 
         {
@@ -227,7 +204,6 @@ impl DelegatableNode for TextModifierNode {
 impl ModifierNode for TextModifierNode {
     fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
         self.layout.set_node_id(context.node_id());
-        // Invalidate layout and draw when text node is attached
         context.invalidate(InvalidationKind::Layout);
         context.invalidate(InvalidationKind::Draw);
         context.invalidate(InvalidationKind::Semantics);
@@ -269,14 +245,12 @@ impl LayoutModifierNode for TextModifierNode {
         _measurable: &dyn Measurable,
         constraints: Constraints,
     ) -> cranpose_ui_layout::LayoutModifierMeasureResult {
-        // Measure the text content
         let max_width = constraints
             .max_width
             .is_finite()
             .then_some(constraints.max_width);
         let text_size = self.measure_text_content(max_width);
 
-        // Constrain text size to the provided constraints
         let width = text_size
             .width
             .clamp(constraints.min_width, constraints.max_width);
@@ -284,9 +258,6 @@ impl LayoutModifierNode for TextModifierNode {
             .height
             .clamp(constraints.min_height, constraints.max_height);
 
-        // Text is a leaf node - return the text size directly with no offset
-        // We don't call measurable.measure() because there's no wrapped content
-        // (Text uses EmptyMeasurePolicy which has no children)
         cranpose_ui_layout::LayoutModifierMeasureResult::with_size(Size { width, height })
     }
 
@@ -310,15 +281,11 @@ impl LayoutModifierNode for TextModifierNode {
 }
 
 impl DrawModifierNode for TextModifierNode {
-    fn draw(&self, _draw_scope: &mut dyn DrawScope) {
-        // Text drawing is emitted by the scene builder from the retained node
-        // state, so the modifier draw hook remains side-effect free.
-    }
+    fn draw(&self, _draw_scope: &mut dyn DrawScope) {}
 }
 
 impl SemanticsNode for TextModifierNode {
     fn merge_semantics(&self, config: &mut SemanticsConfiguration) {
-        // Provide text content for accessibility
         config.content_description = Some(self.text().to_string());
     }
 }
@@ -379,7 +346,6 @@ impl ModifierNodeElement for TextModifierElement {
     }
 
     fn capabilities(&self) -> NodeCapabilities {
-        // Text nodes participate in layout, drawing, and semantics
         NodeCapabilities::LAYOUT | NodeCapabilities::DRAW | NodeCapabilities::SEMANTICS
     }
 }

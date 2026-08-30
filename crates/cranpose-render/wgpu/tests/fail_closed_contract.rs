@@ -1,19 +1,3 @@
-//! The fail-closed command feed and live bypass contract (sol's
-//! correctness gates): a bypassed span — empty primitive range, skipped at
-//! materialization because the renderer confirmed it holds the slot — must
-//! NEVER be silently omitted from drawing. The frame OWNS a pinned handle
-//! to the exact fallback recording it was built from, so feed disable,
-//! renderer replacement, and even total ambient-registry loss all end in a
-//! full same-frame rematerialization; the miss terminal is structurally
-//! unreachable and survives only as a loud, counted, self-healing defense
-//! against artificially orphaned frames.
-//!
-//! Same-position-control discipline (documented in `command_feed_parity`):
-//! renders are only ever compared against renders taken from equivalent
-//! renderer state, and byte-exactness is asserted only between passes whose
-//! pipelines are deterministic (feed and flat detector both off, or both
-//! at stable slot positions).
-
 mod support;
 
 use cranpose_render_common::{
@@ -33,10 +17,6 @@ const SIZE: u32 = 408;
 const CENTER: f32 = 204.0;
 const FRAMES: usize = 8;
 
-/// One frame of the synthetic boss through the RECORDING path, identical in
-/// structure to `command_feed_parity`: rings rotating at distinct speeds
-/// under a breathing scale, churning sparks, recoloring twinkles, movers
-/// whose count changes every frame.
 fn record_frame(frame: usize) -> DrawScopeDefault {
     let mut scope =
         DrawScopeDefault::new(cranpose_ui_graphics::Size::new(SIZE as f32, SIZE as f32));
@@ -147,12 +127,6 @@ fn command_for(node_id: usize) -> DrawCommandId {
     }
 }
 
-/// Records every frame through one live `CommandReplayState`, exactly as
-/// the scene builder's verifier would, returning each frame's graph. Each
-/// replay frame owns a pinned handle to the exact recording it was built
-/// from (`fallback`), exactly as production attaches the published handle
-/// in `draw_nodes` — the frame's ONLY rematerialization source; rendering
-/// never consults the ambient registry.
 fn build_sequence(node_id: usize, bypass: &mut dyn FnMut(u32) -> bool) -> Vec<RenderGraph> {
     let mut state = CommandReplayState::default();
     let command = command_for(node_id);
@@ -217,10 +191,6 @@ fn channels_differing_over(a: &[u8], b: &[u8], threshold: u8) -> usize {
         .count()
 }
 
-/// Asserts two frames differ by at most the renderer's pass-position
-/// blending noise (≤2/255, documented in `command_feed_parity`): identical
-/// CONTENT through different pipeline positions. Missing content would put
-/// tens of thousands of channels at diffs near 255.
 fn assert_noise_only(label: &str, a: &[Vec<u8>], b: &[Vec<u8>]) {
     for (frame, (a, b)) in a.iter().zip(b).enumerate() {
         let worst = a
@@ -270,17 +240,12 @@ fn assert_byte_exact(label: &str, a: &[Vec<u8>], b: &[Vec<u8>]) {
     }
 }
 
-/// Declares the current feed generation as the build epoch, exactly as the
-/// production pipeline does before every build.
 fn declare_current_epoch() {
     cranpose_render_common::scene_builder::set_retained_feed_epoch(Some(
         cranpose_render_wgpu::retained_feed_generation(),
     ));
 }
 
-/// Builds the bypassed sequence against live confirmations and asserts the
-/// bypass actually engaged (materialization halved), so the fail-closed
-/// assertions that follow are not vacuous.
 fn build_bypassed_sequence(node_id: usize, full_primitives: usize) -> Vec<RenderGraph> {
     declare_current_epoch();
     let command = command_for(node_id);
@@ -296,10 +261,6 @@ fn build_bypassed_sequence(node_id: usize, full_primitives: usize) -> Vec<Render
     graphs
 }
 
-/// T2: graphs built WITH bypass (confirmations live) must render complete
-/// after the feed is disabled — the fail-closed walk rebuilds every
-/// bypassed span from its recording, byte-identical to a never-bypassed
-/// control through the pure ordinary pipeline.
 #[test]
 fn feed_disabled_after_build_rematerializes_bypassed_spans() {
     let mut renderer = match support::headless_renderer() {
@@ -312,15 +273,10 @@ fn feed_disabled_after_build_rematerializes_bypassed_spans() {
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ARC_MESH", Some("0"));
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_COMMAND_FEED", Some("1"));
 
-    // Warm: captures land and slots are confirmed.
     let graphs = build_sequence(31, &mut |_| false);
     let _ = render_sequence(&mut renderer, &graphs);
     let bypassed_graphs = build_bypassed_sequence(31, run_primitives(&graphs));
 
-    // Flip the feed (and the flat detector) off: from here both passes are
-    // deterministic CPU emission with no retention state at all. One warm
-    // pass absorbs the pass-position transition (same-position-control
-    // discipline, see `command_feed_parity`) before anything is compared.
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_COMMAND_FEED", Some("0"));
     let _ = render_sequence(&mut renderer, &graphs);
     let control = render_sequence(&mut renderer, &graphs);
@@ -336,11 +292,6 @@ fn feed_disabled_after_build_rematerializes_bypassed_spans() {
     assert_byte_exact("feed-disabled-vs-control", &control, &rematerialized);
 }
 
-/// T3: replacing the GPU renderer under live confirmations (surface
-/// recreation semantics) must revoke every confirmation and bump the feed
-/// generation BEFORE the new renderer exists; in-flight bypassed graphs
-/// rematerialize completely, and after one rebuild the fed output is
-/// byte-identical to a control render.
 #[test]
 fn renderer_swap_revokes_confirmations_and_rematerializes() {
     let mut renderer = match support::headless_renderer() {
@@ -358,7 +309,6 @@ fn renderer_swap_revokes_confirmations_and_rematerializes() {
     let _ = render_sequence(&mut renderer, &graphs);
     let bypassed_graphs = build_bypassed_sequence(32, run_primitives(&graphs));
 
-    // The swap: same replacement path Android's surface recreation takes.
     let generation_before = cranpose_render_wgpu::retained_feed_generation();
     support::reinit_gpu(&mut renderer).expect("GPU reinit failed");
     assert_eq!(
@@ -376,10 +326,6 @@ fn renderer_swap_revokes_confirmations_and_rematerializes() {
         );
     }
 
-    // The in-flight frame: a bypassed graph rendered on the NEW renderer
-    // without rebuilding. Every bypassed span must rematerialize from the
-    // recording its frame owns — byte-identical to the pure ordinary
-    // pipeline.
     let last = FRAMES - 1;
     let remat_frame = render_sequence(&mut renderer, &bypassed_graphs[last..]);
     let (_, _, remat_misses) = cranpose_render_wgpu::command_feed_live_stats();
@@ -387,17 +333,10 @@ fn renderer_swap_revokes_confirmations_and_rematerializes() {
         remat_misses, 0,
         "the frames own their recordings; no span may terminal-miss"
     );
-    // The remat frame is by definition a first-pass-at-position render (the
-    // in-flight frame right after the swap), so it is compared under the
-    // blending-noise envelope, not byte-exactly; T2 proves byte-exactness
-    // of the rematerialization walk from stable positions.
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_COMMAND_FEED", Some("0"));
     let ordinary_frame = render_sequence(&mut renderer, &graphs[last..]);
     assert_noise_only("swap-remat-vs-ordinary", &ordinary_frame, &remat_frame);
 
-    // Heal: a full fed pass re-earns slots and confirmations on the new
-    // renderer, and one rebuild later bypass output is byte-identical to a
-    // same-position fed control.
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_COMMAND_FEED", Some("1"));
     let _ = render_sequence(&mut renderer, &bypassed_graphs);
     let (feed_slots, _, remat_misses) = cranpose_render_wgpu::command_feed_live_stats();
@@ -407,8 +346,6 @@ fn renderer_swap_revokes_confirmations_and_rematerializes() {
     );
     assert_eq!(remat_misses, 0);
     let rebuilt_graphs = build_bypassed_sequence(32, run_primitives(&graphs));
-    // Same-position-control discipline: one warm pass, then the compared
-    // control and bypassed passes render from stable renderer state.
     let _ = render_sequence(&mut renderer, &graphs);
     let control = render_sequence(&mut renderer, &graphs);
     let rebuilt = render_sequence(&mut renderer, &rebuilt_graphs);
@@ -417,12 +354,6 @@ fn renderer_swap_revokes_confirmations_and_rematerializes() {
     assert_byte_exact("post-swap-rebuild-vs-control", &control, &rebuilt);
 }
 
-/// T4, reshaped to the categorical property the frame-owned fallback buys:
-/// destroying every AMBIENT rematerialization source — all registry
-/// recordings cleared AND the renderer (with every retained slot) replaced
-/// — no longer causes a miss at all. Every bypassed span rebuilds in the
-/// same frame from the recording its frame owns, and the frame renders
-/// complete.
 #[test]
 fn registry_loss_no_longer_reaches_the_miss_terminal() {
     let mut renderer = match support::headless_renderer() {
@@ -439,9 +370,6 @@ fn registry_loss_no_longer_reaches_the_miss_terminal() {
     let _ = render_sequence(&mut renderer, &graphs);
     let bypassed_graphs = build_bypassed_sequence(33, run_primitives(&graphs));
 
-    // What used to drive the terminal: the ambient recordings and (via the
-    // swap) the retained slots are all gone. The frames' own handles are
-    // untouched by construction.
     cranpose_render_common::scene_builder::clear_command_recordings_for_tests();
     support::reinit_gpu(&mut renderer).expect("GPU reinit failed");
 
@@ -454,10 +382,6 @@ fn registry_loss_no_longer_reaches_the_miss_terminal() {
          loss may no longer reach the terminal"
     );
 
-    // Complete content: the pure ordinary pipeline is the reference. The
-    // remat frame is a first-pass-at-position render (right after the
-    // swap), so it is compared under the blending-noise envelope; T2 proves
-    // byte-exactness of the walk from stable positions.
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_COMMAND_FEED", Some("0"));
     let ordinary_frame = render_sequence(&mut renderer, &graphs[last..]);
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_COMMAND_FEED", None);
@@ -465,11 +389,6 @@ fn registry_loss_no_longer_reaches_the_miss_terminal() {
     assert_noise_only("registry-loss-vs-ordinary", &ordinary_frame, &remat_frame);
 }
 
-/// T4's defensive remainder: the terminal itself, reachable only by
-/// artificially orphaning a frame (stripping the fallback the builder
-/// always attaches). It must stay loud, counted, revoking, and
-/// self-healing at the next build — the last line of defense behind the
-/// structural guarantee.
 #[test]
 fn orphaned_frame_terminal_counts_revokes_and_self_heals() {
     let mut renderer = match support::headless_renderer() {
@@ -487,10 +406,6 @@ fn orphaned_frame_terminal_counts_revokes_and_self_heals() {
     let _ = render_sequence(&mut renderer, &graphs);
     let bypassed_graphs = build_bypassed_sequence(35, run_primitives(&graphs));
 
-    // The artificial orphan: no frame the builder produces lacks its
-    // fallback, so construct the impossible state by hand, then kill the
-    // remaining draw sources (registry recordings, and the retained slots
-    // via the swap).
     let last = FRAMES - 1;
     let mut orphaned = bypassed_graphs[last].clone();
     {
@@ -527,14 +442,9 @@ fn orphaned_frame_terminal_counts_revokes_and_self_heals() {
         );
     }
 
-    // Non-vacuity + self-heal, both against the pure ordinary pipeline: the
-    // miss frame is missing its rings; the next build (nothing confirmed,
-    // so nothing bypasses) renders byte-identical to control. One warm
-    // pass absorbs the pass-position transition before comparing.
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_COMMAND_FEED", Some("0"));
     let _ = render_sequence(&mut renderer, &graphs[last..]);
     let control = render_sequence(&mut renderer, &graphs[last..]);
-    // Missing rings put many channels far beyond blending noise (≤2/255).
     let missing_differs = channels_differing_over(&control[0], &missing_frame.pixels, 60);
     assert!(
         missing_differs > 10_000,
@@ -555,12 +465,6 @@ fn orphaned_frame_terminal_counts_revokes_and_self_heals() {
     assert_byte_exact("self-heal-vs-control", &control, &healed);
 }
 
-/// 5b/7a: a replay-ops batch stamped with a LOWER feed generation than the
-/// store's must be dropped whole — empty ack, nothing captured, nothing
-/// confirmed, no GPU slot allocated. (A HIGHER generation adopts forward
-/// instead; see `higher_generation_replay_ops_adopt_forward`.)
-/// Synchronously impossible through the public render path today, so the
-/// roundtrip hook skews the batch's stamp below the store's own generation.
 #[test]
 fn mismatched_generation_replay_ops_drop_whole() {
     let mut renderer = match support::headless_renderer() {
@@ -570,9 +474,6 @@ fn mismatched_generation_replay_ops_drop_whole() {
             return;
         }
     };
-    // Move the store's generation off zero (the swap bumps the producer
-    // generation and the new store adopts it), so `store - 1` below cannot
-    // wrap to u64::MAX and read as a higher generation.
     support::reinit_gpu(&mut renderer).expect("GPU reinit failed");
     let command = command_for(36);
     cranpose_render_wgpu::inject_feed_capture_for_tests(command, 0, 0, 4);
@@ -603,12 +504,6 @@ fn mismatched_generation_replay_ops_drop_whole() {
     );
 }
 
-/// 7a §5: a replay-ops batch stamped with a HIGHER generation than the
-/// store's is the new universe arriving, not a stale one — a producer-side
-/// bump (root-scale change retiring the feed) delivers the retirement
-/// releases THROUGH that very batch. The store must adopt the generation
-/// and serve the batch: no generation drop, and the feed re-earns slots
-/// under the adopted generation on the frames that follow.
 #[test]
 fn higher_generation_replay_ops_adopt_forward() {
     let mut renderer = match support::headless_renderer() {
@@ -621,7 +516,6 @@ fn higher_generation_replay_ops_adopt_forward() {
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ARC_MESH", Some("0"));
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_COMMAND_FEED", Some("1"));
 
-    // Warm at scale 1.0: captures land, slots confirm.
     let graphs = build_sequence(37, &mut |_| false);
     let _ = render_sequence(&mut renderer, &graphs);
     let (feed_slots, _, _) = cranpose_render_wgpu::command_feed_live_stats();
@@ -634,10 +528,6 @@ fn higher_generation_replay_ops_adopt_forward() {
     let drops_before = renderer.replay_generation_drops_for_tests();
     let generation_before = cranpose_render_wgpu::retained_feed_generation();
 
-    // The bump: a root-scale change retires the feed at collection start —
-    // the producer generation moves to +1 and every retired slot's release
-    // travels in the SAME frame's ops batch, which therefore arrives at the
-    // store stamped one generation ahead of the store's own.
     renderer.scene_mut().graph = Some(graphs[0].clone());
     renderer
         .capture_frame_with_scale(SIZE, SIZE, 2.0)
@@ -653,9 +543,6 @@ fn higher_generation_replay_ops_adopt_forward() {
         "a higher-generation batch must be adopted and served, never dropped"
     );
 
-    // Served, not just tolerated: under the adopted generation the feed
-    // re-earns confirmed slots across the following frames — impossible if
-    // the store were dropping every batch of the new generation.
     for graph in &graphs {
         renderer.scene_mut().graph = Some(graph.clone());
         renderer
@@ -676,11 +563,6 @@ fn higher_generation_replay_ops_adopt_forward() {
     );
 }
 
-/// 7a: a CANCELLED packet whose replay plan carries real feed releases
-/// (here: a whole feed retirement from a root-scale change) must hand
-/// those releases back to the planner for re-queue — the pool is 128 ids
-/// and a dropped batch would leak them forever. The store's slots stay
-/// live until a LATER frame's batch actually serves the releases.
 #[test]
 fn cancelled_packet_requeues_feed_releases() {
     let mut renderer = match support::headless_renderer() {
@@ -693,7 +575,6 @@ fn cancelled_packet_requeues_feed_releases() {
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ARC_MESH", Some("0"));
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_COMMAND_FEED", Some("1"));
 
-    // Warm at scale 1.0 so the feed holds live, confirmed slots.
     let graphs = build_sequence(38, &mut |_| false);
     let _ = render_sequence(&mut renderer, &graphs);
     let (feed_slots, _, _) = cranpose_render_wgpu::command_feed_live_stats();
@@ -706,8 +587,6 @@ fn cancelled_packet_requeues_feed_releases() {
     let (_, live_before) = renderer.replay_slot_mesh_stats();
     let drops_before = renderer.replay_generation_drops_for_tests();
 
-    // A scale change retires the feed at collection start: every live
-    // slot's release rides THIS packet's ops batch.
     renderer.set_root_scale(2.0);
     renderer.scene_mut().graph = Some(graphs[0].clone());
     let packet = renderer
@@ -716,7 +595,6 @@ fn cancelled_packet_requeues_feed_releases() {
     let (queued, _) = cranpose_render_wgpu::planner_replay_queue_stats_for_tests();
     assert_eq!(queued, 0, "the packet's plan must have taken the releases");
 
-    // The packet never reaches the store: cancelled for its surface epoch.
     renderer.note_surface_reconfigured();
     let device = renderer
         .try_device()
@@ -746,9 +624,6 @@ fn cancelled_packet_requeues_feed_releases() {
         )
     );
 
-    // THE slot-leak fix: the cancelled batch's releases are back in the
-    // planner queue, and the store still holds every slot (nothing of the
-    // cancelled batch reached it).
     let (requeued, _) = cranpose_render_wgpu::planner_replay_queue_stats_for_tests();
     assert!(
         requeued >= feed_slots,
@@ -761,9 +636,6 @@ fn cancelled_packet_requeues_feed_releases() {
         "a cancelled packet must not free store slots"
     );
 
-    // A later frame's batch serves them: queue drains, no generation drop
-    // (the bumped generation adopts forward), and the slot ids return to
-    // the pool for reuse rather than leaking.
     renderer.scene_mut().graph = Some(graphs[0].clone());
     renderer
         .capture_frame(SIZE, SIZE)
@@ -782,10 +654,6 @@ fn cancelled_packet_requeues_feed_releases() {
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ARC_MESH", None);
 }
 
-/// T5: a feed capture that outlives the frame it was queued on (aborted
-/// collection) must be dropped at the drain — never captured against
-/// another frame's shapes, never confirmed. (That `retire_all` also clears
-/// the queue is unit-tested in `shape_replay`.)
 #[test]
 fn stale_feed_captures_are_dropped_at_the_drain() {
     let mut renderer = match support::headless_renderer() {
@@ -795,13 +663,8 @@ fn stale_feed_captures_are_dropped_at_the_drain() {
             return;
         }
     };
-    // The flat detector stays out so the injected capture is the only
-    // replay-adjacent state in play.
     let command = command_for(34);
 
-    // A plain (non-replayed) scene with far more shapes than the injected
-    // capture asks for: without the frame stamp, the drain WOULD capture
-    // shapes 0..64 of the wrong frame and confirm the slot.
     let finished = record_frame(0).finish();
     assert!(finished.primitives.len() > 128);
     let graph = graph_for(vec![RenderNode::DrawRun(

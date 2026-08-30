@@ -1,7 +1,3 @@
-//! Robot test: take REAL system screenshots of the underlined text at different scroll positions.
-//!
-//! NOT headless. NOT renderer screenshots. Actual X11 window capture via ImageMagick `import`.
-
 mod output_paths;
 mod text_showcase_external_helpers;
 

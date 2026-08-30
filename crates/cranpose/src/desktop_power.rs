@@ -1,23 +1,3 @@
-//! Desktop power and device information.
-//!
-//! Registered as the platform power monitor by the desktop backend, so an
-//! application reads heat and battery through the same contract on a laptop as
-//! on a phone.
-//!
-//! What a desktop can answer differs by system, and the point of
-//! [`PowerReading`] is that the difference is visible rather than papered over:
-//!
-//! | | thermal | battery |
-//! | --- | --- | --- |
-//! | macOS | `NSProcessInfo`'s thermal pressure | not read here |
-//! | Linux | no pressure API to read | `/sys/class/power_supply` |
-//! | Windows | not read here | not read here |
-//!
-//! Linux exposes temperatures, not pressure. Turning degrees into
-//! [`ThermalState`] means choosing thresholds per machine, and a number this
-//! module invented would read as a measurement while being a guess — so it
-//! answers `Unsupported`, which is what it can honestly say.
-
 use std::sync::Arc;
 
 use cranpose_services::{
@@ -25,7 +5,6 @@ use cranpose_services::{
     set_platform_power_monitor,
 };
 
-/// Installs the desktop power monitor.
 pub(crate) fn register() {
     set_platform_power_monitor(Arc::new(DesktopPowerMonitor));
 }
@@ -37,8 +16,6 @@ impl PowerMonitor for DesktopPowerMonitor {
         PowerCapabilities {
             thermal: cfg!(target_os = "macos"),
             battery: cfg!(target_os = "linux"),
-            // No desktop system restricts an application's background work the
-            // way a mobile one does; there is nothing to report or request.
             background_restriction: false,
         }
     }
@@ -70,7 +47,6 @@ impl PowerMonitor for DesktopPowerMonitor {
 mod macos {
     use super::{PowerReading, ThermalState};
 
-    /// The same reading iOS gives, from the same Foundation call.
     pub(super) fn thermal_state() -> PowerReading<ThermalState> {
         PowerReading::Known(crate::apple_thermal::thermal_state())
     }
@@ -98,8 +74,6 @@ mod linux {
             };
             return PowerReading::Known(status);
         }
-        // The directory exists on every Linux with a power-supply class, so a
-        // machine with no battery in it is a desktop rather than an unknown.
         PowerReading::Unsupported
     }
 
@@ -135,8 +109,6 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn a_mac_reports_a_thermal_reading_rather_than_unsupported() {
-        // The gap this closes: with no desktop backend registered at all, an
-        // application throttling on heat could never throttle on a Mac.
         assert!(matches!(
             DesktopPowerMonitor.thermal_state(),
             PowerReading::Known(_)

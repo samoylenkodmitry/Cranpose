@@ -1,5 +1,3 @@
-//! Robot contract for image atlas isolation and rested scroll sharpness.
-
 mod output_paths;
 
 use std::{path::Path, time::Duration};

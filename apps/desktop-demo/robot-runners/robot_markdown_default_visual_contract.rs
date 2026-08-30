@@ -1,5 +1,3 @@
-//! Robot test: default Markdown payload must keep the visible viewport populated after wheel scroll.
-
 mod markdown_fixture_client;
 mod output_paths;
 mod perf_contract;

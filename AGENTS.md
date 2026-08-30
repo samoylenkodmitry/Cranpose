@@ -65,11 +65,21 @@
   regenerable by definition, so removing them is safe -- but never remove a
   worktree's source or anything uncommitted, and check `df -h /` before starting
   a large build
+- `scripts/ci/with_host_lock.sh` gates samarch-1's CPU: `--shared` for a
+  build (any number concurrently), `--exclusive` for a measurement or a robot
+  suite (one at a time, nothing else running beside it). It is flock-based, so
+  a crash or a cancelled job releases it immediately -- no stale PID file, no
+  cleanup step to skip. This applies to work done by `ssh samarch-1` exactly
+  as much as to CI; it is the same machine and the same two runners either
+  way. Take the lock rather than watching load and waiting for a quiet
+  moment -- the lock queues you, and waiting for quiet on a shared host is
+  polling for a moment that may never arrive.
 - perf scripts are perf*.sh at project root
 - e2e robot headless tests is `just robot` (should all pass)
 - do not use big models as subagents (opus, codex xhigh thinking, etc), only small fast & cheap to not waste tokens
 - no 'backwards compatibility' is allowed; we in a pre-alpha
 - no comments in style "now it is like that" - we are not writing history
+- code comments are forbidden; documentation of the public API surface is required. `///`/`//!` stay only on items reachable as `pub` from a crate root of a published crate; everything else, including doc comments on private or test-only items, is a comment and goes
 - duplicated code (10+ lines) without architecture is forbidden
 - 'legacy'/'old way' etc not allowed. we are in a pre-alpha, everything is fresh, clean, single instance
 - be aware of what you've done by looking at git status
@@ -80,6 +90,7 @@
 - not "if you want to"; should be "the proper fix for production-grade ui-framework"; not "I WANT"; should be "this is wrong, this is right, this is the cause, this has to be re-architectured and be rewritten"
 - for non-trivial bugs: explore → document findings → rank suspicions with evidence → propose re-architecture options → implement → diagnostic verify → iterate until confirmed fixed. no one-shot guessing.
 - confirm a suspected cause by REMOVING it and re-running, before writing the fix. (binary search by cutting half of the code until the only thin cause left)
+- performance should not degrade correctness: a performance change ships with a correctness test that fails when the optimization is wrong -- a benchmark proving it is fast is not that test. Prove the test red first by deliberately breaking the optimization; a correctness test that has never failed is decoration. If you cannot write a test that would catch your optimization being wrong, you do not know what work it is skipping, and it does not ship. When speed and correctness genuinely conflict, correctness wins and the speed is given back until a design has both. (2026-08-29: four optimizations landed, three caused user-visible regressions -- an unreadable nav bar, rows frozen under an expanded action strip, a blur cache showing a stale image during scroll -- each validated only by an instrument measuring the optimized thing, not the risk)
 - for a UI bug that reproduces on a device, write the robot e2e test FIRST.
 - device testing on the Pixel Watch over adb: the watch dozes between commands and silently drops injected input, and a dozing screen captures as black PNG. Send `input keyevent KEYCODE_WAKEUP` before every step and check `dumpsys power | grep mWakefulness` before believing a screenshot. The rotary crown is `adb shell input rotaryencoder scroll --axis SCROLL,<n>`, and ring menus also take taps on the screen edge.
 - `gh` has more than one account here and the active one flips. When a repo starts 404ing or a rerun says "must have admin rights", run  `gh auth switch --user samoylenkodmitry` 

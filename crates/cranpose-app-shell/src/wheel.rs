@@ -1,30 +1,7 @@
-//! One mouse-wheel / trackpad sample, in the shell's wheel convention.
-//!
-//! Every host that has a wheel — the winit desktop loop, the browser's `wheel`
-//! listener — has to answer the same four questions in the same order: is this
-//! a zoom gesture, does a rotary handler want it, is it an axis-swapped
-//! horizontal scroll, and otherwise how much does the hovered scrollable move.
-//! [`AppShell::wheel_scrolled`](crate::AppShell::wheel_scrolled) is that answer,
-//! and this type is its input, so a host's whole job is normalizing its native
-//! event into a [`WheelScroll`].
-//!
-//! # Sign convention
-//!
-//! `delta` is **logical pixels, positive when the content being scrolled should
-//! move down and right** — the direction a wheel turned up / away from the user
-//! produces. That is winit's convention and the one the scroll modifiers are
-//! written against (a positive vertical delta walks a `ScrollState` back toward
-//! zero). The DOM's is the opposite: `WheelEvent::delta_y` is positive when the
-//! wheel is turned *down*, so the browser host negates on the way in. Getting
-//! this wrong does not fail loudly — it scrolls backwards.
-
 use cranpose_foundation::Modifiers;
 use cranpose_ui_graphics::Point;
 
-/// Logical pixels one wheel notch scrolls, and the notch the ctrl+wheel zoom
-/// step is defined against.
 const NOTCH_LOGICAL_PX: f32 = 40.0;
-/// Zoom applied by one ctrl+wheel notch.
 const ZOOM_PER_NOTCH: f32 = 1.2;
 
 /// A mouse-wheel or trackpad scroll sample ready for
@@ -115,8 +92,6 @@ mod tests {
 
         assert!(up.is_zoom());
         assert!((up.zoom_factor() - ZOOM_PER_NOTCH).abs() < 1.0e-6);
-        // Zooming out by a notch must undo zooming in by one, or a pinch
-        // in-and-out drifts the scale.
         assert!((up.zoom_factor() * down.zoom_factor() - 1.0).abs() < 1.0e-6);
     }
 
@@ -131,8 +106,6 @@ mod tests {
             wheel(0.0, 48.0).with_modifiers(alt).scroll_delta(),
             Point { x: 48.0, y: 0.0 }
         );
-        // A device that already reports a horizontal axis keeps it: only the
-        // vertical-only wheel needs the swap.
         assert_eq!(
             wheel(12.0, 48.0).with_modifiers(alt).scroll_delta(),
             Point { x: 12.0, y: 0.0 }

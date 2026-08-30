@@ -1,51 +1,3 @@
-//! Pixel parity for retained arc/ring meshes.
-//!
-//! Renders the same churning retained scene as `command_feed_parity` under
-//! two capture regimes — `CRANPOSE_ARC_MESH=0` (plain quad expansion) and
-//! `CRANPOSE_ARC_MESH=1` (the conservative mesh: indexed since P1b,
-//! size-gated and default-ON since Stage 3) — and compares same-position
-//! passes. Each sector ring is backed by a full annulus whose quad clears
-//! the retained size gate, so the mesh arm still meshes under the default
-//! threshold while the ~1.3k tiny sector bricks take the passthrough quad —
-//! the engagement split the gate exists for, asserted below. The
-//! instanced-quad selection is pinned OFF for the whole test so both arms
-//! match the regime this envelope was measured under (see the note at the
-//! top of the test body).
-//!
-//! THE MEASURED ENVELOPE, AND WHY IT IS NOT ZERO. The design bar was
-//! byte-identical output, on the argument that any vertex stream carrying
-//! (pos, uv) consistent with the quad's affine rect map reproduces
-//! identical fragment inputs. That argument is falsified by the rasterizer:
-//! attribute interpolation is derived per triangle from its own vertices,
-//! so two triangulations of the SAME affine uv map disagree by an ulp of
-//! interpolated `rect_pos` at a pixel, which after the SDF, smoothstep and
-//! unorm8 quantization flips low bits on arc AA edges. A controlled
-//! isolation run (all shapes forced through the mesh pipeline as
-//! passthrough quads, i.e. geometry bitwise identical to the quad path)
-//! measured: identity-transform frames byte-EXACT — the vertex path itself
-//! is bit-clean — while rotated frames still differed by ≤27 single-ulp
-//! channels because the two vertex entry points compile with different fma
-//! contraction. With real arc meshes the divergence is ~5.3k of 666k bytes
-//! (~0.8% of pixels) at ±1, plus O(10) pixels per rotated frame at the
-//! tight-AABB tangent crop, where an ulp of edge position flips a
-//! half-covered pixel (worst measured 78). Zero-byte parity across a
-//! re-tessellation is therefore unattainable without deriving `rect_pos`
-//! from the fragment coordinate instead of interpolated uv — a shared
-//! `fs_main` change explicitly out of scope here.
-//!
-//! The asserted envelope is ~2x the measured ceiling and stays a real
-//! tripwire: a containment bug (dropped band pixels), a seam defect
-//! (double-blended or missed strip edges) or a uv mapping error each
-//! produce full-color diffs in the thousands.
-//!
-//! Each arm records under its own command identity so it captures its own
-//! slots (the mesh is built at capture time; flipping the environment after
-//! capture changes nothing). The compared renders are the third and fourth
-//! passes: `command_feed_parity` documents the same-position control trap —
-//! the flat detector renders pre-retention frames differently before any
-//! feed slot lives in the renderer, so a first pass must never be compared
-//! against a later one.
-
 mod support;
 
 use cranpose_render_common::{
@@ -65,9 +17,6 @@ const SIZE: u32 = 408;
 const CENTER: f32 = 204.0;
 const FRAMES: usize = 8;
 
-/// One frame of the synthetic boss through the RECORDING path: rings
-/// rotating at distinct speeds under a breathing scale, churning sparks,
-/// recoloring twinkles, movers whose count changes every frame.
 fn record_frame(frame: usize) -> DrawScopeDefault {
     let mut scope =
         DrawScopeDefault::new(cranpose_ui_graphics::Size::new(SIZE as f32, SIZE as f32));
@@ -99,9 +48,6 @@ fn record_frame(frame: usize) -> DrawScopeDefault {
     {
         let radius = radius * breathing;
         let band = band * breathing;
-        // A full backing annulus under each sector ring, rotating with it:
-        // its ~32k-90k px² quad clears the retained size gate, so the mesh
-        // arm keeps meshing now that the tiny sectors below pass through.
         scope.draw_annular_sector(
             Brush::solid(Color(0.08, 0.12, 0.22, 1.0)),
             Point::new(CENTER, CENTER),
@@ -151,9 +97,6 @@ fn record_frame(frame: usize) -> DrawScopeDefault {
     scope
 }
 
-/// Records every frame once through one live `CommandReplayState`, exactly
-/// as the scene builder's verifier would. `node_id` keys the command
-/// identity, so distinct ids retain into distinct renderer slots.
 fn build_sequence(node_id: usize) -> Vec<RenderGraph> {
     let mut state = CommandReplayState::default();
     let command = DrawCommandId {
@@ -221,13 +164,6 @@ fn render_sequence(renderer: &mut support::LockedRenderer, graphs: &[RenderGraph
 
 #[test]
 fn retained_arc_mesh_stays_within_the_interpolation_envelope() {
-    // Pin the instanced-quad selection OFF for this renderer (the flag is
-    // latched at construction, so it must be set BEFORE the renderer
-    // exists): this suite's envelope was measured against `vs_main` quads,
-    // and P1b's indexed mesh keeps triangle geometry byte-identical, so the
-    // per-frame numbers must reproduce byte-for-byte. Letting the quad arm
-    // drift onto `vs_shape_instanced` would fold the separate instancing
-    // fma envelope (covered by `instanced_quad_parity`) into this one.
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_INSTANCED_QUADS", Some("0"));
     let mut renderer = match support::headless_renderer() {
         Ok(renderer) => renderer,
@@ -239,10 +175,6 @@ fn retained_arc_mesh_stays_within_the_interpolation_envelope() {
     };
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_COMMAND_FEED", Some("1"));
 
-    // Identical scenes under distinct command identities: node 7's slots
-    // capture with the mesh disabled, node 8's with it enabled. The flag is
-    // (re)set around every pass so any recapture lands under its arm's
-    // regime.
     let graphs_quad = build_sequence(7);
     let graphs_mesh = build_sequence(8);
 
@@ -251,9 +183,6 @@ fn retained_arc_mesh_stays_within_the_interpolation_envelope() {
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ARC_MESH", Some("1"));
     let _capture_mesh = render_sequence(&mut renderer, &graphs_mesh);
 
-    // Same-position control passes: every slot of both arms is live from
-    // here on, matching the renderer positions command_feed_parity proved
-    // byte-stable against each other.
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ARC_MESH", Some("0"));
     let quad_frames = render_sequence(&mut renderer, &graphs_quad);
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ARC_MESH", Some("1"));
@@ -267,8 +196,6 @@ fn retained_arc_mesh_stays_within_the_interpolation_envelope() {
         "the pinned-off selection must have latched at construction"
     );
 
-    // Non-vacuity: the mesh arm must actually hold meshed slots, and the
-    // quad arm's slots must exist without meshes.
     let (mesh_slots, total_slots) = renderer.replay_slot_mesh_stats();
     eprintln!("arc-mesh slots: {mesh_slots} of {total_slots}");
     assert!(
@@ -280,10 +207,6 @@ fn retained_arc_mesh_stays_within_the_interpolation_envelope() {
         "the quad arm's slots must have captured without meshes \
          ({mesh_slots} of {total_slots} meshed)"
     );
-    // The size gate's engagement split: the big backing annuli meshed, the
-    // ~1.3k tiny sector bricks per capture took the passthrough quad (the
-    // regime that meshed them wholesale measured 4-11 fps slower on the
-    // watch), and nothing in this scene is a stroked-circle rim.
     let (arcs_meshed, rims_meshed, passthrough) = renderer.replay_slot_mesh_engagement();
     eprintln!("arc-mesh engagement: {arcs_meshed} arcs, {rims_meshed} rims, {passthrough} quads");
     assert!(
@@ -314,16 +237,11 @@ fn retained_arc_mesh_stays_within_the_interpolation_envelope() {
         }
         eprintln!("frame {frame}: differing {differing} (beyond ±1: {beyond_one}) worst {worst}");
         if frame < 2 {
-            // Pre-retention frames ride the fresh-batch path in both arms
-            // and must stay byte-exact — any drift here is renderer state,
-            // not the mesh.
             assert_eq!(
                 differing, 0,
                 "frame {frame}: dynamic frames must be byte-exact"
             );
         } else {
-            // Retained frames: the interpolation-rounding envelope described
-            // in the module docs (measured ceiling 5476 / 28 / 78 on Metal).
             assert!(
                 differing < 12_000 && beyond_one < 200 && worst < 160,
                 "frame {frame}: {differing} bytes diverged ({beyond_one} beyond ±1, \

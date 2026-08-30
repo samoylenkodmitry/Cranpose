@@ -3,16 +3,13 @@
 //! Port of Jetpack Compose's VelocityTracker1D using the Impulse strategy.
 //! This calculates velocity based on kinetic energy principles.
 
-/// Ring buffer size for velocity tracking samples.
 const HISTORY_SIZE: usize = 20;
 
-/// Only use samples within the last 100ms for velocity calculation.
 const HORIZON_MS: i64 = 100;
 
 /// If no movement for this duration, assume the pointer has stopped.
 pub const ASSUME_STOPPED_MS: i64 = 40;
 
-/// A data point with timestamp.
 #[derive(Clone, Copy, Default)]
 struct DataPointAtTime {
     time_ms: i64,
@@ -34,11 +31,8 @@ struct DataPointAtTime {
 /// ```
 #[derive(Clone)]
 pub struct VelocityTracker1D {
-    /// Ring buffer of samples.
     samples: [Option<DataPointAtTime>; HISTORY_SIZE],
-    /// Current write index in ring buffer.
     index: usize,
-    /// Whether data points are differential (change in position) vs absolute positions.
     is_differential: bool,
 }
 
@@ -145,7 +139,6 @@ impl VelocityTracker1D {
     }
 }
 
-/// Calculates velocity using the impulse strategy from Jetpack Compose.
 fn calculate_impulse_velocity(
     data_points: &[f32; HISTORY_SIZE],
     times: &[f32; HISTORY_SIZE],
@@ -183,7 +176,6 @@ fn calculate_impulse_velocity(
     kinetic_energy_to_velocity(work)
 }
 
-/// Converts kinetic energy to velocity using E = 0.5 * m * v^2 (with m = 1).
 #[inline]
 fn kinetic_energy_to_velocity(kinetic_energy: f32) -> f32 {
     kinetic_energy.signum() * (2.0 * kinetic_energy.abs()).sqrt()
@@ -209,14 +201,12 @@ mod tests {
     #[test]
     fn test_constant_velocity() {
         let mut tracker = VelocityTracker1D::new();
-        // Moving at 100 px per 10ms = 10000 px/s
         tracker.add_data_point(0, 0.0);
         tracker.add_data_point(10, 100.0);
         tracker.add_data_point(20, 200.0);
         tracker.add_data_point(30, 300.0);
 
         let velocity = tracker.calculate_velocity();
-        // Should be approximately 10000 px/s
         assert!(
             (velocity - 10000.0).abs() < 1000.0,
             "Expected ~10000, got {}",
@@ -238,7 +228,6 @@ mod tests {
     #[test]
     fn test_negative_velocity() {
         let mut tracker = VelocityTracker1D::new();
-        // Moving backwards
         tracker.add_data_point(0, 300.0);
         tracker.add_data_point(10, 200.0);
         tracker.add_data_point(20, 100.0);
@@ -271,14 +260,11 @@ mod tests {
     #[test]
     fn test_old_samples_ignored() {
         let mut tracker = VelocityTracker1D::new();
-        // Old sample (more than HORIZON_MS ago)
         tracker.add_data_point(0, 0.0);
-        // Recent samples
         tracker.add_data_point(150, 100.0);
         tracker.add_data_point(160, 200.0);
         tracker.add_data_point(170, 300.0);
 
-        // Velocity should only be based on recent samples
         let velocity = tracker.calculate_velocity();
         assert!(
             velocity.abs() > 0.0,

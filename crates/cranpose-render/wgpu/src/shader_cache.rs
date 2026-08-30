@@ -1,8 +1,3 @@
-//! Pipeline cache for RuntimeShader effects.
-//!
-//! Compiles and caches `wgpu::RenderPipeline` objects keyed by WGSL source hash,
-//! so the same shader with different uniform values reuses its pipeline.
-
 use std::collections::{HashMap, HashSet};
 
 use cranpose_ui_graphics::RuntimeShader;
@@ -23,13 +18,10 @@ impl RuntimeShaderPipelineMode {
     }
 }
 
-/// Caches compiled render pipelines for custom WGSL shader effects.
 pub(crate) struct ShaderPipelineCache {
     backend: wgpu::Backend,
     cache: HashMap<(u64, RuntimeShaderPipelineMode, bool), wgpu::RenderPipeline>,
     disabled: HashSet<u64>,
-    /// The device's shared pipeline cache (see `GpuRenderer`); runtime
-    /// shader pipelines pass it like every built-in pipeline does.
     pipeline_cache: Option<wgpu::PipelineCache>,
 }
 
@@ -43,18 +35,6 @@ impl ShaderPipelineCache {
         }
     }
 
-    /// Get or compile a render pipeline for the given WGSL source.
-    ///
-    /// The pipeline is cached by the source hash, so repeated calls with
-    /// the same shader source (but potentially different uniforms) reuse
-    /// the compiled pipeline.
-    ///
-    /// `depth` is true exactly when the pipeline will draw inside the
-    /// display-clip culled fused pass: the variant adds the depth test
-    /// against the visible-region occluder and nothing else. The user's
-    /// WGSL is NOT rewritten — the conventional fullscreen z of 0.0
-    /// already fails `Less` against the occluder's 0.0, so occluded
-    /// pixels cull correctly.
     #[allow(clippy::too_many_arguments)]
     pub fn get_or_create(
         &mut self,
@@ -101,7 +81,7 @@ impl ShaderPipelineCache {
                     vertex: wgpu::VertexState {
                         module: &shader_module,
                         entry_point: Some("fullscreen_vs"),
-                        buffers: &[], // Fullscreen quad from vertex_index
+                        buffers: &[],
                         compilation_options: wgpu::PipelineCompilationOptions::default(),
                     },
                     fragment: Some(wgpu::FragmentState {
@@ -134,7 +114,6 @@ impl ShaderPipelineCache {
     }
 }
 
-/// Validate the user-provided source, then hand the WGSL to wgpu.
 fn create_runtime_shader_module(
     device: &wgpu::Device,
     shader: &RuntimeShader,
@@ -200,9 +179,6 @@ fn validate_runtime_shader_backend_support(
     validate_glsl_portability(module, module_info, "effect_fs", ShaderStage::Fragment)
 }
 
-/// GLSL portability validation exists only when a GL-class backend can be
-/// selected at runtime: native builds with the `backend-gles` feature, web
-/// builds (WebGL fallback), and unit tests.
 #[cfg(any(test, feature = "backend-gles", target_arch = "wasm32"))]
 fn validate_glsl_portability(
     module: &naga::Module,
@@ -240,9 +216,6 @@ fn validate_glsl_portability(
         .map_err(|err| format!("GL/WebGL portability emission failed for `{entry_point}`: {err}"))
 }
 
-/// Without `backend-gles`, wgpu cannot select the GL backend on native
-/// targets, so this path is unreachable; reject defensively instead of
-/// claiming portability that was never checked.
 #[cfg(not(any(test, feature = "backend-gles", target_arch = "wasm32")))]
 fn validate_glsl_portability(
     _module: &naga::Module,

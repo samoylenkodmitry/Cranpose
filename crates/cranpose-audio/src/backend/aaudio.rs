@@ -1,24 +1,3 @@
-//! The Android output device: AAudio through the `ndk` crate.
-//!
-//! AAudio is the NDK's native audio API (API 26 and up; Wear OS 3 is API 30),
-//! so this backend needs no Java on the activity side and no C++ toolchain —
-//! `ndk::audio` is a pure-Rust binding over `libaaudio.so`, which every Android
-//! and Wear OS device ships.
-//!
-//! The stream asks for `LowLatency` with a 32-bit float, two-channel format.
-//! AAudio calls back on a real-time thread it owns; the callback below does
-//! exactly two things — read the negotiated format off the stream handle and
-//! run the renderer — so the real-time budget holds.
-//!
-//! The stream is not kept running for its own sake. A `LowLatency` output on
-//! Android is an MMAP route with the always-on audio DSP behind it, and it
-//! costs power whether or not the samples crossing it are zero, so when the
-//! renderer reports that nothing has sounded for a while the callback returns
-//! [`AudioCallbackResult::Stop`] and the engine starts the stream again on the
-//! next sound. That is AAudio's own idiom for a stream with nothing to do.
-//!
-//! The crate root denies unsafe code; this module opts back in for the one
-//! place it is unavoidable: turning AAudio's raw output pointer into a slice.
 #![allow(unsafe_code)]
 
 use std::{
@@ -123,14 +102,8 @@ fn open_stream(
         .channel_count(REQUESTED_CHANNELS)
         .performance_mode(AudioPerformanceMode::LowLatency)
         .sharing_mode(AudioSharingMode::Shared)
-        // `setUsage` and `setContentType` are deliberately left at their
-        // defaults: both entered the NDK at API 28, and calling them would
-        // raise this backend's floor above AAudio's own API 26.
         .data_callback(Box::new(
             move |stream: &AudioStream, audio_data: *mut c_void, frames: i32| {
-                // Both getters read a field on the stream handle; neither locks
-                // nor allocates, and `set_device_format` returns immediately
-                // once the format matches what the renderer already assumed.
                 let channels = stream.channel_count().max(1) as usize;
                 renderer.set_device_format(stream.sample_rate() as f32, channels);
 
@@ -145,18 +118,11 @@ fn open_stream(
                 let out = unsafe { std::slice::from_raw_parts_mut(data, samples) };
                 match renderer.render(out) {
                     RenderStatus::Continue => AudioCallbackResult::Continue,
-                    // Returning `Stop` is what ends this real-time thread; the
-                    // engine also calls `request_stop` from the UI thread (see
-                    // `AAudioSink::park`) because AAudio only guarantees that
-                    // `Stop` ends the callback, not that it releases the route.
                     RenderStatus::Idle => AudioCallbackResult::Stop,
                 }
             },
         ))
         .error_callback(Box::new(move |_stream, error| {
-            // Runs on an AAudio worker thread, not the real-time one, so this
-            // may log. A disconnect ends the stream; the engine reopens the
-            // device the next time it is asked to play.
             error_connected.store(false, Ordering::Release);
             log::warn!("AAudio stream error: {error:?}");
         }))
@@ -269,14 +235,6 @@ fn apply_operation(
             }
         }
         StreamOperation::Resume => {
-            // A stream the data callback gave up by returning `Stop` may still
-            // be in `Started`: on Android 8 that return only ended the
-            // callback, and the internal stop that later releases added does
-            // not exist there. `request_start` is rejected in that state,
-            // which would leave the app permanently silent, so the stop is
-            // made explicit first. This is a no-op on a stream that really did
-            // stop, and it does not fire on the lifecycle path, where
-            // `suspend` left the stream paused.
             if stream.state() == AudioStreamState::Started {
                 if let Err(error) = stream.request_stop() {
                     log::warn!("failed to settle the AAudio stream before starting it: {error}");
@@ -288,11 +246,6 @@ fn apply_operation(
         }
         StreamOperation::IsRunning => {}
         StreamOperation::Park => {
-            // `request_stop` rather than `request_pause`: a paused stream
-            // keeps its route, which is exactly the thing costing power.
-            // Stopping an already stopped stream is a no-op in AAudio, so this
-            // stays correct on the releases where returning `Stop` from the
-            // callback already tore the stream down.
             if let Err(error) = stream.request_stop() {
                 log::warn!("failed to release the idle AAudio stream: {error}");
             }
@@ -317,8 +270,6 @@ fn stream_is_usable(stream: &AudioStream, connected: &AtomicBool) -> bool {
 }
 
 fn stop_stream(stream: &AudioStream) {
-    // Stopping before the stream closes means the callback has returned for
-    // the last time, so the renderer it owns is dropped on its owner thread.
     if let Err(error) = stream.request_stop() {
         log::warn!("failed to stop the AAudio stream: {error}");
     }

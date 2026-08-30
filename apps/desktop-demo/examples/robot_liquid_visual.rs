@@ -1,7 +1,3 @@
-//! Liquid UI visual walkthrough: opens the Liquid tab, captures the resting
-//! state, scrolls to the materials lab, exercises the tab-bar blob and the
-//! morphing menu, and writes numbered PNGs into `CRANPOSE_LIQUID_SHOT_DIR`.
-
 use std::{
     path::{Path, PathBuf},
     time::Duration,
@@ -83,10 +79,6 @@ fn main() {
                 return;
             }
 
-            // Toggle lens: normalize to the reference's off state, raise the
-            // lens over the left thumb, then release once. The supplied 54
-            // frames show the lens springing right while the stationary track
-            // interpolates from gray to green.
             scroll_text_to_y(&robot, "TOGGLE PRESS", 300.0);
             settle(&robot, 800);
             if let Some(toggle) =
@@ -100,8 +92,6 @@ fn main() {
                 let on_thumb_x = toggle.0 + toggle.2 - 20.0;
                 let off_thumb_x = toggle.0 + 20.0;
 
-                // The showcase starts on. One ordinary tap gives the judge a
-                // deterministic off baseline before replaying off -> on.
                 robot
                     .click(on_thumb_x, toggle_y)
                     .expect("normalize toggle to off");
@@ -130,15 +120,15 @@ fn main() {
                 let transition_steps = [
                     (0.0, false),
                     (1.0, false),
-                    (49.0, true),  // target f004: 50 ms after release
-                    (50.0, true),  // target f007: +100 ms
-                    (50.0, true),  // target f010: +150 ms
-                    (50.0, true),  // target f013: +200 ms
-                    (50.0, true),  // target f016: +250 ms
-                    (67.0, true),  // target f020: +317 ms
-                    (166.0, true), // target f030: +483 ms
-                    (200.0, true), // target f042: +683 ms
-                    (200.0, true), // target f054: +883 ms
+                    (49.0, true),
+                    (50.0, true),
+                    (50.0, true),
+                    (50.0, true),
+                    (50.0, true),
+                    (67.0, true),
+                    (166.0, true),
+                    (200.0, true),
+                    (200.0, true),
                 ];
                 let transition_names = [
                     "01a-toggle-transition-f004-aligned",
@@ -158,8 +148,6 @@ fn main() {
                     save_aligned_frame(frame, &shot_dir, name, toggle_crop);
                 }
 
-                // The deterministic keyframes advanced animation time. Let
-                // wall time catch up before continuing with live gestures.
                 settle(&robot, 1100);
                 shot(&robot, &shot_dir, "01b3-toggle-settled");
             }
@@ -178,8 +166,6 @@ fn main() {
             let account_x = account.0 + account.2 * 0.5;
             let bar_y = account.1 + account.3 * 0.5;
 
-            // Align the authored 440dp scene with the source frame's crop,
-            // keeping identical content under the target and current lenses.
             scroll_text_to_y_with_tolerance(
                 &robot,
                 "Apple Developer Program",
@@ -188,8 +174,6 @@ fn main() {
             );
             settle(&robot, 700);
 
-            // Match the target's final swipe: Account is selected, then the
-            // live lens moves left across WWDC while the finger stays down.
             {
                 robot.click(account_x, bar_y).expect("select account");
                 settle(&robot, 700);
@@ -198,8 +182,6 @@ fn main() {
                 robot.mouse_move(account_x, bar_y).expect("hover account");
                 robot.mouse_down().expect("press account");
                 std::thread::sleep(Duration::from_millis(80));
-                // f_055 is the canonical fast-flight frame: its lens center
-                // is half a cell pitch left of Account.
                 let target_drag = account.2 * TARGET_TAB_DRAG_FRACTION;
                 for step in 1..=2 {
                     robot
@@ -230,8 +212,6 @@ fn main() {
                 robot.mouse_up().expect("release account drag");
                 settle(&robot, 700);
 
-                // A separate full-width drag checks the same lens joining the
-                // detached search surface near the bar's trailing edge.
                 let discover = cranpose_testing::find_button_exact_in_semantics(&robot, "Discover")
                     .expect("discover tab in semantics");
                 let start_x = discover.0 + discover.2 * 0.5;
@@ -248,8 +228,6 @@ fn main() {
                         std::thread::sleep(Duration::from_millis(30));
                     }
                 }
-                // Keep dragging to the bar's end: the lens necks with the
-                // search circle through the liquid field.
                 for step in 1..=12 {
                     robot
                         .mouse_move(start_x + 176.0 + step as f32 * 22.0, bar_y)
@@ -285,9 +263,6 @@ fn main() {
             settle(&robot, 900);
             shot(&robot, &shot_dir, "03-materials-lab");
 
-            // Tab-bar blob: hop from Discover to Account mid-flight capture.
-            // The tab cell is resolved from semantics — the pill stretches
-            // tabs when width allows, so fixed coordinates would drift.
             let account = cranpose_testing::find_button_exact_in_semantics(&robot, "Account")
                 .expect("account tab in semantics");
             robot
@@ -298,14 +273,6 @@ fn main() {
             settle(&robot, 900);
             shot(&robot, &shot_dir, "05-blob-settled");
 
-            // Morphing menu from the nav trailing button: the droplet inflates
-            // out of the "…" circle (mid-flight frames), settles with a size
-            // overshoot, then deflates back into the button on dismiss. Match
-            // the reference capture with a structured session row behind the
-            // surface so frost and transmitted detail can be judged directly.
-            // The "..." anchor lives in the Featured videos card header;
-            // park the page at the top so the whole card (and its anchor)
-            // is on-screen.
             for _ in 0..20 {
                 robot.mouse_move(450.0, 400.0).expect("hover for scroll");
                 robot.mouse_scroll(0.0, 200.0).expect("scroll to top");
@@ -329,22 +296,16 @@ fn main() {
             shot(&robot, &shot_dir, "06c-menu-morph-late");
             settle(&robot, 700);
             shot(&robot, &shot_dir, "07-menu-open");
-            // Dismiss: tap outside — the droplet sucks back into the anchor.
             robot.click(200.0, 400.0).expect("dismiss menu");
             std::thread::sleep(Duration::from_millis(60));
             shot(&robot, &shot_dir, "08a-menu-close-mid");
             settle(&robot, 600);
             shot(&robot, &shot_dir, "08b-menu-closed");
 
-            // One continuous menu gesture: the original DOWN owns the stream
-            // while the menu opens, sliding updates the highlighted row, and
-            // the matching UP commits that row without an intermediate lift.
             robot
                 .mouse_move(menu_anchor.0, menu_anchor.1)
                 .expect("hover menu trigger");
             robot.mouse_down().expect("hold menu trigger");
-            // The held-open menu materializes its items near settle; poll
-            // semantics instead of racing a fixed sleep against host load.
             let mut grid_probe = None;
             for _ in 0..20 {
                 std::thread::sleep(Duration::from_millis(100));

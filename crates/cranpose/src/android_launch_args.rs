@@ -1,26 +1,5 @@
-//! The wire format that carries an Android `Intent`'s extras into
-//! [`cranpose_services::LaunchArgs`].
-//!
-//! `CranposeActivity.cranposeEncodeLaunchArguments` flattens the launching
-//! intent's extras into one string, which crosses JNI as a single `String`
-//! rather than one call per extra. Decoding lives here, in safe Rust, and is
-//! unit-tested on the host — the format is the contract between the two sides.
-//!
-//! ```text
-//! <1|0>                      debuggable (ApplicationInfo.FLAG_DEBUGGABLE)
-//! <type>\t<name>\t<value>    one record per extra, newline separated
-//! ```
-//!
-//! `type` is `b`, `i`, `l`, `f` or `s` for the `boolean`, `int`, `long`,
-//! `float` and `String` extras `am start --ez/--ei/--el/--ef/--es` produces.
-//! Names and values use the same `%09`/`%0A`/`%0D`/`%25` escaping as the
-//! accessibility payload, so a value containing a tab or newline survives.
-//! Unknown types and malformed records are skipped: an app must still launch
-//! when someone passes an extra Cranpose cannot type.
-
 use cranpose_services::{LaunchArgValue, LaunchArgs};
 
-/// Decodes a payload produced by `cranposeEncodeLaunchArguments`.
 pub(crate) fn decode_launch_arguments(payload: &str) -> LaunchArgs {
     let mut lines = payload.split('\n');
     let debuggable = matches!(lines.next(), Some("1"));

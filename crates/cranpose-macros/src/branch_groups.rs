@@ -24,10 +24,6 @@ pub(crate) fn inject_branch_groups(core_path: &TokenStream2, block: &mut Block) 
     }
 }
 
-/// One level of an aggregate expression that suspends somewhere: each
-/// immediate child is handed back whole — the normal visitor when the child
-/// is await-free (its guards close inside the child's own evaluation, before
-/// any sibling awaits), the suspension-aware walker when the child awaits.
 struct SuspendingChildren<'a, 'b> {
     injector: &'a mut BranchGroupInjector<'b>,
 }
@@ -89,9 +85,6 @@ fn stmt_suspends(stmt: &Stmt) -> bool {
     scan.found
 }
 
-/// Both spellings of the naked marker: `#[naked]` and the edition-2024
-/// `#[unsafe(naked)]`. A naked body must stay a single `naked_asm!` call, so
-/// it can carry no instrumentation at all.
 fn is_naked_attr(attr: &syn::Attribute) -> bool {
     if attr.path().is_ident("naked") {
         return true;

@@ -59,7 +59,6 @@ impl std::fmt::Display for TaskSite {
 }
 
 impl From<&'static std::panic::Location<'static>> for TaskSite {
-    /// The site a `#[track_caller]` function was called from.
     fn from(location: &'static std::panic::Location<'static>) -> TaskSite {
         TaskSite::new(location.file(), location.line())
     }
@@ -382,8 +381,6 @@ where
     K: PartialEq + 'static,
     F: FnOnce(LaunchedEffectScope) + 'static,
 {
-    // Create a group using the caller's location to ensure each LaunchedEffect
-    // gets its own slot table entry, even in conditional branches
     with_current_composer(|composer| {
         composer.with_group(group_key, |composer| {
             let key = EffectKey::new(keys);

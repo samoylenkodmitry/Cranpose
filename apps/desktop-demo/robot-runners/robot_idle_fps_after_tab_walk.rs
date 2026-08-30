@@ -1,6 +1,3 @@
-//! Robot regression: after visiting animated tabs and settling on static content,
-//! the app must not keep presenting frames or mutating FPS stats.
-
 mod perf_contract;
 
 use std::time::Duration;

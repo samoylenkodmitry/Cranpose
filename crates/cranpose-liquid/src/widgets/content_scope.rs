@@ -1,20 +1,10 @@
-//! The seam every scoped Liquid widget declares its content through.
-//!
-//! A widget that takes content instead of a vector hands its caller a scope
-//! whose calls append to one of these lists, then reads back what the call
-//! built. Sharing the list means a scope type only has to state its own
-//! vocabulary — `tab`, `segment`, `action` — and never the plumbing under it.
-
 use std::{cell::RefCell, rc::Rc};
 
-/// The list a scope appends its declarations to.
 pub(crate) struct ScopeContent<T> {
     items: Rc<RefCell<Vec<T>>>,
 }
 
 impl<T> ScopeContent<T> {
-    /// Runs `content` against the scope `build` wraps this list in, and
-    /// returns what it declared, in the order it was declared.
     pub(crate) fn collect<S>(
         build: impl FnOnce(ScopeContent<T>) -> S,
         content: impl FnOnce(&S),
@@ -27,7 +17,6 @@ impl<T> ScopeContent<T> {
         items.take()
     }
 
-    /// Adds one declaration to the end of the list.
     pub(crate) fn push(&self, item: T) {
         self.items.borrow_mut().push(item);
     }
@@ -66,8 +55,6 @@ mod tests {
         assert!(collected.is_empty());
     }
 
-    /// Two collections must not see each other's declarations: a widget
-    /// recomposing builds its list from scratch every time.
     #[test]
     fn each_collection_starts_from_an_empty_list() {
         let build = |content| Numbers { content };

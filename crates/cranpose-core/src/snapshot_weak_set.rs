@@ -1,9 +1,3 @@
-//! Weak reference set for tracking state objects with multiple records.
-//!
-//! This implements Kotlin's `SnapshotWeakSet` - a collection that maintains weak
-//! references to state objects, automatically removing dead references and providing
-//! efficient add/remove operations via binary search.
-
 use std::sync::{Arc, Weak};
 
 use crate::state::StateObject;
@@ -14,13 +8,7 @@ pub(crate) struct SnapshotWeakSetDebugStats {
     pub capacity: usize,
 }
 
-/// A sorted set of weak references to StateObjects, optimized for memory cleanup.
-///
-/// The set maintains elements sorted by their identity hash (pointer address) to
-/// enable O(log N) lookups and insertions via binary search. Weak references
-/// prevent memory leaks - GC'd objects are automatically removed during iteration.
 pub(crate) struct SnapshotWeakSet {
-    /// Sorted array of (hash, weak_ref) pairs
     entries: Vec<(usize, Weak<dyn StateObject>)>,
 }
 
@@ -33,24 +21,18 @@ impl std::fmt::Debug for SnapshotWeakSet {
 }
 
 impl SnapshotWeakSet {
-    /// Create a new empty weak set with default capacity.
     pub(crate) fn new() -> Self {
         Self {
             entries: Vec::with_capacity(16),
         }
     }
 
-    /// Add a state object to the set.
-    ///
-    /// Uses binary search to find the insertion point, maintaining sort order.
-    /// Live duplicates are skipped (same hash already present with a live entry).
     #[cfg(test)]
     pub(crate) fn add<T: StateObject + 'static>(&mut self, state: &Arc<T>) {
         let hash = Arc::as_ptr(state) as *const () as usize;
         let trait_obj: Arc<dyn StateObject> = state.clone();
         let weak = Arc::downgrade(&trait_obj);
 
-        // Binary search to find insertion point
         let pos = self.entries.partition_point(|(h, _)| *h < hash);
 
         let has_live = self.entries[pos..]
@@ -63,20 +45,15 @@ impl SnapshotWeakSet {
 
         self.entries.insert(pos, (hash, weak));
 
-        // Grow capacity if needed (double when full)
         if self.entries.len() == self.entries.capacity() {
             self.entries.reserve(self.entries.len());
         }
     }
 
-    /// Add a trait object to the set (for use with Arc<dyn StateObject>).
-    ///
-    /// This is a specialized version of `add` that works with trait objects directly.
     pub(crate) fn add_trait_object(&mut self, state: &Arc<dyn StateObject>) {
         let hash = Arc::as_ptr(state) as *const () as usize;
         let weak = Arc::downgrade(state);
 
-        // Binary search to find insertion point
         let pos = self.entries.partition_point(|(h, _)| *h < hash);
 
         let has_live = self.entries[pos..]
@@ -89,42 +66,28 @@ impl SnapshotWeakSet {
 
         self.entries.insert(pos, (hash, weak));
 
-        // Grow capacity if needed (double when full)
         if self.entries.len() == self.entries.capacity() {
             self.entries.reserve(self.entries.len());
         }
     }
 
-    /// Remove entries based on a predicate, also cleaning up dead weak references.
-    ///
-    /// The predicate receives a reference to the StateObject and should return:
-    /// - `true` to keep the entry in the set
-    /// - `false` to remove the entry
-    ///
-    /// Dead weak references (GC'd objects) are automatically removed regardless
-    /// of the predicate.
     pub(crate) fn remove_if<F>(&mut self, mut predicate: F)
     where
         F: FnMut(&dyn StateObject) -> bool,
     {
         self.entries.retain(|(_, weak)| {
-            // Try to upgrade the weak reference
             if let Some(strong) = weak.upgrade() {
-                // Object still alive - check predicate
                 predicate(&*strong)
             } else {
-                // Object was GC'd - remove it
                 false
             }
         });
     }
 
-    /// Get the current number of entries (including dead references).
     pub(crate) fn len(&self) -> usize {
         self.entries.len()
     }
 
-    /// Check if the set is empty.
     pub(crate) fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
@@ -136,7 +99,6 @@ impl SnapshotWeakSet {
         }
     }
 
-    /// Count the number of alive entries (for testing).
     #[cfg(test)]
     pub(crate) fn alive_count(&self) -> usize {
         self.entries
@@ -163,7 +125,6 @@ mod tests {
         state::ObjectId,
     };
 
-    // Mock StateObject for testing
     struct MockState {
         id: ObjectId,
         value: Cell<i32>,
@@ -260,12 +221,10 @@ mod tests {
         let mut set = SnapshotWeakSet::new();
         let states: Vec<_> = (0..10).map(MockState::new).collect();
 
-        // Add in random order
         for state in &states {
             set.add(state);
         }
 
-        // Verify entries are sorted by hash
         let hashes: Vec<_> = set.entries.iter().map(|(h, _)| *h).collect();
         let mut sorted_hashes = hashes.clone();
         sorted_hashes.sort_unstable();
@@ -282,14 +241,11 @@ mod tests {
             set.add(&state1);
             set.add(&state2);
             assert_eq!(set.alive_count(), 2);
-            // state1 and state2 drop here
         }
 
-        // Dead references are still in the set until removeIf is called
         assert_eq!(set.len(), 2);
         assert_eq!(set.alive_count(), 0);
 
-        // removeIf with always-true predicate should remove dead refs
         set.remove_if(|_| true);
         assert_eq!(set.len(), 0);
         assert!(set.is_empty());
@@ -306,13 +262,12 @@ mod tests {
         set.add(&state2);
         set.add(&state3);
 
-        // Remove states with even values
         set.remove_if(|state: &dyn StateObject| {
             let mock = state.as_any().downcast_ref::<MockState>().unwrap();
-            mock.value.get() % 2 != 0 // Keep odd values
+            mock.value.get() % 2 != 0
         });
 
-        assert_eq!(set.alive_count(), 2); // Should have 1 and 3
+        assert_eq!(set.alive_count(), 2);
     }
 
     #[test]
@@ -325,16 +280,14 @@ mod tests {
         {
             let state2 = MockState::new(2);
             set.add(&state2);
-            // state2 drops here
         }
 
         let state3 = MockState::new(3);
         set.add(&state3);
 
         assert_eq!(set.len(), 3);
-        assert_eq!(set.alive_count(), 2); // state1 and state3
+        assert_eq!(set.alive_count(), 2);
 
-        // Clean up dead references
         set.remove_if(|_| true);
         assert_eq!(set.len(), 2);
         assert_eq!(set.alive_count(), 2);
@@ -345,7 +298,6 @@ mod tests {
         let mut set = SnapshotWeakSet::new();
         let initial_capacity = set.entries.capacity();
 
-        // Add more than initial capacity
         let states: Vec<_> = (0..20).map(MockState::new).collect();
         for state in &states {
             set.add(state);
@@ -369,13 +321,12 @@ mod tests {
         set.add(&state2);
         set.add(&state3);
 
-        // Keep only states with value >= 20
         set.remove_if(|state: &dyn StateObject| {
             let mock = state.as_any().downcast_ref::<MockState>().unwrap();
             mock.value.get() >= 20
         });
 
-        assert_eq!(set.alive_count(), 2); // Should have state2 and state3
+        assert_eq!(set.alive_count(), 2);
     }
 
     #[test]
@@ -389,7 +340,6 @@ mod tests {
 
         assert_eq!(set.alive_count(), 5);
 
-        // Remove everything
         set.remove_if(|_| false);
         assert!(set.is_empty());
         assert_eq!(set.alive_count(), 0);

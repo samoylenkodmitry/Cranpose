@@ -1,23 +1,3 @@
-//! Per-tab screenshot dump used to visually diff renderer backends.
-//!
-//! Drives the desktop demo app through every [`DemoTab`], lets each tab
-//! settle, and writes one PNG per tab into the directory named by the
-//! `ROBOT_SHOT_DIR` environment variable. This binary links against
-//! whichever renderer feature the crate was compiled with (`renderer-wgpu`
-//! the two output directories (e.g. with ImageMagick `compare`) catches
-//! renderer-specific pixel regressions tab by tab.
-//!
-//! ```bash
-//! ROBOT_SHOT_DIR=/tmp/shots CRANPOSE_HEADLESS=0 \
-//!     cargo run --profile robot -p desktop-app --features robot-app \
-//!     --example robot_tab_screenshot_dump
-//! ```
-//!
-//! A handful of tabs pull live network content or run continuous
-//! animations; their pixels are not reproducible run to run and are listed
-//! in [`NONDETERMINISTIC_TABS`] so callers can treat a nonzero diff on those
-//! tabs as expected rather than as a renderer gap.
-
 use std::{
     path::{Path, PathBuf},
     time::Duration,
@@ -33,11 +13,6 @@ const WINDOW_TITLE: &str = "Robot Tab Screenshot Dump";
 const SHOT_DIR_ENV: &str = "ROBOT_SHOT_DIR";
 const SETTLE_MS_ENV: &str = "ROBOT_SHOT_SETTLE_MS";
 
-/// Tabs whose captured pixels are expected to vary between runs: network
-/// fetches race against a fixed settle timer, and continuously animating
-/// tabs are sampled mid-animation. A nonzero diff on these tabs is not on
-/// its own evidence of a renderer regression; inspect the diff image before
-/// drawing conclusions.
 const NONDETERMINISTIC_TABS: [DemoTab; 7] = [
     DemoTab::HackerNews,
     DemoTab::WebFetch,
@@ -45,12 +20,6 @@ const NONDETERMINISTIC_TABS: [DemoTab; 7] = [
     DemoTab::Animations,
     DemoTab::InteractiveAnim,
     DemoTab::ShaderRect,
-    // Scrolls forever: `WearState::advance` runs the list to the end, turns
-    // around and runs it back, every frame, with no state it settles into. A
-    // capture taken after a fixed settle is therefore taken wherever the scroll
-    // happened to be, and two runs of this dump will never agree on it. Left
-    // out of the list, that showed up as a large permanent pixel delta on a tab
-    // nothing was wrong with -- the exact reading this list exists to prevent.
     DemoTab::Wear,
 ];
 
@@ -91,17 +60,11 @@ fn dump_tab(robot: &cranpose::Robot, tab: DemoTab, shot_dir: &Path) {
         .invoke_app_hook("set-tab", slug)
         .unwrap_or_else(|err| panic!("failed to select tab '{slug}': {err}"));
 
-    // The dump includes tabs whose contract is to keep updating forever. A
-    // bounded frame pump gives every tab the same opportunity to apply the
-    // selection and build its first scene without treating animation as an
-    // idle condition.
     robot
         .pump_frames(3)
         .unwrap_or_else(|err| panic!("failed to settle tab '{slug}': {err}"));
 
     if NONDETERMINISTIC_TABS.contains(&tab) {
-        // Give network fetches (or a few more animation frames) a chance to
-        // produce representative, if not bit-reproducible, content.
         std::thread::sleep(Duration::from_millis(settle_ms()));
         robot
             .pump_frames(3)
@@ -120,10 +83,6 @@ fn dump_tab(robot: &cranpose::Robot, tab: DemoTab, shot_dir: &Path) {
     println!("captured {slug} -> {}", path.display());
 }
 
-/// Single source of truth for the kebab-case slug used both as the
-/// `set-tab` app-hook argument and as the screenshot file stem, so the
-/// forward (tab -> slug) and reverse (slug -> tab) lookups can never drift
-/// apart.
 fn tab_slug(tab: DemoTab) -> &'static str {
     match tab {
         DemoTab::Counter => "counter",
@@ -170,8 +129,6 @@ fn set_tab_hook(name: String, argument: String) -> Result<Option<String>, String
 }
 
 fn shot_dir() -> PathBuf {
-    // Default to a temp directory so the example runs unconfigured (CI robot
-    // shards); set ROBOT_SHOT_DIR to keep the screenshots somewhere useful.
     std::env::var_os(SHOT_DIR_ENV)
         .map(PathBuf::from)
         .unwrap_or_else(|| std::env::temp_dir().join("cranpose-robot-shots"))

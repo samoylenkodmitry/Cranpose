@@ -1,13 +1,3 @@
-//! Color fidelity contract: authored sRGB `Color` values must land on screen
-//! byte-for-byte for solid fills, gradient stops, and text.
-//!
-//! Guards the surface-format policy — an sRGB swapchain view double-encodes
-//! the framework's sRGB-space colors, washing out the entire UI (a solid
-//! `(52, 199, 89)` fill used to display as `(125, 229, 160)`).
-//!
-//! Run with:
-//! `cargo run --package desktop-app --example robot_color_fidelity --features robot-app`
-
 use std::time::Duration;
 
 use cranpose::{
@@ -25,7 +15,6 @@ const GRADIENT_END: Color = Color(1.0, 45.0 / 255.0, 85.0 / 255.0, 1.0);
 const TEXT_COLOR: Color = Color(17.0 / 255.0, 17.0 / 255.0, 20.0 / 255.0, 1.0);
 const BACKGROUND: Color = Color(1.0, 1.0, 1.0, 1.0);
 
-/// Anti-aliasing-free interior sample points.
 const SOLID_PROBE: (f32, f32) = (75.0, 90.0);
 const GRADIENT_SAME_PROBE: (f32, f32) = (225.0, 90.0);
 const GRADIENT_MIX_START_PROBE: (f32, f32) = (308.0, 90.0);
@@ -53,8 +42,6 @@ fn main() {
                     (expected.2 * 255.0).round() as u8,
                 ];
                 let actual = [actual[0], actual[1], actual[2]];
-                // ±1 absorbs backend rounding; a double sRGB encode is tens
-                // of steps off, far outside this window.
                 let close = actual
                     .iter()
                     .zip(expected.iter())
@@ -72,9 +59,6 @@ fn main() {
             expect_exact("gradient same-endpoints", GRADIENT_SAME_PROBE, SOLID);
             expect_exact("gradient first stop", GRADIENT_MIX_START_PROBE, SOLID);
 
-            // Text: glyph AA never reaches the authored color exactly, but the
-            // darkest core pixel must be within a few steps of it. The washed
-            // pipeline rendered (17,17,20) text at (73,73,79).
             let (left, top, right, bottom) = TEXT_REGION;
             let mut darkest = [255u8; 3];
             let mut darkest_sum = 765u32;
@@ -157,8 +141,6 @@ fn content() {
                             .draw_behind(|scope| {
                                 let size = scope.size();
                                 scope.draw_round_rect(
-                                    // 20px clamp zones on both ends give the
-                                    // probes exact first-stop pixels.
                                     Brush::linear_gradient_range(
                                         vec![SOLID, GRADIENT_END],
                                         Point::new(20.0, 0.0),

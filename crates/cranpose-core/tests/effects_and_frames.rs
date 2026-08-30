@@ -1,11 +1,3 @@
-//! Derived state, produced state, event collection and the frame clock.
-//!
-//! These are the pieces an application reaches for when something outside the
-//! composition has to reach in: a computation over other state, a producer, a
-//! stream, a frame. Each one is only correct if it is scoped to the composition
-//! that created it, so each test here composes, drives, and then asks what
-//! survived.
-
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
@@ -26,7 +18,6 @@ fn composition() -> Composition<MemoryApplier> {
     Composition::new(MemoryApplier::new())
 }
 
-/// Pumps the runtime until `done` answers true, or the deadline passes.
 fn pump_until(composition: &mut Composition<MemoryApplier>, done: impl Fn() -> bool) -> bool {
     let runtime = composition.runtime_handle();
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -85,8 +76,6 @@ fn a_coroutine_scope_launches_work_onto_the_runtime_and_survives_recomposition()
             .expect("render succeeds");
     }
 
-    // A scope torn down by the second pass would cancel the first pass's task
-    // before it ever ran, and only one of the two would land.
     assert!(
         pump_until(&mut composition, || ran.get() == 2),
         "the scope delivered {} of two launches",
@@ -123,10 +112,6 @@ fn collect_events_delivers_every_event_the_stream_carries() {
     assert_eq!(*collected.borrow(), vec![1, 2, 3]);
 }
 
-/// A platform-service stand-in: observers register from the composition and
-/// unregister when their registration handle drops, exactly like
-/// `observe_memory_pressure` and `observe_incoming_content` in
-/// cranpose-services.
 type PlatformObserver = Arc<dyn Fn(u32) + Send + Sync>;
 
 #[derive(Clone, Default)]
@@ -181,11 +166,6 @@ impl PlatformService {
     }
 }
 
-/// Two `rememberEventStream` calls in one composable are two independent
-/// subscriptions: each service registers exactly one observer, and each publish
-/// reaches its own collector exactly once — before and after the body
-/// recomposes. Identity shared between the two call sites would collapse them
-/// onto one effect and double what a collector sees.
 #[test]
 fn two_event_streams_in_one_composable_each_deliver_exactly_once() {
     let mut composition = composition();
@@ -203,8 +183,6 @@ fn two_event_streams_in_one_composable_each_deliver_exactly_once() {
         let pressure_sink = Rc::clone(&seen_pressure);
         composition
             .render(key, move || {
-                // The application body reads state, so every set recomposes it
-                // — the shape of cranscan's Root around its two collectors.
                 let _ = tick.get();
                 let shares = shares.clone();
                 let pressure = pressure.clone();
@@ -245,8 +223,6 @@ fn two_event_streams_in_one_composable_each_deliver_exactly_once() {
         seen_shares.borrow()
     );
 
-    // Recompose the body, then publish again: the subscriptions must neither
-    // duplicate nor swap streams.
     tick.set(1);
     render(&mut composition);
     assert_eq!(
@@ -281,16 +257,6 @@ fn two_event_streams_in_one_composable_each_deliver_exactly_once() {
     );
 }
 
-/// A stream that enters the composition later must not disturb the identity of
-/// the streams already mounted after it in the same body.
-///
-/// Each stream owns its subscription by call site, so a conditional stream
-/// appearing above its siblings changes nothing: every service keeps exactly
-/// one observer and every publish is delivered once. Identity that followed
-/// sibling position instead would shift each later stream onto its neighbour's
-/// effect state — the conditional stream inheriting an already-run effect and
-/// never subscribing, the last stream subscribing a second time and doubling
-/// every platform event its collector sees from then on.
 #[test]
 fn a_stream_mounting_later_does_not_steal_an_existing_streams_identity() {
     let mut composition = composition();
@@ -471,8 +437,6 @@ fn produced_state_starts_at_its_initial_value_and_takes_what_the_producer_publis
     };
 
     render(&mut composition);
-    // The first read happens before the producer has run: a produced state that
-    // skipped its initial value would leave the first frame blank.
     assert_eq!(*seen.borrow(), vec![0]);
 
     let runtime = composition.runtime_handle();

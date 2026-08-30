@@ -20,9 +20,6 @@ use cranpose_ui_graphics::Point;
 
 use crate::nodes::input::{PointerEvent, PointerEventKind, PointerId};
 
-/// Minimum mean pointer spread (in dp) for a zoom ratio to be trusted.
-/// Below this the fingers are effectively on top of each other and the
-/// ratio explodes numerically.
 const MIN_ZOOM_SPREAD: f32 = 1.0;
 
 /// A transform step reported by [`TransformGesture::handle_event`].
@@ -180,7 +177,6 @@ mod tests {
         gesture.handle_event(&event(PointerEventKind::Down, 0, 100.0, 100.0));
         gesture.handle_event(&event(PointerEventKind::Down, 1, 200.0, 100.0));
 
-        // Second finger moves from (200,100) to (300,100): spread 50 -> 100.
         let step = gesture.handle_event(&event(PointerEventKind::Move, 1, 300.0, 100.0));
         match step {
             TransformGestureEvent::Transform {
@@ -191,7 +187,6 @@ mod tests {
             } => {
                 assert!((zoom - 2.0).abs() < 1e-5, "spread doubled, got zoom={zoom}");
                 assert!((pan.x - 50.0).abs() < 1e-5 && pan.y.abs() < 1e-5, "{pan:?}");
-                // Anchor centroid: pointer positions BEFORE the sample.
                 assert_eq!(centroid, Point { x: 150.0, y: 100.0 });
                 assert_eq!(pointer_count, 2);
             }
@@ -220,7 +215,6 @@ mod tests {
         gesture.handle_event(&event(PointerEventKind::Down, 0, 100.0, 100.0));
         gesture.handle_event(&event(PointerEventKind::Down, 1, 200.0, 100.0));
 
-        // Both fingers move +10 in x, one sample after the other.
         let mut total_pan = Point { x: 0.0, y: 0.0 };
         let mut total_zoom = 1.0;
         for step in [
@@ -295,8 +289,6 @@ mod tests {
         gesture.handle_event(&event(PointerEventKind::Down, 1, 100.0, 0.0));
         gesture.handle_event(&event(PointerEventKind::Up, 1, 100.0, 0.0));
 
-        // The next move of the remaining finger reports only its own delta,
-        // not the centroid jump caused by the lifted finger.
         let step = gesture.handle_event(&event(PointerEventKind::Move, 0, 5.0, 0.0));
         match step {
             TransformGestureEvent::Transform { pan, zoom, .. } => {

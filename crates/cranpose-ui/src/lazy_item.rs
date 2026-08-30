@@ -55,7 +55,6 @@ mod tests {
 
     use super::*;
 
-    /// Runs `body` once inside a real composition and returns what it recorded.
     fn composed<T: Copy + Default + 'static>(body: impl Fn(&Cell<T>) + 'static) -> T {
         let mut composition = Composition::new(MemoryApplier::new());
         let seen = Rc::new(Cell::new(T::default()));
@@ -69,8 +68,6 @@ mod tests {
 
     #[test]
     fn an_item_key_reaches_what_the_row_composes() {
-        // Outside a lazy item there is no identity to carry, inside there is,
-        // and it ends with the item so the next row does not inherit it.
         let seen: (Option<u64>, Option<u64>, Option<u64>) = composed(|cell| {
             let before = lazy_item_key();
             let inside = Cell::new(None);
@@ -82,8 +79,6 @@ mod tests {
 
     #[test]
     fn an_unkeyed_list_reports_no_identity_rather_than_its_position() {
-        // An index is the identity of the slot, which is the identity that
-        // leaks state between rows; a list with no user key says so.
         let seen: Option<u64> = composed(|cell| {
             cell.set(Some(0));
             ProvideLazyItemKey(None, || cell.set(lazy_item_key()));
@@ -93,8 +88,6 @@ mod tests {
 
     #[test]
     fn the_composition_local_is_one_instance_per_thread() {
-        // Two calls that returned different locals would each carry their own
-        // value, and a provision through one would be invisible to the other.
         let seen: bool = composed(|cell| {
             ProvideLazyItemKey(Some(3), || {
                 cell.set(local_lazy_item_key().current() == Some(3));

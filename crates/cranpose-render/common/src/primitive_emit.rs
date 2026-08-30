@@ -49,14 +49,6 @@ pub struct ShapeDrawParams {
     pub motion_context_animated: bool,
 }
 
-/// Resolves the rect a (possibly stroked) rect/round-rect primitive should
-/// actually cover, plus the layer-scaled stroke.
-///
-/// A centered stroke bleeds `width / 2` outside the geometry, so the quad has
-/// to grow by that much or the outer half of the outline would be clipped away
-/// by its own vertices. The shader shrinks the SDF box back by the same amount.
-///
-/// Returns `None` for a stroke that cannot draw anything.
 fn stroked_draw_rect(
     local_rect: Rect,
     stroke: Option<Stroke>,
@@ -70,10 +62,6 @@ fn stroked_draw_rect(
     if !stroke.is_visible() {
         return None;
     }
-    // Inflate in pre-scale local space; `apply_layer_affine_to_rect` then
-    // scales the padding by scale_x/scale_y while the stroke width itself uses
-    // the uniform (minimum) scale. The padding is therefore never smaller than
-    // the stroke needs.
     let outset = stroke.half_width();
     Some((
         inflate_rect(draw_rect, outset),
@@ -306,16 +294,9 @@ pub fn arc_shape_params(
     if arc.is_degenerate() {
         return None;
     }
-    // `rect` already is the tight, cap-inclusive bounding box, so the
-    // quad needs no extra inflation here.
     let draw_rect = local_rect.translate(layer_bounds.x, layer_bounds.y);
     let out_rect = apply_layer_affine_to_rect(draw_rect, layer_bounds, layer);
     let quad = apply_layer_to_quad(draw_rect, layer_bounds, layer);
-    // Radii scale by the *uniform* (minimum) layer scale, matching how
-    // corner radii are handled. Under a non-uniform scale the true
-    // shape would be an ellipse; taking the minimum keeps the band
-    // strictly inside the (independently scaled) bounding box, so the
-    // quad never clips it.
     let scale = layer_uniform_scale(layer);
     let arc_center = apply_layer_affine_to_point(
         Point::new(center.x + layer_bounds.x, center.y + layer_bounds.y),
@@ -345,9 +326,6 @@ pub fn emit_draw_primitive<S: DrawPrimitiveSink>(
     blend_mode: Option<BlendMode>,
     motion_context_animated: bool,
 ) {
-    // Borrowing the primitive keeps the per-frame collect walk from cloning
-    // the whole enum for every draw; only the payloads a sink actually keeps
-    // (brush, image handle, text block, shadow) are cloned below.
     match primitive {
         DrawPrimitive::Content => {}
         DrawPrimitive::Blend {
@@ -464,16 +442,6 @@ pub fn emit_draw_primitive<S: DrawPrimitiveSink>(
     }
 }
 
-/// Lowers a text primitive into [`TextDrawParams`].
-///
-/// The block box is translated into layer space and transformed exactly like a
-/// `Text` node's rect, and the style is built by the *same*
-/// [`text_style_for_draw_style`] the draw scope measured through — so the
-/// glyphs the rasterizer lays out and the extent the caller was told about come
-/// from one description.
-///
-/// Returns `None` for geometry no rasterizer would draw, so degenerate text
-/// never reaches a scene.
 fn text_draw_params(
     text: TextPrimitive,
     layer_bounds: Rect,
@@ -504,9 +472,6 @@ fn text_draw_params(
         text_style: text_style_for_draw_style(&text.style),
         font_size: text.style.resolved_font_size(),
         scale,
-        // A draw scope hands the renderer a box it measured itself: re-wrapping
-        // or ellipsizing it against that same box could only shorten text the
-        // caller already sized for.
         layout_options: TextLayoutOptions {
             soft_wrap: false,
             overflow: TextOverflow::Visible,
@@ -622,8 +587,6 @@ mod tests {
         );
     }
 
-    // ── Stroke / arc lowering ───────────────────────────────────────────────
-
     use std::f32::consts::FRAC_PI_2;
 
     use cranpose_ui_graphics::{Stroke, StrokeCap, StrokeJoin};
@@ -643,8 +606,6 @@ mod tests {
 
     #[test]
     fn stroked_rect_inflates_the_quad_by_half_the_width() {
-        // Without the inflation the outer half of the outline would be clipped
-        // away by the quad it is drawn on.
         let params = draw_shape_params_for_primitive(
             DrawPrimitive::Rect {
                 rect: Rect {
@@ -666,7 +627,6 @@ mod tests {
         let stroke = params.stroke.expect("stroke must survive lowering");
         assert_eq!(stroke.width, 6.0);
         assert_eq!(stroke.join, StrokeJoin::Bevel);
-        // Geometry (15, 25) 40x30, grown by 3 on every side.
         assert_eq!(
             params.local_rect,
             Rect {
@@ -711,7 +671,6 @@ mod tests {
         .expect("stroked rect");
 
         assert_eq!(params.stroke.expect("stroke").width, 8.0);
-        // Geometry (-2,-2)..(22,22) scaled 2x about the origin.
         assert_eq!(
             params.local_rect,
             Rect {
@@ -774,7 +733,6 @@ mod tests {
         .expect("arc");
 
         let arc = params.arc.expect("arc geometry must survive lowering");
-        // Center translated by the layer origin, exactly like the bbox.
         assert_eq!(arc.center, Point::new(60.0, 70.0));
         assert_eq!(arc.inner_radius, 6.0);
         assert_eq!(arc.outer_radius, 12.0);
@@ -862,7 +820,6 @@ mod tests {
         assert_eq!(arc.center, Point::new(30.0, 30.0));
         assert_eq!(arc.inner_radius, 12.0);
         assert_eq!(arc.outer_radius, 30.0);
-        // The band must stay inside the quad the renderer emits.
         assert_eq!(
             params.local_rect,
             Rect {
@@ -881,13 +838,9 @@ mod tests {
             height: 20.0,
         });
         let cases: [(f32, f32, f32, Option<Stroke>); 4] = [
-            // inner >= outer
             (10.0, 10.0, 1.0, None),
-            // zero sweep
             (10.0, 0.0, 0.0, None),
-            // zero radius
             (0.0, 0.0, 1.0, None),
-            // zero-width stroke
             (10.0, 0.0, 1.0, Some(Stroke::new(0.0))),
         ];
         for (radius, inner_radius, sweep_angle, stroke) in cases {
@@ -937,8 +890,6 @@ mod tests {
         assert!(params.arc.is_none());
         assert!(params.shape.is_some());
     }
-
-    // ── Text lowering ───────────────────────────────────────────────────────
 
     use std::rc::Rc as StdRc;
 
@@ -1006,7 +957,6 @@ mod tests {
             &GraphicsLayer::default(),
         );
         assert_eq!(params.len(), 1);
-        // Layer bounds are (10, 20); an untransformed layer only translates.
         assert_eq!(
             params[0].rect,
             Rect {
@@ -1091,8 +1041,6 @@ mod tests {
 
     #[test]
     fn lowered_text_is_never_re_wrapped_against_the_box_it_was_measured_into() {
-        // The draw scope already sized the box from the string; wrapping or
-        // ellipsizing here could only truncate text the caller asked for.
         let params = lower_text(
             text_primitive(
                 Rect {
@@ -1167,8 +1115,6 @@ mod tests {
 
     #[test]
     fn blended_text_still_lowers_because_glyphs_composite_src_over() {
-        // `DrawScope` offers no blended text, but a nested `Blend` wrapper must
-        // not swallow the run if one is built by hand.
         let params = lower_text(
             DrawPrimitive::Blend {
                 primitive: Box::new(text_primitive(

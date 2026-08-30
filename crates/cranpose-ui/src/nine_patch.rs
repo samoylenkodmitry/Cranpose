@@ -152,9 +152,6 @@ pub fn nine_patch_quads(
         }];
     }
 
-    // Source columns and rows: leading corner, stretchable middle, trailing
-    // corner. The destination has the same three bands, with the middle taking
-    // whatever is left over.
     let source_columns = [
         (source.x, insets.left),
         (
@@ -224,7 +221,6 @@ pub fn nine_patch_quads(
             let fill = match (column, row) {
                 (1, 1) => center,
                 _ if stretched => edges,
-                // A corner is never scaled, whatever the fills say.
                 _ => PatchFill::Stretch,
             };
             if fill.is_tiled() {
@@ -249,9 +245,6 @@ fn usable(rect: Rect) -> bool {
         && rect.height > 0.0
 }
 
-/// Repeats `source` across `destination`, clipping the final row and column so
-/// a partial tile shows the leading part of the source rather than a squeezed
-/// whole one.
 fn push_tiles(quads: &mut Vec<PatchQuad>, source: Rect, destination: Rect) {
     if !usable(source) || !usable(destination) {
         return;
@@ -317,8 +310,6 @@ mod tests {
     fn insets_scale_with_the_source_they_were_measured_on() {
         let insets = NinePatchInsets::uniform(4.0).scaled(2.0);
         assert_eq!(insets, NinePatchInsets::uniform(8.0));
-        // A factor that means nothing leaves the insets alone rather than
-        // collapsing them.
         assert_eq!(
             NinePatchInsets::uniform(4.0).scaled(0.0),
             NinePatchInsets::uniform(4.0)
@@ -447,8 +438,6 @@ mod tests {
             PatchFill::Tile,
             PatchFill::Tile,
         );
-        // Corners are still four single quads; the middle band is 30 wide and
-        // 10 tall over a 10x10 source, so three tiles per middle row.
         let corners = quads
             .iter()
             .filter(|quad| quad.destination.width == 10.0 && quad.destination.height == 10.0)

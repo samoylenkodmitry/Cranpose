@@ -1,17 +1,3 @@
-//! Robot runner for Shaders performance profiling.
-//!
-//! Steps:
-//! 1. Open app
-//! 2. Go to Shaders tab
-//! 3. Drag "Blur" and "Glass" rects around
-//! 4. Scroll the page up and down
-//! 5. Repeat for profiling
-//!
-//! Run with:
-//! ```bash
-//! cargo run --package desktop-app --example robot_measure_shaders --features robot-app
-//! ```
-
 mod output_paths;
 
 use std::{

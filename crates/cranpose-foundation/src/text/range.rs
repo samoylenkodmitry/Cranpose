@@ -1,7 +1,3 @@
-//! Text range for representing cursor position and selection.
-//!
-//! Matches Jetpack Compose's `androidx.compose.ui.text.TextRange`.
-
 /// Represents a range in text, used for cursor position and selection.
 ///
 /// When `start == end`, this represents a cursor position (collapsed selection).
@@ -95,22 +91,18 @@ impl TextRange {
         let start = self.min().min(text.len());
         let end = self.max().min(text.len());
 
-        // Clamp start to valid char boundary (scan backward)
         let start = if text.is_char_boundary(start) {
             start
         } else {
-            // Find previous char boundary by scanning backward
             (0..start)
                 .rev()
                 .find(|&i| text.is_char_boundary(i))
                 .unwrap_or(0)
         };
 
-        // Clamp end to valid char boundary (scan forward)
         let end = if text.is_char_boundary(end) {
             end
         } else {
-            // Find next char boundary by scanning forward
             (end..=text.len())
                 .find(|&i| text.is_char_boundary(i))
                 .unwrap_or(text.len())
@@ -163,7 +155,7 @@ mod tests {
         assert!(range.contains(2));
         assert!(range.contains(3));
         assert!(range.contains(4));
-        assert!(!range.contains(5)); // exclusive end
+        assert!(!range.contains(5));
     }
 
     #[test]
@@ -180,12 +172,9 @@ mod tests {
 
     #[test]
     fn safe_slice_unicode() {
-        // "Hello 🌍" - emoji is 4 bytes
         let text = "Hello 🌍";
-        // Range in middle of emoji (byte 7 is inside the 4-byte emoji starting at 6)
         let range = TextRange::new(0, 7);
         let slice = range.safe_slice(text);
-        // Should clamp to valid boundary (either before or after emoji)
         assert!(slice == "Hello " || slice == "Hello 🌍");
     }
 }

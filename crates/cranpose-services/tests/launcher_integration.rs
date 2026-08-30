@@ -1,7 +1,3 @@
-//! The launcher contract: a chooser result reaches the composition that asked
-//! for it, including when the host destroyed and rebuilt that composition while
-//! the chooser was in front.
-
 use std::{cell::RefCell, rc::Rc};
 
 use cranpose_core::{Composition, MemoryApplier, location_key};
@@ -11,9 +7,6 @@ use cranpose_services::{
     set_platform_file_picker,
 };
 
-/// A picker whose chooser never resolves in this process, and which instead
-/// reports the selection the host recovered — exactly what Android does when it
-/// recreates the activity while the Storage Access Framework is in front.
 #[derive(Default)]
 struct RecreatingPicker {
     recovered: RefCell<Vec<RecoveredPick>>,
@@ -26,7 +19,6 @@ impl FilePicker for RecreatingPicker {
         _options: FilePickerOptions,
     ) -> PickerFuture<Result<Option<ContentHandle>, FilePickerError>> {
         self.launches.set(self.launches.get() + 1);
-        // The composition is destroyed before this ever resolves.
         Box::pin(std::future::pending())
     }
 
@@ -42,7 +34,6 @@ impl FilePicker for RecreatingPicker {
     }
 }
 
-/// An immediately-resolving picker, for the ordinary path.
 struct InstantPicker {
     name: &'static str,
 }
@@ -80,7 +71,6 @@ fn a_recovered_pick_reaches_the_launcher_that_asked_for_it() {
     let picker = Rc::new(RecreatingPicker::default());
     set_platform_file_picker(picker.clone());
 
-    // First composition: the button is pressed and the chooser is presented.
     {
         let launched = Rc::new(std::cell::Cell::new(false));
         let launched_in_build = Rc::clone(&launched);
@@ -99,13 +89,10 @@ fn a_recovered_pick_reaches_the_launcher_that_asked_for_it() {
     }
     assert_eq!(picker.launches.get(), 1);
 
-    // The host recreated the activity; the platform recorded the grant.
     picker.recovered.borrow_mut().push(RecoveredPick::File(
         BytesContent::named("recovered.txt", b"recovered".to_vec()).handle(),
     ));
 
-    // Second composition: the same request key takes delivery, with no polling
-    // and no application-side inbox.
     let delivered: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
     let seen = Rc::clone(&delivered);
     let _composition = render(move || {
@@ -130,7 +117,6 @@ fn a_recovered_pick_is_delivered_once() {
     let picker = Rc::new(RecreatingPicker::default());
     set_platform_file_picker(picker.clone());
 
-    // Mark a request in flight, then hand the framework its recovered result.
     {
         let launched = Rc::new(std::cell::Cell::new(false));
         let launched_in_build = Rc::clone(&launched);
@@ -203,10 +189,6 @@ fn an_ordinary_pick_resolves_through_the_callback() {
     clear_launcher_state();
 }
 
-/// A chooser is a modal the user is standing in front of. `is_in_flight` is
-/// what a screen reads to grey its own button out; if it stayed true after the
-/// result arrived, the button would never come back, and if a second launch
-/// went through while one was up the application would present two choosers.
 #[test]
 fn a_launcher_reports_a_chooser_that_is_still_in_front() {
     clear_platform_file_picker();
@@ -224,8 +206,6 @@ fn a_launcher_reports_a_chooser_that_is_still_in_front() {
         seen.borrow_mut().push(launcher.is_in_flight());
         if !launched.replace(true) {
             launcher.launch(FilePickerOptions::default());
-            // A second launch while the first chooser is still up must not
-            // present another one.
             launcher.launch(FilePickerOptions::default());
             seen.borrow_mut().push(launcher.is_in_flight());
         }
@@ -248,7 +228,6 @@ fn a_launcher_reports_a_chooser_that_is_still_in_front() {
     clear_launcher_state();
 }
 
-/// The ordinary path: once the chooser resolves, the launcher is idle again.
 #[test]
 fn a_launcher_is_idle_again_once_the_chooser_resolves() {
     clear_platform_file_picker();

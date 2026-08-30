@@ -1,10 +1,3 @@
-//! Focused robot test for click-drag text selection
-//!
-//! Run with:
-//! ```bash
-//! cargo run --package desktop-app --example robot_drag_selection --features robot-app
-//! ```
-
 use std::{
     path::{Path, PathBuf},
     time::Duration,
@@ -33,7 +26,6 @@ fn main() {
         .with_headless(true)
         .with_test_driver(move |robot| {
             const TEST_TIMEOUT_SECS: u64 = 60;
-            // Timeout after a full robot run budget.
             std::thread::spawn(|| {
                 std::thread::sleep(Duration::from_secs(TEST_TIMEOUT_SECS));
                 println!("\n✗ Test timed out after {} seconds", TEST_TIMEOUT_SECS);
@@ -43,7 +35,6 @@ fn main() {
             std::thread::sleep(Duration::from_millis(300));
             println!("✓ App ready\n");
 
-            // Step 1: Switch to Text Input tab
             println!("--- Step 1: Switch to Text Input Tab ---");
             if text_input_robot_helpers::open_text_input_tab(&robot) {
                 println!("✓ Clicked Text Input tab\n");
@@ -53,7 +44,6 @@ fn main() {
                 return;
             }
 
-            // Step 2: Find text field - try multiple times with wait
             println!("--- Step 2: Find text field ---");
             if let Some((field_x, field_y, field_w, field_h)) =
                 text_input_robot_helpers::wait_for_in_semantics(&robot, |robot| {
@@ -62,7 +52,6 @@ fn main() {
             {
                 println!("✓ Found text field at ({:.0}, {:.0})\n", field_x, field_y);
 
-                // Step 3: Add text by clicking Add ! button
                 println!("--- Step 3: Add text ---");
                 for _ in 0..5 {
                     if let Some((x, y, w, h)) =
@@ -81,18 +70,15 @@ fn main() {
                 std::thread::sleep(Duration::from_millis(200));
                 println!("✓ Added text\n");
 
-                // Step 4: Perform click-drag selection
                 println!("--- Step 4: Click-drag selection ---");
 
                 let start_x = field_x + field_w - 10.0;
                 let end_x = field_x + 10.0;
                 let center_y = field_y + field_h / 2.0;
 
-                // Mouse move to start
                 let _ = robot.mouse_move(start_x, center_y);
                 std::thread::sleep(Duration::from_millis(50));
 
-                // Mouse down
                 let _ = robot.mouse_down();
                 std::thread::sleep(Duration::from_millis(50));
 
@@ -102,7 +88,6 @@ fn main() {
                     println!("    (Note: app-thread focus query returned false)");
                 }
 
-                // Drag across (3 steps)
                 for step in 1..=3 {
                     let t = step as f32 / 3.0;
                     let drag_x = start_x + (end_x - start_x) * t;
@@ -111,7 +96,6 @@ fn main() {
                 }
                 println!("  • Dragged across text");
 
-                // Mouse up
                 let _ = robot.mouse_up();
                 std::thread::sleep(Duration::from_millis(100));
 
@@ -140,9 +124,6 @@ fn main() {
                     "desktop pointer selection must render both handles; found {start_handle_pixels}/{end_handle_pixels} solid-blue pixels"
                 );
 
-                // Rendering handles for a mouse-created range is insufficient:
-                // prove that a desktop mouse can own the end handle through the
-                // real popup hit-test/input path and move its semantic endpoint.
                 let end_handle = lower_handle_center(&shot, selected_bounds)
                     .expect("rendered end handle must have a measurable blue dot");
                 let before = normalized(selection);
@@ -190,10 +171,6 @@ fn main() {
                     );
                     let moved_handle = lower_handle_center(&moved_shot, moved_bounds)
                         .expect("moved end handle must remain measurable");
-                    // The drawn handle GLIDES on a spring: it trails the
-                    // pointer while moving and converges at rest (checked
-                    // after release below). Same-frame it must have left its
-                    // previous position toward the pointer.
                     assert!(
                         (moved_handle.0 - drag_x).abs() <= 34.0,
                         "end handle did not follow the mouse in input frame {index}: pointer={drag_x:.1}, handle={:.1}",
@@ -246,8 +223,6 @@ fn lower_handle_center(shot: &RobotScreenshot, rect: (f32, f32, f32, f32)) -> Op
     let max_y = (top..bottom)
         .rev()
         .find(|&py| (left..right).any(|px| is_blue(px, py)))?;
-    // The bottom rows belong only to the circular dot, not the highlighted
-    // text band or its stem, so their centroid robustly identifies the handle.
     let band_top = max_y.saturating_sub((4.0 * sy).ceil() as usize);
     let mut sum_x = 0usize;
     let mut sum_y = 0usize;

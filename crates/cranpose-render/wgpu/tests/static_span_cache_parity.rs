@@ -1,33 +1,3 @@
-//! Byte parity and engagement for the opaque static leading-span cache.
-//!
-//! The frame's first draws — a full-screen opaque background rect and a
-//! radial-gradient vignette disc — are static for hundreds of frames while
-//! everything above them churns. The cache captures that leading span once
-//! into a pooled offscreen and replaces it with a single full-target blit on
-//! every frame whose leading converted `ShapeData` records (plus gradient
-//! stop payloads) memcmp-match the capture.
-//!
-//! The bar is ZERO differing bytes against the cache-off arm, on every frame
-//! of a churning sequence that includes a mid-run palette mutation of the
-//! leading shapes (invalidation + recapture) — the mechanism's claim is
-//! byte-exactness by construction (opaque clear below, SrcOver-only span,
-//! identical pipelines at identical device coordinates, Nearest-sampled
-//! alpha-255 blit), so any tolerance would hide a broken link in that chain.
-//! Arm separation is by the `CRANPOSE_STATIC_SPAN` kill switch, read per
-//! engagement, and engagement is asserted through the renderer's
-//! (hits, recaptures) counters: a parity pass with zero hits would prove
-//! nothing.
-//!
-//! Both tests latch `CRANPOSE_DISABLE_DIRECT_SCENE_RANGE_CACHE` (a
-//! process-wide `OnceLock`, so it must be set before the first frame): a
-//! small static test scene would otherwise be absorbed whole by the
-//! direct-scene range cache and never reach the shape path as leading
-//! records. On the watch that cache does NOT take the span — `fill-diag`
-//! measured the background + vignette submitted as gradient quads every
-//! frame, which is the very condition this stage exists for — and when the
-//! range cache does absorb a leading chunk, the span cache correctly stays
-//! disengaged (the chunk no longer starts with a shape batch).
-
 mod support;
 
 use cranpose_render_common::{
@@ -42,11 +12,6 @@ use cranpose_ui_graphics::{Brush, Color, DrawScope, DrawScopeDefault, GraphicsLa
 
 const SIZE: u32 = 240;
 
-/// One frame of the scene: the static leading span (opaque background rect,
-/// then a radial-gradient vignette disc, then optionally a smaller gradient
-/// glow disc), then churning content whose bytes change every frame.
-/// `bg`/`vignette`/`glow` parameterize the span palette so a test can
-/// mutate a leading shape mid-run.
 fn record_scene(
     scope: &mut DrawScopeDefault,
     frame: u32,
@@ -54,7 +19,6 @@ fn record_scene(
     vignette: Color,
     glow: Option<Color>,
 ) {
-    // 1. Full-screen opaque background — the span's alpha == 1 base.
     scope.draw_rect_at(
         Rect {
             x: 0.0,
@@ -64,10 +28,6 @@ fn record_scene(
         },
         Brush::solid(bg),
     );
-    // 2. Static vignette: a radial-gradient disc covering most of the
-    //    target, translucent toward the center so it composites against the
-    //    background (and so the gradient's ordered dither is live in the
-    //    cached bytes).
     let radius = SIZE as f32 * 0.52;
     scope.draw_circle(
         Brush::radial_gradient(
@@ -78,9 +38,6 @@ fn record_scene(
         Point::new(SIZE as f32 * 0.5, SIZE as f32 * 0.5),
         radius,
     );
-    // 2b. Optional third span shape: a smaller radial-gradient glow disc,
-    //     so a test can invalidate the span's TAIL while the gradient-
-    //     carrying prefix (background + vignette) stays capturable.
     if let Some(glow) = glow {
         let glow_radius = SIZE as f32 * 0.18;
         scope.draw_circle(
@@ -93,9 +50,6 @@ fn record_scene(
             glow_radius,
         );
     }
-    // 3. Churn: orbiting solid dots whose positions move every frame,
-    //    several overlapping the vignette so a z-order mistake in the
-    //    span-split changes blended bytes, not just fringes.
     for i in 0..7u32 {
         let angle = frame as f32 * 0.37 + i as f32 * (std::f32::consts::TAU / 7.0);
         scope.draw_circle(
@@ -107,7 +61,6 @@ fn record_scene(
             9.0,
         );
     }
-    // 4. A translucent churner right over the vignette center.
     scope.draw_circle(
         Brush::solid(Color(0.35, 0.8, 0.6, 0.6)),
         Point::new(
@@ -196,9 +149,6 @@ fn assert_frames_identical(baseline: &[Vec<u8>], cached: &[Vec<u8>], label: &str
     }
 }
 
-/// Palette flips for BOTH leading shapes at `PALETTE_FLIP_FRAME` — the
-/// palette-drain shape of invalidation: one whole-span miss, then a full
-/// recapture of the new span.
 const PALETTE_FLIP_FRAME: u32 = 6;
 const FRAMES: u32 = 12;
 
@@ -213,7 +163,6 @@ fn full_flip_graph(frame: u32) -> RenderGraph {
 
 #[test]
 fn span_cache_is_byte_exact_across_churn_and_a_palette_flip() {
-    // Before the first frame: latched process-wide (see module docs).
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_DISABLE_DIRECT_SCENE_RANGE_CACHE", Some("1"));
     let mut renderer = match support::headless_renderer() {
         Ok(renderer) => renderer,
@@ -223,7 +172,6 @@ fn span_cache_is_byte_exact_across_churn_and_a_palette_flip() {
         }
     };
 
-    // Arm A: cache off, the live baseline.
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_STATIC_SPAN", Some("0"));
     let baseline = render_sequence(&mut renderer, 0..FRAMES, full_flip_graph);
     assert_eq!(
@@ -232,14 +180,10 @@ fn span_cache_is_byte_exact_across_churn_and_a_palette_flip() {
         "the kill switch must keep the cache fully idle"
     );
 
-    // Arm B: cache on (default state).
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_STATIC_SPAN", None);
     let cached = render_sequence(&mut renderer, 0..FRAMES, full_flip_graph);
     let (hits, recaptures) = renderer.static_span_stats();
 
-    // Engagement proof — the schedule is deterministic: frame 0 observes,
-    // frame 1 captures, 2..6 hit; the flip frame misses whole (both leading
-    // shapes changed), frame 7 recaptures, 8..12 hit.
     assert_eq!(
         recaptures, 2,
         "expected exactly the initial capture and the post-flip recapture"
@@ -253,10 +197,6 @@ fn span_cache_is_byte_exact_across_churn_and_a_palette_flip() {
     assert_frames_identical(&baseline, &cached, "full palette flip");
 }
 
-/// Glow-only mutation: the background rect and the vignette stay
-/// byte-identical, so the recapture after the flip covers only the 2-shape
-/// gradient-carrying prefix, and the upgrade hysteresis must re-extend it
-/// to the full 3-shape span after 30 consecutive stable frames.
 const UPGRADE_FRAMES: u32 = 42;
 
 fn glow_flip_graph(frame: u32) -> RenderGraph {
@@ -272,7 +212,6 @@ fn glow_flip_graph(frame: u32) -> RenderGraph {
 
 #[test]
 fn partial_span_invalidation_stays_byte_exact_and_recovers_the_full_span() {
-    // Before the first frame: latched process-wide (see module docs).
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_DISABLE_DIRECT_SCENE_RANGE_CACHE", Some("1"));
     let mut renderer = match support::headless_renderer() {
         Ok(renderer) => renderer,
@@ -292,10 +231,6 @@ fn partial_span_invalidation_stays_byte_exact_and_recovers_the_full_span() {
     let hits = hits - idle_stats.0;
     let recaptures = recaptures - idle_stats.1;
 
-    // Initial capture (frame 1), shrink recapture at the flip (frame 6,
-    // span = the still-stable background + vignette prefix), upgrade
-    // recapture once the re-stabilized glow outlasts the 30-frame
-    // hysteresis.
     assert_eq!(
         recaptures, 3,
         "expected initial capture, post-flip shrink capture, and one hysteresis upgrade"
@@ -308,20 +243,10 @@ fn partial_span_invalidation_stays_byte_exact_and_recovers_the_full_span() {
     assert_frames_identical(&baseline, &cached, "glow-only flip");
 }
 
-/// The span capture pass shares its encoder with the culled fused pass but
-/// carries no depth attachment, so the depth-variant pipeline flag must die
-/// with the fused pass it described. This exact combination — a capturable
-/// static leading span under an `InscribedCircle` visible region — aborted
-/// the first round-display device build with a pipeline/pass depth-format
-/// validation panic. The bar: the sequence renders at all, the cache still
-/// recaptures mid-arm (the flip frame forces the capture pass to run while
-/// the region is cullable), and every VISIBLE pixel matches the Full-region
-/// cache-on arm byte-for-byte.
 #[test]
 fn span_capture_inside_a_culled_pass_neither_panics_nor_diverges() {
     use cranpose_render_wgpu::{DisplayVisibleRegion, display_clip_pixel_is_visible};
 
-    // Before the first frame: latched process-wide (see module docs).
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_DISABLE_DIRECT_SCENE_RANGE_CACHE", Some("1"));
     let mut renderer = match support::headless_renderer() {
         Ok(renderer) => renderer,
@@ -331,14 +256,9 @@ fn span_capture_inside_a_culled_pass_neither_panics_nor_diverges() {
         }
     };
 
-    // Arm A: Full region, cache on.
     let flat = render_sequence(&mut renderer, 0..FRAMES, full_flip_graph);
     let (_, recaptures_flat) = renderer.static_span_stats();
 
-    // Arm B: the platform reports a cullable region and the cull is opted
-    // in (it is opt-in while the on-device abort is under investigation).
-    // The mid-sequence palette flip forces a recapture INSIDE this arm, so
-    // the capture pass provably encodes while the fused pass is culled.
     renderer.set_display_visible_region(DisplayVisibleRegion::InscribedCircle);
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ROUND_CULL", Some("1"));
     let culled = render_sequence(&mut renderer, 0..FRAMES, full_flip_graph);

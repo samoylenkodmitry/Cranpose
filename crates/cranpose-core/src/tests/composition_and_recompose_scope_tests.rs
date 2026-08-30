@@ -130,7 +130,6 @@ fn malformed_composition_local_entry_falls_back_to_default() {
 
 #[test]
 fn composition_local_simple_subscription_test() {
-    // Simplified test to verify basic subscription behavior
     thread_local! {
         static READER_RECOMPOSITIONS: Cell<usize> = const { Cell::new(0) };
         static LAST_VALUE: Cell<i32> = const { Cell::new(-1) };
@@ -169,11 +168,9 @@ fn composition_local_simple_subscription_test() {
     assert_eq!(READER_RECOMPOSITIONS.with(|c| c.get()), 1);
     assert_eq!(LAST_VALUE.with(|v| v.get()), 10);
 
-    // Change trigger - should update the provided value and reader should see it
     trigger.set_value(20);
     let _ = composition.process_invalid_scopes().expect("recomposition");
 
-    // Reader should have recomposed and seen the new value
     println!(
         "after update recompositions={}, last={}",
         READER_RECOMPOSITIONS.with(|c| c.get()),
@@ -324,8 +321,6 @@ fn composition_local_custom_policy_uses_equivalence_for_updates() {
 
 #[test]
 fn composition_local_tracks_reads_and_recomposes_selectively() {
-    // This test verifies that CompositionLocal establishes subscriptions
-    // and ONLY recomposes composables that actually read .current()
     thread_local! {
         static OUTSIDE_RECOMPOSITIONS: Cell<usize> = const { Cell::new(0) };
         static NOT_CHANGING_TEXT_RECOMPOSITIONS: Cell<usize> = const { Cell::new(0) };
@@ -344,15 +339,12 @@ fn composition_local_tracks_reads_and_recomposes_selectively() {
     #[composable]
     fn inside_inside() {
         INSIDE_INSIDE_RECOMPOSITIONS.with(|c| c.set(c.get() + 1));
-        // Does NOT read LocalCount - should NOT recompose when it changes
     }
 
     #[composable]
     fn inside(local_count: CompositionLocal<i32>) {
         INSIDE_RECOMPOSITIONS.with(|c| c.set(c.get() + 1));
-        // Does NOT read LocalCount directly - should NOT recompose when it changes
 
-        // This text reads the local - SHOULD recompose
         #[composable]
         fn reading_text(local_count: CompositionLocal<i32>) {
             READING_TEXT_RECOMPOSITIONS.with(|c| c.set(c.get() + 1));
@@ -362,7 +354,6 @@ fn composition_local_tracks_reads_and_recomposes_selectively() {
 
         reading_text(local_count.clone());
 
-        // This text does NOT read the local - should NOT recompose
         #[composable]
         fn non_reading_text() {
             NON_READING_TEXT_RECOMPOSITIONS.with(|c| c.set(c.get() + 1));
@@ -375,15 +366,13 @@ fn composition_local_tracks_reads_and_recomposes_selectively() {
     #[composable]
     fn not_changing_text() {
         NOT_CHANGING_TEXT_RECOMPOSITIONS.with(|c| c.set(c.get() + 1));
-        // Does NOT read anything reactive - should NOT recompose
     }
 
     #[composable]
     fn outside(local_count: CompositionLocal<i32>, trigger: MutableState<i32>) {
         OUTSIDE_RECOMPOSITIONS.with(|c| c.set(c.get() + 1));
-        let count = trigger.value(); // Read trigger to establish subscription
+        let count = trigger.value();
         CompositionLocalProvider(vec![local_count.provides(count)], || {
-            // Directly call reading_text without the inside() wrapper
             #[composable]
             fn reading_text(local_count: CompositionLocal<i32>) {
                 READING_TEXT_RECOMPOSITIONS.with(|c| c.set(c.get() + 1));
@@ -396,7 +385,6 @@ fn composition_local_tracks_reads_and_recomposes_selectively() {
         });
     }
 
-    // Initial composition
     composition
         .render(1, || outside(local_count.clone(), trigger))
         .expect("initial composition");
@@ -406,16 +394,10 @@ fn composition_local_tracks_reads_and_recomposes_selectively() {
     assert_eq!(READING_TEXT_RECOMPOSITIONS.with(|c| c.get()), 1);
     assert_eq!(LAST_READ_VALUE.with(|v| v.get()), 0);
 
-    // Change the trigger - this should update the provided value
     trigger.set_value(1);
     let _ = composition
         .process_invalid_scopes()
         .expect("process recomposition");
-
-    // Expected behavior:
-    // - outside: RECOMPOSES (reads trigger.value())
-    // - not_changing_text: SKIPPED (no reactive reads)
-    // - reading_text: RECOMPOSES (reads local_count.current())
 
     assert_eq!(
         OUTSIDE_RECOMPOSITIONS.with(|c| c.get()),
@@ -438,7 +420,6 @@ fn composition_local_tracks_reads_and_recomposes_selectively() {
         "should read new value"
     );
 
-    // Change again
     trigger.set_value(2);
     let _ = composition
         .process_invalid_scopes()
@@ -473,7 +454,6 @@ fn static_composition_local_provides_values() {
         })
         .expect("initial composition");
 
-    // Verify the provided value is accessible
     assert_eq!(READ_VALUE.with(|slot| slot.get()), 5);
 }
 

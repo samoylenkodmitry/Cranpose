@@ -1,26 +1,3 @@
-//! Debug utilities for inspecting the current screen state
-//!
-//! This module provides utilities to log and format the UI hierarchy and render operations,
-//! making it easier to debug layout and rendering issues.
-//!
-//! # Usage
-//!
-//! ```text
-//! use cranpose_ui::{log_layout_tree, log_render_scene, log_screen_summary};
-//!
-//! // After computing layout
-//! let layout_tree = applier.compute_layout(root, viewport_size)?;
-//! log_layout_tree(&layout_tree);
-//!
-//! // After rendering
-//! let renderer = HeadlessRenderer::new();
-//! let render_scene = renderer.render(&layout_tree);
-//! log_render_scene(&render_scene);
-//!
-//! // Or get a quick summary
-//! log_screen_summary(&layout_tree, &render_scene);
-//! ```
-
 use std::{fmt::Write, sync::Arc};
 
 use cranpose_foundation::{ModifierNodeChain, NodeCapabilities};

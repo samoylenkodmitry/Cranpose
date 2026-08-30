@@ -1,9 +1,3 @@
-//! Windowed ghost probe: replays the reported flow (liquid tab → scroll →
-//! switch to markdown/shaders) in a REAL window so the presented surface can
-//! be captured externally (the robot screenshot re-renders offscreen and
-//! cannot see present-path artifacts). Prints STAGE markers; an external
-//! grabber (maim/import) snapshots the window at each pause.
-
 use std::time::Duration;
 
 use cranpose::AppLauncher;
@@ -26,10 +20,6 @@ fn main() {
             robot.mouse_move(800.0, 500.0).expect("move");
             robot.mouse_scroll(0.0, -520.0).expect("scroll");
             settle(&robot, 900);
-            // Kick a glass interaction and switch away MID-SETTLE: press the
-            // Wi-Fi toggle (materializes the lens) and switch tabs while the
-            // lens/springs are still animating. The switch hugs the card's
-            // trailing edge (thumb ≈ window right - 62, from the walkthrough).
             if let Some((_, y, _, h)) = cranpose_testing::find_text_in_semantics(&robot, "Wi-Fi") {
                 let toggle_y = y + h * 0.5;
                 robot.mouse_move(1538.0, toggle_y).expect("hover thumb");
@@ -50,7 +40,6 @@ fn main() {
             robot.mouse_move(800.0, 500.0).expect("move");
             robot.mouse_scroll(0.0, -880.0).expect("scroll");
             settle(&robot, 400);
-            // Drag the tab-bar lens and switch away while it flies.
             if let Some(discover) =
                 cranpose_testing::find_button_exact_in_semantics(&robot, "Discover")
             {

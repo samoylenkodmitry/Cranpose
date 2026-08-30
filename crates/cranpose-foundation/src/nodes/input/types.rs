@@ -233,8 +233,6 @@ pub struct PointerEvent {
     /// "nothing held" or it silently drops the gesture on the platforms that
     /// cannot yet report it instead of visibly doing nothing.
     pub modifiers: Option<Modifiers>,
-    /// Tracks whether this event has been consumed by a handler.
-    /// Shared via `Rc<Cell>` so consumption can be tracked across copies.
     consumed: Rc<Cell<bool>>,
     deferred_post_dispatch: DeferredPostDispatch,
 }
@@ -449,7 +447,6 @@ mod tests {
         assert!(PointerSource::Stylus.is_touch_like());
         assert!(!PointerSource::Mouse.is_touch_like());
 
-        // Local-position copies (used during hit-test dispatch) keep the source.
         let local = touch.copy_with_local_position(point(5.0, 5.0));
         assert_eq!(local.source, PointerSource::Touch);
     }
@@ -494,8 +491,6 @@ mod tests {
     #[test]
     fn pointer_event_modifiers_default_to_unreported_and_thread_through_copy() {
         let event = PointerEvent::new(PointerEventKind::Down, point(1.0, 1.0), point(1.0, 1.0));
-        // Unreported (None) must stay visibly distinct from "reported, none
-        // held" (Some(Modifiers::NONE)) -- see the field doc on why.
         assert_eq!(event.modifiers, None);
 
         let shift = event.with_modifiers(Modifiers {
@@ -510,8 +505,6 @@ mod tests {
             })
         );
 
-        // Local-position copies (used during hit-test dispatch) keep the
-        // modifiers, exactly like they keep the source.
         let local = shift.copy_with_local_position(point(5.0, 5.0));
         assert_eq!(local.modifiers, shift.modifiers);
     }
@@ -529,8 +522,6 @@ mod tests {
 
     #[test]
     fn rotary_payload_survives_local_position_copies() {
-        // Dispatch localizes the event per node; the rotary payload must
-        // survive that copy or handlers deeper in the chain see zeros.
         let rotary = RotaryScrollEvent::new(-8.0, 0.0, 7);
         let event =
             PointerEvent::rotary(PointerEventKind::RotaryScrollPre, rotary, point(0.0, 0.0));

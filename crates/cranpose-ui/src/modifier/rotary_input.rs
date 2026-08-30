@@ -1,22 +1,3 @@
-//! Rotary input modifiers (Wear OS crown / rotating bezel).
-//!
-//! Mirrors Jetpack Compose for Wear OS's `Modifier.onRotaryScrollEvent` and
-//! `Modifier.onPreRotaryScrollEvent`. Returning `true` from a handler consumes
-//! the event and stops propagation, exactly as in Compose.
-//!
-//! ## Dispatch order
-//!
-//! Rotary events run two passes over the target node's modifier chain, matching
-//! `RotaryInputModifierNode`'s documented contract:
-//!
-//! 1. **Capture (pre)** — root to focused node, invoking
-//!    [`Modifier::on_pre_rotary_scroll_event`] handlers. An ancestor can
-//!    intercept the event before the focused node sees it.
-//! 2. **Bubble** — focused node to root, invoking
-//!    [`Modifier::on_rotary_scroll_event`] handlers.
-//!
-//! The first handler that returns `true` ends both passes.
-
 use std::{
     cell::Cell,
     fmt,
@@ -31,12 +12,9 @@ use cranpose_foundation::{
 
 use super::{Modifier, inspector_metadata};
 
-/// Which dispatch pass a rotary handler listens on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum RotaryPass {
-    /// Capture pass, root to focused node (`onPreRotaryScrollEvent`).
     Pre,
-    /// Bubble pass, focused node to root (`onRotaryScrollEvent`).
     Bubble,
 }
 
@@ -136,9 +114,6 @@ impl fmt::Debug for RotaryInputElement {
 
 impl PartialEq for RotaryInputElement {
     fn eq(&self, other: &Self) -> bool {
-        // Compare only the pass, never the closure identity: handlers are
-        // recreated on every recomposition, and comparing them would drop and
-        // rebuild the node each frame. Matches `PointerInputElement`.
         self.pass == other.pass
     }
 }
@@ -159,8 +134,6 @@ impl ModifierNodeElement for RotaryInputElement {
     }
 
     fn update(&self, node: &mut Self::Node) {
-        // Always refresh the closure so the node calls the latest captured
-        // state, without restarting anything.
         node.handler.set(Some(self.handler.clone()));
     }
 
@@ -189,7 +162,6 @@ impl RotaryInputModifierNode {
     fn new(pass: RotaryPass, handler: RotaryHandler) -> Self {
         let handler_cell: Rc<Cell<Option<RotaryHandler>>> = Rc::new(Cell::new(Some(handler)));
         let handler_for_dispatch = Rc::clone(&handler_cell);
-        // One closure allocated per node at construction time, not per event.
         let dispatch = Rc::new(move |event: PointerEvent| {
             if !pass.matches(event.kind) || event.is_consumed() {
                 return;
@@ -197,15 +169,11 @@ impl RotaryInputModifierNode {
             let Some(rotary) = event.rotary_scroll_event() else {
                 return;
             };
-            // Take-and-restore keeps the handler behind a `Cell` (no RefCell
-            // borrow can be held across the call, so a handler is free to
-            // rebuild the composition).
             let Some(handler) = handler_for_dispatch.take() else {
                 return;
             };
             let consumed = handler(rotary);
             if handler_for_dispatch.take().is_none() {
-                // Nothing replaced it while we were running: put ours back.
                 handler_for_dispatch.set(Some(handler));
             }
             if consumed {
@@ -324,8 +292,6 @@ mod tests {
 
     #[test]
     fn an_already_consumed_event_never_reaches_the_handler() {
-        // This is what stops propagation: once an inner node consumed the
-        // event, outer nodes in the same pass must not run.
         let calls = Rc::new(Cell::new(0));
         let counter = Rc::clone(&calls);
         let node = node(
@@ -371,8 +337,6 @@ mod tests {
 
     #[test]
     fn element_reuses_the_node_across_recomposition() {
-        // Equal elements (same pass) must not churn the node, but the closure
-        // must still be refreshed so it observes the latest state.
         let first = RotaryInputElement::new(RotaryPass::Bubble, Rc::new(|_| false));
         let second = RotaryInputElement::new(RotaryPass::Bubble, Rc::new(|_| true));
         assert_eq!(first, second);

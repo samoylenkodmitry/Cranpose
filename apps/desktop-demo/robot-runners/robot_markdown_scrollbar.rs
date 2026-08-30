@@ -1,8 +1,3 @@
-//! Robot test for the Markdown tab custom scrollbar drag behavior.
-//!
-//! Run with:
-//! `cargo run --package desktop-app --example robot_markdown_scrollbar --features robot-app`
-
 use std::{fs, sync::Arc, time::Duration};
 
 use cranpose::AppLauncher;

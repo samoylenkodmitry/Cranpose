@@ -1,9 +1,3 @@
-//! Tests for modifier node reuse and dynamic chain updates
-//!
-//! These tests verify that modifier nodes are properly reused when the modifier
-//! chain is updated with the same structure, and that chains update correctly when
-//! modifiers are added or removed.
-
 use cranpose_ui::*;
 
 #[test]
@@ -11,19 +5,15 @@ fn test_modifier_chain_length_after_updates() {
     let _app_context = cranpose_ui::AppContext::new();
     let _app_context_scope = _app_context.enter_scope();
     _app_context.enter(cranpose_ui::reset_render_state_for_tests);
-    // This test verifies that the modifier chain has the correct number of nodes
-    // after various updates
     let mut composition = run_test_composition(|| {
         Box(Modifier::empty().padding(12.0), BoxSpec::default(), || {});
     });
 
-    // Should have root node
     assert!(
         composition.root().is_some(),
         "Should have root after first render"
     );
 
-    // Second render with same modifier - chain should remain
     composition = run_test_composition(|| {
         Box(Modifier::empty().padding(12.0), BoxSpec::default(), || {});
     });
@@ -39,7 +29,6 @@ fn test_modifier_value_changes_propagate_to_layout() {
     let _app_context = cranpose_ui::AppContext::new();
     let _app_context_scope = _app_context.enter_scope();
     _app_context.enter(cranpose_ui::reset_render_state_for_tests);
-    // Test that when a modifier value changes, the layout reflects the new value
 
     let run_with_padding = |p: f32| {
         let mut composition = run_test_composition(|| {
@@ -73,7 +62,6 @@ fn test_modifier_chain_adds_node() {
     let _app_context = cranpose_ui::AppContext::new();
     let _app_context_scope = _app_context.enter_scope();
     _app_context.enter(cranpose_ui::reset_render_state_for_tests);
-    // Test adding a modifier to the chain
     let mut composition = run_test_composition(|| {
         Box(Modifier::empty().padding(8.0), BoxSpec::default(), || {});
     });
@@ -83,7 +71,6 @@ fn test_modifier_chain_adds_node() {
         "Should have root with padding only"
     );
 
-    // Add background modifier
     composition = run_test_composition(|| {
         Box(
             Modifier::empty()
@@ -105,7 +92,6 @@ fn test_modifier_chain_removes_node() {
     let _app_context = cranpose_ui::AppContext::new();
     let _app_context_scope = _app_context.enter_scope();
     _app_context.enter(cranpose_ui::reset_render_state_for_tests);
-    // Test removing a modifier from the chain
     let mut composition = run_test_composition(|| {
         Box(
             Modifier::empty()
@@ -121,7 +107,6 @@ fn test_modifier_chain_removes_node() {
         "Should have root with padding + background"
     );
 
-    // Remove background
     composition = run_test_composition(|| {
         Box(Modifier::empty().padding(8.0), BoxSpec::default(), || {});
     });
@@ -137,7 +122,6 @@ fn test_modifier_order_change() {
     let _app_context = cranpose_ui::AppContext::new();
     let _app_context_scope = _app_context.enter_scope();
     _app_context.enter(cranpose_ui::reset_render_state_for_tests);
-    // Test that changing modifier order works correctly
     let mut composition = run_test_composition(|| {
         Box(
             Modifier::empty().padding(10.0).size(Size {
@@ -161,15 +145,13 @@ fn test_modifier_order_change() {
         )
         .expect("layout computation");
 
-    // padding then size: padding creates space for child, then size constrains it
     assert_eq!(
         layout1.root().rect.width,
         120.0,
         "Width should be padding (20) + size (100)"
     );
-    drop(applier); // Release the borrow
+    drop(applier);
 
-    // Reverse order - size then padding
     composition = run_test_composition(|| {
         Box(
             Modifier::empty()
@@ -195,8 +177,6 @@ fn test_modifier_order_change() {
         )
         .expect("layout computation");
 
-    // When size is applied AFTER padding, the size constraint applies to the outer box,
-    // constraining the final result to 100x100 (the size constraint wins)
     assert_eq!(
         layout2.root().rect.width,
         100.0,
@@ -209,7 +189,6 @@ fn test_complex_modifier_chain_updates() {
     let _app_context = cranpose_ui::AppContext::new();
     let _app_context_scope = _app_context.enter_scope();
     _app_context.enter(cranpose_ui::reset_render_state_for_tests);
-    // Cycle through different modifier configurations
     let build_modifier = |step: i32| match step {
         0 => Modifier::empty().padding(5.0),
         1 => Modifier::empty().padding(5.0).size(Size {
@@ -233,7 +212,6 @@ fn test_complex_modifier_chain_updates() {
         _ => Modifier::empty(),
     };
 
-    // Test each configuration
     for step in 0..=5 {
         let composition = run_test_composition(|| {
             Box(build_modifier(step), BoxSpec::default(), || {});

@@ -129,15 +129,12 @@ struct ChunkState<E> {
     ready: VecDeque<Vec<u8>>,
     error: Option<E>,
     finished: bool,
-    /// The consumer has gone, or asked to stop. The producer notices at its
-    /// next push and stops reading rather than filling a queue nobody drains.
     abandoned: bool,
     waker: Option<Waker>,
 }
 
 struct ChunkShared<E> {
     state: Mutex<ChunkState<E>>,
-    /// The producer parks here while the consumer is behind.
     room: Condvar,
 }
 
@@ -179,8 +176,6 @@ impl<E> ChunkChannel<E> {
     pub fn push(&self, chunk: Vec<u8>) -> bool {
         let waker = {
             let mut state = lock(&self.shared.state);
-            // The browser has one thread: parking it would stop the very task
-            // that drains the queue, so there the bound is advisory.
             #[cfg(not(target_arch = "wasm32"))]
             while state.ready.len() >= MAX_PENDING_CHUNKS && !state.abandoned {
                 state = self
@@ -262,7 +257,6 @@ impl<E> Drop for ChunkStream<E> {
         let mut state = lock(&self.shared.state);
         state.abandoned = true;
         drop(state);
-        // A producer parked on the bound has to learn nobody is reading.
         self.shared.room.notify_all();
     }
 }
@@ -312,7 +306,6 @@ mod tests {
         assert_eq!(pollster::block_on(signal.wait()), Some(7));
     }
 
-    /// A worker that dies without answering must not leave a reader hanging.
     #[test]
     fn a_closed_signal_resolves_to_nothing_rather_than_waiting_for_ever() {
         let signal = Signal::<u32>::new();
@@ -360,8 +353,6 @@ mod tests {
         );
     }
 
-    /// A worker that panics must end the stream rather than leaving a reader
-    /// waiting on a chunk nobody will produce.
     #[test]
     fn dropping_the_producer_ends_the_stream() {
         let (channel, stream) = ChunkChannel::<Failed>::new();
@@ -369,8 +360,6 @@ mod tests {
         assert_eq!(pollster::block_on(stream.next()), Ok(None));
     }
 
-    /// Without a bound a fast server and a slow reader put the whole download in
-    /// memory, which is the thing streaming exists to avoid.
     #[test]
     fn the_producer_waits_while_the_consumer_is_behind() {
         let (channel, stream) = ChunkChannel::<Failed>::new();
@@ -386,7 +375,6 @@ mod tests {
             channel.finish();
         });
 
-        // Give the producer a chance to fill the queue and park on the bound.
         std::thread::sleep(std::time::Duration::from_millis(50));
         assert!(
             pushed.load(std::sync::atomic::Ordering::Acquire) <= MAX_PENDING_CHUNKS,
@@ -401,9 +389,6 @@ mod tests {
         worker.join().expect("the worker finishes");
     }
 
-    /// A reader that stops early — a cancelled download, a dropped screen —
-    /// must stop the producer rather than leaving it reading into a queue
-    /// nobody drains.
     #[test]
     fn abandoning_the_stream_stops_the_producer() {
         let (channel, stream) = ChunkChannel::<Failed>::new();

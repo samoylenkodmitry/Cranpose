@@ -1,38 +1,9 @@
-//! Repro: a wrapping paragraph must PAINT the height it MEASURED.
-//!
-//! A `Text` without `fill_max_width` is placed at its own `metrics.width` — the
-//! widest line it wrapped into, which is by construction narrower than the
-//! constraint it wrapped under. The paint pass used to re-wrap at that placed
-//! width, and because the widest line is exactly the one that fills the limit,
-//! measuring it against itself pushed its last word onto a new line. The
-//! paragraph then painted one line taller than the box the column had reserved:
-//! the extra line was clipped away, and the block below it had already been
-//! placed as if that line did not exist.
-//!
-//! Run it:
-//!
-//! ```text
-//! cargo run -p desktop-app --features robot-app --example text_wrap_repro
-//! ```
-//!
-//! What to look for: the paragraph sits in a boxed frame whose height is what
-//! LAYOUT measured, and the red rule underneath is where the next sibling
-//! starts. Fixed, every line of the paragraph is inside the frame and clear of
-//! the rule. Broken, the paragraph's last line is missing and the text runs
-//! into the rule.
-//!
-//! The strings are mixed Latin/Cyrillic on purpose: this was reported from an
-//! app rendering Serbian receipts, and the defect needs the real proportional
-//! font backend — with a monospaced stub the two wrap widths agree by accident
-//! and nothing shows.
-
 use cranpose_ui::{
     composable,
     text::{SpanStyle, TextUnit},
     Color, Column, ColumnSpec, LinearArrangement, Modifier, Size, Spacer, Text, TextStyle,
 };
 
-/// Width the paragraph is measured under. Chosen so the re-wrap grows a line.
 const PARAGRAPH_WIDTH: f32 = 245.0;
 
 const VERDICT: &str = "fed back картица scored fp32 износ once paper fed Vision dropped fed \
@@ -63,8 +34,6 @@ fn label_style() -> TextStyle {
     }
 }
 
-/// One paragraph inside a frame the size layout gave it, over a rule marking
-/// where the following sibling begins.
 #[allow(non_snake_case)]
 #[composable]
 fn FramedParagraph(title: String, body: String) {
@@ -73,16 +42,11 @@ fn FramedParagraph(title: String, body: String) {
         ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(4.0)),
         move || {
             Text(title.clone(), Modifier::empty(), label_style());
-            // No `fill_max_width`: this is the shape that breaks. The node is
-            // placed at the width the paragraph measured, not at the constraint.
             Text(
                 body.clone(),
                 Modifier::empty().background(Color(0.87, 0.93, 1.0, 1.0)),
                 body_style(),
             );
-            // The following sibling. Layout puts it directly under the
-            // paragraph's MEASURED height, so anything the paragraph paints
-            // past that height lands on top of this.
             Text(
                 "▲ next sibling starts here".to_string(),
                 Modifier::empty()

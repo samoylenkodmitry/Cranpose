@@ -1,9 +1,3 @@
-//! Integration tests for the Snapshot V2 system.
-//!
-//! These tests exercise end-to-end behaviour using the real
-//! `SnapshotMutableState` implementation to ensure snapshot isolation,
-//! conflict detection, and observer dispatch behave as expected.
-
 use std::{rc::Rc, sync::Arc};
 
 use super::*;
@@ -109,18 +103,15 @@ mod tests {
     #[test]
     fn test_conflict_detection_after_record_reuse() {
         let _guard = reset_runtime();
-        // Note: reset_pinning_table() is already called by reset_runtime()
 
         let global = GlobalSnapshot::get_or_create();
         let state = new_state(0);
 
         const INVALID_SNAPSHOT_ID: SnapshotId = 0;
 
-        // Record the head's snapshot_id before modification for diagnostics
         let head = state.first_record();
         let original_head_id = head.snapshot_id();
 
-        // Inject an INVALID record to force the next writable() call to reuse it.
         let invalid_record = StateRecord::new(INVALID_SNAPSHOT_ID, -1i32, head.next());
         head.set_next(Some(invalid_record.clone()));
 
@@ -130,7 +121,6 @@ mod tests {
 
         snap1.enter(|| state.set(10));
 
-        // Reused record should now belong to snap1 and match the readable record for that snapshot.
         let actual_snapshot_id = invalid_record.snapshot_id();
         assert_eq!(
             actual_snapshot_id,
@@ -175,7 +165,6 @@ mod tests {
         let snapshot = global.take_nested_mutable_snapshot(None, None);
         snapshot.enter(|| state.set(10));
 
-        // Competing snapshot advances global state to create a merge scenario.
         let competitor = global.take_nested_mutable_snapshot(None, None);
         competitor.enter(|| state.set(5));
         assert!(competitor.apply().is_success());

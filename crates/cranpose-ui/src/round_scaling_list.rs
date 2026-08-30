@@ -155,7 +155,6 @@ pub fn scale_and_alpha_with(
     if viewport <= 0.0 {
         return Some(ScaleAlpha::UNCHANGED);
     }
-    // Distance to whichever edge this row is nearer, as a share of the viewport.
     let edge = (viewport - top).min(bottom) / viewport;
     let size_ratio = inverse_lerp(
         params.min_element_height,
@@ -167,9 +166,6 @@ pub fn scale_and_alpha_with(
     if edge >= line || line <= 0.0 {
         return Some(ScaleAlpha::UNCHANGED);
     }
-    // Wear does not clamp this before easing, so an item scrolled past the edge
-    // reads `edge < 0` and comes out below `edge_scale`. `ease` clamps, which
-    // is the behaviour a port wants and the one the spec recommends.
     let progress = ease(1.0 - edge / line);
     Some(ScaleAlpha {
         scale: 1.0 + (params.edge_scale - 1.0) * progress,
@@ -238,7 +234,6 @@ pub fn place_row_with(
         return Some(PlacedRow {
             top,
             height: scaled,
-            // `roundToInt` has no meaning without a pixel grid to round onto.
             reported_height: scaled,
             scale: transform.scale,
             alpha: transform.alpha,
@@ -249,8 +244,6 @@ pub fn place_row_with(
     let height_px = (height * density).round();
     let transform = scale_and_alpha_with(params, viewport_px, top_px, top_px + height_px)?;
     let scaled_px = (height_px * transform.scale).round();
-    // Wear's `isAboveLine`, on the same integers it uses: a row above the
-    // centre line keeps its BOTTOM edge, one below keeps its top.
     let above = top_px + top_px + height_px < viewport_px;
     let pinned = if above {
         top_px + height_px - scaled_px
@@ -326,8 +319,6 @@ pub fn place_rows_with(
         cursor += height + run.gap;
         out[index] = row;
     }
-    // Upward the cursor is the next row's BOTTOM, and the ramp is still read
-    // off the row's full box hanging from it.
     let mut bottom = run.anchor_top;
     for index in (0..anchor).rev() {
         let height = heights[index];
@@ -396,7 +387,6 @@ pub struct CentreAnchor {
 }
 
 impl Default for CentreAnchor {
-    /// `rememberScalingLazyListState()`'s own default: the second item, centred.
     fn default() -> Self {
         Self {
             index: 1,
@@ -552,8 +542,6 @@ pub fn anchor_travel(
     (start.min(end), end)
 }
 
-/// Half a pixel when a pixel height is odd, nothing when it is even — what
-/// Compose's integer halving leaves behind beside its floating-point one.
 fn odd_pixel(pixels: f32) -> f32 {
     let half = pixels * 0.5;
     half - half.floor()
@@ -563,11 +551,6 @@ fn inverse_lerp(start: f32, stop: f32, value: f32) -> f32 {
     ((value - start) / (stop - start)).clamp(0.0, 1.0)
 }
 
-/// Wear's transition easing, `CubicBezierEasing(0.3, 0.0, 0.7, 1.0)`.
-///
-/// A Compose easing curve is parametric, so the answer is the curve's y at the
-/// parameter whose x is `fraction`. Twelve bisections put the result inside
-/// 1/4096, which is far below a pixel at any watch size.
 fn ease(x: f32) -> f32 {
     let x = x.clamp(0.0, 1.0);
     let mut low = 0.0f32;
@@ -607,8 +590,6 @@ mod tests {
         let edge = scale_and_alpha(VIEWPORT, 0.0, 20.0).unwrap();
         assert!(edge.scale < 1.0 && edge.scale >= EDGE_SCALE, "{edge:?}");
         assert!(edge.alpha < 1.0 && edge.alpha >= EDGE_ALPHA, "{edge:?}");
-        // Both run to their limits together, so a row never fades without
-        // shrinking or the reverse.
         let top = scale_and_alpha(VIEWPORT, 0.0, 0.0).unwrap();
         assert!((top.scale - EDGE_SCALE).abs() < 1e-3, "{top:?}");
         assert!((top.alpha - EDGE_ALPHA).abs() < 1e-3, "{top:?}");
@@ -626,11 +607,6 @@ mod tests {
 
     #[test]
     fn a_taller_row_starts_shrinking_further_from_the_edge() {
-        // The transition band grows with row height. Isolating that needs two
-        // rows at the SAME distance from an edge: anchor both near the bottom,
-        // where `edge` is measured from the top edge and so does not move when
-        // the height does. The taller row has the wider band, so the same
-        // distance is a larger fraction of it and it shrinks more.
         let top = VIEWPORT - 10.0;
         let short = scale_and_alpha(VIEWPORT, top, top + VIEWPORT * 0.2).unwrap();
         let tall = scale_and_alpha(VIEWPORT, top, top + VIEWPORT * 0.62).unwrap();
@@ -639,19 +615,14 @@ mod tests {
 
     #[test]
     fn a_row_is_placed_from_the_full_heights_above_it_not_the_scaled_ones() {
-        // Two rows of the same full height at the same unscaled offsets must
-        // land where those offsets say, however much the first one shrank.
         let first = place_row(VIEWPORT, 0.0, 50.0, 2.0).unwrap();
         let second = place_row(VIEWPORT, 50.0, 50.0, 2.0).unwrap();
         assert!(first.scale < 1.0, "the first row is at the edge: {first:?}");
-        // The second row's position is not pushed up by the first row shrinking.
         assert!(second.top >= 49.0, "{second:?}");
     }
 
     #[test]
     fn a_row_above_the_centre_line_keeps_its_bottom_edge() {
-        // Above the line the transform origin is the bottom, so shrinking pulls
-        // the top down; below the line the top is pinned and the bottom rises.
         let above = place_row(VIEWPORT, 4.0, 50.0, 2.0).unwrap();
         assert!(above.scale < 1.0, "{above:?}");
         assert!(
@@ -669,8 +640,6 @@ mod tests {
 
     #[test]
     fn an_odd_pixel_height_carries_the_half_pixel_composes_integer_halving_leaves() {
-        // 25 units at density 2 is a 50px row — even. 25.5 is 51px — odd, and
-        // that half pixel is exactly what a float-only implementation drops.
         assert_eq!(odd_pixel(50.0), 0.0);
         assert_eq!(odd_pixel(51.0), 0.5);
         let odd = place_row(VIEWPORT, 3.0, 25.5, 2.0).unwrap();
@@ -732,7 +701,6 @@ mod tests {
         assert_eq!(params.max_element_height, MAX_ELEMENT_HEIGHT);
         assert_eq!(params.min_transition_area, MIN_TRANSITION_AREA);
         assert_eq!(params.max_transition_area, MAX_TRANSITION_AREA);
-        // And the parameterised entry points agree with the fixed ones.
         assert_eq!(
             scale_and_alpha_with(params, VIEWPORT, 0.0, 20.0),
             scale_and_alpha(VIEWPORT, 0.0, 20.0)
@@ -752,26 +720,16 @@ mod tests {
 
     #[test]
     fn the_supplied_params_reach_the_pixel_path_and_not_only_the_continuous_one() {
-        // `place_row_with` used to hand the pixel branch the Wear defaults and
-        // ignore its own argument, so a `reduced_motion` list was identical to
-        // a scaling one on every real display and only differed at density 0 —
-        // which is the one case no device is in.
         let params = ScalingParams::default().reduced_motion();
         let still = place_row_with(params, VIEWPORT, 4.0, 50.0, 2.0).unwrap();
         assert_eq!(still.scale, 1.0, "{still:?}");
         assert_eq!(still.alpha, 1.0, "{still:?}");
         assert_eq!(still.top, 4.0, "an unscaled row is not pinned anywhere");
-        // And the Wear defaults still scale the same row, so the test is not
-        // passing because the row was out of the band.
         assert!(place_row(VIEWPORT, 4.0, 50.0, 2.0).unwrap().scale < 1.0);
     }
 
     #[test]
     fn a_row_is_placed_against_the_scaled_size_of_the_row_between_it_and_the_centre() {
-        // `ScalingLazyListState.layoutInfo` walks outward from the centre item
-        // with a cursor that advances by `ScalingLazyListItemInfo.size`, which
-        // is the SCALED size. Two rows below the anchor, that cursor has
-        // already lost whatever the first one shrank by.
         let viewport = 192.0;
         let density = 2.0;
         let (gap, height) = (4.0, 52.0);
@@ -784,7 +742,6 @@ mod tests {
             "so it reports its full height"
         );
 
-        // First row below: both accounts agree, because the anchor is unscaled.
         let first_top = anchor_top + anchor.reported_height + gap;
         assert_eq!(first_top, anchor_top + height + gap);
         let first = place_row(viewport, first_top, height, density).unwrap();
@@ -794,7 +751,6 @@ mod tests {
             "and it reports less than its full height: {first:?}"
         );
 
-        // Second row below: the cursor and the full-height stack part company.
         let second_top = first_top + first.reported_height + gap;
         let stacked_top = first_top + height + gap;
         assert!(
@@ -808,8 +764,6 @@ mod tests {
 
     #[test]
     fn the_reported_height_is_the_rounded_one_and_the_drawn_height_is_not() {
-        // 51 device pixels at some scale under one: the layout reports a whole
-        // pixel and the graphics layer draws the fraction.
         let placed = place_row(VIEWPORT, 3.0, 25.5, 2.0).unwrap();
         assert!(
             placed.scale < 1.0,
@@ -852,8 +806,6 @@ mod tests {
     fn the_centre_anchor_puts_the_anchored_items_centre_on_the_centre_line() {
         let mut slots = Vec::new();
         stack_into([40.0, 60.0, 40.0], 4.0, &mut slots);
-        // Item 1 spans 44..104, centre 74. The viewport centre is 113.5, which
-        // at density 2 is a whole pixel, so the shift is exact.
         let offset = centre_offset(&slots, VIEWPORT, CentreAnchor::default(), 2.0);
         shift(&mut slots, offset);
         assert!(
@@ -882,14 +834,11 @@ mod tests {
     #[test]
     fn a_fractional_scroll_travels_between_item_centres_not_item_tops() {
         let mut slots = Vec::new();
-        // A short row beside a tall one: interpolating tops would move the
-        // anchor by the first row's height, centres by the mean of the two.
         stack_into([20.0, 100.0], 0.0, &mut slots);
         let start = centre_offset_at(&slots, VIEWPORT, 0.0, 0.0);
         let end = centre_offset_at(&slots, VIEWPORT, 1.0, 0.0);
         let middle = centre_offset_at(&slots, VIEWPORT, 0.5, 0.0);
         assert!((middle - (start + end) * 0.5).abs() < 1e-4);
-        // And the endpoints agree with the index-and-offset form.
         assert_eq!(
             start,
             centre_offset(
@@ -925,11 +874,8 @@ mod tests {
 
     #[test]
     fn rounding_a_length_to_a_pixel_sends_an_exact_half_up_the_way_kotlin_does() {
-        // 0.25 at density 2 is exactly half a pixel.
         assert_eq!(round_to_px(0.25, 2.0), 0.5);
         assert_eq!(round_to_px(-0.25, 2.0), 0.0);
-        // Rust's own rounding sends the negative half the other way, which is
-        // the disagreement this helper exists to settle.
         assert_eq!((-0.5f32).round(), -1.0);
         assert_eq!(round_to_px(0.3, 0.0), 0.3);
         assert!(round_to_px(f32::NAN, 2.0).is_nan());
@@ -937,8 +883,6 @@ mod tests {
 
     #[test]
     fn the_shift_and_the_two_spacers_are_the_same_arithmetic_seen_from_two_sides() {
-        // In pixels, on an even viewport, with the anchored item far enough
-        // down that the leading spacer is not clamped.
         let viewport_px = 454.0;
         let mut slots = Vec::new();
         stack_into([96.0, 104.0, 104.0], 8.0, &mut slots);
@@ -950,8 +894,6 @@ mod tests {
 
     #[test]
     fn the_leading_spacer_never_pushes_the_anchor_below_the_centre_line() {
-        // One short item: the plain shift would be positive and large, and the
-        // clamp is what stops the list from starting scrolled.
         let mut slots = Vec::new();
         stack_into([600.0], 8.0, &mut slots);
         let anchor = CentreAnchor::default();
@@ -967,18 +909,13 @@ mod tests {
         let anchor = slots[1].centre();
         let last = slots[3].centre();
         let (start, end) = anchor_travel(anchor, last, 68.0, 68.0);
-        // The anchored row can be pulled below the centre line by the padding,
-        // and the last row can be pushed above it by the same.
         assert_eq!(start, anchor - 68.0);
         assert_eq!(end, last + 68.0);
-        // Which is 136 px more travel than stopping at the two centred rows.
         assert_eq!((end - start) - (last - anchor), 136.0);
     }
 
     #[test]
     fn a_list_with_nowhere_to_go_does_not_travel_backwards() {
-        // One row, so both ends are the same row's centre. The padding must not
-        // hand back a range whose start is past its end.
         let mut slots = Vec::new();
         stack_into([104.0], 8.0, &mut slots);
         let centre = slots[0].centre();

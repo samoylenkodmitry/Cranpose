@@ -59,8 +59,6 @@ impl FrameFormat {
         match self {
             FrameFormat::Rgba8 => pixels.checked_mul(4),
             FrameFormat::Rgb8 => pixels.checked_mul(3),
-            // NV12 needs even dimensions: the chroma plane is half-resolution
-            // in both directions, and an odd row or column has no half.
             FrameFormat::Nv12 => {
                 if !width.is_multiple_of(2) || !height.is_multiple_of(2) {
                     return None;
@@ -217,8 +215,6 @@ pub struct UprightRgba {
     pub rgba: Vec<u8>,
 }
 
-/// Where source pixel `(x, y)` lands in the image turned clockwise by
-/// `rotation`, as a pixel index into the turned image.
 #[inline]
 fn turned_index(rotation: u16, width: usize, height: usize, x: usize, y: usize) -> usize {
     match rotation {
@@ -229,23 +225,14 @@ fn turned_index(rotation: u16, width: usize, height: usize, x: usize, y: usize) 
     }
 }
 
-/// Widens tightly packed RGB8 to RGBA8, opaque throughout.
 fn rgb8_to_rgba8(bytes: &[u8]) -> Vec<u8> {
     let mut rgba = Vec::with_capacity(bytes.len() / 3 * 4);
-    // Fixed-size chunks rather than a runtime length: the three reads below
-    // then carry no bounds check, which is what lets this vectorise.
     for [red, green, blue] in bytes.as_chunks::<3>().0 {
         rgba.extend_from_slice(&[*red, *green, *blue, 255]);
     }
     rgba
 }
 
-/// Converts a full-range NV12 frame to tightly packed RGBA8.
-///
-/// The BT.601 full-range matrix, which is what `ImageFormat.YUV_420_888` and
-/// the equivalent capture formats deliver. Written over whole rows so the
-/// bounds checks fall out of the inner loop and the compiler can vectorise it,
-/// which matters because this runs on every previewed frame.
 fn nv12_to_rgba8(width: u32, height: u32, bytes: &[u8]) -> Vec<u8> {
     let (width, height) = (width as usize, height as usize);
     let pixels = width * height;
@@ -536,11 +523,6 @@ fn lenses_slot() -> &'static Mutex<CameraLenses> {
     SLOT.get_or_init(|| Mutex::new(CameraLenses::default()))
 }
 
-/// Frames produced while every observer was still busy with an earlier one.
-///
-/// Counted rather than queued: a detector that falls behind should see the
-/// scene as it is now and know how much it missed, not work through a backlog
-/// describing a scene that has moved.
 static DROPPED_FRAMES: AtomicU64 = AtomicU64::new(0);
 
 type FrameObserver = Arc<dyn Fn(CameraFrame) + Send + Sync>;
@@ -877,8 +859,6 @@ pub async fn capture_camera_still() -> Result<CameraStill, CameraError> {
     request_camera_still()?;
     let arrived = signal.wait().await;
     drop(observer);
-    // The signal only closes empty if the backend went away mid-capture, which
-    // is a camera that stopped rather than a still that failed.
     arrived.unwrap_or(Err(CameraError::NotRunning))
 }
 
@@ -886,8 +866,6 @@ pub async fn capture_camera_still() -> Result<CameraStill, CameraError> {
 mod tests {
     use super::*;
 
-    /// A backend that records what it was asked and publishes what a real one
-    /// would.
     struct FakeCamera {
         started: AtomicU64,
         stopped: AtomicU64,
@@ -957,8 +935,6 @@ mod tests {
         assert_eq!(FrameFormat::Nv12.byte_len(4, 3), None);
     }
 
-    /// A frame whose bytes do not match its size reads as corrupted video
-    /// rather than as an error, so it is refused where it enters.
     #[test]
     fn a_frame_that_does_not_match_its_size_is_refused() {
         assert!(CameraFrame::new(2, 2, FrameFormat::Rgba8, 0, 0, vec![0; 15]).is_none());
@@ -979,9 +955,6 @@ mod tests {
         assert_eq!(frame.to_rgba8(), frame.bytes);
     }
 
-    /// The conversion has to agree with what every other BT.601 full-range
-    /// implementation produces, or the viewfinder is a different colour from
-    /// the photo the same camera takes.
     #[test]
     fn nv12_black_white_and_primaries_convert_to_the_expected_colours() {
         fn convert(luma: u8, blue: u8, red: u8) -> [u8; 4] {
@@ -1032,8 +1005,6 @@ mod tests {
         clear_platform_camera();
     }
 
-    /// Opening a camera takes long enough on a phone that a screen has to show
-    /// something in the meantime, so the wait is a state and not a gap.
     #[test]
     fn the_session_reports_starting_before_it_reports_running() {
         let _guard = crate::registry::test_service_guard();
@@ -1092,8 +1063,6 @@ mod tests {
         clear_platform_camera();
     }
 
-    /// A viewfinder draws the newest frame, so the stored one is always the
-    /// newest — never a queue a slow drawer works through.
     #[test]
     fn the_stored_frame_is_always_the_newest_one() {
         let _guard = crate::registry::test_service_guard();
@@ -1129,8 +1098,6 @@ mod tests {
         clear_platform_camera();
     }
 
-    /// A detector that cannot keep up must fall behind by frames, and the
-    /// framework has to be able to say how far.
     #[test]
     fn frames_the_platform_could_not_deliver_are_counted_rather_than_queued() {
         let _guard = crate::registry::test_service_guard();
@@ -1139,16 +1106,12 @@ mod tests {
         record_dropped_camera_frame();
         record_dropped_camera_frame();
         assert_eq!(dropped_camera_frames(), 2);
-        // A new session starts the count and the stored frame over: what the
-        // last one missed says nothing about this one.
         publish_camera_state(CameraState::Starting);
         assert_eq!(dropped_camera_frames(), 0);
         assert_eq!(latest_camera_frame(), None);
         clear_platform_camera();
     }
 
-    /// A still takes as long as the device takes; asking must not block
-    /// whatever asked.
     #[test]
     fn a_still_is_asked_for_and_arrives_separately() {
         let _guard = crate::registry::test_service_guard();
@@ -1250,8 +1213,6 @@ mod tests {
         image.rgba.iter().step_by(4).copied().collect()
     }
 
-    /// A quarter turn must land every pixel where a clockwise turn of the
-    /// picture puts it, and swap the sides for the odd quarters.
     #[test]
     fn a_frame_turns_upright_by_its_rotation() {
         let unturned = two_pixel_frame(0).upright_rgba8();
@@ -1271,8 +1232,6 @@ mod tests {
         assert_eq!(pixel_values(&three_quarters), vec![20, 10]);
     }
 
-    /// The turn happens in the same pass as the NV12 conversion, so the two
-    /// paths must agree pixel for pixel.
     #[test]
     fn an_nv12_frame_turns_and_converts_in_one_pass() {
         let bytes = vec![0, 255, 0, 0, 128, 128];
@@ -1304,8 +1263,6 @@ mod tests {
         assert!(upright.rgba.iter().skip(3).step_by(4).all(|a| *a == 255));
     }
 
-    /// No camera produces a turn that is not a quarter, so anything else is
-    /// left alone rather than guessed at.
     #[test]
     fn a_turn_that_is_not_a_quarter_is_left_alone() {
         let frame = CameraFrame::new(2, 1, FrameFormat::Rgba8, 45, 0, vec![7; 8])

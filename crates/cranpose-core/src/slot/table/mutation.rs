@@ -104,9 +104,6 @@ impl SlotTable {
         cursor: ChildCursor,
         key: GroupKey,
     ) -> AnchorId {
-        // Group insertion recipe:
-        // allocate identity, insert the group record, refresh active indexes from
-        // the insertion point, then update ancestor spans.
         if !self.repair_child_cursor_parent_subtree(cursor, "group insertion") {
             log::error!(
                 "slot table rejected group insertion for unrecoverable child cursor parent={:?} index={}",
@@ -181,12 +178,6 @@ impl SlotTable {
         anchor
     }
 
-    /// Moves a later direct child subtree to an earlier cursor under the same parent.
-    ///
-    /// This is the writer's keyed sibling reorder primitive. It is not a general
-    /// tree move: `root` must identify a direct child of `cursor.parent()`, and
-    /// `cursor.index()` must be before the root's current index. Passing the
-    /// root's current cursor is a no-op.
     pub(in crate::slot) fn move_later_sibling_subtree_to_cursor(
         &mut self,
         root: ActiveSubtreeRoot,
@@ -246,10 +237,6 @@ impl SlotTable {
             return;
         }
 
-        // Move recipe:
-        // rotate payload, node, and group segments in place; update the segment
-        // starts carried by the affected group records; then refresh active
-        // indexes over the range whose preorder indexes actually changed.
         let moved_group_count = moving_groups.len();
         let affected_group_end = moving_groups.as_group_range().end();
         let moved_payload_count =

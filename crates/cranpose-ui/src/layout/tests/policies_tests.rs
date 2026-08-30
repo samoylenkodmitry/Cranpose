@@ -1,8 +1,6 @@
 use super::*;
 use crate::layout::core::Placeable;
 
-/// A [`MeasureScope`] at the unit grid, for policy tests that measure
-/// directly rather than through the composed [`Layout`](crate::widgets::Layout).
 fn test_scope() -> crate::density::DensityMeasureScope {
     crate::density::DensityMeasureScope::new(crate::density::Density::default())
 }
@@ -278,10 +276,6 @@ fn built_in_policies_measure_into_reuses_caller_placements() {
     assert_eq!(placements.capacity(), original_capacity);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// FlowRowMeasurePolicy
-// ─────────────────────────────────────────────────────────────────────────────
-
 fn loose(max_width: f32, max_height: f32) -> Constraints {
     Constraints {
         min_width: 0.0,
@@ -304,18 +298,15 @@ fn flow_row_wraps_children_of_varying_widths() {
 
     let result = policy.measure(&test_scope(), &measurables, loose(100.0, 500.0));
 
-    // Line 1: 50 + 20 = 70 (45 would exceed 100).
     assert_eq!((result.placements[0].x, result.placements[0].y), (0.0, 0.0));
     assert_eq!(
         (result.placements[1].x, result.placements[1].y),
         (50.0, 0.0)
     );
-    // Line 2: 45 (80 would exceed 100).
     assert_eq!(
         (result.placements[2].x, result.placements[2].y),
         (0.0, 20.0)
     );
-    // Line 3: 80 + 10 = 90.
     assert_eq!(
         (result.placements[3].x, result.placements[3].y),
         (0.0, 40.0)
@@ -325,7 +316,6 @@ fn flow_row_wraps_children_of_varying_widths() {
         (80.0, 40.0)
     );
 
-    // Width is the widest line, height is the sum of line heights.
     assert_eq!(result.size.width, 90.0);
     assert_eq!(result.size.height, 60.0);
 }
@@ -341,13 +331,11 @@ fn flow_row_respects_main_and_cross_axis_spacing() {
 
     let result = policy.measure(&test_scope(), &measurables, loose(100.0, 500.0));
 
-    // Line 1: [0..30] and [40..70]; the third child would need 70+10+30 = 110.
     assert_eq!((result.placements[0].x, result.placements[0].y), (0.0, 0.0));
     assert_eq!(
         (result.placements[1].x, result.placements[1].y),
         (40.0, 0.0)
     );
-    // Line 2 starts below the tallest child of line 1 plus the cross gap.
     assert_eq!(
         (result.placements[2].x, result.placements[2].y),
         (0.0, 30.0)
@@ -368,10 +356,8 @@ fn flow_row_children_share_line_top_when_heights_differ() {
 
     let result = policy.measure(&test_scope(), &measurables, loose(100.0, 500.0));
 
-    // Children on the same line are top-aligned.
     assert_eq!(result.placements[0].y, 0.0);
     assert_eq!(result.placements[1].y, 0.0);
-    // The next line sits below the TALLEST child of the first line.
     assert_eq!(result.placements[2].y, 30.0);
     assert_eq!(result.size.height, 50.0);
 }
@@ -388,7 +374,6 @@ fn flow_row_gives_oversized_child_its_own_line() {
     let result = policy.measure(&test_scope(), &measurables, loose(100.0, 500.0));
 
     assert_eq!((result.placements[0].x, result.placements[0].y), (0.0, 0.0));
-    // Wider than the whole line: gets its own line and overflows.
     assert_eq!(
         (result.placements[1].x, result.placements[1].y),
         (0.0, 10.0)
@@ -398,7 +383,6 @@ fn flow_row_gives_oversized_child_its_own_line() {
         (0.0, 20.0)
     );
 
-    // The reported size stays within the constraints.
     assert_eq!(result.size.width, 100.0);
     assert_eq!(result.size.height, 30.0);
 }
@@ -447,12 +431,8 @@ fn flow_row_intrinsics_follow_the_wrap() {
         Box::new(MockMeasurable::new(30.0, 20.0, 3)),
     ];
 
-    // Narrowest layout: the widest single child.
     assert_eq!(policy.min_intrinsic_width(&measurables, 100.0), 30.0);
-    // Widest layout: a single spaced line.
     assert_eq!(policy.max_intrinsic_width(&measurables, 100.0), 110.0);
-    // At width 100 the third child wraps: 25 + 5 + 20.
     assert_eq!(policy.max_intrinsic_height(&measurables, 100.0), 50.0);
-    // At the full single-line width nothing wraps.
     assert_eq!(policy.max_intrinsic_height(&measurables, 110.0), 25.0);
 }

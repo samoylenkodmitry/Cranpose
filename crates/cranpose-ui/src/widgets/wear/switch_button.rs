@@ -207,8 +207,6 @@ pub fn draw_switch(scope: &mut dyn DrawScope, spec: SwitchButtonSpec, colors: Sw
     scope.draw_round_rect(Brush::Solid(colors.track), CornerRadii::uniform(radius));
 
     if colors.track_border.3 > 0.0 {
-        // A centred stroke, so the ring is inset by half its own width and the
-        // rounded corner shrinks with it.
         let inset = spec.track_border_width * 0.5;
         scope.draw_round_rect_at_stroked(
             Rect {
@@ -253,7 +251,6 @@ fn draw_tick(scope: &mut dyn DrawScope, centre: Point, scale: f32, color: Color)
     if scale <= 0.0 || color.3 <= 0.0 {
         return;
     }
-    // (start, end) in the 24x24 design box, relative to its (12, 12) centre.
     const SEGMENTS: [((f32, f32), (f32, f32)); 2] = [
         ((7.4 - 12.0, 13.0 - 12.0), (9.9 - 12.0, 15.5 - 12.0)),
         ((10.5 - 12.0, 15.1 - 12.0), (16.5 - 12.0, 9.1 - 12.0)),
@@ -349,11 +346,6 @@ where
         .draw_behind(move |scope: &mut dyn DrawScope| {
             scope.draw_round_rect(Brush::Solid(container), CornerRadii::uniform(radius));
         })
-        // `Role.Switch`, which is what tells a screen reader the row is a
-        // toggle before it is acted on rather than after. Wear puts it on the
-        // `Switch` control inside the row and lets the merge carry it up; this
-        // names it on the row, which is the same announcement and does not
-        // depend on the merge.
         .toggleable(
             checked,
             Some(format!("{label}, {}", if checked { "on" } else { "off" })),
@@ -427,9 +419,6 @@ impl MeasurePolicy for SwitchButtonMeasurePolicy {
             constraints.min_width
         };
 
-        // The switch is measured first because the label column gets whatever
-        // is left: `Labels` has `weight(1f)` and absorbs all the slack, so its
-        // width is a subtraction rather than an intrinsic.
         let switch_width = density.dp(self.spec.switch_width);
         let spacing = density.dp(self.spec.control_spacing);
         let label_width = (width - horizontal - switch_width - spacing).max(0.0);
@@ -477,9 +466,6 @@ impl MeasurePolicy for SwitchButtonMeasurePolicy {
         }
 
         if let Some(switch) = switch {
-            // The 24dp slot is centred in the content area, and the 22dp
-            // graphic is TOP-aligned inside that slot — so the graphic ends up
-            // one slot-slack above the row's centre, not on it.
             let slot_top = padding_top + density.centre(content, slot);
             let switch_x = width - density.dp(self.spec.padding_horizontal) - switch.width();
             placements.push(Placement::new(switch.node_id(), switch_x, slot_top, 0));
@@ -595,7 +581,6 @@ mod tests {
             checked,
         );
         let primitives = scope.into_primitives();
-        // Track, thumb, and the tick's two segments as body + two caps each.
         assert_eq!(primitives.len(), 8);
     }
 
@@ -607,8 +592,6 @@ mod tests {
             SwitchButtonSpec::default().colors(colors()).progress(0.0),
             SwitchColors::of(colors(), false),
         );
-        // Track, border ring, thumb — and nothing else, because the tick's
-        // scale is zero at progress zero.
         assert_eq!(scope.into_primitives().len(), 3);
     }
 
@@ -616,7 +599,6 @@ mod tests {
     fn the_tick_eases_out_rather_than_growing_linearly() {
         assert_eq!(switch_tick_scale(0.0), 0.0);
         assert_eq!(switch_tick_scale(1.0), 1.0);
-        // A cubic ease-out is past halfway before the thumb is.
         assert!(switch_tick_scale(0.5) > 0.5);
         assert!((switch_tick_scale(0.5) - 0.875).abs() < 1e-6);
     }

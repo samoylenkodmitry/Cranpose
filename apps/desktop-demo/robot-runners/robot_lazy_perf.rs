@@ -1,13 +1,3 @@
-//! Performance test for LazyColumn with extreme item counts
-//!
-//! Tests that LazyColumn handles usize::MAX items without performance degradation.
-//! This validates the O(1) nature of virtualization - only visible items are composed.
-//!
-//! Run with:
-//! ```bash
-//! cargo run --package desktop-app --example robot_lazy_perf --features robot-app
-//! ```
-
 use std::time::{Duration, Instant};
 
 use cranpose::{AppLauncher, LazyItems};
@@ -15,7 +5,6 @@ use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope};
 use cranpose_testing::find_text_in_semantics;
 use cranpose_ui::{widgets::*, Color, LinearArrangement, Modifier, TextStyle};
 
-/// Total items = usize::MAX (18,446,744,073,709,551,615 on 64-bit)
 const ITEM_COUNT: usize = usize::MAX;
 
 fn test_app() {
@@ -28,21 +17,18 @@ fn test_app() {
             .background(Color(0.08, 0.08, 0.12, 1.0)),
         ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(10.0)),
         move || {
-            // Header
             Text(
                 "LazyColumn Performance Test".to_string(),
                 Modifier::empty().padding(8.0),
                 TextStyle::default(),
             );
 
-            // Item count display (formatted for readability)
             Text(
                 format!("{} items (usize::MAX)", format_large_number(ITEM_COUNT)),
                 Modifier::empty().padding(4.0),
                 TextStyle::default(),
             );
 
-            // LazyColumn with MASSIVE item count
             LazyColumn(
                 Modifier::empty()
                     .fill_max_width()
@@ -54,7 +40,6 @@ fn test_app() {
                     scope.items(
                         LazyItems::new(ITEM_COUNT).key(|i: usize| i as u64),
                         move |i| {
-                            // Simple text item - just the index
                             let bg = if i % 2 == 0 {
                                 Color(0.15, 0.18, 0.25, 1.0)
                             } else {
@@ -81,7 +66,6 @@ fn test_app() {
                 },
             );
 
-            // Stats
             let stats = list_state.stats();
             Text(
                 format!(
@@ -92,7 +76,6 @@ fn test_app() {
                 TextStyle::default(),
             );
 
-            // Jump to Middle button
             let middle_index = ITEM_COUNT / 2;
             Button(
                 Modifier::empty()
@@ -114,7 +97,6 @@ fn test_app() {
     );
 }
 
-/// Formats a large number with underscores for readability
 fn format_large_number(n: usize) -> String {
     let s = n.to_string();
     let mut result = String::new();
@@ -142,13 +124,11 @@ fn main() {
         .with_test_driver(|robot| {
             println!("✓ App launched");
 
-            // Measure initial render time
             let start = Instant::now();
             std::thread::sleep(Duration::from_millis(500));
             let initial_render_time = start.elapsed();
             println!("  Initial render time: {:?}", initial_render_time);
 
-            // === PHASE 1: Verify basic rendering ===
             println!("\n=== PHASE 1: Verify Rendering ===");
 
             let find_text = |text: &str| find_text_in_semantics(&robot, text);
@@ -159,7 +139,6 @@ fn main() {
                 println!("  ✗ Header NOT found!");
             }
 
-            // Check first items are visible
             let mut visible_items = Vec::new();
             for i in 0..20 {
                 let item_text = format!("Item #{}", i);
@@ -178,7 +157,6 @@ fn main() {
                 println!("  ✗ Too few items visible!");
             }
 
-            // === PHASE 2: Instant Jump to Middle ===
             println!("\n=== PHASE 2: Jump to Middle (button click) ===");
             let middle_index = ITEM_COUNT / 2;
             println!(
@@ -186,7 +164,6 @@ fn main() {
                 format_large_number(middle_index)
             );
 
-            // Find and click the button
             use cranpose_testing::find_button_in_semantics;
             let jump_start = Instant::now();
             if let Some((x, y, w, h)) = find_button_in_semantics(&robot, "Jump to Middle") {
@@ -202,10 +179,8 @@ fn main() {
                 println!("  ✗ Button not found!");
             }
 
-            // Check which items are visible after jump
             std::thread::sleep(Duration::from_millis(200));
 
-            // Look for items around the middle
             let search_start = middle_index.saturating_sub(10);
             let mut found_middle_items = Vec::new();
             for offset in 0..20 {
@@ -219,7 +194,6 @@ fn main() {
             if !found_middle_items.is_empty() {
                 println!("  ✓ Jumped to middle: found items {:?}", found_middle_items);
             } else {
-                // Check first 50 items to see what's visible
                 let mut items_after = Vec::new();
                 for i in 0..50 {
                     let item_text = format!("Item #{}", i);
@@ -243,11 +217,9 @@ fn main() {
                 }
             }
 
-            // === PHASE 3: Performance metrics ===
             println!("\n=== PHASE 3: Performance Summary ===");
 
-            // Check that we're NOT composing millions of items
-            let expected_max_visible = 20; // Generous estimate
+            let expected_max_visible = 20;
             if visible_items.len() <= expected_max_visible {
                 println!(
                     "  ✓ Virtualization working: only {} items composed",
@@ -257,7 +229,6 @@ fn main() {
                 println!("  ✗ Too many items composed: {}", visible_items.len());
             }
 
-            // Timing checks
             if initial_render_time < Duration::from_secs(2) {
                 println!(
                     "  ✓ Initial render < 2s (actual: {:?})",
@@ -267,7 +238,6 @@ fn main() {
                 println!("  ✗ Initial render too slow: {:?}", initial_render_time);
             }
 
-            // === SUMMARY ===
             println!("\n=== SUMMARY ===");
             let success = visible_items.len() <= expected_max_visible
                 && initial_render_time < Duration::from_secs(2);

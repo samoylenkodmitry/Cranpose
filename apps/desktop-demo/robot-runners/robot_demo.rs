@@ -1,10 +1,3 @@
-//! Robot demonstration - watch the robot interact with the app
-//!
-//! Run with:
-//! ```bash
-//! cargo run --package desktop-app --example robot_demo --features robot-app
-//! ```
-
 use std::time::Duration;
 
 use cranpose::{AppLauncher, Robot};
@@ -31,10 +24,8 @@ fn main() {
             println!("App launched! Starting robot interactions in 1 second...");
             std::thread::sleep(Duration::from_secs(1));
 
-            // Wait for app to be ready
             let _ = wait_for_content(&robot, "Increment", 10, Duration::from_millis(200));
 
-            // Click the increment button 5 times
             println!("Clicking increment button 5 times...");
             for i in 1..=5 {
                 println!("  Click {}/5", i);

@@ -1,21 +1,3 @@
-//! ADPF performance-hint session for the Android frame loop.
-//!
-//! On a small watch the cpufreq governor samples the frame loop into a lower
-//! OPP whenever a few frames finish early, and the next heavy frame then
-//! misses its deadline before the clock climbs back — measured on a Pixel
-//! Watch 3 as uniform double-vsync presents every few seconds with no other
-//! system activity, the difference between 59.7 fps and a locked 60. The
-//! platform's answer is the performance-hint session: the loop declares its
-//! target work duration (one vsync) and reports the actual duration every
-//! presented frame, and the kernel holds the clock exactly where the
-//! deadline needs it — the sanctioned, vendor-neutral form of the priority
-//! and DVFS pinning an unprivileged app cannot do itself.
-//!
-//! `APerformanceHint_*` lives in `libandroid.so` from API 33; every symbol
-//! is `dlsym`-resolved so a minSdk 29 build loads everywhere and quietly
-//! does nothing where the API (or a vendor implementation) is absent.
-//! `CRANPOSE_ADPF=0` (property `debug.cranpose.adpf`) is the kill switch.
-
 #![allow(unsafe_code)]
 
 use std::ffi::c_void;
@@ -32,10 +14,6 @@ struct HintApi {
     close_session: CloseSessionFn,
 }
 
-/// One hint session for the calling thread. Created on the frame-loop
-/// thread so the session's thread list is exactly the loop itself; the
-/// worker pool's threads earn their cycles through the loop's reports (the
-/// governor scales the cluster, not a core).
 pub(crate) struct PerfHintSession {
     session: *mut c_void,
     api: HintApi,
@@ -67,9 +45,6 @@ unsafe fn resolve(name: &std::ffi::CStr) -> *mut c_void {
 }
 
 impl PerfHintSession {
-    /// Opens the session with `target_ns` as the declared work budget.
-    /// `None` where ADPF is absent, disabled, or refuses the session —
-    /// callers keep exactly the pre-ADPF behavior.
     pub(crate) fn open(target_ns: i64) -> Option<Self> {
         if !enabled() || target_ns <= 0 {
             return None;
@@ -129,9 +104,6 @@ impl PerfHintSession {
         }
     }
 
-    /// Reports one presented frame's work duration, refreshing the target
-    /// first when the display period moved (mode switch); tiny jitter in
-    /// the period estimate is not a new target.
     pub(crate) fn report(&mut self, actual_ns: i64, target_ns: i64) {
         if actual_ns <= 0 {
             return;

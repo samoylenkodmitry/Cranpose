@@ -1,8 +1,3 @@
-//! Robot visual regression for Text showcase gradient/stroke sample.
-//!
-//! Run with:
-//! `cargo run --package desktop-app --example robot_text_showcase_gradient --features robot-app`
-
 use std::time::Duration;
 
 use cranpose::AppLauncher;

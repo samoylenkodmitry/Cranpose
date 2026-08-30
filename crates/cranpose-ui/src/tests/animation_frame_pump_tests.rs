@@ -1,10 +1,3 @@
-//! The frame pump under the robot's exact-interval keyframe clock.
-//!
-//! The deterministic capture command advances the animation clock by exact
-//! deltas, which lands frame callbacks EXACTLY on tween duration boundaries
-//! and completes several animations in one drain — the failure mode observed
-//! live was every later recomposition/animation dying after such a frame.
-
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
@@ -23,8 +16,6 @@ fn drain(composition: &mut TestComposition) {
     {}
 }
 
-/// One update exactly like the app shell's: frame callbacks then UI drains,
-/// wrapped in the deferred-state-release guard, at an EXACT frame time.
 fn update_at(composition: &mut TestComposition, frame_time: u64) {
     let runtime = composition.runtime_handle();
     composition.with_app_context(|| {
@@ -81,8 +72,6 @@ fn frame_pump_survives_exact_boundary_completions() {
     let probe = probe_slot.borrow().clone().expect("probe captured");
 
     let ms = |v: u64| v * 1_000_000;
-    // Two tweens started in the same frame, one 120 ms and one 70 ms — the
-    // loupe birth gate and the menu dissolve of the live repro.
     composition.with_app_context(|| {
         probe
             .gate
@@ -94,12 +83,10 @@ fn frame_pump_survives_exact_boundary_completions() {
             .animateTo(1.0, AnimationType::Tween(AnimationSpec::linear(70)));
     });
 
-    update_at(&mut composition, ms(10)); // both stamp start=10ms
-    update_at(&mut composition, ms(70)); // gate 0.5, tail 60/70
+    update_at(&mut composition, ms(10));
+    update_at(&mut composition, ms(70));
     assert!((probe.observed_gate.get() - 0.5).abs() < 1e-3);
 
-    // The killer frame: BOTH tweens land exactly on/beyond their duration in
-    // ONE drain (gate at exactly 120 ms elapsed) and complete together.
     update_at(&mut composition, ms(130));
     assert_eq!(
         probe.observed_gate.get(),
@@ -108,8 +95,6 @@ fn frame_pump_survives_exact_boundary_completions() {
     );
     assert_eq!(probe.observed_tail.get(), 1.0);
 
-    // The pump must still be alive: a NEW animation after the boundary
-    // completion has to tick and recompose.
     let composes_before = probe.composes.get();
     composition.with_app_context(|| {
         probe
@@ -117,8 +102,8 @@ fn frame_pump_survives_exact_boundary_completions() {
             .borrow_mut()
             .animateTo(0.0, AnimationType::Tween(AnimationSpec::linear(50)));
     });
-    update_at(&mut composition, ms(140)); // stamps start
-    update_at(&mut composition, ms(165)); // half-way back
+    update_at(&mut composition, ms(140));
+    update_at(&mut composition, ms(165));
     assert!(
         probe.composes.get() > composes_before,
         "recomposition died after the boundary-completion frame"

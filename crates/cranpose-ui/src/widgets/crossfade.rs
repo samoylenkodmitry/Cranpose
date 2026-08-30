@@ -35,12 +35,9 @@ pub(crate) fn animate_float_with_initial(
 }
 
 struct CrossfadeEntry<T> {
-    /// Stable key for the composition group of this content.
     id: u64,
     value: T,
-    /// Alpha state produced the last time this entry was composed.
     alpha: Option<State<f32>>,
-    /// Whether this entry should fade in from 0 when it first appears.
     fade_in: bool,
 }
 
@@ -112,8 +109,6 @@ where
     F: FnMut(T) + 'static,
 {
     let handle = remember(|| CrossfadeStateHandle::<T>::new()).with(CrossfadeStateHandle::clone);
-    // Refresh the stored content closure so recompositions triggered by
-    // animation frames observe the latest captured environment.
     *handle.inner.content.borrow_mut() = Some(std::boxed::Box::new(content));
     CrossfadeContents(handle, target_state, animation);
 }
@@ -128,8 +123,6 @@ where
     {
         let mut entries = state.inner.entries.borrow_mut();
         if entries.is_empty() {
-            // First composition: the initial content appears without a fade,
-            // matching Compose (the transition starts at the target state).
             let id = state.allocate_id();
             entries.push(CrossfadeEntry {
                 id,
@@ -147,9 +140,6 @@ where
             });
         }
 
-        // Remove contents whose fade-out completed. Reading the alpha state
-        // here subscribes this recompose scope, so every animation frame
-        // re-evaluates the retention decision.
         entries.retain(|entry| {
             entry.value == target_state
                 || entry

@@ -3,7 +3,6 @@ use cranpose_ui::{composable, Column, ColumnSpec, Modifier, Text, TextStyle};
 
 #[composable]
 fn conditional_text_with_external_state(counter_state: cranpose_core::MutableState<i32>) {
-    // Mimic the exact pattern from counter_app - with_key BEFORE the Column
     let is_even = counter_state.get() % 2 == 0;
     cranpose_core::with_key(&is_even, || {
         if is_even {
@@ -41,7 +40,6 @@ fn test_conditional_text_reactivity() {
         static TEST_COUNTER: RefCell<Option<MutableState<i32>>> = const { RefCell::new(None) };
     }
 
-    // Helper function to drain recompositions
     fn drain_all(composition: &mut cranpose_ui::TestComposition) -> Result<(), NodeError> {
         loop {
             if !composition.process_invalid_scopes()? {
@@ -51,7 +49,6 @@ fn test_conditional_text_reactivity() {
         Ok(())
     }
 
-    // Initial composition - counter is 0 (even)
     let mut composition = run_test_composition(|| {
         let counter = cranpose_core::rememberMutableStateOf(|| 0);
         TEST_COUNTER.with(|cell| {
@@ -65,12 +62,10 @@ fn test_conditional_text_reactivity() {
     let initial_node_count = tree.lines().count();
     println!("Initial node count: {}", initial_node_count);
 
-    // Get the counter state and increment it
     let counter = TEST_COUNTER
         .with(|cell| *cell.borrow())
         .expect("counter state not set");
 
-    // Increment the counter to 1 (odd)
     counter.set(1);
     drain_all(&mut composition).expect("drain after increment to 1");
 
@@ -79,13 +74,11 @@ fn test_conditional_text_reactivity() {
     let after_1_node_count = tree.lines().count();
     println!("After increment to 1, node count: {}", after_1_node_count);
 
-    // The node count should stay the same - we're replacing one Text node with another
     assert_eq!(
         initial_node_count, after_1_node_count,
         "Node count should remain the same when counter changes from 0 to 1"
     );
 
-    // Increment again to 2 (even)
     counter.set(2);
     drain_all(&mut composition).expect("drain after increment to 2");
 

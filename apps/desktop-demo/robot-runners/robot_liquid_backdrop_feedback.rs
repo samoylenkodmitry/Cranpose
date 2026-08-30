@@ -1,13 +1,3 @@
-//! Backdrop self-feedback contract: a STATIC glass surface must tone the
-//! scene beneath it exactly once. When the renderer snapshots a region that
-//! still holds the previous frame's composite (its own output), the material
-//! re-tones itself every frame and converges to a bright fixed point —
-//! measured on the sort/filter menu droplet over the purple header:
-//! raw pill (58,14,54) -> first composite (149,98,145) -> fed-back
-//! (214,155,210) within two frames. This runner pins the first composite:
-//! once the droplet face materializes over the pill, later frames of the
-//! UNCHANGED scene must not brighten.
-
 use std::{
     process::ExitCode,
     sync::atomic::{AtomicBool, Ordering},
@@ -19,13 +9,7 @@ use desktop_app::app::{self, TEST_ACTIVE_TAB_STATE};
 
 const WINDOW_WIDTH: u32 = 900;
 const WINDOW_HEIGHT: u32 = 800;
-/// A face is "materialized" once it clearly left the raw dark pill
-/// (~24 luma). The two-point-solved dark material (tint alpha 155) puts
-/// the settled face over the pill near ~60 — the old floor of 100 was
-/// calibrated on the pre-solve translucent panel.
 const MATERIALIZED_LUMA_FLOOR: f32 = 45.0;
-/// Feedback pushed the face +65 luma within two frames; honest per-frame
-/// material/animation variation stays well under this.
 const MAX_LATER_BRIGHTENING: f32 = 18.0;
 
 static FAILED: AtomicBool = AtomicBool::new(false);
@@ -52,10 +36,6 @@ fn main() -> ExitCode {
             let (px, py) = center(pill);
 
             robot.click(px, py).expect("open sort menu");
-            // Exact-clock frames across the droplet birth and the settled
-            // panel. Feedback converges within 1-2 frames (measured
-            // 25ms -> 50ms), so the early samples must be frame-dense to
-            // catch the first composite before it is re-toned.
             let offsets: Vec<(f32, bool)> = vec![
                 (25.0, true),
                 (17.0, true),

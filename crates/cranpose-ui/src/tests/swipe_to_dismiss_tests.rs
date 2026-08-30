@@ -1,7 +1,3 @@
-//! Headless tests for the SwipeToDismiss gesture math and dismiss/restore
-//! behavior. The controller state machine is driven with synthetic pointer
-//! events; spring animations advance through manual frame-clock pumps.
-
 use cranpose_core::{DefaultScheduler, Runtime};
 use cranpose_foundation::{
     BasicModifierNodeContext, ModifierNodeChain, PointerButton, PointerButtons,
@@ -11,7 +7,7 @@ use cranpose_ui_graphics::Point;
 use super::*;
 use crate::{collect_modifier_slices, scroll::ScrollState};
 
-const FRAME_NANOS: u64 = 16_666_667; // ~60 FPS
+const FRAME_NANOS: u64 = 16_666_667;
 
 fn point(x: f32, y: f32) -> Point {
     Point { x, y }
@@ -49,8 +45,6 @@ fn cancel() -> PointerEvent {
 }
 
 struct Harness {
-    // The collapse watcher requests render/layout invalidation, which needs an
-    // active app context; keep one alive for the whole harness.
     _app_context: crate::render_state::TestAppContextScope,
     _runtime: Runtime,
     controller: Rc<SwipeToDismissController>,
@@ -85,7 +79,6 @@ impl Harness {
         handle_swipe_event(&self.controller, event);
     }
 
-    /// The swipe as an application sees it.
     fn state(&self) -> SwipeDismissState {
         SwipeDismissState {
             controller: Rc::clone(&self.controller),
@@ -96,22 +89,18 @@ impl Harness {
         self.controller.current_offset()
     }
 
-    /// Non-reactive read of the background-reveal flag driven by the gesture.
     fn revealed(&self) -> bool {
         self.controller.revealed.get_non_reactive()
     }
 
-    /// Current row height scale (`1.0` at rest, `0.0` fully collapsed).
     fn collapse(&self) -> f32 {
         self.controller.collapse_fraction()
     }
 
-    /// The edge the background is revealed on for the current displacement.
     fn side(&self) -> SwipeDismissSide {
         self.controller.revealed_side()
     }
 
-    /// Advances the frame clock, driving springs and the settle watcher.
     fn pump_frames(&mut self, frames: usize) {
         let handle = self._runtime.handle();
         for _ in 0..frames {
@@ -120,10 +109,6 @@ impl Harness {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Pure gesture math
-// ---------------------------------------------------------------------------
 
 #[test]
 fn axis_stays_undecided_within_slop() {
@@ -137,7 +122,6 @@ fn axis_stays_undecided_within_slop() {
 fn axis_capture_requires_horizontal_dominance() {
     assert_eq!(decide_axis(9.0, 0.0, 8.0), SwipeAxisDecision::Horizontal);
     assert_eq!(decide_axis(-9.0, 4.0, 8.0), SwipeAxisDecision::Horizontal);
-    // Ties go to the swipe (main axis wins on >=, like the scroll modifier).
     assert_eq!(decide_axis(9.0, 9.0, 8.0), SwipeAxisDecision::Horizontal);
 }
 
@@ -153,7 +137,6 @@ fn dismissal_target_uses_threshold_fraction_and_sign() {
     assert_eq!(dismissal_target(100.0, 200.0, 0.5), Some(200.0));
     assert_eq!(dismissal_target(-150.0, 200.0, 0.5), Some(-200.0));
     assert_eq!(dismissal_target(30.0, 200.0, 0.1), Some(200.0));
-    // Unknown or degenerate widths never dismiss.
     assert_eq!(dismissal_target(500.0, f32::NAN, 0.5), None);
     assert_eq!(dismissal_target(500.0, 0.0, 0.5), None);
 }
@@ -163,13 +146,8 @@ fn clamp_offset_limits_travel_to_one_width() {
     assert_eq!(clamp_offset(250.0, 200.0), 200.0);
     assert_eq!(clamp_offset(-250.0, 200.0), -200.0);
     assert_eq!(clamp_offset(50.0, 200.0), 50.0);
-    // Unknown width leaves the offset untouched.
     assert_eq!(clamp_offset(250.0, f32::NAN), 250.0);
 }
-
-// ---------------------------------------------------------------------------
-// Gesture state machine
-// ---------------------------------------------------------------------------
 
 #[test]
 fn horizontal_drag_captures_and_follows_the_finger() {
@@ -177,25 +155,21 @@ fn horizontal_drag_captures_and_follows_the_finger() {
 
     harness.send(&down(10.0, 10.0));
 
-    // Within the slop: no capture, no consumption.
     let small = move_to(14.0, 10.0);
     harness.send(&small);
     assert!(!small.is_consumed());
     assert_eq!(harness.offset(), 0.0);
 
-    // Crossing the slop horizontally captures and consumes.
     let capture = move_to(30.0, 12.0);
     harness.send(&capture);
     assert!(capture.is_consumed());
     assert_eq!(harness.offset(), 20.0);
 
-    // Subsequent moves track the finger relative to the down position.
     let drag = move_to(140.0, 12.0);
     harness.send(&drag);
     assert!(drag.is_consumed());
     assert_eq!(harness.offset(), 130.0);
 
-    // The offset clamps at one content width.
     let far = move_to(500.0, 12.0);
     harness.send(&far);
     assert_eq!(harness.offset(), 200.0);
@@ -207,12 +181,10 @@ fn vertical_drag_locks_out_and_leaves_events_for_the_parent() {
 
     harness.send(&down(10.0, 10.0));
 
-    // Decisively vertical: the parent (LazyColumn) must win.
     let vertical = move_to(12.0, 40.0);
     harness.send(&vertical);
     assert!(!vertical.is_consumed());
 
-    // Even large horizontal travel later in the gesture stays unconsumed.
     let late_horizontal = move_to(80.0, 40.0);
     harness.send(&late_horizontal);
     assert!(!late_horizontal.is_consumed());
@@ -280,7 +252,7 @@ fn release_past_threshold_animates_out_and_fires_on_dismiss_once() {
 
     harness.send(&down(10.0, 10.0));
     harness.send(&move_to(30.0, 10.0));
-    harness.send(&move_to(140.0, 10.0)); // offset 130 >= threshold 100
+    harness.send(&move_to(140.0, 10.0));
 
     let release = up(140.0, 10.0);
     harness.send(&release);
@@ -295,20 +267,10 @@ fn release_past_threshold_animates_out_and_fires_on_dismiss_once() {
         harness.offset()
     );
 
-    // Further frames never re-fire the callback.
     harness.pump_frames(60);
     assert_eq!(harness.dismiss_count.get(), 1);
 }
 
-/// A row that dismisses stays off screen, because its host is about to remove
-/// it. A NAVIGATION dismissal is the opposite case and must come back.
-///
-/// `SwipeToDismissBox` owns its state internally, so an application has no
-/// handle to call `SwipeDismissState::reset` on. Left off screen, a host that
-/// answers the gesture by staying composed -- backing out of a pause overlay
-/// resumes the game in the same root composable -- shows a blank screen that
-/// taps do not reach and further back gestures neither redraw nor leave. It
-/// takes a process restart, which is what CranOrbit did on a Pixel Watch 3.
 #[test]
 fn a_navigation_dismissal_returns_to_rest_after_notifying_the_host() {
     let mut harness = Harness::new(200.0, 0.5);
@@ -316,7 +278,7 @@ fn a_navigation_dismissal_returns_to_rest_after_notifying_the_host() {
 
     harness.send(&down(10.0, 10.0));
     harness.send(&move_to(30.0, 10.0));
-    harness.send(&move_to(140.0, 10.0)); // offset 130 >= threshold 100
+    harness.send(&move_to(140.0, 10.0));
     harness.send(&up(140.0, 10.0));
 
     harness.pump_frames(300);
@@ -336,7 +298,6 @@ fn a_navigation_dismissal_returns_to_rest_after_notifying_the_host() {
     );
     assert!(!harness.revealed(), "nothing is revealed at rest");
 
-    // And the gesture still works afterwards, rather than being a one-shot.
     harness.send(&down(10.0, 10.0));
     harness.send(&move_to(30.0, 10.0));
     harness.send(&move_to(140.0, 10.0));
@@ -349,8 +310,6 @@ fn a_navigation_dismissal_returns_to_rest_after_notifying_the_host() {
     );
 }
 
-/// The row default is unchanged: without the flag a dismissed row stays off
-/// screen so its host can remove it.
 #[test]
 fn a_row_dismissal_still_stays_off_screen_for_its_host_to_remove() {
     let mut harness = Harness::new(200.0, 0.5);
@@ -376,7 +335,7 @@ fn release_below_threshold_springs_back_without_dismissing() {
 
     harness.send(&down(10.0, 10.0));
     harness.send(&move_to(30.0, 10.0));
-    harness.send(&move_to(70.0, 10.0)); // offset 60 < threshold 100
+    harness.send(&move_to(70.0, 10.0));
     harness.send(&up(70.0, 10.0));
 
     harness.pump_frames(300);
@@ -393,7 +352,7 @@ fn leftward_swipe_dismisses_to_the_left() {
     let mut harness = Harness::new(200.0, 0.5);
 
     harness.send(&down(150.0, 10.0));
-    harness.send(&move_to(30.0, 10.0)); // offset -120
+    harness.send(&move_to(30.0, 10.0));
 
     harness.send(&up(30.0, 10.0));
     harness.pump_frames(300);
@@ -405,17 +364,15 @@ fn leftward_swipe_dismisses_to_the_left() {
 fn revealed_side_follows_the_swipe_direction() {
     let mut harness = Harness::new(200.0, 0.5);
 
-    // Swipe right: the row moves right, revealing the leading (start) edge.
     harness.send(&down(20.0, 10.0));
-    harness.send(&move_to(120.0, 10.0)); // offset +100
+    harness.send(&move_to(120.0, 10.0));
     assert!(harness.offset() > 0.0);
     assert_eq!(harness.side(), SwipeDismissSide::Start);
     harness.send(&cancel());
     harness.pump_frames(300);
 
-    // Swipe left: the row moves left, revealing the trailing (end) edge.
     harness.send(&down(180.0, 10.0));
-    harness.send(&move_to(60.0, 10.0)); // offset -120
+    harness.send(&move_to(60.0, 10.0));
     assert!(harness.offset() < 0.0);
     assert_eq!(harness.side(), SwipeDismissSide::End);
 }
@@ -425,9 +382,8 @@ fn consumed_move_abandons_the_gesture_and_restores() {
     let mut harness = Harness::new(200.0, 0.5);
 
     harness.send(&down(10.0, 10.0));
-    harness.send(&move_to(60.0, 10.0)); // captured, offset 50
+    harness.send(&move_to(60.0, 10.0));
 
-    // A foreign handler consumed this sequence; the swipe must let go.
     let foreign = move_to(80.0, 10.0);
     foreign.consume();
     harness.send(&foreign);
@@ -448,11 +404,9 @@ fn background_reveal_tracks_displacement() {
         "still hidden before the swipe captures"
     );
 
-    harness.send(&move_to(30.0, 10.0)); // captured, offset 20
+    harness.send(&move_to(30.0, 10.0));
     assert!(harness.revealed(), "revealed once the row is displaced");
 
-    // Below threshold: springs back and the reveal turns off at rest so the
-    // background cannot flash while the row sits still.
     harness.send(&up(30.0, 10.0));
     harness.pump_frames(300);
     assert!(harness.offset().abs() <= 0.5);
@@ -469,15 +423,11 @@ fn dismiss_hides_background_and_collapses_row() {
 
     harness.send(&down(10.0, 10.0));
     harness.send(&move_to(30.0, 10.0));
-    harness.send(&move_to(140.0, 10.0)); // offset 130 >= threshold 100
+    harness.send(&move_to(140.0, 10.0));
     assert!(harness.revealed(), "background revealed while displaced");
     harness.send(&up(140.0, 10.0));
     harness.pump_frames(300);
 
-    // The dismiss fired exactly once and the row has fully settled: the
-    // background is no longer drawn (nothing to leave a red strip) and the row
-    // has collapsed to zero height (no lingering gap) regardless of when the
-    // host removes the item.
     assert_eq!(harness.dismiss_count.get(), 1);
     assert!(
         !harness.revealed(),
@@ -495,7 +445,7 @@ fn cancel_springs_back() {
     let mut harness = Harness::new(200.0, 0.5);
 
     harness.send(&down(10.0, 10.0));
-    harness.send(&move_to(90.0, 10.0)); // captured, offset 80
+    harness.send(&move_to(90.0, 10.0));
     harness.send(&cancel());
 
     harness.pump_frames(300);
@@ -503,13 +453,6 @@ fn cancel_springs_back() {
     assert!(harness.offset().abs() <= 0.5);
 }
 
-// ---------------------------------------------------------------------------
-// Nested with a vertical scroll parent (modifier-chain dispatch, mirroring
-// the shell's leaf-first hit-path order like the nested scroll tests)
-// ---------------------------------------------------------------------------
-
-/// Builds the production pointer handler for a modifier by driving it
-/// through a real modifier-node chain (same approach as zoom/scroll tests).
 fn pointer_handler_for(modifier: crate::Modifier) -> (Rc<dyn Fn(PointerEvent)>, ModifierNodeChain) {
     let elements = modifier.elements();
     let mut chain = ModifierNodeChain::new();
@@ -524,8 +467,6 @@ fn pointer_handler_for(modifier: crate::Modifier) -> (Rc<dyn Fn(PointerEvent)>, 
     (handler, chain)
 }
 
-/// Dispatches an event leaf-first (swipe child, then scroll parent),
-/// mirroring the shell's hit-path dispatch order.
 fn dispatch_nested(
     child: &Rc<dyn Fn(PointerEvent)>,
     parent: &Rc<dyn Fn(PointerEvent)>,
@@ -547,7 +488,6 @@ struct NestedHarness {
 }
 
 impl NestedHarness {
-    /// A swipeable row nested in a vertical scroll container.
     fn new() -> Self {
         let app_context = crate::render_state::app_context_test_scope();
         let harness = Harness::new(200.0, 0.5);
@@ -583,7 +523,6 @@ fn vertical_drag_on_row_scrolls_parent_list() {
     let nested = NestedHarness::new();
 
     nested.send(down(100.0, 100.0));
-    // Decisively vertical: the swipe locks itself out, the parent scrolls.
     nested.send(move_to(102.0, 60.0));
     nested.send(move_to(104.0, 20.0));
     nested.send(up(104.0, 20.0));
@@ -602,8 +541,6 @@ fn horizontal_swipe_on_row_does_not_scroll_parent_list() {
     let mut nested = NestedHarness::new();
 
     nested.send(down(20.0, 100.0));
-    // Mostly horizontal with vertical jitter: the swipe captures, so the
-    // consumed moves never scroll the parent.
     let capture = nested.send(move_to(40.0, 104.0));
     assert!(capture.is_consumed(), "swipe must capture horizontal drags");
     nested.send(move_to(160.0, 98.0));
@@ -628,7 +565,6 @@ fn horizontal_swipe_on_row_does_not_scroll_parent_list() {
 fn pressing_mid_flight_pins_the_content() {
     let mut harness = Harness::new(200.0, 0.5);
 
-    // Swipe below threshold and release: spring-back starts.
     harness.send(&down(10.0, 10.0));
     harness.send(&move_to(90.0, 10.0));
     harness.send(&up(90.0, 10.0));
@@ -636,12 +572,10 @@ fn pressing_mid_flight_pins_the_content() {
     let mid_flight = harness.offset();
     assert!(mid_flight > 0.0 && mid_flight < 80.0);
 
-    // Pressing again stops the animation where it is.
     harness.send(&down(50.0, 10.0));
     harness.pump_frames(5);
     assert_eq!(harness.offset(), mid_flight);
 
-    // And the new drag continues from the pinned offset.
     let drag = move_to(70.0, 10.0);
     harness.send(&drag);
     assert!(drag.is_consumed());
@@ -650,19 +584,13 @@ fn pressing_mid_flight_pins_the_content() {
 
 #[test]
 fn identity_change_resets_a_dismissed_controller() {
-    // The bug this guards: an UNKEYED lazy list reuses composition slots by
-    // index, so after a dismissal the slot's remembered controller — content
-    // translated off-screen, background revealed, height collapsed — is
-    // handed to the NEXT item ("items go shuffled, red boxes stick"). With
-    // `SwipeToDismissSpec::with_key`, the composable resets the controller
-    // whenever the key changes; this drives that reset directly.
     let mut harness = Harness::new(200.0, 0.5);
 
     harness.send(&down(10.0, 10.0));
-    harness.send(&move_to(30.0, 12.0)); // capture
-    harness.send(&move_to(180.0, 12.0)); // past the 100 px threshold
+    harness.send(&move_to(30.0, 12.0));
+    harness.send(&move_to(180.0, 12.0));
     harness.send(&up(180.0, 12.0));
-    harness.pump_frames(240); // fling + settle + collapse
+    harness.pump_frames(240);
     assert_eq!(harness.dismiss_count.get(), 1);
     assert!(
         harness.collapse() < 0.05,
@@ -670,8 +598,6 @@ fn identity_change_resets_a_dismissed_controller() {
         harness.collapse()
     );
 
-    // The slot is reused for a different item: SwipeToDismiss sees a new
-    // spec key and resets. The new item must start pristine.
     harness.controller.identity.set(Some(7));
     harness.controller.reset_to_rest();
     assert_eq!(harness.offset(), 0.0, "offset must snap back to rest");
@@ -682,7 +608,6 @@ fn identity_change_resets_a_dismissed_controller() {
     assert!(!harness.revealed(), "background must not stay revealed");
     assert!(!harness.controller.dismissed.get());
 
-    // And the new item swipes like new — including firing its own dismissal.
     harness.send(&down(10.0, 10.0));
     harness.send(&move_to(30.0, 12.0));
     harness.send(&move_to(180.0, 12.0));
@@ -691,12 +616,6 @@ fn identity_change_resets_a_dismissed_controller() {
     assert_eq!(harness.dismiss_count.get(), 2);
 }
 
-// ---------------------------------------------------------------------------
-// The swipe an application can read
-// ---------------------------------------------------------------------------
-
-/// A row at rest reports nothing happening, so a background bound to the state
-/// draws nothing before the finger arrives.
 #[test]
 fn a_row_at_rest_reports_no_swipe() {
     let harness = Harness::new(200.0, 0.5);
@@ -708,9 +627,6 @@ fn a_row_at_rest_reports_no_swipe() {
     assert!(!state.is_dismissed());
 }
 
-/// Progress is measured against the same threshold a release is judged by, so
-/// a label bound to it reaches full strength exactly when letting go would
-/// dismiss the row.
 #[test]
 fn progress_reaches_one_where_a_release_would_dismiss() {
     let harness = Harness::new(200.0, 0.5);
@@ -737,8 +653,6 @@ fn progress_reaches_one_where_a_release_would_dismiss() {
     assert_eq!(state.progress(), 1.0, "progress does not run past complete");
 }
 
-/// A leftward swipe reports the other edge, so a background can put its label
-/// on the side the row is leaving towards.
 #[test]
 fn the_reported_side_follows_the_direction_of_travel() {
     let harness = Harness::new(200.0, 0.5);
@@ -749,8 +663,6 @@ fn the_reported_side_follows_the_direction_of_travel() {
     assert!(state.offset() < 0.0);
 }
 
-/// Before the row has been measured a fraction of its width would be a guess,
-/// so nothing is reported rather than a number that will change.
 #[test]
 fn an_unmeasured_row_reports_no_progress() {
     let harness = Harness::new(f32::NAN, 0.5);
@@ -760,8 +672,6 @@ fn an_unmeasured_row_reports_no_progress() {
     assert_eq!(state.progress(), 0.0);
 }
 
-/// A dismissal is observable, so a screen can show an undo bar without being
-/// handed a callback.
 #[test]
 fn a_dismissal_is_reported_to_the_state() {
     let mut harness = Harness::new(200.0, 0.5);
@@ -776,8 +686,6 @@ fn a_dismissal_is_reported_to_the_state() {
     assert_eq!(harness.dismiss_count.get(), 1);
 }
 
-/// Resetting from outside returns the row to rest — an undo, or a screen
-/// closing what the swipe opened.
 #[test]
 fn resetting_the_state_returns_the_row_to_rest() {
     let mut harness = Harness::new(200.0, 0.5);

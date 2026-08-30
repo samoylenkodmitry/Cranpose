@@ -1,4 +1,3 @@
-//! Android WGPU surface bridge.
 #![allow(unsafe_code)]
 
 use std::{ffi::c_void, ptr::NonNull};

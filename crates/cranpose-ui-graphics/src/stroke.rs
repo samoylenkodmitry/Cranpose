@@ -145,7 +145,6 @@ pub struct ArcGeometry {
 #[inline]
 fn exact_floor(x: f32) -> f32 {
     if x == 0.0 {
-        // The int round-trip would turn -0.0 into +0.0; floorf keeps the sign.
         return x;
     }
     if x.abs() < 8_388_608.0 {
@@ -225,16 +224,12 @@ impl ArcGeometry {
         let outer = outer_radius.max(0.0);
         let inner = inner_radius.clamp(0.0, outer);
 
-        // Fold negative sweeps into a positive sweep starting at the other end
-        // so downstream math (and the shader) only ever sees `0 ..= TAU`.
         let (mut start, mut sweep) = if sweep_angle < 0.0 {
             (start_angle + sweep_angle, -sweep_angle)
         } else {
             (start_angle, sweep_angle)
         };
         if sweep >= TAU {
-            // A closed ring: caps can never be seen, and forcing `Round` keeps
-            // the shader from clipping a hairline seam at the wrap point.
             sweep = TAU;
             start = 0.0;
         }
@@ -322,13 +317,6 @@ impl ArcGeometry {
             };
         }
 
-        // A closed ring reaches `center ± outer` on all four axes and nothing
-        // in it — caps included — reaches further, so its box needs no
-        // endpoint trig at all. Most primitives in a particle-heavy scene are
-        // full circles (dots, rings, glow discs), and the two `sin_cos` calls
-        // below were the single largest trig cost of recording such a frame.
-        // (`new` forces `Round` at a full sweep; a hand-built square cap can
-        // project past `outer` along the tangent, so it keeps the long path.)
         if self.sweep_angle >= TAU && self.cap != StrokeCap::Square {
             let r = self.outer_radius;
             return Rect {
@@ -368,7 +356,6 @@ impl ArcGeometry {
                     );
                 }
                 StrokeCap::Square => {
-                    // Projected along the tangent, away from the sweep.
                     let tx = -sin * rb * outward;
                     let ty = cos * rb * outward;
                     include(
@@ -381,7 +368,6 @@ impl ArcGeometry {
                     );
                 }
                 StrokeCap::Round => {
-                    // Semicircle of radius `rb` centered on the band centerline.
                     let cx = self.center.x + cos * ra;
                     let cy = self.center.y + sin * ra;
                     include(cx - rb, cy - rb);
@@ -390,9 +376,6 @@ impl ArcGeometry {
             }
         }
 
-        // The axis directions have constant sines and cosines; going through
-        // `sin_cos` here doubled the trig cost of every arc in a shape-heavy
-        // scene.
         const AXIS_DIRECTIONS: [(f32, f32); 4] = [(0.0, 1.0), (1.0, 0.0), (0.0, -1.0), (-1.0, 0.0)];
         for (quadrant, (sin, cos)) in AXIS_DIRECTIONS.into_iter().enumerate() {
             let angle = quadrant as f32 * std::f32::consts::FRAC_PI_2;
@@ -404,12 +387,6 @@ impl ArcGeometry {
             }
         }
 
-        // The endpoint positions above came from approximate trig; grow the
-        // box by their worst-case error (sub-pixel at any plausible radius)
-        // so it still contains the exact shape. Square caps project rb along
-        // an approximate tangent on top of the radial term, hence the sum;
-        // the absolute floor keeps the containment margin real for tiny
-        // radii where f32 rounding competes with the scaled term.
         let pad = (self.outer_radius + rb) * FAST_TRIG_ERR + 0.02;
         Rect {
             x: min_x - pad,
@@ -470,17 +447,10 @@ mod tests {
 
     use super::*;
 
-    /// Bounds are deliberately conservative now: endpoint trig is
-    /// approximate and the box is padded by its worst-case error, so
-    /// "hugs"/"tight" means within that documented slack, not within float
-    /// noise. The containment property test below is the strict guard.
     fn approx(a: f32, b: f32) -> bool {
         (a - b).abs() < 0.15
     }
 
-    /// What a pinch or a scale-on-press does to an arc: the ring grows about a
-    /// point without opening or closing. The angles must survive untouched, or
-    /// a progress ring would appear to jump backwards while being scaled.
     #[test]
     fn scaling_an_arc_moves_its_centre_and_its_radii_and_nothing_else() {
         let arc = ArcGeometry::new(
@@ -500,7 +470,6 @@ mod tests {
         assert_eq!(moved.sweep_angle, arc.sweep_angle);
         assert_eq!(moved.cap, arc.cap);
 
-        // Scaling by one is the identity apart from the centre it is told.
         let same = arc.scaled_about(arc.center, 1.0);
         assert_eq!(same, arc);
     }
@@ -607,9 +576,6 @@ mod tests {
         }
     }
 
-    /// The strict contract of approximate bounds: the box must CONTAIN the
-    /// box the exact-trig algorithm produces, and must not exceed it by more
-    /// than the documented pad. Sweeps every cap, many radii and angles.
     #[test]
     fn approximate_bounds_contain_the_exact_box_within_documented_slack() {
         for radius in [2.0f32, 10.0, 57.0, 204.0] {
@@ -655,7 +621,6 @@ mod tests {
         }
     }
 
-    /// The pre-approximation bounds algorithm, verbatim, with libm trig.
     fn exact_bounds(arc: &ArcGeometry) -> Rect {
         let mut min_x = f32::INFINITY;
         let mut min_y = f32::INFINITY;
@@ -723,12 +688,9 @@ mod tests {
 
     #[test]
     fn arc_geometry_flags_degenerate_bands() {
-        // inner >= outer
         assert!(ArcGeometry::new(Point::ZERO, 5.0, 5.0, 0.0, 1.0, StrokeCap::Butt).is_degenerate());
         assert!(ArcGeometry::new(Point::ZERO, 9.0, 5.0, 0.0, 1.0, StrokeCap::Butt).is_degenerate());
-        // zero sweep
         assert!(ArcGeometry::new(Point::ZERO, 1.0, 5.0, 0.0, 0.0, StrokeCap::Butt).is_degenerate());
-        // zero radius
         assert!(ArcGeometry::new(Point::ZERO, 0.0, 0.0, 0.0, 1.0, StrokeCap::Butt).is_degenerate());
     }
 
@@ -751,7 +713,6 @@ mod tests {
 
     #[test]
     fn arc_bounds_three_quarter_sweep_spans_every_axis_it_crosses() {
-        // 0 -> 270 degrees crosses +X, +Y, -X and ends on -Y.
         let arc = ArcGeometry::new(
             Point::new(0.0, 0.0),
             0.0,
@@ -769,8 +730,6 @@ mod tests {
 
     #[test]
     fn arc_bounds_include_inner_endpoints_when_no_axis_is_crossed() {
-        // 45 -> 135 degrees only crosses +Y; the minimum y comes from the two
-        // *inner* radial endpoints, not from the outer arc.
         let arc = ArcGeometry::new(
             Point::ZERO,
             8.0,
@@ -817,7 +776,6 @@ mod tests {
         let round = ArcGeometry::new(Point::ZERO, 8.0, 12.0, 0.0, FRAC_PI_2, StrokeCap::Round);
         let butt_bounds = butt.bounds();
         let round_bounds = round.bounds();
-        // The start cap at angle 0 bulges to -rb in y; butt stops at y = 0.
         assert!(approx(butt_bounds.y, 0.0), "{butt_bounds:?}");
         assert!(approx(round_bounds.y, -2.0), "{round_bounds:?}");
         assert!(round_bounds.width >= butt_bounds.width);
@@ -828,7 +786,6 @@ mod tests {
     fn arc_bounds_square_caps_project_along_the_tangent() {
         let square = ArcGeometry::new(Point::ZERO, 8.0, 12.0, 0.0, FRAC_PI_2, StrokeCap::Square);
         let bounds = square.bounds();
-        // Start cap at angle 0: tangent is +Y, projected backwards by rb = 2.
         assert!(approx(bounds.y, -2.0), "{bounds:?}");
         assert!(approx(bounds.x + bounds.width, 12.0), "{bounds:?}");
     }
@@ -844,21 +801,15 @@ mod tests {
         assert_eq!((inner, outer), (6.0, 10.0));
         assert_eq!(cap, StrokeCap::Butt);
 
-        // inner >= outer clamps rather than producing a negative band.
         let (inner, outer, _) = arc_band(10.0, 40.0, None);
         assert_eq!((inner, outer), (10.0, 10.0));
 
-        // A stroke wider than the radius clamps the inner radius at 0.
         let (inner, outer, _) = arc_band(1.0, 0.0, Some(Stroke::new(10.0)));
         assert_eq!((inner, outer), (0.0, 6.0));
     }
 
     #[test]
     fn full_ring_bounds_shortcut_matches_the_endpoint_walk() {
-        // The trig-free full-sweep path must return exactly what the endpoint
-        // walk would: `center ± outer` on both axes. The walk's answer for a
-        // full ring is forced by the four axis crossings plus a round cap
-        // whose farthest point sits at `mid + half_thickness == outer`.
         let ring = ArcGeometry::new(Point::new(10.0, -4.0), 6.0, 9.0, 1.3, TAU, StrokeCap::Butt);
         assert_eq!(
             ring.bounds(),
@@ -870,11 +821,6 @@ mod tests {
             }
         );
 
-        // A hand-built square cap can project past `outer` along the tangent
-        // (its corner sits at distance `sqrt(outer² + rb²)` from the center),
-        // so a full-sweep square ring must keep the endpoint walk. The
-        // endpoint angle is chosen so the corner lands on the +x axis, where
-        // the excess is largest.
         let square = ArcGeometry {
             cap: StrokeCap::Square,
             start_angle: TAU - (1.5f32 / 9.0).atan(),

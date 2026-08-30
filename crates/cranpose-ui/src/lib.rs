@@ -52,37 +52,23 @@ pub mod widgets;
 mod word_boundaries;
 pub mod zoom;
 
-// Export for cursor blink animation - AppShell checks this to continuously redraw
 pub use bring_into_view::{
     BringIntoViewResponder, local_bring_into_view_responder, scroll_delta_to_reveal,
 };
-// Lazy list exports - single source from cranpose-foundation
-// `rememberLazyListState` belongs here with the state it builds: an app that
-// composes a `LazyColumn` against cranpose-ui had to reach into
-// cranpose-foundation for the one hook that makes its state, which is the
-// reaching-past this facade exists to prevent.
-pub use cranpose_foundation::lazy::{
-    LazyItems, LazyListItemInfo, LazyListLayoutInfo, LazyListScope, LazyListState,
-    rememberLazyListState, rememberLazyListStateWithPosition,
-};
-// The accessibility vocabulary an app writes against. It is declared in
-// cranpose-foundation, next to `SemanticsConfiguration`, but an app composes
-// against cranpose-ui and should not have to reach past it to describe a
-// button.
 pub use cranpose_foundation::{
-    CanvasSemanticsNode, SemanticsConfiguration, SemanticsCustomAction, SemanticsWidgetRole,
-};
-pub use cranpose_foundation::{
-    DelegatableNode, ModifierNode, ModifierNodeElement, NodeCapabilities, NodeState,
+    CanvasSemanticsNode, DelegatableNode, ModifierNode, ModifierNodeElement, NodeCapabilities,
+    NodeState, SemanticsConfiguration, SemanticsCustomAction, SemanticsWidgetRole,
+    lazy::{
+        LazyItems, LazyListItemInfo, LazyListLayoutInfo, LazyListScope, LazyListState,
+        rememberLazyListState, rememberLazyListStateWithPosition,
+    },
 };
 pub use cranpose_ui_graphics::{BlurredEdgeTreatment, ColorFilter, Dp, ImageBitmap, ImageSampling};
 pub use cranpose_ui_layout::IntrinsicSize;
-// Export cursor blink timing for WaitUntil scheduling
 pub use cursor_animation::{
     is_cursor_visible, next_cursor_blink_time, reset_cursor_blink, start_cursor_blink,
     stop_cursor_blink, tick_cursor_blink,
 };
-// Debug utilities
 pub use debug::{
     ModifierChainTraceGuard, format_layout_tree, format_modifier_chain, format_render_scene,
     format_screen_summary, install_modifier_chain_trace, log_layout_tree, log_modifier_chain,
@@ -94,10 +80,6 @@ pub use draw::{
     DrawCacheBuilder, DrawCommand, DrawCommandFn, command_draw_scope, command_draw_scope_retained,
     command_draw_scope_reusing, execute_draw_commands,
 };
-// Focus invalidation scheduler plumbing (mirrors Compose's internal
-// FocusInvalidationManager). Hosts like cranpose-app-shell service these
-// after composition/layout; custom modifier authors invalidate through
-// `ModifierNode::invalidate` instead.
 #[doc(hidden)]
 pub use focus_dispatch::{
     active_focus_target, clear_focus_invalidations, has_pending_focus_invalidations,
@@ -137,7 +119,6 @@ pub use modifier::{
     RuntimeShader, SemanticsRequester, Shadow, ShadowScope, Size, TransformOrigin,
     collect_modifier_slices, collect_semantics_from_modifier, collect_slices_from_modifier,
 };
-// Test utilities for fling velocity verification (only with test-helpers feature)
 #[cfg(feature = "test-helpers")]
 pub use modifier::{last_fling_velocity, reset_last_fling_velocity};
 pub use modifier_nodes::{
@@ -149,7 +130,6 @@ pub use modifier_nodes::{
 pub use nine_patch::{
     NinePatchInsets, PatchFill, PatchQuad, nine_patch_quads, tile_count, tile_quads,
 };
-// Pointer repass scheduler plumbing serviced by the host shell each frame.
 #[doc(hidden)]
 pub use pointer_dispatch::{
     clear_pointer_repasses, has_pending_pointer_repasses, process_pointer_repasses,
@@ -168,10 +148,6 @@ pub use primitives::{
 #[cfg(any(test, feature = "test-helpers"))]
 #[doc(hidden)]
 pub use render_state::reset_render_state_for_tests;
-// Render/layout/draw scheduler and invalidation-queue plumbing serviced by
-// the host shell and renderer each frame. Custom modifier authors should
-// invalidate through `ModifierNode::invalidate` instead of reaching for
-// these directly.
 pub use render_state::{
     AppContext, AppContextScope, MAX_FONT_SCALE, MIN_FONT_SCALE, current_density,
     current_font_scale, current_font_scale_curve, scale_sp, set_density, set_font_scale,
@@ -195,7 +171,6 @@ pub use renderer::{HeadlessRenderer, PaintLayer, RecordedRenderScene, RenderOp};
 pub use safe_area::{WindowInsets, local_ime_insets, local_safe_area_insets, window_insets};
 pub use scroll::{ScrollElement, ScrollMetrics, ScrollNode, ScrollSettlePolicy, ScrollState};
 pub use scrollbar::{ThumbBounds, ThumbGeometry, content_delta_for_thumb_drag, thumb_geometry};
-// Semantics invalidation scheduler plumbing serviced by the host shell each frame.
 #[doc(hidden)]
 pub use semantics_dispatch::{
     clear_semantics_invalidations, has_pending_semantics_invalidations,
@@ -214,13 +189,8 @@ pub use text::{
     measure_text_with_options_for_node, prepare_text_layout, prepare_text_layout_for_node,
     set_text_measurer,
 };
-// Editable-state snapshot for platform IMEs (Android InputConnection, web
-// composition) - platform runtimes read it through the shell
-pub use text_field_focus::ImeEditorState;
-pub use text_field_focus::has_focused_field;
+pub use text_field_focus::{ImeEditorState, has_focused_field};
 pub use text_field_modifier_node::{TextFieldElement, TextFieldModifierNode, TextPanResolver};
-// Platform soft-keyboard bridge - platform runtimes install a handler so text
-// field focus changes can show/hide the on-screen keyboard
 pub use text_input_session::PlatformTextInputHandler;
 pub use text_modifier_node::{TextModifierElement, TextModifierNode};
 pub use widgets::{

@@ -1,17 +1,3 @@
-//! Robot test for button click after tab switch with cursor movement
-//!
-//! This test reproduces a bug where:
-//! 1. Open app (starts on Counter App)
-//! 2. Click on "CompositionLocal Test" tab
-//! 3. Click back on "Counter App" tab
-//! 4. Move cursor from "Counter App" button to "Increment" button (over gradient area)
-//! 5. Click "Increment" - button doesn't work
-//!
-//! Run with:
-//! ```bash
-//! cargo run --package desktop-app --example robot_increment_bug --features robot-app
-//! ```
-
 use std::time::Duration;
 
 use cranpose::AppLauncher;
@@ -90,7 +76,6 @@ fn main() {
                 Err(e) => println!("Note: {}\n", e),
             }
 
-            // Helper to find button center
             let find_button_center = |robot: &cranpose::Robot, name: &str| -> Option<(f32, f32)> {
                 robot
                     .find_button_bounds(name)
@@ -136,21 +121,15 @@ fn main() {
             std::thread::sleep(Duration::from_millis(300));
 
             println!("\n--- Step 4: Move Cursor Over Gradient Area ---");
-            // Move from Counter App tab position through the gradient area (y ≈ 220+)
-            // This triggers the gradient's pointer_input handler which updates state
-            // and causes recomposition during the cursor movement.
             if let Some((tab_x, tab_y)) = counter_app_pos {
                 println!(
                     "  Moving cursor from tab ({:.1}, {:.1}) through gradient area...",
                     tab_x, tab_y
                 );
 
-                // Move to a point in the gradient area (approximately y=220-250)
-                // This is where the gradient's pointer_input handler tracks mouse position
                 let gradient_x = 80.0;
                 let gradient_y = 230.0;
 
-                // Move in steps through the gradient area to trigger recomposition
                 for step in 0..20 {
                     let progress = step as f32 / 19.0;
                     let x = tab_x + (gradient_x - tab_x) * progress;
@@ -167,20 +146,15 @@ fn main() {
             std::thread::sleep(Duration::from_millis(200));
 
             println!("\n--- Step 5: Find and Click Increment Button ---");
-            // The Increment button is INSIDE the gradient area, at approximately y=129
-            // based on previous test runs finding it at (144.6, 129.4)
             let increment_pos = find_button_center(&robot, "Increment");
             if let Some((x, y)) = increment_pos {
                 println!("  Found 'Increment' button at ({:.1}, {:.1})", x, y);
 
-                // First move to the button position (may trigger additional recomposition)
                 robot.mouse_move(x, y).unwrap_or_else(|err| {
                     fail(&robot, &format!("failed to move mouse to Increment button: {err}"))
                 });
                 std::thread::sleep(Duration::from_millis(100));
 
-                // Then click - this tests that Up event reaches the button
-                // even if Down event triggered recomposition
                 robot.click(x, y).unwrap_or_else(|err| {
                     fail(&robot, &format!("failed to click Increment button: {err}"))
                 });

@@ -50,10 +50,6 @@ pub struct LazyLayoutStats {
     pub reuse_count: usize,
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// LazyListScrollPosition - Reactive scroll position (matches JC design)
-// ─────────────────────────────────────────────────────────────────────────────
-
 /// Contains the current scroll position represented by the first visible item
 /// index and the first visible item scroll offset.
 ///
@@ -63,24 +59,16 @@ pub struct LazyLayoutStats {
 /// Matches Jetpack Compose's `LazyListScrollPosition` design.
 #[derive(Clone, Copy)]
 pub struct LazyListScrollPosition {
-    /// The index of the first visible item (reactive).
     index: MutableState<usize>,
-    /// The scroll offset of the first visible item (reactive).
     scroll_offset: MutableState<f32>,
-    /// Non-reactive internal state (key tracking, nearest range).
     inner: MutableState<Rc<RefCell<ScrollPositionInner>>>,
 }
 
 /// Non-reactive internal state for scroll position.
 struct ScrollPositionInner {
-    /// Authoritative first visible item index used by layout and non-reactive reads.
     current_index: usize,
-    /// Authoritative first visible item offset used by layout and non-reactive reads.
     current_scroll_offset: f32,
-    /// The last known key of the item at index position.
-    /// Used for scroll position stability across data changes.
     last_known_first_item_key: Option<u64>,
-    /// Sliding window range for optimized key lookups.
     nearest_range_state: NearestRangeState,
 }
 
@@ -119,7 +107,6 @@ impl LazyListScrollPosition {
         self.current_scroll_offset()
     }
 
-    /// Updates the retained scroll position from a measurement result.
     pub(crate) fn update_from_measure_result(
         &self,
         first_visible_index: usize,
@@ -129,7 +116,6 @@ impl LazyListScrollPosition {
         if !self.is_alive() {
             return;
         }
-        // Update internal state (key tracking, nearest range)
         self.inner.with(|rc| {
             let mut inner = rc.borrow_mut();
             inner.current_index = first_visible_index;
@@ -146,8 +132,6 @@ impl LazyListScrollPosition {
         }
     }
 
-    /// Requests a new position and clears the last known key.
-    /// Used for programmatic scrolls (scroll_to_item).
     pub(crate) fn request_position_and_forget_last_known_key(
         &self,
         index: usize,
@@ -172,8 +156,6 @@ impl LazyListScrollPosition {
         }
     }
 
-    /// Adjusts scroll position if the first visible item was moved.
-    /// Returns the adjusted index.
     pub(crate) fn update_if_first_item_moved<F>(
         &self,
         new_item_count: usize,
@@ -217,10 +199,6 @@ impl LazyListScrollPosition {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// LazyListState - Main state object
-// ─────────────────────────────────────────────────────────────────────────────
-
 /// State object for lazy list scroll position tracking.
 ///
 /// Holds the current scroll position and provides methods to programmatically
@@ -253,22 +231,13 @@ impl LazyListScrollPosition {
 /// ```
 #[derive(Clone, Copy)]
 pub struct LazyListState {
-    /// Scroll position with reactive index and offset (matches JC design).
     scroll_position: LazyListScrollPosition,
-    /// Whether we can scroll forward (reactive, matches JC).
     can_scroll_forward_state: MutableState<bool>,
-    /// Whether we can scroll backward (reactive, matches JC).
     can_scroll_backward_state: MutableState<bool>,
-    /// Reactive stats state for triggering recomposition when stats change.
-    /// Only contains items_in_use and items_in_pool (diagnostic counters are in inner).
     stats_state: MutableState<LazyLayoutStats>,
-    /// Non-reactive internal state (caches, callbacks, prefetch, layout info).
     inner: MutableState<Rc<RefCell<LazyListStateInner>>>,
 }
 
-// Implement PartialEq by comparing the stable inner state handle identity.
-// This allows LazyListState to be used as a composable function parameter
-// without dereferencing released state cells during parameter updates.
 impl PartialEq for LazyListState {
     fn eq(&self, other: &Self) -> bool {
         self.inner == other.inner
@@ -283,49 +252,36 @@ struct CachedItemSize {
 
 /// Non-reactive internal state for LazyListState.
 struct LazyListStateInner {
-    /// Scroll delta to be consumed in the next layout pass.
     scroll_to_be_consumed: f32,
 
-    /// Pending scroll-to-item request.
     pending_scroll_to_index: Option<(usize, f32)>,
 
-    /// Layout info from the last measure pass.
     layout_info: LazyListLayoutInfo,
     current_can_scroll_forward: bool,
     current_can_scroll_backward: bool,
 
-    /// Invalidation callbacks.
     invalidate_callbacks: Vec<(u64, Rc<dyn Fn()>)>,
     next_callback_id: u64,
 
-    /// Registered layout invalidation callback id, if any.
-    /// Used to prevent duplicate registrations on recomposition and to
-    /// allow clean re-registration after a branch is disposed and restored.
     layout_invalidation_callback_id: Option<u64>,
     layout_invalidation_node_id: Option<NodeId>,
 
-    /// Diagnostic counters (non-reactive - not typically displayed in UI).
     total_composed: usize,
     reuse_count: usize,
 
-    /// Cache of recently measured item sizes (index -> main_axis_size).
     item_size_cache: std::collections::HashMap<usize, CachedItemSize>,
     item_size_eviction_queue: BinaryHeap<Reverse<(u64, usize)>>,
     item_size_clock: u64,
 
-    /// Running average of measured item sizes for estimation.
     average_item_size: f32,
     total_measured_items: usize,
     next_measure_cycle_id: u64,
     next_item_measure_pass_id: u64,
 
-    /// Prefetch scheduler for pre-composing items.
     prefetch_scheduler: PrefetchScheduler,
 
-    /// Prefetch strategy configuration.
     prefetch_strategy: PrefetchStrategy,
 
-    /// Last scroll delta direction for prefetch.
     last_scroll_direction: f32,
 }
 
@@ -357,7 +313,6 @@ pub fn rememberLazyListStateWithPosition(
     initial_first_visible_item_index: usize,
     initial_first_visible_item_scroll_offset: f32,
 ) -> LazyListState {
-    // Create scroll position with reactive fields (matches JC LazyListScrollPosition)
     let scroll_position = LazyListScrollPosition {
         index: cranpose_core::rememberMutableStateOf(|| initial_first_visible_item_index),
         scroll_offset: cranpose_core::rememberMutableStateOf(|| {
@@ -373,7 +328,6 @@ pub fn rememberLazyListStateWithPosition(
         }),
     };
 
-    // Non-reactive internal state
     let inner = cranpose_core::rememberMutableStateOfNeverEqual(|| {
         Rc::new(RefCell::new(LazyListStateInner {
             scroll_to_be_consumed: 0.0,
@@ -400,7 +354,6 @@ pub fn rememberLazyListStateWithPosition(
         }))
     });
 
-    // Reactive state
     let can_scroll_forward_state = cranpose_core::rememberMutableStateOf(|| false);
     let can_scroll_backward_state = cranpose_core::rememberMutableStateOf(|| false);
     let stats_state = cranpose_core::rememberMutableStateOf(LazyLayoutStats::default);
@@ -430,7 +383,6 @@ impl LazyListState {
     /// When called during composition, this creates a reactive subscription
     /// so that changes to the index will trigger recomposition.
     pub fn first_visible_item_index(&self) -> usize {
-        // Delegate to scroll_position (reactive read)
         self.scroll_position.index()
     }
 
@@ -448,7 +400,6 @@ impl LazyListState {
     /// When called during composition, this creates a reactive subscription
     /// so that changes to the offset will trigger recomposition.
     pub fn first_visible_item_scroll_offset(&self) -> f32 {
-        // Delegate to scroll_position (reactive read)
         self.scroll_position.scroll_offset()
     }
 
@@ -487,7 +438,6 @@ impl LazyListState {
         if !self.stats_state.is_alive() || !self.inner.is_alive() {
             return LazyLayoutStats::default();
         }
-        // Read reactive state (creates subscription) and combine with non-reactive counters
         let reactive = self.stats_state.get();
         let (total_composed, reuse_count) = self.inner.with(|rc| {
             let inner = rc.borrow();
@@ -512,19 +462,9 @@ impl LazyListState {
 
         let current = self.stats_state.get_non_reactive();
 
-        // Hysteresis: only trigger reactive update when items_in_use INCREASES
-        // or DECREASES by more than 1. This prevents the 5→4→5→4 oscillation
-        // that happens at boundary conditions during slow upward scroll.
-        //
-        // Rationale:
-        // - Items becoming visible (increase): user should see count update immediately
-        // - Items going off-screen by 1: minor fluctuation, wait for significant change
-        // - Items going off-screen by 2+: significant change, update immediately
         let should_update_reactive = if items_in_use > current.items_in_use {
-            // Increase: always update (new items visible)
             true
         } else if items_in_use < current.items_in_use {
-            // Decrease: only update if by more than 1 (prevents oscillation)
             current.items_in_use - items_in_use > 1
         } else {
             false
@@ -537,8 +477,6 @@ impl LazyListState {
                 ..current
             });
         }
-        // Note: pool-only changes are intentionally not committed to reactive state
-        // to prevent the 5→4→5 oscillation that caused slow upward scroll hang.
     }
 
     /// Records that an item was composed (either new or reused).
@@ -630,12 +568,10 @@ impl LazyListState {
                 scroll_offset
             );
         }
-        // Store pending scroll request
         self.inner.with(|rc| {
             rc.borrow_mut().pending_scroll_to_index = Some((index, scroll_offset));
         });
 
-        // Delegate to scroll_position which handles reactive updates and key clearing
         self.scroll_position
             .request_position_and_forget_last_known_key(index, scroll_offset);
 
@@ -653,8 +589,6 @@ impl LazyListState {
     /// placement. The node id carries through to the scene phase, which scopes
     /// its graph update to that subtree: O(subtree) instead of O(entire app).
     pub fn dispatch_scroll_delta(&self, delta: f32) -> f32 {
-        // Guard against stale handles: fling animation frame callbacks can fire
-        // after a tab switch disposes the composition group that owns this state.
         if !self.inner.is_alive() {
             return 0.0;
         }
@@ -675,7 +609,6 @@ impl LazyListState {
             let should_invalidate = self.inner.with(|rc| {
                 let mut inner = rc.borrow_mut();
                 let pending_before = inner.scroll_to_be_consumed;
-                // If we're already at an edge, clear stale backlog in the same blocked direction.
                 if pending_before.abs() > 0.001 && pending_before.signum() == delta.signum() {
                     inner.scroll_to_be_consumed = 0.0;
                 }
@@ -712,9 +645,6 @@ impl LazyListState {
                         delta
                     );
                 }
-                // When gesture direction reverses, stale unconsumed backlog from the previous
-                // direction causes "snap back" behavior on slow frames. Keep only the latest
-                // direction intent.
                 inner.scroll_to_be_consumed = delta;
             } else {
                 inner.scroll_to_be_consumed += delta;
@@ -927,13 +857,9 @@ impl LazyListState {
 
     /// Returns the current nearest range for optimized key lookup.
     pub fn nearest_range(&self) -> std::ops::Range<usize> {
-        // Delegate to scroll_position
         self.scroll_position.nearest_range()
     }
 
-    /// Updates the scroll position from a layout pass.
-    ///
-    /// Called by the layout after measurement.
     pub(crate) fn update_scroll_position(
         &self,
         first_visible_item_index: usize,
@@ -946,9 +872,6 @@ impl LazyListState {
         );
     }
 
-    /// Updates the scroll position and stores the key of the first visible item.
-    ///
-    /// Called by the layout after measurement to enable scroll position stability.
     pub(crate) fn update_scroll_position_with_key(
         &self,
         first_visible_item_index: usize,
@@ -977,12 +900,10 @@ impl LazyListState {
     where
         F: Fn(u64) -> Option<usize>,
     {
-        // Delegate to scroll_position
         self.scroll_position
             .update_if_first_item_moved(new_item_count, get_index_by_key)
     }
 
-    /// Updates the layout info from a layout pass.
     pub(crate) fn update_layout_info(&self, mut info: LazyListLayoutInfo) {
         if !self.inner.is_alive() {
             return;
@@ -1039,9 +960,6 @@ impl LazyListState {
             .unwrap_or(false)
     }
 
-    /// Updates the scroll bounds after layout measurement.
-    ///
-    /// Called by the layout after measurement to update can_scroll_forward/backward.
     pub(crate) fn update_scroll_bounds(&self) {
         if !self.inner.is_alive()
             || !self.can_scroll_forward_state.is_alive()
@@ -1049,12 +967,9 @@ impl LazyListState {
         {
             return;
         }
-        // Compute can_scroll_forward from layout info
         let can_forward = self.inner.with(|rc| {
             let inner = rc.borrow();
             let info = &inner.layout_info;
-            // Use effective viewport end (accounting for after_content_padding)
-            // Without this, lists with padding can report false while still scrollable
             let viewport_end = info.viewport_size - info.after_content_padding;
             if let Some(last_visible) = info.visible_items_info.last() {
                 last_visible.index < info.total_items_count.saturating_sub(1)
@@ -1064,7 +979,6 @@ impl LazyListState {
             }
         });
 
-        // Compute can_scroll_backward from scroll position
         let can_backward = self.scroll_position.current_index() > 0
             || self.scroll_position.current_scroll_offset() > 0.0;
 
@@ -1146,8 +1060,6 @@ impl LazyListState {
         if !self.inner.is_alive() {
             return;
         }
-        // Clone callbacks to avoid holding the borrow while calling them
-        // This prevents re-entrancy issues if a callback triggers another state update
         let callbacks: Vec<_> = self.inner.with(|rc| {
             rc.borrow()
                 .invalidate_callbacks
@@ -1246,7 +1158,6 @@ fn snap_anchor_item_offset(info: &LazyListLayoutInfo, item: &LazyListItemInfo) -
     }
 }
 
-/// Test helpers for creating LazyListState without composition context.
 #[cfg(test)]
 pub mod test_helpers {
     use std::sync::Arc;
@@ -1255,26 +1166,19 @@ pub mod test_helpers {
 
     use super::*;
 
-    /// Creates a test runtime and keeps it alive for the duration of the closure.
-    /// Use this to create LazyListState in unit tests.
     pub fn with_test_runtime<T>(f: impl FnOnce() -> T) -> T {
         let _runtime = Runtime::new(Arc::new(DefaultScheduler));
         f()
     }
 
-    /// Creates a new LazyListState for testing.
-    /// Must be called within `with_test_runtime`.
     pub fn new_lazy_list_state() -> LazyListState {
         new_lazy_list_state_with_position(0, 0.0)
     }
 
-    /// Creates a new LazyListState for testing with initial position.
-    /// Must be called within `with_test_runtime`.
     pub fn new_lazy_list_state_with_position(
         initial_first_visible_item_index: usize,
         initial_first_visible_item_scroll_offset: f32,
     ) -> LazyListState {
-        // Create scroll position with reactive fields (matches JC LazyListScrollPosition)
         let scroll_position = LazyListScrollPosition {
             index: cranpose_core::mutableStateOf(initial_first_visible_item_index),
             scroll_offset: cranpose_core::mutableStateOf(initial_first_visible_item_scroll_offset),
@@ -1286,7 +1190,6 @@ pub mod test_helpers {
             }))),
         };
 
-        // Non-reactive internal state
         let inner = cranpose_core::mutableStateOf(Rc::new(RefCell::new(LazyListStateInner {
             scroll_to_be_consumed: 0.0,
             pending_scroll_to_index: None,
@@ -1311,7 +1214,6 @@ pub mod test_helpers {
             last_scroll_direction: 0.0,
         })));
 
-        // Reactive state
         let can_scroll_forward_state = cranpose_core::mutableStateOf(false);
         let can_scroll_backward_state = cranpose_core::mutableStateOf(false);
         let stats_state = cranpose_core::mutableStateOf(LazyLayoutStats::default());
@@ -1585,11 +1487,9 @@ mod tests {
             assert_eq!(invalidations.get(), 1);
             assert!((state.peek_scroll_delta() + super::MAX_PENDING_SCROLL_DELTA).abs() < 0.001);
 
-            // Additional same-direction input is clamped to the same pending value.
             state.dispatch_scroll_delta(-100.0);
             assert_eq!(invalidations.get(), 1);
 
-            // Opposite-direction input changes pending and should invalidate again.
             state.dispatch_scroll_delta(100.0);
             assert_eq!(invalidations.get(), 2);
         });

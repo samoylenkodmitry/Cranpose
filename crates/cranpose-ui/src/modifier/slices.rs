@@ -26,12 +26,6 @@ use crate::{
 pub struct ModifierNodeSlices {
     draw_commands: Vec<DrawCommand>,
     pointer_inputs: Vec<Rc<dyn Fn(PointerEvent)>>,
-    /// Write targets for the node's resolved layout size, one per pointer-input
-    /// node in the chain that exposes a size to its handler (Compose's
-    /// `PointerInputScope.size`). The layout/scene pass publishes the node's
-    /// size into them every pass via
-    /// [`ModifierNodeSlices::publish_pointer_input_size`], so a handler reading
-    /// `scope.size()` — before or after its first event — sees live dimensions.
     pointer_input_sizes: Vec<Rc<std::cell::Cell<cranpose_ui_graphics::Size>>>,
     click_handlers: Vec<Rc<dyn Fn(Point)>>,
     clip_to_bounds: bool,
@@ -44,17 +38,7 @@ pub struct ModifierNodeSlices {
     text_layout_options: Option<TextLayoutOptions>,
     prepared_text_layout: Option<TextPreparedLayoutHandle>,
     text_pan: Option<TextPanResolver>,
-    /// Write target for a text field's composited window origin. The layout
-    /// `place` pass writes the field node's true on-screen top-left here (window
-    /// coordinates, resolved through ancestor scroll placement + graphics-layer
-    /// translation) so the field's finger selection handles follow the field as
-    /// a `LazyColumn`/`vertical_scroll` scrolls. `None` for non-text-field nodes.
     text_field_window_origin: Option<Rc<std::cell::Cell<Point>>>,
-    /// Write target for a scroll container's composited window rect (viewport
-    /// bounds in window coordinates). The layout `place` pass writes the node's
-    /// true on-screen rect here so a `BringIntoViewResponder` can scroll a
-    /// focused descendant field's caret above the soft keyboard. `None` for
-    /// nodes without a `report_window_rect` modifier.
     viewport_window_rect: Option<Rc<dyn crate::modifier_nodes::WindowRectSink>>,
     graphics_layer: Option<GraphicsLayer>,
     graphics_layer_resolver: Option<Rc<dyn Fn() -> GraphicsLayer>>,
@@ -110,20 +94,6 @@ impl Clone for ModifierNodeSlices {
     }
 }
 
-/// Compose two nested graphics layers (`base` outer, `overlay` inner) into one
-/// flattened layer snapshot used by render pipelines.
-///
-/// Composition rules follow how nested transforms/effects behave visually:
-/// - Multiplicative: `alpha`, `scale`, `scale_x`, `scale_y`
-/// - Additive: `rotation_*`, `translation_*`
-/// - Boolean OR: `clip`
-/// - Overlay-wins when explicitly set: camera distance, transform origin,
-///   shadow elevation/colors, shape, compositing strategy, blend mode
-/// - Filters/effects are composed in draw order:
-///   - color filters are multiplied where possible
-///   - render effects chain inner-first then outer (`inner.then(outer)`)
-/// - Backdrop effect keeps the most local explicit backdrop effect because
-///   backdrop sampling cannot be safely flattened as a deterministic chain.
 fn merge_graphics_layers(base: GraphicsLayer, overlay: GraphicsLayer) -> GraphicsLayer {
     GraphicsLayer {
         alpha: (base.alpha * overlay.alpha).clamp(0.0, 1.0),
@@ -145,11 +115,7 @@ fn merge_graphics_layers(base: GraphicsLayer, overlay: GraphicsLayer) -> Graphic
         compositing_strategy: overlay.compositing_strategy,
         blend_mode: overlay.blend_mode,
         color_filter: compose_color_filters(base.color_filter, overlay.color_filter),
-        // Modifiers are traversed outer -> inner. Layer effects therefore compose
-        // inner-first, then outer, matching nested layer rendering semantics.
         render_effect: compose_render_effects(base.render_effect, overlay.render_effect),
-        // Backdrop effects cannot be represented as a deterministic chain on a
-        // flattened single layer, so keep the most local explicit backdrop.
         backdrop_effect: overlay.backdrop_effect.or(base.backdrop_effect),
     }
 }
@@ -462,7 +428,6 @@ pub fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut Modi
         node_ref.with_node(|node| {
             let any = node.as_any();
 
-            // POINTER_INPUT collection
             if has_pointer
                 && node_caps.intersects(NodeCapabilities::POINTER_INPUT)
                 && let Some(pointer_node) = node.as_pointer_input_node()
@@ -470,15 +435,11 @@ pub fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut Modi
                 if let Some(handler) = pointer_node.pointer_input_handler() {
                     slices.pointer_inputs.push(handler);
                 }
-                // Collect the node's size sink so the layout pass can
-                // publish this node's resolved size into the handler's
-                // scope (`PointerInputScope::size`).
                 if let Some(sink) = pointer_node.layout_size_sink() {
                     slices.pointer_input_sizes.push(sink);
                 }
             }
 
-            // DRAW collection
             if has_draw && node_caps.intersects(NodeCapabilities::DRAW) {
                 if let Some(bg_node) = any.downcast_ref::<BackgroundNode>() {
                     background_color = Some(bg_node.color());
@@ -536,7 +497,6 @@ pub fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut Modi
                 }
             }
 
-            // LAYOUT collection (padding + text)
             if has_layout && node_caps.intersects(NodeCapabilities::LAYOUT) {
                 if let Some(padding_node) = any.downcast_ref::<PaddingNode>() {
                     let p = padding_node.padding();
@@ -551,9 +511,6 @@ pub fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut Modi
                 }
 
                 if let Some(reporter) = any.downcast_ref::<WindowRectReporterNode>() {
-                    // Scroll container's viewport-rect sink: the layout `place`
-                    // pass fills it so a `BringIntoViewResponder` knows the
-                    // visible bounds (window coordinates).
                     slices.viewport_window_rect = Some(reporter.window_rect_sink());
                 }
 
@@ -581,9 +538,6 @@ pub fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut Modi
                     slices.text_layout_options = Some(TextLayoutOptions::default());
                     slices.prepared_text_layout = None;
                     slices.text_pan = text_field_node.text_pan_resolver();
-                    // Give the layout pass a handle to write the field's true
-                    // composited window origin into, so its finger selection
-                    // handles follow the field as an ancestor list scrolls.
                     slices.text_field_window_origin = Some(text_field_node.window_origin_sink());
 
                     text_field_node.set_content_offset(padding.left);
@@ -595,7 +549,6 @@ pub fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut Modi
 
     slices.corner_shape = corner_shape;
 
-    // Convert background + shape into a draw command
     if let Some(color) = background_color {
         let draw_cmd = Rc::new(move |scope: &mut cranpose_ui_graphics::DrawScopeDefault| {
             use cranpose_ui_graphics::{CornerRadii, DrawScope as _};

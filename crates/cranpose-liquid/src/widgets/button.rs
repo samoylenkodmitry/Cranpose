@@ -1,6 +1,3 @@
-//! Glass buttons: capsule glass with a spring press (scale + specular boost)
-//! and haptic feedback.
-
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
@@ -28,8 +25,6 @@ use crate::{
 
 const ICON_BACKPLATE_DIAMETER_RATIO: f32 = 0.50;
 const ICON_BACKPLATE_GLYPH_RATIO: f32 = 0.28;
-/// Grace margin around the group within which a release still commits the
-/// pressed member.
 const TAP_EXIT_SLOP: f32 = 12.0;
 
 fn with_button_semantics(modifier: Modifier) -> Modifier {
@@ -227,7 +222,6 @@ impl GlassIconButtonGroupScope {
     }
 }
 
-/// Runs `content` and returns the actions it declared.
 fn collect_items(
     content: impl FnOnce(&GlassIconButtonGroupScope),
 ) -> Vec<GlassIconButtonGroupItem> {
@@ -272,17 +266,12 @@ impl Default for GlassIconButtonGroupSpec {
         Self {
             diameter: 44.0,
             spacing: 8.0,
-            // Measured on touched-up-state f_0250 vs f_0285: disc 62px ->
-            // held ball 96px.
             pressed_scale: 1.55,
             glue_radius: 12.0,
         }
     }
 }
 
-/// Surviving glyphs vanish for the body of a merge and rematerialize as
-/// the fused circle settles (reference touched-up f_0350..f_0390: the dots
-/// blur out at release and sharpen back only at the end of the fuse).
 fn merge_glyph_alpha(merge: f32) -> f32 {
     let m = merge.clamp(0.0, 1.0);
     if m <= 0.0 {
@@ -363,10 +352,6 @@ pub fn GlassButton(
     let mut base = Modifier::empty();
     if let Some(glass) = material {
         let pressed_for_glass = pressed;
-        // Held glass lights from WITHIN: the reference's pressed disc
-        // carries a luminous core (touched-up-state sheet), not a flat
-        // fill — the centered touch glow supplies the HDR heart while
-        // highlight_boost lifts the specular shell.
         let glow_size = cranpose_core::remember(|| {
             std::rc::Rc::new(std::cell::Cell::new(cranpose_ui_graphics::Size {
                 width: 0.0,
@@ -399,7 +384,6 @@ pub fn GlassButton(
             .padding_symmetric(16.0, 10.0),
     );
 
-    // Touched glass turns more transparent: the label ghosts while pressed.
     let content_layer = Modifier::empty().graphics_layer(move || GraphicsLayer {
         alpha: content_alpha.get().clamp(0.0, 1.0),
         ..Default::default()
@@ -520,7 +504,6 @@ pub(crate) fn GlassIconButtonWithForegroundAlpha(
         })
         .size(Size::new(diameter, diameter));
 
-    // The reference press: the icon ghosts while the glass lifts.
     let content_layer = Modifier::empty().graphics_layer(move || GraphicsLayer {
         alpha: content_alpha.get().clamp(0.0, 1.0) * foreground_alpha.clamp(0.0, 1.0),
         ..Default::default()
@@ -563,9 +546,6 @@ pub fn GlassIconButtonGroup(
     let colors = liquid_colors();
     let live_items: Rc<RefCell<Vec<GlassIconButtonGroupItem>>> =
         remember(|| Rc::new(RefCell::new(Vec::new()))).with(Rc::clone);
-    // A member that leaves the group dissolves in place instead of popping:
-    // the reference confirm disc turns translucent over the surviving "…"
-    // and is gone ~250 ms later (touched-up-state frames f_0350..f_0370).
     let ghosts: Rc<RefCell<Vec<(GlassIconButtonGroupItem, usize, f32)>>> =
         remember(|| Rc::new(RefCell::new(Vec::new()))).with(Rc::clone);
     let ghost_fade = remember(|| {
@@ -576,8 +556,6 @@ pub fn GlassIconButtonGroup(
     })
     .with(Rc::clone);
     let active = remember(|| mutableStateOf(None::<usize>)).with(|state| *state);
-    // The held disc rides the finger toward a neighbor (the reference press
-    // drifts and necks into the adjacent circle); None between gestures.
     let drag_x = remember(|| mutableStateOf(None::<f32>)).with(|state| *state);
     let last_active = remember(|| Rc::new(Cell::new(0usize))).with(Rc::clone);
     if let Some(index) = active.get() {
@@ -588,16 +566,9 @@ pub fn GlassIconButtonGroup(
         LiquidMotion::snappy(),
         "glass-icon-group-press",
     );
-    // Set when the pressed member departs mid-settle: its ghost carries the
-    // swollen visual out, and the live members render unpressed.
     let press_orphaned = remember(|| Rc::new(Cell::new(false))).with(Rc::clone);
 
     {
-        // Membership identity is SEMANTIC (icon + description): callers
-        // rebuild the item vec with fresh callback Rcs every recomposition,
-        // and the pointer-based PartialEq made every member read as a
-        // "leaver" each frame — the real ghost got discarded one frame
-        // after its birth.
         let member_stays = |member: &GlassIconButtonGroupItem| {
             items.iter().any(|item| {
                 item.icon_path == member.icon_path
@@ -606,18 +577,12 @@ pub fn GlassIconButtonGroup(
         };
         let previous = live_items.borrow();
         if !previous.is_empty() {
-            // A departing member dissolves from its CURRENT pose: the
-            // reference confirm disc blurs out straight from the swollen
-            // ball (touched-up f_0355..f_0370) and never re-forms the rest
-            // button, so each ghost carries the press progress it left with.
             let leavers: Vec<(GlassIconButtonGroupItem, usize, f32)> = previous
                 .iter()
                 .enumerate()
                 .filter(|(_, member)| !member_stays(member))
                 .map(|(index, member)| {
                     let departure = if index == last_active.get() {
-                        // The press dies with its member: the live survivor
-                        // must not inherit the swell the ghost carries out.
                         press_orphaned.set(true);
                         press_progress.get().clamp(0.0, 1.0)
                     } else {
@@ -644,10 +609,6 @@ pub fn GlassIconButtonGroup(
     *live_items.borrow_mut() = items;
     let render_items = live_items.borrow().clone();
 
-    // A dissolving ghost keeps its layout slot: without it the narrower
-    // group recenters instantly and the ghost renders outside the node (the
-    // dissolve vanished in one frame). The reference "…" stays put while
-    // the ball fades (touched-up f_0360..f_0375).
     let ghost_slots = ghosts
         .borrow()
         .iter()
@@ -655,13 +616,6 @@ pub fn GlassIconButtonGroup(
         .max()
         .unwrap_or(0);
     let layout_count = count.max(ghost_slots);
-    // The collapse is a MERGE (reference f_0350..f_0390): as the departed
-    // ball dissolves, the group's span contracts from the old slot count to
-    // the new one — in the reference's trailing-anchored toolbar the
-    // survivor glides INTO the fading ball and the two fuse into one
-    // circle where the ball stood. Ghosts anchor to the TRAILING edge so
-    // the ball holds its screen position while the span contracts under a
-    // trailing-aligned host.
     let merge = if layout_count > count {
         (1.0 - ghost_alpha.get().clamp(0.0, 1.0)).clamp(0.0, 1.0)
     } else {
@@ -709,14 +663,6 @@ pub fn GlassIconButtonGroup(
                                     active.set(None);
                                     drag_x.set(None);
                                     if let Some(index) = pressed_index {
-                                        // The gesture belongs to the PRESSED
-                                        // member: any release inside the
-                                        // control commits it (the reference
-                                        // hold necks toward the neighbor and
-                                        // still confirms on release — the
-                                        // ride clamp means the ball never
-                                        // leaves its member anyway). Only
-                                        // exiting the control cancels.
                                         let count = gesture_items.borrow().len();
                                         let released_inside = (-TAP_EXIT_SLOP
                                             ..=spec.diameter + TAP_EXIT_SLOP)
@@ -756,12 +702,6 @@ pub fn GlassIconButtonGroup(
         let pitch = spec.diameter + spec.spacing;
         let active_index = last_active.get().min(count - 1);
 
-        // The union field owns the connection and shared refraction. It sits
-        // behind the item faces, and while pressed it carries the ACTIVE
-        // item's tint so the neck toward a neighbor flows in that material
-        // (the reference bridge is the confirm action's cyan, not plain
-        // glass); the tint alpha rides press activity, so the resting field
-        // stays a whisper.
         let pad = spec.glue_radius + spec.diameter * (spec.pressed_scale - 1.0) * 0.5 + 4.0;
         let node_width = width + pad * 2.0;
         let node_height = spec.diameter * spec.pressed_scale + pad * 2.0;
@@ -775,18 +715,12 @@ pub fn GlassIconButtonGroup(
                     .resolve_material(&colors, item.spec.icon_color(&colors))
             })
             .and_then(|material| material.tint)
-            // The faces cover their own discs, so this alpha only ever
-            // shows in the BRIDGE between them — the reference neck is a
-            // solid run of the ball's cyan (f_0280), not a faint haze.
             .map(|tint| tint.with_alpha(0.85))
             .unwrap_or(Color::WHITE.with_alpha(0.035));
         let shared = Modifier::empty()
             .required_size(Size::new(node_width, node_height))
             .offset(-pad, (spec.diameter - node_height) * 0.5)
             .glass_effect_with(
-                // Regular variant: the tint covers the whole union field
-                // uniformly, so the thin neck carries the material — the
-                // lens variant's interior ramp fades tint exactly there.
                 Glass::regular()
                     .blur_radius(0.0)
                     .tint(union_tint)
@@ -803,20 +737,12 @@ pub fn GlassIconButtonGroup(
                     let active_index = shared_last_active.get().min(count - 1);
                     let center_y = node_height * 0.5;
                     let rest_center = active_index as f32 * pitch + spec.diameter * 0.5;
-                    // Ride the finger toward a neighbor, one pitch at most:
-                    // approaching the next circle necks the union field.
-                    // Half a pitch keeps the neighbor distinct: the disc
-                    // leans and the glue stretches a thin neck instead of
-                    // the shapes overlapping outright.
                     let ridden = drag_x
                         .get()
                         .map(|x| x.clamp(rest_center - pitch * 0.35, rest_center + pitch * 0.35))
                         .unwrap_or(rest_center);
                     let center_x = pad + rest_center + (ridden - rest_center) * progress;
                     let diameter = spec.diameter * (1.0 + (spec.pressed_scale - 1.0) * progress);
-                    // The reference press concentrates saturation + a soft
-                    // gradient light under the FINGER (touched-up-state
-                    // recording), riding press activity.
                     let touch = drag_x.get().map(|x| {
                         (
                             pad + x.clamp(0.0, node_width - 2.0 * pad),
@@ -846,7 +772,6 @@ pub fn GlassIconButtonGroup(
             );
         Box(shared, BoxSpec::default(), || {});
 
-        // Independent base surfaces preserve each member's style and tint.
         for (index, item) in render_items.iter().enumerate() {
             let x = index as f32 * pitch;
             let surface_progress = press_progress;
@@ -892,11 +817,6 @@ pub fn GlassIconButtonGroup(
                         } else {
                             surface_progress.get().clamp(0.0, 1.0)
                         };
-                        // The reference touch-up is an HDR-like lift of the
-                        // SAME material — highlight and saturation surge, no
-                        // recolor (tint stays put). The held ball densifies
-                        // toward the flat saturated accent (touched-up-state
-                        // f_0285: near-pure electric cyan, glyph dissolved).
                         GlassDynamics {
                             highlight_boost: if item_is_active { 0.60 * progress } else { 0.0 },
                             saturation_boost: if item_is_active { 1.6 * progress } else { 0.0 },
@@ -913,8 +833,6 @@ pub fn GlassIconButtonGroup(
             });
         }
 
-        // The active foreground is absorbed into the rising material. Other
-        // members stay crisp and retain their independent ownership.
         for (index, item) in render_items.iter().enumerate() {
             let x = index as f32 * pitch;
             let item_is_active = index == active_index;
@@ -923,9 +841,6 @@ pub fn GlassIconButtonGroup(
             let foreground_spec = item.spec.clone();
             let icon_path = item.icon_path;
             let description = item.content_description.clone();
-            // During a merge the surviving glyph rides out early and
-            // rematerializes once fused (reference: the "…" dots are gone
-            // by f_0356 and sharpen back f_0372+).
             let merge_alpha = merge_glyph_alpha(merge);
             let foreground = Modifier::empty()
                 .size(Size::new(spec.diameter, spec.diameter))
@@ -953,12 +868,7 @@ pub fn GlassIconButtonGroup(
             );
         }
 
-        // Departed members: the same surface + glyph at their old slot,
-        // riding one shared fade to transparent. No gestures, no union
-        // membership — a purely optical afterimage.
         for (ghost, ghost_index, departure) in ghosts.borrow().iter() {
-            // Trailing-anchored: the ball keeps its screen slot while the
-            // group's span contracts past it (see the merge above).
             let x = *ghost_index as f32 * pitch + ghost_trailing_shift;
             let fade = ghost_alpha;
             let departure = *departure;
@@ -967,10 +877,6 @@ pub fn GlassIconButtonGroup(
                 .offset(x, 0.0)
                 .graphics_layer(move || {
                     let alpha = fade.get().clamp(0.0, 1.0);
-                    // The reference dissolve shrinks the swollen disc a
-                    // little as it blurs out (f_0360: smaller than held,
-                    // soft); a rest-state departure keeps scale 1 and no
-                    // blur — the plain crisp fade.
                     let scale =
                         1.0 + (spec.pressed_scale - 1.0) * departure * (0.55 + 0.45 * alpha);
                     GraphicsLayer {
@@ -994,9 +900,6 @@ pub fn GlassIconButtonGroup(
                     Modifier::empty()
                         .size(Size::new(spec.diameter, spec.diameter))
                         .glass_effect_with(material.shape(LiquidShape::Circle), move || {
-                            // The departed press keeps its HDR lift: the
-                            // smudge stays the saturated accent it held
-                            // (touched-up f_0355+), not the rest material.
                             GlassDynamics {
                                 highlight_boost: 0.60 * departure,
                                 saturation_boost: 1.6 * departure,
@@ -1013,8 +916,6 @@ pub fn GlassIconButtonGroup(
                     if let Some(surface) = surface.clone() {
                         Box(surface, BoxSpec::default(), || {});
                     }
-                    // The glyph had already dissolved into the held ball —
-                    // a swollen departure must not resurrect it.
                     let glyph_layer = Modifier::empty().graphics_layer(move || GraphicsLayer {
                         alpha: glyph_alpha,
                         ..Default::default()
@@ -1106,8 +1007,6 @@ mod tests {
         assert_eq!(item.spec.style, GlassButtonStyle::Prominent);
     }
 
-    /// Actions appear in declaration order, each carrying the callback it was
-    /// declared with — the group never dispatches a bare index anywhere.
     #[test]
     fn a_scope_declares_actions_in_order_with_their_callbacks() {
         let fired = Rc::new(Cell::new(0usize));

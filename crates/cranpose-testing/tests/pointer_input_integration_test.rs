@@ -1,5 +1,3 @@
-//! Integration tests for pointer input with async handlers and button interactions
-
 use cranpose_core::MutableState;
 use cranpose_foundation::PointerEventKind;
 use cranpose_macros::composable;
@@ -57,8 +55,6 @@ fn test_pointer_input_async_handler_is_present() {
     let _app_context = cranpose_ui::AppContext::new();
     let _app_context_scope = _app_context.enter_scope();
     _app_context.enter(cranpose_ui::reset_render_state_for_tests);
-    // This test verifies that async pointer_input handlers are properly
-    // extracted into the modifier chain and available for hit-testing
 
     let mut rule = ComposeTestRule::new();
     let runtime = rule.runtime_handle();
@@ -75,20 +71,15 @@ fn test_pointer_input_async_handler_is_present() {
     })
     .expect("initial render succeeds");
 
-    // Verify initial state
     assert_eq!(hover_position.get().x, 0.0);
     assert_eq!(hover_position.get().y, 0.0);
     assert!(!is_hovered.get());
 
-    // The composition should have created a Column with a pointer_input modifier
     let node_count = rule.applier_mut().len();
     assert!(
         node_count >= 2,
         "Should have at least 2 nodes (Column and Text)"
     );
-
-    // This test validates composition structure. The app-shell test suite covers
-    // hit-testing and pointer dispatch with rendered scenes.
 
     println!(
         "✓ Pointer input composition created successfully with {} nodes",
@@ -108,7 +99,6 @@ fn button_with_modifiers_app(click_count: MutableState<i32>) {
                 TextStyle::default(),
             );
 
-            // Button with draw_behind modifier (like the pause button)
             Button(
                 Modifier::empty()
                     .rounded_corners(12.0)
@@ -142,9 +132,6 @@ fn test_button_with_draw_modifiers_is_clickable() {
     let _app_context = cranpose_ui::AppContext::new();
     let _app_context_scope = _app_context.enter_scope();
     _app_context.enter(cranpose_ui::reset_render_state_for_tests);
-    // This test verifies that buttons with draw_behind modifiers are still clickable
-    // This reproduces the "pause button" issue where buttons with custom rendering
-    // might not have their click handlers properly wired
 
     let mut rule = ComposeTestRule::new();
     let runtime = rule.runtime_handle();
@@ -159,11 +146,8 @@ fn test_button_with_draw_modifiers_is_clickable() {
     })
     .expect("initial render succeeds");
 
-    // Verify initial state
     assert_eq!(click_count.get(), 0);
 
-    // The button should have been created with all modifiers
-    // including both the user's draw_behind and the internal clickable
     let node_count = rule.applier_mut().len();
     assert!(
         node_count >= 3,
@@ -215,8 +199,6 @@ fn test_button_with_dynamic_content_updates_correctly() {
     let _app_context = cranpose_ui::AppContext::new();
     let _app_context_scope = _app_context.enter_scope();
     _app_context.enter(cranpose_ui::reset_render_state_for_tests);
-    // This test ensures buttons with dynamic labels (like pause/resume)
-    // properly update and remain clickable after state changes
 
     let mut rule = ComposeTestRule::new();
     let runtime = rule.runtime_handle();
@@ -233,23 +215,18 @@ fn test_button_with_dynamic_content_updates_correctly() {
     })
     .expect("initial render succeeds");
 
-    // Verify initial state
     assert_eq!(click_count.get(), 0);
     assert!(!is_active.get());
 
-    // Manually toggle the state (simulating a click)
     is_active.set(true);
     click_count.set(1);
 
-    // Force recomposition
     rule.pump_until_idle()
         .expect("recompose after state change");
 
-    // Verify state updated
     assert_eq!(click_count.get(), 1);
     assert!(is_active.get());
 
-    // Toggle again
     is_active.set(false);
     click_count.set(2);
 

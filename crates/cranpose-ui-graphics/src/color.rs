@@ -77,7 +77,6 @@ impl Color {
         )
     }
 
-    // Common color constants
     pub const BLACK: Color = Color(0.0, 0.0, 0.0, 1.0);
     pub const WHITE: Color = Color(1.0, 1.0, 1.0, 1.0);
     pub const RED: Color = Color(1.0, 0.0, 0.0, 1.0);
@@ -97,8 +96,6 @@ mod tests {
 
     #[test]
     fn an_srgb_colour_is_eight_bits_and_a_half_rounds_up() {
-        // The Wear settings capsule: mix(rail, background, 0.55) is exactly
-        // 22.5/255 on green, and the platform keeps 23.
         let mixed = Color(9.9 / 255.0, 22.5 / 255.0, 34.2 / 255.0, 1.0);
         let snapped = mixed.srgb_8bit();
         assert_eq!(
@@ -109,9 +106,6 @@ mod tests {
             ],
             [10, 23, 34]
         );
-        // And the snapped value really is a whole channel value, not merely
-        // one that rounds back to it: nothing downstream has a tie left to
-        // break.
         for channel in [snapped.0, snapped.1, snapped.2, snapped.3] {
             let scaled = channel * 255.0;
             assert!(
@@ -123,9 +117,6 @@ mod tests {
 
     #[test]
     fn snapping_matches_the_platforms_own_expression_over_the_whole_range() {
-        // Compose computes `(int)(c * 255f + 0.5f)`; this uses `round`. They
-        // agree for every channel a colour can hold, ties included, and the
-        // sweep is what says so rather than an argument about float formats.
         for step in 0..=100_000u32 {
             let channel = step as f32 / 100_000.0;
             let platform = (channel * 255.0 + 0.5) as u32;

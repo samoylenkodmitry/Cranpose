@@ -81,9 +81,6 @@ impl HeadlessRenderer {
 
         operations.append(&mut behind);
 
-        // Render text content if present in modifier slices.
-        // This follows Jetpack Compose's pattern where text is a modifier node capability
-        // (TextModifierNode implements LayoutModifierNode + DrawModifierNode + SemanticsNode)
         if let Some(text) = layout.node_data.modifier_slices().text_content() {
             operations.push(RenderOp::Text {
                 node_id: layout.node_id,
@@ -92,7 +89,6 @@ impl HeadlessRenderer {
             });
         }
 
-        // Render children
         for child in &layout.children {
             self.render_box(child, operations);
         }
@@ -242,9 +238,6 @@ fn translate_primitive(primitive: DrawPrimitive, dx: f32, dy: f32) -> DrawPrimit
         } => DrawPrimitive::Arc {
             rect: rect.translate(dx, dy),
             brush,
-            // The arc center lives in the same local space as `rect`, so it
-            // must move with it — translating only the bounding box would
-            // silently shear the arc out of its box.
             center: Point::new(center.x + dx, center.y + dy),
             radius,
             start_angle,
@@ -303,10 +296,6 @@ fn translate_primitive(primitive: DrawPrimitive, dx: f32, dy: f32) -> DrawPrimit
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Direct Applier Rendering (new architecture)
-// ═══════════════════════════════════════════════════════════════════════════
-
 impl HeadlessRenderer {
     /// Renders the scene by traversing LayoutNodes directly via the Applier.
     /// This is the new architecture that eliminates per-frame LayoutTree reconstruction.
@@ -328,7 +317,6 @@ impl HeadlessRenderer {
         parent_offset: Point,
         operations: &mut Vec<RenderOp>,
     ) {
-        // Read layout state and node data from LayoutNode
         let node_data = match applier.with_node::<LayoutNode, _>(node_id, |node| {
             let state = node.layout_state();
             let modifier_slices = node.modifier_slices_snapshot();
@@ -336,17 +324,15 @@ impl HeadlessRenderer {
             (state, modifier_slices, children)
         }) {
             Ok(data) => data,
-            Err(_) => return, // Node not found or type mismatch
+            Err(_) => return,
         };
 
         let (layout_state, modifier_slices, children) = node_data;
 
-        // Skip nodes that weren't placed
         if !layout_state.is_placed() {
             return;
         }
 
-        // Calculate absolute position
         let abs_x = parent_offset.x + layout_state.position().x;
         let abs_y = parent_offset.y + layout_state.position().y;
 
@@ -362,7 +348,6 @@ impl HeadlessRenderer {
             height: rect.height,
         };
 
-        // Collect draw commands from modifier slices
         let mut behind = Vec::new();
         let mut overlay = Vec::new();
         behind.extend(collect_primitives_from_commands(
@@ -382,7 +367,6 @@ impl HeadlessRenderer {
 
         operations.append(&mut behind);
 
-        // Render text content if present
         if let Some(text) = modifier_slices.text_content() {
             operations.push(RenderOp::Text {
                 node_id,
@@ -391,13 +375,11 @@ impl HeadlessRenderer {
             });
         }
 
-        // Calculate content offset for children (includes node position + content_offset from padding etc.)
         let child_offset = Point {
             x: abs_x + layout_state.content_offset.x,
             y: abs_y + layout_state.content_offset.y,
         };
 
-        // Render children
         for child_id in children {
             self.render_node_from_applier(applier, child_id, child_offset, operations);
         }

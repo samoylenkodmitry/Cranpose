@@ -1,16 +1,3 @@
-//! Robot test that replicates scroll bug on Lazy List tab
-//!
-//! User's repro steps on LAZY LIST (infinite content):
-//! 1. Go to Lazy List tab
-//! 2. Scroll down (fast enough to trigger fling)
-//! 3. Wait for fling to finish  
-//! 4. Do a second scroll - content jumps back?
-//!
-//! Run with:
-//! ```bash
-//! cargo run --package desktop-app --example robot_scroll_jump --features robot-app
-//! ```
-
 use std::time::Duration;
 
 use cranpose::{AppLauncher, Robot};
@@ -36,9 +23,6 @@ fn main() {
             let _ = robot.wait_for_idle();
             println!("✓ App ready\n");
 
-            // ============================================
-            // STEP 1: Click Lazy List tab
-            // ============================================
             println!("=== STEP 1: Click Lazy List tab ===");
             if let Some((x, y, w, h)) = find_button_in_semantics(&robot, "Lazy List") {
                 let cx = x + w / 2.0;
@@ -63,7 +47,6 @@ fn main() {
                     .map(|(_, y, _, h)| y + h / 2.0)
             }
 
-            // Find first visible item
             fn find_first_visible(robot: &Robot) -> Option<(i32, f32)> {
                 for i in 0..50 {
                     if let Some(y) = find_item_y(robot, i) {
@@ -73,13 +56,9 @@ fn main() {
                 None
             }
 
-            // Record initial
             let (initial_item, initial_y) = find_first_visible(&robot).unwrap_or((0, 500.0));
             println!("Initial: Item {} at Y={:.1}\n", initial_item, initial_y);
 
-            // ============================================
-            // STEP 2: Fast scroll down with fling
-            // ============================================
             println!("=== STEP 2: Fast scroll (will trigger fling) ===");
 
             let start_x = 400.0;
@@ -91,7 +70,6 @@ fn main() {
             let _ = robot.mouse_down();
             std::thread::sleep(Duration::from_millis(20));
 
-            // FAST drag - 200px in 50ms = 4000 px/sec
             for i in 1..=5 {
                 let new_y = start_y - (40.0 * i as f32);
                 let _ = robot.mouse_move(start_x, new_y);
@@ -101,9 +79,6 @@ fn main() {
             let _ = robot.mouse_up();
             println!("  Fling triggered");
 
-            // ============================================
-            // STEP 3: Wait for fling to complete
-            // ============================================
             println!("\n=== STEP 3: Wait for fling (1 second) ===");
             std::thread::sleep(Duration::from_millis(1000));
 
@@ -114,14 +89,10 @@ fn main() {
             );
             println!("  Scrolled {} items", after_fling_item - initial_item);
 
-            // ============================================
-            // STEP 4: Second scroll - CHECK FOR JUMP
-            // ============================================
             println!("\n=== STEP 4: Second scroll (CHECK FOR JUMP!) ===");
 
             let start_y_2 = 400.0;
 
-            // Record before
             let (before_item, before_y) = find_first_visible(&robot).unwrap_or((0, 0.0));
             println!(
                 "  BEFORE mouse down: Item {} at Y={:.1}",
@@ -134,7 +105,6 @@ fn main() {
             let _ = robot.mouse_down();
             std::thread::sleep(Duration::from_millis(50));
 
-            // Check after down
             let (after_down_item, after_down_y) = find_first_visible(&robot).unwrap_or((0, 0.0));
             println!(
                 "  AFTER mouse down: Item {} at Y={:.1}",
@@ -151,7 +121,6 @@ fn main() {
                 println!("  ✓ No significant jump");
             }
 
-            // Drag
             let _ = robot.mouse_move(start_x, start_y_2 - 50.0);
             std::thread::sleep(Duration::from_millis(50));
 
@@ -160,9 +129,6 @@ fn main() {
 
             let _ = robot.mouse_up();
 
-            // ============================================
-            // VERDICT
-            // ============================================
             println!("\n=== VERDICT ===");
             println!("Initial:       Item {}", initial_item);
             println!(

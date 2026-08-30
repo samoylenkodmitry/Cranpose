@@ -1,10 +1,3 @@
-//! iOS persistent writable folders, resolved from security-scoped bookmarks.
-//!
-//! The user grants a folder through the chooser in [`crate::ios_file_picker`];
-//! the granted security-scoped URL is serialized to a bookmark (hex-encoded) as
-//! the durable handle. Reopening resolves that bookmark on any thread and holds
-//! its security scope for the duration of each file operation — so scheduled
-//! auto-backups keep working across launches without re-prompting.
 #![allow(unsafe_code)]
 
 use std::{
@@ -24,7 +17,6 @@ use objc2_foundation::{
     NSData, NSURL, NSURLBookmarkCreationOptions, NSURLBookmarkResolutionOptions,
 };
 
-/// Installs the iOS writable-folder store factory.
 pub(crate) fn register() {
     set_writable_folder_store_factory(Box::new(|handle| {
         Some(Arc::new(BookmarkStore {
@@ -33,8 +25,6 @@ pub(crate) fn register() {
     }));
 }
 
-/// Serializes a granted security-scoped folder URL to a durable, hex-encoded
-/// bookmark handle.
 pub(crate) fn bookmark_handle(url: &NSURL) -> Result<String, FilePickerError> {
     let accessed = unsafe { url.startAccessingSecurityScopedResource() };
     let data = url.bookmarkDataWithOptions_includingResourceValuesForKeys_relativeToURL_error(
@@ -50,9 +40,6 @@ pub(crate) fn bookmark_handle(url: &NSURL) -> Result<String, FilePickerError> {
     Ok(hex_encode(&data.to_vec()))
 }
 
-/// A writable folder reopened from a security-scoped bookmark. Thread-safe: it
-/// holds only the encoded bookmark and re-resolves it (holding the scope) per
-/// operation, so background auto-backups can use it off the main thread.
 struct BookmarkStore {
     handle: String,
 }
@@ -168,8 +155,6 @@ impl WritableFolderStore for BookmarkStore {
     }
 }
 
-/// A chunked reader whose scope is re-entered for each chunk, so a long read
-/// never holds a security-scoped resource open across an await point.
 struct BookmarkReader {
     handle: String,
     path: PathBuf,
@@ -208,7 +193,6 @@ impl FolderReader for BookmarkReader {
     }
 }
 
-/// A chunked writer that stages beside the target and renames on commit.
 struct BookmarkWriter {
     handle: String,
     target: PathBuf,

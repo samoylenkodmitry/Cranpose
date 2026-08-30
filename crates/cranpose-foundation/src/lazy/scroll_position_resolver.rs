@@ -1,20 +1,8 @@
-//! Scroll position resolution for lazy list measurement.
-//!
-//! This module handles scroll position calculation and offset normalization,
-//! including jump optimization for large scrolls.
-
 use super::{
     lazy_list_measure::LazyListMeasureConfig,
     lazy_list_state::{LazyListMeasureStateSnapshot, LazyListState},
 };
 
-/// Resolves and normalizes scroll position for lazy list measurement.
-///
-/// Handles:
-/// - Consuming pending scroll-to-item requests
-/// - Applying scroll deltas
-/// - Jump optimization for large backward/forward scrolls
-/// - Offset normalization across item boundaries
 pub struct ScrollPositionResolver<'a> {
     state: &'a LazyListState,
     measure_state: LazyListMeasureStateSnapshot,
@@ -24,7 +12,6 @@ pub struct ScrollPositionResolver<'a> {
 }
 
 impl<'a> ScrollPositionResolver<'a> {
-    /// Creates a new ScrollPositionResolver.
     pub fn new(
         state: &'a LazyListState,
         measure_state: LazyListMeasureStateSnapshot,
@@ -41,14 +28,12 @@ impl<'a> ScrollPositionResolver<'a> {
         }
     }
 
-    /// Gets initial position and applies the pending scroll delta without normalization.
     pub(crate) fn apply_pending_scroll_delta(&self) -> (usize, f32) {
         let (index, mut offset) = self.get_initial_position();
         offset -= self.measure_state.pending_scroll_delta;
         (index, offset)
     }
 
-    /// Gets initial position from pending scroll-to request or current state.
     fn get_initial_position(&self) -> (usize, f32) {
         if let Some((target_index, target_offset)) = self.measure_state.pending_scroll_to {
             let clamped = target_index.min(self.items_count.saturating_sub(1));
@@ -63,7 +48,6 @@ impl<'a> ScrollPositionResolver<'a> {
         }
     }
 
-    /// Applies jump optimization for large backward scrolls without per-item fine-tuning.
     pub(crate) fn normalize_backward_jump(
         &self,
         mut index: usize,
@@ -75,7 +59,6 @@ impl<'a> ScrollPositionResolver<'a> {
 
         let average_size = self.measure_state.average_item_size;
 
-        // Jump optimization for large backward scrolls
         if average_size > 0.0 && offset < -self.effective_viewport_size {
             let pixels_to_jump = (-offset) - self.effective_viewport_size;
             let items_to_jump =
@@ -93,10 +76,6 @@ impl<'a> ScrollPositionResolver<'a> {
         (index, offset)
     }
 
-    /// Normalizes forward scroll offset by skipping items.
-    ///
-    /// When offset is large, estimates items to skip to avoid measuring
-    /// items that won't be visible.
     pub(crate) fn normalize_forward_with_cache(
         &self,
         mut index: usize,
@@ -110,12 +89,6 @@ impl<'a> ScrollPositionResolver<'a> {
             let Some(item_size) = self.state.get_cached_size(index) else {
                 break;
             };
-            // Leading content padding is scrollable content, not a permanent
-            // viewport inset. While item 0 is the anchor, its scroll extent
-            // therefore includes the padding that precedes it. Omitting this
-            // advanced the anchor as soon as item 0 reached the padded start
-            // line, recycling it while it was still visible between that line
-            // and the real viewport edge.
             let leading_padding = if index == 0 {
                 self.config.before_content_padding
             } else {
@@ -137,8 +110,6 @@ impl<'a> ScrollPositionResolver<'a> {
             return (index, offset);
         }
 
-        // Consume the one-off leading padding before applying the average-size
-        // jump. It must never be treated as if it repeated for every item.
         let original_offset = offset;
         let leading_padding = if index == 0 {
             self.config.before_content_padding
@@ -157,12 +128,9 @@ impl<'a> ScrollPositionResolver<'a> {
             return (index, offset);
         }
 
-        // Keep a buffer to avoid over-skipping due to size variance
         let buffer_pixels = self.effective_viewport_size;
         if offset > buffer_pixels {
             let pixels_to_skip = offset - buffer_pixels;
-            // Include spacing in jump calculation to match backward path logic
-            // Without this, index/offset drifts on large forward scrolls when spacing > 0
             let item_size_with_spacing = average_size + self.config.spacing;
             let items_to_skip = (pixels_to_skip / item_size_with_spacing).floor() as usize;
 
@@ -237,12 +205,11 @@ mod tests {
         with_test_runtime(|| {
             let state = new_lazy_list_state_with_position(50, 0.0);
             let config = LazyListMeasureConfig::default();
-            // Only 10 items, but positioned at 50
             let resolver =
                 ScrollPositionResolver::new(&state, state.begin_measure_pass(), &config, 10, 500.0);
 
             let (index, _offset) = resolver.apply_pending_scroll_delta();
-            assert_eq!(index, 9); // Clamped to last item
+            assert_eq!(index, 9);
         });
     }
 
@@ -270,7 +237,6 @@ mod tests {
     fn test_normalize_forward_skips_items() {
         with_test_runtime(|| {
             let state = new_lazy_list_state();
-            // Seed an average size so forward normalization can estimate
             state.cache_item_size(0, 100.0);
             let config = LazyListMeasureConfig::default();
             let resolver = ScrollPositionResolver::new(
@@ -281,9 +247,7 @@ mod tests {
                 500.0,
             );
 
-            // Large forward offset should skip items
             let (index, offset) = resolver.normalize_forward(0, 1500.0);
-            // Should have jumped some items forward
             assert!(index > 0, "Expected forward jump, got index={}", index);
             assert!(offset < 1500.0, "Expected offset reduction");
         });
@@ -325,9 +289,7 @@ mod tests {
                 500.0,
             );
 
-            // Start at index 50 with large negative offset
             let (index, offset) = resolver.normalize_backward_jump(50, -2000.0);
-            // Should have jumped backward
             assert!(index < 50, "Expected backward jump, got index={}", index);
             assert!(offset > -2000.0, "Expected offset increase");
         });

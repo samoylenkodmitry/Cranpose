@@ -1,19 +1,9 @@
-//! Joins a `dump-compose-api` JSON file and a `dump-cranpose-api` JSON file
-//! on a case- and separator-insensitive name key, as a first-pass,
-//! reviewable candidate correspondence -- not a verdict. See
-//! `docs/compose_api_parity.md` for how the curated verdicts sit on top of
-//! this generated join.
 use std::{collections::HashMap, path::PathBuf};
 
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
 use serde_json::Value;
 
-/// Collapses a name to lowercase alphanumerics only, so `fillMaxSize`,
-/// `fill_max_size`, and `FillMaxSize` compare equal. This is a coarse
-/// heuristic: two unrelated names that happen to squash to the same key
-/// will collide, which is why every row this produces is a candidate for
-/// human review, not a verdict.
 pub fn squash(name: &str) -> String {
     name.chars()
         .filter(|c| c.is_ascii_alphanumeric())
@@ -21,8 +11,6 @@ pub fn squash(name: &str) -> String {
         .collect()
 }
 
-/// The identifier after the last `::`, for a Cranpose ident that may be
-/// qualified as `Type::method`.
 pub fn leaf_name(ident: &str) -> &str {
     ident.rsplit("::").next().unwrap_or(ident)
 }

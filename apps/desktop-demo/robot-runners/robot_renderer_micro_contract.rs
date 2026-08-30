@@ -1,8 +1,3 @@
-//! Robot micro-contract for deterministic renderer screenshot validation.
-//!
-//! Run with:
-//! `cargo run --package desktop-app --example robot_renderer_micro_contract --features robot-app`
-
 mod output_paths;
 mod text_showcase_external_helpers;
 
@@ -52,8 +47,6 @@ fn sample_rgb(screenshot: &cranpose::RobotScreenshot, x: f32, y: f32) -> Result<
     Ok([rgba[0], rgba[1], rgba[2]])
 }
 
-/// `Color` is sRGB-space and the swapchain is a non-sRGB view, so authored
-/// channel values land on screen byte-for-byte.
 fn expected_screenshot_rgb(color: Color) -> [u8; 3] {
     [
         (color.0.clamp(0.0, 1.0) * 255.0).round() as u8,

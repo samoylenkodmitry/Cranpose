@@ -18,7 +18,6 @@ pub(crate) enum NodeLifecycle {
     RetainedDetached,
 }
 
-/// Stable structural identity for a group among siblings.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct GroupKey {
     pub(crate) static_key: Key,
@@ -36,7 +35,6 @@ impl GroupKey {
     }
 }
 
-/// Seed used to reserve a full [`GroupKey`] in the active writer frame.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct GroupKeySeed {
     pub(crate) static_key: Key,
@@ -59,7 +57,6 @@ impl GroupKeySeed {
     }
 }
 
-/// Transient handle to a group in the active slot table.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub(crate) struct ActiveGroupId {
     pub(crate) index: u32,
@@ -83,7 +80,6 @@ impl ActiveGroupId {
     }
 }
 
-/// Stable semantic identity for a payload record.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub(crate) struct PayloadAnchor {
     id: u32,
@@ -120,7 +116,6 @@ impl PayloadAnchor {
     }
 }
 
-/// Opaque handle to a value slot.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub(crate) struct ValueSlotId {
     pub(crate) anchor: PayloadAnchor,
@@ -141,7 +136,6 @@ impl ValueSlotId {
     }
 }
 
-/// Semantic result of starting a group at the current writer cursor.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GroupStartKind {
     Inserted,
@@ -150,7 +144,6 @@ pub(crate) enum GroupStartKind {
     Restored,
 }
 
-/// Result of starting a group.
 pub(crate) struct GroupStart<G> {
     pub(crate) group: G,
     pub(crate) anchor: AnchorId,

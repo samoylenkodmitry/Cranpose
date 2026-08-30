@@ -1,19 +1,3 @@
-//! GPU robustness: an uncaptured wgpu device error must be survived —
-//! recorded, logged, and answered with one skipped frame — never a panic.
-//! wgpu's default uncaptured handler panics on the reporting thread;
-//! mid-encode that unwind runs the drop glue of live pass/encoder
-//! objects, whose follow-up error reports re-enter the same panicking
-//! handler, and the second panic inside the first's unwind aborts the
-//! process with the original validation message unlogged. The framework
-//! therefore installs a logging handler at `GpuRenderer` construction
-//! (`CRANPOSE_SURVIVE_GPU_ERRORS` kill switch), poisons the renderer,
-//! cancels exactly one packet (`CancelReason::DeviceError`, buffers
-//! returned whole), and renders on.
-//!
-//! Red without the fix: the deliberate validation error below reaches the
-//! default handler and this suite dies at `create_texture` with
-//! `wgpu error: Validation Error`.
-
 mod support;
 
 use cranpose_core::NodeId;
@@ -111,10 +95,6 @@ fn target_view(renderer: &support::LockedRenderer, width: u32, height: u32) -> w
     texture.create_view(&wgpu::TextureViewDescriptor::default())
 }
 
-/// A genuine wgpu validation error — recorded, one packet cancelled with
-/// `CancelReason::DeviceError` (its scene returned to the producer pool),
-/// and the packet after that presents: one skipped frame per poisoning,
-/// no panic anywhere.
 #[test]
 fn uncaptured_device_error_poisons_one_frame_then_recovers() {
     let mut renderer = match support::headless_renderer() {
@@ -127,7 +107,6 @@ fn uncaptured_device_error_poisons_one_frame_then_recovers() {
     renderer.scene_mut().graph = Some(direct_graph());
     let view = target_view(&renderer, WIDTH, HEIGHT);
 
-    // Healthy first: a clean device presents and has recorded nothing.
     let packet = renderer
         .build_frame_packet_for_tests(WIDTH, HEIGHT)
         .expect("direct graph must lower into a packet");
@@ -141,9 +120,6 @@ fn uncaptured_device_error_poisons_one_frame_then_recovers() {
         "a clean frame must record no device errors"
     );
 
-    // A zero-width texture is a wgpu validation error, reported through
-    // the device's uncaptured-error path. Without the installed handler
-    // this call panics in wgpu's fatal default handler — the red run.
     let device = renderer
         .try_device()
         .expect("renderer GPU device was not initialized");
@@ -166,8 +142,6 @@ fn uncaptured_device_error_poisons_one_frame_then_recovers() {
         "the uncaptured-error handler must record the validation error"
     );
 
-    // The frame after the error skips whole — cancelled before any
-    // encoding, buffers returned — and clears the poison on the way out.
     let packet = renderer
         .build_frame_packet_for_tests(WIDTH, HEIGHT)
         .expect("the post-error build must lower normally");
@@ -184,7 +158,6 @@ fn uncaptured_device_error_poisons_one_frame_then_recovers() {
         "the cancelled packet's scene must return to the producer pool"
     );
 
-    // One skip per poisoning: the next packet renders.
     let packet = renderer
         .build_frame_packet_for_tests(WIDTH, HEIGHT)
         .expect("the recovery build must lower normally");

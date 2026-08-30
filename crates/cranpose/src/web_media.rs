@@ -1,21 +1,3 @@
-//! Browser media playback: one `<audio>` element, the Media Session API for
-//! the lock screen, and Web Audio for the visualiser.
-//!
-//! The element lives on the browser thread and cannot be held by a
-//! `Send + Sync` service, so — like [`crate::web_host_surface`] — the service
-//! itself holds nothing. The element, its listeners and the analysis graph live
-//! in a thread-local that only the browser thread ever reaches, which on wasm
-//! is the only thread there is.
-//!
-//! The element is never added to the document: it is an audio pipeline, not a
-//! control, and the application draws its own transport.
-//!
-//! The Media Session API is reached through `js_sys::Reflect` rather than
-//! `web_sys`, whose bindings for it are behind `--cfg=web_sys_unstable_apis`.
-//! An application should not have to set a rustc flag to get a lock screen,
-//! and a browser without the API should not fail to play — so it is looked up
-//! by name and skipped when it is not there.
-
 use std::{
     cell::{Cell, RefCell},
     sync::Arc,
@@ -34,63 +16,37 @@ use web_sys::{
     MediaElementAudioSourceNode,
 };
 
-/// How many samples one analysis block carries. 2048 is the smallest FFT size
-/// a browser guarantees to a useful resolution, and ~46 ms at 44.1 kHz.
 const ANALYSIS_FFT_SIZE: u32 = 2048;
-/// How often the analysis graph is read while a visualiser wants it.
 const ANALYSIS_INTERVAL_MS: i32 = 16;
 
-/// The equalizer's band centres and how far each reaches. The contract's own
-/// octave set, so a curve saved on a desktop means the same thing here.
 const EQUALIZER_BAND_CENTERS_HZ: [f32; 10] = cranpose_services::OCTAVE_BAND_CENTERS_HZ;
 const EQUALIZER_RANGE_DB: f32 = 12.0;
-/// One octave between centres works out at roughly this Q, which is what makes
-/// the bands cover the spectrum evenly rather than leaving dips between them.
 const EQUALIZER_BAND_Q: f32 = 1.41;
 
 thread_local! {
     static BROWSER: RefCell<Option<Browser>> = const { RefCell::new(None) };
 }
 
-/// The element, everything keeping its callbacks alive, and the analysis graph.
 struct Browser {
     element: HtmlAudioElement,
-    /// Dropping a `Closure` unregisters the JavaScript function it wraps, so
-    /// every listener is held for the life of the element.
     _element_listeners: Vec<Closure<dyn FnMut()>>,
     _session_handlers: Vec<Closure<dyn FnMut(JsValue)>>,
-    /// The object URL the lock-screen artwork is served from, revoked when it
-    /// is replaced so a long playlist does not leak one per track.
     artwork_url: Option<String>,
     graph: Option<AudioGraph>,
 }
 
-/// The Web Audio graph the equalizer shapes and the visualiser reads.
-///
-/// One graph, because `createMediaElementSource` may be called once per
-/// element: asking for a visualiser and asking for an equalizer cannot each
-/// build their own.
-///
-/// `element -> preamp -> band filters -> analyser -> destination`
 struct AudioGraph {
     _source: MediaElementAudioSourceNode,
     context: AudioContext,
-    /// The gain ahead of the bands.
     preamp: GainNode,
-    /// One peaking filter per reported band, in band order.
     filters: Vec<BiquadFilterNode>,
-    /// Held for the life of the graph: dropping it disconnects the node the
-    /// pump reads through its own clone.
     _analyser: AnalyserNode,
-    /// The `setInterval` handle, present only while samples are wanted.
     timer: Option<i32>,
     _pump: Closure<dyn FnMut()>,
 }
 
-/// Plays media through the browser.
 struct WebMediaPlayer;
 
-/// Installs the browser as the platform media player.
 pub(crate) fn install() {
     let Ok(element) = HtmlAudioElement::new() else {
         log::warn!("cranpose: this browser has no <audio> element; media playback is off");
@@ -115,14 +71,8 @@ fn with_browser<R>(action: impl FnOnce(&mut Browser) -> R) -> Option<R> {
     BROWSER.with(|slot| slot.borrow_mut().as_mut().map(action))
 }
 
-// --- The element's own events ----------------------------------------------
-
 fn attach_listeners(element: &HtmlAudioElement) -> Vec<Closure<dyn FnMut()>> {
     let mut listeners = Vec::new();
-    // `loadedmetadata` is when the duration becomes known, `timeupdate` and
-    // `progress` are the position and the buffer moving, and the rest are the
-    // browser telling us what it did with a `play()` we may not have asked for
-    // — a headset button reaches the element directly.
     for (event, publish) in [
         ("loadedmetadata", publish_ready as fn()),
         ("durationchange", publish_ready),
@@ -159,9 +109,6 @@ fn publish_playing() {
 }
 
 fn publish_paused() {
-    // `pause` also fires as part of ending an item; the `ended` listener has
-    // already published that, and re-publishing `Paused` over it would lose
-    // the one event a playlist advances on.
     if with_browser(|browser| browser.element.ended()).unwrap_or(false) {
         return;
     }
@@ -205,8 +152,6 @@ fn seconds(value: f64) -> Duration {
     }
 }
 
-/// A duration the browser actually knows. `NaN` before metadata arrives and
-/// infinite for a live stream, both of which mean "no length" to a seek bar.
 fn finite_seconds(value: f64) -> Option<Duration> {
     (value.is_finite() && value > 0.0).then(|| Duration::from_secs_f64(value))
 }
@@ -219,8 +164,6 @@ fn buffered_end(element: &HtmlAudioElement) -> Option<Duration> {
     }
     ranges.end(count - 1).ok().map(seconds)
 }
-
-// --- The Media Session API --------------------------------------------------
 
 fn media_session() -> Option<js_sys::Object> {
     let navigator = web_sys::window()?.navigator();
@@ -263,8 +206,6 @@ fn attach_session_handlers() -> Vec<Closure<dyn FnMut(JsValue)>> {
             closure.as_ref().unchecked_ref(),
         );
         if registered.is_err() {
-            // A browser that does not know an action throws for that one
-            // action; the ones it does know are still registered.
             log::debug!("cranpose: this browser has no `{action}` media-session action");
         }
         handlers.push(closure);
@@ -317,8 +258,6 @@ fn set_string(object: &js_sys::Object, key: &str, value: &str) {
     let _ = js_sys::Reflect::set(object, &JsValue::from_str(key), &JsValue::from_str(value));
 }
 
-/// Publishes the artwork as an object URL, revoking the one the previous item
-/// used so a long playlist does not leak one blob per track.
 fn artwork_url(metadata: &MediaMetadata) -> Option<String> {
     let artwork = metadata.artwork.as_ref();
     let url = artwork.and_then(|artwork| {
@@ -339,8 +278,6 @@ fn artwork_url(metadata: &MediaMetadata) -> Option<String> {
     url
 }
 
-// --- Web Audio analysis -----------------------------------------------------
-
 fn ensure_graph(browser: &mut Browser) -> Option<&mut AudioGraph> {
     if browser.graph.is_none() {
         let context = AudioContext::new().ok()?;
@@ -352,10 +289,6 @@ fn ensure_graph(browser: &mut Browser) -> Option<&mut AudioGraph> {
         preamp.gain().set_value(1.0);
         source.connect_with_audio_node(&preamp).ok()?;
 
-        // A peaking filter at 0 dB passes its input through, so the bands stay
-        // in the chain whether or not the equalizer is switched on. Rewiring
-        // the graph per switch would cost a click; ten transparent biquads
-        // cost the browser nothing anyone can measure.
         let mut filters: Vec<BiquadFilterNode> = Vec::new();
         for center in EQUALIZER_BAND_CENTERS_HZ {
             let filter = context.create_biquad_filter().ok()?;
@@ -383,8 +316,6 @@ fn ensure_graph(browser: &mut Browser) -> Option<&mut AudioGraph> {
             let mut buffer = buffer.borrow_mut();
             pump_analyser.get_float_time_domain_data(&mut buffer);
             sequence.set(sequence.get() + 1);
-            // The analyser mixes the graph down to one channel, which is the
-            // channel a visualiser draws anyway.
             if let Some(samples) =
                 MediaSamples::new(sample_rate, 1, sequence.get(), buffer.as_slice())
             {
@@ -405,14 +336,10 @@ fn ensure_graph(browser: &mut Browser) -> Option<&mut AudioGraph> {
     browser.graph.as_mut()
 }
 
-/// Applies a curve, building the graph on first use.
 fn set_equalizer_curve(browser: &mut Browser, settings: &EqualizerSettings) {
     let Some(graph) = ensure_graph(browser) else {
         return;
     };
-    // Routing the element through the graph makes the graph's state the one
-    // that matters, and a context created before the user has interacted with
-    // the page starts suspended.
     let _ = graph.context.resume();
     let preamp_db = if settings.enabled {
         settings.preamp_db
@@ -462,12 +389,6 @@ fn set_analysis_running(browser: &mut Browser, enabled: bool) -> bool {
     }
 }
 
-// --- The service contract ---------------------------------------------------
-
-/// Extension and the media type to ask the browser about. Which of these play
-/// is the browser's answer, not ours: the same page in two browsers decodes a
-/// different set, and Safari and Firefox disagree about most of the second
-/// half of this list.
 const WEB_AUDIO_CANDIDATES: &[(&str, &str)] = &[
     ("aac", "audio/aac"),
     ("aif", "audio/aiff"),
@@ -498,17 +419,11 @@ impl MediaPlayer for WebMediaPlayer {
             analysis: true,
             session: media_session().is_some(),
             equalizer: true,
-            // An `HTMLAudioElement` only knows a duration once it has loaded
-            // the metadata, so there is nothing to answer a synchronous probe
-            // with.
             probing: false,
         }
     }
 
     fn audio_extensions(&self) -> Vec<&'static str> {
-        // `canPlayType` is the browser's own answer, and the only honest one:
-        // an empty string is "no", and anything else ("probably", "maybe") is
-        // as much of a yes as the specification allows a browser to give.
         with_browser(|browser| {
             WEB_AUDIO_CANDIDATES
                 .iter()
@@ -536,11 +451,6 @@ impl MediaPlayer for WebMediaPlayer {
         let promise =
             with_browser(|browser| browser.element.play()).ok_or(MediaError::Unsupported)?;
         match promise {
-            // The promise rejects when the browser's autoplay policy refuses a
-            // `play()` that no gesture asked for. The element stays paused and
-            // publishes `pause` itself, so there is nothing to undo — but the
-            // rejection has to be taken, or the browser reports it as an
-            // unhandled one on the console of every application.
             Ok(promise) => {
                 wasm_bindgen_futures::spawn_local(async move {
                     if let Err(error) = wasm_bindgen_futures::JsFuture::from(promise).await {

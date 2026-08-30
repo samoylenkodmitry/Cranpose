@@ -1,6 +1,3 @@
-//! iOS system "back": a left-edge swipe recognized on the root view feeds
-//! [`cranpose_services::push_back_request`], so apps handle back the same way
-//! across Android and iOS.
 #![allow(unsafe_code)]
 
 use std::cell::RefCell;
@@ -22,7 +19,6 @@ define_class!(
     impl BackGestureTarget {
         #[unsafe(method(handleEdgePan:))]
         fn handle_edge_pan(&self, recognizer: &UIScreenEdgePanGestureRecognizer) {
-            // One back per completed edge swipe.
             if recognizer.state() == UIGestureRecognizerState::Ended {
                 push_back_request();
             }
@@ -38,11 +34,9 @@ impl BackGestureTarget {
 }
 
 thread_local! {
-    /// Keeps the gesture target alive (the recognizer holds it weakly).
     static TARGET: RefCell<Option<Retained<BackGestureTarget>>> = const { RefCell::new(None) };
 }
 
-/// Installs the left-edge swipe-back recognizer on the app's root view.
 pub(crate) fn register() {
     let Some(mtm) = MainThreadMarker::new() else {
         return;

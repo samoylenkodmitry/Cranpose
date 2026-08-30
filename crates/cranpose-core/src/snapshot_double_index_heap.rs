@@ -1,12 +1,3 @@
-/// A specialized min-heap data structure for tracking snapshot IDs with O(1) lowest-value queries
-/// and O(log N) handle-based removal.
-///
-/// This is a direct port of Jetpack Compose's SnapshotDoubleIndexHeap, used for efficiently
-/// tracking pinned snapshots and determining the reuse limit for state records.
-///
-/// The "double index" refers to bidirectional mapping between:
-/// - Array positions (where values live in the heap)
-/// - Handles (stable identifiers returned to callers for later removal)
 use crate::snapshot_id_set::SnapshotId;
 
 const INITIAL_CAPACITY: usize = 16;
@@ -25,23 +16,14 @@ pub struct SnapshotDoubleIndexHeapDebugStats {
 /// Uses handle-based removal so callers don't need to track array indices.
 #[derive(Debug)]
 pub struct SnapshotDoubleIndexHeap {
-    /// Current number of elements in the heap
     size: usize,
 
-    /// Array of snapshot IDs forming the min-heap
-    /// Invariant: values[i] <= values[2*i+1] && values[i] <= values[2*i+2]
     values: Vec<SnapshotId>,
 
-    /// Maps heap position → handle
-    /// index[i] tells us which handle corresponds to values[i]
     index: Vec<usize>,
 
-    /// Maps handle → heap position
-    /// handles[h] tells us where handle h is located in values array
-    /// Also used as a free list: free handles store the next free handle index
     handles: Vec<usize>,
 
-    /// Index of the first free handle in the free list
     first_free_handle: usize,
 }
 
@@ -54,7 +36,6 @@ impl SnapshotDoubleIndexHeap {
     /// Creates a new empty heap with specified initial capacity
     pub fn with_capacity(capacity: usize) -> Self {
         let mut handles = Vec::with_capacity(capacity);
-        // Initialize free list: each handle points to the next
         for i in 0..capacity {
             handles.push(i + 1);
         }
@@ -101,7 +82,6 @@ impl SnapshotDoubleIndexHeap {
 
         let handle = self.allocate_handle();
 
-        // Add to end of heap
         if i >= self.values.len() {
             self.values.push(value);
             self.index.push(handle);
@@ -112,7 +92,6 @@ impl SnapshotDoubleIndexHeap {
 
         self.handles[handle] = i;
 
-        // Restore heap invariant by shifting up
         self.shift_up(i);
 
         handle
@@ -124,15 +103,12 @@ impl SnapshotDoubleIndexHeap {
     pub fn remove(&mut self, handle: usize) {
         let i = self.handles[handle];
 
-        // Swap with last element
         self.swap(i, self.size - 1);
         self.size -= 1;
 
-        // Restore heap invariant
         self.shift_up(i);
         self.shift_down(i);
 
-        // Return handle to free list
         self.free_handle(handle);
     }
 
@@ -146,7 +122,6 @@ impl SnapshotDoubleIndexHeap {
         }
     }
 
-    /// Ensures the heap has capacity for at least `capacity` elements
     fn ensure_capacity(&mut self, capacity: usize) {
         if capacity <= self.values.capacity() {
             return;
@@ -157,7 +132,6 @@ impl SnapshotDoubleIndexHeap {
         self.values.reserve(new_capacity - self.values.capacity());
         self.index.reserve(new_capacity - self.index.capacity());
 
-        // Extend handles array and initialize new free list entries
         let old_len = self.handles.len();
         self.handles.reserve(new_capacity - old_len);
         for i in old_len..new_capacity {
@@ -165,12 +139,10 @@ impl SnapshotDoubleIndexHeap {
         }
     }
 
-    /// Allocates a handle from the free list
     fn allocate_handle(&mut self) -> usize {
         let handle = self.first_free_handle;
 
         if handle >= self.handles.len() {
-            // Need to grow handles array
             let new_size = self.handles.len().max(1) * 2;
             for i in self.handles.len()..new_size {
                 self.handles.push(i + 1);
@@ -181,34 +153,26 @@ impl SnapshotDoubleIndexHeap {
         handle
     }
 
-    /// Returns a handle to the free list
     fn free_handle(&mut self, handle: usize) {
         self.handles[handle] = self.first_free_handle;
         self.first_free_handle = handle;
     }
 
-    /// Swaps two elements in the heap, maintaining index integrity
     fn swap(&mut self, i: usize, j: usize) {
         if i >= self.size || j >= self.size {
             return;
         }
 
-        // Swap values
         self.values.swap(i, j);
 
-        // Swap indices
         self.index.swap(i, j);
 
-        // Update handle mappings
         let handle_i = self.index[i];
         let handle_j = self.index[j];
         self.handles[handle_i] = i;
         self.handles[handle_j] = j;
     }
 
-    /// Shifts an element up the heap to restore min-heap invariant
-    ///
-    /// Called after inserting at position i or after decreasing a value
     fn shift_up(&mut self, mut i: usize) {
         if i >= self.size {
             return;
@@ -223,15 +187,11 @@ impl SnapshotDoubleIndexHeap {
                 break;
             }
 
-            // Move parent down
             self.swap(i, parent);
             i = parent;
         }
     }
 
-    /// Shifts an element down the heap to restore min-heap invariant
-    ///
-    /// Called after removing the root or after increasing a value
     fn shift_down(&mut self, mut i: usize) {
         if i >= self.size {
             return;
@@ -241,8 +201,7 @@ impl SnapshotDoubleIndexHeap {
         let half = self.size / 2;
 
         while i < half {
-            // Find smallest child
-            let mut child = 2 * i + 1; // left child
+            let mut child = 2 * i + 1;
             let right = child + 1;
 
             if right < self.size && self.values[right] < self.values[child] {
@@ -253,7 +212,6 @@ impl SnapshotDoubleIndexHeap {
                 break;
             }
 
-            // Move child up
             self.swap(i, child);
             i = child;
         }
@@ -322,22 +280,18 @@ mod tests {
 
         assert_eq!(heap.lowest_or_default(0), 10);
 
-        // Remove minimum
         heap.remove(h4);
         assert_eq!(heap.lowest_or_default(0), 30);
         assert_eq!(heap.len(), 3);
 
-        // Remove middle element
         heap.remove(h1);
         assert_eq!(heap.lowest_or_default(0), 30);
         assert_eq!(heap.len(), 2);
 
-        // Remove minimum again
         heap.remove(h2);
         assert_eq!(heap.lowest_or_default(0), 70);
         assert_eq!(heap.len(), 1);
 
-        // Remove last element
         heap.remove(h3);
         assert!(heap.is_empty());
         assert_eq!(heap.lowest_or_default(999), 999);
@@ -347,7 +301,6 @@ mod tests {
     fn test_heap_invariant_after_operations() {
         let mut heap = SnapshotDoubleIndexHeap::new();
 
-        // Add elements in random order
         let values = vec![100, 20, 80, 5, 60, 15, 90, 3, 40];
         let mut handles = Vec::new();
 
@@ -355,7 +308,6 @@ mod tests {
             handles.push(heap.add(v));
         }
 
-        // Verify heap invariant: parent <= children
         fn verify_heap_invariant(heap: &SnapshotDoubleIndexHeap) {
             for i in 0..heap.size {
                 let left_child = 2 * i + 1;
@@ -388,16 +340,15 @@ mod tests {
         verify_heap_invariant(&heap);
         assert_eq!(heap.lowest_or_default(0), 3);
 
-        // Remove some elements
-        heap.remove(handles[3]); // Remove 5
+        heap.remove(handles[3]);
         verify_heap_invariant(&heap);
         assert_eq!(heap.lowest_or_default(0), 3);
 
-        heap.remove(handles[7]); // Remove 3
+        heap.remove(handles[7]);
         verify_heap_invariant(&heap);
         assert_eq!(heap.lowest_or_default(0), 15);
 
-        heap.remove(handles[1]); // Remove 20
+        heap.remove(handles[1]);
         verify_heap_invariant(&heap);
     }
 
@@ -405,7 +356,6 @@ mod tests {
     fn test_handle_reuse() {
         let mut heap = SnapshotDoubleIndexHeap::new();
 
-        // Add and remove many elements to trigger handle reuse
         let h1 = heap.add(1);
         let h2 = heap.add(2);
         let h3 = heap.add(3);
@@ -413,7 +363,6 @@ mod tests {
         heap.remove(h2);
         heap.remove(h1);
 
-        // These should reuse freed handles
         let h4 = heap.add(4);
         let h5 = heap.add(5);
 
@@ -428,7 +377,6 @@ mod tests {
     fn test_capacity_growth() {
         let mut heap = SnapshotDoubleIndexHeap::with_capacity(2);
 
-        // Add more elements than initial capacity
         let mut handles = Vec::new();
         for i in 0..20 {
             handles.push(heap.add(i));
@@ -437,7 +385,6 @@ mod tests {
         assert_eq!(heap.len(), 20);
         assert_eq!(heap.lowest_or_default(999), 0);
 
-        // Remove all
         for handle in handles {
             heap.remove(handle);
         }
@@ -450,26 +397,22 @@ mod tests {
         let mut heap = SnapshotDoubleIndexHeap::new();
         let mut handles = Vec::new();
 
-        // Add 100 elements
         for i in 0..100 {
-            handles.push(heap.add(i * 7 % 97)); // Some pseudo-random values
+            handles.push(heap.add(i * 7 % 97));
         }
 
-        // Remove every other one
         for i in (0..handles.len()).step_by(2) {
             heap.remove(handles[i]);
         }
 
         assert_eq!(heap.len(), 50);
 
-        // Add more
         for i in 100..150 {
             handles.push(heap.add(i * 3 % 89));
         }
 
         assert_eq!(heap.len(), 100);
 
-        // Verify we can still get lowest
         let _ = heap.lowest_or_default(0);
     }
 }

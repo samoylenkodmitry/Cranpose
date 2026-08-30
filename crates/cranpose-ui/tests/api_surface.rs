@@ -1,11 +1,3 @@
-//! The value-level half of `cranpose-ui`: specs, metrics, annotations and the
-//! small pure functions the widgets are assembled from.
-//!
-//! None of these need a composition. What they do need is somebody to state
-//! what they answer, because each one is a rule a widget then obeys — a
-//! threshold fraction, a scroll extent, a thumb offset — and a rule nobody
-//! checks is a rule that quietly changes.
-
 use cranpose_ui::{
     ParagraphStyle, ScrollMetrics, ScrollState, run_test_composition,
     text::{AnnotatedString, LinkAnnotation},
@@ -21,7 +13,6 @@ fn scroll_metrics_add_the_viewport_to_what_is_left_to_travel() {
     };
     assert_eq!(metrics.content_extent(), 190.0);
 
-    // Content that fits has nowhere to go, and its extent is the viewport.
     let fits = ScrollMetrics {
         offset: 0.0,
         max_offset: 0.0,
@@ -32,8 +23,6 @@ fn scroll_metrics_add_the_viewport_to_what_is_left_to_travel() {
 
 #[test]
 fn a_fresh_scroll_state_has_no_measured_extents_and_no_settle_policy() {
-    // The state is snapshot-backed, so it needs a runtime to be allocated
-    // against — which is what a composition supplies.
     run_test_composition(|| {
         let state = ScrollState::new(0.0);
         assert_eq!(
@@ -69,8 +58,6 @@ fn a_swipe_spec_records_every_option_it_is_given() {
 
 #[test]
 fn a_swipe_edge_width_is_never_negative() {
-    // A negative edge would arm the gesture over a strip of nothing, which
-    // reads to the user as a row that cannot be swiped at all.
     assert_eq!(
         SwipeToDismissSpec::default().from_edge(-8.0).edge_width,
         Some(0.0)
@@ -89,7 +76,6 @@ fn an_annotated_string_carries_the_annotations_pushed_into_it() {
     assert_eq!(found.len(), 1, "the string annotation was not recorded");
     assert_eq!(found[0].item.annotation, "payload");
 
-    // A tag nobody pushed answers with nothing rather than with everything.
     assert!(
         annotated
             .get_string_annotations("other", 0, annotated.text.len())

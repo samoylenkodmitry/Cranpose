@@ -1,28 +1,7 @@
-//! Files a desktop hands the application without a picker.
-//!
-//! Two ways in, and both arrive as the same [`IncomingContent`] a share or a
-//! picked file does, so an application collects one stream rather than growing
-//! a desktop-shaped path of its own:
-//!
-//! * dropped on the window, which winit reports as `DragDropped`;
-//! * named on the command line, which is what a desktop shell passes when a
-//!   document is opened with this application.
-//!
-//! The command-line half covers Linux and Windows, where opening a document
-//! launches the program with its path in `argv`. A macOS `.app` bundle is told
-//! through an Apple Event instead, which winit does not surface — so a Mac
-//! delivers dropped files and not opened ones, and this says so rather than
-//! implying coverage it does not have.
-
 use std::path::Path;
 
 use cranpose_services::{IncomingContent, media::uri_for_path, publish_incoming_content};
 
-/// Publishes one file as incoming content.
-///
-/// The URI form is what the rest of the framework already understands: a
-/// `file:` URI resolves through the content resolver, so a dropped file, a
-/// picked file and a shared file reach the application as the same handle.
 pub(crate) fn publish_file(path: &Path) {
     let mut content = IncomingContent::from_uri(uri_for_path(path));
     if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
@@ -31,22 +10,12 @@ pub(crate) fn publish_file(path: &Path) {
     publish_incoming_content(content);
 }
 
-/// Publishes the documents this process was launched to open.
-///
-/// Called once as the shell starts, before the first composition, so the
-/// backlog is waiting for the first collector rather than arriving before
-/// anything can observe it.
 pub(crate) fn publish_launch_documents() {
     for path in launch_documents(std::env::args().skip(1)) {
         publish_file(&path);
     }
 }
 
-/// The arguments that name an existing file.
-///
-/// An option and its value are not documents, and neither is a path to
-/// something that is not there: a desktop application is launched with all
-/// three, and only the files are content.
 fn launch_documents<I>(arguments: I) -> Vec<std::path::PathBuf>
 where
     I: IntoIterator<Item = String>,

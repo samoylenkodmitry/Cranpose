@@ -15,10 +15,7 @@ pub(crate) struct DrawShape {
     pub snap_to_pixel_grid: bool,
     pub brush: Brush,
     pub shape: Option<RoundedCornerShape>,
-    /// `Some` strokes the outline of `rect`/`shape` instead of filling it.
-    /// `rect` is already inflated by half the stroke width.
     pub stroke: Option<Stroke>,
-    /// `Some` replaces the rect geometry with a circular band, in `rect` units.
     pub arc: Option<ArcGeometry>,
     pub z_index: usize,
     pub clip: Option<Rect>,
@@ -51,7 +48,6 @@ pub(crate) struct ImageDraw {
     pub z_index: usize,
     pub clip: Option<Rect>,
     pub blend_mode: BlendMode,
-    /// Source sub-region in image-pixel coordinates. `None` means full image.
     pub src_rect: Option<Rect>,
 }
 

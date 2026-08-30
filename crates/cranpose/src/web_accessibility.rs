@@ -1,5 +1,3 @@
-//! Browser accessibility bridge for the canvas renderer.
-
 use std::{cell::RefCell, rc::Rc};
 
 use cranpose_app_shell::AppShell;
@@ -9,7 +7,6 @@ use web_sys::{Document, Element, HtmlCanvasElement, HtmlElement, MouseEvent};
 
 use crate::accessibility::{self, AccessibilityElement, AccessibilityRole};
 
-/// Transparent DOM nodes mirroring the semantic controls painted on canvas.
 pub(crate) struct WebAccessibilityBridge {
     root: HtmlElement,
     canvas: HtmlCanvasElement,
@@ -87,10 +84,6 @@ impl WebAccessibilityBridge {
         let scale_x = canvas_rect.width() / viewport.0.max(1.0) as f64;
         let scale_y = canvas_rect.height() / viewport.1.max(1.0) as f64;
 
-        // Identified by the shared accessibility element id rather than the
-        // layout node id: a node that publishes drawn controls owns several
-        // elements, and two DOM nodes claiming the same identity is exactly
-        // the bug a screen reader trips over.
         let ids = accessibility::element_ids(&elements);
         for (id, element) in ids.into_iter().zip(elements) {
             let node = document
@@ -125,9 +118,6 @@ impl WebAccessibilityBridge {
                     node.set_attribute("aria-modal", "true")?;
                 }
             }
-            // ARIA has no direct `stateDescription`; the state a control is in
-            // rides on the checked/selected attributes where the role has them,
-            // and `aria-description` carries the app's wording either way.
             if let Some(state) = &element.state_description {
                 node.set_attribute("aria-description", state)?;
             }

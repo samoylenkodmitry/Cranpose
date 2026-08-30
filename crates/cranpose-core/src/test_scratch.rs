@@ -39,9 +39,6 @@ pub fn test_scratch_dir(manifest_dir: &str, tag: &str) -> PathBuf {
     path
 }
 
-/// The nearest ancestor of `manifest` holding a `Cargo.lock`, which is the
-/// workspace root; the manifest directory itself when there is none, so a
-/// crate built outside a workspace still writes somewhere it owns.
 fn workspace_root(manifest: &Path) -> PathBuf {
     manifest
         .ancestors()

@@ -12,7 +12,7 @@ use crate::{
     run_test_composition, slide_in_vertically, slide_out_vertically,
 };
 
-const FRAME_NANOS: u64 = 16_666_667; // ~60 FPS
+const FRAME_NANOS: u64 = 16_666_667;
 const TRANSITION_MILLIS: u64 = 160;
 
 fn transition_spec() -> AnimationType {
@@ -156,8 +156,6 @@ fn becoming_visible_mid_exit_keeps_content_composed() {
     pump_frames(&mut composition, &mut frame_time, 2);
     assert!(alive.get(), "content composed mid-exit");
 
-    // Toggle back to visible before the exit finishes: the enter transition
-    // retargets the running animation and the content never leaves.
     composition.with_app_context(|| visible.set_value(true));
     drain(&mut composition);
     settle(&mut composition, &mut frame_time);
@@ -199,8 +197,6 @@ fn enter_and_exit_transitions_combine_with_plus() {
     assert!(exit.has_fade());
     assert_eq!(exit.slide_vertical_fraction(), Some(0.25));
 
-    // `+` keeps the left-hand animation spec when both sides carry one, like
-    // effect order in Compose is preserved.
     let spec_a = tween(100, Easing::LinearEasing);
     let spec_b = tween(200, Easing::EaseIn);
     let combined =

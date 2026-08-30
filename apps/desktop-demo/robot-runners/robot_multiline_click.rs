@@ -1,11 +1,3 @@
-//! Robot test for multiline click positioning
-//!
-//! Tests that clicking on different lines positions the cursor correctly.
-//! Run with:
-//! ```bash
-//! cargo run --package desktop-app --example robot_multiline_click --features robot-app
-//! ```
-
 use std::time::Duration;
 
 use cranpose::{AppLauncher, Robot};
@@ -24,7 +16,6 @@ fn main() {
         .with_size(600, 600)
         .with_headless(true)
         .with_test_driver(|robot| {
-            // Timeout after 60 seconds
             std::thread::spawn(|| {
                 std::thread::sleep(Duration::from_secs(60));
                 println!("\n✗ Test timed out");
@@ -34,7 +25,6 @@ fn main() {
             std::thread::sleep(Duration::from_millis(300));
             println!("✓ App ready\n");
 
-            // Step 1: Switch to Text Input tab
             println!("--- Step 1: Switch to Text Input Tab ---");
             if text_input_robot_helpers::open_text_input_tab(&robot) {
                 println!("✓ Clicked Text Input tab\n");
@@ -44,7 +34,6 @@ fn main() {
                 return;
             }
 
-            // Step 2: Find the empty text field
             println!("--- Step 2: Find empty text field ---");
             let text_field = text_input_robot_helpers::wait_for_in_semantics(&robot, |robot| {
                 find_in_semantics(robot, |elem| find_text_exact(elem, "Empty Text Field:"))
@@ -66,7 +55,6 @@ fn main() {
                 fx as i32, fy as i32, fw as i32, fh as i32
             );
 
-            // Step 3: Click to focus the text field
             println!("--- Step 3: Focus text field ---");
             let _ = robot.mouse_move(fx + 10.0, fy + 10.0);
             std::thread::sleep(Duration::from_millis(50));
@@ -76,9 +64,7 @@ fn main() {
             std::thread::sleep(Duration::from_millis(200));
             println!("✓ Clicked text field\n");
 
-            // Step 4: Type 3 simple lines
             println!("--- Step 4: Type 3 lines of text ---");
-            // Type aaa, newline, bbb, newline, ccc (lowercase for send_key compatibility)
             let _ = robot.send_key("a");
             let _ = robot.send_key("a");
             let _ = robot.send_key("a");
@@ -97,11 +83,9 @@ fn main() {
             std::thread::sleep(Duration::from_millis(200));
             println!("✓ Typed text: aaa\\nbbb\\nccc\n");
 
-            // Print current text state
             println!("--- Step 5: Read current text state ---");
             print_all_texts(&robot);
 
-            // Step 6: Click on line 2 using actual text bounds
             println!("--- Step 6: Click on line 2 ---");
             let multiline_bounds =
                 find_in_semantics(&robot, |elem| find_text_exact(elem, "aaa\nbbb\nccc"));
@@ -139,12 +123,10 @@ fn main() {
             std::thread::sleep(Duration::from_millis(200));
             println!("✓ Clicked on line 2\n");
 
-            // Step 7: Type x to mark position
             println!("--- Step 7: Insert 'x' marker ---");
             let _ = robot.send_key("x");
             std::thread::sleep(Duration::from_millis(200));
 
-            // Print text after click
             println!("--- Step 8: Verify marker position ---");
             print_all_texts(&robot);
 
@@ -155,7 +137,6 @@ fn main() {
                 let lines: Vec<&str> = text.split('\n').collect();
                 println!("  Lines: {:?}", lines);
 
-                // Check if x is on line 2
                 if lines.len() >= 2 && lines[1].contains('x') {
                     println!("✓ PASS: Marker 'x' correctly placed on line 2\n");
                 } else if !lines.is_empty() && lines[0].contains('x') {
@@ -182,9 +163,7 @@ fn main() {
                 return;
             }
 
-            // Step 9: Click on line 3
             println!("--- Step 9: Click on line 3 ---");
-            // First remove the X
             let _ = robot.send_key("BackSpace");
             std::thread::sleep(Duration::from_millis(100));
 
@@ -200,7 +179,6 @@ fn main() {
             let _ = robot.mouse_up();
             std::thread::sleep(Duration::from_millis(200));
 
-            // Step 10: Type y marker
             let _ = robot.send_key("y");
             std::thread::sleep(Duration::from_millis(200));
 
@@ -251,7 +229,6 @@ fn find_multiline_text(robot: &Robot) -> Option<String> {
     find_in_semantics(robot, |elem| {
         fn search(elem: &cranpose::SemanticElement, result: &std::cell::RefCell<Option<String>>) {
             if let Some(ref t) = elem.text {
-                // Look for multiline text containing our test characters (lowercase)
                 if t.contains('\n') && (t.contains('a') || t.contains('b') || t.contains('c')) {
                     *result.borrow_mut() = Some(t.clone());
                 }

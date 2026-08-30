@@ -6,8 +6,6 @@ use syn::{FnArg, Ident, ItemFn, Pat, PatType, ReturnType, Type, parse_macro_inpu
 
 mod branch_groups;
 
-/// Check if a type is Fn-like (impl FnMut/Fn/FnOnce, Box<dyn FnMut>, generic with Fn bound, etc.)
-/// For generic type parameters (e.g., `F` where F: FnMut()), we need to check the bounds.
 fn is_fn_like_type(ty: &Type) -> bool {
     match ty {
         Type::ImplTrait(impl_trait) => impl_trait.bounds.iter().any(|bound| {
@@ -47,7 +45,6 @@ fn is_fn_like_type(ty: &Type) -> bool {
     }
 }
 
-/// Check if a generic type parameter has Fn-like bounds by looking at the where clause and bounds
 fn is_generic_fn_like(ty: &Type, generics: &syn::Generics) -> bool {
     let type_ident = match ty {
         Type::Path(type_path) if type_path.path.segments.len() == 1 => {
@@ -97,14 +94,10 @@ fn is_generic_fn_like(ty: &Type, generics: &syn::Generics) -> bool {
     false
 }
 
-/// Unified check: is this type Fn-like, either syntactically or via generic bounds?
 fn is_fn_param(ty: &Type, generics: &syn::Generics) -> bool {
     is_fn_like_type(ty) || is_generic_fn_like(ty, generics)
 }
 
-/// Check if a type is `impl Fn() + ...` or `impl FnMut() + ...` with **zero** arguments.
-/// Only these can be stored through [`CallbackHolder`] (excludes `FnOnce` which can't be
-/// called more than once).
 fn is_zero_arg_fn_impl_trait(ty: &Type) -> bool {
     if let Type::ImplTrait(impl_trait) = ty {
         impl_trait.bounds.iter().any(|bound| {
@@ -125,8 +118,6 @@ fn is_zero_arg_fn_impl_trait(ty: &Type) -> bool {
     }
 }
 
-/// The bare ident of a plain single-segment type path (e.g. the `F` in
-/// `content: F`), if that is what the type is.
 fn type_bare_generic_ident(ty: &Type) -> Option<&Ident> {
     match ty {
         Type::Path(type_path)
@@ -140,7 +131,6 @@ fn type_bare_generic_ident(ty: &Type) -> Option<&Ident> {
     }
 }
 
-/// Whether the token stream mentions an ident with this exact name anywhere.
 fn stream_mentions_ident(tokens: &TokenStream2, name: &str) -> bool {
     tokens.clone().into_iter().any(|tt| match tt {
         proc_macro2::TokenTree::Ident(ident) => ident == name,
@@ -149,8 +139,6 @@ fn stream_mentions_ident(tokens: &TokenStream2, name: &str) -> bool {
     })
 }
 
-/// Clone `generics` without the stripped type parameters and without the
-/// where-clause predicates that constrain them.
 fn filter_generics(
     generics: &syn::Generics,
     strip: &std::collections::HashSet<String>,

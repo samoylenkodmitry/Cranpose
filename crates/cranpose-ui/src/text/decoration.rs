@@ -50,14 +50,14 @@ mod tests {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Shadow {
     pub color: Color,
-    pub offset: crate::modifier::Point, // Using Point as Offset counterpart
+    pub offset: crate::modifier::Point,
     pub blur_radius: f32,
 }
 
 impl Default for Shadow {
     fn default() -> Self {
         Self {
-            color: Color(0.0, 0.0, 0.0, 1.0), // Black default
+            color: Color(0.0, 0.0, 0.0, 1.0),
             offset: crate::modifier::Point::new(0.0, 0.0),
             blur_radius: 0.0,
         }

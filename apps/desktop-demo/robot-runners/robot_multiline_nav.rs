@@ -1,11 +1,3 @@
-//! Robot test for multiline text navigation (Up/Down arrows)
-//!
-//! Tests that cursor preserves column when moving between lines.
-//! Run with:
-//! ```bash
-//! cargo run --package desktop-app --example robot_multiline_nav --features robot-app
-//! ```
-
 use std::time::Duration;
 
 use cranpose::AppLauncher;
@@ -23,7 +15,6 @@ fn main() {
         .with_size(600, 600)
         .with_headless(true)
         .with_test_driver(|robot| {
-            // Timeout after 60 seconds
             std::thread::spawn(|| {
                 std::thread::sleep(Duration::from_secs(60));
                 println!("\n✗ Test timed out");
@@ -33,7 +24,6 @@ fn main() {
             std::thread::sleep(Duration::from_millis(300));
             println!("✓ App ready\n");
 
-            // Step 1: Switch to Text Input tab
             println!("--- Step 1: Switch to Text Input Tab ---");
             if text_input_robot_helpers::open_text_input_tab(&robot) {
                 println!("✓ Clicked Text Input tab\n");
@@ -43,7 +33,6 @@ fn main() {
                 return;
             }
 
-            // Step 2: Find text field
             println!("--- Step 2: Find text field ---");
             let text_field = text_input_robot_helpers::wait_for_in_semantics(&robot, |robot| {
                 find_in_semantics(robot, |elem| find_text(elem, "Empty Text Field:"))
@@ -63,7 +52,6 @@ fn main() {
             let field_cy = fy + fh / 2.0;
             println!("✓ Found text field at ({}, {})\n", fx as i32, fy as i32);
 
-            // Step 3: Click to focus the text field
             println!("--- Step 3: Focus text field ---");
             let _ = robot.mouse_move(field_cx, field_cy);
             std::thread::sleep(Duration::from_millis(50));
@@ -73,20 +61,18 @@ fn main() {
             std::thread::sleep(Duration::from_millis(200));
             println!("✓ Clicked text field\n");
 
-            // Step 4: Type multiline text using send_key
             println!("--- Step 4: Type multiline text ---");
-            // Type "aaaa" then Enter, then "bb" then Enter, then "cccc"
             let _ = robot.send_key("a");
             let _ = robot.send_key("a");
             let _ = robot.send_key("a");
             let _ = robot.send_key("a");
             std::thread::sleep(Duration::from_millis(50));
-            let _ = robot.send_key("Return"); // Enter key
+            let _ = robot.send_key("Return");
             std::thread::sleep(Duration::from_millis(50));
             let _ = robot.send_key("b");
             let _ = robot.send_key("b");
             std::thread::sleep(Duration::from_millis(50));
-            let _ = robot.send_key("Return"); // Enter key
+            let _ = robot.send_key("Return");
             std::thread::sleep(Duration::from_millis(50));
             let _ = robot.send_key("c");
             let _ = robot.send_key("c");
@@ -95,30 +81,24 @@ fn main() {
             std::thread::sleep(Duration::from_millis(200));
             println!("✓ Typed multiline text: aaaa\\nbb\\ncccc\n");
 
-            // Step 5: Navigate to specific column on line 3 and test Up arrow
             println!("--- Step 5: Test Up arrow column preservation ---");
-            // Go to Home (start of current line = line 3)
             let _ = robot.send_key("Home");
             std::thread::sleep(Duration::from_millis(50));
             println!("  • Moved to Home (start of line 3)");
 
-            // Move right twice to column 2 (after "cc")
             let _ = robot.send_key("Right");
             let _ = robot.send_key("Right");
             std::thread::sleep(Duration::from_millis(100));
             println!("  • Moved Right twice to column 2 (after 'cc')");
 
-            // Press Up - should go to column 2 on line 2 (after "bb")
             let _ = robot.send_key("Up");
             std::thread::sleep(Duration::from_millis(100));
             println!("  • Pressed Up - should be at column 2 on line 2");
 
-            // Press Up again - should go to column 2 on line 1 (after "aa")
             let _ = robot.send_key("Up");
             std::thread::sleep(Duration::from_millis(100));
             println!("  • Pressed Up - should be at column 2 on line 1");
 
-            // Step 6: Test Down arrow
             println!("--- Step 6: Test Down arrow column preservation ---");
             let _ = robot.send_key("Down");
             std::thread::sleep(Duration::from_millis(100));
@@ -128,12 +108,10 @@ fn main() {
             std::thread::sleep(Duration::from_millis(100));
             println!("  • Pressed Down - should return to column 2 on line 3");
 
-            // Step 7: Insert marker to verify position
             println!("--- Step 7: Insert marker to verify position ---");
             let _ = robot.send_key("x");
             std::thread::sleep(Duration::from_millis(200));
 
-            // Print all text found in semantics for debugging
             println!("  Scanning semantics for text content...");
             let found_text: std::cell::RefCell<Option<String>> = std::cell::RefCell::new(None);
             find_in_semantics(&robot, |elem| {
@@ -156,10 +134,8 @@ fn main() {
                 None::<(f32, f32, f32, f32)>
             });
 
-            // Extract and verify
             let found = found_text.borrow().clone();
             if let Some(text) = found {
-                // Expected: "aaaa\nbb\nccxcc" (x inserted at column 2 of line 3)
                 if text == "aaaa\nbb\nccxcc" {
                     println!("✓ PASS: Column preserved correctly!\n");
                     println!("=== ✓ ALL TESTS PASSED ===");

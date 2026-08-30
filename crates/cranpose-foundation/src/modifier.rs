@@ -19,7 +19,6 @@ pub use cranpose_ui_graphics::{DrawScope, Size};
 pub use cranpose_ui_layout::{Constraints, Measurable};
 
 use crate::nodes::input::types::PointerEvent;
-// use cranpose_core::NodeId;
 
 /// Identifies which part of the rendering pipeline should be invalidated
 /// after a modifier node changes state.
@@ -474,7 +473,6 @@ pub trait LayoutModifierNode: ModifierNode {
         measurable: &dyn Measurable,
         constraints: Constraints,
     ) -> cranpose_ui_layout::LayoutModifierMeasureResult {
-        // Default: pass through to wrapped content by measuring the child.
         let placeable = measurable.measure(constraints);
         cranpose_ui_layout::LayoutModifierMeasureResult::with_size(Size {
             width: placeable.width(),
@@ -519,9 +517,7 @@ pub trait DrawModifierNode: ModifierNode {
     ///
     /// Takes `&self` to work with immutable chain iteration - use interior
     /// mutability (RefCell) for any state that needs mutation during draw.
-    fn draw(&self, _draw_scope: &mut dyn DrawScope) {
-        // Default: no custom drawing
-    }
+    fn draw(&self, _draw_scope: &mut dyn DrawScope) {}
 
     /// Creates a closure for deferred drawing that will be evaluated at render time.
     ///
@@ -603,9 +599,7 @@ pub trait PointerInputNode: ModifierNode {
 /// accessibility and testing purposes.
 pub trait SemanticsNode: ModifierNode {
     /// Merges semantic properties into the provided configuration.
-    fn merge_semantics(&self, _config: &mut SemanticsConfiguration) {
-        // Default: no semantics added
-    }
+    fn merge_semantics(&self, _config: &mut SemanticsConfiguration) {}
 }
 
 /// Focus state of a focus target node.
@@ -657,9 +651,7 @@ pub trait FocusNode: ModifierNode {
     fn focus_state(&self) -> FocusState;
 
     /// Called when focus state changes for this node.
-    fn on_focus_changed(&mut self, _context: &mut dyn ModifierNodeContext, _state: FocusState) {
-        // Default: no action on focus change
-    }
+    fn on_focus_changed(&mut self, _context: &mut dyn ModifierNodeContext, _state: FocusState) {}
 }
 
 /// What kind of control a node is, as screen readers announce it.
@@ -802,9 +794,6 @@ impl Default for CanvasSemanticsNode {
             clickable: false,
             selected: None,
             toggled: None,
-            // Matches Compose: a node is enabled unless `disabled()` says
-            // otherwise, so an app that never thinks about it gets the right
-            // answer.
             enabled: true,
             custom_actions: Vec::new(),
         }
@@ -935,8 +924,6 @@ impl SemanticsConfiguration {
         if let Some(toggled) = other.toggled {
             self.toggled = Some(toggled);
         }
-        // Disabling wins: a chain that disables the node anywhere disables it,
-        // matching how Compose's `disabled()` is not undone by an inner node.
         self.enabled &= other.enabled;
         self.is_clickable |= other.is_clickable;
         self.is_editable_text |= other.is_editable_text;
@@ -1317,10 +1304,7 @@ enum TraversalDirection {
 /// of following the linked-list through `NodeState::child`/`parent`.
 pub struct ModifierChainIter<'a> {
     chain: &'a ModifierNodeChain,
-    /// Current position in `ordered_nodes`. For forward iteration, starts at 0
-    /// and increments; for backward, starts at len-1 and decrements.
     cursor: usize,
-    /// Number of elements remaining (avoids underflow on backward iteration).
     remaining: usize,
     direction: TraversalDirection,
 }
@@ -1394,7 +1378,6 @@ impl ModifierNodeEntry {
         hash_code: u64,
         capabilities: NodeCapabilities,
     ) -> Self {
-        // Wrap the boxed node in Rc<RefCell<>> for shared ownership
         let node_rc = Rc::new(RefCell::new(node));
         let entry = Self {
             element_type,
@@ -1534,9 +1517,7 @@ pub struct ModifierNodeChain {
     head_aggregate_child_capabilities: NodeCapabilities,
     head_sentinel: Box<SentinelNode>,
     tail_sentinel: Box<SentinelNode>,
-    /// (link, own_capabilities, aggregate_child_capabilities)
     ordered_nodes: Vec<(NodeLink, NodeCapabilities, NodeCapabilities)>,
-    // Scratch buffers reused during update to avoid repeated allocations
     scratch_old_used: Vec<bool>,
     scratch_match_order: Vec<Option<usize>>,
     scratch_final_slots: Vec<Option<ModifierNodeEntry>>,
@@ -1567,9 +1548,7 @@ impl ModifierNode for SentinelNode {}
 pub struct ModifierChainNodeRef<'a> {
     chain: &'a ModifierNodeChain,
     link: NodeLink,
-    /// Capabilities cached from `ordered_nodes` build time — avoids RefCell borrow in kind_set().
     cached_capabilities: Option<NodeCapabilities>,
-    /// Aggregate child capabilities cached from `ordered_nodes` — avoids RefCell borrow.
     cached_aggregate_child: Option<NodeCapabilities>,
 }
 
@@ -1584,11 +1563,8 @@ impl Default for ModifierNodeChain {
 /// This avoids O(n²) complexity by pre-building hash maps that allow constant-time
 /// lookups for matching entries by key, hash, or type.
 struct EntryIndex {
-    /// Map (element type, node type, key) to keyed entries.
     keyed: HashMap<(TypeId, TypeId, u64), Vec<usize>>,
-    /// Map (element type, node type, hash) to unkeyed entries with specific hash.
     hashed: HashMap<(TypeId, TypeId, u64), Vec<usize>>,
-    /// Map (element type, node type) to unkeyed entries.
     typed: HashMap<(TypeId, TypeId), Vec<usize>>,
 }
 
@@ -1608,13 +1584,11 @@ impl EntryIndex {
 
         for (i, entry) in entries.iter().enumerate() {
             if let Some(key_value) = entry.key {
-                // Keyed entry
                 keyed
                     .entry((entry.element_type, entry.node_type, key_value))
                     .or_insert_with(Vec::new)
                     .push(i);
             } else {
-                // Unkeyed entry - add to both hash and type indices
                 hashed
                     .entry((entry.element_type, entry.node_type, entry.hash_code))
                     .or_insert_with(Vec::new)
@@ -1633,12 +1607,6 @@ impl EntryIndex {
         }
     }
 
-    /// Find the best matching entry for reuse.
-    ///
-    /// Matching priority (from highest to lowest):
-    /// 1. Keyed match: same element type, node type, and key.
-    /// 2. Exact match: same retained identity, no key, same hash, and equal element.
-    /// 3. Retained identity match without equality, which requires update.
     fn find_match(
         &self,
         entries: &[ModifierNodeEntry],
@@ -1646,7 +1614,6 @@ impl EntryIndex {
         query: EntryMatchQuery<'_>,
     ) -> Option<usize> {
         if let Some(key_value) = query.key {
-            // Priority 1: Keyed lookup - O(1)
             if let Some(candidates) =
                 self.keyed
                     .get(&(query.element_type, query.node_type, key_value))
@@ -1658,7 +1625,6 @@ impl EntryIndex {
                 }
             }
         } else {
-            // Priority 2: Exact match (hash + equality) - O(1) lookup + O(k) equality checks
             if let Some(candidates) =
                 self.hashed
                     .get(&(query.element_type, query.node_type, query.hash_code))
@@ -1675,7 +1641,6 @@ impl EntryIndex {
                 }
             }
 
-            // Priority 3: Type match only - O(1) lookup + O(k) scan
             if let Some(candidates) = self.typed.get(&(query.element_type, query.node_type)) {
                 for &i in candidates {
                     if !used[i] {
@@ -1751,14 +1716,10 @@ impl ModifierNodeChain {
     ) where
         I: Iterator<Item = &'a DynModifierElement>,
     {
-        // Fast path: try to match elements sequentially without building index.
-        // If all elements match in order (same type and key at same position),
-        // we skip the expensive EntryIndex building. This is O(n) instead of O(n + m).
         let old_len = self.entries.len();
         let mut fast_path_failed_at: Option<usize> = None;
         let mut elements_count = 0;
 
-        // Collect elements we need to process in slow path
         self.scratch_elements.clear();
 
         for (idx, element) in elements.enumerate() {
@@ -1771,8 +1732,6 @@ impl ModifierNodeChain {
                 let same_key = entry.key == element.key();
                 let same_hash = entry.hash_code == element.hash_code();
 
-                // Fast path requires same type, key, AND hash to ensure we're not
-                // breaking reordering semantics (where elements can move positions)
                 let positional_update = element.requires_update();
                 if same_type && same_node_type && same_key && (same_hash || positional_update) {
                     let can_update_node = {
@@ -1785,11 +1744,9 @@ impl ModifierNodeChain {
                         continue;
                     }
 
-                    // Fast path: element matches at same position
                     let same_element = entry.element.as_ref().equals_element(element.as_ref());
                     let capabilities = element.capabilities();
 
-                    // Re-attach node if it was detached during a previous update
                     {
                         let node_borrow = entry.node.borrow();
                         if !node_borrow.node_state().is_attached() {
@@ -1798,7 +1755,6 @@ impl ModifierNodeChain {
                         }
                     }
 
-                    // Optimize updates: only call update_node if element changed
                     let needs_update = !same_element || element.requires_update();
                     if needs_update {
                         element.update_node(&mut **entry.node.borrow_mut());
@@ -1807,7 +1763,6 @@ impl ModifierNodeChain {
                         request_update_auto_invalidations(element.as_ref(), context, capabilities);
                     }
 
-                    // Always update metadata
                     entry.capabilities = capabilities;
                     entry
                         .node
@@ -1816,20 +1771,13 @@ impl ModifierNodeChain {
                         .set_capabilities(capabilities);
                     continue;
                 }
-                // Fast path failed - mark position and fall through to collect
                 fast_path_failed_at = Some(idx);
             }
 
-            // Collect element for slow path processing
             self.scratch_elements.push(element.clone());
         }
 
-        // Fast path succeeded if:
-        // 1. No mismatch was found (fast_path_failed_at is None)
-        // 2. All elements were processed via fast path (scratch_elements is empty)
-        // Note: If old_len=0 and we have new elements, scratch_elements won't be empty
         if fast_path_failed_at.is_none() && self.scratch_elements.is_empty() {
-            // Detach any removed entries (elements_count <= old_len guaranteed here)
             if elements_count < self.entries.len() {
                 for entry in self.entries.drain(elements_count..) {
                     request_auto_invalidations(context, entry.capabilities);
@@ -1840,30 +1788,24 @@ impl ModifierNodeChain {
             return;
         }
 
-        // Slow path: need full reconciliation starting from failure point
-        // If no mismatch but we have extra elements, fail_idx is the old length
         let fail_idx = fast_path_failed_at.unwrap_or(old_len);
 
-        // Move entries that were already processed to a safe place
         let mut old_entries: Vec<ModifierNodeEntry> = self.entries.drain(fail_idx..).collect();
         let processed_entries_len = self.entries.len();
         let old_len = old_entries.len();
 
-        // Reuse scratch buffers for the remaining entries only
         self.scratch_old_used.clear();
         self.scratch_old_used.resize(old_len, false);
 
         self.scratch_match_order.clear();
         self.scratch_match_order.resize(old_len, None);
 
-        // Build index only for unprocessed entries
         let index = EntryIndex::build(&old_entries);
 
         let new_elements_count = self.scratch_elements.len();
         self.scratch_final_slots.clear();
         self.scratch_final_slots.reserve(new_elements_count);
 
-        // Process each remaining element
         for (new_pos, element) in self.scratch_elements.drain(..).enumerate() {
             self.scratch_final_slots.push(None);
             let element_type = element.element_type();
@@ -1872,7 +1814,6 @@ impl ModifierNodeChain {
             let hash_code = element.hash_code();
             let capabilities = element.capabilities();
 
-            // Find best matching old entry via index
             let matched_idx = index.find_match(
                 &old_entries,
                 &self.scratch_old_used,
@@ -1886,7 +1827,6 @@ impl ModifierNodeChain {
             );
 
             if let Some(idx) = matched_idx {
-                // Reuse existing entry
                 let entry = &mut old_entries[idx];
                 let can_update_node = {
                     let node_borrow = entry.node.borrow();
@@ -1913,10 +1853,8 @@ impl ModifierNodeChain {
                 self.scratch_match_order[idx] = Some(new_pos);
                 let moved = idx != new_pos;
 
-                // Check if element actually changed
                 let same_element = entry.element.as_ref().equals_element(element.as_ref());
 
-                // Re-attach node if it was detached
                 {
                     let node_borrow = entry.node.borrow();
                     if !node_borrow.node_state().is_attached() {
@@ -1925,7 +1863,6 @@ impl ModifierNodeChain {
                     }
                 }
 
-                // Optimize updates: only call update_node if element changed
                 let needs_update = !same_element || element.requires_update();
                 if needs_update {
                     element.update_node(&mut **entry.node.borrow_mut());
@@ -1941,7 +1878,6 @@ impl ModifierNodeChain {
                     request_auto_invalidations(context, capabilities);
                 }
 
-                // Always update metadata
                 entry.key = key;
                 entry.element_type = element_type;
                 entry.node_type = node_type;
@@ -1952,7 +1888,6 @@ impl ModifierNodeChain {
                     .node_state()
                     .set_capabilities(capabilities);
             } else {
-                // Create new entry
                 let entry = ModifierNodeEntry::new(
                     element_type,
                     node_type,
@@ -1969,7 +1904,6 @@ impl ModifierNodeChain {
             }
         }
 
-        // Place matched entries in their new positions
         for (i, entry) in old_entries.into_iter().enumerate() {
             if self.scratch_old_used[i] {
                 if let Some(pos) = self.scratch_match_order[i] {
@@ -1984,7 +1918,6 @@ impl ModifierNodeChain {
             }
         }
 
-        // Append processed entries to self.entries
         self.entries.reserve(self.scratch_final_slots.len());
         for slot in self.scratch_final_slots.drain(..) {
             if let Some(entry) = slot {
@@ -2221,7 +2154,7 @@ impl ModifierNodeChain {
                             {
                                 current = delegate;
                             } else {
-                                return; // Invalid delegate path
+                                return;
                             }
                         }
                         f(current, cached_caps);
@@ -2280,13 +2213,11 @@ impl ModifierNodeChain {
 
         let mut previous = NodeLink::Head;
         for (link, _caps, _agg) in self.ordered_nodes.iter().copied() {
-            // Set child link on previous
             match &previous {
                 NodeLink::Head => self.head_sentinel.node_state().set_child_link(Some(link)),
                 NodeLink::Tail => self.tail_sentinel.node_state().set_child_link(Some(link)),
                 NodeLink::Entry(path) => {
                     let node_borrow = self.entries[path.entry()].node.borrow();
-                    // Navigate to delegate if needed
                     if path.delegates().is_empty() {
                         node_borrow.node_state().set_child_link(Some(link));
                     } else {
@@ -2300,7 +2231,6 @@ impl ModifierNodeChain {
                     }
                 }
             }
-            // Set parent link on current
             match &link {
                 NodeLink::Head => self
                     .head_sentinel
@@ -2312,7 +2242,6 @@ impl ModifierNodeChain {
                     .set_parent_link(Some(previous)),
                 NodeLink::Entry(path) => {
                     let node_borrow = self.entries[path.entry()].node.borrow();
-                    // Navigate to delegate if needed
                     if path.delegates().is_empty() {
                         node_borrow.node_state().set_parent_link(Some(previous));
                     } else {
@@ -2329,7 +2258,6 @@ impl ModifierNodeChain {
             previous = link;
         }
 
-        // Set child link on last node to Tail
         match &previous {
             NodeLink::Head => self
                 .head_sentinel
@@ -2341,7 +2269,6 @@ impl ModifierNodeChain {
                 .set_child_link(Some(NodeLink::Tail)),
             NodeLink::Entry(path) => {
                 let node_borrow = self.entries[path.entry()].node.borrow();
-                // Navigate to delegate if needed
                 if path.delegates().is_empty() {
                     node_borrow
                         .node_state()
@@ -2366,7 +2293,6 @@ impl ModifierNodeChain {
         for (link, cached_caps, cached_aggregate) in self.ordered_nodes.iter_mut().rev() {
             aggregate |= *cached_caps;
             *cached_aggregate = aggregate;
-            // Also update NodeState for code that reads through DelegatableNode
             match link {
                 NodeLink::Head => {
                     self.head_sentinel
@@ -2446,25 +2372,20 @@ impl ModifierNodeChain {
 }
 
 impl<'a> ModifierChainNodeRef<'a> {
-    /// Helper to get NodeState, properly handling RefCell for entries.
-    /// Returns NodeState values by calling a closure with the state.
     fn with_state<R>(&self, f: impl FnOnce(&NodeState) -> R) -> R {
         match &self.link {
             NodeLink::Head => f(self.chain.head_sentinel.node_state()),
             NodeLink::Tail => f(self.chain.tail_sentinel.node_state()),
             NodeLink::Entry(path) => {
                 let node_borrow = self.chain.entries[path.entry()].node.borrow();
-                // Navigate through delegates if path has them
                 if path.delegates().is_empty() {
                     f(node_borrow.node_state())
                 } else {
-                    // Navigate to the delegate node
                     let mut current: &dyn ModifierNode = &**node_borrow;
                     for &delegate_index in path.delegates() {
                         if let Some(delegate) = nth_delegate(current, delegate_index as usize) {
                             current = delegate;
                         } else {
-                            // Fallback to root node state if delegate path is invalid
                             return f(node_borrow.node_state());
                         }
                     }
@@ -2478,18 +2399,15 @@ impl<'a> ModifierChainNodeRef<'a> {
     /// Returns None for sentinel nodes.
     pub fn with_node<R>(&self, f: impl FnOnce(&dyn ModifierNode) -> R) -> Option<R> {
         match &self.link {
-            NodeLink::Head => None, // Head sentinel
-            NodeLink::Tail => None, // Tail sentinel
+            NodeLink::Head => None,
+            NodeLink::Tail => None,
             NodeLink::Entry(path) => {
                 let node_borrow = self.chain.entries[path.entry()].node.borrow();
-                // Navigate through delegates if path has them
                 if path.delegates().is_empty() {
                     Some(f(&**node_borrow))
                 } else {
-                    // Navigate to the delegate node
                     let mut current: &dyn ModifierNode = &**node_borrow;
                     for &delegate_index in path.delegates() {
-                        // `?`: bail out with None if the delegate path is invalid.
                         current = nth_delegate(current, delegate_index as usize)?;
                     }
                     Some(f(current))

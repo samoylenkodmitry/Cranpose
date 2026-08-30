@@ -47,56 +47,37 @@ const TRANSLATED_LOCAL_CAPTURE_STABLE_GUARD: f32 = 64.0;
 const MOTION_STABLE_CAPTURE_CROSS_AXIS_LEADING_GUARD: f32 = 96.0;
 const CLIPPED_TEXT_PREWARM_VIEWPORT_MULTIPLIER: f32 = 2.0;
 
-/// A fully owned lowering of an isolating child layer: the POD composite
-/// fields, a snapshot of every scalar the render path used to read off
-/// `&LayerNode`, and the child's own collected content (`source`). All
-/// snapshot values are captured at collection time so rendering never has to
-/// reach back into the retained graph.
 pub(crate) struct ChildLayerComposite {
     pub(crate) z_index: usize,
     pub(crate) logical_rect: Rect,
     pub(crate) dest_quad: [[f32; 2]; 4],
     pub(crate) snap_anchor: Option<SnapAnchor>,
-    /// Transform pivot in the parent scene's logical coordinate space.
     pub(crate) composite_snap_origin: Option<Point>,
     pub(crate) backdrop_rect: Rect,
     pub(crate) visual_clip: Option<Rect>,
     pub(crate) surface_clip: Option<Rect>,
     pub(crate) shadow_draws: Vec<ShadowDraw>,
     pub(crate) needs_nested_underlay: bool,
-    // --- snapshot of the layer node (captured at collection) ---
     pub(crate) node_id: Option<NodeId>,
     pub(crate) backdrop: Option<RenderEffect>,
     pub(crate) has_effect: bool,
     pub(crate) effect_contains_runtime_shader: bool,
     pub(crate) target_content_hash: u64,
     pub(crate) effect_hash: u64,
-    /// Present exactly when the render body's source-cache-key decision reads
-    /// it (a motion-stable source); the hash walks the subtree, so it is not
-    /// computed for layers that can never consume it.
     pub(crate) motion_source_content_hash: Option<u64>,
-    /// Same value as `needs_nested_underlay` (both snapshot
-    /// `layer_contains_descendant_backdrop`); kept separate because the two
-    /// fields serve different contracts (compositing vs. cache admission).
     pub(crate) contains_descendant_backdrop: bool,
     pub(crate) cache_policy: CachePolicy,
     pub(crate) surface_requirements: LayerSurfaceRequirements,
     pub(crate) rounded_clip: Option<LayerSurfaceRoundedClip>,
     pub(crate) isolation: Option<LayerIsolation>,
     pub(crate) translated_content_context: bool,
-    /// `translated_content_axes_for_layer` of the child itself.
     pub(crate) own_translated_content_axes: TranslatedContentAxes,
     pub(crate) clip_rect: Option<Rect>,
     pub(crate) local_bounds: Rect,
-    /// `layer_surface_scale` of the child (uniform transform scale).
     pub(crate) surface_scale: f32,
-    /// The child's own collected content, in the child's local space. The
-    /// parent's post-build shift must never translate it.
     pub(crate) source: LoweredChildSource,
 }
 
-/// The owned, recursive lowering of a child layer's content: its collected
-/// scene plus the lowered isolating children found inside it.
 #[derive(Default)]
 pub(crate) struct LoweredChildSource {
     pub(crate) scene: CompositorScene,
@@ -108,7 +89,6 @@ pub(crate) struct ResolvedChildSurfaceComposite {
     pub(crate) logical_rect: Rect,
     pub(crate) dest_quad: [[f32; 2]; 4],
     pub(crate) snap_anchor: Option<SnapAnchor>,
-    /// Transform pivot in the parent scene's logical coordinate space.
     pub(crate) composite_snap_origin: Option<Point>,
     pub(crate) backdrop_rect: Rect,
     pub(crate) surface_clip: Option<Rect>,
@@ -544,8 +524,6 @@ pub(crate) fn motion_stable_capture_bounds(
     )
 }
 
-/// [`motion_stable_capture_bounds`] over collection-time snapshots of the
-/// layer scalars it reads, for callers that no longer hold a `&LayerNode`.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn motion_stable_capture_bounds_from_parts(
     layer_clip_rect: Option<Rect>,
@@ -808,10 +786,6 @@ struct LocalPrimitiveContext<'a> {
 
 use crate::run_entry::ShapeRunEntry;
 
-/// Runs the shared per-variant emit math for one run entry, returning the
-/// shape params instead of touching the scene. `None` means the draw resolved
-/// away (fully clipped or degenerate), exactly the cases where the
-/// per-primitive path emits nothing.
 fn emit_shape_run_entry(
     entry: &ShapeRunEntry<'_>,
     layer_bounds: Rect,
@@ -884,14 +858,10 @@ fn emit_shape_run_entry(
             entry.blend_mode,
             motion_context_animated,
         ),
-        // ShapeRunEntry::new admits no other variant.
         _ => unreachable!("shape run entries only hold shape primitives"),
     }
 }
 
-/// Whether a large flush fans out is decided by measurement — see
-/// [`crate::cost_tuner::CostTuner`]. 2048 entries is the floor; a serial
-/// run projected under 2 ms is never worth the spawn wave.
 #[cfg(not(target_arch = "wasm32"))]
 static SHAPE_RUN_TUNER: crate::cost_tuner::CostTuner =
     crate::cost_tuner::CostTuner::new("shape-emit", 2048, 2_000_000);
@@ -900,9 +870,6 @@ static SHAPE_RUN_TUNER: crate::cost_tuner::CostTuner =
 static FORCE_SHAPE_RUN_PARALLEL: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
-/// Test-only override that routes every flush through the parallel path,
-/// bypassing the size gate — the equivalence test uses it to exercise the
-/// fan-out on a scene small enough to assert against exactly.
 #[cfg(test)]
 pub(crate) fn force_shape_run_parallel_for_tests(on: bool) {
     FORCE_SHAPE_RUN_PARALLEL.store(on, std::sync::atomic::Ordering::Relaxed);
@@ -910,27 +877,10 @@ pub(crate) fn force_shape_run_parallel_for_tests(on: bool) {
 
 #[cfg(not(target_arch = "wasm32"))]
 thread_local! {
-    /// Slot buffer for the parallel emit path, kept across frames so a 15k
-    /// run does not remap megabytes of scratch every flush.
     static SHAPE_RUN_SCRATCH: std::cell::RefCell<Vec<Option<ShapeDrawParams>>> =
         const { std::cell::RefCell::new(Vec::new()) };
 }
 
-/// Emits an accumulated run of consecutive shape draws into the scene.
-///
-/// Emission order — and therefore z order — matches the per-primitive path
-/// exactly. Params go from the builder straight into the scene, skipping the
-/// per-item scene bookkeeping `push_local_primitive` pays, and the shared
-/// snap anchor is applied once at the end.
-///
-/// On native targets a large run may fan the emit math out across scoped
-/// threads: workers write `Option<ShapeDrawParams>` into disjoint slots of a
-/// reused scratch buffer and the main thread pushes the results in entry
-/// order, so z order and snap anchoring are byte-identical to the serial
-/// path. Whether the fan-out actually runs is decided by measured cost — see
-/// [`crate::cost_tuner::CostTuner`] — because the same spawn wave that pays for itself
-/// many times over on a watch-class in-order core measurably loses on a big
-/// phone core.
 fn flush_shape_run(
     local_scene: &mut CompositorScene,
     run: &mut Vec<ShapeRunEntry<'_>>,
@@ -963,9 +913,6 @@ fn flush_shape_run(
     #[cfg(target_arch = "wasm32")]
     flush_shape_run_serial(local_scene, run, context, motion);
 
-    // The whole run shares one layer context, so applying the anchor once at
-    // the end lands on exactly the shapes the per-primitive path would have
-    // anchored one at a time.
     assign_snap_anchor_since(local_scene, counts_before, context.draw_snap_anchor);
 }
 
@@ -1021,8 +968,6 @@ use crate::shape_replay::{
     rect_contains,
 };
 
-/// Feeds one [`DrawRunNode`]'s primitives through the shape run, spilling any
-/// non-shape draw through the ordinary emit path at its exact z position.
 fn collect_draw_run<'a>(
     local_scene: &mut CompositorScene,
     run: &'a DrawRunNode,
@@ -1045,12 +990,6 @@ fn collect_draw_run<'a>(
     }
 }
 
-/// Draws a run from its verified replay frame: retained spans as
-/// [`crate::scene::RetainedDraw`]s referencing identity-keyed slots, dynamic
-/// spans through the ordinary emit path, in exact span order. `true` means
-/// the run was fully emitted here. `false` leaves the run to the ordinary
-/// path — the feed is opt-in, unsupported contexts fall back wholesale, and
-/// a fallen-back frame costs exactly one ordinarily-drawn frame.
 #[cfg(not(target_arch = "wasm32"))]
 fn try_command_feed<'a>(
     local_scene: &mut CompositorScene,
@@ -1064,17 +1003,11 @@ fn try_command_feed<'a>(
         scene::{ColorPatch, PendingFeedCapture},
         shape_replay::command_feed_enabled,
     };
-    // Guard order and content are the happy path's exact current checks —
-    // when they all pass, nothing below this block costs anything new.
     let feed_ready = command_feed_enabled()
         && SHAPE_REPLAY.with(|state| state.borrow().supported)
         && context.draw_snap_anchor.is_none()
         && layer_supports_replay(context.local_layer);
     if !feed_ready {
-        // Fail closed: a frame that bypassed materialization has spans
-        // `run.primitives` is missing, so falling back to the caller's
-        // ordinary loop would silently omit them. Only a frame with no
-        // bypassed spans may return false here.
         return emit_unserved_frame_rematerialized(
             local_scene,
             run,
@@ -1091,8 +1024,6 @@ fn try_command_feed<'a>(
         context.local_layer.alpha,
         motion,
     );
-    // Entries accumulated from earlier nodes flush first: span emission
-    // below must land after them to keep z order exact.
     flush_shape_run(local_scene, shape_run, context);
     let center_final = Point::new(
         frame.center.x + context.layer_bounds.x,
@@ -1119,9 +1050,6 @@ fn try_command_feed<'a>(
                 range,
                 ..
             } => {
-                // The capture frame: emit ordinarily, and when every record
-                // produced exactly one uncut shape, ask the renderer to
-                // retain the shape range under this span's identity.
                 let shape_start = local_scene.shapes.len();
                 let primitives = &run.primitives[range.0 as usize..range.1 as usize];
                 let mut clean = !primitives.is_empty();
@@ -1202,8 +1130,6 @@ fn try_command_feed<'a>(
                             }
                             feed_slot.last_referenced = frame_now;
                             let gpu_slot = feed_slot.gpu_slot;
-                            // Compact-record recolors are always solid: a
-                            // flat 16-byte color write, no Brush at all.
                             for (offset, color) in recolors {
                                 state.pending_color_patches.push(ColorPatch {
                                     slot: gpu_slot,
@@ -1243,10 +1169,6 @@ fn try_command_feed<'a>(
                     } else if let Some(primitives) = frame.fallback.as_ref().and_then(|recording| {
                         recording.materialize_range(tape_range.0 as usize, tape_range.1 as usize)
                     }) {
-                        // Bypassed span whose retained buffer went away this
-                        // frame: rebuild its primitives from the recording
-                        // the frame itself owns — never from the ambient
-                        // registry, whose contents may have moved on.
                         stat_remat += 1;
                         emit_feed_range(local_scene, &primitives, context, motion);
                     } else {
@@ -1274,16 +1196,6 @@ fn try_command_feed<'a>(
     true
 }
 
-/// Fail-closed emission for a fed run the feed cannot serve (feed disabled,
-/// unsupported collection window, snap-anchored context, unsupported
-/// layer). A frame with NO bypassed spans returns `false`: `run.primitives`
-/// is complete and the caller's ordinary loop draws it exactly as before —
-/// the historical fallback, kept bit-identical. A frame that DID bypass
-/// materialization returns `true` after emitting every span in order
-/// itself: spans with primitives ordinarily, bypassed spans rebuilt from
-/// the recording the frame itself owns (`frame.fallback`), with the
-/// defensive terminal ([`note_remat_miss`]) on any span that cannot be
-/// rebuilt.
 #[cfg(not(target_arch = "wasm32"))]
 fn emit_unserved_frame_rematerialized<'a>(
     local_scene: &mut CompositorScene,
@@ -1309,11 +1221,6 @@ fn emit_unserved_frame_rematerialized<'a>(
     {
         static WALKS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         let n = WALKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        // First 8 walks verbatim, then every 1024th: a feed that fail-closes
-        // in steady state must stay visible in logcat forever (the counter
-        // in the line is the rate), not fall silent after startup — the
-        // difference between "startup reconcile" and "the bypass never
-        // engages" is exactly what a device log has to be able to answer.
         if n < 8 || n.is_multiple_of(1024) {
             log::warn!(
                 "[command-feed] feed cannot serve a frame of {:?} with bypassed spans; \
@@ -1323,8 +1230,6 @@ fn emit_unserved_frame_rematerialized<'a>(
             );
         }
     }
-    // Entries accumulated from earlier nodes flush first, exactly as the
-    // fed path does: span emission must land after them to keep z order.
     flush_shape_run(local_scene, shape_run, context);
     let motion = context.motion_context_animated || context.content_offset_translation;
     let counts_before = scene_counts(local_scene);
@@ -1348,8 +1253,6 @@ fn emit_unserved_frame_rematerialized<'a>(
             );
             continue;
         }
-        // An empty dynamic or capture span carries nothing to draw; an
-        // empty retained span is a bypass and must rebuild.
         let Some((slot, tape_range)) = bypassed_slot else {
             continue;
         };
@@ -1361,26 +1264,10 @@ fn emit_unserved_frame_rematerialized<'a>(
             note_remat_miss(command, slot);
         }
     }
-    // One of the guards that routed us here may be a snap-anchored context:
-    // the ordinary loop would have anchored these draws, so anchor
-    // everything the walk emitted (idempotent over loose draws that already
-    // anchored themselves).
     assign_snap_anchor_since(local_scene, counts_before, context.draw_snap_anchor);
     true
 }
 
-/// The defensive terminal for a bypassed span that could neither draw
-/// retained nor rebuild: structurally unreachable for any frame the
-/// builder produced, because every such frame owns a pinned handle to the
-/// exact recording its spans address (`frame.fallback`) and
-/// `materialize_range` on it cannot fail for the ranges the same recording
-/// produced. Reaching this means a hand-built frame without its fallback
-/// or a corrupt tape range — so keep the omission loud, counted, and
-/// bounded. Revoking the confirmation makes the very next graph build
-/// materialize the span again — the earliest self-heal point reachable
-/// from here, as scene collection has no frame-invalidation hook to
-/// request an early rebuild; on animating scenes that bound is the next
-/// frame.
 #[cfg(not(target_arch = "wasm32"))]
 fn note_remat_miss(command: cranpose_render_common::graph::DrawCommandId, slot: u32) {
     cranpose_render_common::scene_builder::revoke_retained_slot(command, slot);
@@ -1401,9 +1288,6 @@ fn note_remat_miss(command: cranpose_render_common::graph::DrawCommandId, slot: 
     }
 }
 
-/// The ordinary path for one span of a fed run: shape entries convert in
-/// place, non-shape primitives spill loose, exactly as the unfed run loop
-/// does.
 #[cfg(not(target_arch = "wasm32"))]
 fn emit_feed_range(
     local_scene: &mut CompositorScene,
@@ -1428,8 +1312,6 @@ fn emit_feed_range(
     }
 }
 
-/// The `PrimitiveNode::Draw` arm of [`push_local_primitive`] for a primitive
-/// with no per-draw clip — the shape a [`DrawRunNode`] carries.
 fn push_loose_draw_primitive(
     local_scene: &mut CompositorScene,
     primitive: &DrawPrimitive,
@@ -1543,13 +1425,6 @@ pub(crate) fn translate_quad(quad: [[f32; 2]; 4], delta: Point) -> [[f32; 2]; 4]
 }
 
 #[allow(clippy::too_many_arguments)]
-/// The request context `render_layer_surface` will receive for every
-/// isolating child collected under `layer` — the flat child list is rendered
-/// by the surface layer's uncached body, which derives one request context
-/// from its own effective translation values and hands it to every child
-/// (`render_layer_source_uncached`'s recursion). Collecting a child's
-/// `source` with anything else would diverge from what the old render-time
-/// re-collect produced.
 pub(crate) fn derived_child_surface_context(
     layer: &LayerNode,
     translation_context: TranslationRenderContext,
@@ -1664,12 +1539,6 @@ fn collect_layer_contents_into(
         local_picture_capture_active: translation_context.local_picture_capture_active,
     };
     let mut deferred_draws: Vec<&RenderNode> = Vec::new();
-    // Consecutive plain shape draws accumulate here and emit as one batch
-    // instead of one bookkept scene push at a time. Anything else (text,
-    // images, child layers) flushes the run first so z order is exactly what
-    // the per-primitive path would have produced. Capacity is an upper bound
-    // on any run this layer can produce, so a watch-scale run never pays the
-    // doubling-realloc ladder mid-collection.
     let shape_run_bound: usize = layer
         .children
         .iter()
@@ -1752,9 +1621,6 @@ fn collect_layer_contents_into(
                         child_offset,
                         child_translated_snap_anchor,
                         child_translation_context,
-                        // The flat child list still belongs to the same
-                        // surface layer, so its render request context is
-                        // unchanged.
                         child_surface_ctx,
                         local_scene,
                         child_layers,
@@ -1770,13 +1636,6 @@ fn collect_layer_contents_into(
                     layer_snap_anchor,
                 );
                 let mut shadow_scene = CompositorScene::new();
-                // Collect the child's content ONCE, at producer time, with the
-                // exact translation context the render path used to re-collect
-                // it with: the request context every consumer passes
-                // (`child_surface_ctx`), post-transformed the way
-                // `render_layer_surface` does for a nested capture
-                // (`layer_surface_translation_context` with
-                // `activates_nested_capture` true).
                 let child_effective_translated_content_context = child_surface_ctx
                     .inherited_content_translation
                     || child_layer.translated_content_context
@@ -1794,10 +1653,6 @@ fn collect_layer_contents_into(
                         ..child_surface_ctx
                     }
                 };
-                // Mirrors the effective requirements the render body
-                // recomputes from the post-transform context; the motion hash
-                // snapshot must exist exactly when its source-cache-key
-                // decision reads it.
                 let child_motion_stable_source = effective_surface_requirements(
                     child_effective_translated_content_context,
                     child_source_ctx.surface_capture_active,
@@ -1823,12 +1678,6 @@ fn collect_layer_contents_into(
                     layer_surface_rect_cache,
                     layer_surface_requirements_cache,
                 );
-                // The per-frame rect memo may short-circuit the bounds math.
-                // On a miss the rect must match what the estimate path (a
-                // default-context collect) computes: when the source context
-                // IS the default context the source is that same collect, so
-                // derive the rect from it directly; otherwise fall back to the
-                // estimate so the memoized value stays identical.
                 let rect_cache_key = layer_cache_key(child_layer.as_ref());
                 let child_logical_rect =
                     if let Some(cached_rect) = layer_surface_rect_cache.get(&rect_cache_key) {
@@ -2020,7 +1869,6 @@ fn collect_layer_contents_into(
             RenderNode::DrawRun(run) => {
                 collect_draw_run(local_scene, run, &mut shape_run, &local_primitive_context);
             }
-            // Only primitive and run nodes are ever deferred.
             RenderNode::Layer(_) => {}
         }
     }
@@ -2121,16 +1969,6 @@ pub(crate) fn collect_layer_contents_with_capacity(
     )
 }
 
-/// Like [`collect_layer_contents_with_capacity`], but fills a scene recycled
-/// from a previous frame. A fully animated scene re-collects every primitive
-/// each frame, and its draw-op vector is megabytes — large enough that a
-/// fresh allocation goes straight to mmap and back every frame. Reusing the
-/// buffers keeps the steady-state frame allocation-free.
-/// Like [`collect_layer_contents_with_capacity`], but the caller supplies the
-/// request context its children will be rendered with (`child_surface_ctx`).
-/// The direct-root path hands its children to `render_layer_surface` with the
-/// root request context as-is, not the surface-derived one, so it must pass
-/// `translation_context` here unchanged.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn collect_layer_contents_reusing(
     layer: &LayerNode,
@@ -2165,11 +2003,6 @@ pub(crate) fn collect_layer_contents_reusing(
     }
 }
 
-/// Builds the snapshot + collected source a root-level layer needs to run the
-/// shared snapshot-consuming render body. The collect happens with the same
-/// post-transform translation context the old in-body re-collect used.
-/// Producer-side since step 6b: the caller supplies the text layout resolver
-/// and the frontend's lowering memos instead of a render backend.
 pub(crate) fn lower_layer_node(
     layer: &LayerNode,
     text_layout: &mut impl TextLayoutResolver,
@@ -2192,9 +2025,6 @@ pub(crate) fn lower_layer_node(
         layer_surface_requirements_cache,
     );
     let contains_descendant_backdrop = layer_contains_descendant_backdrop(layer);
-    // The body decides the source cache key with the effective requirements
-    // it recomputes from the post-transform context; the motion hash snapshot
-    // must exist exactly when that decision reads it.
     let effective_translated_content_context = translation_context.inherited_content_translation
         || layer.translated_content_context
         || surface_requirements.contains_translated_content;
@@ -2205,8 +2035,6 @@ pub(crate) fn lower_layer_node(
     )
     .contains(SurfaceRequirement::MotionStableCapture);
     let lowered = ChildLayerComposite {
-        // Parent-space composite fields are meaningless for a root-level
-        // surface; the body never reads them.
         z_index: 0,
         logical_rect,
         dest_quad: [[0.0; 2]; 4],
@@ -2354,8 +2182,6 @@ pub(crate) fn resolved_layer_surface_rect(layer: &LayerNode, bounds: Option<Rect
     )
 }
 
-/// [`resolved_layer_surface_rect`] over collection-time snapshots of the
-/// layer scalars it reads.
 pub(crate) fn resolved_layer_surface_rect_from_parts(
     local_bounds: Rect,
     has_effect: bool,
@@ -2396,10 +2222,6 @@ impl TranslateBy for Point {
 }
 
 impl TranslateBy for ChildLayerComposite {
-    /// Shifts the parent-space composite fields by the parent's surface
-    /// origin. `logical_rect`, `surface_clip` and the whole `source` tree are
-    /// expressed in the child's own space and must stay put — the child's
-    /// render applies its own shift when it builds its surface.
     fn translate_by(&mut self, delta: Point) {
         for point in &mut self.dest_quad {
             point[0] += delta.x;
@@ -2431,8 +2253,6 @@ impl TranslateBy for DrawShape {
             clip.translate_by(delta);
         }
         if let Some(arc) = self.arc.as_mut() {
-            // The arc center lives in the same space as `local_rect`; leaving
-            // it behind would slide the band out of its own bounding box.
             arc.center.x += delta.x;
             arc.center.y += delta.y;
         }
@@ -2533,8 +2353,6 @@ impl TranslateBy for CompositorScene {
 
 pub(crate) struct SceneWindowSource<'a> {
     pub(crate) shapes: &'a [DrawShape],
-    /// The brush table the shapes' gradient handles index — the owning
-    /// scene's `brushes`.
     pub(crate) brushes: &'a [Brush],
     pub(crate) images: &'a [ImageDraw],
     pub(crate) texts: &'a [TextDraw],
@@ -2555,9 +2373,6 @@ pub(crate) fn build_scene_window(
     window_rect: Rect,
 ) -> CompositorScene {
     let mut scene = CompositorScene::new();
-    // Windowed shapes keep their gradient handles, so the window carries the
-    // whole (gradients-only, tiny) source table — indices stay valid without
-    // remapping.
     scene.brushes.extend_from_slice(source.brushes);
     let mut shape_map = vec![None; source.shapes.len()];
     for (source_index, shape) in source.shapes.iter().enumerate() {
@@ -2608,13 +2423,6 @@ pub(crate) fn build_scene_window(
                 .copied()
                 .flatten()
                 .map(DrawOpKind::Shadow),
-            // Retained batches never appear inside windowed ranges: their
-            // quads are baked in absolute device space, and a window scene is
-            // translated into its own origin. The range chunker refuses to
-            // cache across them (`draw_op_is_motion_sensitive` is true and
-            // `scene_range_can_cache_as_transparent_surface` is false), so an
-            // op reaching here would already be a bug upstream; dropping it
-            // keeps the window's coordinates sane.
             DrawOpKind::Retained(_) => {
                 debug_assert!(false, "retained draw op inside a windowed scene range");
                 None

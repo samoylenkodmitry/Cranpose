@@ -1,14 +1,3 @@
-//! Robot test for repeated tab round-trips across restored scrollable tabs.
-//!
-//! Scenario:
-//! 1. CompositionLocal Test
-//! 2. Web Fetch
-//! 3. CompositionLocal Test
-//! 4. Web Fetch
-//! 5. Counter App
-//!
-//! Every tab must show its expected visible marker after each switch.
-
 use std::time::Duration;
 
 use cranpose::AppLauncher;

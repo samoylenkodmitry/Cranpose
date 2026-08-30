@@ -1,5 +1,3 @@
-//! Winamp skin loader for classic `.wsz` archives.
-
 use std::{
     collections::HashMap,
     io::{Cursor, Read},
@@ -8,7 +6,6 @@ use std::{
 use anyhow::{Context, Result};
 use cranpose_ui::ImageBitmap;
 
-/// Decoded sprite sheets loaded from a Winamp classic skin.
 #[derive(Clone, PartialEq)]
 pub struct WinampSkin {
     pub main: ImageBitmap,
@@ -25,7 +22,6 @@ pub struct WinampSkin {
     pub pledit: ImageBitmap,
 }
 
-/// Loads a classic Winamp skin from `.wsz` bytes.
 pub fn load_skin(wsz_bytes: &[u8]) -> Result<WinampSkin> {
     let mut archive = zip::ZipArchive::new(Cursor::new(wsz_bytes))
         .context("failed to open winamp .wsz archive")?;
@@ -78,7 +74,6 @@ fn decode_bmp(bytes: &[u8]) -> Result<ImageBitmap> {
     let dynamic = image::load_from_memory(bytes).context("image decode")?;
     let mut rgba = dynamic.to_rgba8();
 
-    // Classic Winamp skins use magenta as a transparent color key.
     for pixel in rgba.pixels_mut() {
         if pixel[0] == 255 && pixel[1] == 0 && pixel[2] == 255 {
             pixel[3] = 0;

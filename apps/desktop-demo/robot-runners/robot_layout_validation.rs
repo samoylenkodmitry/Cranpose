@@ -1,16 +1,3 @@
-//! Robot test for comprehensive layout validation in Async Runtime and Recursive Layout tabs
-//!
-//! This test dumps all semantic element bounds and validates:
-//! - No zero or negative sizes
-//! - No non-finite (NaN/Infinity) values  
-//! - No elements positioned far outside window bounds
-//! - No overlapping sibling elements (optional)
-//!
-//! Run with:
-//! ```bash
-//! cargo run --package desktop-app --example robot_layout_validation --features robot-app
-//! ```
-
 use std::time::Duration;
 
 use cranpose::{AppLauncher, SemanticElement};
@@ -104,7 +91,6 @@ fn validate_bounds(
             text.clone()
         };
 
-        // Mark elements outside viewport or with issues
         let mut markers = Vec::new();
 
         if *w <= 0.0 {
@@ -116,7 +102,6 @@ fn validate_bounds(
             markers.push("H=0");
         }
 
-        // Check if bottom edge is outside viewport
         let bottom = *y + *h;
         let right = *x + *w;
         if bottom > vh || right > vw {
@@ -130,16 +115,13 @@ fn validate_bounds(
             format!(" [{}]", markers.join(", "))
         };
 
-        // Print each element with its bounds
         println!(
             "{}[{}] \"{}\" @ ({:.1}, {:.1}) size ({:.1} x {:.1}){}",
             indent, role, text_display, x, y, w, h, marker_str
         );
 
-        // Check for issues
         let bounds = (*x, *y, *w, *h);
 
-        // Issue 1: Non-finite values
         if !x.is_finite() || !y.is_finite() || !w.is_finite() || !h.is_finite() {
             issues.push(LayoutIssue {
                 element_text: text.clone(),
@@ -149,7 +131,6 @@ fn validate_bounds(
             });
         }
 
-        // Issue 2: Zero width on content elements (not spacers)
         if *w <= 0.0 && !text.is_empty() {
             issues.push(LayoutIssue {
                 element_text: text.clone(),
@@ -159,7 +140,6 @@ fn validate_bounds(
             });
         }
 
-        // Issue 3: Zero height on content elements
         if *h <= 0.0 && !text.is_empty() {
             issues.push(LayoutIssue {
                 element_text: text.clone(),
@@ -169,8 +149,6 @@ fn validate_bounds(
             });
         }
 
-        // Issue 4: Element extends below viewport bottom (layout overflow)
-        // Skip for scrollable content like Recursive Layout
         if !skip_overflow_checks && bottom > vh + 50.0 && role == "Text" {
             issues.push(LayoutIssue {
                 element_text: text.clone(),
@@ -183,8 +161,6 @@ fn validate_bounds(
             });
         }
 
-        // Issue 5: Container larger than window (potential missing scrollable)
-        // Skip for scrollable content like Recursive Layout
         if !skip_overflow_checks && *h > vh && *w > 10.0 {
             issues.push(LayoutIssue {
                 element_text: format!("Container at depth {}", depth),
@@ -197,7 +173,6 @@ fn validate_bounds(
             });
         }
 
-        // Issue 6: Negative position (potential bug)
         if *x < -1.0 || *y < -1.0 {
             issues.push(LayoutIssue {
                 element_text: text.clone(),
@@ -206,14 +181,8 @@ fn validate_bounds(
                 bounds,
             });
         }
-
-        // Issue 7: removed - was incorrectly flagging progress bar fill element
-        // The progress bar architecture is:
-        //   Row (fill_max_width) <- outer container, should be wide
-        //     Row (fixed width) <- progress fill, should be narrow based on %
     }
 
-    // Print summary statistics
     println!("\n--- {} Statistics ---", tab_name);
     println!("  Total elements: {}", all_bounds.len());
     println!("  Zero-width elements: {}", zero_width_count);
@@ -256,7 +225,6 @@ fn main() {
                 }
             };
 
-            // ===== Test 1: Async Runtime Tab =====
             println!("\n\n######################################");
             println!("# TEST 1: ASYNC RUNTIME TAB");
             println!("######################################");
@@ -264,7 +232,6 @@ fn main() {
             if click_button("Async Runtime") {
                 std::thread::sleep(Duration::from_millis(500));
 
-                // Verify we're on the right tab
                 if find_text_in_semantics(&robot, "Async Runtime Demo").is_some() {
                     println!("✓ Navigated to Async Runtime tab");
 
@@ -287,7 +254,6 @@ fn main() {
                 println!("✗ Could not find Async Runtime tab button");
             }
 
-            // ===== Test 2: Recursive Layout Tab =====
             println!("\n\n######################################");
             println!("# TEST 2: RECURSIVE LAYOUT TAB");
             println!("######################################");
@@ -295,7 +261,6 @@ fn main() {
             if click_button("Recursive Layout") {
                 std::thread::sleep(Duration::from_millis(500));
 
-                // Verify we're on the right tab
                 if find_text_in_semantics(&robot, "Recursive Layout Playground").is_some() {
                     println!("✓ Navigated to Recursive Layout tab");
 
@@ -305,7 +270,6 @@ fn main() {
                             print_semantics_tree(elem, 0);
                         }
 
-                        // Skip overflow checks - content is in a scrollable container
                         let issues =
                             validate_bounds(&semantics, "Recursive Layout", window_bounds, true);
                         for issue in issues {
@@ -316,7 +280,6 @@ fn main() {
                     println!("✗ Failed to verify Recursive Layout tab content");
                 }
 
-                // Also test after clicking buttons
                 println!("\n--- Testing after state changes ---");
                 if click_button("Increase depth") {
                     std::thread::sleep(Duration::from_millis(300));
@@ -351,7 +314,6 @@ fn main() {
                 println!("✗ Could not find Recursive Layout tab button");
             }
 
-            // ===== Final Report =====
             println!("\n\n######################################");
             println!("# LAYOUT VALIDATION REPORT");
             println!("######################################\n");

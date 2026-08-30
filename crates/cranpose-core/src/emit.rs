@@ -122,7 +122,6 @@ impl Composer {
             return id;
         }
 
-        // Type mismatch, stale generation, or no node: create new node
         let (id, generation) = {
             let mut applier = self.borrow_applier();
             let emitted = make_node(&mut *applier);
@@ -237,11 +236,6 @@ impl Composer {
         id: NodeId,
         force_reparent_current_parent: bool,
     ) {
-        // IMPORTANT: Check parent_stack FIRST.
-        // During subcomposition, if there's an active parent (e.g., Row),
-        // child nodes (e.g., Text) should attach to that parent, NOT to the
-        // subcompose frame. Only ROOT nodes (nodes with no active parent)
-        // should be added to the subcompose frame.
         let mut parent_stack = self.parent_stack();
         if let Some(parent_id) = parent_stack.last().map(|frame| frame.id) {
             let stale_root_parent = self.core.root.get() == Some(parent_id) && {
@@ -264,31 +258,16 @@ impl Composer {
                 }
                 drop(parent_stack);
 
-                // KEY FIX: Set parent link IMMEDIATELY, matching Jetpack Compose's
-                // LayoutNode.insertAt pattern where _foldedParent is set synchronously.
-                // This ensures that when bubble_measure_dirty runs (in commands),
-                // the parent chain is already established.
-                //
-                // IMPORTANT: Only set parent if node doesn't have one or if the new parent
-                // is not the root. This prevents double-recomposition scenarios where a
-                // child scope (invalidated by CompositionLocalProvider during parent's
-                // recomposition) gets processed again with parent_stack=[root], which would
-                // incorrectly reparent nodes to root.
                 {
                     let mut applier = self.borrow_applier();
                     if let Ok(child_node) = applier.get_mut(id) {
                         let existing_parent = child_node.parent();
-                        // Only set parent if:
-                        // 1. Node has no parent, OR
-                        // 2. New parent is NOT the root (parent_id != 0 or != self.root)
-                        // This prevents root from stealing children that belong to intermediate nodes.
                         let should_set = if force_reparent_current_parent {
                             existing_parent != Some(parent_id)
                         } else {
                             match existing_parent {
                                 None => true,
                                 Some(existing) => {
-                                    // Don't let root steal children from proper parents
                                     let root_id = self.core.root.get();
                                     parent_id != root_id.unwrap_or(0)
                                         || existing == root_id.unwrap_or(0)
@@ -312,12 +291,8 @@ impl Composer {
         }
         drop(parent_stack);
 
-        // No active parent - check if we're in subcompose
         let in_subcompose = !self.subcompose_stack().is_empty();
         if in_subcompose {
-            // During subcompose, only add ROOT nodes (nodes without a parent).
-            // Child nodes already have their parent-child relationship from composition;
-            // re-adding them to the subcompose frame would cause duplication.
             let has_parent = {
                 let mut applier = self.borrow_applier();
                 applier
@@ -335,7 +310,6 @@ impl Composer {
             return;
         }
 
-        // During recomposition, preserve the original parent when possible.
         if let Some(parent_hint) = self.core.recompose_parent_hint.get() {
             if parent_hint == id {
                 debug_assert_ne!(
@@ -365,10 +339,6 @@ impl Composer {
             return;
         }
 
-        // Neither parent nor subcompose - check if this node already has a parent.
-        // During recomposition, reused nodes already have their correct parent from
-        // initial composition. We should NOT set them as root, as that would corrupt
-        // the tree structure and cause duplication.
         let has_parent = {
             let mut applier = self.borrow_applier();
             applier
@@ -377,11 +347,9 @@ impl Composer {
                 .unwrap_or(false)
         };
         if has_parent {
-            // Node already has a parent, nothing to do
             return;
         }
 
-        // Node has no parent and is not in subcompose - must be root
         self.set_root(Some(id));
     }
 
@@ -406,9 +374,6 @@ impl Composer {
         let reused = self.core.last_node_reused.take().unwrap_or(true);
         let in_subcompose = !self.core.subcompose_stack.borrow().is_empty();
 
-        // Fresh parents usually append children directly, but a restored or otherwise
-        // non-reused node can still carry attached children in the applier. In that case
-        // we must diff against the live child list or stale descendants remain mounted.
         let mut previous = ChildList::new();
         if reused || in_subcompose {
             previous.extend(self.get_node_children(id));

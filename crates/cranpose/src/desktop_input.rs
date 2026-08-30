@@ -1,6 +1,3 @@
-//! Winit → framework input translation shared by every desktop shell
-//! (the wgpu shell and the slim Vulkan shell).
-
 use cranpose_app_shell::AppShell;
 
 pub(crate) fn dispatch_keyboard_input<R>(

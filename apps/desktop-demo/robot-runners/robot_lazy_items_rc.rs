@@ -1,12 +1,3 @@
-//! Robot test for LazyList items_slice_rc and items_indexed_rc methods.
-//!
-//! Validates that zero-copy Rc-based item APIs render correctly.
-//!
-//! Run with:
-//! ```bash
-//! cargo run --package desktop-app --example robot_lazy_items_rc --features robot-app
-//! ```
-
 use std::{rc::Rc, time::Duration};
 
 use cranpose::AppLauncher;
@@ -18,14 +9,12 @@ use cranpose_ui::{
     VerticalAlignment,
 };
 
-/// Test data struct to verify complex types work with Rc
 #[derive(Clone, Debug, PartialEq)]
 struct TestItem {
     id: usize,
     name: String,
 }
 
-/// LazyList using items_slice_rc (zero-copy Rc API)
 fn lazy_list_with_rc(state: LazyListState, data: Rc<[TestItem]>) {
     LazyColumn(
         Modifier::empty()
@@ -38,7 +27,6 @@ fn lazy_list_with_rc(state: LazyListState, data: Rc<[TestItem]>) {
             .vertical_arrangement(LinearArrangement::SpacedBy(4.0))
             .content_padding(8.0, 8.0),
         |scope| {
-            // Use items_slice_rc - should NOT clone the data
             scope.items_slice_rc(data, |item| {
                 rc_item_content(item);
             });
@@ -46,7 +34,6 @@ fn lazy_list_with_rc(state: LazyListState, data: Rc<[TestItem]>) {
     );
 }
 
-/// LazyList using items_indexed_rc (zero-copy Rc API with index)
 fn lazy_list_with_indexed_rc(state: LazyListState, data: Rc<[TestItem]>) {
     LazyColumn(
         Modifier::empty()
@@ -59,7 +46,6 @@ fn lazy_list_with_indexed_rc(state: LazyListState, data: Rc<[TestItem]>) {
             .vertical_arrangement(LinearArrangement::SpacedBy(4.0))
             .content_padding(8.0, 8.0),
         |scope| {
-            // Use items_indexed_rc - should NOT clone the data
             scope.items_indexed_rc(data, |index, item| {
                 indexed_rc_item_content(index, item);
             });
@@ -67,7 +53,6 @@ fn lazy_list_with_indexed_rc(state: LazyListState, data: Rc<[TestItem]>) {
     );
 }
 
-/// Non-composable item content - clones data upfront for 'static closure
 fn rc_item_content(item: &TestItem) {
     let id = item.id;
     let name = item.name.clone();
@@ -98,7 +83,6 @@ fn rc_item_content(item: &TestItem) {
     );
 }
 
-/// Non-composable indexed item content
 fn indexed_rc_item_content(index: usize, item: &TestItem) {
     let id = item.id;
     let name = item.name.clone();
@@ -131,7 +115,6 @@ fn indexed_rc_item_content(index: usize, item: &TestItem) {
 
 #[composable]
 fn rc_items_test_app() {
-    // Create test data once and wrap in Rc
     let data: Rc<[TestItem]> = Rc::from(
         (0..15)
             .map(|i| TestItem {
@@ -192,7 +175,6 @@ fn main() {
 
             let mut errors = Vec::new();
 
-            // Step 1: Verify title
             println!("\n--- Step 1: Verify app loaded ---");
             if find_text_in_semantics(&robot, "LazyList Rc Items Test").is_some() {
                 println!("  ✓ Title found");
@@ -201,7 +183,6 @@ fn main() {
                 errors.push("Title not found");
             }
 
-            // Step 2: Verify items_slice_rc items
             println!("\n--- Step 2: Verify items_slice_rc items ---");
             let mut rc_items_found = 0;
             for i in 0..10 {
@@ -224,7 +205,6 @@ fn main() {
                 );
             }
 
-            // Step 3: Verify items_indexed_rc items
             println!("\n--- Step 3: Verify items_indexed_rc items ---");
             let mut indexed_items_found = 0;
             for i in 0..10 {
@@ -247,7 +227,6 @@ fn main() {
                 );
             }
 
-            // Step 4: Verify item names rendered (proves data access works)
             println!("\n--- Step 4: Verify item data access ---");
             let mut name_found = false;
             for i in 0..5 {
@@ -263,7 +242,6 @@ fn main() {
                 println!("  ✗ No item names found!");
             }
 
-            // Step 5: Scroll test for items_slice_rc list
             println!("\n--- Step 5: Scroll test ---");
             if let Some((x, y, w, h)) = find_text_in_semantics(&robot, "RcItem #0") {
                 robot
@@ -277,7 +255,6 @@ fn main() {
                 std::thread::sleep(Duration::from_millis(200));
                 let _ = robot.wait_for_idle();
 
-                // Check if new items appeared
                 let mut new_items_found = false;
                 for i in 5..10 {
                     let item_text = format!("RcItem #{}", i);
@@ -294,7 +271,6 @@ fn main() {
                 }
             }
 
-            // Summary
             println!("\n=== SUMMARY ===");
             if errors.is_empty() {
                 println!("✓ All Rc-based item tests PASSED!");

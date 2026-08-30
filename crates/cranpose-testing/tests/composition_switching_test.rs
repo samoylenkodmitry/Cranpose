@@ -1,17 +1,10 @@
-//! Tests for composition switching bug
-//!
-//! This test reproduces a bug where switching between different composable views
-//! and clicking buttons causes content to be appended multiple times.
-
 use cranpose_core::{CompositionLocalProvider, MutableState, compositionLocalOf};
 use cranpose_macros::composable;
 use cranpose_testing::ComposeTestRule;
 use cranpose_ui::*;
 
-/// Helper to create a simple composable that tracks how many times it's rendered
 #[composable]
 fn counter_view(counter: MutableState<i32>, render_count: MutableState<i32>) {
-    // Track render count
     render_count.set(render_count.get() + 1);
 
     Column(
@@ -44,10 +37,8 @@ fn counter_view(counter: MutableState<i32>, render_count: MutableState<i32>) {
     );
 }
 
-/// Helper for an alternative view
 #[composable]
 fn alternative_view(counter: MutableState<i32>, render_count: MutableState<i32>) {
-    // Track render count
     render_count.set(render_count.get() + 1);
 
     Column(
@@ -76,7 +67,6 @@ fn alternative_view(counter: MutableState<i32>, render_count: MutableState<i32>)
     );
 }
 
-/// Combined app that switches between views
 #[composable]
 fn combined_switching_app(
     show_counter: MutableState<bool>,
@@ -97,7 +87,6 @@ fn combined_switching_app(
             let render_count1_inner = render_count1;
             let render_count2_inner = render_count2;
 
-            // Switch buttons
             Row(
                 Modifier::empty().padding(8.0),
                 RowSpec::default(),
@@ -150,7 +139,6 @@ fn combined_switching_app(
                 height: 12.0,
             });
 
-            // Conditionally show one view or the other
             if show_counter_inner.get() {
                 counter_view(counter1_inner, render_count1_inner);
             } else {
@@ -174,7 +162,6 @@ fn test_switching_between_views_doesnt_duplicate_content() {
     let render_count1 = MutableState::with_runtime(0, runtime.clone());
     let render_count2 = MutableState::with_runtime(0, runtime.clone());
 
-    // Initial render - show counter view
     rule.set_content({
         move || {
             combined_switching_app(
@@ -202,7 +189,6 @@ fn test_switching_between_views_doesnt_duplicate_content() {
         "Alternative view should not render initially"
     );
 
-    // Switch to alternative view
     show_counter.set(false);
     rule.pump_until_idle().expect("recompose after switching");
 
@@ -220,7 +206,6 @@ fn test_switching_between_views_doesnt_duplicate_content() {
         "Alternative view should render once"
     );
 
-    // Switch back to counter view
     show_counter.set(true);
     rule.pump_until_idle()
         .expect("recompose after switching back");
@@ -235,7 +220,6 @@ fn test_switching_between_views_doesnt_duplicate_content() {
         render_count1.get()
     );
 
-    // The bug: if content is being duplicated, node count will grow
     assert_eq!(
         after_switch_back_node_count, initial_node_count,
         "Node count should return to initial value after switching back"
@@ -246,7 +230,6 @@ fn test_switching_between_views_doesnt_duplicate_content() {
         "Switching back should not re-render the alternative view"
     );
 
-    // Click increment button twice in counter view
     counter1.set(1);
     rule.pump_until_idle()
         .expect("recompose after first increment");
@@ -259,7 +242,6 @@ fn test_switching_between_views_doesnt_duplicate_content() {
     let after_second_click = rule.applier_mut().len();
     println!("After second increment node count: {}", after_second_click);
 
-    // Node count should remain stable
     assert_eq!(
         after_first_click, after_switch_back_node_count,
         "Node count should not change on first increment"
@@ -269,14 +251,12 @@ fn test_switching_between_views_doesnt_duplicate_content() {
         "Node count should not change on second increment"
     );
 
-    // Switch to alternative view again
     show_counter.set(false);
     rule.pump_until_idle()
         .expect("recompose after switching to alternative");
     let after_second_switch = rule.applier_mut().len();
     println!("After second switch node count: {}", after_second_switch);
 
-    // Click increment button twice in alternative view
     counter2.set(1);
     rule.pump_until_idle().expect("recompose after first add");
     let after_first_add = rule.applier_mut().len();
@@ -287,7 +267,6 @@ fn test_switching_between_views_doesnt_duplicate_content() {
     let after_second_add = rule.applier_mut().len();
     println!("After second add node count: {}", after_second_add);
 
-    // Node count should remain stable
     assert_eq!(
         after_first_add, after_second_switch,
         "Node count should not change on first add"
@@ -297,7 +276,6 @@ fn test_switching_between_views_doesnt_duplicate_content() {
         "Node count should not change on second add"
     );
 
-    // Final check: switch back and verify no duplication
     show_counter.set(true);
     rule.pump_until_idle().expect("final recompose");
     let final_node_count = rule.applier_mut().len();
@@ -327,12 +305,10 @@ fn test_node_cleanup_on_view_switch() {
                 ColumnSpec::default(),
                 move || {
                     if show_first_inner.get() {
-                        // First view with 3 text nodes
                         Text("First A", Modifier::empty(), TextStyle::default());
                         Text("First B", Modifier::empty(), TextStyle::default());
                         Text("First C", Modifier::empty(), TextStyle::default());
                     } else {
-                        // Second view with 2 text nodes
                         Text("Second A", Modifier::empty(), TextStyle::default());
                         Text("Second B", Modifier::empty(), TextStyle::default());
                     }
@@ -342,21 +318,17 @@ fn test_node_cleanup_on_view_switch() {
     })
     .expect("initial render succeeds");
 
-    // Count nodes: 1 Column + 3 Text = 4
     let initial_count = rule.applier_mut().len();
     println!("Initial node count (first view): {}", initial_count);
     assert_eq!(initial_count, 4, "Should have Column + 3 Text nodes");
 
-    // Switch to second view
     show_first.set(false);
     rule.pump_until_idle().expect("recompose after switch");
 
-    // Count nodes: 1 Column + 2 Text = 3
     let after_switch = rule.applier_mut().len();
     println!("Node count after switch (second view): {}", after_switch);
     assert_eq!(after_switch, 3, "Should have Column + 2 Text nodes");
 
-    // Switch back to first view
     show_first.set(true);
     rule.pump_until_idle().expect("recompose after switch back");
 
@@ -370,7 +342,6 @@ fn test_node_cleanup_on_view_switch() {
         "Should return to initial node count"
     );
 
-    // Multiple rapid switches
     for i in 0..5 {
         show_first.set(i % 2 == 0);
         rule.pump_until_idle()
@@ -446,18 +417,8 @@ fn test_multiple_switches_with_state_changes() {
     let baseline_count = rule.applier_mut().len();
     println!("Baseline node count: {}", baseline_count);
 
-    // Reproduce the exact scenario from the bug report:
-    // 1. Start in View A (Counter APP)
-    // 2. Switch to View B (CompositionLocal Test)
-    // 3. Click button in View B twice
-    // 4. Switch back to View A
-    // 5. Click button in View A twice
-    // Expected: No node duplication at any point
-
-    // Step 1: We're already in View A
     assert_eq!(counter_a.get(), 0);
 
-    // Step 2: Switch to View B
     show_view_a.set(false);
     rule.pump_until_idle().expect("switch to view B");
     let after_switch_to_b = rule.applier_mut().len();
@@ -467,7 +428,6 @@ fn test_multiple_switches_with_state_changes() {
         "Node count should be same (both views have same structure)"
     );
 
-    // Step 3: Click button twice in View B
     counter_b.set(counter_b.get() + 1);
     rule.pump_until_idle().expect("first click in view B");
     let after_first_click_b = rule.applier_mut().len();
@@ -480,13 +440,11 @@ fn test_multiple_switches_with_state_changes() {
     println!("After second click in View B: {}", after_second_click_b);
     assert_eq!(counter_b.get(), 2);
 
-    // This is where the bug might manifest - content appended twice
     assert_eq!(
         after_second_click_b, baseline_count,
         "BUG: Content should not be duplicated after two clicks in View B"
     );
 
-    // Step 4: Switch back to View A
     show_view_a.set(true);
     rule.pump_until_idle().expect("switch back to view A");
     let after_switch_to_a = rule.applier_mut().len();
@@ -496,7 +454,6 @@ fn test_multiple_switches_with_state_changes() {
         "Node count should return to baseline after switching back"
     );
 
-    // Step 5: Click button twice in View A
     counter_a.set(counter_a.get() + 1);
     rule.pump_until_idle().expect("first click in view A");
     let after_first_click_a = rule.applier_mut().len();
@@ -509,7 +466,6 @@ fn test_multiple_switches_with_state_changes() {
     println!("After second click in View A: {}", after_second_click_a);
     assert_eq!(counter_a.get(), 2);
 
-    // Final verification: no duplication
     assert_eq!(
         after_second_click_a, baseline_count,
         "BUG: Content should not be duplicated after two clicks in View A"
@@ -550,11 +506,9 @@ fn test_deeply_nested_conditional_switching() {
     })
     .expect("initial render succeeds");
 
-    // Initial: outer=true, inner=true -> 1 root + 1 nested column + 2 texts = 4
     let initial = rule.applier_mut().len();
     assert_eq!(initial, 4, "Should have nested structure");
 
-    // Switch inner: outer=true, inner=false -> 1 root + 1 nested column + 1 text = 3
     show_inner.set(false);
     rule.pump_until_idle().expect("switch inner");
     let after_inner_switch = rule.applier_mut().len();
@@ -563,13 +517,11 @@ fn test_deeply_nested_conditional_switching() {
         "Should have fewer nodes after inner switch"
     );
 
-    // Switch outer: outer=false -> 1 root + 1 text = 2
     show_outer.set(false);
     rule.pump_until_idle().expect("switch outer");
     let after_outer_switch = rule.applier_mut().len();
     assert_eq!(after_outer_switch, 2, "Should have minimal nodes");
 
-    // Switch back to initial state
     show_outer.set(true);
     show_inner.set(true);
     rule.pump_until_idle().expect("restore initial");
@@ -590,20 +542,19 @@ fn test_switching_with_different_node_counts() {
     rule.set_content({
         move || {
             let view_type_inner = view_type;
-            Column(Modifier::empty(), ColumnSpec::default(), move || {
-                match view_type_inner.get() {
+            Column(
+                Modifier::empty(),
+                ColumnSpec::default(),
+                move || match view_type_inner.get() {
                     0 => {
-                        // View with 1 node
                         Text("Single", Modifier::empty(), TextStyle::default());
                     }
                     1 => {
-                        // View with 3 nodes
                         Text("Triple 1", Modifier::empty(), TextStyle::default());
                         Text("Triple 2", Modifier::empty(), TextStyle::default());
                         Text("Triple 3", Modifier::empty(), TextStyle::default());
                     }
                     2 => {
-                        // View with 5 nodes including nested structure
                         Column(Modifier::empty(), ColumnSpec::default(), || {
                             Text("Nested 1", Modifier::empty(), TextStyle::default());
                             Text("Nested 2", Modifier::empty(), TextStyle::default());
@@ -611,35 +562,30 @@ fn test_switching_with_different_node_counts() {
                         Text("Extra", Modifier::empty(), TextStyle::default());
                     }
                     _ => {}
-                }
-            });
+                },
+            );
         }
     })
     .expect("initial render succeeds");
 
-    // View 0: 1 root + 1 text = 2
     let count0 = rule.applier_mut().len();
     assert_eq!(count0, 2);
 
-    // Switch to View 1: 1 root + 3 texts = 4
     view_type.set(1);
     rule.pump_until_idle().expect("switch to view 1");
     let count1 = rule.applier_mut().len();
     assert_eq!(count1, 4);
 
-    // Switch to View 2: 1 root + 1 nested column + 2 texts + 1 extra text = 5
     view_type.set(2);
     rule.pump_until_idle().expect("switch to view 2");
     let count2 = rule.applier_mut().len();
     assert_eq!(count2, 5);
 
-    // Switch back to View 0
     view_type.set(0);
     rule.pump_until_idle().expect("switch back to view 0");
     let count0_again = rule.applier_mut().len();
     assert_eq!(count0_again, count0, "Should return to original count");
 
-    // Cycle through all views multiple times
     for _ in 0..3 {
         view_type.set(1);
         rule.pump_until_idle().expect("cycle: view 1");
@@ -672,7 +618,6 @@ fn test_conditional_with_complex_button_structure() {
             let counter_inner = counter;
             Column(Modifier::empty(), ColumnSpec::default(), move || {
                 if show_first_inner.get() {
-                    // Complex structure with nested buttons
                     Column(Modifier::empty(), ColumnSpec::default(), {
                         let counter = counter_inner;
                         move || {
@@ -696,7 +641,6 @@ fn test_conditional_with_complex_button_structure() {
                         }
                     });
                 } else {
-                    // Different structure
                     Text("Second View", Modifier::empty(), TextStyle::default());
                     Button(
                         Modifier::empty(),
@@ -715,13 +659,10 @@ fn test_conditional_with_complex_button_structure() {
     })
     .expect("initial render succeeds");
 
-    // First view: 1 root + 1 nested column + 1 text + 2 buttons (each with 1 text child) = 7
-    // (root Column, nested Column, Text, Button1, Button1's Text, Button2, Button2's Text)
     let initial = rule.applier_mut().len();
     println!("Initial node count: {}", initial);
     assert_eq!(initial, 7);
 
-    // Interact with first view
     counter.set(5);
     rule.pump_until_idle().expect("update counter");
     assert_eq!(
@@ -730,13 +671,11 @@ fn test_conditional_with_complex_button_structure() {
         "Node count stable after state change"
     );
 
-    // Switch to second view: 1 root + 1 text + 1 button (with 1 text child) = 4
     show_first.set(false);
     rule.pump_until_idle().expect("switch to second");
     let after_switch = rule.applier_mut().len();
     assert_eq!(after_switch, 4);
 
-    // Interact with second view
     counter.set(3);
     rule.pump_until_idle()
         .expect("update counter in second view");
@@ -746,7 +685,6 @@ fn test_conditional_with_complex_button_structure() {
         "Node count stable in second view"
     );
 
-    // Switch back to first view
     show_first.set(true);
     rule.pump_until_idle().expect("switch back to first");
     let restored = rule.applier_mut().len();
@@ -761,8 +699,6 @@ fn test_clicking_same_switch_button_twice_no_duplication() {
     let _app_context = cranpose_ui::AppContext::new();
     let _app_context_scope = _app_context.enter_scope();
     _app_context.enter(cranpose_ui::reset_render_state_for_tests);
-    // This test reproduces the bug where clicking the "CompositionLocal Test" button
-    // twice causes content duplication
     let mut rule = ComposeTestRule::new();
     let runtime = rule.runtime_handle();
 
@@ -773,7 +709,6 @@ fn test_clicking_same_switch_button_twice_no_duplication() {
             let show_counter_copy = show_counter;
             let show_counter_for_button = show_counter;
             Column(Modifier::empty(), ColumnSpec::default(), move || {
-                // Row with switching buttons
                 Row(Modifier::empty(), RowSpec::default(), {
                     let show_counter = show_counter_for_button;
                     move || {
@@ -804,7 +739,6 @@ fn test_clicking_same_switch_button_twice_no_duplication() {
                     }
                 });
 
-                // Conditional content
                 if show_counter_copy.get() {
                     Column(Modifier::empty(), ColumnSpec::default(), || {
                         Text("Counter View", Modifier::empty(), TextStyle::default());
@@ -826,12 +760,9 @@ fn test_clicking_same_switch_button_twice_no_duplication() {
     })
     .expect("initial render succeeds");
 
-    // Initial: root Column + Row with 2 Buttons (each with 1 Text) + nested Column + 2 Texts
-    // = 1 + 1 + 2 + 2 + 1 + 2 = 9
     let initial = rule.applier_mut().len();
     println!("Initial node count (Counter View): {}", initial);
 
-    // Click "CompositionLocal Test" button once
     show_counter.set(false);
     rule.pump_until_idle()
         .expect("first switch to composition local");
@@ -840,13 +771,11 @@ fn test_clicking_same_switch_button_twice_no_duplication() {
         "After first click to CompositionLocal: {}",
         after_first_click
     );
-    // Should be: 1 + 1 + 2 + 2 + 1 + 3 = 10
     assert_eq!(
         after_first_click, 10,
         "Node count changes due to different content"
     );
 
-    // Click "CompositionLocal Test" button AGAIN (should be no-op since already showing that view)
     show_counter.set(false);
     rule.pump_until_idle()
         .expect("second click on composition local");
@@ -858,13 +787,11 @@ fn test_clicking_same_switch_button_twice_no_duplication() {
     println!("\n=== Tree structure after second click ===");
     println!("{}", rule.dump_tree());
 
-    // BUG: This is where duplication might happen
     assert_eq!(
         after_second_click, after_first_click,
         "BUG: Clicking the same button twice should not duplicate content"
     );
 
-    // Switch to Counter App
     show_counter.set(true);
     rule.pump_until_idle().expect("switch to counter app");
     let after_switch_to_counter = rule.applier_mut().len();
@@ -874,7 +801,6 @@ fn test_clicking_same_switch_button_twice_no_duplication() {
         "Should return to initial count"
     );
 
-    // Click Counter App button again
     show_counter.set(true);
     rule.pump_until_idle().expect("second click on counter app");
     let after_second_counter_click = rule.applier_mut().len();

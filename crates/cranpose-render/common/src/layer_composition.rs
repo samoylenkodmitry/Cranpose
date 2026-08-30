@@ -19,22 +19,12 @@ pub fn layer_requires_isolation(layer: &GraphicsLayer) -> bool {
 
 fn isolation_composite_alpha(layer: &GraphicsLayer) -> f32 {
     if layer.compositing_strategy == CompositingStrategy::ModulateAlpha {
-        // The float-fold branch, which HWUI takes when nothing overlaps: the
-        // alpha never becomes a byte there, so nothing to snap.
         1.0
     } else {
         GraphicsLayer::composite_alpha_8bit(layer.alpha)
     }
 }
 
-/// The alpha a layer's own contents carry when the backend has no offscreen to
-/// isolate them in and folds the layer's alpha into them instead.
-///
-/// Folding is an approximation — it fades a subtree's overlapping parts
-/// separately where a real layer fades the composited result — but the alpha
-/// it folds is not a matter of taste: for a layer that would have been
-/// isolated it is the composite's byte, so the two backends land on the same
-/// pixel wherever the approximation is exact at all.
 fn folded_layer_alpha(layer: &GraphicsLayer) -> f32 {
     if layer.compositing_strategy != CompositingStrategy::ModulateAlpha
         && layer_requires_isolation(layer)
@@ -112,7 +102,6 @@ mod tests {
         };
         let isolation = effective_layer_isolation(&layer).expect("expected isolation");
         assert!(isolation.effect.is_none());
-        // A half composites at 127/255, not at a half: `(int)(0.5f * 255)`.
         assert!((isolation.composite_alpha - 127.0 / 255.0).abs() < 1e-6);
 
         let content = layer_for_content(&layer, Some(&isolation));
@@ -121,9 +110,6 @@ mod tests {
 
     #[test]
     fn a_backend_without_an_offscreen_folds_the_composites_byte_not_the_float() {
-        // The software path has no offscreen, so it folds the layer's alpha
-        // into the contents. What it folds has to be the alpha the isolating
-        // path composites at, or the two backends part company by a level.
         let layer = GraphicsLayer {
             alpha: 0.88,
             compositing_strategy: CompositingStrategy::Auto,
@@ -134,8 +120,6 @@ mod tests {
         assert!((folded.alpha - composite_alpha).abs() < 1e-6);
         assert!((folded.alpha - 224.0 / 255.0).abs() < 1e-6);
 
-        // A layer that names ModulateAlpha is asking for the float fold, which
-        // is the branch HWUI takes when nothing overlaps, so it keeps it.
         let modulated = GraphicsLayer {
             alpha: 0.88,
             compositing_strategy: CompositingStrategy::ModulateAlpha,

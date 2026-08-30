@@ -217,7 +217,6 @@ mod tests {
 
     #[test]
     fn a_segment_shorter_than_its_stroke_becomes_a_dot() {
-        // The thumb pinned to the very top leaves nothing above it.
         let primitives = scene(
             IndicatorGeometry {
                 thumb: 0.7,
@@ -225,8 +224,6 @@ mod tests {
             },
             1.0,
         );
-        // The leading track has zero sweep and draws nothing at all; what is
-        // left is the thumb and the trailing track.
         assert_eq!(primitives.len(), 2);
     }
 

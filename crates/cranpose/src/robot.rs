@@ -1,13 +1,3 @@
-//! Renderer-agnostic robot testing harness shared by the desktop shells.
-//!
-//! The [`Robot`] handle, its command/response protocol, the semantic-tree
-//! extraction, and the screenshot payload live here so both the wgpu desktop
-//! shell (`desktop.rs`) and the slim Vulkan desktop shell (`desktop_slim.rs`)
-//! drive the exact same test surface. Each shell owns the event-loop side of
-//! the channel and translates commands against its own presentation model; the
-//! renderer-neutral pieces are gathered in this module to avoid duplicating the
-//! protocol per shell.
-
 use std::{
     any::Any,
     collections::HashMap,
@@ -123,7 +113,6 @@ pub struct RobotTimelineStep {
     pub capture: bool,
 }
 
-/// Robot command for controlling the application
 #[derive(Debug)]
 pub(crate) enum RobotCommand {
     Click {
@@ -170,7 +159,7 @@ pub(crate) enum RobotCommand {
         source: PointerSource,
     },
     TypeText(String),
-    SendKey(String), // Key code like "Up", "Down", "Home", "End", "Return", "a", etc.
+    SendKey(String),
     SendKeyWithModifiers {
         key: String,
         shift: bool,
@@ -194,19 +183,10 @@ pub(crate) enum RobotCommand {
     },
     GetScreenshot,
     GetScreenshotWithScale(f32),
-    /// Keyframe a live transition: advance the animation clock by EXACT
-    /// intervals — wall-time independent — capturing after each step that
-    /// asks for one. The whole sequence runs atomically inside one command:
-    /// the headless loop free-runs and captures stall unpredictably, so
-    /// wall-clock sleeps cannot sample a ~55 ms transition honestly.
     CaptureKeyframes {
         scale: f32,
-        /// `(advance_ms, capture)` per step; a 0 ms first step processes
-        /// pending input (starting e.g. a release-triggered transition)
-        /// without advancing the clock.
         steps: Vec<(f32, bool)>,
     },
-    /// Atomically advance an exact clock, inject ordered input, and capture.
     CaptureInteractionKeyframes {
         scale: f32,
         steps: Vec<RobotTimelineStep>,
@@ -236,7 +216,6 @@ pub(crate) enum RobotCommand {
     Exit,
 }
 
-/// Robot response
 #[derive(Debug)]
 pub(crate) enum RobotResponse {
     Ok,
@@ -259,8 +238,6 @@ pub(crate) enum RobotResponse {
     Error(String),
 }
 
-/// Event-loop side of the robot channel: the shell receives commands on `rx`
-/// and answers on `tx`. Created together with its paired [`Robot`] handle.
 pub(crate) struct RobotChannel {
     pub(crate) rx: mpsc::Receiver<RobotCommand>,
     pub(crate) tx: mpsc::Sender<RobotResponse>,
@@ -288,15 +265,6 @@ impl RobotChannel {
     }
 }
 
-/// The driver's end of the command channel, which wakes the event loop for
-/// every command it sends.
-///
-/// Commands are drained by the shell on its way into a wait, so a command sent
-/// while the loop is parked would sit in the channel until something else
-/// happened to wake it. The alternative -- keeping the loop spinning for as
-/// long as a robot is attached -- makes a driven run free-run regardless of the
-/// app's pacing mode, and any frame rate a robot test reads is then the
-/// harness's, not the app's.
 #[derive(Clone)]
 pub(crate) struct RobotCommandSender {
     tx: mpsc::Sender<RobotCommand>,
@@ -557,7 +525,6 @@ impl Robot {
     /// robot.drag(400.0, 200.0, 100.0, 200.0)?;
     /// ```
     pub fn drag(&self, from_x: f32, from_y: f32, to_x: f32, to_y: f32) -> Result<(), String> {
-        // Touch down at start position
         self.tx
             .send(RobotCommand::TouchDown {
                 x: from_x,
@@ -572,7 +539,6 @@ impl Robot {
             Err(e) => return Err(format!("Failed to receive response: {}", e)),
         }
 
-        // Move in steps to simulate smooth drag
         let steps = 10;
         for i in 1..=steps {
             let t = i as f32 / steps as f32;
@@ -594,7 +560,6 @@ impl Robot {
             }
         }
 
-        // Touch up at end position
         self.tx
             .send(RobotCommand::TouchUp {
                 x: to_x,
@@ -1231,13 +1196,9 @@ impl Robot {
         text: &str,
     ) -> Option<&'a SemanticElement> {
         for elem in elements {
-            if elem.clickable {
-                // Check if this clickable element or its children have the text
-                if Self::contains_text(elem, text) {
-                    return Some(elem);
-                }
+            if elem.clickable && Self::contains_text(elem, text) {
+                return Some(elem);
             }
-            // Recurse into children
             if let Some(found) = Self::find_button(&elem.children, text) {
                 return Some(found);
             }
@@ -1245,15 +1206,12 @@ impl Robot {
         None
     }
 
-    /// Helper: check if element or any descendants contain text
     fn contains_text(elem: &SemanticElement, text: &str) -> bool {
-        // Check element itself
         if let Some(elem_text) = &elem.text
             && elem_text.contains(text)
         {
             return true;
         }
-        // Check children recursively
         for child in &elem.children {
             if Self::contains_text(child, text) {
                 return true;
@@ -1314,8 +1272,6 @@ impl Robot {
         log::info!(target: "cranpose::robot::semantics", "\n{report}");
     }
 
-    /// Clone of the command channel. Shells use this to surface a panicking
-    /// test driver back into the event loop as a `DriverPanicked` command.
     pub(crate) fn command_sender(&self) -> RobotCommandSender {
         self.tx.clone()
     }
@@ -1354,7 +1310,6 @@ impl Robot {
     }
 }
 
-/// Format the payload of a caught test-driver panic into a readable message.
 pub(crate) fn panic_payload_message(payload: Box<dyn Any + Send>) -> String {
     if let Some(message) = payload.downcast_ref::<&'static str>() {
         (*message).to_string()
@@ -1365,10 +1320,6 @@ pub(crate) fn panic_payload_message(payload: Box<dyn Any + Send>) -> String {
     }
 }
 
-/// Whether `wait_for_idle` may finish while a continuous animation keeps the
-/// shell producing frames. Robot idle waits must not hang on infinite
-/// animation loops once the structure has settled and at least one clean
-/// visual frame has been observed.
 pub(crate) fn robot_wait_for_idle_animation_loop_only(
     has_active_animations: bool,
     has_transient_frame_callbacks: bool,
@@ -1383,25 +1334,19 @@ pub(crate) fn robot_wait_for_idle_animation_loop_only(
         && idle_structure_clean_frames > 0
 }
 
-/// Map a robot key name (e.g. "Up", "Return", "a") to a shell `KeyCode` and
-/// the character text it produces. Shared by every shell so synthetic key
-/// events behave identically across renderers.
 pub(crate) fn robot_key_code_and_text(key: &str) -> (KeyCode, String) {
     match key {
-        // Navigation keys
         "Up" => (KeyCode::ArrowUp, String::new()),
         "Down" => (KeyCode::ArrowDown, String::new()),
         "Left" => (KeyCode::ArrowLeft, String::new()),
         "Right" => (KeyCode::ArrowRight, String::new()),
         "Home" => (KeyCode::Home, String::new()),
         "End" => (KeyCode::End, String::new()),
-        // Editing keys
         "Return" => (KeyCode::Enter, String::from("\n")),
         "BackSpace" => (KeyCode::Backspace, String::new()),
         "Delete" => (KeyCode::Delete, String::new()),
         "Tab" => (KeyCode::Tab, String::from("\t")),
         "space" => (KeyCode::Space, String::from(" ")),
-        // Letters
         "a" => (KeyCode::A, String::from("a")),
         "b" => (KeyCode::B, String::from("b")),
         "c" => (KeyCode::C, String::from("c")),
@@ -1432,7 +1377,6 @@ pub(crate) fn robot_key_code_and_text(key: &str) -> (KeyCode, String) {
     }
 }
 
-/// Map a character to a KeyCode for robot typing
 pub(crate) fn char_to_key_code(ch: char) -> KeyCode {
     match ch.to_ascii_lowercase() {
         'a' => KeyCode::A,
@@ -1476,7 +1420,6 @@ pub(crate) fn char_to_key_code(ch: char) -> KeyCode {
     }
 }
 
-/// Extract semantic elements by combining semantic tree with an on-demand layout snapshot.
 pub(crate) fn extract_semantics<R>(app: &mut AppShell<R>) -> Vec<SemanticElement>
 where
     R: Renderer,
@@ -1523,9 +1466,6 @@ where
         .iter()
         .any(|action| matches!(action, SemanticsAction::Click { .. }));
     let bounds = bounds_for(sem_node.node_id);
-    // Controls the node drew rather than laid out come first, in publication
-    // order. Without them a robot snapshot of an immediate-mode screen shows
-    // one node where a screen reader sees a list.
     let mut children: Vec<SemanticElement> = sem_node
         .canvas_children
         .iter()
@@ -1569,7 +1509,6 @@ fn semantic_element_from_canvas_node(
         ),
         text: Some(node.label.clone()),
         state_description: node.state_description.clone(),
-        // Canvas bounds are relative to the node that drew them.
         bounds: SemanticRect {
             x: owner.x + node.bounds.x,
             y: owner.y + node.bounds.y,
@@ -1644,11 +1583,6 @@ fn semantic_rect_for_node(
         })
 }
 
-/// Finds a drawn control on `sem_node` by its label.
-///
-/// The result carries the owning layout node's id with the *control's* own
-/// window rect, which is what a robot tap needs: activating a canvas control
-/// is a tap at its centre, exactly as it is for a screen reader.
 fn find_canvas_child(
     owner: SemanticRect,
     sem_node: &SemanticsNode,
@@ -1713,9 +1647,6 @@ fn find_button_in_semantics_tree(
     match_kind: SemanticTextMatchKind,
 ) -> Option<SemanticQueryResult> {
     let owner = semantic_rect_for_node(bounds_by_node, sem_node.node_id);
-    // A drawn control is checked before the node that drew it: the node itself
-    // is often one full-screen click target, and answering with that would
-    // tap the middle of the screen instead of the row that was asked for.
     if let Some(result) = find_canvas_child(owner, sem_node, query, match_kind, true) {
         return Some(result);
     }
@@ -1922,10 +1853,6 @@ mod tests {
         }
     }
 
-    /// A canvas screen is one full-screen click target with a list of drawn
-    /// controls inside it. A `find_button` that answered with the canvas node
-    /// would hand back the centre of the screen, so the drawn control has to
-    /// win — and its bounds have to be its own, or the tap lands elsewhere.
     #[test]
     fn queries_find_a_drawn_control_ahead_of_the_canvas_that_drew_it() {
         use cranpose_ui::CanvasSemanticsNode;
@@ -1988,11 +1915,8 @@ mod tests {
         )
         .expect("a drawn control should be findable as a button");
         assert_eq!(button.text.as_deref(), Some("Haptics"));
-        // The row's own rect, not the canvas's 200x400.
         assert_eq!((button.bounds.y, button.bounds.height), (60.0, 52.0));
 
-        // The unclickable label is not a button, and the canvas node behind it
-        // must not be offered in its place.
         assert!(
             find_button_in_semantics_tree(
                 &bounds_by_node,
@@ -2004,8 +1928,6 @@ mod tests {
         );
     }
 
-    /// A robot snapshot of an immediate-mode screen has to show the controls
-    /// the app drew, or a canvas app can only ever be asserted as one node.
     #[test]
     fn robot_snapshots_report_the_controls_a_canvas_published() {
         use cranpose_ui::{CanvasSemanticsNode, SemanticsWidgetRole};

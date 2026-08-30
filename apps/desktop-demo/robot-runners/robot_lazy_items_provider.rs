@@ -1,12 +1,3 @@
-//! Robot test for LazyList items_with_provider and items_indexed_with_provider methods.
-//!
-//! Validates that callback-based provider APIs render correctly with zero allocation.
-//!
-//! Run with:
-//! ```bash
-//! cargo run --package desktop-app --example robot_lazy_items_provider --features robot-app
-//! ```
-
 use std::{rc::Rc, time::Duration};
 
 use cranpose::AppLauncher;
@@ -18,14 +9,12 @@ use cranpose_ui::{
     VerticalAlignment,
 };
 
-/// Test data struct
 #[derive(Clone, Debug, PartialEq)]
 struct ProviderItem {
     id: usize,
     label: String,
 }
 
-/// LazyList using items_with_provider (callback-based, zero allocation)
 fn lazy_list_with_provider(state: LazyListState, data: Rc<Vec<ProviderItem>>) {
     let count = data.len();
 
@@ -40,7 +29,6 @@ fn lazy_list_with_provider(state: LazyListState, data: Rc<Vec<ProviderItem>>) {
             .vertical_arrangement(LinearArrangement::SpacedBy(4.0))
             .content_padding(8.0, 8.0),
         |scope| {
-            // Use items_with_provider - provider closure fetches data on demand
             let data_clone = Rc::clone(&data);
             scope.items_with_provider(
                 count,
@@ -53,7 +41,6 @@ fn lazy_list_with_provider(state: LazyListState, data: Rc<Vec<ProviderItem>>) {
     );
 }
 
-/// LazyList using items_indexed_with_provider (callback-based with index)
 fn lazy_list_with_indexed_provider(state: LazyListState, data: Rc<Vec<ProviderItem>>) {
     let count = data.len();
 
@@ -68,7 +55,6 @@ fn lazy_list_with_indexed_provider(state: LazyListState, data: Rc<Vec<ProviderIt
             .vertical_arrangement(LinearArrangement::SpacedBy(4.0))
             .content_padding(8.0, 8.0),
         |scope| {
-            // Use items_indexed_with_provider - provider closure fetches data on demand
             let data_clone = Rc::clone(&data);
             scope.items_indexed_with_provider(
                 count,
@@ -81,7 +67,6 @@ fn lazy_list_with_indexed_provider(state: LazyListState, data: Rc<Vec<ProviderIt
     );
 }
 
-/// Non-composable provider item content
 fn provider_item_content(item: ProviderItem) {
     let id = item.id;
     let label = item.label;
@@ -112,7 +97,6 @@ fn provider_item_content(item: ProviderItem) {
     );
 }
 
-/// Non-composable indexed provider item content
 fn indexed_provider_item_content(index: usize, item: ProviderItem) {
     let id = item.id;
     let label = item.label;
@@ -145,7 +129,6 @@ fn indexed_provider_item_content(index: usize, item: ProviderItem) {
 
 #[composable]
 fn provider_items_test_app() {
-    // Create test data - stored in Rc<Vec> so provider closure can access it
     let data: Rc<Vec<ProviderItem>> = Rc::new(
         (0..15)
             .map(|i| ProviderItem {
@@ -206,7 +189,6 @@ fn main() {
 
             let mut errors = Vec::new();
 
-            // Step 1: Verify title
             println!("\n--- Step 1: Verify app loaded ---");
             if find_text_in_semantics(&robot, "LazyList Provider Items Test").is_some() {
                 println!("  ✓ Title found");
@@ -215,7 +197,6 @@ fn main() {
                 errors.push("Title not found");
             }
 
-            // Step 2: Verify items_with_provider items
             println!("\n--- Step 2: Verify items_with_provider items ---");
             let mut prov_items_found = 0;
             for i in 0..10 {
@@ -238,7 +219,6 @@ fn main() {
                 );
             }
 
-            // Step 3: Verify items_indexed_with_provider items
             println!("\n--- Step 3: Verify items_indexed_with_provider items ---");
             let mut indexed_items_found = 0;
             for i in 0..10 {
@@ -261,7 +241,6 @@ fn main() {
                 );
             }
 
-            // Step 4: Verify item labels rendered (proves provider callback works)
             println!("\n--- Step 4: Verify provider callback data access ---");
             let mut label_found = false;
             for i in 0..5 {
@@ -277,7 +256,6 @@ fn main() {
                 println!("  ✗ No item labels found!");
             }
 
-            // Step 5: Scroll test for items_with_provider list
             println!("\n--- Step 5: Scroll test ---");
             if let Some((x, y, w, h)) = find_text_in_semantics(&robot, "ProvItem #0") {
                 robot
@@ -291,7 +269,6 @@ fn main() {
                 std::thread::sleep(Duration::from_millis(200));
                 let _ = robot.wait_for_idle();
 
-                // Check if new items appeared
                 let mut new_items_found = false;
                 for i in 5..10 {
                     let item_text = format!("ProvItem #{}", i);
@@ -308,7 +285,6 @@ fn main() {
                 }
             }
 
-            // Summary
             println!("\n=== SUMMARY ===");
             if errors.is_empty() {
                 println!("✓ All provider-based item tests PASSED!");

@@ -1,33 +1,3 @@
-//! Retained replay state for the command feed.
-//!
-//! A scene that redraws thousands of primitives every frame usually is not
-//! drawing new content: MEGA-class boss scenes re-issue ~17k arcs whose only
-//! frame-over-frame change is a per-ring rotation plus a global breathing
-//! scale — a similarity transform baked into every primitive's values by the
-//! game. The recording layer detects it per draw command
-//! ([`CommandReplayFrame`](cranpose_ui_graphics::CommandReplayFrame)) and the
-//! graph carries the verified spans to collection; the renderer retains each
-//! captured span's converted GPU form in a replay slot and later frames
-//! replace the whole span with a single
-//! [`DrawOpKind::Retained`](crate::scene::DrawOpKind) op — the per-shape
-//! emit/record/convert/upload pipeline never sees those shapes again.
-//!
-//! Solid-brush color changes (twinkling and hue-shimmering ring dots) do not
-//! break a span: they become 16-byte color patches into the retained buffer.
-//! Anything the feed cannot serve falls back to the normal pipeline, which
-//! re-captures over the following frames. Correctness therefore never
-//! depends on retention being available; an unserved span costs a frame of
-//! normal rendering, never a wrong pixel.
-//!
-//! Everything here is CPU state on the producer side: a pure PLANNER. GPU
-//! resources live in the present-side store (the renderer's replay slots),
-//! and the two sides talk ONLY through typed messages: the planner emits
-//! one [`ReplayFrameOps`] batch into each [`FramePacket`](crate::frame_packet::FramePacket)
-//! ([`ShapeReplayState::take_frame_ops`]) and applies the store's
-//! [`ReplayAck`] before the next frame's planning
-//! ([`ShapeReplayState::apply_ack`]). Both directions swap-recycle their
-//! buffers, so the protocol adds no per-frame allocation.
-
 use std::{
     cell::RefCell,
     hash::{Hash, Hasher},
@@ -41,90 +11,44 @@ use crate::{
     scene::{ColorPatch, PendingFeedCapture, SimilarityTransform},
 };
 
-/// Retained ops per frame are capped by the transform buffer's slot count;
-/// spans past the cap emit dynamically for the frame. Mirrors the
-/// renderer's `MAX_REPLAY_SLOTS`.
 pub(crate) const MAX_RETAINED_OPS: usize = 128;
 
-/// The planner's record of one confirmed identity-fed capture, keyed by
-/// the (command, slot) pair the scene builder's verifier stamped on the
-/// span. `gpu_slot` arrived via [`ReplayAck`]; liveness is driven by the
-/// graph: spans stop referencing a key and the slot ages out.
 pub(crate) struct FeedSlot {
     pub gpu_slot: u32,
-    /// Emission context at capture; a differing context falls back to
-    /// ordinary drawing (the captured shapes bake the old context in).
     pub fingerprint: u64,
-    /// The ambient clip the capture was emitted under; replay must keep the
-    /// transformed span inside it (the baked clip moves with the shapes).
     pub capture_clip: Option<Rect>,
-    /// Frame that last drew from this slot, for aging out.
     pub last_referenced: u64,
 }
 
-/// The planner half of a capture in flight: what [`ShapeReplayState::apply_ack`]
-/// copies into the [`FeedSlot`] when the store confirms the capture. Keyed
-/// like `feed_slots`; entries live exactly one plan→ack cycle.
 pub(crate) struct RequestedFeedSlot {
     pub fingerprint: u64,
     pub capture_clip: Option<Rect>,
-    /// The (generation, frame) of the ops batch that carried the capture,
-    /// stamped by [`ShapeReplayState::take_frame_ops`] so a cancelled
-    /// batch's entries — which can never be confirmed — are removable
-    /// precisely ([`ShapeReplayState::reclaim_cancelled_ops`]).
     pub generation: u64,
     pub frame: u64,
 }
 
-/// Frames a feed slot may go unreferenced before its buffers are released.
-/// Long enough to ride out a recapture cycle, short enough that a vanished
-/// command frees its slots within a couple of seconds.
 pub(crate) const FEED_SLOT_IDLE_FRAMES: u64 = 120;
 
 #[derive(Default)]
 pub(crate) struct ShapeReplayState {
-    /// Set by the renderer each frame; false means this frame cannot host
-    /// retained draws (uniform-mode shape batches, non-direct scenes).
     pub supported: bool,
-    /// Frame ordinal, bumped by the renderer at collection start.
     pub frame: u64,
-    /// Root scale for the frame being collected; retained transforms are in
-    /// device pixels while run entries are logical.
     pub root_scale: f32,
-    /// Lifetime recolor-patch count, reported under the diag flag.
     pub stat_patches: u64,
-    /// Lifetime count of bypassed spans that could neither draw retained
-    /// nor rematerialize from their command's recording — the fail-closed
-    /// terminal. Every hit revokes the span's confirmation so the next
-    /// build materializes it again; a nonzero steady rate is a defect.
     pub stat_remat_miss: u64,
-    /// Queues accumulated during collection and moved whole into the
-    /// frame's [`ReplayFrameOps`] by [`Self::take_frame_ops`].
     pub pending_color_patches: Vec<ColorPatch>,
     pub pending_releases: Vec<u32>,
-    /// Identity-fed retained slots (see [`FeedSlot`]) and their capture
-    /// queue, driven by [`CommandReplayFrame`](cranpose_ui_graphics::CommandReplayFrame)s
-    /// the graph carries.
     pub feed_slots: std::collections::HashMap<
         (DrawCommandId, u32),
         FeedSlot,
         cranpose_ui_graphics::FxBuildHasher,
     >,
     pub pending_feed_captures: Vec<PendingFeedCapture>,
-    /// Captures emitted into this frame's ops, awaiting the store's
-    /// confirmation. [`Self::apply_ack`] promotes confirmed entries into
-    /// `feed_slots` and drops the rest silently (the capture failed; the
-    /// planner just won't serve them). Cleared every ack, so entries never
-    /// outlive their plan→ack cycle.
     pub awaiting_confirmation: std::collections::HashMap<
         (DrawCommandId, u32),
         RequestedFeedSlot,
         cranpose_ui_graphics::FxBuildHasher,
     >,
-    /// The previous batch's emptied buffers, returned by the store with
-    /// its ack; [`Self::take_frame_ops`] swaps the pending queues against
-    /// them so every vec keeps its high-water capacity (P4b: the queue,
-    /// in-flight, and store-held vecs ping-pong, none is reallocated).
     pub recycled_ops: ReplayFrameOps,
 }
 
@@ -133,19 +57,10 @@ thread_local! {
         RefCell::new(ShapeReplayState::default());
 }
 
-/// Kill switch for the identity feed: default ON since parity was proven
-/// exact on the game scene (command_feed_parity test + desktop runs);
-/// `CRANPOSE_COMMAND_FEED=0` disables retention entirely for A/B
-/// comparison. Read per frame (not cached) so a comparison can flip it
-/// mid-process; one environment lookup per frame is noise.
 pub(crate) fn command_feed_enabled() -> bool {
     crate::debug_toggles::debug_toggle("CRANPOSE_COMMAND_FEED").as_deref() != Some("0")
 }
 
-/// Test/diagnostic view of the identity feed on this thread: live feed
-/// slots, lifetime patch count, and lifetime remat-miss count (bypassed
-/// spans that could neither draw retained nor rebuild from their recording
-/// — the fail-closed terminal; see `stat_remat_miss`).
 #[doc(hidden)]
 pub fn feed_live_stats() -> (usize, u64, u64) {
     SHAPE_REPLAY.with(|state| {
@@ -158,10 +73,6 @@ pub fn feed_live_stats() -> (usize, u64, u64) {
     })
 }
 
-/// Test hook: queues a feed capture stamped with the CURRENT frame ordinal.
-/// Rendering the next frame advances the ordinal before the drain runs, so
-/// an injected capture is exactly the stale-frame case the drain must drop
-/// without capturing or confirming.
 #[doc(hidden)]
 pub fn inject_feed_capture_for_tests(
     command: cranpose_render_common::graph::DrawCommandId,
@@ -183,14 +94,11 @@ pub fn inject_feed_capture_for_tests(
     });
 }
 
-/// Test hook: how many feed captures are queued on this thread.
 #[doc(hidden)]
 pub fn pending_feed_capture_count_for_tests() -> usize {
     SHAPE_REPLAY.with(|state| state.borrow().pending_feed_captures.len())
 }
 
-/// Test hook: (queued release ids, awaiting-confirmation entries) on this
-/// thread's planner — the cancellation contract's no-leak instruments.
 #[doc(hidden)]
 pub fn planner_replay_queue_stats_for_tests() -> (usize, usize) {
     SHAPE_REPLAY.with(|state| {
@@ -202,9 +110,6 @@ pub fn planner_replay_queue_stats_for_tests() -> (usize, usize) {
     })
 }
 
-/// Test hook: the recycled-ops buffer capacities (captures, color patches,
-/// releases) on this thread's planner — proof a cancelled batch's buffers
-/// came back for reuse instead of being dropped.
 #[doc(hidden)]
 pub fn recycled_ops_capacities_for_tests() -> (usize, usize, usize) {
     SHAPE_REPLAY.with(|state| {
@@ -218,21 +123,11 @@ pub fn recycled_ops_capacities_for_tests() -> (usize, usize, usize) {
 }
 
 impl ShapeReplayState {
-    /// Voids every pending per-scene request. Called when the collected
-    /// scene will never render (rejected collection, renderer replacement):
-    /// pending feed captures reference shape indices of the scene being
-    /// retired, and a later frame's drain must never capture (and confirm)
-    /// another scene's shapes under their identities; pending color patches
-    /// were queued for that scene's retained draws.
     pub(crate) fn retire_all(&mut self) {
         self.pending_feed_captures.clear();
         self.pending_color_patches.clear();
     }
 
-    /// Renderer-side frame handshake, called once when a scene collection
-    /// begins. `supported` is false whenever this frame cannot host retained
-    /// draws; a root-scale change retires the feed because the slots bake
-    /// device pixels.
     pub(crate) fn begin_frame(&mut self, supported: bool, root_scale: f32) {
         self.frame = self.frame.wrapping_add(1);
         let feed_scale_changed = !self.feed_slots.is_empty() && self.root_scale != root_scale;
@@ -243,9 +138,6 @@ impl ShapeReplayState {
         }
     }
 
-    /// Releases every identity-fed slot and moves the feed to a fresh
-    /// epoch, so scene building restarts each command's verification
-    /// instead of referencing buffers that no longer exist.
     pub(crate) fn retire_feed(&mut self) {
         for (_, slot) in self.feed_slots.drain() {
             self.pending_releases.push(slot.gpu_slot);
@@ -255,15 +147,6 @@ impl ShapeReplayState {
         crate::pipeline::bump_retained_feed_generation();
     }
 
-    /// The GPU renderer was replaced (surface recreation, device loss):
-    /// every retained slot died with it, so the feed retires wholesale
-    /// (confirmations revoked, generation bumped — fail-closed BEFORE the
-    /// new renderer exists), pending per-scene requests are voided, and
-    /// queued release ids are cleared rather than drained into the new
-    /// store — the new store starts fully free, so old ids are at best a
-    /// guarded no-op there; clearing guarantees ids never cross renderers.
-    /// In-flight captures can never be confirmed against the new store's
-    /// universe, so the awaiting map empties too.
     pub(crate) fn renderer_replaced(&mut self) {
         self.retire_feed();
         self.retire_all();
@@ -271,19 +154,6 @@ impl ShapeReplayState {
         self.awaiting_confirmation.clear();
     }
 
-    /// Closes this frame's replay window and emits the frame's plan: the
-    /// pending capture/patch/release queues move whole into a
-    /// [`ReplayFrameOps`] for the frame's packet, swapped against the
-    /// previous batch's recycled buffers so no side allocates (P4b).
-    /// Called at packet build — collection for the frame is done, so
-    /// `supported` drops here (later collections this frame, e.g.
-    /// overlays, build windowed scenes that cannot carry retained ops);
-    /// this replaces the store-side write the old drain did.
-    ///
-    /// Feed slots whose spans stopped arriving age out first (planner-side
-    /// eviction): their releases join this frame's ops, so the store frees
-    /// the buffers before this frame's captures ask, and the revocation
-    /// makes the next build materialize the span again.
     pub(crate) fn take_frame_ops(&mut self, generation: u64) -> ReplayFrameOps {
         let frame = self.frame;
         let releases = &mut self.pending_releases;
@@ -296,9 +166,6 @@ impl ShapeReplayState {
                 true
             }
         });
-        // `take` leaves fresh empty vecs in `recycled_ops` (no allocation);
-        // the capacity travels out with the batch and comes back with the
-        // ack.
         let mut ops = std::mem::take(&mut self.recycled_ops);
         std::mem::swap(&mut ops.captures, &mut self.pending_feed_captures);
         std::mem::swap(&mut ops.color_patches, &mut self.pending_color_patches);
@@ -320,20 +187,6 @@ impl ShapeReplayState {
         ops
     }
 
-    /// Applies the store's answer to this frame's ops, before the next
-    /// frame's planning (and, today, before this frame renders — the same
-    /// point the old in-store drain confirmed at, so observable timing is
-    /// unchanged: confirmations only gate the NEXT build's bypass and
-    /// `feed_slots` is only served at collect time). Each confirmation
-    /// promotes its awaiting entry into `feed_slots`; a displaced slot
-    /// (recapture over a live identity) is released through the NEXT
-    /// frame's ops — one frame later than the old same-frame release,
-    /// safe because the capture frame never draws the old slot (its span
-    /// emitted ordinarily) and the pool has headroom for one lingering
-    /// slot (128 slots, the MEGA scene uses 22). Unconfirmed entries drop
-    /// silently. The ack's recycled buffers become the next batch's, and
-    /// the drained confirmations vec returns to the caller for the store
-    /// to refill (P4b: no side allocates per frame).
     pub(crate) fn apply_ack(
         &mut self,
         mut ack: ReplayAck,
@@ -342,10 +195,6 @@ impl ShapeReplayState {
         let frame = self.frame;
         for (key, gpu_slot) in ack.confirmations.drain(..) {
             let Some(requested) = self.awaiting_confirmation.remove(&key) else {
-                // Defensive: a confirmation this planner never asked for.
-                // Without the requested fingerprint/clip no valid feed slot
-                // can exist, but the store DID retain buffers — queue the
-                // release rather than leak the slot.
                 self.pending_releases.push(gpu_slot);
                 continue;
             };
@@ -357,45 +206,22 @@ impl ShapeReplayState {
                     capture_clip: requested.capture_clip,
                     last_referenced: frame,
                 },
-            ) {
-                // A recaptured identity replaces its old buffers whole.
-                if old.gpu_slot != gpu_slot {
-                    self.pending_releases.push(old.gpu_slot);
-                }
+            ) && old.gpu_slot != gpu_slot
+            {
+                self.pending_releases.push(old.gpu_slot);
             }
-            // Only now may scene building skip materializing this span:
-            // the retained buffer verifiably exists — in the ack's feed
-            // generation's slot universe, which the confirmation is
-            // stamped with so a later universe never trusts it.
             cranpose_render_common::scene_builder::confirm_retained_slot(
                 key.0,
                 key.1,
                 ack.generation,
             );
         }
-        // Purge only THIS batch's leftovers — requests the store did not
-        // confirm can never be confirmed later. A batch published while
-        // this one rendered carries the next frame ordinal and its
-        // requests must outlive this ack, so the purge keys on the frame
-        // the ack echoes (unique among in-flight batches) rather than
-        // clearing the map: the drop path deliberately acks under the
-        // store's generation, so generation alone cannot identify a batch.
         self.awaiting_confirmation
             .retain(|_, requested| requested.frame != ack.frame);
         self.recycled_ops = recycled;
         ack.confirmations
     }
 
-    /// Takes back a cancelled packet's [`ReplayFrameOps`] — a plan the store
-    /// never consumed. The releases re-queue whole (the slot ids are still
-    /// live store-side; dropping them would leak pool slots forever — the
-    /// pool is 128 ids). The captures drop (no store slot was ever created),
-    /// but the `awaiting_confirmation` entries [`Self::take_frame_ops`]
-    /// recorded for exactly this batch can never be confirmed and must not
-    /// wait for an ack that may never come (every later frame could be
-    /// Surface), so they purge precisely by the batch's (generation, frame)
-    /// stamp. Color patches drop (regenerated every frame). The emptied
-    /// buffers recycle exactly like [`Self::apply_ack`]'s, capacity intact.
     pub(crate) fn reclaim_cancelled_ops(&mut self, mut ops: ReplayFrameOps) {
         self.pending_releases.extend_from_slice(&ops.releases);
         ops.releases.clear();
@@ -408,7 +234,6 @@ impl ShapeReplayState {
     }
 }
 
-/// The per-frame transform of one retained span, relative to its capture.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct SegmentTransform {
     pub scale: f32,
@@ -432,10 +257,6 @@ pub(crate) fn rect_contains(outer: Rect, inner: Rect) -> bool {
         && inner.y + inner.height <= outer.y + outer.height
 }
 
-/// Whether the layer context can host replay at all: the shape-params affine
-/// must be the identity (translation lives in `layer_bounds`, which the
-/// fingerprint covers) with no quad-deforming rotation and no color filter,
-/// and draws must carry no snap anchor a retained batch would skip.
 pub(crate) fn layer_supports_replay(layer: &GraphicsLayer) -> bool {
     layer.scale == 1.0
         && layer.scale_x == 1.0
@@ -448,8 +269,6 @@ pub(crate) fn layer_supports_replay(layer: &GraphicsLayer) -> bool {
         && layer.color_filter.is_none()
 }
 
-/// Hash of every emission-context input that must hold constant between the
-/// capture frame and each replayed frame.
 pub(crate) fn context_fingerprint(
     layer_bounds: Rect,
     visual_clip: Option<Rect>,
@@ -650,9 +469,6 @@ mod tests {
         };
         state.apply_ack(ack, ReplayFrameOps::default());
 
-        // Everything span serving checks at collect time is in place: the
-        // gpu slot, the capture-context fingerprint, the ambient clip, and
-        // the reference stamp.
         let slot = state
             .feed_slots
             .get(&key)
@@ -692,9 +508,6 @@ mod tests {
         let captures_capacity = cancelled_ops.captures.capacity();
         let releases_capacity = cancelled_ops.releases.capacity();
 
-        // A later frame's plan with its own capture: its awaiting entry
-        // must SURVIVE the earlier frame's reclaim (the purge is precise
-        // to the cancelled batch's (generation, frame)).
         state.begin_frame(true, 1.0);
         state
             .pending_feed_captures

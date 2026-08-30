@@ -49,12 +49,8 @@ pub(crate) const HANDLE_TAP_SLOP_PX: f32 = 12.0;
 /// the line BOTTOM — sits inside that box, so the caller can anchor the box at
 /// `tip_endpoint - tip_in_box` to land the stem on the text edge.
 struct HandleShape {
-    /// SVG path of the lollipop in the box's local coordinates.
     path_data: String,
-    /// The full box size including the finger grab slop. The box's own pointer
-    /// input is the handle's grab region, so this must be finger-sized.
     box_size: Size,
-    /// The anchor position (text edge at the line bottom) within the box.
     tip_in_box: Point,
 }
 
@@ -85,17 +81,11 @@ fn handle_shape(kind: HandleKind, radius: f32, line_height: f32) -> HandleShape 
     let slop = HANDLE_GRAB_SLOP.max(0.0);
     let line_height = line_height.max(1.0);
     let half_width = radius.max(HANDLE_STEM_WIDTH * 0.5);
-    // Vertical extent of the drawable relative to the anchor (line bottom).
     let (draw_top, draw_bottom) = match kind {
-        // Dot above the line top (dipping HANDLE_DOT_LINE_OVERLAP into it).
         HandleKind::SelectionStart => (-line_height - 2.0 * radius + HANDLE_DOT_LINE_OVERLAP, 0.0),
-        // Stem across the line, dot hanging below.
         HandleKind::SelectionEnd => (-line_height, 2.0 * radius - HANDLE_DOT_LINE_OVERLAP),
-        // Dot below the line only (the field's caret is the stem).
         HandleKind::Cursor => (0.0, 2.0 * radius - HANDLE_DOT_LINE_OVERLAP),
     };
-    // Grab slop: sides always; above only where the handle's dot is above
-    // (start), below only where it hangs below (end/cursor).
     let (slop_above, slop_below) = match kind {
         HandleKind::SelectionStart => (slop, 0.0),
         HandleKind::SelectionEnd | HandleKind::Cursor => (0.0, slop),
@@ -110,11 +100,8 @@ fn handle_shape(kind: HandleKind, radius: f32, line_height: f32) -> HandleShape 
         width: 2.0 * half_width + 2.0 * slop,
         height: box_bottom - box_top,
     };
-    // The path in box-local coordinates. The cursor handle draws only its dot
-    // (its stem is the field's caret); start/end draw stem + dot.
     let (line_top_local, line_bottom_local) = (tip_in_box.y - line_height, tip_in_box.y);
     let path_data = if kind == HandleKind::Cursor {
-        // Dot tangent below the line bottom, overlap folded in.
         let cy = line_bottom_local + radius - HANDLE_DOT_LINE_OVERLAP;
         format!(
             "M {x0} {cy} A {r} {r} 0 1 1 {x1} {cy} A {r} {r} 0 1 1 {x0} {cy} Z",
@@ -138,15 +125,6 @@ fn handle_shape(kind: HandleKind, radius: f32, line_height: f32) -> HandleShape 
     }
 }
 
-/// The window-space axis-aligned grab region for a handle whose anchor (text
-/// edge at the line bottom) sits at `tip` (window coords). This is exactly the
-/// region covered by the handle's `Box` pointer input, expressed in window
-/// coordinates, so a touch-DOWN within it grabs the handle (the overlay
-/// `Popup` is hit-tested above the field, so a grab always wins over the
-/// field's caret placement).
-///
-/// Exposed so the arbitration can be asserted in tests without a full
-/// compose/layout/hit-test round-trip.
 #[cfg(test)]
 pub(crate) fn handle_grab_rect(
     kind: HandleKind,
@@ -214,13 +192,6 @@ pub fn SelectionHandle(
     on_tap: impl Fn() + 'static,
 ) {
     let shape = handle_shape(kind, radius, line_height);
-    // The handle GLIDES between character positions (the reference handle
-    // never teleports char-to-char); a jump farther than ~1.5 line heights
-    // is a fresh placement (double-tap, new selection) and snaps. The
-    // spring lives ENTIRELY in the draw phase on a plain Cell — no
-    // animation-state writes from composition or effects: such writes at
-    // the composition boundary can swallow pending invalidations and
-    // freeze the field's press feed (the edit-menu slide regression).
     let glide: Rc<Cell<GlideState>> = remember(|| {
         Rc::new(Cell::new(GlideState {
             x: f32::NAN,
@@ -245,10 +216,6 @@ pub fn SelectionHandle(
             });
         }
     }
-    // Snap the box to whole logical pixels: the stem is a 2dp bar whose
-    // box-local coordinates are integral, so a fractional anchor gives one
-    // handle a 7px stem and the other a 6px one at 3x (anti-aliased
-    // asymmetry the reference never shows).
     let anchor = Rect {
         x: (tip.x - shape.tip_in_box.x).round(),
         y: (tip.y - shape.tip_in_box.y).round(),
@@ -275,19 +242,12 @@ pub fn SelectionHandle(
             Modifier::empty()
                 .size(box_size)
                 .draw_behind(move |scope: &mut dyn DrawScope| {
-                    // The CURSOR handle never glides: its stem IS the
-                    // field's caret and the dot must move as one object
-                    // with it (the caret itself is state-driven).
                     if kind == HandleKind::Cursor {
                         if let Ok(path) = VectorPath::parse(&path_data) {
                             scope.draw_vector_path(&path, Brush::solid(color));
                         }
                         return;
                     }
-                    // Render-only glide: a critically damped spring toward
-                    // the true anchor, integrated on real dt per redraw.
-                    // The hit box stays exact at the anchor; only the drawn
-                    // lollipop trails.
                     let mut state = glide_for_draw.get();
                     let settled = state.x.is_finite()
                         && (state.x - glide_tip.x).abs() < 0.25
@@ -295,10 +255,6 @@ pub fn SelectionHandle(
                         && state.vx.abs() < 2.0
                         && state.vy.abs() < 2.0;
                     if settled {
-                        // Byte-stable draw at rest: keep writing/moving here
-                        // and the retained overlay scene churns every frame,
-                        // resetting pointer routing mid-gesture (the edit
-                        // menu's slide feed regression).
                         if state.last_nanos != 0 {
                             state = GlideState {
                                 x: glide_tip.x,
@@ -318,11 +274,6 @@ pub fn SelectionHandle(
                         };
                         state.last_nanos = now_nanos;
                         if dt > 0.0 && state.x.is_finite() {
-                            // Closed-form critically damped step: exact for
-                            // any frame gap. The Euler step was unstable
-                            // past its bound (omega*dt > 1) and a long gap
-                            // overshot 4x — the user-reported one-frame
-                            // far jump that then retracted.
                             let omega = 40.0f32;
                             let decay = (-omega * dt).exp();
                             let sx = state.x - glide_tip.x;
@@ -335,12 +286,6 @@ pub fn SelectionHandle(
                             state.vy = (state.vy - omega * cy * dt) * decay;
                         }
                         glide_for_draw.set(state);
-                        // Keep the glide advancing: the spring lives in a
-                        // Cell no observation can see, so this draw must
-                        // name its own node for the next frame's re-record —
-                        // a bare render invalidation only re-presents the
-                        // retained scene and would freeze the spring
-                        // mid-transition.
                         crate::request_current_draw_redraw();
                     }
                     let (dx, dy) = if state.x.is_finite() {
@@ -395,16 +340,10 @@ pub(crate) fn selection_handle_pointer_input(
         async move {
             scope
                 .await_pointer_event_scope(|await_scope| async move {
-                    // Track the initial press so a resting finger can be told
-                    // apart from a drag. `time_ms` is the platform input clock;
-                    // when it is unavailable the long-press simply never fires
-                    // (a drag/lift still settles the selection).
                     let mut down_time: Option<i64> = None;
                     let mut down_pos = Point { x: 0.0, y: 0.0 };
                     let mut pressed = false;
                     let mut long_press_fired = false;
-                    // Whether the finger has strayed beyond the tap slop since it
-                    // went down — a stray means a drag, not a tap.
                     let mut dragged = false;
                     loop {
                         let event = await_scope.await_pointer_event().await;
@@ -419,12 +358,6 @@ pub(crate) fn selection_handle_pointer_input(
                                 event.consume();
                             }
                             PointerEventKind::Move => {
-                                // Only a move of a PRESSED pointer drags the
-                                // handle. Hover moves (mouse passing over, the
-                                // synthesized hover dispatch after a release)
-                                // must not: treating them as drags moved the
-                                // caret under a hovering mouse and re-armed
-                                // the loupe right after a release.
                                 if !pressed {
                                     continue;
                                 }
@@ -459,9 +392,6 @@ pub(crate) fn selection_handle_pointer_input(
                                 }
                                 pressed = false;
                                 on_drag_end();
-                                // A quick press→release that neither dragged the
-                                // handle nor became a long-press is a tap: open
-                                // the handle's action popup.
                                 if !dragged && !long_press_fired {
                                     on_tap();
                                 }
@@ -537,30 +467,19 @@ mod tests {
 
     const LINE_HEIGHT: f32 = 20.0;
 
-    /// Regression guard for double-tap-to-select-word. The cursor handle — the
-    /// one a single tap shows — must keep its whole touch box AT OR BELOW the
-    /// line bottom (its dot hangs under the line; its stem is the field's own
-    /// caret). Any grab region over the glyph line would swallow the second
-    /// tap of a double-tap (which must reach the field to escalate into a word
-    /// selection).
     #[test]
     fn cursor_handle_touch_box_sits_at_or_below_the_line_bottom() {
         let shape = handle_shape(HandleKind::Cursor, HANDLE_RADIUS, LINE_HEIGHT);
-        // The box is anchored at `tip - tip_in_box`; `tip_in_box.y == 0` means
-        // its top edge coincides with the anchor (the caret line's bottom).
         assert!(
             shape.tip_in_box.y.abs() < 0.01,
             "cursor handle anchor must sit at the top edge of its touch box \
              (tip_in_box.y = {}), so it never overlaps the text line above",
             shape.tip_in_box.y
         );
-        // The dot still hangs below the anchor with room for a finger.
         assert!(
             shape.box_size.height >= 2.0 * HANDLE_RADIUS,
             "cursor handle box must extend below the anchor so the dot is grabbable"
         );
-        // And it draws ONLY the dot — the stem is the field's caret, which
-        // keeps blinking; a drawn stem would paint over it.
         assert!(
             !shape.path_data.contains('L'),
             "cursor handle must draw only its dot (no stem rectangle): {}",
@@ -568,11 +487,6 @@ mod tests {
         );
     }
 
-    /// The grab region must be finger-sized: at least a fingertip across so a
-    /// touch-DOWN aimed at the handle reliably lands inside it instead of
-    /// falling through to the field (which would collapse the selection). A
-    /// fingertip is ~24-32dp; the drawn dot alone (~2·radius) is far too
-    /// small, so the box must add a generous slop.
     #[test]
     fn grab_region_is_finger_sized() {
         for kind in [
@@ -599,10 +513,6 @@ mod tests {
         }
     }
 
-    /// The start and end grab regions are vertical mirror images of each other
-    /// about the line box: the start covers its dot ABOVE the line (plus the
-    /// stem column across the line), the end covers the stem column and its dot
-    /// BELOW — so neither handle is harder to grab than the other.
     #[test]
     fn start_and_end_grab_regions_mirror_about_the_line() {
         let tip = Point { x: 100.0, y: 100.0 };
@@ -610,13 +520,10 @@ mod tests {
         let start = handle_grab_rect(HandleKind::SelectionStart, tip, HANDLE_RADIUS, LINE_HEIGHT);
         let end = handle_grab_rect(HandleKind::SelectionEnd, tip, HANDLE_RADIUS, LINE_HEIGHT);
 
-        // Same-size boxes.
         assert!(
             (start.width - end.width).abs() < 0.01 && (start.height - end.height).abs() < 0.01,
             "start {start:?} and end {end:?} grab boxes must be the same size"
         );
-        // Start reaches above the line top as far as end reaches below the
-        // line bottom (dot + slop), and each stops at the opposite line edge.
         let start_above = line_top - start.y;
         let end_below = (end.y + end.height) - tip.y;
         assert!(
@@ -633,13 +540,6 @@ mod tests {
         );
     }
 
-    /// Per-kind grab arbitration: a press on a handle's dot (or a finger-width
-    /// beside it) grabs the handle; a press one line AWAY from the handle's
-    /// extent — the neighbouring glyph line — must fall through to the field
-    /// so taps/double-taps there keep working. Start and end handles also
-    /// cover their stem column ON the line (the reference grabs an edge on the
-    /// line and rides it with the loupe up); the cursor handle never covers
-    /// the line (double-tap protection).
     #[test]
     fn grab_regions_cover_the_dot_and_stem_but_not_neighbouring_lines() {
         let tip = Point { x: 100.0, y: 100.0 };
@@ -648,7 +548,6 @@ mod tests {
             x >= r.x && x <= r.x + r.width && y >= r.y && y <= r.y + r.height
         };
 
-        // Cursor: dot below the line is grabbable; the line above is not.
         let cursor = handle_grab_rect(HandleKind::Cursor, tip, HANDLE_RADIUS, LINE_HEIGHT);
         assert!(contains(cursor, tip.x - 16.0, tip.y + 12.0));
         assert!(contains(cursor, tip.x + 16.0, tip.y + 12.0));
@@ -657,8 +556,6 @@ mod tests {
             "cursor: a press on the glyph line belongs to the field"
         );
 
-        // Start: dot above the line and the stem column on the line grab it;
-        // the line BELOW (next line's glyphs) does not.
         let start = handle_grab_rect(HandleKind::SelectionStart, tip, HANDLE_RADIUS, LINE_HEIGHT);
         assert!(
             contains(start, tip.x, line_top - HANDLE_RADIUS),
@@ -673,7 +570,6 @@ mod tests {
             "start: a press below the line belongs to the field"
         );
 
-        // End: stem column and dot below grab it; the line ABOVE does not.
         let end = handle_grab_rect(HandleKind::SelectionEnd, tip, HANDLE_RADIUS, LINE_HEIGHT);
         assert!(
             contains(end, tip.x, tip.y + HANDLE_RADIUS),

@@ -1,13 +1,3 @@
-//! Interactive robot demonstration using semantic tree
-//!
-//! This example shows how to use robot testing with semantic queries
-//! to automate interactions. Watch the robot find and click elements by text!
-//!
-//! Run with:
-//! ```bash
-//! cargo run --package desktop-app --example robot_interactive --features robot-app
-//! ```
-
 use std::time::Duration;
 
 use cranpose::{AppLauncher, Robot};
@@ -35,7 +25,6 @@ fn main() {
             std::thread::sleep(Duration::from_millis(500));
             println!("✓ App launched\n");
 
-            // Print semantic tree for debugging
             println!("--- Semantic Tree Structure ---");
             match robot.get_semantics() {
                 Ok(sem) => Robot::print_semantics(&sem, 0),
@@ -43,7 +32,6 @@ fn main() {
             }
             println!();
 
-            // Workflow 1: Counter interactions using semantic queries
             println!("--- Workflow 1: Counter App (Semantic Clicking) ---");
             std::thread::sleep(Duration::from_secs(1));
 
@@ -60,7 +48,6 @@ fn main() {
             std::thread::sleep(Duration::from_secs(1));
             println!("✓ Counter workflow complete\n");
 
-            // Workflow 2: Tab navigation with semantic queries
             println!("--- Workflow 2: Tab Navigation (Semantic Queries) ---");
             std::thread::sleep(Duration::from_secs(1));
 
@@ -91,7 +78,6 @@ fn main() {
 
             println!("✓ Tab navigation complete\n");
 
-            // Keep window open
             println!("--- Demo Complete ---");
             println!("Window will stay open for 1 seconds...\n");
 

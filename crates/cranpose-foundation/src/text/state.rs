@@ -1,8 +1,3 @@
-//! Observable state holder for text field content.
-//!
-//! Matches Jetpack Compose's `TextFieldState` from
-//! `compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/text/input/TextFieldState.kt`.
-
 use std::{
     cell::{Cell, RefCell},
     collections::VecDeque,
@@ -53,38 +48,21 @@ impl TextFieldValue {
 
 type ChangeListener = Box<dyn Fn(&TextFieldValue)>;
 
-/// Maximum capacity for undo stack
 const UNDO_CAPACITY: usize = 100;
 
-/// Timeout for undo coalescing in milliseconds.
-/// Consecutive edits within this window are grouped into a single undo.
 const UNDO_COALESCE_MS: u128 = 1000;
 
-/// Inner state for TextFieldState - contains editing machinery ONLY.
-/// Value storage is handled by MutableState.
 pub struct TextFieldStateInner {
-    /// Flag to prevent concurrent edits  
     is_editing: bool,
-    /// Listeners to notify on changes
     listeners: Vec<ChangeListener>,
-    /// Undo stack - previous states to restore
     undo_stack: VecDeque<TextFieldValue>,
-    /// Redo stack - states undone that can be redone
     redo_stack: VecDeque<TextFieldValue>,
-    /// Desired column for up/down navigation (preserved between vertical moves)
     desired_column: Cell<Option<usize>>,
-    /// Last edit timestamp for undo coalescing
     last_edit_time: Cell<Option<web_time::Instant>>,
-    /// Snapshot before the current coalescing group started
-    /// Only pushed to undo_stack when coalescing breaks
     pending_undo_snapshot: RefCell<Option<TextFieldValue>>,
-    /// Cached line start offsets for O(1) line lookups during rendering.
-    /// Invalidated on text change. Each entry is byte offset of line start.
-    /// e.g., for "ab\ncd" -> [0, 3] (line 0 starts at 0, line 1 starts at 3)
     line_offsets_cache: RefCell<Option<Vec<usize>>>,
 }
 
-/// RAII guard for is_editing flag - ensures panic safety
 struct EditGuard<'a> {
     inner: &'a RefCell<TextFieldStateInner>,
 }
@@ -94,7 +72,7 @@ impl<'a> EditGuard<'a> {
         {
             let borrowed = inner.borrow();
             if borrowed.is_editing {
-                return Err(()); // Already editing
+                return Err(());
             }
         }
         inner.borrow_mut().is_editing = true;
@@ -139,8 +117,6 @@ pub struct TextFieldState {
     /// Public for cross-crate pointer-based identity comparison (Hash).
     pub inner: MutableState<Rc<RefCell<TextFieldStateInner>>>,
 
-    /// Value storage - the SINGLE source of truth for text field value.
-    /// Uses MutableState for reactive composition integration.
     value: MutableState<TextFieldValue>,
 }
 
@@ -250,28 +226,22 @@ impl TextFieldState {
         let inner_state = self.inner();
         let inner = inner_state.borrow();
 
-        // Check if cached
         if let Some(ref offsets) = *inner.line_offsets_cache.borrow() {
             return offsets.clone();
         }
 
-        // Compute line offsets
         let text = self.text();
         let mut offsets = vec![0];
         for (i, c) in text.char_indices() {
             if c == '\n' {
-                // Next line starts at i + 1 (byte after newline)
-                // Note: '\n' is always 1 byte in UTF-8
                 offsets.push(i + 1);
             }
         }
 
-        // Cache and return
         *inner.line_offsets_cache.borrow_mut() = Some(offsets.clone());
         offsets
     }
 
-    /// Invalidates the cached line offsets. Called internally on text change.
     fn invalidate_line_cache(&self) {
         self.inner().borrow().line_offsets_cache.borrow_mut().take();
     }
@@ -334,19 +304,15 @@ impl TextFieldState {
     /// Undoes the last edit.
     /// Returns true if undo was performed.
     pub fn undo(&self) -> bool {
-        // First, flush any pending coalescing snapshot so it becomes the undo target
         self.flush_undo_group();
 
         let inner_state = self.inner();
         let mut inner = inner_state.borrow_mut();
         if let Some(previous_state) = inner.undo_stack.pop_back() {
-            // Save current state to redo stack
             let current = self.value.with(|v| v.clone());
             inner.redo_stack.push_back(current);
-            // Clear coalescing state since we're undoing
             inner.last_edit_time.set(None);
             drop(inner);
-            // Update value via MutableState (triggers recomposition)
             self.value.set(previous_state);
             true
         } else {
@@ -360,11 +326,9 @@ impl TextFieldState {
         let inner_state = self.inner();
         let mut inner = inner_state.borrow_mut();
         if let Some(redo_state) = inner.redo_stack.pop_back() {
-            // Save current state to undo stack
             let current = self.value.with(|v| v.clone());
             inner.undo_stack.push_back(current);
             drop(inner);
-            // Update value via MutableState (triggers recomposition)
             self.value.set(redo_state);
             true
         } else {
@@ -397,28 +361,23 @@ impl TextFieldState {
             return false;
         };
 
-        // Create buffer from current value
         let current = self.value();
         let mut buffer = TextFieldBuffer::with_selection(&current.text, current.selection);
         if let Some(comp) = current.composition {
             buffer.set_composition(Some(comp));
         }
 
-        // Execute the edit
         f(&mut buffer);
 
-        // Build new value
         let new_value = TextFieldValue {
             text: buffer.text().to_string(),
             selection: buffer.selection(),
             composition: buffer.composition(),
         };
 
-        // Only update and notify if changed
         let changed = new_value != current;
         let text_changed = new_value.text != current.text;
 
-        // Invalidate line cache if text changed (not just selection)
         if text_changed {
             self.invalidate_line_cache();
         }
@@ -426,12 +385,10 @@ impl TextFieldState {
         if changed {
             let now = web_time::Instant::now();
 
-            // Determine if we should break the undo coalescing group
             let should_break_group = {
                 let inner_state = self.inner();
                 let inner = inner_state.borrow();
 
-                // Check timeout
                 let timeout_expired = inner
                     .last_edit_time
                     .get()
@@ -441,18 +398,14 @@ impl TextFieldState {
                 if timeout_expired {
                     true
                 } else {
-                    // Check if this looks like a single character insert
                     let text_delta = new_value.text.len() as i64 - current.text.len() as i64;
                     let is_single_char_insert = text_delta == 1;
 
-                    // Check if it's whitespace/newline (break group on word boundaries)
                     let ends_with_whitespace = new_value.text.ends_with(char::is_whitespace);
 
-                    // Check if cursor jumped (non-consecutive editing)
                     let cursor_jumped = new_value.selection.start != current.selection.start + 1
                         && new_value.selection.start != current.selection.end + 1;
 
-                    // Break if not a simple character insert, or if whitespace/newline, or cursor jumped
                     !is_single_char_insert || ends_with_whitespace || cursor_jumped
                 }
             };
@@ -462,7 +415,6 @@ impl TextFieldState {
                 let inner = inner_state.borrow();
 
                 if should_break_group {
-                    // Push pending snapshot (if any) to undo stack, then start new group
                     let pending = inner.pending_undo_snapshot.take();
                     drop(inner);
 
@@ -474,38 +426,28 @@ impl TextFieldState {
                         }
                         inner.undo_stack.push_back(snapshot);
                     }
-                    // Clear redo stack on new edit
                     inner.redo_stack.clear();
-                    // Start new coalescing group with current state as pending snapshot
                     drop(inner);
                     self.inner()
                         .borrow()
                         .pending_undo_snapshot
                         .replace(Some(current.clone()));
                 } else {
-                    // Continue coalescing - pending snapshot stays as-is
-                    // If no pending snapshot, start one
                     if inner.pending_undo_snapshot.borrow().is_none() {
                         inner.pending_undo_snapshot.replace(Some(current.clone()));
                     }
                     drop(inner);
-                    // Clear redo stack on new edit
                     self.inner().borrow_mut().redo_stack.clear();
                 }
 
-                // Update last edit time
                 self.inner().borrow().last_edit_time.set(Some(now));
             }
 
-            // Update value via MutableState (triggers recomposition)
             self.value.set(new_value.clone());
         }
 
-        // Explicitly drop guard to clear is_editing BEFORE notifying listeners
-        // This ensures listeners see clean state and can start new edits if needed
         drop(guard);
 
-        // Notify listeners outside of borrow
         if changed {
             let listener_count = self.inner().borrow().listeners.len();
             for i in 0..listener_count {
@@ -565,9 +507,6 @@ mod tests {
 
     use super::*;
 
-    /// Sets up a test runtime and keeps it alive for the duration of the test.
-    /// This is required because TextFieldState uses MutableState which requires
-    /// an active runtime context.
     fn with_test_runtime<T>(f: impl FnOnce() -> T) -> T {
         let _runtime = Runtime::new(Arc::new(DefaultScheduler));
         f()
@@ -583,9 +522,6 @@ mod tests {
                 "a field nobody navigated vertically had a remembered column"
             );
 
-            // Up/down navigation keeps the column the caret started from, so a
-            // walk down through short lines and back up returns to where it
-            // began rather than to the end of the shortest line it passed.
             state.set_desired_column(Some(7));
             assert_eq!(state.desired_column(), Some(7));
 
@@ -598,7 +534,6 @@ mod tests {
     fn flushing_an_undo_group_is_harmless_when_nothing_is_pending() {
         with_test_runtime(|| {
             let state = TextFieldState::new("Hello");
-            // A focus loss flushes whether or not anything coalesced.
             state.flush_undo_group();
             state.flush_undo_group();
             assert_eq!(state.text(), "Hello");
@@ -614,8 +549,6 @@ mod tests {
             state.edit(|buffer| buffer.insert("cd"));
             assert_eq!(state.text(), "abcd");
 
-            // Without the flush both inserts coalesce into one undo step and
-            // the first undo empties the field.
             state.undo();
             assert_eq!(
                 state.text(),

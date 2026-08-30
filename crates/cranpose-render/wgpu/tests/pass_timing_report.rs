@@ -1,9 +1,3 @@
-//! The GPU pass-timing profile behind `CRANPOSE_GPU_PASS_TIMING` (issue
-//! #500). Fill-pixel counters rank the renderer's passes but cannot size
-//! them in milliseconds; the timing report must attribute real GPU time to
-//! the pass labels of a rendered scene, and it must stay off — costing
-//! nothing and reporting nothing — unless the toggle asks for it.
-
 mod support;
 
 use cranpose_app_shell::AppShell;
@@ -52,8 +46,6 @@ impl Harness {
         Self { shell }
     }
 
-    /// Renders one frame; the capture's internal device wait is what lets a
-    /// prior frame's timestamp readback complete and be harvested.
     fn frame(&mut self) -> cranpose_render_wgpu::GpuPassTimingReport {
         self.shell.update();
         self.shell
@@ -78,8 +70,6 @@ fn adapter_can_time_passes() -> bool {
     adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY)
 }
 
-/// Clears the timing toggle even when the test panics, so the global toggle
-/// state cannot leak into renderers built by other tests.
 struct TimingToggle;
 
 impl TimingToggle {
@@ -112,10 +102,6 @@ fn a_rendered_scene_attributes_gpu_time_to_its_pass_labels() {
         eprintln!("adapter lacks TIMESTAMP_QUERY; skipping pass-timing report test");
         return;
     }
-    // The toggle is set under the GPU-test lock, before construction: a
-    // toggle flipped outside that window leaks into whichever parallel
-    // test's renderer is constructing. The tuple's drop order clears the
-    // toggle before the lock releases.
     let (_lock, _toggle, renderer) =
         support::headless_renderer_parts_configured(TimingToggle::set).expect("headless renderer");
     let mut harness = Harness::new(renderer);

@@ -250,7 +250,6 @@ pub fn http_body_ref<B: HttpBody + 'static>(body: B) -> HttpBodyRef {
     std::rc::Rc::new(body)
 }
 
-/// A body with nothing in it, which is what a `HEAD` answers with.
 struct EmptyBody;
 
 impl HttpBody for EmptyBody {
@@ -472,12 +471,6 @@ pub trait HttpClient: Send + Sync {
     }
 }
 
-/// Streams `url` into `target` through `client`, resuming where it left off.
-///
-/// Written once, against the client trait, so no backend has its own copy of
-/// the resume rule — which is the rule most easily got wrong: a server that
-/// ignores a `Range` header answers with the whole body, and appending that to
-/// a partial file produces a file that is the right length and the wrong bytes.
 #[cfg(not(target_arch = "wasm32"))]
 async fn download_through<C: HttpClient + ?Sized>(
     client: &C,
@@ -694,11 +687,6 @@ impl HttpClient for StubHttpClient {
     }
 }
 
-/// How much of a body is read at a time.
-///
-/// Large enough that a fast connection is not held up by per-chunk bookkeeping,
-/// small enough that progress moves visibly and a cancellation is noticed
-/// promptly.
 #[cfg(all(not(target_arch = "wasm32"), feature = "http-native"))]
 const CHUNK_LEN: usize = 64 * 1024;
 
@@ -716,8 +704,6 @@ impl DefaultHttpClient {
     }
 }
 
-/// The status line and headers, handed back the moment they arrive so a caller
-/// can start reading the body while the rest of it is still on the wire.
 #[cfg(all(not(target_arch = "wasm32"), feature = "http-native"))]
 struct ResponseHead {
     status: u16,
@@ -726,7 +712,6 @@ struct ResponseHead {
     resumed: bool,
 }
 
-/// A body read by a worker thread and delivered through a waker.
 #[cfg(all(not(target_arch = "wasm32"), feature = "http-native"))]
 struct ChannelBody {
     chunks: crate::async_io::ChunkStream<HttpError>,
@@ -739,14 +724,6 @@ impl HttpBody for ChannelBody {
     }
 }
 
-/// Runs one request on a thread of its own.
-///
-/// The platform's HTTP is synchronous, and the framework has no thread pool to
-/// hide that behind: the alternative to a thread is blocking whichever task
-/// polled the future, which on the UI thread is the frame. The thread reads the
-/// status line, hands it back through a [`Signal`](crate::async_io::Signal), and
-/// then keeps reading the body into a bounded channel — so the connection stays
-/// busy while the reader works, and stops when the reader stops.
 #[cfg(all(not(target_arch = "wasm32"), feature = "http-native"))]
 async fn send_native(
     client: reqwest::blocking::Client,
@@ -768,9 +745,6 @@ async fn send_native(
             match outcome {
                 Ok(()) => chunks.finish(),
                 Err(error) => {
-                    // The head may not have been delivered yet: a connection
-                    // that never opened has no status line, and whoever is
-                    // awaiting one has to hear about it rather than wait.
                     worker_head.set(Err(error.clone()));
                     chunks.fail(error);
                 }
@@ -782,9 +756,6 @@ async fn send_native(
             message: format!("could not start the transfer: {error}"),
         })?;
 
-    // Awaited, not blocked on: the whole reason the transfer runs on a thread of
-    // its own is that whoever polled this future — often the frame — must stay
-    // free while the connection opens.
     let head = head_signal
         .wait()
         .await
@@ -803,8 +774,6 @@ async fn send_native(
     .with_resumed(head.resumed))
 }
 
-/// The worker body of [`send_native`]: sends the request, publishes the head,
-/// then pumps the body.
 #[cfg(all(not(target_arch = "wasm32"), feature = "http-native"))]
 fn read_native_response(
     client: &reqwest::blocking::Client,
@@ -881,7 +850,6 @@ fn read_native_response(
             transferred,
             total: content_length,
         });
-        // A reader that has gone is a transfer nobody wants finished.
         if !chunks.push(buffer[..count].to_vec()) {
             break;
         }
@@ -932,10 +900,6 @@ fn build_native_client() -> Result<reqwest::blocking::Client, HttpError> {
         reqwest::blocking::Client::builder()
             .connect_timeout(Duration::from_secs(30))
             .timeout(None)
-            // Named from the crate's own version rather than a literal,
-            // which drifts from the release it claims to be the moment one
-            // ships. Some hosts (GitHub's API among them) refuse a request
-            // that carries no agent at all.
             .user_agent(concat!("cranpose/", env!("CARGO_PKG_VERSION"))),
     )?
     .build()
@@ -989,11 +953,6 @@ where
         .collect()
 }
 
-/// A `fetch` body, read through the `ReadableStream` the browser hands back.
-///
-/// The browser streams a response, so the framework streams it too: a page that
-/// downloads a hundred megabytes should not have to hold it as one `ArrayBuffer`
-/// to hand it on in pieces.
 #[cfg(all(target_arch = "wasm32", feature = "web-http"))]
 struct FetchBody {
     url: String,
@@ -1182,20 +1141,13 @@ mod tests {
 
     #[test]
     fn a_response_carries_what_a_resumed_download_needs_to_know() {
-        // A range request that the server honoured answers `206` with the
-        // length of what is left, not of the whole file, and says it resumed —
-        // which is how a caller knows to append rather than truncate.
         let response = HttpResponse::empty("https://host/big.bin", 206)
             .with_content_length(Some(4_096))
             .with_resumed(true);
         assert_eq!(response.content_length, Some(4_096));
         assert!(response.resumed);
-        // 206 Partial Content is a success — a caller that only accepted 200
-        // would treat every resumed download as a failure.
         assert!(response.is_success());
 
-        // A server that ignored the range restarts the transfer, and a caller
-        // that appended to its part file would corrupt it.
         let restarted = HttpResponse::empty("https://host/big.bin", 200)
             .with_content_length(None)
             .with_resumed(false);
@@ -1206,8 +1158,6 @@ mod tests {
 
     #[test]
     fn the_stub_client_answers_every_url_with_the_same_body() {
-        // What a test that only cares about the caller uses: no route table,
-        // no per-URL closure, just "whatever you ask for, here is this".
         let client = StubHttpClient::with_body(b"pong".to_vec());
         for url in ["https://host/a", "https://host/b?query=1"] {
             let request = HttpRequest::get(url);
@@ -1346,8 +1296,6 @@ mod tests {
         assert!(matches!(error, HttpError::HttpStatus { status: 404, .. }));
     }
 
-    /// A body arrives in pieces whether it came off a socket or out of memory,
-    /// and reading it whole must give the same bytes either way.
     #[test]
     fn a_body_read_in_chunks_reassembles_to_what_was_sent() {
         let response = HttpResponse::new(
@@ -1399,10 +1347,6 @@ mod tests {
         assert_eq!(Arc::strong_count(&client), 1);
     }
 
-    /// The point of running a transfer on a thread of its own is that whoever
-    /// polled the future stays free. Blocking on the answer instead puts the
-    /// wait back on the caller's thread — which on the UI thread is the frame —
-    /// and the thread buys nothing.
     #[test]
     fn the_native_transfer_awaits_its_response_rather_than_blocking_on_it() {
         let source = include_str!("http.rs");
@@ -1437,9 +1381,6 @@ mod tests {
         );
     }
 
-    /// Text, bytes and a file on disk are all one transfer plus what the caller
-    /// does with the body, so a backend that implements `send` gets the rest
-    /// and cannot make them disagree.
     #[test]
     fn every_convenience_reads_the_body_the_backend_produced() {
         let client = TestHttpClient;
@@ -1569,12 +1510,6 @@ mod tests {
         assert_eq!(certificates.len(), 3);
     }
 
-    /// A local server that answers one request, so the native transfer can be
-    /// exercised without reaching the network.
-    ///
-    /// `body_len` bytes are written in `chunk` pieces, with `delay` between
-    /// them, which is what makes streaming, progress and cancellation
-    /// observable rather than instantaneous.
     #[cfg(all(not(target_arch = "wasm32"), feature = "http-native"))]
     fn local_server(
         body: Vec<u8>,
@@ -1630,8 +1565,6 @@ mod tests {
             .expect("write local test response head");
             for piece in payload.chunks(chunk.max(1)) {
                 if stream.write_all(piece).is_err() {
-                    // The client hung up: a cancelled transfer, which is the
-                    // behaviour under test rather than a failure.
                     return;
                 }
                 let _ = stream.flush();
@@ -1643,8 +1576,6 @@ mod tests {
         Some((format!("http://{address}"), handle))
     }
 
-    /// A body larger than one chunk must arrive in pieces rather than being
-    /// buffered whole, which is the whole point of streaming it.
     #[cfg(all(not(target_arch = "wasm32"), feature = "http-native"))]
     #[test]
     fn a_native_body_arrives_in_pieces() {
@@ -1678,8 +1609,6 @@ mod tests {
         );
     }
 
-    /// Progress must reach the caller while the transfer runs, not once at the
-    /// end — a progress bar that fills in one step is not a progress bar.
     #[cfg(all(not(target_arch = "wasm32"), feature = "http-native"))]
     #[test]
     fn a_native_transfer_reports_progress_as_it_runs() {
@@ -1730,8 +1659,6 @@ mod tests {
         );
     }
 
-    /// A cancelled transfer stops rather than running to completion in the
-    /// background, and says so.
     #[cfg(all(not(target_arch = "wasm32"), feature = "http-native"))]
     #[test]
     fn a_cancelled_native_transfer_stops() {
@@ -1747,7 +1674,6 @@ mod tests {
         let response = pollster::block_on(client.send(&HttpRequest::get(&url), control.clone()))
             .expect("a response");
 
-        // Read a little, then stop.
         let first = pollster::block_on(response.read_chunk()).expect("a chunk");
         assert!(first.is_some());
         control.cancel();
@@ -1772,8 +1698,6 @@ mod tests {
         assert!(ended, "a cancelled transfer must end rather than run on");
     }
 
-    /// A download resumes from what is already on disk, and a server that
-    /// ignores the range restarts the file rather than appending to it.
     #[cfg(all(not(target_arch = "wasm32"), feature = "http-native"))]
     #[test]
     fn a_download_resumes_from_what_is_already_on_disk() {
@@ -1797,9 +1721,6 @@ mod tests {
         let _ = std::fs::remove_file(&target);
     }
 
-    /// A server free to ignore a `Range` header answers with the whole body.
-    /// Appending that to a partial file gives a file of the right length and
-    /// the wrong bytes, so the partial file has to be replaced instead.
     #[cfg(all(not(target_arch = "wasm32"), feature = "http-native"))]
     #[test]
     fn a_server_that_ignores_a_range_restarts_the_file_rather_than_appending() {

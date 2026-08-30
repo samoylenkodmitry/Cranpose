@@ -1,13 +1,11 @@
 use cranpose_core::MutableState;
 use cranpose_testing::ComposeTestRule;
 use cranpose_ui::{HeadlessRenderer, LayoutBox, LayoutEngine, LayoutTree, RenderOp, Size};
-// Import the showcase functions
 use desktop_app::app::{
     complex_chain_showcase, dynamic_modifiers_showcase, item_list_showcase,
     positioned_boxes_showcase, simple_card_showcase,
 };
 
-/// Helper to compute layout from a test rule
 fn compute_layout_from_rule(
     rule: &mut ComposeTestRule,
     max_width: f32,
@@ -33,12 +31,10 @@ fn compute_layout_from_rule(
     Ok(layout)
 }
 
-/// Recursively dump layout tree with positions and sizes
 fn dump_layout_tree(layout_box: &LayoutBox, depth: usize) -> String {
     let indent = "  ".repeat(depth);
     let rect = &layout_box.rect;
 
-    // Get text content if present
     let text_content = layout_box
         .node_data
         .modifier_slices()
@@ -58,16 +54,9 @@ fn dump_layout_tree(layout_box: &LayoutBox, depth: usize) -> String {
     output
 }
 
-/// Validate that a child box's base position is within parent bounds.
-///
-/// For nodes with explicit offset (content_offset != 0), the offset modifier
-/// is designed to allow content to spill outside parent bounds (similar to
-/// CSS position: relative). We validate the base rect origin is within parent.
 fn validate_child_within_parent(parent: &LayoutBox, child: &LayoutBox) -> Result<(), String> {
     let tolerance = 1.0;
 
-    // Validate base rect origin is within parent
-    // (offset-induced spillage is intentional and allowed)
     if child.rect.x + tolerance < parent.rect.x || child.rect.y + tolerance < parent.rect.y {
         return Err(format!(
             "Child {} base origin ({:.1},{:.1}) outside parent {} at ({:.1},{:.1}) size ({:.1}x{:.1})",
@@ -76,11 +65,9 @@ fn validate_child_within_parent(parent: &LayoutBox, child: &LayoutBox) -> Result
         ));
     }
 
-    // Check if child has an explicit offset modifier
     let has_explicit_offset = child.node_data.resolved_modifiers().offset().x.abs() > 0.001
         || child.node_data.resolved_modifiers().offset().y.abs() > 0.001;
 
-    // For non-offset nodes, also validate right/bottom bounds
     if !has_explicit_offset
         && (child.rect.x + child.rect.width > parent.rect.x + parent.rect.width + tolerance
             || child.rect.y + child.rect.height > parent.rect.y + parent.rect.height + tolerance)
@@ -91,12 +78,10 @@ fn validate_child_within_parent(parent: &LayoutBox, child: &LayoutBox) -> Result
             parent.node_id, parent.rect.x, parent.rect.y, parent.rect.width, parent.rect.height
         ));
     }
-    // For offset nodes, right/bottom overflow is allowed (intentional offset behavior)
 
     Ok(())
 }
 
-/// Recursively validate all children are within their parents
 fn validate_layout_hierarchy(layout_box: &LayoutBox) -> Result<(), String> {
     for child in &layout_box.children {
         validate_child_within_parent(layout_box, child)?;
@@ -105,7 +90,6 @@ fn validate_layout_hierarchy(layout_box: &LayoutBox) -> Result<(), String> {
     Ok(())
 }
 
-/// Find a layout box by its text content
 fn find_box_with_text<'a>(layout_box: &'a LayoutBox, text: &str) -> Option<&'a LayoutBox> {
     if let Some(content) = layout_box.node_data.modifier_slices().text_content() {
         if content == text {
@@ -122,7 +106,6 @@ fn find_box_with_text<'a>(layout_box: &'a LayoutBox, text: &str) -> Option<&'a L
     None
 }
 
-/// Collect all layout boxes in a flat list (depth-first)
 fn collect_all_boxes<'a>(layout_box: &'a LayoutBox, result: &mut Vec<&'a LayoutBox>) {
     result.push(layout_box);
     for child in &layout_box.children {
@@ -143,10 +126,8 @@ fn test_simple_card_layout_positions() {
     println!("=== Simple Card Layout ===");
     println!("{}", dump_layout_tree(layout.root(), 0));
 
-    // Validate hierarchy - all children should be within parent bounds
     validate_layout_hierarchy(layout.root()).expect("Layout hierarchy should be valid");
 
-    // Simple card should have title, description, and action buttons
     let title = find_box_with_text(layout.root(), "Card Title").expect("Should find Card Title");
     let description = find_box_with_text(layout.root(), "Card content goes here with padding")
         .expect("Should find description");
@@ -155,7 +136,6 @@ fn test_simple_card_layout_positions() {
     let action2 =
         find_box_with_text(layout.root(), "Action 2").expect("Should find Action 2 button");
 
-    // Title should be above description
     assert!(
         title.rect.y < description.rect.y,
         "Title should be above description: title.y={:.2} vs desc.y={:.2}",
@@ -163,7 +143,6 @@ fn test_simple_card_layout_positions() {
         description.rect.y
     );
 
-    // Description should be above action buttons
     assert!(
         description.rect.y < action1.rect.y,
         "Description should be above Action 1: desc.y={:.2} vs action1.y={:.2}",
@@ -171,7 +150,6 @@ fn test_simple_card_layout_positions() {
         action1.rect.y
     );
 
-    // Action buttons should be on same horizontal level
     assert!(
         (action1.rect.y - action2.rect.y).abs() < 2.0,
         "Action buttons should be at same vertical position: action1.y={:.2} vs action2.y={:.2}",
@@ -179,7 +157,6 @@ fn test_simple_card_layout_positions() {
         action2.rect.y
     );
 
-    // Action 1 should be left of Action 2
     assert!(
         action1.rect.x < action2.rect.x,
         "Action 1 should be left of Action 2: action1.x={:.2} vs action2.x={:.2}",
@@ -203,10 +180,8 @@ fn test_positioned_boxes_layout() {
     println!("=== Positioned Boxes Layout ===");
     println!("{}", dump_layout_tree(layout.root(), 0));
 
-    // Validate hierarchy - should pass with new container size
     validate_layout_hierarchy(layout.root()).expect("Layout hierarchy should be valid");
 
-    // Now has 4 boxes: A (top-left), B (bottom-right), C (center-top), D (center-left)
     let box_a = find_box_with_text(layout.root(), "Box A").expect("Should find Box A");
     let box_b = find_box_with_text(layout.root(), "Box B").expect("Should find Box B");
     let box_c = find_box_with_text(layout.root(), "C").expect("Should find Box C");
@@ -229,21 +204,16 @@ fn test_positioned_boxes_layout() {
         box_d.rect.x, box_d.rect.y, box_d.rect.width, box_d.rect.height
     );
 
-    // Verify relative positioning
-    // Box A (top-left) should be leftmost and topmost
     assert!(box_a.rect.x < box_b.rect.x, "Box A should be left of Box B");
     assert!(box_a.rect.y < box_b.rect.y, "Box A should be above Box B");
 
-    // Box C should be above Box D (center-top vs center-left)
     assert!(box_c.rect.y < box_d.rect.y, "Box C should be above Box D");
 
-    // Box B should be rightmost
     assert!(
         box_b.rect.x > box_a.rect.x && box_b.rect.x > box_c.rect.x && box_b.rect.x > box_d.rect.x,
         "Box B should be rightmost"
     );
 
-    // Box A should be topmost
     assert!(
         box_a.rect.y <= box_b.rect.y
             && box_a.rect.y <= box_c.rect.y
@@ -267,26 +237,21 @@ fn test_item_list_spacing() {
     println!("=== Item List Layout ===");
     println!("{}", dump_layout_tree(layout.root(), 0));
 
-    // Validate hierarchy
     validate_layout_hierarchy(layout.root()).expect("Layout hierarchy should be valid");
 
-    // Find all items
     let item1 = find_box_with_text(layout.root(), "Item #0").expect("Should find Item #0");
     let item2 = find_box_with_text(layout.root(), "Item #1").expect("Should find Item #1");
     let item3 = find_box_with_text(layout.root(), "Item #2").expect("Should find Item #2");
 
-    // Items should be vertically stacked
     assert!(item1.rect.y < item2.rect.y, "Item 1 should be above Item 2");
     assert!(item2.rect.y < item3.rect.y, "Item 2 should be above Item 3");
 
-    // Calculate spacing between items
     let spacing_1_2 = item2.rect.y - (item1.rect.y + item1.rect.height);
     let spacing_2_3 = item3.rect.y - (item2.rect.y + item2.rect.height);
 
     println!("Spacing between Item 1 and 2: {:.1}", spacing_1_2);
     println!("Spacing between Item 2 and 3: {:.1}", spacing_2_3);
 
-    // Spacing should be consistent (allowing small floating point error)
     let spacing_diff = (spacing_1_2 - spacing_2_3).abs();
     assert!(
         spacing_diff < 1.0,
@@ -296,7 +261,6 @@ fn test_item_list_spacing() {
         spacing_diff
     );
 
-    // Render the scene to count backgrounds (for borders and status indicators)
     let renderer = HeadlessRenderer::new();
     let scene = renderer.render(&layout);
 
@@ -306,10 +270,6 @@ fn test_item_list_spacing() {
         .filter(|op| matches!(op, RenderOp::Primitive { .. }))
         .count();
 
-    // Should have backgrounds for:
-    // - Title background (1)
-    // - Each item: border + background + status indicator (3 * 5 = 15)
-    // Total: 1 + 15 = 16 backgrounds
     println!("Background primitives found: {}", background_count);
     assert!(
         background_count >= 16,
@@ -333,10 +293,8 @@ fn test_complex_chain_modifier_ordering() {
     println!("=== Complex Chain Layout ===");
     println!("{}", dump_layout_tree(layout.root(), 0));
 
-    // Validate hierarchy - should now pass after fixing the overflow bug
     validate_layout_hierarchy(layout.root()).expect("Layout hierarchy should be valid");
 
-    // Render the scene to check draw order and nested backgrounds
     let renderer = HeadlessRenderer::new();
     let scene = renderer.render(&layout);
 
@@ -371,27 +329,18 @@ fn test_complex_chain_modifier_ordering() {
     println!("\nBackground primitives: {}", background_count);
     println!("Text elements: {}", text_count);
 
-    // Nested Box structure creates multiple backgrounds:
-    // - Title background (1)
-    // - First nested boxes: Red outer, Green middle, Blue inner (3)
-    // - Second nested boxes: Orange outer, Purple inner (2)
-    // Total: 1 + 3 + 2 = 6 backgrounds
     assert_eq!(
         background_count, 6,
         "Should have 6 background primitives for nested box structure, got {}",
         background_count
     );
 
-    // Should have 5 text elements:
-    // - Title, description1, text1 (Nested!), description2, text2 (Offset + Sized)
     assert_eq!(
         text_count, 5,
         "Should have 5 text elements, got {}",
         text_count
     );
 
-    // Validate nested backgrounds are properly rendered
-    // Find the "Nested!" text to verify it's surrounded by colored backgrounds
     let nested_text =
         find_box_with_text(layout.root(), "Nested!").expect("Should find 'Nested!' text");
     let offset_text = find_box_with_text(layout.root(), "Offset + Sized")
@@ -406,7 +355,6 @@ fn test_complex_chain_modifier_ordering() {
         offset_text.rect.x, offset_text.rect.y, offset_text.rect.width, offset_text.rect.height
     );
 
-    // The offset box should be offset by 20px horizontally
     assert!(
         offset_text.rect.x >= 20.0,
         "Offset box should be offset by at least 20px, got x={:.1}",
@@ -430,7 +378,6 @@ fn test_dynamic_modifiers_size_changes() {
     println!("=== Dynamic Modifiers (Initial) ===");
     println!("{}", dump_layout_tree(layout.root(), 0));
 
-    // Validate hierarchy at frame 0
     validate_layout_hierarchy(layout.root()).expect("Layout hierarchy should be valid at frame 0");
 
     println!("✓ Dynamic modifiers render correctly");
@@ -449,14 +396,12 @@ fn test_dynamic_modifiers_frame_advancement() {
     })
     .expect("Dynamic modifiers should render");
 
-    // Test at frame 0
     let layout0 = compute_layout_from_rule(&mut rule, 800.0, 600.0)
         .expect("Should compute layout at frame 0");
     println!("\n=== Dynamic Modifiers Frame 0 ===");
     println!("{}", dump_layout_tree(layout0.root(), 0));
     validate_layout_hierarchy(layout0.root()).expect("Layout should be valid at frame 0");
 
-    // Advance to frame 5 (x = 50)
     frame.set(5);
     rule.pump_until_idle()
         .expect("Should recompose after frame advance");
@@ -466,7 +411,6 @@ fn test_dynamic_modifiers_frame_advancement() {
     println!("{}", dump_layout_tree(layout5.root(), 0));
     validate_layout_hierarchy(layout5.root()).expect("Layout should be valid at frame 5");
 
-    // Advance to frame 10 (x = 100)
     frame.set(10);
     rule.pump_until_idle()
         .expect("Should recompose after frame advance");
@@ -476,7 +420,6 @@ fn test_dynamic_modifiers_frame_advancement() {
     println!("{}", dump_layout_tree(layout10.root(), 0));
     validate_layout_hierarchy(layout10.root()).expect("Layout should be valid at frame 10");
 
-    // Advance to frame 19 (x = 190, close to boundary)
     frame.set(19);
     rule.pump_until_idle()
         .expect("Should recompose after frame advance");
@@ -485,7 +428,6 @@ fn test_dynamic_modifiers_frame_advancement() {
     println!("\n=== Dynamic Modifiers Frame 19 (x=190) ===");
     println!("{}", dump_layout_tree(layout19.root(), 0));
 
-    // This should not fail now - validation skips nodes with explicit offsets
     match validate_layout_hierarchy(layout19.root()) {
         Ok(_) => println!("✓ Layout valid at frame 19"),
         Err(e) => {
@@ -497,7 +439,6 @@ fn test_dynamic_modifiers_frame_advancement() {
     println!("✓ Dynamic modifiers handle frame advancement correctly");
 }
 
-// Helper function that takes frame as parameter for testing
 fn dynamic_modifiers_showcase_with_frame(frame: MutableState<i32>) {
     use cranpose_ui::*;
 
@@ -520,7 +461,6 @@ fn dynamic_modifiers_showcase_with_frame(frame: MutableState<i32>) {
         let x = (current_frame as f32 * 10.0) % 200.0;
         let y = 50.0;
 
-        // Wrap moving box in a container with explicit size to prevent overflow
         cranpose_ui::Box(
             Modifier::empty()
                 .size_points(250.0, 150.0)
@@ -581,11 +521,9 @@ fn test_all_showcases_have_valid_layouts() {
         let layout = compute_layout_from_rule(&mut rule, 800.0, 600.0)
             .unwrap_or_else(|_| panic!("{} should compute layout", name));
 
-        // Validate hierarchy - all showcases should now have valid hierarchies
         validate_layout_hierarchy(layout.root())
             .unwrap_or_else(|_| panic!("{} layout hierarchy should be valid", name));
 
-        // Ensure root has non-zero size
         assert!(
             layout.root().rect.width > 0.0,
             "{} root should have width",
@@ -597,7 +535,6 @@ fn test_all_showcases_have_valid_layouts() {
             name
         );
 
-        // Collect all boxes and ensure none have negative positions
         let mut all_boxes = Vec::new();
         collect_all_boxes(layout.root(), &mut all_boxes);
 

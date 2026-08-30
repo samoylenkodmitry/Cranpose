@@ -10,7 +10,6 @@ pub mod default {
 
 #[cfg(not(feature = "std-hash"))]
 pub mod default {
-    // fast branch
     pub use ahash::AHasher as DefaultHasher;
 
     #[inline]

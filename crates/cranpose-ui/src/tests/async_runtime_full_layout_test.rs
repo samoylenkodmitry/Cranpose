@@ -1,13 +1,3 @@
-// Comprehensive test reproducing the async runtime freeze bug with full layout structure
-//
-// This test mimics the actual desktop demo app's async_runtime_example() function
-// to reproduce the exact freeze bug where:
-// - Animation continues (LaunchedEffectAsync keeps running)
-// - BUT: Text "Frames advanced: N" freezes
-// - BUT: Button "Pause..." appearance doesn't change
-//
-// Root cause: Conditional rendering breaks RecomposeScope connections for sibling components
-
 use cranpose_core::{
     __launched_effect_async_impl as launched_effect_async_impl, Composition, MemoryApplier,
     MutableState, Node, TaskSite, location_key,
@@ -55,20 +45,12 @@ struct DummyNode;
 
 impl Node for DummyNode {}
 
-/// Composable function that mimics the full async_runtime_example() layout
-/// This includes:
-/// - LaunchedEffectAsync updating animation + stats
-/// - Column with Title Text
-/// - Progress Column with conditional Row (THE BUG TRIGGER)
-/// - Stats Text showing frame count (FREEZES)
-/// - Button row with Pause button (FREEZES)
 #[composable]
 fn async_runtime_full_layout(
     is_running: MutableState<bool>,
     animation: MutableState<AnimationState>,
     stats: MutableState<FrameStats>,
 ) {
-    // LaunchedEffectAsync - exactly like the demo
     {
         let animation_state = animation;
         let stats_state = stats;
@@ -100,25 +82,23 @@ fn async_runtime_full_layout(
                         if let Some(previous) = last_time {
                             let mut delta_nanos = nanos.saturating_sub(previous);
                             if delta_nanos == 0 {
-                                delta_nanos = 16_666_667; // 60 FPS fallback
+                                delta_nanos = 16_666_667;
                             }
                             let dt_ms = delta_nanos as f32 / 1_000_000.0;
 
-                            // Update stats - THIS SHOULD TRIGGER RECOMPOSITION
                             stats.update(|state| {
                                 state.frames = state.frames.wrapping_add(1);
                                 state.last_frame_ms = dt_ms;
                             });
 
-                            // Update animation - this triggers conditional rendering
                             animation.update(|anim| {
                                 let next = anim.progress + 0.1 * anim.direction * (dt_ms / 600.0);
                                 if next >= 1.0 {
                                     anim.progress = 1.0;
-                                    anim.direction = -1.0; // Flip to reverse
+                                    anim.direction = -1.0;
                                 } else if next <= 0.0 {
                                     anim.progress = 0.0;
-                                    anim.direction = 1.0; // Flip to forward
+                                    anim.direction = 1.0;
                                 } else {
                                     anim.progress = next;
                                 }
@@ -132,12 +112,10 @@ fn async_runtime_full_layout(
         );
     }
 
-    // Full layout structure matching the demo
     Column(
         Modifier::empty().padding(32.0),
         ColumnSpec::default(),
         move || {
-            // Title Text
             Text(
                 "Async Runtime Demo",
                 Modifier::empty().padding(12.0),
@@ -149,12 +127,10 @@ fn async_runtime_full_layout(
                 height: 16.0,
             });
 
-            // Get snapshots for this render
             let animation_snapshot = animation.get();
             let stats_snapshot = stats.get();
             let progress_value = animation_snapshot.progress.clamp(0.0, 1.0);
 
-            // Progress Column with conditional Row
             Column(
                 Modifier::empty().padding(8.0),
                 ColumnSpec::default(),
@@ -170,7 +146,6 @@ fn async_runtime_full_layout(
                         height: 8.0,
                     });
 
-                    // Outer container Row
                     Row(
                         Modifier::empty()
                             .height(26.0)
@@ -179,8 +154,6 @@ fn async_runtime_full_layout(
                         {
                             let progress_fraction = progress_value;
                             move || {
-                                // CRITICAL: Conditional rendering that triggers the bug
-                                // When progress goes from >0 to 0 and back, this changes composition structure
                                 if progress_fraction > 0.0 {
                                     Row(
                                         Modifier::empty()
@@ -211,7 +184,6 @@ fn async_runtime_full_layout(
                 height: 12.0,
             });
 
-            // Stats Text - THIS SHOULD UPDATE BUT FREEZES
             Text(
                 format!(
                     "Frames advanced: {} (direction: {})",
@@ -231,7 +203,6 @@ fn async_runtime_full_layout(
                 height: 16.0,
             });
 
-            // Button Row
             {
                 let is_running_for_button = is_running;
                 Row(
@@ -240,7 +211,6 @@ fn async_runtime_full_layout(
                     move || {
                         let running = is_running_for_button.get();
 
-                        // Pause/Resume Button - APPEARANCE SHOULD CHANGE BUT FREEZES
                         let button_label = if running {
                             "Pause animation"
                         } else {
@@ -268,13 +238,11 @@ fn async_runtime_full_layout(
     );
 }
 
-/// Helper to drain all pending recompositions until stable
 fn drain_all<A: cranpose_core::Applier + 'static>(
     composition: &mut Composition<A>,
 ) -> Result<(), cranpose_core::NodeError> {
     let mut iterations = 0;
     loop {
-        // Check if process_invalid_scopes did any work
         if !composition.process_invalid_scopes()? {
             if iterations > 100 {
                 println!("drain_all: Took {} iterations to stabilize", iterations);
@@ -289,7 +257,7 @@ fn drain_all<A: cranpose_core::Applier + 'static>(
             return Err(cranpose_core::NodeError::MissingContext {
                 id: 0,
                 reason: "drain_all: Exceeded 1000 iterations",
-            }); // Indicate error instead of panicking
+            });
         }
     }
 }
@@ -297,16 +265,13 @@ fn drain_all<A: cranpose_core::Applier + 'static>(
 #[test]
 fn async_runtime_full_layout_freezes_after_forward_flip() {
     let _app_context = crate::render_state::app_context_test_scope();
-    // Setup composition
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
 
-    // Create states
     let is_running = MutableState::with_runtime(true, runtime.clone());
     let animation = MutableState::with_runtime(AnimationState::default(), runtime.clone());
     let stats = MutableState::with_runtime(FrameStats::default(), runtime.clone());
 
-    // Initial render
     composition
         .render(location_key(file!(), line!(), column!()), &mut || {
             async_runtime_full_layout(is_running, animation, stats);
@@ -316,13 +281,12 @@ fn async_runtime_full_layout_freezes_after_forward_flip() {
 
     println!("Starting animation loop, looking for forward flip...");
 
-    // Advance frames until we detect a forward flip (reverse -> forward transition)
     let mut time = 0u64;
     let mut last_direction = animation.get().direction;
     let mut forward_flip_frame: Option<u32> = None;
 
     for frame_num in 0..2000 {
-        time += 16_666_667; // 60 FPS (16.67ms per frame)
+        time += 16_666_667;
         runtime.drain_frame_callbacks(time);
         drain_all(&mut composition).expect("drain loop");
         {
@@ -350,7 +314,6 @@ fn async_runtime_full_layout_freezes_after_forward_flip() {
         let anim = animation.get();
         let current_direction = anim.direction;
 
-        // Detect forward flip: direction was negative, now positive, progress near 0
         if last_direction < 0.0 && current_direction > 0.0 && anim.progress < 0.1 {
             forward_flip_frame = Some(frame_num);
             println!(
@@ -371,8 +334,6 @@ fn async_runtime_full_layout_freezes_after_forward_flip() {
     let frames_at_flip = stats.get().frames;
     println!("Stats frames at flip: {}", frames_at_flip);
 
-    // Advance 100 more frames AFTER the flip
-    // This is where the bug manifests: frames should continue incrementing but don't
     println!("Advancing 100 frames after flip...");
     for _ in 0..100 {
         time += 16_666_667;
@@ -410,9 +371,6 @@ fn async_runtime_full_layout_freezes_after_forward_flip() {
         anim_after.progress, anim_after.direction
     );
 
-    // BUG REPRODUCTION: This assertion will FAIL
-    // Expected: frames_after_flip > frames_at_flip (e.g., 890 > 790)
-    // Actual: frames_after_flip == frames_at_flip (e.g., 790 == 790)
     assert!(
         frames_after_flip > frames_at_flip,
         "BUG REPRODUCED: Frames stopped incrementing after forward flip! \
@@ -426,8 +384,6 @@ fn async_runtime_full_layout_freezes_after_forward_flip() {
         anim_after.direction
     );
 
-    // Additional assertion: composition should recognize need to rerender
-    // This will also fail because RecomposeScopes are disconnected
     assert!(
         composition.should_render(),
         "BUG: Composition should schedule rerender when stats change, but doesn't"

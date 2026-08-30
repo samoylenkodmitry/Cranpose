@@ -1,6 +1,3 @@
-//! Tests that a [`SelectionHandle`] renders its teardrop in the top-level
-//! overlay, anchored so its tip lands on the given text endpoint.
-
 use cranpose_core::{Key, MemoryApplier, NodeId, location_key};
 use cranpose_ui_graphics::{Color, DrawPrimitive, Point, Rect, Size};
 
@@ -40,9 +37,6 @@ fn settle(composition: &mut Composition<MemoryApplier>, key: Key, content: &mut 
     }
 }
 
-/// Any drawn primitive's bounding rectangle (the teardrop rasterizes to an
-/// image mask; backgrounds/rects are also matched so the test is robust to the
-/// exact draw technique).
 fn drawn_rects(scene: &crate::renderer::RecordedRenderScene) -> Vec<Rect> {
     scene
         .operations()
@@ -109,28 +103,15 @@ fn selection_handle_renders_in_overlay_at_its_tip() {
         !rects.is_empty(),
         "the selection handle should draw at least one primitive in the overlay"
     );
-    // The handle's drawn box must contain the tip (120, 90): the teardrop's tip
-    // points exactly at the text endpoint.
     assert!(
         rects.iter().any(|rect| contains(rect, tip)),
         "handle box must contain its tip {tip:?}; drawn rects: {rects:?}"
     );
-    // And it must render well below y=0 (i.e. it is not clamped to the top of
-    // any parent) — the bulb hangs below the tip.
     assert!(
         rects.iter().any(|rect| rect.y + rect.height >= tip.y),
         "the handle bulb should hang at/below the tip"
     );
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Long-press → (re)open the contextual menu
-//
-// A selection handle reports a long-press (finger held on the handle without
-// dragging it) so the field can re-show the Copy/Cut/Paste/Select-all menu even
-// when the selection range has not changed. These drive the real handle gesture
-// modifier synchronously, the same way the zoom gesture tests do.
-// ─────────────────────────────────────────────────────────────────────────────
 
 mod long_press {
     use std::{cell::Cell, rc::Rc, sync::Arc};
@@ -160,9 +141,6 @@ mod long_press {
             .with_time_ms(Some(time_ms))
     }
 
-    /// Builds the real selection-handle gesture modifier and returns a handler
-    /// that synchronously drives its async pointer loop, plus the chain (kept
-    /// alive so the task keeps running). Counters record the fired callbacks.
     struct Harness {
         _runtime: Runtime,
         handler: Rc<dyn Fn(PointerEvent)>,
@@ -237,8 +215,6 @@ mod long_press {
         let _app_context = crate::render_state::app_context_test_scope();
         let h = Harness::new();
 
-        // Finger goes down, rests in place, then a later sample (as a real touch
-        // history emits) crosses the long-press timeout without moving.
         h.send(event(PointerEventKind::Down, 100.0, 100.0, 0));
         h.send(event(
             PointerEventKind::Move,
@@ -253,7 +229,6 @@ mod long_press {
             "a finger resting on the handle past the timeout should report one long-press"
         );
 
-        // It must fire only once per press even as more samples arrive.
         h.send(event(
             PointerEventKind::Move,
             101.0,
@@ -284,9 +259,6 @@ mod long_press {
         let _app_context = crate::render_state::app_context_test_scope();
         let h = Harness::new();
 
-        // A perfectly still finger emits no Move samples; the elapsed hold is
-        // only observable when it lifts. That lift must still report the
-        // long-press (and settle) so the menu can re-open.
         h.send(event(PointerEventKind::Down, 100.0, 100.0, 0));
         h.send(event(
             PointerEventKind::Up,
@@ -317,8 +289,6 @@ mod long_press {
             "a quick tap on the handle must not be treated as a long-press"
         );
         assert_eq!(h.drag_ends.get(), 1);
-        // Bug (b): a quick press→release that did not drag the handle is a tap,
-        // so the handle reports one tap (the cursor handle opens its popup).
         assert_eq!(
             h.taps.get(),
             1,
@@ -331,7 +301,6 @@ mod long_press {
         let _app_context = crate::render_state::app_context_test_scope();
         let h = Harness::new();
 
-        // Press, travel well past the tap slop, then lift: a drag, not a tap.
         h.send(event(PointerEventKind::Down, 100.0, 100.0, 0));
         h.send(event(PointerEventKind::Move, 160.0, 130.0, 40));
         h.send(event(PointerEventKind::Up, 160.0, 130.0, 60));
@@ -345,8 +314,6 @@ mod long_press {
         let _app_context = crate::render_state::app_context_test_scope();
         let h = Harness::new();
 
-        // Held long enough, but the finger travels far — that is a drag to
-        // adjust the selection, not a long-press.
         h.send(event(PointerEventKind::Down, 100.0, 100.0, 0));
         h.send(event(
             PointerEventKind::Move,
@@ -371,21 +338,18 @@ mod long_press {
 
     #[test]
     fn is_handle_long_press_classifies_hold_vs_tap_vs_drag() {
-        // Held long enough, barely moved → long-press.
         assert!(is_handle_long_press(
             0,
             HANDLE_LONG_PRESS_TIMEOUT_MS,
             point(10.0, 10.0),
             point(14.0, 12.0),
         ));
-        // Not held long enough → not a long-press.
         assert!(!is_handle_long_press(
             0,
             HANDLE_LONG_PRESS_TIMEOUT_MS - 1,
             point(10.0, 10.0),
             point(10.0, 10.0),
         ));
-        // Held long enough but moved far → a drag, not a long-press.
         assert!(!is_handle_long_press(
             0,
             HANDLE_LONG_PRESS_TIMEOUT_MS + 100,
@@ -395,19 +359,6 @@ mod long_press {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Handle-kind restart — the start-vs-end grab asymmetry regression
-//
-// When a field's selection collapses to a caret and then re-expands into a
-// range, the composition reuses the single cursor handle's positional slot for
-// the range's START handle. The handle's gesture task is a `pointer_input`; if
-// it is keyed by a constant it does NOT restart when the slot's kind changes, so
-// the start handle keeps running the cursor handle's caret-placement drag and
-// COLLAPSES the selection on grab (while the end handle, a fresh slot, works) —
-// the exact start-vs-end asymmetry seen on device. Keying the task by handle
-// kind restarts it with the correct drag closure. These drive the real gesture
-// modifier through the modifier-node reconciliation the way a recomposition does.
-// ─────────────────────────────────────────────────────────────────────────────
 mod kind_restart {
     use std::{cell::Cell, rc::Rc, sync::Arc};
 
@@ -445,11 +396,6 @@ mod kind_restart {
             .expect("handle provides a pointer input handler")
     }
 
-    /// Regression for the start-handle collapse: a slot first composed as the
-    /// cursor handle (caret-collapse drag) and then re-composed as the range
-    /// START handle (edge drag) must run the START handle's drag on grab, not
-    /// the stale caret one — otherwise grabbing the start handle collapses the
-    /// selection.
     #[test]
     fn reusing_the_cursor_slot_as_the_start_handle_runs_the_edge_drag_not_the_caret_drag() {
         let _app_context = crate::render_state::app_context_test_scope();
@@ -470,21 +416,16 @@ mod kind_restart {
         let mut chain = ModifierNodeChain::new();
         let mut context = BasicModifierNodeContext::new();
 
-        // Frame 1: the collapsed caret shows a single CURSOR handle.
         chain.update_from_slice(
             &handle_modifier(HandleKind::Cursor, Rc::clone(&caret_drag)).elements(),
             &mut context,
         );
 
-        // Frame 2: the selection re-expands; the same slot is now the range
-        // START handle with the edge-drag closure.
         chain.update_from_slice(
             &handle_modifier(HandleKind::SelectionStart, Rc::clone(&edge_drag)).elements(),
             &mut context,
         );
 
-        // A grab now must drive the START handle's edge drag, never the stale
-        // cursor caret drag.
         active_handler(&chain)(down());
 
         assert_eq!(
@@ -502,8 +443,6 @@ mod kind_restart {
         );
     }
 
-    /// The end handle was never affected (fresh slot) — assert it too runs its
-    /// own drag, so the fix keeps both edges independent.
     #[test]
     fn end_handle_runs_its_own_edge_drag() {
         let _app_context = crate::render_state::app_context_test_scope();

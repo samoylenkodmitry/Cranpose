@@ -1,11 +1,3 @@
-//! The debug formatters, the retained draw scopes, and the zoom limits.
-//!
-//! The formatters are what anyone reads when a screen is wrong, so a formatter
-//! that panics or comes back empty removes the only tool available at exactly
-//! the moment it is needed. The retained draw scopes exist so a command
-//! re-recording every frame allocates nothing in the steady state, which is a
-//! claim about the buffer that comes back rather than the picture that goes out.
-
 use cranpose_ui::{
     Modifier, RecordedRenderScene, ZoomState, command_draw_scope_retained,
     command_draw_scope_reusing, format_layout_tree, format_modifier_chain, format_render_scene,
@@ -14,8 +6,6 @@ use cranpose_ui::{
 };
 use cranpose_ui_graphics::Size;
 
-/// Composes one box and measures it, which is the smallest thing the debug
-/// formatters can be pointed at.
 fn measured() -> cranpose_ui::LayoutTree {
     let mut composition = run_test_composition(|| {
         cranpose_ui::widgets::box_widget::Box(
@@ -48,7 +38,6 @@ fn the_layout_formatter_describes_the_tree_it_is_given() {
         text.contains("40"),
         "a 40-wide box was not described: {text}"
     );
-    // The logging form is the formatter plus a log line; it must not diverge.
     log_layout_tree(&tree);
 }
 
@@ -90,9 +79,6 @@ fn the_modifier_chain_formatter_reports_how_many_nodes_it_walked() {
 
 #[test]
 fn a_reusing_draw_scope_gives_the_callers_buffer_back() {
-    // The point of the reusing form is that the caller's allocation survives:
-    // a scope that returned a fresh Vec would allocate once per frame per
-    // command, which is what the retained recorder exists to avoid.
     let storage = Vec::with_capacity(64);
     let capacity = storage.capacity();
 

@@ -1,5 +1,3 @@
-//! Scene building pipeline - builds the render graph and backend scene state.
-
 use std::{ops::Range, rc::Rc};
 
 use cranpose_core::{MemoryApplier, NodeId};
@@ -41,7 +39,6 @@ use crate::{
     surface_requirements::{SurfaceRequirement, SurfaceRequirementSet},
 };
 
-// Re-use style functions from a local copy
 mod style;
 use style::{apply_layer_to_brush, apply_layer_to_color, scale_corner_radii};
 
@@ -102,7 +99,7 @@ fn shadow_shape(
             shape,
             stroke: None,
             arc: None,
-            z_index: 0, // populated by CompositorScene::push_shadow_draw()
+            z_index: 0,
             clip: None,
             blend_mode: BlendMode::SrcOver,
             motion_context_animated: false,
@@ -111,13 +108,6 @@ fn shadow_shape(
     )
 }
 
-/// The largest rectangle the caster provably paints over its own shadow:
-/// its transformed footprint inset past the rounded corners. Only an
-/// axis-aligned, fully opaque layer occludes — rotation makes the
-/// axis-aligned inset wrong and layer alpha lets the shadow show through.
-/// (Whether the caster's CONTENT covers its bounds is the application's
-/// contract, exactly as on the reference platform, whose `drawShadow`
-/// assumes an opaque occluder unless told otherwise.)
 fn shadow_occluder(
     layer: &GraphicsLayer,
     transformed_bounds: Rect,
@@ -185,7 +175,7 @@ pub(crate) fn push_layer_shadow(
             blur_radius: ambient_pass.blur_radius,
             clip,
             occluder,
-            z_index: 0, // populated by CompositorScene::push_shadow_draw()
+            z_index: 0,
         });
     }
 
@@ -203,7 +193,7 @@ pub(crate) fn push_layer_shadow(
             blur_radius: spot_pass.blur_radius,
             clip,
             occluder,
-            z_index: 0, // populated by CompositorScene::push_shadow_draw()
+            z_index: 0,
         });
     }
 }
@@ -233,8 +223,6 @@ fn resolve_text_clip(
     if overflow == TextOverflow::Visible {
         return Some(visual_clip);
     }
-    // Non-visible overflow requires a concrete clip intersection.
-    // If empty, skip drawing rather than treating `None` as unbounded clip.
     resolve_clip(visual_clip, Some(pad_clip_rect(transformed_text_bounds))).map(Some)
 }
 
@@ -781,11 +769,6 @@ trait TextStyleDrawSink {
         z_end: usize,
     );
 
-    /// Extended version of `push_effect_layer` that carries surface requirements.
-    ///
-    /// The default implementation **discards** `requirements` and delegates to
-    /// `push_effect_layer`. Implementations that use requirements for surface
-    /// isolation decisions (e.g. `CompositorScene`) **must** override this.
     #[allow(clippy::too_many_arguments)]
     fn push_effect_layer_with_surface(
         &mut self,
@@ -1200,9 +1183,6 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
             text_scale,
         )
     {
-        // If any span overrides the foreground color, the single GPU effect
-        // would overwrite that override. Fall back to per-span batching so
-        // each range gets its own material (gradient vs solid).
         if text_spans_override_foreground_color(text)
             && push_span_gpu_text_material_draws(
                 sink,
@@ -1927,9 +1907,6 @@ fn decoration_brush_for_span(
     )
 }
 
-// The tests below call the shared implementation rather than a `#[cfg(test)]`
-// replica of this rule, so they guard the function the scene builder — the code
-// that actually paints — runs.
 #[cfg(test)]
 use cranpose_render_common::scene_builder::resolve_text_measure_width;
 
@@ -1964,38 +1941,22 @@ fn resolve_text_horizontal_offset(
     }
 }
 
-// The retained-slot universe graphs built by this crate feed into. Bumped
-// whenever the renderer drops retained slots wholesale (device loss, scale
-// change); scene building resets per-command verification state when the
-// epoch moves, so no graph references slots from a dead universe.
 #[cfg(not(target_arch = "wasm32"))]
 thread_local! {
     static RETAINED_FEED_GENERATION: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
-/// Moves the retained feed to a fresh epoch after the renderer dropped its
-/// identity-fed slots wholesale; the next scene build restarts every
-/// command's verification state.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn bump_retained_feed_generation() {
     RETAINED_FEED_GENERATION.with(|cell| cell.set(cell.get().wrapping_add(1)));
 }
 
-/// The current retained-feed generation: the slot universe confirmations
-/// are stamped with when the renderer honors a capture, and the epoch
-/// [`declare_retained_feed`] declares to scene building. Public (hidden)
-/// so the fail-closed contract tests can assert revocation bumped it.
 #[cfg(not(target_arch = "wasm32"))]
 #[doc(hidden)]
 pub fn retained_feed_generation() -> u64 {
     RETAINED_FEED_GENERATION.with(std::cell::Cell::get)
 }
 
-/// Declares to scene building that the wgpu renderer consumes retained
-/// draw-run spans by identity. wasm has no storage-buffer retained path, so
-/// it declares nothing and scene building skips verification entirely. With
-/// the feed flag off nothing consumes the spans either — declaring an epoch
-/// there would let bypass skip primitives no path redraws.
 fn declare_retained_feed() {
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -2014,7 +1975,6 @@ fn declare_retained_feed() {
     cranpose_render_common::scene_builder::set_retained_feed_epoch(None);
 }
 
-/// Renders the scene by traversing the LayoutNode tree directly via Applier.
 pub(crate) fn render_from_applier(
     applier: &mut MemoryApplier,
     root: NodeId,
@@ -2132,9 +2092,6 @@ fn collect_hits_from_graph(
     collect_common_hits(layer, parent_transform, &mut sink, parent_hit_clip);
 }
 
-/// Node id recorded for text that came from a draw primitive rather than a
-/// `Text` node. Text draws only carry a node id for per-node prewarm
-/// bookkeeping, and a draw primitive belongs to its layer, not to a text node.
 const DRAW_PRIMITIVE_TEXT_NODE_ID: cranpose_core::NodeId = 0;
 
 pub(crate) fn push_draw_primitive(
@@ -2193,11 +2150,6 @@ pub(crate) fn push_draw_primitive(
         }
 
         fn push_text(&mut self, params: TextDrawParams) {
-            // Straight into the compositor's text list — the same one `Text`
-            // nodes land in, so the run shares its glyph atlas, run cache and
-            // pipeline. `emit_text_style_draws` is skipped deliberately: a draw
-            // primitive carries no spans, background, shadow or decoration for
-            // it to expand.
             self.scene.push_text(
                 DRAW_PRIMITIVE_TEXT_NODE_ID,
                 params.rect,
@@ -2245,12 +2197,8 @@ fn push_shadow_primitive(
                 local_rect: params.local_rect,
                 quad: params.quad,
                 snap_anchor: None,
-                // A rare gradient caster interns into the shadow draw's own
-                // table, so the draw stays self-contained wherever it travels.
                 brush: crate::scene::intern_brush_into(brushes, params.brush),
                 shape: params.shape,
-                // Shadows silhouette the *rendered* shape, so a stroked or arc
-                // caster must cast a stroked or arc shadow, not a filled box.
                 stroke: params.stroke,
                 arc: params.arc,
                 z_index: 0,
@@ -2963,8 +2911,6 @@ mod tests {
         let crate::scene::SceneBrush::Solid(background) = &scene.shapes[0].brush else {
             panic!("background draw should use a solid brush");
         };
-        // Painted colours arrive at eight bits per channel, which is where the
-        // platform's own colour type already is — see `Color::srgb_8bit`.
         assert_eq!(*background, Color(0.2, 0.3, 0.52, 0.55).srgb_8bit());
 
         assert_eq!(scene.texts.len(), 1, "content text expected");
@@ -4830,8 +4776,6 @@ mod tests {
             prepared.text
         );
     }
-
-    // ── DrawScope text ──────────────────────────────────────────────────────
 
     fn text_draw_primitive(rect: Rect, text: &str) -> DrawPrimitive {
         DrawPrimitive::Text(Box::new(cranpose_ui_graphics::TextPrimitive {

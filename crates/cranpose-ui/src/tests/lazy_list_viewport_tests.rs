@@ -741,12 +741,6 @@ fn lazy_column_tall_text_item_keeps_rendered_height_in_sync_with_lazy_measuremen
     });
 }
 
-/// Coordinator device repro: a LazyColumn whose content includes one item
-/// substantially TALLER than the viewport hard-stops partway even though a
-/// large portion of the tall item is still below the fold.
-///
-/// Drives the REAL widget path: LazyColumn composition, measure_layout per
-/// frame, scroll deltas dispatched between frames like the drag gesture does.
 fn drag_lazy_column_to_end(item_heights: &'static [f32], viewport_height: f32) -> (usize, f32) {
     let mut composition = run_test_composition(move || {
         let list_state = rememberLazyListState();
@@ -778,8 +772,6 @@ fn drag_lazy_column_to_end(item_heights: &'static [f32], viewport_height: f32) -
 
     let list_state = LAST_LAZY_STATE.with(|cell| (*cell.borrow()).expect("state captured"));
 
-    // Repeated 280dp finger drags, one measured frame per drag, until the list
-    // refuses to move any further.
     let mut stuck_drags = 0;
     for _ in 0..200 {
         list_state.dispatch_scroll_delta(-280.0);
@@ -794,7 +786,6 @@ fn drag_lazy_column_to_end(item_heights: &'static [f32], viewport_height: f32) -
             stuck_drags = 0;
         } else {
             stuck_drags += 1;
-            // Mirror the device repro: seven consecutive drags moving nothing.
             if stuck_drags >= 7 {
                 break;
             }
@@ -812,7 +803,6 @@ fn drag_lazy_column_to_end(item_heights: &'static [f32], viewport_height: f32) -
 
 #[test]
 fn lazy_column_single_item_taller_than_viewport_reaches_bottom() {
-    // viewport 600, single item 3000 => max scroll offset must be 2400.
     let (final_index, final_offset) = drag_lazy_column_to_end(&[3000.0], 600.0);
     assert_eq!(final_index, 0);
     assert!(
@@ -824,7 +814,6 @@ fn lazy_column_single_item_taller_than_viewport_reaches_bottom() {
 
 #[test]
 fn lazy_column_trailing_tall_item_reaches_bottom() {
-    // 200 + 3000 content in a 600 viewport => final position is 2400 inside item 1.
     let (final_index, final_offset) = drag_lazy_column_to_end(&[200.0, 3000.0], 600.0);
     assert_eq!(final_index, 1);
     assert!(
@@ -834,14 +823,6 @@ fn lazy_column_trailing_tall_item_reaches_bottom() {
     );
 }
 
-/// Regression (device repro): a LazyColumn measured with UNBOUNDED height —
-/// exactly what a `vertical_scroll` parent provides — must report its TRUE
-/// content height and give up internal scrolling, instead of truncating the
-/// layout to an `average_item_size * 20` pseudo viewport. With one item much
-/// taller than the rest, the old estimate (a) cut the reported height below
-/// the real content and (b) flipped can_scroll_forward to false partway once
-/// the tall item raised the average, hard-stopping drags with content still
-/// below the fold.
 #[test]
 fn unbounded_lazy_column_with_tall_item_reports_true_content_height() {
     let heights: &'static [f32] = &[
@@ -900,14 +881,8 @@ fn unbounded_lazy_column_with_tall_item_reports_true_content_height() {
     });
 }
 
-/// Regression (device repro): the soft keyboard shrinks the list viewport; the
-/// user scrolls to the end; then the keyboard hides and the viewport grows
-/// back. The list MUST scroll back to fill the freed space instead of leaving a
-/// blank gap where the keyboard was (an over-scroll: content ending above the
-/// grown viewport's bottom).
 #[test]
 fn lazy_column_refills_when_viewport_grows_after_scroll_to_end() {
-    // 10 items x 100 = 1000 tall content.
     let heights: &'static [f32] = &[
         100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0,
     ];
@@ -936,13 +911,12 @@ fn lazy_column_refills_when_viewport_grows_after_scroll_to_end() {
     let small = ViewportSize {
         width: 320.0,
         height: 400.0,
-    }; // keyboard up
+    };
     let large = ViewportSize {
         width: 320.0,
         height: 800.0,
-    }; // keyboard hidden
+    };
 
-    // Scroll to the end with the shrunk (keyboard-up) viewport.
     measure_tree(&mut composition, root, small);
     for _ in 0..50 {
         list_state.dispatch_scroll_delta(-280.0);
@@ -950,16 +924,11 @@ fn lazy_column_refills_when_viewport_grows_after_scroll_to_end() {
         measure_tree(&mut composition, root, small);
     }
 
-    // Keyboard hides -> the viewport grows back.
     measure_tree(&mut composition, root, large);
 
     let idx = list_state.first_visible_item_index_non_reactive();
     let off = list_state.first_visible_item_scroll_offset_non_reactive();
-    // Uniform 100-tall items: total scroll distance from the top.
     let effective = idx as f32 * 100.0 + off;
-    // content 1000, viewport 800 => max scroll 200; content must fill the
-    // viewport, so the list re-anchors to offset 200 (not the stale ~600 from
-    // the small viewport, which would leave a ~400 blank gap).
     let blank_gap = large.height - (1000.0 - effective);
     assert!(
         (effective - 200.0).abs() < 1.0,

@@ -139,8 +139,6 @@ pub trait WritableFolderStore: Send + Sync {
 /// Shared handle to a [`WritableFolderStore`].
 pub type WritableFolderStoreRef = Arc<dyn WritableFolderStore>;
 
-/// Factory turning a stored handle into a [`WritableFolderStore`]. Thread-safe,
-/// so a worker thread can reopen the folder.
 type StoreFactory = Box<dyn Fn(&str) -> Option<WritableFolderStoreRef> + Send + Sync>;
 static STORE_FACTORY: OnceLock<StoreFactory> = OnceLock::new();
 

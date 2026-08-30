@@ -207,8 +207,6 @@ mod tests {
         let geometry = thumb_geometry(100_000.0, 240.0, 0.0, bounds).expect("scrollable");
         assert_eq!(geometry.length, 0.1);
 
-        // The floor only raises a thumb that is too short; a thumb already
-        // longer than it keeps its own length.
         let roomy = thumb_geometry(480.0, 240.0, 0.0, bounds).expect("scrollable");
         assert_eq!(roomy.length, 0.5);
     }
@@ -229,7 +227,6 @@ mod tests {
     #[test]
     fn dragging_the_thumb_across_its_travel_scrolls_the_whole_content() {
         let geometry = thumb_geometry(400.0, 100.0, 0.0, ThumbBounds::FULL).expect("scrollable");
-        // Track 200, thumb 25% of it: 150 of thumb travel maps onto 300 of scroll.
         assert_eq!(
             content_delta_for_thumb_drag(150.0, 200.0, geometry, 300.0),
             300.0

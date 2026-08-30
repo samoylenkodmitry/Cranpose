@@ -58,12 +58,6 @@ fn layer_render_diag_enabled() -> bool {
     *ENABLED.get_or_init(|| std::env::var_os("CRANPOSE_LAYER_RENDER_DIAG").is_some())
 }
 
-/// Counts a layer-cache miss, and under `CRANPOSE_LAYER_CACHE_DIAG` names the
-/// key that missed and the path that probed it.
-///
-/// A miss on a key nothing ever stores is indistinguishable from a miss under
-/// eviction pressure in the counters alone, which is how issue #478 stayed
-/// hidden. Every miss goes through here so the key is always recoverable.
 fn record_layer_cache_miss<B: SurfaceExecutionBackend>(
     backend: &mut B,
     site: &str,
@@ -97,18 +91,6 @@ fn direct_scene_range_coalesce_enabled() -> bool {
     })
 }
 
-/// Merges consecutive direct-rendered cache chunks into one flush range.
-///
-/// Chunk boundaries exist only so a chunk *could* become a scene-range cache
-/// entry. A chunk that ends up rendering directly — its content hash missed
-/// and admission refused it, or it never got a cache key — gains nothing from
-/// the boundary, and on a tile-based mobile GPU every extra render pass is a
-/// full tile store and reload of the target. An animated scene is the worst
-/// case: every chunk's key changes every frame, so every chunk misses, and a
-/// small-screen game frame was being cut into ~18 passes of 64 draw ops each.
-/// Absorbing consecutive direct chunks and flushing once — before a chunk
-/// that composites from the cache, or at the end of the walk — renders the
-/// same ops in the same order in a single pass.
 #[derive(Default)]
 struct DirectChunkRunCoalescer {
     run_start: Option<usize>,
@@ -362,13 +344,6 @@ fn brush_is_opaque(brush: &Brush) -> bool {
     }
 }
 
-/// Whether a filled rect with these corner radii paints every pixel of `rect`.
-///
-/// A rounded fill misses only its four corner squares, so a band that clears
-/// them on one axis is covered whatever it does on the other: a row's frosted
-/// button sits mid-height, far from the card's rounded corners, and the card
-/// behind it is the whole of the button's backdrop input. Reading that as "not
-/// covered" costs the row its raster cache on every frame it scrolls.
 fn rounded_fill_covers_rect(
     bounds: Rect,
     shape: Option<cranpose_ui_graphics::RoundedCornerShape>,
@@ -386,9 +361,6 @@ fn rounded_fill_covers_rect(
         .max(radii.top_right)
         .max(radii.bottom_right)
         .max(radii.bottom_left);
-    // `radius <= 0.0` rather than `!(radius > 0.0)`: the negated form reads as
-    // the same thing and is not, since a NaN radius satisfies neither. A NaN
-    // here means no usable corner, which is what the early return says.
     if radius <= 0.0 || radius.is_nan() {
         return true;
     }
@@ -444,7 +416,6 @@ fn draw_can_reduce_alpha(
                 *blend_mode != BlendMode::SrcOver && rects_intersect(shape.rect, rect)
             })
         }),
-        // Replayed batches are SrcOver-only by construction.
         DrawOpKind::Retained(_) => false,
     }
 }
@@ -493,9 +464,6 @@ fn scene_range_has_opaque_cover_before(
                     return true;
                 }
             }
-            // A replayed batch is thousands of blended shapes; treating any
-            // of it as opaque cover would need per-shape analysis it exists
-            // to skip.
             DrawOpKind::Retained(_) => {}
             DrawOpKind::Image(index) => {
                 if images
@@ -573,14 +541,6 @@ pub(crate) fn backdrop_underlay_is_covered_by_local_content(
     covered
 }
 
-/// The one colour the underlay under `rect` holds, when it holds only one.
-///
-/// A child whose glass reads a flat colour reads the same colour wherever the
-/// child sits, so its raster stays good while it moves. That needs the whole
-/// rect covered by a single opaque solid fill with nothing over it: any other
-/// draw that reaches into the rect, any layer event below it, and any sibling
-/// already composited into the target all end it. When nothing at all reaches
-/// the rect the answer is whatever the parent's own underlay holds.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn uniform_underlay_color_before(
     scene: &CompositorScene,
@@ -838,9 +798,6 @@ fn axis_aligned_backdrop_snapshot_copy_plan(
     })
 }
 
-/// Env-gated backdrop composite diagnostics (`CRANPOSE_BACKDROP_DIAG=1`):
-/// prints capture/scissor/padding decisions per backdrop layer to stderr —
-/// works in release binaries without a logger.
 fn backdrop_diag_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED.get_or_init(|| std::env::var_os("CRANPOSE_BACKDROP_DIAG").is_some())
@@ -861,9 +818,6 @@ fn backdrop_capture_rect(
     root_scale: f32,
     target_size: (u32, u32),
 ) -> Rect {
-    // The capture must cover both the sampling reach (input padding) and
-    // everywhere the effect writes (output padding) — the shader needs real
-    // backdrop texels under every pixel it produces.
     let padding = effect.input_padding().max(effect.output_padding());
     if !padding.is_finite() || padding <= 0.0 || !root_scale.is_finite() || root_scale <= 0.0 {
         return effect_rect;
@@ -886,10 +840,6 @@ fn backdrop_capture_rect(
         .unwrap_or(clipped)
 }
 
-/// Where a backdrop effect may WRITE: the tight rect widened by the effect's
-/// declared output padding (SDF coverage past node bounds — rim glow, wobble,
-/// glued neighbor shapes), still clipped to the viewport and the layer clip.
-/// The composite scissor derives from this instead of the tight rect.
 fn backdrop_output_rect(
     effect_rect: Rect,
     clip: Option<Rect>,
@@ -974,14 +924,6 @@ fn flush_pending_clear<B: SurfaceExecutionBackend>(
     }
 }
 
-/// The scale a child layer's own surface renders at, and therefore the scale
-/// every texture handed to that surface has to be built at.
-///
-/// A magnifying layer is composited by mapping its surface through its own
-/// transform, so the texture carries that magnification's worth of detail
-/// instead of resampling a 1x raster upward — which means the child's scale is
-/// **not** the parent's whenever a layer scales. Both the surface and its
-/// backdrop underlay resolve it here so they cannot disagree.
 fn child_surface_target_scale(
     child: &ChildLayerComposite,
     root_scale: f32,
@@ -996,30 +938,6 @@ fn child_surface_target_scale(
     )
 }
 
-/// Projects the content behind a child layer into an underlay that layer's own
-/// nested backdrops can sample.
-///
-/// Two different scales meet here, and conflating them silently rescales every
-/// backdrop inside the child:
-///
-/// * `parent_scale` maps the parent surface's logical coordinates to its pixels,
-///   and is what `child_dest_quad` — the region of the parent this content is
-///   read from — is expressed against.
-/// * `child_scale` is the scale the child's own surface renders at, which
-///   [`layer_surface_target_scale`] quantizes *up* for a magnifying layer (a
-///   1.03x press lift becomes 1.25x). Everything inside that surface, the
-///   nested backdrop capture included, addresses this texture at `child_scale`,
-///   so that is the resolution it has to be built at.
-///
-/// They are equal for every layer that does not magnify, which is why sharing
-/// one scale looked correct until a glass surface grew a press transform: the
-/// backdrop then showed the world at `1 / child_scale * parent_scale` of its
-/// true size, anchored at the surface origin.
-/// Every rect the child's own render will read back out of the underlay,
-/// in the child's local coordinates: each backdrop it holds, grown by the
-/// reach of its effect, and the whole quad of any child that carries a
-/// backdrop deeper down, since that child builds its own underlay out of
-/// this one.
 fn underlay_sample_rect(source: &LoweredChildSource) -> Option<Rect> {
     let mut bounds: Option<Rect> = None;
     for layer in &source.scene.backdrop_layers {
@@ -1079,8 +997,6 @@ fn underlay_fill_scissor(
     height: u32,
 ) -> Option<(u32, u32, u32, u32)> {
     let rect = sample_rect?.translate(-child_logical_rect.x, -child_logical_rect.y);
-    // Snapping moves a backdrop by up to a device pixel after this union is
-    // taken, so the fill keeps a margin that far out.
     let margin = if child_scale.is_finite() && child_scale > 0.0 {
         2.0 / child_scale
     } else {
@@ -1346,14 +1262,6 @@ fn scene_range_has_draw_ops(scene: &CompositorScene, z_start: usize, z_end: usiz
     scene_range_draw_op_count(scene, z_start, z_end) > 0
 }
 
-/// The draw ops that fall inside `z_start..z_end`, found by binary search.
-///
-/// Every push assigns the scene's monotonically increasing `next_z`, so
-/// `draw_ops` is always sorted by `z_index` and a z range is a contiguous
-/// slice. The range queries here used to filter the whole list instead; an
-/// animated game frame carries ~17k draw ops and asks for ranges several
-/// times per frame, which made those linear scans a measurable slice of the
-/// frame budget on a mobile core.
 fn scene_range_draw_ops(draw_ops: &[DrawOp], z_start: usize, z_end: usize) -> &[DrawOp] {
     debug_assert!(draw_ops.windows(2).all(|w| w[0].z_index <= w[1].z_index));
     let start = draw_ops.partition_point(|op| op.z_index < z_start);
@@ -1370,11 +1278,6 @@ fn scene_range_can_cache_as_transparent_surface(
     z_start: usize,
     z_end: usize,
 ) -> bool {
-    // Only the ops inside the range decide the verdict; every op outside it
-    // passed trivially. The binary-searched slice visits exactly the deciding
-    // ops — the full-array scan it replaces cost O(total ops) per chunk, so a
-    // walk cutting an animated frame into ~19 chunks re-touched every op ~19
-    // times just to skip it.
     scene_range_draw_ops(&scene.draw_ops, z_start, z_end)
         .iter()
         .all(|op| match op.kind {
@@ -1388,8 +1291,6 @@ fn scene_range_can_cache_as_transparent_surface(
                 .is_some_and(|image| image.blend_mode == BlendMode::SrcOver),
             DrawOpKind::Text(_) => true,
             DrawOpKind::Shadow(_) => false,
-            // A replayed batch transforms every frame; a texture of it would
-            // be stale on arrival.
             DrawOpKind::Retained(_) => false,
         })
 }
@@ -1412,11 +1313,6 @@ fn scene_range_meets_direct_cache_floor(
         >= MIN_SINGLE_DRAW_DIRECT_SCENE_RANGE_CACHE_BYTES
 }
 
-/// The visible bounds of a scene range snapped to whole device pixels — the
-/// logical rect a cache entry for the range would cover, `None` when nothing
-/// in the range draws. The direct-scene walk derives this once per chunk and
-/// threads it through the fits gate and the cache path, which used to union
-/// the same draw-op bounds independently.
 fn direct_scene_range_snapped_bounds(
     scene: &CompositorScene,
     z_start: usize,
@@ -1427,15 +1323,6 @@ fn direct_scene_range_snapped_bounds(
         .and_then(|bounds| snap_scene_range_bounds_to_pixels(bounds, root_scale))
 }
 
-/// Whether a chunk is small enough that the range cache would accept it.
-///
-/// This is the same size gate [`cached_direct_scene_range_surface`] applies
-/// before it computes a key, hoisted so the caller can tell — cheaply, and
-/// without touching the cache — whether cutting the range here could ever
-/// produce a stored entry. A chunk that fails it is going to be rendered
-/// directly whatever happens, so there is no reason to give it its own pass.
-/// `snapped_bounds` is the chunk's [`direct_scene_range_snapped_bounds`],
-/// computed by the caller and shared with the cache path.
 fn direct_scene_range_chunk_fits_cache_entry(
     max_texture_dim: u32,
     snapped_bounds: Option<Rect>,
@@ -2126,10 +2013,6 @@ fn render_range_with_layer_events_to_view<B: SurfaceExecutionBackend>(
     Ok(())
 }
 
-// result_large_err: the Err arm deliberately carries the same
-// CompositorScene the Ok arm does, so the caller recycles the scene
-// buffers on BOTH arms; the Ok (hot) arm is equally sized, and boxing
-// would only add an allocation to the error path.
 #[allow(clippy::too_many_arguments, clippy::result_large_err)]
 pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
     backend: &mut B,
@@ -2375,10 +2258,6 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
                         scissor: prepared_scissor,
                     } = prepared;
                     if prepared_surface.deferred_effect.is_some() {
-                        // The capture flush above landed every pending write
-                        // that touches this backdrop's output rect, so the
-                        // shader queue's earlier flush slot cannot be overdrawn
-                        // by a blit queued before this glass.
                         match direct_shader_layer_composite(
                             prepared_surface,
                             child.z_index,
@@ -2632,19 +2511,12 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
 
         Ok(())
     })();
-    // Hand the scene back in BOTH arms so the caller can recycle its
-    // buffers even when the draw errs; for a heavy animated frame they are
-    // megabytes of Vec that would otherwise round-trip through mmap on
-    // every frame.
     match result {
         Ok(()) => Ok(local_scene),
         Err(error) => Err((error, local_scene)),
     }
 }
 
-/// Renders the surface for a producer-lowered child layer. Every value the
-/// old `&LayerNode` path read off the node comes from the collection-time
-/// snapshot; the child's content is consumed from `child.source`.
 pub(crate) fn render_layer_surface<B: SurfaceExecutionBackend>(
     backend: &mut B,
     child: &mut ChildLayerComposite,
@@ -2660,8 +2532,6 @@ pub(crate) fn render_layer_surface<B: SurfaceExecutionBackend>(
         activates_nested_capture,
         translation_context,
     } = request;
-    // Taken up front: on a cache hit the collected source is dropped unused,
-    // matching the old lazy path that never collected it.
     let source = std::mem::take(&mut child.source);
     let surface_requirements = child.surface_requirements;
     let direct_translated_content_context =
@@ -2757,10 +2627,6 @@ pub(crate) fn render_layer_surface<B: SurfaceExecutionBackend>(
     )
 }
 
-/// Snapshot-consuming twin of the backend's `layer_raster_cache_candidate`:
-/// the same admission rules and key, decided from the values captured at
-/// collection time. `child.logical_rect` stands in for the memoized estimate
-/// the node-based path re-reads — it is that memoized value.
 #[allow(clippy::too_many_arguments)]
 fn child_layer_raster_cache_candidate(
     child: &ChildLayerComposite,
@@ -2774,21 +2640,10 @@ fn child_layer_raster_cache_candidate(
     max_texture_dim: u32,
 ) -> Option<(LayerRasterCacheKey, Rect)> {
     let surface_requirements = child.surface_requirements;
-    // A RuntimeShader produces different output every frame from uniforms no
-    // content hash carries, so nothing can invalidate a texture it was
-    // rastered into. Caching the shader's own layer would only fill the LRU
-    // with stale entries; caching an ANCESTOR of one freezes the effect
-    // outright, because the ancestor stays a hit forever and replays whatever
-    // frame it first rastered. The whole subtree is therefore uncacheable.
     if surface_requirements.contains_runtime_shader {
         return None;
     }
 
-    // The candidate must be the key the render path will STORE, or the lookup
-    // mints a miss every frame against a key that never exists. A layer the
-    // render path serves out of the source-content cache never stores a
-    // full-surface entry, so its candidate has to be that same source-content
-    // key — or nothing, where no key is nameable from here.
     if let Some(source) = layer_source_cache_entry(
         child,
         effective_requirements,
@@ -2797,8 +2652,6 @@ fn child_layer_raster_cache_candidate(
     ) {
         match supported_isolation_effect {
             None => {
-                // No collected hash means only the render path can name the
-                // key, so there is nothing here worth probing for.
                 let content_hash = source.collected_content_hash?;
                 let logical_rect = logical_rect_override.unwrap_or(child.logical_rect);
                 let pixel_size = surface_target_size(logical_rect, root_scale, max_texture_dim);
@@ -2810,14 +2663,8 @@ fn child_layer_raster_cache_candidate(
                     logical_rect,
                 ));
             }
-            Some(effect) if can_materialize_cached_effect(effect, child.backdrop.as_ref()) => {
-                // The render path materializes the effect over the cached
-                // source and stores the result under the full-surface key:
-                // fall through to the full-surface candidate.
-            }
+            Some(effect) if can_materialize_cached_effect(effect, child.backdrop.as_ref()) => {}
             Some(_) => {
-                // The effect re-applies over the cached source every frame,
-                // so no post-effect surface is ever stored under any key.
                 return None;
             }
         }
@@ -2923,11 +2770,6 @@ fn materialize_render_effect_to_target<B: SurfaceExecutionBackend>(
         return Ok(());
     }
 
-    // An effect without a shader tail encodes straight into the target:
-    // the generic composite route below would bounce it through a scratch
-    // surface and spend an extra render pass presenting a 1:1 opaque copy.
-    // Shader-tailed chains stay on the generic route — its direct-tail path
-    // owns the shrunk-intermediate fill optimization.
     if split_backdrop_effect(effect).1.is_none()
         && backend.materialize_effect_direct(source, effect, layer_pixel_rect, target)?
     {
@@ -2948,23 +2790,8 @@ fn materialize_render_effect_to_target<B: SurfaceExecutionBackend>(
     )
 }
 
-/// What the source-content cache holds for a layer, if anything.
-///
-/// The retained lookup and the render path have to answer this identically:
-/// the key one probes is the key the other stores under, and a probe against a
-/// key nothing ever writes mints a miss every frame forever. Both read the
-/// answer from [`layer_source_cache_entry`] so the two cannot drift apart.
 struct LayerSourceCacheEntry {
     stable_id: Option<NodeId>,
-    /// The content hash the key carries, when collection already settled it.
-    ///
-    /// `None` for a motion-stable capture. Collection snapshots that hash into
-    /// `motion_source_content_hash` only when its own recomputation of the
-    /// effective requirements agrees with the render body's, and the retained
-    /// lookup recomputes them from a context that legitimately differs. The
-    /// render path resolves the hash there, alongside the capture rect it
-    /// resolves for the same reason; a caller working from a collection-time
-    /// estimate cannot name the resulting key at all.
     collected_content_hash: Option<u64>,
 }
 
@@ -3120,11 +2947,6 @@ fn backdrop_effect_cache_key_for_effect_hash(
     ))
 }
 
-/// Splits a backdrop effect into the part worth materializing into the
-/// cached surface and a runtime-shader tail worth deferring to the
-/// composite batch. The tail's pass then folds into the batched composite
-/// that already runs, and — because the tail's uniforms leave the cache
-/// key — per-frame glass dynamics stop invalidating the blurred capture.
 fn split_backdrop_effect(effect: &RenderEffect) -> (Option<&RenderEffect>, Option<&RuntimeShader>) {
     match effect {
         RenderEffect::Shader { shader } => (None, Some(shader)),
@@ -3250,10 +3072,6 @@ fn backdrop_scene_prefix_hash(
     hasher.finish()
 }
 
-/// One input hash per backdrop the scene carries, in the order the render
-/// path indexes them. A backdrop that lives in a scene rather than on a child
-/// composite reaches the blur cache through these; without one the blur runs
-/// again on every frame whose scene under it never moved.
 fn scene_backdrop_input_hashes(
     scene: &CompositorScene,
     prior_child_contributions: &[BackdropPrefixChildContribution],
@@ -3784,9 +3602,6 @@ fn next_composite_seq(counter: &mut usize) -> usize {
 
 struct PendingLayerComposite {
     z_index: usize,
-    /// Push order across BOTH pending queues: z indices tie whenever a
-    /// backdrop and its own child body queue at the same z, and only the
-    /// push sequence says which one draws first in a fused flush.
     seq: usize,
     surface: LayerSurface,
     dest_quad: [[f32; 2]; 4],
@@ -3801,8 +3616,6 @@ struct PreparedBackdropComposite {
 
 struct PendingShaderLayerComposite {
     z_index: usize,
-    /// Push order across BOTH pending queues; see
-    /// [`PendingLayerComposite::seq`].
     seq: usize,
     surface: LayerSurface,
     shader: RuntimeShader,
@@ -3991,11 +3804,6 @@ fn release_pending_layer_composites<B: SurfaceExecutionBackend>(
     }
 }
 
-/// Whether a pending composite actually writes inside `rect`. The dest quad
-/// alone over-reports: a prepared backdrop composite's quad spans its whole
-/// padded capture and relies on the scissor to confine the write, so two
-/// stacked glass elements read as overlapping when their painted pixels
-/// never touch.
 fn pending_write_intersects_rect(
     dest_quad: [[f32; 2]; 4],
     scissor: Option<(u32, u32, u32, u32)>,
@@ -4021,11 +3829,6 @@ fn pending_load_op_holds_clear(load_op: &Option<wgpu::LoadOp<wgpu::Color>>) -> b
     matches!(load_op, Some(wgpu::LoadOp::Clear(_)))
 }
 
-/// The pixels a backdrop layer READS (its padded capture) or WRITES (its
-/// output reach, which morph glass extends past the capture) — the region
-/// that decides whether pending composites must land before the layer's
-/// snapshot copy. `None` means the layer resolves to nothing visible, so
-/// nothing is captured and nothing needs flushing.
 fn backdrop_dependency_rect(
     effect_rect: Rect,
     clip: Option<Rect>,
@@ -4040,11 +3843,6 @@ fn backdrop_dependency_rect(
     union_rect(Some(capture), output)
 }
 
-/// Land pending composites before a backdrop capture ONLY when the capture
-/// genuinely depends on them — or when a queue still owns the frame's clear,
-/// which covers every pixel. The unconditional flush this replaces cost a
-/// root-target pass per glass element: a fixed-glass page fragmented its
-/// whole composite batch into per-element passes (issue #500, cause 2).
 #[allow(clippy::too_many_arguments)]
 fn flush_pending_queues_for_backdrop_capture<B: SurfaceExecutionBackend>(
     backend: &mut B,
@@ -4142,13 +3940,6 @@ fn take_ordered_pending_composite_load_op(
     }
 }
 
-/// Flush BOTH pending queues in painter's order through one fused render
-/// pass. This replaces the shader-then-blit flush pair, which spent an
-/// extra pass boundary AND always drew the whole shader batch below every
-/// queued blit regardless of z. When only one queue holds items, the
-/// single-kind flush runs exactly as before. When a shader pipeline fails
-/// validation, every item composites individually — still in painter's
-/// order.
 #[allow(clippy::too_many_arguments)]
 fn flush_pending_composite_queues_fused<B: SurfaceExecutionBackend>(
     backend: &mut B,
@@ -4354,10 +4145,6 @@ fn cached_direct_scene_range_surface<B: SurfaceExecutionBackend>(
     root_scale: f32,
     snapped_bounds: Option<Rect>,
 ) -> Result<Option<LayerSurface>, String> {
-    // `snapped_bounds` is the caller's [`direct_scene_range_snapped_bounds`]
-    // for exactly this range — the same value this function used to derive
-    // itself, handed over so the union over the range's draw ops happens
-    // once per chunk instead of once per gate.
     let Some(logical_rect) = snapped_bounds else {
         if layer_render_diag_enabled() {
             log::warn!(
@@ -4521,9 +4308,6 @@ fn cached_direct_scene_range_surface<B: SurfaceExecutionBackend>(
     }))
 }
 
-/// Queues a composite for the range when the cache can serve it. The sole
-/// caller — the direct-scene walk — checks [`direct_scene_range_cache_enabled`]
-/// before calling and hands over the range's precomputed snapped bounds.
 #[allow(clippy::too_many_arguments)]
 fn queue_cached_direct_scene_range<B: SurfaceExecutionBackend>(
     backend: &mut B,
@@ -4596,26 +4380,11 @@ fn render_direct_scene_range_with_pending_composites<B: SurfaceExecutionBackend>
         if chunk_end <= cursor_z {
             return Err("direct scene cache chunk did not advance".to_string());
         }
-        // The chunk's snapped visible bounds, derived once and read by both
-        // the fits gate and the cache path below (each used to union the
-        // same draw-op bounds itself). Only valid for the un-widened chunk:
-        // after a widen the chunk cannot cache and the value is never read.
-        // With the cache disabled no gate ever reads bounds, so none are
-        // derived.
         let chunk_bounds = if cache_enabled {
             direct_scene_range_snapped_bounds(scene, cursor_z, chunk_end, root_scale)
         } else {
             None
         };
-        // A chunk boundary only exists to keep a *cache entry* small enough to
-        // store. When the chunk is too big to be admitted anyway, the split
-        // buys nothing and costs a whole render pass — and on a tile-based
-        // mobile GPU a render pass is a tile store and reload of the entire
-        // target. An animated scene is the worst case: every chunk covers the
-        // whole surface, so every one is refused, and a game frame of ~640
-        // draw ops was being cut into ten passes that all wrote the same
-        // pixels. Rendering the remainder in one pass measured 18% less CPU
-        // on a Pixel 9 Pro.
         let mut chunk_can_cache = cache_enabled;
         if chunk_end < z_end
             && !(cache_enabled
@@ -4626,11 +4395,6 @@ fn render_direct_scene_range_with_pending_composites<B: SurfaceExecutionBackend>
                 ))
         {
             chunk_end = z_end;
-            // The widened range can only fail the same admission check: its
-            // visible bounds contain the refused chunk's, and the byte budget
-            // is monotone in bounds. Asking the cache anyway would union the
-            // visible bounds of every remaining draw op — ~17k rects in an
-            // animated game frame — just to be told no.
             chunk_can_cache = false;
         }
         if chunk_can_cache
@@ -4647,10 +4411,6 @@ fn render_direct_scene_range_with_pending_composites<B: SurfaceExecutionBackend>
                 next_load_op,
             )?
         {
-            // The chunk composites from the cache. Any direct run absorbed so
-            // far sits below it in z; flushing now keeps painter's order — the
-            // just-queued composite rides along in the flush, interleaved
-            // after the run's lower-z draw ops.
             if let Some((run_start, run_end)) = direct_run.flush_at(cursor_z) {
                 render_non_effect_range_with_pending_composites(
                     backend,
@@ -5337,12 +5097,6 @@ fn render_layer_surface_uncached<B: SurfaceExecutionBackend>(
         let target_scale = quantize_motion_stable_target_scale(target_scale, composite_sample_mode);
         let (width, height) =
             surface_target_size(surface_rect, target_scale, backend.max_texture_dim());
-        // The composite maps the whole texture onto the destination quad, so
-        // the rect the quad is built from has to be the area the texture
-        // actually covers. Without this the ceil padding is stretched across
-        // the quad and the content lands up to half a device pixel toward its
-        // origin — invisible while the scale is constant, per-frame jitter
-        // once the scale animates.
         let surface_rect =
             device_pixel_exact_surface_rect(surface_rect, target_scale, width, height);
         let shift = cranpose_ui_graphics::Point {
@@ -5367,11 +5121,6 @@ fn render_layer_surface_uncached<B: SurfaceExecutionBackend>(
             &child_layers,
             backdrop_underlay.is_some(),
         );
-        // A source-kind candidate arrives from the retained lookup that just
-        // missed on it. It is authoritative: the entry has to be stored under
-        // the key the next frame's lookup probes, not under a recomputed key
-        // whose rect or scale the deep path may have adjusted since. Probing
-        // it again here could only repeat the miss it arrived from.
         let candidate_source_key = cache_candidate
             .take_if(|(key, _)| key.is_source_content())
             .map(|(key, _)| key);
@@ -5875,18 +5624,6 @@ fn prepare_cached_backdrop_layer_composite<B: SurfaceExecutionBackend>(
         root_scale,
         backend.max_texture_dim(),
     );
-    // The effect geometry anchors to the FULL node rect: a viewport or
-    // scroll clip shrinks the visible/capture rects, and a shader
-    // handed the clipped rect rescales its whole dp mapping (the
-    // window-bottom bar's lens drew its capsule ~9dp high). Clipping
-    // belongs to the scissor, never to the effect rect.
-    //
-    // The copy plan is the single source of truth for the snapshot size: it
-    // spans floor(origin)..ceil(origin+extent) in texels, which runs one
-    // texel past ceil(extent) whenever the capture origin is fractional.
-    // Sizing the surface independently rejects the 1:1 copy every frame and
-    // the projective fallback hands the effect a backdrop with fractional
-    // alpha — the glass body then composites washed-out (menu-expand gray).
     let copy_plan = if (backdrop_scale - root_scale).abs() <= 0.01 {
         axis_aligned_backdrop_snapshot_copy_plan(
             capture_rect,
@@ -5901,11 +5638,6 @@ fn prepare_cached_backdrop_layer_composite<B: SurfaceExecutionBackend>(
     let (backdrop_width, backdrop_height) = copy_plan.map(|plan| plan.size).unwrap_or_else(|| {
         surface_target_size(capture_rect, backdrop_scale, backend.max_texture_dim())
     });
-    // The runtime-shader tail defers to the batched composite when the
-    // caller runs one: its pass folds into the batch, and its uniforms
-    // leave the cache key so per-frame glass dynamics stop invalidating
-    // the blurred capture. The materialized part alone names the cache
-    // content.
     let (materialized_effect, deferred_tail) = if allow_deferred_tail {
         split_backdrop_effect(&layer.effect)
     } else {
@@ -5998,9 +5730,6 @@ fn prepare_cached_backdrop_layer_composite<B: SurfaceExecutionBackend>(
             )?;
             backend.release_frame_surface(snapshot);
         } else {
-            // The whole effect is a deferred shader tail: the cached surface
-            // is the capture itself — a texture copy when the 1:1 plan holds,
-            // never a materialize pass.
             let copied_capture = copy_plan.is_some_and(|plan| {
                 backend.copy_texture_region_to_target(
                     target,
@@ -6035,11 +5764,6 @@ fn prepare_cached_backdrop_layer_composite<B: SurfaceExecutionBackend>(
 
     let (surface_logical_rect, deferred_effect, effect_content_rect) = match deferred_tail {
         Some(shader) => {
-            // The composite must address the surface texels exactly as the
-            // copy plan laid them down: the plan spans
-            // floor(origin)..ceil(origin+extent), up to a texel wider than
-            // the capture rect, and the tail shader's dp mapping keys off
-            // this window.
             let window = copy_plan
                 .map(|plan| Rect {
                     x: plan.source_origin.0 as f32 / root_scale,
@@ -6599,13 +6323,10 @@ mod tests {
     #[test]
     fn direct_chunk_run_coalescer_merges_consecutive_direct_chunks() {
         let mut run = DirectChunkRunCoalescer::default();
-        // Three consecutive direct chunks 0..64, 64..128, 128..192 absorb
-        // into one range flushed at the walk's end.
         run.absorb(0);
         run.absorb(64);
         run.absorb(128);
         assert_eq!(run.flush_at(192), Some((0, 192)));
-        // The flush drains the run: nothing left for a second boundary.
         assert_eq!(run.flush_at(192), None);
     }
 
@@ -6613,10 +6334,7 @@ mod tests {
     fn direct_chunk_run_coalescer_flushes_below_a_composited_chunk() {
         let mut run = DirectChunkRunCoalescer::default();
         run.absorb(0);
-        // A cached chunk at z 64..128 composites: the run below it flushes
-        // up to the composite's start.
         assert_eq!(run.flush_at(64), Some((0, 64)));
-        // Direct chunks resume above the composite and flush independently.
         run.absorb(128);
         assert_eq!(run.flush_at(256), Some((128, 256)));
     }
@@ -6624,11 +6342,8 @@ mod tests {
     #[test]
     fn direct_chunk_run_coalescer_is_quiet_without_direct_chunks() {
         let mut run = DirectChunkRunCoalescer::default();
-        // An all-cached walk never absorbs, so no boundary flushes anything.
         assert_eq!(run.flush_at(64), None);
         assert_eq!(run.flush_at(128), None);
-        // A boundary that hasn't advanced past the run start must not emit a
-        // zero-length render call — and must keep the run for a later flush.
         run.absorb(64);
         assert_eq!(run.flush_at(64), None);
         assert_eq!(run.flush_at(128), Some((64, 128)));
@@ -6830,9 +6545,6 @@ mod tests {
         layer
     }
 
-    /// Snapshots a `LayerNode` into the owned child struct the way the
-    /// collection site does, with an empty source; tests that used to hand
-    /// the borrowed node to the render path build their input through this.
     fn lower_test_layer(layer: &LayerNode) -> crate::normalized_scene::ChildLayerComposite {
         use cranpose_render_common::layer_composition::effective_layer_isolation;
 
@@ -6994,12 +6706,6 @@ mod tests {
 
     #[test]
     fn fractional_origin_backdrop_snapshot_spans_more_than_ceiled_extent() {
-        // A capture rect whose scaled origin is fractional spans one texel
-        // more than ceil(extent): floor(origin)..ceil(origin + extent). The
-        // snapshot surface MUST be allocated from the copy plan's size — an
-        // independently ceiled extent rejects the 1:1 copy every frame and
-        // the projective fallback feeds the glass a broken backdrop (the
-        // menu-expand panel composited washed-out gray, tint-blind).
         let capture = Rect {
             x: 53.0,
             y: 95.435,
@@ -7392,10 +7098,6 @@ mod tests {
 
     #[test]
     fn a_chunk_too_large_to_cache_is_not_worth_splitting_for() {
-        // Every shape covers the full 1280x2856 surface, the way a game frame's
-        // moving objects do once their bounds are unioned. Each 64-op chunk is
-        // then far past the entry budget, so the cache would refuse it and the
-        // split would buy a render pass for nothing.
         let mut scene = CompositorScene::new();
         for z_index in 0..(MAX_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS * 2) {
             let mut shape = prefix_shape(z_index, Color::BLACK);

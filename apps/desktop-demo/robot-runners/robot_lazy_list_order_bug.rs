@@ -1,20 +1,3 @@
-//! Robot test for LazyList item order corruption bug
-//!
-//! BUG: When scrolling down in LazyList tab, after item #14 there's
-//! a wrong item #0, then #15, then #1, then #16, etc.
-//! Items appear interleaved/duplicated incorrectly.
-//!
-//! Steps to reproduce:
-//! 1. Go to Lazy List tab
-//! 2. Scroll down past item #14
-//! 3. Items should be sequential: #15, #16, #17...
-//! 4. BUG: Items appear as #0, #15, #1, #16, #2, #17...
-//!
-//! Run with:
-//! ```bash
-//! cargo run --package desktop-app --example robot_lazy_list_order_bug --features robot-app
-//! ```
-
 use std::time::Duration;
 
 use cranpose::AppLauncher;
@@ -49,13 +32,11 @@ fn main() {
 
             let mut all_passed = true;
 
-            // Helper to extract visible item numbers from semantics
             let get_visible_items = |robot: &cranpose::Robot| -> Vec<i32> {
                 let mut items = Vec::new();
                 if let Ok(semantics) = robot.get_semantics() {
                     fn find_items(elem: &cranpose::SemanticElement, items: &mut Vec<(i32, f32)>) {
                         if let Some(ref text) = elem.text {
-                            // Match "Hello #N" pattern
                             if text.starts_with("Hello #") {
                                 if let Some(num_str) = text.strip_prefix("Hello #") {
                                     if let Ok(n) = num_str.parse::<i32>() {
@@ -71,7 +52,6 @@ fn main() {
                     for elem in &semantics {
                         let mut found = Vec::new();
                         find_items(elem, &mut found);
-                        // Sort by Y position to get visual order
                         found.sort_by(|a, b| a.1.total_cmp(&b.1));
                         items.extend(found.iter().map(|(n, _)| *n));
                     }
@@ -79,9 +59,6 @@ fn main() {
                 items
             };
 
-            // =========================================================
-            // STEP 1: Navigate to Lazy List tab
-            // =========================================================
             println!("--- Step 1: Navigate to Lazy List tab ---");
 
             if let Some((x, y, w, h)) = find_button_in_semantics(&robot, "Lazy List") {
@@ -98,16 +75,12 @@ fn main() {
                 all_passed = false;
             }
 
-            // =========================================================
-            // STEP 2: Verify initial items are in order
-            // =========================================================
             println!("--- Step 2: Verify initial item order ---");
 
             let initial_items = get_visible_items(&robot);
             println!("  Initial visible items: {:?}", initial_items);
 
             if !initial_items.is_empty() {
-                // Check if items are sequential
                 let mut is_sequential = true;
                 for window in initial_items.windows(2) {
                     if window[1] != window[0] + 1 {
@@ -123,12 +96,8 @@ fn main() {
                 }
             }
 
-            // =========================================================
-            // STEP 3: Find LazyList viewport and scroll down
-            // =========================================================
             println!("--- Step 3: Scroll down in LazyList ---");
 
-            // Find the viewport area (look for LazyListViewport or list content area)
             if let Some((x, y, w, h)) = find_in_semantics(&robot, |elem| {
                 if elem.role == "Subcompose" && elem.bounds.height > 200.0 {
                     return Some((
@@ -147,20 +116,16 @@ fn main() {
                     x, y, w, h
                 );
 
-                // Scroll down multiple times to get past item #14
                 for scroll_num in 1..=5 {
                     println!("  Scroll #{}: wheel at ({:.1}, {:.1})", scroll_num, cx, cy);
 
-                    // Move mouse to viewport
                     let _ = robot.mouse_move(cx, cy);
                     std::thread::sleep(Duration::from_millis(50));
 
-                    // Simulate scroll wheel (drag down)
                     let _ = robot.mouse_down();
                     std::thread::sleep(Duration::from_millis(50));
 
-                    // Drag down to scroll
-                    let drag_y = cy - 200.0; // Drag up to scroll down
+                    let drag_y = cy - 200.0;
                     let _ = robot.mouse_move(cx, drag_y);
                     std::thread::sleep(Duration::from_millis(100));
 
@@ -170,12 +135,11 @@ fn main() {
                 }
                 println!("  ✓ Scrolled down\n");
             } else {
-                // Fallback: find any list item and scroll from there
                 if let Some((x, y, w, _h)) =
                     find_in_semantics(&robot, |elem| find_text(elem, "Hello #"))
                 {
                     let cx = x + w / 2.0;
-                    let cy = y + 100.0; // Offset to get into list area
+                    let cy = y + 100.0;
 
                     println!("  Using item position for scroll at ({:.1}, {:.1})", cx, cy);
 
@@ -195,9 +159,6 @@ fn main() {
                 }
             }
 
-            // =========================================================
-            // STEP 4: Check item order after scrolling
-            // =========================================================
             println!("--- Step 4: Verify item order after scroll ---");
 
             let scrolled_items = get_visible_items(&robot);
@@ -207,11 +168,6 @@ fn main() {
                 println!("  ✗ FAIL: No items visible after scroll!\n");
                 all_passed = false;
             } else {
-                // Check for order corruption:
-                // 1. Items should be sequential (each item = previous + 1)
-                // 2. No duplicates
-                // 3. No items going backwards
-
                 let mut order_issues = Vec::new();
                 let mut seen = std::collections::HashSet::new();
 
@@ -219,7 +175,6 @@ fn main() {
                     let prev = window[0];
                     let curr = window[1];
 
-                    // Check for duplicates
                     if seen.contains(&curr) {
                         order_issues.push(format!(
                             "Duplicate item #{} at position {}",
@@ -229,7 +184,6 @@ fn main() {
                     }
                     seen.insert(curr);
 
-                    // Check for non-sequential (gap > 1 or backwards)
                     if curr != prev + 1 {
                         order_issues.push(format!(
                             "Non-sequential: #{} followed by #{} (expected #{})",
@@ -252,9 +206,6 @@ fn main() {
                 }
             }
 
-            // =========================================================
-            // SUMMARY
-            // =========================================================
             println!("\n=== Test Summary ===");
             if all_passed {
                 println!("✓ ALL TESTS PASSED");

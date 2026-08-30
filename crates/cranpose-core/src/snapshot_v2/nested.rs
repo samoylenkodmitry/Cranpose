@@ -1,5 +1,3 @@
-//! Nested snapshot implementations.
-
 use super::*;
 
 /// A nested read-only snapshot.
@@ -46,7 +44,6 @@ impl NestedReadonlySnapshot {
         if let Some(parent) = self.parent.upgrade() {
             parent.root_nested_readonly()
         } else {
-            // Parent is gone, return self as root
             NestedReadonlySnapshot::new(
                 self.state.id.get(),
                 self.state.invalid.borrow().clone(),
@@ -118,7 +115,6 @@ pub struct NestedMutableSnapshot {
     parent: Weak<MutableSnapshot>,
     nested_count: Cell<usize>,
     applied: Cell<bool>,
-    /// Parent's snapshot id when this nested snapshot was created
     base_parent_id: SnapshotId,
 }
 
@@ -163,7 +159,6 @@ impl NestedMutableSnapshot {
         if let Some(parent) = self.parent.upgrade() {
             parent.root_mutable()
         } else {
-            // Parent is gone, return a fallback mutable snapshot
             MutableSnapshot::new(
                 self.state.id.get(),
                 self.state.invalid.borrow().clone(),
@@ -241,16 +236,13 @@ impl NestedMutableSnapshot {
             return SnapshotApplyResult::Failure;
         }
 
-        // Apply changes to parent instead of global snapshot
         if let Some(parent) = self.parent.upgrade() {
-            // Merge to parent (Phase 2.2) with simple conflict detection.
             let child_modified = self.state.modified.borrow();
             if child_modified.is_empty() {
                 self.applied.set(true);
                 self.state.dispose();
                 return SnapshotApplyResult::Success;
             }
-            // Ask parent to merge child's modifications; it will detect conflicts.
             if parent.merge_child_modifications(&child_modified).is_err() {
                 return SnapshotApplyResult::Failure;
             }
@@ -273,19 +265,14 @@ impl NestedMutableSnapshot {
         let merged_write =
             merge_write_observers(write_observer, self.state.write_observer.borrow().clone());
 
-        // Get parent's current state BEFORE allocating child
         let parent_id = self.state.id.get();
         let current_invalid = self.state.invalid.borrow().clone();
 
-        // Allocate the new child snapshot ID
         let (new_id, _runtime_invalid) = allocate_snapshot();
 
-        // Update parent's invalid to include the child
         let parent_invalid_with_child = current_invalid.set(new_id);
         self.state.invalid.replace(parent_invalid_with_child);
 
-        // Child's invalid = parent's invalid + range(parent_id + 1, new_id)
-        // This does NOT include parent_id, so child can read parent's records
         let invalid = current_invalid.add_range(parent_id + 1, new_id);
 
         let self_weak = Arc::downgrade(&self.root_mutable());
@@ -296,7 +283,7 @@ impl NestedMutableSnapshot {
             merged_read,
             merged_write,
             self_weak,
-            self.state.id.get(), // base_parent_id = this snapshot's id at creation time
+            self.state.id.get(),
         );
 
         self.nested_count.set(self.nested_count.get() + 1);
@@ -407,7 +394,6 @@ mod tests {
     #[test]
     fn test_nested_merge_sets_parent_pending_changes() {
         let _guard = reset_runtime();
-        // Child writes an object; after apply, parent should have pending changes
         struct TestObj {
             id: crate::state::ObjectId,
         }
@@ -460,7 +446,6 @@ mod tests {
     #[test]
     fn test_nested_conflict_with_parent_same_object() {
         let _guard = reset_runtime();
-        // Parent and child both modify same object; child apply should fail
         struct TestObj {
             id: crate::state::ObjectId,
         }

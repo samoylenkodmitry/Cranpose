@@ -4,8 +4,6 @@ use cranpose_ui::{
 };
 use cranpose_ui_graphics::{DrawPrimitive, DrawScope as _, ShadowPrimitive};
 
-/// Records a draw command into a fresh consumer-owned scope, the way the
-/// renderers do, and returns what it recorded.
 fn record(func: &DrawCommandFn, size: Size) -> Vec<DrawPrimitive> {
     let mut scope = command_draw_scope(size);
     func(&mut scope);

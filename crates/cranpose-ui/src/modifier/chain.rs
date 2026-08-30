@@ -3,7 +3,7 @@
 use std::{any::type_name_of_val, cell::RefCell, rc::Rc};
 
 use cranpose_core::NodeId;
-#[allow(unused_imports)] // Used in tests
+#[allow(unused_imports)]
 use cranpose_foundation::InvalidationKind;
 use cranpose_foundation::{
     BasicModifierNodeContext, ModifierInvalidation, ModifierNodeChain, ModifierNodeContext,
@@ -82,7 +82,6 @@ impl ModifierChainHandle {
         modifier: &Modifier,
         resolver: &mut ModifierLocalAncestorResolver<'_>,
     ) -> Vec<ModifierInvalidation> {
-        // Use iterator-based update to avoid allocation entirely
         self.chain
             .update_from_ref_iter(modifier.iter_elements(), &mut *self.context.borrow_mut());
         self.capabilities = self.chain.capabilities();
@@ -100,7 +99,6 @@ impl ModifierChainHandle {
             self.resolved = self.compute_resolved();
         }
 
-        // Only collect inspector snapshot when debugging is enabled (lazy collection)
         let should_log = self.debug_logging || modifier_debug_enabled();
         if should_log {
             self.collect_inspector_snapshot(modifier);
@@ -116,17 +114,13 @@ impl ModifierChainHandle {
     }
 
     pub fn set_node_id(&mut self, id: Option<NodeId>) {
-        // Check if the ID is actually changing
         let old_id = self.context.borrow().node_id();
         if old_id == id {
-            // ID hasn't changed, nothing to do
             return;
         }
 
         self.context.borrow_mut().set_node_id(id);
 
-        // When a valid ID is provided AND it changed, force a reset of the modifier chain's lifecycle.
-        // This ensures that nodes can access the new ID via the context during `on_attach`.
         if id.is_some() {
             self.chain.detach_nodes();
             self.chain.repair_chain();
@@ -190,9 +184,6 @@ impl ModifierChainHandle {
         &self.inspector_snapshot
     }
 
-    /// Explicitly collects the inspector snapshot for testing purposes.
-    /// Unlike `update()` which only collects when debug logging is enabled,
-    /// this method always populates the snapshot.
     #[cfg(test)]
     pub fn refresh_inspector_snapshot(&mut self, modifier: &Modifier) {
         self.collect_inspector_snapshot(modifier);
@@ -232,9 +223,6 @@ impl ModifierChainHandle {
                     offset.x += delta.x;
                     offset.y += delta.y;
                 }
-                // Note: BackgroundNode, CornerShapeNode, and GraphicsLayerNode are no longer
-                // tracked in ResolvedModifiers. Visual rendering now flows through modifier slices
-                // collected from the node chain at draw time.
             });
         });
 
@@ -420,7 +408,6 @@ mod tests {
                 .then(Modifier::empty().rounded_corners(8.0)),
         );
 
-        // Background and shape are now captured in modifier slices as draw commands
         let slices = collect_modifier_slices(handle.chain());
         assert!(
             !slices.draw_commands().is_empty(),

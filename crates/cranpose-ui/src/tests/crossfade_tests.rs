@@ -6,7 +6,7 @@ use cranpose_macros::composable;
 
 use crate::{Crossfade, TestComposition, run_test_composition};
 
-const FRAME_NANOS: u64 = 16_666_667; // ~60 FPS
+const FRAME_NANOS: u64 = 16_666_667;
 const CROSSFADE_MILLIS: u64 = 160;
 
 fn drain(composition: &mut TestComposition) {
@@ -116,7 +116,6 @@ fn crossfade_keeps_both_contents_during_transition_and_removes_old_after() {
         "both contents should be composed as soon as the transition starts"
     );
 
-    // A few frames into the crossfade both compositions must still exist.
     pump_frames(&mut composition, &mut frame_time, 3);
     assert_eq!(
         alive.borrow().as_slice(),
@@ -124,8 +123,6 @@ fn crossfade_keeps_both_contents_during_transition_and_removes_old_after() {
         "both contents should stay composed mid-transition"
     );
 
-    // Run well past the crossfade duration: the old content must leave the
-    // composition once its fade-out completes.
     settle(&mut composition, &mut frame_time);
     assert_eq!(
         alive.borrow().as_slice(),
@@ -149,8 +146,6 @@ fn crossfade_retargeting_mid_transition_restores_previous_content() {
     pump_frames(&mut composition, &mut frame_time, 2);
     assert_eq!(alive.borrow().as_slice(), &[1, 2]);
 
-    // Flip back to the original state while the crossfade is still running:
-    // the original content fades back in, the interrupted one fades out.
     composition.with_app_context(|| target.set_value(1));
     drain(&mut composition);
     assert_eq!(

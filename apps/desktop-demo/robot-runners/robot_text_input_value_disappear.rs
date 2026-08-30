@@ -1,19 +1,3 @@
-//! Robot test for text input value disappearing bug
-//!
-//! BUG: When clicking on the "Type here..." text input field,
-//! the "Current value: ..." label disappears.
-//!
-//! Steps to reproduce:
-//! 1. Go to Text Input tab
-//! 2. Verify "Current value: ..." is visible
-//! 3. Click on "Type here..." input field
-//! 4. Verify "Current value: ..." is STILL visible (BUG: it disappears)
-//!
-//! Run with:
-//! ```bash
-//! cargo run --package desktop-app --example robot_text_input_value_disappear --features robot-app
-//! ```
-
 use std::time::Duration;
 
 use cranpose::AppLauncher;
@@ -50,9 +34,6 @@ fn main() {
 
             let mut all_passed = true;
 
-            // =========================================================
-            // STEP 1: Navigate to Text Input tab
-            // =========================================================
             println!("--- Step 1: Navigate to Text Input tab ---");
 
             if let Some((x, y, w, h)) = find_button_in_semantics(&robot, "Text Input") {
@@ -71,9 +52,6 @@ fn main() {
                 all_passed = false;
             }
 
-            // =========================================================
-            // STEP 2: Verify "Current value:" is visible BEFORE clicking input
-            // =========================================================
             println!("--- Step 2: Verify 'Current value:' is visible ---");
 
             let current_value_before =
@@ -89,9 +67,6 @@ fn main() {
                 all_passed = false;
             }
 
-            // =========================================================
-            // STEP 3: Click on "Type here..." input field
-            // =========================================================
             println!("--- Step 3: Click on 'Type here...' input field ---");
 
             if let Some((x, y, w, h)) =
@@ -112,9 +87,6 @@ fn main() {
                 all_passed = false;
             }
 
-            // =========================================================
-            // STEP 4: Verify "Current value:" is STILL visible AFTER clicking
-            // =========================================================
             println!("--- Step 4: Verify 'Current value:' is still visible ---");
 
             let current_value_after =
@@ -131,9 +103,6 @@ fn main() {
                 all_passed = false;
             }
 
-            // =========================================================
-            // SUMMARY
-            // =========================================================
             println!("\n=== Test Summary ===");
             if all_passed {
                 println!("✓ ALL TESTS PASSED");

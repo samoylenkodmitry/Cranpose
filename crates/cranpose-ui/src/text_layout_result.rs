@@ -72,18 +72,11 @@ pub struct TextLayoutResult {
     pub height: f32,
     /// Height of a single line
     pub line_height: f32,
-    /// X position at each character boundary (including end)
-    /// glyph_x_positions[i] = x position before character at char index i
-    /// glyph_x_positions[char_count] = x position at end of text
     glyph_x_positions: Vec<f32>,
-    /// Byte offset for each character index
-    /// char_to_byte[i] = byte offset of character at char index i
     char_to_byte: Vec<usize>,
     /// Line layout information
     pub lines: Vec<LineLayout>,
-    /// Visual glyph boxes in shaped order.
     glyph_layouts: Vec<GlyphLayout>,
-    /// Hash of text this was computed for (for validation)
     text_hash: u64,
 }
 
@@ -105,7 +98,6 @@ impl TextLayoutResult {
     /// Returns X position for cursor at given byte offset.
     /// O(1) lookup from pre-computed positions.
     pub fn get_cursor_x(&self, byte_offset: usize) -> f32 {
-        // Binary search for char index containing this byte offset
         let char_idx = self
             .char_to_byte
             .iter()
@@ -113,7 +105,6 @@ impl TextLayoutResult {
             .map(|i| i.saturating_sub(1))
             .unwrap_or(self.char_to_byte.len().saturating_sub(1));
 
-        // Return X position at that char boundary
         self.glyph_x_positions
             .get(char_idx)
             .copied()
@@ -127,14 +118,12 @@ impl TextLayoutResult {
             return 0;
         }
 
-        // Binary search for closest glyph boundary
         let char_idx = match self
             .glyph_x_positions
             .binary_search_by(|pos| pos.partial_cmp(&x).unwrap_or(std::cmp::Ordering::Equal))
         {
             Ok(i) => i,
             Err(i) => {
-                // Between two positions - pick closest
                 if i == 0 {
                     0
                 } else if i >= self.glyph_x_positions.len() {
@@ -147,7 +136,6 @@ impl TextLayoutResult {
             }
         };
 
-        // Convert char index to byte offset
         self.char_to_byte.get(char_idx).copied().unwrap_or(0)
     }
 
@@ -179,7 +167,6 @@ impl TextLayoutResult {
             char_to_byte.push(byte_offset);
             cursor_x += char_width;
         }
-        // Add end position
         glyph_x_positions.push(cursor_x);
         char_to_byte.push(text.len());
 
@@ -207,7 +194,6 @@ impl TextLayoutResult {
             line_x += char_width;
         }
 
-        // Compute lines - collect once and reuse
         let line_texts: Vec<&str> = text.split('\n').collect();
         let line_count = line_texts.len();
         let mut lines = Vec::with_capacity(line_count);
@@ -222,7 +208,6 @@ impl TextLayoutResult {
                 line_start + line_text.len()
             };
 
-            // Track max width while iterating
             let line_width = line_text.chars().count() as f32 * char_width;
             max_width = max_width.max(line_width);
 
@@ -233,11 +218,10 @@ impl TextLayoutResult {
                 height: line_height,
             });
 
-            line_start = line_end + 1; // +1 for newline
+            line_start = line_end + 1;
             y += line_height;
         }
 
-        // Ensure at least one line
         if lines.is_empty() {
             lines.push(LineLayout {
                 start_offset: 0,
@@ -270,16 +254,14 @@ mod tests {
     fn test_monospaced_layout() {
         let layout = TextLayoutResult::monospaced("Hello", 10.0, 20.0);
 
-        // Check positions
-        assert_eq!(layout.get_cursor_x(0), 0.0); // Before 'H'
-        assert_eq!(layout.get_cursor_x(5), 50.0); // After 'o'
+        assert_eq!(layout.get_cursor_x(0), 0.0);
+        assert_eq!(layout.get_cursor_x(5), 50.0);
     }
 
     #[test]
     fn test_get_offset_for_x() {
         let layout = TextLayoutResult::monospaced("Hello", 10.0, 20.0);
 
-        // Click at x=25 should be closest to offset 2 or 3
         let offset = layout.get_offset_for_x(25.0);
         assert!(offset == 2 || offset == 3);
     }
@@ -290,7 +272,7 @@ mod tests {
 
         assert_eq!(layout.lines.len(), 2);
         assert_eq!(layout.lines[0].start_offset, 0);
-        assert_eq!(layout.lines[1].start_offset, 3); // After "Hi\n"
+        assert_eq!(layout.lines[1].start_offset, 3);
     }
 
     #[test]

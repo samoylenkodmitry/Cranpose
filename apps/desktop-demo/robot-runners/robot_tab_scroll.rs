@@ -1,14 +1,3 @@
-//! Robot test for tab scroll after click bug regression
-//!
-//! This test validates:
-//! 1. Clicking a tab button SHOULD NOT cause the tab row to scroll
-//! 2. Mouse move after click release SHOULD NOT scroll the tab row
-//!
-//! Run with:
-//! ```bash
-//! cargo run --package desktop-app --example robot_tab_scroll --features robot-app
-//! ```
-
 use std::time::Duration;
 
 use cranpose::AppLauncher;
@@ -35,16 +24,10 @@ fn main() {
 
             let mut all_passed = true;
 
-            // =========================================================
-            // Test: Click "Web Fetch" tab then move cursor
-            // The bug: tab row scrolls following cursor after click
-            // =========================================================
             println!("--- Test: Click 'Web Fetch' Tab Then Move Cursor ---");
 
-            // Find "Web Fetch" tab (may auto-scroll to reveal)
             let web_fetch_tab = find_button_in_semantics(&robot, "Web Fetch");
 
-            // Record reference tab position AFTER any auto-scroll
             let ref_tab_before = find_button_in_semantics(&robot, "Modifiers Showcase");
             let ref_x_before = ref_tab_before.map(|(x, _, _, _)| x).unwrap_or(0.0);
             println!(
@@ -56,7 +39,6 @@ fn main() {
                 let cy = y + h / 2.0;
                 println!("  Found 'Web Fetch' tab at center ({:.1}, {:.1})", cx, cy);
 
-                // Click the tab (down + up quickly)
                 let _ = robot.mouse_move(cx, cy);
                 std::thread::sleep(Duration::from_millis(50));
                 let _ = robot.mouse_down();
@@ -67,13 +49,11 @@ fn main() {
 
                 println!("  Clicked 'Web Fetch' tab");
 
-                // Now move cursor to the RIGHT (without pressing any button)
                 println!("  Moving cursor 150px right (no button pressed)...");
                 let _ = robot.mouse_move(cx + 150.0, cy);
                 let _ = robot.wait_for_idle();
                 std::thread::sleep(Duration::from_millis(200));
 
-                // Check if reference tab moved (it should NOT)
                 let ref_tab_after = find_button_in_semantics(&robot, "Modifiers Showcase");
                 let ref_x_after = ref_tab_after.map(|(x, _, _, _)| x).unwrap_or(0.0);
 
@@ -96,7 +76,6 @@ fn main() {
             } else {
                 println!("  Could not find 'Web Fetch' tab, trying 'Counter App'");
 
-                // Fallback to Counter App tab
                 let counter_tab = find_button_in_semantics(&robot, "Counter App");
                 if let Some((x, y, w, h)) = counter_tab {
                     let cx = x + w / 2.0;

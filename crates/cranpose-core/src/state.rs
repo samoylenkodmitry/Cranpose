@@ -1,4 +1,3 @@
-// StateRecord uses Rc with Cell for single-threaded shared ownership in the snapshot system.
 #![allow(clippy::arc_with_non_send_sync)]
 
 use std::{
@@ -29,7 +28,6 @@ pub(crate) const PREEXISTING_SNAPSHOT_ID: SnapshotId = 1;
 
 const INVALID_SNAPSHOT_ID: SnapshotId = 0;
 
-/// Maximum snapshot ID used to mark records as invisible during initialization
 const SNAPSHOT_ID_MAX: SnapshotId = usize::MAX;
 
 #[derive(Clone, Copy, Eq, PartialEq, Hash, Debug, Default)]
@@ -46,12 +44,6 @@ impl ObjectId {
     }
 }
 
-/// A record in the state history chain.
-///
-/// # Thread Safety
-/// Contains `Cell<T>` which is not `Send`/`Sync`. This is safe because state records
-/// are accessed only from the UI thread via thread-local snapshot system. The `Rc`
-/// is used for cheap cloning and shared ownership within a single thread.
 pub struct StateRecord {
     snapshot_id: Cell<SnapshotId>,
     tombstone: Cell<bool>,
@@ -154,18 +146,11 @@ impl StateRecord {
         Some(f(value))
     }
 
-    /// Clears the value from this record to free memory.
-    /// Used when marking records as reusable - clears the value to reduce memory usage.
     #[cfg(test)]
     pub(crate) fn clear_for_reuse(&self) {
         self.clear_value();
     }
 
-    /// Copies the value from the source record into this record.
-    ///
-    /// This is used during record reuse to copy valid data from a readable record
-    /// into a reused record, and during cleanup to preserve data in records being
-    /// marked as INVALID_SNAPSHOT.
     pub(crate) fn assign_value<T: Any + Clone>(
         &self,
         source: &StateRecord,
@@ -182,20 +167,13 @@ impl StateRecord {
 
 impl Drop for StateRecord {
     fn drop(&mut self) {
-        // Prevent recursive drop of deep chains which can cause stack overflow.
-        // We iteratively detach and drop the next record if we are the sole owner.
         let mut next = self.next.take();
         while let Some(node) = next {
             match Rc::try_unwrap(node) {
                 Ok(record) => {
-                    // We were the last owner. Take its next pointer to continue the loop.
-                    // The record itself will be dropped here, but since next is None,
-                    // it won't recurse.
                     next = record.next.take();
                 }
                 Err(_) => {
-                    // Someone else holds a reference to this node.
-                    // The chain destruction stops here.
                     break;
                 }
             }
@@ -203,12 +181,6 @@ impl Drop for StateRecord {
     }
 }
 
-/// Owns the mutable head pointer for a state's record chain.
-///
-/// Snapshot code clones the current head, prepends new records, and swaps in
-/// replacement heads frequently. Centralizing those operations keeps the
-/// `RefCell<Rc<StateRecord>>` borrow protocol out of the higher-level state
-/// logic.
 struct CurrentRecord {
     head: RefCell<Rc<StateRecord>>,
 }
@@ -258,9 +230,6 @@ pub(crate) fn readable_record_for(
     snapshot_id: SnapshotId,
     invalid: &SnapshotIdSet,
 ) -> Option<Rc<StateRecord>> {
-    // Find the highest valid record in the chain.
-    // We must scan the full chain because reused records may not be prepended
-    // as the head but still need to be found (e.g., after writes using record reuse).
     let mut best: Option<Rc<StateRecord>> = None;
     let mut cursor = Some(Rc::clone(head));
 
@@ -280,11 +249,6 @@ pub(crate) fn readable_record_for(
     best
 }
 
-/// Finds the youngest record in the chain, or the first one matching the predicate.
-///
-/// Searches the record chain starting from the given head:
-/// - If a record matches the predicate, returns it immediately
-/// - Otherwise, tracks the youngest record (highest snapshot_id) and returns it
 fn find_youngest_or<F>(head: &Rc<StateRecord>, predicate: F) -> Rc<StateRecord>
 where
     F: Fn(&Rc<StateRecord>) -> bool,
@@ -305,22 +269,10 @@ where
     youngest
 }
 
-/// Finds a StateRecord that can be safely reused because no open snapshot can see it.
-///
-/// Returns a record that either:
-/// 1. Is marked as INVALID_SNAPSHOT (abandoned/tombstone)
-/// 2. Is obscured by a newer record (both are below the reuse limit)
-///
-/// The reuse limit is `lowest_pinned_snapshot - 1`, meaning any record with a snapshot ID
-/// at or below this value cannot be selected by any currently open snapshot.
-///
-/// Note: PREEXISTING records (snapshot_id=1) are never reused to maintain the ability
-/// for all snapshots to read the initial state.
 pub(crate) fn used_locked(head: &Rc<StateRecord>) -> Option<Rc<StateRecord>> {
     let mut current = Some(Rc::clone(head));
     let mut valid_record: Option<Rc<StateRecord>> = None;
 
-    // Calculate reuse limit: records below this ID are invisible to all open snapshots
     let reuse_limit = lowest_pinned_snapshot()
         .map(|lowest| lowest.saturating_sub(1))
         .unwrap_or_else(|| allocate_record_id().saturating_sub(1));
@@ -330,13 +282,11 @@ pub(crate) fn used_locked(head: &Rc<StateRecord>) -> Option<Rc<StateRecord>> {
     while let Some(record) = current {
         let current_id = record.snapshot_id();
 
-        // Never reuse PREEXISTING records - they must always be available as a fallback
         if current_id == PREEXISTING_SNAPSHOT_ID {
             current = record.next();
             continue;
         }
 
-        // Fast path: records marked INVALID_SNAPSHOT can be reused immediately
         if current_id == INVALID_SNAPSHOT_ID {
             return Some(record);
         }
@@ -345,18 +295,14 @@ pub(crate) fn used_locked(head: &Rc<StateRecord>) -> Option<Rc<StateRecord>> {
             return Some(record);
         }
 
-        // Check if this record is valid for snapshots at or below the reuse limit
         if record_is_valid_for(&record, reuse_limit, &invalid) {
             if let Some(ref existing) = valid_record {
-                // We found two valid records below the reuse limit.
-                // This means one obscures the other - return the older one for reuse.
                 return Some(if current_id < existing.snapshot_id() {
                     record
                 } else {
                     Rc::clone(existing)
                 });
             } else {
-                // First valid record below reuse limit - keep looking
                 valid_record = Some(record.clone());
             }
         }
@@ -364,49 +310,24 @@ pub(crate) fn used_locked(head: &Rc<StateRecord>) -> Option<Rc<StateRecord>> {
         current = record.next();
     }
 
-    // No reusable record found
     None
 }
 
-/// Creates a new overwritable record for a state object, reusing an existing record if possible.
-///
-/// The record is initially marked with SNAPSHOT_ID_MAX to make it invisible to all snapshots
-/// during initialization. The caller must:
-/// 1. Copy/set the desired value into the record
-/// 2. Set the final snapshot_id
-///
-/// Returns a record that is either:
-/// - A reused record (if `used_locked()` found one), marked with SNAPSHOT_ID_MAX
-/// - A newly created record, prepended to the state's record chain via `prepend_state_record()`
 pub(crate) fn new_overwritable_record_locked(state: &dyn StateObject) -> Rc<StateRecord> {
     let state_head = state.first_record();
 
-    // Try to reuse an existing record
     if let Some(reusable) = used_locked(&state_head) {
-        // Mark as invisible during initialization
         reusable.set_snapshot_id(SNAPSHOT_ID_MAX);
         return reusable;
     }
 
-    // No reusable record found; create an invisible record and let the caller
-    // replace the unit initializer before publishing the final snapshot id.
-    let new_record = StateRecord::new(
-        SNAPSHOT_ID_MAX,
-        (),
-        None, // next will be set by prepend_state_record
-    );
+    let new_record = StateRecord::new(SNAPSHOT_ID_MAX, (), None);
 
-    // Prepend the new record to the state's chain
     state.prepend_state_record(Rc::clone(&new_record));
 
     new_record
 }
 
-/// Creates an overwritable record and ensures it is the head of the record chain.
-///
-/// This is used for global snapshot writes where the newest record must be at the head
-/// to keep tombstoning logic consistent. Reused records are unlinked from their current
-/// position before being prepended.
 pub(crate) fn new_overwritable_record_as_head_locked(state: &dyn StateObject) -> Rc<StateRecord> {
     let head = state.first_record();
 
@@ -452,27 +373,12 @@ pub(crate) fn new_overwritable_record_as_head_locked(state: &dyn StateObject) ->
     new_record
 }
 
-/// Overwrites unused records in a state object's record chain with data from retained records.
-///
-/// This function implements Kotlin's `overwriteUnusedRecordsLocked` to reclaim memory by:
-/// 1. Finding records below the reuse limit (records invisible to all open snapshots)
-/// 2. Keeping the highest record below the reuse limit (so lowest pinned snapshot can see it)
-/// 3. Marking older obscured records as INVALID_SNAPSHOT and copying valid data into them
-///
-/// The valid data is copied from a "young" record (above reuse limit) to ensure that if
-/// an invalidated record is somehow accessed, it contains current valid data rather than
-/// cleared/garbage values.
-///
-/// Returns `true` if the state has multiple retained records and should stay in extraStateObjects,
-/// `false` if it can be removed from tracking.
 pub(crate) fn overwrite_unused_records_locked<T: Any + Clone>(state: &dyn StateObject) -> bool {
     let head = state.first_record();
     let mut current = Some(Rc::clone(&head));
     let mut overwrite_record: Option<Rc<StateRecord>> = None;
     let mut valid_record: Option<Rc<StateRecord>> = None;
 
-    // Calculate reuse limit: records below this ID are invisible to all open snapshots
-    // Mirrors Kotlin's: val reuseLimit = pinningTable.lowestOrDefault(nextSnapshotId)
     let reuse_limit =
         lowest_pinned_snapshot().unwrap_or_else(crate::snapshot_v2::peek_next_snapshot_id);
 
@@ -482,16 +388,11 @@ pub(crate) fn overwrite_unused_records_locked<T: Any + Clone>(state: &dyn StateO
         let current_id = record.snapshot_id();
 
         if current_id == INVALID_SNAPSHOT_ID {
-            // Already invalid, skip
         } else if current_id < reuse_limit {
             if valid_record.is_none() {
-                // If any records are below reuse_limit, we must keep the highest one
-                // so the lowest snapshot can select it
                 valid_record = Some(Rc::clone(&record));
                 retained_records += 1;
             } else {
-                // We have two records below the reuse limit - one obscures the other
-                // Overwrite the older one (lower snapshot_id)
                 let Some(valid) = valid_record.as_ref() else {
                     valid_record = Some(Rc::clone(&record));
                     retained_records += 1;
@@ -501,18 +402,15 @@ pub(crate) fn overwrite_unused_records_locked<T: Any + Clone>(state: &dyn StateO
                 let record_to_overwrite = if current_id < valid.snapshot_id() {
                     Rc::clone(&record)
                 } else {
-                    // Keep current as valid, overwrite the previous valid
                     let to_overwrite = Rc::clone(valid);
                     valid_record = Some(Rc::clone(&record));
                     to_overwrite
                 };
 
-                // Lazily find a young record to copy data from
                 let source_record = overwrite_record.get_or_insert_with(|| {
                     find_youngest_or(&head, |r| r.snapshot_id() >= reuse_limit)
                 });
 
-                // Mark the old record as invalid and copy valid data into it
                 record_to_overwrite.set_snapshot_id(INVALID_SNAPSHOT_ID);
                 if let Err(error) = record_to_overwrite.assign_value::<T>(source_record) {
                     log::error!(
@@ -523,15 +421,12 @@ pub(crate) fn overwrite_unused_records_locked<T: Any + Clone>(state: &dyn StateO
                 }
             }
         } else {
-            // Record is above reuse limit - it's still visible and must be kept
             retained_records += 1;
         }
 
         current = record.next();
     }
 
-    // Return true if we have multiple records that must be retained
-    // (state should stay in extraStateObjects for future cleanup)
     retained_records > 1
 }
 
@@ -572,9 +467,6 @@ pub trait StateObject: Any {
     ) -> Option<Rc<StateRecord>>;
     fn readable_record(&self, snapshot_id: SnapshotId, invalid: &SnapshotIdSet) -> Rc<StateRecord>;
 
-    /// Prepends a record to the head of the record chain.
-    /// This is used when reusing records - the record's next pointer is updated to point to the current head,
-    /// and the head is updated to point to the new record.
     fn prepend_state_record(&self, record: Rc<StateRecord>);
 
     fn merge_records(
@@ -591,19 +483,14 @@ pub trait StateObject: Any {
     }
     fn promote_record(&self, child_id: SnapshotId) -> Result<(), &'static str>;
 
-    /// Overwrites unused records in this state's record chain with valid data.
-    ///
-    /// Returns `true` if the state has multiple retained records and should stay in extraStateObjects,
-    /// `false` if it can be removed from tracking.
     fn overwrite_unused_records(&self) -> bool {
-        false // Default implementation for states that don't support cleanup
+        false
     }
 
     fn observation_lease(&self) -> Option<Box<dyn Any>> {
         None
     }
 
-    /// Downcast to Any for testing/debugging purposes.
     fn as_any(&self) -> &dyn Any;
 }
 
@@ -748,9 +635,6 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
                 let refreshed = readable_record_for(&current_head, snapshot_id, invalid);
                 let source = refreshed.unwrap_or_else(|| current_head.clone());
 
-                // Create a new record
-                // Record reuse is NOT used here to preserve history for conflict detection
-                // Reuse happens during cleanup (overwrite_unused_records_locked)
                 let cloned_value = source.with_value(|value: &T| value.clone());
                 let new_head = StateRecord::new(snapshot_id, cloned_value, Some(current_head));
                 self.head.replace(new_head.clone());
@@ -821,8 +705,6 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
         }
 
         *state.lock_weak_self() = Some(Arc::downgrade(&state));
-
-        // No need to advance the global snapshot for initial state creation
 
         state
     }
@@ -940,7 +822,6 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
     }
 
     pub(crate) fn set(&self, new_value: T) -> bool {
-        // Debug-only check: warn if modifying state in event handler without proper snapshot
         #[cfg(debug_assertions)]
         {
             let in_handler = crate::in_event_handler();
@@ -1047,10 +928,6 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
             }
         }
 
-        // Retain the prior record chain so concurrent readers never observe freed nodes.
-        // Compose proper prunes when it can prove no readers exist; for now we keep
-        // the historical chain with tombstoned values to avoid use-after-free crashes
-        // under heavy UI load.
         true
     }
 }
@@ -1113,7 +990,6 @@ fn mark_update_write(id: ObjectId) {
 }
 
 impl<T: Clone + 'static> SnapshotMutableState<T> {
-    /// Try to find a readable record, returning None if no valid record exists.
     fn try_readable_record(
         &self,
         snapshot_id: SnapshotId,
@@ -1212,12 +1088,6 @@ impl<T: Clone + 'static> StateObject for SnapshotMutableState<T> {
                     );
                     return Err("child record value missing or wrong type");
                 };
-                // Publish through the reuse primitive: every apply retires
-                // the previous head, so an unconditional allocation here
-                // grows the record chain by one per UI event — the chain is
-                // scanned linearly on every read, so frames decay for the
-                // whole session (user-visible as sinking fps under repeated
-                // handle drags).
                 let new_id = allocate_record_id();
                 let promoted = new_overwritable_record_as_head_locked(self);
                 promoted.replace_value(cloned);
@@ -1247,8 +1117,6 @@ impl<T: Clone + 'static> StateObject for SnapshotMutableState<T> {
             );
             return Err("merged record value missing or wrong type");
         };
-        // Same reuse discipline as `promote_record`: merged commits happen
-        // per conflicting apply and must not grow the chain.
         let new_id = allocate_record_id();
         let committed = new_overwritable_record_as_head_locked(self);
         committed.replace_value(value);
@@ -1378,10 +1246,6 @@ impl<T: Clone + 'static> MutableStateInner<T> {
 
     pub(crate) fn unregister_scope(&self, scope_id: ScopeId) {
         let mut watchers = self.watchers.borrow_mut();
-        // Only prune a DEAD entry. Scope ids are derived from the scope
-        // allocation's address, so a dropped scope's id can already belong
-        // to a live replacement — its Drop-time unregister must not wipe
-        // the new scope's registration.
         let removed = if watchers
             .get(&scope_id)
             .is_some_and(|weak| weak.upgrade().is_none())
@@ -2096,11 +1960,9 @@ impl<T: fmt::Debug + Clone + 'static> fmt::Debug for State<T> {
 mod tests {
     use super::*;
 
-    /// Helper to create a chain of records for testing
     fn create_record_chain(ids: &[SnapshotId]) -> Rc<StateRecord> {
         let mut head: Option<Rc<StateRecord>> = None;
 
-        // Build chain in reverse order (last ID becomes the tail)
         for &id in ids.iter().rev() {
             head = Some(StateRecord::new(id, 0i32, head));
         }
@@ -2276,7 +2138,6 @@ mod tests {
 
     #[test]
     fn test_used_locked_finds_invalid_snapshot() {
-        // Create a chain with an INVALID_SNAPSHOT record
         let tail = StateRecord::new(PREEXISTING_SNAPSHOT_ID, 0i32, None);
         let invalid_rec = StateRecord::new(INVALID_SNAPSHOT_ID, 0i32, Some(tail));
         let head = StateRecord::new(10, 0i32, Some(invalid_rec.clone()));
@@ -2288,21 +2149,16 @@ mod tests {
 
     #[test]
     fn test_used_locked_finds_obscured_record() {
-        // Reset pinning state for clean test
         crate::snapshot_pinning::reset_pinning_table();
 
-        // Pin a high snapshot to set a known reuse limit
-        // This ensures records 2 and 5 are both below (reuse_limit = 10 - 1 = 9)
         let pin_handle = crate::snapshot_pinning::track_pinning(10, &SnapshotIdSet::EMPTY);
 
-        // Create a chain with two old records below the reuse limit
         let oldest = StateRecord::new(2, 0i32, None);
         let newer = StateRecord::new(5, 0i32, Some(oldest.clone()));
         let head = StateRecord::new(100, 0i32, Some(newer));
 
         let result = used_locked(&head);
 
-        // Should find the older of the two records below reuse limit
         assert!(result.is_some());
         let reused = result.unwrap();
         assert_eq!(
@@ -2311,17 +2167,13 @@ mod tests {
             "Should return the oldest obscured record"
         );
 
-        // Clean up
         crate::snapshot_pinning::release_pinning(pin_handle);
     }
 
     #[test]
     fn test_used_locked_no_reusable_record() {
-        // Reset pinning state
         crate::snapshot_pinning::reset_pinning_table();
 
-        // Create a chain where all records are recent (above reuse limit)
-        // Use very high IDs to ensure they're above any reuse limit
         let high_id = allocate_record_id() + 1000;
         let head = create_record_chain(&[high_id, high_id + 1, high_id + 2]);
 
@@ -2334,15 +2186,12 @@ mod tests {
 
     #[test]
     fn test_used_locked_single_old_record() {
-        // Reset pinning state
         crate::snapshot_pinning::reset_pinning_table();
 
-        // Create a chain with only one old record (should not be reused)
         let old = StateRecord::new(2, 0i32, None);
         let head = StateRecord::new(100, 0i32, Some(old));
 
         let result = used_locked(&head);
-        // With only ONE record below reuse limit, it's still valid and should not be reused
         assert!(result.is_none(), "Single old record should not be reused");
     }
 
@@ -2361,12 +2210,10 @@ mod tests {
         let head = create_record_chain(&[10, 5, PREEXISTING_SNAPSHOT_ID]);
         let invalid = SnapshotIdSet::EMPTY;
 
-        // Reading at snapshot 10 should return record 10
         let result = readable_record_for(&head, 10, &invalid);
         assert!(result.is_some());
         assert_eq!(result.unwrap().snapshot_id(), 10);
 
-        // Reading at snapshot 7 should skip record 10 and return record 5
         let result = readable_record_for(&head, 7, &invalid);
         assert!(result.is_some());
         assert_eq!(result.unwrap().snapshot_id(), 5);
@@ -2374,17 +2221,14 @@ mod tests {
 
     #[test]
     fn test_new_overwritable_record_locked_reuses_invalid() {
-        // Create a state with an INVALID record in the chain
         let state = SnapshotMutableState::new_in_arc(100i32, Arc::new(NeverEqual));
 
-        // Manually insert an INVALID record into the chain
         let current_head = state.first_record();
         let invalid_rec = StateRecord::new(INVALID_SNAPSHOT_ID, 0i32, current_head.next());
         current_head.set_next(Some(invalid_rec.clone()));
 
         let result = new_overwritable_record_locked(&*state);
 
-        // Should reuse the INVALID record
         assert!(Rc::ptr_eq(&result, &invalid_rec));
         assert_eq!(result.snapshot_id(), SNAPSHOT_ID_MAX);
     }
@@ -2393,20 +2237,15 @@ mod tests {
     fn test_new_overwritable_record_locked_creates_new() {
         crate::snapshot_pinning::reset_pinning_table();
 
-        // Pin snapshot 1 to prevent PREEXISTING (id=1) from being reusable
-        // This ensures the reuse limit is above 1, so PREEXISTING won't be obscured
         let _pin_handle = crate::snapshot_pinning::track_pinning(1, &SnapshotIdSet::EMPTY);
 
-        // Create a state with all recent records (no reusable ones)
         let state = SnapshotMutableState::new_in_arc(100i32, Arc::new(NeverEqual));
         let old_head = state.first_record();
 
         let result = new_overwritable_record_locked(&*state);
 
-        // Should create a new record
         assert_eq!(result.snapshot_id(), SNAPSHOT_ID_MAX);
 
-        // Should be prepended to the chain (becomes new head)
         let new_head = state.first_record();
         assert!(
             Rc::ptr_eq(&new_head, &result),
@@ -2415,7 +2254,6 @@ mod tests {
             Rc::as_ptr(&result)
         );
 
-        // The new record should point to the old head
         assert!(result.next().is_some());
         assert!(Rc::ptr_eq(&result.next().unwrap(), &old_head));
     }
@@ -2426,7 +2264,6 @@ mod tests {
 
         let state = SnapshotMutableState::new_in_arc(7i32, Arc::new(NeverEqual));
 
-        // Inject an INVALID record that should be reused on next write.
         let head = state.first_record();
         let invalid = StateRecord::new(INVALID_SNAPSHOT_ID, 0i32, head.next());
         head.set_next(Some(invalid.clone()));
@@ -2483,16 +2320,12 @@ mod tests {
     fn test_state_record_clear_for_reuse() {
         let record = StateRecord::new(10, 42i32, None);
 
-        // Verify value exists before clearing
         record.with_value(|val: &i32| {
             assert_eq!(*val, 42);
         });
 
-        // Clear the record for reuse
         record.clear_for_reuse();
 
-        // Value should be cleared (will panic if we try to access it)
-        // Just verify snapshot_id is unchanged
         assert_eq!(record.snapshot_id(), 10);
     }
 
@@ -2500,22 +2333,17 @@ mod tests {
     fn test_overwrite_unused_records_no_old_records() {
         crate::snapshot_pinning::reset_pinning_table();
 
-        // Create state first to establish snapshot IDs
         let state = SnapshotMutableState::new_in_arc(42i32, Arc::new(NeverEqual));
 
-        // Pin snapshot 1 so reuse limit is 1, making both initial records (1 and 2) above it
-        // This ensures PREEXISTING won't be overwritten
         let _pin = crate::snapshot_pinning::track_pinning(1, &SnapshotIdSet::EMPTY);
 
         let should_retain = state.overwrite_unused_records();
 
-        // With both records above/at reuse limit, we have 2 retained
         assert!(
             should_retain,
             "Should retain multiple records when none are old enough"
         );
 
-        // No records should be marked as INVALID
         let mut cursor = Some(state.first_record());
         while let Some(record) = cursor {
             assert_ne!(record.snapshot_id(), INVALID_SNAPSHOT_ID);
@@ -2525,15 +2353,12 @@ mod tests {
 
     #[test]
     fn test_overwrite_unused_records_basic_cleanup() {
-        // Test that old records get marked invalid when newer ones exist
         crate::snapshot_pinning::reset_pinning_table();
 
-        // Create simple manual chain to avoid snapshot ID allocation complexity
         let rec1 = StateRecord::new(100, 1i32, None);
         let rec2 = StateRecord::new(200, 2i32, Some(rec1.clone()));
         let rec3 = StateRecord::new(300, 3i32, Some(rec2.clone()));
 
-        // Mock state object for testing
         struct TestState {
             head: Rc<StateRecord>,
         }
@@ -2565,17 +2390,14 @@ mod tests {
 
         let test_state = TestState { head: rec3.clone() };
 
-        // Pin at 1000 so all three records (100, 200, 300) are below reuse limit
         let _pin = crate::snapshot_pinning::track_pinning(1000, &SnapshotIdSet::EMPTY);
 
         let result = overwrite_unused_records_locked::<i32>(&test_state);
 
-        // Should keep highest (300), mark others invalid
         assert_eq!(rec3.snapshot_id(), 300);
         assert_eq!(rec2.snapshot_id(), INVALID_SNAPSHOT_ID);
         assert_eq!(rec1.snapshot_id(), INVALID_SNAPSHOT_ID);
 
-        // Only one record retained (300), so should return false
         assert!(!result);
     }
 
@@ -2585,13 +2407,11 @@ mod tests {
 
         let state = SnapshotMutableState::new_in_arc(42i32, Arc::new(NeverEqual));
 
-        // Remove the PREEXISTING record by setting next to None
         let head = state.first_record();
         head.set_next(None);
 
         let should_retain = state.overwrite_unused_records();
 
-        // With only one record, should return false
         assert!(!should_retain, "Single record should return false");
     }
 
@@ -2617,7 +2437,6 @@ mod tests {
         let head = StateRecord::new(150, 42i32, Some(old_rec2.clone()));
         let state = ManualState::new(head.clone());
 
-        // Verify value exists before cleanup
         old_rec1.with_value(|val: &i32| {
             assert_eq!(*val, 999);
         });
@@ -2625,16 +2444,13 @@ mod tests {
         let _pin = crate::snapshot_pinning::track_pinning(100, &SnapshotIdSet::EMPTY);
         overwrite_unused_records_locked::<i32>(&state);
 
-        // The invalidated record should have its value cleared
         assert_eq!(old_rec1.snapshot_id(), INVALID_SNAPSHOT_ID);
-        // Value access would panic, so we just verify it was marked invalid
     }
 
     #[test]
     fn test_overwrite_unused_records_mixed_old_and_new() {
         crate::snapshot_pinning::reset_pinning_table();
 
-        // Create mixed chain: recent (50) -> old (5) -> old (2) -> PREEXISTING
         let preexisting = StateRecord::new(PREEXISTING_SNAPSHOT_ID, 0i32, None);
         let rec2 = StateRecord::new(2, 100i32, Some(preexisting.clone()));
         let rec5 = StateRecord::new(5, 100i32, Some(rec2.clone()));
@@ -2642,17 +2458,13 @@ mod tests {
         let head = StateRecord::new(120, 100i32, Some(rec50.clone()));
         let state = ManualState::new(head.clone());
 
-        // Pin snapshot 40 so reuse limit is ~40, making 2 and 5 old but 50 recent
         let _pin = crate::snapshot_pinning::track_pinning(40, &SnapshotIdSet::EMPTY);
 
         let should_retain = overwrite_unused_records_locked::<i32>(&state);
         assert!(should_retain);
 
-        // rec50 is above reuse limit - should stay valid
         assert_eq!(rec50.snapshot_id(), 50);
-        // rec5 is highest below reuse limit - should stay valid
         assert_eq!(rec5.snapshot_id(), 5);
-        // rec2 is older and below reuse limit - should be invalidated
         assert_eq!(rec2.snapshot_id(), INVALID_SNAPSHOT_ID);
     }
 
@@ -2661,18 +2473,14 @@ mod tests {
         let head = create_record_chain(&[10, 5, PREEXISTING_SNAPSHOT_ID]);
         let invalid = SnapshotIdSet::new().set(5);
 
-        // Reading at snapshot 10 should skip record 5 (in invalid set)
         let result = readable_record_for(&head, 10, &invalid);
         assert!(result.is_some());
         assert_eq!(result.unwrap().snapshot_id(), 10);
 
-        // Reading at snapshot 7 should skip 5 and fall back to PREEXISTING
         let result = readable_record_for(&head, 7, &invalid);
         assert!(result.is_some());
         assert_eq!(result.unwrap().snapshot_id(), PREEXISTING_SNAPSHOT_ID);
     }
-
-    // ========== Tests for assign_value() ==========
 
     #[test]
     fn test_assign_value_copies_int() {
@@ -2681,17 +2489,14 @@ mod tests {
 
         target.assign_value::<i32>(&source).expect("copy int value");
 
-        // Verify the value was copied
         target.with_value(|val: &i32| {
             assert_eq!(*val, 42);
         });
 
-        // Verify source is unchanged
         source.with_value(|val: &i32| {
             assert_eq!(*val, 42);
         });
 
-        // Verify snapshot IDs are unchanged
         assert_eq!(source.snapshot_id(), 10);
         assert_eq!(target.snapshot_id(), 20);
     }
@@ -2705,12 +2510,10 @@ mod tests {
             .assign_value::<String>(&source)
             .expect("copy string value");
 
-        // Verify the value was copied
         target.with_value(|val: &String| {
             assert_eq!(val, "hello");
         });
 
-        // Verify source is unchanged
         source.with_value(|val: &String| {
             assert_eq!(val, "hello");
         });
@@ -2737,17 +2540,14 @@ mod tests {
         let source = StateRecord::new(10, 100i32, None);
         let target = StateRecord::new(20, 999i32, None);
 
-        // Verify target has initial value
         target.with_value(|val: &i32| {
             assert_eq!(*val, 999);
         });
 
-        // Assign from source
         target
             .assign_value::<i32>(&source)
             .expect("overwrite int value");
 
-        // Verify target now has source's value
         target.with_value(|val: &i32| {
             assert_eq!(*val, 100);
         });
@@ -2777,7 +2577,6 @@ mod tests {
     fn test_assign_value_self_assignment() {
         let record = StateRecord::new(10, 42i32, None);
 
-        // Self-assignment should work (though not useful in practice)
         record
             .assign_value::<i32>(&record)
             .expect("self-assign int value");
@@ -2787,12 +2586,6 @@ mod tests {
         });
     }
 
-    /// The user-visible leak behind "fps got lower and lower" during
-    /// repeated text-handle drags: every pointer event writes drag state
-    /// through `run_in_mutable_snapshot` (the `dispatch_ui_event` path).
-    /// Each write must leave the record chain bounded — a growing chain
-    /// makes every subsequent state read a longer linear scan, degrading
-    /// every later frame.
     #[test]
     fn event_loop_writes_keep_the_record_chain_bounded() {
         crate::snapshot_pinning::reset_pinning_table();
@@ -2804,8 +2597,6 @@ mod tests {
                 state.set(event as f32);
             })
             .expect("event snapshot applies");
-            // The renderer reads the value from the global snapshot between
-            // events (draw + layout consume the state each frame).
             let _ = state.get();
             if event % 500 == 499 {
                 lens.push(state.record_chain_debug().len());
@@ -2832,7 +2623,6 @@ mod tests {
             assert_eq!(val, &vec![1, 2, 3, 4, 5]);
         });
 
-        // Verify it's a deep copy (modifying source won't affect target)
         source.replace_value(vec![10, 20]);
         target.with_value(|val: &Vec<i32>| {
             assert_eq!(val, &vec![1, 2, 3, 4, 5]);

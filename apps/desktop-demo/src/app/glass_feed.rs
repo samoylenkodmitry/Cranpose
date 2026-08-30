@@ -1,11 +1,3 @@
-//! Glass feed: fixed glass chrome over a scrolling lazy list.
-//!
-//! The topology issue #500 attributes ~90 % of scroll-time isolated-layer
-//! area to: a glass top bar, a glass search field, and a glass filter panel
-//! whose backdrop IS the moving list, plus sparse per-row glass buttons that
-//! ride along with the scroll. Every element is deterministic so on-device
-//! and robot measurements sample the same scene.
-
 #![allow(non_snake_case)]
 
 use std::sync::Arc;
@@ -27,15 +19,11 @@ use cranpose_ui::{Alignment, HorizontalAlignment, LinearArrangement, VerticalAli
 
 pub const GLASS_FEED_LIST_TAG: &str = "GlassFeedList";
 
-/// Vertical space the fixed chrome occupies; the list starts below it and
-/// scrolls under it.
 const CHROME_CLEARANCE: f32 = 150.0;
 const CARD_HEIGHT: f32 = 76.0;
 const CARD_SPACING: f32 = 12.0;
 const FEED_ROWS: usize = 120;
 
-/// Vivid card gradients — the kind of backdrop the glass chrome has to
-/// re-blur every scrolled frame.
 const CARD_GRADIENTS: [[Color; 2]; 6] = [
     [
         Color::from_rgb_u8(255, 94, 98),
@@ -170,9 +158,6 @@ fn FeedCard(index: usize) {
                             );
                         },
                     );
-                    // Sparse moving glass: every third card carries a 44x44
-                    // glass button, keeping 1-4 on screen like the shipping
-                    // page this mirrors.
                     if index.is_multiple_of(3) {
                         GlassButton(
                             Modifier::empty().size(Size::new(44.0, 44.0)),
@@ -189,8 +174,6 @@ fn FeedCard(index: usize) {
     );
 }
 
-/// The fixed chrome: every layer here blurs the moving list behind it, so
-/// none of these captures can ever be cache hits during a scroll.
 #[composable]
 fn FeedChrome() {
     let colors = liquid_colors();

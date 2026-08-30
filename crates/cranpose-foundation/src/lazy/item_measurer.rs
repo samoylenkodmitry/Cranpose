@@ -1,7 +1,3 @@
-//! Item measurement for lazy list.
-//!
-//! This module handles measuring visible items and beyond-bounds buffer items.
-
 use std::collections::VecDeque;
 
 use web_time::{Duration, Instant};
@@ -11,23 +7,11 @@ use super::{
     lazy_list_measured_item::LazyListMeasuredItem,
 };
 
-/// Maximum items to measure per pass as a safety limit.
-///
-/// This prevents infinite loops when items have zero or near-zero size.
-/// With 500 items at typical 12px minimum item height, this supports
-/// viewports up to ~6000px. Larger viewports with tiny items may be
-/// under-filled, but this is rare in practice.
-///
-/// If the limit is reached, a warning is logged but measurement continues
-/// correctly - the viewport will simply have fewer items than it could fit.
 const DEFAULT_TIME_BUDGET: Duration = Duration::from_millis(6);
 
-/// Maximum items to measure per pass as a hard safety limit.
-/// Used in addition to time budget to prevent memory exhaustion in extreme cases.
 const MAX_VISIBLE_ITEMS_SAFETY: usize = 10000;
 const MIN_ESTIMATED_ITEM_EXTENT: f32 = 1.0;
 
-/// Metadata returned from a single lazy list item measurement pass.
 #[derive(Debug)]
 pub struct ItemMeasurePass {
     pub items: Vec<LazyListMeasuredItem>,
@@ -61,16 +45,9 @@ where
     }
 }
 
-/// Measures items for lazy list layout.
-///
-/// Handles measuring:
-/// - Visible items that fill the viewport
-/// - Beyond-bounds items after visible (for prefetch)
-/// - Beyond-bounds items before visible (for prefetch)
 pub struct ItemMeasurer<'a, F, B = AlwaysMeasureBeyond> {
     measure_fn: &'a mut F,
     beyond_bounds_policy: B,
-    /// Items already measured during scroll normalization to avoid re-composition.
     pre_measured: VecDeque<LazyListMeasuredItem>,
     config: &'a LazyListMeasureConfig,
     guaranteed_after_beyond_bounds_item_count: usize,
@@ -87,7 +64,6 @@ impl<'a, F> ItemMeasurer<'a, F, AlwaysMeasureBeyond>
 where
     F: FnMut(usize) -> LazyListMeasuredItem,
 {
-    /// Creates a new ItemMeasurer.
     pub fn new(
         measure_fn: &'a mut F,
         config: &'a LazyListMeasureConfig,
@@ -160,18 +136,12 @@ where
         }
     }
 
-    /// Measures all items: visible + beyond-bounds buffer.
-    ///
-    /// Returns the complete list of measured items with offsets set.
     pub fn measure_all(
         &mut self,
         first_item_index: usize,
         first_item_scroll_offset: f32,
     ) -> ItemMeasurePass {
         let start_time = Instant::now();
-        // Content padding belongs to the scrollable content. It offsets item 0
-        // at rest, but must not become a permanent clipping boundary after the
-        // first item advances.
         let leading_padding = if first_item_index == 0 {
             self.config.before_content_padding
         } else {
@@ -182,16 +152,11 @@ where
         let content_end =
             (self.effective_viewport_size - self.config.after_content_padding).max(0.0);
 
-        // Measure visible items
         let (mut visible_items, current_index, current_offset) =
             self.measure_visible(first_item_index, start_offset, viewport_end, start_time);
         let measured_visible_items = visible_items.len();
         let hit_time_budget = start_time.elapsed() > DEFAULT_TIME_BUDGET;
 
-        // Scroll back to fill if the forward pass reached the end of the list
-        // but left spare space (e.g. the viewport grew because the soft keyboard
-        // hid): pull earlier items in so the content bottom aligns with the
-        // viewport end instead of leaving an over-scroll blank gap.
         let effective_first_index = self
             .fill_end_gap(
                 &mut visible_items,
@@ -204,7 +169,6 @@ where
             .unwrap_or(first_item_index);
         let backfilled = effective_first_index != first_item_index;
 
-        // Measure beyond-bounds items after visible.
         self.measure_beyond_after(
             current_index,
             current_offset,
@@ -212,7 +176,6 @@ where
             start_time,
         );
 
-        // Measure beyond-bounds items before visible.
         if self.include_before_beyond_bounds
             && effective_first_index > 0
             && !visible_items.is_empty()
@@ -260,17 +223,6 @@ where
         pass
     }
 
-    /// Scrolls back to fill a viewport that the forward pass could not fill.
-    ///
-    /// When the forward measurement runs off the end of the list (its item index
-    /// reaches `items_count`) but stops before the viewport end (spare space
-    /// below), the stored scroll position is too far down for the current
-    /// viewport — typically because the viewport just grew (the soft keyboard
-    /// hid, e.g.). This
-    /// shifts the measured items down so the last item's bottom aligns with the
-    /// viewport end, then measures earlier items into the freed top space,
-    /// preventing an over-scroll blank gap. Returns the new first visible index
-    /// when it backfilled.
     fn fill_end_gap(
         &mut self,
         visible_items: &mut Vec<LazyListMeasuredItem>,
@@ -287,11 +239,9 @@ where
         if spare <= 0.5 {
             return None;
         }
-        // Align the content bottom with the viewport end.
         for item in visible_items.iter_mut() {
             item.offset += spare;
         }
-        // Fill the freed space at the top with the preceding items.
         let mut top = visible_items[0].offset;
         let mut idx = first_item_index;
         while idx > 0 && top > self.config.before_content_padding + 0.5 {
@@ -306,7 +256,6 @@ where
             item.offset = top;
             visible_items.insert(0, item);
         }
-        // If the list start was reached, clamp the top to the content padding.
         let first = &visible_items[0];
         if first.index == 0 && first.offset > self.config.before_content_padding {
             let adjustment = first.offset - self.config.before_content_padding;
@@ -317,9 +266,6 @@ where
         Some(visible_items[0].index)
     }
 
-    /// Measures visible items starting from `start_index`.
-    ///
-    /// Returns (items, next_index, next_offset).
     fn measure_visible(
         &mut self,
         start_index: usize,
@@ -348,7 +294,6 @@ where
             current_index += 1;
         }
 
-        // Warn if we hit the safety limit - viewport may be under-filled
         if items.len() >= MAX_VISIBLE_ITEMS_SAFETY && current_offset < viewport_end {
             log::warn!(
                 "MAX_VISIBLE_ITEMS ({}) reached while viewport has remaining space ({:.0}px) - \
@@ -361,7 +306,6 @@ where
         (items, current_index, current_offset)
     }
 
-    /// Measures beyond-bounds items after visible items.
     fn measure_beyond_after(
         &mut self,
         mut current_index: usize,
@@ -398,9 +342,6 @@ where
         }
     }
 
-    /// Measures beyond-bounds items before visible items.
-    ///
-    /// Returns items in correct order (earliest index first).
     fn measure_beyond_before(
         &mut self,
         first_index: usize,
@@ -629,7 +570,6 @@ mod tests {
         let pass = measurer.measure_all(0, 0.0);
         let items = pass.items;
 
-        // 200px viewport / 50px items = 4 visible + 2 beyond = 6
         assert!(items.len() >= 4);
         assert_eq!(items[0].index, 0);
         assert_eq!(items[0].offset, 0.0);
@@ -645,8 +585,6 @@ mod tests {
         let pass = measurer.measure_all(5, 25.0);
         let items = pass.items;
 
-        // First visible item should be at index 5
-        // Beyond-bounds before should include items 3, 4
         assert!(items.iter().any(|i| i.index == 3));
         assert!(items.iter().any(|i| i.index == 5));
     }
@@ -686,7 +624,6 @@ mod tests {
         let pass = measurer.measure_all(0, 0.0);
         let items = pass.items;
 
-        // Only 3 items exist, even though viewport can fit more
         assert_eq!(items.len(), 3);
     }
 
@@ -703,9 +640,8 @@ mod tests {
         let pass = measurer.measure_all(0, 0.0);
         let items = pass.items;
 
-        // Check spacing is applied
         assert_eq!(items[0].offset, 0.0);
-        assert_eq!(items[1].offset, 60.0); // 50 + 10 spacing
+        assert_eq!(items[1].offset, 60.0);
     }
 
     #[test]

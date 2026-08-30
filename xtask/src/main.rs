@@ -76,18 +76,6 @@ fn print_usage() {
     );
 }
 
-/// Every target triple the project ships, from the release workflow and the
-/// `ios-sim`/`ios-device`/`android`/`web` recipes.
-///
-/// The dependency budget resolves the graph for all of them at once, so its
-/// verdict is identical on every host. Without the pins `cargo tree` filters by
-/// host platform, and a budget that is green on a Linux CI runner can be red on
-/// macOS. Per-architecture entries matter as much as per-OS ones: families like
-/// `windows_x86_64_msvc` are architecture-specific, so dropping an Android ABI
-/// or the iOS simulator here would let a split hide. Resolving all of them
-/// costs no measurable time over resolving one.
-///
-/// Adding a shipped target means adding it here.
 const SHIPPED_TARGETS: &[&str] = &[
     "aarch64-apple-darwin",
     "aarch64-apple-ios",
@@ -101,25 +89,12 @@ const SHIPPED_TARGETS: &[&str] = &[
     "x86_64-unknown-linux-gnu",
 ];
 
-/// A duplicate dependency version family the workspace knowingly carries.
 #[derive(Debug, PartialEq, Eq)]
 struct DuplicateDebt {
     family: &'static str,
     reason: &'static str,
 }
 
-/// Duplicate dependency version families in the default-feature graph.
-///
-/// Every entry is upstream debt: the crate pinning the old family is at its
-/// latest published release, so the split cannot be collapsed from this side.
-/// Each reason names the concrete upstream event that clears it. The budget
-/// fails on any family missing from this table, and also on any entry whose
-/// split no longer exists, so the table shrinks the moment that event lands.
-///
-/// These are not a licence to add duplicates. A split this workspace can
-/// collapse itself -- by aligning a version, dropping a dependency, or
-/// patching a crate to an upstream rev the way `gpu-descriptor` is patched --
-/// must be collapsed instead of recorded here.
 const WORKSPACE_DUPLICATE_DEBT: &[DuplicateDebt] = &[
     DuplicateDebt {
         family: "jni-sys",
@@ -159,7 +134,6 @@ const WORKSPACE_DUPLICATE_DEBT: &[DuplicateDebt] = &[
     },
 ];
 
-/// Additional duplicate families that only appear with `--all-features`.
 const ALL_FEATURES_EXTRA_DUPLICATE_DEBT: &[DuplicateDebt] = &[DuplicateDebt {
     family: "env_filter",
     reason: "android_logger 0.15.1 (latest) pins env_filter ^0.1 while env_logger 0.11 is past 1.0",
@@ -472,13 +446,6 @@ fn bundle_macos(options: BundleMacosOptions) -> Result<(), String> {
     }
 
     let bundle = create_bundle(&workspace, &options, &binary)?;
-    // Always seal the bundle. The Rust linker ad-hoc signs the inner Mach-O with
-    // a bundle-style signature that expects `_CodeSignature/CodeResources`, but
-    // assembling the `.app` afterwards leaves that seal missing. A downloaded
-    // (quarantined) bundle in that state fails Gatekeeper with "is damaged and
-    // should be moved to the Trash". Re-signing the assembled bundle binds the
-    // Info.plist and writes a valid seal; ad-hoc (`-`) is the default when no
-    // developer identity is supplied.
     sign_bundle(
         &bundle,
         bundle_sign_identity(options.sign_identity.as_deref()),
@@ -593,26 +560,13 @@ impl DistMinOptions {
     }
 }
 
-/// Extra rustc flags for the smallest distribution build: immediate-abort
-/// panics remove the unwind/panic-message machinery from every crate
-/// (including the rebuilt std), `location-detail=none` drops panic-site
-/// file/line path strings, `fmt-debug=none` compiles `Debug` formatting to
-/// no-ops, and lld's `--icf=all` folds identical functions (e.g. the
-/// per-call-site composable shims). The trade: dist-min binaries abort
-/// without a message and log `{:?}` payloads as empty — acceptable for
-/// shipped builds, not for debugging. Requires `lld` on PATH.
 const DIST_MIN_RUSTFLAGS: &str = "-Cpanic=immediate-abort -Zunstable-options \
      -Zlocation-detail=none -Zfmt-debug=none";
 
-/// Linker extras that only apply to ELF/lld targets (Linux, Android):
-/// `--icf=all` folds identical functions; macOS ld64 and MSVC link.exe have
-/// no such flags (MSVC's /OPT:ICF is already on in release).
 const DIST_MIN_LLD_RUSTFLAGS: &str = " -Clink-arg=-fuse-ld=lld -Clink-arg=-Wl,--icf=all";
 
 fn dist_min_rustflags_for_target(target: &str) -> String {
     let mut flags = DIST_MIN_RUSTFLAGS.to_owned();
-    // MSVC targets use SEH exceptions and REQUIRE unwind tables; rustc
-    // hard-errors on force-unwind-tables=no there.
     if !target.contains("msvc") {
         flags.push_str(" -Cforce-unwind-tables=no");
     }
@@ -624,16 +578,11 @@ fn dist_min_rustflags_for_target(target: &str) -> String {
 
 fn build_dist_min(mut options: DistMinOptions) -> Result<(), String> {
     let workspace = workspace_root()?;
-    // -Zbuild-std requires an explicit --target.
     if options.binary.target.is_none() {
         options.binary.target = Some(host_triple()?);
     }
     options.binary = stage_patched_package(&workspace, &options.binary)?;
 
-    // `cargo +nightly` only works through the rustup shim; inside `cargo
-    // xtask` the PATH cargo is the toolchain binary itself, so go through
-    // rustup explicitly. The outer cargo also exports its own toolchain via
-    // CARGO/RUSTC/RUSTDOC, which must not leak into the nightly child.
     let nightly = pinned_nightly_channel(&workspace)?;
     let mut command = Command::new("rustup");
     command.args(["run", nightly.as_str(), "cargo", "build"]);
@@ -718,11 +667,6 @@ fn bundle_binary_options(options: &BundleMacosOptions) -> CargoBinaryOptions {
     }
 }
 
-/// The nightly toolchain named by `rust-toolchain-nightly.toml`.
-///
-/// `dist-min` needs nightly cargo for `-Zbuild-std`, but spelling the channel
-/// `nightly` would build release artifacts against whatever nightly the host
-/// happens to hold that day. Reading the pin keeps a tag reproducible.
 fn pinned_nightly_channel(workspace: &Path) -> Result<String, String> {
     let path = workspace.join("rust-toolchain-nightly.toml");
     let text = fs::read_to_string(&path)
@@ -856,27 +800,10 @@ fn escape_toml_string(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-/// Staging root for out-of-workspace packages built with local Cranpose
-/// patches. It lives under the workspace `target/`, which is ignored, so the
-/// lockfile cargo rewrites there is a build artifact like any other.
 const PATCHED_PACKAGE_STAGE: &str = "target/patched-packages";
 
-/// The package files a staged build needs beside its sources.
 const STAGED_PACKAGE_FILES: &[&str] = &["Cargo.toml", "Cargo.lock"];
 
-/// Redirect a patched build at a staged copy of the package it measures.
-///
-/// `--patch-workspace-cranpose` hands cargo a `patch.crates-io.*.path` for
-/// every Cranpose crate. Cargo re-resolves under those patches and rewrites the
-/// package's `Cargo.lock`, dropping the `source` and `checksum` of every
-/// patched crate. `apps/isolated-demo` tracks its lockfile on purpose -- it is
-/// the canary proving a release resolves from crates.io -- so measuring a
-/// binary must not rewrite it. Building a staged copy keeps that lockfile
-/// untouched while the patched resolution lands in `target/`.
-///
-/// A workspace build needs no staging: with no `--manifest-path` cargo resolves
-/// the workspace's own lockfile, which already holds the Cranpose crates as
-/// workspace members.
 fn stage_patched_package(
     workspace: &Path,
     options: &CargoBinaryOptions,
@@ -898,8 +825,6 @@ fn stage_patched_package(
     let staged = workspace.join(PATCHED_PACKAGE_STAGE).join(package_dir_name);
 
     let source_roots = package_source_roots(&manifest_path)?;
-    // Cargo reports canonical target paths, so the package directory has to be
-    // canonical as well for them to strip against it.
     let package_dir = fs::canonicalize(package_dir)
         .map_err(|error| format!("failed to resolve `{}`: {error}", package_dir.display()))?;
     stage_package(&package_dir, &staged, &source_roots)?;
@@ -910,12 +835,6 @@ fn stage_patched_package(
     })
 }
 
-/// Mirror the files cargo compiles -- the manifest, the lockfile and every
-/// directory holding a declared target -- into `staged`.
-///
-/// Mirroring the whole package directory instead would drag in whatever other
-/// build systems left inside it (`android/app/build`, `ios/build`, `pkg`), so
-/// the set comes from what cargo itself reports as this package's targets.
 fn stage_package(
     package_dir: &Path,
     staged: &Path,
@@ -943,11 +862,6 @@ fn stage_package(
     Ok(())
 }
 
-/// The directories holding the cargo targets `manifest_path` declares.
-///
-/// `--no-deps` reports the manifest's own packages without resolving
-/// dependencies, so asking is free and -- unlike a build -- leaves the
-/// package's lockfile alone.
 fn package_source_roots(manifest_path: &Path) -> Result<Vec<PathBuf>, String> {
     let output = Command::new("cargo")
         .args(["metadata", "--no-deps", "--format-version", "1"])
@@ -992,12 +906,6 @@ fn parse_target_source_roots(metadata_json: &str) -> Vec<PathBuf> {
     roots
 }
 
-/// Mirror `source` onto `destination`, copying only the files whose bytes
-/// differ and dropping whatever `source` no longer holds.
-///
-/// Copying unconditionally would restamp every mtime and make cargo rebuild the
-/// staged package from scratch on every run; comparing contents first keeps the
-/// measurement incremental.
 fn mirror_dir(source: &Path, destination: &Path) -> Result<(), String> {
     fs::create_dir_all(destination)
         .map_err(|error| format!("failed to create `{}`: {error}", destination.display()))?;
@@ -1032,15 +940,12 @@ fn mirror_dir(source: &Path, destination: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Copy `source` onto `destination` unless their bytes already match.
 fn mirror_file(source: &Path, destination: &Path) -> Result<(), String> {
     let bytes = fs::read(source)
         .map_err(|error| format!("failed to read `{}`: {error}", source.display()))?;
     if fs::read(destination).is_ok_and(|mirrored| mirrored == bytes) {
         return Ok(());
     }
-    // `fs::copy` rather than `fs::write`: it carries the permission bits over,
-    // so a staged script stays executable.
     fs::copy(source, destination).map_err(|error| {
         format!(
             "failed to copy `{}` to `{}`: {error}",
@@ -1051,8 +956,6 @@ fn mirror_file(source: &Path, destination: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Mirror `source` when it exists, and drop a `destination` left over from a
-/// run where it did.
 fn mirror_optional_file(source: &Path, destination: &Path) -> Result<(), String> {
     if source.exists() {
         return mirror_file(source, destination);
@@ -1266,10 +1169,6 @@ fn escape_xml(value: &str) -> String {
         .replace('\'', "&apos;")
 }
 
-/// Selects the codesign identity used to seal a macOS bundle.
-///
-/// Falls back to ad-hoc (`-`) when no developer identity is supplied so the
-/// `.app` always carries a valid signature seal.
 fn bundle_sign_identity(requested: Option<&str>) -> &str {
     requested.unwrap_or("-")
 }
@@ -1449,15 +1348,6 @@ struct DuplicatePackageRoot {
     direct_dependents: Vec<String>,
 }
 
-/// Removes ANSI escape sequences from one `cargo tree` line.
-///
-/// `cargo tree` colours its output whenever `CARGO_TERM_COLOR=always`, which
-/// the CI workflow sets globally. A nested line then arrives as
-/// `ESC[2m│ESC[0m   ESC[2m└──ESC[0m thiserror v1.0.69`, which does not start
-/// with a box-drawing character, so the root check waves it through and the
-/// package "name" ends up carrying the tree drawing with it. Strip the escapes
-/// before parsing so the budget reads the same graph however the environment
-/// is configured.
 fn strip_ansi_escapes(line: &str) -> String {
     let mut plain = String::with_capacity(line.len());
     let mut characters = line.chars();
@@ -1466,8 +1356,6 @@ fn strip_ansi_escapes(line: &str) -> String {
             plain.push(character);
             continue;
         }
-        // A control sequence is `ESC [ <parameters> <final>`, where the final
-        // byte is in `@..=~`. Any other escape is two characters long.
         if let Some('[') = characters.next() {
             for character in characters.by_ref() {
                 if ('@'..='~').contains(&character) {
@@ -1910,10 +1798,6 @@ tiny-skia v0.12.0 (*)
         }
     }
 
-    /// CI sets `CARGO_TERM_COLOR=always`, so every `cargo tree` line arrives
-    /// wrapped in ANSI escapes. A nested line then starts with `ESC[` rather
-    /// than with a box-drawing character, which is exactly what the root check
-    /// looks for.
     #[test]
     fn duplicate_budget_parser_ignores_coloured_nested_lines() {
         let tree = concat!(
@@ -2269,8 +2153,6 @@ cranpose v0.1.0
 
     #[test]
     fn bundle_defaults_to_adhoc_signing() {
-        // Without a developer identity the bundle must still be sealed ad-hoc.
-        // An unsealed `.app` is reported "damaged" by Gatekeeper once downloaded.
         assert_eq!(bundle_sign_identity(None), "-");
     }
 
@@ -2284,17 +2166,12 @@ cranpose v0.1.0
 
     #[test]
     fn patched_isolated_build_never_touches_the_tracked_package() {
-        // `--patch-workspace-cranpose` makes cargo re-resolve and rewrite the
-        // package's Cargo.lock. apps/isolated-demo tracks its lockfile as the
-        // proof that a release resolves from crates.io, so the patched build
-        // has to compile a staged copy instead.
         let workspace = unique_temp_dir();
         let package_dir = workspace.join("apps/isolated-demo");
         fs::create_dir_all(package_dir.join("src")).expect("create package");
         fs::write(package_dir.join("Cargo.toml"), MINIMAL_MANIFEST).expect("write manifest");
         fs::write(package_dir.join("Cargo.lock"), PUBLISHED_LOCKFILE).expect("write lockfile");
         fs::write(package_dir.join("src/main.rs"), b"fn main() {}").expect("write source");
-        // Another build system's output next to the sources must not be staged.
         fs::create_dir_all(package_dir.join("android/app/build")).expect("create gradle output");
         fs::write(package_dir.join("android/app/build/huge.apk"), b"output").expect("write output");
 
@@ -2352,8 +2229,6 @@ cranpose v0.1.0
             .and_then(|metadata| metadata.modified())
             .expect("staged mtime");
 
-        // Unchanged sources must keep their timestamps, or every run would
-        // rebuild the package from scratch.
         stage_package(&package_dir, &staged, &roots).expect("restage package");
         let second = fs::metadata(staged.join("src/main.rs"))
             .and_then(|metadata| metadata.modified())
@@ -2429,8 +2304,6 @@ cranpose v0.1.0
         assert!(error.contains("lies outside package"), "{error}");
     }
 
-    /// Staging asks cargo which directories hold the package's targets, so the
-    /// fixture manifest has to be one cargo accepts.
     const MINIMAL_MANIFEST: &str = "\
 [package]
 name = \"isolated-demo\"

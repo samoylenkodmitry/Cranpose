@@ -1,10 +1,3 @@
-//! iOS haptics via `UIFeedbackGenerator`.
-//!
-//! Registered as the platform haptics (see
-//! [`cranpose_services::set_platform_haptics`]) by the iOS backend. Feedback
-//! generators are main-thread objects; haptics are triggered from UI event
-//! handlers, so they run on the main thread.
-
 use std::sync::Arc;
 
 use cranpose_services::{
@@ -16,7 +9,6 @@ use objc2_ui_kit::{
     UINotificationFeedbackType, UISelectionFeedbackGenerator,
 };
 
-/// Installs the iOS haptics as the platform haptics.
 pub(crate) fn register() {
     set_platform_haptics(Arc::new(IosHaptics));
 }
@@ -42,8 +34,6 @@ impl Haptics for IosHaptics {
         }
     }
 
-    /// `UIFeedbackGenerator` has no duration control, but it does take an
-    /// intensity, so the amplitude is honoured and the duration is not.
     fn vibrate(&self, _duration_ms: u32, amplitude: u8) {
         let Some(mtm) = MainThreadMarker::new() else {
             return;
@@ -57,10 +47,6 @@ impl Haptics for IosHaptics {
         generator.impactOccurredWithIntensity(intensity);
     }
 
-    /// UIKit exposes no arbitrary waveform, so each step of the pattern that
-    /// asks for vibration becomes one impact at its own intensity. Long
-    /// patterns are truncated rather than run as a timed sequence: scheduling
-    /// them would need a run-loop timer the framework does not own here.
     fn play_pattern(&self, pattern: &HapticPattern) {
         let Some(mtm) = MainThreadMarker::new() else {
             return;
@@ -89,8 +75,6 @@ impl Haptics for IosHaptics {
         self.perform(effect.closest_feedback());
     }
 
-    /// `UIFeedbackGenerator` events are instantaneous, so there is nothing
-    /// running to cancel.
     fn cancel(&self) {}
 
     fn has_amplitude_control(&self) -> bool {
@@ -99,9 +83,6 @@ impl Haptics for IosHaptics {
 }
 
 fn impact(mtm: MainThreadMarker, style: UIImpactFeedbackStyle) {
-    // `initWithStyle:` is soft-deprecated in favor of the view-relative
-    // initializer; the style-only generator is exactly what a non-spatial
-    // haptic wants.
     #[allow(deprecated)]
     let generator =
         UIImpactFeedbackGenerator::initWithStyle(UIImpactFeedbackGenerator::alloc(mtm), style);

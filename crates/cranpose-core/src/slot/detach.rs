@@ -5,9 +5,6 @@ use super::{
 use crate::{AnchorId, Applier, NodeError, NodeId, remove_child_and_cleanup_now};
 
 impl SlotTable {
-    // Keep detach and restore ordering aligned with docs/SLOT_TABLE_LIFECYCLE.md.
-    // Indexes, scopes, payload locations, and ancestor spans are deliberately
-    // updated in separate steps so validation can pinpoint broken transitions.
     fn flush_group_index_refresh_from(&mut self, start: Option<usize>) {
         if let Some(start) = start {
             self.refresh_group_indexes_from(start);
@@ -145,10 +142,6 @@ impl SlotTable {
         root_index: usize,
         refresh_indexes: bool,
     ) -> DetachedSubtree {
-        // Detach recipe:
-        // drain the group segment, normalize detached depths and root parent,
-        // extract payload and node segments, clear active indexes, refresh the
-        // active suffix when requested, then shrink ancestor spans.
         let root_parent_anchor = self.groups[root_index].parent_anchor;
         let Some(removed_group_range) =
             self.repair_group_subtree_range_at_index(root_index, "subtree detach")
@@ -291,10 +284,6 @@ impl SlotTable {
             .filter_map(|group| group.scope_id.map(|scope_id| (scope_id, group.anchor)))
             .collect::<Vec<_>>();
 
-        // Restore recipe:
-        // retarget root parent/depth, mark nodes active, restore payload and
-        // node segments, splice groups, refresh active indexes, restore scopes,
-        // update ancestor spans, then refresh payload anchor locations.
         let target_root_depth = if parent_anchor.is_valid() {
             let Some(parent_index) = self.active_group_index(parent_anchor) else {
                 log::error!(

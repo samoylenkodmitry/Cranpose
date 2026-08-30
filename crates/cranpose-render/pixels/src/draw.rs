@@ -136,8 +136,6 @@ fn draw_raster_scene(
     for (index, text) in scene.texts.iter().enumerate() {
         ordered_items.push((text.z_index, RenderItem::Text(index)));
     }
-    // Unique z per item (the scene's `next_z` counter), so unstable sorting is
-    // order-identical and avoids the stable sort's per-frame scratch allocation.
     ordered_items.sort_unstable_by_key(|(z, _)| *z);
 
     for (_, item) in ordered_items {
@@ -181,8 +179,6 @@ fn draw_shape(
         .map(snap_delta_for_anchor)
         .unwrap_or_default();
     let rect = draw.rect.translate(snap_delta.x, snap_delta.y);
-    // Clips are already resolved in scene space and may belong to a fixed
-    // ancestor. Only the draw geometry borrows this item's raster snap.
     let clip = draw.clip;
     let rect = if draw.snap_to_pixel_grid {
         Rect {
@@ -202,9 +198,6 @@ fn draw_shape(
     } else {
         rect
     };
-    // Empty geometry draws nothing. The shared lowering already drops these,
-    // but a `DrawShape` can also be built directly (shadow casters, caches), so
-    // guard here too rather than emitting a hairline for a zero-area band.
     if draw.arc.is_some_and(|arc| arc.is_degenerate())
         || draw.stroke.is_some_and(|stroke| !stroke.is_visible())
     {
@@ -221,18 +214,12 @@ fn draw_shape(
         ..
     } = rect;
 
-    // Stroked outlines and arcs are rasterized from the very same signed
-    // distance functions the GPU shader evaluates (see
-    // `cranpose_render_common::shape_sdf`), so the software backend draws the
-    // real shape instead of degrading a stroke to a filled box.
     let arc = draw.arc.map(|mut arc| {
         arc.center.x += snap_delta.x;
         arc.center.y += snap_delta.y;
         arc
     });
     let stroke = draw.stroke;
-    // For a stroked shape `rect` is already inflated by half the stroke width,
-    // so corner radii must resolve against the geometry that was asked for.
     let stroke_outset = stroke.map(|stroke| stroke.half_width()).unwrap_or(0.0);
     let resolved_shape = draw.shape.map(|shape| {
         shape.resolve(
@@ -321,7 +308,6 @@ fn draw_image(
     }
     let src_pixels = draw.image.pixels();
 
-    // Source region: either a sub-rect or the full image
     let (sr_x, sr_y, sr_w, sr_h) = if let Some(sr) = draw.src_rect {
         (sr.x, sr.y, sr.width, sr.height)
     } else {
@@ -867,7 +853,6 @@ mod tests {
         count
     }
 
-    /// Returns `(top_y, bottom_y)` (exclusive) of all non-background ink rows.
     fn ink_y_range(frame: &[u8], width: u32, height: u32) -> Option<(u32, u32)> {
         let mut top = None;
         let mut bottom = 0u32;
@@ -938,7 +923,6 @@ mod tests {
         let mut frame = vec![0u8; (width * height * 4) as usize];
         draw_raster_scene_for_test(&mut frame, width, height, &raster_scene);
 
-        // Find the y-range of all ink pixels (font-agnostic approach).
         let (ink_top, ink_bottom) =
             ink_y_range(&frame, width, height).expect("expected ink pixels in rendered text");
         let ink_height = ink_bottom - ink_top;
@@ -1167,13 +1151,6 @@ mod tests {
         );
     }
 
-    // ── Stroke / arc rasterization ──────────────────────────────────────────
-    //
-    // The software backend must draw the real stroked/arc shape. Falling back
-    // to a filled rect would look plausible in a screenshot diff but is simply
-    // the wrong picture, so these assert the defining properties: a stroke is
-    // hollow, an arc is a band, and an annular sector has flat radial edges.
-
     const CANVAS: u32 = 64;
 
     fn blank_frame() -> Vec<u8> {
@@ -1214,7 +1191,6 @@ mod tests {
 
     #[test]
     fn stroked_rect_rasterizes_hollow() {
-        // Geometry (16,16)-(48,48) stroked at width 4 => bounds (14,14)-(50,50).
         let mut shape = shape_template(Rect {
             x: 14.0,
             y: 14.0,
@@ -1253,7 +1229,6 @@ mod tests {
 
     #[test]
     fn arc_band_rasterizes_between_the_two_radii() {
-        // Full ring, inner 10, outer 16, centered at (32, 32).
         let mut shape = shape_template(Rect {
             x: 16.0,
             y: 16.0,
@@ -1271,7 +1246,6 @@ mod tests {
         let frame = render_shape(shape);
 
         assert!(is_background(&frame, 32, 32), "the hole must stay empty");
-        // Centerline radius 13 in each cardinal direction.
         assert!(is_inked(&frame, 45, 32), "+X band");
         assert!(is_inked(&frame, 19, 32), "-X band");
         assert!(is_inked(&frame, 32, 45), "+Y band");
@@ -1283,8 +1257,6 @@ mod tests {
 
     #[test]
     fn annular_sector_has_flat_radial_edges_and_respects_the_sweep() {
-        // 0 -> 90 degrees (i.e. +X sweeping down to +Y in screen space),
-        // inner 8, outer 16, centered at (32, 32).
         let mut shape = shape_template(Rect {
             x: 32.0,
             y: 32.0,
@@ -1301,14 +1273,11 @@ mod tests {
         ));
         let frame = render_shape(shape);
 
-        // Inside the sweep, between the radii.
         assert!(is_inked(&frame, 44, 33), "inside the sector near 0 degrees");
         assert!(
             is_inked(&frame, 33, 44),
             "inside the sector near 90 degrees"
         );
-        // Outside the sweep at the same radius: the radial edge is flat, so
-        // one pixel the other side of the start angle is empty.
         assert!(
             is_background(&frame, 44, 30),
             "past the flat radial start edge must be empty"
@@ -1317,15 +1286,12 @@ mod tests {
             is_background(&frame, 30, 44),
             "past the flat radial end edge must be empty"
         );
-        // Inside the hole and outside the outer radius.
         assert!(is_background(&frame, 35, 35), "inner hole");
         assert!(is_background(&frame, 52, 33), "beyond the outer radius");
     }
 
     #[test]
     fn arc_and_stroke_rasterization_never_writes_nan_or_panics() {
-        // Degenerate geometry can reach the rasterizer through a translated or
-        // cached scene; it must simply draw nothing.
         for arc in [
             cranpose_ui_graphics::ArcGeometry::new(
                 Point::new(32.0, 32.0),

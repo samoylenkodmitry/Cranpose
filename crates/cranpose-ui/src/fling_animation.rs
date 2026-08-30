@@ -23,11 +23,8 @@ use cranpose_core::{
 /// artifact — see `ios_fling_measurement.rs`). 300 sits in that band.
 pub const MIN_FLING_VELOCITY: f32 = 300.0;
 
-/// Minimum unconsumed delta (in pixels) to consider a boundary hit.
 const BOUNDARY_EPSILON: f32 = 0.5;
 
-/// Schedules the next fling animation frame without creating a FlingAnimation instance.
-/// This is called recursively to drive the animation forward.
 fn schedule_next_frame<F, G>(
     state: Rc<RefCell<Option<FlingAnimationState>>>,
     frame_clock: FrameClock,
@@ -122,29 +119,19 @@ fn schedule_next_frame<F, G>(
         }
     });
 
-    // Store the registration to keep the callback alive
     if let Some(anim_state) = state.borrow_mut().as_mut() {
         anim_state.registration = Some(registration);
     }
 }
 
-/// State for an active fling animation.
 struct FlingAnimationState {
-    /// Initial position when fling started (used as reference for decay calc).
     initial_value: f32,
-    /// Last applied position (to calculate delta for next frame).
     last_value: Cell<f32>,
-    /// Initial velocity in px/sec.
     initial_velocity: f32,
-    /// Frame time when the animation started (used for deterministic timing).
     start_frame_time_nanos: Cell<Option<u64>>,
-    /// Decay animation spec for computing position/velocity.
     decay_spec: ExponentialDecaySpec,
-    /// Current frame callback registration (kept alive to continue animation).
     registration: Option<FrameCallbackRegistration>,
-    /// Whether the animation is still active.
     is_running: Cell<bool>,
-    /// Total delta applied so far (for debugging)
     total_delta: Cell<f32>,
 }
 
@@ -175,13 +162,11 @@ impl FlingAnimation {
     /// * `on_end` - Callback invoked when animation completes
     pub fn start_fling<F, G>(&self, initial_value: f32, velocity: f32, on_scroll: F, on_end: G)
     where
-        F: Fn(f32) -> f32 + 'static, // Returns consumed amount
+        F: Fn(f32) -> f32 + 'static,
         G: FnOnce() + 'static,
     {
-        // Cancel any existing animation
         self.cancel();
 
-        // Check if velocity is high enough to warrant animation
         if velocity.abs() < MIN_FLING_VELOCITY {
             on_end();
             return;
@@ -202,7 +187,6 @@ impl FlingAnimation {
 
         *self.state.borrow_mut() = Some(anim_state);
 
-        // Start frame loop
         schedule_next_frame(
             self.state.clone(),
             self.frame_clock.clone(),
@@ -213,9 +197,7 @@ impl FlingAnimation {
 
     pub fn cancel(&self) {
         if let Some(state) = self.state.borrow_mut().take() {
-            // Mark as not running to prevent callback from doing anything
             state.is_running.set(false);
-            // Registration is dropped, cancelling the callback
             drop(state.registration);
         }
     }
@@ -285,7 +267,6 @@ impl SpringParams {
     };
 }
 
-/// Position/velocity epsilons below which a settle animation finishes.
 const SETTLE_REST_DISTANCE: f32 = 0.1;
 const SETTLE_REST_VELOCITY: f32 = 4.0;
 
@@ -323,10 +304,6 @@ impl SettleAnimation {
         }
     }
 
-    /// Starts settling from `initial_value` (with `initial_velocity`, in
-    /// offset units/sec) toward `target`. `on_scroll` receives per-frame
-    /// deltas and returns the consumed amount; `on_end` fires once when the
-    /// spring rests or the target stops consuming (boundary hit).
     pub(crate) fn start_settle<F, G>(
         &self,
         initial_value: f32,

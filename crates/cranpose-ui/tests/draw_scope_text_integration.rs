@@ -1,10 +1,3 @@
-//! `DrawScope` text goes through the app's text measurer.
-//!
-//! These exercise the whole UI-side path — modifier closure to primitive — with
-//! a measurer installed on a real `AppContext`, which is what proves a draw
-//! scope built by `draw_behind` picks the app's fonts up rather than the
-//! font-free estimate.
-
 use std::{cell::RefCell, rc::Rc};
 
 use cranpose_ui::{
@@ -21,8 +14,6 @@ const CHAR_WIDTH: f32 = 6.0;
 const LINE_HEIGHT: f32 = 10.0;
 const FIRST_BASELINE: f32 = 8.0;
 
-/// Measures a fixed advance per character and records every string it was asked
-/// about, so a test can tell whether the draw scope reached it at all.
 struct RecordingMeasurer {
     measured: Rc<RefCell<Vec<String>>>,
 }
@@ -72,8 +63,6 @@ impl TextMeasurer for RecordingMeasurer {
     }
 }
 
-/// Runs `draw` inside an app context that measures text with
-/// [`RecordingMeasurer`], and returns the primitives plus the strings measured.
 fn primitives_from_draw_behind(
     size: Size,
     draw: impl Fn(&mut dyn DrawScope) + 'static,
@@ -115,8 +104,6 @@ fn draw_behind_text_is_measured_by_the_app_context_measurer() {
 
     assert_eq!(measured, vec!["SCORE".to_string()]);
     let text = text_primitive(&primitives);
-    // 5 chars x 6.0 advance, one 10.0 line — the measurer's numbers, not the
-    // font-free estimate's.
     assert_eq!(
         text.rect,
         Rect {
@@ -149,7 +136,6 @@ fn measure_text_reports_the_box_a_later_draw_fills() {
     let text = text_primitive(&primitives);
     assert_eq!(text.rect.width, measurement.size.width);
     assert_eq!(text.rect.height, measurement.size.height);
-    // A caller centering by hand must land on the same x the scope chose.
     assert_eq!(text.rect.x, (300.0 - measurement.size.width) / 2.0);
 }
 
@@ -205,8 +191,6 @@ fn an_unchanged_string_measures_once_across_repeated_frames() {
     );
 }
 
-/// Reports one em of advance per character, so the font size a measurement was
-/// taken at is readable straight off the width.
 struct EmWidthMeasurer;
 
 impl TextMeasurer for EmWidthMeasurer {
@@ -249,20 +233,6 @@ impl TextMeasurer for EmWidthMeasurer {
     }
 }
 
-/// A draw scope's text is measured at the size the style names, whatever the
-/// system font scale is.
-///
-/// The rasterizer takes its font size straight off the primitive's
-/// `DrawTextStyle` — that style is documented as fully resolved, and a scene is
-/// lowered with `text.style.resolved_font_size()` and nothing else. So a
-/// measurement that quietly multiplied by the system font scale would hand the
-/// caller a box the glyphs never fill: every wrap decision, every centred label
-/// and every hit rect computed from `measure_text` would be out by exactly that
-/// factor, on the devices where the setting is not 1.0 and nowhere else.
-///
-/// A `Text` composable is the other case and stays scaled: its style carries
-/// real `Sp` sizes, and its prepared layout hands the SCALED style on to the
-/// renderer, so both sides move together there.
 #[test]
 fn draw_scope_text_is_measured_at_the_size_the_style_names() {
     const FONT_SIZE: f32 = 10.0;
@@ -289,7 +259,6 @@ fn draw_scope_text_is_measured_at_the_size_the_style_names() {
     });
 
     let text = text_primitive(&primitives);
-    // The size the renderer will rasterize at, untouched by the setting.
     assert_eq!(text.style.font_size, FONT_SIZE);
     assert_eq!(
         text.rect.width,

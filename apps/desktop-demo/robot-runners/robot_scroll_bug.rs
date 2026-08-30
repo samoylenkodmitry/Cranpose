@@ -32,30 +32,21 @@ fn main() {
                 panic!("Scroll repro content not found");
             }
 
-            // 4. Scroll down
-            // User: "scroll after item 4 jumps back to item 2"
-            // Items are ~70px. 4 items ~280px.
-            // Drag up 400px.
             println!("Scrolling down past item 4...");
             robot.mouse_move(512.0, 600.0).unwrap();
             robot.mouse_down().unwrap();
-            // Drag slowly? Or fast? User didn't specify, but fling might affect it.
-            // Let's drag consistently.
-            // Drag to y=200
             let steps = 10;
             for i in 1..=steps {
                 let t = i as f32 / steps as f32;
                 let y = 600.0 + (200.0 - 600.0) * t;
                 robot.mouse_move(512.0, y).unwrap();
-                std::thread::sleep(Duration::from_millis(16)); // 60fps simulation
+                std::thread::sleep(Duration::from_millis(16));
             }
             robot.mouse_up().unwrap();
 
-            // Wait for momentum/settling
             println!("Waiting for scroll to settle...");
             std::thread::sleep(Duration::from_secs(1));
 
-            // 5. Check visible items
             println!("Checking visible items...");
 
             let viewport_bounds =
@@ -72,7 +63,6 @@ fn main() {
                 }
             };
 
-            // We want to find the top-most visible rank by exact text match.
             let mut visible_ranks = Vec::new();
             for i in 1..=20 {
                 let label = format!("{}.", i);
@@ -99,8 +89,6 @@ fn main() {
             if let Some((first_rank, _)) = visible_ranks.first() {
                 println!("Top-most visible item rank: {}", first_rank);
 
-                // If we scrolled past item 4 (4 * ~70px = 280px), we expect item 5 or 6 at top.
-                // If we see item 2 or 3, bug is reproduced.
                 if *first_rank <= 3 {
                     println!(
                         "BUG REPRODUCED: Scrolled down 400px but item {} is at top!",

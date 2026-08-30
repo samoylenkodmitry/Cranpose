@@ -1,30 +1,7 @@
-//! winit's mouse wheel, normalized into the shell's wheel sample.
-//!
-//! The desktop host's entire wheel responsibility is this translation: what a
-//! wheel sample *means* — zoom, rotary, axis-swapped scroll, or plain scroll —
-//! is [`AppShell::wheel_scrolled`](cranpose_app_shell::AppShell::wheel_scrolled),
-//! shared with every other host.
-//!
-//! # Sign convention
-//!
-//! winit reports a **positive** vertical delta when the wheel is scrolled *up /
-//! away from the user* ("the content being scrolled should move down"), which is
-//! exactly the shell's convention, so the delta passes through unchanged. The
-//! browser's is inverted and its host negates; see
-//! [`WheelScroll`](cranpose_app_shell::WheelScroll).
-
 use cranpose_app_shell::{Modifiers, WheelScroll};
 use cranpose_ui::Point;
 use winit::keyboard::ModifiersState;
 
-/// Converts an already-logical wheel delta and winit's modifier state into a
-/// [`WheelScroll`].
-///
-/// `logical_delta` is the output of `DesktopWinitPlatform::scroll_delta`, which
-/// normalizes both `MouseScrollDelta::LineDelta` and
-/// `MouseScrollDelta::PixelDelta` into logical pixels while preserving winit's
-/// sign. `uptime_millis` is a monotonic timestamp; only differences between
-/// samples are meaningful.
 pub(crate) fn wheel_scroll_from_winit(
     logical_delta: Point,
     modifiers: ModifiersState,
@@ -46,7 +23,6 @@ mod tests {
 
     use super::*;
 
-    /// One wheel notch as normalized by `DesktopWinitPlatform`.
     const NOTCH_PIXELS: f32 = 40.0;
 
     fn wheel_for(delta: MouseScrollDelta, scale_factor: f64) -> WheelScroll {
@@ -61,8 +37,6 @@ mod tests {
 
     #[test]
     fn line_delta_scroll_up_produces_negative_vertical_pixels() {
-        // Wheel up == crown turned away == negative vertical_scroll_pixels,
-        // matching Compose's `val axisValue = -event.getAxisValue(AXIS_SCROLL)`.
         let event = rotary_for(MouseScrollDelta::LineDelta(0.0, 1.0), 1.0);
 
         assert_eq!(event.vertical_scroll_pixels, -NOTCH_PIXELS);
@@ -96,7 +70,6 @@ mod tests {
 
     #[test]
     fn pixel_delta_respects_hidpi_scale_factor() {
-        // 24 physical px at 2x == 12 logical px, then negated.
         let event = rotary_for(
             MouseScrollDelta::PixelDelta(PhysicalPosition { x: 8.0, y: 24.0 }),
             2.0,
@@ -108,8 +81,6 @@ mod tests {
 
     #[test]
     fn both_delta_variants_agree_on_direction() {
-        // A scroll "up" must have the same sign whichever variant the platform
-        // reports, or trackpads and wheels would scroll opposite ways.
         let line = rotary_for(MouseScrollDelta::LineDelta(0.0, 1.0), 1.0);
         let pixel = rotary_for(
             MouseScrollDelta::PixelDelta(PhysicalPosition { x: 0.0, y: 40.0 }),
@@ -122,9 +93,6 @@ mod tests {
 
     #[test]
     fn desktop_sign_matches_the_android_detent_path() {
-        // The two ingresses must agree: a crown turned "up" reports a positive
-        // detent, a wheel scrolled "up" reports a positive winit delta, and
-        // both must land on a negative vertical_scroll_pixels.
         let desktop = rotary_for(MouseScrollDelta::LineDelta(0.0, 1.0), 1.0);
         let android = RotaryScrollEvent::from_detents(1.0, NOTCH_PIXELS, NOTCH_PIXELS, 0);
 
@@ -136,9 +104,6 @@ mod tests {
 
     #[test]
     fn a_wheel_scrolled_up_asks_the_content_to_move_down() {
-        // The shell's convention, which winit already speaks: the scrollables
-        // are written against a positive delta walking a ScrollState back
-        // toward zero.
         let up = wheel_for(MouseScrollDelta::LineDelta(0.0, 1.0), 1.0);
 
         assert_eq!(up.delta.y, NOTCH_PIXELS);

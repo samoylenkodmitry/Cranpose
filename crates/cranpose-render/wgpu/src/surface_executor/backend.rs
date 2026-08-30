@@ -25,9 +25,6 @@ pub(crate) struct LayerSurface {
     pub(crate) rounded_clip: Option<LayerSurfaceRoundedClip>,
     pub(crate) backdrop: Option<RenderEffect>,
     pub(crate) deferred_effect: Option<RenderEffect>,
-    /// The owning layer's content bounds in `logical_rect`'s space. The
-    /// deferred effect's shader geometry anchors to THIS rect — the surface
-    /// itself is padded/clipped and must never define the effect geometry.
     pub(crate) effect_content_rect: Option<Rect>,
     pub(crate) sample_mode: CompositeSampleMode,
 }
@@ -260,10 +257,6 @@ pub(crate) trait SurfaceExecutionBackend {
         load_op: wgpu::LoadOp<wgpu::Color>,
         composites: &[ShaderCompositeBatchItem<'_>],
     ) -> bool;
-    /// Draw blits and runtime-shader composites interleaved in the items'
-    /// own order inside ONE render pass. Returns false when a shader
-    /// pipeline fails validation; nothing is drawn and the caller flushes
-    /// the items individually instead.
     fn fused_composite_batch_to_view(
         &mut self,
         dest_view: &wgpu::TextureView,
@@ -298,11 +291,6 @@ pub(crate) trait SurfaceExecutionBackend {
         dest_viewport: Option<(f32, f32, f32, f32)>,
         sample_mode: CompositeSampleMode,
     ) -> Result<(), String>;
-    /// Encode `effect` from `source` straight into `target`'s view — the
-    /// materialize shape: opaque SrcOver onto a fully-owned target with a
-    /// 1:1 texel mapping. Returns Ok(false) when the backend cannot encode
-    /// directly (e.g. the sizes differ); the caller then composites through
-    /// the generic scratch route.
     fn materialize_effect_direct(
         &mut self,
         source: &OffscreenTarget,

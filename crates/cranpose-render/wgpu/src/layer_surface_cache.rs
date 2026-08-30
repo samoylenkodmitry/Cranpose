@@ -22,17 +22,11 @@ pub(crate) const MAX_SCENE_RANGE_CACHE_ENTRY_BYTES: u64 = 16 * 1024 * 1024;
 pub(crate) const MAX_SCENE_RANGE_CACHE_BYTES: u64 = 64 * 1024 * 1024;
 const RETAINED_LAYER_SEEN_THIS_FRAME_CAPACITY: usize = 256;
 
-/// Env-gated cache-key diagnostics (`CRANPOSE_LAYER_CACHE_DIAG=1`): logs every
-/// miss with the key that missed, and every insert with the key it landed
-/// under, so a cache that misses without eviction pressure names the field
-/// that varied — or shows that the two key spaces never met.
 pub(crate) fn cache_diag_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED.get_or_init(|| std::env::var_os("CRANPOSE_LAYER_CACHE_DIAG").is_some())
 }
 
-/// Takes out the values no other holder still references, and keeps the rest
-/// for a later call.
 fn take_unshared<T>(pending: &mut Vec<Rc<T>>) -> Vec<T> {
     let mut free = Vec::new();
     let mut held = Vec::new();
@@ -53,19 +47,7 @@ pub(crate) struct LayerSurfaceCache {
     bytes: u64,
     scene_range_bytes: u64,
     seen_this_frame: HashSet<usize>,
-    /// Surfaces this cache no longer keys, waiting to go back to the offscreen
-    /// pool.
-    ///
-    /// A layer whose backdrop moves changes its key every frame, so its entry
-    /// is replaced every frame. Dropping the entry here would free the texture
-    /// to the allocator while the pool stays empty of that size, and the next
-    /// acquire creates the texture again: a scrolling list with a frosted bar
-    /// allocated twelve targets and 15 MB per frame on a Mali G76 with a pool
-    /// of twenty-six unused targets. The sizes repeat exactly, so the pool
-    /// serves every one of them once the surfaces come back.
     recycled: Vec<Rc<OffscreenTarget>>,
-    /// Keys stored this frame, checked at `finish_frame` against the keys the
-    /// render paths were probed for and missed.
     #[cfg(debug_assertions)]
     inserted_this_frame: HashSet<LayerRasterCacheKey>,
 }
@@ -103,10 +85,6 @@ impl LayerSurfaceCache {
         self.recycled.push(entry.target);
     }
 
-    /// Hands back the surfaces no other holder still references.
-    ///
-    /// A surface stays in the list while the frame that composites from it is
-    /// still recorded, and is offered again on a later frame.
     pub(crate) fn take_recycled(&mut self) -> Vec<OffscreenTarget> {
         take_unshared(&mut self.recycled)
     }
@@ -191,18 +169,6 @@ impl LayerSurfaceCache {
         cached_handle
     }
 
-    /// Fails the frame if the render paths were probed for a key that nothing
-    /// went on to store.
-    ///
-    /// A miss is a one-off cost by design: whatever missed gets rendered and
-    /// stored under the key that missed, so the next frame hits it. A miss on
-    /// a key no path ever stores under is a miss that repeats every frame for
-    /// the life of the layer, and in the counters it is indistinguishable from
-    /// honest eviction pressure. Issue #478 was exactly that -- the retained
-    /// lookup probed a full-surface key for every backdrop-carrying layer,
-    /// which is stored under a source-content key and never under the one
-    /// probed -- and it hid behind a plausible-looking hit rate for as long as
-    /// nothing compared the two sets. Every scene any test renders now does.
     #[cfg(debug_assertions)]
     fn assert_every_miss_was_stored(&self, frame_stats: &FrameStats) {
         let missed = frame_stats.take_missed_layer_cache_keys();
@@ -336,9 +302,6 @@ mod tests {
     use super::{MAX_SCENE_RANGE_CACHE_BYTES, MAX_SCENE_RANGE_CACHE_ENTRY_BYTES, take_unshared};
     use crate::surface_executor::offscreen_byte_size;
 
-    /// A layer whose backdrop moves replaces its cache entry every frame. The
-    /// surface it drops has to come back for the offscreen pool, or the
-    /// renderer creates a texture of the same size again on the next frame.
     #[test]
     fn a_dropped_surface_comes_back() {
         let mut pending = vec![Rc::new(7u32), Rc::new(9u32)];
@@ -348,8 +311,6 @@ mod tests {
         assert!(pending.is_empty());
     }
 
-    /// A surface the recorded frame still composites from stays held, and is
-    /// offered again once its last holder lets go.
     #[test]
     fn a_surface_in_use_waits_for_its_last_holder() {
         let held = Rc::new(7u32);

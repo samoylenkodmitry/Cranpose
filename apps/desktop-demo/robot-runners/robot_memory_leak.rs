@@ -1,16 +1,3 @@
-//! Framework memory release regression test.
-//!
-//! The critical scenario: increase Recursive Layout depth to 15, then switch
-//! directly back to Counter App without decreasing depth. Framework-owned
-//! runtime/render memory must return to the warmed baseline after the switch.
-//! RSS is logged diagnostically because allocator retention can keep the heap
-//! mapped even after the framework releases its data structures.
-//!
-//! Run with:
-//! ```bash
-//! cargo run --profile robot --package desktop-app --example robot_memory_leak --features robot-app
-//! ```
-
 #[cfg(target_os = "linux")]
 use std::collections::HashMap;
 use std::time::Duration;

@@ -1,8 +1,3 @@
-//! Effect rendering infrastructure: blur, custom shaders, offscreen passes.
-//!
-//! This module ties together the offscreen pool, blur pipeline, and shader
-//! pipeline cache to apply `RenderEffect`s to subtree-rendered textures.
-
 use std::cell::Cell;
 
 use cranpose_ui_graphics::{
@@ -22,12 +17,6 @@ use crate::{
     shaders,
 };
 
-/// The size for a `Chain(Blur, Shader)` tail intermediate: the blur's own
-/// scratch size. The vertical axis otherwise writes every destination pixel
-/// — sixteen times the horizontal pass's work at a quarter-scale scratch —
-/// only for the shader to consume a texture whose extra resolution a
-/// radius-16+ Gaussian already destroyed. The shader receives the logical
-/// extent separately, so its pixel-calibrated offsets stay correct.
 pub(crate) fn direct_tail_intermediate_size(
     first_effect: &RenderEffect,
     width: u32,
@@ -92,8 +81,6 @@ fn scaled_scissor(
 pub(crate) struct EffectRenderer {
     offscreen_pool: OffscreenPool,
     pub shader_cache: ShaderPipelineCache,
-    /// The device's shared pipeline cache (see `GpuRenderer`); every lazy
-    /// effect pipeline creation passes it.
     pipeline_cache: Option<wgpu::PipelineCache>,
 
     blur_shader: wgpu::ShaderModule,
@@ -109,9 +96,6 @@ pub(crate) struct EffectRenderer {
     offset_uniform_bind_group_layout: wgpu::BindGroupLayout,
 
     blit_shader: wgpu::ShaderModule,
-    /// Kept for the display-clip blit variants, whose module is compiled
-    /// lazily from this text with the content z rewritten (see
-    /// [`crate::display_clip::with_content_z`]).
     blit_shader_source: String,
     blit_pipeline_layout: wgpu::PipelineLayout,
     blit_pipeline: SharedPassPipeline,
@@ -124,37 +108,25 @@ pub(crate) struct EffectRenderer {
     projective_blit_pipeline_src: SharedPassPipeline,
     projective_blit_pipeline_dst_out: SharedPassPipeline,
 
-    // Shared bind group layouts for effect texture + uniform access
     pub effect_texture_bind_group_layout: wgpu::BindGroupLayout,
     pub effect_uniform_bind_group_layout: wgpu::BindGroupLayout,
 
-    // Sampler for effect textures
     pub effect_linear_sampler: wgpu::Sampler,
 
     surface_format: wgpu::TextureFormat,
     adapter_backend: wgpu::Backend,
 
-    // Debug counters (reset each frame by GpuRenderer)
     pub(crate) debug_command_stats: Cell<FrameCommandStats>,
     pub(crate) debug_blurs: Cell<u32>,
     pub(crate) debug_composites: Cell<u32>,
     pub(crate) debug_effects: Cell<u32>,
     pub(crate) debug_upload_bytes: Cell<u64>,
-    /// `CRANPOSE_FILL_DIAG` target-area fill of effect passes, device px²,
-    /// drained once per frame by the renderer into `FillAreaDiag`'s
-    /// effect-composite / offscreen-source buckets. Always zero while the
-    /// diagnostic is off.
     #[cfg(not(target_arch = "wasm32"))]
     debug_fill_composite_px2: Cell<f64>,
     #[cfg(not(target_arch = "wasm32"))]
     debug_fill_offscreen_px2: Cell<f64>,
 }
 
-/// Approximate fill of one full-target effect pass, in px²: the dest
-/// viewport's area when one is set, else the fallback target size, clamped
-/// by the scissor when one is set. (The fullscreen triangle shades exactly
-/// scissor ∩ viewport; the min of the two areas stands in for the exact
-/// intersection — a deliberate `CRANPOSE_FILL_DIAG` approximation.)
 #[cfg(not(target_arch = "wasm32"))]
 fn effect_pass_fill_px2(
     scissor: Option<(u32, u32, u32, u32)>,
@@ -298,7 +270,6 @@ fn acquire_recorded_effect_scratch_textures_into<C: FrameCommandRecorder>(
     }
 }
 
-/// Blur uniform data matching the WGSL `BlurUniforms` struct.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct BlurUniforms {
@@ -316,7 +287,6 @@ struct BlurRoundedMaskUniforms {
     corner_radii: [f32; 4],
 }
 
-/// Offset uniform data matching the WGSL `OffsetUniforms` struct.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct OffsetUniforms {
@@ -324,7 +294,6 @@ struct OffsetUniforms {
     _padding: [f32; 2],
 }
 
-/// Blit uniform data matching the WGSL `BlitUniforms` struct.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct BlitUniforms {
@@ -419,12 +388,9 @@ fn effect_uniform_spec() -> UploadAllocatorSpec {
     )
 }
 
-/// Optional rounded-rectangle clip mask applied during fullscreen blit.
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct RoundedCompositeMask {
-    /// Clip rect in destination pixel coordinates: x, y, width, height.
     pub rect: [f32; 4],
-    /// Corner radii in pixels: top_left, top_right, bottom_left, bottom_right.
     pub radii: [f32; 4],
 }
 
@@ -446,11 +412,6 @@ struct ShaderPassOptions {
     scissor: Option<(u32, u32, u32, u32)>,
     dest_viewport: Option<(f32, f32, f32, f32)>,
     pipeline_mode: RuntimeShaderPipelineMode,
-    /// The logical pixel extent the source texture REPRESENTS, when it is
-    /// rasterized smaller than that (a blur chain's scratch-size
-    /// intermediate). The shader divides pixel-calibrated offsets by this
-    /// instead of `textureDimensions`, which would inflate them by the
-    /// downscale factor. `None` means the source is at its logical size.
     source_logical_size: Option<(f32, f32)>,
 }
 
@@ -475,8 +436,6 @@ pub(crate) struct CompositeBatchItem<'a> {
     pub(crate) sample_mode: CompositeSampleMode,
 }
 
-/// One draw of a fused composite batch: blits and runtime-shader
-/// composites interleaved in painter's order inside a single render pass.
 #[derive(Clone, Copy)]
 pub(crate) enum FusedCompositeItem<'a> {
     Blit(CompositeBatchItem<'a>),
@@ -498,10 +457,6 @@ pub(crate) struct PreparedShaderDraw<'a> {
     dest_viewport: (f32, f32, f32, f32),
 }
 
-/// One rotated/scaled textured-quad composite for the fused pass — the
-/// segment-surface cache's draw-back. `dest_quad` is in destination pixels,
-/// strip order TL, TR, BL, BR; `inverse` maps destination pixels to SOURCE
-/// TEXEL coordinates (not normalized).
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct ProjectiveCompositeItem<'a> {
     pub source: &'a OffscreenTarget,
@@ -654,11 +609,9 @@ impl EffectRenderer {
         surface_format: wgpu::TextureFormat,
         adapter_backend: wgpu::Backend,
     ) -> Self {
-        // Create shared bind group layouts
         let effect_texture_bind_group_layout = OffscreenPool::texture_bind_group_layout(device);
         let effect_uniform_bind_group_layout = OffscreenPool::uniform_bind_group_layout(device);
 
-        // Blur-specific uniform layout
         let blur_uniform_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("Blur Uniform Bind Group Layout"),
@@ -674,7 +627,6 @@ impl EffectRenderer {
                 }],
             });
 
-        // Offset-specific uniform layout
         let offset_uniform_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("Offset Uniform Bind Group Layout"),
@@ -690,7 +642,6 @@ impl EffectRenderer {
                 }],
             });
 
-        // Blit-specific uniform layout
         let blit_uniform_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("Blit Uniform Bind Group Layout"),
@@ -706,7 +657,6 @@ impl EffectRenderer {
                 }],
             });
 
-        // Compile blur pipeline
         let blur_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Blur Shader"),
             source: wgpu::ShaderSource::Wgsl(shaders::blur_shader().into()),
@@ -729,7 +679,6 @@ impl EffectRenderer {
         });
         let blur_rounded_mask_pipeline = LazyGpuResource::new("effect/blur-rounded-mask");
 
-        // Compile offset pipeline
         let offset_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Offset Shader"),
             source: wgpu::ShaderSource::Wgsl(shaders::offset_shader().into()),
@@ -747,7 +696,6 @@ impl EffectRenderer {
 
         let offset_pipeline = LazyGpuResource::new("effect/offset");
 
-        // Compile blit pipeline
         let blit_shader_source = shaders::blit_shader();
         let blit_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Blit Shader"),
@@ -843,9 +791,6 @@ impl EffectRenderer {
         }
     }
 
-    /// One draw into a caller-supplied view (composite/blit/src-over shader):
-    /// counts its target-area fill for `CRANPOSE_FILL_DIAG`. No-op while the
-    /// diagnostic is off.
     fn note_composite_fill(
         &self,
         scissor: Option<(u32, u32, u32, u32)>,
@@ -864,9 +809,6 @@ impl EffectRenderer {
         let _ = (scissor, dest_viewport, fallback);
     }
 
-    /// One pass into an offscreen chain texture (blur axis, offset,
-    /// replace-mode shader): counts its target-area fill for
-    /// `CRANPOSE_FILL_DIAG`. No-op while the diagnostic is off.
     fn note_offscreen_fill(
         &self,
         scissor: Option<(u32, u32, u32, u32)>,
@@ -885,9 +827,6 @@ impl EffectRenderer {
         let _ = (scissor, dest_viewport, fallback);
     }
 
-    /// Drains the frame's accumulated effect fill: (composite px²,
-    /// offscreen px²). Called once per frame by the renderer while
-    /// `CRANPOSE_FILL_DIAG` is on.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn take_fill_diag_fill_px2(&self) -> (f64, f64) {
         (
@@ -945,10 +884,6 @@ impl EffectRenderer {
         })
     }
 
-    /// The composite blit in its two pass flavors: `depth` is true exactly
-    /// when the caller is encoding the display-clip culled fused pass,
-    /// whose variant compiles the blit source with the content z rewritten
-    /// and depth-tests against the visible-region occluder.
     fn blit_pipeline(
         &self,
         device: &wgpu::Device,
@@ -1011,11 +946,6 @@ impl EffectRenderer {
             .expect("prepared composite must initialize its blit pipeline")
     }
 
-    /// The projective blit in its two pass flavors, mirroring
-    /// [`Self::blit_pipeline`]: `depth` is true exactly when the caller is
-    /// encoding into the display-clip culled fused pass, whose variant
-    /// compiles the shader with the content z rewritten and depth-tests
-    /// against the visible-region occluder.
     fn projective_blit_pipeline(
         &self,
         device: &wgpu::Device,
@@ -1159,9 +1089,6 @@ impl EffectRenderer {
         targets
     }
 
-    /// Encode a two-pass separable Gaussian blur using one caller-owned scratch
-    /// target. The horizontal pass writes source -> scratch, and the vertical
-    /// pass writes scratch -> dest_view.
     #[allow(clippy::too_many_arguments)]
     fn encode_blur_axis_pass<C: FrameCommandRecorder>(
         &mut self,
@@ -1585,10 +1512,6 @@ impl EffectRenderer {
         true
     }
 
-    /// Encodes blits and runtime-shader composites interleaved in the
-    /// items' own order inside ONE render pass. Returns false when a
-    /// shader pipeline fails validation — all-or-nothing, so the caller
-    /// can fall back without a half-drawn pass.
     pub(crate) fn encode_fused_composite_batch_to_view<C: FrameCommandRecorder>(
         &mut self,
         recorder: &mut C,
@@ -1660,9 +1583,6 @@ impl EffectRenderer {
         true
     }
 
-    /// `pass_depth` names the pass the prepared draws will execute in: true
-    /// exactly for the display-clip culled fused pass, whose shader
-    /// pipelines carry the depth state (see [`ShaderPipelineCache`]).
     pub(crate) fn prepare_shader_batch_draws<'a, C: FrameCommandRecorder>(
         &mut self,
         recorder: &mut C,
@@ -1701,8 +1621,6 @@ impl EffectRenderer {
                 &self.effect_texture_bind_group_layout,
                 &self.effect_linear_sampler,
             );
-            // Prepared draws execute exactly once each (fused batch arms);
-            // counting here covers every batched shader composite.
             self.note_composite_fill(
                 item.scissor,
                 Some(item.dest_viewport),
@@ -1750,10 +1668,6 @@ impl EffectRenderer {
             pass.set_scissor_rect(0, 0, viewport.0, viewport.1);
         }
         pass.draw(0..4, 0..1);
-        // This pass is caller-owned and shared with subsequent fused batches
-        // (text, shapes, more composites): restore the full-target viewport
-        // and scissor, or every later draw inherits this composite's
-        // sub-viewport transform and lands squeezed inside it.
         pass.set_viewport(0.0, 0.0, viewport.0 as f32, viewport.1 as f32, 0.0, 1.0);
         pass.set_scissor_rect(0, 0, viewport.0, viewport.1);
     }
@@ -1788,10 +1702,6 @@ impl EffectRenderer {
             &self.debug_upload_bytes,
         );
 
-        // Validate the pipeline first, then account, then fetch it for the
-        // draw — the fetch below is a cache hit, and a shader that fails to
-        // compile must not count fill (the caller composites instead, which
-        // counts its own pass).
         if self
             .shader_cache
             .get_or_create(
@@ -1807,8 +1717,6 @@ impl EffectRenderer {
         {
             return false;
         }
-        // Replace-mode shader passes write chain textures; src-over ones
-        // composite into the caller's view.
         match options.pipeline_mode {
             RuntimeShaderPipelineMode::Replace => self.note_offscreen_fill(
                 options.scissor,
@@ -2124,10 +2032,6 @@ impl EffectRenderer {
         }
     }
 
-    /// `pass_depth` names the pass the prepared draws will execute in: true
-    /// exactly for the display-clip culled fused pass, so the right blit
-    /// variant is initialized here (the draw arm fetches it without a
-    /// device).
     pub(crate) fn prepare_composite_batch_draws<'a, C: FrameCommandRecorder>(
         &mut self,
         recorder: &mut C,
@@ -2164,8 +2068,6 @@ impl EffectRenderer {
                 bytemuck::bytes_of(&uniforms),
                 &self.debug_upload_bytes,
             );
-            // Prepared draws execute exactly once each (fused batch arms);
-            // counting here covers every batched composite.
             self.note_composite_fill(
                 item.scissor,
                 item.dest_viewport,
@@ -2199,15 +2101,6 @@ impl EffectRenderer {
         pass.draw(0..4, 0..1);
     }
 
-    /// Prepares one projective composite for later drawing INSIDE an
-    /// existing render pass (the fused segment pass), mirroring
-    /// [`Self::prepare_composite_batch_draws`] for the rotated-quad case.
-    /// Unlike [`Self::encode_composite_to_view_projective`], the four
-    /// uploaded vertices are the item's dest quad corners themselves (strip
-    /// order TL, TR, BL, BR), not their AABB — the rasterized area is then
-    /// exactly the transformed quad, which is what the segment-surface
-    /// economics gate prices. The fragment shader's out-of-source discard
-    /// stays as the safety net at the quad edges.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn prepare_projective_composite_draw<'a, C: FrameCommandRecorder>(
         &mut self,
@@ -2301,9 +2194,6 @@ impl EffectRenderer {
         }
     }
 
-    /// Draws a prepared projective composite inside an existing pass. The
-    /// scissor is reset to the full viewport, matching what the retained
-    /// draws around it do.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn draw_prepared_projective_composite(
         &self,
@@ -2320,7 +2210,6 @@ impl EffectRenderer {
         pass.draw(0..4, 0..1);
     }
 
-    /// Encode an offscreen composite pass into an existing command buffer.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn encode_composite_to_view_scissored_with_alpha_and_mask_and_blend_mode<
         C: FrameCommandRecorder,
@@ -2376,7 +2265,6 @@ impl EffectRenderer {
         let Some((min_x, min_y, max_x, max_y)) = projective_dest_bounds_rect(dest_bounds) else {
             return false;
         };
-        // The projective blit rasterizes the dest bounds' AABB quad.
         self.note_composite_fill(
             scissor,
             Some((min_x, min_y, max_x - min_x, max_y - min_y)),
@@ -2528,10 +2416,8 @@ mod tests {
             radius_y: 24.0,
             edge_treatment: Default::default(),
         };
-        // Radius 24 downsamples 4x on each side.
         assert_eq!(direct_tail_intermediate_size(&frost, 1080, 360), (270, 90));
 
-        // A zero blur is the composite fast path; nothing shrinks.
         let no_frost = RenderEffect::Blur {
             radius_x: 0.0,
             radius_y: 0.0,
@@ -2542,7 +2428,6 @@ mod tests {
             (1080, 360)
         );
 
-        // A shader first stage samples at texel precision; full size.
         let lens = RenderEffect::Shader {
             shader: RuntimeShader::new("fn f() {}"),
         };
@@ -2563,19 +2448,15 @@ mod tests {
     #[test]
     fn effect_pass_fill_prefers_the_viewport_and_clamps_by_the_scissor() {
         use super::effect_pass_fill_px2;
-        // No scissor, no viewport: the whole fallback target.
         assert_eq!(effect_pass_fill_px2(None, None, (100, 50)), 5000.0);
-        // A dest viewport bounds the rasterized region.
         assert_eq!(
             effect_pass_fill_px2(None, Some((5.0, 5.0, 40.0, 10.0)), (100, 50)),
             400.0
         );
-        // A scissor clamps the fallback.
         assert_eq!(
             effect_pass_fill_px2(Some((0, 0, 30, 30)), None, (100, 50)),
             900.0
         );
-        // A scissor larger than the viewport never inflates the pass.
         assert_eq!(
             effect_pass_fill_px2(
                 Some((0, 0, 100, 100)),
@@ -2584,7 +2465,6 @@ mod tests {
             ),
             400.0
         );
-        // A degenerate viewport falls back to the target size.
         assert_eq!(
             effect_pass_fill_px2(None, Some((0.0, 0.0, 0.0, 0.0)), (10, 10)),
             100.0
