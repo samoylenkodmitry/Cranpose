@@ -75,3 +75,6 @@ wasm-bindgen-futures = "0.4.71"
 inherits = "release"
 opt-level = "z"
 lto = "fat"
+strip = true
+panic = "abort"
+codegen-units = 1
