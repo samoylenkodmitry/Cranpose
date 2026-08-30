@@ -310,7 +310,7 @@ fn AppShellLifecycleCountDisplay(count: MutableState<usize>) {
 #[composable]
 #[allow(non_snake_case)]
 fn AppShellLifecycleListItem(index: usize, count: MutableState<usize>) {
-    cranpose_core::DisposableEffect!(index, move |_| {
+    cranpose_core::DisposableEffect(index, move |_| {
         count.update(|current| *current += 1);
         cranpose_core::DisposableEffectResult::new(|| {})
     });

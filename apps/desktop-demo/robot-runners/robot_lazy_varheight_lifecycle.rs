@@ -104,7 +104,7 @@ fn variable_height_item(index: usize, stats: MutableState<LifecycleStats>) {
         println!("  [COMPOSE] Item {} composition", index);
     });
 
-    DisposableEffect!(index, move |_key| {
+    DisposableEffect(index, move |_key| {
         stats.update(|s| s.total_effects += 1);
         println!("  [EFFECT] Item {} effect started", index);
 

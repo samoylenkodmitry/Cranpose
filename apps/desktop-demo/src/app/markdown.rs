@@ -403,7 +403,7 @@ pub fn markdown_viewer_tab() {
     let request_counter = cranpose_core::rememberMutableStateOf(|| 0u64);
     let http_client = local_http_client().current();
 
-    cranpose_core::LaunchedEffect!(request_counter.get(), move |scope| {
+    cranpose_core::LaunchedEffect(request_counter.get(), move |scope| {
         let tick = request_counter.get();
         if tick == 0 {
             return;

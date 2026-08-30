@@ -638,7 +638,7 @@ fn bind_layout_invalidation_callback(
         overscroll.remove_invalidate_callback(previous_id);
     }
 
-    cranpose_core::DisposableEffect!(
+    cranpose_core::DisposableEffect(
         (list_state_id, node_id, callback_id, overscroll_callback_id),
         move |scope| {
             scope.on_dispose(move || {
@@ -647,7 +647,7 @@ fn bind_layout_invalidation_callback(
                 }
                 overscroll.remove_invalidate_callback(overscroll_callback_id);
             })
-        }
+        },
     );
 }
 

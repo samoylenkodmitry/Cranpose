@@ -177,7 +177,7 @@ pub fn DialogWithScrim<C>(
             }
         }))
     };
-    cranpose_core::DisposableEffect!((), move |scope| {
+    cranpose_core::DisposableEffect((), move |scope| {
         let registration = crate::modal::register_modal(Rc::new(move || (back.value())()));
         scope.on_dispose(move || drop(registration))
     });

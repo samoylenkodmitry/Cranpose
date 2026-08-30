@@ -179,7 +179,7 @@ fn each_arm_of_an_else_if_chain_owns_its_slots() {
 
 #[composable]
 fn effect_child(label: &'static str) {
-    DisposableEffect!(0, move |scope| {
+    DisposableEffect(0, move |scope| {
         BRANCH_LOG.with(|log| log.borrow_mut().push(format!("{label}:start")));
         scope.on_dispose(move || {
             BRANCH_LOG.with(|log| log.borrow_mut().push(format!("{label}:dispose")));

@@ -58,7 +58,7 @@ fn VisibilityHost(visible: MutableState<bool>, alive: Rc<Cell<bool>>) {
         (fade_out() + slide_out_vertically(0.5)).with_animation(transition_spec()),
         move || {
             let alive = Rc::clone(&alive_for_content);
-            cranpose_core::DisposableEffect!((), move |_scope| {
+            cranpose_core::DisposableEffect((), move |_scope| {
                 alive.set(true);
                 let alive = Rc::clone(&alive);
                 DisposableEffectResult::new(move || {
