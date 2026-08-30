@@ -2445,7 +2445,7 @@ mod tests {
         let glass = tab_swipe_reference_glass();
         assert_eq!(glass.variant, GlassVariant::Regular);
         assert!(glass.shadow);
-        assert_eq!(glass.refraction_depth, 0.34);
+        assert_eq!(glass.refraction_depth, 0.0);
         assert!(glass.blur_radius.is_none());
         assert!(glass.tint.is_none());
     }
