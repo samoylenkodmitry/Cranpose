@@ -1,5 +1,6 @@
 mod output_paths;
 mod presented_window_geometry_contract;
+mod robot_exit;
 mod text_showcase_external_helpers;
 
 fn main() {

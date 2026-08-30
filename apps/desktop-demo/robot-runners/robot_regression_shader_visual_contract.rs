@@ -1,4 +1,5 @@
 mod output_paths;
+mod robot_exit;
 mod text_showcase_external_helpers;
 mod visual_contract_metrics;
 
@@ -25,11 +26,6 @@ const SHADOW_TITLE: &str = "Robot Shader Shadow Regression Contract";
 const DSTOUT_TITLE: &str = "Robot Shader DstOut Regression Contract";
 const WINDOW_WIDTH: u32 = 1200;
 const WINDOW_HEIGHT: u32 = 900;
-
-fn fail(_robot: &cranpose::Robot, message: &str) -> ! {
-    println!("FATAL: {message}");
-    std::process::exit(1);
-}
 
 fn center((x, y, w, h): (f32, f32, f32, f32)) -> (f32, f32) {
     (x + w * 0.5, y + h * 0.5)
@@ -86,9 +82,9 @@ fn run_interactive_overlap() {
             wait_for_text(&robot, "Interactive Effects (drag the rects!)");
 
             let blur = find_text_in_semantics(&robot, "Blur")
-                .unwrap_or_else(|| fail(&robot, "Blur label missing"));
+                .unwrap_or_else(|| robot_exit::fail_without_shutdown( "Blur label missing"));
             let glass = find_text_in_semantics(&robot, "Glass")
-                .unwrap_or_else(|| fail(&robot, "Glass label missing"));
+                .unwrap_or_else(|| robot_exit::fail_without_shutdown( "Glass label missing"));
             let (blur_cx, blur_cy) = center(blur);
             let (glass_cx, glass_cy) = center(glass);
             let blur_start = (blur_cx + 16.0, blur_cy + 16.0);
@@ -175,10 +171,8 @@ fn run_interactive_overlap() {
                 || right_blue_blur_pixels < left_blue_blur_pixels.saturating_mul(3)
                 || right_edge < 0.65 * left_edge.max(1.0)
             {
-                fail(
-                    &robot,
-                    "glass/blur overlap lost backdrop detail in the right half of the glass rect",
-                );
+                robot_exit::fail_without_shutdown(
+                    "glass/blur overlap lost backdrop detail in the right half of the glass rect");
             }
 
             println!("PASS: glass/blur overlap keeps visible backdrop detail");
@@ -204,7 +198,7 @@ fn run_shader_scrollbar() {
             select_shaders_tab(&robot);
 
             let before = robot.screenshot().expect("shader before screenshot");
-            assert_no_implicit_scrollbar(&robot, "before scroll", &before);
+            assert_no_implicit_scrollbar("before scroll", &before);
             robot
                 .mouse_move(WINDOW_WIDTH as f32 - 46.0, WINDOW_HEIGHT as f32 * 0.5)
                 .expect("move to shader scrollbar area");
@@ -213,7 +207,7 @@ fn run_shader_scrollbar() {
             let _ = robot.wait_for_idle();
 
             let after = robot.screenshot().expect("shader after screenshot");
-            assert_no_implicit_scrollbar(&robot, "after scroll", &after);
+            assert_no_implicit_scrollbar("after scroll", &after);
 
             println!("PASS: plain shader scroll container draws no implicit scrollbar chrome");
             robot.exit().expect("exit");
@@ -240,7 +234,7 @@ fn run_shadow_showcases() {
             )
             .is_none()
             {
-                fail(&robot, "Shadow Fields section not visible");
+                robot_exit::fail_without_shutdown( "Shadow Fields section not visible");
             }
             let _ = set_slider_fraction(&robot, "shadow_elevation", 1.0, 196.0, 9.0, shader_scroll_config());
             let _ = set_slider_fraction(&robot, "ambient_alpha", 1.0, 196.0, 9.0, shader_scroll_config());
@@ -252,7 +246,7 @@ fn run_shadow_showcases() {
                 12,
                 shader_scroll_config(),
             )
-            .unwrap_or_else(|| fail(&robot, "Shadow preview label not visible"));
+            .unwrap_or_else(|| robot_exit::fail_without_shutdown( "Shadow preview label not visible"));
             let screenshot = robot.screenshot().expect("shadow screenshot");
             let shadow_path = output_paths::diagnostic_path("shader_shadow_fields.png");
             save_robot_screenshot(&shadow_path, &screenshot);
@@ -270,10 +264,8 @@ fn run_shadow_showcases() {
                 shadow_path.display()
             );
             if shadow_pixels < 120 {
-                fail(
-                    &robot,
-                    &format!("Shadow Fields preview is missing shadow pixels: count={shadow_pixels}"),
-                );
+                robot_exit::fail_without_shutdown(
+                    &format!("Shadow Fields preview is missing shadow pixels: count={shadow_pixels}"));
             }
 
             scroll_text_into_view(
@@ -282,12 +274,12 @@ fn run_shadow_showcases() {
                 24,
                 shader_scroll_config(),
             )
-            .unwrap_or_else(|| fail(&robot, "Compose 1.9 Shadow API section not visible"));
+            .unwrap_or_else(|| robot_exit::fail_without_shutdown( "Compose 1.9 Shadow API section not visible"));
             let screenshot = robot.screenshot().expect("compose shadow screenshot");
             let compose_path = output_paths::diagnostic_path("shader_compose_shadow.png");
             save_robot_screenshot(&compose_path, &screenshot);
             let drop_label = find_text_in_semantics(&robot, "drop")
-                .unwrap_or_else(|| fail(&robot, "drop shadow preview label not visible"));
+                .unwrap_or_else(|| robot_exit::fail_without_shutdown( "drop shadow preview label not visible"));
             let drop_box_left = drop_label.0 - 10.0;
             let drop_box_top = drop_label.1 - 50.0;
             let compose_probe = (
@@ -308,10 +300,8 @@ fn run_shadow_showcases() {
                 compose_path.display()
             );
             if compose_shadow_pixels < 300 {
-                fail(
-                    &robot,
-                    &format!("Compose shadow preview is missing shadow pixels: count={compose_shadow_pixels}"),
-                );
+                robot_exit::fail_without_shutdown(
+                    &format!("Compose shadow preview is missing shadow pixels: count={compose_shadow_pixels}"));
             }
 
             println!("PASS: shadow showcases contain visible shadow pixels");
@@ -344,7 +334,7 @@ fn run_dstout_alpha() {
                 830.0,
                 shader_scroll_config(),
             )
-            .unwrap_or_else(|| fail(&robot, "TOP LAYER text not visible in measurement band"));
+            .unwrap_or_else(|| robot_exit::fail_without_shutdown( "TOP LAYER text not visible in measurement band"));
             let screenshot = robot.screenshot().expect("DstOut screenshot");
             let dstout_path = output_paths::diagnostic_path("shader_dstout_alpha.png");
             save_robot_screenshot(&dstout_path, &screenshot);
@@ -355,10 +345,10 @@ fn run_dstout_alpha() {
                 top_layer.2 + 8.0,
                 top_layer.3 + 8.0,
             )
-            .unwrap_or_else(|| fail(&robot, "failed to crop TOP LAYER text"));
+            .unwrap_or_else(|| robot_exit::fail_without_shutdown( "failed to crop TOP LAYER text"));
             let top_edge = edge_energy_screenshot(&top_crop);
             let underlay = find_text_in_semantics(&robot, "UNDERLAY CONTENT")
-                .unwrap_or_else(|| fail(&robot, "UNDERLAY CONTENT text not visible after preview_alpha change"));
+                .unwrap_or_else(|| robot_exit::fail_without_shutdown( "UNDERLAY CONTENT text not visible after preview_alpha change"));
             let underlay_crop = crop_screenshot_logical(
                 &screenshot,
                 (underlay.0 - 4.0).max(0.0),
@@ -366,17 +356,15 @@ fn run_dstout_alpha() {
                 underlay.2 + 8.0,
                 underlay.3 + 8.0,
             )
-            .unwrap_or_else(|| fail(&robot, "failed to crop UNDERLAY CONTENT text"));
+            .unwrap_or_else(|| robot_exit::fail_without_shutdown( "failed to crop UNDERLAY CONTENT text"));
             let underlay_edge = edge_energy_screenshot(&underlay_crop);
             println!(
                 "dstout_alpha top_edge={top_edge:.3} underlay_edge={underlay_edge:.3} top={top_layer:?} underlay={underlay:?} screenshot={}",
                 dstout_path.display()
             );
             if top_edge < 3.5 || underlay_edge < 8.0 {
-                fail(
-                    &robot,
-                    &format!("DstOut preview damaged text after preview_alpha changed: top_edge={top_edge:.3} underlay_edge={underlay_edge:.3}"),
-                );
+                robot_exit::fail_without_shutdown(
+                    &format!("DstOut preview damaged text after preview_alpha changed: top_edge={top_edge:.3} underlay_edge={underlay_edge:.3}"));
             }
 
             println!("PASS: DstOut alpha change keeps preview text visible");
@@ -436,7 +424,7 @@ fn drag_window(window_id: &str, from: (f32, f32), to: (f32, f32)) {
 
 fn select_shaders_tab(robot: &cranpose::Robot) {
     let Some((x, y, w, h)) = find_button_in_semantics(robot, "Shaders") else {
-        fail(robot, "Shaders tab not found");
+        robot_exit::fail_without_shutdown("Shaders tab not found");
     };
     robot
         .click(x + w * 0.5, y + h * 0.5)
@@ -453,7 +441,7 @@ fn wait_for_text(robot: &cranpose::Robot, text: &str) {
         std::thread::sleep(Duration::from_millis(100));
         let _ = robot.wait_for_idle();
     }
-    fail(robot, &format!("text {text:?} did not appear"));
+    robot_exit::fail_without_shutdown(&format!("text {text:?} did not appear"));
 }
 
 fn shader_scroll_config() -> ScrollConfig {
@@ -475,11 +463,7 @@ fn scrollbar_probe_region(screenshot: &cranpose::RobotScreenshot) -> (f32, f32, 
     )
 }
 
-fn assert_no_implicit_scrollbar(
-    robot: &cranpose::Robot,
-    phase: &str,
-    screenshot: &cranpose::RobotScreenshot,
-) {
+fn assert_no_implicit_scrollbar(phase: &str, screenshot: &cranpose::RobotScreenshot) {
     let stats = feature_stats_screenshot(
         screenshot,
         scrollbar_probe_region(screenshot),
@@ -487,10 +471,9 @@ fn assert_no_implicit_scrollbar(
     );
     println!("shader_no_implicit_scrollbar phase={phase} stats={stats:?}");
     if stats.is_some_and(|stats| stats.count > 80) {
-        fail(
-            robot,
-            &format!("plain shader scroll container drew implicit scrollbar chrome {phase}"),
-        );
+        robot_exit::fail_without_shutdown(&format!(
+            "plain shader scroll container drew implicit scrollbar chrome {phase}"
+        ));
     }
 }
 

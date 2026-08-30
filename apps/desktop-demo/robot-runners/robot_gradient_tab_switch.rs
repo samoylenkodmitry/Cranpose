@@ -1,3 +1,5 @@
+mod robot_exit;
+
 use std::time::Duration;
 
 use cranpose::{AppLauncher, Robot};
@@ -19,12 +21,6 @@ fn wait_for_prefix(
     None
 }
 
-fn fail(robot: &Robot, message: &str) -> ! {
-    eprintln!("✗ {}", message);
-    let _ = robot.exit();
-    std::process::exit(1);
-}
-
 fn dump_semantics(robot: &Robot, label: &str) {
     if let Ok(semantics) = robot.get_semantics() {
         println!("--- Semantics dump ({}) ---", label);
@@ -34,7 +30,7 @@ fn dump_semantics(robot: &Robot, label: &str) {
 
 fn click_tab(robot: &Robot, label: &str) {
     let (x, y, w, h) = find_button_in_semantics(robot, label)
-        .unwrap_or_else(|| fail(robot, &format!("Tab '{}' not found", label)));
+        .unwrap_or_else(|| robot_exit::fail(robot, &format!("Tab '{}' not found", label)));
     robot.click(x + w / 2.0, y + h / 2.0).ok();
     std::thread::sleep(Duration::from_millis(200));
     let _ = robot.wait_for_idle();
@@ -71,7 +67,7 @@ fn main() {
             )
             .is_none()
             {
-                fail(&robot, "CompositionLocal content not visible");
+                robot_exit::fail(&robot, "CompositionLocal content not visible");
             }
 
             click_tab(&robot, "Counter App");
@@ -83,15 +79,15 @@ fn main() {
             )
             .is_none()
             {
-                fail(&robot, "Counter App content not visible");
+                robot_exit::fail(&robot, "Counter App content not visible");
             }
 
             let (x, y, w, h, text_before) =
                 wait_for_prefix(&robot, "Pointer:", 20, Duration::from_millis(100))
-                    .unwrap_or_else(|| fail(&robot, "Pointer text not found"));
+                    .unwrap_or_else(|| robot_exit::fail(&robot, "Pointer text not found"));
 
             let _ = parse_pointer_text(&text_before)
-                .unwrap_or_else(|| fail(&robot, "Failed to parse Pointer text"));
+                .unwrap_or_else(|| robot_exit::fail(&robot, "Failed to parse Pointer text"));
 
             let pos1 = (x + w * 0.2, y + h * 0.5);
             let pos2 = (x + w * 0.8, y + h * 0.5 + 60.0);
@@ -104,11 +100,12 @@ fn main() {
                 wait_for_prefix(&robot, "Pointer:", 10, Duration::from_millis(100)).unwrap_or_else(
                     || {
                         dump_semantics(&robot, "missing pointer after move 1");
-                        fail(&robot, "Pointer text missing after first move")
+                        robot_exit::fail(&robot, "Pointer text missing after first move")
                     },
                 );
-            let coords_1 = parse_pointer_text(&text_after_1)
-                .unwrap_or_else(|| fail(&robot, "Failed to parse Pointer after move 1"));
+            let coords_1 = parse_pointer_text(&text_after_1).unwrap_or_else(|| {
+                robot_exit::fail(&robot, "Failed to parse Pointer after move 1")
+            });
 
             let _ = robot.mouse_move(pos2.0, pos2.1);
             std::thread::sleep(Duration::from_millis(120));
@@ -118,11 +115,12 @@ fn main() {
                 wait_for_prefix(&robot, "Pointer:", 10, Duration::from_millis(100)).unwrap_or_else(
                     || {
                         dump_semantics(&robot, "missing pointer after move 2");
-                        fail(&robot, "Pointer text missing after second move")
+                        robot_exit::fail(&robot, "Pointer text missing after second move")
                     },
                 );
-            let coords_2 = parse_pointer_text(&text_after_2)
-                .unwrap_or_else(|| fail(&robot, "Failed to parse Pointer after move 2"));
+            let coords_2 = parse_pointer_text(&text_after_2).unwrap_or_else(|| {
+                robot_exit::fail(&robot, "Failed to parse Pointer after move 2")
+            });
 
             let dx = coords_2.0 - coords_1.0;
             let dy = coords_2.1 - coords_1.1;

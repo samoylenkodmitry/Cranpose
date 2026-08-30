@@ -1,4 +1,7 @@
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 
 use cranpose_core::NodeId;
 use cranpose_foundation::lazy::{LazyItems, LazyListScope, LazyListState, rememberLazyListState};
@@ -116,31 +119,30 @@ fn a_recycled_lazy_row_stops_the_effect_of_a_widget_one_subcompose_deeper() {
     );
 }
 
-thread_local! {
-    static DROPPED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-struct DropMark;
+struct DropMark(Rc<Cell<usize>>);
 
 impl Drop for DropMark {
     fn drop(&mut self) {
-        DROPPED.with(|count| count.set(count.get() + 1));
+        self.0.set(self.0.get() + 1);
     }
 }
 
 #[composable]
 #[allow(non_snake_case)]
-fn MarkGroup() {
-    cranpose_core::remember(|| DropMark);
+fn MarkGroup(dropped: Rc<Cell<usize>>) {
+    cranpose_core::remember(move || DropMark(dropped));
 }
 
 #[composable]
 #[allow(non_snake_case)]
-fn BusyRow(index: usize, state: cranpose_core::MutableState<bool>) {
+fn BusyRow(index: usize, state: cranpose_core::MutableState<bool>, dropped: Rc<Cell<usize>>) {
     let busy = state.get() && index == 0;
     if busy {
-        cranpose_core::remember(|| DropMark);
-        MarkGroup();
+        cranpose_core::remember({
+            let dropped = Rc::clone(&dropped);
+            move || DropMark(dropped)
+        });
+        MarkGroup(dropped);
         cranpose_core::LaunchedEffectAsync!(0u32, move |_scope| {
             Box::pin(async move {
                 std::future::pending::<()>().await;
@@ -735,25 +737,30 @@ struct SwapSample {
 fn samples_across_swap(nested: bool) -> Vec<SwapSample> {
     let held: Rc<RefCell<Option<cranpose_core::MutableState<bool>>>> = Rc::new(RefCell::new(None));
     let keeper = Rc::clone(&held);
-    let mut composition = run_test_composition(move || {
-        let busy = cranpose_core::rememberMutableStateOf(|| true);
-        *keeper.borrow_mut() = Some(busy);
-        match nested {
-            true => {
-                let list_state = rememberLazyListState();
-                LazyColumn(
-                    Modifier::empty().fill_max_size(),
-                    list_state,
-                    LazyColumnSpec::default(),
-                    move |scope| {
-                        scope.items(
-                            LazyItems::new(ROWS).key(|index: usize| index as u64),
-                            move |index| BusyRow(index, busy),
-                        );
-                    },
-                );
+    let dropped = Rc::new(Cell::new(0));
+    let mut composition = run_test_composition({
+        let dropped = Rc::clone(&dropped);
+        move || {
+            let busy = cranpose_core::rememberMutableStateOf(|| true);
+            *keeper.borrow_mut() = Some(busy);
+            match nested {
+                true => {
+                    let list_state = rememberLazyListState();
+                    let dropped = Rc::clone(&dropped);
+                    LazyColumn(
+                        Modifier::empty().fill_max_size(),
+                        list_state,
+                        LazyColumnSpec::default(),
+                        move |scope| {
+                            scope.items(
+                                LazyItems::new(ROWS).key(|index: usize| index as u64),
+                                move |index| BusyRow(index, busy, Rc::clone(&dropped)),
+                            );
+                        },
+                    );
+                }
+                false => BusyRow(0, busy, Rc::clone(&dropped)),
             }
-            false => BusyRow(0, busy),
         }
     });
 
@@ -762,7 +769,7 @@ fn samples_across_swap(nested: bool) -> Vec<SwapSample> {
     composition.runtime_handle().drain_ui();
     let mut samples = vec![SwapSample {
         tasks: composition.runtime_handle().debug_stats().tasks_len,
-        drops: DROPPED.with(|count| count.get()),
+        drops: dropped.get(),
     }];
 
     let busy = (*held.borrow()).expect("busy state");
@@ -775,7 +782,7 @@ fn samples_across_swap(nested: bool) -> Vec<SwapSample> {
     composition.runtime_handle().drain_ui();
     samples.push(SwapSample {
         tasks: composition.runtime_handle().debug_stats().tasks_len,
-        drops: DROPPED.with(|count| count.get()),
+        drops: dropped.get(),
     });
     samples
 }
@@ -788,10 +795,9 @@ fn task_counts_across_swap(nested: bool) -> Vec<usize> {
 }
 
 fn drop_counts_across_swap(nested: bool) -> Vec<usize> {
-    let base = DROPPED.with(|count| count.get());
     samples_across_swap(nested)
         .iter()
-        .map(|sample| sample.drops - base)
+        .map(|sample| sample.drops)
         .collect()
 }
 

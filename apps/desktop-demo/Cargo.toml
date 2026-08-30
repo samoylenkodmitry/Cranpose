@@ -858,6 +858,11 @@ path = "robot-runners/robot_liquid_backdrop_feedback.rs"
 required-features = ["desktop", "robot-app"]
 
 [[example]]
+name = "robot_glass_backdrop_scroll_stability"
+path = "robot-runners/robot_glass_backdrop_scroll_stability.rs"
+required-features = ["desktop", "robot-app"]
+
+[[example]]
 name = "robot_liquid_scroll_exact_external_contract"
 path = "robot-runners/robot_liquid_scroll_exact_external_contract.rs"
 required-features = ["desktop", "robot-app"]
@@ -878,6 +883,16 @@ path = "robot-runners/robot_liquid_tab_bar_pill_containment.rs"
 required-features = ["desktop", "robot-app"]
 
 [[example]]
+name = "robot_liquid_round_glass_edge_refraction"
+path = "robot-runners/robot_liquid_round_glass_edge_refraction.rs"
+required-features = ["desktop", "robot-app"]
+
+[[example]]
+name = "robot_liquid_tab_flight_dark_scheme_ink_recolor"
+path = "robot-runners/robot_liquid_tab_flight_dark_scheme_ink_recolor.rs"
+required-features = ["desktop", "robot-app"]
+
+[[example]]
 name = "robot_liquid_dropdown_accordion"
 path = "robot-runners/robot_liquid_dropdown_accordion.rs"
 required-features = ["desktop", "robot-app"]
@@ -895,6 +910,11 @@ required-features = ["desktop", "robot-app"]
 [[example]]
 name = "lens_probe"
 path = "examples/lens_probe.rs"
+required-features = ["desktop", "robot-app"]
+
+[[example]]
+name = "round_glass_probe"
+path = "examples/round_glass_probe.rs"
 required-features = ["desktop", "robot-app"]
 
 [[example]]

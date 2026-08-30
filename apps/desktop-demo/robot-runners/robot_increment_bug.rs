@@ -1,13 +1,10 @@
+mod robot_exit;
+
 use std::time::Duration;
 
 use cranpose::AppLauncher;
 use cranpose_testing::find_text_by_prefix_in_semantics;
 use desktop_app::app;
-
-fn fail(robot: &cranpose::Robot, message: &str) -> ! {
-    let _ = robot;
-    panic!("{message}");
-}
 
 fn counter_value(robot: &cranpose::Robot) -> Option<i32> {
     find_text_by_prefix_in_semantics(robot, "Counter:")
@@ -86,7 +83,7 @@ fn main() {
 
             println!("--- Step 1: Verify Initial State ---");
             let initial_counter = counter_value(&robot)
-                .unwrap_or_else(|| fail(&robot, "initial counter value not found"));
+                .unwrap_or_else(|| robot_exit::fail_without_shutdown( "initial counter value not found"));
             println!("  Initial counter value: {}", initial_counter);
 
             println!("\n--- Step 2: Click CompositionLocal Test Tab ---");
@@ -96,14 +93,12 @@ fn main() {
                     x, y
                 );
                 robot.click(x, y).unwrap_or_else(|err| {
-                    fail(
-                        &robot,
-                        &format!("failed to click 'CompositionLocal Test': {err}"),
-                    )
+                    robot_exit::fail_without_shutdown(
+                        &format!("failed to click 'CompositionLocal Test': {err}"))
                 });
                 println!("  ✓ Clicked");
             } else {
-                fail(&robot, "tab 'CompositionLocal Test' not found");
+                robot_exit::fail_without_shutdown( "tab 'CompositionLocal Test' not found");
             }
             std::thread::sleep(Duration::from_millis(300));
 
@@ -112,11 +107,11 @@ fn main() {
             if let Some((x, y)) = counter_app_pos {
                 println!("  Found 'Counter App' tab at ({:.1}, {:.1})", x, y);
                 robot.click(x, y).unwrap_or_else(|err| {
-                    fail(&robot, &format!("failed to click 'Counter App': {err}"))
+                    robot_exit::fail_without_shutdown( &format!("failed to click 'Counter App': {err}"))
                 });
                 println!("  ✓ Clicked");
             } else {
-                fail(&robot, "tab 'Counter App' not found");
+                robot_exit::fail_without_shutdown( "tab 'Counter App' not found");
             }
             std::thread::sleep(Duration::from_millis(300));
 
@@ -135,13 +130,13 @@ fn main() {
                     let x = tab_x + (gradient_x - tab_x) * progress;
                     let y = tab_y + (gradient_y - tab_y) * progress;
                     robot.mouse_move(x, y).unwrap_or_else(|err| {
-                        fail(&robot, &format!("failed to move mouse through gradient area: {err}"))
+                        robot_exit::fail_without_shutdown( &format!("failed to move mouse through gradient area: {err}"))
                     });
                     std::thread::sleep(Duration::from_millis(25));
                 }
                 println!("  ✓ Cursor moved through gradient area (triggering recomposition)");
             } else {
-                fail(&robot, "counter tab position missing before gradient walk");
+                robot_exit::fail_without_shutdown( "counter tab position missing before gradient walk");
             }
             std::thread::sleep(Duration::from_millis(200));
 
@@ -151,16 +146,16 @@ fn main() {
                 println!("  Found 'Increment' button at ({:.1}, {:.1})", x, y);
 
                 robot.mouse_move(x, y).unwrap_or_else(|err| {
-                    fail(&robot, &format!("failed to move mouse to Increment button: {err}"))
+                    robot_exit::fail_without_shutdown( &format!("failed to move mouse to Increment button: {err}"))
                 });
                 std::thread::sleep(Duration::from_millis(100));
 
                 robot.click(x, y).unwrap_or_else(|err| {
-                    fail(&robot, &format!("failed to click Increment button: {err}"))
+                    robot_exit::fail_without_shutdown( &format!("failed to click Increment button: {err}"))
                 });
                 println!("  ✓ Clicked Increment");
             } else {
-                fail(&robot, "Increment button not found after tab roundtrip");
+                robot_exit::fail_without_shutdown( "Increment button not found after tab roundtrip");
             }
             std::thread::sleep(Duration::from_millis(300));
 
@@ -181,15 +176,13 @@ fn main() {
                     initial_counter, final_counter
                 );
             } else {
-                fail(
-                    &robot,
+                robot_exit::fail_without_shutdown(
                     &format!(
                         "counter value mismatch after robot click: expected {}, got {}, all counters {:?}",
                         initial_counter + 1,
                         final_counter,
                         all_counters,
-                    ),
-                );
+                    ));
             }
 
             println!("\nClosing in 1 second...");

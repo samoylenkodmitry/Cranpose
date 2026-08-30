@@ -1,3 +1,5 @@
+mod robot_exit;
+
 use std::time::Duration;
 
 use cranpose::{AppLauncher, Robot};
@@ -70,13 +72,10 @@ fn main() {
                 return;
             }
 
-            let mut viewport = match fetch_list_viewport(&robot) {
-                Some(bounds) => bounds,
-                None => {
-                    eprintln!("✗ LazyListViewport is not visible in the viewport");
-                    let _ = robot.exit();
-                    return;
-                }
+            let Some(mut viewport) = fetch_list_viewport(&robot) else {
+                eprintln!("✗ LazyListViewport is not visible in the viewport");
+                let _ = robot.exit();
+                return;
             };
 
             fn find_item_center_y(robot: &Robot, item_text: &str) -> Option<f32> {
@@ -241,12 +240,10 @@ fn main() {
 
             println!("--- Test 7: Simulated Frame Drops ---");
 
-            let (tracked_label, _before_y) = match find_any_item(&robot) {
-                Some(value) => value,
-                None => {
-                    eprintln!("✗ Could not find a visible item before frame drop test");
-                    std::process::exit(1);
-                }
+            let Some((tracked_label, _before_y)) = find_any_item(&robot) else {
+                robot_exit::fail_without_shutdown(
+                    "Could not find a visible item before frame drop test",
+                );
             };
 
             if let Err(err) = robot.reset_last_fling_velocity() {
@@ -281,23 +278,17 @@ fn main() {
                 }
             };
 
-            match (post_release_y, after_fling_y) {
-                (Some(post_y), Some(after_y)) => {
-                    let additional = (post_y - after_y).abs();
-                    if additional < 15.0 && measured_velocity < 50.0 {
-                        eprintln!(
-                            "✗ Frame drop fling too small: {:.1}px (velocity {:.1} px/s)",
-                            additional, measured_velocity
-                        );
-                        std::process::exit(1);
-                    } else if additional < 15.0 {
-                        println!(
-                            "  WARN: Low visual movement ({:.1}px) but fling velocity {:.1} px/s",
-                            additional, measured_velocity
-                        );
-                    }
+            if let (Some(post_y), Some(after_y)) = (post_release_y, after_fling_y) {
+                let additional = (post_y - after_y).abs();
+                if additional < 15.0 && measured_velocity < 50.0 {
+                    robot_exit::fail_without_shutdown(&format!(
+                        "Frame drop fling too small: {additional:.1}px (velocity {measured_velocity:.1} px/s)"
+                    ));
+                } else if additional < 15.0 {
+                    println!(
+                        "  WARN: Low visual movement ({additional:.1}px) but fling velocity {measured_velocity:.1} px/s"
+                    );
                 }
-                _ => {}
             }
 
             println!("  ✓ Frame drops - fling momentum detected\n");

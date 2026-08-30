@@ -2,6 +2,8 @@
 
 mod app;
 mod fonts;
+mod screens;
+mod theme;
 
 fn main() {
     #[cfg(feature = "logging")]

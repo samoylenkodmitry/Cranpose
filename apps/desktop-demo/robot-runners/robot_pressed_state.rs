@@ -1,3 +1,5 @@
+mod robot_exit;
+
 use std::time::Duration;
 
 use cranpose::{AppLauncher, Robot};
@@ -9,12 +11,6 @@ use desktop_app::test_screens::pressed_state_repro::{
 
 const COLOR_TOLERANCE: i32 = 24;
 const SAMPLE_ATTEMPTS: usize = 20;
-
-fn fail(robot: &Robot, message: &str) -> ! {
-    println!("FATAL: {message}");
-    let _ = robot.exit();
-    std::process::exit(1);
-}
 
 fn physical_scale(screenshot: &cranpose::RobotScreenshot) -> f32 {
     if screenshot.logical_width.is_finite() && screenshot.logical_width > 0.0 {
@@ -72,10 +68,9 @@ fn main() {
             let center_y = SPRITE_OFFSET_Y + SPRITE_HEIGHT * 0.5;
 
             if let Err(actual) = wait_for_sprite_color(&robot, center_x, center_y, NORMAL_RGBA) {
-                fail(
+                robot_exit::fail(
                     &robot,
-                    &format!("sprite should start with the normal color, got {actual:?}"),
-                );
+                    &format!("sprite should start with the normal color, got {actual:?}"));
             }
             println!("Baseline normal sprite confirmed");
 
@@ -85,22 +80,20 @@ fn main() {
 
             if let Err(actual) = wait_for_sprite_color(&robot, center_x, center_y, PRESSED_RGBA) {
                 let _ = robot.mouse_up();
-                fail(
+                robot_exit::fail(
                     &robot,
                     &format!(
                         "sprite must show the pressed color while the pointer is down, got {actual:?}"
-                    ),
-                );
+                    ));
             }
             println!("Pressed sprite confirmed while pointer is down");
 
             robot.mouse_up().expect("mouse up");
 
             if let Err(actual) = wait_for_sprite_color(&robot, center_x, center_y, NORMAL_RGBA) {
-                fail(
+                robot_exit::fail(
                     &robot,
-                    &format!("sprite should return to the normal color after release, got {actual:?}"),
-                );
+                    &format!("sprite should return to the normal color after release, got {actual:?}"));
             }
             println!("Normal sprite restored after release");
 

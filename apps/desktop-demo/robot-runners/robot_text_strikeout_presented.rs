@@ -1,4 +1,5 @@
 mod output_paths;
+mod robot_exit;
 mod text_showcase_external_helpers;
 
 use std::{path::Path, time::Duration};
@@ -26,12 +27,6 @@ struct StrikeoutMetrics {
     max_dark_gap: u32,
 }
 
-fn fail(robot: &cranpose::Robot, message: &str) -> ! {
-    println!("FATAL: {message}");
-    let _ = robot.exit();
-    std::process::exit(1);
-}
-
 fn main() {
     env_logger::init();
     println!("=== Robot Text Strikeout Presented ===");
@@ -56,7 +51,7 @@ fn main() {
                 .expect("present Text tab before strikeout capture");
             wait_for_text_showcase_heading(&robot);
             let bounds = find_exact_text_in_semantics(&robot, TARGET_TEXT)
-                .unwrap_or_else(|| fail(&robot, "strikeout text semantics bounds not found"));
+                .unwrap_or_else(|| robot_exit::fail(&robot, "strikeout text semantics bounds not found"));
             println!("Target bounds: {bounds:?}");
 
             let window_id = find_window_id(WINDOW_TITLE);
@@ -78,25 +73,24 @@ fn main() {
                 bounds.2 + crop_padding * 2.0,
                 bounds.3 + crop_padding * 2.0,
             )
-            .unwrap_or_else(|| fail(&robot, "failed to crop strikeout text from X11 capture"));
+            .unwrap_or_else(|| robot_exit::fail(&robot, "failed to crop strikeout text from X11 capture"));
             let crop_path = output_dir.join("strikeout_crop.png");
             save_robot_screenshot(&crop, &crop_path);
 
             let metrics = strikeout_metrics(&crop)
-                .unwrap_or_else(|| fail(&robot, "could not locate line-through row in crop"));
+                .unwrap_or_else(|| robot_exit::fail(&robot, "could not locate line-through row in crop"));
             println!(
                 "Strikeout metrics: row={} first_x={} last_x={} coverage={:.3} max_dark_gap={}",
                 metrics.row, metrics.first_x, metrics.last_x, metrics.coverage, metrics.max_dark_gap
             );
 
             if metrics.coverage < 0.86 || metrics.max_dark_gap > 2 {
-                fail(
+                robot_exit::fail(
                     &robot,
                     &format!(
                         "line-through must be continuous in the presented X11 capture; coverage={:.3}, max_dark_gap={}",
                         metrics.coverage, metrics.max_dark_gap
-                    ),
-                );
+                    ));
             }
 
             println!("PASS: Text tab line-through is continuous in presented X11 capture");

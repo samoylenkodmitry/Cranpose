@@ -1,3 +1,5 @@
+mod robot_exit;
+
 use std::time::Duration;
 
 use cranpose::{AppLauncher, Robot, RobotScreenshot};
@@ -6,16 +8,10 @@ use cranpose_testing::{
 };
 use desktop_app::app;
 
-fn fail(robot: &Robot, message: &str) -> ! {
-    println!("FATAL: {message}");
-    robot.exit().ok();
-    std::process::exit(1);
-}
-
 fn capture(robot: &Robot, label: &str) -> RobotScreenshot {
     robot
         .screenshot()
-        .unwrap_or_else(|err| fail(robot, &format!("{label} screenshot failed: {err}")))
+        .unwrap_or_else(|err| robot_exit::fail(robot, &format!("{label} screenshot failed: {err}")))
 }
 
 fn changed_pixels(
@@ -38,16 +34,16 @@ fn main() {
             std::thread::sleep(Duration::from_millis(500));
             robot
                 .wait_for_idle()
-                .unwrap_or_else(|err| fail(&robot, &format!("initial idle failed: {err}")));
+                .unwrap_or_else(|err| robot_exit::fail(&robot, &format!("initial idle failed: {err}")));
 
             if find_text_in_semantics(&robot, "Interactive Anim").is_none() {
-                fail(&robot, "Interactive Anim tab content not visible");
+                robot_exit::fail(&robot, "Interactive Anim tab content not visible");
             }
 
             let Some((button_x, button_y, button_w, button_h)) =
                 find_button_in_semantics(&robot, "Tap me")
             else {
-                fail(&robot, "'Tap me' button not found");
+                robot_exit::fail(&robot, "'Tap me' button not found");
             };
             let sample_region = (
                 button_x - 18.0,
@@ -60,75 +56,71 @@ fn main() {
 
             robot
                 .move_to(center_x, center_y)
-                .unwrap_or_else(|err| fail(&robot, &format!("move failed: {err}")));
+                .unwrap_or_else(|err| robot_exit::fail(&robot, &format!("move failed: {err}")));
             robot
                 .wait_for_idle()
-                .unwrap_or_else(|err| fail(&robot, &format!("pre-press idle failed: {err}")));
+                .unwrap_or_else(|err| robot_exit::fail(&robot, &format!("pre-press idle failed: {err}")));
             let baseline = capture(&robot, "baseline");
 
             robot
                 .mouse_down()
-                .unwrap_or_else(|err| fail(&robot, &format!("mouse down failed: {err}")));
+                .unwrap_or_else(|err| robot_exit::fail(&robot, &format!("mouse down failed: {err}")));
             robot
                 .pump_frames(1)
-                .unwrap_or_else(|err| fail(&robot, &format!("down pump failed: {err}")));
+                .unwrap_or_else(|err| robot_exit::fail(&robot, &format!("down pump failed: {err}")));
             let down_first = capture(&robot, "first pressed");
 
             robot
                 .pump_frames(8)
-                .unwrap_or_else(|err| fail(&robot, &format!("pressed animation pump failed: {err}")));
+                .unwrap_or_else(|err| robot_exit::fail(&robot, &format!("pressed animation pump failed: {err}")));
             let down_later = capture(&robot, "later pressed");
 
             let press_delta = changed_pixels(&baseline, &down_first, sample_region);
             let held_delta = changed_pixels(&down_first, &down_later, sample_region);
             if press_delta < 120 {
-                fail(
+                robot_exit::fail(
                     &robot,
-                    &format!("press did not produce visible button pixels: {press_delta}"),
-                );
+                    &format!("press did not produce visible button pixels: {press_delta}"));
             }
             if held_delta < 2 {
-                fail(
+                robot_exit::fail(
                     &robot,
-                    &format!("held press animation did not advance: {held_delta}"),
-                );
+                    &format!("held press animation did not advance: {held_delta}"));
             }
 
             robot
                 .mouse_up()
-                .unwrap_or_else(|err| fail(&robot, &format!("mouse up failed: {err}")));
+                .unwrap_or_else(|err| robot_exit::fail(&robot, &format!("mouse up failed: {err}")));
             robot
                 .pump_frames(6)
-                .unwrap_or_else(|err| fail(&robot, &format!("release pump failed: {err}")));
+                .unwrap_or_else(|err| robot_exit::fail(&robot, &format!("release pump failed: {err}")));
             let released_first = capture(&robot, "first released");
             robot
                 .pump_frames(14)
-                .unwrap_or_else(|err| fail(&robot, &format!("slow release pump failed: {err}")));
+                .unwrap_or_else(|err| robot_exit::fail(&robot, &format!("slow release pump failed: {err}")));
             let released_later = capture(&robot, "later released");
             let release_delta = changed_pixels(&down_later, &released_first, sample_region);
             let slow_release_delta =
                 changed_pixels(&released_first, &released_later, sample_region);
             if release_delta < 80 {
-                fail(
+                robot_exit::fail(
                     &robot,
-                    &format!("release did not animate button back up: {release_delta}"),
-                );
+                    &format!("release did not animate button back up: {release_delta}"));
             }
             if slow_release_delta < 20 {
-                fail(
+                robot_exit::fail(
                     &robot,
-                    &format!("release animation did not continue slowly: {slow_release_delta}"),
-                );
+                    &format!("release animation did not continue slowly: {slow_release_delta}"));
             }
 
             if find_text_in_semantics(&robot, "1").is_none() {
-                fail(&robot, "click count did not update after release");
+                robot_exit::fail(&robot, "click count did not update after release");
             }
 
             let Some((reveal_x, reveal_y, reveal_w, reveal_h)) =
                 find_button_in_semantics(&robot, "Reveal")
             else {
-                fail(&robot, "'Reveal' button not found");
+                robot_exit::fail(&robot, "'Reveal' button not found");
             };
             let reveal_region = (
                 reveal_x - 4.0,
@@ -141,24 +133,24 @@ fn main() {
 
             robot
                 .move_to(reveal_center_x, reveal_center_y)
-                .unwrap_or_else(|err| fail(&robot, &format!("reveal move failed: {err}")));
+                .unwrap_or_else(|err| robot_exit::fail(&robot, &format!("reveal move failed: {err}")));
             robot
                 .wait_for_idle()
-                .unwrap_or_else(|err| fail(&robot, &format!("pre-reveal idle failed: {err}")));
+                .unwrap_or_else(|err| robot_exit::fail(&robot, &format!("pre-reveal idle failed: {err}")));
             let reveal_baseline = capture(&robot, "reveal baseline");
             robot
                 .mouse_down()
-                .unwrap_or_else(|err| fail(&robot, &format!("reveal mouse down failed: {err}")));
+                .unwrap_or_else(|err| robot_exit::fail(&robot, &format!("reveal mouse down failed: {err}")));
             robot
                 .mouse_up()
-                .unwrap_or_else(|err| fail(&robot, &format!("reveal mouse up failed: {err}")));
+                .unwrap_or_else(|err| robot_exit::fail(&robot, &format!("reveal mouse up failed: {err}")));
             robot
                 .pump_frames(4)
-                .unwrap_or_else(|err| fail(&robot, &format!("reveal start pump failed: {err}")));
+                .unwrap_or_else(|err| robot_exit::fail(&robot, &format!("reveal start pump failed: {err}")));
             let reveal_started = capture(&robot, "reveal started");
             robot
                 .pump_frames(14)
-                .unwrap_or_else(|err| fail(&robot, &format!("reveal progress pump failed: {err}")));
+                .unwrap_or_else(|err| robot_exit::fail(&robot, &format!("reveal progress pump failed: {err}")));
             let reveal_later = capture(&robot, "reveal later");
 
             let reveal_start_delta =
@@ -168,20 +160,18 @@ fn main() {
             let reveal_total_delta =
                 changed_pixels(&reveal_baseline, &reveal_later, reveal_region);
             if reveal_total_delta < 80 {
-                fail(
+                robot_exit::fail(
                     &robot,
                     &format!(
                         "reveal click did not draw visible circular pixels: start={reveal_start_delta}, total={reveal_total_delta}"
-                    ),
-                );
+                    ));
             }
             if reveal_progress_delta < 30 {
-                fail(
+                robot_exit::fail(
                     &robot,
                     &format!(
                         "reveal animation did not expand over time: {reveal_progress_delta}"
-                    ),
-                );
+                    ));
             }
 
             println!(

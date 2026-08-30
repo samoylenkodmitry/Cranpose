@@ -1,3 +1,5 @@
+mod robot_exit;
+
 use std::time::Duration;
 
 use cranpose::{
@@ -58,12 +60,7 @@ fn main() {
         .with_size(600, 400)
         .with_headless(true)
         .with_test_driver(move |robot| {
-            const TEST_TIMEOUT_SECS: u64 = 400;
-            std::thread::spawn(|| {
-                std::thread::sleep(Duration::from_secs(TEST_TIMEOUT_SECS));
-                println!("\n✗ Test timed out after {TEST_TIMEOUT_SECS} seconds");
-                std::process::exit(1);
-            });
+            robot_exit::arm_timeout(400);
 
             std::thread::sleep(Duration::from_millis(300));
 

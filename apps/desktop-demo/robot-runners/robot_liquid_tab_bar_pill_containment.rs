@@ -1,9 +1,7 @@
-use std::{
-    path::{Path, PathBuf},
-    process::ExitCode,
-    sync::atomic::{AtomicBool, Ordering},
-    time::Duration,
-};
+mod robot_exit;
+mod robot_shot;
+
+use std::{path::PathBuf, process::ExitCode, sync::atomic::AtomicBool, time::Duration};
 
 use cranpose::{
     liquid::prelude::*,
@@ -44,17 +42,12 @@ fn main() -> ExitCode {
         .with_fonts(desktop_app::fonts::DEMO_FONTS)
         .with_headless(std::env::var("CRANPOSE_HEADLESS").as_deref() != Ok("0"))
         .with_test_driver(move |robot| {
-            const TEST_TIMEOUT_SECS: u64 = 180;
-            std::thread::spawn(|| {
-                std::thread::sleep(Duration::from_secs(TEST_TIMEOUT_SECS));
-                println!("\n✗ Test timed out after {TEST_TIMEOUT_SECS} seconds");
-                std::process::exit(1);
-            });
+            robot_exit::arm_timeout(180);
             std::thread::sleep(Duration::from_millis(700));
-            settle(&robot, SETTLE_MS);
+            robot_shot::settle(&robot, SETTLE_MS);
 
             let interior = robot.screenshot().expect("interior selection shot");
-            save(&interior, &shot_dir, "0-interior-cell.png");
+            robot_shot::save(&interior, &shot_dir, "0-interior-cell.png");
             let scale = interior.width as f32 / interior.logical_width;
             let left_edge = BAR_LEFT * scale;
             let right_edge = (BAR_LEFT + BAR_WIDTH) * scale;
@@ -65,15 +58,13 @@ fn main() -> ExitCode {
 
             for (name, cell) in [("leading", 0usize), ("trailing", TAB_COUNT - 1)] {
                 click_cell(&robot, cell);
-                settle(&robot, SETTLE_MS);
+                robot_shot::settle(&robot, SETTLE_MS);
                 let shot = robot.screenshot().expect("end selection shot");
-                save(&shot, &shot_dir, &format!("1-{name}-end-cell.png"));
+                robot_shot::save(&shot, &shot_dir, &format!("1-{name}-end-cell.png"));
 
                 let (first, last) = changed_span(&interior, &shot).unwrap_or_else(|| {
-                    fail(
-                        &robot,
-                        &format!("selecting the {name} end cell changed nothing on screen"),
-                    )
+                    robot_exit::fail_and_await_shutdown(&robot, &FAILED,
+                        &format!("selecting the {name} end cell changed nothing on screen"))
                 });
                 println!("the {name} end bubble occupies columns {first}..={last}");
 
@@ -81,19 +72,17 @@ fn main() -> ExitCode {
                 let past_right = last as f32 - right_edge;
                 if past_left > ESCAPE_BUDGET_PX || past_right > ESCAPE_BUDGET_PX {
                     let escape = past_left.max(past_right) / scale;
-                    fail(
-                        &robot,
+                    robot_exit::fail_and_await_shutdown(&robot, &FAILED,
                         &format!(
                             "the resting bubble on the {name} end cell is drawing outside the \
                              bar: columns {first}..={last} against the {left_edge:.1}..={right_edge:.1} \
                              it was given, about {escape:.1}dp of glass past the pill's rounded \
                              end. Its overhang past its own cell has outgrown the pill's margin."
-                        ),
-                    );
+                        ));
                 }
 
                 click_cell(&robot, 1);
-                settle(&robot, SETTLE_MS);
+                robot_shot::settle(&robot, SETTLE_MS);
             }
 
             println!(
@@ -153,11 +142,7 @@ fn main() -> ExitCode {
         })
         .expect("launch tab bar pill containment runner");
 
-    if FAILED.load(Ordering::Relaxed) {
-        ExitCode::FAILURE
-    } else {
-        ExitCode::SUCCESS
-    }
+    robot_exit::exit_code(&FAILED)
 }
 
 const TABS: [(&str, &str); TAB_COUNT] = [
@@ -205,23 +190,4 @@ fn pixel(shot: &RobotScreenshot, x: u32, y: u32) -> (u8, u8, u8) {
         shot.pixels[index + 1],
         shot.pixels[index + 2],
     )
-}
-
-fn save(shot: &RobotScreenshot, directory: &Path, name: &str) {
-    if let Some(image) = image::RgbaImage::from_raw(shot.width, shot.height, shot.pixels.clone()) {
-        let _ = image.save(directory.join(name));
-    }
-}
-
-fn settle(robot: &cranpose::Robot, millis: u64) {
-    let _ = robot.wait_for_idle();
-    std::thread::sleep(Duration::from_millis(millis));
-    let _ = robot.wait_for_idle();
-}
-
-fn fail(robot: &cranpose::Robot, message: &str) -> ! {
-    println!("\n✗ {message}");
-    FAILED.store(true, Ordering::Relaxed);
-    let _ = robot.exit();
-    std::process::exit(1);
 }

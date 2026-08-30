@@ -1,4 +1,5 @@
 mod output_paths;
+mod robot_exit;
 mod text_showcase_external_helpers;
 
 use std::{path::PathBuf, time::Duration};
@@ -37,7 +38,7 @@ fn main() {
             focus_x11_window(&window_id);
 
             let (x, y, width, height) = find_button_exact_in_semantics(&robot, "Increment")
-                .unwrap_or_else(|| fail(&robot, "Increment button not found"));
+                .unwrap_or_else(|| robot_exit::fail(&robot, "Increment button not found"));
             let center_x = x + width * 0.5;
             let center_y = y + height * 0.5;
             move_x11_mouse_in_window(&window_id, center_x, center_y);
@@ -60,13 +61,12 @@ fn main() {
             let released = capture_x11_window(&window_id, &released_path);
 
             let counter_text = wait_for_counter_text(&robot).unwrap_or_else(|| {
-                fail(&robot, "Counter text missing after Increment button release")
+                robot_exit::fail(&robot, "Counter text missing after Increment button release")
             });
             if !counter_text.contains("1") {
-                fail(
+                robot_exit::fail(
                     &robot,
-                    &format!("Increment click did not update counter: {counter_text}"),
-                );
+                    &format!("Increment click did not update counter: {counter_text}"));
             }
 
             let roi = Roi::around(center_x, center_y);
@@ -100,7 +100,7 @@ fn main() {
             }
 
             if !failures.is_empty() {
-                fail(
+                robot_exit::fail(
                     &robot,
                     &format!(
                         "{}\nscreenshots: baseline={} pressed={} released={}",
@@ -108,8 +108,7 @@ fn main() {
                         baseline_path.display(),
                         pressed_path.display(),
                         released_path.display(),
-                    ),
-                );
+                    ));
             }
 
             robot.exit().expect("exit");
@@ -177,10 +176,4 @@ fn mean_luma_delta(left: &RgbaImage, right: &RgbaImage, roi: Roi) -> f32 {
 
 fn luma(pixel: [u8; 4]) -> f32 {
     pixel[0] as f32 * 0.2126 + pixel[1] as f32 * 0.7152 + pixel[2] as f32 * 0.0722
-}
-
-fn fail(robot: &Robot, message: &str) -> ! {
-    eprintln!("FAIL: {message}");
-    let _ = robot.exit();
-    std::process::exit(1);
 }

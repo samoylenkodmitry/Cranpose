@@ -1,3 +1,5 @@
+mod robot_exit;
+
 use std::time::Duration;
 
 use cranpose::AppLauncher;
@@ -24,11 +26,6 @@ fn click_tab(robot: &cranpose::Robot, label: &str) -> bool {
     true
 }
 
-fn fail(robot: &cranpose::Robot, message: &str) -> ! {
-    let _ = robot;
-    panic!("{message}");
-}
-
 fn main() {
     env_logger::init();
     println!("=== Robot Tab Roundtrip Content Test ===");
@@ -52,16 +49,13 @@ fn main() {
             for (tab, marker) in tab_walk {
                 println!("--- Switching to '{}' ---", tab);
                 if !click_tab(&robot, tab) {
-                    fail(&robot, &format!("tab '{}' not found", tab));
+                    robot_exit::fail_without_shutdown(&format!("tab '{}' not found", tab));
                 }
                 if !wait_for_text(&robot, marker, 30, Duration::from_millis(100)) {
-                    fail(
-                        &robot,
-                        &format!(
-                            "marker '{}' did not appear after switching to '{}'",
-                            marker, tab
-                        ),
-                    );
+                    robot_exit::fail_without_shutdown(&format!(
+                        "marker '{}' did not appear after switching to '{}'",
+                        marker, tab
+                    ));
                 }
             }
 

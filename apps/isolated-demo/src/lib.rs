@@ -4,6 +4,10 @@
 mod app;
 #[cfg(any(target_os = "android", all(feature = "web", target_arch = "wasm32")))]
 mod fonts;
+#[cfg(any(target_os = "android", all(feature = "web", target_arch = "wasm32")))]
+mod screens;
+#[cfg(any(target_os = "android", all(feature = "web", target_arch = "wasm32")))]
+mod theme;
 
 cranpose::android_main! {
     launcher: app::create_app(),

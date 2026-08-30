@@ -56,12 +56,6 @@ impl PixelBounds {
     }
 }
 
-fn fail(robot: &cranpose::Robot, message: &str) -> ! {
-    println!("FATAL: {message}");
-    let _ = robot.exit();
-    std::process::exit(1);
-}
-
 fn color_bounds(image: &RgbaImage, target: [u8; 3]) -> Option<PixelBounds> {
     let mut bounds: Option<PixelBounds> = None;
     for (x, y, pixel) in image.enumerate_pixels() {
@@ -100,7 +94,7 @@ fn require_bounds(
     color: [u8; 3],
 ) -> PixelBounds {
     color_bounds(image, color).unwrap_or_else(|| {
-        fail(
+        crate::robot_exit::fail(
             robot,
             &format!("presented window marker '{name}' was not found"),
         )
@@ -109,7 +103,7 @@ fn require_bounds(
 
 fn assert_close(robot: &cranpose::Robot, name: &str, actual: i32, expected: i32, tolerance: i32) {
     if (actual - expected).abs() > tolerance {
-        fail(
+        crate::robot_exit::fail(
             robot,
             &format!("{name}: actual={actual} expected={expected} tolerance={tolerance}"),
         );
@@ -131,7 +125,7 @@ fn capture_scale(robot: &cranpose::Robot, image: &RgbaImage) -> CaptureScale {
         || scale.y < 0.5
         || (scale.x - scale.y).abs() > SCALE_AXIS_TOLERANCE
     {
-        fail(
+        crate::robot_exit::fail(
             robot,
             &format!(
                 "presented capture has invalid scale: capture={}x{} logical={}x{} scale=({:.3}, {:.3})",
@@ -141,8 +135,7 @@ fn capture_scale(robot: &cranpose::Robot, image: &RgbaImage) -> CaptureScale {
                 WINDOW_HEIGHT,
                 scale.x,
                 scale.y
-            ),
-        );
+            ));
     }
     scale
 }

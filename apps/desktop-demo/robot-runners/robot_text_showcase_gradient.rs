@@ -1,3 +1,5 @@
+mod robot_exit;
+
 use std::time::Duration;
 
 use cranpose::AppLauncher;
@@ -6,12 +8,6 @@ use cranpose_testing::{
     find_in_semantics, find_text,
 };
 use desktop_app::app;
-
-fn fail(robot: &cranpose::Robot, message: &str) -> ! {
-    println!("FATAL: {message}");
-    let _ = robot.exit();
-    std::process::exit(1);
-}
 
 fn main() {
     env_logger::init();
@@ -29,7 +25,7 @@ fn main() {
             let Some((shaders_x, shaders_y, shaders_w, shaders_h)) =
                 find_button_in_semantics(&robot, "Shaders")
             else {
-                fail(&robot, "Shaders tab not found");
+                robot_exit::fail(&robot, "Shaders tab not found");
             };
             robot
                 .click(shaders_x + shaders_w * 0.5, shaders_y + shaders_h * 0.5)
@@ -40,7 +36,7 @@ fn main() {
             let Some((text_x, text_y, text_w, text_h)) =
                 find_button_exact_in_semantics(&robot, "Text")
             else {
-                fail(&robot, "Text tab not found after navigating to right-side tabs");
+                robot_exit::fail(&robot, "Text tab not found after navigating to right-side tabs");
             };
             robot.click(text_x + text_w * 0.5, text_y + text_h * 0.5).ok();
             std::thread::sleep(Duration::from_millis(350));
@@ -51,30 +47,28 @@ fn main() {
             })
             .is_none()
             {
-                fail(&robot, "Text showcase heading not found after tab switch");
+                robot_exit::fail(&robot, "Text showcase heading not found after tab switch");
             }
 
             let Some((_anchor_x, _anchor_y, _anchor_w, _anchor_h)) = find_in_semantics(&robot, |elem| {
                 find_text(elem, "brush + alpha + draw_style + platform_style")
             })
             else {
-                fail(
+                robot_exit::fail(
                     &robot,
-                    "gradient/stroke anchor label not found in Text showcase semantics",
-                );
+                    "gradient/stroke anchor label not found in Text showcase semantics");
             };
             let Some((sample_x, sample_y, sample_w, sample_h)) = find_in_semantics(&robot, |elem| {
                 find_text(elem, "Gradient/alpha/fill/platform")
             }) else {
-                fail(
+                robot_exit::fail(
                     &robot,
-                    "gradient/stroke sample text not found in Text showcase semantics",
-                );
+                    "gradient/stroke sample text not found in Text showcase semantics");
             };
 
             let screenshot = robot
                 .screenshot()
-                .unwrap_or_else(|err| fail(&robot, &format!("screenshot failed: {err}")));
+                .unwrap_or_else(|err| robot_exit::fail(&robot, &format!("screenshot failed: {err}")));
 
             let crop_padding = 8.0;
             let cropped = crop_screenshot_logical(
@@ -84,7 +78,7 @@ fn main() {
                 sample_w + crop_padding * 2.0,
                 sample_h + crop_padding * 2.0,
             )
-                .unwrap_or_else(|| fail(&robot, "failed to crop sample bounds"));
+                .unwrap_or_else(|| robot_exit::fail(&robot, "failed to crop sample bounds"));
 
             let mut colored_pixels = 0usize;
             let mut min_red = 1.0f32;
@@ -109,41 +103,37 @@ fn main() {
             }
 
             if colored_pixels <= 20 {
-                fail(
+                robot_exit::fail(
                     &robot,
                     &format!(
                         "expected visible colored ink in sample, got colored_pixels={colored_pixels}"
-                    ),
-                );
+                    ));
             }
 
             let red_span = max_red - min_red;
             let blue_span = max_blue - min_blue;
             let channel_span = red_span.max(blue_span);
             if channel_span <= 0.12 {
-                fail(
+                robot_exit::fail(
                     &robot,
                     &format!(
                         "expected gradient variation in sample, red_span={red_span:.3}, blue_span={blue_span:.3}"
-                    ),
-                );
+                    ));
             }
 
             let Some((_p_x, _p_y, _p_w, p_h)) = find_in_semantics(&robot, |elem| {
                 find_text(elem, "This paragraph demonstrates textIndent")
             }) else {
-                fail(
+                robot_exit::fail(
                     &robot,
-                    "paragraph sample text not found for multiline-wrap verification",
-                );
+                    "paragraph sample text not found for multiline-wrap verification");
             };
             if p_h <= 40.0 {
-                fail(
+                robot_exit::fail(
                     &robot,
                     &format!(
                         "expected multiline paragraph sample height, got p_h={p_h:.1} (likely wrapped to a single clipped line)"
-                    ),
-                );
+                    ));
             }
 
             println!(

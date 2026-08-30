@@ -1,8 +1,6 @@
-use std::{
-    process::ExitCode,
-    sync::atomic::{AtomicBool, Ordering},
-    time::Duration,
-};
+mod robot_exit;
+
+use std::{process::ExitCode, sync::atomic::AtomicBool, time::Duration};
 
 use cranpose::AppLauncher;
 use desktop_app::app::{self, TEST_ACTIVE_TAB_STATE};
@@ -31,7 +29,7 @@ fn main() -> ExitCode {
             settle(&robot, 900);
 
             let Some(pill) = scroll_to_button(&robot, "Sort filter pill", 260.0) else {
-                fail(&robot, "sort filter stage not found");
+                robot_exit::fail_and_await_shutdown(&robot, &FAILED, "sort filter stage not found");
             };
             let (px, py) = center(pill);
 
@@ -65,16 +63,18 @@ fn main() -> ExitCode {
 
             let Some(first_materialized) = lumas.iter().position(|&l| l >= MATERIALIZED_LUMA_FLOOR)
             else {
-                fail(
+                robot_exit::fail_and_await_shutdown(
                     &robot,
+                    &FAILED,
                     "droplet face never materialized over the pill (probe point missed)",
                 );
             };
             let base = lumas[first_materialized];
             for (index, &later) in lumas.iter().enumerate().skip(first_materialized + 1) {
                 if later - base > MAX_LATER_BRIGHTENING {
-                    fail(
+                    robot_exit::fail_and_await_shutdown(
                         &robot,
+                        &FAILED,
                         &format!(
                             "static glass face brightened after its first composite \
                              (self-feedback): {base:.1} at {}ms -> {later:.1} at {}ms",
@@ -89,11 +89,7 @@ fn main() -> ExitCode {
         })
         .try_run(app::combined_app)
         .expect("launch backdrop feedback runner");
-    if FAILED.load(Ordering::Relaxed) {
-        ExitCode::FAILURE
-    } else {
-        ExitCode::SUCCESS
-    }
+    robot_exit::exit_code(&FAILED)
 }
 
 fn set_tab_hook(name: String, argument: String) -> Result<Option<String>, String> {
@@ -168,17 +164,4 @@ fn sample_rgb(shot: &cranpose::RobotScreenshot, x: f32, y: f32) -> [u8; 3] {
 
 fn luma(rgb: [u8; 3]) -> f32 {
     0.2126 * rgb[0] as f32 + 0.7152 * rgb[1] as f32 + 0.0722 * rgb[2] as f32
-}
-
-fn fail(robot: &cranpose::Robot, message: &str) -> ! {
-    println!("FATAL: {message}");
-    FAILED.store(true, Ordering::Relaxed);
-    std::thread::spawn(|| {
-        std::thread::sleep(Duration::from_secs(15));
-        std::process::exit(1);
-    });
-    let _ = robot.exit();
-    loop {
-        std::thread::sleep(Duration::from_secs(60));
-    }
 }

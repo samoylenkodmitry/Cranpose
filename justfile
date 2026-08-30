@@ -142,8 +142,16 @@ duplication-gate base="origin/main":
 # backtrace from a failing gate is readable.
 
 # The workspace test suite.
+#
+# `--no-fail-fast` because cargo otherwise stops at the first test binary that
+# fails, and the ~129 remaining binaries report nothing. On samarch-1 that is
+# not hypothetical: `cranpose-render-wgpu --test pass_timing_report` segfaults
+# from an environmental GPU fault, and every crate after it in the run
+# silently never executes while the gate reports one failure. The same shape
+# as a step that stops its job -- one problem hides the rest, and the fix
+# costs a full second run to find the second one.
 test:
-    cargo test --profile ci --workspace
+    cargo test --profile ci --workspace --no-fail-fast
 
 # Feature permutations of the core crate that the default build does not cover.
 test-features:
@@ -227,7 +235,7 @@ typos:
 
 # Workspace, lockfile and isolated-demo versions must agree.
 versions:
-    python3 scripts/check_cranpose_versions.py
+    cargo xtask versions
 
 # Everything the architecture-budget job enforces.
 # This is the heavy job on the machine the robot suite measures on --
@@ -318,16 +326,18 @@ robot-gpu:
       --sequential \
       --skip robot_underline_screenshot \
       --skip robot_text_strikeout_presented \
-      --skip robot_leetcodedaily_full_layout_scroll_stability
+      --skip robot_leetcodedaily_full_layout_scroll_stability \
+      --skip robot_glass_backdrop_scroll_stability
 
-# CI's software-present half: exactly the three captures excluded above.
+# CI's software-present half: exactly the four captures excluded above.
 robot-captures:
     WGPU_BACKEND=gl LIBGL_ALWAYS_SOFTWARE=1 \
       xvfb-run -a -s "-screen 0 1600x1200x24" ./run_robot_test.sh \
       --sequential \
       --example robot_underline_screenshot \
       --example robot_text_strikeout_presented \
-      --example robot_leetcodedaily_full_layout_scroll_stability
+      --example robot_leetcodedaily_full_layout_scroll_stability \
+      --example robot_glass_backdrop_scroll_stability
 
 # Render the liquid-glass cheatsheet montages.
 cheatsheets:

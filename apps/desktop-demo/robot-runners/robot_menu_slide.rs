@@ -1,8 +1,6 @@
-use std::{
-    process::ExitCode,
-    sync::atomic::{AtomicBool, Ordering},
-    time::Duration,
-};
+mod robot_exit;
+
+use std::{process::ExitCode, sync::atomic::AtomicBool, time::Duration};
 
 use cranpose::{
     widgets::{BasicTextFieldOptions, BasicTextFieldWithOptions, Box as CBox, BoxSpec},
@@ -61,14 +59,19 @@ fn main() -> ExitCode {
             robot.touch_down(press_x, line_mid).expect("press down");
             std::thread::sleep(Duration::from_millis(250));
             if find_text_in_semantics(&robot, "Copy").is_some() {
-                fail(&robot, "menu appeared before the long-press threshold");
+                robot_exit::fail_and_await_shutdown(
+                    &robot,
+                    &FAILED,
+                    "menu appeared before the long-press threshold",
+                );
             }
             std::thread::sleep(Duration::from_millis(600));
 
             let menu_up_while_down = find_text_in_semantics(&robot, "Copy").is_some();
             if !menu_up_while_down {
-                fail(
+                robot_exit::fail_and_await_shutdown(
                     &robot,
+                    &FAILED,
                     "menu did not materialize during the hold (finger still down)",
                 );
             }
@@ -80,8 +83,9 @@ fn main() -> ExitCode {
             let accent_pixels = count_accentish(&shot, FIELD_X + prefix, FIELD_Y, word, 20.0);
             println!("menu_up_while_down={menu_up_while_down} accent_pixels={accent_pixels}");
             if accent_pixels < 60 {
-                fail(
+                robot_exit::fail_and_await_shutdown(
                     &robot,
+                    &FAILED,
                     &format!("no selection highlight after the long-press ({accent_pixels} px)"),
                 );
             }
@@ -92,8 +96,13 @@ fn main() -> ExitCode {
                 .expect("move mouse to second word");
             robot.mouse_down().expect("mouse long-press down");
             std::thread::sleep(Duration::from_millis(750));
-            let copy = find_text_in_semantics(&robot, "Copy")
-                .unwrap_or_else(|| fail(&robot, "menu absent during the second hold"));
+            let copy = find_text_in_semantics(&robot, "Copy").unwrap_or_else(|| {
+                robot_exit::fail_and_await_shutdown(
+                    &robot,
+                    &FAILED,
+                    "menu absent during the second hold",
+                )
+            });
             let (copy_cx, copy_cy) = (copy.0 + copy.2 * 0.5, copy.1 + copy.3 * 0.5);
             robot
                 .mouse_move((press_x + copy_cx) * 0.5, (line_mid + copy_cy) * 0.5)
@@ -105,8 +114,9 @@ fn main() -> ExitCode {
             std::thread::sleep(Duration::from_millis(300));
             let _ = robot.wait_for_idle();
             if find_text_in_semantics(&robot, "Copy").is_some() {
-                fail(
+                robot_exit::fail_and_await_shutdown(
                     &robot,
+                    &FAILED,
                     "lifting on Copy did not fire it (menu still open after release)",
                 );
             }
@@ -145,24 +155,7 @@ fn main() -> ExitCode {
         })
         .expect("launch menu slide runner");
 
-    if FAILED.load(Ordering::Relaxed) {
-        ExitCode::FAILURE
-    } else {
-        ExitCode::SUCCESS
-    }
-}
-
-fn fail(robot: &cranpose::Robot, message: &str) -> ! {
-    println!("FATAL: {message}");
-    FAILED.store(true, Ordering::Relaxed);
-    std::thread::spawn(|| {
-        std::thread::sleep(Duration::from_secs(15));
-        std::process::exit(1);
-    });
-    let _ = robot.exit();
-    loop {
-        std::thread::sleep(Duration::from_secs(60));
-    }
+    robot_exit::exit_code(&FAILED)
 }
 
 fn count_accentish(
