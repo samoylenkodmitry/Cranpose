@@ -441,6 +441,40 @@ def changed_ranges(base: str, pathspec: str = "*.rs") -> dict[str, list[tuple[in
     return semantic_ranges(hunk_spans, read_old, read_new)
 
 
+def write_old_blobs(base_sha: str, files: list[str], dest_root: Path) -> list[str]:
+    """Write each of `files` as it stood at `base_sha` into `dest_root`,
+    preserving relative paths, and return the subset that existed there.
+
+    Some analysis tools (`rust-code-analysis-cli`, `jscpd`) need a real file
+    on disk, take a directory or path list rather than arbitrary text, and
+    report results keyed by relative path -- comparing "before" against
+    "after" for one of them means giving it an actual pre-change checkout to
+    point at, not just the text `changed_ranges`'s own `read_old` reads
+    in-process for its own, per-hunk comparison. Preserving the relative
+    path (rather than flattening into `dest_root` directly) is what lets the
+    tool's own report be matched back to `changed_ranges`'s keys afterward.
+
+    A file the diff added did not exist at `base_sha` and is skipped: there
+    is nothing to check it against, and asking `git show` for it would only
+    fail.
+    """
+    written: list[str] = []
+    for f in files:
+        blob = subprocess.run(
+            ["git", "show", f"{base_sha}:{f}"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+        )
+        if blob.returncode != 0:
+            continue
+        dest = dest_root / f
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(blob.stdout)
+        written.append(f)
+    return written
+
+
 def cargo_bin_dir() -> Path:
     """Where `cargo install` puts binaries -- $CARGO_HOME/bin, or ~/.cargo/bin.
 
