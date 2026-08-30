@@ -227,7 +227,7 @@ typos:
 
 # Workspace, lockfile and isolated-demo versions must agree.
 versions:
-    python3 scripts/check_cranpose_versions.py
+    cargo xtask versions
 
 # Everything the architecture-budget job enforces.
 # This is the heavy job on the machine the robot suite measures on --

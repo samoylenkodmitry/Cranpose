@@ -5,7 +5,10 @@ use std::{
     fs, io,
     path::{Path, PathBuf},
     process::{Command, ExitCode},
+    sync::LazyLock,
 };
+
+use regex::{Captures, Regex};
 
 fn main() -> ExitCode {
     match run(env::args().skip(1).collect()) {
@@ -44,6 +47,21 @@ fn run(args: Vec<String>) -> Result<(), String> {
             Ok(())
         }
         "dependency-budget" => check_dependency_budget(DependencyBudgetOptions::parse(&args[1..])?),
+        "versions" if args[1..].iter().any(|arg| arg == "--help" || arg == "-h") => {
+            print_versions_usage();
+            Ok(())
+        }
+        "versions" => {
+            if let Some(extra) = args.get(1) {
+                return Err(format!("unknown versions option `{extra}`"));
+            }
+            check_versions()
+        }
+        "sync-isolated-demo" if args[1..].iter().any(|arg| arg == "--help" || arg == "-h") => {
+            print_sync_isolated_demo_usage();
+            Ok(())
+        }
+        "sync-isolated-demo" => sync_isolated_demo(SyncIsolatedDemoOptions::parse(&args[1..])?),
         "help" | "-h" | "--help" => {
             print_usage();
             Ok(())
@@ -61,6 +79,8 @@ fn print_usage() {
            binary-size         Build or inspect a binary and print its file size\n\
            dist-min            Build the smallest binary (nightly build-std + immediate-abort)\n\
            dependency-budget   Fail if new duplicate dependency families appear\n\
+           versions            Check that workspace, lockfile and isolated-demo versions agree\n\
+           sync-isolated-demo  Point apps/isolated-demo at a published cranpose version\n\
          \n\
          bundle-macos options:\n\
            --package <name>       Cargo package to build [desktop-app]\n\
@@ -73,6 +93,28 @@ fn print_usage() {
            --target <triple>      Cargo target triple\n\
            --no-build             Bundle an already built binary\n\
            --sign-identity <id>   codesign identity to seal the bundle [ad-hoc \"-\"]"
+    );
+}
+
+fn print_versions_usage() {
+    eprintln!(
+        "usage: cargo xtask versions\n\
+         \n\
+         Checks that the workspace version, Cargo.lock, and apps/isolated-demo\n\
+         (its manifest and its own lockfile) all agree on the same cranpose\n\
+         package version."
+    );
+}
+
+fn print_sync_isolated_demo_usage() {
+    eprintln!(
+        "usage: cargo xtask sync-isolated-demo [version]\n\
+         \n\
+         Points apps/isolated-demo/Cargo.toml at a published cranpose version.\n\
+         With no argument, syncs to the current workspace version. A leading\n\
+         'v' (as in a release tag) is stripped. Run `cargo update --manifest-path\n\
+         apps/isolated-demo/Cargo.toml -p cranpose -p cranpose-core` afterwards\n\
+         to move the demo's lockfile."
     );
 }
 
@@ -1519,6 +1561,387 @@ fn print_recorded_duplicate_debt(scope: DependencyBudgetScope, recorded_debt: &[
     }
 }
 
+/// What a Cargo.lock records for a crate resolved from crates.io. A lockfile
+/// entry without it was resolved from somewhere else -- a `[patch]`, a path
+/// dependency, a git dependency.
+const CRATES_IO_SOURCE: &str = "registry+https://github.com/rust-lang/crates.io-index";
+
+fn load_toml(path: &Path) -> Result<toml::Value, String> {
+    let text = fs::read_to_string(path)
+        .map_err(|error| format!("failed to read `{}`: {error}", path.display()))?;
+    toml::from_str(&text).map_err(|error| format!("failed to parse `{}`: {error}", path.display()))
+}
+
+fn workspace_package_version(root: &Path) -> Result<String, String> {
+    let manifest_path = root.join("Cargo.toml");
+    let manifest = load_toml(&manifest_path)?;
+    manifest
+        .get("workspace")
+        .and_then(toml::Value::as_table)
+        .and_then(|workspace| workspace.get("package"))
+        .and_then(toml::Value::as_table)
+        .and_then(|package| package.get("version"))
+        .and_then(toml::Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            format!(
+                "{} has no workspace.package.version",
+                manifest_path.display()
+            )
+        })
+}
+
+fn dependency_version(spec: &toml::Value) -> Option<String> {
+    match spec {
+        toml::Value::String(version) => Some(version.clone()),
+        toml::Value::Table(table) => table
+            .get("version")
+            .and_then(toml::Value::as_str)
+            .map(str::to_owned),
+        _ => None,
+    }
+}
+
+fn display_version(version: &Option<String>) -> &str {
+    version.as_deref().unwrap_or("None")
+}
+
+/// One `[[package]]` entry from a Cargo.lock, filtered to cranpose crates.
+struct LockPackage {
+    name: String,
+    version: Option<String>,
+    source: Option<String>,
+    checksum: Option<String>,
+}
+
+fn cranpose_lock_packages(lockfile: &toml::Value) -> Vec<LockPackage> {
+    let Some(packages) = lockfile.get("package").and_then(toml::Value::as_array) else {
+        return Vec::new();
+    };
+
+    packages
+        .iter()
+        .filter_map(toml::Value::as_table)
+        .filter_map(|package| {
+            let name = package.get("name")?.as_str()?;
+            if !name.starts_with("cranpose") {
+                return None;
+            }
+            Some(LockPackage {
+                name: name.to_owned(),
+                version: package
+                    .get("version")
+                    .and_then(toml::Value::as_str)
+                    .map(str::to_owned),
+                source: package
+                    .get("source")
+                    .and_then(toml::Value::as_str)
+                    .map(str::to_owned),
+                checksum: package
+                    .get("checksum")
+                    .and_then(toml::Value::as_str)
+                    .map(str::to_owned),
+            })
+        })
+        .collect()
+}
+
+fn lock_versions(packages: &[LockPackage]) -> BTreeMap<String, BTreeSet<String>> {
+    let mut versions = BTreeMap::<String, BTreeSet<String>>::new();
+    for package in packages {
+        if let Some(version) = &package.version {
+            versions
+                .entry(package.name.clone())
+                .or_default()
+                .insert(version.clone());
+        }
+    }
+    versions
+}
+
+/// `[dependencies]` plus every `[target.'cfg(..)'.dependencies]` table in a
+/// manifest -- everywhere a crate dependency version can be declared.
+fn dependency_tables(manifest: &toml::Value) -> Vec<&toml::Table> {
+    let mut tables = Vec::new();
+    if let Some(dependencies) = manifest.get("dependencies").and_then(toml::Value::as_table) {
+        tables.push(dependencies);
+    }
+    if let Some(targets) = manifest.get("target").and_then(toml::Value::as_table) {
+        for target in targets.values() {
+            if let Some(target_dependencies) =
+                target.get("dependencies").and_then(toml::Value::as_table)
+            {
+                tables.push(target_dependencies);
+            }
+        }
+    }
+    tables
+}
+
+fn sorted_cranpose_dependencies(table: &toml::Table) -> Vec<(&String, &toml::Value)> {
+    let mut entries = table
+        .iter()
+        .filter(|(name, _)| name.starts_with("cranpose"))
+        .collect::<Vec<_>>();
+    entries.sort_by_key(|(name, _)| name.as_str());
+    entries
+}
+
+/// Assert a lockfile resolves every Cranpose crate from crates.io.
+///
+/// `apps/isolated-demo` is the canary that proves a release is consumable by
+/// an outside project, so its lockfile has to pin the *published* crates. A
+/// local `[patch]` -- the one `cargo xtask binary-size
+/// --patch-workspace-cranpose` applies -- makes cargo drop the `source` and
+/// `checksum` lines, which silently turns the canary into a path build that
+/// verifies nothing.
+fn check_published_lock(
+    path: &Path,
+    relative: &str,
+    workspace_version: &str,
+    failures: &mut Vec<String>,
+) -> Result<(), String> {
+    let lockfile = load_toml(path)?;
+    let packages = cranpose_lock_packages(&lockfile);
+    if packages.is_empty() {
+        failures.push(format!("{relative} locks no cranpose packages"));
+        return Ok(());
+    }
+
+    for package in &packages {
+        let name = &package.name;
+        if package.source.as_deref() != Some(CRATES_IO_SOURCE) {
+            let origin = package.source.as_deref().unwrap_or("a local path");
+            failures.push(format!(
+                "{relative} resolves {name} from {origin}, expected the published crate at {CRATES_IO_SOURCE}"
+            ));
+        } else if package.checksum.is_none() {
+            failures.push(format!("{relative} package {name} has no checksum"));
+        }
+        if package.version.as_deref() != Some(workspace_version) {
+            failures.push(format!(
+                "{relative} package {name} is {}, expected {workspace_version}",
+                display_version(&package.version)
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// `just versions`: workspace, lockfile and `apps/isolated-demo` must all
+/// agree on the same cranpose package version.
+///
+/// Ported from the former `scripts/check_cranpose_versions.py` -- Python's
+/// `tomllib` is 3.11+, so the same commit passed or failed this gate
+/// depending on which `python3` happened to be first on a runner's PATH.
+/// Rust and `toml` (already a build dependency of this workspace) are on
+/// every runner that can build the crate at all, so this check can no longer
+/// depend on ambient interpreter state.
+fn check_versions() -> Result<(), String> {
+    let root = workspace_root()?;
+    check_versions_at(&root)
+}
+
+/// The body of `check_versions`, taking the workspace root explicitly so
+/// tests can point it at a fixture directory instead of shelling out to
+/// `cargo metadata` for the real workspace.
+fn check_versions_at(root: &Path) -> Result<(), String> {
+    let mut failures = Vec::new();
+
+    let root_manifest = load_toml(&root.join("Cargo.toml"))?;
+    let workspace = root_manifest
+        .get("workspace")
+        .and_then(toml::Value::as_table)
+        .ok_or_else(|| "Cargo.toml has no [workspace] table".to_owned())?;
+    let workspace_version = workspace
+        .get("package")
+        .and_then(toml::Value::as_table)
+        .and_then(|package| package.get("version"))
+        .and_then(toml::Value::as_str)
+        .ok_or_else(|| "Cargo.toml has no workspace.package.version".to_owned())?
+        .to_owned();
+
+    let mut expected_package_names = BTreeSet::new();
+    if let Some(dependencies) = workspace
+        .get("dependencies")
+        .and_then(toml::Value::as_table)
+    {
+        for (name, spec) in sorted_cranpose_dependencies(dependencies) {
+            expected_package_names.insert(name.clone());
+            let version = dependency_version(spec);
+            if version.as_deref() != Some(workspace_version.as_str()) {
+                failures.push(format!(
+                    "workspace dependency {name} is {}, expected {workspace_version}",
+                    display_version(&version)
+                ));
+            }
+        }
+    }
+
+    let root_lock = load_toml(&root.join("Cargo.lock"))?;
+    let root_versions = lock_versions(&cranpose_lock_packages(&root_lock));
+    let root_lock_names: BTreeSet<String> = root_versions.keys().cloned().collect();
+    for name in expected_package_names.difference(&root_lock_names) {
+        failures.push(format!("Cargo.lock is missing workspace package {name}"));
+    }
+    for (name, versions) in &root_versions {
+        if !(versions.len() == 1 && versions.contains(&workspace_version)) {
+            let found = versions.iter().cloned().collect::<Vec<_>>().join(", ");
+            failures.push(format!(
+                "Cargo.lock package {name} has {found}, expected {workspace_version}"
+            ));
+        }
+    }
+
+    let isolated_manifest = load_toml(&root.join("apps/isolated-demo/Cargo.toml"))?;
+    for table in dependency_tables(&isolated_manifest) {
+        for (name, spec) in sorted_cranpose_dependencies(table) {
+            let version = dependency_version(spec);
+            if version.as_deref() != Some(workspace_version.as_str()) {
+                failures.push(format!(
+                    "apps/isolated-demo dependency {name} is {}, expected {workspace_version}",
+                    display_version(&version)
+                ));
+            }
+        }
+    }
+
+    check_published_lock(
+        &root.join("apps/isolated-demo/Cargo.lock"),
+        "apps/isolated-demo/Cargo.lock",
+        &workspace_version,
+        &mut failures,
+    )?;
+
+    if failures.is_empty() {
+        println!("cranpose package versions are aligned at {workspace_version}");
+        Ok(())
+    } else {
+        Err(failures.join("\n"))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SyncIsolatedDemoOptions {
+    version: Option<String>,
+}
+
+impl SyncIsolatedDemoOptions {
+    fn parse(args: &[String]) -> Result<Self, String> {
+        let mut version = None;
+        for arg in args {
+            if arg.starts_with('-') {
+                return Err(format!("unknown sync-isolated-demo option `{arg}`"));
+            }
+            if version.is_some() {
+                return Err(format!("unexpected argument `{arg}`"));
+            }
+            version = Some(arg.clone());
+        }
+        Ok(Self { version })
+    }
+}
+
+/// `cranpose[-foo] = { ..., version = "x", ... }` (inline table) in
+/// `[dependencies]` or any `[target.'cfg(..)'.dependencies]`.
+static INLINE_TABLE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"(?m)(?P<head>^[ \t]*cranpose[\w-]*[ \t]*=[ \t]*\{[^}\n]*?version[ \t]*=[ \t]*")(?P<version>[^"]+)(?P<tail>")"#,
+    )
+    .expect("INLINE_TABLE_RE is a valid pattern")
+});
+
+/// `cranpose[-foo] = "x"` (bare string) in the same places.
+static BARE_STRING_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?m)(?P<head>^[ \t]*cranpose[\w-]*[ \t]*=[ \t]*")(?P<version>[^"]+)(?P<tail>")"#)
+        .expect("BARE_STRING_RE is a valid pattern")
+});
+
+static SEMVER_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^\d+\.\d+\.\d+([-+][0-9A-Za-z.\-]+)?$").expect("SEMVER_RE is a valid pattern")
+});
+
+/// Rewrite every `cranpose*` dependency line `pattern` matches to `target_version`,
+/// recording `"name old -> new"` for each line whose version actually changes.
+///
+/// Matches whose version already equals `target_version` are rewritten to the
+/// same text (a no-op) and are not recorded, mirroring the Python original,
+/// which only reported changed lines.
+fn rewrite_cranpose_versions(
+    pattern: &Regex,
+    text: &str,
+    target_version: &str,
+    changed: &mut Vec<String>,
+) -> String {
+    pattern
+        .replace_all(text, |captures: &Captures| {
+            let whole = captures.get(0).expect("group 0 always matches").as_str();
+            let name = whole.split_once('=').map_or(whole, |(name, _)| name).trim();
+            let old_version = &captures["version"];
+            if old_version != target_version {
+                changed.push(format!("{name} {old_version} -> {target_version}"));
+            }
+            format!("{}{target_version}{}", &captures["head"], &captures["tail"])
+        })
+        .into_owned()
+}
+
+/// `cargo xtask sync-isolated-demo`: point `apps/isolated-demo/Cargo.toml` at
+/// a published cranpose version.
+///
+/// Ported from the former `scripts/sync_isolated_demo.py`. The isolated demo
+/// deliberately consumes cranpose from crates.io (it is the canary that
+/// proves a release is usable by a real downstream crate), so it can only be
+/// moved onto a release *after* that release is on the registry --
+/// `publish.yml`'s `sync_versions` job defers the bump for exactly that
+/// reason, and `bump_isolated_demo` runs this once the crates are live.
+///
+/// Rewrites the demo's manifest with regex substitution rather than a
+/// round-tripped TOML re-serialization, so comments and formatting elsewhere
+/// in the file survive untouched. Run `cargo update --manifest-path
+/// apps/isolated-demo/Cargo.toml -p cranpose -p cranpose-core` afterwards to
+/// move the demo's lockfile (that step needs the version to be resolvable).
+fn sync_isolated_demo(options: SyncIsolatedDemoOptions) -> Result<(), String> {
+    let root = workspace_root()?;
+    sync_isolated_demo_at(&root, options)
+}
+
+/// The body of `sync_isolated_demo`, taking the workspace root explicitly so
+/// tests can point it at a fixture directory instead of shelling out to
+/// `cargo metadata` for the real workspace.
+fn sync_isolated_demo_at(root: &Path, options: SyncIsolatedDemoOptions) -> Result<(), String> {
+    let version = match options.version {
+        Some(version) => version,
+        None => workspace_package_version(root)?,
+    };
+    let version = version.strip_prefix('v').unwrap_or(&version);
+    if !SEMVER_RE.is_match(version) {
+        return Err(format!("Not a semver version: '{version}'"));
+    }
+
+    let manifest_path = root.join("apps/isolated-demo/Cargo.toml");
+    let manifest = fs::read_to_string(&manifest_path)
+        .map_err(|error| format!("failed to read `{}`: {error}", manifest_path.display()))?;
+
+    let mut changed = Vec::new();
+    let after_inline_tables =
+        rewrite_cranpose_versions(&INLINE_TABLE_RE, &manifest, version, &mut changed);
+    let rewritten =
+        rewrite_cranpose_versions(&BARE_STRING_RE, &after_inline_tables, version, &mut changed);
+
+    if changed.is_empty() {
+        println!("apps/isolated-demo already depends on cranpose {version}.");
+        return Ok(());
+    }
+
+    fs::write(&manifest_path, rewritten)
+        .map_err(|error| format!("failed to write `{}`: {error}", manifest_path.display()))?;
+    for line in &changed {
+        println!("apps/isolated-demo: {line}");
+    }
+    Ok(())
+}
+
 #[cfg(all(test, unix))]
 fn make_executable(path: &Path) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
@@ -2304,6 +2727,442 @@ cranpose v0.1.0
         assert!(error.contains("lies outside package"), "{error}");
     }
 
+    const FIXTURE_VERSION: &str = "0.1.105";
+
+    fn write_root_manifest(root: &Path, workspace_version: &str, dependency_version: &str) {
+        let manifest = format!(
+            "[workspace]\n\
+             members = [\"crates/cranpose\"]\n\
+             \n\
+             [workspace.package]\n\
+             version = \"{workspace_version}\"\n\
+             \n\
+             [workspace.dependencies]\n\
+             cranpose = {{ path = \"crates/cranpose\", version = \"{dependency_version}\" }}\n"
+        );
+        fs::write(root.join("Cargo.toml"), manifest).expect("write root manifest");
+    }
+
+    /// A root `Cargo.lock` entry for a workspace member: no `source` or
+    /// `checksum`, exactly like a path dependency the workspace resolves
+    /// itself (see the real `Cargo.lock`, which carries neither for its own
+    /// `cranpose` packages).
+    fn write_root_lock(root: &Path, version: &str) {
+        let lock =
+            format!("version = 4\n\n[[package]]\nname = \"cranpose\"\nversion = \"{version}\"\n");
+        fs::write(root.join("Cargo.lock"), lock).expect("write root lock");
+    }
+
+    fn write_root_lock_without_cranpose(root: &Path) {
+        let lock = "version = 4\n\n[[package]]\nname = \"log\"\nversion = \"0.4.0\"\n";
+        fs::write(root.join("Cargo.lock"), lock).expect("write root lock");
+    }
+
+    fn write_isolated_manifest(root: &Path, dependency_version: &str) {
+        let dir = root.join("apps/isolated-demo");
+        fs::create_dir_all(&dir).expect("create apps/isolated-demo");
+        let manifest = format!(
+            "[package]\n\
+             name = \"isolated-demo\"\n\
+             version = \"0.1.0\"\n\
+             \n\
+             [dependencies]\n\
+             cranpose = {{ version = \"{dependency_version}\" }}\n"
+        );
+        fs::write(dir.join("Cargo.toml"), manifest).expect("write isolated-demo manifest");
+    }
+
+    fn write_isolated_lock(
+        root: &Path,
+        version: &str,
+        source: Option<&str>,
+        checksum: Option<&str>,
+    ) {
+        let dir = root.join("apps/isolated-demo");
+        fs::create_dir_all(&dir).expect("create apps/isolated-demo");
+        let mut lock =
+            format!("version = 4\n\n[[package]]\nname = \"cranpose\"\nversion = \"{version}\"\n");
+        if let Some(source) = source {
+            lock.push_str(&format!("source = \"{source}\"\n"));
+        }
+        if let Some(checksum) = checksum {
+            lock.push_str(&format!("checksum = \"{checksum}\"\n"));
+        }
+        fs::write(dir.join("Cargo.lock"), lock).expect("write isolated-demo lock");
+    }
+
+    fn write_isolated_lock_without_cranpose(root: &Path) {
+        let dir = root.join("apps/isolated-demo");
+        fs::create_dir_all(&dir).expect("create apps/isolated-demo");
+        let lock = "version = 4\n\n[[package]]\nname = \"log\"\nversion = \"0.4.0\"\n";
+        fs::write(dir.join("Cargo.lock"), lock).expect("write isolated-demo lock");
+    }
+
+    /// Every file `check_versions_at` reads, all agreeing at `FIXTURE_VERSION`.
+    fn write_aligned_versions_fixture(root: &Path) {
+        write_root_manifest(root, FIXTURE_VERSION, FIXTURE_VERSION);
+        write_root_lock(root, FIXTURE_VERSION);
+        write_isolated_manifest(root, FIXTURE_VERSION);
+        write_isolated_lock(
+            root,
+            FIXTURE_VERSION,
+            Some(CRATES_IO_SOURCE),
+            Some("deadbeef"),
+        );
+    }
+
+    #[test]
+    fn versions_pass_when_everything_aligned() {
+        let root = unique_temp_dir();
+        write_aligned_versions_fixture(&root);
+
+        check_versions_at(&root).expect("aligned versions must pass");
+    }
+
+    #[test]
+    fn versions_fail_when_workspace_dependency_diverges() {
+        let root = unique_temp_dir();
+        write_aligned_versions_fixture(&root);
+        write_root_manifest(&root, FIXTURE_VERSION, "0.1.104");
+
+        let error = check_versions_at(&root).expect_err("a stale workspace dependency must fail");
+
+        assert!(
+            error.contains("workspace dependency cranpose is 0.1.104, expected 0.1.105"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn versions_fail_when_lockfile_version_diverges() {
+        let root = unique_temp_dir();
+        write_aligned_versions_fixture(&root);
+        write_root_lock(&root, "0.1.104");
+
+        let error = check_versions_at(&root).expect_err("a stale Cargo.lock entry must fail");
+
+        assert!(
+            error.contains("Cargo.lock package cranpose has 0.1.104, expected 0.1.105"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn versions_fail_when_lockfile_is_missing_a_workspace_package() {
+        let root = unique_temp_dir();
+        write_aligned_versions_fixture(&root);
+        write_root_lock_without_cranpose(&root);
+
+        let error = check_versions_at(&root).expect_err("a missing lock entry must fail");
+
+        assert!(
+            error.contains("Cargo.lock is missing workspace package cranpose"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn versions_fail_when_isolated_demo_manifest_diverges() {
+        let root = unique_temp_dir();
+        write_aligned_versions_fixture(&root);
+        write_isolated_manifest(&root, "0.1.104");
+
+        let error = check_versions_at(&root).expect_err("a stale isolated-demo manifest must fail");
+
+        assert!(
+            error.contains("apps/isolated-demo dependency cranpose is 0.1.104, expected 0.1.105"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn versions_fail_when_isolated_lock_has_no_cranpose_packages() {
+        let root = unique_temp_dir();
+        write_aligned_versions_fixture(&root);
+        write_isolated_lock_without_cranpose(&root);
+
+        let error = check_versions_at(&root)
+            .expect_err("a canary lockfile with no cranpose crates must fail");
+
+        assert!(
+            error.contains("apps/isolated-demo/Cargo.lock locks no cranpose packages"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn versions_fail_when_isolated_lock_resolves_from_a_local_path() {
+        let root = unique_temp_dir();
+        write_aligned_versions_fixture(&root);
+        write_isolated_lock(&root, FIXTURE_VERSION, None, None);
+
+        let error = check_versions_at(&root)
+            .expect_err("a patched/path-resolved canary lockfile must fail");
+
+        assert!(
+            error.contains(
+                "apps/isolated-demo/Cargo.lock resolves cranpose from a local path, expected \
+                 the published crate at registry+https://github.com/rust-lang/crates.io-index"
+            ),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn versions_fail_when_isolated_lock_resolves_from_a_patch() {
+        let root = unique_temp_dir();
+        write_aligned_versions_fixture(&root);
+        write_isolated_lock(
+            &root,
+            FIXTURE_VERSION,
+            Some("git+https://example.com/cranpose"),
+            None,
+        );
+
+        let error = check_versions_at(&root).expect_err("a git-resolved canary lockfile must fail");
+
+        assert!(
+            error.contains("resolves cranpose from git+https://example.com/cranpose, expected"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn versions_fail_when_isolated_lock_has_no_checksum() {
+        let root = unique_temp_dir();
+        write_aligned_versions_fixture(&root);
+        write_isolated_lock(&root, FIXTURE_VERSION, Some(CRATES_IO_SOURCE), None);
+
+        let error =
+            check_versions_at(&root).expect_err("a canary lockfile missing a checksum must fail");
+
+        assert!(
+            error.contains("apps/isolated-demo/Cargo.lock package cranpose has no checksum"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn versions_fail_when_isolated_lock_version_diverges() {
+        let root = unique_temp_dir();
+        write_aligned_versions_fixture(&root);
+        write_isolated_lock(&root, "0.1.104", Some(CRATES_IO_SOURCE), Some("deadbeef"));
+
+        let error =
+            check_versions_at(&root).expect_err("a stale canary lockfile version must fail");
+
+        assert!(
+            error.contains(
+                "apps/isolated-demo/Cargo.lock package cranpose is 0.1.104, expected 0.1.105"
+            ),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn dependency_version_reads_bare_strings_and_inline_tables() {
+        let bare: toml::Value = toml::from_str("v = \"1.2.3\"").expect("parse bare string");
+        let table: toml::Value =
+            toml::from_str("v = { path = \"crates/cranpose\", version = \"1.2.3\" }")
+                .expect("parse inline table");
+        let no_version: toml::Value = toml::from_str("v = { path = \"crates/cranpose\" }")
+            .expect("parse table without version");
+
+        assert_eq!(
+            dependency_version(bare.get("v").expect("v present")),
+            Some("1.2.3".to_owned())
+        );
+        assert_eq!(
+            dependency_version(table.get("v").expect("v present")),
+            Some("1.2.3".to_owned())
+        );
+        assert_eq!(
+            dependency_version(no_version.get("v").expect("v present")),
+            None
+        );
+    }
+
+    #[test]
+    fn lock_versions_groups_by_package_name() {
+        let lock: toml::Value = toml::from_str(
+            "[[package]]\n\
+             name = \"cranpose\"\n\
+             version = \"0.1.0\"\n\
+             \n\
+             [[package]]\n\
+             name = \"cranpose\"\n\
+             version = \"0.1.1\"\n\
+             \n\
+             [[package]]\n\
+             name = \"log\"\n\
+             version = \"0.4.0\"\n",
+        )
+        .expect("parse lockfile");
+
+        let versions = lock_versions(&cranpose_lock_packages(&lock));
+
+        assert_eq!(versions.len(), 1, "only cranpose-prefixed packages count");
+        assert_eq!(
+            versions.get("cranpose"),
+            Some(&BTreeSet::from(["0.1.0".to_owned(), "0.1.1".to_owned()]))
+        );
+    }
+
+    #[test]
+    fn sync_isolated_demo_rewrites_inline_and_bare_dependencies() {
+        let root = unique_temp_dir();
+        write_root_manifest(&root, FIXTURE_VERSION, FIXTURE_VERSION);
+        let manifest_dir = root.join("apps/isolated-demo");
+        fs::create_dir_all(&manifest_dir).expect("create apps/isolated-demo");
+        fs::write(
+            manifest_dir.join("Cargo.toml"),
+            "[dependencies]\n\
+             cranpose = { version = \"0.1.104\" }\n\
+             cranpose-core = \"0.1.104\"\n\
+             log = \"0.4\"\n\
+             \n\
+             [target.'cfg(target_arch = \"wasm32\")'.dependencies]\n\
+             cranpose-platform-web = \"0.1.104\"\n",
+        )
+        .expect("write isolated-demo manifest");
+
+        sync_isolated_demo_at(
+            &root,
+            SyncIsolatedDemoOptions {
+                version: Some("0.1.105".to_owned()),
+            },
+        )
+        .expect("sync must succeed");
+
+        let updated = fs::read_to_string(manifest_dir.join("Cargo.toml")).expect("read manifest");
+        assert!(
+            updated.contains("cranpose = { version = \"0.1.105\" }"),
+            "{updated}"
+        );
+        assert!(updated.contains("cranpose-core = \"0.1.105\""), "{updated}");
+        assert!(
+            updated.contains("cranpose-platform-web = \"0.1.105\""),
+            "target-cfg dependencies must be rewritten too: {updated}"
+        );
+        assert!(
+            updated.contains("log = \"0.4\""),
+            "non-cranpose dependencies must be left alone: {updated}"
+        );
+    }
+
+    #[test]
+    fn sync_isolated_demo_is_a_noop_when_already_synced() {
+        let root = unique_temp_dir();
+        write_root_manifest(&root, FIXTURE_VERSION, FIXTURE_VERSION);
+        let manifest_dir = root.join("apps/isolated-demo");
+        fs::create_dir_all(&manifest_dir).expect("create apps/isolated-demo");
+        let manifest_text = "[dependencies]\ncranpose = { version = \"0.1.105\" }\n";
+        fs::write(manifest_dir.join("Cargo.toml"), manifest_text).expect("write manifest");
+
+        sync_isolated_demo_at(
+            &root,
+            SyncIsolatedDemoOptions {
+                version: Some("0.1.105".to_owned()),
+            },
+        )
+        .expect("sync must succeed");
+
+        let updated = fs::read_to_string(manifest_dir.join("Cargo.toml")).expect("read manifest");
+        assert_eq!(
+            updated, manifest_text,
+            "an already-synced manifest must be left byte-for-byte alone"
+        );
+    }
+
+    #[test]
+    fn sync_isolated_demo_defaults_to_the_workspace_version() {
+        let root = unique_temp_dir();
+        write_root_manifest(&root, "0.1.107", "0.1.107");
+        let manifest_dir = root.join("apps/isolated-demo");
+        fs::create_dir_all(&manifest_dir).expect("create apps/isolated-demo");
+        fs::write(
+            manifest_dir.join("Cargo.toml"),
+            "[dependencies]\ncranpose = { version = \"0.1.104\" }\n",
+        )
+        .expect("write manifest");
+
+        sync_isolated_demo_at(&root, SyncIsolatedDemoOptions { version: None })
+            .expect("sync must succeed");
+
+        let updated = fs::read_to_string(manifest_dir.join("Cargo.toml")).expect("read manifest");
+        assert!(updated.contains("0.1.107"), "{updated}");
+    }
+
+    #[test]
+    fn sync_isolated_demo_strips_a_leading_v() {
+        let root = unique_temp_dir();
+        write_root_manifest(&root, FIXTURE_VERSION, FIXTURE_VERSION);
+        let manifest_dir = root.join("apps/isolated-demo");
+        fs::create_dir_all(&manifest_dir).expect("create apps/isolated-demo");
+        fs::write(
+            manifest_dir.join("Cargo.toml"),
+            "[dependencies]\ncranpose = { version = \"0.1.104\" }\n",
+        )
+        .expect("write manifest");
+
+        sync_isolated_demo_at(
+            &root,
+            SyncIsolatedDemoOptions {
+                version: Some("v0.2.0".to_owned()),
+            },
+        )
+        .expect("sync must succeed");
+
+        let updated = fs::read_to_string(manifest_dir.join("Cargo.toml")).expect("read manifest");
+        assert!(updated.contains("0.2.0"), "{updated}");
+        assert!(
+            !updated.contains("v0.2.0"),
+            "the leading v must be stripped: {updated}"
+        );
+    }
+
+    #[test]
+    fn sync_isolated_demo_rejects_a_non_semver_version() {
+        let root = unique_temp_dir();
+        write_root_manifest(&root, FIXTURE_VERSION, FIXTURE_VERSION);
+        write_isolated_manifest(&root, FIXTURE_VERSION);
+
+        let error = sync_isolated_demo_at(
+            &root,
+            SyncIsolatedDemoOptions {
+                version: Some("not-a-version".to_owned()),
+            },
+        )
+        .expect_err("a non-semver version must be rejected");
+
+        assert!(error.contains("Not a semver version"), "{error}");
+    }
+
+    #[test]
+    fn semver_regex_accepts_prerelease_and_build_metadata() {
+        assert!(SEMVER_RE.is_match("1.2.3"));
+        assert!(SEMVER_RE.is_match("1.2.3-alpha.1"));
+        assert!(SEMVER_RE.is_match("1.2.3+build.5"));
+        assert!(!SEMVER_RE.is_match("1.2"));
+        assert!(!SEMVER_RE.is_match("v1.2.3"));
+        assert!(!SEMVER_RE.is_match("not-a-version"));
+    }
+
+    #[test]
+    fn parse_sync_isolated_demo_options() {
+        let none = SyncIsolatedDemoOptions::parse(&[]).expect("no args parse");
+        assert_eq!(none.version, None);
+
+        let with_version =
+            SyncIsolatedDemoOptions::parse(&["0.1.73".to_owned()]).expect("one arg parses");
+        assert_eq!(with_version.version.as_deref(), Some("0.1.73"));
+
+        SyncIsolatedDemoOptions::parse(&["0.1.73".to_owned(), "0.1.74".to_owned()])
+            .expect_err("two positional arguments must be rejected");
+        SyncIsolatedDemoOptions::parse(&["--bogus".to_owned()])
+            .expect_err("unknown flags must be rejected");
+    }
+
     const MINIMAL_MANIFEST: &str = "\
 [package]
 name = \"isolated-demo\"
@@ -2325,14 +3184,30 @@ name = \"isolated-demo\"
 version = \"0.1.0\"
 ";
 
+    /// A fresh, never-reused scratch directory for a single test.
+    ///
+    /// The wall-clock timestamp alone is not a reliable uniqueness key: `cargo
+    /// test` runs test functions on a thread pool, and a clock whose tick is
+    /// coarser than the time between two threads calling `SystemTime::now()`
+    /// hands them the same nanosecond count. That collision is rare enough to
+    /// hide in a small suite but turned up routinely once enough tests here
+    /// used this helper -- two tests silently shared one directory and
+    /// stomped on each other's fixture files, failing whichever ran second,
+    /// nondeterministically and on whichever test happened to lose the race.
+    /// A monotonic in-process counter guarantees uniqueness regardless of
+    /// clock resolution; the timestamp stays only to make directories sort
+    /// and read chronologically.
     fn unique_temp_dir() -> PathBuf {
+        static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("clock after epoch")
             .as_nanos();
+        let sequence = SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../target/test-output/xtask")
-            .join(format!("cranpose-xtask-test-{nanos}"));
+            .join(format!("cranpose-xtask-test-{nanos}-{sequence}"));
         fs::create_dir_all(&path).expect("create temp dir");
         path
     }

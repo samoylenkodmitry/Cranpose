@@ -445,7 +445,7 @@ jobs:
       # apps/isolated-demo is the canary that proves a release is consumable
       # from crates.io, so `sync_versions` deliberately leaves it alone before
       # publishing (the version does not exist in the registry yet). Bump it
-      # here instead — otherwise check_cranpose_versions.py fails and main goes
+      # here instead — otherwise `cargo xtask versions` fails and main goes
       # red after every release until someone edits it by hand.
       - name: Wait for crates.io to serve the release
         run: |
@@ -479,7 +479,7 @@ jobs:
         run: |
           set -euo pipefail
           version="${TAG_NAME#v}"
-          python3 scripts/sync_isolated_demo.py "$version"
+          cargo xtask sync-isolated-demo "$version"
           # `cargo fetch`, not `cargo update`. The manifest has just been
           # bumped, so the lock no longer satisfies it and something has to
           # re-resolve; the two commands differ in how much.
