@@ -164,7 +164,6 @@ where
                 current_offset,
                 content_end,
                 first_item_index,
-                start_time,
             )
             .unwrap_or(first_item_index);
         let backfilled = effective_first_index != first_item_index;
@@ -230,7 +229,6 @@ where
         current_offset: f32,
         viewport_end: f32,
         first_item_index: usize,
-        start_time: Instant,
     ) -> Option<usize> {
         if current_index < self.items_count || first_item_index == 0 || visible_items.is_empty() {
             return None;
@@ -244,10 +242,10 @@ where
         }
         let mut top = visible_items[0].offset;
         let mut idx = first_item_index;
-        while idx > 0 && top > self.config.before_content_padding + 0.5 {
-            if start_time.elapsed() > DEFAULT_TIME_BUDGET {
-                break;
-            }
+        while idx > 0
+            && top > self.config.before_content_padding + 0.5
+            && visible_items.len() < MAX_VISIBLE_ITEMS_SAFETY
+        {
             idx -= 1;
             let mut item = self
                 .take_pre_measured(idx)
@@ -476,6 +474,34 @@ mod tests {
         assert_eq!(
             measured, 5,
             "configured beyond-bounds rows are part of deterministic retained layout"
+        );
+    }
+
+    #[test]
+    fn fill_end_gap_backfills_fully_even_when_item_measurement_is_slow() {
+        let config = LazyListMeasureConfig::default();
+        let mut measure = |i| {
+            std::thread::sleep(Duration::from_millis(2));
+            create_test_item(i, 40.0)
+        };
+        let mut measurer =
+            ItemMeasurer::new(&mut measure, &config, 20, 500.0, 40.0, VecDeque::new())
+                .with_include_before_beyond_bounds(false);
+
+        let pass = measurer.measure_all(15, 0.0);
+
+        assert_eq!(
+            pass.start_index, 7,
+            "the backfill must pull in every preceding item needed to fill the \
+             grown viewport, not stop partway because measuring was slow: {pass:?}"
+        );
+        let indices: Vec<usize> = pass.items.iter().map(|item| item.index).collect();
+        assert_eq!(indices, (7..=19).collect::<Vec<_>>());
+        let last = pass.items.last().expect("measured items");
+        let last_end = last.offset + last.main_axis_size;
+        assert!(
+            (last_end - 500.0).abs() < 0.01,
+            "content bottom must align with the grown viewport end: {last_end}"
         );
     }
 

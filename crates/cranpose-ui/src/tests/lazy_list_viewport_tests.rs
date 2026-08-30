@@ -8,18 +8,9 @@ use cranpose_ui_graphics::{Rect, Size as ViewportSize};
 
 use super::*;
 
-thread_local! {
-    static LAST_LAZY_STATE: RefCell<Option<LazyListState>> = const { RefCell::new(None) };
-}
-
 #[test]
 fn lazy_column_unbounded_height_matches_effective_viewport() {
-    let mut composition = run_test_composition(|| {
-        let list_state = rememberLazyListState();
-        LAST_LAZY_STATE.with(|cell| {
-            *cell.borrow_mut() = Some(list_state);
-        });
-
+    let (mut composition, captured_state) = compose_with_list_state(|list_state| {
         LazyColumn(
             Modifier::empty(),
             list_state,
@@ -53,7 +44,7 @@ fn lazy_column_unbounded_height_matches_effective_viewport() {
         result
     };
 
-    let list_state = LAST_LAZY_STATE.with(|cell| (*cell.borrow()).expect("state captured"));
+    let list_state = (*captured_state.borrow()).expect("state captured");
     let expected_height = list_state.layout_info().viewport_size;
     let actual_height = measurements.root_size().height;
 
@@ -62,10 +53,6 @@ fn lazy_column_unbounded_height_matches_effective_viewport() {
         (actual_height - expected_height).abs() < 0.01,
         "expected lazy column height to match effective viewport {expected_height}, got {actual_height}"
     );
-
-    LAST_LAZY_STATE.with(|cell| {
-        *cell.borrow_mut() = None;
-    });
 }
 
 fn measure_tree(
@@ -82,6 +69,72 @@ fn measure_tree(
         .expect("lazy list viewport test requested a layout tree");
     applier.clear_runtime_handle();
     layout
+}
+
+fn compose_with_list_state(
+    mut content: impl FnMut(LazyListState) + 'static,
+) -> (TestComposition, Rc<RefCell<Option<LazyListState>>>) {
+    let captured_state = Rc::new(RefCell::new(None));
+    let composition = run_test_composition({
+        let captured_state = Rc::clone(&captured_state);
+        move || {
+            let list_state = rememberLazyListState();
+            *captured_state.borrow_mut() = Some(list_state);
+            content(list_state);
+        }
+    });
+    (composition, captured_state)
+}
+
+fn compose_with_list_state_at(
+    index: usize,
+    offset: f32,
+    mut content: impl FnMut(LazyListState) + 'static,
+) -> (TestComposition, Rc<RefCell<Option<LazyListState>>>) {
+    let captured_state = Rc::new(RefCell::new(None));
+    let composition = run_test_composition({
+        let captured_state = Rc::clone(&captured_state);
+        move || {
+            let list_state = rememberLazyListStateWithPosition(index, offset);
+            *captured_state.borrow_mut() = Some(list_state);
+            content(list_state);
+        }
+    });
+    (composition, captured_state)
+}
+
+fn assert_visible_items_stay_ordered(
+    visible: &[(usize, f32)],
+    step: usize,
+    direction: f32,
+    context: impl std::fmt::Display,
+    last_top_item: &mut Option<usize>,
+) {
+    assert!(
+        !visible.is_empty(),
+        "step {step}: expected at least one visible item after {context}"
+    );
+    for pair in visible.windows(2) {
+        assert!(
+            pair[1].0 > pair[0].0,
+            "step {step}: rendered item order regressed after {context}: {visible:?}"
+        );
+    }
+    if let Some(previous_top_item) = *last_top_item {
+        let current_top_item = visible[0].0;
+        if direction < 0.0 {
+            assert!(
+                current_top_item >= previous_top_item,
+                "step {step}: forward movement moved top item backward from                  {previous_top_item} to {current_top_item} after {context}"
+            );
+        } else if direction > 0.0 {
+            assert!(
+                current_top_item <= previous_top_item,
+                "step {step}: reverse movement backtracked from top item                  {previous_top_item} to {current_top_item} after {context}"
+            );
+        }
+    }
+    *last_top_item = Some(visible[0].0);
 }
 
 fn collect_visible_item_texts(
@@ -177,14 +230,9 @@ fn find_nearest_draw_ancestor_for_text<'a>(
 #[test]
 fn lazy_column_jump_does_not_alias_remembered_item_state() {
     let captured_slots = Rc::new(RefCell::new(HashMap::new()));
-    let mut composition = run_test_composition({
+    let (mut composition, captured_state) = compose_with_list_state({
         let captured_slots = Rc::clone(&captured_slots);
-        move || {
-            let list_state = rememberLazyListState();
-            LAST_LAZY_STATE.with(|cell| {
-                *cell.borrow_mut() = Some(list_state);
-            });
-
+        move |list_state| {
             LazyColumn(
                 Modifier::empty(),
                 list_state,
@@ -219,7 +267,7 @@ fn lazy_column_jump_does_not_alias_remembered_item_state() {
     });
 
     let root = composition.root().expect("lazy column root");
-    let list_state = LAST_LAZY_STATE.with(|cell| (*cell.borrow()).expect("state captured"));
+    let list_state = (*captured_state.borrow()).expect("state captured");
     let viewport_size = ViewportSize {
         width: 320.0,
         height: 180.0,
@@ -302,20 +350,11 @@ fn lazy_column_jump_does_not_alias_remembered_item_state() {
         restored_count > 0,
         "jumping back should restore at least one initially visible keyed item: {restored_visible:?}",
     );
-
-    LAST_LAZY_STATE.with(|cell| {
-        *cell.borrow_mut() = None;
-    });
 }
 
 #[test]
 fn lazy_column_variable_height_reverse_scroll_keeps_rendered_items_ordered() {
-    let mut composition = run_test_composition(|| {
-        let list_state = rememberLazyListState();
-        LAST_LAZY_STATE.with(|cell| {
-            *cell.borrow_mut() = Some(list_state);
-        });
-
+    let (mut composition, captured_state) = compose_with_list_state(|list_state| {
         LazyColumn(
             Modifier::empty(),
             list_state,
@@ -350,7 +389,7 @@ fn lazy_column_variable_height_reverse_scroll_keeps_rendered_items_ordered() {
     });
 
     let root = composition.root().expect("lazy column root");
-    let list_state = LAST_LAZY_STATE.with(|cell| (*cell.borrow()).expect("state captured"));
+    let list_state = (*captured_state.borrow()).expect("state captured");
     let viewport_size = ViewportSize {
         width: 320.0,
         height: 260.0,
@@ -375,50 +414,19 @@ fn lazy_column_variable_height_reverse_scroll_keeps_rendered_items_ordered() {
             },
         );
 
-        assert!(
-            !visible.is_empty(),
-            "step {step}: expected at least one visible item after delta {delta}"
+        assert_visible_items_stay_ordered(
+            &visible,
+            step,
+            delta,
+            format_args!("delta {delta}"),
+            &mut last_top_item,
         );
-
-        for pair in visible.windows(2) {
-            assert!(
-                pair[1].0 > pair[0].0,
-                "step {step}: rendered item order regressed after delta {delta}: {:?}",
-                visible
-            );
-        }
-
-        if let Some(previous_top_item) = last_top_item {
-            let current_top_item = visible[0].0;
-            if delta < 0.0 {
-                assert!(
-                    current_top_item >= previous_top_item,
-                    "step {step}: forward scroll moved top item backward from {previous_top_item} to {current_top_item}"
-                );
-            } else if delta > 0.0 {
-                assert!(
-                    current_top_item <= previous_top_item,
-                    "step {step}: reverse scroll backtracked from top item {previous_top_item} to {current_top_item}"
-                );
-            }
-        }
-
-        last_top_item = Some(visible[0].0);
     }
-
-    LAST_LAZY_STATE.with(|cell| {
-        *cell.borrow_mut() = None;
-    });
 }
 
 #[test]
 fn lazy_column_content_type_reuse_reverse_scroll_keeps_rendered_items_ordered() {
-    let mut composition = run_test_composition(|| {
-        let list_state = rememberLazyListState();
-        LAST_LAZY_STATE.with(|cell| {
-            *cell.borrow_mut() = Some(list_state);
-        });
-
+    let (mut composition, captured_state) = compose_with_list_state(|list_state| {
         LazyColumn(
             Modifier::empty(),
             list_state,
@@ -452,7 +460,7 @@ fn lazy_column_content_type_reuse_reverse_scroll_keeps_rendered_items_ordered() 
     });
 
     let root = composition.root().expect("lazy column root");
-    let list_state = LAST_LAZY_STATE.with(|cell| (*cell.borrow()).expect("state captured"));
+    let list_state = (*captured_state.borrow()).expect("state captured");
     let viewport_size = ViewportSize {
         width: 320.0,
         height: 260.0,
@@ -477,50 +485,19 @@ fn lazy_column_content_type_reuse_reverse_scroll_keeps_rendered_items_ordered() 
             },
         );
 
-        assert!(
-            !visible.is_empty(),
-            "step {step}: expected at least one visible item after delta {delta}"
+        assert_visible_items_stay_ordered(
+            &visible,
+            step,
+            delta,
+            format_args!("delta {delta}"),
+            &mut last_top_item,
         );
-
-        for pair in visible.windows(2) {
-            assert!(
-                pair[1].0 > pair[0].0,
-                "step {step}: rendered item order regressed after delta {delta}: {:?}",
-                visible
-            );
-        }
-
-        if let Some(previous_top_item) = last_top_item {
-            let current_top_item = visible[0].0;
-            if delta < 0.0 {
-                assert!(
-                    current_top_item >= previous_top_item,
-                    "step {step}: forward scroll moved top item backward from {previous_top_item} to {current_top_item}"
-                );
-            } else if delta > 0.0 {
-                assert!(
-                    current_top_item <= previous_top_item,
-                    "step {step}: reverse scroll backtracked from top item {previous_top_item} to {current_top_item}"
-                );
-            }
-        }
-
-        last_top_item = Some(visible[0].0);
     }
-
-    LAST_LAZY_STATE.with(|cell| {
-        *cell.borrow_mut() = None;
-    });
 }
 
 #[test]
 fn lazy_column_variable_height_bursty_reverse_scroll_keeps_rendered_items_ordered() {
-    let mut composition = run_test_composition(|| {
-        let list_state = rememberLazyListState();
-        LAST_LAZY_STATE.with(|cell| {
-            *cell.borrow_mut() = Some(list_state);
-        });
-
+    let (mut composition, captured_state) = compose_with_list_state(|list_state| {
         LazyColumn(
             Modifier::empty(),
             list_state,
@@ -557,7 +534,7 @@ fn lazy_column_variable_height_bursty_reverse_scroll_keeps_rendered_items_ordere
     });
 
     let root = composition.root().expect("lazy column root");
-    let list_state = LAST_LAZY_STATE.with(|cell| (*cell.borrow()).expect("state captured"));
+    let list_state = (*captured_state.borrow()).expect("state captured");
     let viewport_size = ViewportSize {
         width: 320.0,
         height: 260.0,
@@ -591,44 +568,14 @@ fn lazy_column_variable_height_bursty_reverse_scroll_keeps_rendered_items_ordere
             },
         );
 
-        assert!(
-            !visible.is_empty(),
-            "step {step}: expected at least one visible item after burst {:?}",
-            burst
+        assert_visible_items_stay_ordered(
+            &visible,
+            step,
+            total_delta,
+            format_args!("burst {burst:?}"),
+            &mut last_top_item,
         );
-
-        for pair in visible.windows(2) {
-            assert!(
-                pair[1].0 > pair[0].0,
-                "step {step}: rendered item order regressed after burst {:?}: {:?}",
-                burst,
-                visible
-            );
-        }
-
-        if let Some(previous_top_item) = last_top_item {
-            let current_top_item = visible[0].0;
-            if total_delta < 0.0 {
-                assert!(
-                    current_top_item >= previous_top_item,
-                    "step {step}: forward burst moved top item backward from {previous_top_item} to {current_top_item} after {:?}",
-                    burst
-                );
-            } else if total_delta > 0.0 {
-                assert!(
-                    current_top_item <= previous_top_item,
-                    "step {step}: reverse burst backtracked from top item {previous_top_item} to {current_top_item} after {:?}",
-                    burst
-                );
-            }
-        }
-
-        last_top_item = Some(visible[0].0);
     }
-
-    LAST_LAZY_STATE.with(|cell| {
-        *cell.borrow_mut() = None;
-    });
 }
 
 #[test]
@@ -637,15 +584,9 @@ fn lazy_column_tall_text_item_keeps_rendered_height_in_sync_with_lazy_measuremen
         "This comment body is intentionally long so the first lazy item becomes taller than the viewport once it wraps to the available width. "
             .repeat(20),
     );
-
-    let mut composition = run_test_composition({
+    let (mut composition, captured_state) = compose_with_list_state_at(0, 180.0, {
         let tall_body = Rc::clone(&tall_body);
-        move || {
-            let list_state = rememberLazyListStateWithPosition(0, 180.0);
-            LAST_LAZY_STATE.with(|cell| {
-                *cell.borrow_mut() = Some(list_state);
-            });
-
+        move |list_state| {
             LazyColumn(
                 Modifier::empty(),
                 list_state,
@@ -710,7 +651,7 @@ fn lazy_column_tall_text_item_keeps_rendered_height_in_sync_with_lazy_measuremen
         height: 260.0,
     };
     let layout = measure_tree(&mut composition, root, viewport_size);
-    let list_state = LAST_LAZY_STATE.with(|cell| (*cell.borrow()).expect("state captured"));
+    let list_state = (*captured_state.borrow()).expect("state captured");
     let layout_info = list_state.layout_info();
     let measured_first = layout_info
         .visible_items_info
@@ -735,19 +676,10 @@ fn lazy_column_tall_text_item_keeps_rendered_height_in_sync_with_lazy_measuremen
         "expected only list spacing between first and second items, got gap {:.1}px",
         rendered_gap
     );
-
-    LAST_LAZY_STATE.with(|cell| {
-        *cell.borrow_mut() = None;
-    });
 }
 
 fn drag_lazy_column_to_end(item_heights: &'static [f32], viewport_height: f32) -> (usize, f32) {
-    let mut composition = run_test_composition(move || {
-        let list_state = rememberLazyListState();
-        LAST_LAZY_STATE.with(|cell| {
-            *cell.borrow_mut() = Some(list_state);
-        });
-
+    let (mut composition, captured_state) = compose_with_list_state(move |list_state| {
         LazyColumn(
             Modifier::empty(),
             list_state,
@@ -770,7 +702,7 @@ fn drag_lazy_column_to_end(item_heights: &'static [f32], viewport_height: f32) -
     };
     measure_tree(&mut composition, root, viewport);
 
-    let list_state = LAST_LAZY_STATE.with(|cell| (*cell.borrow()).expect("state captured"));
+    let list_state = (*captured_state.borrow()).expect("state captured");
 
     let mut stuck_drags = 0;
     for _ in 0..200 {
@@ -792,9 +724,6 @@ fn drag_lazy_column_to_end(item_heights: &'static [f32], viewport_height: f32) -
         }
     }
 
-    LAST_LAZY_STATE.with(|cell| {
-        *cell.borrow_mut() = None;
-    });
     (
         list_state.first_visible_item_index_non_reactive(),
         list_state.first_visible_item_scroll_offset_non_reactive(),
@@ -828,11 +757,7 @@ fn unbounded_lazy_column_with_tall_item_reports_true_content_height() {
     let heights: &'static [f32] = &[
         50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 800.0, 50.0, 50.0, 50.0, 50.0,
     ];
-    let mut composition = run_test_composition(move || {
-        let list_state = rememberLazyListState();
-        LAST_LAZY_STATE.with(|cell| {
-            *cell.borrow_mut() = Some(list_state);
-        });
+    let (mut composition, captured_state) = compose_with_list_state(move |list_state| {
         LazyColumn(
             Modifier::empty(),
             list_state,
@@ -864,7 +789,7 @@ fn unbounded_lazy_column_with_tall_item_reports_true_content_height() {
         applier.clear_runtime_handle();
         result
     };
-    let list_state = LAST_LAZY_STATE.with(|cell| (*cell.borrow()).expect("state captured"));
+    let list_state = (*captured_state.borrow()).expect("state captured");
     let true_content: f32 = heights.iter().sum();
 
     assert!(
@@ -876,9 +801,6 @@ fn unbounded_lazy_column_with_tall_item_reports_true_content_height() {
         !list_state.can_scroll_forward_non_reactive(),
         "a fully realized unbounded LazyColumn must not claim internal scrollability"
     );
-    LAST_LAZY_STATE.with(|cell| {
-        *cell.borrow_mut() = None;
-    });
 }
 
 #[test]
@@ -886,11 +808,7 @@ fn lazy_column_refills_when_viewport_grows_after_scroll_to_end() {
     let heights: &'static [f32] = &[
         100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0,
     ];
-    let mut composition = run_test_composition(move || {
-        let list_state = rememberLazyListState();
-        LAST_LAZY_STATE.with(|cell| {
-            *cell.borrow_mut() = Some(list_state);
-        });
+    let (mut composition, captured_state) = compose_with_list_state(move |list_state| {
         LazyColumn(
             Modifier::empty(),
             list_state,
@@ -906,7 +824,7 @@ fn lazy_column_refills_when_viewport_grows_after_scroll_to_end() {
         );
     });
     let root = composition.root().expect("lazy column root");
-    let list_state = LAST_LAZY_STATE.with(|cell| (*cell.borrow()).expect("state captured"));
+    let list_state = (*captured_state.borrow()).expect("state captured");
 
     let small = ViewportSize {
         width: 320.0,
@@ -936,7 +854,4 @@ fn lazy_column_refills_when_viewport_grows_after_scroll_to_end() {
          content fills it (offset 200), but it stayed at effective offset \
          {effective}, leaving a {blank_gap}px blank gap"
     );
-    LAST_LAZY_STATE.with(|cell| {
-        *cell.borrow_mut() = None;
-    });
 }
