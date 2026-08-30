@@ -825,6 +825,26 @@ struct AnimatableInner<T: SpringScalar + 'static> {
 impl<T: SpringScalar + 'static> Animatable<T> {
     /// Create a new animatable with the given initial value.
     pub fn new(initial: T, runtime: RuntimeHandle) -> Self {
+        Self::new_with_animation(initial, AnimationType::default(), runtime)
+    }
+
+    /// Create a new animatable already at rest at `initial`, recording
+    /// `animation` as the spec currently driving it without scheduling a
+    /// frame.
+    ///
+    /// Building blocks like [`crate::animateValueAsState`] use this instead
+    /// of [`Animatable::new`] so that a call site's first render, which
+    /// starts already at its target, does not spuriously detect the
+    /// caller's spec as "changed" the moment [`Animatable::animation_type`]
+    /// is first compared against it (a fresh [`Animatable::new`] always
+    /// reports [`AnimationType::default`], regardless of what the call site
+    /// actually asked for) and schedule a pointless one-frame animation to
+    /// nowhere.
+    pub fn new_with_animation(
+        initial: T,
+        animation: AnimationType,
+        runtime: RuntimeHandle,
+    ) -> Self {
         let inner = AnimatableInner {
             state: OwnedMutableState::with_runtime(initial.clone(), runtime.clone()),
             runtime,
@@ -832,7 +852,7 @@ impl<T: SpringScalar + 'static> Animatable<T> {
             velocity: [0.0; SPRING_MAX_DIMENSIONS],
             start: initial.clone(),
             target: initial,
-            animation_type: AnimationType::default(),
+            animation_type: animation,
             start_time_nanos: None,
             last_frame_nanos: None,
             registration: None,
@@ -934,6 +954,21 @@ impl<T: SpringScalar + 'static> Animatable<T> {
     /// Return the animation spec currently driving this animatable.
     pub fn animation_type(&self) -> AnimationType {
         self.inner.borrow().animation_type
+    }
+
+    /// Whether a frame callback is currently scheduled: `true` while the
+    /// value is mid-flight toward its target, `false` once it has settled.
+    /// Mirrors Jetpack Compose's `Animatable.isRunning`.
+    pub fn is_running(&self) -> bool {
+        self.inner.borrow().registration.is_some()
+    }
+
+    /// Pointer identity of the shared inner state, stable across clones of
+    /// the same [`Animatable`]. Used to key registration into a parent
+    /// collection (e.g. [`crate::transition::Transition`]'s children) by
+    /// object identity rather than value equality.
+    pub(crate) fn identity(&self) -> usize {
+        Rc::as_ptr(&self.inner) as usize
     }
 
     /// Get the current state.
@@ -1104,24 +1139,42 @@ pub fn animate_float_as_state_with_initial(
     })
 }
 
-#[allow(non_snake_case)]
+/// Generic building block for the whole `animate*AsState` family: any type
+/// that implements [`SpringScalar`] (the vector-converter core -- equality
+/// plus a fixed-size float decomposition, mirroring Compose's
+/// `TwoWayConverter`/`AnimationVector`) gets a fire-and-forget animation for
+/// free. [`animateFloatAsState`], [`crate::animateColorAsState`] and the
+/// `Dp`/`Offset`/`Size`/`Rect` specializations in
+/// [`crate::unit_animation`]/[`crate::geometry_animation`] are all thin
+/// wrappers over this one function.
 #[track_caller]
-pub fn animateFloatAsState(target: f32, animation: AnimationType, label: &str) -> State<f32> {
+pub fn animateValueAsState<T: SpringScalar + PartialEq + 'static>(
+    target: T,
+    animation: AnimationType,
+    label: &str,
+) -> State<T> {
     let _ = label;
     let caller = cranpose_core::caller_location_key();
     with_current_composer(|composer| {
         let runtime = composer.runtime_handle();
-        let anim: Owned<Animatable<f32>> =
-            composer.remember_at(caller, || Animatable::new(target, runtime));
+        let anim: Owned<Animatable<T>> = composer.remember_at(caller, || {
+            Animatable::new_with_animation(target.clone(), animation, runtime)
+        });
         anim.update(|animatable| {
-            let is_new_target = (animatable.target() - target).abs() > f32::EPSILON;
+            let is_new_target = animatable.target() != target;
             let is_new_animation = animatable.animation_type() != animation;
             if is_new_target || is_new_animation {
-                animatable.animateTo(target, animation);
+                animatable.animateTo(target.clone(), animation);
             }
         });
         anim.with(|animatable| animatable.state())
     })
+}
+
+#[allow(non_snake_case)]
+#[track_caller]
+pub fn animateFloatAsState(target: f32, animation: AnimationType, label: &str) -> State<f32> {
+    animateValueAsState(target, animation, label)
 }
 
 impl<T: SpringScalar + 'static> Clone for Animatable<T> {

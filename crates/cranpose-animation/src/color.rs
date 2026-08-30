@@ -2,17 +2,17 @@
 //!
 //! Mirrors Jetpack Compose's `animateColorAsState` from
 //! `androidx.compose.animation.SingleValueAnimation` by layering a [`Lerp`]
-//! implementation for [`Color`] over the generic [`Animatable`] machinery.
+//! implementation for [`Color`] over the generic [`crate::Animatable`] machinery.
 //!
 //! Note: This module uses camelCase for function names to maintain 1:1 API
 //! parity with Jetpack Compose.
 
 #![allow(non_snake_case)]
 
-use cranpose_core::{Owned, State, with_current_composer};
+use cranpose_core::State;
 use cranpose_ui_graphics::Color;
 
-use crate::animation::{Animatable, AnimationType, Lerp, SpringScalar};
+use crate::animation::{AnimationType, Lerp, SpringScalar, animateValueAsState};
 
 impl Lerp for Color {
     fn lerp(&self, target: &Self, fraction: f32) -> Self {
@@ -62,21 +62,7 @@ impl SpringScalar for Color {
 /// [`Lerp`] for [`Color`] for how this relates to Compose's Oklab lerp).
 #[track_caller]
 pub fn animateColorAsState(target: Color, animation: AnimationType, label: &str) -> State<Color> {
-    let _ = label;
-    let caller = cranpose_core::caller_location_key();
-    with_current_composer(|composer| {
-        let runtime = composer.runtime_handle();
-        let anim: Owned<Animatable<Color>> =
-            composer.remember_at(caller, || Animatable::new(target, runtime));
-        anim.update(|animatable| {
-            let is_new_target = animatable.target() != target;
-            let is_new_animation = animatable.animation_type() != animation;
-            if is_new_target || is_new_animation {
-                animatable.animateTo(target, animation);
-            }
-        });
-        anim.with(|animatable| animatable.state())
-    })
+    animateValueAsState(target, animation, label)
 }
 
 #[cfg(test)]
