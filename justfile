@@ -109,6 +109,33 @@ clippy-camera-desktop:
 clippy-android:
     cargo ndk --platform 24 -t arm64-v8a -t armeabi-v7a -t x86 -t x86_64 clippy -p desktop-app-platform --lib --no-default-features --features android,renderer-wgpu -- -D warnings -A clippy::missing_const_for_thread_local
 
+# --- code quality gates -----------------------------------------------------
+#
+# Both gates below are scoped to the diff against `base`, not the whole
+# workspace: a function or a clone already there is left alone unless this
+# change touches it. See scripts/ci/gate_diff.py for how "touches" is
+# derived from the merge base, and scripts/ci/code_quality_gates.toml for the
+# thresholds. `base` defaults to `origin/main` so the same recipe means the
+# same thing for a developer comparing a local branch and for CI comparing a
+# pull request.
+
+# Unit tests for the diff-scoping logic itself -- synthetic diffs and
+# synthetic tool output, no git history or external tool required.
+test-quality-gates:
+    python3 scripts/ci/test_gate_diff.py
+
+# Cyclomatic complexity ceiling for functions the diff adds or modifies.
+# Installs its own tool on demand, the way `typos` does -- see
+# gate_diff.resolve_cargo_tool for why that install is pinned to a cargo
+# path rather than trusting whatever `rust-code-analysis-cli` is on $PATH.
+complexity-gate base="origin/main":
+    python3 scripts/ci/complexity_gate.py --base {{base}}
+
+# Copy-paste budget for a block the diff adds, at either end of the copy.
+# Same on-demand install as above, through the same pinned-path resolver.
+duplication-gate base="origin/main":
+    python3 scripts/ci/duplication_gate.py --base {{base}}
+
 # --- test ------------------------------------------------------------------
 
 # `--profile ci` keeps the debuginfo that the local dev profile strips, so a
@@ -340,7 +367,7 @@ perf-heap *args:
 # Excludes the jobs that need a GPU, an Android SDK or an iOS toolchain.
 
 # What a pull request is gated on. Run this before pushing.
-ci: fmt-check typos versions test clippy doc budgets
+ci: fmt-check typos versions test clippy doc budgets test-quality-gates complexity-gate duplication-gate
 
 # Needs a Linux box with the X11 stack, an Android SDK and (on macOS) Xcode.
 
