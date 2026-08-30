@@ -1,7 +1,8 @@
 # Pre-existing complexity and duplication debt, first made visible by #539
 
 `#539` added `just complexity-gate` and `just duplication-gate`, both scoped
-to the lines a diff actually touches (`scripts/ci/gate_diff.py`). Scoped
+to the lines a diff actually touches (the `gate_diff` module in
+`xtask/src/main.rs`). Scoped
 gates only ever check what a PR's own diff reaches, by design -- so nothing
 here is a regression from any specific commit. It is debt that predates the
 gate and was never in scope for any earlier PR to fix, made visible for the
