@@ -38,6 +38,7 @@
 //! path cannot present a window at all (see `TIME_WASTERS.md`).
 
 mod output_paths;
+mod robot_exit;
 mod scroll_stability_external_helpers;
 mod text_showcase_external_helpers;
 
@@ -111,12 +112,6 @@ fn time_present_wait(robot: &cranpose::Robot, label: &str) {
     println!("{label}: wait_for_present_frame took {elapsed:?} result={result:?}");
 }
 
-fn fail(robot: &cranpose::Robot, message: &str) -> ! {
-    println!("FATAL: {message}");
-    let _ = robot.exit();
-    std::process::exit(1);
-}
-
 fn main() {
     env_logger::init();
     println!("=== Robot Glass Backdrop Scroll Stability ===");
@@ -172,7 +167,7 @@ fn main() {
                 .get(RECEIPT_ANCHOR_SKIP_FROM_TOP)
                 .map(|(text, _)| text.clone())
                 .unwrap_or_else(|| {
-                    fail(
+                    robot_exit::fail(
                         &robot,
                         &format!(
                             "expected at least {} visible receipt subtitles after settle, found {}",
@@ -191,7 +186,7 @@ fn main() {
             let mut previous_bounds = find_in_semantics(&robot, |elem| {
                 find_text_exact(elem, anchor_text)
             })
-            .unwrap_or_else(|| fail(&robot, "content anchor should be visible after settle"));
+            .unwrap_or_else(|| robot_exit::fail(&robot, "content anchor should be visible after settle"));
 
             let window_id = find_window_id(WINDOW_TITLE);
 
@@ -310,7 +305,7 @@ fn main() {
 
             let report_path = output_dir.join("fractional_alignment_report.txt");
             let report = std::fs::read_to_string(&report_path).unwrap_or_else(|err| {
-                fail(
+                robot_exit::fail(
                     &robot,
                     &format!("compare script did not write {report_path:?}: {err}"),
                 )
@@ -333,7 +328,7 @@ fn main() {
             }
 
             if !failures.is_empty() {
-                fail(
+                robot_exit::fail(
                     &robot,
                     &format!(
                         "glass backdrop did not track the content's confirmed scroll:\n{}\ncaptures retained in {}",
