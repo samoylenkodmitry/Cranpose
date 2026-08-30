@@ -401,10 +401,12 @@ Sampled against Compose's `androidx.compose.ui`/`foundation-layout`:
 | `Modifier.toggleable(value, onValueChange)` | `Modifier::toggleable(value, description, role, on_value_change)` | Implemented | Cranpose's takes `role`/`description` directly rather than through a separate `semantics {}` block. |
 | `Modifier.semantics { ... }` | `Modifier::semantics(recorder: impl Fn(&mut SemanticsConfiguration))` | Implemented | `SemanticsConfiguration`'s own fields carry doc comments naming the exact Compose property they mirror (e.g. `state_description` is documented as "Compose's `stateDescription`") -- this one was built as a deliberate mirror, not a coincidental name match. |
 | `Modifier.focusTarget()` | `Modifier::focus_target()` | Implemented | The low-level primitive. |
-| `Modifier.focusable()` (the common convenience wrapper over `focusTarget` + indication) | -- | Absent | Only the low-level `focus_target` was found; no convenience wrapper. |
+| `Modifier.focusable()` (the common convenience wrapper over `focusTarget` + indication) | `Modifier::focusable()` | Implemented, deliberately a subset | Wraps `focus_target` and nothing else. Cranpose has no indication concept to compose with -- `MutableInteractionSource` emits only press interactions -- so the wrapper stops at focus rather than inventing one. |
 | `Modifier.testTag("x")` | -- | Absent | See Findings -- `cranpose-testing` finds elements by text/geometry instead. |
-| `Modifier.rotate()`, `.scale()`, `.zIndex()` | -- (folded into `graphics_layer`/`graphics_layer_params`) | Partial | The underlying `graphicsLayer`-equivalent primitive exists; Compose's individual convenience wrappers over it do not. |
-| `Modifier.testTag`, `FocusRequester`, `Modifier.focusRequester()` | -- | Absent | No imperative focus-request mechanism found (`requester.requestFocus()`); only reactive `on_focus_changed`. |
+| `Modifier.rotate()`, `.scale()` | -- (folded into `graphics_layer`/`graphics_layer_params`) | Partial | The `graphicsLayer`-equivalent primitive exists; the convenience wrappers do not. They are straightforward over it -- the pivot already matches Compose, since `TransformOrigin::CENTER` is the layer default and positive degrees rotate clockwise in Cranpose's y-down space. |
+| `Modifier.zIndex()` | -- | Absent | Not a `graphicsLayer` wrapper: draw order is a layout concern. `Placement::z_index` exists but is hardcoded per widget and never exposed through `ParentData`, so a real modifier needs a parent-data field, a node populating it, and every `Placement::new(.., 0)` site reading it instead. |
+| `FocusRequester`, `Modifier.focusRequester()` | `FocusRequester`, `Modifier::focus_requester()` | Implemented | `request_focus()` returns `Result`, with `NotAttached` (never attached, or the node left composition) and `NoFocusTarget` distinguished -- no panic and no lying `Ok`. Reentrancy is safe by construction: a `request_focus()` from inside `on_focus_changed` enqueues and returns, and the outer dispatch loop drains it, with the manager's `RefCell` never held across a callback. |
+| `Modifier.testTag` | -- | Absent | See Findings: semantics-driven testing is not available. |
 | `Constraints`, `Density`, `Alignment`, `Arrangement`, `Measurable`, `Placeable`, `MeasureResult`, `MeasurePolicy` | `cranpose-ui-layout::{Constraints, ..., MeasurePolicy}`, `cranpose-ui::Density` | Implemented | Full layout-contract vocabulary present under the same names. |
 | `Dp`, `Sp`, `Px` (typed units, used everywhere in Compose's own modifier signatures) | `cranpose-ui-graphics::unit::{Dp, Sp, Px}` (types exist) | **Partial** | The types exist, but the widget/modifier surface itself (`padding`, `size`, `weight`, `offset`, ...) takes raw `f32`, not `Dp` -- Compose's type-safety guarantee against mixing raw pixels and density-independent units is not carried through to the call sites that would benefit from it. |
 
@@ -432,18 +434,19 @@ by symbol, per the Scope decision above.
 | Compose | Cranpose | Verdict | Note |
 |---|---|---|---|
 | `animateFloatAsState`, `animateColorAsState` | Same names (`cranpose-animation::animation`) | Implemented | |
-| `animateDpAsState`, `animateOffsetAsState`, `animateIntAsState`, ... (the rest of the `animate*AsState` family) | -- | Absent | Only the Float and Color specializations were found; no generic `animateValueAsState`. |
+| `animateDpAsState`, `animateOffsetAsState`, `animateSizeAsState`, `animateRectAsState` | Same names | Implemented | Built on a generic `animateValueAsState<T: SpringScalar + PartialEq>`. The vector-converter core already existed as the `SpringScalar` + `Lerp` traits and was extended to `Dp`, `Sp`, `Point`, `Size` and `Rect` rather than duplicated; `animateFloatAsState`/`animateColorAsState` now delegate to the same function. |
+| `animateIntAsState`, `animateIntOffsetAsState`, `animateIntSizeAsState` | -- | Absent, deliberately | Cranpose has no `Int`-typed geometry vocabulary, so these would be unused surface. |
 | `tween(durationMillis, easing)`, `spring(dampingRatio, stiffness)` | Same names | Implemented | |
 | `Animatable<T>` | Same name | Implemented | |
 | `rememberInfiniteTransition()` / `InfiniteTransition.animateFloat` | Same names | Implemented | |
-| `updateTransition(targetState)` / `Transition<S>` / `transition.animateFloat { }` (finite, multi-property, state-machine-driven transitions) | -- | Absent | Cranpose covers single-value animation and infinite repetition, not the general finite state-driven multi-property orchestration API. |
+| `updateTransition(targetState)` / `Transition<S>` / `transition.animateFloat { }` | Same names (`animateValue`/`animateFloat`/`animateDp`/`animateColor`) | Implemented, different settled semantics | Each child owns an `Animatable` and reports its own running state; `Transition::is_running()` is true until every child settles. Compose instead drives children from one shared total-duration play-time. Registration reuses `InfiniteTransition`'s disposable-effect-by-pointer-identity pattern. |
 | `DecayAnimationSpec`, `FloatDecayAnimationSpec` (fling physics contract) | `cranpose-animation::decay_spec::{FloatDecayAnimationSpec, ExponentialDecaySpec}` | Implemented, deliberately different physics | The trait matches; the concrete spec does not. `SplineBasedDecaySpec` (a port of `android.widget.Scroller`'s math) was replaced in #541 (landed after this doc's data was last generated, caught while re-verifying for this refresh) by `ExponentialDecaySpec` + `IOS_DECELERATION_RATE_{FAST,NORMAL}`, physics measured directly from a real iOS `UIScrollView` -- a deliberate divergence (Cranpose targets iOS feel, not an Android-physics port), not a gap. |
 
 ### Text
 
 | Compose | Cranpose | Verdict |
 |---|---|---|
-| `TextStyle`, `AnnotatedString` | Same names (two `TextStyle`s exist -- `cranpose-ui::text::style` and a distinct `cranpose-ui-graphics::typography` one; worth resolving which is canonical in a future pass) | Implemented, with an internal duplication worth a closer look |
+| `TextStyle`, `AnnotatedString` | `cranpose-ui::text::style::TextStyle` (authored style, Compose-parity) and `cranpose-ui-graphics::typography::DrawTextStyle` (resolved draw primitive) | Implemented | The two types are a real architectural split, not drift -- see Findings. The graphics one was renamed to `DrawTextStyle` so they no longer share a name. |
 | `BasicTextField`, `TextFieldState` | Same names | Implemented |
 
 ### Testing
@@ -559,16 +562,26 @@ gathered this pass explains it as intentional.
 - `cranpose-liquid` is a from-scratch, non-Material design system, not a
   Material port -- see Scope.
 
-### Two `TextStyle` types
+### Two `TextStyle` types -- resolved: a real split, now renamed
 
-`cranpose-ui::text::style::TextStyle` and
-`cranpose-ui-graphics::typography::TextStyle` both exist as distinct
-structs. Compose has exactly one `androidx.compose.ui.text.TextStyle`.
-Whether both Cranpose types are meant to coexist (one text-layout-facing,
-one lower-level typography-facing) or this is drift from having two
-crates evolve the same concept independently was not resolved here --
-recorded as a finding, not chased down, since establishing intent needs a
-git-blame/design-doc dig this pass didn't do.
+The dig this pass deferred has since been done. The two types are not
+drift. `cranpose-ui-graphics::typography` (2025-10-17) is a resolved,
+self-positioning draw primitive: plain `f32` fields, and `align`/
+`vertical_align` that the other type has no use for, because a canvas
+call has no parent layout to position it. `cranpose-ui::text::style`
+(2026-02-06) is the authored, Compose-parity style --
+`TextStyle { span_style, paragraph_style }` over `TextUnit` -- and is
+what `Text` consumes. A single documented conversion,
+`text_style_for_draw_style`, bridges them and is deliberately partial
+rather than lossy.
+
+So both should exist. What should not is both being called `TextStyle`:
+four files had independently invented `as DrawTextStyle`/`as UiTextStyle`
+import aliases and one doc link had to fully qualify itself, which is the
+collision being felt rather than argued about. The graphics-crate type is
+now `DrawTextStyle`; the `cranpose-ui` one keeps the name that matches
+Compose. A split being justified is not a reason for two types in one
+framework to share a name.
 
 ## Regenerating the full generated candidate table
 
