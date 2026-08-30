@@ -4655,7 +4655,7 @@ mod tests {
         DrawPrimitive::Text(Box::new(cranpose_ui_graphics::TextPrimitive {
             rect,
             text: std::rc::Rc::from(text),
-            style: cranpose_ui_graphics::TextStyle::new(16.0),
+            style: cranpose_ui_graphics::DrawTextStyle::new(16.0),
             color: cranpose_ui_graphics::Color::WHITE,
         }))
     }

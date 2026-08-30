@@ -6,8 +6,8 @@ use cranpose_ui::{
     text::{AnnotatedString, TextLayoutResult},
 };
 use cranpose_ui_graphics::{
-    Brush, Color, DrawPrimitive, DrawScope, Point, Rect, Size, TextAlign,
-    TextStyle as DrawTextStyle, TextVerticalAlign, estimate_text_measurement,
+    Brush, Color, DrawPrimitive, DrawScope, DrawTextStyle, Point, Rect, Size, TextAlign,
+    TextVerticalAlign, estimate_text_measurement,
 };
 
 const CHAR_WIDTH: f32 = 6.0;
