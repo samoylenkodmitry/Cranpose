@@ -189,6 +189,35 @@ pub fn pending_feed_capture_count_for_tests() -> usize {
     SHAPE_REPLAY.with(|state| state.borrow().pending_feed_captures.len())
 }
 
+/// Test hook: drops this thread's queued feed captures, so a test that
+/// injected one cannot leak it into whichever test the runner schedules on
+/// the same thread next.
+#[doc(hidden)]
+pub fn clear_pending_feed_captures_for_tests() {
+    SHAPE_REPLAY.with(|state| state.borrow_mut().pending_feed_captures.clear());
+}
+
+/// Whether any feed capture is queued on this thread's planner this frame.
+pub(crate) fn any_pending_feed_captures() -> bool {
+    SHAPE_REPLAY.with(|state| !state.borrow().pending_feed_captures.is_empty())
+}
+
+/// Whether a feed capture queued this frame covers `shape_index`.
+///
+/// A captured span must materialize through the ordinary conversion stream
+/// — the capture copies those very shape slots — so a scene-range composite
+/// that swallows the span this frame retains wrong content under a
+/// confirmed identity. The range chunker treats these shapes as uncacheable
+/// for exactly the frame their capture is queued.
+pub(crate) fn shape_index_pending_feed_capture(shape_index: usize) -> bool {
+    SHAPE_REPLAY.with(|state| {
+        state.borrow().pending_feed_captures.iter().any(|capture| {
+            shape_index >= capture.shape_start
+                && shape_index < capture.shape_start.saturating_add(capture.shape_count)
+        })
+    })
+}
+
 /// Test hook: (queued release ids, awaiting-confirmation entries) on this
 /// thread's planner — the cancellation contract's no-leak instruments.
 #[doc(hidden)]

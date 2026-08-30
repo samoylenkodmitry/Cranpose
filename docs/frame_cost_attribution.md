@@ -33,25 +33,39 @@ retained scene is not re-encoded, retention works — but present
 recovers only half: ~6 ms of GPU per frame remains for pixels that
 never change, and only removal recovers it.
 
-**Resolution (2026-08-30).** The mechanism to recover this already
-existed: the direct scene-range cache renders a stable-hash chunk to a
-texture once and composites it as a quad inside the neighboring render
-pass — no per-frame round-trip, so Finding 4's economics do not apply
-to it. Fullscreen chunks were excluded solely by a flat 2 MB per-entry
-admission (a 1080x2244 chunk is 9.24 MB at Rgba8; a 408x408 Wear chunk
-is 0.64 MB and always fit, making the flat rule implicitly
-display-class-conditional). Two same-binary sysprop A/Bs on the Mate
-20 X, alternated and temperature-flat: admitting fullscreen entries on
-the frozen backdrop gained +4.2 fps (present p50 17.4/17.6 ->
-15.3/15.0 ms), with cache-diag proving three near-fullscreen entries
-hit every frame; on the shipping quantized backdrop, where the hash
-changes about once a second and each change pays one refused sighting
-plus one 9.7 MB store, the win held at +1.5 fps (present -1.4 ms).
-Admission is now viewport-relative — entries admit up to
-max(2 MB, 125% of the render target's own bytes),
-`debug.cranpose.range_cache_pct` overrides the percentage (0 restores
-the flat floor for A/B arms) — so the same rule derives the same
-behavior on every display class instead of being tuned to one.
+**Resolution (2026-08-30): prefix snapshots.** The first fix admitted
+fullscreen chunks into the flatten cache (viewport-relative admission),
+and its A/B — +4.2 fps frozen backdrop, +1.5 fps quantized — proved the
+ECONOMICS: replaying a fullscreen texture beats re-rasterizing a stable
+backdrop on this GPU. But that mechanism was retired without shipping,
+because flattening cannot be byte-exact and a fullscreen inexact entry
+is a fullscreen wrong answer. The impossibility is structural, not a
+precision bug: the direct path rounds to the composition format between
+EVERY overlapping write — each ROP blend reads an already-rounded
+destination — while a flatten collapses that chain of roundings into
+one. No entry precision fixes that (f32 included); overlapping
+anti-aliased content diverges by construction.
+
+What shipped instead is exact by construction. The scene's stable
+bottom prefix — every op below the first retained or feed-captured one
+— is rendered once into an entry through the same segment pipeline,
+over the same clear color: identical op sequence from identical initial
+state reproduces the direct path's rounding chain bit for bit. Replay
+is a single REPLACE composite of that entry (Src, not SrcOver: the
+entry is the target's whole post-prefix state, and a SrcOver replay is
+off by one bit wherever stored alpha rounds below one at an AA pixel).
+From its first sighting the prefix range is claimed away from the
+flatten chunker entirely, so observe, store, and replay frames all
+produce the direct bytes — the mechanism is a per-position pure
+function, enforced by `scene_range_cache_exactness.rs` and the
+instanced/retained/feed parity suites. The flatten class survives only
+below its flat 2 MB floor, where its measured envelope is 1 LSB on
+0.05% of bytes (the same suite measures and reports it).
+
+Same-binary sysprop ladder on the Mate 20 X (idle list screen,
+alternated, temps 40.0-41.0 °C flat, `debug.cranpose.no_prefix_snap`
+the only variable): OFF 37.2 / 36.2 fps, ON 40.3 / 40.3 fps — +3.1 and
++4.1 fps, present p50 18.6/18.8 -> 16.6/16.7 ms.
 
 ## Finding 2 — re-recording costs ~37µs per solid-brush primitive
 
@@ -123,15 +137,20 @@ into discrete steps) so the existing scene diff can skip re-encoding —
 27.0-29.6 → 38.2-38.6 fps at 39.0°C flat, against a 48.7 ceiling with
 the field removed.
 
-The consequence for the unchanged-layer work (Finding 1): on this
-class of GPU, bandwidth is the scarce resource. Texture-caching stable
-layers pays only when sampling the cached texture is cheaper than
-re-rendering the layer's content — true for expensive layers, false
-for cheap ones, and the two failures above are the measured proof that
-"render once, composite forever" is not free here. Any design must
-either skip GPU work without adding round-trips (damage-aware
-rendering) or cache selectively with a cost model, and must be
-device-measured, not reasoned into existence.
+The consequence for the unchanged-layer work (Finding 1), refined by
+later ablations: the scarce resources on this GPU are per-pixel shader
+ALU and render-pass overhead, NOT raw sampling fill. The fill-Mpx model
+(cost proportional to composited megapixels) is retired — removing
+4.8 Mpx/frame of composites bought ~0 fps, while each additional
+backdrop effect pass costs ~0.18 ms against ~18 passes/frame. That
+re-reads both failures above: the fullscreen shader pass and the
+per-group layers lost because each added a PASS (a tile store and
+reload of the target), not because sampling is expensive. So
+"render once, composite forever" pays exactly when the replay rides an
+EXISTING pass and displaces per-pixel rasterization ALU — which is what
+the prefix snapshot does (see Finding 1's resolution) — and loses when
+it adds passes. Any such design must be device-measured, not reasoned
+into existence.
 
 ## Methods notes (the traps)
 

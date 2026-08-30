@@ -149,8 +149,8 @@ const PROPERTY_BACKED_ENV_VARS: [(&str, &str); 44] = [
         "CRANPOSE_DISABLE_DIRECT_SCENE_RANGE_CACHE",
     ),
     (
-        "debug.cranpose.range_cache_pct",
-        "CRANPOSE_DIRECT_SCENE_RANGE_CACHE_VIEWPORT_PCT",
+        "debug.cranpose.no_prefix_snap",
+        "CRANPOSE_DISABLE_PREFIX_SNAPSHOT",
     ),
     ("debug.cranpose.gpu_backend", "CRANPOSE_ANDROID_GPU_BACKEND"),
     ("debug.cranpose.async_haptics", "CRANPOSE_ASYNC_HAPTICS"),

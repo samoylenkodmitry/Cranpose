@@ -67,6 +67,11 @@
   a large build
 - perf scripts are perf*.sh at project root
 - e2e robot headless tests is `just robot` (should all pass)
+- run_robot_test.sh manages the samarch-1 host lock itself; wrapping it in
+  with_host_lock.sh self-deadlocks (the inner acquisition waits forever on
+  your outer hold) and starves every CI job on the host while it hangs.
+  Invoke it bare — the lock exists to serialize robot suites, and the
+  script is already the lock taker
 - do not use big models as subagents (opus, codex xhigh thinking, etc), only small fast & cheap to not waste tokens
 - no 'backwards compatibility' is allowed; we in a pre-alpha
 - no comments in style "now it is like that" - we are not writing history

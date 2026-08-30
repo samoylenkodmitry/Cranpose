@@ -33,6 +33,7 @@ enum LayerRasterCacheKind {
     SourceContent,
     BackdropEffect,
     SceneRange,
+    PrefixSnapshot,
 }
 
 impl LayerRasterCacheKind {
@@ -42,6 +43,7 @@ impl LayerRasterCacheKind {
             Self::SourceContent => 1,
             Self::BackdropEffect => 2,
             Self::SceneRange => 3,
+            Self::PrefixSnapshot => 4,
         }
     }
 }
@@ -157,12 +159,43 @@ impl LayerRasterCacheKey {
         }
     }
 
+    /// A snapshot of the scene's rendered prefix: the bytes the target held
+    /// after drawing ops `[0, prefix_len)` over the pass's clear color. A
+    /// replay of captured bytes is identical to direct rendering by
+    /// construction — no flattening, so none of the chained-rounding
+    /// divergence flatten entries carry.
+    pub fn prefix_snapshot(
+        content_hash: u64,
+        prefix_len: u64,
+        local_bounds: Rect,
+        pixel_size: (u32, u32),
+        scale_bucket: ScaleBucket,
+    ) -> Self {
+        Self {
+            kind: LayerRasterCacheKind::PrefixSnapshot,
+            stable_id: None,
+            content_hash,
+            effect_hash: prefix_len,
+            local_bounds_bits: [
+                local_bounds.x.to_bits(),
+                local_bounds.y.to_bits(),
+                local_bounds.width.to_bits(),
+                local_bounds.height.to_bits(),
+            ],
+            pixel_size: [pixel_size.0, pixel_size.1],
+            scale_bucket,
+        }
+    }
+
     pub fn stable_id(self) -> Option<NodeId> {
         self.stable_id
     }
 
     pub fn is_scene_range(self) -> bool {
-        self.kind == LayerRasterCacheKind::SceneRange
+        matches!(
+            self.kind,
+            LayerRasterCacheKind::SceneRange | LayerRasterCacheKind::PrefixSnapshot
+        )
     }
 
     pub fn is_source_content(self) -> bool {

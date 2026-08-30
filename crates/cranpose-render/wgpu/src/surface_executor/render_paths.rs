@@ -84,18 +84,12 @@ fn direct_scene_range_cache_enabled() -> bool {
     })
 }
 
-/// Per-entry admission ceiling as a percentage of the render target's own
-/// byte size (`CRANPOSE_DIRECT_SCENE_RANGE_CACHE_VIEWPORT_PCT`, mirrored as
-/// `debug.cranpose.range_cache_pct` on Android). `0` restores the flat
-/// 2 MB floor for A/B arms; the default admits a fullscreen chunk with
-/// headroom for snap rounding.
-fn direct_scene_range_cache_viewport_pct() -> u64 {
-    static PCT: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
-    *PCT.get_or_init(|| {
-        crate::debug_toggles::debug_toggle("CRANPOSE_DIRECT_SCENE_RANGE_CACHE_VIEWPORT_PCT")
-            .and_then(|value| value.trim().parse().ok())
-            .unwrap_or(DEFAULT_DIRECT_SCENE_RANGE_CACHE_VIEWPORT_PCT)
-    })
+/// Kill switch for prefix snapshots alone (`CRANPOSE_DISABLE_PREFIX_SNAPSHOT`,
+/// mirrored as `debug.cranpose.no_prefix_snap` on Android), so a device A/B
+/// can separate the snapshot mechanism from the flatten cache it shares a
+/// budget with. The range-cache kill switch disables both.
+fn prefix_snapshot_enabled() -> bool {
+    crate::debug_toggles::debug_toggle("CRANPOSE_DISABLE_PREFIX_SNAPSHOT").is_none()
 }
 
 fn direct_scene_range_coalesce_enabled() -> bool {
@@ -139,39 +133,19 @@ impl DirectChunkRunCoalescer {
     }
 }
 
-fn direct_scene_range_cache_enabled_for_entry_bytes(byte_size: u64, surface_bytes: u64) -> bool {
-    direct_scene_range_cache_enabled_for_policy(
-        direct_scene_range_cache_viewport_pct(),
-        !direct_scene_range_cache_enabled(),
-        byte_size,
-        surface_bytes,
-    )
+fn direct_scene_range_cache_enabled_for_entry_bytes(byte_size: u64) -> bool {
+    direct_scene_range_cache_enabled_for_policy(!direct_scene_range_cache_enabled(), byte_size)
 }
 
-/// Admission is viewport-relative so the same rule derives the same behavior
-/// on every display class: a fullscreen chunk is ~1x its target's bytes
-/// whether that is 0.64 MB on a watch or 9.24 MB on a 1080x2244 phone. An
-/// absolute ceiling tuned on one class is implicitly conditional on it — the
-/// old flat 2 MB admitted every Wear fullscreen chunk with 3x headroom while
-/// excluding fullscreen on phones entirely, which is where the Mate 20 X
-/// measured the exclusion at 1.4-2.6 ms of present per frame (A/B'd both on a
-/// frozen backdrop and under quantized-animation store churn). The flat floor
-/// below keeps small entries admitted inside small offscreen targets exactly
-/// as before; the hard per-entry and total caps in
-/// [`crate::layer_surface_cache`] stay as the memory-safety line, so displays
-/// whose fullscreen exceeds them (4K class) keep today's behavior until
-/// someone measures one.
-fn direct_scene_range_cache_enabled_for_policy(
-    viewport_pct: u64,
-    disable_all: bool,
-    byte_size: u64,
-    surface_bytes: u64,
-) -> bool {
-    if disable_all {
-        return false;
-    }
-    let viewport_ceiling = surface_bytes.saturating_mul(viewport_pct) / 100;
-    byte_size <= DIRECT_SCENE_RANGE_CACHE_FLOOR_BYTES.max(viewport_ceiling)
+/// The flatten cache's flat 2 MB floor. Flatten entries composite content
+/// through an intermediate texture, which cannot reproduce the direct
+/// path's chained per-draw roundings — a bounded, tested inexactness the
+/// small class trades for mid-scene coverage. Large stable regions are
+/// served exactly instead, by the prefix snapshot path, so the floor is a
+/// scope line between the inexact-but-general mechanism and the
+/// exact-but-prefix-only one.
+fn direct_scene_range_cache_enabled_for_policy(disable_all: bool, byte_size: u64) -> bool {
+    !disable_all && byte_size <= DIRECT_SCENE_RANGE_CACHE_FLOOR_BYTES
 }
 
 fn direct_scene_range_hash_diag_enabled() -> bool {
@@ -188,12 +162,12 @@ fn direct_scene_range_hash_detail_z() -> Option<usize> {
 }
 
 const MIN_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS: usize = 2;
-const MAX_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS: usize = 256;
+const MAX_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS: usize = 64;
 const MIN_SINGLE_DRAW_DIRECT_SCENE_RANGE_CACHE_BYTES: u64 = 512 * 1024;
 const MAX_MOTION_SENSITIVE_DIRECT_SCENE_CACHE_DRAW_BYTES: u64 = 2_097_152;
 const DIRECT_SCENE_RANGE_CACHE_FLOOR_BYTES: u64 = 2 * 1024 * 1024;
-const DEFAULT_DIRECT_SCENE_RANGE_CACHE_VIEWPORT_PCT: u64 = 125;
 const MAX_DIRECT_SCENE_RANGE_CACHE_BYTES: u64 = MAX_SCENE_RANGE_CACHE_ENTRY_BYTES;
+const MIN_PREFIX_SNAPSHOT_DRAW_OPS: usize = 2;
 const RENDER_STRING_HASH_CACHE_CAPACITY: usize = 2048;
 
 thread_local! {
@@ -1396,10 +1370,17 @@ fn scene_range_draw_op_count(scene: &CompositorScene, z_start: usize, z_end: usi
 
 fn draw_op_caches_as_transparent_surface(scene: &CompositorScene, op: DrawOp) -> bool {
     match op.kind {
-        DrawOpKind::Shape(index) => scene
-            .shapes
-            .get(index)
-            .is_some_and(|shape| shape.blend_mode == BlendMode::SrcOver),
+        // The feed-capture exclusion: a capture queued this frame copies
+        // those exact shape slots out of the ordinary conversion stream, and
+        // a range composite that swallows the span retains wrong content
+        // under a confirmed identity (command_feed_parity pins this).
+        DrawOpKind::Shape(index) => {
+            scene
+                .shapes
+                .get(index)
+                .is_some_and(|shape| shape.blend_mode == BlendMode::SrcOver)
+                && !crate::shape_replay::shape_index_pending_feed_capture(index)
+        }
         DrawOpKind::Image(index) => scene
             .images
             .get(index)
@@ -1473,25 +1454,18 @@ fn direct_scene_range_chunk_fits_cache_entry(
     max_texture_dim: u32,
     snapped_bounds: Option<Rect>,
     root_scale: f32,
-    surface_bytes: u64,
 ) -> bool {
     let Some(logical_rect) = snapped_bounds else {
         return false;
     };
     let (target_width, target_height) =
         surface_target_size(logical_rect, root_scale, max_texture_dim);
-    direct_scene_range_cache_enabled_for_entry_bytes(
-        offscreen_byte_size(target_width, target_height),
-        surface_bytes,
-    )
+    direct_scene_range_cache_enabled_for_entry_bytes(offscreen_byte_size(
+        target_width,
+        target_height,
+    ))
 }
 
-/// Chunk boundaries fall where cacheability changes, not at an op count: a
-/// clean run mixed with one shadow can never produce a key, and a clean run
-/// cut mid-way produces several stacked entries where one would do — the
-/// Mate 20 X list screen paid three fullscreen composite reads per frame
-/// for one 161-op backdrop that the old 64-op cap split in three. The cap
-/// survives only as a ceiling on per-chunk bounds-union and hash work.
 fn direct_scene_range_cache_chunk_end(
     scene: &CompositorScene,
     z_start: usize,
@@ -1499,22 +1473,12 @@ fn direct_scene_range_cache_chunk_end(
     root_scale: f32,
 ) -> usize {
     let mut draw_count = 0usize;
-    let mut run_is_cacheable: Option<bool> = None;
     for draw_op in scene_range_draw_ops(&scene.draw_ops, z_start, z_end) {
         if draw_op_splits_direct_scene_range_cache(scene, *draw_op, root_scale) {
             if draw_op.z_index <= z_start {
                 return draw_op.z_index.saturating_add(1).min(z_end);
             }
             return draw_op.z_index.min(z_end);
-        }
-
-        let op_is_cacheable = draw_op_caches_as_transparent_surface(scene, *draw_op);
-        match run_is_cacheable {
-            None => run_is_cacheable = Some(op_is_cacheable),
-            Some(run) if run != op_is_cacheable => {
-                return draw_op.z_index.min(z_end);
-            }
-            _ => {}
         }
 
         draw_count = draw_count.saturating_add(1);
@@ -2253,6 +2217,7 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
                     render_direct_scene_range_with_pending_composites(
                         backend,
                         surface_view,
+                        root_target,
                         &local_scene,
                         cursor_z,
                         child.z_index,
@@ -2631,6 +2596,7 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
                 render_direct_scene_range_with_pending_composites(
                     backend,
                     surface_view,
+                    root_target,
                     &local_scene,
                     cursor_z,
                     local_scene.next_z,
@@ -4403,7 +4369,6 @@ fn cached_direct_scene_range_surface<B: SurfaceExecutionBackend>(
     z_end: usize,
     root_scale: f32,
     snapped_bounds: Option<Rect>,
-    surface_bytes: u64,
 ) -> Result<Option<LayerSurface>, String> {
     // `snapped_bounds` is the caller's [`direct_scene_range_snapped_bounds`]
     // for exactly this range — the same value this function used to derive
@@ -4420,7 +4385,7 @@ fn cached_direct_scene_range_surface<B: SurfaceExecutionBackend>(
     let (target_width, target_height) =
         surface_target_size(logical_rect, root_scale, backend.max_texture_dim());
     let target_bytes = offscreen_byte_size(target_width, target_height);
-    if !direct_scene_range_cache_enabled_for_entry_bytes(target_bytes, surface_bytes) {
+    if !direct_scene_range_cache_enabled_for_entry_bytes(target_bytes) {
         if layer_render_diag_enabled() {
             let draw_ops = scene_range_draw_op_count(scene, z_start, z_end);
             log::warn!(
@@ -4583,7 +4548,6 @@ fn queue_cached_direct_scene_range<B: SurfaceExecutionBackend>(
     z_end: usize,
     root_scale: f32,
     snapped_bounds: Option<Rect>,
-    surface_bytes: u64,
     pending_composites: &mut Vec<PendingLayerComposite>,
     composite_seq: &mut usize,
     pending_composite_load_op: &mut Option<wgpu::LoadOp<wgpu::Color>>,
@@ -4596,7 +4560,6 @@ fn queue_cached_direct_scene_range<B: SurfaceExecutionBackend>(
         z_end,
         root_scale,
         snapped_bounds,
-        surface_bytes,
     )?
     else {
         return Ok(false);
@@ -4624,10 +4587,223 @@ fn queue_cached_direct_scene_range<B: SurfaceExecutionBackend>(
     Ok(true)
 }
 
+/// The last z (exclusive) of the scene prefix a snapshot may cover: ops from
+/// the bottom up to the first one whose replay could be wrong — a retained
+/// batch (its transform lives outside the content hash) or a shape whose
+/// feed capture this frame needs the ordinary conversion stream. Everything
+/// else is eligible, shadows and non-SrcOver blends included: a snapshot
+/// replays captured bytes, so the flatten path's transparency-safety rules
+/// do not apply to it.
+fn prefix_snapshot_range_end(scene: &CompositorScene, z_end: usize) -> usize {
+    for op in scene_range_draw_ops(&scene.draw_ops, 0, z_end) {
+        let stable = match op.kind {
+            DrawOpKind::Retained(_) => false,
+            DrawOpKind::Shape(index) => {
+                !crate::shape_replay::shape_index_pending_feed_capture(index)
+            }
+            DrawOpKind::Image(_) | DrawOpKind::Text(_) | DrawOpKind::Shadow(_) => true,
+        };
+        if !stable {
+            return op.z_index.min(z_end);
+        }
+    }
+    z_end
+}
+
+fn prefix_snapshot_key(
+    scene: &CompositorScene,
+    prefix_end: usize,
+    width: u32,
+    height: u32,
+    root_scale: f32,
+    clear: &wgpu::Color,
+) -> Option<(LayerRasterCacheKey, Rect)> {
+    if !root_scale.is_finite() || root_scale <= 0.0 {
+        return None;
+    }
+    if scene_range_draw_op_count(scene, 0, prefix_end) < MIN_PREFIX_SNAPSHOT_DRAW_OPS {
+        return None;
+    }
+    let logical_rect = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: width as f32 / root_scale,
+        height: height as f32 / root_scale,
+    };
+    // The clear color is part of the captured bytes (the prefix rendered
+    // over it), so it belongs in the key with the content.
+    let clear_bits = clear.r.to_bits()
+        ^ clear.g.to_bits().rotate_left(16)
+        ^ clear.b.to_bits().rotate_left(32)
+        ^ clear.a.to_bits().rotate_left(48);
+    let content_hash =
+        scene_range_content_hash(scene, 0, prefix_end, (width, height), root_scale) ^ clear_bits;
+    Some((
+        LayerRasterCacheKey::prefix_snapshot(
+            content_hash,
+            prefix_end as u64,
+            logical_rect,
+            (width, height),
+            ScaleBucket::from_scale(root_scale),
+        ),
+        logical_rect,
+    ))
+}
+
+/// Serves the scene's stable bottom prefix from a byte-exact snapshot, or
+/// captures one.
+///
+/// On a hit the snapshot replays as a full-viewport composite riding inside
+/// the segment's first render pass; premultiplied SrcOver over the pass's
+/// own clear reproduces the captured bytes exactly (the dst term vanishes
+/// against the very color the capture embedded). On an admitted miss the
+/// prefix renders through the ordinary pipeline — every chained rounding
+/// happens exactly as an uncached frame — and the produced texels are then
+/// copied out of the target, so the entry IS the direct output rather than
+/// a flattened approximation of it. First sightings render normally and
+/// only observe, mirroring the flatten cache's two-sighting admission.
+#[allow(clippy::too_many_arguments)]
+/// What the prefix snapshot stage did with the walk's bottom range.
+enum PrefixSnapshotOutcome {
+    /// No prefix key exists this frame; the walk owns the whole range.
+    Inert,
+    /// The prefix owns `[0, end)`: the walk renders it as one plain direct
+    /// run and the chunk flatten cache never sees it. The claim starts on
+    /// the FIRST sighting, not on the store: the chunker's grid downstream
+    /// of the prefix must be the same in every frame of a scene's life, or
+    /// chunk admissions restart mid-life and same-content frames stop being
+    /// byte-identical. Claimed frames, store frames (which also render the
+    /// entry offscreen), and served frames all produce the direct path's
+    /// bytes for the prefix range.
+    Claimed(usize),
+    /// A cached entry was composited in place of `[0, end)`.
+    Served(usize),
+}
+
+#[allow(clippy::too_many_arguments)]
+fn serve_or_capture_prefix_snapshot<B: SurfaceExecutionBackend>(
+    backend: &mut B,
+    snapshot_source: Option<&OffscreenTarget>,
+    scene: &CompositorScene,
+    z_start: usize,
+    z_end: usize,
+    width: u32,
+    height: u32,
+    root_scale: f32,
+    pending_composites: &mut Vec<PendingLayerComposite>,
+    composite_seq: &mut usize,
+    pending_composite_load_op: &mut Option<wgpu::LoadOp<wgpu::Color>>,
+    next_load_op: &mut wgpu::LoadOp<wgpu::Color>,
+) -> Result<PrefixSnapshotOutcome, String> {
+    if z_start != 0 || !prefix_snapshot_enabled() {
+        return Ok(PrefixSnapshotOutcome::Inert);
+    }
+    let Some(source) = snapshot_source else {
+        return Ok(PrefixSnapshotOutcome::Inert);
+    };
+    let wgpu::LoadOp::Clear(clear) = *next_load_op else {
+        return Ok(PrefixSnapshotOutcome::Inert);
+    };
+    if source.width != width || source.height != height {
+        return Ok(PrefixSnapshotOutcome::Inert);
+    }
+    // A pending feed capture copies specific shape slots out of this frame's
+    // conversion stream; both replaying past them and splitting the frame's
+    // batches around them would corrupt what the store captures. Captures
+    // are one-shot events, so sitting the whole frame out is free.
+    if crate::shape_replay::any_pending_feed_captures() {
+        return Ok(PrefixSnapshotOutcome::Inert);
+    }
+    let prefix_end = prefix_snapshot_range_end(scene, z_end);
+    let Some((key, logical_rect)) =
+        prefix_snapshot_key(scene, prefix_end, width, height, root_scale, &clear)
+    else {
+        return Ok(PrefixSnapshotOutcome::Inert);
+    };
+
+    if let Some((cached_target, cached_rect)) = backend.cached_layer_surface(&key) {
+        if pending_composites.is_empty() {
+            *pending_composite_load_op = Some(*next_load_op);
+        }
+        let dest_quad = anchored_composite_dest_quad(
+            crate::rect_to_quad(cached_rect),
+            None,
+            None,
+            root_scale,
+            CompositeSampleMode::Nearest,
+        );
+        // Src, not SrcOver: the entry is the target's whole state after the
+        // prefix — clear included — so replay is a verbatim texel copy. A
+        // SrcOver replay is off by one bit wherever the stored alpha rounds
+        // below one at an anti-aliased pixel and the dst term leaks through.
+        pending_composites.push(PendingLayerComposite {
+            z_index: 0,
+            seq: next_composite_seq(composite_seq),
+            surface: LayerSurface {
+                target: LayerSurfaceTexture::Cached(cached_target),
+                logical_rect: cached_rect,
+                composite_alpha: 1.0,
+                blend_mode: BlendMode::Src,
+                rounded_clip: None,
+                backdrop: None,
+                deferred_effect: None,
+                effect_content_rect: None,
+                sample_mode: CompositeSampleMode::Nearest,
+            },
+            dest_quad,
+            scissor: None,
+        });
+        *next_load_op = wgpu::LoadOp::Load;
+        return Ok(PrefixSnapshotOutcome::Served(prefix_end));
+    }
+
+    if !backend.admit_layer_surface_cache_miss(&key) {
+        return Ok(PrefixSnapshotOutcome::Claimed(prefix_end));
+    }
+
+    // The entry renders through the same segment pipeline as the frame,
+    // over the same clear: an identical op sequence from an identical
+    // initial state reproduces the direct path's chained roundings bit for
+    // bit, which a flatten over transparent cannot. The claim makes the
+    // frame render the same range as one plain direct run, so the store
+    // frame's on-screen bytes, the entry's, and every later replay's are
+    // all the same bytes; its cost is this one ordered offscreen pass.
+    let entry = backend.acquire_retained_surface(width, height);
+    let render_result = backend.render_non_effect_segment(
+        &entry.view,
+        &scene.shapes,
+        &scene.brushes,
+        &scene.images,
+        &scene.texts,
+        &scene.shadow_draws,
+        &scene.retained_draws,
+        &scene.draw_ops,
+        0,
+        prefix_end,
+        &[],
+        width,
+        height,
+        root_scale,
+        wgpu::LoadOp::Clear(clear),
+    );
+    match render_result {
+        Ok(()) => {
+            record_layer_cache_miss(backend, "prefix-snapshot", &key, width, height);
+            backend.insert_cached_layer_surface(key, entry, logical_rect);
+            Ok(PrefixSnapshotOutcome::Claimed(prefix_end))
+        }
+        Err(_) => {
+            backend.release_layer_surface_target(LayerSurfaceTexture::Owned(entry));
+            Ok(PrefixSnapshotOutcome::Claimed(prefix_end))
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn render_direct_scene_range_with_pending_composites<B: SurfaceExecutionBackend>(
     backend: &mut B,
     target_view: &wgpu::TextureView,
+    snapshot_source: Option<&OffscreenTarget>,
     scene: &CompositorScene,
     z_start: usize,
     z_end: usize,
@@ -4642,9 +4818,31 @@ fn render_direct_scene_range_with_pending_composites<B: SurfaceExecutionBackend>
     next_load_op: &mut wgpu::LoadOp<wgpu::Color>,
 ) -> Result<(), String> {
     let cache_enabled = direct_scene_range_cache_enabled();
-    let surface_bytes = offscreen_byte_size(width, height);
     let mut cursor_z = z_start;
     let mut direct_run = DirectChunkRunCoalescer::default();
+    if cache_enabled {
+        match serve_or_capture_prefix_snapshot(
+            backend,
+            snapshot_source,
+            scene,
+            cursor_z,
+            z_end,
+            width,
+            height,
+            root_scale,
+            pending_composites,
+            composite_seq,
+            pending_composite_load_op,
+            next_load_op,
+        )? {
+            PrefixSnapshotOutcome::Inert => {}
+            PrefixSnapshotOutcome::Served(end) => cursor_z = end,
+            PrefixSnapshotOutcome::Claimed(end) => {
+                direct_run.absorb(cursor_z);
+                cursor_z = end;
+            }
+        }
+    }
     while cursor_z < z_end {
         let mut chunk_end = direct_scene_range_cache_chunk_end(scene, cursor_z, z_end, root_scale);
         if chunk_end <= cursor_z {
@@ -4665,13 +4863,11 @@ fn render_direct_scene_range_with_pending_composites<B: SurfaceExecutionBackend>
         // store. When the chunk is too big to be admitted anyway, the split
         // buys nothing and costs a whole render pass — and on a tile-based
         // mobile GPU a render pass is a tile store and reload of the entire
-        // target. A game frame of ~640 full-surface draw ops was being cut
-        // into ten passes that all wrote the same pixels; rendering the
-        // remainder in one pass measured 18% less CPU on a Pixel 9 Pro. The
-        // viewport-relative admission means an in-budget chunk always fits
-        // its own surface, so this widen engages when an operator narrows
-        // admission (`range_cache_pct` A/B arms, or the kill switch making
-        // `chunk_can_cache` false above).
+        // target. An animated scene is the worst case: every chunk covers the
+        // whole surface, so every one is refused, and a game frame of ~640
+        // draw ops was being cut into ten passes that all wrote the same
+        // pixels. Rendering the remainder in one pass measured 18% less CPU
+        // on a Pixel 9 Pro.
         let mut chunk_can_cache = cache_enabled;
         if chunk_end < z_end
             && !(cache_enabled
@@ -4679,7 +4875,6 @@ fn render_direct_scene_range_with_pending_composites<B: SurfaceExecutionBackend>
                     backend.max_texture_dim(),
                     chunk_bounds,
                     root_scale,
-                    surface_bytes,
                 ))
         {
             chunk_end = z_end;
@@ -4698,7 +4893,6 @@ fn render_direct_scene_range_with_pending_composites<B: SurfaceExecutionBackend>
                 chunk_end,
                 root_scale,
                 chunk_bounds,
-                surface_bytes,
                 pending_composites,
                 composite_seq,
                 pending_composite_load_op,
@@ -6583,23 +6777,24 @@ mod tests {
     };
 
     use super::{
-        BackdropPrefixChildContribution, DEFAULT_DIRECT_SCENE_RANGE_CACHE_VIEWPORT_PCT,
-        DIRECT_SCENE_RANGE_CACHE_FLOOR_BYTES, DirectChunkRunCoalescer,
-        MAX_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS, MAX_MOTION_SENSITIVE_DIRECT_SCENE_CACHE_DRAW_BYTES,
-        MIN_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS, SceneBrush, anchored_composite_dest_quad,
-        axis_aligned_backdrop_copy_region, axis_aligned_backdrop_snapshot_copy_plan,
-        backdrop_effect_cache_key, backdrop_effect_cache_key_for_effect_hash,
-        backdrop_scene_prefix_hash, backdrop_underlay_is_covered_by_local_content,
-        child_composite_visible, composite_dest_viewport, dest_quad_intersects_rect,
-        direct_scene_range_cache_chunk_end, direct_scene_range_cache_enabled_for_policy,
-        direct_scene_range_cache_key, direct_scene_range_chunk_fits_cache_entry,
-        direct_scene_range_snapped_bounds, exact_translation_sample_mode, layer_source_cache_key,
+        BackdropPrefixChildContribution, DIRECT_SCENE_RANGE_CACHE_FLOOR_BYTES,
+        DirectChunkRunCoalescer, MAX_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS,
+        MAX_MOTION_SENSITIVE_DIRECT_SCENE_CACHE_DRAW_BYTES, MIN_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS,
+        SceneBrush, anchored_composite_dest_quad, axis_aligned_backdrop_copy_region,
+        axis_aligned_backdrop_snapshot_copy_plan, backdrop_effect_cache_key,
+        backdrop_effect_cache_key_for_effect_hash, backdrop_scene_prefix_hash,
+        backdrop_underlay_is_covered_by_local_content, child_composite_visible,
+        composite_dest_viewport, dest_quad_intersects_rect, direct_scene_range_cache_chunk_end,
+        direct_scene_range_cache_enabled_for_policy, direct_scene_range_cache_key,
+        direct_scene_range_chunk_fits_cache_entry, direct_scene_range_snapped_bounds,
+        exact_translation_sample_mode, layer_source_cache_key,
         layer_source_uses_external_backdrop_underlay, layer_surface_dest_quad,
         layer_surface_translation_context, minimum_surface_scale_for_composite,
-        offscreen_byte_size, quad_bounds_rect, rects_intersect, render_string_scene_hash,
-        retained_render_effect_hash, rounded_fill_covers_rect, scene_backdrop_input_hashes,
-        snapped_backdrop_geometry, split_backdrop_effect, surface_target_size,
-        underlay_fill_scissor, underlay_sample_rect, visible_backdrop_capture_rect,
+        prefix_snapshot_key, prefix_snapshot_range_end, quad_bounds_rect, rects_intersect,
+        render_string_scene_hash, retained_render_effect_hash, rounded_fill_covers_rect,
+        scene_backdrop_input_hashes, snapped_backdrop_geometry, split_backdrop_effect,
+        surface_target_size, underlay_fill_scissor, underlay_sample_rect,
+        visible_backdrop_capture_rect,
     };
     use crate::{
         effect_renderer::CompositeSampleMode,
@@ -6693,80 +6888,138 @@ mod tests {
     }
 
     #[test]
-    fn a_fullscreen_chunk_is_admitted_on_every_display_class() {
-        let phone_surface = offscreen_byte_size(1080, 2244);
-        let watch_surface = offscreen_byte_size(408, 408);
-        let pct = DEFAULT_DIRECT_SCENE_RANGE_CACHE_VIEWPORT_PCT;
+    fn the_flatten_floor_keeps_entries_small_and_the_kill_switch_refuses_all() {
+        let small_entry = DIRECT_SCENE_RANGE_CACHE_FLOOR_BYTES;
+        let large_entry = DIRECT_SCENE_RANGE_CACHE_FLOOR_BYTES + 1;
 
-        // The Mate 20 X measurement: a fullscreen entry equals its surface's
-        // bytes and must be admitted, where the flat 2 MB rule refused it.
         assert!(direct_scene_range_cache_enabled_for_policy(
-            pct,
             false,
-            phone_surface,
-            phone_surface
+            small_entry
         ));
-        assert!(direct_scene_range_cache_enabled_for_policy(
-            pct,
-            false,
-            watch_surface,
-            watch_surface
-        ));
-    }
-
-    #[test]
-    fn the_viewport_ceiling_refuses_an_entry_larger_than_its_surface() {
-        let phone_surface = offscreen_byte_size(1080, 2244);
-        let oversized = phone_surface * 2;
         assert!(!direct_scene_range_cache_enabled_for_policy(
-            DEFAULT_DIRECT_SCENE_RANGE_CACHE_VIEWPORT_PCT,
             false,
-            oversized,
-            phone_surface
+            large_entry
         ));
-    }
-
-    #[test]
-    fn the_flat_floor_preserves_small_display_admission() {
-        // A watch entry between 1.25x its viewport and the 2 MB floor was
-        // admitted under the old flat rule and must stay admitted: the
-        // viewport term only ever widens admission, never narrows it.
-        let watch_surface = offscreen_byte_size(408, 408);
-        let between = DIRECT_SCENE_RANGE_CACHE_FLOOR_BYTES - 1;
-        assert!(between > watch_surface);
-        assert!(direct_scene_range_cache_enabled_for_policy(
-            DEFAULT_DIRECT_SCENE_RANGE_CACHE_VIEWPORT_PCT,
-            false,
-            between,
-            watch_surface
-        ));
-    }
-
-    #[test]
-    fn pct_zero_restores_the_flat_floor_for_ab_arms() {
-        let phone_surface = offscreen_byte_size(1080, 2244);
         assert!(!direct_scene_range_cache_enabled_for_policy(
-            0,
-            false,
-            phone_surface,
-            phone_surface
-        ));
-        assert!(direct_scene_range_cache_enabled_for_policy(
-            0,
-            false,
-            DIRECT_SCENE_RANGE_CACHE_FLOOR_BYTES,
-            phone_surface
-        ));
-    }
-
-    #[test]
-    fn the_kill_switch_refuses_everything() {
-        assert!(!direct_scene_range_cache_enabled_for_policy(
-            DEFAULT_DIRECT_SCENE_RANGE_CACHE_VIEWPORT_PCT,
             true,
-            1,
-            offscreen_byte_size(1080, 2244)
+            small_entry
         ));
+    }
+
+    #[test]
+    fn a_prefix_snapshot_stops_at_a_retained_batch() {
+        let mut scene = CompositorScene::new();
+        for z_index in 0..10usize {
+            let shape = prefix_shape(z_index, Color::BLACK);
+            scene.shapes.push(shape);
+            scene.draw_ops.push(DrawOp {
+                z_index,
+                kind: DrawOpKind::Shape(z_index),
+            });
+        }
+        scene.retained_draws.push(crate::scene::RetainedDraw {
+            slot: 0,
+            transform: crate::scene::SimilarityTransform::IDENTITY,
+            bounds: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 10.0,
+                height: 10.0,
+            },
+            first_shape: 0,
+            shape_count: 1,
+        });
+        scene.draw_ops.push(DrawOp {
+            z_index: 10,
+            kind: DrawOpKind::Retained(0),
+        });
+        scene.next_z = 11;
+
+        assert_eq!(prefix_snapshot_range_end(&scene, scene.next_z), 10);
+    }
+
+    #[test]
+    fn a_prefix_snapshot_stops_before_a_feed_captured_shape() {
+        crate::shape_replay::clear_pending_feed_captures_for_tests();
+        let mut scene = CompositorScene::new();
+        for z_index in 0..10usize {
+            let shape = prefix_shape(z_index, Color::BLACK);
+            scene.shapes.push(shape);
+            scene.draw_ops.push(DrawOp {
+                z_index,
+                kind: DrawOpKind::Shape(z_index),
+            });
+        }
+        scene.next_z = 10;
+
+        assert_eq!(prefix_snapshot_range_end(&scene, scene.next_z), 10);
+
+        crate::shape_replay::inject_feed_capture_for_tests(
+            cranpose_render_common::graph::DrawCommandId {
+                node_id: 7,
+                command_index: 0,
+                placement: cranpose_render_common::style_shared::DrawPlacement::Behind,
+            },
+            0,
+            6,
+            2,
+        );
+        assert_eq!(
+            prefix_snapshot_range_end(&scene, scene.next_z),
+            6,
+            "a capture queued this frame copies those shape slots out of the \
+             ordinary conversion stream; a snapshot replay would starve it"
+        );
+        crate::shape_replay::clear_pending_feed_captures_for_tests();
+    }
+
+    #[test]
+    fn a_prefix_snapshot_key_carries_the_clear_color() {
+        let scene = scene_with_cacheable_prefix_shapes(Color::BLACK);
+        let clear_a = wgpu::Color::BLACK;
+        let clear_b = wgpu::Color {
+            r: 0.5,
+            g: 0.0,
+            b: 0.0,
+            a: 1.0,
+        };
+        let key_a = prefix_snapshot_key(&scene, scene.next_z, 400, 400, 1.0, &clear_a)
+            .expect("prefix over enough ops must key")
+            .0;
+        let key_b = prefix_snapshot_key(&scene, scene.next_z, 400, 400, 1.0, &clear_b)
+            .expect("prefix over enough ops must key")
+            .0;
+        assert_ne!(
+            key_a, key_b,
+            "the captured bytes embed the clear the prefix rendered over"
+        );
+    }
+
+    #[test]
+    fn a_prefix_snapshot_key_never_collides_with_a_flatten_key() {
+        let scene = scene_with_cacheable_prefix_shapes(Color::BLACK);
+        let prefix = prefix_snapshot_key(&scene, scene.next_z, 400, 400, 1.0, &wgpu::Color::BLACK)
+            .expect("prefix over enough ops must key")
+            .0;
+        let flatten = direct_scene_range_cache_key(
+            &scene,
+            0,
+            scene.next_z,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 400.0,
+                height: 400.0,
+            },
+            (400, 400),
+            1.0,
+        )
+        .expect("the same range must also produce a flatten key");
+        assert_ne!(
+            prefix, flatten,
+            "a byte-exact snapshot and a flattened approximation must never \
+             serve each other's probes"
+        );
     }
 
     fn default_cache_runtime_shader_layer() -> LayerNode {
@@ -7494,78 +7747,12 @@ mod tests {
     }
 
     #[test]
-    fn a_clean_run_is_cut_at_the_first_uncacheable_op_not_at_the_op_cap() {
-        // 161 SrcOver ops (a fullscreen decorative backdrop) followed by a
-        // non-SrcOver op. Cut at the 64-op cap this run becomes THREE
-        // fullscreen cache entries, and the frame pays three fullscreen
-        // composite reads for one backdrop — measured at 7.2 of the 10.6
-        // effect-composite Mpx/frame on the Mate 20 X list screen. The
-        // boundary that matters is where cacheability changes, not an op
-        // count.
-        let clean_ops = 161usize;
-        let mut scene = CompositorScene::new();
-        for z_index in 0..clean_ops {
-            let mut shape = prefix_shape(z_index, Color::BLACK);
-            shape.rect.x = (z_index % 40) as f32 * 4.0;
-            shape.local_rect = shape.rect;
-            shape.quad = crate::rect_to_quad(shape.rect);
-            scene.shapes.push(shape);
-            scene.draw_ops.push(DrawOp {
-                z_index,
-                kind: DrawOpKind::Shape(z_index),
-            });
-        }
-        let mut dirty = prefix_shape(clean_ops, Color::BLACK);
-        dirty.blend_mode = BlendMode::Plus;
-        scene.shapes.push(dirty);
-        scene.draw_ops.push(DrawOp {
-            z_index: clean_ops,
-            kind: DrawOpKind::Shape(clean_ops),
-        });
-        scene.next_z = clean_ops + 1;
-
-        assert_eq!(
-            direct_scene_range_cache_chunk_end(&scene, 0, scene.next_z, 1.0),
-            clean_ops,
-            "the whole clean run belongs to one chunk, cut before the dirty op"
-        );
-        assert_eq!(
-            direct_scene_range_cache_chunk_end(&scene, clean_ops, scene.next_z, 1.0),
-            scene.next_z,
-            "the dirty remainder is its own chunk"
-        );
-    }
-
-    #[test]
-    fn a_dirty_run_ends_where_cacheable_content_resumes() {
-        let mut scene = CompositorScene::new();
-        for z_index in 0..4usize {
-            let mut shape = prefix_shape(z_index, Color::BLACK);
-            if z_index < 2 {
-                shape.blend_mode = BlendMode::Plus;
-            }
-            scene.shapes.push(shape);
-            scene.draw_ops.push(DrawOp {
-                z_index,
-                kind: DrawOpKind::Shape(z_index),
-            });
-        }
-        scene.next_z = 4;
-
-        assert_eq!(
-            direct_scene_range_cache_chunk_end(&scene, 0, scene.next_z, 1.0),
-            2,
-            "the dirty run must not absorb the cacheable ops behind it"
-        );
-    }
-
-    #[test]
-    fn a_full_surface_chunk_fits_inside_its_own_surface_budget() {
-        // Every shape covers the full 1280x2856 surface. Under the flat 2 MB
-        // rule each 64-op chunk was refused and the walk widened past it; the
-        // viewport-relative rule admits a chunk up to its surface's own byte
-        // size, which is what the Mate 20 X A/B measured as a 1.4-2.6 ms
-        // present win for a stable fullscreen backdrop.
+    fn a_chunk_too_large_to_cache_is_not_worth_splitting_for() {
+        // Every shape covers the full 1280x2856 surface, the way a game frame's
+        // moving objects do once their bounds are unioned. Each 64-op chunk is
+        // then far past the flatten entry budget, so the cache would refuse it
+        // and the split would buy a render pass for nothing. Large stable
+        // regions are the prefix snapshot's job instead.
         let mut scene = CompositorScene::new();
         for z_index in 0..(MAX_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS * 2) {
             let mut shape = prefix_shape(z_index, Color::BLACK);
@@ -7587,7 +7774,7 @@ mod tests {
         scene.next_z = MAX_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS * 2;
 
         assert!(
-            direct_scene_range_chunk_fits_cache_entry(
+            !direct_scene_range_chunk_fits_cache_entry(
                 8192,
                 direct_scene_range_snapped_bounds(
                     &scene,
@@ -7596,9 +7783,8 @@ mod tests {
                     1.0,
                 ),
                 1.0,
-                offscreen_byte_size(1280, 2856),
             ),
-            "a fullscreen chunk equals its surface's bytes and must be admitted"
+            "a full-surface chunk is far past the flatten entry budget"
         );
     }
 
@@ -7615,7 +7801,6 @@ mod tests {
                     1.0,
                 ),
                 1.0,
-                offscreen_byte_size(1280, 2856),
             ),
             "a small range is exactly what the range cache is for"
         );
