@@ -164,6 +164,7 @@ jobs:
         run: scripts/ci/docs_only_change.sh
 
       - name: Provision iOS Rust targets
+        id: provision
         if: steps.changes.outputs.docs_only != 'true'
         run: |
           # Resolve the account's real home rather than trusting $HOME:
@@ -189,15 +190,15 @@ jobs:
             aarch64-apple-ios
 
       - name: Clippy iOS simulator
-        if: steps.changes.outputs.docs_only != 'true'
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' && steps.changes.outputs.docs_only != 'true' }}
         run: just clippy-ios
 
       - name: Build iOS device binary
-        if: steps.changes.outputs.docs_only != 'true'
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' && steps.changes.outputs.docs_only != 'true' }}
         run: just ios-device
 
       - name: Assemble simulator app bundle
-        if: steps.changes.outputs.docs_only != 'true'
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' && steps.changes.outputs.docs_only != 'true' }}
         run: just ios-sim
 
   android-release:
@@ -253,6 +254,7 @@ jobs:
           echo "$sdk_root/platform-tools" >> "$GITHUB_PATH"
 
       - name: Provision toolchains and start sccache
+        id: provision
         if: steps.changes.outputs.docs_only != 'true'
         run: |
           # rust-toolchain.toml owns the version; the targets land on it.
@@ -273,14 +275,14 @@ jobs:
           test -f "$ANDROID_NDK_HOME/source.properties"
 
       - name: Clippy Android ABIs
-        if: steps.changes.outputs.docs_only != 'true'
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' && steps.changes.outputs.docs_only != 'true' }}
         # Gradle does not deny warnings, so the APK build below cannot be the
         # zero-warning gate for this target. Runs first: a lint failure should
         # not wait behind a full release APK.
         run: just clippy-android
 
       - name: Build Android release APK
-        if: steps.changes.outputs.docs_only != 'true'
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' && steps.changes.outputs.docs_only != 'true' }}
         # --no-daemon: never attach to a shared/foreign Gradle daemon on this
         # self-hosted box. Reused daemons started by other builds on the runner
         # can carry a PATH without ~/.cargo/bin, which makes the cargo-ndk check

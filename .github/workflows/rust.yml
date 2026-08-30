@@ -102,9 +102,17 @@ jobs:
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         run: just clippy
 
-      - name: Run clippy on the macOS camera backend
+      - name: Run clippy on the optional desktop backends
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
-        run: just clippy-camera-desktop
+        run: just clippy-optional-backends
+
+      - name: Run clippy on the SVG image painter
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
+        run: just clippy-svg
+
+      - name: Run clippy on the embedded hyphenation dictionary
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
+        run: just clippy-hyphenation
 
       - name: Run clippy on the robot runners
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
@@ -115,7 +123,7 @@ jobs:
         # A broken intra-doc link is a broken published page.
         run: just doc
 
-      - name: Run cranpose-core feature permutations
+      - name: Run feature permutations the default build skips
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         run: just test-features
 
