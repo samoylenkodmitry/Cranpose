@@ -104,6 +104,25 @@ pub fn optional_device_features(adapter: &wgpu::Adapter) -> wgpu::Features {
     adapter.features() & (wgpu::Features::PIPELINE_CACHE | wgpu::Features::TIMESTAMP_QUERY)
 }
 
+#[doc(hidden)]
+pub fn offscreen_render_target_for_tests(
+    device: &wgpu::Device,
+    width: u32,
+    height: u32,
+    label: &str,
+) -> (wgpu::Texture, wgpu::TextureView) {
+    let texture = offscreen::create_2d_texture(
+        device,
+        wgpu::TextureFormat::Rgba8Unorm,
+        width,
+        height,
+        wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        Some(label),
+    );
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    (texture, view)
+}
+
 pub(crate) fn rect_to_quad(rect: Rect) -> [[f32; 2]; 4] {
     [
         [rect.x, rect.y],

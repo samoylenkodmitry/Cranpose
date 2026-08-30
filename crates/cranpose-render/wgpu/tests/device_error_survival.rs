@@ -1,49 +1,16 @@
 mod support;
 
-use cranpose_core::NodeId;
 use cranpose_render_common::{
     Renderer,
     graph::{
-        CachePolicy, DrawPrimitiveNode, IsolationReasons, LayerNode, PrimitiveEntry, PrimitiveNode,
-        PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode,
+        DrawPrimitiveNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, RenderGraph, RenderNode,
     },
-    raster_cache::LayerRasterCacheHashes,
 };
 use cranpose_render_wgpu::{CancelReason, PresentOutcome};
-use cranpose_ui_graphics::{Brush, Color, GraphicsLayer, Point, Rect};
+use cranpose_ui_graphics::{Brush, Color, Rect};
 
 const WIDTH: u32 = 128;
 const HEIGHT: u32 = 96;
-
-fn test_layer(node_id: Option<NodeId>, children: Vec<RenderNode>) -> LayerNode {
-    LayerNode {
-        node_id,
-        local_bounds: Rect {
-            x: 0.0,
-            y: 0.0,
-            width: WIDTH as f32,
-            height: HEIGHT as f32,
-        },
-        transform_to_parent: ProjectiveTransform::identity(),
-        motion_context_animated: false,
-        translated_content_context: false,
-        translated_content_offset: Point::default(),
-        content_offset: Point::default(),
-        scene_children_origin: Point::default(),
-        scene_children_layer_translation: Point::default(),
-        graphics_layer: GraphicsLayer::default(),
-        clip_to_bounds: false,
-        shadow_clip: None,
-        hit_test: None,
-        has_hit_targets: false,
-        has_origin_sinks: false,
-        isolation: IsolationReasons::default(),
-        cache_policy: CachePolicy::None,
-        cache_hashes: LayerRasterCacheHashes::default(),
-        cache_hashes_valid: false,
-        children,
-    }
-}
 
 fn rect_primitive(rect: Rect, color: Color) -> RenderNode {
     RenderNode::Primitive(PrimitiveEntry {
@@ -60,8 +27,10 @@ fn rect_primitive(rect: Rect, color: Color) -> RenderNode {
 }
 
 fn direct_graph() -> RenderGraph {
-    RenderGraph::new(test_layer(
+    RenderGraph::new(support::layer_node(
         Some(9_400),
+        WIDTH as f32,
+        HEIGHT as f32,
         vec![rect_primitive(
             Rect {
                 x: 16.0,

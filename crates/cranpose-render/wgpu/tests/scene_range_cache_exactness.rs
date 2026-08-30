@@ -13,12 +13,10 @@ use cranpose_core::NodeId;
 use cranpose_render_common::{
     Renderer,
     graph::{
-        CachePolicy, DrawPrimitiveNode, IsolationReasons, LayerNode, PrimitiveEntry, PrimitiveNode,
-        PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode,
+        DrawPrimitiveNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, RenderGraph, RenderNode,
     },
-    raster_cache::LayerRasterCacheHashes,
 };
-use cranpose_ui_graphics::{Brush, Color, CornerRadii, DrawPrimitive, GraphicsLayer, Point, Rect};
+use cranpose_ui_graphics::{Brush, Color, CornerRadii, DrawPrimitive, Rect};
 
 const SIZE: u32 = 600;
 const FRAMES: usize = 3;
@@ -74,33 +72,12 @@ fn layered_graph(node_id: NodeId, region: Rect, frame: usize) -> RenderGraph {
         Color(0.9, 0.55, 0.2, 0.65),
         7.0,
     )));
-    RenderGraph::new(LayerNode {
-        node_id: Some(node_id),
-        local_bounds: Rect {
-            x: 0.0,
-            y: 0.0,
-            width: SIZE as f32,
-            height: SIZE as f32,
-        },
-        transform_to_parent: ProjectiveTransform::identity(),
-        content_offset: Point::default(),
-        motion_context_animated: false,
-        translated_content_context: false,
-        translated_content_offset: Point::default(),
-        scene_children_origin: Point::default(),
-        scene_children_layer_translation: Point::default(),
-        graphics_layer: GraphicsLayer::default(),
-        clip_to_bounds: false,
-        shadow_clip: None,
-        hit_test: None,
-        has_hit_targets: false,
-        has_origin_sinks: false,
-        isolation: IsolationReasons::default(),
-        cache_policy: CachePolicy::None,
-        cache_hashes: LayerRasterCacheHashes::default(),
-        cache_hashes_valid: false,
-        children: primitives,
-    })
+    RenderGraph::new(support::layer_node(
+        Some(node_id),
+        SIZE as f32,
+        SIZE as f32,
+        primitives,
+    ))
 }
 
 /// One pass over the sequence: per-frame pixels plus per-frame

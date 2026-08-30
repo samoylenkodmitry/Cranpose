@@ -215,6 +215,19 @@ pub fn find_button_exact_in_semantics(
     find_button_in_semantics_by(robot, text, TextMatchMode::Exact)
 }
 
+/// Find a button by semantic text, click its center, and wait for the UI to
+/// settle. Returns whether the button was found.
+pub fn click_button_in_semantics(robot: &cranpose::Robot, name: &str) -> bool {
+    let Some((x, y, w, h)) = find_button_in_semantics(robot, name) else {
+        println!("  ✗ Button '{}' not found!", name);
+        return false;
+    };
+    println!("  Found button '{}' at ({:.1}, {:.1})", name, x, y);
+    robot.click(x + w / 2.0, y + h / 2.0).ok();
+    std::thread::sleep(Duration::from_millis(200));
+    true
+}
+
 fn find_button_in_semantics_by(
     robot: &cranpose::Robot,
     text: &str,

@@ -14,6 +14,9 @@
 //! cargo run --package desktop-app --example round_glass_probe --features desktop,robot-app
 //! ```
 
+#[path = "../robot-runners/robot_shot.rs"]
+mod robot_shot;
+
 use std::path::PathBuf;
 
 use cranpose::{
@@ -69,13 +72,6 @@ fn ProbeApp() {
     });
 }
 
-fn color_distance(a: (u8, u8, u8), b: (u8, u8, u8)) -> f32 {
-    let dr = a.0 as f32 - b.0 as f32;
-    let dg = a.1 as f32 - b.1 as f32;
-    let db = a.2 as f32 - b.2 as f32;
-    (dr * dr + dg * dg + db * db).sqrt()
-}
-
 fn main() {
     let _ = env_logger::try_init();
     let shot_dir = PathBuf::from(
@@ -91,18 +87,8 @@ fn main() {
         .with_test_driver(move |robot| {
             std::thread::sleep(std::time::Duration::from_millis(700));
             let shot = robot.screenshot().expect("shot");
-            let scale = shot.width as f32 / shot.logical_width;
-            let sample = |lx: f32, ly: f32| -> (u8, u8, u8) {
-                let px = (lx * scale).round().clamp(0.0, shot.width as f32 - 1.0) as u32;
-                let py = (ly * scale).round().clamp(0.0, shot.height as f32 - 1.0) as u32;
-                let idx = ((py * shot.width + px) * 4) as usize;
-                (shot.pixels[idx], shot.pixels[idx + 1], shot.pixels[idx + 2])
-            };
-            let marker_rgb = (
-                (MARKER.r() * 255.0) as u8,
-                (MARKER.g() * 255.0) as u8,
-                (MARKER.b() * 255.0) as u8,
-            );
+            let sample = robot_shot::logical_sampler(&shot);
+            let marker_rgb = robot_shot::to_rgb8(MARKER);
             println!("angle_deg,logical_x,logical_y,r,g,b,dist_to_marker");
             let mut worst = f32::MAX;
             for step in 0..36 {
@@ -110,7 +96,7 @@ fn main() {
                 let lx = CENTER + (CIRCLE_RADIUS - 1.0) * angle.cos();
                 let ly = CENTER + (CIRCLE_RADIUS - 1.0) * angle.sin();
                 let rgb = sample(lx, ly);
-                let dist = color_distance(rgb, marker_rgb);
+                let dist = robot_shot::color_distance(rgb, marker_rgb);
                 worst = worst.min(dist);
                 println!(
                     "{:.1},{:.1},{:.1},{},{},{},{:.1}",
@@ -124,8 +110,8 @@ fn main() {
                 );
             }
             println!("closest_rim_sample_to_marker_color = {worst:.1}");
-            let image =
-                image::RgbaImage::from_raw(shot.width, shot.height, shot.pixels).expect("decode");
+            let image = image::RgbaImage::from_raw(shot.width, shot.height, shot.pixels.clone())
+                .expect("decode");
             image
                 .save(shot_dir.join("round-glass-probe.png"))
                 .expect("save");

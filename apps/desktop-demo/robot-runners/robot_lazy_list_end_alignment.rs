@@ -3,7 +3,7 @@ mod robot_launch;
 use std::time::Duration;
 
 use cranpose_testing::{
-    find_button_in_semantics, find_element_by_text_exact, find_in_semantics,
+    click_button_in_semantics, find_element_by_text_exact, find_in_semantics,
     find_text_by_prefix_in_semantics, find_text_exact, print_semantics_with_bounds, union_bounds,
 };
 use desktop_app::app;
@@ -17,17 +17,7 @@ fn main() {
             println!("✓ App launched");
             std::thread::sleep(Duration::from_millis(500));
 
-            let click_button = |name: &str| -> bool {
-                if let Some((x, y, w, h)) = find_button_in_semantics(&robot, name) {
-                    println!("  Found button '{}' at ({:.1}, {:.1})", name, x, y);
-                    robot.click(x + w / 2.0, y + h / 2.0).ok();
-                    std::thread::sleep(Duration::from_millis(200));
-                    true
-                } else {
-                    println!("  ✗ Button '{}' not found!", name);
-                    false
-                }
-            };
+            let click_button = |name: &str| -> bool { click_button_in_semantics(&robot, name) };
 
             println!("\n--- Step 1: Navigate to 'Lazy List' tab ---");
             if !click_button("Lazy List") {
