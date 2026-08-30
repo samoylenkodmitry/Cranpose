@@ -82,6 +82,17 @@ clippy-ios:
 clippy-camera-desktop:
     cargo clippy -p cranpose --no-default-features --features desktop,renderer-wgpu,camera-desktop,robot --all-targets -- -D warnings
 
+# Lint the robot runners, which `just clippy` cannot reach.
+#
+# `cargo clippy --workspace --all-targets` silently SKIPS a target whose
+# `required-features` are not enabled, and all ~165 `[[example]]` entries in
+# apps/desktop-demo carry `required-features = ["robot-app"]`. Skipping is not
+# an error, so the omission never surfaced: `cargo check -p desktop-app
+# --examples` finishes in a fraction of a second having compiled nothing. The
+# runners went unlinted from the day the feature gate was added until #575.
+clippy-robot:
+    cargo clippy -p desktop-app --examples --features robot-app -- -D warnings
+
 # Lint the exact package, features and ABIs the Android build ships.
 #
 # `just android` runs Gradle, which does not deny warnings, so Android was the
@@ -383,7 +394,7 @@ perf-heap *args:
 # Excludes the jobs that need a GPU, an Android SDK or an iOS toolchain.
 
 # What a pull request is gated on. Run this before pushing.
-ci: fmt-check typos versions test clippy doc budgets test-quality-gates complexity-gate duplication-gate
+ci: fmt-check typos versions test clippy clippy-robot doc budgets test-quality-gates complexity-gate duplication-gate
 
 # Needs a Linux box with the X11 stack, an Android SDK and (on macOS) Xcode.
 
