@@ -152,9 +152,49 @@ the prefix snapshot does (see Finding 1's resolution) — and loses when
 it adds passes. Any such design must be device-measured, not reasoned
 into existence.
 
+## Finding 5 — scroll costs a pass explosion, not a fill explosion
+
+Idle vs continuous drag on the showcase list screen, same binary
+(post-prefix, post-recompose-fix), `debug.cranpose.gpu_stats` sampled
+frames: passes 16-17 -> 38-39, blur passes 0 -> 9, offscreen acquires
+0-1 -> 18, layer cache 97-100% hit -> 51% on sampled frames, while
+fill grows only 9.3 -> 11.8 Mpx. present p50 goes 16.6 -> ~31 ms — the
+pass count, not the fill, is what doubles the GPU cost, consistent
+with Finding 4's ALU-and-passes model.
+
+Two CPU-side lessons from the same campaign:
+
+- The showcase's `ListScreen` returned `scroll.value()` to a caller
+  that discarded it — a composition-scope read that recomposed the
+  whole screen every scroll frame. Removing it took scroll-time
+  `update` from 15.5 to 5.7 ms p50 (two-binary A/B, alternated) and
+  moved fps not at all: `acquire` absorbed every freed millisecond,
+  which is the "never optimize a wait" rule doing its job. CPU-side
+  fixes under a GPU-bound scroll change headroom, not frame rate.
+- `debug.cranpose.layer_cache_diag` (now property-mirrored) shows the
+  scroll misses are almost entirely `BackdropEffect` keys — glass
+  re-captures and re-blurs as content translates beneath it, which is
+  inherent to live backdrop effects — plus one avoidable class: the
+  same surface oscillating between two pixel sizes one device pixel
+  apart (276x277 vs 276x276) as its snapped bounds cross rounding
+  boundaries during translation, churning keys for content that did
+  not change.
+
+The open mechanisms, in the model's currency: batch the per-surface
+blur chains into shared passes (9 blur passes are ~4 surfaces times
+two axes that could be two passes over an atlas), and make snapped
+surface sizes motion-stable so translation cannot flip a key by one
+pixel. Both need device ladders before any claim.
+
 ## Methods notes (the traps)
 
 - xvfb frame rates are software presentation, not the GPU.
+- `[GPU f#N]` lines print every 60th frame and their per-frame counters
+  describe THAT frame only. A sampled frame can be an ambient-step
+  epoch frame (every cache missing at once) while the all-frames diag
+  average sits at 1-2 misses; treating one sampled frame as the
+  per-frame typical misattributed a whole scroll campaign before
+  `layer_cache_diag` totals over the full window corrected it.
 - Thermal drift on this device is ~2 fps across a back-to-back arm
   sequence at 38-39°C battery temperature; alternate arm order and log
   temps, or a late-running baseline reads as a regression.
