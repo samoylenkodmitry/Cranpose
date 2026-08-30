@@ -4,6 +4,13 @@ name: Rust
 # ARM64 MacBooks + the Linux GPU server). Every job explicitly rejects fork
 # heads before allocating a runner; same-repository pull requests remain safe.
 # The robot suite lives in heavy-selfhosted.yml where it runs on the real GPU.
+#
+# `architecture budgets` and `wasm build` both draw on the heavy pool, so they
+# short-circuit on a prose-only diff the same way the heavy workflow's jobs do.
+# `checks` never does, and must not: `just typos` spell-checks docs/ and every
+# .md, `just doc` fails on a broken intra-doc link, and `just test` compiles the
+# doctests that crates/cranpose-core/src/lib.rs pulls in from its README. Prose
+# is exactly what that job gates, so a prose diff is signal there, not waste.
 on:
   push:
     branches: ["main"]
@@ -68,6 +75,11 @@ jobs:
       - name: Test the quality gates' diff-scoping logic
         run: just test-quality-gates
 
+      - name: Check the docs-only trigger filter
+        # The predicate the heavy jobs skip on. It runs in this job because
+        # this job is the one that never skips.
+        run: just test-ci-filters
+
       - name: Check cyclomatic complexity of changed functions
         run: just complexity-gate
 
@@ -104,8 +116,17 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          # Both parents of the merge commit, for the diff below.
+          fetch-depth: 2
+
+      - name: Detect a docs-only change
+        id: changes
+        # Why a short-circuit and not paths-ignore: see the header.
+        run: scripts/ci/docs_only_change.sh
 
       - name: Provision PATH and sccache
+        if: steps.changes.outputs.docs_only != 'true'
         run: |
           # Both, and in this order. `GITHUB_PATH` only reaches LATER steps,
           # and the `cargo install` on the next line runs in THIS one -- so on
@@ -131,6 +152,7 @@ jobs:
           scripts/ci/start_sccache.sh
 
       - name: Check architecture budgets
+        if: steps.changes.outputs.docs_only != 'true'
         # Featureless and all-features builds, the per-backend winit checks, the
         # duplicate-dependency budgets and the desktop binary-size ceiling.
         run: just budgets
@@ -147,8 +169,17 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          # Both parents of the merge commit, for the diff below.
+          fetch-depth: 2
+
+      - name: Detect a docs-only change
+        id: changes
+        # Why a short-circuit and not paths-ignore: see the header.
+        run: scripts/ci/docs_only_change.sh
 
       - name: Provision PATH and sccache
+        if: steps.changes.outputs.docs_only != 'true'
         run: |
           # Both, and in this order. `GITHUB_PATH` only reaches LATER steps,
           # and the `cargo install` on the next line runs in THIS one -- so on
@@ -179,6 +210,7 @@ jobs:
           wasm-opt --version || echo "no system binaryen; wasm-pack supplies its own"
 
       - name: Run wasm clippy
+        if: steps.changes.outputs.docs_only != 'true'
         # A build alone (below) does not lint: `Arc<dyn Trait>` values that are
         # not `Send + Sync` on the single-threaded wasm target compile fine but
         # pay for synchronisation the target cannot use. Only clippy catches
@@ -186,4 +218,5 @@ jobs:
         run: just clippy-wasm
 
       - name: Build web demo
+        if: steps.changes.outputs.docs_only != 'true'
         run: just web

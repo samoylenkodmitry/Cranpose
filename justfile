@@ -150,6 +150,12 @@ test-features:
     cargo test --profile ci -p cranpose-core --features std-hash
     cargo test --profile ci -p cranpose-core --features internal
 
+# The docs-only trigger filter that lets the heavy jobs skip a prose diff.
+# A wrong answer there disables the robot suite silently, so the predicate is
+# pinned by the same gate that runs everywhere else.
+test-ci-filters:
+    scripts/ci/docs_only_change_test.sh
+
 # The deterministic slot-table model check, at the frame count CI uses.
 test-property:
     cargo test --profile ci -p cranpose-core deterministic_model_render_frames_match_slot_table
