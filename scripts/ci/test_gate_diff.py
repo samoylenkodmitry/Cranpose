@@ -3,9 +3,14 @@
 
 This is the part correctness actually hinges on: get the intersection wrong
 and the gate either lets new debt through or fails an innocent PR for
-something it never touched. Runs against synthetic diff text and synthetic
-tool output, so it needs neither git history nor `rust-code-analysis-cli` /
-`jscpd` installed.
+something it never touched. Most of this runs against synthetic diff text and
+synthetic tool output, needing neither git history nor
+`rust-code-analysis-cli` / `jscpd` installed. The merge-base tests are the
+exception: they build real, disposable git repositories under a temp
+directory to reproduce a shallow checkout, because the bug they guard --
+`git merge-base` failing on two disconnected single-commit histories -- only
+exists in git's own history-walking behavior, not in anything this module
+could fake convincingly.
 
     just test-quality-gates
     python3 scripts/ci/test_gate_diff.py
@@ -15,6 +20,7 @@ from __future__ import annotations
 
 import os
 import stat
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -177,6 +183,89 @@ class ResolveCargoTool(unittest.TestCase):
                     with self.assertRaises(SystemExit) as raised:
                         gate_diff.resolve_cargo_tool("some-tool", "do not substitute npm")
             self.assertIn("do not substitute npm", str(raised.exception))
+
+
+class MergeBaseShallowHistory(unittest.TestCase):
+    def _git(self, args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True)
+
+    def _is_shallow(self, repo: Path) -> bool:
+        return self._git(["rev-parse", "--is-shallow-repository"], repo).stdout.strip() == "true"
+
+    def _commit(self, repo: Path, message: str) -> str:
+        (repo / "file.txt").write_text(message)
+        self._git(["add", "."], repo)
+        self._git(["commit", "--quiet", "-m", message], repo)
+        return self._git(["rev-parse", "HEAD"], repo).stdout.strip()
+
+    def _init_repo(self, repo: Path, initial_branch: str) -> None:
+        repo.mkdir()
+        self._git(["init", "--quiet", "-b", initial_branch], repo)
+        self._git(["config", "user.email", "test@example.com"], repo)
+        self._git(["config", "user.name", "Test"], repo)
+
+    def _shallow_checkout_of_branch_tip(self, origin: Path, branch: str, work: Path) -> None:
+        """Reproduce what `actions/checkout` leaves behind for a PR head.
+
+        A depth-1 `actions/checkout` configures the broad
+        `+refs/heads/*:refs/remotes/origin/*` refspec but fetches only the
+        one commit it needs, so the checked-out branch's remote-tracking ref
+        exists locally with a single commit and no reachable parent -- the
+        exact shape `ensure_ref`'s later fetch of a *different* branch does
+        not, by itself, fix.
+        """
+        work.mkdir()
+        self._git(["init", "--quiet"], work)
+        self._git(["remote", "add", "origin", f"file://{origin}"], work)
+        self._git(["config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"], work)
+        tip = self._git(["rev-parse", branch], origin).stdout.strip()
+        self._git(
+            ["fetch", "--quiet", "--depth=1", "origin", f"+{tip}:refs/remotes/origin/{branch}"],
+            work,
+        )
+        self._git(["checkout", "--quiet", "-b", branch, f"origin/{branch}"], work)
+
+    def test_deepens_shallow_history_to_find_the_merge_base(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            origin = Path(tmp) / "origin"
+            work = Path(tmp) / "work"
+            self._init_repo(origin, "main")
+            shared_ancestor = self._commit(origin, "shared ancestor")
+            self._git(["checkout", "--quiet", "-b", "feature"], origin)
+            self._commit(origin, "feature work")
+            self._git(["checkout", "--quiet", "main"], origin)
+            self._commit(origin, "main moved on without the feature branch")
+
+            self._shallow_checkout_of_branch_tip(origin, "feature", work)
+            self.assertTrue(self._is_shallow(work))
+
+            with mock.patch("gate_diff.ROOT", work):
+                self.assertEqual(gate_diff.merge_base("origin/main"), shared_ancestor)
+            self.assertFalse(self._is_shallow(work))
+
+    def test_raises_when_histories_truly_share_no_ancestor(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            origin_main = Path(tmp) / "origin_main"
+            origin_feature = Path(tmp) / "origin_feature"
+            work = Path(tmp) / "work"
+            self._init_repo(origin_main, "main")
+            self._commit(origin_main, "main's own unrelated root")
+            self._init_repo(origin_feature, "feature")
+            self._commit(origin_feature, "feature's own unrelated root")
+
+            work.mkdir()
+            self._git(["init", "--quiet"], work)
+            self._git(["remote", "add", "origin", f"file://{origin_main}"], work)
+            self._git(["fetch", "--quiet", "origin", "main"], work)
+            self._git(["remote", "add", "elsewhere", f"file://{origin_feature}"], work)
+            self._git(["fetch", "--quiet", "elsewhere", "feature"], work)
+            self._git(["checkout", "--quiet", "-b", "feature", "elsewhere/feature"], work)
+            self.assertFalse(self._is_shallow(work))
+
+            with mock.patch("gate_diff.ROOT", work):
+                with self.assertRaises(SystemExit) as raised:
+                    gate_diff.merge_base("origin/main")
+            self.assertIn("share no common ancestor", str(raised.exception))
 
 
 class ComplexityFindViolations(unittest.TestCase):

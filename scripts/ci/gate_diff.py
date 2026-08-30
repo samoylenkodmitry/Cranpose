@@ -15,9 +15,10 @@ thing in both places.
 The merge base is computed against the ref given (default `origin/main`), not
 hardcoded to a branch name or a commit, so this works for any PR and for a
 plain feature branch alike. A shallow checkout (`actions/checkout`'s default)
-may not have the commits needed to compute it; `ensure_ref` fetches the base
-branch when it is not resolvable rather than failing with a confusing
-`git merge-base` error.
+leaves `base` and `HEAD` as two problems, not one: `ensure_ref` makes `base`
+resolvable by fetching it, and `merge_base` separately makes it *reachable*
+from `HEAD` by deepening history when the two sides turn out to be
+disconnected single-commit graphs with no merge base between them.
 """
 
 from __future__ import annotations
@@ -60,17 +61,67 @@ def ensure_ref(base: str) -> None:
         )
 
 
-def merge_base(base: str) -> str:
-    """The merge base of `base` and HEAD, fetching `base` first if needed."""
-    ensure_ref(base)
+def is_shallow_repository() -> bool:
+    """Whether the checkout's history is truncated at some boundary commit."""
     result = subprocess.run(
-        ["git", "merge-base", base, "HEAD"],
+        ["git", "rev-parse", "--is-shallow-repository"],
         cwd=ROOT,
         capture_output=True,
         text=True,
         check=True,
     )
-    return result.stdout.strip()
+    return result.stdout.strip() == "true"
+
+
+def merge_base(base: str) -> str:
+    """The merge base of `base` and HEAD, deepening history first if needed.
+
+    `actions/checkout`'s default depth-1 clone gives `HEAD` a history of
+    exactly one commit with no recorded parent; `ensure_ref`'s own fetch of
+    `base` is likewise shallow. The two land as disconnected single-commit
+    graphs, so `git merge-base` exits 1 even though `base` resolves fine --
+    not because the branches lack a common ancestor, but because neither
+    side's local history reaches back far enough to see it. `git fetch
+    --unshallow` is the fix, tried only after a first attempt fails and only
+    when the repository is actually shallow: a non-shallow repository
+    failing the same merge-base call really does share no history with
+    `base`, and this refuses to paper over that by guessing a diff scope --
+    the exact silent mis-scoping the diff-scoped gates exist to prevent.
+    """
+    ensure_ref(base)
+    first_attempt = subprocess.run(
+        ["git", "merge-base", base, "HEAD"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+    if first_attempt.returncode == 0:
+        return first_attempt.stdout.strip()
+    if not is_shallow_repository():
+        raise SystemExit(
+            f"gate_diff: no merge base between {base!r} and HEAD, and the "
+            "checkout already has full history -- these two branches share "
+            "no common ancestor, so the diff cannot be scoped"
+        )
+    deepened = subprocess.run(["git", "fetch", "--quiet", "--unshallow", "origin"], cwd=ROOT)
+    if deepened.returncode != 0:
+        raise SystemExit(
+            "gate_diff: the checkout is shallow and `git fetch --unshallow "
+            "origin` failed -- cannot deepen history enough to find a "
+            f"merge base with {base!r}"
+        )
+    second_attempt = subprocess.run(
+        ["git", "merge-base", base, "HEAD"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+    if second_attempt.returncode != 0:
+        raise SystemExit(
+            f"gate_diff: no merge base between {base!r} and HEAD even after "
+            "`git fetch --unshallow` -- cannot scope the diff safely"
+        )
+    return second_attempt.stdout.strip()
 
 
 def parse_unified_diff_zero_context(diff_text: str) -> dict[str, list[tuple[int, int]]]:
