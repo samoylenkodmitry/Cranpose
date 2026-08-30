@@ -25,7 +25,7 @@ use crate::{
 const TEXT_CLIP_PAD: f32 = 1.0;
 const ROUNDED_CLIP_EDGE_FEATHER: f32 = 1.0;
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 struct BuildNodeSnapshot {
     node_id: NodeId,
     placement: Point,
@@ -1934,8 +1934,8 @@ mod tests {
     use cranpose_foundation::lazy::{LazyListScope, LazyListState, rememberLazyListState};
     use cranpose_ui::{
         Color, Column, ColumnSpec, DrawCommand, LayoutEngine, LazyColumn, LazyColumnSpec,
-        LinearArrangement, Modifier, Point, Rect, ResolvedModifiers, RoundedCornerShape,
-        ScrollState, Size, Spacer, Text, TextStyle,
+        LinearArrangement, Modifier, Point, Rect, RoundedCornerShape, ScrollState, Size, Spacer,
+        Text, TextStyle,
         text::{AnnotatedString, BaselineShift, SpanStyle, TextAlign, TextDirection, TextMotion},
     };
     use cranpose_ui_graphics::{
@@ -2102,50 +2102,22 @@ mod tests {
                 width: 40.0,
                 height: 20.0,
             },
-            content_offset: Point::default(),
-            motion_context_animated: false,
-            translated_content_context: false,
-            has_own_origin_sinks: false,
-            measured_max_width: None,
-            resolved_modifiers: ResolvedModifiers::default(),
             draw_commands: vec![child_command],
-            click_actions: vec![],
-            pointer_inputs: vec![],
-            clip_to_bounds: false,
-            annotated_text: None,
-            text_style: None,
-            text_layout_options: None,
-            text_pan: None,
-            graphics_layer: None,
-            children: vec![],
+            ..Default::default()
         };
 
         BuildNodeSnapshot {
             node_id: 1,
-            placement: Point::default(),
             size: Size {
                 width: 80.0,
                 height: 50.0,
             },
-            content_offset: Point::default(),
-            motion_context_animated: false,
-            translated_content_context: false,
-            has_own_origin_sinks: false,
-            measured_max_width: None,
-            resolved_modifiers: ResolvedModifiers::default(),
-            draw_commands: vec![],
-            click_actions: vec![],
-            pointer_inputs: vec![],
-            clip_to_bounds: false,
-            annotated_text: None,
-            text_style: None,
-            text_layout_options: None,
-            text_pan: None,
             graphics_layer: Some(GraphicsLayer {
                 translation_x: tx,
                 ..GraphicsLayer::default()
             }),
             children: vec![child],
+            ..Default::default()
         }
     }
 
@@ -2200,47 +2172,18 @@ mod tests {
                 width: 40.0,
                 height: 20.0,
             },
-            content_offset: Point::default(),
-            motion_context_animated: false,
-            translated_content_context: false,
-            has_own_origin_sinks: false,
-            measured_max_width: None,
-            resolved_modifiers: ResolvedModifiers::default(),
-            draw_commands: vec![],
-            click_actions: vec![],
-            pointer_inputs: vec![],
-            clip_to_bounds: false,
-            annotated_text: None,
-            text_style: None,
-            text_layout_options: None,
-            text_pan: None,
-            graphics_layer: None,
-            children: vec![],
+            ..Default::default()
         };
 
         let parent = BuildNodeSnapshot {
             node_id: 1,
-            placement: Point::default(),
             size: Size {
                 width: 80.0,
                 height: 50.0,
             },
             content_offset: Point { x: 13.0, y: -9.0 },
-            motion_context_animated: false,
-            translated_content_context: false,
-            has_own_origin_sinks: false,
-            measured_max_width: None,
-            resolved_modifiers: ResolvedModifiers::default(),
-            draw_commands: vec![],
-            click_actions: vec![],
-            pointer_inputs: vec![],
-            clip_to_bounds: false,
-            annotated_text: None,
-            text_style: None,
-            text_layout_options: None,
-            text_pan: None,
-            graphics_layer: None,
             children: vec![child],
+            ..Default::default()
         };
 
         let graph = build_layer_node_for_test(parent, 1.0, false);
@@ -2275,27 +2218,12 @@ mod tests {
                     width: 40.0,
                     height: 20.0,
                 },
-                content_offset: Point::default(),
-                motion_context_animated: false,
-                translated_content_context: false,
-                has_own_origin_sinks: false,
-                measured_max_width: None,
-                resolved_modifiers: ResolvedModifiers::default(),
                 draw_commands: vec![child_command],
-                click_actions: vec![],
-                pointer_inputs: vec![],
-                clip_to_bounds: false,
-                annotated_text: None,
-                text_style: None,
-                text_layout_options: None,
-                text_pan: None,
-                graphics_layer: None,
-                children: vec![],
+                ..Default::default()
             };
 
             BuildNodeSnapshot {
                 node_id: 1,
-                placement: Point::default(),
                 size: Size {
                     width: 80.0,
                     height: 50.0,
@@ -2303,19 +2231,8 @@ mod tests {
                 content_offset: offset,
                 motion_context_animated,
                 translated_content_context: true,
-                has_own_origin_sinks: false,
-                measured_max_width: None,
-                resolved_modifiers: ResolvedModifiers::default(),
-                draw_commands: vec![],
-                click_actions: vec![],
-                pointer_inputs: vec![],
-                clip_to_bounds: false,
-                annotated_text: None,
-                text_style: None,
-                text_layout_options: None,
-                text_pan: None,
-                graphics_layer: None,
                 children: vec![child],
+                ..Default::default()
             }
         }
 
@@ -3899,22 +3816,7 @@ mod tests {
                 width: 20.0,
                 height: 10.0,
             },
-            content_offset: Point::default(),
-            motion_context_animated: false,
-            translated_content_context: false,
-            has_own_origin_sinks: false,
-            measured_max_width: None,
-            resolved_modifiers: ResolvedModifiers::default(),
-            draw_commands: vec![],
-            click_actions: vec![],
-            pointer_inputs: vec![],
-            clip_to_bounds: false,
-            annotated_text: None,
-            text_style: None,
-            text_layout_options: None,
-            text_pan: None,
-            graphics_layer: None,
-            children: vec![],
+            ..Default::default()
         };
         let behind = DrawCommand::Behind(Rc::new(|scope: &mut DrawScopeDefault| {
             scope.push_recorded(vec![cranpose_ui_graphics::DrawPrimitive::Rect {
@@ -3943,27 +3845,13 @@ mod tests {
 
         let parent = BuildNodeSnapshot {
             node_id: 1,
-            placement: Point::default(),
             size: Size {
                 width: 80.0,
                 height: 50.0,
             },
-            content_offset: Point::default(),
-            motion_context_animated: false,
-            translated_content_context: false,
-            has_own_origin_sinks: false,
-            measured_max_width: None,
-            resolved_modifiers: ResolvedModifiers::default(),
             draw_commands: vec![behind, overlay],
-            click_actions: vec![],
-            pointer_inputs: vec![],
-            clip_to_bounds: false,
-            annotated_text: None,
-            text_style: None,
-            text_layout_options: None,
-            text_pan: None,
-            graphics_layer: None,
             children: vec![child],
+            ..Default::default()
         };
 
         let graph = build_layer_node_for_test(parent, 1.0, false);
@@ -3985,17 +3873,10 @@ mod tests {
     fn command_recordings_reuse_buffers_across_rebuilds() {
         let snapshot = || BuildNodeSnapshot {
             node_id: 7001,
-            placement: Point::default(),
             size: Size {
                 width: 40.0,
                 height: 20.0,
             },
-            content_offset: Point::default(),
-            motion_context_animated: false,
-            translated_content_context: false,
-            has_own_origin_sinks: false,
-            measured_max_width: None,
-            resolved_modifiers: ResolvedModifiers::default(),
             draw_commands: vec![DrawCommand::Behind(Rc::new(
                 |scope: &mut DrawScopeDefault| {
                     scope.draw_rect_at(
@@ -4009,15 +3890,7 @@ mod tests {
                     );
                 },
             ))],
-            click_actions: vec![],
-            pointer_inputs: vec![],
-            clip_to_bounds: false,
-            annotated_text: None,
-            text_style: None,
-            text_layout_options: None,
-            text_pan: None,
-            graphics_layer: None,
-            children: vec![],
+            ..Default::default()
         };
         fn run_of(layer: &LayerNode) -> &DrawRunNode {
             let RenderNode::DrawRun(run) = &layer.children[0] else {
@@ -4066,49 +3939,19 @@ mod tests {
                 width: 20.0,
                 height: 10.0,
             },
-            content_offset: Point::default(),
-            motion_context_animated: false,
-            translated_content_context: false,
-            has_own_origin_sinks: false,
-            measured_max_width: None,
-            resolved_modifiers: ResolvedModifiers::default(),
-            draw_commands: vec![],
-            click_actions: vec![],
-            pointer_inputs: vec![],
-            clip_to_bounds: false,
-            annotated_text: None,
-            text_style: None,
-            text_layout_options: None,
-            text_pan: None,
-            graphics_layer: None,
-            children: vec![],
+            ..Default::default()
         };
         let mut moved_child = child.clone();
         moved_child.placement.x += 7.0;
 
         let parent = BuildNodeSnapshot {
             node_id: 1,
-            placement: Point::default(),
             size: Size {
                 width: 80.0,
                 height: 50.0,
             },
-            content_offset: Point::default(),
-            motion_context_animated: false,
-            translated_content_context: false,
-            has_own_origin_sinks: false,
-            measured_max_width: None,
-            resolved_modifiers: ResolvedModifiers::default(),
-            draw_commands: vec![],
-            click_actions: vec![],
-            pointer_inputs: vec![],
-            clip_to_bounds: false,
-            annotated_text: None,
-            text_style: None,
-            text_layout_options: None,
-            text_pan: None,
-            graphics_layer: None,
             children: vec![child],
+            ..Default::default()
         };
         let moved_parent = BuildNodeSnapshot {
             children: vec![moved_child],
@@ -4129,27 +3972,11 @@ mod tests {
     fn stored_effect_hash_tracks_local_effect_only() {
         let base = BuildNodeSnapshot {
             node_id: 1,
-            placement: Point::default(),
             size: Size {
                 width: 80.0,
                 height: 50.0,
             },
-            content_offset: Point::default(),
-            motion_context_animated: false,
-            translated_content_context: false,
-            has_own_origin_sinks: false,
-            measured_max_width: None,
-            resolved_modifiers: ResolvedModifiers::default(),
-            draw_commands: vec![],
-            click_actions: vec![],
-            pointer_inputs: vec![],
-            clip_to_bounds: false,
-            annotated_text: None,
-            text_style: None,
-            text_layout_options: None,
-            text_pan: None,
-            graphics_layer: None,
-            children: vec![],
+            ..Default::default()
         };
         let mut effected = base.clone();
         effected.graphics_layer = Some(GraphicsLayer {
@@ -4177,30 +4004,18 @@ mod tests {
 
         let snapshot = BuildNodeSnapshot {
             node_id: 1,
-            placement: Point::default(),
             size: Size {
                 width: 180.0,
                 height: 48.0,
             },
-            content_offset: Point::default(),
-            motion_context_animated: false,
-            translated_content_context: false,
-            has_own_origin_sinks: false,
             measured_max_width: Some(180.0),
-            resolved_modifiers: ResolvedModifiers::default(),
-            draw_commands: vec![],
-            click_actions: vec![],
-            pointer_inputs: vec![],
-            clip_to_bounds: false,
             annotated_text: Some(AnnotatedString::from("rtl")),
             text_style: Some(text_style),
             text_layout_options: Some(cranpose_ui::TextLayoutOptions {
                 overflow: cranpose_ui::TextOverflow::Clip,
                 ..Default::default()
             }),
-            text_pan: None,
-            graphics_layer: None,
-            children: vec![],
+            ..Default::default()
         };
 
         let graph = build_layer_node_for_test(snapshot, 1.0, false);
@@ -4232,30 +4047,18 @@ mod tests {
     fn clipped_text_node_raster_bounds_use_measured_text_width_not_full_box() {
         let snapshot = BuildNodeSnapshot {
             node_id: 1,
-            placement: Point::default(),
             size: Size {
                 width: 320.0,
                 height: 48.0,
             },
-            content_offset: Point::default(),
-            motion_context_animated: false,
-            translated_content_context: false,
-            has_own_origin_sinks: false,
             measured_max_width: Some(320.0),
-            resolved_modifiers: ResolvedModifiers::default(),
-            draw_commands: vec![],
-            click_actions: vec![],
-            pointer_inputs: vec![],
-            clip_to_bounds: false,
             annotated_text: Some(AnnotatedString::from("short")),
             text_style: Some(TextStyle::default()),
             text_layout_options: Some(cranpose_ui::TextLayoutOptions {
                 overflow: cranpose_ui::TextOverflow::Clip,
                 ..Default::default()
             }),
-            text_pan: None,
-            graphics_layer: None,
-            children: vec![],
+            ..Default::default()
         };
 
         let graph = build_layer_node_for_test(snapshot, 1.0, false);
@@ -4285,29 +4088,18 @@ mod tests {
         let viewports = resolved_viewports.clone();
         let make_snapshot = |text_pan: Option<cranpose_ui::TextPanResolver>| BuildNodeSnapshot {
             node_id: 1,
-            placement: Point::default(),
             size: Size {
                 width: field_width,
                 height: 24.0,
             },
-            content_offset: Point::default(),
-            motion_context_animated: false,
-            translated_content_context: false,
-            has_own_origin_sinks: false,
             measured_max_width: Some(field_width),
-            resolved_modifiers: ResolvedModifiers::default(),
-            draw_commands: vec![],
-            click_actions: vec![],
-            pointer_inputs: vec![],
-            clip_to_bounds: false,
             annotated_text: Some(AnnotatedString::from(
                 "a very long single line of text that cannot fit",
             )),
             text_style: Some(TextStyle::default()),
             text_layout_options: Some(cranpose_ui::TextLayoutOptions::default()),
             text_pan,
-            graphics_layer: None,
-            children: vec![],
+            ..Default::default()
         };
 
         let text_node = |snapshot: BuildNodeSnapshot| {
@@ -4367,46 +4159,21 @@ mod tests {
                 width: 120.0,
                 height: 32.0,
             },
-            content_offset: Point::default(),
-            motion_context_animated: false,
-            translated_content_context: false,
-            has_own_origin_sinks: false,
             measured_max_width: Some(120.0),
-            resolved_modifiers: ResolvedModifiers::default(),
-            draw_commands: vec![],
-            click_actions: vec![],
-            pointer_inputs: vec![],
-            clip_to_bounds: false,
             annotated_text: Some(AnnotatedString::from("scrolling")),
             text_style: Some(TextStyle::default()),
-            text_layout_options: None,
-            text_pan: None,
-            graphics_layer: None,
-            children: vec![],
+            ..Default::default()
         };
         let parent = BuildNodeSnapshot {
             node_id: 1,
-            placement: Point::default(),
             size: Size {
                 width: 160.0,
                 height: 64.0,
             },
             content_offset: Point { x: 0.0, y: -18.5 },
-            motion_context_animated: false,
             translated_content_context: true,
-            has_own_origin_sinks: false,
-            measured_max_width: None,
-            resolved_modifiers: ResolvedModifiers::default(),
-            draw_commands: vec![],
-            click_actions: vec![],
-            pointer_inputs: vec![],
-            clip_to_bounds: false,
-            annotated_text: None,
-            text_style: None,
-            text_layout_options: None,
-            text_pan: None,
-            graphics_layer: None,
             children: vec![child],
+            ..Default::default()
         };
 
         let graph = build_layer_node_for_test(parent, 1.0, false);
@@ -4433,46 +4200,20 @@ mod tests {
                 width: 120.0,
                 height: 32.0,
             },
-            content_offset: Point::default(),
-            motion_context_animated: false,
-            translated_content_context: false,
-            has_own_origin_sinks: false,
             measured_max_width: Some(120.0),
-            resolved_modifiers: ResolvedModifiers::default(),
-            draw_commands: vec![],
-            click_actions: vec![],
-            pointer_inputs: vec![],
-            clip_to_bounds: false,
             annotated_text: Some(AnnotatedString::from("scrolling")),
             text_style: Some(TextStyle::default()),
-            text_layout_options: None,
-            text_pan: None,
-            graphics_layer: None,
-            children: vec![],
+            ..Default::default()
         };
         let parent = BuildNodeSnapshot {
             node_id: 1,
-            placement: Point::default(),
             size: Size {
                 width: 160.0,
                 height: 64.0,
             },
             content_offset: Point { x: 0.0, y: -18.0 },
-            motion_context_animated: false,
-            translated_content_context: false,
-            has_own_origin_sinks: false,
-            measured_max_width: None,
-            resolved_modifiers: ResolvedModifiers::default(),
-            draw_commands: vec![],
-            click_actions: vec![],
-            pointer_inputs: vec![],
-            clip_to_bounds: false,
-            annotated_text: None,
-            text_style: None,
-            text_layout_options: None,
-            text_pan: None,
-            graphics_layer: None,
             children: vec![child],
+            ..Default::default()
         };
 
         let graph = build_layer_node_for_test(parent, 1.0, false);
@@ -4502,16 +4243,7 @@ mod tests {
                 width: 120.0,
                 height: 32.0,
             },
-            content_offset: Point::default(),
-            motion_context_animated: false,
-            translated_content_context: false,
-            has_own_origin_sinks: false,
             measured_max_width: Some(120.0),
-            resolved_modifiers: ResolvedModifiers::default(),
-            draw_commands: vec![],
-            click_actions: vec![],
-            pointer_inputs: vec![],
-            clip_to_bounds: false,
             annotated_text: Some(AnnotatedString::from("shadow")),
             text_style: Some(TextStyle::from_span_style(SpanStyle {
                 shadow: Some(cranpose_ui::text::Shadow {
@@ -4521,34 +4253,18 @@ mod tests {
                 }),
                 ..SpanStyle::default()
             })),
-            text_layout_options: None,
-            text_pan: None,
-            graphics_layer: None,
-            children: vec![],
+            ..Default::default()
         };
         let parent = BuildNodeSnapshot {
             node_id: 1,
-            placement: Point::default(),
             size: Size {
                 width: 160.0,
                 height: 64.0,
             },
             content_offset: Point { x: 0.0, y: -18.5 },
-            motion_context_animated: false,
             translated_content_context: true,
-            has_own_origin_sinks: false,
-            measured_max_width: None,
-            resolved_modifiers: ResolvedModifiers::default(),
-            draw_commands: vec![],
-            click_actions: vec![],
-            pointer_inputs: vec![],
-            clip_to_bounds: false,
-            annotated_text: None,
-            text_style: None,
-            text_layout_options: None,
-            text_pan: None,
-            graphics_layer: None,
             children: vec![child],
+            ..Default::default()
         };
 
         let graph = build_layer_node_for_test(parent, 1.0, false);
@@ -4574,46 +4290,20 @@ mod tests {
                 width: 120.0,
                 height: 32.0,
             },
-            content_offset: Point::default(),
-            motion_context_animated: false,
-            translated_content_context: false,
-            has_own_origin_sinks: false,
             measured_max_width: Some(120.0),
-            resolved_modifiers: ResolvedModifiers::default(),
-            draw_commands: vec![],
-            click_actions: vec![],
-            pointer_inputs: vec![],
-            clip_to_bounds: false,
             annotated_text: Some(AnnotatedString::from("lazy")),
             text_style: Some(TextStyle::default()),
-            text_layout_options: None,
-            text_pan: None,
-            graphics_layer: None,
-            children: vec![],
+            ..Default::default()
         };
         let parent = BuildNodeSnapshot {
             node_id: 1,
-            placement: Point::default(),
             size: Size {
                 width: 160.0,
                 height: 64.0,
             },
-            content_offset: Point::default(),
             motion_context_animated: true,
-            translated_content_context: false,
-            has_own_origin_sinks: false,
-            measured_max_width: None,
-            resolved_modifiers: ResolvedModifiers::default(),
-            draw_commands: vec![],
-            click_actions: vec![],
-            pointer_inputs: vec![],
-            clip_to_bounds: false,
-            annotated_text: None,
-            text_style: None,
-            text_layout_options: None,
-            text_pan: None,
-            graphics_layer: None,
             children: vec![child],
+            ..Default::default()
         };
 
         let graph = build_layer_node_for_test(parent, 1.0, false);
@@ -4893,16 +4583,7 @@ mod tests {
                 width: 120.0,
                 height: 32.0,
             },
-            content_offset: Point::default(),
-            motion_context_animated: false,
-            translated_content_context: false,
-            has_own_origin_sinks: false,
             measured_max_width: Some(120.0),
-            resolved_modifiers: ResolvedModifiers::default(),
-            draw_commands: vec![],
-            click_actions: vec![],
-            pointer_inputs: vec![],
-            clip_to_bounds: false,
             annotated_text: Some(AnnotatedString::from("static")),
             text_style: Some(TextStyle::from_paragraph_style(
                 cranpose_ui::text::ParagraphStyle {
@@ -4910,34 +4591,18 @@ mod tests {
                     ..Default::default()
                 },
             )),
-            text_layout_options: None,
-            text_pan: None,
-            graphics_layer: None,
-            children: vec![],
+            ..Default::default()
         };
         let parent = BuildNodeSnapshot {
             node_id: 1,
-            placement: Point::default(),
             size: Size {
                 width: 160.0,
                 height: 64.0,
             },
             content_offset: Point { x: 0.0, y: -18.5 },
-            motion_context_animated: false,
             translated_content_context: true,
-            has_own_origin_sinks: false,
-            measured_max_width: None,
-            resolved_modifiers: ResolvedModifiers::default(),
-            draw_commands: vec![],
-            click_actions: vec![],
-            pointer_inputs: vec![],
-            clip_to_bounds: false,
-            annotated_text: None,
-            text_style: None,
-            text_layout_options: None,
-            text_pan: None,
-            graphics_layer: None,
             children: vec![child],
+            ..Default::default()
         };
 
         let graph = build_layer_node_for_test(parent, 1.0, false);

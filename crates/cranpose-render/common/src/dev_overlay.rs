@@ -1,16 +1,11 @@
 //! Renderer-drawn dev overlay (fps counter): one shared graph builder so
 //! every backend draws the identical overlay without composition impact.
 
-use cranpose_ui_graphics::{
-    Brush, Color, CornerRadii, DrawPrimitive, GraphicsLayer, Point, Rect, Size,
-};
+use cranpose_ui_graphics::{Brush, Color, CornerRadii, DrawPrimitive, Rect, Size};
 
-use crate::{
-    graph::{
-        CachePolicy, DrawPrimitiveNode, IsolationReasons, LayerNode, PrimitiveEntry, PrimitiveNode,
-        PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode, TextPrimitiveNode,
-    },
-    raster_cache::LayerRasterCacheHashes,
+use crate::graph::{
+    DrawPrimitiveNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase,
+    ProjectiveTransform, RenderGraph, RenderNode, TextPrimitiveNode,
 };
 
 /// Cache key for the last-built overlay; rebuilding only on change keeps the
@@ -57,22 +52,6 @@ pub fn build_dev_overlay_graph(
             height: text_height + padding / 2.0,
         },
         transform_to_parent: ProjectiveTransform::translation(x, y),
-        content_offset: Point::default(),
-        motion_context_animated: false,
-        translated_content_context: false,
-        translated_content_offset: Point::default(),
-        scene_children_origin: Point::default(),
-        scene_children_layer_translation: Point::default(),
-        graphics_layer: GraphicsLayer::default(),
-        clip_to_bounds: false,
-        shadow_clip: None,
-        hit_test: None,
-        has_hit_targets: false,
-        has_origin_sinks: false,
-        isolation: IsolationReasons::default(),
-        cache_policy: CachePolicy::None,
-        cache_hashes: LayerRasterCacheHashes::default(),
-        cache_hashes_valid: false,
         children: vec![
             RenderNode::Primitive(PrimitiveEntry {
                 phase: PrimitivePhase::BeforeChildren,
@@ -109,30 +88,14 @@ pub fn build_dev_overlay_graph(
                 })),
             }),
         ],
+        ..Default::default()
     };
     overlay_layer.recompute_raster_cache_hashes();
 
     let mut graph = RenderGraph::new(LayerNode {
-        node_id: None,
         local_bounds: Rect::from_size(viewport),
-        transform_to_parent: ProjectiveTransform::identity(),
-        content_offset: Point::default(),
-        motion_context_animated: false,
-        translated_content_context: false,
-        translated_content_offset: Point::default(),
-        scene_children_origin: Point::default(),
-        scene_children_layer_translation: Point::default(),
-        graphics_layer: GraphicsLayer::default(),
-        clip_to_bounds: false,
-        shadow_clip: None,
-        hit_test: None,
-        has_hit_targets: false,
-        has_origin_sinks: false,
-        isolation: IsolationReasons::default(),
-        cache_policy: CachePolicy::None,
-        cache_hashes: LayerRasterCacheHashes::default(),
-        cache_hashes_valid: false,
         children: vec![RenderNode::Layer(Box::new(overlay_layer))],
+        ..Default::default()
     });
     graph.root.recompute_raster_cache_hashes();
     graph

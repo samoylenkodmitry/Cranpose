@@ -138,10 +138,7 @@ fn collect_hits_from_graph_inner<S: HitGraphSink>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        graph::{CachePolicy, HitTestNode, IsolationReasons},
-        raster_cache::LayerRasterCacheHashes,
-    };
+    use crate::graph::HitTestNode;
 
     type RecordedHit = (
         NodeId,
@@ -188,15 +185,7 @@ mod tests {
                 height: 18.0,
             },
             transform_to_parent,
-            content_offset: cranpose_ui_graphics::Point::default(),
-            motion_context_animated: false,
-            translated_content_context: false,
-            translated_content_offset: cranpose_ui_graphics::Point::default(),
-            scene_children_origin: cranpose_ui_graphics::Point::default(),
-            scene_children_layer_translation: cranpose_ui_graphics::Point::default(),
-            graphics_layer: cranpose_ui_graphics::GraphicsLayer::default(),
             clip_to_bounds: true,
-            shadow_clip: None,
             hit_test: Some(HitTestNode {
                 shape: None,
                 click_actions: vec![Rc::new(|_point| {})],
@@ -204,12 +193,7 @@ mod tests {
                 clip: None,
             }),
             has_hit_targets: true,
-            has_origin_sinks: false,
-            isolation: IsolationReasons::default(),
-            cache_policy: CachePolicy::None,
-            cache_hashes: LayerRasterCacheHashes::default(),
-            cache_hashes_valid: false,
-            children: vec![],
+            ..Default::default()
         }
     }
 
