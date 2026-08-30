@@ -366,10 +366,10 @@ impl Glass {
             tint: None,
             blur_radius: None,
             saturation: None,
-            refraction_depth: 0.34,
+            refraction_depth: 0.0,
             refraction_curve: 0.25,
             dispersion: 0.0,
-            transmission_refraction: 1.0,
+            transmission_refraction: 0.0,
             meniscus_absorption: 1.0,
             fold_depth: 0.0,
             optical_zoom: 1.0,
@@ -1061,6 +1061,8 @@ mod tests {
         assert!(clear.blur_radius_dp > lens.blur_radius_dp);
         assert!(regular.saturation > clear.saturation);
         assert_eq!(lens.rim_style, 1.0);
+        assert_eq!(regular.refraction_depth, 0.0);
+        assert_eq!(regular.transmission_refraction, 0.0);
         assert_eq!(regular.refraction_curve, 0.25);
         assert_eq!(lens.refraction_curve, 1.0);
         assert_eq!(regular.dispersion, 0.0);
