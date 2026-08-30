@@ -63,6 +63,7 @@ include_locked=0
 include_self=0
 include_main=0
 min_size_mb=100
+repo_arg=""
 extra_roots=()
 
 usage() {
@@ -74,6 +75,11 @@ usage: target_gc.sh [options]
   --busy-minutes N    A target written within N minutes has a live build and is
                       never evicted (default: 15).
   --min-size-mb N     Ignore target dirs smaller than N MB (default: 100).
+  --repo DIR          Sweep this repository's worktrees rather than the one
+                      containing the current directory. Always pass this from a
+                      script: defaulting to wherever the caller happens to be
+                      standing is fine for a human typing `just gc` and a loaded
+                      gun for anything automated.
   --root DIR          Also sweep cargo target dirs found under DIR. Repeatable.
                       Use for sibling checkouts that are not worktrees of this
                       repository.
@@ -96,6 +102,7 @@ while [ $# -gt 0 ]; do
         --min-free-gb) min_free_gb="${2:?--min-free-gb needs a value}"; shift ;;
         --busy-minutes) busy_minutes="${2:?--busy-minutes needs a value}"; shift ;;
         --min-size-mb) min_size_mb="${2:?--min-size-mb needs a value}"; shift ;;
+        --repo) repo_arg="${2:?--repo needs a value}"; shift ;;
         --root) extra_roots+=("${2:?--root needs a value}"); shift ;;
         -h|--help) usage; exit 0 ;;
         *) echo "target_gc.sh: unknown argument '$1'" >&2; usage >&2; exit 2 ;;
@@ -221,12 +228,35 @@ EOF
     [ "$reaped" -eq 0 ] || echo "Reaped $reaped interrupted sweep(s)."
 }
 
-repo_root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
-if [ -z "$repo_root" ]; then
-    echo "target_gc.sh: not inside a git repository" >&2
-    exit 2
+# Which repository to sweep. Defaulting to the caller's directory is the
+# behaviour that turned a test run into a 25GB reclaim of live worktrees during
+# development: the script was invoked from a real checkout while it was meant to
+# act on a fixture, and it did exactly what it was told. Scripted callers should
+# name the repository; humans running `just gc` get the convenient default.
+if [ -n "$repo_arg" ]; then
+    if [ ! -d "$repo_arg" ]; then
+        echo "target_gc.sh: --repo '$repo_arg' is not a directory" >&2
+        exit 2
+    fi
+    repo_root="$(git -C "$repo_arg" rev-parse --show-toplevel 2>/dev/null || true)"
+    if [ -z "$repo_root" ]; then
+        echo "target_gc.sh: --repo '$repo_arg' is not inside a git repository" >&2
+        exit 2
+    fi
+else
+    repo_root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+    if [ -z "$repo_root" ]; then
+        echo "target_gc.sh: not inside a git repository" >&2
+        exit 2
+    fi
 fi
-self_root="$(cd "$repo_root" && pwd -P)"
+
+# The worktree the caller is standing in, which is protected by default. This is
+# deliberately the caller's location and not repo_root: with --repo the two are
+# different, and it is the directory someone is working in that must not have
+# its build state pulled out from under it.
+self_root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+[ -n "$self_root" ] && self_root="$(cd "$self_root" && pwd -P)"
 
 # The primary checkout is the parent of the *common* git dir; every linked
 # worktree shares that same common dir while having its own gitdir. Protecting

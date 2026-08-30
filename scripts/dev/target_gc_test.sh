@@ -21,6 +21,10 @@ GC="$SCRIPT_DIR/target_gc.sh"
 # exactly the mistake a test must not make.
 gc() { ( cd "$fixture_repo" && "$GC" "$@" ); }
 
+# Same sweep, driven by --repo from outside the fixture. This is the form any
+# script should use, so it is the form the tests pin.
+gc_repo() { "$GC" --repo "$fixture_repo" "$@"; }
+
 passed=0
 failed=0
 
@@ -116,6 +120,15 @@ listing="$(gc --min-free-gb 999999 --busy-minutes 0 2>&1 || true)"
 check "locked worktree is protected" \
     "$(printf '%s\n' "$listing" | grep -c 'git-locked')" "1"
 git -C "$main_wt" worktree unlock "$root/new"
+
+# 8. --repo targets the named repository, not the caller's. This is the flag
+#    that keeps a scripted sweep off whatever checkout the caller stands in.
+make_target "$root/old/target" 202608010000
+listing="$(gc_repo --min-free-gb 999999 --busy-minutes 0 2>&1 || true)"
+check "--repo sweeps the named repo from outside it" \
+    "$(printf '%s\n' "$listing" | grep -c 'would reclaim')" "2"
+check "--repo rejects a non-repository" \
+    "$("$GC" --repo "$root" >/dev/null 2>&1; echo $?)" "2"
 
 echo
 echo "$passed passed, $failed failed"
