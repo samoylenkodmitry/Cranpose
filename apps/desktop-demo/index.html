@@ -2,115 +2,200 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#f6f7fb">
     <title>Cranpose Demo</title>
     <link rel="icon" href="data:,">
     <style>
-        html, body {
-            margin: 0;
-            padding: 0;
-            height: 100%;
-            overflow: hidden;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+        :root {
+            color-scheme: light;
+            font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
         }
 
-        .boot-chrome {
+        html,
+        body {
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            overflow: hidden;
+            background: #f6f7fb;
+        }
+
+        body {
             position: fixed;
             inset: 0;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            text-align: center;
-            padding: 20px;
-            box-sizing: border-box;
-        }
-
-        body[data-phase="running"] .boot-chrome {
-            display: none;
-        }
-
-        h1 {
-            color: white;
-            margin-bottom: 10px;
-            font-size: 2.5em;
-            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
-        }
-
-        .subtitle {
-            color: rgba(255, 255, 255, 0.9);
-            margin-bottom: 30px;
-            font-size: 1.2em;
         }
 
         #cranpose-canvas {
-            position: fixed;
+            position: absolute;
+            z-index: 0;
             inset: 0;
             display: block;
-            background: white;
+            width: 100%;
+            height: 100%;
+            background: #ffffff;
+            touch-action: none;
         }
 
-        .loading {
-            color: white;
-            font-size: 1.2em;
-            margin-top: 20px;
+        .boot-surface {
+            position: absolute;
+            z-index: 1;
+            inset: 0;
+            display: grid;
+            place-items: center;
+            box-sizing: border-box;
+            padding: max(24px, env(safe-area-inset-top)) max(24px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(24px, env(safe-area-inset-left));
+            background:
+                radial-gradient(circle at 50% 44%, rgba(108, 99, 255, 0.08), transparent 28rem),
+                #f6f7fb;
+            color: #171821;
+            opacity: 1;
+            visibility: visible;
+            transition: opacity 160ms ease, visibility 0s linear 160ms;
         }
 
-        .error {
-            color: #ff6b6b;
-            background: white;
-            padding: 20px;
-            border-radius: 10px;
-            margin-top: 20px;
-            max-width: 600px;
+        body[data-phase="running"] .boot-surface {
+            opacity: 0;
+            visibility: hidden;
+            pointer-events: none;
         }
 
-        .info {
-            color: rgba(255, 255, 255, 0.8);
-            margin-top: 20px;
-            font-size: 0.9em;
+        .boot-content {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            width: min(22rem, 100%);
+            text-align: center;
         }
 
-        .links {
-            margin-top: 20px;
+        .boot-symbol {
+            display: grid;
+            place-items: center;
+            width: 3.5rem;
+            height: 3.5rem;
+            margin-bottom: 1.25rem;
+            border: 1px solid rgba(65, 63, 121, 0.1);
+            border-radius: 1.25rem;
+            background: linear-gradient(145deg, rgba(255, 255, 255, 0.98), rgba(232, 230, 255, 0.92));
+            box-shadow:
+                0 1rem 2.5rem rgba(67, 59, 160, 0.12),
+                inset 0 1px rgba(255, 255, 255, 0.9);
         }
 
-        .links a {
-            color: white;
-            text-decoration: none;
-            margin: 0 10px;
-            padding: 10px 20px;
-            background: rgba(255, 255, 255, 0.2);
-            border-radius: 5px;
-            transition: background 0.3s;
+        .boot-symbol::before {
+            width: 1.1rem;
+            height: 1.1rem;
+            border: 3px solid rgba(91, 80, 232, 0.16);
+            border-top-color: #5b50e8;
+            border-radius: 50%;
+            content: "";
+            animation: boot-spin 850ms linear infinite;
         }
 
-        .links a:hover {
-            background: rgba(255, 255, 255, 0.3);
+        .boot-title {
+            margin: 0;
+            font-size: 1.15rem;
+            font-weight: 650;
+            letter-spacing: -0.02em;
+        }
+
+        .boot-status {
+            min-height: 1.25rem;
+            margin: 0.55rem 0 0;
+            color: #727482;
+            font-size: 0.9rem;
+        }
+
+        .boot-error {
+            display: none;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        body[data-phase="error"] .boot-status {
+            display: none;
+        }
+
+        body[data-phase="error"] .boot-symbol::before {
+            width: auto;
+            height: auto;
+            border: 0;
+            color: #bc3347;
+            content: "!";
+            font-size: 1.4rem;
+            font-weight: 750;
+            animation: none;
+        }
+
+        body[data-phase="error"] .boot-error {
+            display: flex;
+        }
+
+        .boot-error-title {
+            margin: 0;
+            font-size: 1.05rem;
+            font-weight: 650;
+        }
+
+        .boot-error-message {
+            max-width: 100%;
+            margin: 0.55rem 0 1.1rem;
+            overflow-wrap: anywhere;
+            color: #727482;
+            font-size: 0.82rem;
+            line-height: 1.45;
+        }
+
+        .boot-retry {
+            min-width: 6.5rem;
+            min-height: 2.6rem;
+            border: 0;
+            border-radius: 0.8rem;
+            background: #27283a;
+            color: #ffffff;
+            font: inherit;
+            font-size: 0.9rem;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        .boot-retry:focus-visible {
+            outline: 3px solid rgba(91, 80, 232, 0.35);
+            outline-offset: 3px;
+        }
+
+        @keyframes boot-spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .boot-surface {
+                transition: none;
+            }
+
+            .boot-symbol::before {
+                animation-duration: 1.8s;
+            }
         }
     </style>
 </head>
-<body>
+<body data-phase="booting">
     <canvas id="cranpose-canvas" width="800" height="600"></canvas>
 
-    <div class="boot-chrome">
-        <h1>🚀 Cranpose Demo</h1>
-        <p class="subtitle">Jetpack Compose-inspired UI framework for Rust</p>
-
-        <div id="loading" class="loading">Loading WASM module...</div>
-        <div id="error" class="error" style="display: none;"></div>
-
-        <div class="info">
-            <p>Powered by Rust 🦀 + WebAssembly + WebGPU/WebGL2</p>
-            <p>Full demo with interactive examples, animations, and more!</p>
+    <main id="boot-surface" class="boot-surface" role="status" aria-live="polite" aria-atomic="true">
+        <div class="boot-content">
+            <div class="boot-symbol" aria-hidden="true"></div>
+            <p class="boot-title">Cranpose</p>
+            <p id="boot-status" class="boot-status">Preparing the demo…</p>
+            <div class="boot-error" role="alert">
+                <p class="boot-error-title">Cranpose couldn’t start</p>
+                <p id="error-message" class="boot-error-message"></p>
+                <button id="retry" class="boot-retry" type="button">Reload</button>
+            </div>
         </div>
-
-        <div class="links">
-            <a href="https://github.com/samoylenkodmitry/cranpose" target="_blank">GitHub</a>
-            <a href="https://github.com/samoylenkodmitry/cranpose/blob/main/docs/ARCHITECTURE.md" target="_blank">Documentation</a>
-        </div>
-    </div>
+    </main>
 
     <script type="module">
         const MAX_CAPTURED_CONSOLE_MESSAGES = 2000;
@@ -120,9 +205,13 @@
             backend: null,
             initialTab: null,
             initialShaderSection: null,
+            bundle: null,
             lastUpdatedMs: Date.now(),
             error: null,
         };
+        const bootSurface = document.getElementById('boot-surface');
+        const bootStatus = document.getElementById('boot-status');
+        const errorMessage = document.getElementById('error-message');
 
         window.__cranposeConsoleMessages = capturedConsoleMessages;
         window.__cranposeAppState = appState;
@@ -133,6 +222,15 @@
                 lastUpdatedMs: Date.now(),
             });
             document.body.dataset.phase = phase;
+            if (phase === 'running') {
+                bootSurface.setAttribute('aria-hidden', 'true');
+            } else {
+                bootSurface.removeAttribute('aria-hidden');
+            }
+        }
+
+        function updateBootStatus(message) {
+            bootStatus.textContent = message;
         }
 
         function serializeConsoleValue(value) {
@@ -209,17 +307,51 @@
                 event.preventDefault();
                 const message = 'Graphics context lost';
                 console.error(message);
-                updateAppState('error', { error: message });
+                showFailure(message);
             });
 
             canvas.addEventListener('webglcontextrestored', (event) => {
                 event.preventDefault();
-                if (appState.phase !== 'error') {
-                    const message = 'Graphics context restored after loss';
-                    console.warn(message);
-                    updateAppState('error', { error: message });
-                }
+                const message = 'Graphics context restored; reload to resume';
+                console.warn(message);
+                showFailure(message);
             });
+        }
+
+        function verifiedAssetUrl(path) {
+            if (typeof path !== 'string' || !path.startsWith('assets/')) {
+                throw new Error('The web release manifest is invalid.');
+            }
+            const url = new URL(path, document.baseURI);
+            if (url.origin !== window.location.origin) {
+                throw new Error('The web release manifest points outside this site.');
+            }
+            return url;
+        }
+
+        async function loadBundleManifest() {
+            const manifestUrl = new URL('asset-manifest.json', document.baseURI);
+            manifestUrl.searchParams.set('request', Date.now().toString());
+            const response = await fetch(manifestUrl, { cache: 'no-store' });
+            if (!response.ok) {
+                throw new Error(`Unable to load the web release manifest (${response.status}).`);
+            }
+            const manifest = await response.json();
+            if (manifest.version !== 1) {
+                throw new Error('The web release manifest version is unsupported.');
+            }
+            const moduleUrl = verifiedAssetUrl(manifest.module);
+            const wasmUrl = verifiedAssetUrl(manifest.wasm);
+            if (new URL('.', moduleUrl).href !== new URL('.', wasmUrl).href) {
+                throw new Error('The JavaScript and WASM release assets do not match.');
+            }
+            return { moduleUrl, wasmUrl };
+        }
+
+        function showFailure(error) {
+            const message = error instanceof Error ? error.message : String(error);
+            updateAppState('error', { error: message });
+            errorMessage.textContent = message;
         }
 
         async function init() {
@@ -230,82 +362,38 @@
                 const initialShaderSection = params.get('shader_section');
                 updateAppState('initializing', { backend, initialTab, initialShaderSection });
                 registerGraphicsContextMonitor(document.getElementById('cranpose-canvas'));
-                const hasWebGpu = typeof navigator !== 'undefined' && 'gpu' in navigator;
-                const canvas = document.createElement('canvas');
-                const hasWebGl2 = !!canvas.getContext('webgl2');
+
+                const hasWebGpu = 'gpu' in navigator;
+                const probeCanvas = document.createElement('canvas');
+                const hasWebGl2 = !!probeCanvas.getContext('webgl2');
                 if (backend === 'webgpu' && !hasWebGpu) {
-                    throw new Error('This URL forced backend=webgpu, but WebGPU is not available in this browser.');
+                    throw new Error('WebGPU is unavailable. Reload without the WebGPU override.');
                 }
                 if (backend === 'gl' && !hasWebGl2) {
-                    throw new Error('This URL forced backend=gl, but WebGL2 is not available in this browser.');
+                    throw new Error('WebGL2 is unavailable in this browser.');
                 }
                 if (!hasWebGpu && !hasWebGl2) {
-                    throw new Error('Neither WebGPU nor WebGL2 is supported in this browser. Please use a current browser with modern graphics support.');
+                    throw new Error('This browser does not provide WebGPU or WebGL2.');
                 }
+
                 console.log(`Graphics startup preference: backend=${backend}`);
-                if (initialTab) {
-                    console.log(`UI startup preference: tab=${initialTab}`);
-                }
-                if (initialShaderSection) {
-                    console.log(`UI startup preference: shader_section=${initialShaderSection}`);
-                }
-
-                // Import the WASM module
+                updateBootStatus('Loading the interface…');
                 updateAppState('loading_wasm');
-                const wasm = await import('./pkg/desktop_app.js');
+                const { moduleUrl, wasmUrl } = await loadBundleManifest();
+                const wasm = await import(moduleUrl.href);
+                await wasm.default({ module_or_path: wasmUrl });
 
-                // Initialize the WASM module (this loads the .wasm file)
-                await wasm.default();
-
-                // Now run the app (functions are available after init)
-                updateAppState('starting_app');
+                updateBootStatus('Starting Cranpose…');
+                updateAppState('starting_app', { bundle: moduleUrl.pathname });
                 await wasm.run_app(initialTab, initialShaderSection);
                 updateAppState('running');
-
-                // Hide loading message
-                document.getElementById('loading').style.display = 'none';
-            } catch (err) {
-                console.error('Failed to initialize app:', err);
-                updateAppState('error', {
-                    error: err.message || err.toString(),
-                });
-                document.getElementById('loading').style.display = 'none';
-                const errorDiv = document.getElementById('error');
-                errorDiv.style.display = 'block';
-
-                let errorHtml = `<h3>Error Loading Application</h3><p>${err.message || err.toString()}</p>`;
-
-                if ((err.message || '').includes('WebGPU') || (err.message || '').includes('WebGL')) {
-                    errorHtml += `
-                        <hr>
-                        <h4>Graphics Support Missing</h4>
-                        <p style="text-align: left;">This demo defaults to the stable WebGL2 path and supports manual overrides with <code>?backend=webgpu</code>, <code>?backend=gl</code>, or <code>?backend=auto</code>.</p>
-                        <h5>Solutions:</h5>
-                        <ol style="text-align: left;">
-                            <li>Update your browser to the latest version</li>
-                            <li>Enable WebGPU or WebGL in your browser settings</li>
-                            <li>Update your graphics drivers</li>
-                            <li>Use the default WebGL2 path or <code>?backend=gl</code> if WebGPU startup is unstable on your browser</li>
-                            <li>Try a different browser (Chrome, Edge, Safari, or Firefox with the needed graphics support)</li>
-                        </ol>
-                    `;
-                } else {
-                    errorHtml += `
-                        <hr>
-                        <h4>Troubleshooting:</h4>
-                        <ol style="text-align: left;">
-                            <li>Check the browser console for detailed errors</li>
-                            <li>Ensure you're serving over HTTP (not file://)</li>
-                            <li>Try refreshing the page</li>
-                            <li>Update your browser to the latest version</li>
-                        </ol>
-                    `;
-                }
-
-                errorDiv.innerHTML = errorHtml;
+            } catch (error) {
+                console.error('Failed to initialize app:', error);
+                showFailure(error);
             }
         }
 
+        document.getElementById('retry').addEventListener('click', () => window.location.reload());
         init();
     </script>
 </body>

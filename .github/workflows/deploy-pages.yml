@@ -72,13 +72,11 @@ jobs:
           echo "WASM binary size:"
           ls -lh pkg/desktop_app_bg.wasm
 
-      - name: Create deployment directory
+      - name: Package content-addressed deployment
         run: |
-          mkdir -p _site
-          cp -r apps/desktop-demo/pkg _site/
-          cp apps/desktop-demo/index.html _site/
-          # Prevent Jekyll processing
-          touch _site/.nojekyll
+          site_root="$RUNNER_TEMP/cranpose-pages-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          apps/desktop-demo/package-web.sh "$site_root"
+          echo "CRANPOSE_PAGES_SITE_ROOT=$site_root" >> "$GITHUB_ENV"
 
       - name: Provision GNU tar for the Pages uploader
         env:
@@ -91,6 +89,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5
         with:
+          path: ${{ env.CRANPOSE_PAGES_SITE_ROOT }}
           retention-days: 1
 
   deploy:
