@@ -2871,7 +2871,11 @@ fn layer_source_cache_entry(
 
     Some(LayerSourceCacheEntry {
         stable_id: child.node_id,
-        collected_content_hash: (!motion_stable_source).then_some(child.target_content_hash),
+        // A motion-stable destination can reuse its geometry while it moves,
+        // but its source pixels remain live input for backdrop effects. A
+        // source cache keyed without the translated content hash freezes a
+        // glass pane over scrolling content.
+        collected_content_hash: Some(child.target_content_hash),
     })
 }
 
@@ -2891,11 +2895,9 @@ fn layer_source_cache_key(
         has_backdrop_underlay,
         allow_runtime_cache,
     )?;
-    let content_hash = source.collected_content_hash.unwrap_or_else(|| {
-        child
-            .motion_source_content_hash
-            .expect("motion-stable source snapshots its motion content hash at collection")
-    });
+    let content_hash = source
+        .collected_content_hash
+        .expect("cacheable layer sources retain their live content hash");
     Some(source.key(content_hash, surface_rect, pixel_size, target_scale))
 }
 
@@ -6886,7 +6888,6 @@ mod tests {
                 .is_some_and(|effect| effect.contains_runtime_shader()),
             target_content_hash: layer.target_content_hash(),
             effect_hash: layer.effect_hash(),
-            motion_source_content_hash: Some(layer.motion_source_content_hash()),
             contains_descendant_backdrop,
             cache_policy: layer.cache_policy,
             surface_requirements,
@@ -8405,7 +8406,7 @@ mod tests {
     }
 
     #[test]
-    fn motion_stable_translated_text_source_cache_ignores_scroll_offset() {
+fn motion_stable_translated_text_source_cache_tracks_scroll_offset() {
         let text = RenderNode::Primitive(PrimitiveEntry {
             phase: PrimitivePhase::BeforeChildren,
             node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
@@ -8478,7 +8479,7 @@ mod tests {
             true,
         );
 
-        assert_eq!(base_key, moved_key);
+        assert_ne!(base_key, moved_key);
     }
 
     #[test]

@@ -64,7 +64,6 @@ pub(crate) struct ChildLayerComposite {
     pub(crate) effect_contains_runtime_shader: bool,
     pub(crate) target_content_hash: u64,
     pub(crate) effect_hash: u64,
-    pub(crate) motion_source_content_hash: Option<u64>,
     pub(crate) contains_descendant_backdrop: bool,
     pub(crate) cache_policy: CachePolicy,
     pub(crate) surface_requirements: LayerSurfaceRequirements,
@@ -1653,12 +1652,6 @@ fn collect_layer_contents_into(
                         ..child_surface_ctx
                     }
                 };
-                let child_motion_stable_source = effective_surface_requirements(
-                    child_effective_translated_content_context,
-                    child_source_ctx.surface_capture_active,
-                    child_requirements,
-                )
-                .contains(SurfaceRequirement::MotionStableCapture);
                 let mut source_scene = CompositorScene::new();
                 let mut source_children = Vec::new();
                 collect_layer_contents_into(
@@ -1817,8 +1810,6 @@ fn collect_layer_contents_into(
                         .is_some_and(|effect| effect.contains_runtime_shader()),
                     target_content_hash: child_layer.target_content_hash(),
                     effect_hash: child_layer.effect_hash(),
-                    motion_source_content_hash: child_motion_stable_source
-                        .then(|| child_layer.motion_source_content_hash()),
                     contains_descendant_backdrop: child_contains_descendant_backdrop,
                     cache_policy: child_layer.cache_policy,
                     surface_requirements: child_requirements,
@@ -2025,15 +2016,6 @@ pub(crate) fn lower_layer_node(
         layer_surface_requirements_cache,
     );
     let contains_descendant_backdrop = layer_contains_descendant_backdrop(layer);
-    let effective_translated_content_context = translation_context.inherited_content_translation
-        || layer.translated_content_context
-        || surface_requirements.contains_translated_content;
-    let motion_stable_source = effective_surface_requirements(
-        effective_translated_content_context,
-        translation_context.surface_capture_active,
-        surface_requirements,
-    )
-    .contains(SurfaceRequirement::MotionStableCapture);
     let lowered = ChildLayerComposite {
         z_index: 0,
         logical_rect,
@@ -2053,8 +2035,6 @@ pub(crate) fn lower_layer_node(
             .is_some_and(|effect| effect.contains_runtime_shader()),
         target_content_hash: layer.target_content_hash(),
         effect_hash: layer.effect_hash(),
-        motion_source_content_hash: motion_stable_source
-            .then(|| layer.motion_source_content_hash()),
         contains_descendant_backdrop,
         cache_policy: layer.cache_policy,
         surface_requirements,

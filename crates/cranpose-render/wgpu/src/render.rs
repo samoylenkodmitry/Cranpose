@@ -17759,7 +17759,6 @@ mod tests {
                 .is_some_and(|effect| effect.contains_runtime_shader()),
             target_content_hash: layer.target_content_hash(),
             effect_hash: layer.effect_hash(),
-            motion_source_content_hash: Some(layer.motion_source_content_hash()),
             contains_descendant_backdrop: layer_contains_descendant_backdrop(layer),
             cache_policy: layer.cache_policy,
             surface_requirements,
