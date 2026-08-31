@@ -406,7 +406,7 @@ fn popup_impl(
     });
 
     let dispose_registry = registry;
-    cranpose_core::DisposableEffect!((), move |scope| {
+    cranpose_core::DisposableEffect((), move |scope| {
         let dispose_registry = dispose_registry.clone();
         scope.on_dispose(move || dispose_registry.remove(id))
     });

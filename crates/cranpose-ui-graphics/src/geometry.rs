@@ -6,7 +6,7 @@ use crate::{
     Brush, Color, ColorFilter, ImageBitmap, ImageSampling,
     stroke::{ArcGeometry, Stroke, arc_band},
     typography::{
-        DrawTextMeasurer, TextAlign, TextMeasurement, TextStyle, TextVerticalAlign,
+        DrawTextMeasurer, DrawTextStyle, TextAlign, TextMeasurement, TextVerticalAlign,
         estimate_text_measurement,
     },
 };
@@ -565,7 +565,7 @@ pub enum DrawPrimitive {
 /// A run of text, positioned and ready to rasterize.
 ///
 /// `rect` is *already resolved*: [`DrawScope::draw_text_at`] measures the
-/// string, applies [`TextStyle::align`] / [`TextStyle::vertical_align`] inside
+/// string, applies [`DrawTextStyle::align`] / [`DrawTextStyle::vertical_align`] inside
 /// the requested box, and stores the result here. Renderers therefore lay the
 /// glyphs out from `rect`'s top-left and never re-align — which is what keeps
 /// what [`DrawScope::measure_text`] reported and what lands on screen the same
@@ -578,7 +578,7 @@ pub struct TextPrimitive {
     /// Shared so redrawing an unchanged string each frame clones a pointer
     /// rather than the characters.
     pub text: std::rc::Rc<str>,
-    pub style: TextStyle,
+    pub style: DrawTextStyle,
     /// Text is filled with a single color: the glyph atlas path modulates one
     /// vertex color per glyph. Gradient brushes are resolved to their first
     /// stop by the draw scope, exactly like [`DrawScope::draw_vector_path`].
@@ -863,28 +863,28 @@ pub trait DrawScope {
     /// Free to call repeatedly: the underlying text stack caches metrics on
     /// `(text, style)`, so a game can measure every label every frame to center
     /// it without touching a font file more than once.
-    fn measure_text(&self, text: &str, style: &TextStyle) -> TextMeasurement;
+    fn measure_text(&self, text: &str, style: &DrawTextStyle) -> TextMeasurement;
 
     /// Draws `text` inside the whole scope rect, positioned by
-    /// [`TextStyle::align`] and [`TextStyle::vertical_align`].
-    fn draw_text(&mut self, brush: Brush, text: &str, style: &TextStyle) {
+    /// [`DrawTextStyle::align`] and [`DrawTextStyle::vertical_align`].
+    fn draw_text(&mut self, brush: Brush, text: &str, style: &DrawTextStyle) {
         self.draw_text_at(Rect::from_size(self.size()), brush, text, style);
     }
 
-    /// Draws `text` inside `rect`, positioned by [`TextStyle::align`] and
-    /// [`TextStyle::vertical_align`].
+    /// Draws `text` inside `rect`, positioned by [`DrawTextStyle::align`] and
+    /// [`DrawTextStyle::vertical_align`].
     ///
     /// The glyphs are *not* clipped to `rect` — it is an alignment box, not a
     /// viewport. A `rect` narrower than the measured text overflows in the
     /// direction the alignment implies; clip the layer if that matters.
-    fn draw_text_at(&mut self, rect: Rect, brush: Brush, text: &str, style: &TextStyle);
+    fn draw_text_at(&mut self, rect: Rect, brush: Brush, text: &str, style: &DrawTextStyle);
 
     /// Draws `text` with the top-left corner of its block at `top_left`.
     ///
     /// Alignment is a no-op here because the box is the measurement — this is
     /// the "I already know where it goes" form, and the one to pair with
     /// [`measure_text`](Self::measure_text) for hand-rolled centering.
-    fn draw_text_from(&mut self, top_left: Point, brush: Brush, text: &str, style: &TextStyle) {
+    fn draw_text_from(&mut self, top_left: Point, brush: Brush, text: &str, style: &DrawTextStyle) {
         if text.is_empty() {
             return;
         }
@@ -893,7 +893,7 @@ pub trait DrawScope {
             Rect::from_origin_size(top_left, measurement.size),
             brush,
             text,
-            &TextStyle {
+            &DrawTextStyle {
                 align: TextAlign::Left,
                 vertical_align: TextVerticalAlign::Top,
                 ..style.clone()
@@ -909,7 +909,7 @@ pub trait DrawScope {
 ///
 /// Split out so the placement rule is stated once and can be unit-tested
 /// against the measurement it is derived from.
-pub fn align_text_block(rect: Rect, measurement: TextMeasurement, style: &TextStyle) -> Point {
+pub fn align_text_block(rect: Rect, measurement: TextMeasurement, style: &DrawTextStyle) -> Point {
     let x = match style.align {
         TextAlign::Left => rect.x,
         TextAlign::Center => rect.x + (rect.width - measurement.size.width) * 0.5,
@@ -2121,14 +2121,14 @@ impl DrawScope for DrawScopeDefault {
         });
     }
 
-    fn measure_text(&self, text: &str, style: &TextStyle) -> TextMeasurement {
+    fn measure_text(&self, text: &str, style: &DrawTextStyle) -> TextMeasurement {
         match &self.text_measurer {
             Some(measurer) => measurer.measure_text(text, style),
             None => estimate_text_measurement(text, style),
         }
     }
 
-    fn draw_text_at(&mut self, rect: Rect, brush: Brush, text: &str, style: &TextStyle) {
+    fn draw_text_at(&mut self, rect: Rect, brush: Brush, text: &str, style: &DrawTextStyle) {
         if text.is_empty() {
             return;
         }
@@ -2516,7 +2516,7 @@ mod tests {
             line_count: 1,
         };
         let style = |align, vertical| {
-            TextStyle::default()
+            DrawTextStyle::default()
                 .with_align(align)
                 .with_vertical_align(vertical)
         };
@@ -3290,7 +3290,7 @@ mod tests {
     }
 
     impl DrawTextMeasurer for FixedAdvanceTextMeasurer {
-        fn measure_text(&self, text: &str, _style: &TextStyle) -> TextMeasurement {
+        fn measure_text(&self, text: &str, _style: &DrawTextStyle) -> TextMeasurement {
             self.calls.set(self.calls.get() + 1);
             let lines: Vec<&str> = text.split('\n').collect();
             let width = lines
@@ -3324,7 +3324,7 @@ mod tests {
     #[test]
     fn drawn_text_occupies_exactly_the_box_measure_text_reported() {
         let (mut scope, _) = text_scope(Size::new(200.0, 100.0));
-        let style = TextStyle::new(16.0);
+        let style = DrawTextStyle::new(16.0);
         let measured = scope.measure_text("ABCD", &style);
 
         scope.draw_text_from(
@@ -3366,7 +3366,7 @@ mod tests {
         ];
         for (align, vertical_align, expected_x, expected_y) in cases {
             let (mut scope, _) = text_scope(Size::new(400.0, 400.0));
-            let style = TextStyle::new(16.0)
+            let style = DrawTextStyle::new(16.0)
                 .with_align(align)
                 .with_vertical_align(vertical_align);
             scope.draw_text_at(box_rect, Brush::solid(Color::WHITE), "AB", &style);
@@ -3384,7 +3384,7 @@ mod tests {
     #[test]
     fn baseline_aligned_text_hangs_above_the_box_edge() {
         let (mut scope, _) = text_scope(Size::new(200.0, 200.0));
-        let style = TextStyle::new(16.0).with_vertical_align(TextVerticalAlign::Baseline);
+        let style = DrawTextStyle::new(16.0).with_vertical_align(TextVerticalAlign::Baseline);
         let measured = scope.measure_text("Ag", &style);
         scope.draw_text_at(
             Rect {
@@ -3409,7 +3409,7 @@ mod tests {
     #[test]
     fn draw_text_fills_the_whole_scope_rect() {
         let (mut scope, _) = text_scope(Size::new(120.0, 60.0));
-        let style = TextStyle::new(16.0)
+        let style = DrawTextStyle::new(16.0)
             .with_align(TextAlign::Right)
             .with_vertical_align(TextVerticalAlign::Bottom);
         scope.draw_text(Brush::solid(Color::WHITE), "AB", &style);
@@ -3425,7 +3425,7 @@ mod tests {
     #[test]
     fn draw_text_from_ignores_alignment_and_anchors_the_top_left() {
         let (mut scope, _) = text_scope(Size::new(400.0, 400.0));
-        let style = TextStyle::new(16.0)
+        let style = DrawTextStyle::new(16.0)
             .with_align(TextAlign::Center)
             .with_vertical_align(TextVerticalAlign::Bottom);
         scope.draw_text_from(
@@ -3446,7 +3446,7 @@ mod tests {
     #[test]
     fn multiline_text_measures_the_widest_line_and_stacks_the_lines() {
         let (mut scope, _) = text_scope(Size::new(400.0, 400.0));
-        let style = TextStyle::new(16.0);
+        let style = DrawTextStyle::new(16.0);
         scope.draw_text_from(Point::ZERO, Brush::solid(Color::WHITE), "AB\nABCDE", &style);
         let primitives = scope.into_primitives();
         let text = unwrap_text(&primitives[0]);
@@ -3457,18 +3457,18 @@ mod tests {
     #[test]
     fn empty_text_draws_nothing_and_never_measures() {
         let (mut scope, measurer) = text_scope(Size::new(100.0, 100.0));
-        scope.draw_text(Brush::solid(Color::WHITE), "", &TextStyle::new(16.0));
+        scope.draw_text(Brush::solid(Color::WHITE), "", &DrawTextStyle::new(16.0));
         scope.draw_text_at(
             Rect::from_size(Size::new(10.0, 10.0)),
             Brush::solid(Color::WHITE),
             "",
-            &TextStyle::new(16.0),
+            &DrawTextStyle::new(16.0),
         );
         scope.draw_text_from(
             Point::ZERO,
             Brush::solid(Color::WHITE),
             "",
-            &TextStyle::new(16.0),
+            &DrawTextStyle::new(16.0),
         );
         assert!(scope.into_primitives().is_empty());
         assert_eq!(
@@ -3481,7 +3481,7 @@ mod tests {
     #[test]
     fn invisible_text_draws_nothing() {
         let (mut scope, _) = text_scope(Size::new(100.0, 100.0));
-        let style = TextStyle::new(16.0);
+        let style = DrawTextStyle::new(16.0);
         scope.draw_text(Brush::solid(Color(1.0, 1.0, 1.0, 0.0)), "AB", &style);
         scope.draw_text(
             Brush::LinearGradient {
@@ -3503,7 +3503,7 @@ mod tests {
         scope.draw_text(
             Brush::linear_gradient(vec![Color::RED, Color::BLUE]),
             "AB",
-            &TextStyle::new(16.0),
+            &DrawTextStyle::new(16.0),
         );
         let primitives = scope.into_primitives();
         assert_eq!(unwrap_text(&primitives[0]).color, Color::RED);
@@ -3512,7 +3512,7 @@ mod tests {
     #[test]
     fn a_scope_without_a_measurer_falls_back_to_the_font_free_estimate() {
         let mut scope = DrawScopeDefault::new(Size::new(100.0, 100.0));
-        let style = TextStyle::new(16.0);
+        let style = DrawTextStyle::new(16.0);
         assert_eq!(
             scope.measure_text("ABC", &style),
             crate::estimate_text_measurement("ABC", &style)
@@ -3527,7 +3527,7 @@ mod tests {
     fn degenerate_text_geometry_emits_nothing_and_never_panics() {
         struct DegenerateTextMeasurer;
         impl DrawTextMeasurer for DegenerateTextMeasurer {
-            fn measure_text(&self, _text: &str, _style: &TextStyle) -> TextMeasurement {
+            fn measure_text(&self, _text: &str, _style: &DrawTextStyle) -> TextMeasurement {
                 TextMeasurement {
                     size: Size::new(f32::NAN, 0.0),
                     line_height: f32::NAN,
@@ -3541,7 +3541,7 @@ mod tests {
             Size::new(50.0, 50.0),
             Rc::new(DegenerateTextMeasurer),
         );
-        scope.draw_text(Brush::solid(Color::WHITE), "AB", &TextStyle::new(16.0));
+        scope.draw_text(Brush::solid(Color::WHITE), "AB", &DrawTextStyle::new(16.0));
         scope.draw_text_at(
             Rect {
                 x: f32::NAN,
@@ -3551,7 +3551,7 @@ mod tests {
             },
             Brush::solid(Color::WHITE),
             "AB",
-            &TextStyle::new(16.0),
+            &DrawTextStyle::new(16.0),
         );
         assert!(
             scope.into_primitives().is_empty(),
@@ -3562,7 +3562,7 @@ mod tests {
     #[test]
     fn text_style_survives_lowering_into_the_primitive() {
         let (mut scope, _) = text_scope(Size::new(100.0, 100.0));
-        let style = TextStyle::new(21.0)
+        let style = DrawTextStyle::new(21.0)
             .with_font_family("Fira Sans")
             .with_weight(FontWeight::BOLD)
             .with_style(FontStyle::Italic)

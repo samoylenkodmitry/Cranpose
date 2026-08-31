@@ -696,7 +696,7 @@ fn launch_initial_load(
     state: cranpose_core::MutableState<NewsState>,
     client: HttpClientRef,
 ) {
-    cranpose_core::LaunchedEffect!(trigger, move |scope| {
+    cranpose_core::LaunchedEffect(trigger, move |scope| {
         state.set(NewsState::Loading);
         let client = client.clone();
 
@@ -720,7 +720,7 @@ fn launch_load_more(
     state: cranpose_core::MutableState<NewsState>,
     client: HttpClientRef,
 ) {
-    cranpose_core::LaunchedEffect!(trigger, move |scope| {
+    cranpose_core::LaunchedEffect(trigger, move |scope| {
         if trigger == 0 {
             return;
         }
@@ -784,7 +784,7 @@ fn launch_comment_thread(
 ) {
     let selected_story_id = selected_story.as_ref().map(|story| story.id);
 
-    cranpose_core::LaunchedEffect!((selected_story_id, refresh_trigger), move |scope| {
+    cranpose_core::LaunchedEffect((selected_story_id, refresh_trigger), move |scope| {
         let Some(story) = selected_story.clone() else {
             state.set(ThreadState::Idle);
             return;
@@ -818,7 +818,7 @@ fn launch_load_more_comments(
     state: cranpose_core::MutableState<ThreadState>,
     client: HttpClientRef,
 ) {
-    cranpose_core::LaunchedEffect!(trigger, move |scope| {
+    cranpose_core::LaunchedEffect(trigger, move |scope| {
         if trigger == 0 {
             return;
         }
@@ -907,7 +907,7 @@ fn AutoLoadMore(
         _ => (false, 0),
     };
 
-    cranpose_core::LaunchedEffect!((should_trigger, next_index), move |_scope| {
+    cranpose_core::LaunchedEffect((should_trigger, next_index), move |_scope| {
         if should_trigger {
             auto_load_guard.set(next_index);
             load_more_trigger.update(|value| *value = value.wrapping_add(1));
@@ -936,7 +936,7 @@ fn AutoLoadMoreComments(
         && visible_end >= preload_index
         && auto_load_guard.get() != loaded_count;
 
-    cranpose_core::LaunchedEffect!((should_trigger, loaded_count), move |_scope| {
+    cranpose_core::LaunchedEffect((should_trigger, loaded_count), move |_scope| {
         if should_trigger {
             auto_load_guard.set(loaded_count);
             load_more_trigger.update(|value| *value = value.wrapping_add(1));
@@ -1943,14 +1943,14 @@ pub fn HackerNewsTab() {
         http_client.clone(),
     );
     AutoLoadMore(list_state, news_state, auto_load_guard, load_more_trigger);
-    cranpose_core::LaunchedEffect!(
+    cranpose_core::LaunchedEffect(
         (
             selected_story.as_ref().map(|story| story.id),
-            thread_refresh_trigger.get()
+            thread_refresh_trigger.get(),
         ),
         move |_scope| {
             comment_auto_load_guard.set(0);
-        }
+        },
     );
 
     Column(

@@ -39,6 +39,9 @@ pub struct LiquidColors {
     pub fill: Color,
     /// Lighter fill for nested controls.
     pub secondary_fill: Color,
+    /// Resting tint of a glass surface pane (cards, planks): the surface
+    /// role at pane translucency, so the backdrop transmits through it.
+    pub surface_glass: Color,
     /// Window background (grouped style).
     pub background: Color,
     /// Elevated surface (cards, list sections).
@@ -75,6 +78,7 @@ impl LiquidColors {
             separator: Color::from_rgba_u8(60, 60, 67, 56),
             fill: Color::from_rgba_u8(120, 120, 128, 40),
             secondary_fill: Color::from_rgba_u8(120, 120, 128, 28),
+            surface_glass: Color::from_rgba_u8(255, 255, 255, 191),
             background: Color::from_rgb_u8(242, 242, 247),
             surface: Color::WHITE,
             surface_pressed: Color::from_rgb_u8(226, 226, 231),
@@ -99,6 +103,7 @@ impl LiquidColors {
             separator: Color::from_rgba_u8(84, 84, 88, 130),
             fill: Color::from_rgba_u8(120, 120, 128, 70),
             secondary_fill: Color::from_rgba_u8(120, 120, 128, 50),
+            surface_glass: Color::from_rgba_u8(28, 28, 30, 184),
             background: Color::from_rgb_u8(10, 10, 12),
             surface: Color::from_rgb_u8(28, 28, 30),
             surface_pressed: Color::from_rgb_u8(44, 44, 46),

@@ -190,6 +190,62 @@ fn workflow_actions_are_pinned_to_commit_shas() {
 }
 
 #[test]
+fn release_jobs_require_every_expected_asset() {
+    let workflow = workspace_source(".github/workflows/release.yml");
+
+    for file in [
+        "files: ${{ matrix.artifact_name }}.tar.gz",
+        "files: cranpose-demo-windows-x86_64.zip",
+        "files: apps/android-demo/android/app/build/outputs/apk/release/app-release.apk",
+    ] {
+        assert!(
+            workflow.contains(&format!("{file}\n          fail_on_unmatched_files: true")),
+            "release uploads must name `{file}` exactly and fail when it is missing"
+        );
+    }
+    assert!(
+        !workflow.contains("*.tar.gz")
+            && !workflow.contains("*.zip")
+            && !workflow.contains("app-*-release.apk"),
+        "release uploads must not use globs that can silently match no files"
+    );
+}
+
+#[test]
+fn release_artifacts_wait_for_publish_to_finalize_the_tag() {
+    let workflow = workspace_source(".github/workflows/release.yml");
+    let finalized_tag = "${{ github.event.workflow_run.head_branch }}";
+
+    assert!(
+        workflow.contains("workflow_run:\n    workflows: [\"Publish\"]\n    types: [completed]")
+            && !workflow.contains("push:\n    tags: [\"v*\"]"),
+        "release artifacts must start only after Publish has finalized the release tag"
+    );
+    assert!(
+        workflow.contains(
+            "if: github.event.workflow_run.conclusion == 'success' && startsWith(github.event.workflow_run.head_branch, 'v')"
+        ),
+        "release artifacts must reject failed Publish runs and non-tag manual runs"
+    );
+    assert_eq!(
+        workflow.matches(&format!("ref: {finalized_tag}")).count(),
+        3,
+        "every release build definition must check out the finalized tag name"
+    );
+    assert_eq!(
+        workflow
+            .matches(&format!("tag_name: {finalized_tag}"))
+            .count(),
+        4,
+        "every release action must explicitly target the finalized tag under workflow_run"
+    );
+    assert!(
+        !workflow.contains("github.ref_name"),
+        "workflow_run release jobs must not resolve the default branch as the release tag"
+    );
+}
+
+#[test]
 fn render_common_package_embeds_crate_owned_text_assets() {
     let software_text_source =
         workspace_source("crates/cranpose-render/common/src/software_text_raster.rs");
@@ -836,6 +892,22 @@ fn web_primary_pointer_stream_is_captured_until_release_or_cancel() {
             .count()
             >= 2,
         "web pointer-up and pointer-cancel must both release canvas pointer capture"
+    );
+}
+
+#[test]
+fn web_haptics_treats_the_vibration_api_as_optional() {
+    let source = crate_source("src/web_services.rs");
+
+    assert!(
+        !source.contains("navigator.vibrate_with_"),
+        "web haptics must not call Navigator.vibrate directly: browsers without the optional Vibration API throw out of the WASM pointer callback"
+    );
+    assert!(
+        source.contains("Reflect::get(navigator.as_ref(), &JsValue::from_str(\"vibrate\"))")
+            && source.contains("dyn_ref::<js_sys::Function>()")
+            && source.contains("vibrate.call1(navigator.as_ref(), pattern)"),
+        "web haptics must feature-detect a callable vibration function and contain invocation failures"
     );
 }
 

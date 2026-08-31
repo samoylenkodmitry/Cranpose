@@ -25,7 +25,7 @@
 //! of text that never asked. The Wear widgets ask for it through
 //! [`WearTextStyle`](crate::widgets::wear::WearTextStyle), and a
 //! [`DrawScope`](cranpose_ui_graphics::DrawScope) run asks for it through
-//! [`TextStyle::with_line_height_style`](cranpose_ui_graphics::TextStyle::with_line_height_style)
+//! [`DrawTextStyle::with_line_height_style`](cranpose_ui_graphics::DrawTextStyle::with_line_height_style)
 //! — which is what lets a canvas and a `Text` on one screen agree.
 
 use crate::text::style::{

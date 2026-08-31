@@ -2062,6 +2062,267 @@ fn opaque_row_with_glass_fixture(animated_color: Color) -> RenderGraph {
 }
 
 #[test]
+fn a_resting_glass_pane_washes_its_backdrop_with_the_resting_tint() {
+    let mut renderer = match support::headless_renderer() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!(
+                "skipping resting glass tint assertions because headless WGPU init failed: {}",
+                err
+            );
+            return;
+        }
+    };
+
+    let mut tail =
+        cranpose_ui_graphics::RuntimeShader::new(cranpose_ui_graphics::LIQUID_GLASS_WGSL);
+    tail.set_float2(0, 0.0, 0.0);
+    tail.set_float(6, 10.0);
+    tail.set_float(111, 0.0);
+    tail.set_float4(113, 0.5, 0.5, 0.6, 0.5);
+    let glass = layer(
+        Rect {
+            x: 16.0,
+            y: 32.0,
+            width: 96.0,
+            height: 28.0,
+        },
+        ProjectiveTransform::identity(),
+        GraphicsLayer {
+            backdrop_effect: Some(
+                RenderEffect::blur(6.0)
+                    .then(cranpose_ui_graphics::RenderEffect::runtime_shader(tail)),
+            ),
+            ..GraphicsLayer::default()
+        },
+        vec![],
+    );
+
+    renderer.scene_mut().graph = Some(RenderGraph::new(layer(
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: FRAME_WIDTH as f32,
+            height: FRAME_HEIGHT as f32,
+        },
+        ProjectiveTransform::identity(),
+        GraphicsLayer::default(),
+        vec![
+            solid_rect(
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: FRAME_WIDTH as f32,
+                    height: FRAME_HEIGHT as f32,
+                },
+                Color::BLACK,
+            ),
+            RenderNode::Layer(Box::new(glass)),
+        ],
+    )));
+
+    let frame = renderer
+        .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
+        .expect("resting glass tint capture should succeed");
+
+    // A resting pane is frost, not vacuum: its interior carries the resting
+    // tint wash over the transmitted backdrop. A resting path that returns
+    // the raw backdrop sample makes the pane vanish entirely — the invisible
+    // pill regression this pins down.
+    let interior = rgba(&frame, 64, 46);
+    let outside = rgba(&frame, 8, 8);
+    let interior_luma = interior[0] as i32 + interior[1] as i32 + interior[2] as i32;
+    let outside_luma = outside[0] as i32 + outside[1] as i32 + outside[2] as i32;
+    assert!(
+        interior_luma >= 100,
+        "a resting pane must wash its interior with the resting tint: interior \
+         luma {interior_luma} over a black backdrop (tint 0.5/0.5/0.6 at alpha \
+         0.5 washes to ~200 summed; a raw-backdrop pass-through reads 0)"
+    );
+    assert!(
+        outside_luma < 30,
+        "the resting wash must stop at the pane's coverage: outside luma \
+         {outside_luma} should stay near the black backdrop"
+    );
+}
+
+#[test]
+fn a_resting_glass_pane_transmits_the_blurred_backdrop() {
+    let mut renderer = match support::headless_renderer() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!(
+                "skipping resting glass transmission assertions because headless WGPU init failed: {}",
+                err
+            );
+            return;
+        }
+    };
+
+    let star = Rect {
+        x: 38.0,
+        y: 42.0,
+        width: 8.0,
+        height: 8.0,
+    };
+    let mut tail =
+        cranpose_ui_graphics::RuntimeShader::new(cranpose_ui_graphics::LIQUID_GLASS_WGSL);
+    tail.set_float2(0, 0.0, 0.0);
+    tail.set_float(6, 10.0);
+    tail.set_float(111, 0.0);
+    tail.set_float4(113, 0.05, 0.05, 0.08, 0.35);
+    let glass = layer(
+        Rect {
+            x: 16.0,
+            y: 32.0,
+            width: 96.0,
+            height: 28.0,
+        },
+        ProjectiveTransform::identity(),
+        GraphicsLayer {
+            backdrop_effect: Some(
+                RenderEffect::blur(6.0)
+                    .then(cranpose_ui_graphics::RenderEffect::runtime_shader(tail)),
+            ),
+            ..GraphicsLayer::default()
+        },
+        vec![],
+    );
+
+    renderer.scene_mut().graph = Some(RenderGraph::new(layer(
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: FRAME_WIDTH as f32,
+            height: FRAME_HEIGHT as f32,
+        },
+        ProjectiveTransform::identity(),
+        GraphicsLayer::default(),
+        vec![
+            solid_rect(
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: FRAME_WIDTH as f32,
+                    height: FRAME_HEIGHT as f32,
+                },
+                Color::BLACK,
+            ),
+            solid_rect(star, Color::WHITE),
+            RenderNode::Layer(Box::new(glass)),
+        ],
+    )));
+
+    let frame = renderer
+        .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
+        .expect("resting glass capture should succeed");
+
+    // A frosted pane spreads the star's light: a pixel a few texels BESIDE
+    // the star, under the glass, carries blurred starlight. A resting path
+    // that discards the backdrop (or leaks it sharply) leaves that pixel as
+    // dark as the pane's far interior.
+    let beside = rgba(&frame, 48, 46);
+    let far = rgba(&frame, 100, 46);
+    let beside_luma = beside[0] as i32 + beside[1] as i32 + beside[2] as i32;
+    let far_luma = far[0] as i32 + far[1] as i32 + far[2] as i32;
+    assert!(
+        beside_luma >= far_luma + 40,
+        "a resting glass pane must transmit the BLURRED backdrop: beside-star \
+         luma {beside_luma} vs far-interior luma {far_luma} (blur radius 6 puts \
+         spread starlight at the beside pixel only when the frost transmits — a \
+         tint-only resting path leaves it as dark as the far interior, and a \
+         sharp leak lights only the star itself)"
+    );
+}
+
+#[test]
+fn a_cutout_drop_shadow_keeps_its_penumbra_outside_and_none_inside() {
+    let mut renderer = match support::headless_renderer() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!(
+                "skipping cutout drop shadow assertions because headless WGPU init failed: {}",
+                err
+            );
+            return;
+        }
+    };
+
+    let element = Rect {
+        x: 24.0,
+        y: 24.0,
+        width: 64.0,
+        height: 32.0,
+    };
+    let shadow_shape = Rect {
+        x: 24.0,
+        y: 30.0,
+        width: 64.0,
+        height: 32.0,
+    };
+    let radii = cranpose_ui_graphics::CornerRadii::uniform(10.0);
+    let shadow = RenderNode::Primitive(PrimitiveEntry {
+        phase: PrimitivePhase::BeforeChildren,
+        node: PrimitiveNode::Draw(DrawPrimitiveNode {
+            primitive: DrawPrimitive::Shadow(ShadowPrimitive::Drop {
+                shape: Box::new(DrawPrimitive::RoundRect {
+                    rect: shadow_shape,
+                    brush: Brush::solid(Color(0.0, 0.0, 0.0, 0.6)),
+                    radii,
+                    stroke: None,
+                }),
+                cutout: Some(Box::new(DrawPrimitive::RoundRect {
+                    rect: element,
+                    brush: Brush::solid(Color::BLACK),
+                    radii,
+                    stroke: None,
+                })),
+                blur_radius: 8.0,
+                blend_mode: BlendMode::SrcOver,
+            }),
+            clip: None,
+        }),
+    });
+
+    renderer.scene_mut().graph = Some(graph(vec![solid_rect(frame_rect(), Color::WHITE), shadow]));
+
+    let frame = renderer
+        .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
+        .expect("cutout drop shadow capture should succeed");
+
+    // The cutout exists so a translucent element never sits over its own
+    // shadow: the element's footprint must stay clean all the way to its
+    // edge, while the penumbra survives OUTSIDE the silhouette. A cutout
+    // applied before the blur bleeds shadow back into the footprint (the
+    // dark ring hugging every glass rim), and misreading the cutout as an
+    // inner-shadow mask discards the outer penumbra entirely.
+    let interior_center = rgba(&frame, 56, 40);
+    let interior_bottom = rgba(&frame, 56, 52);
+    let outside_below = rgba(&frame, 56, 66);
+    let center_luma =
+        interior_center[0] as i32 + interior_center[1] as i32 + interior_center[2] as i32;
+    let bottom_luma =
+        interior_bottom[0] as i32 + interior_bottom[1] as i32 + interior_bottom[2] as i32;
+    let outside_luma = outside_below[0] as i32 + outside_below[1] as i32 + outside_below[2] as i32;
+    assert!(
+        outside_luma <= 720,
+        "the drop shadow's penumbra below the element must survive: outside \
+         luma {outside_luma} over white should be visibly darkened (a shadow \
+         composite masked to its own silhouette discards it)"
+    );
+    assert!(
+        bottom_luma >= 740,
+        "no shadow may bleed inside the element footprint: near-bottom \
+         interior luma {bottom_luma} should stay white (a cutout applied \
+         before the blur lets the blur smear shadow back in)"
+    );
+    assert!(
+        center_luma >= 750,
+        "the element center must stay untouched by its own shadow: luma {center_luma}"
+    );
+}
+
+#[test]
 fn a_row_whose_glass_reads_only_its_own_draws_keeps_its_raster() {
     let mut renderer = match support::headless_renderer() {
         Ok(renderer) => renderer,

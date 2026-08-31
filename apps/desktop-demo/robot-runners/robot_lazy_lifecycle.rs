@@ -100,7 +100,7 @@ fn lifecycle_item(index: usize, stats: MutableState<LifecycleStats>) {
     })
     .with(|s| *s);
 
-    DisposableEffect!(index, move |_key| {
+    DisposableEffect(index, move |_key| {
         stats.update(|s| s.total_effects += 1);
         println!("  [EFFECT] Item {} effect started", index);
 

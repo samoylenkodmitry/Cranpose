@@ -16,9 +16,9 @@ use cranpose_foundation::{
 };
 use cranpose_ui::{
     composable, BasicTextField, BasicTextFieldOptions, BasicTextFieldWithOptions, BoxSpec, Brush,
-    Button, ButtonSpec, Color, Column, ColumnSpec, CornerRadii, GraphicsLayer, IntrinsicSize,
-    LinearArrangement, Modifier, Point, PointerInputScope, RoundedCornerShape, Row, RowSpec,
-    ScrollState, Size, Spacer, Text, TextStyle, VerticalAlignment,
+    Button, ButtonSpec, Color, Column, ColumnSpec, CornerRadii, FocusRequester, GraphicsLayer,
+    IntrinsicSize, LinearArrangement, Modifier, Point, PointerInputScope, RoundedCornerShape, Row,
+    RowSpec, ScrollState, Size, Spacer, Text, TextStyle, VerticalAlignment,
 };
 
 mod animations;
@@ -849,6 +849,7 @@ fn text_input_example() {
     let text_state1 =
         cranpose_core::remember(|| TextFieldState::new("Type here...")).with(|state| *state);
     let text_state2 = cranpose_core::remember(|| TextFieldState::new("")).with(|state| *state);
+    let field2_focus = cranpose_core::remember(FocusRequester::new).with(Clone::clone);
 
     Column(
         Modifier::empty()
@@ -932,9 +933,22 @@ fn text_input_example() {
                     .fill_max_width()
                     .padding(12.0)
                     .background(Color(0.18, 0.15, 0.22, 1.0))
-                    .rounded_corners(8.0),
+                    .rounded_corners(8.0)
+                    .focus_requester(&field2_focus),
                 TextStyle::default(),
             );
+
+            {
+                let field2_text = text_state2.text();
+                Text(
+                    format!("Field 2 value: \"{}\"", field2_text),
+                    Modifier::empty()
+                        .padding(8.0)
+                        .background(Color(0.12, 0.16, 0.28, 0.8))
+                        .rounded_corners(8.0),
+                    TextStyle::default(),
+                );
+            }
 
             Spacer(Size {
                 width: 0.0,
@@ -956,6 +970,7 @@ fn text_input_example() {
                 Modifier::empty().fill_max_width(),
                 RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(8.0)),
                 {
+                    let field2_focus = field2_focus.clone();
                     move || {
                         {
                             Button(
@@ -1029,6 +1044,32 @@ fn text_input_example() {
                                 || {
                                     Text(
                                         "Copy ↓",
+                                        Modifier::empty().padding(4.0),
+                                        TextStyle::default(),
+                                    );
+                                },
+                            );
+                        }
+
+                        {
+                            let field2_focus = field2_focus.clone();
+                            Button(
+                                Modifier::empty()
+                                    .rounded_corners(8.0)
+                                    .draw_behind(|scope| {
+                                        scope.draw_round_rect(
+                                            Brush::solid(Color(0.5, 0.3, 0.6, 1.0)),
+                                            CornerRadii::uniform(8.0),
+                                        );
+                                    })
+                                    .padding(10.0),
+                                ButtonSpec::default(),
+                                move || {
+                                    let _ = field2_focus.request_focus();
+                                },
+                                || {
+                                    Text(
+                                        "Focus Field 2",
                                         Modifier::empty().padding(4.0),
                                         TextStyle::default(),
                                     );
@@ -1681,7 +1722,7 @@ pub(crate) fn AsyncRuntimeEngine(
     let running = is_running.get();
     let reset_key = reset_signal.get();
 
-    cranpose_core::LaunchedEffect!((reset_key,), move |_scope| {
+    cranpose_core::LaunchedEffect((reset_key,), move |_scope| {
         if last_reset.get() != reset_key {
             last_reset.set(reset_key);
             animation.set(AnimationState::default());
@@ -1746,7 +1787,7 @@ fn counter_app() {
     };
     let wave_state = animateFloatAsState(target_wave, AnimationType::default(), "wave");
     let fetch_key = fetch_request.get();
-    LaunchedEffect!(fetch_key, move |_scope| {
+    LaunchedEffect(fetch_key, move |_scope| {
         if fetch_key == 0 {
             return;
         }
@@ -2179,7 +2220,7 @@ fn counter_app() {
 #[composable]
 fn composition_local_observer() {
     let state = cranpose_core::rememberMutableStateOf(|| 0);
-    DisposableEffect!((), move |_| {
+    DisposableEffect((), move |_| {
         state.set(state.get() + 1);
         DisposableEffectResult::default()
     });

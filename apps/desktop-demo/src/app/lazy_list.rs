@@ -138,7 +138,7 @@ where
 #[allow(non_snake_case)]
 #[composable]
 fn LifecycleListItem(index: usize, stats: MutableState<LifecycleStats>) {
-    DisposableEffect!(index, move |_key| {
+    DisposableEffect(index, move |_key| {
         stats.update(|current| {
             current.total_composes += 1;
             current.total_effects += 1;

@@ -4,7 +4,7 @@
 //! of text that [`crate::DrawScope`] can hand to a renderer. The full typography
 //! model (annotated strings, span/paragraph styles, decorations, hyphenation)
 //! lives in `cranpose-ui`, which is above this crate in the dependency graph —
-//! `cranpose-ui` maps a [`TextStyle`] onto that richer model, and both
+//! `cranpose-ui` maps a [`DrawTextStyle`] onto that richer model, and both
 //! measurement and rasterization go through that one mapping.
 
 use crate::geometry::Size;
@@ -156,7 +156,7 @@ impl Default for LineHeightStyle {
 /// `(text, style)` pair, so a style rebuilt with identical values still hits
 /// the cache.
 #[derive(Clone, Debug, PartialEq)]
-pub struct TextStyle {
+pub struct DrawTextStyle {
     /// Family name to resolve against the fonts the app registered. `None`
     /// asks for the framework's default family.
     ///
@@ -179,7 +179,7 @@ pub struct TextStyle {
     pub vertical_align: TextVerticalAlign,
 }
 
-impl TextStyle {
+impl DrawTextStyle {
     /// The size used when a style carries a non-positive or non-finite one.
     /// Matches the framework-wide text default.
     pub const DEFAULT_FONT_SIZE: f32 = 14.0;
@@ -240,7 +240,7 @@ impl TextStyle {
     }
 
     /// The font size a measurer/rasterizer will actually use. Non-finite and
-    /// non-positive sizes fall back to [`TextStyle::DEFAULT_FONT_SIZE`] instead
+    /// non-positive sizes fall back to [`DrawTextStyle::DEFAULT_FONT_SIZE`] instead
     /// of producing NaN geometry.
     pub fn resolved_font_size(&self) -> f32 {
         if self.font_size.is_finite() && self.font_size > 0.0 {
@@ -269,7 +269,7 @@ impl TextStyle {
     }
 }
 
-impl Default for TextStyle {
+impl Default for DrawTextStyle {
     fn default() -> Self {
         Self {
             font_family: None,
@@ -326,7 +326,7 @@ impl TextMeasurement {
 /// back to [`estimate_text_measurement`], which is good enough for layout
 /// smoke tests and wrong for anything that has to line up with real glyphs.
 pub trait DrawTextMeasurer {
-    fn measure_text(&self, text: &str, style: &TextStyle) -> TextMeasurement;
+    fn measure_text(&self, text: &str, style: &DrawTextStyle) -> TextMeasurement;
 }
 
 /// Font-free estimate used when no [`DrawTextMeasurer`] is installed.
@@ -335,7 +335,7 @@ pub trait DrawTextMeasurer {
 /// split typical of a UI sans face, so the shape of the result (and the
 /// baseline formula) matches what a real font measurer returns even though the
 /// numbers do not.
-pub fn estimate_text_measurement(text: &str, style: &TextStyle) -> TextMeasurement {
+pub fn estimate_text_measurement(text: &str, style: &DrawTextStyle) -> TextMeasurement {
     const CHAR_WIDTH_RATIO: f32 = 0.6;
     const ASCENT_RATIO: f32 = 0.8;
     const NATURAL_LINE_HEIGHT_RATIO: f32 = 1.0;
@@ -372,7 +372,7 @@ mod tests {
 
     #[test]
     fn letter_spacing_resolves_to_something_a_measurer_can_use() {
-        let style = TextStyle::default().with_font_size(18.0);
+        let style = DrawTextStyle::default().with_font_size(18.0);
         assert_eq!(style.font_size, 18.0);
         assert_eq!(style.resolved_font_size(), 18.0);
         assert_eq!(style.resolved_letter_spacing(), 0.0);
@@ -404,10 +404,10 @@ mod tests {
 
         for broken in [0.0, -12.0, f32::NAN, f32::INFINITY] {
             assert_eq!(
-                TextStyle::default()
+                DrawTextStyle::default()
                     .with_font_size(broken)
                     .resolved_font_size(),
-                TextStyle::DEFAULT_FONT_SIZE
+                DrawTextStyle::DEFAULT_FONT_SIZE
             );
         }
     }
@@ -417,17 +417,17 @@ mod tests {
     fn text_style_resolves_degenerate_sizes_to_the_framework_default() {
         for size in [0.0, -12.0, f32::NAN, f32::INFINITY] {
             assert_eq!(
-                TextStyle::new(size).resolved_font_size(),
-                TextStyle::DEFAULT_FONT_SIZE,
+                DrawTextStyle::new(size).resolved_font_size(),
+                DrawTextStyle::DEFAULT_FONT_SIZE,
                 "font size {size} must not reach a font backend"
             );
         }
-        assert_eq!(TextStyle::new(19.0).resolved_font_size(), 19.0);
+        assert_eq!(DrawTextStyle::new(19.0).resolved_font_size(), 19.0);
     }
 
     #[test]
     fn text_style_line_height_falls_back_to_the_natural_one() {
-        let style = TextStyle::new(20.0);
+        let style = DrawTextStyle::new(20.0);
         assert_eq!(style.resolved_line_height(28.0), 28.0);
         assert_eq!(
             style
@@ -444,9 +444,12 @@ mod tests {
 
     #[test]
     fn empty_font_family_name_means_the_default_family() {
-        assert_eq!(TextStyle::new(14.0).with_font_family("").font_family, None);
         assert_eq!(
-            TextStyle::new(14.0)
+            DrawTextStyle::new(14.0).with_font_family("").font_family,
+            None
+        );
+        assert_eq!(
+            DrawTextStyle::new(14.0)
                 .with_font_family("Fira Sans")
                 .font_family,
             Some("Fira Sans".to_string())
@@ -455,7 +458,7 @@ mod tests {
 
     #[test]
     fn estimated_measurement_grows_with_the_longest_line() {
-        let style = TextStyle::new(10.0);
+        let style = DrawTextStyle::new(10.0);
         let one = estimate_text_measurement("AAAA", &style);
         let two = estimate_text_measurement("AAAA\nAAAAAAAA", &style);
         assert_eq!(one.line_count, 1);
@@ -466,7 +469,7 @@ mod tests {
 
     #[test]
     fn estimated_measurement_of_an_empty_string_keeps_one_line_of_metrics() {
-        let measurement = estimate_text_measurement("", &TextStyle::new(16.0));
+        let measurement = estimate_text_measurement("", &DrawTextStyle::new(16.0));
         assert_eq!(measurement.size, Size::ZERO);
         assert_eq!(measurement.line_count, 1);
         assert!(measurement.line_height > 0.0);
@@ -475,7 +478,7 @@ mod tests {
 
     #[test]
     fn estimated_baseline_sits_inside_the_line_slot() {
-        let measurement = estimate_text_measurement("Ag", &TextStyle::new(24.0));
+        let measurement = estimate_text_measurement("Ag", &DrawTextStyle::new(24.0));
         assert!(measurement.first_baseline > 0.0);
         assert!(measurement.first_baseline < measurement.line_height);
     }

@@ -52,9 +52,9 @@ pub use cranpose_ui_graphics::{
     Shadow, ShadowScope, Size, TransformOrigin,
 };
 use cranpose_ui_layout::{Alignment, HorizontalAlignment, IntrinsicSize, VerticalAlignment};
-#[allow(unused_imports)]
-pub use focus::FocusDirection;
 use focus::FocusTargetElement;
+#[allow(unused_imports)]
+pub use focus::{FocusDirection, FocusRequestError, FocusRequester, FocusRequesterElement};
 pub use graphics_layer::GlassMaterial;
 pub(crate) use local::{
     ModifierLocalAncestorResolver, ModifierLocalSource, ModifierLocalToken, ResolvedModifierLocal,
@@ -497,6 +497,30 @@ impl Modifier {
         let element = FocusTargetElement::with_callback(callback);
         let modifier = Modifier::from_parts(vec![modifier_element(element)]);
         self.then(modifier)
+    }
+
+    /// Binds a [`FocusRequester`] to this node, so an app can move focus onto
+    /// it imperatively with [`FocusRequester::request_focus`].
+    ///
+    /// Pair it with [`focus_target`](Self::focus_target) (or
+    /// [`on_focus_changed`](Self::on_focus_changed)) on the same node —
+    /// `request_focus` moves whichever focus targets are attached there.
+    pub fn focus_requester(self, requester: &FocusRequester) -> Self {
+        let element = FocusRequesterElement::new(requester.clone());
+        let modifier = Modifier::from_parts(vec![modifier_element(element)]);
+        self.then(modifier)
+    }
+
+    /// The Compose `Modifier.focusable()` convenience.
+    ///
+    /// Compose's version also wires an optional `MutableInteractionSource` so
+    /// a `focusable` can drive its own visual indication. Cranpose's
+    /// [`MutableInteractionSource`](crate::MutableInteractionSource) only
+    /// emits press interactions — there is no focus interaction or indication
+    /// concept to plug in yet — so `focusable` here is honestly just
+    /// [`focus_target`](Self::focus_target), nothing more.
+    pub fn focusable(self) -> Self {
+        self.focus_target()
     }
 
     /// Binds a [`SemanticsRequester`] to this node, so an app can mark the

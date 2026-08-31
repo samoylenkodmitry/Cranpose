@@ -6,7 +6,7 @@ use std::{
 
 use cranpose_core::{MutableState, mutableStateOf};
 use cranpose_foundation::{
-    Constraints, DelegatableNode, DrawModifierNode, DrawScope, InvalidationKind,
+    Constraints, DelegatableNode, DrawModifierNode, DrawScope, FocusState, InvalidationKind,
     LayoutModifierNode, Measurable, ModifierNode, ModifierNodeContext, ModifierNodeElement,
     NodeCapabilities, NodeState, PointerEvent, PointerEventKind, PointerInputNode,
     SemanticsConfiguration, SemanticsNode, Size,
@@ -251,6 +251,47 @@ pub(crate) fn range_visual_line_rects(
     rects
 }
 
+fn build_focus_handler(
+    state: TextFieldState,
+    refs: &TextFieldRefs,
+    line_limits: TextFieldLineLimits,
+    style: &TextStyle,
+) -> Rc<dyn crate::text_field_focus::FocusedTextFieldHandler> {
+    crate::text_field_handler::TextFieldHandler::new(
+        state,
+        refs.node_id.get(),
+        line_limits,
+        crate::text_field_handler::CaretGeometryRefs {
+            node_origin: refs.node_origin.clone(),
+            content_offset: refs.content_offset.clone(),
+            content_y_offset: refs.content_y_offset.clone(),
+            scroll_offset: refs.scroll_offset.clone(),
+            style: style.clone(),
+        },
+    )
+}
+
+struct TextFieldFocusBridge {
+    state: TextFieldState,
+    refs: TextFieldRefs,
+    style: TextStyle,
+    line_limits: TextFieldLineLimits,
+}
+
+impl crate::focus_dispatch::FocusTargetHandle for TextFieldFocusBridge {
+    fn set_focus_state(&self, state: FocusState) {
+        if state.is_focused() {
+            crate::text_field_focus::request_focus(
+                self.refs.is_focused.clone(),
+                build_focus_handler(self.state, &self.refs, self.line_limits, &self.style),
+                self.refs.modal_depth.get(),
+            );
+        } else if crate::text_field_focus::focused_field_node() == self.refs.node_id.get() {
+            crate::text_field_focus::clear_focus();
+        }
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct TextFieldRefs {
     pub is_focused: Rc<RefCell<bool>>,
@@ -268,6 +309,7 @@ pub(crate) struct TextFieldRefs {
     pub wrap_width: Rc<Cell<Option<f32>>>,
     pub press_track: MutableState<Option<PointerPressTrack>>,
     pub gesture_claimed: Rc<Cell<bool>>,
+    pub modal_depth: Rc<Cell<usize>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -294,6 +336,7 @@ impl TextFieldRefs {
             wrap_width: Rc::new(Cell::new(None::<f32>)),
             press_track: mutableStateOf(None::<PointerPressTrack>),
             gesture_claimed: Rc::new(Cell::new(false)),
+            modal_depth: Rc::new(Cell::new(0)),
         }
     }
 }
@@ -317,6 +360,7 @@ pub struct TextFieldModifierNode {
     cached_pan_resolver: TextPanResolver,
     handle_controller: Option<TextFieldHandleController>,
     modal_depth: usize,
+    focus_bridge: Option<Rc<dyn crate::focus_dispatch::FocusTargetHandle>>,
 }
 
 impl std::fmt::Debug for TextFieldModifierNode {
@@ -328,8 +372,6 @@ impl std::fmt::Debug for TextFieldModifierNode {
             .finish()
     }
 }
-
-use crate::text_field_handler::TextFieldHandler;
 
 impl TextFieldModifierNode {
     /// Creates a new text field modifier node.
@@ -364,6 +406,7 @@ impl TextFieldModifierNode {
             cached_pan_resolver,
             handle_controller: None,
             modal_depth: 0,
+            focus_bridge: None,
         }
     }
 
@@ -485,21 +528,9 @@ impl TextFieldModifierNode {
                     }));
                     refs.gesture_claimed.set(false);
 
-                    let handler = TextFieldHandler::new(
-                        state,
-                        refs.node_id.get(),
-                        line_limits,
-                        crate::text_field_handler::CaretGeometryRefs {
-                            node_origin: refs.node_origin.clone(),
-                            content_offset: refs.content_offset.clone(),
-                            content_y_offset: refs.content_y_offset.clone(),
-                            scroll_offset: refs.scroll_offset.clone(),
-                            style: style.clone(),
-                        },
-                    );
                     crate::text_field_focus::request_focus(
                         refs.is_focused.clone(),
-                        handler,
+                        build_focus_handler(state, &refs, line_limits, &style),
                         modal_depth,
                     );
 
@@ -794,6 +825,24 @@ impl ModifierNode for TextFieldModifierNode {
         context.invalidate(InvalidationKind::Layout);
         context.invalidate(InvalidationKind::Draw);
         context.invalidate(InvalidationKind::Semantics);
+
+        if let Some(node_id) = context.node_id() {
+            let bridge: Rc<dyn crate::focus_dispatch::FocusTargetHandle> =
+                Rc::new(TextFieldFocusBridge {
+                    state: self.state,
+                    refs: self.refs.clone(),
+                    style: self.style.clone(),
+                    line_limits: self.line_limits,
+                });
+            self.focus_bridge = Some(Rc::clone(&bridge));
+            crate::focus_dispatch::register_focus_target(node_id, bridge);
+        }
+    }
+
+    fn on_detach(&mut self) {
+        if let (Some(node_id), Some(bridge)) = (self.refs.node_id.get(), self.focus_bridge.take()) {
+            crate::focus_dispatch::unregister_focus_target(node_id, &bridge);
+        }
     }
 
     fn as_draw_node(&self) -> Option<&dyn DrawModifierNode> {
@@ -1257,6 +1306,7 @@ impl ModifierNodeElement for TextFieldElement {
             .with_cursor_color(self.cursor_color)
             .with_line_limits(self.line_limits);
         node.modal_depth = self.modal_depth;
+        node.refs.modal_depth.set(self.modal_depth);
         if let Some(controller) = self.handle_controller.clone() {
             node = node.with_handle_controller(controller);
         }
@@ -1271,6 +1321,7 @@ impl ModifierNodeElement for TextFieldElement {
         node.line_limits = self.line_limits;
         node.handle_controller = self.handle_controller.clone();
         node.modal_depth = self.modal_depth;
+        node.refs.modal_depth.set(self.modal_depth);
         node.rebuild_cached_closures();
 
         if node.update_cached_state() {}
@@ -1887,6 +1938,113 @@ mod tests {
             assert_eq!(node.text(), "Test");
 
             assert_eq!(node.selection().start, 4);
+        });
+    }
+
+    #[test]
+    fn a_focus_requester_makes_the_text_field_receive_keyboard_input() {
+        use cranpose_foundation::{BasicModifierNodeContext, ModifierNodeChain};
+
+        use crate::{
+            key_event::{KeyCode, KeyEvent, KeyEventType, Modifiers},
+            modifier::{FocusRequester, FocusRequesterElement},
+        };
+
+        let _app_context = crate::render_state::app_context_test_scope();
+        with_test_runtime(|| {
+            let state = TextFieldState::new("");
+            let requester = FocusRequester::new();
+
+            let mut context = BasicModifierNodeContext::new();
+            context.set_node_id(Some(1));
+            let mut chain = ModifierNodeChain::new();
+            chain.update(
+                vec![
+                    cranpose_foundation::modifier_element(FocusRequesterElement::new(
+                        requester.clone(),
+                    )),
+                    cranpose_foundation::modifier_element(TextFieldElement::new(
+                        state,
+                        TextStyle::default(),
+                    )),
+                ],
+                &mut context,
+            );
+
+            assert!(!crate::text_field_focus::has_focused_field());
+
+            requester
+                .request_focus()
+                .expect("the text field must accept a programmatic focus request");
+
+            assert!(crate::text_field_focus::has_focused_field());
+
+            let key_down = KeyEvent::new(KeyCode::H, "h", Modifiers::NONE, KeyEventType::KeyDown);
+            assert!(
+                crate::text_field_focus::dispatch_key_event(&key_down),
+                "the field must consume a key event once focused programmatically"
+            );
+            assert_eq!(state.text(), "h");
+        });
+    }
+
+    #[test]
+    fn two_text_fields_hand_off_keyboard_focus_via_their_requesters() {
+        use cranpose_foundation::{BasicModifierNodeContext, ModifierNodeChain};
+
+        use crate::modifier::{FocusRequester, FocusRequesterElement};
+
+        let _app_context = crate::render_state::app_context_test_scope();
+        with_test_runtime(|| {
+            let state_a = TextFieldState::new("a-text");
+            let state_b = TextFieldState::new("b-text");
+            let requester_a = FocusRequester::new();
+            let requester_b = FocusRequester::new();
+
+            let mut context = BasicModifierNodeContext::new();
+            context.set_node_id(Some(1));
+            let mut chain_a = ModifierNodeChain::new();
+            chain_a.update(
+                vec![
+                    cranpose_foundation::modifier_element(FocusRequesterElement::new(
+                        requester_a.clone(),
+                    )),
+                    cranpose_foundation::modifier_element(TextFieldElement::new(
+                        state_a,
+                        TextStyle::default(),
+                    )),
+                ],
+                &mut context,
+            );
+
+            context.set_node_id(Some(2));
+            let mut chain_b = ModifierNodeChain::new();
+            chain_b.update(
+                vec![
+                    cranpose_foundation::modifier_element(FocusRequesterElement::new(
+                        requester_b.clone(),
+                    )),
+                    cranpose_foundation::modifier_element(TextFieldElement::new(
+                        state_b,
+                        TextStyle::default(),
+                    )),
+                ],
+                &mut context,
+            );
+
+            requester_a.request_focus().expect("field a accepts focus");
+            assert_eq!(
+                crate::text_field_focus::focused_field_node(),
+                Some(1),
+                "field a should own text-field keyboard focus"
+            );
+
+            requester_b.request_focus().expect("field b accepts focus");
+            assert_eq!(
+                crate::text_field_focus::focused_field_node(),
+                Some(2),
+                "field b must take over text-field keyboard focus from field a"
+            );
         });
     }
 }

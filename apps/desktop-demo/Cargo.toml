@@ -253,6 +253,11 @@ path = "robot-runners/robot_text_input.rs"
 required-features = ["robot-app"]
 
 [[example]]
+name = "robot_focus_requester"
+path = "robot-runners/robot_focus_requester.rs"
+required-features = ["robot-app"]
+
+[[example]]
 name = "robot_reactive_state"
 path = "robot-runners/robot_reactive_state.rs"
 required-features = ["robot-app"]

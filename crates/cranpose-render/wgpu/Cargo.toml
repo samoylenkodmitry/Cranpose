@@ -105,6 +105,8 @@ naga = { version = "29.0.3", features = ["wgsl-in", "glsl-out"] }
 [dev-dependencies]
 # Path-only dev-deps: stripped from the published manifest (publish order ignores dev edges).
 cranpose-app-shell = { path = "../../cranpose-app-shell", features = ["test-support"] }
+cranpose-liquid = { path = "../../cranpose-liquid" }
+cranpose-macros = { path = "../../cranpose-macros" }
 # Unit tests exercise the embedded fallback font and GL portability validation
 # on every platform, independent of the production feature set.
 cranpose-render-common = { path = "../common", features = ["embedded-default-font"] }

@@ -378,13 +378,13 @@ Verdict key: **Implemented** (equivalent name and semantics) ·
 | `mutableStateOf(x)` | `cranpose_core::hooks::mutableStateOf` | Implemented | Same shape: `(initial: T) -> MutableState<T>`. |
 | `derivedStateOf { ... }` | `cranpose_core::hooks::derivedStateOf` | Implemented | Same shape. |
 | `rememberSaveable { ... }` | `cranpose_services::preferences::rememberSaveable` | Renamed/reshaped | Lives in `cranpose-services`, not `cranpose-core`, and takes an explicit `key: &'static str` + `Saver<T>` up front rather than Compose's implicit-position + optional `Saver`. |
-| `LaunchedEffect(keys) { ... }` | `cranpose_core::LaunchedEffect!(keys, effect)` | Renamed/reshaped | Same semantics (re-run when `keys` changes, call-site identity via `location_key(file!(), line!(), column!())` inside a `macro_rules!`). Notably `remember` gets the same kind of call-site identity from a plain `#[track_caller]` function, not a macro -- `LaunchedEffect`/`DisposableEffect` did not have to become macros for that reason alone; see Findings. |
-| `DisposableEffect(keys) { onDispose { ... } }` | `cranpose_core::DisposableEffect!` | Renamed/reshaped | Same reasoning as `LaunchedEffect`. |
+| `LaunchedEffect(keys) { ... }` | `cranpose_core::LaunchedEffect(keys, effect)` | Implemented | A plain `#[track_caller]` function, matching `remember`. Was a `macro_rules!`; see Findings for why the macro was not merely unnecessary but wrong. |
+| `DisposableEffect(keys) { onDispose { ... } }` | `cranpose_core::DisposableEffect(keys, effect)` | Implemented | Same conversion as `LaunchedEffect`. |
 | `SideEffect { ... }` | `cranpose_core::SideEffect` | Implemented | Plain `fn(impl FnOnce())`, no macro needed since there's no key list. |
 | `CompositionLocal<T>` / `compositionLocalOf` / `staticCompositionLocalOf` | `cranpose_core::composition_locals::{CompositionLocal, compositionLocalOf, staticCompositionLocalOf}` | Implemented | Same three-way split (local, dynamic default, static default). |
 | `CompositionLocalProvider(...)` | `cranpose_core::CompositionLocalProvider` | Implemented | |
 | `rememberCoroutineScope()` | `cranpose_core::concurrency::rememberCoroutineScope` | Implemented | |
-| `key(vararg keys) { ... }` | -- | Absent | No standalone identity-scoping construct found under this or a squashed name; `location_key` is the internal call-site identity primitive `LaunchedEffect!`/`DisposableEffect!` use, not a public scoping composable. |
+| `key(vararg keys) { ... }` | `cranpose_core::key(keys, content)` | Renamed/reshaped | Owned-value keys -- a tuple for multiple -- rather than a vararg, which Rust has no equivalent of. Seeds the composition group through the same `with_key` machinery that already existed internally but was unreachable from the facade. |
 | `Modifier.Node` / `LayoutModifierNode` / `DrawModifierNode` / `PointerInputNode` (Compose 1.4+ node-based modifiers) | `cranpose_foundation::modifier::{ModifierNode, LayoutModifierNode, DrawModifierNode, PointerInputNode}` | Implemented | Same names, same architecture (Compose's newer node-based modifier system, not the older factory-based one). |
 
 ### Modifier & layout
@@ -401,10 +401,12 @@ Sampled against Compose's `androidx.compose.ui`/`foundation-layout`:
 | `Modifier.toggleable(value, onValueChange)` | `Modifier::toggleable(value, description, role, on_value_change)` | Implemented | Cranpose's takes `role`/`description` directly rather than through a separate `semantics {}` block. |
 | `Modifier.semantics { ... }` | `Modifier::semantics(recorder: impl Fn(&mut SemanticsConfiguration))` | Implemented | `SemanticsConfiguration`'s own fields carry doc comments naming the exact Compose property they mirror (e.g. `state_description` is documented as "Compose's `stateDescription`") -- this one was built as a deliberate mirror, not a coincidental name match. |
 | `Modifier.focusTarget()` | `Modifier::focus_target()` | Implemented | The low-level primitive. |
-| `Modifier.focusable()` (the common convenience wrapper over `focusTarget` + indication) | -- | Absent | Only the low-level `focus_target` was found; no convenience wrapper. |
+| `Modifier.focusable()` (the common convenience wrapper over `focusTarget` + indication) | `Modifier::focusable()` | Implemented, deliberately a subset | Wraps `focus_target` and nothing else. Cranpose has no indication concept to compose with -- `MutableInteractionSource` emits only press interactions -- so the wrapper stops at focus rather than inventing one. |
 | `Modifier.testTag("x")` | -- | Absent | See Findings -- `cranpose-testing` finds elements by text/geometry instead. |
-| `Modifier.rotate()`, `.scale()`, `.zIndex()` | -- (folded into `graphics_layer`/`graphics_layer_params`) | Partial | The underlying `graphicsLayer`-equivalent primitive exists; Compose's individual convenience wrappers over it do not. |
-| `Modifier.testTag`, `FocusRequester`, `Modifier.focusRequester()` | -- | Absent | No imperative focus-request mechanism found (`requester.requestFocus()`); only reactive `on_focus_changed`. |
+| `Modifier.rotate()`, `.scale()` | -- (folded into `graphics_layer`/`graphics_layer_params`) | Partial | The `graphicsLayer`-equivalent primitive exists; the convenience wrappers do not. They are straightforward over it -- the pivot already matches Compose, since `TransformOrigin::CENTER` is the layer default and positive degrees rotate clockwise in Cranpose's y-down space. |
+| `Modifier.zIndex()` | -- | Absent | Not a `graphicsLayer` wrapper: draw order is a layout concern. `Placement::z_index` exists but is hardcoded per widget and never exposed through `ParentData`, so a real modifier needs a parent-data field, a node populating it, and every `Placement::new(.., 0)` site reading it instead. |
+| `FocusRequester`, `Modifier.focusRequester()` | `FocusRequester`, `Modifier::focus_requester()` | Implemented | `request_focus()` returns `Result`, with `NotAttached` (never attached, or the node left composition) and `NoFocusTarget` distinguished -- no panic and no lying `Ok`. Reentrancy is safe by construction: a `request_focus()` from inside `on_focus_changed` enqueues and returns, and the outer dispatch loop drains it, with the manager's `RefCell` never held across a callback. |
+| `Modifier.testTag` | -- | Absent | See Findings: semantics-driven testing is not available. |
 | `Constraints`, `Density`, `Alignment`, `Arrangement`, `Measurable`, `Placeable`, `MeasureResult`, `MeasurePolicy` | `cranpose-ui-layout::{Constraints, ..., MeasurePolicy}`, `cranpose-ui::Density` | Implemented | Full layout-contract vocabulary present under the same names. |
 | `Dp`, `Sp`, `Px` (typed units, used everywhere in Compose's own modifier signatures) | `cranpose-ui-graphics::unit::{Dp, Sp, Px}` (types exist) | **Partial** | The types exist, but the widget/modifier surface itself (`padding`, `size`, `weight`, `offset`, ...) takes raw `f32`, not `Dp` -- Compose's type-safety guarantee against mixing raw pixels and density-independent units is not carried through to the call sites that would benefit from it. |
 
@@ -432,18 +434,19 @@ by symbol, per the Scope decision above.
 | Compose | Cranpose | Verdict | Note |
 |---|---|---|---|
 | `animateFloatAsState`, `animateColorAsState` | Same names (`cranpose-animation::animation`) | Implemented | |
-| `animateDpAsState`, `animateOffsetAsState`, `animateIntAsState`, ... (the rest of the `animate*AsState` family) | -- | Absent | Only the Float and Color specializations were found; no generic `animateValueAsState`. |
+| `animateDpAsState`, `animateOffsetAsState`, `animateSizeAsState`, `animateRectAsState` | Same names | Implemented | Built on a generic `animateValueAsState<T: SpringScalar + PartialEq>`. The vector-converter core already existed as the `SpringScalar` + `Lerp` traits and was extended to `Dp`, `Sp`, `Point`, `Size` and `Rect` rather than duplicated; `animateFloatAsState`/`animateColorAsState` now delegate to the same function. |
+| `animateIntAsState`, `animateIntOffsetAsState`, `animateIntSizeAsState` | -- | Absent, deliberately | Cranpose has no `Int`-typed geometry vocabulary, so these would be unused surface. |
 | `tween(durationMillis, easing)`, `spring(dampingRatio, stiffness)` | Same names | Implemented | |
 | `Animatable<T>` | Same name | Implemented | |
 | `rememberInfiniteTransition()` / `InfiniteTransition.animateFloat` | Same names | Implemented | |
-| `updateTransition(targetState)` / `Transition<S>` / `transition.animateFloat { }` (finite, multi-property, state-machine-driven transitions) | -- | Absent | Cranpose covers single-value animation and infinite repetition, not the general finite state-driven multi-property orchestration API. |
+| `updateTransition(targetState)` / `Transition<S>` / `transition.animateFloat { }` | Same names (`animateValue`/`animateFloat`/`animateDp`/`animateColor`) | Implemented, different settled semantics | Each child owns an `Animatable` and reports its own running state; `Transition::is_running()` is true until every child settles. Compose instead drives children from one shared total-duration play-time. Registration reuses `InfiniteTransition`'s disposable-effect-by-pointer-identity pattern. |
 | `DecayAnimationSpec`, `FloatDecayAnimationSpec` (fling physics contract) | `cranpose-animation::decay_spec::{FloatDecayAnimationSpec, ExponentialDecaySpec}` | Implemented, deliberately different physics | The trait matches; the concrete spec does not. `SplineBasedDecaySpec` (a port of `android.widget.Scroller`'s math) was replaced in #541 (landed after this doc's data was last generated, caught while re-verifying for this refresh) by `ExponentialDecaySpec` + `IOS_DECELERATION_RATE_{FAST,NORMAL}`, physics measured directly from a real iOS `UIScrollView` -- a deliberate divergence (Cranpose targets iOS feel, not an Android-physics port), not a gap. |
 
 ### Text
 
 | Compose | Cranpose | Verdict |
 |---|---|---|
-| `TextStyle`, `AnnotatedString` | Same names (two `TextStyle`s exist -- `cranpose-ui::text::style` and a distinct `cranpose-ui-graphics::typography` one; worth resolving which is canonical in a future pass) | Implemented, with an internal duplication worth a closer look |
+| `TextStyle`, `AnnotatedString` | `cranpose-ui::text::style::TextStyle` (authored style, Compose-parity) and `cranpose-ui-graphics::typography::DrawTextStyle` (resolved draw primitive) | Implemented | The two types are a real architectural split, not drift -- see Findings. The graphics one was renamed to `DrawTextStyle` so they no longer share a name. |
 | `BasicTextField`, `TextFieldState` | Same names | Implemented |
 
 ### Testing
@@ -531,21 +534,34 @@ how central `testTag` is to Compose's own testing guidance, this is worth
 treating as a real gap rather than a stylistic difference, not something
 to close inside this doc, but worth a spawned follow-up.
 
-### `LaunchedEffect`/`DisposableEffect` are macros; `remember` is not, for no evidenced reason
+### `LaunchedEffect`/`DisposableEffect` were macros -- resolved, and the macro was wrong
 
-`cranpose_core::hooks::remember` is a plain `#[track_caller]` function --
-`Location::caller()` gives it correct per-call-site identity without any
-macro involved. `LaunchedEffect!`/`DisposableEffect!` instead expand to
-`location_key(file!(), line!(), column!())` inside a `macro_rules!`. Both
-techniques solve the identical problem (a hook needs to know where in the
-source it was called from); Rust does not force the macro choice here,
-since `remember` next to it in the same crate proves the function-based
-route works. Whether the macro exists for an unrelated reason (composing
-with `LaunchedEffectAsync`'s future-boxing, or predating `#[track_caller]`
-being adopted elsewhere) was not chased down -- recorded as an
-inconsistency worth resolving, not a semantic gap: callers should not read
-"macro vs function" here as meaningful, since nothing in the evidence
-gathered this pass explains it as intentional.
+This pass recorded the macro-vs-function split as an unexplained
+inconsistency and did not chase it down. It has been chased down, and the
+answer is stronger than "the macro was unnecessary": the macro was
+actively worse, and it had already cost something.
+
+None of the candidate justifications survive -- future-boxing, variadic
+keys, lazy evaluation of the effect body and how `keys` is captured are
+all identical whether the call site is a macro or a function. The
+function route was already proven in-tree: the same internal impls
+(`__launched_effect_impl`, `__disposable_effect_impl`) were being invoked
+directly, with a `#[track_caller]`-computed key, by non-macro code in
+`cranpose-core::concurrency` and `cranpose-services`. `TaskSite`'s
+`From<&'static Location>` impl was dead code, which reads as the
+track_caller route having been anticipated and never finished.
+
+The defect: `file!()/line!()/column!()` are lexical, so every call routed
+through a second-order wrapper that is not itself `#[composable]` gets
+**one fixed key** -- every instance colliding on the wrapper's own source
+position instead of the caller's. `#[track_caller]` propagates through
+such a wrapper; a macro cannot. That is not hypothetical: the round-36
+caller-identity sweep in `a1f64e59` hit exactly this in
+`cranpose-animation` and worked around it with a manual XOR salt at the
+call site rather than at the root.
+
+Both are now `#[track_caller]` functions with the same bounds, exported
+through the facade and prelude.
 
 ### Positive divergences (deliberate, not gaps)
 
@@ -559,16 +575,26 @@ gathered this pass explains it as intentional.
 - `cranpose-liquid` is a from-scratch, non-Material design system, not a
   Material port -- see Scope.
 
-### Two `TextStyle` types
+### Two `TextStyle` types -- resolved: a real split, now renamed
 
-`cranpose-ui::text::style::TextStyle` and
-`cranpose-ui-graphics::typography::TextStyle` both exist as distinct
-structs. Compose has exactly one `androidx.compose.ui.text.TextStyle`.
-Whether both Cranpose types are meant to coexist (one text-layout-facing,
-one lower-level typography-facing) or this is drift from having two
-crates evolve the same concept independently was not resolved here --
-recorded as a finding, not chased down, since establishing intent needs a
-git-blame/design-doc dig this pass didn't do.
+The dig this pass deferred has since been done. The two types are not
+drift. `cranpose-ui-graphics::typography` (2025-10-17) is a resolved,
+self-positioning draw primitive: plain `f32` fields, and `align`/
+`vertical_align` that the other type has no use for, because a canvas
+call has no parent layout to position it. `cranpose-ui::text::style`
+(2026-02-06) is the authored, Compose-parity style --
+`TextStyle { span_style, paragraph_style }` over `TextUnit` -- and is
+what `Text` consumes. A single documented conversion,
+`text_style_for_draw_style`, bridges them and is deliberately partial
+rather than lossy.
+
+So both should exist. What should not is both being called `TextStyle`:
+four files had independently invented `as DrawTextStyle`/`as UiTextStyle`
+import aliases and one doc link had to fully qualify itself, which is the
+collision being felt rather than argued about. The graphics-crate type is
+now `DrawTextStyle`; the `cranpose-ui` one keeps the name that matches
+Compose. A split being justified is not a reason for two types in one
+framework to share a name.
 
 ## Regenerating the full generated candidate table
 

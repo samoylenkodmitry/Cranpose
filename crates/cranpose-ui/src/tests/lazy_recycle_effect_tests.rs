@@ -37,7 +37,7 @@ fn measure(composition: &mut TestComposition, root: NodeId) {
 fn ParkedRow(index: usize, nested: bool) {
     let body = move || {
         if index == 0 {
-            cranpose_core::LaunchedEffectAsync!(0u32, move |_scope| {
+            cranpose_core::LaunchedEffectAsync(0u32, move |_scope| {
                 Box::pin(async move {
                     std::future::pending::<()>().await;
                 })
@@ -143,7 +143,7 @@ fn BusyRow(index: usize, state: cranpose_core::MutableState<bool>, dropped: Rc<C
             move || DropMark(dropped)
         });
         MarkGroup(dropped);
-        cranpose_core::LaunchedEffectAsync!(0u32, move |_scope| {
+        cranpose_core::LaunchedEffectAsync(0u32, move |_scope| {
             Box::pin(async move {
                 std::future::pending::<()>().await;
             })
@@ -266,7 +266,7 @@ fn a_lazy_badge_that_leaves_the_screen_stops_its_loops() {
 #[allow(non_snake_case)]
 fn CapturedBusyRow(index: usize, busy: bool) {
     if busy {
-        cranpose_core::LaunchedEffectAsync!(0u32, move |_scope| {
+        cranpose_core::LaunchedEffectAsync(0u32, move |_scope| {
             Box::pin(async move {
                 std::future::pending::<()>().await;
             })

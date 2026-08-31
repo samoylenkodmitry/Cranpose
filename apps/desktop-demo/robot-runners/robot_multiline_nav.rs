@@ -108,43 +108,13 @@ fn main() {
             let _ = robot.send_key("x");
             std::thread::sleep(Duration::from_millis(200));
 
-            println!("  Scanning semantics for text content...");
-            let found_text: std::cell::RefCell<Option<String>> = std::cell::RefCell::new(None);
-            find_in_semantics(&robot, |elem| {
-                fn search_text(elem: &cranpose::SemanticElement, texts: &mut Vec<String>) {
-                    if let Some(ref t) = elem.text {
-                        texts.push(t.clone());
-                    }
-                    for child in &elem.children {
-                        search_text(child, texts);
-                    }
-                }
-                let mut texts = Vec::new();
-                search_text(elem, &mut texts);
-                for t in &texts {
-                    if t.contains("aaaa") {
-                        println!("  Found text: '{}'", t.replace('\n', "\\n"));
-                        *found_text.borrow_mut() = Some(t.clone());
-                    }
-                }
-                None::<(f32, f32, f32, f32)>
-            });
-
-            let found = found_text.borrow().clone();
-            if let Some(text) = found {
-                if text == "aaaa\nbb\nccxcc" {
-                    println!("✓ PASS: Column preserved correctly!\n");
-                    println!("=== ✓ ALL TESTS PASSED ===");
-                    let _ = robot.exit();
-                } else {
-                    println!(
-                        "✗ FAIL: Expected 'aaaa\\nbb\\nccxcc' but got '{}'",
-                        text.replace('\n', "\\n")
-                    );
-                    let _ = robot.exit();
-                }
+            const EXPECTED_TEXT: &str = "aaaa\nbb\nccxcc";
+            if find_in_semantics(&robot, |elem| find_text_exact(elem, EXPECTED_TEXT)).is_some() {
+                println!("✓ PASS: Column preserved correctly!\n");
+                println!("=== ✓ ALL TESTS PASSED ===");
+                let _ = robot.exit();
             } else {
-                println!("✗ FAIL: Could not find text content containing 'aaaa'");
+                println!("✗ FAIL: Could not find exact text 'aaaa\\nbb\\nccxcc'");
                 let _ = robot.exit();
             }
         })

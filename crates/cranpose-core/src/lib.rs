@@ -65,8 +65,8 @@ pub use hooks::{
 #[doc(hidden)]
 pub use hooks::{withFrameMillis, withFrameNanos};
 pub use launched_effect::{
-    __launched_effect_async_impl, __launched_effect_impl, CancelToken, LaunchedEffectScope,
-    TaskSite,
+    __launched_effect_async_impl, __launched_effect_impl, CancelToken, LaunchedEffect,
+    LaunchedEffectAsync, LaunchedEffectScope, TaskSite,
 };
 pub use owned::Owned;
 pub use platform::{Clock, RuntimeScheduler, SchedulerRef, scheduler_ref};
@@ -1048,10 +1048,33 @@ pub fn current_recompose_scope_invalidated_only_by(
     .flatten()
 }
 
+fn key_scoped<K: Hash, R>(
+    key: &K,
+    caller: &'static std::panic::Location<'static>,
+    content: impl FnOnce() -> R,
+) -> R {
+    let seed = explicit_group_key_seed(key, caller);
+    with_current_composer(|composer| composer.with_group_seed(seed, |_| content()))
+}
+
 #[track_caller]
 pub fn with_key<K: Hash>(key: &K, content: impl FnOnce()) {
-    let seed = explicit_group_key_seed(key, std::panic::Location::caller());
-    with_current_composer(|composer| composer.with_group_seed(seed, |_| content()));
+    key_scoped(key, std::panic::Location::caller(), content);
+}
+
+/// Scopes composition identity to `keys` for the duration of `content`.
+///
+/// Mirrors Jetpack Compose's `key(vararg keys) { content }`. A call keeps its
+/// identity by call-site position alone by default, so a slot survives a
+/// recomposition even when what a caller passes in changes; wrapping the
+/// call in `key(keys, || ...)` folds `keys` into that identity instead, so
+/// changing `keys` discards the previous state and starts fresh, and two
+/// `key` calls at the same call site with different `keys` never share
+/// state. Pass a tuple to key on more than one value, e.g.
+/// `key((a, b), || ...)`.
+#[track_caller]
+pub fn key<K: Hash, R>(keys: K, content: impl FnOnce() -> R) -> R {
+    key_scoped(&keys, std::panic::Location::caller(), content)
 }
 
 #[derive(Default)]
@@ -1147,15 +1170,21 @@ where
     });
 }
 
-#[macro_export]
-macro_rules! DisposableEffect {
-    ($keys:expr, $effect:expr) => {
-        $crate::__disposable_effect_impl(
-            $crate::location_key(file!(), line!(), column!()),
-            $keys,
-            $effect,
-        )
-    };
+/// Runs `effect` when this call site first enters composition, and again
+/// whenever `keys` no longer equals the value it ran with last time; the
+/// previous run's [`DisposableEffectScope::on_dispose`] cleanup, if any,
+/// runs first, and also when the call site leaves composition entirely.
+///
+/// `keys` may be a tuple to depend on more than one value, matching Jetpack
+/// Compose's `DisposableEffect(vararg keys)`.
+#[allow(non_snake_case)]
+#[track_caller]
+pub fn DisposableEffect<K, F>(keys: K, effect: F)
+where
+    K: PartialEq + 'static,
+    F: FnOnce(DisposableEffectScope) -> DisposableEffectResult + 'static,
+{
+    __disposable_effect_impl(crate::caller_location_key(), keys, effect);
 }
 
 #[macro_export]

@@ -28,7 +28,7 @@ use crate::{composable, layout::policies::LeafMeasurePolicy, modifier::Modifier,
 ///
 /// ```ignore
 /// Canvas(Modifier::empty().fill_max_size(), |scope| {
-///     let style = TextStyle::new(24.0)
+///     let style = DrawTextStyle::new(24.0)
 ///         .with_weight(FontWeight::BOLD)
 ///         .with_align(TextAlign::Center);
 ///     // Centered in the whole canvas.

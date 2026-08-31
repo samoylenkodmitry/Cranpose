@@ -584,6 +584,7 @@ fn LiquidTabBarLayout(
                                 highlight_boost: 0.45 * press,
                                 saturation_boost: 0.12 * press,
                                 touch: (press > 0.01).then_some((touch_x, touch_y, press)),
+                                press_depth: Some(press),
                                 ..Default::default()
                             }
                         })

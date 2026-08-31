@@ -57,7 +57,8 @@ const WCKSRD_EDGE_EXTENT_DP: f32 = 0.33333334;
 // fixed screen scale where its constants were safe; this port derives
 // band widths from material and density, and each can go sub-pixel
 // independently.
-const MIN_BAND_WIDTH_PX: f32 = 0.75;
+const MIN_BAND_WIDTH_PX: f32 = 1.0;
+const MIN_LINE_WIDTH_PX: f32 = 1.4;
 
 fn floored_band_width(width_px: f32) -> f32 {
     return max(width_px, MIN_BAND_WIDTH_PX);
@@ -274,10 +275,18 @@ fn wcksrd_optics(
     let inradius = max(min(half_size.x, half_size.y), 1.0);
     let lens_refraction = max(inradius * refraction_depth, 0.001);
     let interior = clamp(-distance / lens_refraction, 0.0, 1.0);
-    // The border line's ramp spans lens_refraction/edge_sharpness px.
-    let border_ramp = floored_band_width(lens_refraction / max(edge_sharpness, 1.0));
-    let border = clamp(-(distance - edge_extent) / border_ramp, 0.0, 1.0)
-        - clamp(-distance / border_ramp, 0.0, 1.0);
+    // The border line's ramp spans lens_refraction/edge_sharpness px. The
+    // drawn line must stay resolvable by the pixel grid: a sub-pixel band
+    // point-sampled at pixel centers renders as disconnected sparkles along
+    // a curved rim. Widening the band below the floor conserves its energy
+    // exactly — the profile's integral along the normal equals its extent,
+    // so the gain ratio keeps the line's total light unchanged.
+    let border_extent = max(edge_extent, MIN_LINE_WIDTH_PX);
+    let border_gain = edge_extent / border_extent;
+    let border_ramp = max(lens_refraction / max(edge_sharpness, 1.0), MIN_LINE_WIDTH_PX);
+    let border = (clamp(-(distance - edge_extent) / border_ramp, 0.0, 1.0)
+        - clamp(-(distance + border_extent - edge_extent) / border_ramp, 0.0, 1.0))
+        * border_gain;
     let gradient_band = wcksrd_meniscus(
         distance,
         lens_refraction,
@@ -632,13 +641,15 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
             * material_activity;
     }
     let resting_tint = get_vec4(113u);
-    let resting_alpha = resting_tint.a
-        * (1.0 - material_activity)
-        * coverage;
-    let resting_output = vec4<f32>(
-        resting_tint.rgb * resting_alpha,
-        resting_alpha,
-    );
+    // A drained lens is FROSTED glass, not paint: the pane still transmits
+    // the blurred backdrop it samples, washed with the resting tint. A
+    // tint-only resting output reads as an opaque plank — stars behind a
+    // resting bar simply vanished instead of glowing through the frost.
+    let resting_weight = (1.0 - material_activity) * coverage;
+    let frost_sample = textureSample(input_texture, input_sampler, input.uv);
+    let resting_frost = frost_sample * (1.0 - resting_tint.a)
+        + vec4<f32>(resting_tint.rgb * resting_tint.a, resting_tint.a);
+    let resting_output = resting_frost * resting_weight;
     if material_activity <= 0.0 {
         return resting_output;
     }
@@ -980,11 +991,14 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
         -reflection_path_length / max(inradius, 1.0) * internal_reflection_extinction,
     );
     let reflection_rgb = reflection_path.rgb * internal_reflection_transmittance;
+    // The opposite-wall return belongs to an interactive lens. Applying it
+    // to a regular surface duplicates the rim as a darker band inside it.
     let long_edge_return = 0.40 + 0.60 * pow(abs(outward_normal.y), 1.5);
     let meniscus_reflection = clamp(
         face_meniscus
             * long_edge_return
-            * mix(0.14, 0.24, rim_style),
+            * rim_style
+            * 0.24,
         0.0,
         0.24,
     ) * select(1.0, 0.0, loupe_mode > 0.5);

@@ -79,11 +79,11 @@ them.
 
 ## Effects
 
-`LaunchedEffect!` is a **macro**, not a function, and takes a key expression
-first. The effect restarts when the key changes:
+`LaunchedEffect` takes a key expression first, like `remember`. The effect
+restarts when the key changes:
 
 ```rust
-cranpose_core::LaunchedEffect!(request_id.get(), move |scope| {
+LaunchedEffect(request_id.get(), move |scope| {
     state.set(Loading);
     scope.launch_background(/* ... */);
 });
@@ -91,6 +91,11 @@ cranpose_core::LaunchedEffect!(request_id.get(), move |scope| {
 
 Use `DisposableEffect` when something must be undone on teardown, and
 `SideEffect` to publish composition results to non-Cranpose code.
+
+`key(keys, || { ... })` scopes composition identity to `keys` instead of just
+call-site position: changing `keys` discards the block's remembered state and
+starts over, and it separates two blocks at the same call site (a loop body,
+a branch) that would otherwise share one.
 
 ## Lists
 
@@ -186,7 +191,7 @@ cranpose = { version = "0.1", features = ["desktop", "renderer-wgpu"] }
   that should react to it.
 - **A `for` loop over a long collection composes all of it.** Use `LazyColumn`.
 - **Do not `.clone()` state handles.** They are `Copy`.
-- **`LaunchedEffect!` needs a key.** Passing a key that changes every
+- **`LaunchedEffect` needs a key.** Passing a key that changes every
   composition restarts the effect every frame.
 - **Cranpose is pre-alpha.** Versions are not compatible with each other and
   APIs change without deprecation cycles. Pin an exact version.

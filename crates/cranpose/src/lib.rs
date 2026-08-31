@@ -154,10 +154,12 @@ renderer_wgpu_platform_modules!(present_mode, surface_format, wgpu_surface);
 pub use cranpose_audio::{AudioEngine, install as install_audio};
 /// Core runtime helpers commonly used by applications.
 pub use cranpose_core::{
-    CoroutineScope, MutableState, SnapshotStateList, SnapshotStateMap, State, delay, interval,
-    launchBlocking, mutableStateList, mutableStateListOf, mutableStateMap, mutableStateMapOf,
-    mutableStateOf, produceState, remember, rememberCoroutineScope, rememberMutableStateOf,
-    rememberMutableStateOfNeverEqual, rememberUpdatedState,
+    CoroutineScope, DisposableEffect, DisposableEffectResult, DisposableEffectScope,
+    LaunchedEffect, LaunchedEffectAsync, LaunchedEffectScope, MutableState, SnapshotStateList,
+    SnapshotStateMap, State, delay, interval, key, launchBlocking, mutableStateList,
+    mutableStateListOf, mutableStateMap, mutableStateMapOf, mutableStateOf, produceState, remember,
+    rememberCoroutineScope, rememberMutableStateOf, rememberMutableStateOfNeverEqual,
+    rememberUpdatedState,
 };
 /// Liquid UI — the first-party glass component library
 /// (`use cranpose::liquid::prelude::*;`).
@@ -363,10 +365,12 @@ pub mod _docs;
 /// Convenience imports for Cranpose applications.
 pub mod prelude {
     pub use cranpose_core::{
-        CoroutineScope, MutableState, SnapshotStateList, SnapshotStateMap, State, delay, interval,
-        launchBlocking, mutableStateList, mutableStateListOf, mutableStateMap, mutableStateMapOf,
-        mutableStateOf, produceState, remember, rememberCoroutineScope, rememberMutableStateOf,
-        rememberMutableStateOfNeverEqual, rememberUpdatedState,
+        CoroutineScope, DisposableEffect, DisposableEffectResult, DisposableEffectScope,
+        LaunchedEffect, LaunchedEffectAsync, LaunchedEffectScope, MutableState, SnapshotStateList,
+        SnapshotStateMap, State, delay, interval, key, launchBlocking, mutableStateList,
+        mutableStateListOf, mutableStateMap, mutableStateMapOf, mutableStateOf, produceState,
+        remember, rememberCoroutineScope, rememberMutableStateOf, rememberMutableStateOfNeverEqual,
+        rememberUpdatedState,
     };
     pub use cranpose_services::*;
     pub use cranpose_ui::*;

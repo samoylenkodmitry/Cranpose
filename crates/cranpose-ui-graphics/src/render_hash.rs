@@ -369,7 +369,7 @@ fn hash_draw_primitive<H: Hasher>(primitive: &DrawPrimitive, state: &mut H) {
     }
 }
 
-fn hash_text_style<H: Hasher>(style: &crate::TextStyle, state: &mut H) {
+fn hash_text_style<H: Hasher>(style: &crate::DrawTextStyle, state: &mut H) {
     style.font_family.hash(state);
     hash_f32_bits(style.font_size, state);
     style.font_weight.hash(state);
