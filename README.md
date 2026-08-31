@@ -27,14 +27,14 @@ demonstrates liquid-glass surfaces, adaptive layouts, animation, and native Andr
 
 ## Quick start
 
-[`apps/isolated-demo`](apps/isolated-demo) is a complete starter project that
-depends only on published crates — copy it rather than starting from scratch.
-It targets desktop, Android, and the web. The workspace's comprehensive demo
-(`apps/desktop-demo`) also contains the iOS entry point.
+Start from [Showcase Cranpose](https://github.com/samoylenkodmitry/cranpose-showcase),
+the ready-to-run project template with desktop, Android, iOS, and web shells.
+Create a repository from its GitHub template, or clone it locally and replace
+the demo screens with your app.
 
 ```bash
-git clone https://github.com/samoylenkodmitry/cranpose.git
-cd cranpose/apps/isolated-demo
+git clone https://github.com/samoylenkodmitry/cranpose-showcase.git my-cranpose-app
+cd my-cranpose-app
 cargo run --features desktop,renderer-wgpu
 ```
 
