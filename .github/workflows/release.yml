@@ -1,8 +1,9 @@
 name: Release Artifacts
 
 on:
-  push:
-    tags: ["v*"]
+  workflow_run:
+    workflows: ["Publish"]
+    types: [completed]
 
 permissions:
   contents: write
@@ -10,11 +11,13 @@ permissions:
 jobs:
   create-release:
     name: Create GitHub Release
+    if: github.event.workflow_run.conclusion == 'success' && startsWith(github.event.workflow_run.head_branch, 'v')
     runs-on: [self-hosted, macOS, ARM64]
     steps:
       - name: Create release
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3
         with:
+          tag_name: ${{ github.event.workflow_run.head_branch }}
           generate_release_notes: true
 
   build:
@@ -38,10 +41,7 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          # publish.yml may move the release tag onto its generated version-bump
-          # commit while this matrix is queued. Resolve the tag when the runner
-          # starts instead of pinning checkout to the event's original SHA.
-          ref: ${{ github.ref_name }}
+          ref: ${{ github.event.workflow_run.head_branch }}
 
       - name: Provision the pinned toolchains
         run: |
@@ -112,6 +112,7 @@ jobs:
       - name: Attach to release
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3
         with:
+          tag_name: ${{ github.event.workflow_run.head_branch }}
           files: ${{ matrix.artifact_name }}.tar.gz
           fail_on_unmatched_files: true
 
@@ -122,7 +123,7 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          ref: ${{ github.ref_name }}
+          ref: ${{ github.event.workflow_run.head_branch }}
 
       - name: Provision the pinned toolchain and Windows target
         run: |
@@ -161,6 +162,7 @@ jobs:
       - name: Attach to release
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3
         with:
+          tag_name: ${{ github.event.workflow_run.head_branch }}
           files: cranpose-demo-windows-x86_64.zip
           fail_on_unmatched_files: true
 
@@ -171,8 +173,7 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          # Keep Android on the same final tag commit as the desktop matrix.
-          ref: ${{ github.ref_name }}
+          ref: ${{ github.event.workflow_run.head_branch }}
 
       - name: Provision the pinned toolchain and Android targets
         run: |
@@ -213,5 +214,6 @@ jobs:
       - name: Attach to release
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3
         with:
+          tag_name: ${{ github.event.workflow_run.head_branch }}
           files: apps/android-demo/android/app/build/outputs/apk/release/app-release.apk
           fail_on_unmatched_files: true

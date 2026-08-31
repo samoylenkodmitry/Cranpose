@@ -212,6 +212,40 @@ fn release_jobs_require_every_expected_asset() {
 }
 
 #[test]
+fn release_artifacts_wait_for_publish_to_finalize_the_tag() {
+    let workflow = workspace_source(".github/workflows/release.yml");
+    let finalized_tag = "${{ github.event.workflow_run.head_branch }}";
+
+    assert!(
+        workflow.contains("workflow_run:\n    workflows: [\"Publish\"]\n    types: [completed]")
+            && !workflow.contains("push:\n    tags: [\"v*\"]"),
+        "release artifacts must start only after Publish has finalized the release tag"
+    );
+    assert!(
+        workflow.contains(
+            "if: github.event.workflow_run.conclusion == 'success' && startsWith(github.event.workflow_run.head_branch, 'v')"
+        ),
+        "release artifacts must reject failed Publish runs and non-tag manual runs"
+    );
+    assert_eq!(
+        workflow.matches(&format!("ref: {finalized_tag}")).count(),
+        3,
+        "every release build definition must check out the finalized tag name"
+    );
+    assert_eq!(
+        workflow
+            .matches(&format!("tag_name: {finalized_tag}"))
+            .count(),
+        4,
+        "every release action must explicitly target the finalized tag under workflow_run"
+    );
+    assert!(
+        !workflow.contains("github.ref_name"),
+        "workflow_run release jobs must not resolve the default branch as the release tag"
+    );
+}
+
+#[test]
 fn render_common_package_embeds_crate_owned_text_assets() {
     let software_text_source =
         workspace_source("crates/cranpose-render/common/src/software_text_raster.rs");
