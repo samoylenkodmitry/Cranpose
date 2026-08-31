@@ -79,19 +79,16 @@ const COMPARE_SEARCH_OFFSET_PX: u32 = 16;
 /// shift (up to ~`STEP_COUNT` px here), which must still leave a positive
 /// crop height.
 const COMPARE_STABILIZED_GUARD_PX: u32 = 4;
-/// Interior of the "Library" glass `TopBar`
-/// (`apps/desktop-demo/src/app/glass_feed.rs`). Confirmed against this
-/// window size's own semantics dump: the bar's outer box is
-/// (28, 103.6, 744, 56), its icon button occupies x=[680,756], so
-/// x=[150,650] y=[105,157] sits inside the bar with margin, clear of
-/// both the "Library" text and the button. Also verified by eye
-/// against this run's own `glass_step00.png` before trusting any
-/// number from it — sampling the wrong rectangle has cost this
-/// investigation twice already (see TIME_WASTERS.md). Height is capped
-/// by the reused compare script's fractional-shift guard, which grows
-/// with the largest measured shift (~STEP_COUNT px) and must leave a
-/// positive crop height.
-const GLASS_REGION: (f32, f32, f32, f32) = (150.0, 105.0, 500.0, 52.0);
+/// The identity-transmission lane of the "Library" glass `TopBar`
+/// (`apps/desktop-demo/src/app/glass_feed.rs`). The bar's outer box is
+/// (28, 103.6, 744, 56), and this x range is clear of both its label and
+/// button. A strong physical meniscus deliberately remaps the top and bottom
+/// rim, so measuring that rim as a whole cannot distinguish correct optical
+/// distortion from a frozen backdrop. Its centered face has zero ray bend;
+/// therefore a one-pixel list scroll must remain a one-pixel image shift
+/// here. This keeps the test focused on the renderer contract it exists to
+/// protect: the backdrop input must be refreshed for every scroll frame.
+const GLASS_REGION: (f32, f32, f32, f32) = (150.0, 124.0, 500.0, 16.0);
 /// A best-fit shift within this many pixels of the expected cumulative
 /// shift counts as tracking correctly. Must be well under 1 step's worth
 /// of motion or it cannot tell "frozen" from "on time" at step 1.
