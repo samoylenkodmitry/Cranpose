@@ -10,6 +10,7 @@ snapshot state, and a modifier-chain layout system. One Rust codebase targets
 them.
 
 **[Try the web demo in your browser](https://samoylenkodmitry.github.io/Cranpose/)** ·
+[**Explore Showcase Cranpose**](https://samoylenkodmitry.github.io/cranpose-showcase/) ·
 [Releases](https://github.com/samoylenkodmitry/Cranpose/releases) ·
 [crates.io](https://crates.io/crates/cranpose)
 
@@ -17,6 +18,12 @@ them.
 
 > Pre-alpha. The API changes without deprecation cycles, and versions are not
 > compatible with each other.
+
+## Showcase Cranpose
+
+[Showcase Cranpose](https://github.com/samoylenkodmitry/cranpose-showcase) is a polished,
+cross-platform app built with Cranpose. Its live [web demo](https://samoylenkodmitry.github.io/cranpose-showcase/)
+demonstrates liquid-glass surfaces, adaptive layouts, animation, and native Android and iOS builds.
 
 ## Quick start
 
