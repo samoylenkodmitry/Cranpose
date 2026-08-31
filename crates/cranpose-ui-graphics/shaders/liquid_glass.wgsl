@@ -217,6 +217,32 @@ fn sample_wcksrd_path(
     return accumulated / 25.0;
 }
 
+fn sample_adaptive_neighborhood(
+    uv: vec2<f32>,
+    tex_size: vec2<f32>,
+    displacement: vec2<f32>,
+    radius: f32,
+) -> vec4<f32> {
+    let center_uv = clamp(
+        uv + displacement / tex_size,
+        vec2<f32>(0.0),
+        vec2<f32>(1.0),
+    );
+    var accumulated = vec4<f32>(0.0);
+    for (var x = -1; x <= 1; x = x + 1) {
+        for (var y = -1; y <= 1; y = y + 1) {
+            let offset = vec2<f32>(f32(x), f32(y)) * radius / tex_size;
+            accumulated = accumulated + textureSampleLevel(
+                input_texture,
+                input_sampler,
+                clamp(center_uv + offset, vec2<f32>(0.0), vec2<f32>(1.0)),
+                0.0,
+            );
+        }
+    }
+    return accumulated / 9.0;
+}
+
 fn sample_wcksrd_reflection_path(
     uv: vec2<f32>,
     tex_size: vec2<f32>,
@@ -267,13 +293,12 @@ fn wcksrd_optics(
     local_position: vec2<f32>,
     half_size: vec2<f32>,
     distance: f32,
-    refraction_depth: f32,
+    requested_lens_refraction: f32,
     gradient_extent: f32,
     edge_extent: f32,
     edge_sharpness: f32,
 ) -> OpticalSample {
-    let inradius = max(min(half_size.x, half_size.y), 1.0);
-    let lens_refraction = max(inradius * refraction_depth, 0.001);
+    let lens_refraction = max(requested_lens_refraction, 0.001);
     let interior = clamp(-distance / lens_refraction, 0.0, 1.0);
     // The border line's ramp spans lens_refraction/edge_sharpness px. The
     // drawn line must stay resolvable by the pixel grid: a sub-pixel band
@@ -334,21 +359,7 @@ fn channel_lens_displacement(
     // uniformly instead of starving the trailing cap and overshooting the
     // leading one.
     //
-    // The pull's REACH is capped to lens_refraction, the same depth that
-    // already sizes the identity-to-compressed band. Left uncapped, the
-    // reach grows with the raw distance from the axis, which on a highly
-    // curved boundary (a full circle, or a capsule's rounded cap) is large
-    // and sweeps through a wide arc of directions over a short arc length —
-    // a whole stretch of boundary content folds down toward one interior
-    // point, reading as a pinwheel instead of a smooth meniscus. A flat
-    // edge has no such sweep (neighbouring points pull in nearly the same
-    // direction regardless of reach), so capping the reach changes nothing
-    // there.
-    var optical_position = sampling_position - zoom_anchor;
-    let optical_reach = length(optical_position);
-    if optical_reach > lens_refraction {
-        optical_position = optical_position * (lens_refraction / optical_reach);
-    }
+    let optical_position = sampling_position - zoom_anchor;
     var displacement = optical_position * (lens_scale - 1.0)
         * transmission_refraction;
     if optical_zoom > 1.0 && loupe_mode <= 0.5 {
@@ -378,6 +389,22 @@ fn hash12(p: vec2<f32>) -> f32 {
     var p3 = fract(vec3<f32>(p.x, p.y, p.x) * 0.1031);
     p3 = p3 + dot(p3, vec3<f32>(p3.y, p3.z, p3.x) + 33.33);
     return fract((p3.x + p3.y) * p3.z);
+}
+
+fn apply_tone_and_lift(
+    source: vec3<f32>,
+    saturation: f32,
+    contrast: f32,
+    lift: f32,
+) -> vec3<f32> {
+    let source_luma = dot(source, vec3<f32>(0.2126, 0.7152, 0.0722));
+    var toned = mix(vec3<f32>(source_luma), source, max(saturation, 0.0));
+    let tone_luma = dot(toned, vec3<f32>(0.2126, 0.7152, 0.0722));
+    toned = toned + vec3<f32>((tone_luma - 0.5) * (contrast - 1.0));
+    if lift >= 0.0 {
+        return vec3<f32>(1.0) - (vec3<f32>(1.0) - toned) * (1.0 - lift);
+    }
+    return toned * (1.0 + lift);
 }
 
 // Extra scene shapes for the liquid field: every glass shape near another
@@ -608,7 +635,15 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     // Premultiplied compositing against the untouched backdrop is equivalent
     // to the reference shader's final `mix(backdrop, lighting, transition)`.
     let inradius = max(min(half_size.x, half_size.y), 1.0);
-    let lens_refraction = max(inradius * refraction_depth, 0.001);
+    let physical_refraction_depth = max(get_float(98u), 0.0) * optical_scale;
+    let lens_refraction = max(
+        select(
+            inradius * refraction_depth,
+            physical_refraction_depth,
+            get_float(101u) > 0.5,
+        ),
+        0.001,
+    );
     let rounded_box = clamp(-d / lens_refraction, 0.0, 1.0);
     // Coverage AA rides the material's refraction band (wcKSRD's rb1·32).
     // A DRAINED lens (material activity 0) is a soft tint pool, not
@@ -721,7 +756,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
         p,
         half_size,
         d,
-        refraction_depth,
+        lens_refraction,
         gradient_extent,
         edge_extent,
         edge_sharpness,
@@ -1124,14 +1159,6 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     // magenta out of a deep purple backdrop while dimming white through the
     // same law (menu-expand f_020); a per-channel pivot crushes exactly the
     // chroma that bloom needs.
-    let luma = dot(rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
-    rgb = mix(vec3<f32>(luma), rgb, max(saturation, 0.0));
-    let tone_luma = dot(rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
-    rgb = rgb + vec3<f32>((tone_luma - 0.5) * (contrast - 1.0));
-    let outer_luma = dot(outer_rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
-    outer_rgb = mix(vec3<f32>(outer_luma), outer_rgb, max(saturation, 0.0));
-    let outer_tone_luma = dot(outer_rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
-    outer_rgb = outer_rgb + vec3<f32>((outer_tone_luma - 0.5) * (contrast - 1.0));
     // Interactive lenses frost their face without bleaching the meniscus:
     // the target toggle keeps saturated green/cyan at the outer rise while
     // its recessed chamber approaches white. Surface glass uses uniform lift.
@@ -1140,14 +1167,8 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
         lift * mix(0.18, 1.0, interior),
         rim_style,
     );
-    if face_lift >= 0.0 {
-        rgb = vec3<f32>(1.0) - (vec3<f32>(1.0) - rgb) * (1.0 - face_lift);
-        outer_rgb = vec3<f32>(1.0)
-            - (vec3<f32>(1.0) - outer_rgb) * (1.0 - lift * 0.18);
-    } else {
-        rgb = rgb * (1.0 + face_lift);
-        outer_rgb = outer_rgb * (1.0 + lift * 0.18);
-    }
+    rgb = apply_tone_and_lift(rgb, saturation, contrast, face_lift);
+    outer_rgb = apply_tone_and_lift(outer_rgb, saturation, contrast, lift * 0.18);
 
     // The wcKSRD interior ramp keeps an interactive lens clearer at its edge;
     // surface glass retains a uniform tint across its body.
@@ -1174,19 +1195,33 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     // Adaptive frost (91 strength, 97 foreground luma) protects either
-    // foreground polarity. It reacts only when the post-material backdrop is
-    // too close to the foreground, then moves the surface toward the opposite
-    // luminance pole. Both sampled backdrop and actual foreground determine
-    // the correction, preventing white-on-white and black-on-black alike.
+    // foreground polarity. The decision comes from a low-frequency backdrop
+    // neighborhood and applies one local exposure correction to both the
+    // background and its detail. A per-fragment decision classifies thin
+    // light/dark backdrop glyphs as a new background polarity and inverts
+    // them, even though the surrounding card already has safe contrast.
     let adaptive_frost = clamp(get_float(91u), 0.0, 1.0);
     if adaptive_frost > 0.0 {
         let foreground_luma = clamp(get_float(97u), 0.0, 1.0);
-        let frost_luma = dot(rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
-        let separation = abs(frost_luma - foreground_luma);
+        let adaptive_sample = sample_adaptive_neighborhood(
+            uv,
+            tex_size,
+            achromatic_displacement + base_displacement,
+            16.0 * optical_scale,
+        );
+        var adaptive_rgb = apply_tone_and_lift(
+            adaptive_sample.rgb,
+            saturation,
+            contrast,
+            face_lift,
+        );
+        adaptive_rgb = mix(adaptive_rgb, tint_color.rgb, optical_tint_alpha);
+        let adaptive_luma = dot(adaptive_rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+        let separation = abs(adaptive_luma - foreground_luma);
         let contrast_need = 1.0 - smoothstep(0.38, 0.58, separation);
         let foreground_is_light = smoothstep(0.35, 0.65, foreground_luma);
         let target_luma = mix(0.82, 0.18, foreground_is_light);
-        let correction = (target_luma - frost_luma) * adaptive_frost * contrast_need;
+        let correction = (target_luma - adaptive_luma) * adaptive_frost * contrast_need;
         rgb = clamp(rgb + vec3<f32>(correction), vec3<f32>(0.0), vec3<f32>(1.0));
     }
 

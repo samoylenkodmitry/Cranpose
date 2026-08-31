@@ -23,9 +23,21 @@ const CHROME_CLEARANCE: f32 = 150.0;
 const CARD_HEIGHT: f32 = 76.0;
 const CARD_SPACING: f32 = 12.0;
 const FEED_ROWS: usize = 120;
+const FEED_GLASS_DEPTH: f32 = 0.34;
+const FEED_GLASS_REFERENCE_HEIGHT: f32 = 126.0;
+const FEED_GLASS_DEPTH_DP: f32 = FEED_GLASS_REFERENCE_HEIGHT * FEED_GLASS_DEPTH * 0.5;
+const FEED_GLASS_CURVE: f32 = 0.55;
+const FEED_GLASS_CHROMA: f32 = 0.30;
+const FEED_GLASS_TRANSMISSION: f32 = 1.0;
 
 fn feed_glass() -> Glass {
-    Glass::regular().blur_radius(0.0)
+    Glass::regular()
+        .blur_radius(0.0)
+        .refraction_depth(FEED_GLASS_DEPTH)
+        .refraction_depth_dp(FEED_GLASS_DEPTH_DP)
+        .refraction_curve(FEED_GLASS_CURVE)
+        .dispersion(FEED_GLASS_CHROMA)
+        .transmission_refraction(FEED_GLASS_TRANSMISSION)
 }
 
 fn feed_button_spec() -> GlassButtonSpec {
@@ -35,6 +47,7 @@ fn feed_button_spec() -> GlassButtonSpec {
 fn feed_search_spec() -> LiquidSearchFieldSpec {
     LiquidSearchFieldSpec {
         glass: feed_glass(),
+        foreground: Some(Color::WHITE),
         ..Default::default()
     }
 }
@@ -282,8 +295,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_feed_glass_material_explicitly_disables_blur() {
-        assert_eq!(feed_glass().blur_radius, Some(0.0));
+    fn every_feed_glass_material_is_sharp_but_optically_shaped() {
+        let glass = feed_glass();
+        assert_eq!(glass.blur_radius, Some(0.0));
+        assert_eq!(glass.refraction_depth, 0.34);
+        assert_eq!(glass.refraction_depth_dp, Some(21.42));
+        assert_eq!(glass.refraction_curve, 0.55);
+        assert_eq!(glass.dispersion, 0.30);
+        assert_eq!(glass.transmission_refraction, 1.0);
         assert_eq!(
             feed_button_spec()
                 .glass
@@ -292,5 +311,6 @@ mod tests {
             Some(0.0)
         );
         assert_eq!(feed_search_spec().glass.blur_radius, Some(0.0));
+        assert_eq!(feed_search_spec().foreground, Some(Color::WHITE));
     }
 }

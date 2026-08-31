@@ -10,9 +10,10 @@ use cranpose_ui_graphics::{
     Color, GLASS_ACTIVITY_UNIFORM, GLASS_BLUR_RADIUS_UNIFORM, GLASS_DISPERSION_UNIFORM,
     GLASS_EFFECT_DENSITY_UNIFORM, GLASS_FOLD_DEPTH_UNIFORM, GLASS_LIGHT_DIRECTION_UNIFORM,
     GLASS_MENISCUS_ABSORPTION_UNIFORM, GLASS_OPTICAL_ZOOM_ANCHOR_UNIFORM,
-    GLASS_OPTICAL_ZOOM_UNIFORM, GLASS_REFRACTION_CURVE_UNIFORM, GLASS_RESTING_TINT_UNIFORM,
-    GLASS_TRANSMISSION_REFRACTION_UNIFORM, GraphicsLayer, LIQUID_GLASS_WGSL, LayerShape,
-    RenderEffect, RoundedCornerShape, RuntimeShader, TileMode,
+    GLASS_OPTICAL_ZOOM_UNIFORM, GLASS_PHYSICAL_REFRACTION_DEPTH_ENABLED_UNIFORM,
+    GLASS_PHYSICAL_REFRACTION_DEPTH_UNIFORM, GLASS_REFRACTION_CURVE_UNIFORM,
+    GLASS_RESTING_TINT_UNIFORM, GLASS_TRANSMISSION_REFRACTION_UNIFORM, GraphicsLayer,
+    LIQUID_GLASS_WGSL, LayerShape, RenderEffect, RoundedCornerShape, RuntimeShader, TileMode,
 };
 
 use crate::theme::LiquidColors;
@@ -311,6 +312,10 @@ pub struct Glass {
     /// frosted surfaces default to zero so their backdrop stays motion-stable;
     /// interactive lenses opt into optical displacement explicitly.
     pub refraction_depth: f32,
+    /// Optional physical wcKSRD refraction depth in dp. When present, this
+    /// keeps the optical band equally deep across surfaces with different
+    /// inradii instead of scaling it from each surface's height.
+    pub refraction_depth_dp: Option<f32>,
     /// Normalized wcKSRD ray-return exponent.
     pub refraction_curve: f32,
     /// Normalized wcKSRD spectral ray separation.
@@ -371,6 +376,7 @@ impl Glass {
             blur_radius: None,
             saturation: None,
             refraction_depth: 0.0,
+            refraction_depth_dp: None,
             refraction_curve: 0.25,
             dispersion: 0.0,
             transmission_refraction: 0.0,
@@ -408,6 +414,7 @@ impl Glass {
             blur_radius: None,
             saturation: None,
             refraction_depth: 0.34,
+            refraction_depth_dp: None,
             refraction_curve: 1.0,
             dispersion: 0.30,
             transmission_refraction: 1.0,
@@ -449,6 +456,14 @@ impl Glass {
 
     pub fn refraction_depth(mut self, fraction: f32) -> Self {
         self.refraction_depth = fraction.clamp(0.0, 2.0);
+        self.refraction_depth_dp = None;
+        self
+    }
+
+    /// Uses a density-stable physical refraction depth instead of a fraction
+    /// of the live shape inradius.
+    pub fn refraction_depth_dp(mut self, depth_dp: f32) -> Self {
+        self.refraction_depth_dp = Some(depth_dp.max(0.0));
         self
     }
 
@@ -598,6 +613,7 @@ impl Glass {
                 .unwrap_or_else(|| self.default_blur_radius()),
             saturation: self.saturation.unwrap_or_else(|| self.default_saturation()),
             refraction_depth: self.refraction_depth,
+            refraction_depth_dp: self.refraction_depth_dp,
             refraction_curve: self.refraction_curve,
             dispersion: self.dispersion,
             transmission_refraction: self.transmission_refraction,
@@ -644,6 +660,7 @@ pub(crate) struct ResolvedGlass {
     pub blur_radius_dp: f32,
     pub saturation: f32,
     pub refraction_depth: f32,
+    pub refraction_depth_dp: Option<f32>,
     pub refraction_curve: f32,
     pub dispersion: f32,
     pub transmission_refraction: f32,
@@ -727,6 +744,18 @@ impl ResolvedGlass {
         }
         let press_depth = dynamics.press_depth.unwrap_or(1.0).clamp(0.0, 1.0);
         shader.set_float(9, self.refraction_depth * activity * press_depth);
+        shader.set_float(
+            GLASS_PHYSICAL_REFRACTION_DEPTH_UNIFORM,
+            self.refraction_depth_dp.unwrap_or(0.0) * activity * press_depth,
+        );
+        shader.set_float(
+            GLASS_PHYSICAL_REFRACTION_DEPTH_ENABLED_UNIFORM,
+            if self.refraction_depth_dp.is_some() {
+                1.0
+            } else {
+                0.0
+            },
+        );
         shader.set_float(
             GLASS_REFRACTION_CURVE_UNIFORM,
             self.refraction_curve * activity,
@@ -1031,6 +1060,7 @@ mod tests {
             .blur_radius(-2.0)
             .saturation(1.2)
             .refraction_depth(3.0)
+            .refraction_depth_dp(-3.0)
             .refraction_curve(2.0)
             .dispersion(2.0)
             .transmission_refraction(2.0)
@@ -1045,6 +1075,7 @@ mod tests {
         assert_eq!(glass.blur_radius, Some(-2.0));
         assert_eq!(glass.saturation, Some(1.2));
         assert_eq!(glass.refraction_depth, 2.0);
+        assert_eq!(glass.refraction_depth_dp, Some(0.0));
         assert_eq!(glass.refraction_curve, 1.0);
         assert_eq!(glass.dispersion, 1.0);
         assert_eq!(glass.transmission_refraction, 1.0);
@@ -1101,6 +1132,7 @@ mod tests {
     fn resolved_material_packs_wcksrd_and_dynamic_tint() {
         let resolved = Glass::lens()
             .refraction_depth(0.72)
+            .refraction_depth_dp(21.0)
             .refraction_curve(0.8)
             .dispersion(0.42)
             .transmission_refraction(0.35)
@@ -1130,6 +1162,14 @@ mod tests {
         ));
         let shader = terminal_shader(effect);
         assert_eq!(shader.uniforms()[9], 0.72);
+        assert_eq!(
+            shader.uniforms()[GLASS_PHYSICAL_REFRACTION_DEPTH_UNIFORM],
+            21.0
+        );
+        assert_eq!(
+            shader.uniforms()[GLASS_PHYSICAL_REFRACTION_DEPTH_ENABLED_UNIFORM],
+            1.0
+        );
         assert_eq!(shader.uniforms()[GLASS_REFRACTION_CURVE_UNIFORM], 0.8);
         assert_eq!(shader.uniforms()[GLASS_DISPERSION_UNIFORM], 0.42);
         assert_eq!(
@@ -1293,6 +1333,10 @@ mod tests {
         let uniforms = shader.uniforms();
         assert_eq!(uniforms[GLASS_ACTIVITY_UNIFORM], 1.0);
         assert_eq!(uniforms[9], 0.72);
+        assert_eq!(
+            uniforms[GLASS_PHYSICAL_REFRACTION_DEPTH_ENABLED_UNIFORM],
+            0.0
+        );
         assert_eq!(uniforms[GLASS_REFRACTION_CURVE_UNIFORM], 0.8);
         assert_eq!(uniforms[GLASS_DISPERSION_UNIFORM], 0.42);
         assert_eq!(uniforms[GLASS_TRANSMISSION_REFRACTION_UNIFORM], 1.0);

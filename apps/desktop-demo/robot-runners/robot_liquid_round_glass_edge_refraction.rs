@@ -1,22 +1,17 @@
-//! Round and heavily-rounded liquid-glass surfaces must refract their
-//! backdrop smoothly out to the edge, not pinch it toward a single point.
+//! Round and heavily-rounded liquid-glass surfaces must retain wcKSRD's
+//! full compressed source image at the rim.
 //!
-//! wcKSRD's transmission displacement pulls each pixel's source sample
-//! toward the shape's optical axis as it nears the rim (`lens_scale -> 0`).
-//! The pull's reach used to scale with the raw distance from that axis
-//! instead of the lens's own optical depth (`lens_refraction`), so on a
-//! full circle or a capsule's rounded cap -- where every rim point is far
-//! from the axis -- a rim pixel could sample all the way back to the
-//! shape's own center. Content near the center leaks out to the rim,
-//! reading as a pinwheel/moire swirl on a checkerboard and, more simply,
-//! as a small marker placed dead center becoming visible at the rim.
+//! The transmission field maps the lens boundary to its optical axis and
+//! relaxes continuously to identity across the refraction depth. This is
+//! what lets a pill over two colored cards compress the card beneath its
+//! center around the perimeter instead of leaving the original card seam
+//! running straight through the glass.
 //!
-//! This renders a circle and a capsule, each centered over a plain
-//! backdrop with one small, uniquely colored marker at the shape's own
-//! center, and asserts the marker never reads at any point around the
-//! rim: with the reach bounded to lens_refraction, the closest any rim
-//! pixel can pull toward center is `radius - lens_refraction`, which for
-//! these shapes' sizes stays far outside the marker.
+//! This renders a circle and a capsule over a uniquely colored marker at
+//! each optical center. Samples around each rim must contain the compressed
+//! center marker. Bounding the source walk to the refraction-band width
+//! makes the test fail because it turns the field into a shallow edge
+//! offset and loses the compressed image.
 //!
 //! Run with:
 //! ```bash
@@ -107,10 +102,10 @@ fn probe_glass(shape: LiquidShape) -> Glass {
         .dispersion(0.0)
         .highlight(0.0)
         .tint(Color::TRANSPARENT)
-        // Widens the compressed-toward-center band the defect lives in
+        // Widen the compressed-toward-center band
         // (lens_refraction = inradius * this) from a sub-pixel sliver at
         // the reference default to a few px, so RIM_INSET lands inside it
-        // reliably instead of needing sub-pixel precision. Still well
+        // reliably instead of needing sub-pixel precision. This remains
         // inside Glass::refraction_depth's documented 0..2 range.
         .refraction_depth(0.5)
 }
@@ -202,10 +197,11 @@ fn main() -> ExitCode {
                     FAILED.store(true, Ordering::Relaxed);
                 }
 
-                // The core assertion: no point around the shape's rim may
-                // read as its own center marker's color.
+                // The core assertion: the boundary maps back to the optical
+                // center, so the center marker must form a compressed ring.
                 let mut worst = f32::MAX;
                 let mut worst_angle = 0.0f32;
+                let mut compressed_samples = 0u32;
                 for step in 0..RIM_SAMPLE_COUNT {
                     let angle = (step as f32) * TAU / RIM_SAMPLE_COUNT as f32;
                     let axis_shift = probe.cap_offset * angle.cos().signum();
@@ -217,19 +213,27 @@ fn main() -> ExitCode {
                         worst = dist;
                         worst_angle = angle.to_degrees();
                     }
+                    if dist < 60.0 {
+                        compressed_samples += 1;
+                    }
                 }
-                const NOT_MARKER_FLOOR: f32 = 80.0;
                 println!(
-                    "{}: closest rim sample to the marker color = {worst:.1} (at {worst_angle:.0}deg)",
-                    probe.name
+                    "{}: {compressed_samples}/{RIM_SAMPLE_COUNT} rim samples contain the compressed center; closest color distance = {worst:.1} (at {worst_angle:.0}deg)",
+                    probe.name,
                 );
-                if worst < NOT_MARKER_FLOOR {
+                // The ring is approximately one physical pixel wide. A
+                // circular probe aligns with almost every polar sample;
+                // the capsule's flat segments align with fewer rounded
+                // logical coordinates, but must still cover several
+                // distinct angles around both caps and both long edges.
+                const MIN_COMPRESSED_SAMPLES: u32 = 8;
+                if compressed_samples < MIN_COMPRESSED_SAMPLES {
                     println!(
-                        "\n✗ the {}'s rim reads within {worst:.1} of its own center marker's \
-                         color (floor {NOT_MARKER_FLOOR}) at {worst_angle:.0} degrees around the \
-                         perimeter -- the center is bleeding out to the edge instead of the \
-                         glass refracting smoothly out to it",
-                        probe.name
+                        "\n✗ the {}'s rim contains its compressed center at only \
+                         {compressed_samples}/{RIM_SAMPLE_COUNT} samples (minimum \
+                         {MIN_COMPRESSED_SAMPLES}); the source walk is behaving like a shallow \
+                         edge offset instead of mapping the boundary to the optical axis",
+                        probe.name,
                     );
                     FAILED.store(true, Ordering::Relaxed);
                 }
@@ -237,8 +241,8 @@ fn main() -> ExitCode {
 
             if !FAILED.load(Ordering::Relaxed) {
                 println!(
-                    "PASS: neither the circle's nor the capsule's rim shows its own center \
-                     bleeding through"
+                    "PASS: the circle and capsule preserve the compressed center image around \
+                     their rims"
                 );
             }
             robot.exit().expect("exit");

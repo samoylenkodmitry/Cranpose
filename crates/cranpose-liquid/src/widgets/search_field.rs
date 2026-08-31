@@ -5,6 +5,7 @@ use cranpose_ui::{
     text::{SpanStyle, TextStyle},
     widgets::{BasicTextFieldDecorated, BasicTextFieldOptions, Box, BoxSpec, Row, RowSpec, Text},
 };
+use cranpose_ui_graphics::Color;
 use cranpose_ui_layout::{Alignment, VerticalAlignment};
 
 use crate::{
@@ -20,6 +21,9 @@ pub struct LiquidSearchFieldSpec {
     pub on_glass: bool,
     /// Material used by the floating variant.
     pub glass: Glass,
+    /// Foreground override for the icon, input, and placeholder. `None` uses
+    /// the theme's primary/secondary search colors.
+    pub foreground: Option<Color>,
 }
 
 impl Default for LiquidSearchFieldSpec {
@@ -28,6 +32,7 @@ impl Default for LiquidSearchFieldSpec {
             placeholder: "Search".to_string(),
             on_glass: true,
             glass: Glass::regular(),
+            foreground: None,
         }
     }
 }
@@ -38,9 +43,19 @@ impl Default for LiquidSearchFieldSpec {
 pub fn LiquidSearchField(modifier: Modifier, state: TextFieldState, spec: LiquidSearchFieldSpec) {
     let colors = liquid_colors();
     let typography = liquid_typography();
+    let foreground = spec.foreground.unwrap_or(colors.label);
+    let secondary_foreground = spec.foreground.unwrap_or(colors.secondary_label);
 
     let base = if spec.on_glass {
-        Modifier::empty().glass_effect(spec.glass.clone())
+        let glass = spec
+            .foreground
+            .map(|color| {
+                spec.glass
+                    .clone()
+                    .adaptive_frost(color, spec.glass.adaptive_frost)
+            })
+            .unwrap_or_else(|| spec.glass.clone());
+        Modifier::empty().glass_effect(glass)
     } else {
         let fill = colors.fill;
         Modifier::empty()
@@ -67,19 +82,19 @@ pub fn LiquidSearchField(modifier: Modifier, state: TextFieldState, spec: Liquid
                 Modifier::empty().fill_max_width(),
                 RowSpec::default().vertical_alignment(VerticalAlignment::CenterVertically),
                 move || {
-                    crate::icons::Icon(crate::icons::SEARCH, 18.0, colors.secondary_label);
+                    crate::icons::Icon(crate::icons::SEARCH, 18.0, secondary_foreground);
                     Box(Modifier::empty().width(8.0), BoxSpec::default(), || {});
 
                     let field_style = TextStyle {
                         span_style: SpanStyle {
-                            color: Some(colors.label),
+                            color: Some(foreground),
                             ..body.span_style.clone()
                         },
                         ..body.clone()
                     };
                     let placeholder_style = TextStyle {
                         span_style: SpanStyle {
-                            color: Some(colors.secondary_label),
+                            color: Some(secondary_foreground),
                             ..body.span_style.clone()
                         },
                         ..body.clone()
@@ -139,6 +154,7 @@ mod tests {
         assert_eq!(spec.placeholder, "Search");
         assert!(spec.on_glass);
         assert_eq!(spec.glass, Glass::regular());
+        assert_eq!(spec.foreground, None);
     }
 }
 

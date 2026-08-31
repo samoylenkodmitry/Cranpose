@@ -17,11 +17,17 @@ pub const GLASS_DISPERSION_UNIFORM: usize = 95;
 /// Uniform slot controlling displacement of the transmitted backdrop path.
 /// Reflected meniscus rays remain independent.
 pub const GLASS_TRANSMISSION_REFRACTION_UNIFORM: usize = 96;
+/// Uniform slot containing an optional physical wcKSRD refraction depth in
+/// dp.
+pub const GLASS_PHYSICAL_REFRACTION_DEPTH_UNIFORM: usize = 98;
 /// Uniform slot containing px-per-dp for cover-mode optical bands.
 pub const GLASS_EFFECT_DENSITY_UNIFORM: usize = 99;
 /// Uniform slot controlling energy absorbed by the meniscus transmission
 /// path. Reflection and spectral return remain independent.
 pub const GLASS_MENISCUS_ABSORPTION_UNIFORM: usize = 100;
+/// Uniform slot selecting physical refraction depth from slot 98 instead of
+/// the normalized inradius-relative depth from slot 9.
+pub const GLASS_PHYSICAL_REFRACTION_DEPTH_ENABLED_UNIFORM: usize = 101;
 /// Uniform slot containing the interactive rim-fold band depth in dp (the
 /// shader resolves it against the live shape inradius; zero = fold off).
 pub const GLASS_FOLD_DEPTH_UNIFORM: usize = 88;
@@ -54,8 +60,10 @@ pub const GLASS_RESTING_TINT_UNIFORM: usize = 113;
 ///  94: wcKSRD refraction curve exponent (0.05..1.0)
 ///  95: wcKSRD spectral dispersion strength (0..1)
 ///  96: transmitted-path refraction strength (0 = fixed backdrop coordinates)
+///  98: physical wcKSRD refraction depth in dp
 ///  99: cover-mode px-per-dp for density-stable optical bands
 /// 100: meniscus transmission absorption (0 = clear, 1 = full lens absorption)
+/// 101: physical-refraction-depth selector (>0.5 = slot 98, else slot 9)
 ///  11: highlight intensity
 ///  14,15,16,17: tint color (r,g,b,a)
 ///  18: saturation (1.0 = unchanged)
