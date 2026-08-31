@@ -24,6 +24,21 @@ const CARD_HEIGHT: f32 = 76.0;
 const CARD_SPACING: f32 = 12.0;
 const FEED_ROWS: usize = 120;
 
+fn feed_glass() -> Glass {
+    Glass::regular().blur_radius(0.0)
+}
+
+fn feed_button_spec() -> GlassButtonSpec {
+    GlassButtonSpec::glass().with_glass(feed_glass())
+}
+
+fn feed_search_spec() -> LiquidSearchFieldSpec {
+    LiquidSearchFieldSpec {
+        glass: feed_glass(),
+        ..Default::default()
+    }
+}
+
 const CARD_GRADIENTS: [[Color; 2]; 6] = [
     [
         Color::from_rgb_u8(255, 94, 98),
@@ -161,7 +176,7 @@ fn FeedCard(index: usize) {
                     if index.is_multiple_of(3) {
                         GlassButton(
                             Modifier::empty().size(Size::new(44.0, 44.0)),
-                            GlassButtonSpec::glass(),
+                            feed_button_spec(),
                             || {},
                             || {
                                 Text("★", Modifier::empty(), feed_text_style(17.0, Color::WHITE));
@@ -194,7 +209,7 @@ fn FeedChrome() {
 fn TopBar(label: Color) {
     GlassSurface(
         Modifier::empty().fill_max_width().height(56.0),
-        Glass::regular(),
+        feed_glass(),
         move || {
             Row(
                 Modifier::empty()
@@ -211,7 +226,7 @@ fn TopBar(label: Color) {
                     );
                     GlassButton(
                         Modifier::empty().size(Size::new(44.0, 44.0)),
-                        GlassButtonSpec::glass(),
+                        feed_button_spec(),
                         || {},
                         || {
                             Text("⋯", Modifier::empty(), feed_text_style(20.0, Color::WHITE));
@@ -229,7 +244,7 @@ fn SearchBar() {
     LiquidSearchField(
         Modifier::empty().fill_max_width(),
         search_state,
-        LiquidSearchFieldSpec::default(),
+        feed_search_spec(),
     );
 }
 
@@ -244,7 +259,7 @@ fn FilterPanel(label: Color) {
         move || {
             GlassSurface(
                 Modifier::empty().size(Size::new(139.0, 126.0)),
-                Glass::regular().shape(LiquidShape::RoundedRect(20.0)),
+                feed_glass().shape(LiquidShape::RoundedRect(20.0)),
                 move || {
                     Column(
                         Modifier::empty().fill_max_size().padding(12.0),
@@ -260,4 +275,22 @@ fn FilterPanel(label: Color) {
             );
         },
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_feed_glass_material_explicitly_disables_blur() {
+        assert_eq!(feed_glass().blur_radius, Some(0.0));
+        assert_eq!(
+            feed_button_spec()
+                .glass
+                .expect("feed buttons must override their glass material")
+                .blur_radius,
+            Some(0.0)
+        );
+        assert_eq!(feed_search_spec().glass.blur_radius, Some(0.0));
+    }
 }
