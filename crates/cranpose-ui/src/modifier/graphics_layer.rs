@@ -201,6 +201,38 @@ impl Modifier {
         })
     }
 
+    /// Compose-style rotation convenience.
+    ///
+    /// Matches Kotlin: `Modifier.rotate(degrees: Float)`, which maps to
+    /// `graphicsLayer(rotationZ = degrees)`. Rotation is clockwise for
+    /// positive `degrees` and pivots around the layer's center, matching
+    /// `graphics_layer_value`'s default (centered) `transform_origin`.
+    pub fn rotate(self, degrees: f32) -> Self {
+        self.graphics_layer_value(GraphicsLayer {
+            rotation_z: degrees,
+            ..Default::default()
+        })
+    }
+
+    /// Compose-style uniform scale convenience.
+    ///
+    /// Matches Kotlin: `Modifier.scale(scale: Float)`, which maps to
+    /// `graphicsLayer(scaleX = scale, scaleY = scale)`.
+    pub fn scale(self, scale: f32) -> Self {
+        self.scale_xy(scale, scale)
+    }
+
+    /// Compose-style non-uniform scale convenience.
+    ///
+    /// Matches Kotlin: `Modifier.scale(scaleX: Float, scaleY: Float)`.
+    pub fn scale_xy(self, scale_x: f32, scale_y: f32) -> Self {
+        self.graphics_layer_value(GraphicsLayer {
+            scale_x,
+            scale_y,
+            ..Default::default()
+        })
+    }
+
     /// Compose-style elevation shadow convenience.
     ///
     /// This mirrors `Modifier.shadow(elevation)` defaults:

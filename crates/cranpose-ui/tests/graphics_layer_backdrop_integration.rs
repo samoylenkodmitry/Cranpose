@@ -235,3 +235,48 @@ fn inner_default_graphics_layer_resets_parent_local_fields() {
     );
     assert_eq!(layer.blend_mode, cranpose_ui::BlendMode::SrcOver);
 }
+
+#[test]
+fn rotate_sets_rotation_z_and_keeps_default_center_pivot() {
+    let modifier = Modifier::empty().rotate(37.5);
+    let slices = collect_slices_from_modifier(&modifier);
+    let layer = slices.graphics_layer().expect("layer expected");
+
+    assert!((layer.rotation_z - 37.5).abs() < 1e-6);
+    assert_eq!(layer.transform_origin, TransformOrigin::CENTER);
+    assert!((layer.scale_x - 1.0).abs() < 1e-6);
+    assert!((layer.scale_y - 1.0).abs() < 1e-6);
+}
+
+#[test]
+fn scale_sets_uniform_scale_x_and_y() {
+    let modifier = Modifier::empty().scale(1.5);
+    let slices = collect_slices_from_modifier(&modifier);
+    let layer = slices.graphics_layer().expect("layer expected");
+
+    assert!((layer.scale_x - 1.5).abs() < 1e-6);
+    assert!((layer.scale_y - 1.5).abs() < 1e-6);
+    assert_eq!(layer.transform_origin, TransformOrigin::CENTER);
+    assert!((layer.rotation_z - 0.0).abs() < 1e-6);
+}
+
+#[test]
+fn scale_xy_sets_independent_scale_x_and_y() {
+    let modifier = Modifier::empty().scale_xy(2.0, 0.5);
+    let slices = collect_slices_from_modifier(&modifier);
+    let layer = slices.graphics_layer().expect("layer expected");
+
+    assert!((layer.scale_x - 2.0).abs() < 1e-6);
+    assert!((layer.scale_y - 0.5).abs() < 1e-6);
+}
+
+#[test]
+fn rotate_and_scale_compose_in_a_single_layer_when_chained() {
+    let modifier = Modifier::empty().rotate(90.0).scale_xy(2.0, 3.0);
+    let slices = collect_slices_from_modifier(&modifier);
+    let layer = slices.graphics_layer().expect("layer expected");
+
+    assert!((layer.rotation_z - 90.0).abs() < 1e-6);
+    assert!((layer.scale_x - 2.0).abs() < 1e-6);
+    assert!((layer.scale_y - 3.0).abs() < 1e-6);
+}

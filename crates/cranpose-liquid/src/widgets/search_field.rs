@@ -18,6 +18,8 @@ pub struct LiquidSearchFieldSpec {
     pub placeholder: String,
     /// Render on glass (floating) instead of the flat fill (inline in lists).
     pub on_glass: bool,
+    /// Material used by the floating variant.
+    pub glass: Glass,
 }
 
 impl Default for LiquidSearchFieldSpec {
@@ -25,6 +27,7 @@ impl Default for LiquidSearchFieldSpec {
         Self {
             placeholder: "Search".to_string(),
             on_glass: true,
+            glass: Glass::regular(),
         }
     }
 }
@@ -37,7 +40,7 @@ pub fn LiquidSearchField(modifier: Modifier, state: TextFieldState, spec: Liquid
     let typography = liquid_typography();
 
     let base = if spec.on_glass {
-        Modifier::empty().glass_effect(Glass::regular())
+        Modifier::empty().glass_effect(spec.glass.clone())
     } else {
         let fill = colors.fill;
         Modifier::empty()
@@ -135,6 +138,7 @@ mod tests {
         let spec = LiquidSearchFieldSpec::default();
         assert_eq!(spec.placeholder, "Search");
         assert!(spec.on_glass);
+        assert_eq!(spec.glass, Glass::regular());
     }
 }
 
