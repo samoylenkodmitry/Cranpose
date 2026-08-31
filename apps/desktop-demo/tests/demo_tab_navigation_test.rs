@@ -1,8 +1,8 @@
 use desktop_app::app::{DemoTab, DEMO_TABS, DESKTOP_INITIAL_TAB};
 
 #[test]
-fn desktop_demo_opens_on_the_liquid_playground() {
-    assert_eq!(DESKTOP_INITIAL_TAB, DemoTab::Liquid);
+fn desktop_demo_opens_on_hacker_news() {
+    assert_eq!(DESKTOP_INITIAL_TAB, DemoTab::HackerNews);
 }
 
 #[test]

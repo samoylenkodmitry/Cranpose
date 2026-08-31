@@ -117,7 +117,7 @@ pub enum DemoTab {
     Wear,
 }
 
-pub const DESKTOP_INITIAL_TAB: DemoTab = DemoTab::Liquid;
+pub const DESKTOP_INITIAL_TAB: DemoTab = DemoTab::HackerNews;
 
 impl DemoTab {
     pub fn label(self) -> &'static str {
