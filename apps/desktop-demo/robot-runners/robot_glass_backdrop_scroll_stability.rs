@@ -71,9 +71,10 @@ const STEP_EPSILON: f32 = 0.05;
 /// already sleeps 150ms and re-checks the exact delta via semantics; this
 /// adds the rest of the margin on top without touching that shared function.
 const SETTLE_AFTER_SCROLL_EXTRA_MS: u64 = 1_500;
-/// Search radius for the reused shift-search engine. Must comfortably
-/// exceed the final step's expected cumulative shift (`STEP_COUNT` px).
-const COMPARE_SEARCH_OFFSET_PX: u32 = 16;
+/// The final expected cumulative shift is exactly `STEP_COUNT` pixels, so
+/// searching that distance covers every valid alignment without requiring a
+/// wider crop that would spill into the refractive rim.
+const COMPARE_SEARCH_OFFSET_PX: u32 = STEP_COUNT as u32;
 /// Small: the sampled glass patch is only ~90px tall, and the reused
 /// engine's fractional-alignment guard grows with the largest measured
 /// shift (up to ~`STEP_COUNT` px here), which must still leave a positive
@@ -88,7 +89,7 @@ const COMPARE_STABILIZED_GUARD_PX: u32 = 4;
 /// therefore a one-pixel list scroll must remain a one-pixel image shift
 /// here. This keeps the test focused on the renderer contract it exists to
 /// protect: the backdrop input must be refreshed for every scroll frame.
-const GLASS_REGION: (f32, f32, f32, f32) = (150.0, 124.0, 500.0, 16.0);
+const GLASS_REGION: (f32, f32, f32, f32) = (150.0, 120.0, 500.0, 32.0);
 /// A best-fit shift within this many pixels of the expected cumulative
 /// shift counts as tracking correctly. Must be well under 1 step's worth
 /// of motion or it cannot tell "frozen" from "on time" at step 1.
