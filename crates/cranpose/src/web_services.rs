@@ -151,6 +151,16 @@ impl Notifier for WebNotifier {
 
 struct WebHaptics;
 
+fn vibrate_navigator(navigator: &web_sys::Navigator, pattern: &JsValue) {
+    let Ok(value) = js_sys::Reflect::get(navigator.as_ref(), &JsValue::from_str("vibrate")) else {
+        return;
+    };
+    let Some(vibrate) = value.dyn_ref::<js_sys::Function>() else {
+        return;
+    };
+    let _ = vibrate.call1(navigator.as_ref(), pattern);
+}
+
 impl Haptics for WebHaptics {
     fn perform(&self, feedback: HapticFeedback) {
         let duration_ms = match feedback {
@@ -162,7 +172,7 @@ impl Haptics for WebHaptics {
             HapticFeedback::Error => 35,
         };
         if let Some(navigator) = navigator() {
-            let _ = navigator.vibrate_with_duration(duration_ms);
+            vibrate_navigator(&navigator, &JsValue::from_f64(f64::from(duration_ms)));
         }
     }
 
@@ -171,7 +181,7 @@ impl Haptics for WebHaptics {
             return;
         }
         if let Some(navigator) = navigator() {
-            let _ = navigator.vibrate_with_duration(duration_ms);
+            vibrate_navigator(&navigator, &JsValue::from_f64(f64::from(duration_ms)));
         }
     }
 
@@ -183,7 +193,7 @@ impl Haptics for WebHaptics {
         for step in pattern.timings_ms() {
             timings.push(&JsValue::from_f64(f64::from(*step)));
         }
-        let _ = navigator.vibrate_with_pattern(timings.as_ref());
+        vibrate_navigator(&navigator, timings.as_ref());
     }
 
     fn perform_effect(&self, effect: HapticEffect) {
@@ -192,7 +202,7 @@ impl Haptics for WebHaptics {
 
     fn cancel(&self) {
         if let Some(navigator) = navigator() {
-            let _ = navigator.vibrate_with_duration(0);
+            vibrate_navigator(&navigator, &JsValue::from_f64(0.0));
         }
     }
 

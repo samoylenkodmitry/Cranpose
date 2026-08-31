@@ -190,6 +190,28 @@ fn workflow_actions_are_pinned_to_commit_shas() {
 }
 
 #[test]
+fn release_jobs_require_every_expected_asset() {
+    let workflow = workspace_source(".github/workflows/release.yml");
+
+    for file in [
+        "files: ${{ matrix.artifact_name }}.tar.gz",
+        "files: cranpose-demo-windows-x86_64.zip",
+        "files: apps/android-demo/android/app/build/outputs/apk/release/app-release.apk",
+    ] {
+        assert!(
+            workflow.contains(&format!("{file}\n          fail_on_unmatched_files: true")),
+            "release uploads must name `{file}` exactly and fail when it is missing"
+        );
+    }
+    assert!(
+        !workflow.contains("*.tar.gz")
+            && !workflow.contains("*.zip")
+            && !workflow.contains("app-*-release.apk"),
+        "release uploads must not use globs that can silently match no files"
+    );
+}
+
+#[test]
 fn render_common_package_embeds_crate_owned_text_assets() {
     let software_text_source =
         workspace_source("crates/cranpose-render/common/src/software_text_raster.rs");
@@ -836,6 +858,22 @@ fn web_primary_pointer_stream_is_captured_until_release_or_cancel() {
             .count()
             >= 2,
         "web pointer-up and pointer-cancel must both release canvas pointer capture"
+    );
+}
+
+#[test]
+fn web_haptics_treats_the_vibration_api_as_optional() {
+    let source = crate_source("src/web_services.rs");
+
+    assert!(
+        !source.contains("navigator.vibrate_with_"),
+        "web haptics must not call Navigator.vibrate directly: browsers without the optional Vibration API throw out of the WASM pointer callback"
+    );
+    assert!(
+        source.contains("Reflect::get(navigator.as_ref(), &JsValue::from_str(\"vibrate\"))")
+            && source.contains("dyn_ref::<js_sys::Function>()")
+            && source.contains("vibrate.call1(navigator.as_ref(), pattern)"),
+        "web haptics must feature-detect a callable vibration function and contain invocation failures"
     );
 }
 
