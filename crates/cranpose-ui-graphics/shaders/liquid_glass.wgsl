@@ -76,6 +76,15 @@ fn wcksrd_meniscus(
     return gradient_outer - gradient_inner;
 }
 
+// A surface reflection is bounded by the physical coating/rim thickness, not
+// by the distance travelled by the refracted backdrop ray. Keeping this band
+// separate lets a deep optic bend content without painting that full depth as
+// a bright bevel on regular surface glass.
+fn wcksrd_surface_rim(distance: f32, gradient_extent: f32) -> f32 {
+    let rim_extent = floored_band_width(gradient_extent);
+    return 1.0 - smoothstep(0.0, rim_extent, max(-distance, 0.0));
+}
+
 fn opposite_side_reflection_displacement(
     local_position: vec2<f32>,
     outward_normal: vec2<f32>,
@@ -297,6 +306,7 @@ fn wcksrd_optics(
     gradient_extent: f32,
     edge_extent: f32,
     edge_sharpness: f32,
+    rim_style: f32,
 ) -> OpticalSample {
     let lens_refraction = max(requested_lens_refraction, 0.001);
     let interior = clamp(-distance / lens_refraction, 0.0, 1.0);
@@ -312,14 +322,19 @@ fn wcksrd_optics(
     let border = (clamp(-(distance - edge_extent) / border_ramp, 0.0, 1.0)
         - clamp(-(distance + border_extent - edge_extent) / border_ramp, 0.0, 1.0))
         * border_gain;
-    let gradient_band = wcksrd_meniscus(
+    let optical_gradient_band = wcksrd_meniscus(
         distance,
         lens_refraction,
         gradient_extent,
     );
+    let lighting_band = mix(
+        wcksrd_surface_rim(distance, gradient_extent),
+        optical_gradient_band,
+        clamp(rim_style, 0.0, 1.0),
+    );
     let source_y = -local_position.y / max(half_size.y, 1.0) * 0.29;
     let face_light = 0.5 * clamp(clamp(source_y, 0.0, 0.2) + 0.1, 0.0, 1.0)
-        + 0.5 * clamp(clamp(-source_y, -1.0, 0.2) * gradient_band + 0.1, 0.0, 1.0);
+        + 0.5 * clamp(clamp(-source_y, -1.0, 0.2) * lighting_band + 0.1, 0.0, 1.0);
     return OpticalSample(interior, border, face_light);
 }
 
@@ -760,6 +775,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
         gradient_extent,
         edge_extent,
         edge_sharpness,
+        rim_style,
     );
     let interior = optical_sample.interior;
 
@@ -1130,8 +1146,14 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
         highlight,
         0.18 * material_activity * (1.0 - clamp(rim_style, 0.0, 1.0)),
     );
+    let surface_bevel_band = wcksrd_surface_rim(meniscus_distance, gradient_extent);
+    let optical_bevel_band = wcksrd_meniscus(
+        meniscus_distance,
+        lens_refraction,
+        gradient_extent,
+    );
     let bevel_band = clamp(
-        wcksrd_meniscus(meniscus_distance, lens_refraction, gradient_extent),
+        mix(surface_bevel_band, optical_bevel_band, rim_style),
         0.0,
         1.0,
     ) * coverage;

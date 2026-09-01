@@ -1,7 +1,8 @@
 //! A physical glass depth must produce the same refractive/chromatic band on
-//! short Library/Search chrome as on the taller filter panel. The Receipts
-//! feed places both over saturated lazy-list rows; a normalized-only depth
-//! shrinks on the short controls until the list looks unchanged there.
+//! short Library/Search chrome as on the taller filter panel without turning
+//! that optical depth into a thick painted lower rim. The Receipts feed places
+//! both over saturated lazy-list rows, with black gaps that make an oversized
+//! structural rim especially visible.
 
 mod robot_exit;
 mod robot_shot;
@@ -28,6 +29,8 @@ const TALL_HEIGHT: f32 = 126.0;
 const ADAPTIVE_Y: f32 = 330.0;
 const ADAPTIVE_HEIGHT: f32 = 56.0;
 const UNDERLAY_X: f32 = 330.0;
+const RIM_PROBE_X: f32 = SURFACE_X + 300.0;
+const RIM_PROBE_WIDTH: f32 = 240.0;
 const PHYSICAL_DEPTH_DP: f32 = 21.0;
 const PROBE_START_DP: f32 = 0.0;
 const PROBE_END_DP: f32 = 70.0;
@@ -41,7 +44,7 @@ fn probe_glass() -> Glass {
         .saturation(1.0)
         .lift(0.0)
         .contrast(1.0)
-        .highlight(0.0)
+        .highlight(0.9)
         .shadow(false)
         .adaptive_frost(Color::WHITE, 0.0)
         .refraction_depth(0.34)
@@ -98,9 +101,23 @@ fn main() -> ExitCode {
                 270.0,
                 ADAPTIVE_HEIGHT - 24.0,
             );
+            let short_lower_rim_depth = lower_rim_depth_dp(
+                &shot,
+                RIM_PROBE_X,
+                SHORT_Y,
+                RIM_PROBE_WIDTH,
+                SHORT_HEIGHT,
+            );
+            let tall_lower_rim_depth = lower_rim_depth_dp(
+                &shot,
+                RIM_PROBE_X,
+                TALL_Y,
+                RIM_PROBE_WIDTH,
+                TALL_HEIGHT,
+            );
 
             println!(
-                "physical-depth short_chroma={short_chroma} tall_chroma={tall_chroma} short_foreground={short_foreground} adaptive_underlay={adaptive_underlay}"
+                "physical-depth short_chroma={short_chroma} tall_chroma={tall_chroma} short_foreground={short_foreground} adaptive_underlay={adaptive_underlay} short_lower_rim_depth={short_lower_rim_depth:.2}dp tall_lower_rim_depth={tall_lower_rim_depth:.2}dp"
             );
             const CHROMA_FLOOR: usize = 12;
             if short_chroma < CHROMA_FLOOR || tall_chroma < CHROMA_FLOOR {
@@ -127,6 +144,18 @@ fn main() -> ExitCode {
                     &FAILED,
                     &format!(
                         "adaptive frost inverted the light lazy-row text under glass: only {adaptive_underlay} bright receipt-text pixels"
+                    ),
+                );
+            }
+            const MAX_LOWER_RIM_DEPTH_DP: f32 = 3.0;
+            if short_lower_rim_depth > MAX_LOWER_RIM_DEPTH_DP
+                || tall_lower_rim_depth > MAX_LOWER_RIM_DEPTH_DP
+            {
+                robot_exit::fail_and_await_shutdown(
+                    &robot,
+                    &FAILED,
+                    &format!(
+                        "surface glass lower rim must stay thin while refraction remains deep: short={short_lower_rim_depth:.2}dp, tall={tall_lower_rim_depth:.2}dp, maximum={MAX_LOWER_RIM_DEPTH_DP:.2}dp"
                     ),
                 );
             }
@@ -219,6 +248,15 @@ fn draw_stripes(scope: &mut dyn DrawScope, y: f32, height: f32) {
         },
         Brush::solid(Color::BLACK),
     );
+    scope.draw_rect_at(
+        Rect {
+            x: RIM_PROBE_X,
+            y,
+            width: RIM_PROBE_WIDTH,
+            height,
+        },
+        Brush::solid(Color::BLACK),
+    );
 }
 
 #[cranpose::composable]
@@ -300,6 +338,35 @@ fn bright_pixels(
     region_pixels(shot, x, y, width, height)
         .filter(|[r, g, b]| *r >= 220 && *g >= 220 && *b >= 220)
         .count()
+}
+
+fn lower_rim_depth_dp(
+    shot: &cranpose::RobotScreenshot,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+) -> f32 {
+    let sy = shot.height as f32 / shot.logical_height.max(1.0);
+    let y0 = ((y + height * 0.5) * sy).floor().max(0.0) as usize;
+    let y1 = ((y + height) * sy).ceil().min(shot.height as f32) as usize;
+    let body_luma = mean_luma(shot, x, y + height * 0.45, width, 2.0);
+    let rim_threshold = body_luma + 18.0;
+    let bright_rows = (y0..y1)
+        .filter(|py| mean_luma(shot, x, *py as f32 / sy, width, 1.0 / sy) > rim_threshold)
+        .count();
+    bright_rows as f32 / sy
+}
+
+fn mean_luma(shot: &cranpose::RobotScreenshot, x: f32, y: f32, width: f32, height: f32) -> f32 {
+    let mut count = 0usize;
+    let sum = region_pixels(shot, x, y, width, height)
+        .map(|[r, g, b]| {
+            count += 1;
+            0.2126 * r as f32 + 0.7152 * g as f32 + 0.0722 * b as f32
+        })
+        .sum::<f32>();
+    sum / count.max(1) as f32
 }
 
 fn region_pixels(

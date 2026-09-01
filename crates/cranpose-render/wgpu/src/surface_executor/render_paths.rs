@@ -8406,7 +8406,7 @@ mod tests {
     }
 
     #[test]
-fn motion_stable_translated_text_source_cache_tracks_scroll_offset() {
+    fn motion_stable_translated_text_source_cache_tracks_scroll_offset() {
         let text = RenderNode::Primitive(PrimitiveEntry {
             phase: PrimitivePhase::BeforeChildren,
             node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
