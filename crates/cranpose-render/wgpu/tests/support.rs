@@ -12,7 +12,10 @@ use cranpose_render_common::{
     software_text_raster::DEFAULT_SOFTWARE_TEXT_FONT_BYTES,
 };
 use cranpose_render_wgpu::{CapturedFrame, RenderStatsSnapshot, WgpuRenderer};
-use cranpose_ui::AppContext;
+use cranpose_ui::{
+    AppContext, Color, Modifier, Size, composable,
+    widgets::{Box, BoxSpec},
+};
 use cranpose_ui_graphics::Rect;
 
 pub static TEST_FONT: &[u8] = DEFAULT_SOFTWARE_TEXT_FONT_BYTES;
@@ -241,4 +244,28 @@ fn create_headless_renderer_with_format(
         adapter.get_downlevel_capabilities().flags,
     );
     Ok(renderer)
+}
+
+pub fn rect_modifier(rect: [f32; 4]) -> Modifier {
+    Modifier::empty().offset(rect[0], rect[1]).size(Size {
+        width: rect[2],
+        height: rect[3],
+    })
+}
+
+/// A page filling the whole frame with one background color, the root every
+/// parity scene composes its content into.
+#[composable]
+#[allow(non_snake_case)]
+pub fn FramePage(width: u32, height: u32, background: Color, content: impl Fn() + 'static) {
+    Box(
+        Modifier::empty()
+            .size(Size {
+                width: width as f32,
+                height: height as f32,
+            })
+            .background(background),
+        BoxSpec::new(),
+        content,
+    );
 }

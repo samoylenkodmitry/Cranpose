@@ -6,21 +6,15 @@ use cranpose_liquid::{
     Glass, GlassButton, GlassButtonSpec, GlassSurface, LiquidShape, LiquidTheme, LiquidThemeSpec,
 };
 use cranpose_ui::{
-    Color, Modifier, RenderEffect, Size, TextStyle, composable,
+    Color, Modifier, RenderEffect, TextStyle, composable,
     widgets::{Box, BoxSpec, Text},
 };
+use support::{FramePage, rect_modifier};
 
 const FRAME_WIDTH: u32 = 320;
 const FRAME_HEIGHT: u32 = 300;
 const CARDS: [[f32; 4]; 2] = [[24.0, 30.0, 272.0, 110.0], [24.0, 160.0, 272.0, 110.0]];
 const BUTTON_IN_CARD: [f32; 4] = [212.0, 36.0, 40.0, 40.0];
-
-fn rect_modifier(rect: [f32; 4]) -> Modifier {
-    Modifier::empty().offset(rect[0], rect[1]).size(Size {
-        width: rect[2],
-        height: rect[3],
-    })
-}
 
 #[composable]
 #[allow(non_snake_case)]
@@ -45,14 +39,10 @@ fn Stripes() {
 #[composable]
 #[allow(non_snake_case)]
 fn BlurCardsPage() {
-    Box(
-        Modifier::empty()
-            .size(Size {
-                width: FRAME_WIDTH as f32,
-                height: FRAME_HEIGHT as f32,
-            })
-            .background(Color(0.08, 0.12, 0.30, 1.0)),
-        BoxSpec::new(),
+    FramePage(
+        FRAME_WIDTH,
+        FRAME_HEIGHT,
+        Color(0.08, 0.12, 0.30, 1.0),
         || {
             Stripes();
             for card in CARDS {
@@ -98,14 +88,10 @@ fn card_glass() -> Glass {
 #[allow(non_snake_case)]
 fn GlassCardsPage() {
     LiquidTheme(LiquidThemeSpec::default(), || {
-        Box(
-            Modifier::empty()
-                .size(Size {
-                    width: FRAME_WIDTH as f32,
-                    height: FRAME_HEIGHT as f32,
-                })
-                .background(Color(0.08, 0.12, 0.30, 1.0)),
-            BoxSpec::new(),
+        FramePage(
+            FRAME_WIDTH,
+            FRAME_HEIGHT,
+            Color(0.08, 0.12, 0.30, 1.0),
             || {
                 Stripes();
                 for card in CARDS {

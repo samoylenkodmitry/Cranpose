@@ -1585,7 +1585,9 @@ mod tests {
 /// Lives beside the executor because it is the only other place that may
 /// finish an encoder and submit it.
 pub(crate) mod fence_profile {
-    use std::{cell::RefCell, time::Instant};
+    use std::cell::RefCell;
+
+    use web_time::Instant;
 
     const DEFAULT_REPORT_EVERY_FRAMES: u32 = 60;
 

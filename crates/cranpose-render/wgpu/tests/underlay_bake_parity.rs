@@ -3,33 +3,23 @@ mod support;
 use cranpose_app_shell::AppShell;
 use cranpose_core::location_key;
 use cranpose_ui::{
-    Color, Modifier, RenderEffect, Size, TextStyle, composable,
+    Color, Modifier, RenderEffect, TextStyle, composable,
     widgets::{Box, BoxSpec, Text},
 };
+use support::{FramePage, rect_modifier};
 
 const FRAME_WIDTH: u32 = 320;
 const FRAME_HEIGHT: u32 = 240;
 const CARD: [f32; 4] = [24.0, 40.0, 272.0, 120.0];
 const BUTTON: [f32; 4] = [236.0, 80.0, 40.0, 40.0];
 
-fn rect_modifier(rect: [f32; 4]) -> Modifier {
-    Modifier::empty().offset(rect[0], rect[1]).size(Size {
-        width: rect[2],
-        height: rect[3],
-    })
-}
-
 #[composable]
 #[allow(non_snake_case)]
 fn GradientPage() {
-    Box(
-        Modifier::empty()
-            .size(Size {
-                width: FRAME_WIDTH as f32,
-                height: FRAME_HEIGHT as f32,
-            })
-            .background(Color(0.08, 0.12, 0.30, 1.0)),
-        BoxSpec::new(),
+    FramePage(
+        FRAME_WIDTH,
+        FRAME_HEIGHT,
+        Color(0.08, 0.12, 0.30, 1.0),
         || {
             Box(
                 rect_modifier([0.0, 0.0, 160.0, 240.0]).background(Color(0.55, 0.20, 0.12, 1.0)),
