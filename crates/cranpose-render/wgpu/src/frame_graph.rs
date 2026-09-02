@@ -1619,6 +1619,17 @@ pub(crate) mod fence_profile {
         })
     }
 
+    /// `CRANPOSE_GPU_FENCE_PROFILE=frame`: one fence per frame instead of one
+    /// per pass, so the report is the frame's whole GPU time with the
+    /// pipeline intact.
+    fn whole_frame() -> bool {
+        static WHOLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *WHOLE.get_or_init(|| {
+            crate::debug_toggles::debug_toggle("CRANPOSE_GPU_FENCE_PROFILE").as_deref()
+                == Some("frame")
+        })
+    }
+
     #[derive(Default)]
     struct Profile {
         current_label: Option<String>,
@@ -1693,6 +1704,15 @@ pub(crate) mod fence_profile {
         encoder: &mut wgpu::CommandEncoder,
         next_label: Option<&str>,
     ) {
+        if whole_frame() && next_label.is_some() {
+            PROFILE.with(|profile| {
+                profile
+                    .borrow_mut()
+                    .current_label
+                    .get_or_insert_with(|| "frame".to_owned());
+            });
+            return;
+        }
         let elapsed = drain(device, queue, encoder);
         PROFILE.with(|profile| {
             let mut profile = profile.borrow_mut();

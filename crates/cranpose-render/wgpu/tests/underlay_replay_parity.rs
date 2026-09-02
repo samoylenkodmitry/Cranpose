@@ -15,6 +15,7 @@ const FRAME_WIDTH: u32 = 320;
 const FRAME_HEIGHT: u32 = 300;
 const CARDS: [[f32; 4]; 2] = [[24.0, 30.0, 272.0, 110.0], [24.0, 160.0, 272.0, 110.0]];
 const BUTTON_IN_CARD: [f32; 4] = [212.0, 36.0, 40.0, 40.0];
+const BAR: [f32; 4] = [0.0, 120.0, 320.0, 60.0];
 
 #[composable]
 #[allow(non_snake_case)]
@@ -82,6 +83,37 @@ fn card_glass() -> Glass {
         .dispersion(1.0)
         .transmission_refraction(0.72)
         .highlight(0.72)
+}
+
+#[composable]
+#[allow(non_snake_case)]
+fn BarredGlassCardsPage() {
+    LiquidTheme(LiquidThemeSpec::default(), || {
+        FramePage(
+            FRAME_WIDTH,
+            FRAME_HEIGHT,
+            Color(0.08, 0.12, 0.30, 1.0),
+            || {
+                Stripes();
+                for card in CARDS {
+                    GlassSurface(rect_modifier(card), card_glass(), || {
+                        Text(
+                            "Under a bar",
+                            Modifier::empty().offset(16.0, 16.0),
+                            TextStyle::default(),
+                        );
+                    });
+                }
+                Box(
+                    rect_modifier(BAR)
+                        .backdrop_effect(RenderEffect::blur(6.0))
+                        .background(Color(1.0, 1.0, 1.0, 0.2)),
+                    BoxSpec::new(),
+                    || {},
+                );
+            },
+        );
+    });
 }
 
 #[composable]
@@ -242,4 +274,9 @@ fn replaying_blur_cards_into_their_underlay_copies_matches_the_flushed_render_ex
 #[test]
 fn replaying_glass_cards_into_their_underlay_copies_matches_the_flushed_render_exactly() {
     parity("glass cards", GlassCardsPage);
+}
+
+#[test]
+fn a_bar_capturing_over_pending_cards_replays_them_instead_of_flushing_the_target() {
+    parity("barred glass cards", BarredGlassCardsPage);
 }

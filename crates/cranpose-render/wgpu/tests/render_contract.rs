@@ -546,12 +546,21 @@ fn first_child_composite_consumes_pending_clear_load_op() {
         .map(|offset| underlay_start + offset)
         .expect("the underlay helper must be followed by the replay write");
     let underlay_body = &source[underlay_start..underlay_end];
-    let backdrop_body = block_after(&source, "if let Some(backdrop) = &child.backdrop");
+    let capture_source_start = source
+        .find("fn prepare_capture_source<")
+        .expect("backdrop captures must decide their source through the shared helper");
+    let capture_source_end = source[capture_source_start..]
+        .find("\n#[allow(clippy::too_many_arguments)]\nfn prepare_cached_backdrop_layer_composite<")
+        .map(|offset| capture_source_start + offset)
+        .expect("the capture source helper must be followed by the prepare function");
+    let capture_source_body = &source[capture_source_start..capture_source_end];
     let shadow_body = block_after(&source, "if !resolved_child.shadow_draws.is_empty()");
     assert!(
         underlay_body.contains("flush_pending_clear")
             && underlay_body.contains("flush_pending_queues_for_backdrop_capture")
-            && backdrop_body.contains("flush_pending_queues_for_backdrop_capture")
+            && capture_source_body.contains("flush_pending_queues_for_backdrop_capture")
+            && capture_source_body.contains("flush_pending_clear")
+            && source.matches("prepare_capture_source(").count() >= 2
             && shadow_body.contains("flush_pending_clear"),
         "target readers such as underlays, backdrop snapshots, and shadow draws must still initialize the target before reading/compositing"
     );

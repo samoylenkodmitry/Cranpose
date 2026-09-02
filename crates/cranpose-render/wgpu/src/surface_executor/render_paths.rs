@@ -1750,7 +1750,7 @@ fn sample_child_underlay<B: SurfaceExecutionBackend>(
             parent_scale,
         ) {
             if replay && conflicts.any() {
-                replay_pending_into_underlay(
+                replay_pending_into_copy(
                     backend,
                     &target,
                     origin,
@@ -1826,11 +1826,11 @@ fn replayed_write(
     })
 }
 
-/// Draws the pending composites that touch `dependency_pixels` into the
-/// underlay copy, in the order they will later land on the parent, without
-/// consuming them: the copy then holds what the parent will show beneath the
-/// child, and the parent's own batch stays intact.
-fn replay_pending_into_underlay<B: SurfaceExecutionBackend>(
+/// Draws the pending composites that touch `dependency_pixels` into a copy
+/// taken out of the parent at `origin`, in the order they will later land on
+/// the parent, without consuming them: the copy then holds what the parent
+/// will show there, and the parent's own batch stays intact.
+fn replay_pending_into_copy<B: SurfaceExecutionBackend>(
     backend: &mut B,
     underlay: &OffscreenTarget,
     origin: (u32, u32),
@@ -4538,26 +4538,24 @@ fn composite_root_child_backdrop<B: SurfaceExecutionBackend>(
             effect: backdrop,
             z_index: child.z_index,
         };
-        if let Some(dependency_rect) = backdrop_dependency_rect(
+        let replay_pixels = match backdrop_dependency_rect(
             resolved_child.backdrop_rect,
             child.visual_clip,
             &backdrop_layer.effect,
             root_scale,
             (width, height),
         ) {
-            flush_pending_queues_for_backdrop_capture(
+            Some(dependency_rect) => prepare_capture_source(
                 backend,
-                queues.composites,
-                queues.composite_load_op,
-                queues.shader_composites,
-                queues.shader_load_op,
-                surface_view,
-                (width, height),
-                queues.next_load_op,
+                root_target,
+                &backdrop_layer,
                 dependency_rect,
+                (width, height),
                 root_scale,
-            )?;
-        }
+                queues,
+            )?,
+            None => None,
+        };
         let backdrop_input_hash = child_backdrop_input_hash(
             local_scene,
             prior_child_contributions,
@@ -4585,6 +4583,11 @@ fn composite_root_child_backdrop<B: SurfaceExecutionBackend>(
             root_scale,
             Some(backdrop_input_hash),
             !child.needs_nested_underlay,
+            replay_pixels.map(|dependency_pixels| PendingReplaySource {
+                composites: queues.composites,
+                shader_composites: queues.shader_composites,
+                dependency_pixels,
+            }),
         )? {
             let PreparedBackdropComposite {
                 surface: prepared_surface,
@@ -4634,6 +4637,18 @@ fn composite_root_child_backdrop<B: SurfaceExecutionBackend>(
                 *queues.next_load_op = wgpu::LoadOp::Load;
             }
         } else {
+            if replay_pixels.is_some() {
+                flush_pending_composite_queues_fused(
+                    backend,
+                    queues.composites,
+                    queues.composite_load_op,
+                    queues.shader_composites,
+                    queues.shader_load_op,
+                    surface_view,
+                    (width, height),
+                    queues.next_load_op,
+                )?;
+            }
             apply_backdrop_layer_to_target(
                 backend,
                 root_target,
@@ -4692,26 +4707,6 @@ fn composite_nested_child_backdrop<B: SurfaceExecutionBackend>(
     }
 
     if let Some(backdrop) = &child.backdrop {
-        if let Some(dependency_rect) = backdrop_dependency_rect(
-            resolved_child.backdrop_rect,
-            child.visual_clip,
-            backdrop,
-            target_scale,
-            (width, height),
-        ) {
-            flush_pending_queues_for_backdrop_capture(
-                backend,
-                queues.composites,
-                queues.composite_load_op,
-                queues.shader_composites,
-                queues.shader_load_op,
-                &target.view,
-                (width, height),
-                queues.next_load_op,
-                dependency_rect,
-                target_scale,
-            )?;
-        }
         let backdrop_layer = BackdropLayer {
             node_id: child.node_id,
             rect: resolved_child.backdrop_rect,
@@ -4719,6 +4714,24 @@ fn composite_nested_child_backdrop<B: SurfaceExecutionBackend>(
             snap_anchor: resolved_child.snap_anchor,
             effect: backdrop.clone(),
             z_index: child.z_index,
+        };
+        let replay_pixels = match backdrop_dependency_rect(
+            resolved_child.backdrop_rect,
+            child.visual_clip,
+            backdrop,
+            target_scale,
+            (width, height),
+        ) {
+            Some(dependency_rect) => prepare_capture_source(
+                backend,
+                target,
+                &backdrop_layer,
+                dependency_rect,
+                (width, height),
+                target_scale,
+                queues,
+            )?,
+            None => None,
         };
         let backdrop_input_hash = nested_child_backdrop_input_hash(
             local_scene,
@@ -4756,6 +4769,11 @@ fn composite_nested_child_backdrop<B: SurfaceExecutionBackend>(
             target_scale,
             Some(backdrop_input_hash),
             false,
+            replay_pixels.map(|dependency_pixels| PendingReplaySource {
+                composites: queues.composites,
+                shader_composites: queues.shader_composites,
+                dependency_pixels,
+            }),
         )? {
             if queues.composites.is_empty() {
                 *queues.composite_load_op = Some(*queues.next_load_op);
@@ -4769,6 +4787,18 @@ fn composite_nested_child_backdrop<B: SurfaceExecutionBackend>(
             });
             *queues.next_load_op = wgpu::LoadOp::Load;
         } else {
+            if replay_pixels.is_some() {
+                flush_pending_composite_queues_fused(
+                    backend,
+                    queues.composites,
+                    queues.composite_load_op,
+                    queues.shader_composites,
+                    queues.shader_load_op,
+                    &target.view,
+                    (width, height),
+                    queues.next_load_op,
+                )?;
+            }
             apply_backdrop_layer_to_target(
                 backend,
                 target,
@@ -6647,6 +6677,156 @@ pub(crate) fn render_effect_layer_to_target<B: SurfaceExecutionBackend>(
     composite_result
 }
 
+/// The device geometry of a backdrop capture: what of the layer is visible,
+/// the padded rect its effect reads, the scale the capture renders at and,
+/// when that scale is the target's own, the whole-pixel copy that samples it.
+struct BackdropCaptureGeometry {
+    layer_rect: Rect,
+    layer_clip: Option<Rect>,
+    visible_rect: Rect,
+    capture_rect: Rect,
+    backdrop_scale: f32,
+    copy_plan: Option<BackdropSnapshotCopyPlan>,
+}
+
+fn backdrop_capture_geometry(
+    layer: &BackdropLayer,
+    root_scale: f32,
+    width: u32,
+    height: u32,
+    target_size: (u32, u32),
+    max_texture_dim: u32,
+) -> Option<BackdropCaptureGeometry> {
+    let (layer_rect, layer_clip) = snapped_backdrop_geometry(layer, root_scale);
+    let visible_rect = visible_layer_rect(layer_rect, layer_clip, root_scale, width, height)?;
+    let capture_rect = backdrop_capture_rect(
+        visible_rect,
+        layer_clip,
+        &layer.effect,
+        root_scale,
+        (width, height),
+    );
+    let backdrop_scale =
+        clamp_effect_surface_scale(capture_rect, root_scale, root_scale, max_texture_dim);
+    let copy_plan = ((backdrop_scale - root_scale).abs() <= 0.01)
+        .then(|| {
+            axis_aligned_backdrop_snapshot_copy_plan(
+                capture_rect,
+                layer_rect,
+                root_scale,
+                target_size,
+                max_texture_dim,
+            )
+        })
+        .flatten();
+    Some(BackdropCaptureGeometry {
+        layer_rect,
+        layer_clip,
+        visible_rect,
+        capture_rect,
+        backdrop_scale,
+        copy_plan,
+    })
+}
+
+/// The composites still queued for the target when a capture copies out of
+/// it: the ones touching `dependency_pixels` are replayed into the copy.
+struct PendingReplaySource<'a> {
+    composites: &'a [PendingLayerComposite],
+    shader_composites: &'a [PendingShaderLayerComposite],
+    dependency_pixels: Rect,
+}
+
+/// Copies the capture's whole-pixel window out of the target and replays the
+/// queued composites that touch it into the copy. A capture that was promised
+/// a replay cannot fall back to sampling the target, which lacks them.
+fn copy_backdrop_capture<B: SurfaceExecutionBackend>(
+    backend: &mut B,
+    target: &OffscreenTarget,
+    copy_plan: Option<&BackdropSnapshotCopyPlan>,
+    destination: &OffscreenTarget,
+    replay: Option<&PendingReplaySource<'_>>,
+) -> Result<bool, String> {
+    let Some(plan) = copy_plan else {
+        if replay.is_some() {
+            return Err("a backdrop capture promised a replay has no copy plan".to_string());
+        }
+        return Ok(false);
+    };
+    let copied =
+        backend.copy_texture_region_to_target(target, plan.source_origin, destination, plan.size);
+    match replay {
+        Some(source) if copied => replay_pending_into_copy(
+            backend,
+            destination,
+            plan.source_origin,
+            source.composites,
+            source.shader_composites,
+            source.dependency_pixels,
+        )?,
+        Some(_) => {
+            return Err(
+                "a backdrop capture promised a replay could not copy its window".to_string(),
+            );
+        }
+        None => {}
+    }
+    Ok(copied)
+}
+
+/// Decides how a backdrop capture of `layer` sees the composites queued for
+/// `target`. With a whole-pixel copy plan and no clear held by a queue, the
+/// queues stay pending and the capture replays the conflicting ones into its
+/// copy; otherwise the queues flush first. Returns the dependency pixels the
+/// capture must replay, when it must.
+#[allow(clippy::too_many_arguments)]
+fn prepare_capture_source<B: SurfaceExecutionBackend>(
+    backend: &mut B,
+    target: &OffscreenTarget,
+    layer: &BackdropLayer,
+    dependency_rect: Rect,
+    viewport: (u32, u32),
+    scale: f32,
+    queues: &mut PendingQueues<'_>,
+) -> Result<Option<Rect>, String> {
+    let dependency_pixels = surface_pixel_rect(dependency_rect, scale);
+    let conflicts = pending_capture_conflicts(
+        queues.composites,
+        queues.composite_load_op,
+        queues.shader_composites,
+        queues.shader_load_op,
+        dependency_pixels,
+    );
+    let can_replay = backend.underlay_replay_enabled()
+        && !conflicts.clear_held
+        && backdrop_capture_geometry(
+            layer,
+            scale,
+            viewport.0,
+            viewport.1,
+            (target.width, target.height),
+            backend.max_texture_dim(),
+        )
+        .is_some_and(|geometry| geometry.copy_plan.is_some());
+    if !can_replay {
+        flush_pending_queues_for_backdrop_capture(
+            backend,
+            queues.composites,
+            queues.composite_load_op,
+            queues.shader_composites,
+            queues.shader_load_op,
+            &target.view,
+            viewport,
+            queues.next_load_op,
+            dependency_rect,
+            scale,
+        )?;
+        return Ok(None);
+    }
+    flush_pending_clear(backend, &target.view, queues.next_load_op);
+    Ok(conflicts.any().then_some(dependency_pixels))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn prepare_cached_backdrop_layer_composite<B: SurfaceExecutionBackend>(
     backend: &mut B,
@@ -6658,15 +6838,29 @@ fn prepare_cached_backdrop_layer_composite<B: SurfaceExecutionBackend>(
     root_scale: f32,
     input_content_hash: Option<u64>,
     allow_deferred_tail: bool,
+    replay: Option<PendingReplaySource<'_>>,
 ) -> Result<Option<PreparedBackdropComposite>, String> {
     let diag = backdrop_diag_enabled();
-    let (layer_rect, layer_clip) = snapped_backdrop_geometry(layer, root_scale);
-    let Some(visible_rect) = visible_layer_rect(layer_rect, layer_clip, root_scale, width, height)
+    let Some(BackdropCaptureGeometry {
+        layer_rect,
+        layer_clip,
+        visible_rect,
+        capture_rect,
+        backdrop_scale,
+        copy_plan,
+    }) = backdrop_capture_geometry(
+        layer,
+        root_scale,
+        width,
+        height,
+        (target.width, target.height),
+        backend.max_texture_dim(),
+    )
     else {
         if diag {
             eprintln!(
                 "[backdrop-diag] prepare SKIP: no visible rect for {:?}",
-                layer_rect
+                layer.rect
             );
         }
         return Ok(None);
@@ -6688,38 +6882,15 @@ fn prepare_cached_backdrop_layer_composite<B: SurfaceExecutionBackend>(
         }
         return Ok(None);
     };
-    let capture_rect = backdrop_capture_rect(
-        visible_rect,
-        layer_clip,
-        &layer.effect,
-        root_scale,
-        (width, height),
-    );
     if diag {
         eprintln!(
-            "[backdrop-diag] prepare node={:?} visible={visible_rect:?} capture={capture_rect:?} scissor={scissor:?} in_pad={} out_pad={}",
+            "[backdrop-diag] prepare node={:?} visible={visible_rect:?} capture={capture_rect:?} scissor={scissor:?} in_pad={} out_pad={} replay={}",
             layer.node_id,
             layer.effect.input_padding(),
             layer.effect.output_padding(),
+            replay.is_some(),
         );
     }
-    let backdrop_scale = clamp_effect_surface_scale(
-        capture_rect,
-        root_scale,
-        root_scale,
-        backend.max_texture_dim(),
-    );
-    let copy_plan = if (backdrop_scale - root_scale).abs() <= 0.01 {
-        axis_aligned_backdrop_snapshot_copy_plan(
-            capture_rect,
-            layer_rect,
-            root_scale,
-            (target.width, target.height),
-            backend.max_texture_dim(),
-        )
-    } else {
-        None
-    };
     let (backdrop_width, backdrop_height) = copy_plan.map(|plan| plan.size).unwrap_or_else(|| {
         surface_target_size(capture_rect, backdrop_scale, backend.max_texture_dim())
     });
@@ -6765,14 +6936,13 @@ fn prepare_cached_backdrop_layer_composite<B: SurfaceExecutionBackend>(
         let effect_target = backend.acquire_retained_surface(backdrop_width, backdrop_height);
         if let Some(effect) = materialized_effect {
             let snapshot = backend.acquire_frame_surface(backdrop_width, backdrop_height);
-            let copied_snapshot = copy_plan.is_some_and(|plan| {
-                backend.copy_texture_region_to_target(
-                    target,
-                    plan.source_origin,
-                    &snapshot,
-                    plan.size,
-                )
-            });
+            let copied_snapshot = copy_backdrop_capture(
+                backend,
+                target,
+                copy_plan.as_ref(),
+                &snapshot,
+                replay.as_ref(),
+            )?;
             if !copied_snapshot {
                 copy_projective_backdrop_inputs_to_view(
                     backend,
@@ -6815,14 +6985,13 @@ fn prepare_cached_backdrop_layer_composite<B: SurfaceExecutionBackend>(
             )?;
             backend.release_frame_surface(snapshot);
         } else {
-            let copied_capture = copy_plan.is_some_and(|plan| {
-                backend.copy_texture_region_to_target(
-                    target,
-                    plan.source_origin,
-                    &effect_target,
-                    plan.size,
-                )
-            });
+            let copied_capture = copy_backdrop_capture(
+                backend,
+                target,
+                copy_plan.as_ref(),
+                &effect_target,
+                replay.as_ref(),
+            )?;
             if !copied_capture {
                 copy_projective_backdrop_inputs_to_view(
                     backend,
@@ -6916,6 +7085,7 @@ pub(crate) fn apply_backdrop_layer_to_target<B: SurfaceExecutionBackend>(
         root_scale,
         input_content_hash,
         false,
+        None,
     )? {
         if backdrop_diag_enabled() {
             eprintln!(
