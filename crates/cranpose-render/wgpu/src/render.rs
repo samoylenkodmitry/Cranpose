@@ -106,7 +106,7 @@ use crate::{
     },
     shaders,
     surface_executor::{
-        DevicePixelBounds, LayerSurfaceTexture, SurfaceExecutionBackend,
+        CacheAdmission, DevicePixelBounds, LayerSurfaceTexture, SurfaceExecutionBackend,
         apply_backdrop_layer_to_target as execute_apply_backdrop_layer_to_target,
         axis_aligned_quad_rect, backdrop_underlay_is_covered_by_local_content,
         canonicalize_device_coordinate, canonicalized_scaled_quad, canonicalized_scaled_rect,
@@ -228,6 +228,10 @@ const HARD_MAX_BUFFER_MB: usize = 64;
 const MAX_SHADOW_SURFACE_CACHE_ITEMS: usize = 512;
 const MAX_SHADOW_SURFACE_CACHE_BYTES: u64 = 384 * 1024 * 1024;
 
+fn underlay_bake_switch() -> bool {
+    crate::debug_toggles::debug_toggle("CRANPOSE_DISABLE_UNDERLAY_BAKE").is_none()
+}
+
 fn skip_shadow_draws() -> bool {
     crate::debug_toggles::debug_toggle("CRANPOSE_SKIP_SHADOWS")
         .map(|v| matches!(v.as_str(), "1" | "true" | "yes"))
@@ -302,31 +306,32 @@ pub(crate) fn should_log_wgpu_render_stage(start: Instant, end: Instant) -> Opti
 
 fn admit_layer_surface_cache_miss_impl(
     key: &LayerRasterCacheKey,
-    observed_scene_range_misses: &mut BoundedLruCache<LayerRasterCacheKey, ()>,
+    observed_misses: &mut BoundedLruCache<LayerRasterCacheKey, ()>,
+    admission: CacheAdmission,
 ) -> bool {
-    if !key.is_scene_range() {
+    if admission == CacheAdmission::Immediate {
         return true;
     }
-    if observed_scene_range_misses.contains(key) {
+    if observed_misses.contains(key) {
         return true;
     }
-    observed_scene_range_misses.put(*key, ());
+    observed_misses.put(*key, ());
     false
 }
 
 #[cfg(test)]
-fn first_cache_miss_admission(key: &LayerRasterCacheKey) -> bool {
-    let mut observed_scene_range_misses =
+fn first_cache_miss_admission(key: &LayerRasterCacheKey, admission: CacheAdmission) -> bool {
+    let mut observed_misses =
         BoundedLruCache::with_capacity_at_least_one(MAX_OBSERVED_SCENE_RANGE_CACHE_MISSES);
-    admit_layer_surface_cache_miss_impl(key, &mut observed_scene_range_misses)
+    admit_layer_surface_cache_miss_impl(key, &mut observed_misses, admission)
 }
 
 #[cfg(test)]
-fn repeated_cache_miss_admission(key: &LayerRasterCacheKey) -> bool {
-    let mut observed_scene_range_misses =
+fn repeated_cache_miss_admission(key: &LayerRasterCacheKey, admission: CacheAdmission) -> bool {
+    let mut observed_misses =
         BoundedLruCache::with_capacity_at_least_one(MAX_OBSERVED_SCENE_RANGE_CACHE_MISSES);
-    let _ = admit_layer_surface_cache_miss_impl(key, &mut observed_scene_range_misses);
-    admit_layer_surface_cache_miss_impl(key, &mut observed_scene_range_misses)
+    let _ = admit_layer_surface_cache_miss_impl(key, &mut observed_misses, admission);
+    admit_layer_surface_cache_miss_impl(key, &mut observed_misses, admission)
 }
 
 pub static PRESENTED_FRAMES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -5022,6 +5027,8 @@ pub struct GpuRenderer {
     effect_renderer: EffectRenderer,
     layer_surface_cache: LayerSurfaceCache,
     observed_scene_range_cache_misses: BoundedLruCache<LayerRasterCacheKey, ()>,
+    observed_surface_cache_misses: BoundedLruCache<LayerRasterCacheKey, ()>,
+    underlay_bake_enabled: bool,
     shadow_surface_cache: BoundedLruCache<ShadowSurfaceCacheKey, CachedShadowSurface>,
     shadow_surface_cache_bytes: u64,
     frame_stats: gpu_stats::FrameStats,
@@ -5218,8 +5225,7 @@ fn layer_raster_cache_candidate(
     let runtime_cache_is_safe = allow_runtime_cache
         && surface_requirements
             .surface_requirements
-            .has_isolating_requirement()
-        && !surface_requirements.contains_runtime_shader;
+            .has_isolating_requirement();
     let cache_is_allowed = layer.cache_policy == CachePolicy::Auto
         || (allow_runtime_cache && surface_requirements.has_renderer_forced_surface())
         || runtime_cache_is_safe;
@@ -5227,9 +5233,6 @@ fn layer_raster_cache_candidate(
         return None;
     }
     if layer_uses_external_backdrop_input(layer, has_backdrop_underlay) {
-        return None;
-    }
-    if surface_requirements.contains_runtime_shader {
         return None;
     }
 
@@ -5708,6 +5711,10 @@ impl GpuRenderer {
             observed_scene_range_cache_misses: BoundedLruCache::with_capacity_at_least_one(
                 MAX_OBSERVED_SCENE_RANGE_CACHE_MISSES,
             ),
+            observed_surface_cache_misses: BoundedLruCache::with_capacity_at_least_one(
+                MAX_OBSERVED_SCENE_RANGE_CACHE_MISSES,
+            ),
+            underlay_bake_enabled: underlay_bake_switch(),
             shadow_surface_cache: BoundedLruCache::with_capacity_at_least_one(
                 MAX_SHADOW_SURFACE_CACHE_ITEMS,
             ),
@@ -6366,8 +6373,17 @@ impl GpuRenderer {
         self.layer_surface_cache.get(key, &self.frame_stats)
     }
 
-    fn admit_layer_surface_cache_miss(&mut self, key: &LayerRasterCacheKey) -> bool {
-        admit_layer_surface_cache_miss_impl(key, &mut self.observed_scene_range_cache_misses)
+    fn admit_layer_surface_cache_miss(
+        &mut self,
+        key: &LayerRasterCacheKey,
+        admission: CacheAdmission,
+    ) -> bool {
+        let observed = if key.is_scene_range() {
+            &mut self.observed_scene_range_cache_misses
+        } else {
+            &mut self.observed_surface_cache_misses
+        };
+        admit_layer_surface_cache_miss_impl(key, observed, admission)
     }
 
     fn insert_cached_layer_surface(
@@ -7245,8 +7261,16 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
         self.renderer.cached_layer_surface(key)
     }
 
-    fn admit_layer_surface_cache_miss(&mut self, key: &LayerRasterCacheKey) -> bool {
-        self.renderer.admit_layer_surface_cache_miss(key)
+    fn admit_layer_surface_cache_miss(
+        &mut self,
+        key: &LayerRasterCacheKey,
+        admission: CacheAdmission,
+    ) -> bool {
+        self.renderer.admit_layer_surface_cache_miss(key, admission)
+    }
+
+    fn underlay_bake_enabled(&self) -> bool {
+        self.renderer.underlay_bake_enabled
     }
 
     fn insert_cached_layer_surface(
@@ -8288,6 +8312,10 @@ impl GpuRenderer {
         self.last_frame_stats
     }
 
+    pub fn set_underlay_bake_enabled(&mut self, enabled: bool) {
+        self.underlay_bake_enabled = enabled && underlay_bake_switch();
+    }
+
     pub fn gpu_pass_timings(&self) -> crate::pass_timing::GpuPassTimingReport {
         self.frame_graph_executor.pass_timing_report()
     }
@@ -8694,7 +8722,8 @@ impl GpuRenderer {
             LayerSurfaceRequest {
                 root_scale,
                 backdrop_underlay: None,
-                backdrop_underlay_color: None,
+                backdrop_underlay_identity: None,
+                bake_underlay: false,
                 allow_runtime_cache: false,
                 logical_rect_override: Some(viewport_rect),
                 capture_clip_override: None,
@@ -16143,11 +16172,11 @@ mod tests {
         );
 
         assert!(
-            !first_cache_miss_admission(&key),
+            !first_cache_miss_admission(&key, CacheAdmission::OnRepeat),
             "a small scene-range miss should render directly first instead of materializing a tiny one-frame retained target"
         );
         assert!(
-            repeated_cache_miss_admission(&key),
+            repeated_cache_miss_admission(&key, CacheAdmission::OnRepeat),
             "a repeated small scene-range miss is stable enough to materialize into the retained cache"
         );
     }
@@ -16167,11 +16196,11 @@ mod tests {
         );
 
         assert!(
-            !first_cache_miss_admission(&key),
+            !first_cache_miss_admission(&key, CacheAdmission::OnRepeat),
             "a large first scene-range miss should render directly instead of materializing a multi-MB one-frame cache entry"
         );
         assert!(
-            repeated_cache_miss_admission(&key),
+            repeated_cache_miss_admission(&key, CacheAdmission::OnRepeat),
             "a repeated scene-range miss is stable enough to materialize into the retained cache"
         );
     }
@@ -16235,8 +16264,16 @@ mod tests {
         );
 
         assert!(
-            first_cache_miss_admission(&key),
-            "ordinary retained layer surfaces should still cache on first miss"
+            first_cache_miss_admission(&key, CacheAdmission::Immediate),
+            "ordinary retained layer surfaces cache on first miss"
+        );
+        assert!(
+            !first_cache_miss_admission(&key, CacheAdmission::OnRepeat),
+            "a surface whose content can change every frame waits for a repeat sighting"
+        );
+        assert!(
+            repeated_cache_miss_admission(&key, CacheAdmission::OnRepeat),
+            "the repeat sighting admits the surface"
         );
     }
 
@@ -19094,7 +19131,7 @@ mod tests {
     }
 
     #[test]
-    fn layer_raster_cache_candidate_rejects_runtime_shader_child_effect_surfaces() {
+    fn layer_raster_cache_candidate_allows_runtime_shader_child_effect_surfaces() {
         let mut layer = test_layer(
             Rect {
                 x: 0.0,
@@ -19111,8 +19148,8 @@ mod tests {
         layer.recompute_raster_cache_hashes();
 
         assert!(
-            layer_raster_cache_candidate(&layer, 1.0, false, true).is_none(),
-            "runtime shaders must not fill the retained layer cache with per-frame uniform variants"
+            layer_raster_cache_candidate(&layer, 1.0, false, true).is_some(),
+            "a runtime shader hashes its uniforms into the content hash, so its surface is cacheable"
         );
     }
 

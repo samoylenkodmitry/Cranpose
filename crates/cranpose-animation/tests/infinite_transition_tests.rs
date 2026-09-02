@@ -425,3 +425,116 @@ fn infinite_transition_conditional_cycle_does_not_leak_slots() {
         final_slots.len(),
     );
 }
+
+#[test]
+fn respec_animation_keeps_advancing_after_its_readers_leave_and_return() {
+    let mut composition = Composition::new(MemoryApplier::new());
+    let runtime = composition.runtime_handle();
+    let root_key = location_key(file!(), line!(), column!());
+    let detail = MutableState::with_runtime(false, runtime.clone());
+    let rotation_slot = Rc::new(RefCell::new(None::<State<f32>>));
+    let sheen_slot = Rc::new(RefCell::new(None::<State<f32>>));
+
+    let mut render = {
+        let rotation_slot = Rc::clone(&rotation_slot);
+        let sheen_slot = Rc::clone(&sheen_slot);
+        move || {
+            let rotation_slot = Rc::clone(&rotation_slot);
+            let sheen_slot = Rc::clone(&sheen_slot);
+            with_current_composer(|composer| {
+                composer.with_group(location_key(file!(), line!(), column!()), |_composer| {
+                    let transition = rememberInfiniteTransition("ambient");
+                    let spec = if detail.get() {
+                        AnimationSpec::linear(48_000)
+                    } else {
+                        AnimationSpec::stepped(48_000, 960)
+                    };
+                    let rotation = transition.animateFloat(
+                        0.0,
+                        1.0,
+                        infiniteRepeatable(spec, RepeatMode::Restart, StartOffset::default()),
+                        "rotation",
+                    );
+                    let sheen = transition.animateFloat(
+                        0.0,
+                        1.0,
+                        infiniteRepeatable(
+                            AnimationSpec::stepped(5_200, 104),
+                            RepeatMode::Reverse,
+                            StartOffset::default(),
+                        ),
+                        "sheen",
+                    );
+                    rotation_slot.borrow_mut().replace(rotation);
+                    sheen_slot.borrow_mut().replace(sheen);
+                });
+            });
+        }
+    };
+    composition
+        .render(root_key, &mut render)
+        .expect("initial render");
+    runtime.drain_ui();
+    drain_all(&mut composition).expect("initial drain");
+
+    let rotation = || rotation_slot.borrow().as_ref().expect("rotation").get();
+    let sheen = || sheen_slot.borrow().as_ref().expect("sheen").get();
+    let observer = SnapshotStateObserver::new(|callback| callback());
+    let subscribe = |observer: &SnapshotStateObserver| {
+        observer.observe_reads((), |_| {}, || (rotation(), sheen()));
+    };
+    subscribe(&observer);
+    runtime.drain_ui();
+    composition
+        .render(root_key, &mut render)
+        .expect("subscriber render");
+    drain_all(&mut composition).expect("subscriber drain");
+
+    let mut time = 0u64;
+    let mut advance = |composition: &mut Composition<MemoryApplier>, frames: u32| {
+        for _ in 0..frames {
+            time += 16_666_667;
+            runtime.drain_frame_callbacks(time);
+            runtime.drain_ui();
+            drain_all(composition).expect("drain after frame");
+        }
+    };
+
+    advance(&mut composition, 120);
+    assert!(rotation() > 0.0, "rotation must run while it is read");
+
+    detail.set(true);
+    composition
+        .render(root_key, &mut render)
+        .expect("detail render");
+    drain_all(&mut composition).expect("detail drain");
+    advance(&mut composition, 180);
+    detail.set(false);
+    composition
+        .render(root_key, &mut render)
+        .expect("list render");
+    drain_all(&mut composition).expect("list drain");
+    advance(&mut composition, 180);
+    assert!(
+        rotation() > 0.0,
+        "rotation must run after its spec changes back"
+    );
+
+    observer.clear_all();
+    advance(&mut composition, 30);
+    subscribe(&observer);
+    runtime.drain_ui();
+    composition
+        .render(root_key, &mut render)
+        .expect("return render");
+    drain_all(&mut composition).expect("return drain");
+    advance(&mut composition, 60);
+    let after_return = rotation();
+    advance(&mut composition, 60);
+    let later = rotation();
+
+    assert!(
+        later > after_return && after_return > 0.0,
+        "a re-specced animation must keep advancing once its readers return: {after_return} -> {later}"
+    );
+}

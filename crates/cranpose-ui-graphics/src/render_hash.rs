@@ -241,6 +241,11 @@ fn hash_color_filter<H: Hasher>(filter: ColorFilter, state: &mut H) {
 fn hash_runtime_shader<H: Hasher>(shader: &RuntimeShader, state: &mut H) {
     shader.source_hash().hash(state);
     hash_f32_bits(shader.input_padding(), state);
+    hash_f32_bits(shader.output_padding(), state);
+    shader.uniforms().len().hash(state);
+    for uniform in shader.uniforms() {
+        hash_f32_bits(*uniform, state);
+    }
 }
 
 fn hash_render_effect<H: Hasher>(effect: &RenderEffect, state: &mut H) {
@@ -519,17 +524,23 @@ mod tests {
     }
 
     #[test]
-    fn runtime_shader_render_hash_ignores_uniforms() {
+    fn runtime_shader_render_hash_tracks_uniforms() {
         let mut base = RuntimeShader::new("// hash");
         base.set_float(0, 1.0);
+        let same = base.clone();
         let mut changed = base.clone();
         changed.set_float(0, 2.0);
         assert_eq!(
             base.render_hash(),
+            same.render_hash(),
+            "equal source and uniforms hash equally"
+        );
+        assert_ne!(
+            base.render_hash(),
             changed.render_hash(),
-            "render_hash must depend only on source, not uniforms — \
-             animated uniforms (time, position) would otherwise produce a \
-             new effect_hash every frame, filling the layer cache with stale textures"
+            "a uniform change is a pixel change: a surface that bakes this shader \
+             must miss the layer cache, and the cache admits repeating keys only, \
+             so per-frame uniforms never fill it with stale textures"
         );
     }
 

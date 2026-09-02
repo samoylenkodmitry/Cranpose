@@ -3,7 +3,8 @@ mod geometry;
 mod render_paths;
 
 pub(crate) use backend::{
-    CachedLayerSurface, DevicePixelBounds, LayerSurfaceTexture, SurfaceExecutionBackend,
+    CacheAdmission, CachedLayerSurface, DevicePixelBounds, LayerSurfaceTexture,
+    SurfaceExecutionBackend,
 };
 pub(crate) use geometry::{
     axis_aligned_quad_rect, canonicalize_device_coordinate, canonicalized_scaled_quad,

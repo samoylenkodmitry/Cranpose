@@ -544,11 +544,11 @@ fn first_child_composite_consumes_pending_clear_load_op() {
         )
         .expect("nested underlay branch must initialize target before child capture");
     let nested_underlay_end = source[nested_underlay_start..]
-        .find("let child_underlay = child.needs_nested_underlay.then")
+        .find("let underlay = sample_child_underlay(")
         .map(|offset| nested_underlay_start + offset)
         .expect("nested underlay capture should follow target initialization");
     let nested_underlay_body = &source[nested_underlay_start..nested_underlay_end];
-    let backdrop_body = block_after(&source, "if let Some(backdrop) = &child_surface.backdrop");
+    let backdrop_body = block_after(&source, "if let Some(backdrop) = &child.backdrop");
     let shadow_body = block_after(&source, "if !resolved_child.shadow_draws.is_empty()");
     assert!(
         nested_underlay_body.contains("flush_pending_clear")

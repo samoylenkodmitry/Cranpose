@@ -643,6 +643,16 @@ path = "robot-runners/robot_pressed_state.rs"
 required-features = ["robot-app"]
 
 [[example]]
+name = "robot_nested_glass_cache"
+path = "robot-runners/robot_nested_glass_cache.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_nested_glass_animated"
+path = "robot-runners/robot_nested_glass_animated.rs"
+required-features = ["robot-app"]
+
+[[example]]
 name = "robot_reactive_handle_copy"
 path = "robot-runners/robot_reactive_handle_copy.rs"
 required-features = ["robot-app"]

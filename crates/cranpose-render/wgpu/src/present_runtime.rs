@@ -1,6 +1,6 @@
 use std::{
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{
             Receiver, RecvTimeoutError, Sender, SyncSender, TryRecvError, TrySendError, channel,
@@ -77,6 +77,7 @@ pub(crate) enum PresentMsg {
 
 #[derive(Default)]
 pub(crate) struct PresentStatus {
+    pub(crate) last_frame_stats: Mutex<Option<crate::gpu_stats::FrameStatsSnapshot>>,
     pub(crate) needs_frame_warmup: AtomicBool,
     pub(crate) replay_supported: AtomicBool,
     pub(crate) presented_frames: AtomicU64,
@@ -513,6 +514,12 @@ impl PresentState {
     }
 
     fn finish_returns(&mut self, returns: RenderReturns) {
+        *self
+            .status
+            .last_frame_stats
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+            self.gpu_renderer.last_frame_stats();
         self.status
             .needs_frame_warmup
             .store(self.gpu_renderer.needs_frame_warmup(), Ordering::Relaxed);

@@ -46,6 +46,7 @@ use crate::{
         BackdropLayer, CompositorScene, DrawOp, DrawOpKind, DrawShape, EffectLayer, ImageDraw,
         SceneBrush, ShadowDraw, SnapAnchor, TextDraw,
     },
+    surface_executor::CacheAdmission,
     surface_plan::{
         LayerSurfaceRenderOptions, LayerSurfaceRequest, TranslatedContentAxes,
         TranslationRenderContext, composite_sample_mode_for_effect_layer,
@@ -84,6 +85,18 @@ fn record_layer_cache_miss<B: SurfaceExecutionBackend>(
         log::warn!("[layer-cache-diag] miss site={site} key={key:?}");
     }
     backend.record_layer_cache_miss(key, width, height);
+}
+
+/// Measurement ablation: `CRANPOSE_ABLATE_BACKDROPS` skips every backdrop
+/// effect (capture, blur and shader alike) so an A/B of present time isolates
+/// what live glass costs on a device without GPU timestamp queries. Mirrored
+/// as `debug.cranpose.ablate_backdrops` on Android.
+fn ablate_backdrops() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        crate::debug_toggles::debug_toggle("CRANPOSE_ABLATE_BACKDROPS")
+            .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "yes"))
+    })
 }
 
 fn direct_scene_range_cache_enabled() -> bool {
@@ -566,7 +579,6 @@ pub(crate) fn uniform_underlay_color_before(
     z_end: usize,
     rect: Rect,
     root_scale: f32,
-    inherited: Option<u32>,
 ) -> Option<u32> {
     if rect.width <= 0.0 || rect.height <= 0.0 {
         return None;
@@ -606,7 +618,56 @@ pub(crate) fn uniform_underlay_color_before(
         return Some(solid_color_bits(color));
     }
 
-    inherited
+    None
+}
+
+/// Identity of the pixels a nested backdrop reads from its parent's target
+/// under `rect`: a uniform colour when the prefix is one opaque solid (so the
+/// identity survives translation), otherwise the hash of every prefix writer
+/// intersecting `rect` together with `rect` itself, because the same writers
+/// put different pixels under a rect that moved, mixed with the parent's own
+/// underlay identity. `None` when the parent reads an underlay whose identity
+/// is unknown, which keeps a surface that bakes such pixels out of the cache.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn underlay_identity_before(
+    scene: &CompositorScene,
+    prior_child_contributions: &[BackdropPrefixChildContribution],
+    z_end: usize,
+    rect: Rect,
+    target_size: (u32, u32),
+    root_scale: f32,
+    inherited: Option<u64>,
+    has_inherited_underlay: bool,
+) -> Option<u64> {
+    if has_inherited_underlay && inherited.is_none() {
+        return None;
+    }
+    if rect.width <= 0.0 || rect.height <= 0.0 {
+        return None;
+    }
+    let mut hasher = FxHasher::default();
+    0x0BD5_1DEDu64.hash(&mut hasher);
+    inherited.hash(&mut hasher);
+    match uniform_underlay_color_before(scene, prior_child_contributions, z_end, rect, root_scale) {
+        Some(color) => {
+            0u8.hash(&mut hasher);
+            color.hash(&mut hasher);
+        }
+        None => {
+            1u8.hash(&mut hasher);
+            hash_rect(rect, &mut hasher);
+            backdrop_scene_prefix_hash(
+                scene,
+                prior_child_contributions,
+                z_end,
+                rect,
+                target_size,
+                root_scale,
+            )
+            .hash(&mut hasher);
+        }
+    }
+    Some(hasher.finish())
 }
 
 fn solid_color_bits(color: Color) -> u32 {
@@ -1505,6 +1566,205 @@ fn flush_underlay_composite_batch<B: SurfaceExecutionBackend>(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// A child composited with alpha one, `SrcOver`, no group effect and no snap
+/// can be rendered on top of the pixels beneath it: `underlay ∘ content`
+/// composited over `underlay` is `content` composited over `underlay` at
+/// every pixel, mask coverage included, so the surface may bake its underlay.
+fn child_composites_plainly(child: &ChildLayerComposite) -> bool {
+    child.isolation.as_ref().is_none_or(|isolation| {
+        isolation.effect.is_none()
+            && isolation.blend_mode == BlendMode::SrcOver
+            && isolation.composite_alpha == 1.0
+    }) && !child.has_effect
+}
+
+/// A snapped surface rendered at the target's own scale lands on whole
+/// device pixels, and its quad then covers exactly its own texels: the
+/// composite is a copy instead of a per-frame resample of every card, and the
+/// underlay copy beneath it is the pixels the composite will replace.
+fn texel_aligned_dest_quad(
+    dest_quad: [[f32; 2]; 4],
+    surface_size: (u32, u32),
+    snap_anchor: Option<SnapAnchor>,
+    surface_scale: f32,
+    target_scale: f32,
+) -> [[f32; 2]; 4] {
+    let whole_pixel_snap = snap_anchor.is_some_and(|anchor| anchor.device_pixel_step == 1.0);
+    if !whole_pixel_snap || (surface_scale - target_scale).abs() > 1e-6 {
+        return dest_quad;
+    }
+    let Some(rect) = axis_aligned_quad_rect(dest_quad) else {
+        return dest_quad;
+    };
+    let on_device_pixels = |value: f32| (value - value.round()).abs() <= 1e-3;
+    let (width, height) = (surface_size.0 as f32, surface_size.1 as f32);
+    if !on_device_pixels(rect.x)
+        || !on_device_pixels(rect.y)
+        || (rect.width - width).abs() >= 1.0
+        || (rect.height - height).abs() >= 1.0
+    {
+        return dest_quad;
+    }
+    crate::rect_to_quad(Rect {
+        x: rect.x.round(),
+        y: rect.y.round(),
+        width,
+        height,
+    })
+}
+
+/// The device pixel the child's surface origin lands on once its composite
+/// is anchored and snapped exactly as the composite will be, or `None` when
+/// the composite is not a whole-pixel translation of the surface.
+fn baked_underlay_device_origin(
+    child: &ChildLayerComposite,
+    logical_rect: Rect,
+    dest_quad: [[f32; 2]; 4],
+    snap_anchor: Option<SnapAnchor>,
+    composite_snap_origin: Option<Point>,
+    scale: f32,
+    translation_context: TranslationRenderContext,
+) -> Option<(u32, u32)> {
+    let translated_content_context = translation_context.inherited_content_translation
+        || child.translated_content_context
+        || child.surface_requirements.contains_translated_content;
+    let sample_mode = composite_sample_mode_for_requirements(
+        translated_content_context,
+        translation_context.surface_capture_active,
+        child.surface_requirements,
+    );
+    let device_quad = anchored_composite_dest_quad(
+        layer_surface_dest_quad(logical_rect, dest_quad, logical_rect),
+        snap_anchor,
+        composite_snap_origin,
+        scale,
+        sample_mode,
+    );
+    let (width, height) = surface_target_size(logical_rect, scale, u32::MAX);
+    let device_quad =
+        texel_aligned_dest_quad(device_quad, (width, height), snap_anchor, scale, scale);
+    let device_rect = axis_aligned_quad_rect(device_quad)?;
+    let on_device_pixels = |value: f32| value >= 0.0 && (value - value.round()).abs() <= 1e-3;
+    let whole_translation = on_device_pixels(device_rect.x)
+        && on_device_pixels(device_rect.y)
+        && (device_rect.width - width as f32).abs() <= 1e-3
+        && (device_rect.height - height as f32).abs() <= 1e-3;
+    whole_translation.then(|| (device_rect.x.round() as u32, device_rect.y.round() as u32))
+}
+
+struct ChildUnderlayPlacement {
+    logical_rect: Rect,
+    dest_quad: [[f32; 2]; 4],
+    snapped_dest_quad: [[f32; 2]; 4],
+    snap_anchor: Option<SnapAnchor>,
+    composite_snap_origin: Option<Point>,
+}
+
+struct ChildUnderlay {
+    target: OffscreenTarget,
+    baked: bool,
+}
+
+/// The pixels beneath a child that carries nested backdrops, sampled from the
+/// parent target once everything below the child, its own backdrop included,
+/// has been flushed into it. A whole-pixel translated child gets a verbatim
+/// copy it bakes as its surface's base; any other placement gets a projected
+/// resample its nested captures read through.
+#[allow(clippy::too_many_arguments)]
+fn sample_child_underlay<B: SurfaceExecutionBackend>(
+    backend: &mut B,
+    parent_target: &OffscreenTarget,
+    parent_underlay: Option<&OffscreenTarget>,
+    child: &ChildLayerComposite,
+    placement: ChildUnderlayPlacement,
+    underlay_identity: Option<u64>,
+    parent_scale: f32,
+    translation_context: TranslationRenderContext,
+) -> ChildUnderlay {
+    let child_scale = child_surface_target_scale(child, parent_scale, translation_context);
+    let device_origin = (backend.underlay_bake_enabled()
+        && parent_underlay.is_none()
+        && underlay_identity.is_some()
+        && child_composites_plainly(child)
+        && (child_scale - parent_scale).abs() <= 1e-6)
+        .then(|| {
+            baked_underlay_device_origin(
+                child,
+                placement.logical_rect,
+                placement.dest_quad,
+                placement.snap_anchor,
+                placement.composite_snap_origin,
+                parent_scale,
+                translation_context,
+            )
+        })
+        .flatten();
+    if backdrop_diag_enabled() {
+        eprintln!(
+            "[backdrop-diag] underlay node={:?} plain={} identity={} device_origin={:?}",
+            child.node_id,
+            child_composites_plainly(child),
+            underlay_identity.is_some(),
+            device_origin,
+        );
+    }
+    if let Some(target) = device_origin.and_then(|origin| {
+        copy_child_underlay(
+            backend,
+            parent_target,
+            origin,
+            placement.logical_rect,
+            parent_scale,
+        )
+    }) {
+        return ChildUnderlay {
+            target,
+            baked: true,
+        };
+    }
+    let target = create_projected_child_underlay(
+        backend,
+        parent_target,
+        parent_underlay,
+        placement.logical_rect,
+        placement.snapped_dest_quad,
+        parent_scale,
+        child_scale,
+        underlay_sample_rect(&child.source),
+    );
+    ChildUnderlay {
+        target,
+        baked: false,
+    }
+}
+
+/// Copies the device pixels the child's surface will be composited onto out
+/// of `source` into a fresh surface of the child's size, the exact pixels a
+/// re-render of the prefix under the child would produce once everything
+/// below it has been flushed into `source`. `None` when the copy would leave
+/// the source, in which case the caller re-renders instead.
+fn copy_child_underlay<B: SurfaceExecutionBackend>(
+    backend: &mut B,
+    source: &OffscreenTarget,
+    origin: (u32, u32),
+    logical_rect: Rect,
+    scale: f32,
+) -> Option<OffscreenTarget> {
+    let (width, height) = surface_target_size(logical_rect, scale, backend.max_texture_dim());
+    if origin.0.saturating_add(width) > source.width
+        || origin.1.saturating_add(height) > source.height
+    {
+        return None;
+    }
+    let underlay = backend.acquire_frame_surface(width, height);
+    if backend.copy_texture_region_to_target(source, origin, &underlay, (width, height)) {
+        Some(underlay)
+    } else {
+        backend.release_frame_surface(underlay);
+        None
+    }
+}
+
 fn create_direct_root_child_underlay<B: SurfaceExecutionBackend>(
     backend: &mut B,
     local_scene: &CompositorScene,
@@ -2192,41 +2452,8 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
                 )?;
             }
 
-            let child_underlay = if child.needs_nested_underlay {
-                Some(create_direct_root_child_underlay(
-                    backend,
-                    &local_scene,
-                    resolved_child.logical_rect,
-                    resolved_child.dest_quad,
-                    child.z_index,
-                    &pending_composites,
-                    root_scale,
-                )?)
-            } else {
-                None
-            };
-
-            let child_surface_result = render_layer_surface(
-                backend,
-                &mut child,
-                LayerSurfaceRequest {
-                    root_scale,
-                    backdrop_underlay: child_underlay.as_ref(),
-                    backdrop_underlay_color: None,
-                    allow_runtime_cache: true,
-                    logical_rect_override: Some(resolved_child.logical_rect),
-                    capture_clip_override: resolved_child.surface_clip,
-                    activates_nested_capture: true,
-                    translation_context: TranslationRenderContext::default(),
-                },
-            );
-            if let Some(underlay) = child_underlay {
-                backend.release_frame_surface(underlay);
-            }
-            let child_surface = child_surface_result?;
-            if let Some(backdrop) = child_surface.backdrop.clone() {
+            if let Some(backdrop) = child.backdrop.clone() {
                 let Some(root_target) = root_target else {
-                    backend.release_layer_surface_target(child_surface.target);
                     return Err(
                         "root direct path does not support backdrop child surfaces".to_string()
                     );
@@ -2348,6 +2575,88 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
                     }
                 }
             }
+            let child_underlay_identity = child
+                .needs_nested_underlay
+                .then(|| {
+                    underlay_identity_before(
+                        &local_scene,
+                        &prior_child_contributions,
+                        child.z_index,
+                        axis_aligned_quad_rect(resolved_child.dest_quad)?,
+                        (width, height),
+                        root_scale,
+                        None,
+                        false,
+                    )
+                })
+                .flatten();
+            let mut bake_underlay = false;
+            let child_underlay = if child.needs_nested_underlay {
+                Some(match root_target {
+                    Some(root_target) => {
+                        flush_pending_composite_queues_fused(
+                            backend,
+                            &mut pending_composites,
+                            &mut pending_composite_load_op,
+                            &mut pending_shader_composites,
+                            &mut pending_shader_load_op,
+                            surface_view,
+                            (width, height),
+                            &mut next_load_op,
+                        )?;
+                        flush_pending_clear(backend, surface_view, &mut next_load_op);
+                        let underlay = sample_child_underlay(
+                            backend,
+                            root_target,
+                            None,
+                            &child,
+                            ChildUnderlayPlacement {
+                                logical_rect: resolved_child.logical_rect,
+                                dest_quad: resolved_child.dest_quad,
+                                snapped_dest_quad: child_dest_quad,
+                                snap_anchor: resolved_child.snap_anchor,
+                                composite_snap_origin: resolved_child.composite_snap_origin,
+                            },
+                            child_underlay_identity,
+                            root_scale,
+                            TranslationRenderContext::default(),
+                        );
+                        bake_underlay = underlay.baked;
+                        underlay.target
+                    }
+                    None => create_direct_root_child_underlay(
+                        backend,
+                        &local_scene,
+                        resolved_child.logical_rect,
+                        resolved_child.dest_quad,
+                        child.z_index,
+                        &pending_composites,
+                        root_scale,
+                    )?,
+                })
+            } else {
+                None
+            };
+
+            let child_surface_result = render_layer_surface(
+                backend,
+                &mut child,
+                LayerSurfaceRequest {
+                    root_scale,
+                    backdrop_underlay: child_underlay.as_ref(),
+                    backdrop_underlay_identity: child_underlay_identity,
+                    bake_underlay,
+                    allow_runtime_cache: true,
+                    logical_rect_override: Some(resolved_child.logical_rect),
+                    capture_clip_override: resolved_child.surface_clip,
+                    activates_nested_capture: true,
+                    translation_context: TranslationRenderContext::default(),
+                },
+            );
+            if let Some(underlay) = child_underlay {
+                backend.release_frame_surface(underlay);
+            }
+            let child_surface = child_surface_result?;
             if child_backdrop_reads_target && !resolved_child.shadow_draws.is_empty() {
                 flush_pending_composite_queues_fused(
                     backend,
@@ -2377,11 +2686,26 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
                 root_scale,
                 child_surface.sample_mode,
             );
+            let dest_quad = texel_aligned_dest_quad(
+                dest_quad,
+                {
+                    let target = child_surface.target.target();
+                    (target.width, target.height)
+                },
+                resolved_child.snap_anchor,
+                child_surface_target_scale(&child, root_scale, TranslationRenderContext::default()),
+                root_scale,
+            );
             let scissor = child
                 .visual_clip
                 .and_then(|clip| scissor_rect_for_rect(clip, root_scale, width, height));
-            let child_prefix_contribution =
-                backdrop_prefix_child_contribution(&child, &child_surface, dest_quad, scissor);
+            let child_prefix_contribution = backdrop_prefix_child_contribution(
+                &child,
+                &child_surface,
+                dest_quad,
+                scissor,
+                child_underlay_identity,
+            );
             if child_surface.deferred_effect.is_none()
                 && axis_aligned_quad_rect(dest_quad).is_some()
             {
@@ -2559,7 +2883,8 @@ pub(crate) fn render_layer_surface<B: SurfaceExecutionBackend>(
     let LayerSurfaceRequest {
         root_scale,
         backdrop_underlay,
-        backdrop_underlay_color,
+        backdrop_underlay_identity,
+        bake_underlay,
         allow_runtime_cache,
         logical_rect_override,
         capture_clip_override,
@@ -2599,7 +2924,7 @@ pub(crate) fn render_layer_surface<B: SurfaceExecutionBackend>(
         effective_requirements,
         supported_isolation_effect,
         backdrop_underlay.is_some(),
-        backdrop_underlay_color,
+        backdrop_underlay_identity,
         allow_runtime_cache,
         logical_rect_override,
         backend.max_texture_dim(),
@@ -2624,7 +2949,12 @@ pub(crate) fn render_layer_surface<B: SurfaceExecutionBackend>(
             });
         }
         let (width, height) = cache_key.pixel_size();
-        record_layer_cache_miss(backend, "child-candidate", &cache_key, width, height);
+        let cache_candidate = backend
+            .admit_layer_surface_cache_miss(&cache_key, surface_cache_admission(child))
+            .then(|| {
+                record_layer_cache_miss(backend, "child-candidate", &cache_key, width, height);
+                (cache_key, logical_rect)
+            });
         return render_layer_surface_uncached(
             backend,
             child,
@@ -2632,9 +2962,10 @@ pub(crate) fn render_layer_surface<B: SurfaceExecutionBackend>(
             LayerSurfaceRenderOptions {
                 target_scale,
                 backdrop_underlay,
-                backdrop_underlay_color,
+                backdrop_underlay_identity,
+                bake_underlay,
                 allow_runtime_cache,
-                cache_candidate: Some((cache_key, logical_rect)),
+                cache_candidate,
                 logical_rect_override,
                 capture_clip_override,
                 composite_sample_mode,
@@ -2650,7 +2981,8 @@ pub(crate) fn render_layer_surface<B: SurfaceExecutionBackend>(
         LayerSurfaceRenderOptions {
             target_scale,
             backdrop_underlay,
-            backdrop_underlay_color,
+            backdrop_underlay_identity,
+            bake_underlay,
             allow_runtime_cache,
             cache_candidate: None,
             logical_rect_override,
@@ -2661,6 +2993,17 @@ pub(crate) fn render_layer_surface<B: SurfaceExecutionBackend>(
     )
 }
 
+/// A surface whose subtree carries a runtime shader can change every frame
+/// through uniforms alone, so it earns a cache slot only once its key repeats;
+/// every other surface caches on its first miss.
+fn surface_cache_admission(child: &ChildLayerComposite) -> CacheAdmission {
+    if child.surface_requirements.contains_runtime_shader {
+        CacheAdmission::OnRepeat
+    } else {
+        CacheAdmission::Immediate
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn child_layer_raster_cache_candidate(
     child: &ChildLayerComposite,
@@ -2668,20 +3011,17 @@ fn child_layer_raster_cache_candidate(
     effective_requirements: SurfaceRequirementSet,
     supported_isolation_effect: Option<&RenderEffect>,
     has_backdrop_underlay: bool,
-    backdrop_underlay_color: Option<u32>,
+    backdrop_underlay_identity: Option<u64>,
     allow_runtime_cache: bool,
     logical_rect_override: Option<Rect>,
     max_texture_dim: u32,
 ) -> Option<(LayerRasterCacheKey, Rect)> {
     let surface_requirements = child.surface_requirements;
-    if surface_requirements.contains_runtime_shader {
-        return None;
-    }
-
     if let Some(source) = layer_source_cache_entry(
         child,
         effective_requirements,
         has_backdrop_underlay,
+        backdrop_underlay_identity,
         allow_runtime_cache,
     ) {
         match supported_isolation_effect {
@@ -2707,8 +3047,7 @@ fn child_layer_raster_cache_candidate(
     let runtime_cache_is_safe = allow_runtime_cache
         && surface_requirements
             .surface_requirements
-            .has_isolating_requirement()
-        && !surface_requirements.contains_runtime_shader;
+            .has_isolating_requirement();
     let cache_is_allowed = child.cache_policy == CachePolicy::Auto
         || (allow_runtime_cache && surface_requirements.has_renderer_forced_surface())
         || runtime_cache_is_safe;
@@ -2716,7 +3055,7 @@ fn child_layer_raster_cache_candidate(
         return None;
     }
     let external_backdrop_input = has_backdrop_underlay && child.contains_descendant_backdrop;
-    if external_backdrop_input && backdrop_underlay_color.is_none() {
+    if external_backdrop_input && backdrop_underlay_identity.is_none() {
         return None;
     }
 
@@ -2726,11 +3065,7 @@ fn child_layer_raster_cache_candidate(
         return None;
     }
     let content_hash = if external_backdrop_input {
-        let mut hasher = FxHasher::default();
-        0xF1A7_C010u64.hash(&mut hasher);
-        child.target_content_hash.hash(&mut hasher);
-        backdrop_underlay_color.hash(&mut hasher);
-        hasher.finish()
+        content_hash_over_underlay(child.target_content_hash, backdrop_underlay_identity)
     } else {
         child.target_content_hash
     };
@@ -2847,10 +3182,19 @@ impl LayerSourceCacheEntry {
     }
 }
 
+fn content_hash_over_underlay(content_hash: u64, underlay_identity: Option<u64>) -> u64 {
+    let mut hasher = FxHasher::default();
+    0xF1A7_C010u64.hash(&mut hasher);
+    content_hash.hash(&mut hasher);
+    underlay_identity.hash(&mut hasher);
+    hasher.finish()
+}
+
 fn layer_source_cache_entry(
     child: &ChildLayerComposite,
     effective_requirements: SurfaceRequirementSet,
     has_backdrop_underlay: bool,
+    backdrop_underlay_identity: Option<u64>,
     allow_runtime_cache: bool,
 ) -> Option<LayerSourceCacheEntry> {
     let runtime_shader_source = child.effect_contains_runtime_shader;
@@ -2865,9 +3209,15 @@ fn layer_source_cache_entry(
         || allow_runtime_cache
         || child.surface_requirements.has_renderer_forced_surface()
         || motion_stable_source;
-    if !cache_is_allowed || (has_backdrop_underlay && child.contains_descendant_backdrop) {
+    let reads_external_underlay = has_backdrop_underlay && child.contains_descendant_backdrop;
+    if !cache_is_allowed || (reads_external_underlay && backdrop_underlay_identity.is_none()) {
         return None;
     }
+    let content_hash = if reads_external_underlay {
+        content_hash_over_underlay(child.target_content_hash, backdrop_underlay_identity)
+    } else {
+        child.target_content_hash
+    };
 
     Some(LayerSourceCacheEntry {
         stable_id: child.node_id,
@@ -2875,7 +3225,7 @@ fn layer_source_cache_entry(
         // but its source pixels remain live input for backdrop effects. A
         // source cache keyed without the translated content hash freezes a
         // glass pane over scrolling content.
-        collected_content_hash: Some(child.target_content_hash),
+        collected_content_hash: Some(content_hash),
     })
 }
 
@@ -2887,12 +3237,14 @@ fn layer_source_cache_key(
     pixel_size: (u32, u32),
     target_scale: f32,
     has_backdrop_underlay: bool,
+    backdrop_underlay_identity: Option<u64>,
     allow_runtime_cache: bool,
 ) -> Option<LayerRasterCacheKey> {
     let source = layer_source_cache_entry(
         child,
         effective_requirements,
         has_backdrop_underlay,
+        backdrop_underlay_identity,
         allow_runtime_cache,
     )?;
     let content_hash = source
@@ -2922,11 +3274,18 @@ fn backdrop_prefix_child_contribution(
     surface: &LayerSurface,
     dest_quad: [[f32; 2]; 4],
     scissor: Option<(u32, u32, u32, u32)>,
+    underlay_identity: Option<u64>,
 ) -> BackdropPrefixChildContribution {
+    let content_hash = match underlay_identity {
+        Some(_) if child.contains_descendant_backdrop => {
+            content_hash_over_underlay(child.target_content_hash, underlay_identity)
+        }
+        _ => child.target_content_hash,
+    };
     BackdropPrefixChildContribution {
         z_index: child.z_index,
         node_id: child.node_id,
-        content_hash: child.target_content_hash,
+        content_hash,
         effect_hash: child.effect_hash,
         backdrop_hash: surface
             .backdrop
@@ -2995,44 +3354,7 @@ fn split_backdrop_effect(effect: &RenderEffect) -> (Option<&RenderEffect>, Optio
 }
 
 fn retained_render_effect_hash(effect: &RenderEffect) -> u64 {
-    let mut hasher = FxHasher::default();
-    hash_retained_render_effect(effect, &mut hasher);
-    hasher.finish()
-}
-
-fn hash_retained_render_effect<H: Hasher>(effect: &RenderEffect, state: &mut H) {
-    match effect {
-        RenderEffect::Blur {
-            radius_x,
-            radius_y,
-            edge_treatment,
-        } => {
-            0u8.hash(state);
-            hash_f32_bits(*radius_x, state);
-            hash_f32_bits(*radius_y, state);
-            edge_treatment.hash(state);
-        }
-        RenderEffect::Offset { offset_x, offset_y } => {
-            1u8.hash(state);
-            hash_f32_bits(*offset_x, state);
-            hash_f32_bits(*offset_y, state);
-        }
-        RenderEffect::Shader { shader } => {
-            2u8.hash(state);
-            shader.source_hash().hash(state);
-            hash_f32_bits(shader.input_padding(), state);
-            hash_f32_bits(shader.output_padding(), state);
-            shader.uniforms().len().hash(state);
-            for uniform in shader.uniforms() {
-                hash_f32_bits(*uniform, state);
-            }
-        }
-        RenderEffect::Chain { first, second } => {
-            3u8.hash(state);
-            hash_retained_render_effect(first, state);
-            hash_retained_render_effect(second, state);
-        }
-    }
+    effect.render_hash()
 }
 
 fn backdrop_scene_prefix_hash(
@@ -4253,7 +4575,7 @@ fn cached_direct_scene_range_surface<B: SurfaceExecutionBackend>(
         }
         LayerSurfaceTexture::Cached(cached_target)
     } else {
-        if !backend.admit_layer_surface_cache_miss(&cache_key) {
+        if !backend.admit_layer_surface_cache_miss(&cache_key, CacheAdmission::OnRepeat) {
             if layer_render_diag_enabled() {
                 let draw_ops = scene_range_draw_op_count(scene, z_start, z_end);
                 log::warn!(
@@ -4603,7 +4925,7 @@ fn serve_or_capture_prefix_snapshot<B: SurfaceExecutionBackend>(
         return Ok(PrefixSnapshotOutcome::Served(prefix_end));
     }
 
-    if !backend.admit_layer_surface_cache_miss(&key) {
+    if !backend.admit_layer_surface_cache_miss(&key, CacheAdmission::OnRepeat) {
         return Ok(PrefixSnapshotOutcome::Claimed(prefix_end));
     }
 
@@ -4788,7 +5110,8 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
     child_layers: Vec<ChildLayerComposite>,
     target_scale: f32,
     backdrop_underlay: Option<&OffscreenTarget>,
-    underlay_color: Option<u32>,
+    underlay_identity: Option<u64>,
+    bake_underlay: bool,
     width: u32,
     height: u32,
     effective_translated_content_context: bool,
@@ -4796,8 +5119,19 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
     translation_context: TranslationRenderContext,
 ) -> Result<OffscreenTarget, String> {
     let target = backend.acquire_retained_surface(width, height);
+    let baked = bake_underlay
+        && backdrop_underlay.is_some_and(|underlay| {
+            underlay.width == width
+                && underlay.height == height
+                && backend.copy_texture_region_to_target(underlay, (0, 0), &target, (width, height))
+        });
+    let backdrop_underlay = if baked { None } else { backdrop_underlay };
     let mut cursor_z = 0usize;
-    let mut next_load_op = wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT);
+    let mut next_load_op = if baked {
+        wgpu::LoadOp::Load
+    } else {
+        wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
+    };
     let mut pending_composites = Vec::new();
     let mut pending_composite_load_op = None;
     let mut pending_shader_composites = Vec::new();
@@ -4853,12 +5187,17 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
                     &mut pending_composite_load_op,
                     &mut next_load_op,
                 );
-                let local_backdrop_hashes = scene_backdrop_input_hashes(
+                let mut local_backdrop_hashes = scene_backdrop_input_hashes(
                     local_scene,
                     &prior_child_contributions,
                     (width, height),
                     target_scale,
                 );
+                if baked {
+                    for hash in &mut local_backdrop_hashes {
+                        *hash = content_hash_over_underlay(*hash, underlay_identity);
+                    }
+                }
                 backend.render_range_with_layer_events_to_target(
                     &target,
                     &local_scene.shapes,
@@ -4924,45 +5263,7 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
             surface_capture_active: translation_context.surface_capture_active,
             local_picture_capture_active: translation_context.local_picture_capture_active,
         };
-        let child_underlay_color = child.needs_nested_underlay.then(|| {
-            uniform_underlay_color_before(
-                local_scene,
-                &prior_child_contributions,
-                child.z_index,
-                quad_bounds(child_dest_quad),
-                target_scale,
-                underlay_color,
-            )
-        });
-        let child_underlay = child.needs_nested_underlay.then(|| {
-            let sample_rect = underlay_sample_rect(&child.source);
-            create_projected_child_underlay(
-                backend,
-                &target,
-                backdrop_underlay,
-                resolved_child.logical_rect,
-                child_dest_quad,
-                target_scale,
-                child_surface_target_scale(&child, target_scale, child_translation_context),
-                sample_rect,
-            )
-        });
-        let child_surface = render_layer_surface(
-            backend,
-            &mut child,
-            LayerSurfaceRequest {
-                root_scale: target_scale,
-                backdrop_underlay: child_underlay.as_ref(),
-                backdrop_underlay_color: child_underlay_color.flatten(),
-                allow_runtime_cache: true,
-                logical_rect_override: Some(resolved_child.logical_rect),
-                capture_clip_override: resolved_child.surface_clip,
-                activates_nested_capture: true,
-                translation_context: child_translation_context,
-            },
-        )?;
-
-        let child_backdrop_capture_rect = child_surface.backdrop.as_ref().and_then(|backdrop| {
+        let child_backdrop_capture_rect = child.backdrop.as_ref().and_then(|backdrop| {
             visible_backdrop_capture_rect(
                 resolved_child.backdrop_rect,
                 child.visual_clip,
@@ -4986,7 +5287,7 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
             flush_pending_clear(backend, &target.view, &mut next_load_op);
         }
 
-        if let Some(backdrop) = &child_surface.backdrop {
+        if let Some(backdrop) = &child.backdrop {
             if let Some(dependency_rect) = backdrop_dependency_rect(
                 resolved_child.backdrop_rect,
                 child.visual_clip,
@@ -5015,14 +5316,21 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
                 effect: backdrop.clone(),
                 z_index: child.z_index,
             };
-            let backdrop_input_hash = backdrop_scene_prefix_hash(
-                local_scene,
-                &prior_child_contributions,
-                child.z_index,
-                child_backdrop_capture_rect.unwrap_or(backdrop_layer.rect),
-                (width, height),
-                target_scale,
-            );
+            let backdrop_input_hash = {
+                let local_hash = backdrop_scene_prefix_hash(
+                    local_scene,
+                    &prior_child_contributions,
+                    child.z_index,
+                    child_backdrop_capture_rect.unwrap_or(backdrop_layer.rect),
+                    (width, height),
+                    target_scale,
+                );
+                if baked {
+                    content_hash_over_underlay(local_hash, underlay_identity)
+                } else {
+                    local_hash
+                }
+            };
             let effective_backdrop_underlay = if backdrop_underlay.is_some()
                 && backdrop_underlay_is_covered_by_local_content(
                     &local_scene.shapes,
@@ -5077,6 +5385,71 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
             }
         }
 
+        let child_underlay_identity = child
+            .needs_nested_underlay
+            .then(|| {
+                underlay_identity_before(
+                    local_scene,
+                    &prior_child_contributions,
+                    child.z_index,
+                    quad_bounds(child_dest_quad),
+                    (width, height),
+                    target_scale,
+                    underlay_identity,
+                    backdrop_underlay.is_some(),
+                )
+            })
+            .flatten();
+        let mut child_bake_underlay = false;
+        let child_underlay = if child.needs_nested_underlay {
+            flush_pending_composite_queues_fused(
+                backend,
+                &mut pending_composites,
+                &mut pending_composite_load_op,
+                &mut pending_shader_composites,
+                &mut pending_shader_load_op,
+                &target.view,
+                (width, height),
+                &mut next_load_op,
+            )?;
+            flush_pending_clear(backend, &target.view, &mut next_load_op);
+            let underlay = sample_child_underlay(
+                backend,
+                &target,
+                backdrop_underlay,
+                &child,
+                ChildUnderlayPlacement {
+                    logical_rect: resolved_child.logical_rect,
+                    dest_quad: resolved_child.dest_quad,
+                    snapped_dest_quad: child_dest_quad,
+                    snap_anchor: resolved_child.snap_anchor,
+                    composite_snap_origin: resolved_child.composite_snap_origin,
+                },
+                child_underlay_identity,
+                target_scale,
+                child_translation_context,
+            );
+            child_bake_underlay = underlay.baked;
+            Some(underlay.target)
+        } else {
+            None
+        };
+        let child_surface = render_layer_surface(
+            backend,
+            &mut child,
+            LayerSurfaceRequest {
+                root_scale: target_scale,
+                backdrop_underlay: child_underlay.as_ref(),
+                backdrop_underlay_identity: child_underlay_identity,
+                bake_underlay: child_bake_underlay,
+                allow_runtime_cache: true,
+                logical_rect_override: Some(resolved_child.logical_rect),
+                capture_clip_override: resolved_child.surface_clip,
+                activates_nested_capture: true,
+                translation_context: child_translation_context,
+            },
+        )?;
+
         if !resolved_child.shadow_draws.is_empty() {
             flush_pending_shader_layer_composites(
                 backend,
@@ -5104,11 +5477,26 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
             target_scale,
             child_surface.sample_mode,
         );
+        let dest_quad = texel_aligned_dest_quad(
+            dest_quad,
+            {
+                let target = child_surface.target.target();
+                (target.width, target.height)
+            },
+            resolved_child.snap_anchor,
+            child_surface_target_scale(&child, target_scale, child_translation_context),
+            target_scale,
+        );
         let scissor = child
             .visual_clip
             .and_then(|clip| scissor_rect_for_rect(clip, target_scale, width, height));
-        let child_prefix_contribution =
-            backdrop_prefix_child_contribution(&child, &child_surface, dest_quad, scissor);
+        let child_prefix_contribution = backdrop_prefix_child_contribution(
+            &child,
+            &child_surface,
+            dest_quad,
+            scissor,
+            child_underlay_identity,
+        );
         if child_surface.deferred_effect.is_none() && axis_aligned_quad_rect(dest_quad).is_some() {
             flush_pending_shader_layer_composites(
                 backend,
@@ -5289,7 +5677,8 @@ fn render_layer_surface_uncached<B: SurfaceExecutionBackend>(
     let LayerSurfaceRenderOptions {
         target_scale,
         backdrop_underlay,
-        backdrop_underlay_color,
+        backdrop_underlay_identity,
+        bake_underlay,
         allow_runtime_cache,
         mut cache_candidate,
         logical_rect_override,
@@ -5298,6 +5687,7 @@ fn render_layer_surface_uncached<B: SurfaceExecutionBackend>(
         translation_context,
     } = options;
     let isolation = child.isolation.clone();
+    let cache_admission = surface_cache_admission(child);
     let LoweredChildSource {
         scene: mut local_scene,
         children: child_layers,
@@ -5441,6 +5831,7 @@ fn render_layer_surface_uncached<B: SurfaceExecutionBackend>(
                 (width, height),
                 target_scale,
                 source_uses_external_backdrop,
+                backdrop_underlay_identity,
                 allow_runtime_cache,
             )
         });
@@ -5470,7 +5861,9 @@ fn render_layer_surface_uncached<B: SurfaceExecutionBackend>(
             if let Some((cached_target, _)) = cached {
                 LayerSurfaceTexture::Cached(cached_target)
             } else {
-                if !source_probe_missed_upstream {
+                let admitted = source_probe_missed_upstream
+                    || backend.admit_layer_surface_cache_miss(&cache_key, cache_admission);
+                if admitted && !source_probe_missed_upstream {
                     record_layer_cache_miss(backend, "source-content", &cache_key, width, height);
                 }
                 let rendered = render_layer_source_uncached(
@@ -5479,15 +5872,17 @@ fn render_layer_surface_uncached<B: SurfaceExecutionBackend>(
                     child_layers,
                     target_scale,
                     backdrop_underlay,
-                    backdrop_underlay_color,
+                    backdrop_underlay_identity,
+                    bake_underlay,
                     width,
                     height,
                     effective_translated_content_context,
                     effective_translated_content_axes,
                     translation_context,
                 )?;
-                if offscreen_byte_size(rendered.width, rendered.height)
-                    <= MAX_LAYER_SURFACE_CACHE_BYTES
+                if admitted
+                    && offscreen_byte_size(rendered.width, rendered.height)
+                        <= MAX_LAYER_SURFACE_CACHE_BYTES
                 {
                     let cached_target =
                         backend.insert_cached_layer_surface(cache_key, rendered, surface_rect);
@@ -5503,7 +5898,8 @@ fn render_layer_surface_uncached<B: SurfaceExecutionBackend>(
                 child_layers,
                 target_scale,
                 backdrop_underlay,
-                backdrop_underlay_color,
+                backdrop_underlay_identity,
+                bake_underlay,
                 width,
                 height,
                 effective_translated_content_context,
@@ -5783,6 +6179,9 @@ fn prepare_cached_backdrop_layer_composite<B: SurfaceExecutionBackend>(
     input_content_hash: Option<u64>,
     allow_deferred_tail: bool,
 ) -> Result<Option<PreparedBackdropComposite>, String> {
+    if ablate_backdrops() {
+        return Ok(None);
+    }
     let diag = backdrop_diag_enabled();
     let (layer_rect, layer_clip) = snapped_backdrop_geometry(layer, root_scale);
     let Some(visible_rect) = visible_layer_rect(layer_rect, layer_clip, root_scale, width, height)
@@ -6019,6 +6418,9 @@ pub(crate) fn apply_backdrop_layer_to_target<B: SurfaceExecutionBackend>(
     root_scale: f32,
     input_content_hash: Option<u64>,
 ) -> Result<(), String> {
+    if ablate_backdrops() {
+        return Ok(());
+    }
     let (layer_rect, layer_clip) = snapped_backdrop_geometry(layer, root_scale);
     if backdrop_diag_enabled() {
         eprintln!(
@@ -8321,6 +8723,7 @@ mod tests {
                 (32, 24),
                 1.0,
                 false,
+                None,
                 true,
             )
             .is_some(),
@@ -8342,6 +8745,7 @@ mod tests {
                 (80, 40),
                 1.0,
                 false,
+                None,
                 true,
             )
             .is_some(),
@@ -8362,6 +8766,7 @@ mod tests {
                 (80, 40),
                 1.0,
                 true,
+                None,
                 true,
             )
             .is_some(),
@@ -8398,6 +8803,7 @@ mod tests {
                 (120, 90),
                 1.0,
                 true,
+                None,
                 true,
             ),
             None,
@@ -8467,6 +8873,7 @@ mod tests {
             (220, 96),
             1.0,
             false,
+            None,
             true,
         );
         let moved_key = layer_source_cache_key(
@@ -8476,6 +8883,7 @@ mod tests {
             (220, 96),
             1.0,
             false,
+            None,
             true,
         );
 
