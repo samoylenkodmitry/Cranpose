@@ -43,16 +43,19 @@
 //! | Call | Use it for |
 //! | --- | --- |
 //! | [`remember`] | A value computed once and not observed for changes. |
+//! | [`rememberKeyed`] | A value recomputed only when its key changes. |
 //! | [`rememberMutableStateOf`] | Observable state. |
 //! | [`rememberUpdatedState`] | A value a long-lived effect should see fresh without restarting. |
 //! | [`rememberCoroutineScope`] | A scope for work started from an event handler. |
 //! | [`mutableStateOf`] | State owned outside the composition. |
 //!
-//! Reading state outside a composable subscribes nothing. If a change does not
-//! repaint, check that the read happens inside the composable that should react
-//! to it.
+//! Reading state inside `draw_behind` or the lazy `graphics_layer` closure
+//! subscribes only that node's visual phase. Animation values read there redraw
+//! without recomposing or relaying out the composable. Reads outside an observed
+//! composition, layout, or draw phase subscribe nothing.
 //!
 //! [`remember`]: crate::prelude::remember
+//! [`rememberKeyed`]: crate::prelude::rememberKeyed
 //! [`rememberMutableStateOf`]: crate::prelude::rememberMutableStateOf
 //! [`rememberUpdatedState`]: crate::prelude::rememberUpdatedState
 //! [`rememberCoroutineScope`]: crate::prelude::rememberCoroutineScope

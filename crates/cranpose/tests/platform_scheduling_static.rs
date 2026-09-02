@@ -1400,6 +1400,35 @@ fn tick() {
 }
 
 #[test]
+fn android_properties_expose_recomposition_diagnostics() {
+    let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let source = std::fs::read_to_string(crate_dir.join("src/android_frame_telemetry.rs"))
+        .expect("read android frame telemetry source");
+
+    assert!(source.contains("(\"debug.cranpose.recomp_diag\", \"CRANPOSE_RECOMP_DIAG\")"));
+}
+
+#[test]
+fn android_presented_frames_feed_the_app_shell_monitor() {
+    let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let source = std::fs::read_to_string(crate_dir.join("src/android.rs"))
+        .expect("read Android host source");
+
+    assert!(source.contains("shell.record_presented_frame(frame_started_at, frame_finished_at);"));
+}
+
+#[test]
+fn android_presented_frame_intervals_are_ordered_without_producer_timing() {
+    let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let source = std::fs::read_to_string(crate_dir.join("src/android.rs"))
+        .expect("read Android host source");
+
+    assert!(source.contains(
+        "let frame_started_at = if frame_started_at_ns > 0 {\n            instant_at(frame_started_at_ns).min(frame_finished_at)\n        } else {\n            frame_finished_at\n        };"
+    ));
+}
+
+#[test]
 fn unsafe_code_stays_in_reviewed_platform_boundary_modules() {
     let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let source_dir = crate_dir.join("src");

@@ -703,9 +703,10 @@ fn drain_present_returns_into_loop(
     gpu_resources: &mut Option<GpuResources>,
     telemetry: &mut crate::android_frame_telemetry::AndroidFrameTelemetry,
     pending_present_timings: &mut Vec<(u64, crate::android_frame_telemetry::FrameTimings)>,
-) -> Option<web_time::Instant> {
+) -> Option<(web_time::Instant, web_time::Instant)> {
     let mut presented = false;
     let mut refused = false;
+    let mut frame_started_at_ns = 0i64;
     let mut presented_at_ns = 0i64;
     shell
         .renderer()
@@ -719,6 +720,7 @@ fn drain_present_returns_into_loop(
                     presented = true;
                     presented_at_ns = timings.after_present_ns;
                     if let Some(mut frame_timings) = producer_timings {
+                        frame_started_at_ns = frame_timings.iteration_start_ns;
                         frame_timings.after_acquire_ns = timings.after_acquire_ns;
                         frame_timings.after_render_ns = timings.after_render_ns;
                         frame_timings.after_present_ns = timings.after_present_ns;
@@ -742,14 +744,34 @@ fn drain_present_returns_into_loop(
     }
     presented.then(|| {
         let now = web_time::Instant::now();
-        let age_ns = telemetry.now().saturating_sub(presented_at_ns);
-        if presented_at_ns > 0 && age_ns > 0 {
-            now.checked_sub(Duration::from_nanos(age_ns as u64))
-                .unwrap_or(now)
+        let now_ns = telemetry.now();
+        let instant_at = |timestamp_ns: i64| {
+            let age_ns = now_ns.saturating_sub(timestamp_ns);
+            if timestamp_ns > 0 && age_ns > 0 {
+                now.checked_sub(Duration::from_nanos(age_ns as u64))
+                    .unwrap_or(now)
+            } else {
+                now
+            }
+        };
+        let frame_finished_at = instant_at(presented_at_ns);
+        let frame_started_at = if frame_started_at_ns > 0 {
+            instant_at(frame_started_at_ns).min(frame_finished_at)
         } else {
-            now
-        }
+            frame_finished_at
+        };
+        (frame_started_at, frame_finished_at)
     })
+}
+
+fn record_presented_frame(
+    shell: Option<&mut AppShell<WgpuRenderer>>,
+    frame_started_at: web_time::Instant,
+    frame_finished_at: web_time::Instant,
+) {
+    if let Some(shell) = shell {
+        shell.record_presented_frame(frame_started_at, frame_finished_at);
+    }
 }
 
 struct AndroidGpuSetup {
@@ -1677,7 +1699,7 @@ pub fn run(
             ..Default::default()
         };
 
-        let drained_present_at = match app_shell.as_mut() {
+        let drained_present_interval = match app_shell.as_mut() {
             Some(shell) => drain_present_returns_into_loop(
                 shell,
                 &mut gpu_resources,
@@ -2424,10 +2446,12 @@ pub fn run(
             frame_telemetry.note_idle_iteration();
         }
 
-        let presented_at = if frame_timings.after_present_ns != 0 {
-            Some(web_time::Instant::now())
+        let presented_interval = if frame_timings.after_present_ns != 0 {
+            let frame_finished_at = web_time::Instant::now();
+            let frame_started_at = adpf_work_started.unwrap_or(frame_finished_at);
+            Some((frame_started_at, frame_finished_at))
         } else {
-            drained_present_at
+            drained_present_interval
         };
         if adpf_sync_presented && let Some(started) = adpf_work_started {
             let reported = crate::android_frame_telemetry::vsync_period_ns();
@@ -2442,7 +2466,8 @@ pub fn run(
                 session.report(started.elapsed().as_nanos() as i64, period);
             }
         }
-        if let Some(now) = presented_at {
+        if let Some((frame_started_at, frame_finished_at)) = presented_interval {
+            record_presented_frame(app_shell.as_mut(), frame_started_at, frame_finished_at);
             behind_deadline = catchup_pacing
                 && last_present_at.is_some_and(|previous| {
                     let reported = crate::android_frame_telemetry::vsync_period_ns();
@@ -2451,10 +2476,11 @@ pub fn run(
                     } else {
                         crate::android_vsync::observed_vsync_period_ns().unwrap_or(16_666_667)
                     };
-                    now.duration_since(previous).as_nanos() as i64 > period + period / 16
+                    frame_finished_at.duration_since(previous).as_nanos() as i64
+                        > period + period / 16
                 });
             catchup_coasts = 0;
-            last_present_at = Some(now);
+            last_present_at = Some(frame_finished_at);
         } else if behind_deadline {
             catchup_coasts += 1;
             if catchup_coasts >= 3 {

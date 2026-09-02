@@ -83,6 +83,14 @@ fn effects_and_key_scope_compose_from_the_prelude_alone() {
 }
 
 #[test]
+fn keyed_remember_is_available_from_the_prelude() {
+    run_test_composition(|| {
+        let length = rememberKeyed("planet", |name| name.len());
+        assert_eq!(length, 6);
+    });
+}
+
+#[test]
 fn blocking_work_starts_from_the_prelude_alone() {
     let result = std::rc::Rc::new(std::cell::Cell::new(0u32));
     let sink = std::rc::Rc::clone(&result);

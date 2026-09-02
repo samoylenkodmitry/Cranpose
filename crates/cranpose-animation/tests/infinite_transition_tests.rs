@@ -23,6 +23,13 @@ fn drain_all(composition: &mut Composition<MemoryApplier>) -> Result<(), NodeErr
 }
 
 #[test]
+fn stepped_animation_spec_is_available_to_consumers() {
+    let spec = AnimationSpec::stepped(1_000, 4);
+
+    assert_eq!(spec.easing.transform(0.74), 0.5);
+}
+
+#[test]
 fn infinite_transition_drives_state_updates() {
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
