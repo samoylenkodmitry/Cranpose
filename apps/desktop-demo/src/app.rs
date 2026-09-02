@@ -33,7 +33,7 @@ mod markdown;
 mod mineswapper2;
 mod recomposition_lab;
 pub mod rotary;
-mod shader_rect;
+pub(crate) mod shader_rect;
 mod shaders;
 mod source_view;
 mod text_showcase;

@@ -1,29 +1,18 @@
 mod robot_exit;
 mod robot_launch;
+mod robot_pixels;
 
 use std::time::Duration;
 
-use cranpose::{Robot, RobotScreenshot};
+use cranpose::Robot;
 use desktop_app::test_screens::nested_glass_cache_repro::{
     NestedGlassAnimatedReproScreen, SCREEN_HEIGHT, SCREEN_WIDTH, SHADER_BOX_RECT,
 };
+use robot_pixels::pixel_at_logical;
 
 const SAMPLES: usize = 6;
 const FRAMES_BETWEEN_SAMPLES: u32 = 12;
 const MIN_CHANNEL_DELTA: i32 = 8;
-
-fn pixel_at_logical(screenshot: &RobotScreenshot, x: f32, y: f32) -> [u8; 4] {
-    let scale = if screenshot.logical_width.is_finite() && screenshot.logical_width > 0.0 {
-        screenshot.width as f32 / screenshot.logical_width
-    } else {
-        1.0
-    };
-    let px = ((x * scale) as u32).min(screenshot.width.saturating_sub(1));
-    let py = ((y * scale) as u32).min(screenshot.height.saturating_sub(1));
-    let index = (py as usize * screenshot.width as usize + px as usize) * 4;
-    let bytes = &screenshot.pixels[index..index + 4];
-    [bytes[0], bytes[1], bytes[2], bytes[3]]
-}
 
 fn shader_pixel(robot: &Robot) -> [u8; 4] {
     let shot = robot

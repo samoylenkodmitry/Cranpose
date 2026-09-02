@@ -1,6 +1,7 @@
 mod robot_launch;
 
 mod robot_exit;
+mod robot_pixels;
 
 use std::time::Duration;
 
@@ -10,34 +11,10 @@ use desktop_app::test_screens::pressed_state_repro::{
     PressedStateReproScreen, NORMAL_RGBA, PRESSED_RGBA, SPRITE_HEIGHT, SPRITE_OFFSET_X,
     SPRITE_OFFSET_Y, SPRITE_WIDTH,
 };
+use robot_pixels::{color_close, pixel_at_logical};
 
 const COLOR_TOLERANCE: i32 = 24;
 const SAMPLE_ATTEMPTS: usize = 20;
-
-fn physical_scale(screenshot: &cranpose::RobotScreenshot) -> f32 {
-    if screenshot.logical_width.is_finite() && screenshot.logical_width > 0.0 {
-        screenshot.width as f32 / screenshot.logical_width
-    } else {
-        1.0
-    }
-}
-
-fn pixel_at_logical(screenshot: &cranpose::RobotScreenshot, x: f32, y: f32) -> [u8; 4] {
-    let scale = physical_scale(screenshot);
-    let px = ((x * scale) as u32).min(screenshot.width.saturating_sub(1));
-    let py = ((y * scale) as u32).min(screenshot.height.saturating_sub(1));
-    let index = (py as usize * screenshot.width as usize + px as usize) * 4;
-    let bytes = &screenshot.pixels[index..index + 4];
-    [bytes[0], bytes[1], bytes[2], bytes[3]]
-}
-
-fn color_close(actual: [u8; 4], expected: [u8; 4]) -> bool {
-    actual
-        .iter()
-        .zip(expected.iter())
-        .take(3)
-        .all(|(a, e)| (*a as i32 - *e as i32).abs() <= COLOR_TOLERANCE)
-}
 
 fn wait_for_sprite_color(robot: &Robot, x: f32, y: f32, expected: [u8; 4]) -> Result<(), [u8; 4]> {
     let mut last = [0u8; 4];
@@ -46,7 +23,7 @@ fn wait_for_sprite_color(robot: &Robot, x: f32, y: f32, expected: [u8; 4]) -> Re
         let _ = robot.wait_for_idle();
         if let Some(screenshot) = capture_screenshot(robot) {
             last = pixel_at_logical(&screenshot, x, y);
-            if color_close(last, expected) {
+            if color_close(last, expected, COLOR_TOLERANCE) {
                 return Ok(());
             }
         }

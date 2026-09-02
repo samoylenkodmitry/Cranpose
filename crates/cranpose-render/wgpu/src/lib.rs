@@ -364,7 +364,6 @@ impl WgpuRenderer {
         }
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     fn sync_gpu_renderer_mut(&mut self) -> Option<&mut GpuRenderer> {
         match &mut self.backend {
             PresentBackend::Sync(gpu_renderer) => Some(gpu_renderer.as_mut()),

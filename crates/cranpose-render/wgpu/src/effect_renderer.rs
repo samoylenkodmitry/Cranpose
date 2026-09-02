@@ -1185,25 +1185,6 @@ impl EffectRenderer {
             radius_x > 0.0 || radius_y > 0.0,
             "zero-radius blur should use the composite fast path"
         );
-        if ablate_blur() {
-            self.encode_composite_to_view_pass(
-                recorder,
-                device,
-                source,
-                dest_view,
-                CompositePassOptions {
-                    alpha: 1.0,
-                    load_op: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                    scissor,
-                    rounded_mask: None,
-                    blend_mode: BlendMode::SrcOver,
-                    dest_viewport: None,
-                    source_viewport: None,
-                    sample_mode: CompositeSampleMode::Linear,
-                },
-            );
-            return;
-        }
         let scale_x = source.width as f32 / scratch.width.max(1) as f32;
         let scale_y = source.height as f32 / scratch.height.max(1) as f32;
 
@@ -1442,25 +1423,6 @@ impl EffectRenderer {
         shader: &RuntimeShader,
         layer_pixel_rect: [f32; 4],
     ) -> bool {
-        if ablate_shaders() {
-            self.encode_composite_to_view_pass(
-                recorder,
-                device,
-                source,
-                dest_view,
-                CompositePassOptions {
-                    alpha: 1.0,
-                    load_op: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                    scissor: None,
-                    rounded_mask: None,
-                    blend_mode: BlendMode::SrcOver,
-                    dest_viewport: None,
-                    source_viewport: None,
-                    sample_mode: CompositeSampleMode::Linear,
-                },
-            );
-            return true;
-        }
         self.encode_shader_pass(
             recorder,
             device,
@@ -1495,25 +1457,6 @@ impl EffectRenderer {
         if dest_viewport.2 <= 0.0 || dest_viewport.3 <= 0.0 {
             return false;
         }
-        if ablate_shaders() {
-            self.encode_composite_to_view_pass(
-                recorder,
-                device,
-                source,
-                dest_view,
-                CompositePassOptions {
-                    alpha: 1.0,
-                    load_op,
-                    scissor,
-                    rounded_mask: None,
-                    blend_mode: BlendMode::SrcOver,
-                    dest_viewport: Some(dest_viewport),
-                    source_viewport: None,
-                    sample_mode: CompositeSampleMode::Linear,
-                },
-            );
-            return true;
-        }
         self.encode_shader_pass(
             recorder,
             device,
@@ -1542,9 +1485,6 @@ impl EffectRenderer {
     ) -> bool {
         if items.is_empty() {
             return true;
-        }
-        if ablate_shaders() {
-            return false;
         }
         let Some(prepared) = self.prepare_shader_batch_draws(recorder, device, items, false) else {
             return false;
@@ -2461,28 +2401,6 @@ fn composite_sampling_mode_value(sample_mode: CompositeSampleMode) -> f32 {
         CompositeSampleMode::Box4 => 1.0,
         CompositeSampleMode::Nearest => 2.0,
     }
-}
-
-/// Measurement ablations for devices without GPU timestamp queries: with
-/// `CRANPOSE_ABLATE_SHADERS` every runtime-shader stage composites its input
-/// unchanged, and with `CRANPOSE_ABLATE_BLUR` every blur does the same, so an
-/// A/B of present time attributes the GPU cost of each stage. Both are
-/// mirrored as `debug.cranpose.ablate_*` system properties on Android and
-/// change what the screen shows; they are never read outside a diagnosis.
-fn ablate_shaders() -> bool {
-    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        crate::debug_toggles::debug_toggle("CRANPOSE_ABLATE_SHADERS")
-            .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "yes"))
-    })
-}
-
-fn ablate_blur() -> bool {
-    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        crate::debug_toggles::debug_toggle("CRANPOSE_ABLATE_BLUR")
-            .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "yes"))
-    })
 }
 
 #[cfg(test)]

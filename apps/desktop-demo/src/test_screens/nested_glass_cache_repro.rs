@@ -18,26 +18,7 @@ pub const NESTED_BUTTON_RECT: [f32; 4] = [400.0, 160.0, 40.0, 40.0];
 pub const BACKGROUND_A: Color = Color(0.10, 0.16, 0.40, 1.0);
 pub const BACKGROUND_B: Color = Color(0.55, 0.12, 0.10, 1.0);
 
-const FLAT_COLOR_WGSL: &str = r#"
-struct VertexOutput {
-    @builtin(position) position: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-}
-
-@vertex
-fn fullscreen_vs(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
-    var output: VertexOutput;
-    let x = f32(i32(vertex_index & 1u) * 2 - 1);
-    let y = f32(i32(vertex_index >> 1u) * 2 - 1);
-    output.uv = vec2<f32>(x * 0.5 + 0.5, 1.0 - (y * 0.5 + 0.5));
-    output.position = vec4<f32>(x, y, 0.0, 1.0);
-    return output;
-}
-
-@group(0) @binding(0) var input_texture: texture_2d<f32>;
-@group(0) @binding(1) var input_sampler: sampler;
-@group(1) @binding(0) var<uniform> u: array<vec4<f32>, 64>;
-
+const FLAT_COLOR_FRAGMENT: &str = r#"
 @fragment
 fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let base = textureSample(input_texture, input_sampler, input.uv);
@@ -52,7 +33,11 @@ pub fn shader_phase_color(phase: f32) -> [u8; 4] {
 }
 
 fn flat_color_shader(phase: f32) -> RuntimeShader {
-    let mut shader = RuntimeShader::new(FLAT_COLOR_WGSL);
+    let source = format!(
+        "{}{FLAT_COLOR_FRAGMENT}",
+        crate::app::shader_rect::WGSL_PREAMBLE
+    );
+    let mut shader = RuntimeShader::new(&source);
     shader.set_float(0, phase);
     shader
 }

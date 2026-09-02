@@ -35,10 +35,11 @@ use crate::{
     layer_events::{LayerEventKind, collect_effect_ranges, collect_layer_events},
     layer_surface_cache::{MAX_LAYER_SURFACE_CACHE_BYTES, MAX_SCENE_RANGE_CACHE_ENTRY_BYTES},
     normalized_scene::{
-        ChildLayerComposite, CollectedLayer, LoweredChildSource, SceneWindowSource, TranslateBy,
-        build_scene_window, collected_layer_bounds, filtered_effect_layer_index,
-        motion_stable_capture_bounds_from_parts, resolved_child_surface_composite,
-        resolved_layer_surface_rect_from_parts, translate_quad, visible_draw_rect,
+        ChildLayerComposite, CollectedLayer, LoweredChildSource, ResolvedChildSurfaceComposite,
+        SceneWindowSource, TranslateBy, build_scene_window, collected_layer_bounds,
+        filtered_effect_layer_index, motion_stable_capture_bounds_from_parts,
+        resolved_child_surface_composite, resolved_layer_surface_rect_from_parts, translate_quad,
+        visible_draw_rect,
     },
     offscreen::OffscreenTarget,
     render::{has_backdrop_layer_in_range, scissor_rect_for_rect},
@@ -85,18 +86,6 @@ fn record_layer_cache_miss<B: SurfaceExecutionBackend>(
         log::warn!("[layer-cache-diag] miss site={site} key={key:?}");
     }
     backend.record_layer_cache_miss(key, width, height);
-}
-
-/// Measurement ablation: `CRANPOSE_ABLATE_BACKDROPS` skips every backdrop
-/// effect (capture, blur and shader alike) so an A/B of present time isolates
-/// what live glass costs on a device without GPU timestamp queries. Mirrored
-/// as `debug.cranpose.ablate_backdrops` on Android.
-fn ablate_backdrops() -> bool {
-    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        crate::debug_toggles::debug_toggle("CRANPOSE_ABLATE_BACKDROPS")
-            .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "yes"))
-    })
 }
 
 fn direct_scene_range_cache_enabled() -> bool {
@@ -2452,129 +2441,25 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
                 )?;
             }
 
-            if let Some(backdrop) = child.backdrop.clone() {
-                let Some(root_target) = root_target else {
-                    return Err(
-                        "root direct path does not support backdrop child surfaces".to_string()
-                    );
-                };
-                let backdrop_layer = BackdropLayer {
-                    node_id: child.node_id,
-                    rect: resolved_child.backdrop_rect,
-                    clip: child.visual_clip,
-                    snap_anchor: resolved_child.snap_anchor,
-                    effect: backdrop,
-                    z_index: child.z_index,
-                };
-                if let Some(dependency_rect) = backdrop_dependency_rect(
-                    resolved_child.backdrop_rect,
-                    child.visual_clip,
-                    &backdrop_layer.effect,
-                    root_scale,
-                    (width, height),
-                ) {
-                    flush_pending_queues_for_backdrop_capture(
-                        backend,
-                        &mut pending_composites,
-                        &mut pending_composite_load_op,
-                        &mut pending_shader_composites,
-                        &mut pending_shader_load_op,
-                        surface_view,
-                        (width, height),
-                        &mut next_load_op,
-                        dependency_rect,
-                        root_scale,
-                    )?;
-                }
-                let child_backdrop_capture_rect = visible_backdrop_capture_rect(
-                    resolved_child.backdrop_rect,
-                    child.visual_clip,
-                    &backdrop_layer.effect,
-                    root_scale,
-                    (width, height),
-                );
-                let backdrop_input_hash = backdrop_scene_prefix_hash(
-                    &local_scene,
-                    &prior_child_contributions,
-                    child.z_index,
-                    child_backdrop_capture_rect.unwrap_or(backdrop_layer.rect),
-                    (width, height),
-                    root_scale,
-                );
-                if let Some(prepared) = prepare_cached_backdrop_layer_composite(
-                    backend,
-                    root_target,
-                    &backdrop_layer,
-                    None,
-                    width,
-                    height,
-                    root_scale,
-                    Some(backdrop_input_hash),
-                    true,
-                )? {
-                    let PreparedBackdropComposite {
-                        surface: prepared_surface,
-                        dest_quad: prepared_dest_quad,
-                        scissor: prepared_scissor,
-                    } = prepared;
-                    if prepared_surface.deferred_effect.is_some() {
-                        match direct_shader_layer_composite(
-                            prepared_surface,
-                            child.z_index,
-                            next_composite_seq(&mut composite_seq),
-                            prepared_dest_quad,
-                            prepared_scissor,
-                        ) {
-                            Ok(pending) => {
-                                if pending_shader_composites.is_empty() {
-                                    pending_shader_load_op = Some(next_load_op);
-                                }
-                                pending_shader_composites.push(pending);
-                                next_load_op = wgpu::LoadOp::Load;
-                            }
-                            Err(prepared_surface) => {
-                                composite_layer_surface_to_view(
-                                    backend,
-                                    &prepared_surface,
-                                    surface_view,
-                                    (width, height),
-                                    prepared_dest_quad,
-                                    next_load_op,
-                                    prepared_scissor,
-                                )?;
-                                next_load_op = wgpu::LoadOp::Load;
-                                backend.release_layer_surface_target(prepared_surface.target);
-                            }
-                        }
-                    } else {
-                        if pending_composites.is_empty() {
-                            pending_composite_load_op = Some(next_load_op);
-                        }
-                        pending_composites.push(PendingLayerComposite {
-                            z_index: child.z_index,
-                            seq: next_composite_seq(&mut composite_seq),
-                            surface: prepared_surface,
-                            dest_quad: prepared_dest_quad,
-                            scissor: prepared_scissor,
-                        });
-                        next_load_op = wgpu::LoadOp::Load;
-                    }
-                } else {
-                    apply_backdrop_layer_to_target(
-                        backend,
-                        root_target,
-                        &backdrop_layer,
-                        None,
-                        width,
-                        height,
-                        root_scale,
-                        Some(backdrop_input_hash),
-                    )?;
-                    if !pending_composites.is_empty() {
-                        pending_composite_load_op = Some(wgpu::LoadOp::Load);
-                    }
-                }
-            }
+            composite_root_child_backdrop(
+                backend,
+                root_target,
+                surface_view,
+                &local_scene,
+                &prior_child_contributions,
+                &child,
+                &resolved_child,
+                (width, height),
+                root_scale,
+                &mut PendingQueues {
+                    composites: &mut pending_composites,
+                    composite_load_op: &mut pending_composite_load_op,
+                    shader_composites: &mut pending_shader_composites,
+                    shader_load_op: &mut pending_shader_load_op,
+                    next_load_op: &mut next_load_op,
+                    composite_seq: &mut composite_seq,
+                },
+            )?;
             let child_underlay_identity = child
                 .needs_nested_underlay
                 .then(|| {
@@ -2930,7 +2815,16 @@ pub(crate) fn render_layer_surface<B: SurfaceExecutionBackend>(
         backend.max_texture_dim(),
     );
     if let Some((cache_key, logical_rect)) = cache_candidate {
+        if backdrop_diag_enabled() {
+            eprintln!(
+                "[backdrop-diag] probe node={:?} identity={:?} key={:?} bake={}",
+                child.node_id, backdrop_underlay_identity, cache_key, bake_underlay
+            );
+        }
         if let Some((target, logical_rect)) = backend.cached_layer_surface(&cache_key) {
+            if backdrop_diag_enabled() {
+                eprintln!("[backdrop-diag] probe HIT node={:?}", child.node_id);
+            }
             let (composite_alpha, blend_mode) = child
                 .isolation
                 .as_ref()
@@ -3282,6 +3176,17 @@ fn backdrop_prefix_child_contribution(
         }
         _ => child.target_content_hash,
     };
+    if backdrop_diag_enabled() {
+        eprintln!(
+            "[backdrop-diag] contribution node={:?} z={} content_hash={} target_content_hash={} identity={:?} dest0={:?}",
+            child.node_id,
+            child.z_index,
+            content_hash,
+            child.target_content_hash,
+            underlay_identity,
+            dest_quad[0]
+        );
+    }
     BackdropPrefixChildContribution {
         z_index: child.z_index,
         node_id: child.node_id,
@@ -4298,6 +4203,316 @@ fn take_ordered_pending_composite_load_op(
     }
 }
 
+/// The composite queues a render loop batches between passes, lent to the
+/// helpers that push into them or flush them.
+struct PendingQueues<'a> {
+    composites: &'a mut Vec<PendingLayerComposite>,
+    composite_load_op: &'a mut Option<wgpu::LoadOp<wgpu::Color>>,
+    shader_composites: &'a mut Vec<PendingShaderLayerComposite>,
+    shader_load_op: &'a mut Option<wgpu::LoadOp<wgpu::Color>>,
+    next_load_op: &'a mut wgpu::LoadOp<wgpu::Color>,
+    composite_seq: &'a mut usize,
+}
+
+/// Composites a root child's own backdrop into the root target: capture,
+/// effect and either a pending composite, a deferred shader composite or a
+/// direct application, all ahead of the child's surface so an underlay
+/// sampled beneath the child already carries it.
+#[allow(clippy::too_many_arguments)]
+fn composite_root_child_backdrop<B: SurfaceExecutionBackend>(
+    backend: &mut B,
+    root_target: Option<&OffscreenTarget>,
+    surface_view: &wgpu::TextureView,
+    local_scene: &CompositorScene,
+    prior_child_contributions: &[BackdropPrefixChildContribution],
+    child: &ChildLayerComposite,
+    resolved_child: &ResolvedChildSurfaceComposite,
+    viewport: (u32, u32),
+    root_scale: f32,
+    queues: &mut PendingQueues<'_>,
+) -> Result<(), String> {
+    let (width, height) = viewport;
+    if let Some(backdrop) = child.backdrop.clone() {
+        let Some(root_target) = root_target else {
+            return Err("root direct path does not support backdrop child surfaces".to_string());
+        };
+        let backdrop_layer = BackdropLayer {
+            node_id: child.node_id,
+            rect: resolved_child.backdrop_rect,
+            clip: child.visual_clip,
+            snap_anchor: resolved_child.snap_anchor,
+            effect: backdrop,
+            z_index: child.z_index,
+        };
+        if let Some(dependency_rect) = backdrop_dependency_rect(
+            resolved_child.backdrop_rect,
+            child.visual_clip,
+            &backdrop_layer.effect,
+            root_scale,
+            (width, height),
+        ) {
+            flush_pending_queues_for_backdrop_capture(
+                backend,
+                queues.composites,
+                queues.composite_load_op,
+                queues.shader_composites,
+                queues.shader_load_op,
+                surface_view,
+                (width, height),
+                queues.next_load_op,
+                dependency_rect,
+                root_scale,
+            )?;
+        }
+        let child_backdrop_capture_rect = visible_backdrop_capture_rect(
+            resolved_child.backdrop_rect,
+            child.visual_clip,
+            &backdrop_layer.effect,
+            root_scale,
+            (width, height),
+        );
+        let backdrop_input_hash = backdrop_scene_prefix_hash(
+            local_scene,
+            prior_child_contributions,
+            child.z_index,
+            child_backdrop_capture_rect.unwrap_or(backdrop_layer.rect),
+            (width, height),
+            root_scale,
+        );
+        if backdrop_diag_enabled() {
+            eprintln!(
+                "[backdrop-diag] root backdrop node={:?} input_hash={} contributions={}",
+                child.node_id,
+                backdrop_input_hash,
+                prior_child_contributions.len()
+            );
+        }
+        if let Some(prepared) = prepare_cached_backdrop_layer_composite(
+            backend,
+            root_target,
+            &backdrop_layer,
+            None,
+            width,
+            height,
+            root_scale,
+            Some(backdrop_input_hash),
+            true,
+        )? {
+            let PreparedBackdropComposite {
+                surface: prepared_surface,
+                dest_quad: prepared_dest_quad,
+                scissor: prepared_scissor,
+            } = prepared;
+            if prepared_surface.deferred_effect.is_some() {
+                match direct_shader_layer_composite(
+                    prepared_surface,
+                    child.z_index,
+                    next_composite_seq(queues.composite_seq),
+                    prepared_dest_quad,
+                    prepared_scissor,
+                ) {
+                    Ok(pending) => {
+                        if queues.shader_composites.is_empty() {
+                            *queues.shader_load_op = Some(*queues.next_load_op);
+                        }
+                        queues.shader_composites.push(pending);
+                        *queues.next_load_op = wgpu::LoadOp::Load;
+                    }
+                    Err(prepared_surface) => {
+                        composite_layer_surface_to_view(
+                            backend,
+                            &prepared_surface,
+                            surface_view,
+                            (width, height),
+                            prepared_dest_quad,
+                            *queues.next_load_op,
+                            prepared_scissor,
+                        )?;
+                        *queues.next_load_op = wgpu::LoadOp::Load;
+                        backend.release_layer_surface_target(prepared_surface.target);
+                    }
+                }
+            } else {
+                if queues.composites.is_empty() {
+                    *queues.composite_load_op = Some(*queues.next_load_op);
+                }
+                queues.composites.push(PendingLayerComposite {
+                    z_index: child.z_index,
+                    seq: next_composite_seq(queues.composite_seq),
+                    surface: prepared_surface,
+                    dest_quad: prepared_dest_quad,
+                    scissor: prepared_scissor,
+                });
+                *queues.next_load_op = wgpu::LoadOp::Load;
+            }
+        } else {
+            apply_backdrop_layer_to_target(
+                backend,
+                root_target,
+                &backdrop_layer,
+                None,
+                width,
+                height,
+                root_scale,
+                Some(backdrop_input_hash),
+            )?;
+            if !queues.composites.is_empty() {
+                *queues.composite_load_op = Some(wgpu::LoadOp::Load);
+            }
+        }
+    }
+    Ok(())
+}
+
+struct NestedBackdropContext<'a> {
+    backdrop_underlay: Option<&'a OffscreenTarget>,
+    baked: bool,
+    underlay_identity: Option<u64>,
+}
+
+/// The nested counterpart of [`composite_root_child_backdrop`]: the child's
+/// own backdrop goes into the enclosing surface's target, reading through the
+/// surface's external underlay unless local content covers it, and keyed on
+/// the baked underlay identity when the surface bakes one.
+#[allow(clippy::too_many_arguments)]
+fn composite_nested_child_backdrop<B: SurfaceExecutionBackend>(
+    backend: &mut B,
+    target: &OffscreenTarget,
+    local_scene: &CompositorScene,
+    prior_child_contributions: &[BackdropPrefixChildContribution],
+    child: &ChildLayerComposite,
+    resolved_child: &ResolvedChildSurfaceComposite,
+    viewport: (u32, u32),
+    target_scale: f32,
+    context: NestedBackdropContext<'_>,
+    queues: &mut PendingQueues<'_>,
+) -> Result<(), String> {
+    let (width, height) = viewport;
+    let child_backdrop_capture_rect = child.backdrop.as_ref().and_then(|backdrop| {
+        visible_backdrop_capture_rect(
+            resolved_child.backdrop_rect,
+            child.visual_clip,
+            backdrop,
+            target_scale,
+            (width, height),
+        )
+    });
+
+    if !resolved_child.shadow_draws.is_empty() {
+        flush_pending_composite_queues_fused(
+            backend,
+            queues.composites,
+            queues.composite_load_op,
+            queues.shader_composites,
+            queues.shader_load_op,
+            &target.view,
+            (width, height),
+            queues.next_load_op,
+        )?;
+        flush_pending_clear(backend, &target.view, queues.next_load_op);
+    }
+
+    if let Some(backdrop) = &child.backdrop {
+        if let Some(dependency_rect) = backdrop_dependency_rect(
+            resolved_child.backdrop_rect,
+            child.visual_clip,
+            backdrop,
+            target_scale,
+            (width, height),
+        ) {
+            flush_pending_queues_for_backdrop_capture(
+                backend,
+                queues.composites,
+                queues.composite_load_op,
+                queues.shader_composites,
+                queues.shader_load_op,
+                &target.view,
+                (width, height),
+                queues.next_load_op,
+                dependency_rect,
+                target_scale,
+            )?;
+        }
+        let backdrop_layer = BackdropLayer {
+            node_id: child.node_id,
+            rect: resolved_child.backdrop_rect,
+            clip: child.visual_clip,
+            snap_anchor: resolved_child.snap_anchor,
+            effect: backdrop.clone(),
+            z_index: child.z_index,
+        };
+        let backdrop_input_hash = {
+            let local_hash = backdrop_scene_prefix_hash(
+                local_scene,
+                prior_child_contributions,
+                child.z_index,
+                child_backdrop_capture_rect.unwrap_or(backdrop_layer.rect),
+                (width, height),
+                target_scale,
+            );
+            if context.baked {
+                content_hash_over_underlay(local_hash, context.underlay_identity)
+            } else {
+                local_hash
+            }
+        };
+        let effective_backdrop_underlay = if context.backdrop_underlay.is_some()
+            && backdrop_underlay_is_covered_by_local_content(
+                &local_scene.shapes,
+                &local_scene.brushes,
+                &local_scene.images,
+                &local_scene.shadow_draws,
+                &local_scene.draw_ops,
+                &local_scene.effect_layers,
+                &local_scene.backdrop_layers,
+                &backdrop_layer,
+            ) {
+            None
+        } else {
+            context.backdrop_underlay
+        };
+        if let Some(prepared) = prepare_cached_backdrop_layer_composite(
+            backend,
+            target,
+            &backdrop_layer,
+            effective_backdrop_underlay,
+            width,
+            height,
+            target_scale,
+            Some(backdrop_input_hash),
+            false,
+        )? {
+            if queues.composites.is_empty() {
+                *queues.composite_load_op = Some(*queues.next_load_op);
+            }
+            queues.composites.push(PendingLayerComposite {
+                z_index: child.z_index,
+                seq: next_composite_seq(queues.composite_seq),
+                surface: prepared.surface,
+                dest_quad: prepared.dest_quad,
+                scissor: prepared.scissor,
+            });
+            *queues.next_load_op = wgpu::LoadOp::Load;
+        } else {
+            apply_backdrop_layer_to_target(
+                backend,
+                target,
+                &backdrop_layer,
+                effective_backdrop_underlay,
+                width,
+                height,
+                target_scale,
+                Some(backdrop_input_hash),
+            )?;
+            if !queues.composites.is_empty() {
+                *queues.composite_load_op = Some(wgpu::LoadOp::Load);
+            }
+        }
+    }
+
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn flush_pending_composite_queues_fused<B: SurfaceExecutionBackend>(
     backend: &mut B,
@@ -5263,128 +5478,29 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
             surface_capture_active: translation_context.surface_capture_active,
             local_picture_capture_active: translation_context.local_picture_capture_active,
         };
-        let child_backdrop_capture_rect = child.backdrop.as_ref().and_then(|backdrop| {
-            visible_backdrop_capture_rect(
-                resolved_child.backdrop_rect,
-                child.visual_clip,
-                backdrop,
-                target_scale,
-                (width, height),
-            )
-        });
-
-        if !resolved_child.shadow_draws.is_empty() {
-            flush_pending_composite_queues_fused(
-                backend,
-                &mut pending_composites,
-                &mut pending_composite_load_op,
-                &mut pending_shader_composites,
-                &mut pending_shader_load_op,
-                &target.view,
-                (width, height),
-                &mut next_load_op,
-            )?;
-            flush_pending_clear(backend, &target.view, &mut next_load_op);
-        }
-
-        if let Some(backdrop) = &child.backdrop {
-            if let Some(dependency_rect) = backdrop_dependency_rect(
-                resolved_child.backdrop_rect,
-                child.visual_clip,
-                backdrop,
-                target_scale,
-                (width, height),
-            ) {
-                flush_pending_queues_for_backdrop_capture(
-                    backend,
-                    &mut pending_composites,
-                    &mut pending_composite_load_op,
-                    &mut pending_shader_composites,
-                    &mut pending_shader_load_op,
-                    &target.view,
-                    (width, height),
-                    &mut next_load_op,
-                    dependency_rect,
-                    target_scale,
-                )?;
-            }
-            let backdrop_layer = BackdropLayer {
-                node_id: child.node_id,
-                rect: resolved_child.backdrop_rect,
-                clip: child.visual_clip,
-                snap_anchor: resolved_child.snap_anchor,
-                effect: backdrop.clone(),
-                z_index: child.z_index,
-            };
-            let backdrop_input_hash = {
-                let local_hash = backdrop_scene_prefix_hash(
-                    local_scene,
-                    &prior_child_contributions,
-                    child.z_index,
-                    child_backdrop_capture_rect.unwrap_or(backdrop_layer.rect),
-                    (width, height),
-                    target_scale,
-                );
-                if baked {
-                    content_hash_over_underlay(local_hash, underlay_identity)
-                } else {
-                    local_hash
-                }
-            };
-            let effective_backdrop_underlay = if backdrop_underlay.is_some()
-                && backdrop_underlay_is_covered_by_local_content(
-                    &local_scene.shapes,
-                    &local_scene.brushes,
-                    &local_scene.images,
-                    &local_scene.shadow_draws,
-                    &local_scene.draw_ops,
-                    &local_scene.effect_layers,
-                    &local_scene.backdrop_layers,
-                    &backdrop_layer,
-                ) {
-                None
-            } else {
-                backdrop_underlay
-            };
-            if let Some(prepared) = prepare_cached_backdrop_layer_composite(
-                backend,
-                &target,
-                &backdrop_layer,
-                effective_backdrop_underlay,
-                width,
-                height,
-                target_scale,
-                Some(backdrop_input_hash),
-                false,
-            )? {
-                if pending_composites.is_empty() {
-                    pending_composite_load_op = Some(next_load_op);
-                }
-                pending_composites.push(PendingLayerComposite {
-                    z_index: child.z_index,
-                    seq: next_composite_seq(&mut composite_seq),
-                    surface: prepared.surface,
-                    dest_quad: prepared.dest_quad,
-                    scissor: prepared.scissor,
-                });
-                next_load_op = wgpu::LoadOp::Load;
-            } else {
-                apply_backdrop_layer_to_target(
-                    backend,
-                    &target,
-                    &backdrop_layer,
-                    effective_backdrop_underlay,
-                    width,
-                    height,
-                    target_scale,
-                    Some(backdrop_input_hash),
-                )?;
-                if !pending_composites.is_empty() {
-                    pending_composite_load_op = Some(wgpu::LoadOp::Load);
-                }
-            }
-        }
-
+        composite_nested_child_backdrop(
+            backend,
+            &target,
+            local_scene,
+            &prior_child_contributions,
+            &child,
+            &resolved_child,
+            (width, height),
+            target_scale,
+            NestedBackdropContext {
+                backdrop_underlay,
+                baked,
+                underlay_identity,
+            },
+            &mut PendingQueues {
+                composites: &mut pending_composites,
+                composite_load_op: &mut pending_composite_load_op,
+                shader_composites: &mut pending_shader_composites,
+                shader_load_op: &mut pending_shader_load_op,
+                next_load_op: &mut next_load_op,
+                composite_seq: &mut composite_seq,
+            },
+        )?;
         let child_underlay_identity = child
             .needs_nested_underlay
             .then(|| {
@@ -5668,6 +5784,46 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
     Ok(target)
 }
 
+/// Whether a source-content miss earns a cache slot: a miss the upstream probe
+/// already paid for is stored unconditionally, any other miss goes through
+/// the admission policy and is recorded when it is admitted.
+fn admit_source_content_miss<B: SurfaceExecutionBackend>(
+    backend: &mut B,
+    cache_key: &LayerRasterCacheKey,
+    admission: CacheAdmission,
+    missed_upstream: bool,
+    size: (u32, u32),
+) -> bool {
+    if missed_upstream {
+        return true;
+    }
+    let admitted = backend.admit_layer_surface_cache_miss(cache_key, admission);
+    if admitted {
+        record_layer_cache_miss(backend, "source-content", cache_key, size.0, size.1);
+    }
+    admitted
+}
+
+fn store_source_content<B: SurfaceExecutionBackend>(
+    backend: &mut B,
+    admitted: bool,
+    cache_key: LayerRasterCacheKey,
+    rendered: OffscreenTarget,
+    surface_rect: Rect,
+) -> LayerSurfaceTexture {
+    if admitted
+        && offscreen_byte_size(rendered.width, rendered.height) <= MAX_LAYER_SURFACE_CACHE_BYTES
+    {
+        LayerSurfaceTexture::Cached(backend.insert_cached_layer_surface(
+            cache_key,
+            rendered,
+            surface_rect,
+        ))
+    } else {
+        LayerSurfaceTexture::Owned(rendered)
+    }
+}
+
 fn render_layer_surface_uncached<B: SurfaceExecutionBackend>(
     backend: &mut B,
     child: &ChildLayerComposite,
@@ -5861,11 +6017,13 @@ fn render_layer_surface_uncached<B: SurfaceExecutionBackend>(
             if let Some((cached_target, _)) = cached {
                 LayerSurfaceTexture::Cached(cached_target)
             } else {
-                let admitted = source_probe_missed_upstream
-                    || backend.admit_layer_surface_cache_miss(&cache_key, cache_admission);
-                if admitted && !source_probe_missed_upstream {
-                    record_layer_cache_miss(backend, "source-content", &cache_key, width, height);
-                }
+                let admitted = admit_source_content_miss(
+                    backend,
+                    &cache_key,
+                    cache_admission,
+                    source_probe_missed_upstream,
+                    (width, height),
+                );
                 let rendered = render_layer_source_uncached(
                     backend,
                     &local_scene,
@@ -5880,16 +6038,7 @@ fn render_layer_surface_uncached<B: SurfaceExecutionBackend>(
                     effective_translated_content_axes,
                     translation_context,
                 )?;
-                if admitted
-                    && offscreen_byte_size(rendered.width, rendered.height)
-                        <= MAX_LAYER_SURFACE_CACHE_BYTES
-                {
-                    let cached_target =
-                        backend.insert_cached_layer_surface(cache_key, rendered, surface_rect);
-                    LayerSurfaceTexture::Cached(cached_target)
-                } else {
-                    LayerSurfaceTexture::Owned(rendered)
-                }
+                store_source_content(backend, admitted, cache_key, rendered, surface_rect)
             }
         } else {
             LayerSurfaceTexture::Owned(render_layer_source_uncached(
@@ -6179,9 +6328,6 @@ fn prepare_cached_backdrop_layer_composite<B: SurfaceExecutionBackend>(
     input_content_hash: Option<u64>,
     allow_deferred_tail: bool,
 ) -> Result<Option<PreparedBackdropComposite>, String> {
-    if ablate_backdrops() {
-        return Ok(None);
-    }
     let diag = backdrop_diag_enabled();
     let (layer_rect, layer_clip) = snapped_backdrop_geometry(layer, root_scale);
     let Some(visible_rect) = visible_layer_rect(layer_rect, layer_clip, root_scale, width, height)
@@ -6418,9 +6564,6 @@ pub(crate) fn apply_backdrop_layer_to_target<B: SurfaceExecutionBackend>(
     root_scale: f32,
     input_content_hash: Option<u64>,
 ) -> Result<(), String> {
-    if ablate_backdrops() {
-        return Ok(());
-    }
     let (layer_rect, layer_clip) = snapped_backdrop_geometry(layer, root_scale);
     if backdrop_diag_enabled() {
         eprintln!(

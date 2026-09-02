@@ -15,7 +15,9 @@ use cranpose_ui::{
 };
 use cranpose_ui_graphics::{CompositingStrategy, RenderEffect, RuntimeShader};
 
-const WGSL_PREAMBLE: &str = r#"
+/// The fullscreen vertex stage, texture and uniform bindings every runtime
+/// shader in the demo starts from; a fragment stage is appended per effect.
+pub(crate) const WGSL_PREAMBLE: &str = r#"
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) uv: vec2<f32>,

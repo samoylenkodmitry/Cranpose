@@ -1,5 +1,6 @@
 mod robot_exit;
 mod robot_launch;
+mod robot_pixels;
 
 use std::time::Duration;
 
@@ -9,6 +10,7 @@ use desktop_app::test_screens::nested_glass_cache_repro::{
     shader_phase_color, NestedGlassCacheReproScreen, BACKGROUND_TOGGLE_RECT, NESTED_BUTTON_RECT,
     SCREEN_HEIGHT, SCREEN_WIDTH, SHADER_BOX_RECT, SHADER_TOGGLE_RECT, TICK_RECT,
 };
+use robot_pixels::{color_close, pixel_at_logical};
 
 const WARMUP_TICKS: u32 = 4;
 const STILL_TICKS: u32 = 6;
@@ -18,27 +20,6 @@ const MAX_SHADER_TOGGLE_PASSES: u32 = 10;
 
 fn center(rect: [f32; 4]) -> (f32, f32) {
     (rect[0] + rect[2] * 0.5, rect[1] + rect[3] * 0.5)
-}
-
-fn pixel_at_logical(screenshot: &RobotScreenshot, x: f32, y: f32) -> [u8; 4] {
-    let scale = if screenshot.logical_width.is_finite() && screenshot.logical_width > 0.0 {
-        screenshot.width as f32 / screenshot.logical_width
-    } else {
-        1.0
-    };
-    let px = ((x * scale) as u32).min(screenshot.width.saturating_sub(1));
-    let py = ((y * scale) as u32).min(screenshot.height.saturating_sub(1));
-    let index = (py as usize * screenshot.width as usize + px as usize) * 4;
-    let bytes = &screenshot.pixels[index..index + 4];
-    [bytes[0], bytes[1], bytes[2], bytes[3]]
-}
-
-fn color_close(actual: [u8; 4], expected: [u8; 4]) -> bool {
-    actual
-        .iter()
-        .zip(expected.iter())
-        .take(3)
-        .all(|(a, e)| (*a as i32 - *e as i32).abs() <= COLOR_TOLERANCE)
 }
 
 fn click_rect(robot: &Robot, rect: [f32; 4]) {
@@ -143,7 +124,7 @@ fn main() {
         click_rect(&robot, BACKGROUND_TOGGLE_RECT);
         let after_background = expect_card_rerender(&robot, "background-toggle", MAX_BACKGROUND_TOGGLE_PASSES);
         let button_after = pixel_at_logical(&after_background, button_x, button_y);
-        if color_close(button_before, button_after) {
+        if color_close(button_before, button_after, COLOR_TOLERANCE) {
             robot_exit::fail(
                 &robot,
                 &format!(
@@ -157,7 +138,7 @@ fn main() {
 
         let (shader_x, shader_y) = center(SHADER_BOX_RECT);
         let shader_before = pixel_at_logical(&screenshot(&robot), shader_x, shader_y);
-        if !color_close(shader_before, shader_phase_color(0.2)) {
+        if !color_close(shader_before, shader_phase_color(0.2), COLOR_TOLERANCE) {
             robot_exit::fail(
                 &robot,
                 &format!(
@@ -168,7 +149,7 @@ fn main() {
         click_rect(&robot, SHADER_TOGGLE_RECT);
         let after_shader = expect_card_rerender(&robot, "shader-toggle", MAX_SHADER_TOGGLE_PASSES);
         let shader_after = pixel_at_logical(&after_shader, shader_x, shader_y);
-        if !color_close(shader_after, shader_phase_color(0.8)) {
+        if !color_close(shader_after, shader_phase_color(0.8), COLOR_TOLERANCE) {
             robot_exit::fail(
                 &robot,
                 &format!(
