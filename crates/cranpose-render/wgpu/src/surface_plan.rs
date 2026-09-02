@@ -67,7 +67,8 @@ pub(crate) struct TranslationRenderContext {
 pub(crate) struct LayerSurfaceRequest<'a> {
     pub(crate) root_scale: f32,
     pub(crate) backdrop_underlay: Option<&'a OffscreenTarget>,
-    pub(crate) backdrop_underlay_color: Option<u32>,
+    pub(crate) backdrop_underlay_identity: Option<u64>,
+    pub(crate) bake_underlay: bool,
     pub(crate) allow_runtime_cache: bool,
     pub(crate) logical_rect_override: Option<Rect>,
     pub(crate) capture_clip_override: Option<Rect>,
@@ -78,7 +79,8 @@ pub(crate) struct LayerSurfaceRequest<'a> {
 pub(crate) struct LayerSurfaceRenderOptions<'a> {
     pub(crate) target_scale: f32,
     pub(crate) backdrop_underlay: Option<&'a OffscreenTarget>,
-    pub(crate) backdrop_underlay_color: Option<u32>,
+    pub(crate) backdrop_underlay_identity: Option<u64>,
+    pub(crate) bake_underlay: bool,
     pub(crate) allow_runtime_cache: bool,
     pub(crate) cache_candidate: Option<(
         cranpose_render_common::raster_cache::LayerRasterCacheKey,

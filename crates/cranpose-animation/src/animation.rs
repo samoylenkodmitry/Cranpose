@@ -626,6 +626,7 @@ struct InfiniteTransitionInner {
     animations: RefCell<Vec<Rc<dyn InfiniteTransitionAnimation>>>,
     run_token: OwnedMutableState<u64>,
     restart_pending: Cell<bool>,
+    origin_nanos: Cell<Option<u64>>,
     runtime: RuntimeHandle,
 }
 
@@ -637,6 +638,7 @@ impl InfiniteTransition {
                 animations: RefCell::new(Vec::new()),
                 run_token: OwnedMutableState::with_runtime(0u64, runtime.clone()),
                 restart_pending: Cell::new(false),
+                origin_nanos: Cell::new(None),
                 runtime,
             }),
         }
@@ -659,7 +661,6 @@ impl InfiniteTransition {
             move |scope| {
                 Box::pin(async move {
                     let clock = scope.runtime().frame_clock();
-                    let mut start_time: Option<u64> = None;
 
                     loop {
                         if !scope.is_active() {
@@ -680,9 +681,7 @@ impl InfiniteTransition {
                             break;
                         }
 
-                        let start = start_time.get_or_insert(now);
-                        let play_time = now.saturating_sub(*start);
-                        inner.on_frame(play_time);
+                        inner.on_frame(inner.play_time(now));
                     }
                 })
             },
@@ -762,6 +761,21 @@ impl InfiniteTransition {
 }
 
 impl InfiniteTransitionInner {
+    /// Play time measured from the first frame this transition ever saw.
+    /// The driving loop stops while nothing reads its values and starts
+    /// again when a reader returns; every animation's play-time offset was
+    /// captured on this one timeline, so a restarted loop must keep it.
+    fn play_time(&self, now_nanos: u64) -> u64 {
+        let origin = match self.origin_nanos.get() {
+            Some(origin) => origin,
+            None => {
+                self.origin_nanos.set(Some(now_nanos));
+                now_nanos
+            }
+        };
+        now_nanos.saturating_sub(origin)
+    }
+
     fn add_animation(&self, animation: Rc<dyn InfiniteTransitionAnimation>) {
         let mut list = self.animations.borrow_mut();
         let was_empty = list.is_empty();

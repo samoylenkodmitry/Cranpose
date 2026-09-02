@@ -45,6 +45,36 @@ The branch now enforces these invariants:
     effect/backdrop events.
 15. Robot screenshot capture must match `main` raw dimensions for the same
     logical surface.
+16. A surface is cache-eligible whenever its pixels are a pure function of
+    its key. A runtime shader hashes its uniforms into the content hash, so
+    a subtree carrying one is cacheable like any other; a subtree whose
+    nested backdrop reads its parent's target is keyed on that underlay's
+    identity (`underlay_identity_before`: the uniform colour beneath it, or
+    the hash of every prefix writer under its rect plus the rect itself) and
+    stays uncached only when that identity is unknown.
+    The underlay itself is sampled from the parent target after everything
+    below the child, the child's own backdrop included, has been flushed
+    into it (`sample_child_underlay`); a child composited plainly (alpha
+    one, `SrcOver`, no effect) at a whole-pixel translation gets a verbatim
+    copy and bakes it as its surface's base, which turns the underlay
+    resample, the nested capture's underlay merge and the surface's clear
+    into copies and loads (`underlay_bake_parity` pins the pixels to one
+    LSB and the three saved passes). Every backdrop hash inside a baked
+    surface mixes in the underlay identity, since the pixels a nested
+    capture reads are the underlay's as much as the content's.
+    A snapped surface rendered at the target's own scale composites at its
+    texel size (`texel_aligned_dest_quad`): the anchored quad's origin is
+    already a whole device pixel, and the quad is widened by the sub-pixel
+    remainder of the surface's ceil so the composite copies texels instead
+    of resampling every card each frame, and so the underlay copy beneath it
+    is exactly the pixels the composite replaces.
+17. Surfaces that can change every frame through uniforms alone
+    (`contains_runtime_shader`) enter the layer cache on the second sighting
+    of a key (`CacheAdmission::OnRepeat`), the same rule scene ranges use, so
+    an animated shader never rotates stable entries out; everything else is
+    admitted on its first miss. Admission is decided at the probe, before a
+    miss is recorded, because a recorded miss must be stored in the same
+    frame.
 
 ## Current Execution Model
 

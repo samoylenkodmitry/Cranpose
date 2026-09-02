@@ -122,6 +122,16 @@ pub(crate) struct DevicePixelBounds {
     pub(crate) height: u32,
 }
 
+/// How a layer-surface cache miss is admitted into the cache: immediately, or
+/// only once the same key has missed before, which keeps per-frame variants
+/// (a shader whose uniforms change every frame, a scene range that never
+/// repeats) from rotating stable entries out of the cache.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CacheAdmission {
+    Immediate,
+    OnRepeat,
+}
+
 pub(crate) trait SurfaceExecutionBackend {
     fn max_texture_dim(&self) -> u32;
     fn acquire_retained_surface(&mut self, width: u32, height: u32) -> OffscreenTarget;
@@ -132,7 +142,17 @@ pub(crate) trait SurfaceExecutionBackend {
         &mut self,
         key: &LayerRasterCacheKey,
     ) -> Option<(Rc<OffscreenTarget>, Rect)>;
-    fn admit_layer_surface_cache_miss(&mut self, key: &LayerRasterCacheKey) -> bool;
+    fn admit_layer_surface_cache_miss(
+        &mut self,
+        key: &LayerRasterCacheKey,
+        admission: CacheAdmission,
+    ) -> bool;
+    /// Whether a plainly composited surface may start from a copy of the
+    /// pixels beneath it instead of a transparent clear, so its nested
+    /// backdrops capture by texture copy. Off under
+    /// `CRANPOSE_DISABLE_UNDERLAY_BAKE` and through
+    /// [`crate::WgpuRenderer::set_underlay_bake_enabled`].
+    fn underlay_bake_enabled(&self) -> bool;
     fn insert_cached_layer_surface(
         &mut self,
         key: LayerRasterCacheKey,

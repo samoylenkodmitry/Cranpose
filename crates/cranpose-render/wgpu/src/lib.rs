@@ -364,7 +364,6 @@ impl WgpuRenderer {
         }
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     fn sync_gpu_renderer_mut(&mut self) -> Option<&mut GpuRenderer> {
         match &mut self.backend {
             PresentBackend::Sync(gpu_renderer) => Some(gpu_renderer.as_mut()),
@@ -994,9 +993,26 @@ impl WgpuRenderer {
         }
     }
 
+    /// Enables or disables baking a plainly composited surface onto a copy of
+    /// the pixels beneath it (see `CRANPOSE_DISABLE_UNDERLAY_BAKE`). Parity
+    /// tests render the same scene both ways; both ways are exact.
+    pub fn set_underlay_bake_enabled(&mut self, enabled: bool) {
+        if let Some(renderer) = self.sync_gpu_renderer_mut() {
+            renderer.set_underlay_bake_enabled(enabled);
+        }
+    }
+
     pub fn last_frame_stats(&self) -> Option<RenderStatsSnapshot> {
-        self.sync_gpu_renderer()
-            .and_then(GpuRenderer::last_frame_stats)
+        match &self.backend {
+            PresentBackend::Sync(gpu_renderer) => gpu_renderer.last_frame_stats(),
+            #[cfg(not(target_arch = "wasm32"))]
+            PresentBackend::Threaded(handle) => *handle
+                .status()
+                .last_frame_stats
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            PresentBackend::None => None,
+        }
     }
 
     /// GPU milliseconds by pass label, aggregated since the last `[GPU-PASS]`

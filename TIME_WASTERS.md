@@ -31,6 +31,7 @@ Signature → cause → what to do. One lesson per line, no incident history.
 - **macOS: `.with_headless(false)` examples need an awake, compositing display.** "the window surface refused N consecutive frames over 5s and never reached generation 1" is the answer, not a symptom. Two waits emit near-identical text — read the prefix, not the duration: `present wait:` is the standalone wait (`wait_for_present_frame`, `pump_frames`, 5s), `wait_for_idle:` is an idle wait whose composition had already settled with only the frame outstanding (30s). Both accuse the compositor; neither accuses the app. `pmset -g log | grep -i "Display is turned"` dates the panel off/on; `pmset -g assertions` and `CGSSessionScreenIsLocked` answer for now. Host-capability skips gate on X11+xdotool, which these two do not need, so they run and fail instead of skipping.
 - **`~/develop/projects/Cranpose` on samarch-1 is a synced mirror**: its `.git` is a worktree pointer at a macOS path, so every git command dies `not a git repository: (null)`. rsync into a scratch dir (exclude `target/`, `.git`). `just` lives in `~/.cargo/bin`, absent from a non-interactive ssh PATH.
 - **`scripts/ci/with_host_lock.sh` exists and nobody was taking it.** Every session, including the ones telling others to go faster, was `ssh samarch-1`-ing straight past it. One day of that cost four phantom red CI runs: robot jobs refuse to run above a load of about 7, heavy compiles from sessions working over ssh held the box at 13–51, the robot jobs waited, timed out, and reported RED indistinguishable from a regression — two of them got diagnosed as a real regression before anyone checked host load. Separately, cranscan-82's query benchmark spread collapsed from 9.4–33.9ms to 7.6–7.8ms on identical code once they took the lock, overturning a retraction they had already made off the contended numbers. Take `--shared` for a build, `--exclusive` for a measurement or robot suite, every time — do not build on samarch-1 while a robot job runs, and do not wait for a quiet-looking load average instead of just taking the lock.
+- **A PIN-locked phone fails `am start` with "Activity class ... does not exist" (Error type 3) and `screencap` writes a 0-byte PNG.** The resolver table still lists the activity, so the message reads like a broken APK; check `dumpsys window | grep -m1 mCurrentFocus` first -- `StatusBar` means the keyguard is up. `wm dismiss-keyguard`, keyevent 82 and swipe-up do nothing against a PIN, and entering it is off limits: ask for an unlock (or use the emulator, where the same APK, sysprops and telemetry work unchanged).
 - **Android "SDK location not found" is missing env, not a missing SDK.** `~/Library/Android/sdk` and its NDKs are installed; `ANDROID_HOME`/`ANDROID_SDK_ROOT`/`ANDROID_NDK_HOME` are unset in a fresh shell and `android/local.properties` is untracked. `ls ~/Library/Android/sdk` before believing the error.
   ```bash
   export ANDROID_HOME="$HOME/Library/Android/sdk"
@@ -490,3 +491,19 @@ Signature → cause → what to do. One lesson per line, no incident history.
   consumers too (`/Users/s/develop/consumer-bumps/`), and prefer a test
   that calls it — a test is an in-repo caller, and it is what kept
   `draggable_guarded` alive.
+
+## Infinite transition "freeze" needs a spec change AND a reader remount
+
+The showcase planets stopped rotating after details -> back -> Saved -> Explore.
+Scripted Saved/Explore round trips (40+, timed randomly) and detail/back alone
+never reproduced it, and neither did dirty/recomposition diagnostics: the draw
+dirty set was identical frozen and moving (the layers re-rendered every frame),
+so the renderer was a dead end. The value itself was stuck: a spec change
+(`animateFloat` re-specced linear <-> stepped) captures a per-animation
+play-time offset, and when every reader leaves (a `with_key` tab rebuild) the
+transition loop breaks and, on restart, used to restart play time from zero,
+so `saturating_sub(offset)` pinned that one animation at its initial value for
+as long as the stale offset. Any other animation on the same transition kept
+moving, which is what made it look like a rendering bug. Reproduce with the
+exact user sequence, and when a value looks frozen log the *state value* in the
+draw closure before touching the renderer.
