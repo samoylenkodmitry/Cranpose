@@ -538,20 +538,19 @@ fn first_child_composite_consumes_pending_clear_load_op() {
             && source.contains("composite_load_op,"),
         "first child surface composites should consume the pending clear load-op instead of forcing a standalone clear submit"
     );
-    let nested_underlay_start = source
-        .find(
-            "if child.needs_nested_underlay {\n            flush_pending_composite_queues_fused(\n                backend,\n                &mut pending_composites,",
-        )
-        .expect("nested underlay branch must initialize target before child capture");
-    let nested_underlay_end = source[nested_underlay_start..]
-        .find("let underlay = sample_child_underlay(")
-        .map(|offset| nested_underlay_start + offset)
-        .expect("nested underlay capture should follow target initialization");
-    let nested_underlay_body = &source[nested_underlay_start..nested_underlay_end];
+    let underlay_start = source
+        .find("fn sample_child_underlay<")
+        .expect("child underlays must be sampled through the shared helper");
+    let underlay_end = source[underlay_start..]
+        .find("\nstruct ReplayedWrite")
+        .map(|offset| underlay_start + offset)
+        .expect("the underlay helper must be followed by the replay write");
+    let underlay_body = &source[underlay_start..underlay_end];
     let backdrop_body = block_after(&source, "if let Some(backdrop) = &child.backdrop");
     let shadow_body = block_after(&source, "if !resolved_child.shadow_draws.is_empty()");
     assert!(
-        nested_underlay_body.contains("flush_pending_clear")
+        underlay_body.contains("flush_pending_clear")
+            && underlay_body.contains("flush_pending_queues_for_backdrop_capture")
             && backdrop_body.contains("flush_pending_queues_for_backdrop_capture")
             && shadow_body.contains("flush_pending_clear"),
         "target readers such as underlays, backdrop snapshots, and shadow draws must still initialize the target before reading/compositing"

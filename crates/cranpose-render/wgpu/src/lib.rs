@@ -1002,6 +1002,16 @@ impl WgpuRenderer {
         }
     }
 
+    /// Enables or disables replaying the pending composites that overlap a
+    /// baked underlay copy into that copy, instead of flushing them to the
+    /// parent target before the copy (see `CRANPOSE_DISABLE_UNDERLAY_REPLAY`).
+    /// Parity tests render the same scene both ways; both ways are exact.
+    pub fn set_underlay_replay_enabled(&mut self, enabled: bool) {
+        if let Some(renderer) = self.sync_gpu_renderer_mut() {
+            renderer.set_underlay_replay_enabled(enabled);
+        }
+    }
+
     pub fn last_frame_stats(&self) -> Option<RenderStatsSnapshot> {
         match &self.backend {
             PresentBackend::Sync(gpu_renderer) => gpu_renderer.last_frame_stats(),

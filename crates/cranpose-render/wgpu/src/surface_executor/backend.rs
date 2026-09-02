@@ -153,6 +153,11 @@ pub(crate) trait SurfaceExecutionBackend {
     /// `CRANPOSE_DISABLE_UNDERLAY_BAKE` and through
     /// [`crate::WgpuRenderer::set_underlay_bake_enabled`].
     fn underlay_bake_enabled(&self) -> bool;
+    /// Whether the pending composites overlapping a baked underlay copy are
+    /// replayed into that copy instead of flushed to the parent target first.
+    /// Off under `CRANPOSE_DISABLE_UNDERLAY_REPLAY` and through
+    /// [`crate::WgpuRenderer::set_underlay_replay_enabled`].
+    fn underlay_replay_enabled(&self) -> bool;
     fn insert_cached_layer_surface(
         &mut self,
         key: LayerRasterCacheKey,

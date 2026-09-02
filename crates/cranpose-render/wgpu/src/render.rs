@@ -232,6 +232,10 @@ fn underlay_bake_switch() -> bool {
     crate::debug_toggles::debug_toggle("CRANPOSE_DISABLE_UNDERLAY_BAKE").is_none()
 }
 
+fn underlay_replay_switch() -> bool {
+    crate::debug_toggles::debug_toggle("CRANPOSE_DISABLE_UNDERLAY_REPLAY").is_none()
+}
+
 fn skip_shadow_draws() -> bool {
     crate::debug_toggles::debug_toggle("CRANPOSE_SKIP_SHADOWS")
         .map(|v| matches!(v.as_str(), "1" | "true" | "yes"))
@@ -5029,6 +5033,7 @@ pub struct GpuRenderer {
     observed_scene_range_cache_misses: BoundedLruCache<LayerRasterCacheKey, ()>,
     observed_surface_cache_misses: BoundedLruCache<LayerRasterCacheKey, ()>,
     underlay_bake_enabled: bool,
+    underlay_replay_enabled: bool,
     shadow_surface_cache: BoundedLruCache<ShadowSurfaceCacheKey, CachedShadowSurface>,
     shadow_surface_cache_bytes: u64,
     frame_stats: gpu_stats::FrameStats,
@@ -5715,6 +5720,7 @@ impl GpuRenderer {
                 MAX_OBSERVED_SCENE_RANGE_CACHE_MISSES,
             ),
             underlay_bake_enabled: underlay_bake_switch(),
+            underlay_replay_enabled: underlay_replay_switch(),
             shadow_surface_cache: BoundedLruCache::with_capacity_at_least_one(
                 MAX_SHADOW_SURFACE_CACHE_ITEMS,
             ),
@@ -7278,6 +7284,10 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
         self.renderer.underlay_bake_enabled
     }
 
+    fn underlay_replay_enabled(&self) -> bool {
+        self.renderer.underlay_replay_enabled
+    }
+
     fn insert_cached_layer_surface(
         &mut self,
         key: LayerRasterCacheKey,
@@ -8319,6 +8329,10 @@ impl GpuRenderer {
 
     pub fn set_underlay_bake_enabled(&mut self, enabled: bool) {
         self.underlay_bake_enabled = enabled && underlay_bake_switch();
+    }
+
+    pub fn set_underlay_replay_enabled(&mut self, enabled: bool) {
+        self.underlay_replay_enabled = enabled && underlay_replay_switch();
     }
 
     pub fn gpu_pass_timings(&self) -> crate::pass_timing::GpuPassTimingReport {

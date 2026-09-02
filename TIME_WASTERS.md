@@ -548,3 +548,22 @@ of the pending composites and a copy out of the live composition target,
 which on a tile-based GPU is a full tile store and reload of the 2.4 MP
 target every time. The per-kind `miss_px_by_kind` field on the `[GPU f#]`
 line is the cheap way to see which cache kind is churning without logcat.
+
+## A fence-split pass profile ranks by latency, and one sampled GPU line lies
+
+Two instruments cost an evening on the Mate 20 X. `debug.cranpose.gpu_fence_profile`
+(submit and wait at every pass boundary, minus an empty round trip) charged
+each full-screen composite pass about 11 ms and every small pass under 1 ms,
+so seven root composites looked like 77 ms of a 45 ms frame. Removing six of
+them changed present time by nothing: the profiler measures each pass's
+latency in isolation, and a tiler hides most of a big target's write-back
+and reload behind the next pass's work. Use the profile only to list passes
+per frame and their targets, never to rank them; on this GPU the frame cost
+tracks the pass count (about 0.4 ms of fixed cost each, 11 passes present in
+5 ms, 37 in 30 ms) far more than the pixels. The second trap is the
+`[GPU f#]` line: it is one sampled frame out of sixty, and on this screen
+consecutive frames alternate between a star step (56 passes, 2 backdrop hits)
+and a quiet frame (38 passes, 16 hits), so two runs of the same build read as
+a regression or a fix depending on which frame the sampler landed on. Compare
+several consecutive samples, or `pass_px` averaged over a run, before
+believing a difference.

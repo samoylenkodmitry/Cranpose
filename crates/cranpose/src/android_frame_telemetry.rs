@@ -32,7 +32,7 @@ fn property_flag(name: &str) -> bool {
     }
 }
 
-const PROPERTY_BACKED_ENV_VARS: [(&str, &str); 47] = [
+const PROPERTY_BACKED_ENV_VARS: [(&str, &str); 50] = [
     ("debug.cranpose.root_direct", "CRANPOSE_ROOT_DIRECT_DIAG"),
     ("debug.cranpose.recomp_diag", "CRANPOSE_RECOMP_DIAG"),
     (
@@ -41,6 +41,10 @@ const PROPERTY_BACKED_ENV_VARS: [(&str, &str); 47] = [
     ),
     ("debug.cranpose.core_pin", "CRANPOSE_CORE_PIN"),
     ("debug.cranpose.gpu_stats", "CRANPOSE_GPU_STATS"),
+    (
+        "debug.cranpose.gpu_fence_profile",
+        "CRANPOSE_GPU_FENCE_PROFILE",
+    ),
     ("debug.cranpose.pass_timing", "CRANPOSE_GPU_PASS_TIMING"),
     (
         "debug.cranpose.composition_8bit",
@@ -89,6 +93,14 @@ const PROPERTY_BACKED_ENV_VARS: [(&str, &str); 47] = [
         "CRANPOSE_SCENE_UPDATE_DIAG",
     ),
     ("debug.cranpose.backdrop_diag", "CRANPOSE_BACKDROP_DIAG"),
+    (
+        "debug.cranpose.no_underlay_bake",
+        "CRANPOSE_DISABLE_UNDERLAY_BAKE",
+    ),
+    (
+        "debug.cranpose.no_underlay_replay",
+        "CRANPOSE_DISABLE_UNDERLAY_REPLAY",
+    ),
     (
         "debug.cranpose.render_stage_ms",
         "CRANPOSE_WGPU_RENDER_STAGE_TELEMETRY_MS",
