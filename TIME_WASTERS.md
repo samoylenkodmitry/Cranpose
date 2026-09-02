@@ -507,3 +507,26 @@ as long as the stale offset. Any other animation on the same transition kept
 moving, which is what made it look like a rendering bug. Reproduce with the
 exact user sequence, and when a value looks frozen log the *state value* in the
 draw closure before touching the renderer.
+
+## A "frozen backdrop" verdict from a shift search over a featureless lane
+
+`robot_glass_backdrop_scroll_stability` went red on main at "Remove blur from
+Receipts glass surfaces" and stayed red for two days, reading exactly like a
+stale backdrop cache. It was not: the compositor re-captured the bar's
+backdrop every frame (`CRANPOSE_BACKDROP_DIAG=1` showed a fresh `prepare
+MISS copied=true` per frame) and a cold render of the same scroll position
+matched the incrementally scrolled frame pixel for pixel. The test searched
+for a one-pixel vertical shift inside a 32px lane of the bar; with the blur
+gone that lane held only a card's diagonal gradient, whose vertical change
+per pixel is below one colour step, so the best-fit shift was 0 and the test
+called it "frozen". The blur had been smearing card edges and text into the
+lane, which is the only reason it ever measured a shift. The lens optics that
+followed compress vertical motion under the bar as well, so the "identity
+lane" premise does not hold for this material at all. A shift heuristic on a
+glass output cannot tell "frozen" from "no vertical texture"; the test now
+compares every incremental step against a cold render of the same scroll
+position (remount the tab, scroll straight there, capture), which is the
+cache's actual contract and fails from step 2 when the backdrop cache key is
+deliberately frozen. Reproduce such failures headlessly on the Mac first
+(`robot_glass_backdrop_scroll_headless`): a samarch iteration was queued
+10+ minutes behind CI's host lock, the Mac loop is 90 seconds.

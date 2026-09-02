@@ -873,6 +873,11 @@ path = "robot-runners/robot_liquid_backdrop_feedback.rs"
 required-features = ["desktop", "robot-app"]
 
 [[example]]
+name = "robot_glass_backdrop_scroll_headless"
+path = "robot-runners/robot_glass_backdrop_scroll_headless.rs"
+required-features = ["desktop", "robot-app"]
+
+[[example]]
 name = "robot_glass_backdrop_scroll_stability"
 path = "robot-runners/robot_glass_backdrop_scroll_stability.rs"
 required-features = ["desktop", "robot-app"]
