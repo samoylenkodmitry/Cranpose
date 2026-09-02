@@ -158,8 +158,8 @@ pub use cranpose_core::{
     LaunchedEffect, LaunchedEffectAsync, LaunchedEffectScope, MutableState, SnapshotStateList,
     SnapshotStateMap, State, delay, interval, key, launchBlocking, mutableStateList,
     mutableStateListOf, mutableStateMap, mutableStateMapOf, mutableStateOf, produceState, remember,
-    rememberCoroutineScope, rememberMutableStateOf, rememberMutableStateOfNeverEqual,
-    rememberUpdatedState,
+    rememberCoroutineScope, rememberKeyed, rememberMutableStateOf,
+    rememberMutableStateOfNeverEqual, rememberUpdatedState,
 };
 /// Liquid UI — the first-party glass component library
 /// (`use cranpose::liquid::prelude::*;`).
@@ -369,8 +369,8 @@ pub mod prelude {
         LaunchedEffect, LaunchedEffectAsync, LaunchedEffectScope, MutableState, SnapshotStateList,
         SnapshotStateMap, State, delay, interval, key, launchBlocking, mutableStateList,
         mutableStateListOf, mutableStateMap, mutableStateMapOf, mutableStateOf, produceState,
-        remember, rememberCoroutineScope, rememberMutableStateOf, rememberMutableStateOfNeverEqual,
-        rememberUpdatedState,
+        remember, rememberCoroutineScope, rememberKeyed, rememberMutableStateOf,
+        rememberMutableStateOfNeverEqual, rememberUpdatedState,
     };
     pub use cranpose_services::*;
     pub use cranpose_ui::*;

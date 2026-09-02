@@ -1,4 +1,7 @@
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 
 use cranpose_core::{
     Composer, Composition, MemoryApplier, MutableState, Node, SnapshotStateObserver, State,
@@ -187,6 +190,76 @@ fn infinite_repeatable_spec_stores_config() {
     assert_eq!(spec.animation.duration_millis, 1200);
     assert_eq!(spec.repeat_mode, RepeatMode::Reverse);
     assert_eq!(spec.initial_start_offset, StartOffset::default());
+}
+
+#[test]
+fn stepped_animation_spec_quantizes_the_tween_fraction() {
+    let spec = AnimationSpec::stepped(1_000, 4);
+
+    assert_eq!(spec.duration_millis, 1_000);
+    assert_eq!(spec.easing.transform(0.0), 0.0);
+    assert_eq!(spec.easing.transform(0.24), 0.0);
+    assert_eq!(spec.easing.transform(0.25), 0.25);
+    assert_eq!(spec.easing.transform(0.74), 0.5);
+    assert_eq!(spec.easing.transform(0.99), 0.75);
+    assert_eq!(spec.easing.transform(1.0), 1.0);
+}
+
+#[test]
+#[should_panic(expected = "step_count must be greater than zero")]
+fn stepped_animation_spec_rejects_zero_steps() {
+    let _ = AnimationSpec::stepped(1_000, 0);
+}
+
+#[test]
+fn infinite_transition_state_does_not_invalidate_for_equivalent_values() {
+    let composition = Composition::new(MemoryApplier::new());
+    let animation = TransitionAnimationState::new(
+        0.0,
+        0.0,
+        infiniteRepeatable(
+            AnimationSpec::linear(800),
+            RepeatMode::Restart,
+            StartOffset::default(),
+        ),
+        composition.runtime_handle(),
+    );
+    let invalidations = Rc::new(Cell::new(0usize));
+    let observer = SnapshotStateObserver::new(|callback| callback());
+    observer.start();
+    observer.observe_reads(
+        (),
+        {
+            let invalidations = Rc::clone(&invalidations);
+            move |_| invalidations.set(invalidations.get() + 1)
+        },
+        || animation.state().get(),
+    );
+
+    animation.on_frame(16_666_667);
+
+    assert_eq!(invalidations.get(), 0);
+}
+
+#[test]
+fn animatable_state_does_not_invalidate_for_equivalent_values() {
+    let composition = Composition::new(MemoryApplier::new());
+    let mut animation = Animatable::new(0.0, composition.runtime_handle());
+    let invalidations = Rc::new(Cell::new(0usize));
+    let observer = SnapshotStateObserver::new(|callback| callback());
+    observer.start();
+    observer.observe_reads(
+        (),
+        {
+            let invalidations = Rc::clone(&invalidations);
+            move |_| invalidations.set(invalidations.get() + 1)
+        },
+        || animation.state().get(),
+    );
+
+    animation.snapTo(0.0);
+
+    assert_eq!(invalidations.get(), 0);
 }
 
 #[test]

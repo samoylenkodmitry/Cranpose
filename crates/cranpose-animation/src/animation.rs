@@ -43,7 +43,7 @@ impl Lerp for f64 {
 /// velocity is expressed in value units per second — so retargeting an
 /// animation mid-flight keeps the physical velocity (no hitch), and gestures
 /// can hand their release velocity to [`Animatable::animate_to_with_velocity`].
-pub trait SpringScalar: Lerp + Clone {
+pub trait SpringScalar: Lerp + Clone + PartialEq {
     /// Number of animated dimensions (1..=4).
     const DIMENSIONS: usize;
 
@@ -151,6 +151,8 @@ pub enum Easing {
     /// Fast out, linear in (material design).
     /// Jetpack Compose: FastOutLinearEasing
     FastOutLinearEasing,
+    /// Holds each of `step_count` evenly spaced values for one discrete step.
+    Steps(u32),
 }
 
 impl Easing {
@@ -164,6 +166,14 @@ impl Easing {
             Easing::FastOutSlowInEasing => cubic_bezier(0.4, 0.0, 0.2, 1.0, fraction),
             Easing::LinearOutSlowInEasing => cubic_bezier(0.0, 0.0, 0.2, 1.0, fraction),
             Easing::FastOutLinearEasing => cubic_bezier(0.4, 0.0, 1.0, 1.0, fraction),
+            Easing::Steps(step_count) => {
+                if fraction <= 0.0 || fraction >= 1.0 {
+                    fraction
+                } else {
+                    let step_count = (*step_count).max(1) as f32;
+                    (fraction * step_count).floor() / step_count
+                }
+            }
         }
     }
 }
@@ -254,6 +264,16 @@ impl AnimationSpec {
     /// Create a linear tween animation.
     pub fn linear(duration_millis: u64) -> Self {
         Self::tween(duration_millis, Easing::LinearEasing)
+    }
+
+    /// Creates a tween that exposes `step_count` evenly spaced values.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `step_count` is zero.
+    pub fn stepped(duration_millis: u64, step_count: u32) -> Self {
+        assert!(step_count > 0, "step_count must be greater than zero");
+        Self::tween(duration_millis, Easing::Steps(step_count))
     }
 
     /// Add a delay before the animation starts.
@@ -479,7 +499,10 @@ impl<T: Lerp + Clone + PartialEq + 'static> TransitionAnimationState<T> {
         runtime: RuntimeHandle,
     ) -> Self {
         Self {
-            value_state: OwnedMutableState::with_runtime(initial_value.clone(), runtime),
+            value_state: OwnedMutableState::with_runtime_structural_eq(
+                initial_value.clone(),
+                runtime,
+            ),
             initial_value: RefCell::new(initial_value),
             target_value: RefCell::new(target_value),
             spec: RefCell::new(spec),
@@ -846,7 +869,7 @@ impl<T: SpringScalar + 'static> Animatable<T> {
         runtime: RuntimeHandle,
     ) -> Self {
         let inner = AnimatableInner {
-            state: OwnedMutableState::with_runtime(initial.clone(), runtime.clone()),
+            state: OwnedMutableState::with_runtime_structural_eq(initial.clone(), runtime.clone()),
             runtime,
             current: initial.clone(),
             velocity: [0.0; SPRING_MAX_DIMENSIONS],

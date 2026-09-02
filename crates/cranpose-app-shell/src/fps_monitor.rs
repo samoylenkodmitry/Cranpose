@@ -10,6 +10,10 @@ fn recomposition_diag_enabled() -> bool {
     *ENABLED.get_or_init(|| std::env::var_os("CRANPOSE_RECOMP_DIAG").is_some())
 }
 
+fn recomposition_diagnostic_line(rate: u64, frames_per_second: f32, total: u64) -> String {
+    format!("[recomp] {rate}/s frames={frames_per_second:.1}/s total={total}")
+}
+
 #[derive(Debug)]
 pub(crate) struct FpsMonitor {
     tracker: FpsTracker,
@@ -167,9 +171,14 @@ impl FpsTracker {
             self.last_recomp_count = recomposition_count;
             self.last_recomp_calc = frame_finished_at;
             if recomposition_diag_enabled() {
-                eprintln!(
-                    "[recomp] {}/s frames={:.1}/s total={}",
-                    self.recomps_per_second, self.last_fps, recomposition_count
+                log::info!(
+                    target: "cranpose::recomposition",
+                    "{}",
+                    recomposition_diagnostic_line(
+                        self.recomps_per_second,
+                        self.last_fps,
+                        recomposition_count,
+                    )
                 );
             }
         }
@@ -336,7 +345,15 @@ pub struct FpsStats {
 mod tests {
     use std::time::Duration;
 
-    use super::{FpsMonitor, FpsTracker, nearest_rank_percentile};
+    use super::{FpsMonitor, FpsTracker, nearest_rank_percentile, recomposition_diagnostic_line};
+
+    #[test]
+    fn recomposition_diagnostic_reports_rate_frames_and_total() {
+        assert_eq!(
+            recomposition_diagnostic_line(3, 59.94, 17),
+            "[recomp] 3/s frames=59.9/s total=17"
+        );
+    }
 
     #[test]
     fn monitors_do_not_share_recomposition_or_frame_counts() {
