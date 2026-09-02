@@ -3276,6 +3276,8 @@ fn backdrop_scene_prefix_hash(
     hash_f32_bits(root_scale, &mut hasher);
     z_end.hash(&mut hasher);
 
+    let diag = backdrop_diag_enabled();
+    let mut draw_op_count = 0usize;
     for draw_op in scene_range_draw_ops(&scene.draw_ops, 0, z_end)
         .iter()
         .filter(|draw_op| {
@@ -3285,7 +3287,10 @@ fn backdrop_scene_prefix_hash(
     {
         0u8.hash(&mut hasher);
         hash_draw_op(scene, draw_op, &mut hasher);
+        draw_op_count += 1;
     }
+    let after_draw_ops = hasher.finish();
+    let mut effect_layer_count = 0usize;
     for effect_layer in scene
         .effect_layers
         .iter()
@@ -3293,7 +3298,9 @@ fn backdrop_scene_prefix_hash(
     {
         1u8.hash(&mut hasher);
         hash_effect_layer(effect_layer, &mut hasher);
+        effect_layer_count += 1;
     }
+    let after_effect_layers = hasher.finish();
     for backdrop_layer in scene.backdrop_layers.iter().filter(|layer| {
         layer.z_index < z_end
             && rects_intersect(
@@ -3310,6 +3317,7 @@ fn backdrop_scene_prefix_hash(
         2u8.hash(&mut hasher);
         hash_backdrop_layer(backdrop_layer, &mut hasher);
     }
+    let after_backdrop_layers = hasher.finish();
     for child in prior_child_contributions.iter().filter(|child| {
         if child.z_index >= z_end {
             return false;
@@ -3331,8 +3339,14 @@ fn backdrop_scene_prefix_hash(
         3u8.hash(&mut hasher);
         hash_backdrop_prefix_child(child, &mut hasher);
     }
-
-    hasher.finish()
+    let result = hasher.finish();
+    if diag {
+        eprintln!(
+            "[backdrop-diag] prefix-hash z_end={z_end} capture=({:.1},{:.1}) ops={draw_op_count}:{after_draw_ops} effects={effect_layer_count}:{after_effect_layers} backdrops={after_backdrop_layers} full={result}",
+            capture_rect.x, capture_rect.y
+        );
+    }
+    result
 }
 
 fn scene_backdrop_input_hashes(

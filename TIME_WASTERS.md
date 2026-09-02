@@ -530,3 +530,21 @@ cache's actual contract and fails from step 2 when the backdrop cache key is
 deliberately frozen. Reproduce such failures headlessly on the Mac first
 (`robot_glass_backdrop_scroll_headless`): a samarch iteration was queued
 10+ minutes behind CI's host lock, the Mac loop is 90 seconds.
+
+## Ranking GPU cost on the Mate 20 X: no timestamps, so ablate the scene
+
+`debug.cranpose.pass_timing` prints only "adapter lacks TIMESTAMP_QUERY" on
+the Mate 20 X (Mali-G76, Vulkan), and logcat's chatty filter drops most of
+the per-node `[layer-cache-diag]` lines, so neither a pass profile nor a
+per-frame miss list is available there. What worked, at 2.5 minutes per
+build-and-measure round on the showcase copy in the scratchpad: freeze or
+remove one thing at a time and read `present p50`. Baseline 41.5 ms; cards
+without glass 5.5 ms; starfield frozen 6.8 ms; planets frozen 35.8 ms; card
+glass with a trivial shader 38.8 ms; header blur removed 41.2 ms; tab bar
+blur off 43.5 ms. Read together: the glass cards cost 36 ms only while the
+backdrop beneath them changes, and the shader is 3 ms of that. The rest is
+five root backdrop captures plus five underlay bakes per frame, each a flush
+of the pending composites and a copy out of the live composition target,
+which on a tile-based GPU is a full tile store and reload of the 2.4 MP
+target every time. The per-kind `miss_px_by_kind` field on the `[GPU f#]`
+line is the cheap way to see which cache kind is churning without logcat.
