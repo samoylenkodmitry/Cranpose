@@ -5141,7 +5141,13 @@ fn serve_or_capture_prefix_snapshot<B: SurfaceExecutionBackend>(
     }
 
     if !backend.admit_layer_surface_cache_miss(&key, CacheAdmission::OnRepeat) {
+        if crate::layer_surface_cache::cache_diag_enabled() {
+            log::warn!("[layer-cache-diag] prefix-snapshot observe key={key:?}");
+        }
         return Ok(PrefixSnapshotOutcome::Claimed(prefix_end));
+    }
+    if crate::layer_surface_cache::cache_diag_enabled() {
+        log::warn!("[layer-cache-diag] prefix-snapshot admit key={key:?}");
     }
 
     // The entry renders through the same segment pipeline as the frame,

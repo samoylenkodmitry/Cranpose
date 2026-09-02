@@ -15,6 +15,7 @@ use cranpose_render_common::{
     graph::{
         DrawPrimitiveNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, RenderGraph, RenderNode,
     },
+    raster_cache::{LayerRasterCacheKey, ScaleBucket},
 };
 use cranpose_ui_graphics::{Brush, Color, CornerRadii, DrawPrimitive, Rect};
 
@@ -192,6 +193,108 @@ fn a_prefix_snapshot_replays_the_direct_bytes_in_every_cache_phase() {
             );
         }
     }
+}
+
+fn prefix_kind_slot() -> usize {
+    LayerRasterCacheKey::prefix_snapshot(
+        0,
+        0,
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 1.0,
+            height: 1.0,
+        },
+        (1, 1),
+        ScaleBucket::from_scale(1.0),
+    )
+    .kind_slot()
+}
+
+fn prefix_traffic(renderer: &support::LockedRenderer) -> (u32, u32) {
+    let stats = renderer.last_frame_stats().expect("frame stats");
+    let slot = prefix_kind_slot();
+    (
+        stats.layer_cache_hits_by_kind[slot],
+        stats.layer_cache_misses_by_kind[slot],
+    )
+}
+
+/// A prefix that holds still for two frames and then moves on passes the
+/// repeat check on every second frame, so without a backoff each such
+/// frame renders and stores a full-target snapshot that the next frame
+/// replaces unserved: one store per two frames. The bytes stay exact either
+/// way; what must drop is the store traffic, to the streak that arms the
+/// backoff plus one store per doubling window. Once the content settles the
+/// snapshot is served again.
+#[test]
+fn a_prefix_that_holds_for_two_frames_stops_being_snapshotted_and_recovers_when_still() {
+    let mut renderer = match support::headless_renderer() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!("skipping prefix snapshot backoff: headless WGPU init failed: {err}");
+            return;
+        }
+    };
+    let region = Rect {
+        x: 5.0,
+        y: 5.0,
+        width: 590.0,
+        height: 590.0,
+    };
+    const STEPPED_FRAMES: usize = 40;
+    const SETTLED_FRAMES: usize = 80;
+    const MAX_STEPPED_STORES: u32 = (STEPPED_FRAMES / 8) as u32;
+    let stepped: Vec<RenderGraph> = (0..STEPPED_FRAMES)
+        .map(|frame| layered_graph(30_200, region, frame / 2))
+        .collect();
+
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_DISABLE_PREFIX_SNAPSHOT", Some("1"));
+    let (truth, _) = render_pass(&mut renderer, &stepped);
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_DISABLE_PREFIX_SNAPSHOT", None);
+
+    let mut frames = Vec::with_capacity(STEPPED_FRAMES);
+    let mut stores = Vec::with_capacity(STEPPED_FRAMES);
+    for graph in &stepped {
+        renderer.scene_mut().graph = Some(graph.clone());
+        let captured = renderer
+            .capture_frame(SIZE, SIZE)
+            .expect("stepped frame capture");
+        frames.push(captured.pixels);
+        stores.push(prefix_traffic(&renderer).1);
+    }
+    assert_byte_exact("stepped prefix", &truth, &frames);
+    assert!(
+        stores.iter().take(4).any(|stores| *stores > 0),
+        "the repeat check must still admit a first snapshot: {stores:?}"
+    );
+    let total_stores: u32 = stores.iter().sum();
+    assert!(
+        total_stores <= MAX_STEPPED_STORES,
+        "a prefix that never repeats after its second sighting kept being snapshotted {total_stores} times in {STEPPED_FRAMES} frames: {stores:?}"
+    );
+
+    let settled = stepped.last().expect("stepped frames").clone();
+    let mut served = false;
+    for _ in 0..SETTLED_FRAMES {
+        renderer.scene_mut().graph = Some(settled.clone());
+        let captured = renderer
+            .capture_frame(SIZE, SIZE)
+            .expect("settled frame capture");
+        assert_byte_exact(
+            "settled prefix",
+            &truth[STEPPED_FRAMES - 1..],
+            &[captured.pixels],
+        );
+        if prefix_traffic(&renderer).0 > 0 {
+            served = true;
+            break;
+        }
+    }
+    assert!(
+        served,
+        "once the prefix holds still the snapshot must be admitted again and served within {SETTLED_FRAMES} frames"
+    );
 }
 
 /// The small flatten class's inexactness has to stay small and stable:

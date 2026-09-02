@@ -27,6 +27,14 @@ pub struct LayerRasterCacheHashes {
     pub effect: u64,
 }
 
+/// Number of distinct [`LayerRasterCacheKey`] kinds; see
+/// [`LayerRasterCacheKey::kind_slot`] and [`LAYER_RASTER_CACHE_KIND_LABELS`].
+pub const LAYER_RASTER_CACHE_KIND_COUNT: usize = 5;
+
+/// Short labels per kind slot, in [`LayerRasterCacheKey::kind_slot`] order.
+pub const LAYER_RASTER_CACHE_KIND_LABELS: [&str; LAYER_RASTER_CACHE_KIND_COUNT] =
+    ["full", "src", "backdrop", "range", "prefix"];
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum LayerRasterCacheKind {
     FullSurface,
@@ -171,6 +179,12 @@ impl LayerRasterCacheKey {
         }
     }
 
+    /// Index of this key's kind in `0..LAYER_RASTER_CACHE_KIND_COUNT`, for
+    /// per-kind accounting.
+    pub fn kind_slot(self) -> usize {
+        self.kind.identity_kind() as usize
+    }
+
     pub fn stable_id(self) -> Option<NodeId> {
         self.stable_id
     }
@@ -195,6 +209,12 @@ impl LayerRasterCacheKey {
 
     pub fn pixel_size(self) -> (u32, u32) {
         (self.pixel_size[0], self.pixel_size[1])
+    }
+
+    /// The bit pattern of the entry's local bounds: the place a keyless entry
+    /// occupies, stable while its content changes.
+    pub fn local_bounds_bits(self) -> [u32; 4] {
+        self.local_bounds_bits
     }
 
     pub fn scale_bucket(self) -> ScaleBucket {
