@@ -914,6 +914,36 @@ fn renderer_warmup_keeps_frame_schedule_until_renderer_clears_it() {
 }
 
 #[test]
+fn renderer_warmup_waits_until_no_animation_frame_is_pending() {
+    let _guard = test_guard();
+    let needs_warmup = Rc::new(Cell::new(true));
+    let mut shell = AppShell::new(
+        WarmupRenderer {
+            scene: TestScene,
+            needs_warmup: Rc::clone(&needs_warmup),
+        },
+        location_key(file!(), line!(), column!()),
+        || {},
+    );
+
+    shell.update();
+    shell
+        .runtime
+        .runtime_handle()
+        .register_frame_callback(|_| {});
+    assert!(
+        !shell.needs_redraw(),
+        "an armed frame callback already owes the display a frame; a warmup redraw would only render the same scene again"
+    );
+
+    shell.update();
+    assert!(
+        shell.needs_redraw(),
+        "once no frame callback is armed the renderer's warmup must get its frame"
+    );
+}
+
+#[test]
 fn idle_ui_task_wakes_for_an_update_without_scheduling_a_frame() {
     let _guard = test_guard();
     let mut shell = AppShell::new(

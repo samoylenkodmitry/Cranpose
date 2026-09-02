@@ -1,7 +1,9 @@
 use std::cell::{Cell, RefCell};
 
 use cranpose_core::NodeId;
-use cranpose_render_common::raster_cache::LayerRasterCacheKey;
+use cranpose_render_common::raster_cache::{
+    LAYER_RASTER_CACHE_KIND_COUNT, LAYER_RASTER_CACHE_KIND_LABELS, LayerRasterCacheKey,
+};
 use cranpose_ui_graphics::Rect;
 
 use crate::{
@@ -186,6 +188,12 @@ pub struct FrameStatsSnapshot {
     pub layer_cache_evictions: u32,
     pub layer_cache_hit_pixels: u64,
     pub layer_cache_miss_pixels: u64,
+    /// Hits per key kind, indexed by `LayerRasterCacheKey::kind_slot`.
+    pub layer_cache_hits_by_kind: [u32; LAYER_RASTER_CACHE_KIND_COUNT],
+    /// Stores per key kind, indexed by `LayerRasterCacheKey::kind_slot`.
+    pub layer_cache_misses_by_kind: [u32; LAYER_RASTER_CACHE_KIND_COUNT],
+    /// Stored pixels per key kind, indexed by `LayerRasterCacheKey::kind_slot`.
+    pub layer_cache_miss_pixels_by_kind: [u64; LAYER_RASTER_CACHE_KIND_COUNT],
     pub shadow_shape_cache_hits: u32,
     pub shadow_shape_cache_misses: u32,
     pub shadow_shape_cache_hit_pixels: u64,
@@ -258,6 +266,16 @@ impl FrameStatsSnapshot {
         }
     }
 
+    fn miss_pixels_by_kind_display(&self) -> String {
+        LAYER_RASTER_CACHE_KIND_LABELS
+            .iter()
+            .zip(self.layer_cache_miss_pixels_by_kind.iter())
+            .filter(|(_, pixels)| **pixels > 0)
+            .map(|(label, pixels)| format!("{label}={:.2}MP", *pixels as f64 / 1_000_000.0))
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+
     fn print(self, frame_count: u64) {
         let mb = self.offscreen_total_bytes as f64 / (1024.0 * 1024.0);
         let upload_mb = self.upload_bytes as f64 / (1024.0 * 1024.0);
@@ -273,7 +291,7 @@ impl FrameStatsSnapshot {
             "[GPU f#{}] encoders={} submits={} passes={} | offscreen: acq={} new={} {:.1}MB pool={}({:.1}MB) retained={:.1}MB | \
              uploads={:.2}MB | \
              isolated_layers={} area={:.2}MP | \
-             layer_cache: hit={} miss={} {:.1}% evict={} hit_px={:.2}MP miss_px={:.2}MP size={}({:.1}MB) | \
+             layer_cache: hit={} miss={} {:.1}% evict={} hit_px={:.2}MP miss_px={:.2}MP size={}({:.1}MB) miss_px_by_kind={} | \
              shadow_cache: shape_hit={} shape_miss={} hit_px={:.2}MP miss_px={:.2}MP text_blur_fallback={} | \
              blur={} composite={} effect={} | shape={} image={} text={} draws={} | \
              text_img_cache: hit={} miss={} hit_px={:.2}MP miss_px={:.2}MP raster={:.2}MB | \
@@ -300,6 +318,7 @@ impl FrameStatsSnapshot {
             layer_cache_miss_mpx,
             self.layer_cache_size,
             layer_cache_mb,
+            self.miss_pixels_by_kind_display(),
             self.shadow_shape_cache_hits,
             self.shadow_shape_cache_misses,
             shadow_cache_hit_mpx,
@@ -360,6 +379,9 @@ pub(crate) struct FrameStats {
     pub layer_cache_evictions: Cell<u32>,
     pub layer_cache_hit_pixels: Cell<u64>,
     pub layer_cache_miss_pixels: Cell<u64>,
+    pub layer_cache_hits_by_kind: [Cell<u32>; LAYER_RASTER_CACHE_KIND_COUNT],
+    pub layer_cache_misses_by_kind: [Cell<u32>; LAYER_RASTER_CACHE_KIND_COUNT],
+    pub layer_cache_miss_pixels_by_kind: [Cell<u64>; LAYER_RASTER_CACHE_KIND_COUNT],
     pub shadow_shape_cache_hits: Cell<u32>,
     pub shadow_shape_cache_misses: Cell<u32>,
     pub shadow_shape_cache_hit_pixels: Cell<u64>,
@@ -480,7 +502,9 @@ impl FrameStats {
         });
     }
 
-    pub fn record_layer_cache_hit(&self, width: u32, height: u32) {
+    pub fn record_layer_cache_hit(&self, key: &LayerRasterCacheKey, width: u32, height: u32) {
+        let by_kind = &self.layer_cache_hits_by_kind[key.kind_slot()];
+        by_kind.set(by_kind.get().saturating_add(1));
         self.layer_cache_hits
             .set(self.layer_cache_hits.get().saturating_add(1));
         self.layer_cache_hit_pixels.set(
@@ -490,13 +514,18 @@ impl FrameStats {
         );
     }
 
-    #[cfg_attr(
-        not(debug_assertions),
-        expect(unused_variables, reason = "the key is only tracked in debug builds")
-    )]
     pub fn record_layer_cache_miss(&self, key: &LayerRasterCacheKey, width: u32, height: u32) {
         #[cfg(debug_assertions)]
         self.missed_layer_cache_keys.borrow_mut().push(*key);
+        let slot = key.kind_slot();
+        let by_kind = &self.layer_cache_misses_by_kind[slot];
+        by_kind.set(by_kind.get().saturating_add(1));
+        let pixels_by_kind = &self.layer_cache_miss_pixels_by_kind[slot];
+        pixels_by_kind.set(
+            pixels_by_kind
+                .get()
+                .saturating_add((width as u64) * (height as u64)),
+        );
         self.layer_cache_misses
             .set(self.layer_cache_misses.get().saturating_add(1));
         self.layer_cache_miss_pixels.set(
@@ -678,6 +707,12 @@ impl FrameStats {
             layer_cache_evictions: self.layer_cache_evictions.get(),
             layer_cache_hit_pixels: self.layer_cache_hit_pixels.get(),
             layer_cache_miss_pixels: self.layer_cache_miss_pixels.get(),
+            layer_cache_hits_by_kind: self.layer_cache_hits_by_kind.each_ref().map(Cell::get),
+            layer_cache_misses_by_kind: self.layer_cache_misses_by_kind.each_ref().map(Cell::get),
+            layer_cache_miss_pixels_by_kind: self
+                .layer_cache_miss_pixels_by_kind
+                .each_ref()
+                .map(Cell::get),
             shadow_shape_cache_hits: self.shadow_shape_cache_hits.get(),
             shadow_shape_cache_misses: self.shadow_shape_cache_misses.get(),
             shadow_shape_cache_hit_pixels: self.shadow_shape_cache_hit_pixels.get(),
@@ -730,6 +765,11 @@ impl FrameStats {
         self.layer_cache_evictions.set(0);
         self.layer_cache_hit_pixels.set(0);
         self.layer_cache_miss_pixels.set(0);
+        for slot in 0..LAYER_RASTER_CACHE_KIND_COUNT {
+            self.layer_cache_hits_by_kind[slot].set(0);
+            self.layer_cache_misses_by_kind[slot].set(0);
+            self.layer_cache_miss_pixels_by_kind[slot].set(0);
+        }
         self.shadow_shape_cache_hits.set(0);
         self.shadow_shape_cache_misses.set(0);
         self.shadow_shape_cache_hit_pixels.set(0);
@@ -881,8 +921,8 @@ mod tests {
         stats.blur_passes.set(1);
         stats.offscreen_total_bytes.set(1024);
         stats.offscreen_pool_bytes.set(2048);
-        stats.record_layer_cache_hit(10, 20);
-        stats.record_layer_cache_hit(3, 4);
+        stats.record_layer_cache_hit(&test_layer_cache_key(), 10, 20);
+        stats.record_layer_cache_hit(&test_layer_cache_key(), 3, 4);
         stats.record_layer_cache_miss(&test_layer_cache_key(), 5, 6);
         stats.record_layer_cache_eviction();
         stats.record_shadow_shape_cache_hit(72);

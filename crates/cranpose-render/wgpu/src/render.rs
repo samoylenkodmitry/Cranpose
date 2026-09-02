@@ -6378,6 +6378,11 @@ impl GpuRenderer {
         key: &LayerRasterCacheKey,
         admission: CacheAdmission,
     ) -> bool {
+        if admission == CacheAdmission::OnRepeat
+            && self.layer_surface_cache.repeat_admission_backed_off(key)
+        {
+            return false;
+        }
         let observed = if key.is_scene_range() {
             &mut self.observed_scene_range_cache_misses
         } else {
