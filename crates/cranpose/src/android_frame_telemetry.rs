@@ -32,8 +32,7 @@ fn property_flag(name: &str) -> bool {
     }
 }
 
-const PROPERTY_BACKED_ENV_VARS: [(&str, &str); 57] = [
-    ("debug.cranpose.root_direct", "CRANPOSE_ROOT_DIRECT_DIAG"),
+const PROPERTY_BACKED_ENV_VARS: [(&str, &str); 22] = [
     ("debug.cranpose.recomp_diag", "CRANPOSE_RECOMP_DIAG"),
     (
         "debug.cranpose.layout_ms",
@@ -53,33 +52,8 @@ const PROPERTY_BACKED_ENV_VARS: [(&str, &str); 57] = [
     ("debug.cranpose.skip_shadows", "CRANPOSE_SKIP_SHADOWS"),
     ("debug.cranpose.a11y_sync", "CRANPOSE_A11Y_SYNC"),
     ("debug.cranpose.present_thread", "CRANPOSE_PRESENT_THREAD"),
-    ("debug.cranpose.command_feed", "CRANPOSE_COMMAND_FEED"),
-    ("debug.cranpose.arc_mesh", "CRANPOSE_ARC_MESH"),
     ("debug.cranpose.adpf", "CRANPOSE_ADPF"),
-    ("debug.cranpose.rim_mesh", "CRANPOSE_RIM_MESH"),
-    ("debug.cranpose.round_cull", "CRANPOSE_ROUND_CULL"),
-    (
-        "debug.cranpose.retained_mesh_px2",
-        "CRANPOSE_RETAINED_MESH_PX2",
-    ),
     ("debug.cranpose.catchup_pacing", "CRANPOSE_CATCHUP_PACING"),
-    ("debug.cranpose.instanced_quads", "CRANPOSE_INSTANCED_QUADS"),
-    (
-        "debug.cranpose.retained_bundles",
-        "CRANPOSE_RETAINED_BUNDLES",
-    ),
-    (
-        "debug.cranpose.cmd_replay_diag",
-        "CRANPOSE_COMMAND_REPLAY_DIAG",
-    ),
-    (
-        "debug.cranpose.similarity_replay",
-        "CRANPOSE_SIMILARITY_REPLAY",
-    ),
-    (
-        "debug.cranpose.stale_transition",
-        "CRANPOSE_STALE_TRANSITION",
-    ),
     (
         "debug.cranpose.update_stage_ms",
         "CRANPOSE_UPDATE_STAGE_TELEMETRY_MS",
@@ -92,15 +66,6 @@ const PROPERTY_BACKED_ENV_VARS: [(&str, &str); 57] = [
         "debug.cranpose.scene_update_diag",
         "CRANPOSE_SCENE_UPDATE_DIAG",
     ),
-    ("debug.cranpose.backdrop_diag", "CRANPOSE_BACKDROP_DIAG"),
-    (
-        "debug.cranpose.no_underlay_bake",
-        "CRANPOSE_DISABLE_UNDERLAY_BAKE",
-    ),
-    (
-        "debug.cranpose.no_underlay_replay",
-        "CRANPOSE_DISABLE_UNDERLAY_REPLAY",
-    ),
     (
         "debug.cranpose.render_stage_ms",
         "CRANPOSE_WGPU_RENDER_STAGE_TELEMETRY_MS",
@@ -109,79 +74,19 @@ const PROPERTY_BACKED_ENV_VARS: [(&str, &str); 57] = [
         "debug.cranpose.frame_stage_ms",
         "CRANPOSE_FRAME_STAGE_TELEMETRY_MS",
     ),
-    ("debug.cranpose.layer_diag", "CRANPOSE_LAYER_RENDER_DIAG"),
-    ("debug.cranpose.segment_diag", "CRANPOSE_SEGMENT_DIAG"),
-    (
-        "debug.cranpose.text_prewarm_diag",
-        "CRANPOSE_TEXT_PREWARM_DIAG",
-    ),
-    (
-        "debug.cranpose.no_range_cache",
-        "CRANPOSE_DISABLE_DIRECT_SCENE_RANGE_CACHE",
-    ),
-    (
-        "debug.cranpose.no_prefix_snap",
-        "CRANPOSE_DISABLE_PREFIX_SNAPSHOT",
-    ),
     ("debug.cranpose.gpu_backend", "CRANPOSE_ANDROID_GPU_BACKEND"),
     ("debug.cranpose.async_haptics", "CRANPOSE_ASYNC_HAPTICS"),
-    ("debug.cranpose.fill_diag", "CRANPOSE_FILL_DIAG"),
-    ("debug.cranpose.static_span", "CRANPOSE_STATIC_SPAN"),
-    ("debug.cranpose.segment_surface", "CRANPOSE_SEGMENT_SURFACE"),
-    (
-        "debug.cranpose.seg_surface_ratio",
-        "CRANPOSE_SEGMENT_SURFACE_COST_RATIO",
-    ),
-    (
-        "debug.cranpose.seg_surface_recolor",
-        "CRANPOSE_SEGMENT_SURFACE_RECOLOR_RATE",
-    ),
-    (
-        "debug.cranpose.seg_surface_scale",
-        "CRANPOSE_SEGMENT_SURFACE_SCALE_EPS",
-    ),
-    (
-        "debug.cranpose.segment_surface_waiver",
-        "CRANPOSE_SEGMENT_SURFACE_WAIVER_RATIO",
-    ),
     (
         "debug.cranpose.pipeline_disk_cache",
         "CRANPOSE_PIPELINE_DISK_CACHE",
     ),
     (
-        "debug.cranpose.pipeline_prewarm",
-        "CRANPOSE_PIPELINE_PREWARM",
-    ),
-    ("debug.cranpose.solid_trim", "CRANPOSE_SOLID_TRIM_VARYINGS"),
-    (
-        "debug.cranpose.uniform_gradient_stops",
-        "CRANPOSE_UNIFORM_GRADIENT_STOPS",
-    ),
-    (
         "debug.cranpose.no_shader_specialization",
         "CRANPOSE_NO_SHADER_SPECIALIZATION",
-    ),
-    ("debug.cranpose.keep_box4", "CRANPOSE_KEEP_BOX4"),
-    (
-        "debug.cranpose.no_direct_surface",
-        "CRANPOSE_NO_DIRECT_SURFACE",
-    ),
-    (
-        "debug.cranpose.no_backdrop_flatten",
-        "CRANPOSE_NO_BACKDROP_FLATTEN",
-    ),
-    ("debug.cranpose.no_deferred_run", "CRANPOSE_NO_DEFERRED_RUN"),
-    (
-        "debug.cranpose.no_shadow_composite_queue",
-        "CRANPOSE_NO_SHADOW_COMPOSITE_QUEUE",
     ),
     (
         "debug.cranpose.survive_gpu_errors",
         "CRANPOSE_SURVIVE_GPU_ERRORS",
-    ),
-    (
-        "debug.cranpose.layer_cache_diag",
-        "CRANPOSE_LAYER_CACHE_DIAG",
     ),
 ];
 

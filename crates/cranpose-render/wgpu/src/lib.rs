@@ -3,24 +3,24 @@
 //! This renderer uses WGPU for cross-platform GPU support across
 //! desktop (Windows/Mac/Linux), web (WebGPU), and mobile Android.
 
-#[cfg(not(target_arch = "wasm32"))]
-mod cost_tuner;
 pub(crate) use cranpose_render_common::debug_toggles;
 pub use debug_toggles::{debug_toggle, debug_toggle_os, set_debug_toggle, set_debug_toggle_os};
+pub use offscreen::composition_bytes_per_pixel;
 pub use render::presentable_root_usages;
-mod display_clip;
+mod collect;
+mod draw_pass;
 mod effect_renderer;
 mod fast_cores;
+mod frame;
+mod geometry;
+mod layer_cache;
 pub use fast_cores::pin_current_thread_to_fast_cores;
 mod frame_graph;
 mod frame_packet;
 mod frontend;
 pub(crate) mod gpu_stats;
 mod initial_present;
-mod layer_events;
-mod layer_surface_cache;
 mod lazy_resource;
-mod normalized_scene;
 mod offscreen;
 mod output_conversion;
 pub(crate) mod pass_timing;
@@ -30,19 +30,9 @@ mod pipeline_disk_cache;
 #[cfg(not(target_arch = "wasm32"))]
 mod present_runtime;
 mod render;
-mod run_entry;
 mod scene;
-#[cfg(not(target_arch = "wasm32"))]
-mod segment_surface;
 mod shader_cache;
 mod shaders;
-#[cfg(not(target_arch = "wasm32"))]
-mod shape_replay;
-#[cfg(not(target_arch = "wasm32"))]
-mod stage_executor;
-mod surface_executor;
-mod surface_plan;
-mod surface_requirements;
 #[cfg(test)]
 mod test_support;
 
@@ -58,23 +48,14 @@ use cranpose_render_common::{
 };
 use cranpose_ui::{LayoutTree, TextMeasurer};
 use cranpose_ui_graphics::{Rect, Size};
-pub use display_clip::DisplayVisibleRegion;
-#[doc(hidden)]
-#[cfg(not(target_arch = "wasm32"))]
-pub use display_clip::pixel_is_visible as display_clip_pixel_is_visible;
 pub use frame_packet::PresentTimings;
 use frame_packet::RenderReturns;
-#[cfg(not(target_arch = "wasm32"))]
-use frame_packet::ReplayConfirmation;
 #[doc(hidden)]
 pub use frame_packet::{CancelReason, PresentOutcome};
 use frontend::{DevOverlayCache, RendererFrontend};
 pub use gpu_stats::FrameStatsSnapshot as RenderStatsSnapshot;
 pub use initial_present::clear_to_default_background;
 pub use pass_timing::{GpuPassTimingEntry, GpuPassTimingReport};
-#[doc(hidden)]
-#[cfg(not(target_arch = "wasm32"))]
-pub use pipeline::retained_feed_generation;
 #[cfg(not(target_arch = "wasm32"))]
 use present_runtime::{
     PresentControl, PresentHandle, PresentMsg, PresentRuntimeInit, PresentState,
@@ -82,18 +63,6 @@ use present_runtime::{
 use render::GpuRenderer;
 pub use render::frames_presented;
 pub use scene::{ClickAction, HitRegion, Scene};
-#[doc(hidden)]
-#[cfg(not(target_arch = "wasm32"))]
-pub use shape_replay::feed_live_stats as command_feed_live_stats;
-#[doc(hidden)]
-#[cfg(not(target_arch = "wasm32"))]
-pub use shape_replay::{
-    clear_pending_feed_captures_for_tests, inject_feed_capture_for_tests,
-    pending_feed_capture_count_for_tests,
-};
-#[doc(hidden)]
-#[cfg(not(target_arch = "wasm32"))]
-pub use shape_replay::{planner_replay_queue_stats_for_tests, recycled_ops_capacities_for_tests};
 
 /// The optional device features the renderer exploits when the adapter
 /// offers them: pipeline caching (see `pipeline_disk_cache`) and the
@@ -158,10 +127,6 @@ pub struct DebugCpuAllocationStats {
     pub scene_node_index_cap: usize,
     pub text_renderer_pool_len: usize,
     pub text_renderer_pool_cap: usize,
-    pub swash_image_cache_len: usize,
-    pub swash_image_cache_cap: usize,
-    pub swash_outline_cache_len: usize,
-    pub swash_outline_cache_cap: usize,
     pub image_texture_cache_len: usize,
     pub image_texture_cache_cap: usize,
     pub scratch_shape_data_cap: usize,
@@ -169,21 +134,8 @@ pub struct DebugCpuAllocationStats {
     pub scratch_image_vertices_cap: usize,
     pub scratch_image_indices_cap: usize,
     pub scratch_image_cmds_cap: usize,
-    pub scratch_segment_items_cap: usize,
-    pub scratch_effect_ranges_cap: usize,
-    pub scratch_layer_events_cap: usize,
-    pub staged_upload_bytes_cap: usize,
-    pub staged_upload_copies_cap: usize,
-    pub layer_surface_cache_len: usize,
-    pub layer_surface_cache_cap: usize,
-    pub layer_surface_cache_identity_len: usize,
-    pub layer_surface_cache_identity_cap: usize,
-    pub layer_surface_rect_cache_len: usize,
-    pub layer_surface_rect_cache_cap: usize,
-    pub layer_surface_requirements_cache_len: usize,
-    pub layer_surface_requirements_cache_cap: usize,
-    pub layer_cache_seen_this_frame_len: usize,
-    pub layer_cache_seen_this_frame_cap: usize,
+    pub layer_cache_len: usize,
+    pub layer_cache_bytes: u64,
 }
 
 pub(crate) struct TextSystemState {
@@ -283,16 +235,12 @@ pub enum PublishOutcome {
 pub struct WgpuRenderer {
     frontend: RendererFrontend,
     backend: PresentBackend,
-    #[cfg(not(target_arch = "wasm32"))]
-    pending_recycled_confirmations: Option<Vec<ReplayConfirmation>>,
     renderer_epoch: u64,
     surface_epoch: u64,
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
-    display_visible_region: DisplayVisibleRegion,
 }
 
 impl WgpuRenderer {
-    fn update_scene_and_plan_memo(
+    fn update_scene(
         &mut self,
         applier: &mut MemoryApplier,
         root: NodeId,
@@ -300,7 +248,7 @@ impl WgpuRenderer {
         refresh_hits: bool,
     ) {
         let mut changed_nodes = std::mem::take(&mut self.frontend.changed_nodes);
-        let outcome = pipeline::update_from_applier(
+        pipeline::update_from_applier(
             applier,
             root,
             &mut self.frontend.scene,
@@ -309,18 +257,6 @@ impl WgpuRenderer {
             refresh_hits,
             &mut changed_nodes,
         );
-        match outcome {
-            pipeline::SceneUpdateOutcome::Patched => {
-                for node_id in &changed_nodes {
-                    self.frontend
-                        .layer_surface_requirements_cache
-                        .remove(node_id);
-                }
-            }
-            pipeline::SceneUpdateOutcome::Rebuilt => {
-                self.frontend.layer_surface_requirements_cache.clear();
-            }
-        }
         changed_nodes.clear();
         self.frontend.changed_nodes = changed_nodes;
     }
@@ -350,24 +286,14 @@ impl WgpuRenderer {
                 text_system.software_fonts(),
             ),
             backend: PresentBackend::None,
-            #[cfg(not(target_arch = "wasm32"))]
-            pending_recycled_confirmations: None,
             renderer_epoch: 0,
             surface_epoch: 0,
-            display_visible_region: DisplayVisibleRegion::Full,
         }
     }
 
     fn sync_gpu_renderer(&self) -> Option<&GpuRenderer> {
         match &self.backend {
             PresentBackend::Sync(gpu_renderer) => Some(gpu_renderer.as_ref()),
-            _ => None,
-        }
-    }
-
-    fn sync_gpu_renderer_mut(&mut self) -> Option<&mut GpuRenderer> {
-        match &mut self.backend {
-            PresentBackend::Sync(gpu_renderer) => Some(gpu_renderer.as_mut()),
             _ => None,
         }
     }
@@ -383,72 +309,21 @@ impl WgpuRenderer {
     fn retire_live_backend(&mut self) {
         #[allow(unused_mut)]
         let mut backend = std::mem::replace(&mut self.backend, PresentBackend::None);
-        if matches!(backend, PresentBackend::None) {
-            return;
-        }
         #[cfg(not(target_arch = "wasm32"))]
-        {
-            if let PresentBackend::Threaded(handle) = &mut backend {
-                while let Some((ack, recycled)) = handle.try_drain_ack() {
-                    let confirmations = crate::shape_replay::SHAPE_REPLAY
-                        .with(|state| state.borrow_mut().apply_ack(ack, recycled));
-                    self.stash_recycled_confirmations(confirmations);
-                }
-                while let Some(returns) = handle.try_drain() {
-                    if let Some(confirmations) = self.frontend.apply_returns(returns) {
-                        self.stash_recycled_confirmations(confirmations);
-                    }
-                }
-                handle.shutdown();
+        if let PresentBackend::Threaded(handle) = &mut backend {
+            while let Some(returns) = handle.try_drain() {
+                self.frontend.apply_returns(returns);
             }
-            crate::shape_replay::SHAPE_REPLAY.with(|state| state.borrow_mut().renderer_replaced());
-            log::warn!(
-                "[command-feed] renderer replaced: retained slots retired, \
-                 confirmations revoked, feed generation bumped"
-            );
+            handle.shutdown();
         }
         drop(backend);
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn stash_recycled_confirmations(&mut self, confirmations: Vec<ReplayConfirmation>) {
-        match &self.pending_recycled_confirmations {
-            Some(parked) if parked.capacity() >= confirmations.capacity() => {}
-            _ => self.pending_recycled_confirmations = Some(confirmations),
-        }
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    #[doc(hidden)]
-    pub fn drain_replay_acks(&mut self) -> usize {
-        let mut drained = 0;
-        loop {
-            let (ack, recycled) = {
-                let PresentBackend::Threaded(handle) = &mut self.backend else {
-                    break;
-                };
-                match handle.try_drain_ack() {
-                    Some(batch) => batch,
-                    None => break,
-                }
-            };
-            drained += 1;
-            let confirmations = crate::shape_replay::SHAPE_REPLAY
-                .with(|state| state.borrow_mut().apply_ack(ack, recycled));
-            self.stash_recycled_confirmations(confirmations);
-        }
-        drained
     }
 
     /// Initialize GPU resources with a WGPU device and queue.
     ///
     /// Replacing a live renderer (Android surface recreation, device loss)
-    /// drops every retained replay slot with the old `GpuRenderer`, so the
-    /// bypass contract fails closed BEFORE the new renderer exists: every
-    /// slot confirmation is revoked and the feed generation bumped — no
-    /// scene build may omit primitives against buffers that died, and
-    /// already-built frames rematerialize their bypassed spans instead of
-    /// referencing the dead renderer's slot ids.
+    /// bumps the renderer epoch, so a packet built against the previous
+    /// renderer is cancelled instead of drawn.
     pub fn init_gpu(
         &mut self,
         device: Arc<wgpu::Device>,
@@ -459,10 +334,6 @@ impl WgpuRenderer {
     ) {
         self.retire_live_backend();
         self.renderer_epoch = self.renderer_epoch.wrapping_add(1);
-        #[cfg(not(target_arch = "wasm32"))]
-        let store_feed_generation = pipeline::retained_feed_generation();
-        #[cfg(target_arch = "wasm32")]
-        let store_feed_generation = 0;
         self.backend = PresentBackend::Sync(Box::new(GpuRenderer::new(
             device,
             queue,
@@ -471,45 +342,7 @@ impl WgpuRenderer {
             adapter_downlevel,
             self.frontend.text_fonts.clone(),
             self.renderer_epoch,
-            store_feed_generation,
         )));
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let region = self.display_visible_region;
-            if let Some(gpu_renderer) = self.sync_gpu_renderer_mut() {
-                gpu_renderer.set_display_visible_region(region);
-            }
-        }
-    }
-
-    /// The display's visible region — the part of this renderer's
-    /// full-screen surface the panel physically shows. Set by the
-    /// platform layer (never by app content); the renderer then culls
-    /// everything outside the region on the full-frame pass, for any app
-    /// and any layout. The round display is the first provider: Android's
-    /// `AConfiguration` screenRound maps to
-    /// [`DisplayVisibleRegion::InscribedCircle`] for a non-multi-window
-    /// activity. Future providers (display cutouts/insets, host-declared
-    /// clips) plug in as new region variants without touching the cull
-    /// machinery. Default [`DisplayVisibleRegion::Full`]: rendering is
-    /// bitwise identical to a renderer without this capability.
-    ///
-    /// Threaded mode routes the region to the present thread as a control
-    /// message; the message queue is FIFO, so it lands before any packet
-    /// published after this call — the same ordering the sync path's
-    /// direct call has.
-    pub fn set_display_visible_region(&mut self, region: DisplayVisibleRegion) {
-        self.display_visible_region = region;
-        #[cfg(not(target_arch = "wasm32"))]
-        match &mut self.backend {
-            PresentBackend::Sync(gpu_renderer) => {
-                gpu_renderer.set_display_visible_region(region);
-            }
-            PresentBackend::Threaded(handle) => {
-                handle.send_display_visible_region(region);
-            }
-            PresentBackend::None => {}
-        }
     }
 
     /// [`init_gpu`][Self::init_gpu] for the threaded present runtime
@@ -540,7 +373,6 @@ impl WgpuRenderer {
     ) -> Result<(), WgpuRendererError> {
         self.retire_live_backend();
         self.renderer_epoch = self.renderer_epoch.wrapping_add(1);
-        let store_feed_generation = pipeline::retained_feed_generation();
         let init = PresentRuntimeInit {
             device,
             queue,
@@ -549,9 +381,7 @@ impl WgpuRenderer {
             adapter_downlevel,
             text_fonts: self.frontend.text_fonts.clone(),
             renderer_epoch: self.renderer_epoch,
-            store_feed_generation,
             clock,
-            display_visible_region: self.display_visible_region,
         };
         let handle = PresentHandle::spawn(init, waker).map_err(WgpuRendererError::Wgpu)?;
         self.backend = PresentBackend::Threaded(handle);
@@ -570,7 +400,6 @@ impl WgpuRenderer {
     ) -> InlinePresentRuntime {
         self.retire_live_backend();
         self.renderer_epoch = self.renderer_epoch.wrapping_add(1);
-        let store_feed_generation = pipeline::retained_feed_generation();
         let init = PresentRuntimeInit {
             device,
             queue,
@@ -579,9 +408,7 @@ impl WgpuRenderer {
             adapter_downlevel,
             text_fonts: self.frontend.text_fonts.clone(),
             renderer_epoch: self.renderer_epoch,
-            store_feed_generation,
             clock: None,
-            display_visible_region: self.display_visible_region,
         };
         let (handle, state, msg_rx) = PresentHandle::new_inline(init, Arc::new(|| {}));
         self.backend = PresentBackend::Threaded(handle);
@@ -611,11 +438,10 @@ impl WgpuRenderer {
 
     /// Render the scene to a texture view.
     ///
-    /// Producer first, present second: the frontend lowers the frame into a
-    /// `frame_packet::FramePacket` (direct root, root surface, and dev
-    /// overlay alike), the GPU renderer consumes it, and the present
-    /// stage's returns — the recycled scene and the replay ack — fold back
-    /// into the frontend afterwards.
+    /// Producer first, present second: the frontend collects the frame into
+    /// a `frame_packet::FramePacket` (root and dev overlay alike), the GPU
+    /// renderer consumes it, and the present stage's returns fold back into
+    /// the frontend afterwards.
     pub fn render(
         &mut self,
         texture: &wgpu::Texture,
@@ -654,15 +480,8 @@ impl WgpuRenderer {
         };
         let packet = self
             .frontend
-            .build_frame_packet(
-                width,
-                height,
-                gpu_renderer.replay_supported(),
-                self.renderer_epoch,
-                self.surface_epoch,
-            )
+            .build_frame_packet(width, height, self.renderer_epoch, self.surface_epoch)
             .ok_or_else(|| WgpuRendererError::Wgpu("scene graph is missing".to_string()))?;
-        let frontend = &mut self.frontend;
         let mut returns = RenderReturns::default();
         let result = gpu_renderer.render(
             texture,
@@ -673,9 +492,7 @@ impl WgpuRenderer {
             self.surface_epoch,
             &mut returns,
         );
-        if let Some(confirmations) = frontend.apply_returns(returns) {
-            gpu_renderer.restore_replay_ack_confirmations(confirmations);
-        }
+        self.frontend.apply_returns(returns);
         result.map_err(WgpuRendererError::Wgpu)
     }
 
@@ -709,12 +526,10 @@ impl WgpuRenderer {
                 width,
                 height,
                 root_scale,
-                gpu_renderer.replay_supported(),
                 self.renderer_epoch,
                 self.surface_epoch,
             )
             .ok_or_else(|| WgpuRendererError::Wgpu("scene graph is missing".to_string()))?;
-        let frontend = &mut self.frontend;
         let mut returns = RenderReturns::default();
         let result = gpu_renderer.render_to_rgba_pixels(
             width,
@@ -723,9 +538,7 @@ impl WgpuRenderer {
             self.surface_epoch,
             &mut returns,
         );
-        if let Some(confirmations) = frontend.apply_returns(returns) {
-            gpu_renderer.restore_replay_ack_confirmations(confirmations);
-        }
+        self.frontend.apply_returns(returns);
         let pixels = result.map_err(WgpuRendererError::Wgpu)?;
         Ok(CapturedFrame {
             width,
@@ -753,7 +566,6 @@ impl WgpuRenderer {
     /// is not in threaded mode.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn publish_frame(&mut self, width: u32, height: u32) -> PublishOutcome {
-        self.drain_replay_acks();
         let PresentBackend::Threaded(handle) = &mut self.backend else {
             log::error!("publish_frame called without a threaded present runtime");
             return PublishOutcome::NoCredit;
@@ -761,35 +573,24 @@ impl WgpuRenderer {
         if !handle.has_credit() {
             return PublishOutcome::NoCredit;
         }
-        let replay_supported = handle
-            .status()
-            .replay_supported
-            .load(std::sync::atomic::Ordering::Relaxed);
-        let Some(mut packet) = self.frontend.build_frame_packet(
+        let Some(packet) = self.frontend.build_frame_packet(
             width,
             height,
-            replay_supported,
             self.renderer_epoch,
             self.surface_epoch,
         ) else {
             return PublishOutcome::NoGraph;
         };
-        packet.recycled_confirmations = self.pending_recycled_confirmations.take();
         match handle.publish(packet) {
             Ok(()) => PublishOutcome::Published,
-            Err(mut packet) => {
-                if let Some(confirmations) = packet.recycled_confirmations.take() {
-                    self.pending_recycled_confirmations = Some(confirmations);
-                }
+            Err(packet) => {
                 let mut returns = RenderReturns::default();
                 let _ = GpuRenderer::cancel_packet(
                     *packet,
                     CancelReason::SurfaceUnavailable,
                     &mut returns,
                 );
-                if let Some(confirmations) = self.frontend.apply_returns(returns) {
-                    self.stash_recycled_confirmations(confirmations);
-                }
+                self.frontend.apply_returns(returns);
                 log::error!("present runtime unavailable; frame recovered, not published");
                 PublishOutcome::NoCredit
             }
@@ -797,8 +598,7 @@ impl WgpuRenderer {
     }
 
     /// Threaded mode: fold every pending `RenderReturns` back into
-    /// producer state (scene recycling, replay ack, planner re-queue of
-    /// cancelled plans) and free the publish credit. Returns how many were
+    /// producer state and free the publish credit. Returns how many were
     /// drained. No-op outside threaded mode.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn drain_present_returns(&mut self) -> usize {
@@ -813,7 +613,6 @@ impl WgpuRenderer {
         &mut self,
         on_return: &mut dyn FnMut(u64, PresentOutcome, PresentTimings),
     ) -> usize {
-        self.drain_replay_acks();
         let mut drained = 0;
         loop {
             let returns = {
@@ -829,9 +628,7 @@ impl WgpuRenderer {
             let frame_id = returns.frame_id;
             let outcome = returns.outcome;
             let timings = returns.timings;
-            if let Some(confirmations) = self.frontend.apply_returns(returns) {
-                self.stash_recycled_confirmations(confirmations);
-            }
+            self.frontend.apply_returns(returns);
             on_return(frame_id, outcome, timings);
         }
         drained
@@ -964,30 +761,13 @@ impl WgpuRenderer {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[doc(hidden)]
-    pub fn seed_recycled_confirmations_for_tests(&mut self, capacity: usize) {
-        self.pending_recycled_confirmations = Some(Vec::with_capacity(capacity));
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    #[doc(hidden)]
-    pub fn pending_recycled_confirmations_capacity_for_tests(&self) -> Option<usize> {
-        self.pending_recycled_confirmations
-            .as_ref()
-            .map(Vec::capacity)
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    #[doc(hidden)]
-    pub fn present_status_snapshot_for_tests(&self) -> Option<(bool, bool, u64, u64)> {
+    pub fn present_status_snapshot_for_tests(&self) -> Option<(bool, u64, u64)> {
         match &self.backend {
             PresentBackend::Threaded(handle) => {
                 let status = handle.status();
                 Some((
                     status
                         .needs_frame_warmup
-                        .load(std::sync::atomic::Ordering::Relaxed),
-                    status
-                        .replay_supported
                         .load(std::sync::atomic::Ordering::Relaxed),
                     status
                         .presented_frames
@@ -998,25 +778,6 @@ impl WgpuRenderer {
                 ))
             }
             _ => None,
-        }
-    }
-
-    /// Enables or disables baking a plainly composited surface onto a copy of
-    /// the pixels beneath it (see `CRANPOSE_DISABLE_UNDERLAY_BAKE`). Parity
-    /// tests render the same scene both ways; both ways are exact.
-    pub fn set_underlay_bake_enabled(&mut self, enabled: bool) {
-        if let Some(renderer) = self.sync_gpu_renderer_mut() {
-            renderer.set_underlay_bake_enabled(enabled);
-        }
-    }
-
-    /// Enables or disables replaying the pending composites that overlap a
-    /// baked underlay copy into that copy, instead of flushing them to the
-    /// parent target before the copy (see `CRANPOSE_DISABLE_UNDERLAY_REPLAY`).
-    /// Parity tests render the same scene both ways; both ways are exact.
-    pub fn set_underlay_replay_enabled(&mut self, enabled: bool) {
-        if let Some(renderer) = self.sync_gpu_renderer_mut() {
-            renderer.set_underlay_replay_enabled(enabled);
         }
     }
 
@@ -1065,12 +826,6 @@ impl WgpuRenderer {
         stats.scene_hits_cap = self.frontend.scene.hits.capacity();
         stats.scene_node_index_len = self.frontend.scene.node_index.len();
         stats.scene_node_index_cap = self.frontend.scene.node_index.capacity();
-        stats.layer_surface_rect_cache_len += self.frontend.layer_surface_rect_cache.len();
-        stats.layer_surface_rect_cache_cap += self.frontend.layer_surface_rect_cache.capacity();
-        stats.layer_surface_requirements_cache_len +=
-            self.frontend.layer_surface_requirements_cache.len();
-        stats.layer_surface_requirements_cache_cap +=
-            self.frontend.layer_surface_requirements_cache.capacity();
         stats
     }
 
@@ -1093,100 +848,14 @@ impl WgpuRenderer {
             .unwrap_or(0)
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
-    #[doc(hidden)]
-    pub fn instanced_quads_active(&self) -> bool {
-        self.sync_gpu_renderer()
-            .is_some_and(GpuRenderer::instanced_quads_active)
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    #[doc(hidden)]
-    pub fn replay_slot_mesh_stats(&self) -> (usize, usize) {
-        self.sync_gpu_renderer()
-            .map(GpuRenderer::replay_slot_mesh_stats)
-            .unwrap_or((0, 0))
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    #[doc(hidden)]
-    pub fn replay_slot_mesh_engagement(&self) -> (usize, usize, usize) {
-        self.sync_gpu_renderer()
-            .map(GpuRenderer::replay_slot_mesh_engagement)
-            .unwrap_or((0, 0, 0))
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    #[doc(hidden)]
-    pub fn retained_bundle_stats(&self) -> (u64, u64) {
-        self.sync_gpu_renderer()
-            .map(GpuRenderer::retained_bundle_stats)
-            .unwrap_or((0, 0))
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    #[doc(hidden)]
-    pub fn rim_meshes_emitted(&self) -> u64 {
-        self.sync_gpu_renderer()
-            .map(GpuRenderer::rim_meshes_emitted)
-            .unwrap_or(0)
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    #[doc(hidden)]
-    pub fn static_span_stats(&self) -> (u64, u64) {
-        self.sync_gpu_renderer()
-            .map(GpuRenderer::static_span_stats)
-            .unwrap_or((0, 0))
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    #[doc(hidden)]
-    pub fn segment_surface_stats(&self) -> (u64, u64, u64, u64, u64) {
-        self.sync_gpu_renderer()
-            .map(GpuRenderer::segment_surface_stats)
-            .unwrap_or((0, 0, 0, 0, 0))
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    #[doc(hidden)]
-    pub fn replay_generation_drops_for_tests(&self) -> u64 {
-        self.sync_gpu_renderer()
-            .map(GpuRenderer::replay_generation_drops)
-            .unwrap_or(0)
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    #[doc(hidden)]
-    pub fn replay_ops_roundtrip_for_tests(&mut self, generation_skew: u64) -> usize {
-        self.sync_gpu_renderer_mut()
-            .expect("GPU renderer not initialized")
-            .replay_ops_roundtrip_for_tests(generation_skew)
-    }
-
     #[doc(hidden)]
     pub fn build_frame_packet_for_tests(
         &mut self,
         width: u32,
         height: u32,
     ) -> Option<HeldFramePacket> {
-        let replay_supported = match &self.backend {
-            PresentBackend::Sync(gpu_renderer) => gpu_renderer.replay_supported(),
-            #[cfg(not(target_arch = "wasm32"))]
-            PresentBackend::Threaded(handle) => handle
-                .status()
-                .replay_supported
-                .load(std::sync::atomic::Ordering::Relaxed),
-            PresentBackend::None => false,
-        };
         self.frontend
-            .build_frame_packet(
-                width,
-                height,
-                replay_supported,
-                self.renderer_epoch,
-                self.surface_epoch,
-            )
+            .build_frame_packet(width, height, self.renderer_epoch, self.surface_epoch)
             .map(HeldFramePacket)
     }
 
@@ -1205,7 +874,6 @@ impl WgpuRenderer {
                     .to_string(),
             ));
         };
-        let frontend = &mut self.frontend;
         let mut returns = RenderReturns::default();
         let result = gpu_renderer.render(
             texture,
@@ -1217,16 +885,9 @@ impl WgpuRenderer {
             &mut returns,
         );
         let outcome = returns.outcome;
-        if let Some(confirmations) = frontend.apply_returns(returns) {
-            gpu_renderer.restore_replay_ack_confirmations(confirmations);
-        }
+        self.frontend.apply_returns(returns);
         result.map_err(WgpuRendererError::Wgpu)?;
         Ok(outcome)
-    }
-
-    #[doc(hidden)]
-    pub fn has_retained_direct_scene_for_tests(&self) -> bool {
-        !self.frontend.retained_direct_scenes.is_empty()
     }
 }
 
@@ -1279,10 +940,6 @@ impl InlinePresentRuntime {
     pub fn consume_waiting(&mut self) {
         self.state.consume_waiting();
     }
-
-    pub fn store_ack_confirmations_capacity(&self) -> usize {
-        self.state.store_ack_confirmations_capacity()
-    }
 }
 
 impl Default for WgpuRenderer {
@@ -1317,7 +974,6 @@ impl Renderer for WgpuRenderer {
         _viewport: Size,
     ) -> Result<(), Self::Error> {
         self.frontend.scene.clear();
-        self.frontend.layer_surface_requirements_cache.clear();
         self.frontend.dev_overlay_graph = None;
         self.frontend.dev_overlay_cache = None;
         pipeline::render_layout_tree(layout_tree.root(), &mut self.frontend.scene);
@@ -1331,7 +987,6 @@ impl Renderer for WgpuRenderer {
         _viewport: Size,
     ) -> Result<(), Self::Error> {
         self.frontend.scene.clear();
-        self.frontend.layer_surface_requirements_cache.clear();
         self.frontend.dev_overlay_graph = None;
         self.frontend.dev_overlay_cache = None;
         pipeline::render_from_applier(applier, root, &mut self.frontend.scene, 1.0);
@@ -1348,7 +1003,7 @@ impl Renderer for WgpuRenderer {
         if dirty_nodes.is_empty() {
             return self.rebuild_scene_from_applier(applier, root, viewport);
         }
-        self.update_scene_and_plan_memo(applier, root, dirty_nodes, true);
+        self.update_scene(applier, root, dirty_nodes, true);
         Ok(())
     }
 
@@ -1362,7 +1017,7 @@ impl Renderer for WgpuRenderer {
         if dirty_nodes.is_empty() {
             return self.rebuild_scene_from_applier(applier, root, viewport);
         }
-        self.update_scene_and_plan_memo(applier, root, dirty_nodes, false);
+        self.update_scene(applier, root, dirty_nodes, false);
         Ok(())
     }
 

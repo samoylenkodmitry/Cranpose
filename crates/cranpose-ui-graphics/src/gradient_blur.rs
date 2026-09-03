@@ -48,6 +48,7 @@ pub fn gradient_blur_effect(
     shader.set_float(1, end_radius_px);
     shader.set_float(2, direction.uniform_code());
     shader.set_input_padding(start_radius_px.max(end_radius_px).ceil());
+    shader.set_batched_source(true);
     RenderEffect::runtime_shader(shader)
 }
 

@@ -4,7 +4,6 @@ use support::{page::*, read_texture_rgba8};
 
 const FRAME_WIDTH: u32 = 320;
 const FRAME_HEIGHT: u32 = 240;
-const NO_DIRECT: &str = "CRANPOSE_NO_DIRECT_SURFACE";
 
 #[composable]
 #[allow(non_snake_case)]
@@ -46,18 +45,10 @@ fn CardsPage() {
 struct Frames {
     captured: Vec<u8>,
     presented: Vec<u8>,
-    presented_passes: u32,
 }
 
-fn render_frames(disable_direct: bool) -> Option<Frames> {
+fn render_frames() -> Option<Frames> {
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_COMPOSITION_8BIT", Some("1"));
-    cranpose_render_wgpu::set_debug_toggle(NO_DIRECT, disable_direct.then_some("1"));
-    let frames = render_frames_with_current_toggles();
-    cranpose_render_wgpu::set_debug_toggle(NO_DIRECT, None);
-    frames
-}
-
-fn render_frames_with_current_toggles() -> Option<Frames> {
     let (_lock, mut shell) = support::app_shell_for(
         CardsPage,
         FRAME_WIDTH,
@@ -96,22 +87,16 @@ fn render_frames_with_current_toggles() -> Option<Frames> {
             .render(&texture, &view, FRAME_WIDTH, FRAME_HEIGHT)
             .expect("presentable render should succeed");
     }
-    let presented_passes = shell
-        .renderer()
-        .last_frame_stats()
-        .expect("stats")
-        .pass_count;
     assert_eq!(shell.renderer().device_error_count_for_tests(), 0);
     Some(Frames {
         captured: captured.pixels,
         presented: read_texture_rgba8(&device, &queue, &texture),
-        presented_passes,
     })
 }
 
 #[test]
 fn a_frame_rendered_straight_into_the_presentable_image_matches_the_converted_capture() {
-    let Some(frames) = render_frames(false) else {
+    let Some(frames) = render_frames() else {
         return;
     };
     assert!(
@@ -128,18 +113,5 @@ fn a_frame_rendered_straight_into_the_presentable_image_matches_the_converted_ca
         FRAME_WIDTH,
         &frames.presented,
         &frames.captured,
-    );
-
-    let kill_switched = render_frames(true).expect("headless WGPU init failed mid-suite");
-    support::assert_same_bytes(
-        "composition vs captured",
-        FRAME_WIDTH,
-        &kill_switched.presented,
-        &kill_switched.captured,
-    );
-    assert_eq!(
-        frames.presented_passes + 1,
-        kill_switched.presented_passes,
-        "rendering into the presentable image must drop exactly the output conversion pass"
     );
 }

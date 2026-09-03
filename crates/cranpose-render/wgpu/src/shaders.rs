@@ -1,8 +1,5 @@
 pub const SHADER: &str = cranpose_ui_graphics::framework_shaders::SHAPE_WGSL;
 
-pub const SOLID_TRIM_APPENDIX: &str =
-    cranpose_ui_graphics::framework_shaders::SHAPE_SOLID_TRIM_WGSL;
-
 pub const IMAGE_SHADER: &str = cranpose_ui_graphics::framework_shaders::IMAGE_WGSL;
 
 pub const GLYPH_ATLAS_SHADER: &str = cranpose_ui_graphics::framework_shaders::GLYPH_ATLAS_WGSL;
@@ -20,13 +17,6 @@ pub fn blur_shader() -> String {
     format!(
         "{FULLSCREEN_QUAD_VS}{}",
         cranpose_ui_graphics::framework_shaders::BLUR_FS_WGSL
-    )
-}
-
-pub fn blur_rounded_mask_shader() -> String {
-    format!(
-        "{FULLSCREEN_QUAD_VS}{}",
-        cranpose_ui_graphics::framework_shaders::BLUR_ROUNDED_MASK_FS_WGSL
     )
 }
 
@@ -145,21 +135,6 @@ mod tests {
     }
 
     #[test]
-    fn blur_rounded_mask_shader_validates_for_webgpu() {
-        assert!(validate_wgsl_module(&super::blur_rounded_mask_shader()).is_ok());
-    }
-
-    #[test]
-    fn blur_rounded_mask_shader_validates_for_webgl() {
-        let shader = super::blur_rounded_mask_shader();
-        assert!(validate_glsl_portability(&shader, "fullscreen_vs", ShaderStage::Vertex).is_ok());
-        assert!(
-            validate_glsl_portability(&shader, "blur_rounded_mask_fs", ShaderStage::Fragment)
-                .is_ok()
-        );
-    }
-
-    #[test]
     fn offset_shader_validates_for_webgpu() {
         assert!(validate_wgsl_module(&super::offset_shader()).is_ok());
     }
@@ -179,21 +154,6 @@ mod tests {
         if let Err(err) = validate_glsl_portability(super::SHADER, "fs_main", ShaderStage::Fragment)
         {
             panic!("shape.wgsl fragment stage must lower to GLSL ES 300: {err}");
-        }
-    }
-
-    #[test]
-    fn trimmed_shape_shader_validates_for_webgpu_and_lowers_to_glsl() {
-        let source = format!("{}\n{}", super::SHADER, super::SOLID_TRIM_APPENDIX);
-        if let Err(err) = validate_wgsl_module(&source) {
-            panic!("shape.wgsl + shape_solid_trim.wgsl must validate for WebGPU: {err}");
-        }
-        if let Err(err) = validate_glsl_portability(&source, "vs_solid", ShaderStage::Vertex) {
-            panic!("trimmed solid vertex stage must lower to GLSL ES 300: {err}");
-        }
-        if let Err(err) = validate_glsl_portability(&source, "fs_solid_trim", ShaderStage::Fragment)
-        {
-            panic!("trimmed solid fragment stage must lower to GLSL ES 300: {err}");
         }
     }
 
@@ -232,10 +192,6 @@ mod tests {
         for (source, entry_point) in [
             (super::SHADER.to_string(), "fs_main"),
             (super::SHADER.to_string(), "fs_solid"),
-            (
-                format!("{}\n{}", super::SHADER, super::SOLID_TRIM_APPENDIX),
-                "fs_solid_trim",
-            ),
         ] {
             let locations = fragment_input_locations(&source, entry_point);
             let highest = locations.last().copied().expect("fragment inputs");

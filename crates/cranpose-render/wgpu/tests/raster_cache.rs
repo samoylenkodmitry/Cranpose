@@ -204,7 +204,6 @@ fn capture_frame_reuses_cached_child_layers_during_rigid_scroll() {
     assert_eq!(first_stats.layer_cache_misses, 4);
     assert_eq!(second_stats.layer_cache_hits, 4);
     assert_eq!(second_stats.layer_cache_misses, 0);
-    assert_eq!(second_stats.layer_cache_evictions, 0);
     assert!(
         second_stats.isolated_layer_renders < first_stats.isolated_layer_renders,
         "cached child layers should avoid repainting isolated child surfaces"

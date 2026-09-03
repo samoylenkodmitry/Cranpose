@@ -227,8 +227,14 @@ fn scrolled_pass_counts_with_rows(glass_count: usize, shadowed_rows: bool) -> Ve
         .collect()
 }
 
+/// The frame's final pass.
+const FRAME_PASSES: u32 = 1;
+/// One resolve stage: the capture atlas pass and the blur pass pair shared by
+/// every blurred glass in the stage.
+const STAGE_PASSES: u32 = 3;
+
 #[test]
-fn each_extra_fixed_glass_adds_only_its_blur_chain() {
+fn every_fixed_glass_shares_one_capture_atlas_and_one_blur_pair() {
     let single: Vec<u32> = scrolled_pass_counts(1);
     let triple: Vec<u32> = scrolled_pass_counts(3);
     let single_steady = *single.last().expect("single-glass passes");
@@ -242,21 +248,30 @@ fn each_extra_fixed_glass_adds_only_its_blur_chain() {
         "triple-glass scrolled frames must encode a steady pass count: {triple:?}"
     );
     assert_eq!(
-        triple_steady,
-        single_steady + 4,
-        "two extra fixed glasses must add exactly their blur pairs (2 \
-         small-target passes each), with the shader tails and composites \
-         riding the shared batches: single={single:?} triple={triple:?}"
+        single_steady,
+        FRAME_PASSES + STAGE_PASSES,
+        "one fixed glass costs the final pass plus one capture atlas and one blur pair: \
+         single={single:?}"
+    );
+    assert_eq!(
+        triple_steady, single_steady,
+        "extra fixed glasses that read the same content join the same stage and add no \
+         pass; their shader tails draw in the frame's final pass: single={single:?} \
+         triple={triple:?}"
     );
 }
 
 #[test]
-fn a_shadowed_list_under_glass_holds_its_scrolled_pass_budget() {
-    let single = scrolled_pass_counts_with_rows(1, true);
-    let single_steady = *single.last().expect("single-glass passes");
+fn a_shadowed_list_under_glass_adds_no_pass_per_row_shadow() {
+    let plain = scrolled_pass_counts_with_rows(1, false);
+    let shadowed = scrolled_pass_counts_with_rows(1, true);
+    let plain_steady = *plain.last().expect("plain passes");
+    let shadowed_steady = *shadowed.iter().min().expect("shadowed passes");
     assert_eq!(
-        single_steady, 6,
-        "shadowed-rows single-glass scrolled frame pass budget moved: {single:?}"
+        shadowed_steady, plain_steady,
+        "cached row shadows composite inside the final pass; a frame that caches a newly \
+         scrolled-in shadow may pay its source and blur passes, but a frame with every shadow \
+         cached must cost the same as the unshadowed list: plain={plain:?} shadowed={shadowed:?}"
     );
 }
 
@@ -437,13 +452,14 @@ fn a_direct_draw_between_two_glasses_is_captured_by_the_glass_that_covers_it() {
 }
 
 #[test]
-fn direct_draws_between_non_overlapping_glasses_share_one_fused_pass() {
+fn a_capture_never_splits_the_frames_final_pass() {
     let (_, overlapping_passes) = deferred_frame(true);
     let (_, disjoint_passes) = deferred_frame(false);
-    assert!(
-        disjoint_passes < overlapping_passes,
-        "a draw no later capture reads must ride the frame's single fused pass; disjoint \
-         {disjoint_passes} vs overlapping {overlapping_passes}"
+    assert_eq!(
+        disjoint_passes, overlapping_passes,
+        "every backdrop resolves from its own small capture, so whether a draw lies under a \
+         later glass changes what the capture reads, never how many passes the frame encodes: \
+         disjoint {disjoint_passes} vs overlapping {overlapping_passes}"
     );
 }
 
@@ -568,15 +584,8 @@ fn ShadowedGlassColumn(shadowed: bool, scroll: f32) {
     );
 }
 
-fn scrolled_column_frame(
-    shadowed: bool,
-    queue_shadows: bool,
-) -> (cranpose_render_wgpu::CapturedFrame, u32) {
+fn scrolled_column_frame(shadowed: bool) -> (cranpose_render_wgpu::CapturedFrame, u32) {
     let (_lock, renderer) = support::headless_renderer_parts().expect("headless renderer");
-    cranpose_render_wgpu::set_debug_toggle(
-        "CRANPOSE_NO_SHADOW_COMPOSITE_QUEUE",
-        (!queue_shadows).then_some("1"),
-    );
     let root_key = location_key(file!(), line!(), column!());
     let scroll = Rc::new(std::cell::Cell::new(0.0f32));
     let scroll_for_app = Rc::clone(&scroll);
@@ -602,14 +611,13 @@ fn scrolled_column_frame(
             .expect("frame stats")
             .pass_count;
     }
-    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_NO_SHADOW_COMPOSITE_QUEUE", None);
     (frame.expect("a frame was captured"), passes)
 }
 
 #[test]
-fn drop_shadows_under_a_column_of_glass_cards_ride_the_frames_fused_pass() {
-    let (plain, plain_passes) = scrolled_column_frame(false, true);
-    let (shadowed, shadowed_passes) = scrolled_column_frame(true, true);
+fn drop_shadows_under_a_column_of_glass_cards_ride_the_frames_final_pass() {
+    let (plain, plain_passes) = scrolled_column_frame(false);
+    let (shadowed, shadowed_passes) = scrolled_column_frame(true);
     let luma = |frame: &cranpose_render_wgpu::CapturedFrame, x: usize, y: usize| {
         let index = (y * FRAME_WIDTH as usize + x) * 4;
         (u32::from(frame.pixels[index])
@@ -632,31 +640,8 @@ fn drop_shadows_under_a_column_of_glass_cards_ride_the_frames_fused_pass() {
     }
     assert_eq!(
         shadowed_passes, plain_passes,
-        "a cached drop shadow is a composite the glass above it replays, not a direct draw that \
-         splits the frame's fused pass before every card"
-    );
-}
-
-#[test]
-fn a_shadow_composited_from_its_cache_matches_the_shadow_drawn_in_the_segment() {
-    let (direct, direct_passes) = scrolled_column_frame(true, false);
-    let (queued, queued_passes) = scrolled_column_frame(true, true);
-    let max_delta = direct
-        .pixels
-        .iter()
-        .zip(&queued.pixels)
-        .map(|(a, b)| a.abs_diff(*b))
-        .max()
-        .unwrap_or(0);
-    assert!(
-        max_delta <= 1,
-        "the queued shadow composite must land the same texels as the segment's own composite \
-         of the same cached shadow: max delta {max_delta}"
-    );
-    assert!(
-        queued_passes < direct_passes,
-        "queuing the shadows must remove the per-card run flushes: queued {queued_passes} vs \
-         direct {direct_passes}"
+        "a cached drop shadow is a composite drawn inside the frame's final pass, not a draw \
+         that splits the pass before every card"
     );
 }
 
@@ -745,7 +730,7 @@ fn spread_frame(boxes: SpreadBoxes) -> (cranpose_render_wgpu::CapturedFrame, u32
 }
 
 #[test]
-fn a_glass_between_two_direct_draws_it_does_not_cover_leaves_them_in_the_fused_pass() {
+fn a_glass_between_two_direct_draws_it_does_not_cover_leaves_them_in_the_final_pass() {
     let (_, bare_passes) = spread_frame(SpreadBoxes::None);
     let (_, apart_passes) = spread_frame(SpreadBoxes::Apart);
     assert_eq!(

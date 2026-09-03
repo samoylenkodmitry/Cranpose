@@ -19,7 +19,7 @@ use crate::{
     },
     layer_transform::layer_transform_to_parent,
     raster_cache::LayerRasterCacheHashes,
-    style_shared::{DrawPlacement, primitives_for_placement_verified},
+    style_shared::{DrawPlacement, primitives_for_placement_reusing},
 };
 
 const TEXT_CLIP_PAD: f32 = 1.0;
@@ -1212,93 +1212,6 @@ fn build_layer_node_from_data(
 struct RecorderSlot {
     generation: u64,
     handles: [Option<Rc<Vec<cranpose_ui_graphics::DrawPrimitive>>>; 2],
-    recordings: [Option<Rc<cranpose_ui_graphics::CommandRecording>>; 2],
-    replay: cranpose_ui_graphics::CommandReplayState,
-    replay_epoch: Option<u64>,
-    saved_emission: Option<SavedReplayEmission>,
-}
-
-struct SavedReplayEmission {
-    spans: Vec<cranpose_ui_graphics::FrameSpan>,
-    center: cranpose_ui_graphics::Point,
-    primitives: Rc<Vec<cranpose_ui_graphics::DrawPrimitive>>,
-    recording: Rc<cranpose_ui_graphics::CommandRecording>,
-    epoch: u64,
-    generation: u64,
-}
-
-fn stale_transition_enabled() -> bool {
-    matches!(
-        crate::debug_toggles::debug_toggle("CRANPOSE_STALE_TRANSITION").as_deref(),
-        Some(value) if !value.is_empty() && value != "0"
-    )
-}
-
-fn sanitized_replay_spans(
-    spans: &[cranpose_ui_graphics::FrameSpan],
-) -> Vec<cranpose_ui_graphics::FrameSpan> {
-    use cranpose_ui_graphics::FrameSpan;
-    spans
-        .iter()
-        .map(|span| match span {
-            FrameSpan::Retained {
-                capture: true,
-                range,
-                ..
-            } => FrameSpan::Dynamic { range: *range },
-            FrameSpan::Retained {
-                slot,
-                capture: false,
-                slot_offset,
-                range,
-                tape_range,
-                transform,
-                recolors: _,
-                bounds,
-            } => FrameSpan::Retained {
-                slot: *slot,
-                capture: false,
-                slot_offset: *slot_offset,
-                range: *range,
-                tape_range: *tape_range,
-                transform: *transform,
-                recolors: Vec::new(),
-                bounds: *bounds,
-            },
-            FrameSpan::Dynamic { range } => FrameSpan::Dynamic { range: *range },
-        })
-        .collect()
-}
-
-fn saved_emission_available(id: DrawCommandId) -> bool {
-    let Some(epoch) = RETAINED_FEED_EPOCH.with(std::cell::Cell::get) else {
-        return false;
-    };
-    let generation = RECORDING_GENERATION.with(std::cell::Cell::get);
-    COMMAND_RECORDINGS.with(|map| {
-        map.borrow()
-            .get(&id)
-            .and_then(|slot| slot.saved_emission.as_ref())
-            .is_some_and(|saved| {
-                saved.generation.wrapping_add(1) == generation && saved.epoch == epoch
-            })
-    })
-}
-
-fn take_saved_emission(id: DrawCommandId) -> Option<SavedReplayEmission> {
-    COMMAND_RECORDINGS.with(|map| {
-        map.borrow_mut()
-            .get_mut(&id)
-            .and_then(|slot| slot.saved_emission.take())
-    })
-}
-
-fn store_saved_emission(id: DrawCommandId, saved: Option<SavedReplayEmission>) {
-    COMMAND_RECORDINGS.with(|map| {
-        if let Some(slot) = map.borrow_mut().get_mut(&id) {
-            slot.saved_emission = saved;
-        }
-    });
 }
 
 thread_local! {
@@ -1306,83 +1219,6 @@ thread_local! {
         std::collections::HashMap<DrawCommandId, RecorderSlot, cranpose_ui_graphics::FxBuildHasher>,
     > = std::cell::RefCell::new(std::collections::HashMap::default());
     static RECORDING_GENERATION: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-    static RETAINED_FEED_EPOCH: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
-}
-
-/// Declares that the renderer consuming graphs built on this thread retains
-/// draw-run spans by identity, so scene building should verify command
-/// recordings and attach [`cranpose_ui_graphics::CommandReplayFrame`]s to
-/// the runs it builds. The epoch names the renderer's retained-slot
-/// universe: bumping it (device loss, scale change — anything that dropped
-/// slots wholesale) resets every command's verification state, so no frame
-/// ever references a slot from a dead universe. Renderers that draw every
-/// primitive (pixels) never call this and never pay for verification.
-pub fn set_retained_feed_epoch(epoch: Option<u64>) {
-    RETAINED_FEED_EPOCH.with(|cell| cell.set(epoch));
-}
-
-thread_local! {
-    static CONFIRMED_RETAINED_SLOTS: std::cell::RefCell<
-        std::collections::HashMap<(DrawCommandId, u32), u64, cranpose_ui_graphics::FxBuildHasher>,
-    > = std::cell::RefCell::new(std::collections::HashMap::default());
-}
-
-/// The renderer's word that it holds a live retained buffer for this
-/// (command, slot) identity, stamped with the retained-feed generation the
-/// buffer was captured under. Only confirmed spans may skip materialization:
-/// an unconfirmed span's primitives are the renderer's only way to draw it
-/// in the same frame. The stamp is what keeps the word LIVE: a confirmation
-/// from a dead slot universe (renderer replaced, device lost, root-scale
-/// change) stops matching the epoch declared for the build and bypass fails
-/// closed instead of trusting a buffer that no longer exists.
-pub fn confirm_retained_slot(command: DrawCommandId, slot: u32, generation: u64) {
-    CONFIRMED_RETAINED_SLOTS.with(|map| {
-        map.borrow_mut().insert((command, slot), generation);
-    });
-}
-
-/// The renderer released this identity's buffer (aged out, replaced):
-/// spans referencing it must materialize again.
-pub fn revoke_retained_slot(command: DrawCommandId, slot: u32) {
-    CONFIRMED_RETAINED_SLOTS.with(|map| {
-        map.borrow_mut().remove(&(command, slot));
-    });
-}
-
-/// Wholesale retire: every confirmation dies with the slots.
-pub fn clear_retained_slot_confirmations() {
-    CONFIRMED_RETAINED_SLOTS.with(|map| map.borrow_mut().clear());
-}
-
-/// Whether the renderer has confirmed a live retained buffer for this
-/// identity UNDER THE EPOCH DECLARED FOR THIS BUILD (readable by tests
-/// driving the recorder by hand). No declared epoch means no consumer for
-/// bypassed spans, so nothing may skip materialization; a stored generation
-/// from another epoch is a buffer of a dead slot universe.
-pub fn retained_slot_confirmed(command: DrawCommandId, slot: u32) -> bool {
-    let Some(epoch) = RETAINED_FEED_EPOCH.with(std::cell::Cell::get) else {
-        return false;
-    };
-    CONFIRMED_RETAINED_SLOTS.with(|map| map.borrow().get(&(command, slot)) == Some(&epoch))
-}
-
-thread_local! {
-    static VERIFY_EXECUTOR: std::cell::Cell<
-        Option<&'static dyn cranpose_ui_graphics::VerifyExecutor>,
-    > = const { std::cell::Cell::new(None) };
-}
-
-/// Lends the renderer's frame worker pool to command verification: while
-/// set, segment commits at a record boundary run across the pool's lanes
-/// instead of on the build thread alone. `None` (the default, and the wasm
-/// state) keeps verification serial.
-pub fn set_verify_executor(pool: Option<&'static dyn cranpose_ui_graphics::VerifyExecutor>) {
-    VERIFY_EXECUTOR.with(|cell| cell.set(pool));
-}
-
-/// The executor lent by [`set_verify_executor`], if any.
-pub fn verify_executor() -> Option<&'static dyn cranpose_ui_graphics::VerifyExecutor> {
-    VERIFY_EXECUTOR.with(|cell| cell.get())
 }
 
 #[doc(hidden)]
@@ -1404,88 +1240,45 @@ fn bump_recording_generation() {
     }
 }
 
-fn acquire_recording(
-    id: DrawCommandId,
-) -> (
-    cranpose_ui_graphics::CommandRecording,
-    Vec<cranpose_ui_graphics::DrawPrimitive>,
-    Option<cranpose_ui_graphics::CommandReplayState>,
-) {
-    let feed_epoch = RETAINED_FEED_EPOCH.with(std::cell::Cell::get);
+/// The primitive buffer this command recorded into two frames ago, once the
+/// graph that referenced it has been dropped, so re-recording keeps the
+/// capacity it earned; an empty vector when no buffer is free yet.
+fn acquire_storage(id: DrawCommandId) -> Vec<cranpose_ui_graphics::DrawPrimitive> {
     COMMAND_RECORDINGS.with(|map| {
         let mut map = map.borrow_mut();
         let Some(slot) = map.get_mut(&id) else {
-            return (
-                cranpose_ui_graphics::CommandRecording::default(),
-                Vec::new(),
-                feed_epoch.map(|_| cranpose_ui_graphics::CommandReplayState::default()),
-            );
+            return Vec::new();
         };
-        let mut recording = cranpose_ui_graphics::CommandRecording::default();
-        for shared in &mut slot.recordings {
-            if shared
-                .as_ref()
-                .is_some_and(|shared| Rc::strong_count(shared) == 1)
-            {
-                let shared = shared.take().expect("checked some above");
-                recording = Rc::try_unwrap(shared).expect("sole owner checked above");
-                break;
-            }
-        }
-        let replay = feed_epoch.map(|epoch| {
-            if slot.replay_epoch == Some(epoch) {
-                std::mem::take(&mut slot.replay)
-            } else {
-                cranpose_ui_graphics::CommandReplayState::default()
-            }
-        });
         for handle in &mut slot.handles {
             if handle
                 .as_ref()
                 .is_some_and(|shared| Rc::strong_count(shared) == 1)
             {
                 let shared = handle.take().expect("checked some above");
-                let storage = Rc::try_unwrap(shared).expect("sole owner checked above");
-                return (recording, storage, replay);
+                return Rc::try_unwrap(shared).expect("sole owner checked above");
             }
         }
-        (recording, Vec::new(), replay)
+        Vec::new()
     })
 }
 
-fn publish_recording(
+fn publish_primitives(
     id: DrawCommandId,
-    recording: cranpose_ui_graphics::CommandRecording,
     primitives: Vec<cranpose_ui_graphics::DrawPrimitive>,
-    replay: Option<cranpose_ui_graphics::CommandReplayState>,
-) -> (
-    Rc<Vec<cranpose_ui_graphics::DrawPrimitive>>,
-    Rc<cranpose_ui_graphics::CommandRecording>,
-) {
+) -> Rc<Vec<cranpose_ui_graphics::DrawPrimitive>> {
     let shared = Rc::new(primitives);
-    let recording = Rc::new(recording);
     COMMAND_RECORDINGS.with(|map| {
         let mut map = map.borrow_mut();
         let generation = RECORDING_GENERATION.with(std::cell::Cell::get);
         let slot = map.entry(id).or_insert_with(|| RecorderSlot {
             generation,
             handles: [None, None],
-            recordings: [None, None],
-            replay: cranpose_ui_graphics::CommandReplayState::default(),
-            replay_epoch: None,
-            saved_emission: None,
         });
         slot.generation = generation;
-        if let Some(replay) = replay {
-            slot.replay = replay;
-            slot.replay_epoch = RETAINED_FEED_EPOCH.with(std::cell::Cell::get);
-        }
-        slot.recordings[1] = slot.recordings[0].take();
-        slot.recordings[0] = Some(recording.clone());
         slot.handles[1] = slot.handles[0].take();
         slot.handles[0] = Some(shared.clone());
     });
-    (shared, recording)
+    shared
 }
 
 fn draw_nodes(
@@ -1497,84 +1290,27 @@ fn draw_nodes(
     phase: PrimitivePhase,
 ) -> Vec<RenderNode> {
     let mut nodes = Vec::new();
-    let stale_transition = stale_transition_enabled();
     for (command_index, command) in commands.iter().enumerate() {
         let id = DrawCommandId {
             node_id,
             command_index: (first_command_index + command_index) as u32,
             placement,
         };
-        let (recording, storage, mut replay) = acquire_recording(id);
-        let stale_available = stale_transition && replay.is_some() && saved_emission_available(id);
-        let mut ctx = replay
-            .as_mut()
-            .map(|state| crate::style_shared::CommandReplayContext {
-                state,
-                stale_available,
-                serve_stale: false,
-            });
-        let (primitives, recording, frame) = primitives_for_placement_verified(
-            command,
-            placement,
-            size,
-            recording,
-            storage,
-            &mut ctx,
-            Some(id),
-        );
-        if ctx.is_some_and(|ctx| ctx.serve_stale) {
-            publish_recording(id, recording, primitives, replay);
-            if let Some(saved) = take_saved_emission(id) {
-                let frame = cranpose_ui_graphics::CommandReplayFrame {
-                    center: saved.center,
-                    spans: saved.spans,
-                    fallback: Some(saved.recording),
-                };
-                nodes.push(RenderNode::DrawRun(DrawRunNode::for_command_replayed(
-                    phase,
-                    Some(id),
-                    saved.primitives,
-                    Some(Box::new(frame)),
-                )));
-            } else {
-                debug_assert!(false, "serve_stale without a saved emission");
-            }
-            continue;
-        }
-        let has_replay_spans = frame.as_ref().is_some_and(|frame| !frame.spans.is_empty());
-        if primitives.is_empty() && primitives.capacity() == 0 && !has_replay_spans {
+        let storage = acquire_storage(id);
+        let primitives = primitives_for_placement_reusing(command, placement, size, storage);
+        if primitives.is_empty() && primitives.capacity() == 0 {
             retain_empty_draw_command(&mut nodes, phase, id, placement, command);
             continue;
         }
-        let (shared, published_recording) = publish_recording(id, recording, primitives, replay);
-        if stale_transition {
-            let saved = frame.as_ref().and_then(|frame| {
-                RETAINED_FEED_EPOCH
-                    .with(std::cell::Cell::get)
-                    .map(|epoch| SavedReplayEmission {
-                        spans: sanitized_replay_spans(&frame.spans),
-                        center: frame.center,
-                        primitives: shared.clone(),
-                        recording: published_recording.clone(),
-                        epoch,
-                        generation: RECORDING_GENERATION.with(std::cell::Cell::get),
-                    })
-            });
-            store_saved_emission(id, saved);
-        }
-        if shared.is_empty() && !has_replay_spans {
+        let shared = publish_primitives(id, primitives);
+        if shared.is_empty() {
             retain_empty_draw_command(&mut nodes, phase, id, placement, command);
             continue;
         }
-        let frame = frame.map(|mut frame| {
-            frame.fallback = Some(published_recording);
-            frame
-        });
-        nodes.push(RenderNode::DrawRun(DrawRunNode::for_command_replayed(
+        nodes.push(RenderNode::DrawRun(DrawRunNode::for_command_shared(
             phase,
             Some(id),
             shared,
-            frame.map(Box::new),
         )));
     }
     nodes
@@ -5095,286 +4831,5 @@ mod tests {
                 following_top
             );
         });
-    }
-
-    #[test]
-    fn retained_slot_confirmations_are_live_only_under_their_generation() {
-        let command = DrawCommandId {
-            node_id: 990_101,
-            command_index: 0,
-            placement: DrawPlacement::Behind,
-        };
-        set_retained_feed_epoch(Some(7));
-        confirm_retained_slot(command, 3, 7);
-        assert!(retained_slot_confirmed(command, 3));
-        set_retained_feed_epoch(Some(8));
-        assert!(!retained_slot_confirmed(command, 3));
-        set_retained_feed_epoch(None);
-        assert!(!retained_slot_confirmed(command, 3));
-        set_retained_feed_epoch(Some(7));
-        assert!(retained_slot_confirmed(command, 3));
-        revoke_retained_slot(command, 3);
-        assert!(!retained_slot_confirmed(command, 3));
-        set_retained_feed_epoch(None);
-        clear_retained_slot_confirmations();
-    }
-
-    fn record_sweep_test_rings(scope: &mut DrawScopeDefault) {
-        let count = 600usize;
-        let sweep = std::f32::consts::TAU / count as f32 * 0.8;
-        for i in 0..count {
-            let start = i as f32 * (std::f32::consts::TAU / count as f32);
-            scope.draw_annular_sector(
-                Brush::solid(cranpose_ui_graphics::Color(0.2, 0.4, 0.6, 1.0)),
-                cranpose_ui_graphics::Point::new(204.0, 204.0),
-                140.0,
-                150.0,
-                start,
-                sweep,
-            );
-        }
-    }
-
-    #[test]
-    fn recording_sweep_cannot_sever_a_frames_fallback() {
-        let command = DrawCommandId {
-            node_id: 990_102,
-            command_index: 0,
-            placement: DrawPlacement::Behind,
-        };
-        set_retained_feed_epoch(Some(41));
-        for slot in 0..64 {
-            confirm_retained_slot(command, slot, 41);
-        }
-
-        let mut state = cranpose_ui_graphics::CommandReplayState::default();
-        let mut published = None;
-        for _frame in 0..4 {
-            let (recording, storage, _) = acquire_recording(command);
-            let mut scope = DrawScopeDefault::with_recording(
-                cranpose_ui_graphics::Size::new(408.0, 408.0),
-                None,
-                recording,
-                storage,
-            );
-            record_sweep_test_rings(&mut scope);
-            let outcome = state.advance(scope.recorded());
-            let center = state.center();
-            let (finished, frame) = scope.finish_replay(center, outcome, &mut |slot| {
-                retained_slot_confirmed(command, slot)
-            });
-            let (primitives, fallback) =
-                publish_recording(command, finished.recording, finished.primitives, None);
-            let frame = frame.map(|mut frame| {
-                frame.fallback = Some(fallback.clone());
-                frame
-            });
-            published = Some((primitives, fallback, frame));
-        }
-        let (_primitives, fallback, frame) = published.expect("four frames published");
-        let frame = frame.expect("the replay must produce a frame with retained spans");
-        let bypassed: Vec<(u32, u32)> = frame
-            .spans
-            .iter()
-            .filter_map(|span| match span {
-                cranpose_ui_graphics::FrameSpan::Retained {
-                    capture: false,
-                    range,
-                    tape_range,
-                    ..
-                } if range.1 <= range.0 => Some(*tape_range),
-                _ => None,
-            })
-            .collect();
-        assert!(
-            !bypassed.is_empty(),
-            "confirmed slots must actually have bypassed materialization"
-        );
-        let expected: Vec<Vec<DrawPrimitive>> = bypassed
-            .iter()
-            .map(|tape_range| {
-                fallback
-                    .materialize_range(tape_range.0 as usize, tape_range.1 as usize)
-                    .expect("a frame-consistent tape range must materialize")
-            })
-            .collect();
-
-        for _ in 0..1024 {
-            bump_recording_generation();
-        }
-        assert!(
-            COMMAND_RECORDINGS.with(|map| !map.borrow().contains_key(&command)),
-            "the sweep must stay pure capacity management: a live confirmation \
-             no longer pins the registry slot"
-        );
-
-        for (tape_range, expected) in bypassed.iter().zip(&expected) {
-            let after = fallback
-                .materialize_range(tape_range.0 as usize, tape_range.1 as usize)
-                .expect("the frame-owned recording must outlive the sweep");
-            assert_eq!(
-                &after, expected,
-                "post-sweep rematerialization must be byte-identical"
-            );
-        }
-        set_retained_feed_epoch(None);
-        clear_retained_slot_confirmations();
-    }
-
-    #[test]
-    fn command_recordings_reuse_recording_buffers_across_rebuilds() {
-        let command = DrawCommandId {
-            node_id: 990_103,
-            command_index: 0,
-            placement: DrawPlacement::Behind,
-        };
-        let mut held = None;
-        let mut ptrs = Vec::new();
-        for _build in 0..8 {
-            let (recording, storage, _) = acquire_recording(command);
-            let mut scope = DrawScopeDefault::with_recording(
-                cranpose_ui_graphics::Size::new(64.0, 64.0),
-                None,
-                recording,
-                storage,
-            );
-            scope.draw_rect_at(
-                Rect {
-                    x: 4.0,
-                    y: 4.0,
-                    width: 16.0,
-                    height: 8.0,
-                },
-                Brush::solid(Color::WHITE),
-            );
-            let finished = scope.finish();
-            let (primitives, recording) =
-                publish_recording(command, finished.recording, finished.primitives, None);
-            ptrs.push(recording.tape_ptr());
-            held = Some((primitives, recording));
-        }
-        drop(held);
-        for build in 2..8 {
-            assert_eq!(
-                ptrs[build],
-                ptrs[build - 2],
-                "steady-state publishes must ping-pong between the pair's \
-                 buffers (build {build} allocated)"
-            );
-        }
-        assert_ne!(
-            ptrs[6], ptrs[7],
-            "a recording a live frame still shares must never be recorded into"
-        );
-    }
-
-    #[test]
-    fn sanitized_spans_drop_recolors_and_downgrade_captures() {
-        use cranpose_ui_graphics::{FrameSpan, RecordTransform};
-        let bounds = Rect {
-            x: 1.0,
-            y: 2.0,
-            width: 3.0,
-            height: 4.0,
-        };
-        let spans = vec![
-            FrameSpan::Dynamic { range: (0, 5) },
-            FrameSpan::Retained {
-                slot: 7,
-                capture: true,
-                slot_offset: 0,
-                range: (5, 105),
-                tape_range: (5, 105),
-                transform: RecordTransform::IDENTITY,
-                recolors: Vec::new(),
-                bounds,
-            },
-            FrameSpan::Retained {
-                slot: 8,
-                capture: false,
-                slot_offset: 3,
-                range: (105, 205),
-                tape_range: (110, 210),
-                transform: RecordTransform {
-                    scale: 0.999,
-                    angle: 0.05,
-                },
-                recolors: vec![(4, cranpose_ui_graphics::Color(1.0, 0.5, 0.2, 1.0))],
-                bounds,
-            },
-        ];
-        let sanitized = sanitized_replay_spans(&spans);
-        assert_eq!(sanitized[0], FrameSpan::Dynamic { range: (0, 5) });
-        assert_eq!(sanitized[1], FrameSpan::Dynamic { range: (5, 105) });
-        match &sanitized[2] {
-            FrameSpan::Retained {
-                slot,
-                capture,
-                slot_offset,
-                range,
-                tape_range,
-                transform,
-                recolors,
-                bounds: sanitized_bounds,
-            } => {
-                assert_eq!((*slot, *capture, *slot_offset), (8, false, 3));
-                assert_eq!((*range, *tape_range), ((105, 205), (110, 210)));
-                assert_eq!(transform.angle, 0.05);
-                assert!(recolors.is_empty(), "recolors must be emptied");
-                assert_eq!(*sanitized_bounds, bounds);
-            }
-            other => panic!("expected a retained span, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn a_saved_emission_serves_the_next_build_once() {
-        let command = DrawCommandId {
-            node_id: 990_303,
-            command_index: 0,
-            placement: DrawPlacement::Behind,
-        };
-        set_retained_feed_epoch(Some(77));
-        publish_recording(
-            command,
-            cranpose_ui_graphics::CommandRecording::default(),
-            Vec::new(),
-            None,
-        );
-        let saved = || SavedReplayEmission {
-            spans: vec![cranpose_ui_graphics::FrameSpan::Dynamic { range: (0, 3) }],
-            center: cranpose_ui_graphics::Point::new(204.0, 204.0),
-            primitives: Rc::new(Vec::new()),
-            recording: Rc::new(cranpose_ui_graphics::CommandRecording::default()),
-            epoch: 77,
-            generation: RECORDING_GENERATION.with(std::cell::Cell::get),
-        };
-
-        store_saved_emission(command, Some(saved()));
-        assert!(!saved_emission_available(command));
-        bump_recording_generation();
-        assert!(saved_emission_available(command));
-        bump_recording_generation();
-        assert!(!saved_emission_available(command));
-
-        store_saved_emission(command, Some(saved()));
-        bump_recording_generation();
-        assert!(saved_emission_available(command));
-        assert!(take_saved_emission(command).is_some());
-        assert!(
-            !saved_emission_available(command),
-            "a second serve of one emission must be unconstructible"
-        );
-        assert!(take_saved_emission(command).is_none());
-
-        store_saved_emission(command, Some(saved()));
-        bump_recording_generation();
-        set_retained_feed_epoch(Some(78));
-        assert!(!saved_emission_available(command));
-        set_retained_feed_epoch(None);
-        assert!(!saved_emission_available(command));
-        set_retained_feed_epoch(Some(77));
-        assert!(saved_emission_available(command));
-        set_retained_feed_epoch(None);
     }
 }

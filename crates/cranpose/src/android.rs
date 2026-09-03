@@ -614,25 +614,7 @@ fn update_android_shell_geometry(
     }
 }
 
-fn apply_display_visible_region(
-    app: &android_activity::AndroidApp,
-    app_shell: &mut Option<AppShell<WgpuRenderer>>,
-) {
-    let Some(shell) = app_shell else {
-        return;
-    };
-    let round = crate::android_display::display_is_round(app)
-        && !android_activity_in_multi_window_mode(app);
-    shell.renderer().set_display_visible_region(if round {
-        cranpose_render_wgpu::DisplayVisibleRegion::InscribedCircle
-    } else {
-        cranpose_render_wgpu::DisplayVisibleRegion::Full
-    });
-}
-
 fn apply_initialized_android_rendering(
-    app: &android_activity::AndroidApp,
-    app_shell: &mut Option<AppShell<WgpuRenderer>>,
     gpu_resources: &mut Option<GpuResources>,
     current_host_window_size: &mut Size,
     resources: GpuResources,
@@ -642,7 +624,6 @@ fn apply_initialized_android_rendering(
         *current_host_window_size = actual_size;
     }
     *gpu_resources = Some(resources);
-    apply_display_visible_region(app, app_shell);
 }
 
 fn render_once(
@@ -1905,7 +1886,6 @@ pub fn run(
                                         }
 
                                         gpu_resources = Some(resources);
-                                        apply_display_visible_region(&app, &mut app_shell);
                                         log::info!("Rendering initialized successfully");
                                     }
                                     Err(error) => {
@@ -2066,7 +2046,6 @@ pub fn run(
                                     crate::android_font_scale::font_scale_curve(),
                                 );
                             }
-                        apply_display_visible_region(&app, &mut app_shell);
                     }
                     _ => {}
                 }
@@ -2105,8 +2084,6 @@ pub fn run(
                             ) {
                                 Ok((resources, actual_size)) => {
                                     apply_initialized_android_rendering(
-                                        &app,
-                                        &mut app_shell,
                                         &mut gpu_resources,
                                         &mut current_host_window_size,
                                         resources,
@@ -2153,8 +2130,6 @@ pub fn run(
                         ) {
                             Ok((resources, actual_size)) => {
                                 apply_initialized_android_rendering(
-                                    &app,
-                                    &mut app_shell,
                                     &mut gpu_resources,
                                     &mut current_host_window_size,
                                     resources,

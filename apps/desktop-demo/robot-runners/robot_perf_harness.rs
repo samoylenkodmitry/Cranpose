@@ -1212,7 +1212,7 @@ fn main() {
                     Ok(Some(snapshot)) => {
                         for (index, layer) in snapshot.top_isolated_layers().enumerate() {
                             println!(
-                                "PERF_ISOLATED scenario={} rank={} node={:?} rect=({:.1},{:.1},{:.1},{:.1}) target={}x{} reasons={}",
+                                "PERF_ISOLATED scenario={} rank={} node={:?} rect=({:.1},{:.1},{:.1},{:.1}) target={}x{}",
                                 scenario.name(),
                                 index,
                                 layer.node_id,
@@ -1222,7 +1222,6 @@ fn main() {
                                 layer.logical_rect.height,
                                 layer.width,
                                 layer.height,
-                                layer.reasons.display(),
                             );
                         }
                     }
@@ -1548,7 +1547,6 @@ mod tests {
             isolated_layer_pixels: 1024,
             layer_cache_hits: 4,
             layer_cache_misses: 1,
-            layer_cache_evictions: 0,
             layer_cache_hit_pixels: 300,
             layer_cache_miss_pixels: 120,
             blur_passes: 2,

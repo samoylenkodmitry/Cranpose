@@ -81,8 +81,23 @@ impl Default for BlurredEdgeTreatment {
 ///
 /// Float uniforms are packed linearly into the `u` array. Access them in WGSL
 /// as `u[index / 4][index % 4]` for individual floats, or `u[index / 4].xy`
-/// for vec2, etc. User uniforms may use indices `0..248`; slots `248..256`
-/// are reserved for renderer metadata.
+/// for vec2, etc. User uniforms may use indices `0..236`; slots `236..256`
+/// are reserved for renderer metadata:
+///
+/// | slots     | content                                                     |
+/// |-----------|-------------------------------------------------------------|
+/// | 236..240  | source region `(x, y, w, h)` in input texels; zero = whole  |
+/// | 240..244  | composite mask rect `(x, y, w, h)` in region pixels; zero = none |
+/// | 244..248  | composite mask corner radii (top-left, top-right, bottom-left, bottom-right) |
+/// | 248..252  | effect rect `(x, y, w, h)` in region pixels                 |
+/// | 252..254  | logical size the input represents; zero = its texel size   |
+/// | 254       | composite alpha                                             |
+///
+/// A shader that reads the source region, mask and alpha slots declares it
+/// with [`set_batched_source`](Self::set_batched_source); the renderer then
+/// packs its input beside other effects' inputs in one texture and draws it
+/// straight into the final pass with its clip applied. Every other shader is
+/// given the whole texture as its input and `uv` spans it.
 ///
 /// RuntimeShader pipelines operate on premultiplied-alpha textures. Custom
 /// shaders should preserve premultiplied output semantics.
@@ -94,6 +109,7 @@ pub struct RuntimeShader {
     overrides: Vec<(&'static str, f64)>,
     input_padding: f32,
     output_padding: f32,
+    batched_source: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -178,7 +194,19 @@ impl RuntimeShader {
     /// The final slots are reserved for renderer-managed data.
     pub const MAX_UNIFORMS: usize = 256;
     /// First renderer-reserved uniform slot.
-    pub const RESERVED_UNIFORM_START: usize = 248;
+    pub const RESERVED_UNIFORM_START: usize = 236;
+    /// Reserved slot of the source region `(x, y, w, h)` in input texels.
+    pub const SOURCE_REGION_UNIFORM: usize = 236;
+    /// Reserved slot of the composite mask rect `(x, y, w, h)` in region pixels.
+    pub const MASK_RECT_UNIFORM: usize = 240;
+    /// Reserved slot of the composite mask corner radii.
+    pub const MASK_RADII_UNIFORM: usize = 244;
+    /// Reserved slot of the effect rect `(x, y, w, h)` in region pixels.
+    pub const EFFECT_RECT_UNIFORM: usize = 248;
+    /// Reserved slot of the logical size the input represents.
+    pub const LOGICAL_SIZE_UNIFORM: usize = 252;
+    /// Reserved slot of the composite alpha.
+    pub const ALPHA_UNIFORM: usize = 254;
     /// Maximum user-addressable uniform count.
     pub const MAX_USER_UNIFORMS: usize = Self::RESERVED_UNIFORM_START;
 
@@ -194,6 +222,7 @@ impl RuntimeShader {
             overrides: Vec::new(),
             input_padding: 0.0,
             output_padding: 0.0,
+            batched_source: false,
         }
     }
 
@@ -210,6 +239,7 @@ impl RuntimeShader {
             overrides: Vec::new(),
             input_padding: 0.0,
             output_padding: 0.0,
+            batched_source: false,
         }
     }
 
@@ -347,6 +377,19 @@ impl RuntimeShader {
         Ok(())
     }
 
+    /// Declares that the shader reads the reserved source region, mask and
+    /// alpha slots, so the renderer may hand it a packed input region and
+    /// draw it straight into the final pass with its clip applied.
+    pub fn set_batched_source(&mut self, batched: bool) {
+        self.batched_source = batched;
+    }
+
+    /// Whether the shader reads the reserved source region, mask and alpha
+    /// slots.
+    pub fn batched_source(&self) -> bool {
+        self.batched_source
+    }
+
     /// Get the WGSL source code.
     pub fn source(&self) -> &str {
         &self.source
@@ -410,6 +453,7 @@ impl PartialEq for RuntimeShader {
                 .all(|(a, b)| a.0 == b.0 && a.1.to_bits() == b.1.to_bits())
             && self.input_padding.to_bits() == other.input_padding.to_bits()
             && self.output_padding.to_bits() == other.output_padding.to_bits()
+            && self.batched_source == other.batched_source
     }
 }
 

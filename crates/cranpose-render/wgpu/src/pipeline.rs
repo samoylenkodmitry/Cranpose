@@ -2,10 +2,11 @@ use std::{ops::Range, rc::Rc};
 
 use cranpose_core::{MemoryApplier, NodeId};
 #[cfg(test)]
+use cranpose_render_common::geometry::{expand_blurred_rect, union_rect};
+#[cfg(test)]
 use cranpose_render_common::primitive_emit::resolve_clip;
 use cranpose_render_common::{
     Brush, RenderScene,
-    geometry::{expand_blurred_rect, union_rect},
     hit_graph::collect_hits_from_graph,
     layer_shadow::layer_shadow_geometry,
     layer_transform::{apply_layer_to_rect, layer_uniform_scale},
@@ -36,10 +37,7 @@ use cranpose_ui_graphics::{
     RoundedCornerShape, RuntimeShader, TileMode,
 };
 
-use crate::{
-    scene::{CompositorScene, DrawShape, Scene, ShadowDraw, TextDraw},
-    surface_requirements::{SurfaceRequirement, SurfaceRequirementSet},
-};
+use crate::scene::{CompositorScene, DrawShape, Scene, ShadowDraw, TextDraw};
 
 mod style;
 use style::{apply_layer_to_brush, apply_layer_to_color, scale_corner_radii};
@@ -89,10 +87,8 @@ fn shadow_shape(
             shape,
             stroke: None,
             arc: None,
-            z_index: 0,
             clip: None,
             blend_mode: BlendMode::SrcOver,
-            motion_context_animated: false,
         },
         BlendMode::SrcOver,
     )
@@ -197,7 +193,6 @@ pub(crate) fn render_layout_tree(root: &LayoutBox, scene: &mut Scene) {
 }
 
 pub(crate) fn render_layout_tree_with_scale(root: &LayoutBox, scene: &mut Scene, scale: f32) {
-    declare_retained_feed();
     let graph = cranpose_render_common::scene_builder::build_graph_from_layout_tree(root, scale);
     collect_hits_from_graph(
         &graph.root,
@@ -728,9 +723,7 @@ trait TextStyleDrawSink {
         composite_alpha: f32,
         z_start: usize,
         z_end: usize,
-        requirements: SurfaceRequirementSet,
     ) {
-        let _ = requirements;
         self.push_effect_layer(
             rect,
             clip,
@@ -806,14 +799,12 @@ impl TextStyleDrawSink for CompositorScene {
                 node_id,
                 rect,
                 snap_anchor: None,
-                translated_content_context: false,
                 text: crate::scene::render_string_for(&text),
                 color,
                 text_style,
                 font_size,
                 scale,
                 layout_options,
-                z_index: 0,
                 clip,
             }],
             blur_radius,
@@ -855,9 +846,8 @@ impl TextStyleDrawSink for CompositorScene {
         composite_alpha: f32,
         z_start: usize,
         z_end: usize,
-        requirements: SurfaceRequirementSet,
     ) {
-        CompositorScene::push_effect_layer_with_requirements(
+        CompositorScene::push_effect_layer(
             self,
             rect,
             clip,
@@ -866,7 +856,6 @@ impl TextStyleDrawSink for CompositorScene {
             composite_alpha,
             z_start,
             z_end,
-            requirements,
         );
     }
 }
@@ -1007,10 +996,6 @@ fn push_span_gpu_text_material_draws<S: TextStyleDrawSink>(
             1.0,
             z_start,
             sink.current_z(),
-            SurfaceRequirementSet::from_iter([
-                SurfaceRequirement::RenderEffect,
-                SurfaceRequirement::TextMaterialMask,
-            ]),
         );
     }
 
@@ -1180,10 +1165,6 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
             1.0,
             z_start,
             sink.current_z(),
-            SurfaceRequirementSet::from_iter([
-                SurfaceRequirement::RenderEffect,
-                SurfaceRequirement::TextMaterialMask,
-            ]),
         );
         push_text_decorations(
             sink,
@@ -1278,140 +1259,6 @@ pub(crate) fn push_text_style_draws(
         options,
         text_clip,
     );
-}
-
-#[derive(Clone, Copy)]
-pub(crate) struct SceneEmissionCounts {
-    shapes: usize,
-    images: usize,
-    texts: usize,
-    shadow_draws: usize,
-    effect_layers: usize,
-    backdrop_layers: usize,
-}
-
-pub(crate) fn scene_emission_counts(scene: &CompositorScene) -> SceneEmissionCounts {
-    SceneEmissionCounts {
-        shapes: scene.shapes.len(),
-        images: scene.images.len(),
-        texts: scene.texts.len(),
-        shadow_draws: scene.shadow_draws.len(),
-        effect_layers: scene.effect_layers.len(),
-        backdrop_layers: scene.backdrop_layers.len(),
-    }
-}
-
-fn visible_scene_rect(rect: Rect, clip: Option<Rect>) -> Option<Rect> {
-    match clip {
-        Some(clip) => rect.intersect(clip),
-        None => Some(rect),
-    }
-}
-
-fn shadow_draw_bounds(shadow_draws: &[ShadowDraw]) -> Option<Rect> {
-    let mut bounds = None;
-    for shadow in shadow_draws {
-        let mut shadow_bounds = None;
-        for (shape, _) in &shadow.shapes {
-            shadow_bounds = union_rect(shadow_bounds, shape.rect);
-        }
-        for text in &shadow.texts {
-            shadow_bounds = union_rect(shadow_bounds, text.rect);
-        }
-        if let Some(shadow_bounds) = shadow_bounds
-            && let Some(expanded) =
-                expand_blurred_rect(shadow_bounds, shadow.blur_radius, shadow.clip)
-        {
-            bounds = union_rect(bounds, expanded);
-        }
-    }
-    bounds
-}
-
-pub(crate) fn emitted_scene_bounds(
-    scene: &CompositorScene,
-    counts: SceneEmissionCounts,
-) -> Option<Rect> {
-    let mut bounds = None;
-
-    for shape in &scene.shapes[counts.shapes..] {
-        if let Some(visible) = visible_scene_rect(shape.rect, shape.clip) {
-            bounds = union_rect(bounds, visible);
-        }
-    }
-    for image in &scene.images[counts.images..] {
-        if let Some(visible) = visible_scene_rect(image.rect, image.clip) {
-            bounds = union_rect(bounds, visible);
-        }
-    }
-    for text in &scene.texts[counts.texts..] {
-        if let Some(visible) = visible_scene_rect(text.rect, text.clip) {
-            bounds = union_rect(bounds, visible);
-        }
-    }
-    if let Some(shadow_bounds) = shadow_draw_bounds(&scene.shadow_draws[counts.shadow_draws..]) {
-        bounds = union_rect(bounds, shadow_bounds);
-    }
-    for layer in &scene.effect_layers[counts.effect_layers..] {
-        if let Some(visible) = visible_scene_rect(layer.rect, layer.clip) {
-            bounds = union_rect(bounds, visible);
-        }
-    }
-    for layer in &scene.backdrop_layers[counts.backdrop_layers..] {
-        if let Some(visible) = visible_scene_rect(layer.rect, layer.clip) {
-            bounds = union_rect(bounds, visible);
-        }
-    }
-
-    bounds
-}
-
-#[cfg(test)]
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn push_translated_text_style_draws(
-    scene: &mut CompositorScene,
-    node_id: NodeId,
-    rect: Rect,
-    text_rect: Rect,
-    content_layer: &GraphicsLayer,
-    text: &cranpose_ui::text::AnnotatedString,
-    text_style: &TextStyle,
-    font_size: f32,
-    options: TextLayoutOptions,
-    text_clip: Option<Rect>,
-) {
-    let counts = scene_emission_counts(scene);
-    let z_start = scene.current_z();
-    let mut text_layout = UiTextLayoutResolver;
-    let text = Rc::new(text.clone());
-    emit_text_style_draws(
-        scene,
-        &mut text_layout,
-        node_id,
-        rect,
-        text_rect,
-        content_layer,
-        &text,
-        text_style,
-        font_size,
-        options,
-        text_clip,
-    );
-    let z_end = scene.current_z();
-    if z_end > z_start
-        && let Some(surface_rect) = emitted_scene_bounds(scene, counts)
-    {
-        scene.push_effect_layer_with_surface(
-            surface_rect,
-            text_clip,
-            None,
-            BlendMode::SrcOver,
-            1.0,
-            z_start,
-            z_end,
-            SurfaceRequirementSet::default().with(SurfaceRequirement::MotionStableCapture),
-        );
-    }
 }
 
 #[cfg(test)]
@@ -1894,47 +1741,12 @@ fn resolve_text_horizontal_offset(
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-thread_local! {
-    static RETAINED_FEED_GENERATION: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn bump_retained_feed_generation() {
-    RETAINED_FEED_GENERATION.with(|cell| cell.set(cell.get().wrapping_add(1)));
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-#[doc(hidden)]
-pub fn retained_feed_generation() -> u64 {
-    RETAINED_FEED_GENERATION.with(std::cell::Cell::get)
-}
-
-fn declare_retained_feed() {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        cranpose_render_common::scene_builder::set_retained_feed_epoch(
-            crate::shape_replay::command_feed_enabled()
-                .then(|| RETAINED_FEED_GENERATION.with(std::cell::Cell::get)),
-        );
-        cranpose_render_common::scene_builder::set_verify_executor(
-            crate::shape_replay::command_feed_enabled().then(|| {
-                crate::stage_executor::stage_executor()
-                    as &'static dyn cranpose_ui_graphics::VerifyExecutor
-            }),
-        );
-    }
-    #[cfg(target_arch = "wasm32")]
-    cranpose_render_common::scene_builder::set_retained_feed_epoch(None);
-}
-
 pub(crate) fn render_from_applier(
     applier: &mut MemoryApplier,
     root: NodeId,
     scene: &mut Scene,
     scale: f32,
 ) {
-    declare_retained_feed();
     let Some(mut graph) =
         cranpose_render_common::scene_builder::build_graph_from_applier(applier, root, scale)
     else {
@@ -1964,7 +1776,6 @@ pub(crate) fn update_from_applier(
     refresh_hits: bool,
     changed_nodes: &mut Vec<NodeId>,
 ) -> SceneUpdateOutcome {
-    declare_retained_feed();
     changed_nodes.clear();
     let Some(update_report) = scene.graph.as_mut().map(|graph| {
         cranpose_render_common::scene_builder::update_graph_from_applier_report_into(
@@ -2033,7 +1844,6 @@ pub(crate) fn push_draw_primitive(
                 params.arc,
                 params.clip,
                 params.blend_mode,
-                params.motion_context_animated,
             );
         }
 
@@ -2115,10 +1925,8 @@ fn push_shadow_primitive(
                 shape: params.shape,
                 stroke: params.stroke,
                 arc: params.arc,
-                z_index: 0,
                 clip: params.clip,
                 blend_mode: params.blend_mode,
-                motion_context_animated: params.motion_context_animated,
             },
             params.blend_mode,
         ))
@@ -3026,74 +2834,6 @@ mod tests {
         assert!(
             (delta - 0.35).abs() < 0.001,
             "text decoration y must move by the same fractional delta as the text; got {delta}"
-        );
-    }
-
-    #[test]
-    fn push_translated_text_style_draws_wraps_the_whole_text_picture_in_one_surface() {
-        let mut scene = Scene::new();
-        let style = cranpose_ui::TextStyle {
-            span_style: cranpose_ui::SpanStyle {
-                color: Some(Color::WHITE),
-                text_decoration: Some(cranpose_ui::text::TextDecoration::UNDERLINE),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let rect = Rect {
-            x: 8.0,
-            y: 10.0,
-            width: 180.0,
-            height: 28.0,
-        };
-
-        with_test_app_context(|| {
-            push_translated_text_style_draws(
-                &mut scene,
-                71 as NodeId,
-                rect,
-                rect,
-                &GraphicsLayer::default(),
-                &cranpose_ui::text::AnnotatedString::from("Decorated"),
-                &style,
-                14.0,
-                TextLayoutOptions::default(),
-                None,
-            )
-        });
-
-        assert_eq!(
-            scene.shapes.len(),
-            1,
-            "underline geometry should be emitted"
-        );
-        assert_eq!(scene.texts.len(), 1, "glyph draw should be emitted");
-        assert_eq!(
-            scene.effect_layers.len(),
-            1,
-            "translated text should be isolated in exactly one bounded local surface"
-        );
-        let effect_layer = &scene.effect_layers[0];
-        assert!(
-            effect_layer.effect.is_none(),
-            "translated text isolation should not apply a post-effect"
-        );
-        assert!(
-            effect_layer
-                .requirements
-                .contains(SurfaceRequirement::MotionStableCapture),
-            "translated text should request a motion-stable surface"
-        );
-        let expected_surface_rect = union_rect(Some(scene.shapes[0].rect), scene.texts[0].rect)
-            .expect("translated text surface should cover both underline and glyphs");
-        assert_eq!(
-            effect_layer.rect, expected_surface_rect,
-            "the local text surface should cover the entire emitted picture"
-        );
-        assert_eq!(
-            effect_layer.z_end - effect_layer.z_start,
-            2,
-            "the underline and glyph draw should be isolated together"
         );
     }
 
@@ -4755,8 +4495,17 @@ mod tests {
 
         assert_eq!(scene.shapes.len(), 1);
         assert_eq!(scene.texts.len(), 1);
+        let z_of = |kind: fn(&crate::scene::DrawOpKind) -> bool| {
+            scene
+                .draw_ops
+                .iter()
+                .find(|op| kind(&op.kind))
+                .map(|op| op.z_index)
+                .expect("op present")
+        };
         assert!(
-            scene.texts[0].z_index > scene.shapes[0].z_index,
+            z_of(|kind| matches!(kind, crate::scene::DrawOpKind::Text(_)))
+                > z_of(|kind| matches!(kind, crate::scene::DrawOpKind::Shape(_))),
             "text drawn after a rect must composite above it"
         );
     }

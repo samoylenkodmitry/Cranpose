@@ -186,7 +186,7 @@ fn log_render_stats(robot: &cranpose::Robot, phase: &str) {
             );
             for (index, layer) in stats.top_isolated_layers().take(4).enumerate() {
                 eprintln!(
-                    "  [isolated:{phase}:{index}] node={:?} rect=({:.1},{:.1},{:.1},{:.1}) target={}x{} reasons={}",
+                    "  [isolated:{phase}:{index}] node={:?} rect=({:.1},{:.1},{:.1},{:.1}) target={}x{}",
                     layer.node_id,
                     layer.logical_rect.x,
                     layer.logical_rect.y,
@@ -194,7 +194,6 @@ fn log_render_stats(robot: &cranpose::Robot, phase: &str) {
                     layer.logical_rect.height,
                     layer.width,
                     layer.height,
-                    layer.reasons.display(),
                 );
             }
         }
@@ -205,7 +204,7 @@ fn log_render_stats(robot: &cranpose::Robot, phase: &str) {
     match robot.get_render_cpu_allocation_stats() {
         Ok(stats) => {
             eprintln!(
-                "[render-cpu:{phase}] graph_nodes={} graph_heap_mb={:.1} hits={}/{} node_index={}/{} text_pool={}/{} swash_image={}/{} swash_outline={}/{} image_cache={}/{} scratch_layers={} staged_bytes={} layer_cache={}/{} rect_cache={}/{} req_cache={}/{}",
+                "[render-cpu:{phase}] graph_nodes={} graph_heap_mb={:.1} hits={}/{} node_index={}/{} text_pool={}/{} image_cache={}/{} scratch_shape_data={} scratch_gradients={} scratch_image={}/{}/{} layer_cache={} layer_cache_mb={:.1}",
                 stats.scene_graph_node_count,
                 stats.scene_graph_heap_bytes as f64 / (1024.0 * 1024.0),
                 stats.scene_hits_len,
@@ -214,20 +213,15 @@ fn log_render_stats(robot: &cranpose::Robot, phase: &str) {
                 stats.scene_node_index_cap,
                 stats.text_renderer_pool_len,
                 stats.text_renderer_pool_cap,
-                stats.swash_image_cache_len,
-                stats.swash_image_cache_cap,
-                stats.swash_outline_cache_len,
-                stats.swash_outline_cache_cap,
                 stats.image_texture_cache_len,
                 stats.image_texture_cache_cap,
-                stats.scratch_layer_events_cap,
-                stats.staged_upload_bytes_cap,
-                stats.layer_surface_cache_len,
-                stats.layer_surface_cache_cap,
-                stats.layer_surface_rect_cache_len,
-                stats.layer_surface_rect_cache_cap,
-                stats.layer_surface_requirements_cache_len,
-                stats.layer_surface_requirements_cache_cap,
+                stats.scratch_shape_data_cap,
+                stats.scratch_gradients_cap,
+                stats.scratch_image_vertices_cap,
+                stats.scratch_image_indices_cap,
+                stats.scratch_image_cmds_cap,
+                stats.layer_cache_len,
+                stats.layer_cache_bytes as f64 / (1024.0 * 1024.0),
             );
         }
         Err(err) => eprintln!("[render-cpu:{phase}] failed: {err}"),
@@ -576,13 +570,10 @@ fn main() {
                         after_render_cpu.scene_graph_heap_bytes
                     ));
                 }
-                if after_render_cpu.layer_surface_cache_len
-                    > baseline_render_cpu.layer_surface_cache_len + 4
-                {
+                if after_render_cpu.layer_cache_len > baseline_render_cpu.layer_cache_len + 4 {
                     framework_issues.push(format!(
-                        "layer surface cache len grew from {} to {}",
-                        baseline_render_cpu.layer_surface_cache_len,
-                        after_render_cpu.layer_surface_cache_len
+                        "layer cache len grew from {} to {}",
+                        baseline_render_cpu.layer_cache_len, after_render_cpu.layer_cache_len
                     ));
                 }
 

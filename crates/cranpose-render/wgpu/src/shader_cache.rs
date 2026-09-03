@@ -24,7 +24,7 @@ fn shader_specialization_enabled() -> bool {
 
 pub(crate) struct ShaderPipelineCache {
     backend: wgpu::Backend,
-    cache: HashMap<(u64, u64, RuntimeShaderPipelineMode, bool), wgpu::RenderPipeline>,
+    cache: HashMap<(u64, u64, RuntimeShaderPipelineMode), wgpu::RenderPipeline>,
     disabled: HashSet<u64>,
     pipeline_cache: Option<wgpu::PipelineCache>,
 }
@@ -48,7 +48,6 @@ impl ShaderPipelineCache {
         texture_bind_group_layout: &wgpu::BindGroupLayout,
         uniform_bind_group_layout: &wgpu::BindGroupLayout,
         mode: RuntimeShaderPipelineMode,
-        depth: bool,
     ) -> Option<&wgpu::RenderPipeline> {
         let source_hash = shader.source_hash();
         let constants: &[(&str, f64)] = if shader_specialization_enabled() {
@@ -61,7 +60,7 @@ impl ShaderPipelineCache {
         } else {
             shader.overrides_hash()
         };
-        let cache_key = (source_hash, overrides_hash, mode, depth);
+        let cache_key = (source_hash, overrides_hash, mode);
         if self.disabled.contains(&source_hash) {
             return None;
         }
@@ -88,7 +87,7 @@ impl ShaderPipelineCache {
             crate::render::create_render_pipeline_logged(
                 device,
                 self.pipeline_cache.as_ref(),
-                &format!("runtime-shader mode={mode:?} depth={depth}"),
+                &format!("runtime-shader mode={mode:?}"),
                 wgpu::RenderPipelineDescriptor {
                     label: Some("RuntimeShader Effect Pipeline"),
                     layout: Some(&pipeline_layout),
@@ -121,7 +120,7 @@ impl ShaderPipelineCache {
                         cull_mode: None,
                         ..Default::default()
                     },
-                    depth_stencil: crate::display_clip::content_depth_state(depth),
+                    depth_stencil: None,
                     multisample: wgpu::MultisampleState::default(),
                     multiview_mask: None,
                     cache: None,

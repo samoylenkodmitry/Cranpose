@@ -924,196 +924,16 @@ pub fn align_text_block(rect: Rect, measurement: TextMeasurement, style: &DrawTe
     Point::new(x, y)
 }
 
-/// Which typed store holds one recorded draw. The tape preserves the exact
-/// draw order across the per-kind stores.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(u8)]
-pub(crate) enum RecordKind {
-    SolidRect,
-    SolidRoundRect,
-    SolidArc,
-    Other,
-}
-
-/// Tagged reference to one recorded draw: kind in the top 2 bits, index into
-/// that kind's typed store in the low 30. Four bytes per entry buys direct
-/// dispatch everywhere a tape range is consumed — no per-kind cursor walks,
-/// no per-frame view tables (sol P4a).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct TapeRef(u32);
-
-impl TapeRef {
-    const KIND_SHIFT: u32 = 30;
-    const INDEX_MASK: u32 = (1 << Self::KIND_SHIFT) - 1;
-
-    pub(crate) fn new(kind: RecordKind, index: usize) -> Self {
-        debug_assert!(index < (1usize << Self::KIND_SHIFT));
-        Self(((kind as u32) << Self::KIND_SHIFT) | index as u32)
-    }
-
-    pub(crate) fn kind(self) -> RecordKind {
-        match self.0 >> Self::KIND_SHIFT {
-            0 => RecordKind::SolidRect,
-            1 => RecordKind::SolidRoundRect,
-            2 => RecordKind::SolidArc,
-            _ => RecordKind::Other,
-        }
-    }
-
-    pub(crate) fn index(self) -> usize {
-        (self.0 & Self::INDEX_MASK) as usize
-    }
-
-    pub(crate) fn raw(self) -> u32 {
-        self.0
-    }
-}
-
-/// A solid `SrcOver` rect, recorded as raw values.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct SolidRectRecord {
-    pub rect: Rect,
-    pub color: Color,
-    pub stroke: Option<Stroke>,
-}
-
-/// A solid `SrcOver` rounded rect (also the lowering of `draw_circle`),
-/// recorded as raw values.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct SolidRoundRectRecord {
-    pub rect: Rect,
-    pub radii: CornerRadii,
-    pub color: Color,
-    pub stroke: Option<Stroke>,
-}
-
-/// A solid `SrcOver` arc, recorded as the RAW draw parameters — before
-/// band resolution, tight-bounds trigonometry, or the degeneracy check,
-/// all of which happen at materialization. Retention verification must be
-/// able to compare what the app said, ahead of everything deriving from it.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct SolidArcRecord {
-    pub center: Point,
-    pub radius: f32,
-    pub start_angle: f32,
-    pub sweep_angle: f32,
-    pub inner_radius: f32,
-    pub color: Color,
-    pub stroke: Option<Stroke>,
-}
-
-/// One draw command's recording in compact typed form: pure-numeric records
-/// for the common solid shapes (no `Brush` destructor branch, roughly half
-/// the bytes of the `DrawPrimitive` they materialize into) and ordinary
-/// primitives for everything else, with `tape` preserving global order. The
-/// index each tape entry carries into its per-kind store is the stable
-/// compact handle for the rare resource-bearing entries (`others` holds
-/// gradients, images, text, blends, and content markers whole).
-#[derive(Clone, Debug, Default)]
-pub struct CommandRecording {
-    pub(crate) tape: Vec<TapeRef>,
-    pub(crate) rects: Vec<SolidRectRecord>,
-    pub(crate) round_rects: Vec<SolidRoundRectRecord>,
-    pub(crate) arcs: Vec<SolidArcRecord>,
-    pub(crate) others: Vec<DrawPrimitive>,
-}
-
-impl CommandRecording {
-    /// Total recorded entries (the tape length).
-    pub fn len(&self) -> usize {
-        self.tape.len()
-    }
-
-    /// Materializes one tape range into fresh primitives — the emergency
-    /// path for a bypassed span whose retained draw fell through. `None`
-    /// when the range does not lie within this recording (cleared buffers,
-    /// stale range).
-    pub fn materialize_range(
-        &self,
-        tape_start: usize,
-        tape_end: usize,
-    ) -> Option<Vec<DrawPrimitive>> {
-        if tape_start > tape_end || tape_end > self.tape.len() {
-            return None;
-        }
-        let mut out = Vec::with_capacity(tape_end - tape_start);
-        for entry in &self.tape[tape_start..tape_end] {
-            match entry.kind() {
-                RecordKind::SolidRect => {
-                    let record = self.rects.get(entry.index())?;
-                    out.push(DrawPrimitive::Rect {
-                        rect: record.rect,
-                        brush: Brush::Solid(record.color),
-                        stroke: record.stroke,
-                    });
-                }
-                RecordKind::SolidRoundRect => {
-                    let record = self.round_rects.get(entry.index())?;
-                    out.push(DrawPrimitive::RoundRect {
-                        rect: record.rect,
-                        brush: Brush::Solid(record.color),
-                        radii: record.radii,
-                        stroke: record.stroke,
-                    });
-                }
-                RecordKind::SolidArc => {
-                    let record = self.arcs.get(entry.index())?;
-                    if let Some(primitive) = materialize_solid_arc(record) {
-                        out.push(primitive);
-                    }
-                }
-                RecordKind::Other => {
-                    out.push(self.others.get(entry.index())?.clone());
-                }
-            }
-        }
-        Some(out)
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.tape.is_empty()
-    }
-
-    #[doc(hidden)]
-    pub fn tape_ptr(&self) -> *const u8 {
-        self.tape.as_ptr() as *const u8
-    }
-
-    fn clear(&mut self) {
-        self.tape.clear();
-        self.rects.clear();
-        self.round_rects.clear();
-        self.arcs.clear();
-        self.others.clear();
-    }
-
-    pub(crate) fn clone_records_from(&mut self, source: &Self) {
-        self.tape.clone_from(&source.tape);
-        self.rects.clone_from(&source.rects);
-        self.round_rects.clone_from(&source.round_rects);
-        self.arcs.clone_from(&source.arcs);
-        self.others.clone_from(&source.others);
-    }
-}
-
-/// What [`DrawScopeDefault::finish`] hands back: the materialized primitives,
-/// the marker count that travels with them, and the recording buffers so a
-/// retaining caller can lend them to the same command's next recording.
+/// What [`DrawScopeDefault::finish`] hands back: the recorded primitives and
+/// the count of content markers that travel with them.
 pub struct FinishedRecording {
     pub primitives: Vec<DrawPrimitive>,
     pub content_markers: u32,
-    pub recording: CommandRecording,
-    /// Tape indices that materialized to nothing (degenerate arcs), in
-    /// ascending order — empty in practice. Consumers translating tape
-    /// ranges into primitive ranges subtract the drops before each
-    /// boundary.
-    pub dropped: Vec<u32>,
 }
 
 #[derive(Default)]
 pub struct DrawScopeDefault {
     size: Size,
-    rec: CommandRecording,
     out: Vec<DrawPrimitive>,
     content_markers: u32,
     text_measurer: Option<Rc<dyn DrawTextMeasurer>>,
@@ -1154,7 +974,7 @@ fn note_recorded_primitive_count(size: Size, count: usize) {
 
 impl DrawScopeDefault {
     pub fn new(size: Size) -> Self {
-        Self::with_recording(size, None, CommandRecording::default(), Vec::new())
+        Self::with_storage(size, None, Vec::new())
     }
 
     /// A scope that measures text with the app's fonts.
@@ -1162,46 +982,31 @@ impl DrawScopeDefault {
     /// The framework calls this for every draw closure it runs; `new` exists
     /// for callers that never draw text.
     pub fn with_text_measurer(size: Size, text_measurer: Rc<dyn DrawTextMeasurer>) -> Self {
-        Self::with_recording(
-            size,
-            Some(text_measurer),
-            CommandRecording::default(),
-            Vec::new(),
-        )
+        Self::with_storage(size, Some(text_measurer), Vec::new())
     }
 
     /// Like [`with_text_measurer`](Self::with_text_measurer), but records
-    /// into storage the caller already owns. This is the retained-recording
-    /// path: a command that re-records every frame keeps one buffer whose
-    /// capacity was earned on earlier frames, instead of walking a fresh
-    /// vector through the whole doubling schedule again.
+    /// into storage the caller already owns: a command that re-records every
+    /// frame keeps one buffer whose capacity was earned on earlier frames,
+    /// instead of walking a fresh vector through the whole doubling schedule
+    /// again.
     pub fn with_text_measurer_reusing(
         size: Size,
         text_measurer: Rc<dyn DrawTextMeasurer>,
         storage: Vec<DrawPrimitive>,
     ) -> Self {
-        Self::with_recording(
-            size,
-            Some(text_measurer),
-            CommandRecording::default(),
-            storage,
-        )
+        Self::with_storage(size, Some(text_measurer), storage)
     }
 
-    /// The full retained-recording form: compact recording buffers AND the
-    /// materialization target both come from the caller, so a command that
-    /// re-records every frame allocates nothing in the steady state.
-    pub fn with_recording(
+    fn with_storage(
         size: Size,
         text_measurer: Option<Rc<dyn DrawTextMeasurer>>,
-        mut recording: CommandRecording,
-        out: Vec<DrawPrimitive>,
+        mut out: Vec<DrawPrimitive>,
     ) -> Self {
-        recording.clear();
-        recording.tape.reserve(recorded_primitive_capacity(size));
+        out.clear();
+        out.reserve(recorded_primitive_capacity(size));
         Self {
             size,
-            rec: recording,
             out,
             content_markers: 0,
             text_measurer,
@@ -1215,309 +1020,36 @@ impl DrawScopeDefault {
         self.content_markers
     }
 
-    /// The compact recording as recorded so far. Retention verification
-    /// reads this before materialization decides what to skip.
-    pub fn recorded(&self) -> &CommandRecording {
-        &self.rec
-    }
-
-    /// Appends already-recorded primitives verbatim. This is the replay path
-    /// for pre-built primitive lists (deferred modifier draws recorded
-    /// earlier, synthesized commands in tests); the marker count stays
-    /// authoritative because the batch is scanned once on the way in.
+    /// Appends already-recorded primitives verbatim (deferred modifier draws
+    /// recorded earlier, synthesized commands in tests); the marker count
+    /// stays authoritative because the batch is scanned once on the way in.
     pub fn push_recorded(&mut self, primitives: Vec<DrawPrimitive>) {
         self.content_markers += primitives
             .iter()
             .filter(|primitive| matches!(primitive, DrawPrimitive::Content))
             .count() as u32;
-        let base = self.rec.others.len();
-        self.rec
-            .tape
-            .extend((0..primitives.len()).map(|i| TapeRef::new(RecordKind::Other, base + i)));
-        self.rec.others.extend(primitives);
+        self.out.extend(primitives);
     }
 
-    /// Materializes the recording into the `out` storage and hands both
-    /// back, plus the compact buffers for the caller to retain. This — not
-    /// recording — is where solid records become `DrawPrimitive`s and where
-    /// arc bands, tight bounds, and the degeneracy drop happen, so the
-    /// output is exactly what recording used to produce directly.
-    pub fn finish(mut self) -> FinishedRecording {
-        if std::env::var_os("CRANPOSE_RECORD_MIX_DIAG").is_some() && self.rec.tape.len() > 400 {
-            eprintln!(
-                "[record-mix] tape={} rects={} round_rects={} arcs={} others={}",
-                self.rec.tape.len(),
-                self.rec.rects.len(),
-                self.rec.round_rects.len(),
-                self.rec.arcs.len(),
-                self.rec.others.len(),
-            );
-        }
-        let mut out = std::mem::take(&mut self.out);
-        out.clear();
-        out.reserve(self.rec.tape.len());
-        let mut dropped: Vec<u32> = Vec::new();
-        {
-            let mut others = self.rec.others.drain(..);
-            for (tape_index, entry) in self.rec.tape.iter().enumerate() {
-                match entry.kind() {
-                    RecordKind::SolidRect => {
-                        let record = &self.rec.rects[entry.index()];
-                        out.push(DrawPrimitive::Rect {
-                            rect: record.rect,
-                            brush: Brush::Solid(record.color),
-                            stroke: record.stroke,
-                        });
-                    }
-                    RecordKind::SolidRoundRect => {
-                        let record = &self.rec.round_rects[entry.index()];
-                        out.push(DrawPrimitive::RoundRect {
-                            rect: record.rect,
-                            brush: Brush::Solid(record.color),
-                            radii: record.radii,
-                            stroke: record.stroke,
-                        });
-                    }
-                    RecordKind::SolidArc => {
-                        let record = &self.rec.arcs[entry.index()];
-                        if let Some(primitive) = materialize_solid_arc(record) {
-                            out.push(primitive);
-                        } else {
-                            dropped.push(tape_index as u32);
-                        }
-                    }
-                    RecordKind::Other => {
-                        out.push(others.next().expect("tape/others in sync"));
-                    }
-                }
-            }
-        }
-        self.rec.clear();
-        note_recorded_primitive_count(self.size, out.len());
+    /// Hands back the recorded primitives in the storage they were recorded
+    /// into, so the caller can lend it to the same command's next recording.
+    pub fn finish(self) -> FinishedRecording {
+        note_recorded_primitive_count(self.size, self.out.len());
         FinishedRecording {
-            primitives: out,
+            primitives: self.out,
             content_markers: self.content_markers,
-            recording: self.rec,
-            dropped,
         }
-    }
-
-    /// Like [`Self::finish`], but materializing nothing: the consumer is
-    /// about to re-emit a PREVIOUS frame's saved emission in place of this
-    /// recording (the stale-transition serve on a replay collapse frame),
-    /// so building this frame's primitives — the very cost the serve
-    /// exists to skip — would be pure waste. The recording and
-    /// materialization buffers still return, cleared exactly as
-    /// [`Self::finish`] leaves them, so the command's steady-state
-    /// ping-pong keeps its earned capacity.
-    pub fn finish_recording_only(mut self) -> FinishedRecording {
-        let mut out = std::mem::take(&mut self.out);
-        out.clear();
-        note_recorded_primitive_count(self.size, self.rec.tape.len());
-        self.rec.clear();
-        FinishedRecording {
-            primitives: out,
-            content_markers: self.content_markers,
-            recording: self.rec,
-            dropped: Vec::new(),
-        }
-    }
-
-    /// Like [`Self::finish`], but for a verified command: a retained span
-    /// whose slot `bypass` approves is NOT materialized — its records cease
-    /// to exist as per-frame primitives, which is the entire point of
-    /// retention — and the replay frame comes back with primitive ranges
-    /// assigned during the same single tape walk. Every other span
-    /// materializes exactly as [`Self::finish`] would. `AllDynamic`
-    /// degenerates to plain `finish`.
-    pub fn finish_replay(
-        mut self,
-        center: Point,
-        outcome: crate::record_replay::ReplayOutcome,
-        bypass: &mut dyn FnMut(u32) -> bool,
-    ) -> (
-        FinishedRecording,
-        Option<crate::record_replay::CommandReplayFrame>,
-    ) {
-        use crate::record_replay::{CommandReplayFrame, FrameSpan, ReplayOutcome, ReplaySpan};
-        let ReplayOutcome::Spans(replay_spans) = outcome else {
-            return (self.finish(), None);
-        };
-        let tape_len = self.rec.tape.len();
-        let mut out = std::mem::take(&mut self.out);
-        out.clear();
-        let mut dropped: Vec<u32> = Vec::new();
-        let mut spans: Vec<FrameSpan> = Vec::with_capacity(replay_spans.len());
-        let mut any_retained = false;
-        {
-            let mut others = self.rec.others.drain(..);
-            let tape = &self.rec.tape;
-            let rects = &self.rec.rects;
-            let round_rects = &self.rec.round_rects;
-            let arcs = &self.rec.arcs;
-            macro_rules! materialize_range {
-                ($start:expr, $end:expr) => {{
-                    let prim_start = out.len() as u32;
-                    for tape_index in $start..$end {
-                        let entry = tape[tape_index];
-                        match entry.kind() {
-                            RecordKind::SolidRect => {
-                                let record = &rects[entry.index()];
-                                out.push(DrawPrimitive::Rect {
-                                    rect: record.rect,
-                                    brush: Brush::Solid(record.color),
-                                    stroke: record.stroke,
-                                });
-                            }
-                            RecordKind::SolidRoundRect => {
-                                let record = &round_rects[entry.index()];
-                                out.push(DrawPrimitive::RoundRect {
-                                    rect: record.rect,
-                                    brush: Brush::Solid(record.color),
-                                    radii: record.radii,
-                                    stroke: record.stroke,
-                                });
-                            }
-                            RecordKind::SolidArc => {
-                                let record = &arcs[entry.index()];
-                                if let Some(primitive) = materialize_solid_arc(record) {
-                                    out.push(primitive);
-                                } else {
-                                    dropped.push(tape_index as u32);
-                                }
-                            }
-                            RecordKind::Other => {
-                                out.push(others.next().expect("tape/others in sync"));
-                            }
-                        }
-                    }
-                    (prim_start, out.len() as u32)
-                }};
-            }
-            for span in replay_spans {
-                match span {
-                    ReplaySpan::Dynamic {
-                        tape_start,
-                        tape_end,
-                    } => {
-                        let range = materialize_range!(tape_start, tape_end);
-                        if range.1 > range.0 {
-                            spans.push(FrameSpan::Dynamic { range });
-                        }
-                    }
-                    ReplaySpan::Retained {
-                        slot,
-                        capture,
-                        slot_offset,
-                        tape_start,
-                        tape_end,
-                        transform,
-                        recolors,
-                        bounds,
-                    } => {
-                        let compact = tape[tape_start..tape_end]
-                            .iter()
-                            .all(|entry| entry.kind() != RecordKind::Other);
-                        if compact && !capture && bypass(slot) {
-                            any_retained = true;
-                            let position = out.len() as u32;
-                            spans.push(FrameSpan::Retained {
-                                slot,
-                                capture: false,
-                                slot_offset: slot_offset as u32,
-                                range: (position, position),
-                                tape_range: (tape_start as u32, tape_end as u32),
-                                transform,
-                                recolors,
-                                bounds,
-                            });
-                            continue;
-                        }
-                        let drops_before = dropped.len();
-                        let range = materialize_range!(tape_start, tape_end);
-                        if compact && dropped.len() == drops_before {
-                            any_retained = true;
-                            spans.push(FrameSpan::Retained {
-                                slot,
-                                capture,
-                                slot_offset: slot_offset as u32,
-                                range,
-                                tape_range: (tape_start as u32, tape_end as u32),
-                                transform,
-                                recolors,
-                                bounds,
-                            });
-                        } else if range.1 > range.0 {
-                            spans.push(FrameSpan::Dynamic { range });
-                        }
-                    }
-                }
-            }
-        }
-        note_recorded_primitive_count(self.size, tape_len);
-        let frame = any_retained.then_some(CommandReplayFrame {
-            center,
-            spans,
-            fallback: None,
-        });
-        (
-            FinishedRecording {
-                primitives: out,
-                content_markers: self.content_markers,
-                recording: self.rec,
-                dropped,
-            },
-            frame,
-        )
-    }
-
-    fn push_other(&mut self, primitive: DrawPrimitive) {
-        let idx = self.rec.others.len();
-        self.rec.tape.push(TapeRef::new(RecordKind::Other, idx));
-        self.rec.others.push(primitive);
     }
 
     fn push_blended_primitive(&mut self, primitive: DrawPrimitive, blend_mode: BlendMode) {
         if blend_mode != BlendMode::SrcOver {
-            self.push_other(DrawPrimitive::Blend {
+            self.out.push(DrawPrimitive::Blend {
                 primitive: Box::new(primitive),
                 blend_mode,
             });
             return;
         }
-        match primitive {
-            DrawPrimitive::Rect {
-                rect,
-                brush: Brush::Solid(color),
-                stroke,
-            } => {
-                let idx = self.rec.rects.len();
-                self.rec.tape.push(TapeRef::new(RecordKind::SolidRect, idx));
-                self.rec.rects.push(SolidRectRecord {
-                    rect,
-                    color,
-                    stroke,
-                });
-            }
-            DrawPrimitive::RoundRect {
-                rect,
-                brush: Brush::Solid(color),
-                radii,
-                stroke,
-            } => {
-                let idx = self.rec.round_rects.len();
-                self.rec
-                    .tape
-                    .push(TapeRef::new(RecordKind::SolidRoundRect, idx));
-                self.rec.round_rects.push(SolidRoundRectRecord {
-                    rect,
-                    radii,
-                    color,
-                    stroke,
-                });
-            }
-            other => self.push_other(other),
-        }
+        self.out.push(primitive);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1532,22 +1064,6 @@ impl DrawScopeDefault {
         inner_radius: f32,
         blend_mode: BlendMode,
     ) {
-        if blend_mode == BlendMode::SrcOver
-            && let Brush::Solid(color) = brush
-        {
-            let idx = self.rec.arcs.len();
-            self.rec.tape.push(TapeRef::new(RecordKind::SolidArc, idx));
-            self.rec.arcs.push(SolidArcRecord {
-                center,
-                radius,
-                start_angle,
-                sweep_angle,
-                inner_radius,
-                color,
-                stroke,
-            });
-            return;
-        }
         let (band_inner, band_outer, cap) = arc_band(radius, inner_radius, stroke);
         let geometry = ArcGeometry::new(
             center,
@@ -1576,35 +1092,6 @@ impl DrawScopeDefault {
     }
 }
 
-/// The deferred half of the solid-arc fast path: exactly the lowering
-/// [`DrawScopeDefault::push_arc`] applies to every other arc, run when the
-/// recording materializes instead of when the app draws. `None` is the
-/// degenerate drop.
-fn materialize_solid_arc(record: &SolidArcRecord) -> Option<DrawPrimitive> {
-    let (band_inner, band_outer, cap) = arc_band(record.radius, record.inner_radius, record.stroke);
-    let geometry = ArcGeometry::new(
-        record.center,
-        band_inner,
-        band_outer,
-        record.start_angle,
-        record.sweep_angle,
-        cap,
-    );
-    if geometry.is_degenerate() {
-        return None;
-    }
-    Some(DrawPrimitive::Arc {
-        rect: geometry.bounds(),
-        brush: Brush::Solid(record.color),
-        center: record.center,
-        radius: record.radius,
-        start_angle: record.start_angle,
-        sweep_angle: record.sweep_angle,
-        stroke: record.stroke,
-        inner_radius: record.inner_radius,
-    })
-}
-
 impl DrawScope for DrawScopeDefault {
     fn size(&self) -> Size {
         self.size
@@ -1612,7 +1099,7 @@ impl DrawScope for DrawScopeDefault {
 
     fn draw_content(&mut self) {
         self.content_markers += 1;
-        self.push_other(DrawPrimitive::Content);
+        self.out.push(DrawPrimitive::Content);
     }
 
     fn draw_rect(&mut self, brush: Brush) {
@@ -2106,7 +1593,7 @@ impl DrawScope for DrawScopeDefault {
             }
         };
 
-        self.push_other(DrawPrimitive::Image {
+        self.out.push(DrawPrimitive::Image {
             rect: Rect {
                 x: origin.x,
                 y: origin.y,
@@ -2146,7 +1633,7 @@ impl DrawScope for DrawScopeDefault {
         if !origin.x.is_finite() || !origin.y.is_finite() {
             return;
         }
-        self.push_other(DrawPrimitive::Text(Box::new(TextPrimitive {
+        self.out.push(DrawPrimitive::Text(Box::new(TextPrimitive {
             rect: Rect::from_origin_size(origin, measurement.size),
             text: shared_text_str(text),
             style: style.clone(),
@@ -2266,47 +1753,6 @@ mod tests {
         ];
         assert_eq!(finished.primitives, expected);
         assert_eq!(finished.content_markers, 2);
-    }
-
-    #[test]
-    fn reused_recording_buffers_record_identically_to_fresh() {
-        let size = Size::new(64.0, 64.0);
-        let record = |scope: &mut DrawScopeDefault| {
-            scope.draw_circle(Brush::solid(Color::RED), Point::new(32.0, 32.0), 10.0);
-            scope.draw_arc(
-                Brush::solid(Color::BLUE),
-                Point::new(32.0, 32.0),
-                20.0,
-                0.0,
-                3.0,
-                Stroke::new(2.0),
-            );
-        };
-
-        let mut fresh = DrawScopeDefault::new(size);
-        record(&mut fresh);
-        let fresh = fresh.finish();
-
-        let mut dirty = DrawScopeDefault::new(size);
-        dirty.draw_rect(Brush::solid(Color::BLACK));
-        dirty.draw_content();
-        dirty.draw_arc(
-            Brush::solid(Color::WHITE),
-            Point::new(1.0, 1.0),
-            5.0,
-            1.0,
-            1.0,
-            Stroke::new(1.0),
-        );
-        let dirty = dirty.finish();
-
-        let mut reused =
-            DrawScopeDefault::with_recording(size, None, dirty.recording, dirty.primitives);
-        record(&mut reused);
-        let reused = reused.finish();
-
-        assert_eq!(fresh.primitives, reused.primitives);
-        assert_eq!(fresh.content_markers, reused.content_markers);
     }
 
     #[test]
@@ -2450,55 +1896,6 @@ mod tests {
                 ..
             }
         ));
-    }
-
-    #[test]
-    fn a_reused_recording_buffer_records_what_a_fresh_one_would() {
-        let size = Size::new(16.0, 16.0);
-        let measurer: Rc<dyn DrawTextMeasurer> = FixedAdvanceTextMeasurer::shared(10.0, 20.0);
-
-        let draw = |scope: &mut DrawScopeDefault| {
-            scope.draw_rect(Brush::solid(Color::WHITE));
-            scope.draw_content();
-            scope.draw_rect(Brush::solid(Color::BLACK));
-            scope.draw_content();
-        };
-
-        let mut fresh = DrawScopeDefault::with_text_measurer(size, Rc::clone(&measurer));
-        draw(&mut fresh);
-        assert_eq!(fresh.content_marker_count(), 2);
-        let expected = fresh.finish();
-
-        let storage = Vec::with_capacity(64);
-        let mut reused = DrawScopeDefault::with_text_measurer_reusing(size, measurer, storage);
-        draw(&mut reused);
-        assert_eq!(reused.content_marker_count(), 2);
-        let reused = reused.finish();
-
-        assert_eq!(reused.primitives.len(), expected.primitives.len());
-        assert_eq!(reused.content_markers, expected.content_markers);
-        assert_eq!(reused.dropped, expected.dropped);
-    }
-
-    #[test]
-    fn finishing_recording_only_materializes_nothing_but_still_reports_markers() {
-        let mut scope = DrawScopeDefault::new(Size::new(8.0, 8.0));
-        scope.draw_rect(Brush::solid(Color::WHITE));
-        scope.draw_content();
-        assert_eq!(scope.content_marker_count(), 1);
-
-        let finished = scope.finish_recording_only();
-        assert!(
-            finished.primitives.is_empty(),
-            "nothing should have been materialized"
-        );
-        assert_eq!(finished.content_markers, 1);
-        assert!(finished.dropped.is_empty());
-        assert_eq!(
-            finished.recording.tape.len(),
-            0,
-            "the recording buffer comes back cleared, ready to be recorded into again"
-        );
     }
 
     #[test]

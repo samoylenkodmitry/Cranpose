@@ -8,7 +8,6 @@ use cranpose_render_common::{
     },
     raster_cache::LayerRasterCacheHashes,
 };
-use cranpose_render_wgpu::DisplayVisibleRegion;
 use cranpose_ui_graphics::{Brush, Color, DrawScope, DrawScopeDefault, GraphicsLayer, Point, Rect};
 
 const SIZE: u32 = 256;
@@ -179,82 +178,4 @@ fn solid_fragment_entry_matches_fs_main() {
          solid shapes as fs_main does, and a divergence this size is a shading difference \
          rather than the compiler contracting floats differently between two programs"
     );
-}
-
-fn capture_trim_arm() -> Option<(Vec<u8>, Vec<u8>, Vec<u8>)> {
-    let mut renderer = match support::headless_renderer() {
-        Ok(renderer) => renderer,
-        Err(err) => {
-            eprintln!("skipping trim parity arm: headless WGPU init failed: {err}");
-            return None;
-        }
-    };
-    let flat = render_arm(&mut renderer, &graph_for(false));
-    let mixed = render_arm(&mut renderer, &graph_for(true));
-    renderer.set_display_visible_region(DisplayVisibleRegion::InscribedCircle);
-    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ROUND_CULL", Some("1"));
-    let culled = render_arm(&mut renderer, &graph_for(false));
-    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ROUND_CULL", None);
-    renderer.set_display_visible_region(DisplayVisibleRegion::Full);
-    Some((flat, culled, mixed))
-}
-
-fn assert_no_byte_moved(label: &str, full: &[u8], trimmed: &[u8]) {
-    assert_eq!(full.len(), trimmed.len(), "{label}: capture sizes differ");
-    let mut differing = 0usize;
-    let mut worst = 0u8;
-    for (a, b) in full.iter().zip(trimmed) {
-        let diff = a.abs_diff(*b);
-        if diff > 0 {
-            differing += 1;
-            worst = worst.max(diff);
-        }
-    }
-    assert_eq!(
-        differing, 0,
-        "{label}: {differing} bytes diverged (worst {worst}) between the full \
-         and trimmed varying interfaces — the trim only removes varyings \
-         `fs_solid` never read and reuses the one shared coverage function, \
-         so ANY movement is a wiring defect (renumbered location, misrouted \
-         entry point), not float-contraction noise"
-    );
-}
-
-#[test]
-fn trimmed_varyings_do_not_move_a_byte() {
-    for instanced in ["0", "1"] {
-        cranpose_render_wgpu::set_debug_toggle("CRANPOSE_INSTANCED_QUADS", Some(instanced));
-        cranpose_render_wgpu::set_debug_toggle("CRANPOSE_SOLID_TRIM_VARYINGS", None);
-        let Some((full_flat, full_culled, full_mixed)) = capture_trim_arm() else {
-            cranpose_render_wgpu::set_debug_toggle("CRANPOSE_INSTANCED_QUADS", None);
-            return;
-        };
-        assert_ne!(
-            full_flat, full_culled,
-            "instanced={instanced}: the display-clip cull never engaged"
-        );
-
-        cranpose_render_wgpu::set_debug_toggle("CRANPOSE_SOLID_TRIM_VARYINGS", Some("1"));
-        let trimmed = capture_trim_arm();
-        cranpose_render_wgpu::set_debug_toggle("CRANPOSE_SOLID_TRIM_VARYINGS", None);
-        cranpose_render_wgpu::set_debug_toggle("CRANPOSE_INSTANCED_QUADS", None);
-        let (trim_flat, trim_culled, trim_mixed) =
-            trimmed.expect("headless WGPU init failed mid-suite");
-
-        assert_no_byte_moved(
-            &format!("instanced={instanced} flat"),
-            &full_flat,
-            &trim_flat,
-        );
-        assert_no_byte_moved(
-            &format!("instanced={instanced} culled"),
-            &full_culled,
-            &trim_culled,
-        );
-        assert_no_byte_moved(
-            &format!("instanced={instanced} mixed"),
-            &full_mixed,
-            &trim_mixed,
-        );
-    }
 }

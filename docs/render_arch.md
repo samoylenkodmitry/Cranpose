@@ -1,223 +1,188 @@
 # Renderer Architecture
 
-This is the authoritative renderer architecture/status document for the current
-`renderer` branch.
+The authoritative description of how a `RenderGraph` becomes pixels in the
+WGPU renderer. The pixel-stability contract that every rule below serves is
+in [liquid_scroll_pixel_stability.md](liquid_scroll_pixel_stability.md).
 
-## Architecture
-
-The renderer is now a hierarchical graph plus a recursive compositor.
+## Shape of a frame
 
 ```text
-layout/applier state
-  -> RenderGraph { root: LayerNode }
-  -> graph-based hit collection
-  -> WGPU recursive compositor
-     -> direct root path for pure translation/no-surface-reason scenes
-     -> bounded local surfaces only when layer semantics require them
+applier state
+  -> RenderGraph { root: LayerNode }                     scene_builder.rs (common)
+  -> LayerScene per isolated layer                       collect.rs
+       flat z-ordered ops | isolated children at z | backdrop effects at z
+  -> resolve: every backdrop effect and isolated child   frame.rs
+       gets a texture, in z order, from a capture
+  -> compose: one pass into the target                   draw_pass.rs
+       ops in z order, resolved textures blitted where they sit
 ```
 
-The current branch does not use the old global flat-scene model.
+The swapchain pass never reads itself. A backdrop effect resolves from a
+*capture*: the ops beneath it, clipped to the effect's device rect and
+re-rendered into a texture, then filtered into the result. An isolated
+child renders into its own texture through the same three steps
+recursively. The final pass draws direct ops and composites the resolved
+textures.
 
-## Core Invariants
+## Stages
 
-The branch now enforces these invariants:
+A tiling GPU pays a fixed cost per render pass whatever the pass draws, so
+the resolve step batches. The backdrop effects of one layer scene queue into
+stages (`ResolveStages`): an effect joins the stage after every queued
+effect below it whose composite lies under its capture, so every capture in
+a stage reads only composites of earlier stages. A stage runs as:
 
-1. Subtree motion is represented by `LayerNode::transform_to_parent`.
-2. Active scroll/drag/fling ancestry is represented by `LayerNode::motion_context_animated`.
-3. Direct-safe translation-only subtrees collapse into their parent target.
-4. Plain text is not isolated just because it is text.
-5. Decoration-only text stays on the direct path.
-6. Complex text uses bounded local surfaces through `LayerSurfaceReasons::text_local_surface`.
-6. Direct child collapse must rebase text primitives into parent space before
-   text/decorations are emitted.
-7. Unspecified text under active motion ancestry resolves to `TextMotion::Animated`.
-8. Scene build does not round static text rects in logical space.
-9. Idle pure-text leaves participate in the same rigid snap-anchor path as
-   mixed text+draw leaves.
-10. Image primitives carry an explicit sampling policy: low-level draw calls
-    default to nearest for atlases/skins, while the high-level `Image` widget
-    opts into linear sampling for application imagery.
-11. Mixed-content isolation is attributed by real local-surface reasons, not by
-   tab-wide wrappers.
-12. Hit testing uses exact transformed geometry, not axis-aligned approximations.
-13. Raster-cache hashes are computed only when they are actually needed.
-14. Root direct rendering only runs when the collected root scene has no local
-    effect/backdrop events.
-15. Robot screenshot capture must match `main` raw dimensions for the same
-    logical surface.
-16. A surface is cache-eligible whenever its pixels are a pure function of
-    its key. A runtime shader hashes its uniforms into the content hash, so
-    a subtree carrying one is cacheable like any other; a subtree whose
-    nested backdrop reads its parent's target is keyed on that underlay's
-    identity (`underlay_identity_before`: the uniform colour beneath it, or
-    the hash of every prefix writer under its rect plus the rect itself) and
-    stays uncached only when that identity is unknown.
-    The underlay itself is sampled from the parent target after everything
-    below the child, the child's own backdrop included, has been flushed
-    into it (`sample_child_underlay`); a child composited plainly (alpha
-    one, `SrcOver`, no effect) at a whole-pixel translation gets a verbatim
-    copy and bakes it as its surface's base, which turns the underlay
-    resample, the nested capture's underlay merge and the surface's clear
-    into copies and loads (`underlay_bake_parity` pins the pixels to one
-    LSB and the three saved passes). Every backdrop hash inside a baked
-    surface mixes in the underlay identity, since the pixels a nested
-    capture reads are the underlay's as much as the content's.
-    A snapped surface rendered at the target's own scale composites at its
-    texel size (`texel_aligned_dest_quad`): the anchored quad's origin is
-    already a whole device pixel, and the quad is widened by the sub-pixel
-    remainder of the surface's ceil so the composite copies texels instead
-    of resampling every card each frame, and so the underlay copy beneath it
-    is exactly the pixels the composite replaces.
-17. Surfaces that can change every frame through uniforms alone
-    (`contains_runtime_shader`) enter the layer cache on the second sighting
-    of a key (`CacheAdmission::OnRepeat`), the same rule scene ranges use, so
-    an animated shader never rotates stable entries out; everything else is
-    admitted on its first miss. Admission is decided at the probe, before a
-    miss is recorded, because a recorded miss must be stored in the same
-    frame.
+1. one capture pass into an atlas that holds every capture of the stage,
+   shelf-packed with a gap of the effect's blur radius around each region so
+   no blur tap reads a neighbour;
+2. one blur pass pair over every blurred region: the horizontal pass writes
+   each region downscaled into a scratch texture, the vertical pass writes
+   it at full size into a result texture, and both textures are packed to
+   the blurred regions alone, so no pass loads or stores the atlas (on the
+   Mate 20 X the atlas-sized pair cost 9 ms of bandwidth per frame);
+3. composites reading their region: a blur blits its region of the result
+   through the effect's rounded mask; a runtime shader that declares
+   `batched_source` draws in the final pass reading its region, applying the
+   mask and alpha through its reserved uniform slots;
+4. one resolve pass for the stage's shader tails that a later capture reads
+   (`CaptureReaders::reads`): a capture re-shades every tail under it, so a
+   read tail is shaded once into a packed texture and becomes a blit for
+   the captures and the final pass alike. `shader_pixels` in the stats
+   counts what the shaders shade per frame; `backdrop_atlas_parity.rs`
+   pins that a glass under two glass buttons shades exactly its own pixels.
 
-## Current Execution Model
+Effects the renderer cannot batch (an app shader that reads the whole input
+texture, an offset, a chain the shader does not end) resolve one at a time
+inside their stage. A list of glass cards over a page therefore costs one
+capture pass; the glass buttons inside the cards read the cards' glass and
+form the next stage: one capture pass and one blur pair for all of them.
 
-### Graph build
+An isolated child that draws nothing itself and whose effect is a runtime
+shader (a shader-drawn planet) is a shader composite in the final pass over
+a shared transparent input of its surface size, and costs no pass. A shader
+drawn in the final pass is re-run inside every capture above it, so the
+renderer sums the capture area that reads such a child (`CaptureReaders`)
+and resolves it into a texture once when more than half of it is read
+again: a page-wide shader under a list of glass cards runs once, a corner
+shader under one card stays a tail.
 
-- `build_graph_from_applier(...)` is one-pass on the hot path
-- it no longer allocates a full snapshot tree before building the graph
-- child `content_offset` is composed into child transforms
-- child `content_offset` does not by itself propagate `motion_context_animated`
-- scroll and lazy-scroll modifiers report real motion activity into
-  `ModifierNodeSlices::motion_context_animated()`
-- scroll and lazy-scroll modifiers keep `translated_content_context` enabled for
-  the whole translated subtree
-- rested translated clip containers stay on the direct path; active translated
-  clip containers use motion-stable capture only while motion is active
+A shader that reads its region of the atlas maps region-local uv to the
+texture once per fragment (`region_map` in `liquid_glass.wgsl` and
+`gradient_blur.wgsl`) and threads that map through its sampling loops, so
+no tap pays for a texture query or a uniform fetch.
 
-Files:
+`backdrop_atlas_parity.rs` pins the pixels: a glass renders the same alone
+and packed beside others (a shader within one 8-bit step, the float region
+mapping moving a tap by a few ulps; a blur exactly), the in-shader mask
+matches the masked blit, the shader-only child matches its surface resolve,
+and the heavily read shader child resolves exactly once.
+`backdrop_pass_batching.rs` pins the budget: extra glasses in a stage add
+no pass.
 
-- `crates/cranpose-render/common/src/scene_builder.rs`
+## Direct or isolated
 
-### Hit testing
+`collect_child` decides per layer, with `child_placement`:
 
-- `collect_hits_from_graph(...)` skips subtrees with `has_hit_targets == false`
-- interactive regions keep exact transformed quads and inverse transforms
+- **Direct** when the layer's transform is a translation, it needs no group
+  alpha, blend mode, render effect or explicit offscreen, and its rounded
+  clip (if any) admits every op inside it (`content_admits_rounded_clip`:
+  each op's device bounds plus one pixel stay out of the corner squares).
+  Direct ops join the parent's flat scene with the translation applied.
+- **Isolated** otherwise: the layer becomes a `ChildLayer` composited at its
+  z with alpha, blend mode, transform and the rounded mask. Its content is
+  collected into its own `LayerScene` in the layer's local space.
 
-Files:
+The root goes through the same function as every child, so a root with a
+shadow or a backdrop behaves like any layer would.
 
-- `crates/cranpose-render/common/src/hit_graph.rs`
-- `crates/cranpose-render/common/src/graph_scene.rs`
+## Rigid motion
 
-### WGPU compositor
+A translated content context (a scroll container) carries one rigid
+`SnapAnchor` for its whole subtree: every op inherits it, the anchor decides
+one device-pixel delta per frame, and the subtree moves as one raster. Text
+rasterizes at a canonical device origin under an anchor and re-rasterizes
+only when its device phase changes; images and shapes translate their quads
+by the same delta.
 
-- root direct path only when `root_can_render_directly_cached(...)` succeeds
-  and the collected root scene has no local `effect_layers` / `backdrop_layers`
-- per-frame layer-surface requirements cache
-- one-pass direct-child collection into the parent `CompositorScene`
-- bounded offscreens only for real surface reasons
+Outside a translated context a layer snaps when its own primitives are
+pixel-sensitive (`layer_needs_rigid_snap`: text or images, or any drawn
+primitive under motion). An **isolated** child additionally snaps when any
+descendant that only translates against it draws text or images
+(`layer_has_pixel_sensitive_subtree`): compositing such a raster at a
+fractional device offset would resample every glyph, so the composite lands
+on whole pixels instead. A moving translucent card with an icon and a label
+therefore steps by device pixels, exactly as Jetpack Compose's integer pixel
+placement does, and its content never blurs.
 
-Files:
+An animated, unclipped translated wrapper draws directly with its anchor. The
+earlier renderer rendered such wrappers into a supersampled surface and
+composited it at fractional offsets ("motion-stable capture"); that
+mechanism, its surface-requirement planner and its parity tests are gone.
+The contract is the rigid one above, tested in
+`effect_semantics.rs` by the translated text, thin-shape and static alpha
+surface tests: after undoing the rounded translation, the local picture is
+byte-identical.
 
-- `crates/cranpose-render/wgpu/src/render.rs`
-- `crates/cranpose-render/wgpu/src/gpu_stats.rs`
+## Uploads and passes
 
-## Closed Work Items
+- `ViewportUniformRing`: one uniform buffer with dynamic offsets. Every pass
+  and every retained glyph run claims a slot; the whole ring is written once
+  per frame.
+- Shape and image batches write into per-frame slot pools
+  (`shape_slots`, `image_slots`), trimmed after the frame to what it used.
+- All queue writes and command encoders live in `frame_graph.rs`
+  (`render_contract.rs` pins this).
+- Transient textures for captures, blur ping-pong and child surfaces come
+  from the frame recorder and are released at the submit boundary; their
+  bytes are reported as `transient_texture_bytes`.
 
-These refactorings are complete in the checked-in branch state:
+## Caches
 
-1. Exact transformed hit testing.
-2. Root direct rendering for translation-only/no-surface-reason scenes.
-3. Plain translation-only text on the direct path.
-4. Decoration-only text on the direct path with parent-space text rebasing.
-5. Removal of renderer-forced text local-surface classification.
-6. Scroll and lazy-scroll motion-context propagation into the render graph.
-7. Persistent translated-content propagation for scroll subtrees.
-8. Explicit image sampling through `ImageSampling` with nearest as the
-   low-level default and linear selected by the high-level `Image` widget.
-9. Static snap-anchor coverage for pure-text leaves.
-10. Complex-text local-surface classification (`text_local_surface`).
-11. Root direct fallback to the root surface path when local effect/backdrop events exist.
-12. Removal of giant Shaders-tab mixed-content wrapper isolation.
-13. Physical-size-aware presented-window screenshot capture.
-14. Axis-aligned rect-to-quad fast path in `ProjectiveTransform::from_rect_to_quad(...)`.
-15. Per-frame cache for `LayerSurfaceRequirements`.
-16. One-pass direct-child content collection instead of build-then-translate merge.
-17. One-pass hot applier graph build.
-18. Lazy raster-cache hash computation through `cache_hashes_valid`.
-19. Logical-to-physical mapping in robot screenshot helpers.
-20. Deterministic micro-surface screenshot contract via `robot_renderer_micro_contract`.
-21. Raw robot screenshot size parity with `main` for the same logical surface.
-22. Shared rigid-translation render contract without downsample fallback.
+- Glyph atlas, glyph mask cache and retained glyph runs.
+- Image textures.
+- Blurred shape-only shadows, keyed by content and anchored device placement,
+  composited as up to four bands around the occluder inside the final pass.
+- Runtime-shader pipelines, specialized on the shader's inactive features
+  (`glass_specialization_parity.rs` proves the specialized pipeline matches
+  the general one byte for byte).
+- `LayerCache`: textures of isolated children that read no backdrop and whose
+  `cache_policy` is `Auto`, keyed by content hash, effect hash, size and scale
+  bucket.
 
-## Acceptance Status
+Nothing else is cached. A backdrop effect resolves every frame it is drawn;
+when the page under a still glass card animates elsewhere, the card's
+capture and blur run again. A backdrop result cache keyed on the ops its
+capture reads is the one optimization this architecture leaves on the table;
+its correctness gate would be a still-glass frame with zero blur passes next
+to an animated element, and the removed `glass_layer_cache.rs` contract test
+is the template for it.
 
-Current checked-in status:
+## Stats
 
-- translation-only effect semantics are covered by focused WGPU tests
-- bounded blur/backdrop semantics are covered by focused WGPU tests
-- motion-vs-translated-content text defaults are covered by `scene_builder` unit tests
-- motion-aware image sampling policy is covered by WGPU unit tests
-- atlas isolation and rested-scroll crispness are guarded by
-  `robot_render_crispness_contract`
-- oversized mixed-content isolate regressions on the Shaders tab are guarded by a robot runner
-- screenshot-based robot checks use logical regions against captured images correctly
-- attempted isolated-child-surface device-grid snapping was rejected because it
-  violated the shared rigid-translation render contract
-- raw robot screenshots now match `main` dimensions for the micro contract
-- the current micro contract screenshot is pixel-identical to the committed
-  `main` reference
-- shared rigid-translation contracts now pass without the temporary render-contract downsample shortcut
-- translated decorated/shadow text in the desktop demo is stable because it now
-  uses bounded local surfaces instead of loose direct primitives
+`RenderStatsSnapshot` reports passes and pass pixels, transient and retained
+texture bytes, uploads, isolated layer renders and pixels, layer cache
+traffic, blur passes, composite passes, effect applies and the pixels the
+runtime shaders shade (`shader_pixels`, the number that decides a glass
+frame's cost on a tiling GPU).
+`backdrop_pass_batching.rs` pins the pass budget: a frame has one full-screen
+pass, a stage adds one capture pass and one blur pair however many glasses it
+holds, and a capture never splits the final pass.
 
-Latest sequential perf checks on this machine:
+## Validation bar
 
-- `renderer` `opaque_scene`: `350.5 fps`
-- temp `main` `opaque_scene`: `315.2 fps`
-- `renderer` `backdrop_blur`: `207.1 fps`
-- temp `main` `backdrop_blur`: `209.5 fps`
+`just fmt`, `just clippy` (and the target-specific clippy recipes), `just
+test`, `just robot`. A renderer change that touches placement, crispness or
+pass counts ships with a test that fails without it.
 
-Interpretation:
+## Where a glass frame's time goes
 
-- the previous `opaque_scene` regression is closed
-- `backdrop_blur` is effectively at parity
-
-## Validation Bar
-
-The renderer branch is not considered done unless this bar is green:
-
-- `cargo fmt`
-- `cargo test > 1.tmp 2>&1`
-- `cargo clippy > 2.tmp 2>&1`
-- `cargo xtask dependency-budget`
-- `cargo xtask binary-size --package isolated-demo --bin isolated-demo --profile release-small --max-bytes 13107200`
-- `apps/desktop-demo/build-web.sh`
-- `apps/android-demo/android/./gradlew :app:assembleRelease`
-- `./run_robot_test.sh --sequential`
-
-When a renderer change touches crispness, placement, or screenshot correctness,
-the review loop also includes:
-
-1. run `robot_renderer_micro_contract`
-2. inspect the readback and presented-window images under `CRANPOSE_ROBOT_OUTPUT_DIR` or `TMPDIR`
-3. use `robot_measure_shaders` visual-compare mode when a full demo surface is
-   needed
-4. compare logical output against `docs/render-reference/main_renderer_micro_contract.png`, not raw PNG size alone
-
-## Current Plan
-
-The current checked-in state closes the screenshot-scale mismatch, keeps scroll
-text on one translated-content path across active and idle states, routes
-complex text through bounded local surfaces, and removes logical-space static
-text rounding. The remaining review loop is:
-
-- keep the current invariants green
-- inspect saved demo screenshots when a new visual bug is reported
-- add a new render contract only when a concrete remaining defect is reproduced
-
-The next loop is:
-
-1. Keep the current invariants green.
-2. Start every new bug with a failing automated test.
-3. Reject shortcuts that reintroduce global flattening, forced text isolation,
-   or independent child snapping.
-4. Keep screenshot-based acceptance tests aligned with the actual capture mode.
-5. Inspect an actual saved screenshot when a bug report is visual.
-6. Add a new contract only when a concrete remaining defect is reproduced.
+Measured on the Mate 20 X (Mali-G76) scrolling the showcase list, by
+removing one thing at a time from a single build and reading the present
+time: with no backdrop effect the page presents in 3 ms at 59 fps. Every
+remaining millisecond is fill: the glass material's own shading at roughly
+10 ms per megapixel of glass, the page re-drawn under each capture (its
+gradient shapes and cached shadow bands), and the shadow bands in the final
+pass. Pass count stopped mattering once the atlas stages landed; the atlas
+blur bandwidth and the re-shading of read tails were the two renderer costs
+left on top of the fill, and both are gone. The material's per-pixel
+cost is the material's; the renderer shades each glass pixel once.

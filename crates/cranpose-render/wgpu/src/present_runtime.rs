@@ -13,11 +13,7 @@ use std::{
 use cranpose_render_common::software_text_raster::SoftwareTextFontSet;
 
 use crate::{
-    display_clip::DisplayVisibleRegion,
-    frame_packet::{
-        CancelReason, FramePacket, PresentOutcome, PresentTimings, RenderReturns, ReplayAck,
-        ReplayFrameOps,
-    },
+    frame_packet::{CancelReason, FramePacket, PresentOutcome, PresentTimings, RenderReturns},
     render::GpuRenderer,
 };
 
@@ -27,8 +23,6 @@ pub(crate) type PresentClock = Arc<dyn Fn() -> i64 + Send + Sync>;
 
 pub(crate) const CONTROL_ACK_TIMEOUT: Duration = Duration::from_secs(5);
 
-pub(crate) type ReplayAckBatch = (ReplayAck, ReplayFrameOps);
-
 pub(crate) struct PresentRuntimeInit {
     pub(crate) device: Arc<wgpu::Device>,
     pub(crate) queue: Arc<wgpu::Queue>,
@@ -37,9 +31,7 @@ pub(crate) struct PresentRuntimeInit {
     pub(crate) adapter_downlevel: wgpu::DownlevelFlags,
     pub(crate) text_fonts: SoftwareTextFontSet,
     pub(crate) renderer_epoch: u64,
-    pub(crate) store_feed_generation: u64,
     pub(crate) clock: Option<PresentClock>,
-    pub(crate) display_visible_region: DisplayVisibleRegion,
 }
 
 pub(crate) enum PresentControl {
@@ -56,9 +48,6 @@ pub(crate) enum PresentControl {
     },
     DropSurface {
         ack: SyncSender<()>,
-    },
-    SetDisplayVisibleRegion {
-        region: DisplayVisibleRegion,
     },
     #[doc(hidden)]
     AttachOffscreenTargetForTests {
@@ -79,7 +68,6 @@ pub(crate) enum PresentMsg {
 pub(crate) struct PresentStatus {
     pub(crate) last_frame_stats: Mutex<Option<crate::gpu_stats::FrameStatsSnapshot>>,
     pub(crate) needs_frame_warmup: AtomicBool,
-    pub(crate) replay_supported: AtomicBool,
     pub(crate) presented_frames: AtomicU64,
     pub(crate) placeholder_frames: AtomicU64,
     pub(crate) last_present_outcome: AtomicU64,
@@ -109,7 +97,6 @@ pub(crate) struct PresentState {
     surface_epoch: u64,
     waiting_packet: Option<FramePacket>,
     returns_tx: SyncSender<RenderReturns>,
-    acks_tx: SyncSender<ReplayAckBatch>,
     status: Arc<PresentStatus>,
     waker: PresentWaker,
     clock: Option<PresentClock>,
@@ -119,7 +106,6 @@ impl PresentState {
     pub(crate) fn new(
         init: PresentRuntimeInit,
         returns_tx: SyncSender<RenderReturns>,
-        acks_tx: SyncSender<ReplayAckBatch>,
         status: Arc<PresentStatus>,
         waker: PresentWaker,
     ) -> Self {
@@ -131,11 +117,9 @@ impl PresentState {
             adapter_downlevel,
             text_fonts,
             renderer_epoch,
-            store_feed_generation,
             clock,
-            display_visible_region,
         } = init;
-        let mut gpu_renderer = GpuRenderer::new(
+        let gpu_renderer = GpuRenderer::new(
             device.clone(),
             queue,
             surface_format,
@@ -143,12 +127,7 @@ impl PresentState {
             adapter_downlevel,
             text_fonts,
             renderer_epoch,
-            store_feed_generation,
         );
-        gpu_renderer.set_display_visible_region(display_visible_region);
-        status
-            .replay_supported
-            .store(gpu_renderer.replay_supported(), Ordering::Relaxed);
         Self {
             gpu_renderer,
             device,
@@ -159,7 +138,6 @@ impl PresentState {
             surface_epoch: 0,
             waiting_packet: None,
             returns_tx,
-            acks_tx,
             status,
             waker,
             clock,
@@ -257,11 +235,6 @@ impl PresentState {
                 let _ = ack.send(());
                 true
             }
-            PresentControl::SetDisplayVisibleRegion { region } => {
-                self.consume_waiting();
-                self.gpu_renderer.set_display_visible_region(region);
-                true
-            }
             PresentControl::AttachOffscreenTargetForTests { width, height, ack } => {
                 self.cancel_waiting(CancelReason::SurfaceEpoch);
                 self.surface = None;
@@ -307,27 +280,16 @@ impl PresentState {
         }
     }
 
-    fn cancel_packet(&mut self, mut packet: FramePacket, reason: CancelReason) {
-        if let Some(confirmations) = packet.recycled_confirmations.take() {
-            self.gpu_renderer
-                .restore_replay_ack_confirmations(confirmations);
-        }
+    fn cancel_packet(&mut self, packet: FramePacket, reason: CancelReason) {
         let mut returns = RenderReturns::default();
         let _ = GpuRenderer::cancel_packet(packet, reason, &mut returns);
         self.finish_returns(returns);
     }
 
-    fn consume_packet(&mut self, mut packet: FramePacket) {
+    fn consume_packet(&mut self, packet: FramePacket) {
         if let Some(reason) = self.validate(&packet) {
             self.cancel_packet(packet, reason);
             return;
-        }
-        if let Some(confirmations) = packet.recycled_confirmations.take() {
-            self.gpu_renderer
-                .restore_replay_ack_confirmations(confirmations);
-        }
-        if let Some(batch) = self.gpu_renderer.take_replay_ack_early(&mut packet) {
-            self.send_ack(batch);
         }
         let (width, height) = packet.viewport;
         if self.surface.is_some() {
@@ -336,16 +298,6 @@ impl PresentState {
             self.render_offscreen(packet, width, height);
         } else {
             self.cancel_packet(packet, CancelReason::SurfaceUnavailable);
-        }
-    }
-
-    fn send_ack(&mut self, batch: ReplayAckBatch) {
-        match self.acks_tx.try_send(batch) {
-            Ok(()) => {}
-            Err(TrySendError::Full(_)) => {
-                log::error!("[present-runtime] ack channel full; depth-one credit violated");
-            }
-            Err(TrySendError::Disconnected(_)) => {}
         }
     }
 
@@ -545,10 +497,6 @@ impl PresentState {
     fn now(&self) -> i64 {
         self.clock.as_ref().map(|clock| clock()).unwrap_or(0)
     }
-
-    pub(crate) fn store_ack_confirmations_capacity(&self) -> usize {
-        self.gpu_renderer.replay_ack_confirmations_capacity()
-    }
 }
 
 enum AcquireOutcome {
@@ -560,7 +508,6 @@ enum AcquireOutcome {
 pub(crate) struct PresentHandle {
     msg_tx: Sender<PresentMsg>,
     returns_rx: Receiver<RenderReturns>,
-    acks_rx: Receiver<ReplayAckBatch>,
     status: Arc<PresentStatus>,
     thread: Option<std::thread::JoinHandle<()>>,
     outstanding: u32,
@@ -570,20 +517,18 @@ impl PresentHandle {
     pub(crate) fn spawn(init: PresentRuntimeInit, waker: PresentWaker) -> Result<Self, String> {
         let (msg_tx, msg_rx) = channel::<PresentMsg>();
         let (returns_tx, returns_rx) = sync_channel::<RenderReturns>(2);
-        let (acks_tx, acks_rx) = sync_channel::<ReplayAckBatch>(4);
         let status = Arc::new(PresentStatus::default());
         let thread_status = Arc::clone(&status);
         let thread = std::thread::Builder::new()
             .name("cranpose-present".to_string())
             .spawn(move || {
                 crate::fast_cores::pin_current_thread_to_fast_cores("present");
-                PresentState::new(init, returns_tx, acks_tx, thread_status, waker).run(msg_rx);
+                PresentState::new(init, returns_tx, thread_status, waker).run(msg_rx);
             })
             .map_err(|error| format!("failed to spawn present thread: {error}"))?;
         Ok(Self {
             msg_tx,
             returns_rx,
-            acks_rx,
             status,
             thread: Some(thread),
             outstanding: 0,
@@ -596,14 +541,12 @@ impl PresentHandle {
     ) -> (Self, PresentState, Receiver<PresentMsg>) {
         let (msg_tx, msg_rx) = channel::<PresentMsg>();
         let (returns_tx, returns_rx) = sync_channel::<RenderReturns>(2);
-        let (acks_tx, acks_rx) = sync_channel::<ReplayAckBatch>(4);
         let status = Arc::new(PresentStatus::default());
-        let state = PresentState::new(init, returns_tx, acks_tx, Arc::clone(&status), waker);
+        let state = PresentState::new(init, returns_tx, Arc::clone(&status), waker);
         (
             Self {
                 msg_tx,
                 returns_rx,
-                acks_rx,
                 status,
                 thread: None,
                 outstanding: 0,
@@ -644,22 +587,6 @@ impl PresentHandle {
                 Some(returns)
             }
             Err(_) => None,
-        }
-    }
-
-    pub(crate) fn try_drain_ack(&mut self) -> Option<ReplayAckBatch> {
-        self.acks_rx.try_recv().ok()
-    }
-
-    pub(crate) fn send_display_visible_region(&self, region: DisplayVisibleRegion) {
-        if self
-            .msg_tx
-            .send(PresentMsg::Control(
-                PresentControl::SetDisplayVisibleRegion { region },
-            ))
-            .is_err()
-        {
-            log::error!("[present-runtime] set display visible region: runtime is gone");
         }
     }
 
@@ -729,6 +656,4 @@ const _: () = {
     assert_send::<Option<PresentClock>>();
     assert_send::<Arc<PresentStatus>>();
     assert_send::<SyncSender<RenderReturns>>();
-    assert_send::<SyncSender<ReplayAckBatch>>();
-    assert_send::<DisplayVisibleRegion>();
 };

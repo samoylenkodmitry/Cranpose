@@ -6060,15 +6060,14 @@ fn log_top_isolated_layer_render_stats(robot: &cranpose::Robot, label: &str, ste
             );
             for (index, layer) in stats.top_isolated_layers().enumerate() {
                 println!(
-                    "{label}_isolated_layer step={step} rank={index} node={:?} rect=({:.3},{:.3},{:.3},{:.3}) target={}x{} reasons={}",
+                    "{label}_isolated_layer step={step} rank={index} node={:?} rect=({:.3},{:.3},{:.3},{:.3}) target={}x{}",
                     layer.node_id,
                     layer.logical_rect.x,
                     layer.logical_rect.y,
                     layer.logical_rect.width,
                     layer.logical_rect.height,
                     layer.width,
-                    layer.height,
-                    layer.reasons.display()
+                    layer.height
                 );
             }
         }

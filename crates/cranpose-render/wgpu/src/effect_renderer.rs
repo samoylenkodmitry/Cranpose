@@ -1,36 +1,18 @@
 use std::cell::Cell;
 
-use cranpose_ui_graphics::{
-    BlendMode, ROUNDED_ALPHA_MASK_WGSL, RenderEffect, RuntimeShader, TileMode,
-};
+use cranpose_ui_graphics::{BlendMode, RenderEffect, RuntimeShader, TileMode};
 
 use crate::{
-    display_clip,
     frame_graph::{
         FrameCommandRecorder, FrameCommandStats, FrameTextureDescriptor, UploadAllocatorId,
         UploadAllocatorSpec,
     },
     gpu_stats::FrameStats,
-    lazy_resource::{LazyGpuResource, PassPipeline, SharedPassPipeline},
+    lazy_resource::LazyGpuResource,
     offscreen::{OffscreenPool, OffscreenTarget},
     shader_cache::{RuntimeShaderPipelineMode, ShaderPipelineCache},
     shaders,
 };
-
-pub(crate) fn direct_tail_intermediate_size(
-    first_effect: &RenderEffect,
-    width: u32,
-    height: u32,
-) -> (u32, u32) {
-    if let RenderEffect::Blur {
-        radius_x, radius_y, ..
-    } = first_effect
-        && (*radius_x > 0.0 || *radius_y > 0.0)
-    {
-        return blur_scratch_size(*radius_x, *radius_y, width, height);
-    }
-    (width, height)
-}
 
 pub(crate) fn blur_scratch_size(
     radius_x: f32,
@@ -84,10 +66,8 @@ pub(crate) struct EffectRenderer {
     pipeline_cache: Option<wgpu::PipelineCache>,
 
     blur_shader: wgpu::ShaderModule,
-    blur_rounded_mask_shader: wgpu::ShaderModule,
     blur_pipeline_layout: wgpu::PipelineLayout,
     blur_pipeline: LazyGpuResource<wgpu::RenderPipeline>,
-    blur_rounded_mask_pipeline: LazyGpuResource<wgpu::RenderPipeline>,
     blur_uniform_bind_group_layout: wgpu::BindGroupLayout,
 
     offset_shader: wgpu::ShaderModule,
@@ -96,17 +76,16 @@ pub(crate) struct EffectRenderer {
     offset_uniform_bind_group_layout: wgpu::BindGroupLayout,
 
     blit_shader: wgpu::ShaderModule,
-    blit_shader_source: String,
     blit_pipeline_layout: wgpu::PipelineLayout,
-    blit_pipeline: SharedPassPipeline,
-    blit_pipeline_src: SharedPassPipeline,
-    blit_pipeline_dst_out: SharedPassPipeline,
+    blit_pipeline: LazyGpuResource<wgpu::RenderPipeline>,
+    blit_pipeline_src: LazyGpuResource<wgpu::RenderPipeline>,
+    blit_pipeline_dst_out: LazyGpuResource<wgpu::RenderPipeline>,
     blit_uniform_bind_group_layout: wgpu::BindGroupLayout,
     projective_blit_shader: wgpu::ShaderModule,
     projective_blit_pipeline_layout: wgpu::PipelineLayout,
-    projective_blit_pipeline: SharedPassPipeline,
-    projective_blit_pipeline_src: SharedPassPipeline,
-    projective_blit_pipeline_dst_out: SharedPassPipeline,
+    projective_blit_pipeline: LazyGpuResource<wgpu::RenderPipeline>,
+    projective_blit_pipeline_src: LazyGpuResource<wgpu::RenderPipeline>,
+    projective_blit_pipeline_dst_out: LazyGpuResource<wgpu::RenderPipeline>,
 
     pub effect_texture_bind_group_layout: wgpu::BindGroupLayout,
     pub effect_uniform_bind_group_layout: wgpu::BindGroupLayout,
@@ -120,38 +99,8 @@ pub(crate) struct EffectRenderer {
     pub(crate) debug_blurs: Cell<u32>,
     pub(crate) debug_composites: Cell<u32>,
     pub(crate) debug_effects: Cell<u32>,
+    pub(crate) debug_shader_pixels: Cell<u64>,
     pub(crate) debug_upload_bytes: Cell<u64>,
-    #[cfg(not(target_arch = "wasm32"))]
-    debug_fill_composite_px2: Cell<f64>,
-    #[cfg(not(target_arch = "wasm32"))]
-    debug_fill_offscreen_px2: Cell<f64>,
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn effect_pass_fill_px2(
-    scissor: Option<(u32, u32, u32, u32)>,
-    dest_viewport: Option<(f32, f32, f32, f32)>,
-    fallback: (u32, u32),
-) -> f64 {
-    let scissor_px2 = scissor.map(|(_, _, w, h)| f64::from(w) * f64::from(h));
-    let viewport_px2 = dest_viewport
-        .filter(|(_, _, w, h)| *w > 0.0 && *h > 0.0)
-        .map(|(_, _, w, h)| f64::from(w) * f64::from(h));
-    let base = viewport_px2.unwrap_or(f64::from(fallback.0) * f64::from(fallback.1));
-    scissor_px2.map_or(base, |scissor_px2| scissor_px2.min(base))
-}
-
-#[derive(Clone, Copy)]
-pub(crate) struct ProjectiveSurfaceComposite<'a> {
-    pub(crate) source: &'a OffscreenTarget,
-    pub(crate) source_size: (f32, f32),
-    pub(crate) inverse_matrix: [[f32; 3]; 3],
-    pub(crate) dest_bounds: [[f32; 2]; 4],
-    pub(crate) alpha: f32,
-    pub(crate) load_op: wgpu::LoadOp<wgpu::Color>,
-    pub(crate) scissor: Option<(u32, u32, u32, u32)>,
-    pub(crate) blend_mode: BlendMode,
-    pub(crate) sample_mode: CompositeSampleMode,
 }
 
 pub(crate) trait EffectScratchTargetProvider<'target> {
@@ -275,16 +224,8 @@ fn acquire_recorded_effect_scratch_textures_into<C: FrameCommandRecorder>(
 struct BlurUniforms {
     direction_and_radius: [f32; 4],
     texture_size_and_tile_mode: [f32; 4],
-}
-
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct BlurRoundedMaskUniforms {
-    direction_and_radius: [f32; 4],
-    texture_size_and_tile_mode: [f32; 4],
-    effect_rect: [f32; 4],
-    container_and_feather: [f32; 4],
-    corner_radii: [f32; 4],
+    source_region: [f32; 4],
+    dest_region: [f32; 4],
 }
 
 #[repr(C)]
@@ -304,7 +245,6 @@ struct BlitUniforms {
     sampling: [f32; 4],
     dest_viewport: [f32; 4],
     source_viewport: [f32; 4],
-    resolve_span: [f32; 4],
 }
 
 #[repr(C)]
@@ -339,14 +279,6 @@ fn blur_uniform_spec(horizontal: bool) -> UploadAllocatorSpec {
             std::mem::size_of::<BlurUniforms>() as u64,
         )
     }
-}
-
-fn blur_rounded_mask_uniform_spec() -> UploadAllocatorSpec {
-    UploadAllocatorSpec::uniform(
-        "Blur Rounded Mask Uniform Buffer",
-        "Blur Rounded Mask Uniform Bind Group",
-        std::mem::size_of::<BlurRoundedMaskUniforms>() as u64,
-    )
 }
 
 fn offset_uniform_spec() -> UploadAllocatorSpec {
@@ -415,13 +347,96 @@ struct ShaderPassOptions {
     source_logical_size: Option<(f32, f32)>,
 }
 
+/// A runtime shader drawn into a pass over `dest_viewport`, reading
+/// `source_region` of `source` (the whole texture when `None`) with
+/// `layer_pixel_rect` relative to that region, masked by `rounded_mask`
+/// (target pixels) and scaled by `alpha`. Region, mask and alpha reach the
+/// shader through its reserved uniform slots and require a shader that
+/// declares `batched_source`.
 #[derive(Clone, Copy)]
 pub(crate) struct ShaderCompositeBatchItem<'a> {
     pub(crate) source: &'a OffscreenTarget,
     pub(crate) shader: &'a RuntimeShader,
     pub(crate) layer_pixel_rect: [f32; 4],
+    pub(crate) source_region: Option<(f32, f32, f32, f32)>,
+    pub(crate) rounded_mask: Option<RoundedCompositeMask>,
+    pub(crate) alpha: f32,
     pub(crate) scissor: Option<(u32, u32, u32, u32)>,
     pub(crate) dest_viewport: (f32, f32, f32, f32),
+}
+
+/// Fills the renderer-reserved uniform slots of a runtime shader; see
+/// `RuntimeShader`'s slot table.
+struct ReservedShaderUniforms {
+    layer_pixel_rect: [f32; 4],
+    source_region: Option<(f32, f32, f32, f32)>,
+    mask: Option<RoundedCompositeMask>,
+    logical_size: Option<(f32, f32)>,
+    alpha: f32,
+}
+
+impl ReservedShaderUniforms {
+    fn write(&self, padded: &mut [f32; RuntimeShader::MAX_UNIFORMS]) {
+        let region = self.source_region.unwrap_or((0.0, 0.0, 0.0, 0.0));
+        let (mask_rect, mask_radii) = self
+            .mask
+            .map_or(([0.0; 4], [0.0; 4]), |mask| (mask.rect, mask.radii));
+        let logical = self.logical_size.unwrap_or((0.0, 0.0));
+        let slots = [
+            (
+                RuntimeShader::SOURCE_REGION_UNIFORM,
+                [region.0, region.1, region.2, region.3],
+            ),
+            (RuntimeShader::MASK_RECT_UNIFORM, mask_rect),
+            (RuntimeShader::MASK_RADII_UNIFORM, mask_radii),
+            (RuntimeShader::EFFECT_RECT_UNIFORM, self.layer_pixel_rect),
+            (
+                RuntimeShader::LOGICAL_SIZE_UNIFORM,
+                [logical.0, logical.1, self.alpha, 0.0],
+            ),
+        ];
+        for (start, values) in slots {
+            padded[start..start + 4].copy_from_slice(&values);
+        }
+    }
+}
+
+/// Pixels a shader draw shades: its viewport clipped by its scissor.
+fn shaded_pixels(viewport: (f32, f32, f32, f32), scissor: (u32, u32, u32, u32)) -> u64 {
+    let left = viewport.0.max(scissor.0 as f32);
+    let top = viewport.1.max(scissor.1 as f32);
+    let right = (viewport.0 + viewport.2).min((scissor.0 + scissor.2) as f32);
+    let bottom = (viewport.1 + viewport.3).min((scissor.1 + scissor.3) as f32);
+    ((right - left).max(0.0).round() as u64) * ((bottom - top).max(0.0).round() as u64)
+}
+
+fn region_uniform(region: (u32, u32, u32, u32)) -> [f32; 4] {
+    [
+        region.0 as f32,
+        region.1 as f32,
+        region.2 as f32,
+        region.3 as f32,
+    ]
+}
+
+/// One region of a blur atlas pass: the capture texels to blur, the
+/// downscaled slot of the scratch texture the horizontal pass writes, the
+/// origin in the result texture the vertical pass writes at full size, and
+/// the blur to run.
+#[derive(Clone, Copy)]
+pub(crate) struct BlurRegion {
+    pub(crate) source: (u32, u32, u32, u32),
+    pub(crate) scratch: (u32, u32, u32, u32),
+    pub(crate) dest: (u32, u32),
+    pub(crate) radius_x: f32,
+    pub(crate) radius_y: f32,
+    pub(crate) tile_mode: TileMode,
+}
+
+impl BlurRegion {
+    fn dest_rect(&self) -> (u32, u32, u32, u32) {
+        (self.dest.0, self.dest.1, self.source.2, self.source.3)
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -434,12 +449,6 @@ pub(crate) struct CompositeBatchItem<'a> {
     pub(crate) dest_viewport: Option<(f32, f32, f32, f32)>,
     pub(crate) source_viewport: Option<(f32, f32, f32, f32)>,
     pub(crate) sample_mode: CompositeSampleMode,
-}
-
-#[derive(Clone, Copy)]
-pub(crate) enum FusedCompositeItem<'a> {
-    Blit(CompositeBatchItem<'a>),
-    Shader(ShaderCompositeBatchItem<'a>),
 }
 
 pub(crate) struct PreparedCompositeDraw<'a> {
@@ -457,7 +466,6 @@ pub(crate) struct PreparedShaderDraw<'a> {
     dest_viewport: (f32, f32, f32, f32),
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct ProjectiveCompositeItem<'a> {
     pub source: &'a OffscreenTarget,
     pub viewport: (u32, u32),
@@ -468,7 +476,6 @@ pub(crate) struct ProjectiveCompositeItem<'a> {
     pub sample_mode: CompositeSampleMode,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct PreparedProjectiveComposite<'a> {
     texture_bind_group: &'a wgpu::BindGroup,
     uniform_bind_group: wgpu::BindGroup,
@@ -479,7 +486,6 @@ pub(crate) struct PreparedProjectiveComposite<'a> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CompositeSampleMode {
     Linear,
-    Box4,
     Nearest,
 }
 
@@ -505,12 +511,11 @@ fn create_fullscreen_pipeline(
     fragment_entry: &'static str,
     surface_format: wgpu::TextureFormat,
     blend: wgpu::BlendState,
-    depth: bool,
 ) -> wgpu::RenderPipeline {
     crate::render::create_render_pipeline_logged(
         device,
         cache,
-        &format!("effect {label} entry={fragment_entry} depth={depth}"),
+        &format!("effect {label} entry={fragment_entry}"),
         wgpu::RenderPipelineDescriptor {
             label: Some(label),
             layout: Some(layout),
@@ -537,7 +542,7 @@ fn create_fullscreen_pipeline(
                 cull_mode: None,
                 ..Default::default()
             },
-            depth_stencil: display_clip::content_depth_state(depth),
+            depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
             multiview_mask: None,
             cache: None,
@@ -554,12 +559,11 @@ fn create_projective_pipeline(
     shader: &wgpu::ShaderModule,
     surface_format: wgpu::TextureFormat,
     blend: wgpu::BlendState,
-    depth: bool,
 ) -> wgpu::RenderPipeline {
     crate::render::create_render_pipeline_logged(
         device,
         cache,
-        &format!("effect {label} depth={depth}"),
+        &format!("effect {label}"),
         wgpu::RenderPipelineDescriptor {
             label: Some(label),
             layout: Some(layout),
@@ -594,7 +598,7 @@ fn create_projective_pipeline(
                 cull_mode: None,
                 ..Default::default()
             },
-            depth_stencil: display_clip::content_depth_state(depth),
+            depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
             multiview_mask: None,
             cache: None,
@@ -673,12 +677,6 @@ impl EffectRenderer {
 
         let blur_pipeline = LazyGpuResource::new("effect/blur");
 
-        let blur_rounded_mask_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Blur Rounded Mask Shader"),
-            source: wgpu::ShaderSource::Wgsl(shaders::blur_rounded_mask_shader().into()),
-        });
-        let blur_rounded_mask_pipeline = LazyGpuResource::new("effect/blur-rounded-mask");
-
         let offset_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Offset Shader"),
             source: wgpu::ShaderSource::Wgsl(shaders::offset_shader().into()),
@@ -696,10 +694,9 @@ impl EffectRenderer {
 
         let offset_pipeline = LazyGpuResource::new("effect/offset");
 
-        let blit_shader_source = shaders::blit_shader();
         let blit_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Blit Shader"),
-            source: wgpu::ShaderSource::Wgsl(blit_shader_source.clone().into()),
+            source: wgpu::ShaderSource::Wgsl(shaders::blit_shader().into()),
         });
 
         let blit_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -711,10 +708,9 @@ impl EffectRenderer {
             immediate_size: 0,
         });
 
-        let blit_pipeline = PassPipeline::new("effect/blit-src-over", "effect/blit-src-over-depth");
-        let blit_pipeline_src = PassPipeline::new("effect/blit-src", "effect/blit-src-depth");
-        let blit_pipeline_dst_out =
-            PassPipeline::new("effect/blit-dst-out", "effect/blit-dst-out-depth");
+        let blit_pipeline = LazyGpuResource::new("effect/blit-src-over");
+        let blit_pipeline_src = LazyGpuResource::new("effect/blit-src");
+        let blit_pipeline_dst_out = LazyGpuResource::new("effect/blit-dst-out");
 
         let projective_blit_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Projective Blit Shader"),
@@ -729,16 +725,9 @@ impl EffectRenderer {
                 ],
                 immediate_size: 0,
             });
-        let projective_blit_pipeline = PassPipeline::new(
-            "effect/projective-src-over",
-            "effect/projective-src-over-depth",
-        );
-        let projective_blit_pipeline_src =
-            PassPipeline::new("effect/projective-src", "effect/projective-src-depth");
-        let projective_blit_pipeline_dst_out = PassPipeline::new(
-            "effect/projective-dst-out",
-            "effect/projective-dst-out-depth",
-        );
+        let projective_blit_pipeline = LazyGpuResource::new("effect/projective-src-over");
+        let projective_blit_pipeline_src = LazyGpuResource::new("effect/projective-src");
+        let projective_blit_pipeline_dst_out = LazyGpuResource::new("effect/projective-dst-out");
 
         let effect_linear_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("Effect Linear Sampler"),
@@ -753,17 +742,14 @@ impl EffectRenderer {
             shader_cache: ShaderPipelineCache::new(adapter_backend, pipeline_cache.clone()),
             pipeline_cache,
             blur_shader,
-            blur_rounded_mask_shader,
             blur_pipeline_layout,
             blur_pipeline,
-            blur_rounded_mask_pipeline,
             blur_uniform_bind_group_layout,
             offset_shader,
             offset_pipeline_layout,
             offset_pipeline,
             offset_uniform_bind_group_layout,
             blit_shader,
-            blit_shader_source,
             blit_pipeline_layout,
             blit_pipeline,
             blit_pipeline_src,
@@ -783,56 +769,9 @@ impl EffectRenderer {
             debug_blurs: Cell::new(0),
             debug_composites: Cell::new(0),
             debug_effects: Cell::new(0),
+            debug_shader_pixels: Cell::new(0),
             debug_upload_bytes: Cell::new(0),
-            #[cfg(not(target_arch = "wasm32"))]
-            debug_fill_composite_px2: Cell::new(0.0),
-            #[cfg(not(target_arch = "wasm32"))]
-            debug_fill_offscreen_px2: Cell::new(0.0),
         }
-    }
-
-    fn note_composite_fill(
-        &self,
-        scissor: Option<(u32, u32, u32, u32)>,
-        dest_viewport: Option<(f32, f32, f32, f32)>,
-        fallback: (u32, u32),
-    ) {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            if crate::render::fill_area_diag_enabled() {
-                let area = effect_pass_fill_px2(scissor, dest_viewport, fallback);
-                self.debug_fill_composite_px2
-                    .set(self.debug_fill_composite_px2.get() + area);
-            }
-        }
-        #[cfg(target_arch = "wasm32")]
-        let _ = (scissor, dest_viewport, fallback);
-    }
-
-    fn note_offscreen_fill(
-        &self,
-        scissor: Option<(u32, u32, u32, u32)>,
-        dest_viewport: Option<(f32, f32, f32, f32)>,
-        fallback: (u32, u32),
-    ) {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            if crate::render::fill_area_diag_enabled() {
-                let area = effect_pass_fill_px2(scissor, dest_viewport, fallback);
-                self.debug_fill_offscreen_px2
-                    .set(self.debug_fill_offscreen_px2.get() + area);
-            }
-        }
-        #[cfg(target_arch = "wasm32")]
-        let _ = (scissor, dest_viewport, fallback);
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn take_fill_diag_fill_px2(&self) -> (f64, f64) {
-        (
-            self.debug_fill_composite_px2.take(),
-            self.debug_fill_offscreen_px2.take(),
-        )
     }
 
     fn blur_pipeline(&self, device: &wgpu::Device) -> &wgpu::RenderPipeline {
@@ -846,26 +785,8 @@ impl EffectRenderer {
                 "blur_fs",
                 self.surface_format,
                 wgpu::BlendState::REPLACE,
-                false,
             )
         })
-    }
-
-    fn blur_rounded_mask_pipeline(&self, device: &wgpu::Device) -> &wgpu::RenderPipeline {
-        self.blur_rounded_mask_pipeline
-            .get_or_init(self.adapter_backend, || {
-                create_fullscreen_pipeline(
-                    device,
-                    self.pipeline_cache.as_ref(),
-                    "Blur Rounded Mask Pipeline",
-                    &self.blur_pipeline_layout,
-                    &self.blur_rounded_mask_shader,
-                    "blur_rounded_mask_fs",
-                    self.surface_format,
-                    wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
-                    false,
-                )
-            })
     }
 
     fn offset_pipeline(&self, device: &wgpu::Device) -> &wgpu::RenderPipeline {
@@ -879,17 +800,11 @@ impl EffectRenderer {
                 "offset_fs",
                 self.surface_format,
                 wgpu::BlendState::REPLACE,
-                false,
             )
         })
     }
 
-    fn blit_pipeline(
-        &self,
-        device: &wgpu::Device,
-        blend_mode: BlendMode,
-        depth: bool,
-    ) -> &wgpu::RenderPipeline {
+    fn blit_pipeline(&self, device: &wgpu::Device, blend_mode: BlendMode) -> &wgpu::RenderPipeline {
         let (resource, label, blend) = match blend_mode {
             BlendMode::Src => (
                 &self.blit_pipeline_src,
@@ -907,42 +822,28 @@ impl EffectRenderer {
                 wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
             ),
         };
-        resource.get_or_init(self.adapter_backend, depth, |depth| {
-            let depth_shader = depth.then(|| {
-                device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some("Blit Shader (display clip)"),
-                    source: wgpu::ShaderSource::Wgsl(display_clip::with_content_z(
-                        self.blit_shader_source.clone().into(),
-                        true,
-                    )),
-                })
-            });
+        resource.get_or_init(self.adapter_backend, || {
             create_fullscreen_pipeline(
                 device,
                 self.pipeline_cache.as_ref(),
                 label,
                 &self.blit_pipeline_layout,
-                depth_shader.as_ref().unwrap_or(&self.blit_shader),
+                &self.blit_shader,
                 "blit_fs",
                 self.surface_format,
                 blend,
-                depth,
             )
         })
     }
 
-    fn initialized_blit_pipeline(
-        &self,
-        blend_mode: BlendMode,
-        depth: bool,
-    ) -> &wgpu::RenderPipeline {
+    fn initialized_blit_pipeline(&self, blend_mode: BlendMode) -> &wgpu::RenderPipeline {
         let resource = match blend_mode {
             BlendMode::Src => &self.blit_pipeline_src,
             BlendMode::DstOut => &self.blit_pipeline_dst_out,
             _ => &self.blit_pipeline,
         };
         resource
-            .get(depth)
+            .get()
             .expect("prepared composite must initialize its blit pipeline")
     }
 
@@ -950,7 +851,6 @@ impl EffectRenderer {
         &self,
         device: &wgpu::Device,
         blend_mode: BlendMode,
-        depth: bool,
     ) -> &wgpu::RenderPipeline {
         let (resource, label, blend) = match blend_mode {
             BlendMode::Src => (
@@ -969,49 +869,28 @@ impl EffectRenderer {
                 wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
             ),
         };
-        resource.get_or_init(self.adapter_backend, depth, |depth| {
-            let depth_shader = depth.then(|| {
-                device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some("Projective Blit Shader (display clip)"),
-                    source: wgpu::ShaderSource::Wgsl(display_clip::with_content_z(
-                        shaders::projective_blit_shader().into(),
-                        true,
-                    )),
-                })
-            });
+        resource.get_or_init(self.adapter_backend, || {
             create_projective_pipeline(
                 device,
                 self.pipeline_cache.as_ref(),
                 label,
                 &self.projective_blit_pipeline_layout,
-                depth_shader
-                    .as_ref()
-                    .unwrap_or(&self.projective_blit_shader),
+                &self.projective_blit_shader,
                 self.surface_format,
                 blend,
-                depth,
             )
         })
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
-    fn initialized_projective_blit_pipeline(
-        &self,
-        blend_mode: BlendMode,
-        depth: bool,
-    ) -> &wgpu::RenderPipeline {
+    fn initialized_projective_blit_pipeline(&self, blend_mode: BlendMode) -> &wgpu::RenderPipeline {
         let resource = match blend_mode {
             BlendMode::Src => &self.projective_blit_pipeline_src,
             BlendMode::DstOut => &self.projective_blit_pipeline_dst_out,
             _ => &self.projective_blit_pipeline,
         };
         resource
-            .get(depth)
+            .get()
             .expect("prepared projective composite must initialize its pipeline")
-    }
-
-    fn sampler_for_mode(&self, _sample_mode: CompositeSampleMode) -> &wgpu::Sampler {
-        &self.effect_linear_sampler
     }
 
     pub(crate) fn max_texture_dim(&self) -> u32 {
@@ -1051,11 +930,15 @@ impl EffectRenderer {
         stats
             .effect_applies
             .set(stats.effect_applies.get() + self.debug_effects.get());
+        stats
+            .shader_pixels
+            .set(stats.shader_pixels.get() + self.debug_shader_pixels.get());
         stats.record_upload_bytes(self.debug_upload_bytes.get());
         self.debug_command_stats.set(FrameCommandStats::default());
         self.debug_blurs.set(0);
         self.debug_composites.set(0);
         self.debug_effects.set(0);
+        self.debug_shader_pixels.set(0);
         self.debug_upload_bytes.set(0);
     }
 
@@ -1100,7 +983,6 @@ impl EffectRenderer {
         horizontal: bool,
         load_op: wgpu::LoadOp<wgpu::Color>,
         scissor: Option<(u32, u32, u32, u32)>,
-        dest_size: (u32, u32),
     ) {
         let source_bind_group = source.get_or_create_bind_group(
             device,
@@ -1120,7 +1002,6 @@ impl EffectRenderer {
             bytemuck::bytes_of(&uniforms),
             &self.debug_upload_bytes,
         );
-        self.note_offscreen_fill(scissor, None, dest_size);
         let mut pass = recorder.begin_timed_render_pass(&wgpu::RenderPassDescriptor {
             label: Some(if horizontal {
                 "Blur Horizontal Pass"
@@ -1165,6 +1046,8 @@ impl EffectRenderer {
                 tile_mode_uniform_value(tile_mode),
                 0.0,
             ],
+            source_region: [0.0; 4],
+            dest_region: [0.0; 4],
         }
     }
 
@@ -1204,7 +1087,6 @@ impl EffectRenderer {
             true,
             wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
             scaled_scissor(scissor, scale_x, scale_y, scratch.width, scratch.height),
-            (scratch.width, scratch.height),
         );
         self.encode_blur_axis_pass(
             recorder,
@@ -1222,144 +1104,108 @@ impl EffectRenderer {
             false,
             wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
             scissor,
-            (source.width, source.height),
         );
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn rounded_mask_uniforms(
-        shader: &RuntimeShader,
-        layer_pixel_rect: [f32; 4],
-        width: u32,
-        height: u32,
-        blur_width: u32,
-        blur_height: u32,
-        radius_x: f32,
-        radius_y: f32,
-        tile_mode: TileMode,
-    ) -> Option<BlurRoundedMaskUniforms> {
-        if shader.source() != ROUNDED_ALPHA_MASK_WGSL {
-            return None;
-        }
-        let uniforms = shader.uniforms();
-        let get = |index: usize| uniforms.get(index).copied().unwrap_or(0.0);
-        Some(BlurRoundedMaskUniforms {
-            direction_and_radius: [0.0, 1.0, radius_x, radius_y],
-            texture_size_and_tile_mode: [
-                width as f32,
-                height as f32,
-                tile_mode_uniform_value(tile_mode),
-                blur_width as f32,
-            ],
-            effect_rect: layer_pixel_rect,
-            container_and_feather: [
-                get(0).max(1.0),
-                get(1).max(1.0),
-                get(2).max(0.0),
-                blur_height as f32,
-            ],
-            corner_radii: [
-                get(3).max(0.0),
-                get(4).max(0.0),
-                get(5).max(0.0),
-                get(6).max(0.0),
-            ],
-        })
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn encode_blur_then_rounded_mask_src_over_to_view<C: FrameCommandRecorder>(
+    /// Blurs several regions of `atlas` in two passes: every region's
+    /// horizontal pass into `scratch`, then every region's vertical pass back
+    /// into `atlas`. A wide blur runs its horizontal pass into a downscaled
+    /// copy of its region (the scratch region at the top-left of the same
+    /// slot) and the vertical pass back up to full size, the way a single
+    /// blur uses a smaller scratch. Regions must sit at least their blur
+    /// radius apart so no tap reads a neighbour; the caller packs them that
+    /// way.
+    /// Blurs every region of the capture atlas: the horizontal pass writes
+    /// each region downscaled into its scratch slot, the vertical pass reads
+    /// the slot and writes the region at full size into the result texture.
+    /// Both targets hold only the blurred regions, so neither pass loads or
+    /// stores the atlas.
+    pub(crate) fn encode_blur_atlas_passes<C: FrameCommandRecorder>(
         &mut self,
         recorder: &mut C,
         device: &wgpu::Device,
-        source: &OffscreenTarget,
+        atlas: &OffscreenTarget,
         scratch: &OffscreenTarget,
-        dest_view: &wgpu::TextureView,
-        radius_x: f32,
-        radius_y: f32,
-        tile_mode: TileMode,
-        shader: &RuntimeShader,
-        layer_pixel_rect: [f32; 4],
-        load_op: wgpu::LoadOp<wgpu::Color>,
-        scissor: Option<(u32, u32, u32, u32)>,
-        dest_viewport: (f32, f32, f32, f32),
-    ) -> bool {
-        if dest_viewport.2 <= 0.0 || dest_viewport.3 <= 0.0 {
-            return false;
+        result: &OffscreenTarget,
+        regions: &[BlurRegion],
+    ) {
+        for horizontal in [true, false] {
+            let (source, dest_view) = if horizontal {
+                (atlas, &scratch.view)
+            } else {
+                (scratch, &result.view)
+            };
+            let source_bind_group = source.get_or_create_bind_group(
+                device,
+                &self.effect_texture_bind_group_layout,
+                &self.effect_linear_sampler,
+            );
+            let uniform_bind_groups: Vec<wgpu::BindGroup> = regions
+                .iter()
+                .map(|region| {
+                    let (source_region, dest_region) = if horizontal {
+                        (region.source, region.scratch)
+                    } else {
+                        (region.scratch, region.dest_rect())
+                    };
+                    let scale_x = region.source.2 as f32 / region.scratch.2.max(1) as f32;
+                    let scale_y = region.source.3 as f32 / region.scratch.3.max(1) as f32;
+                    let mut uniforms = Self::blur_uniforms(
+                        horizontal,
+                        source.width,
+                        source.height,
+                        region.radius_x / scale_x,
+                        region.radius_y / scale_y,
+                        region.tile_mode,
+                    );
+                    uniforms.source_region = region_uniform(source_region);
+                    uniforms.dest_region = region_uniform(dest_region);
+                    recorder.upload_uniform(
+                        if horizontal {
+                            UploadAllocatorId::BlurHorizontal
+                        } else {
+                            UploadAllocatorId::BlurVertical
+                        },
+                        blur_uniform_spec(horizontal),
+                        device,
+                        &self.blur_uniform_bind_group_layout,
+                        bytemuck::bytes_of(&uniforms),
+                        &self.debug_upload_bytes,
+                    )
+                })
+                .collect();
+            let mut pass = recorder.begin_timed_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some(if horizontal {
+                    "Blur Horizontal Pass"
+                } else {
+                    "Blur Vertical Pass"
+                }),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: dest_view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                ..Default::default()
+            });
+            pass.set_pipeline(self.blur_pipeline(device));
+            pass.set_bind_group(0, source_bind_group, &[]);
+            for (region, uniform_bind_group) in regions.iter().zip(&uniform_bind_groups) {
+                let (x, y, width, height) = if horizontal {
+                    region.scratch
+                } else {
+                    region.dest_rect()
+                };
+                pass.set_bind_group(1, uniform_bind_group, &[]);
+                pass.set_scissor_rect(x, y, width, height);
+                pass.draw(0..4, 0..1);
+            }
         }
-        let scale_x = source.width as f32 / scratch.width.max(1) as f32;
-        let scale_y = source.height as f32 / scratch.height.max(1) as f32;
-        let Some(mask_uniforms) = Self::rounded_mask_uniforms(
-            shader,
-            layer_pixel_rect,
-            source.width,
-            source.height,
-            scratch.width,
-            scratch.height,
-            radius_x / scale_x,
-            radius_y / scale_y,
-            tile_mode,
-        ) else {
-            return false;
-        };
-
-        self.encode_blur_axis_pass(
-            recorder,
-            device,
-            source,
-            &scratch.view,
-            Self::blur_uniforms(
-                true,
-                scratch.width,
-                scratch.height,
-                radius_x / scale_x,
-                radius_y / scale_y,
-                tile_mode,
-            ),
-            true,
-            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-            None,
-            (scratch.width, scratch.height),
-        );
-
-        let scratch_bind_group = scratch.get_or_create_bind_group(
-            device,
-            &self.effect_texture_bind_group_layout,
-            &self.effect_linear_sampler,
-        );
-        let uniform_bind_group = recorder.upload_uniform(
-            UploadAllocatorId::BlurRoundedMask,
-            blur_rounded_mask_uniform_spec(),
-            device,
-            &self.blur_uniform_bind_group_layout,
-            bytemuck::bytes_of(&mask_uniforms),
-            &self.debug_upload_bytes,
-        );
-        self.note_composite_fill(scissor, Some(dest_viewport), (source.width, source.height));
-        let mut pass = recorder.begin_timed_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Blur Rounded Mask Pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: dest_view,
-                resolve_target: None,
-                depth_slice: None,
-                ops: wgpu::Operations {
-                    load: load_op,
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            ..Default::default()
-        });
-        pass.set_pipeline(self.blur_rounded_mask_pipeline(device));
-        pass.set_bind_group(0, scratch_bind_group, &[]);
-        pass.set_bind_group(1, &uniform_bind_group, &[]);
-        let (x, y, width, height) = dest_viewport;
-        pass.set_viewport(x, y, width, height, 0.0, 1.0);
-        if let Some((x, y, w, h)) = scissor {
-            pass.set_scissor_rect(x, y, w, h);
-        }
-        pass.draw(0..4, 0..1);
-        true
+        self.record_blur_pass();
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1390,7 +1236,6 @@ impl EffectRenderer {
             &self.effect_texture_bind_group_layout,
             &self.effect_linear_sampler,
         );
-        self.note_offscreen_fill(None, None, (source.width, source.height));
 
         let mut pass = recorder.begin_timed_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Offset Effect Pass"),
@@ -1440,155 +1285,11 @@ impl EffectRenderer {
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn encode_shader_src_over_to_view<C: FrameCommandRecorder>(
-        &mut self,
-        recorder: &mut C,
-        device: &wgpu::Device,
-        source: &OffscreenTarget,
-        dest_view: &wgpu::TextureView,
-        shader: &RuntimeShader,
-        layer_pixel_rect: [f32; 4],
-        load_op: wgpu::LoadOp<wgpu::Color>,
-        scissor: Option<(u32, u32, u32, u32)>,
-        dest_viewport: (f32, f32, f32, f32),
-        source_logical_size: Option<(f32, f32)>,
-    ) -> bool {
-        if dest_viewport.2 <= 0.0 || dest_viewport.3 <= 0.0 {
-            return false;
-        }
-        self.encode_shader_pass(
-            recorder,
-            device,
-            source,
-            dest_view,
-            shader,
-            layer_pixel_rect,
-            ShaderPassOptions {
-                load_op,
-                scissor,
-                dest_viewport: Some(dest_viewport),
-                pipeline_mode: RuntimeShaderPipelineMode::PremultipliedSrcOver,
-                source_logical_size,
-            },
-        )
-    }
-
-    pub(crate) fn encode_shader_batch_src_over_to_view<C: FrameCommandRecorder>(
-        &mut self,
-        recorder: &mut C,
-        device: &wgpu::Device,
-        dest_view: &wgpu::TextureView,
-        viewport: (u32, u32),
-        load_op: wgpu::LoadOp<wgpu::Color>,
-        items: &[ShaderCompositeBatchItem<'_>],
-    ) -> bool {
-        if items.is_empty() {
-            return true;
-        }
-        let Some(prepared) = self.prepare_shader_batch_draws(recorder, device, items, false) else {
-            return false;
-        };
-
-        let mut pass = recorder.begin_timed_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Batched Shader Effect Pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: dest_view,
-                resolve_target: None,
-                depth_slice: None,
-                ops: wgpu::Operations {
-                    load: load_op,
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            ..Default::default()
-        });
-
-        for draw in &prepared {
-            self.draw_prepared_shader_src_over(device, &mut pass, viewport, draw, false);
-        }
-
-        true
-    }
-
-    pub(crate) fn encode_fused_composite_batch_to_view<C: FrameCommandRecorder>(
-        &mut self,
-        recorder: &mut C,
-        device: &wgpu::Device,
-        dest_view: &wgpu::TextureView,
-        viewport: (u32, u32),
-        load_op: wgpu::LoadOp<wgpu::Color>,
-        items: &[FusedCompositeItem<'_>],
-    ) -> bool {
-        if items.is_empty() {
-            return true;
-        }
-        let mut blit_items = Vec::new();
-        let mut shader_items = Vec::new();
-        for item in items {
-            match item {
-                FusedCompositeItem::Blit(item) => blit_items.push(*item),
-                FusedCompositeItem::Shader(item) => shader_items.push(*item),
-            }
-        }
-        let Some(prepared_shaders) =
-            self.prepare_shader_batch_draws(recorder, device, &shader_items, false)
-        else {
-            return false;
-        };
-        let prepared_blits =
-            self.prepare_composite_batch_draws(recorder, device, load_op, &blit_items, false);
-
-        let mut pass = recorder.begin_timed_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Batched Composite Pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: dest_view,
-                resolve_target: None,
-                depth_slice: None,
-                ops: wgpu::Operations {
-                    load: load_op,
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            ..Default::default()
-        });
-
-        let mut blit_cursor = 0usize;
-        let mut shader_cursor = 0usize;
-        for item in items {
-            match item {
-                FusedCompositeItem::Blit(_) => {
-                    self.draw_prepared_composite(
-                        &mut pass,
-                        viewport,
-                        &prepared_blits[blit_cursor],
-                        false,
-                    );
-                    blit_cursor += 1;
-                }
-                FusedCompositeItem::Shader(_) => {
-                    self.draw_prepared_shader_src_over(
-                        device,
-                        &mut pass,
-                        viewport,
-                        &prepared_shaders[shader_cursor],
-                        false,
-                    );
-                    shader_cursor += 1;
-                }
-            }
-        }
-        true
-    }
-
     pub(crate) fn prepare_shader_batch_draws<'a, C: FrameCommandRecorder>(
         &mut self,
         recorder: &mut C,
         device: &wgpu::Device,
-        items: &'a [ShaderCompositeBatchItem<'a>],
-        pass_depth: bool,
+        items: &[ShaderCompositeBatchItem<'a>],
     ) -> Option<Vec<PreparedShaderDraw<'a>>> {
         let mut prepared = Vec::with_capacity(items.len());
         for item in items {
@@ -1599,14 +1300,26 @@ impl EffectRenderer {
                 &self.effect_texture_bind_group_layout,
                 &self.effect_uniform_bind_group_layout,
                 RuntimeShaderPipelineMode::PremultipliedSrcOver,
-                pass_depth,
             )?;
             let mut padded = item.shader.uniforms_padded();
-            let slot = RuntimeShader::RESERVED_UNIFORM_START;
-            padded[slot] = item.layer_pixel_rect[0];
-            padded[slot + 1] = item.layer_pixel_rect[1];
-            padded[slot + 2] = item.layer_pixel_rect[2];
-            padded[slot + 3] = item.layer_pixel_rect[3];
+            let (dest_x, dest_y, _, _) = item.dest_viewport;
+            let mask = item.rounded_mask.map(|mask| RoundedCompositeMask {
+                rect: [
+                    mask.rect[0] - dest_x,
+                    mask.rect[1] - dest_y,
+                    mask.rect[2],
+                    mask.rect[3],
+                ],
+                radii: mask.radii,
+            });
+            ReservedShaderUniforms {
+                layer_pixel_rect: item.layer_pixel_rect,
+                source_region: item.source_region,
+                mask,
+                logical_size: None,
+                alpha: item.alpha,
+            }
+            .write(&mut padded);
             let uniform_bind_group = recorder.upload_uniform(
                 UploadAllocatorId::EffectUniform,
                 effect_uniform_spec(),
@@ -1620,11 +1333,6 @@ impl EffectRenderer {
                 device,
                 &self.effect_texture_bind_group_layout,
                 &self.effect_linear_sampler,
-            );
-            self.note_composite_fill(
-                item.scissor,
-                Some(item.dest_viewport),
-                (item.source.width, item.source.height),
             );
             prepared.push(PreparedShaderDraw {
                 shader: item.shader,
@@ -1643,7 +1351,6 @@ impl EffectRenderer {
         pass: &mut wgpu::RenderPass<'_>,
         viewport: (u32, u32),
         draw: &PreparedShaderDraw<'_>,
-        pass_depth: bool,
     ) {
         let pipeline = self
             .shader_cache
@@ -1654,7 +1361,6 @@ impl EffectRenderer {
                 &self.effect_texture_bind_group_layout,
                 &self.effect_uniform_bind_group_layout,
                 RuntimeShaderPipelineMode::PremultipliedSrcOver,
-                pass_depth,
             )
             .expect("shader batch pipeline was prevalidated");
         pass.set_pipeline(pipeline);
@@ -1662,11 +1368,10 @@ impl EffectRenderer {
         pass.set_bind_group(1, &draw.uniform_bind_group, &[]);
         let (x, y, width, height) = draw.dest_viewport;
         pass.set_viewport(x, y, width, height, 0.0, 1.0);
-        if let Some((x, y, width, height)) = draw.scissor {
-            pass.set_scissor_rect(x, y, width, height);
-        } else {
-            pass.set_scissor_rect(0, 0, viewport.0, viewport.1);
-        }
+        let scissor = draw.scissor.unwrap_or((0, 0, viewport.0, viewport.1));
+        pass.set_scissor_rect(scissor.0, scissor.1, scissor.2, scissor.3);
+        self.debug_shader_pixels
+            .set(self.debug_shader_pixels.get() + shaded_pixels((x, y, width, height), scissor));
         pass.draw(0..4, 0..1);
         pass.set_viewport(0.0, 0.0, viewport.0 as f32, viewport.1 as f32, 0.0, 1.0);
         pass.set_scissor_rect(0, 0, viewport.0, viewport.1);
@@ -1684,15 +1389,14 @@ impl EffectRenderer {
         options: ShaderPassOptions,
     ) -> bool {
         let mut padded = shader.uniforms_padded();
-        let slot = RuntimeShader::RESERVED_UNIFORM_START;
-        padded[slot] = layer_pixel_rect[0];
-        padded[slot + 1] = layer_pixel_rect[1];
-        padded[slot + 2] = layer_pixel_rect[2];
-        padded[slot + 3] = layer_pixel_rect[3];
-        if let Some((logical_width, logical_height)) = options.source_logical_size {
-            padded[slot + 4] = logical_width;
-            padded[slot + 5] = logical_height;
+        ReservedShaderUniforms {
+            layer_pixel_rect,
+            source_region: None,
+            mask: None,
+            logical_size: options.source_logical_size,
+            alpha: 1.0,
         }
+        .write(&mut padded);
         let uniform_bind_group = recorder.upload_uniform(
             UploadAllocatorId::EffectUniform,
             effect_uniform_spec(),
@@ -1711,23 +1415,10 @@ impl EffectRenderer {
                 &self.effect_texture_bind_group_layout,
                 &self.effect_uniform_bind_group_layout,
                 options.pipeline_mode,
-                false,
             )
             .is_none()
         {
             return false;
-        }
-        match options.pipeline_mode {
-            RuntimeShaderPipelineMode::Replace => self.note_offscreen_fill(
-                options.scissor,
-                options.dest_viewport,
-                (source.width, source.height),
-            ),
-            RuntimeShaderPipelineMode::PremultipliedSrcOver => self.note_composite_fill(
-                options.scissor,
-                options.dest_viewport,
-                (source.width, source.height),
-            ),
         }
         let Some(pipeline) = self.shader_cache.get_or_create(
             device,
@@ -1736,7 +1427,6 @@ impl EffectRenderer {
             &self.effect_texture_bind_group_layout,
             &self.effect_uniform_bind_group_layout,
             options.pipeline_mode,
-            false,
         ) else {
             return false;
         };
@@ -1890,11 +1580,7 @@ impl EffectRenderer {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn composite_pass_uniforms(
-        source: &OffscreenTarget,
-        options: CompositePassOptions,
-    ) -> BlitUniforms {
+    fn composite_pass_uniforms(options: CompositePassOptions) -> BlitUniforms {
         let (mask_rect, mask_radii, mask_enabled) = if let Some(mask) = options.rounded_mask {
             (mask.rect, mask.radii, [1.0, 0.0, 0.0, 0.0])
         } else {
@@ -1906,30 +1592,17 @@ impl EffectRenderer {
         };
         let dest_viewport_uniform = options.dest_viewport.unwrap_or((0.0, 0.0, 0.0, 0.0));
         let source_viewport_uniform = options.source_viewport.unwrap_or((0.0, 0.0, 0.0, 0.0));
-        let source_span = options
-            .source_viewport
-            .filter(|(_, _, width, height)| *width > 0.0 && *height > 0.0)
-            .map(|(_, _, width, height)| (width, height))
-            .unwrap_or((source.width as f32, source.height as f32));
-        let resolve_span = options
-            .dest_viewport
-            .filter(|(_, _, width, height)| *width > 0.0 && *height > 0.0)
-            .map(|(_, _, width, height)| (source_span.0 / width, source_span.1 / height))
-            .unwrap_or((0.0, 0.0));
-        let sample_mode = resolve_composite_sample_mode(
-            options.sample_mode,
-            viewport_blit_is_integer_unit_mapping(
-                options.dest_viewport,
-                options.source_viewport,
-                (source.width as f32, source.height as f32),
-            ),
-        );
         BlitUniforms {
             alpha: [options.alpha.clamp(0.0, 1.0), 0.0, 0.0, 0.0],
             mask_rect,
             mask_radii,
             mask_enabled,
-            sampling: [composite_sampling_mode_value(sample_mode), 0.0, 0.0, 0.0],
+            sampling: [
+                composite_sampling_mode_value(options.sample_mode),
+                0.0,
+                0.0,
+                0.0,
+            ],
             dest_viewport: [
                 dest_viewport_uniform.0,
                 dest_viewport_uniform.1,
@@ -1942,7 +1615,6 @@ impl EffectRenderer {
                 source_viewport_uniform.2,
                 source_viewport_uniform.3,
             ],
-            resolve_span: [resolve_span.0, resolve_span.1, 0.0, 0.0],
         }
     }
 
@@ -1955,8 +1627,8 @@ impl EffectRenderer {
         dest_view: &wgpu::TextureView,
         options: CompositePassOptions,
     ) {
-        let uniforms = Self::composite_pass_uniforms(source, options);
-        let sampler = self.sampler_for_mode(options.sample_mode);
+        let uniforms = Self::composite_pass_uniforms(options);
+        let sampler = &self.effect_linear_sampler;
         let texture_bind_group = source.get_or_create_bind_group(
             device,
             &self.effect_texture_bind_group_layout,
@@ -1969,11 +1641,6 @@ impl EffectRenderer {
             &self.blit_uniform_bind_group_layout,
             bytemuck::bytes_of(&uniforms),
             &self.debug_upload_bytes,
-        );
-        self.note_composite_fill(
-            options.scissor,
-            options.dest_viewport,
-            (source.width, source.height),
         );
 
         let mut pass = recorder.begin_timed_render_pass(&wgpu::RenderPassDescriptor {
@@ -1991,7 +1658,7 @@ impl EffectRenderer {
             ..Default::default()
         });
 
-        pass.set_pipeline(self.blit_pipeline(device, options.blend_mode, false));
+        pass.set_pipeline(self.blit_pipeline(device, options.blend_mode));
         pass.set_bind_group(0, texture_bind_group, &[]);
         pass.set_bind_group(1, &uniform_bind_group, &[]);
         if let Some((x, y, w, h)) = options.scissor {
@@ -2000,52 +1667,16 @@ impl EffectRenderer {
         pass.draw(0..4, 0..1);
     }
 
-    pub(crate) fn encode_composite_batch_to_view_pass<C: FrameCommandRecorder>(
-        &mut self,
-        recorder: &mut C,
-        device: &wgpu::Device,
-        dest_view: &wgpu::TextureView,
-        viewport: (u32, u32),
-        load_op: wgpu::LoadOp<wgpu::Color>,
-        items: &[CompositeBatchItem<'_>],
-    ) {
-        if items.is_empty() {
-            return;
-        }
-
-        let prepared = self.prepare_composite_batch_draws(recorder, device, load_op, items, false);
-
-        let mut pass = recorder.begin_timed_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Batched Blit Composite Pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: dest_view,
-                resolve_target: None,
-                depth_slice: None,
-                ops: wgpu::Operations {
-                    load: load_op,
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            ..Default::default()
-        });
-
-        for draw in &prepared {
-            self.draw_prepared_composite(&mut pass, viewport, draw, false);
-        }
-    }
-
     pub(crate) fn prepare_composite_batch_draws<'a, C: FrameCommandRecorder>(
         &mut self,
         recorder: &mut C,
         device: &wgpu::Device,
         load_op: wgpu::LoadOp<wgpu::Color>,
         items: &[CompositeBatchItem<'a>],
-        pass_depth: bool,
     ) -> Vec<PreparedCompositeDraw<'a>> {
         let mut prepared = Vec::with_capacity(items.len());
         for item in items {
-            self.blit_pipeline(device, item.blend_mode, pass_depth);
+            self.blit_pipeline(device, item.blend_mode);
             let options = CompositePassOptions {
                 alpha: item.alpha,
                 load_op,
@@ -2056,8 +1687,8 @@ impl EffectRenderer {
                 source_viewport: item.source_viewport,
                 sample_mode: item.sample_mode,
             };
-            let uniforms = Self::composite_pass_uniforms(item.source, options);
-            let sampler = self.sampler_for_mode(item.sample_mode);
+            let uniforms = Self::composite_pass_uniforms(options);
+            let sampler = &self.effect_linear_sampler;
             let texture_bind_group = item.source.get_or_create_bind_group(
                 device,
                 &self.effect_texture_bind_group_layout,
@@ -2070,11 +1701,6 @@ impl EffectRenderer {
                 &self.blit_uniform_bind_group_layout,
                 bytemuck::bytes_of(&uniforms),
                 &self.debug_upload_bytes,
-            );
-            self.note_composite_fill(
-                item.scissor,
-                item.dest_viewport,
-                (item.source.width, item.source.height),
             );
             prepared.push(PreparedCompositeDraw {
                 texture_bind_group,
@@ -2091,9 +1717,8 @@ impl EffectRenderer {
         pass: &mut wgpu::RenderPass<'_>,
         viewport: (u32, u32),
         draw: &PreparedCompositeDraw<'_>,
-        pass_depth: bool,
     ) {
-        pass.set_pipeline(self.initialized_blit_pipeline(draw.blend_mode, pass_depth));
+        pass.set_pipeline(self.initialized_blit_pipeline(draw.blend_mode));
         pass.set_bind_group(0, draw.texture_bind_group, &[]);
         pass.set_bind_group(1, &draw.uniform_bind_group, &[]);
         if let Some((x, y, w, h)) = draw.scissor {
@@ -2104,15 +1729,13 @@ impl EffectRenderer {
         pass.draw(0..4, 0..1);
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn prepare_projective_composite_draw<'a, C: FrameCommandRecorder>(
         &mut self,
         recorder: &mut C,
         device: &wgpu::Device,
         item: &ProjectiveCompositeItem<'a>,
-        pass_depth: bool,
     ) -> PreparedProjectiveComposite<'a> {
-        self.projective_blit_pipeline(device, item.blend_mode, pass_depth);
+        self.projective_blit_pipeline(device, item.blend_mode);
         let vertices = [
             ProjectiveBlitVertex {
                 position: item.dest_quad[0],
@@ -2150,16 +1773,13 @@ impl EffectRenderer {
             ],
             alpha: [item.alpha.clamp(0.0, 1.0), 0.0, 0.0, 0.0],
             sampling: [
-                composite_sampling_mode_value(resolve_composite_sample_mode(
-                    item.sample_mode,
-                    inverse_is_integer_unit_translation(item.inverse),
-                )),
+                composite_sampling_mode_value(item.sample_mode),
                 0.0,
                 0.0,
                 0.0,
             ],
         };
-        let sampler = self.sampler_for_mode(item.sample_mode);
+        let sampler = &self.effect_linear_sampler;
         let texture_bind_group = item.source.get_or_create_bind_group(
             device,
             &self.effect_texture_bind_group_layout,
@@ -2180,18 +1800,6 @@ impl EffectRenderer {
             bytemuck::bytes_of(&uniforms),
             &self.debug_upload_bytes,
         );
-        let quad = item.dest_quad;
-        let min_x = quad.iter().map(|p| p[0]).fold(f32::INFINITY, f32::min);
-        let min_y = quad.iter().map(|p| p[1]).fold(f32::INFINITY, f32::min);
-        let max_x = quad.iter().map(|p| p[0]).fold(f32::NEG_INFINITY, f32::max);
-        let max_y = quad.iter().map(|p| p[1]).fold(f32::NEG_INFINITY, f32::max);
-        if min_x.is_finite() && min_y.is_finite() && max_x > min_x && max_y > min_y {
-            self.note_composite_fill(
-                None,
-                Some((min_x, min_y, max_x - min_x, max_y - min_y)),
-                item.viewport,
-            );
-        }
         PreparedProjectiveComposite {
             texture_bind_group,
             uniform_bind_group,
@@ -2200,204 +1808,19 @@ impl EffectRenderer {
         }
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn draw_prepared_projective_composite(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
         viewport: (u32, u32),
         draw: &PreparedProjectiveComposite<'_>,
-        pass_depth: bool,
     ) {
-        pass.set_pipeline(self.initialized_projective_blit_pipeline(draw.blend_mode, pass_depth));
+        pass.set_pipeline(self.initialized_projective_blit_pipeline(draw.blend_mode));
         pass.set_bind_group(0, draw.texture_bind_group, &[]);
         pass.set_bind_group(1, &draw.uniform_bind_group, &[]);
         pass.set_vertex_buffer(0, draw.vertex_buffer.slice(..));
         pass.set_scissor_rect(0, 0, viewport.0, viewport.1);
         pass.draw(0..4, 0..1);
     }
-
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn encode_composite_to_view_scissored_with_alpha_and_mask_and_blend_mode<
-        C: FrameCommandRecorder,
-    >(
-        &mut self,
-        recorder: &mut C,
-        device: &wgpu::Device,
-        source: &OffscreenTarget,
-        dest_view: &wgpu::TextureView,
-        alpha: f32,
-        load_op: wgpu::LoadOp<wgpu::Color>,
-        scissor: Option<(u32, u32, u32, u32)>,
-        rounded_mask: Option<RoundedCompositeMask>,
-        blend_mode: BlendMode,
-        dest_viewport: Option<(f32, f32, f32, f32)>,
-        sample_mode: CompositeSampleMode,
-    ) {
-        self.encode_composite_to_view_pass(
-            recorder,
-            device,
-            source,
-            dest_view,
-            CompositePassOptions {
-                alpha,
-                load_op,
-                scissor,
-                rounded_mask,
-                blend_mode,
-                dest_viewport,
-                source_viewport: None,
-                sample_mode,
-            },
-        );
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn encode_composite_to_view_projective<C: FrameCommandRecorder>(
-        &self,
-        recorder: &mut C,
-        device: &wgpu::Device,
-        source: &OffscreenTarget,
-        dest_view: &wgpu::TextureView,
-        viewport: (u32, u32),
-        source_size: (f32, f32),
-        inverse_matrix: [[f32; 3]; 3],
-        dest_bounds: [[f32; 2]; 4],
-        alpha: f32,
-        load_op: wgpu::LoadOp<wgpu::Color>,
-        scissor: Option<(u32, u32, u32, u32)>,
-        blend_mode: BlendMode,
-        sample_mode: CompositeSampleMode,
-    ) -> bool {
-        let Some((min_x, min_y, max_x, max_y)) = projective_dest_bounds_rect(dest_bounds) else {
-            return false;
-        };
-        self.note_composite_fill(
-            scissor,
-            Some((min_x, min_y, max_x - min_x, max_y - min_y)),
-            viewport,
-        );
-
-        let vertices = [
-            ProjectiveBlitVertex {
-                position: [min_x, min_y],
-            },
-            ProjectiveBlitVertex {
-                position: [max_x, min_y],
-            },
-            ProjectiveBlitVertex {
-                position: [min_x, max_y],
-            },
-            ProjectiveBlitVertex {
-                position: [max_x, max_y],
-            },
-        ];
-        let uniforms = ProjectiveBlitUniforms {
-            viewport: [viewport.0 as f32, viewport.1 as f32],
-            source_size: [source_size.0.max(0.0), source_size.1.max(0.0)],
-            inverse_row0: [
-                inverse_matrix[0][0],
-                inverse_matrix[0][1],
-                inverse_matrix[0][2],
-                0.0,
-            ],
-            inverse_row1: [
-                inverse_matrix[1][0],
-                inverse_matrix[1][1],
-                inverse_matrix[1][2],
-                0.0,
-            ],
-            inverse_row2: [
-                inverse_matrix[2][0],
-                inverse_matrix[2][1],
-                inverse_matrix[2][2],
-                0.0,
-            ],
-            alpha: [alpha.clamp(0.0, 1.0), 0.0, 0.0, 0.0],
-            sampling: [
-                composite_sampling_mode_value(resolve_composite_sample_mode(
-                    sample_mode,
-                    inverse_is_integer_unit_translation(inverse_matrix),
-                )),
-                0.0,
-                0.0,
-                0.0,
-            ],
-        };
-
-        let sampler = self.sampler_for_mode(sample_mode);
-        let texture_bind_group = source.get_or_create_bind_group(
-            device,
-            &self.effect_texture_bind_group_layout,
-            sampler,
-        );
-        let vertex_buffer = recorder.upload_vertex(
-            UploadAllocatorId::ProjectiveBlitVertex,
-            projective_blit_vertex_spec(),
-            device,
-            bytemuck::cast_slice(&vertices),
-            &self.debug_upload_bytes,
-        );
-        let uniform_bind_group = recorder.upload_uniform(
-            UploadAllocatorId::ProjectiveBlitUniform,
-            projective_blit_uniform_spec(),
-            device,
-            &self.blit_uniform_bind_group_layout,
-            bytemuck::bytes_of(&uniforms),
-            &self.debug_upload_bytes,
-        );
-        let mut pass = recorder.begin_timed_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Projective Blit Pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: dest_view,
-                resolve_target: None,
-                depth_slice: None,
-                ops: wgpu::Operations {
-                    load: load_op,
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            ..Default::default()
-        });
-        pass.set_pipeline(self.projective_blit_pipeline(device, blend_mode, false));
-        pass.set_bind_group(0, texture_bind_group, &[]);
-        pass.set_bind_group(1, &uniform_bind_group, &[]);
-        pass.set_vertex_buffer(0, vertex_buffer.slice(..));
-        if let Some((x, y, w, h)) = scissor {
-            pass.set_scissor_rect(x, y, w, h);
-        }
-        pass.draw(0..4, 0..1);
-        true
-    }
-}
-
-pub(crate) fn projective_dest_bounds_rect(
-    dest_bounds: [[f32; 2]; 4],
-) -> Option<(f32, f32, f32, f32)> {
-    let min_x = dest_bounds
-        .iter()
-        .map(|point| point[0])
-        .fold(f32::INFINITY, f32::min);
-    let min_y = dest_bounds
-        .iter()
-        .map(|point| point[1])
-        .fold(f32::INFINITY, f32::min);
-    let max_x = dest_bounds
-        .iter()
-        .map(|point| point[0])
-        .fold(f32::NEG_INFINITY, f32::max);
-    let max_y = dest_bounds
-        .iter()
-        .map(|point| point[1])
-        .fold(f32::NEG_INFINITY, f32::max);
-
-    (min_x.is_finite()
-        && min_y.is_finite()
-        && max_x.is_finite()
-        && max_y.is_finite()
-        && max_x > min_x
-        && max_y > min_y)
-        .then_some((min_x, min_y, max_x, max_y))
 }
 
 fn tile_mode_uniform_value(tile_mode: TileMode) -> f32 {
@@ -2412,189 +1835,17 @@ fn tile_mode_uniform_value(tile_mode: TileMode) -> f32 {
 fn composite_sampling_mode_value(sample_mode: CompositeSampleMode) -> f32 {
     match sample_mode {
         CompositeSampleMode::Linear => 0.0,
-        CompositeSampleMode::Box4 => 1.0,
-        CompositeSampleMode::Nearest => 2.0,
+        CompositeSampleMode::Nearest => 1.0,
     }
-}
-
-fn keep_box4_resolve() -> bool {
-    crate::debug_toggles::debug_toggle("CRANPOSE_KEEP_BOX4").as_deref() == Some("1")
-}
-
-/// Lowers a box resolve to a single texel fetch when the two are the same
-/// bytes: at a unit scale with integer source and destination origins every
-/// destination pixel centre lands on a source texel centre, the box spans
-/// exactly that texel with weight one, and the resolve's 6x6 texel walk
-/// returns it unchanged. `CRANPOSE_KEEP_BOX4` keeps the walk for comparison.
-fn resolve_composite_sample_mode(
-    sample_mode: CompositeSampleMode,
-    integer_unit_mapping: bool,
-) -> CompositeSampleMode {
-    if sample_mode == CompositeSampleMode::Box4 && integer_unit_mapping && !keep_box4_resolve() {
-        CompositeSampleMode::Nearest
-    } else {
-        sample_mode
-    }
-}
-
-fn is_integer(value: f32) -> bool {
-    value.is_finite() && value.fract() == 0.0
-}
-
-/// Whether a viewport blit maps destination pixels onto source texels one to
-/// one with integer origins, so its box resolve is an exact texel fetch.
-fn viewport_blit_is_integer_unit_mapping(
-    dest_viewport: Option<(f32, f32, f32, f32)>,
-    source_viewport: Option<(f32, f32, f32, f32)>,
-    source_size: (f32, f32),
-) -> bool {
-    let Some((dest_x, dest_y, dest_w, dest_h)) = dest_viewport else {
-        return false;
-    };
-    let (source_x, source_y, source_w, source_h) = source_viewport
-        .filter(|(_, _, width, height)| *width > 0.0 && *height > 0.0)
-        .unwrap_or((0.0, 0.0, source_size.0, source_size.1));
-    dest_w > 0.0
-        && dest_h > 0.0
-        && dest_w == source_w
-        && dest_h == source_h
-        && [dest_x, dest_y, source_x, source_y]
-            .iter()
-            .all(|v| is_integer(*v))
-}
-
-/// Whether a projective composite's destination-to-source matrix is a pure
-/// integer translation at unit scale, so its box resolve is an exact texel
-/// fetch.
-fn inverse_is_integer_unit_translation(inverse: [[f32; 3]; 3]) -> bool {
-    inverse[0][0] == 1.0
-        && inverse[0][1] == 0.0
-        && inverse[1][0] == 0.0
-        && inverse[1][1] == 1.0
-        && inverse[2][0] == 0.0
-        && inverse[2][1] == 0.0
-        && inverse[2][2] == 1.0
-        && is_integer(inverse[0][2])
-        && is_integer(inverse[1][2])
 }
 
 #[cfg(test)]
 mod tests {
-    use cranpose_ui_graphics::{RenderEffect, RuntimeShader};
-
-    use super::{
-        BlurUniforms, CompositeSampleMode, direct_tail_intermediate_size,
-        inverse_is_integer_unit_translation, projective_dest_bounds_rect,
-        resolve_composite_sample_mode,
-    };
-
-    fn translation(tx: f32, ty: f32) -> [[f32; 3]; 3] {
-        [[1.0, 0.0, tx], [0.0, 1.0, ty], [0.0, 0.0, 1.0]]
-    }
-
-    #[test]
-    fn integer_unit_translations_lower_box4_to_a_texel_fetch() {
-        assert!(inverse_is_integer_unit_translation(translation(
-            -40.0, 96.0
-        )));
-        assert!(inverse_is_integer_unit_translation(translation(0.0, 0.0)));
-        assert_eq!(
-            resolve_composite_sample_mode(CompositeSampleMode::Box4, true),
-            CompositeSampleMode::Nearest
-        );
-    }
-
-    #[test]
-    fn fractional_scaled_or_rotated_mappings_keep_the_box_resolve() {
-        assert!(!inverse_is_integer_unit_translation(translation(0.5, 0.0)));
-        assert!(!inverse_is_integer_unit_translation(translation(
-            0.0, -12.25
-        )));
-        assert!(!inverse_is_integer_unit_translation([
-            [0.5, 0.0, 0.0],
-            [0.0, 0.5, 0.0],
-            [0.0, 0.0, 1.0]
-        ]));
-        assert!(!inverse_is_integer_unit_translation([
-            [0.0, 1.0, 0.0],
-            [-1.0, 0.0, 0.0],
-            [0.0, 0.0, 1.0]
-        ]));
-        assert!(!inverse_is_integer_unit_translation([
-            [1.0, 0.0, 3.0],
-            [0.0, 1.0, 3.0],
-            [0.001, 0.0, 1.0]
-        ]));
-        assert_eq!(
-            resolve_composite_sample_mode(CompositeSampleMode::Box4, false),
-            CompositeSampleMode::Box4
-        );
-        assert_eq!(
-            resolve_composite_sample_mode(CompositeSampleMode::Linear, true),
-            CompositeSampleMode::Linear
-        );
-    }
-
-    #[test]
-    fn viewport_blits_lower_only_at_unit_scale_with_integer_origins() {
-        use super::viewport_blit_is_integer_unit_mapping;
-        let source = (200.0, 100.0);
-        assert!(viewport_blit_is_integer_unit_mapping(
-            Some((8.0, 16.0, 200.0, 100.0)),
-            None,
-            source
-        ));
-        assert!(viewport_blit_is_integer_unit_mapping(
-            Some((8.0, 16.0, 50.0, 40.0)),
-            Some((10.0, 20.0, 50.0, 40.0)),
-            source
-        ));
-        assert!(!viewport_blit_is_integer_unit_mapping(None, None, source));
-        assert!(!viewport_blit_is_integer_unit_mapping(
-            Some((8.5, 16.0, 200.0, 100.0)),
-            None,
-            source
-        ));
-        assert!(!viewport_blit_is_integer_unit_mapping(
-            Some((8.0, 16.0, 100.0, 50.0)),
-            None,
-            source
-        ));
-        assert!(!viewport_blit_is_integer_unit_mapping(
-            Some((8.0, 16.0, 50.0, 40.0)),
-            Some((10.5, 20.0, 50.0, 40.0)),
-            source
-        ));
-    }
-
-    #[test]
-    fn a_frost_chain_tail_intermediate_shrinks_to_the_blur_scratch() {
-        let frost = RenderEffect::Blur {
-            radius_x: 24.0,
-            radius_y: 24.0,
-            edge_treatment: Default::default(),
-        };
-        assert_eq!(direct_tail_intermediate_size(&frost, 1080, 360), (270, 90));
-
-        let no_frost = RenderEffect::Blur {
-            radius_x: 0.0,
-            radius_y: 0.0,
-            edge_treatment: Default::default(),
-        };
-        assert_eq!(
-            direct_tail_intermediate_size(&no_frost, 1080, 360),
-            (1080, 360)
-        );
-
-        let lens = RenderEffect::Shader {
-            shader: RuntimeShader::new("fn f() {}"),
-        };
-        assert_eq!(direct_tail_intermediate_size(&lens, 1080, 360), (1080, 360));
-    }
+    use super::BlurUniforms;
 
     #[test]
     fn blur_uniforms_use_vec4_packing_for_gl_backends() {
-        assert_eq!(std::mem::size_of::<BlurUniforms>(), 32);
+        assert_eq!(std::mem::size_of::<BlurUniforms>(), 64);
         assert_eq!(std::mem::offset_of!(BlurUniforms, direction_and_radius), 0);
         assert_eq!(
             std::mem::offset_of!(BlurUniforms, texture_size_and_tile_mode),
@@ -2603,32 +1854,6 @@ mod tests {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    #[test]
-    fn effect_pass_fill_prefers_the_viewport_and_clamps_by_the_scissor() {
-        use super::effect_pass_fill_px2;
-        assert_eq!(effect_pass_fill_px2(None, None, (100, 50)), 5000.0);
-        assert_eq!(
-            effect_pass_fill_px2(None, Some((5.0, 5.0, 40.0, 10.0)), (100, 50)),
-            400.0
-        );
-        assert_eq!(
-            effect_pass_fill_px2(Some((0, 0, 30, 30)), None, (100, 50)),
-            900.0
-        );
-        assert_eq!(
-            effect_pass_fill_px2(
-                Some((0, 0, 100, 100)),
-                Some((0.0, 0.0, 20.0, 20.0)),
-                (100, 50)
-            ),
-            400.0
-        );
-        assert_eq!(
-            effect_pass_fill_px2(None, Some((0.0, 0.0, 0.0, 0.0)), (10, 10)),
-            100.0
-        );
-    }
-
     #[test]
     fn a_wide_blur_gets_a_smaller_scratch() {
         use super::blur_scratch_size;
@@ -2661,17 +1886,5 @@ mod tests {
             Some((0, 0, 270, 100))
         );
         assert_eq!(scaled_scissor(None, 4.0, 4.0, 270, 100), None);
-    }
-
-    #[test]
-    fn projective_dest_bounds_reject_degenerate_quads() {
-        assert_eq!(
-            projective_dest_bounds_rect([[2.0, 3.0], [2.0, 3.0], [2.0, 3.0], [2.0, 3.0]]),
-            None
-        );
-        assert_eq!(
-            projective_dest_bounds_rect([[1.0, 2.0], [5.0, 2.0], [1.0, 7.0], [5.0, 7.0]]),
-            Some((1.0, 2.0, 5.0, 7.0))
-        );
     }
 }

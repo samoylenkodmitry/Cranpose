@@ -12,7 +12,6 @@ pub(crate) struct RenderStatsAccumulator {
     pub isolated_layer_pixels: u64,
     pub layer_cache_hits: u64,
     pub layer_cache_misses: u64,
-    pub layer_cache_evictions: u64,
     pub layer_cache_hit_pixels: u64,
     pub layer_cache_miss_pixels: u64,
     pub blur_passes: u64,
@@ -51,9 +50,6 @@ impl RenderStatsAccumulator {
         self.layer_cache_misses = self
             .layer_cache_misses
             .saturating_add(stats.layer_cache_misses as u64);
-        self.layer_cache_evictions = self
-            .layer_cache_evictions
-            .saturating_add(stats.layer_cache_evictions as u64);
         self.layer_cache_hit_pixels = self
             .layer_cache_hit_pixels
             .saturating_add(stats.layer_cache_hit_pixels);
@@ -92,7 +88,7 @@ impl RenderStatsAccumulator {
 
 pub(crate) fn print_render_summary(scenario: &str, stats: RenderStatsAccumulator) {
     println!(
-        "PERF_RENDER_SUMMARY scenario={} samples={} avg_submits={} avg_offscreen_acquires={} avg_offscreen_bytes={} avg_upload_bytes={} max_upload_bytes={} avg_isolated_layers={} avg_isolated_pixels={} max_isolated_pixels={} cache_hits={} cache_misses={} cache_hit_rate_pct={:.2} cache_evictions={} avg_blur_passes={} avg_composite_passes={} avg_effect_applies={} avg_shape_passes={} avg_image_passes={} avg_text_passes={}",
+        "PERF_RENDER_SUMMARY scenario={} samples={} avg_submits={} avg_offscreen_acquires={} avg_offscreen_bytes={} avg_upload_bytes={} max_upload_bytes={} avg_isolated_layers={} avg_isolated_pixels={} max_isolated_pixels={} cache_hits={} cache_misses={} cache_hit_rate_pct={:.2} avg_blur_passes={} avg_composite_passes={} avg_effect_applies={} avg_shape_passes={} avg_image_passes={} avg_text_passes={}",
         scenario,
         stats.samples,
         stats.average_u64(stats.submits),
@@ -106,7 +102,6 @@ pub(crate) fn print_render_summary(scenario: &str, stats: RenderStatsAccumulator
         stats.layer_cache_hits,
         stats.layer_cache_misses,
         stats.cache_hit_rate_pct(),
-        stats.layer_cache_evictions,
         stats.average_u64(stats.blur_passes),
         stats.average_u64(stats.composite_passes),
         stats.average_u64(stats.effect_applies),

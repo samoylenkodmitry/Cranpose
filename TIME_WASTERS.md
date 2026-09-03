@@ -648,3 +648,65 @@ because that file is only compiled for the Android target; the first thing
 that caught it was the phone APK build six seconds in. When you add a row,
 bump the length in the same edit and build the APK before pushing: the
 "Android release build" CI job is the only gate that compiles it.
+
+## A pixel test's failure numbers name the mechanism it expects
+
+`translated_text_wrapper_preserves_local_picture...` failed with 241
+differing pixels against a bound of 240 and a max channel sum of 267 after
+the renderer's direct path drew the text raster at the same device position
+in both frames. That pair of numbers is a snapped raster read back through a
+bilinear sample at a 0.35 px phase: 267 = 3 x 89 = 3 x 0.35 x 255. The test
+was not asserting rigid motion, it was asserting the supersampled "motion
+stable capture" surface the old planner composited at fractional offsets.
+Before chasing a raster bug, decode the reported diff against the sampling
+the assertion applies; when it reproduces a resample of a correct raster the
+test encodes a removed mechanism and needs a new contract, not a fix.
+
+## Deleting a test by `rfind("#[test]")` walks into the previous module
+
+A script that removed tests by searching backwards for the nearest `#[test]`
+from a matched string deleted the `FinishedRecording` struct and half of
+`DrawScopeDefault` in `geometry.rs`: the match was in a doc comment above
+the item, so the search jumped into an earlier test module. Bound the search
+to the `#[cfg(test)] mod tests` slice and end an item at the first `\n}\n`
+at column zero, never by counting braces through string literals, and keep
+a pristine copy of the file (`git show HEAD:<path>`) to rebuild from.
+
+## Pass count, not fill, is the frame cost on every tiler you ship to
+
+The resolve-then-compose renderer halved the showcase's pass pixels and
+still fell from 24 to 14 fps on the Mate 20 X: 65 small passes against 30.
+Metal on the Mac charges the same shape of cost — the pass-timing report
+showed ~0.5 ms for a 40x40 blur pass — so the Mac build is the instrument:
+`CRANPOSE_GPU_PASS_TIMING=1 CRANPOSE_GPU_STATS=1 ./cranpose-showcase` prints
+a per-label pass inventory (`[GPU-PASS] Shader Effect Pass 14ms x30 | ...`)
+that the phone cannot (no timestamp queries, and its logcat drops the
+`[GPU f#]` lines under scroll). Read that inventory before touching a
+shader: the fix was batching captures and blurs into atlas passes and
+drawing shader tails in the final pass, which no ALU work would have found.
+
+## Attributing Mali frame time without GPU timestamps (2026-09-03)
+
+The Mate 20 X exposes no timestamp queries, and reading the Mac pass
+inventory for it misleads twice: Metal's per-pass "occupancy" sums pass
+durations that overlap (the `span` is the real GPU time), and a pass that
+is cheap on Apple silicon (an atlas-sized blur pair, a re-shaded glass
+inside a capture) is bandwidth or ALU on Mali. What worked, in one APK
+build: a temporary `CRANPOSE_ABLATE` toggle mapped to
+`debug.cranpose.ablate`, read in frame.rs and draw_pass.rs, that drops one
+thing per run (all backdrops, the blur pair, the capture draws, the shapes
+or blits or shader composites inside captures, the shader-only children),
+then `setprop` per variant and the frame telemetry's present p50. The
+differences add up to the frame, so one build answers every "what does X
+cost" question; three separate hypothesis builds before it answered none.
+Take the toggle out before committing: it is a debug branch in the hot path.
+
+## A rule that helps one path can hurt the other (2026-09-03)
+
+The tail-recapture rule (a shader tail read by more than half its area
+resolves into a texture) was written for shader-only children, where the
+alternative is a two-pass surface. Applied to backdrop glasses it dropped
+them out of the atlas into per-glass capture and effect passes, and the
+Mac inventory grew four unbatched captures per frame. Any rule that decides
+between "stay batched" and "resolve alone" must be measured on both kinds
+of item before it ships.

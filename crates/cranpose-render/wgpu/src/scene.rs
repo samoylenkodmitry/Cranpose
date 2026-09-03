@@ -11,10 +11,6 @@ use cranpose_ui_graphics::{
     RenderEffect, RoundedCornerShape, Stroke,
 };
 
-use crate::{
-    surface_executor::backend::LayerSurfaceRoundedClip, surface_requirements::SurfaceRequirementSet,
-};
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct SnapAnchor {
     pub origin: Point,
@@ -28,24 +24,6 @@ impl SnapAnchor {
             device_pixel_step: 1.0,
         }
     }
-}
-
-#[derive(Clone, Copy)]
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) struct ColorPatch {
-    pub slot: u32,
-    pub shape_index: u32,
-    pub color: [f32; 4],
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) struct PendingFeedCapture {
-    pub key: (cranpose_render_common::graph::DrawCommandId, u32),
-    pub shape_start: usize,
-    pub shape_count: usize,
-    pub fingerprint: u64,
-    pub capture_clip: Option<Rect>,
-    pub frame: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -66,13 +44,6 @@ pub(crate) fn intern_brush_into(table: &mut Vec<Brush>, brush: ResolvedBrush) ->
 }
 
 impl SceneBrush {
-    pub fn resolve<'a>(&self, brushes: &'a [Brush]) -> std::borrow::Cow<'a, Brush> {
-        match *self {
-            SceneBrush::Solid(color) => std::borrow::Cow::Owned(Brush::Solid(color)),
-            SceneBrush::Gradient(index) => std::borrow::Cow::Borrowed(&brushes[index as usize]),
-        }
-    }
-
     pub fn render_hash(&self, brushes: &[Brush]) -> u64 {
         use cranpose_ui_graphics::RenderHash as _;
         match *self {
@@ -92,17 +63,8 @@ pub(crate) struct DrawShape {
     pub shape: Option<RoundedCornerShape>,
     pub stroke: Option<Stroke>,
     pub arc: Option<ArcGeometry>,
-    pub z_index: usize,
     pub clip: Option<Rect>,
     pub blend_mode: BlendMode,
-    pub motion_context_animated: bool,
-}
-
-impl DrawShape {
-    #[cfg(test)]
-    pub fn has_stroke_or_arc(&self) -> bool {
-        self.stroke.is_some() || self.arc.is_some()
-    }
 }
 
 #[derive(Clone)]
@@ -110,14 +72,12 @@ pub(crate) struct TextDraw {
     pub node_id: NodeId,
     pub rect: Rect,
     pub snap_anchor: Option<SnapAnchor>,
-    pub translated_content_context: bool,
     pub text: std::sync::Arc<cranpose_ui::text::RenderString>,
     pub color: Color,
     pub text_style: TextStyle,
     pub font_size: f32,
     pub scale: f32,
     pub layout_options: TextLayoutOptions,
-    pub z_index: usize,
     pub clip: Option<Rect>,
 }
 
@@ -182,60 +142,12 @@ pub(crate) struct ImageDraw {
     pub motion_context_animated: bool,
 }
 
-#[repr(C)]
-#[derive(Copy, Clone, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
-pub(crate) struct SimilarityTransform {
-    pub(crate) center: [f32; 2],
-    pub(crate) rot: [f32; 2],
-    pub(crate) scale: f32,
-    paint_select: f32,
-    _pad: [f32; 2],
-}
-
-impl SimilarityTransform {
-    pub(crate) const IDENTITY: Self = Self {
-        center: [0.0, 0.0],
-        rot: [1.0, 0.0],
-        scale: 1.0,
-        paint_select: 0.0,
-        _pad: [0.0; 2],
-    };
-
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn new(center: [f32; 2], angle: f32, scale: f32) -> Self {
-        Self {
-            center,
-            rot: [angle.cos(), angle.sin()],
-            scale,
-            paint_select: 0.0,
-            _pad: [0.0; 2],
-        }
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn with_retained_paint(mut self) -> Self {
-        self.paint_select = 1.0;
-        self
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct RetainedDraw {
-    pub slot: u32,
-    pub transform: SimilarityTransform,
-    pub bounds: Rect,
-    pub first_shape: u32,
-    pub shape_count: u32,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum DrawOpKind {
     Shape(usize),
     Image(usize),
     Text(usize),
     Shadow(usize),
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
-    Retained(usize),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -252,7 +164,7 @@ pub(crate) struct ShadowDraw {
     pub texts: Vec<TextDraw>,
     pub blur_radius: f32,
     pub clip: Option<Rect>,
-    pub rounded_clip: Option<LayerSurfaceRoundedClip>,
+    pub rounded_clip: Option<LayerRoundedClip>,
     pub occluder: Option<Rect>,
     pub z_index: usize,
 }
@@ -267,14 +179,21 @@ pub(crate) struct EffectLayer {
     pub composite_alpha: f32,
     pub z_start: usize,
     pub z_end: usize,
-    pub requirements: SurfaceRequirementSet,
+}
+
+/// A rounded clip in a scene's logical space, applied as a mask when the
+/// clipped content is composited from a texture.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct LayerRoundedClip {
+    pub(crate) rect: Rect,
+    pub(crate) radii: [f32; 4],
 }
 
 #[derive(Clone)]
 pub(crate) struct BackdropLayer {
-    pub node_id: Option<NodeId>,
     pub rect: Rect,
     pub clip: Option<Rect>,
+    pub rounded_clip: Option<LayerRoundedClip>,
     pub snap_anchor: Option<SnapAnchor>,
     pub effect: RenderEffect,
     pub z_index: usize,
@@ -289,11 +208,10 @@ pub(crate) struct CompositorScene {
     pub draw_ops: Vec<DrawOp>,
     pub effect_layers: Vec<EffectLayer>,
     pub backdrop_layers: Vec<BackdropLayer>,
-    pub retained_draws: Vec<RetainedDraw>,
     pub next_z: usize,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct SceneCapacityHint {
     pub shapes: usize,
     pub images: usize,
@@ -362,7 +280,6 @@ impl CompositorScene {
                 draw_ops: buffers.draw_ops,
                 effect_layers: buffers.effect_layers,
                 backdrop_layers: buffers.backdrop_layers,
-                retained_draws: Vec::new(),
                 next_z: 0,
             };
         }
@@ -375,7 +292,6 @@ impl CompositorScene {
             draw_ops: Vec::with_capacity(hint.draw_ops),
             effect_layers: Vec::with_capacity(hint.effect_layers),
             backdrop_layers: Vec::with_capacity(hint.backdrop_layers),
-            retained_draws: Vec::new(),
             next_z: 0,
         }
     }
@@ -401,36 +317,7 @@ impl CompositorScene {
         self.draw_ops.clear();
         self.effect_layers.clear();
         self.backdrop_layers.clear();
-        self.retained_draws.clear();
         self.next_z = 0;
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn push_retained_draw(&mut self, draw: RetainedDraw) {
-        if std::env::var_os("CRANPOSE_RETAINED_DIAG").is_some() {
-            eprintln!(
-                "[retained] slot={} first={} count={} center=({:.6},{:.6}) rot=({:.9},{:.9}) scale={:.9} bounds=({:.4},{:.4},{:.4},{:.4})",
-                draw.slot,
-                draw.first_shape,
-                draw.shape_count,
-                draw.transform.center[0],
-                draw.transform.center[1],
-                draw.transform.rot[0],
-                draw.transform.rot[1],
-                draw.transform.scale,
-                draw.bounds.x,
-                draw.bounds.y,
-                draw.bounds.width,
-                draw.bounds.height,
-            );
-        }
-        let z_index = self.next_z;
-        self.next_z += 1;
-        self.retained_draws.push(draw);
-        self.draw_ops.push(DrawOp {
-            z_index,
-            kind: DrawOpKind::Retained(self.retained_draws.len() - 1),
-        });
     }
 
     pub fn intern_brush(&mut self, brush: ResolvedBrush) -> SceneBrush {
@@ -453,7 +340,6 @@ impl CompositorScene {
             shape,
             clip,
             blend_mode,
-            false,
         );
     }
 
@@ -467,7 +353,6 @@ impl CompositorScene {
         shape: Option<RoundedCornerShape>,
         clip: Option<Rect>,
         blend_mode: BlendMode,
-        motion_context_animated: bool,
     ) {
         self.push_shape_with_stroke_and_arc(
             rect,
@@ -479,7 +364,6 @@ impl CompositorScene {
             None,
             clip,
             blend_mode,
-            motion_context_animated,
         );
     }
 
@@ -495,7 +379,6 @@ impl CompositorScene {
         arc: Option<ArcGeometry>,
         clip: Option<Rect>,
         blend_mode: BlendMode,
-        motion_context_animated: bool,
     ) {
         let brush = self.intern_brush(brush);
         let z_index = self.next_z;
@@ -510,10 +393,8 @@ impl CompositorScene {
             shape,
             stroke,
             arc,
-            z_index,
             clip,
             blend_mode,
-            motion_context_animated,
         });
         self.draw_ops.push(DrawOp {
             z_index,
@@ -580,14 +461,12 @@ impl CompositorScene {
             node_id,
             rect,
             snap_anchor: None,
-            translated_content_context: false,
             text: render_string_for(&text),
             color,
             text_style,
             font_size,
             scale,
             layout_options,
-            z_index,
             clip,
         });
         self.draw_ops.push(DrawOp {
@@ -609,31 +488,6 @@ impl CompositorScene {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn push_effect_layer_with_requirements(
-        &mut self,
-        rect: Rect,
-        clip: Option<Rect>,
-        effect: Option<RenderEffect>,
-        blend_mode: BlendMode,
-        composite_alpha: f32,
-        z_start: usize,
-        z_end: usize,
-        requirements: SurfaceRequirementSet,
-    ) {
-        self.effect_layers.push(EffectLayer {
-            rect,
-            clip,
-            snap_anchor: None,
-            effect,
-            blend_mode,
-            composite_alpha,
-            z_start,
-            z_end,
-            requirements,
-        });
-    }
-
-    #[allow(clippy::too_many_arguments)]
     pub fn push_effect_layer(
         &mut self,
         rect: Rect,
@@ -644,23 +498,22 @@ impl CompositorScene {
         z_start: usize,
         z_end: usize,
     ) {
-        let requirements = effect
-            .as_ref()
-            .map(|_| {
-                SurfaceRequirementSet::default()
-                    .with(crate::surface_requirements::SurfaceRequirement::RenderEffect)
-            })
-            .unwrap_or_default();
-        self.push_effect_layer_with_requirements(
+        self.effect_layers.push(EffectLayer {
             rect,
             clip,
+            snap_anchor: None,
             effect,
             blend_mode,
             composite_alpha,
             z_start,
             z_end,
-            requirements,
-        );
+        });
+    }
+
+    pub fn push_backdrop_layer(&mut self, mut layer: BackdropLayer) {
+        layer.z_index = self.next_z;
+        self.next_z += 1;
+        self.backdrop_layers.push(layer);
     }
 }
 

@@ -13,7 +13,6 @@ fn blit_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     }
     let dest_pos = input.position.xy;
     var source_pos = source_origin + input.uv * source_size;
-    var resolve_span = blit.resolve_span.xy;
     if use_dest_viewport {
         let viewport_max = blit.dest_viewport.xy + blit.dest_viewport.zw;
         if dest_pos.x < blit.dest_viewport.x || dest_pos.y < blit.dest_viewport.y ||
@@ -27,7 +26,7 @@ fn blit_fs(input: VertexOutput) -> @location(0) vec4<f32> {
         );
     }
     let sampled =
-        composite_sample(source_pos, tex_size, blit.sampling.x, resolve_span) * blit.alpha.x;
+        composite_sample(source_pos, tex_size, blit.sampling.x) * blit.alpha.x;
     if (blit.mask_enabled.x <= 0.5) {
         return sampled;
     }

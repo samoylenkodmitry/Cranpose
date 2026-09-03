@@ -21,6 +21,66 @@ fn get_float(index: u32) -> f32 {
     return u[index / 4u][index % 4u];
 }
 
+fn get_vec4(index: u32) -> vec4<f32> {
+    return u[index / 4u];
+}
+
+// Renderer-reserved slots 236..240: the region of the input texture this
+// effect reads (x, y, width, height in texels), zero when the input is the
+// whole texture.
+fn region_extent() -> vec4<f32> {
+    let region = get_vec4(236u);
+    let dims = vec2<f32>(textureDimensions(input_texture));
+    if region.z > 0.5 && region.w > 0.5 {
+        return region;
+    }
+    return vec4<f32>(0.0, 0.0, dims.x, dims.y);
+}
+
+// The region as a map from region-local uv to texture uv, computed once
+// per fragment so no tap pays for a texture query or a uniform fetch.
+struct RegionMap {
+    offset: vec2<f32>,
+    scale: vec2<f32>,
+}
+
+fn region_map() -> RegionMap {
+    let region = region_extent();
+    let dims = max(vec2<f32>(textureDimensions(input_texture)), vec2<f32>(1.0));
+    return RegionMap(region.xy / dims, region.zw / dims);
+}
+
+fn map_uv(map: RegionMap, local_uv: vec2<f32>) -> vec2<f32> {
+    return map.offset + clamp(local_uv, vec2<f32>(0.0), vec2<f32>(1.0)) * map.scale;
+}
+
+fn sd_round_rect(p: vec2<f32>, half_size: vec2<f32>, radius: f32) -> f32 {
+    let q = abs(p) - half_size + vec2<f32>(radius);
+    return length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0) - radius;
+}
+
+// Renderer-reserved slots 240..248: the composite's rounded clip in region
+// pixels (rect, then the four corner radii), zero when unclipped; slot 254:
+// the composite alpha.
+fn composite_coverage(local_uv: vec2<f32>) -> f32 {
+    let mask_rect = get_vec4(240u);
+    if mask_rect.z <= 0.5 || mask_rect.w <= 0.5 {
+        return 1.0;
+    }
+    let radii = get_vec4(244u);
+    let p = local_uv * region_extent().zw;
+    let half_size = mask_rect.zw * 0.5;
+    let center = mask_rect.xy + half_size;
+    let local = p - center;
+    let radius = select(
+        select(radii.x, radii.y, local.x > 0.0),
+        select(radii.z, radii.w, local.x > 0.0),
+        local.y > 0.0,
+    );
+    let d = sd_round_rect(local, half_size, radius);
+    return 1.0 - smoothstep(-0.5, 0.5, d);
+}
+
 const POISSON_OFFSETS: array<vec2<f32>, 36> = array<vec2<f32>, 36>(
     vec2<f32>(0.117851, 0.000000),
     vec2<f32>(-0.150515, 0.137884),
@@ -62,7 +122,12 @@ const POISSON_OFFSETS: array<vec2<f32>, 36> = array<vec2<f32>, 36>(
 
 @fragment
 fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
-    let texture_size = vec2<f32>(textureDimensions(input_texture));
+    return blur_fs(input) * composite_coverage(input.uv) * get_float(254u);
+}
+
+fn blur_fs(input: VertexOutput) -> vec4<f32> {
+    let map = region_map();
+    let texture_size = region_extent().zw;
     let effect_rect = vec4<f32>(
         get_float(248u), get_float(249u), get_float(250u), get_float(251u)
     );
@@ -86,14 +151,14 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let progress = smoothstep(0.0, 1.0, axis);
     let radius_px = mix(get_float(0u), get_float(1u), progress);
     if radius_px < 0.25 {
-        return textureSample(input_texture, input_sampler, input.uv);
+        return textureSample(input_texture, input_sampler, map_uv(map, input.uv));
     }
 
     // A stable Vogel-disk kernel avoids the separated echo copies produced by
     // a sparse Cartesian grid at large radii. Radial weights approximate a
     // Gaussian while 37 taps keep the full-screen-bar pass mobile-friendly.
     let texel = vec2<f32>(radius_px) / max(texture_size, vec2<f32>(1.0));
-    var color = textureSample(input_texture, input_sampler, input.uv) * 1.5;
+    var color = textureSample(input_texture, input_sampler, map_uv(map, input.uv)) * 1.5;
     var total_weight = 1.5;
     for (var i: u32 = 0u; i < 36u; i = i + 1u) {
         let offset = POISSON_OFFSETS[i];
@@ -104,7 +169,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
             vec2<f32>(0.0),
             vec2<f32>(1.0)
         );
-        color = color + textureSample(input_texture, input_sampler, sample_uv) * weight;
+        color = color + textureSample(input_texture, input_sampler, map_uv(map, sample_uv)) * weight;
         total_weight = total_weight + weight;
     }
     return color / max(total_weight, 0.00001);

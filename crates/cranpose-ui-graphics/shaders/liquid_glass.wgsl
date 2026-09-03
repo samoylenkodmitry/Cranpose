@@ -27,6 +27,38 @@ fn get_vec2(index: u32) -> vec2<f32> {
     return vec2<f32>(get_float(index), get_float(index + 1u));
 }
 
+// Renderer-reserved slots 236..240: the region of the input texture this
+// effect reads (x, y, width, height in texels), zero when the input is the
+// whole texture. Every sample goes through `region_uv`, so a region packed
+// beside other effects' inputs reads only its own texels and clamps at its
+// own edges exactly as a dedicated texture would.
+fn region_extent() -> vec4<f32> {
+    let region = get_vec4(236u);
+    let dims = vec2<f32>(textureDimensions(input_texture));
+    if region.z > 0.5 && region.w > 0.5 {
+        return region;
+    }
+    return vec4<f32>(0.0, 0.0, dims.x, dims.y);
+}
+
+// The region as a map from region-local uv to texture uv, computed once
+// per fragment and threaded through the sampling helpers so no tap pays for
+// a texture query or a uniform fetch.
+struct RegionMap {
+    offset: vec2<f32>,
+    scale: vec2<f32>,
+}
+
+fn region_map() -> RegionMap {
+    let region = region_extent();
+    let dims = max(vec2<f32>(textureDimensions(input_texture)), vec2<f32>(1.0));
+    return RegionMap(region.xy / dims, region.zw / dims);
+}
+
+fn map_uv(map: RegionMap, local_uv: vec2<f32>) -> vec2<f32> {
+    return map.offset + clamp(local_uv, vec2<f32>(0.0), vec2<f32>(1.0)) * map.scale;
+}
+
 fn get_vec4(index: u32) -> vec4<f32> {
     return vec4<f32>(get_float(index), get_float(index + 1u), get_float(index + 2u), get_float(index + 3u));
 }
@@ -184,7 +216,7 @@ fn catmull_rom_weight(distance: f32) -> f32 {
 // magnifies it. Catmull-Rom reconstructs the sharp source path from the same
 // backdrop texture; intentionally blurred glass continues through the 9x9
 // wcKSRD footprint below.
-fn sample_wcksrd_sharp_path(uv: vec2<f32>, tex_size: vec2<f32>) -> vec4<f32> {
+fn sample_wcksrd_sharp_path(map: RegionMap, uv: vec2<f32>, tex_size: vec2<f32>) -> vec4<f32> {
     let sample_position = uv * tex_size - vec2<f32>(0.5);
     let base = floor(sample_position);
     let fraction = sample_position - base;
@@ -199,7 +231,7 @@ fn sample_wcksrd_sharp_path(uv: vec2<f32>, tex_size: vec2<f32>) -> vec4<f32> {
                 vec2<f32>(1.0),
             );
             reconstructed = reconstructed
-                + textureSampleLevel(input_texture, input_sampler, sample_uv, 0.0)
+                + textureSampleLevel(input_texture, input_sampler, map_uv(map, sample_uv), 0.0)
                     * weight_x
                     * weight_y;
         }
@@ -208,6 +240,7 @@ fn sample_wcksrd_sharp_path(uv: vec2<f32>, tex_size: vec2<f32>) -> vec4<f32> {
 }
 
 fn sample_wcksrd_path(
+    map: RegionMap,
     uv: vec2<f32>,
     tex_size: vec2<f32>,
     base_displacement: vec2<f32>,
@@ -221,9 +254,9 @@ fn sample_wcksrd_path(
     );
     if blur_radius <= 0.0 {
         if reconstruct_sharp {
-            return sample_wcksrd_sharp_path(center_uv, tex_size);
+            return sample_wcksrd_sharp_path(map, center_uv, tex_size);
         }
-        return textureSampleLevel(input_texture, input_sampler, center_uv, 0.0);
+        return textureSampleLevel(input_texture, input_sampler, map_uv(map, center_uv), 0.0);
     }
     if reconstruct_sharp {
         // Loupe rims soften per pixel up to ~4.5px, wide enough that a
@@ -237,7 +270,7 @@ fn sample_wcksrd_path(
                 accumulated = accumulated + textureSampleLevel(
                     input_texture,
                     input_sampler,
-                    clamp(center_uv + offset, vec2<f32>(0.0), vec2<f32>(1.0)),
+                    map_uv(map, clamp(center_uv + offset, vec2<f32>(0.0), vec2<f32>(1.0))),
                     0.0,
                 );
             }
@@ -256,7 +289,7 @@ fn sample_wcksrd_path(
             accumulated = accumulated + textureSampleLevel(
                 input_texture,
                 input_sampler,
-                clamp(center_uv + offset, vec2<f32>(0.0), vec2<f32>(1.0)),
+                map_uv(map, clamp(center_uv + offset, vec2<f32>(0.0), vec2<f32>(1.0))),
                 0.0,
             );
         }
@@ -265,6 +298,7 @@ fn sample_wcksrd_path(
 }
 
 fn sample_adaptive_neighborhood(
+    map: RegionMap,
     uv: vec2<f32>,
     tex_size: vec2<f32>,
     displacement: vec2<f32>,
@@ -282,7 +316,7 @@ fn sample_adaptive_neighborhood(
             accumulated = accumulated + textureSampleLevel(
                 input_texture,
                 input_sampler,
-                clamp(center_uv + offset, vec2<f32>(0.0), vec2<f32>(1.0)),
+                map_uv(map, clamp(center_uv + offset, vec2<f32>(0.0), vec2<f32>(1.0))),
                 0.0,
             );
         }
@@ -291,6 +325,7 @@ fn sample_adaptive_neighborhood(
 }
 
 fn sample_wcksrd_reflection_path(
+    map: RegionMap,
     uv: vec2<f32>,
     tex_size: vec2<f32>,
     displacement: vec2<f32>,
@@ -310,27 +345,27 @@ fn sample_wcksrd_reflection_path(
     );
     let outer_offset = tangent_direction * blur_radius / tex_size;
     let inner_offset = outer_offset * 0.5;
-    let center = textureSampleLevel(input_texture, input_sampler, center_uv, 0.0);
+    let center = textureSampleLevel(input_texture, input_sampler, map_uv(map, center_uv), 0.0);
     let inner = textureSampleLevel(
         input_texture,
         input_sampler,
-        clamp(center_uv - inner_offset, vec2<f32>(0.0), vec2<f32>(1.0)),
+        map_uv(map, clamp(center_uv - inner_offset, vec2<f32>(0.0), vec2<f32>(1.0))),
         0.0,
     ) + textureSampleLevel(
         input_texture,
         input_sampler,
-        clamp(center_uv + inner_offset, vec2<f32>(0.0), vec2<f32>(1.0)),
+        map_uv(map, clamp(center_uv + inner_offset, vec2<f32>(0.0), vec2<f32>(1.0))),
         0.0,
     );
     let outer = textureSampleLevel(
         input_texture,
         input_sampler,
-        clamp(center_uv - outer_offset, vec2<f32>(0.0), vec2<f32>(1.0)),
+        map_uv(map, clamp(center_uv - outer_offset, vec2<f32>(0.0), vec2<f32>(1.0))),
         0.0,
     ) + textureSampleLevel(
         input_texture,
         input_sampler,
-        clamp(center_uv + outer_offset, vec2<f32>(0.0), vec2<f32>(1.0)),
+        map_uv(map, clamp(center_uv + outer_offset, vec2<f32>(0.0), vec2<f32>(1.0))),
         0.0,
     );
     return center * 0.40 + inner * 0.20 + outer * 0.10;
@@ -579,9 +614,37 @@ fn scene_sdf(
     return d;
 }
 
+// Renderer-reserved slots 240..248: the composite's rounded clip in region
+// pixels (rect, then the four corner radii), zero when unclipped; slot 254:
+// the composite alpha. Applying both here lets the glass draw straight into
+// the final pass instead of through a masked blit of its own texture.
+fn composite_coverage(local_uv: vec2<f32>) -> f32 {
+    let mask_rect = get_vec4(240u);
+    if mask_rect.z <= 0.5 || mask_rect.w <= 0.5 {
+        return 1.0;
+    }
+    let radii = get_vec4(244u);
+    let p = local_uv * region_extent().zw;
+    let half_size = mask_rect.zw * 0.5;
+    let center = mask_rect.xy + half_size;
+    let local = p - center;
+    let radius = select(
+        select(radii.x, radii.y, local.x > 0.0),
+        select(radii.z, radii.w, local.x > 0.0),
+        local.y > 0.0,
+    );
+    let d = sd_round_rect(local, half_size, radius);
+    return 1.0 - smoothstep(-0.5, 0.5, d);
+}
+
 @fragment
 fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
+    return glass_fs(input) * composite_coverage(input.uv) * get_float(254u);
+}
+
+fn glass_fs(input: VertexOutput) -> vec4<f32> {
     let uv = input.uv;
+    let map = region_map();
     // Renderer-reserved slot 252/253: the LOGICAL pixel extent the input
     // texture represents, injected when it is rasterized smaller than that
     // (a blur chain's scratch-size intermediate). Pixel-calibrated offsets
@@ -589,7 +652,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     // a quarter-scale texture would inflate every displacement fourfold.
     // Zero means the input is at its logical size.
     let logical_size = get_vec2(252u);
-    var tex_size = vec2<f32>(textureDimensions(input_texture));
+    var tex_size = region_extent().zw;
     if (logical_size.x > 0.5 && logical_size.y > 0.5) {
         tex_size = logical_size;
     }
@@ -724,7 +787,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     // its foreground content. Keeping the mask in this shader guarantees
     // that blurred children and the refracted backdrop share one silhouette.
     if fixed_or(get_float(112u), 0.0, GLASS_CONTENT_MASK_OFF) > 0.5 {
-        return textureSample(input_texture, input_sampler, input.uv)
+        return textureSample(input_texture, input_sampler, map_uv(map, input.uv))
             * coverage
             * material_activity;
     }
@@ -734,7 +797,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     // tint-only resting output reads as an opaque plank — stars behind a
     // resting bar simply vanished instead of glowing through the frost.
     let resting_weight = (1.0 - material_activity) * coverage;
-    let frost_sample = textureSample(input_texture, input_sampler, input.uv);
+    let frost_sample = textureSample(input_texture, input_sampler, map_uv(map, input.uv));
     let resting_frost = frost_sample * (1.0 - resting_tint.a)
         + vec4<f32>(resting_tint.rgb * resting_tint.a, resting_tint.a);
     let resting_output = resting_frost * resting_weight;
@@ -914,13 +977,14 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     // wcKSRD owns source mapping and backdrop blur.
     let wcksrd_blur_radius = max(max(fixed_or(get_float(93u), 0.0, GLASS_OPTICAL_BLUR_OFF), 0.0), loupe_rim_softening);
     let transmitted_path = sample_wcksrd_path(
+        map,
         uv,
         tex_size,
         achromatic_displacement + base_displacement,
         wcksrd_blur_radius,
         loupe_mode > 0.5,
     );
-    let plain_path = textureSampleLevel(input_texture, input_sampler, uv, 0.0);
+    let plain_path = textureSampleLevel(input_texture, input_sampler, map_uv(map, uv), 0.0);
     var rgb = transmitted_path.rgb;
     if dispersion_strength > 0.0 {
         // Chromatic transmission as ONE continuous ray model: each channel
@@ -936,6 +1000,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
         // chromatic transmission.
         let index_spread = dispersion_strength * 0.22;
         let red_path = sample_wcksrd_path(
+            map,
             uv,
             tex_size,
             achromatic_displacement + channel_lens_displacement(
@@ -956,6 +1021,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
             loupe_mode > 0.5,
         );
         let blue_path = sample_wcksrd_path(
+            map,
             uv,
             tex_size,
             achromatic_displacement + channel_lens_displacement(
@@ -1067,6 +1133,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     );
     let reflection_tangent = vec2<f32>(-outward_normal.y, outward_normal.x);
     let reflection_path = sample_wcksrd_reflection_path(
+        map,
         uv,
         tex_size,
         reflection_displacement,
@@ -1264,6 +1331,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     if adaptive_frost > 0.0 {
         let foreground_luma = clamp(get_float(97u), 0.0, 1.0);
         let adaptive_sample = sample_adaptive_neighborhood(
+            map,
             uv,
             tex_size,
             achromatic_displacement + base_displacement,

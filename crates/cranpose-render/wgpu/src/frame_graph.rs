@@ -340,7 +340,6 @@ pub(crate) struct PassContext<'pass> {
     transient_textures: &'pass mut TransientTexturePool,
     pending_transient_releases: &'pass mut Vec<(FrameTextureDescriptor, OffscreenTarget)>,
     transient_texture_bytes: &'pass mut u64,
-    staged_upload_cursor: &'pass mut u64,
     pass_count: u32,
     pass_timer: Option<&'pass PassTimer>,
 }
@@ -459,24 +458,6 @@ impl WgpuFrameGraphExecutor {
         }
     }
 
-    pub(crate) fn upload_buffer(
-        &self,
-        queue: &wgpu::Queue,
-        buffer: &wgpu::Buffer,
-        offset: u64,
-        data: &[u8],
-    ) -> FrameCommandStats {
-        if data.is_empty() {
-            return FrameCommandStats::default();
-        }
-        queue.write_buffer(buffer, offset, data);
-        note_upload_write();
-        FrameCommandStats {
-            upload_bytes: data.len() as u64,
-            ..FrameCommandStats::default()
-        }
-    }
-
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn begin<'a>(
         &'a mut self,
@@ -506,7 +487,6 @@ impl WgpuFrameGraphExecutor {
         }
         let mut pass_count = 0u32;
         let mut transient_texture_bytes = 0u64;
-        let mut staged_upload_cursor = 0u64;
         let mut pending_transient_releases = Vec::new();
         let mut encoder = Self::create_command_encoder(device, graph.label);
 
@@ -522,7 +502,6 @@ impl WgpuFrameGraphExecutor {
                 &mut encoder,
                 &mut pending_transient_releases,
                 &mut transient_texture_bytes,
-                &mut staged_upload_cursor,
                 0,
                 pass,
             ) {
@@ -550,7 +529,6 @@ impl WgpuFrameGraphExecutor {
                     &mut encoder,
                     &mut pending_transient_releases,
                     &mut transient_texture_bytes,
-                    &mut staged_upload_cursor,
                     pass_index,
                     pass,
                 ) {
@@ -599,7 +577,6 @@ impl WgpuFrameGraphExecutor {
         encoder: &mut wgpu::CommandEncoder,
         pending_transient_releases: &mut Vec<(FrameTextureDescriptor, OffscreenTarget)>,
         transient_texture_bytes: &mut u64,
-        staged_upload_cursor: &mut u64,
         pass_index: usize,
         pass: PassNode<'_>,
     ) -> Result<u32, FrameGraphError> {
@@ -613,7 +590,6 @@ impl WgpuFrameGraphExecutor {
             transient_textures: &mut self.transient_textures,
             pending_transient_releases,
             transient_texture_bytes,
-            staged_upload_cursor,
             pass_count: 0,
             pass_timer: self.pass_timer.as_ref(),
         };
@@ -669,6 +645,25 @@ impl WgpuFrameGraphExecutor {
 
 std::thread_local! {
     static UPLOAD_WRITE_CALLS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Writes `data` into `buffer` at `offset` ahead of the next submit and
+/// accounts for it as an upload; an empty write is skipped.
+pub(crate) fn write_buffer(
+    queue: &wgpu::Queue,
+    buffer: &wgpu::Buffer,
+    offset: u64,
+    data: &[u8],
+) -> FrameCommandStats {
+    if data.is_empty() {
+        return FrameCommandStats::default();
+    }
+    queue.write_buffer(buffer, offset, data);
+    note_upload_write();
+    FrameCommandStats {
+        upload_bytes: data.len() as u64,
+        ..FrameCommandStats::default()
+    }
 }
 
 fn note_upload_write() {
@@ -746,7 +741,6 @@ fn log_frame_graph_pass_timing(start: Instant, label: Option<&'static str>, pass
 }
 
 pub(crate) trait FrameCommandRecorder {
-    fn encoder(&mut self) -> &mut wgpu::CommandEncoder;
     fn begin_timed_render_pass(
         &mut self,
         descriptor: &wgpu::RenderPassDescriptor<'_>,
@@ -778,7 +772,6 @@ pub(crate) trait FrameCommandRecorder {
         descriptor: FrameTextureDescriptor,
         target: OffscreenTarget,
     );
-    fn allocate_staged_upload_bytes(&mut self, bytes: u64) -> u64;
     fn record_passes(&mut self, count: u32);
 
     fn record_pass(&mut self) {
@@ -789,10 +782,6 @@ pub(crate) trait FrameCommandRecorder {
 }
 
 impl FrameCommandRecorder for PassContext<'_> {
-    fn encoder(&mut self) -> &mut wgpu::CommandEncoder {
-        self.encoder
-    }
-
     fn begin_timed_render_pass(
         &mut self,
         descriptor: &wgpu::RenderPassDescriptor<'_>,
@@ -854,12 +843,6 @@ impl FrameCommandRecorder for PassContext<'_> {
         self.pending_transient_releases.push((descriptor, target));
     }
 
-    fn allocate_staged_upload_bytes(&mut self, bytes: u64) -> u64 {
-        let aligned = align_u64_to(*self.staged_upload_cursor, wgpu::COPY_BUFFER_ALIGNMENT);
-        *self.staged_upload_cursor = aligned.saturating_add(bytes);
-        aligned
-    }
-
     fn record_passes(&mut self, count: u32) {
         self.pass_count = self.pass_count.saturating_add(count);
     }
@@ -882,10 +865,6 @@ pub(crate) struct WgpuFrameEncoder<'a> {
 
 #[cfg(target_arch = "wasm32")]
 impl WgpuFrameEncoder<'_> {
-    pub(crate) fn encoder(&mut self) -> &mut wgpu::CommandEncoder {
-        &mut self.encoder
-    }
-
     pub(crate) fn record_passes(&mut self, count: u32) {
         self.pass_count = self.pass_count.saturating_add(count);
     }
@@ -962,10 +941,6 @@ impl Drop for PendingTransientReleases<'_> {
 
 #[cfg(target_arch = "wasm32")]
 impl FrameCommandRecorder for WgpuFrameEncoder<'_> {
-    fn encoder(&mut self) -> &mut wgpu::CommandEncoder {
-        Self::encoder(self)
-    }
-
     fn begin_timed_render_pass(
         &mut self,
         descriptor: &wgpu::RenderPassDescriptor<'_>,
@@ -1019,10 +994,6 @@ impl FrameCommandRecorder for WgpuFrameEncoder<'_> {
 
     fn record_passes(&mut self, count: u32) {
         Self::record_passes(self, count);
-    }
-
-    fn allocate_staged_upload_bytes(&mut self, _bytes: u64) -> u64 {
-        0
     }
 
     fn recorded_pass_count(&self) -> u32 {
@@ -1137,7 +1108,6 @@ pub(crate) enum UploadAllocatorId {
     ProjectiveBlitUniform,
     ProjectiveBlitVertex,
     EffectUniform,
-    BlurRoundedMask,
 }
 
 impl UploadAllocatorId {
@@ -1150,7 +1120,6 @@ impl UploadAllocatorId {
             Self::ProjectiveBlitUniform => 4,
             Self::ProjectiveBlitVertex => 5,
             Self::EffectUniform => 6,
-            Self::BlurRoundedMask => 7,
         }
     }
 }

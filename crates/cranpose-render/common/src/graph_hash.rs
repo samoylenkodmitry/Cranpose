@@ -117,50 +117,6 @@ fn hash_layer_content<H: Hasher>(
                 for primitive in run.primitives.iter() {
                     primitive.render_hash().hash(state);
                 }
-                if let Some(frame) = &run.replay {
-                    frame.spans.len().hash(state);
-                    frame.center.x.to_bits().hash(state);
-                    frame.center.y.to_bits().hash(state);
-                    for span in &frame.spans {
-                        match span {
-                            cranpose_ui_graphics::FrameSpan::Dynamic { range } => {
-                                0u8.hash(state);
-                                range.hash(state);
-                            }
-                            cranpose_ui_graphics::FrameSpan::Retained {
-                                slot,
-                                capture,
-                                slot_offset,
-                                range,
-                                tape_range,
-                                transform,
-                                recolors,
-                                bounds,
-                            } => {
-                                1u8.hash(state);
-                                slot.hash(state);
-                                capture.hash(state);
-                                slot_offset.hash(state);
-                                range.hash(state);
-                                tape_range.hash(state);
-                                transform.scale.to_bits().hash(state);
-                                transform.angle.to_bits().hash(state);
-                                recolors.len().hash(state);
-                                for (offset, color) in recolors {
-                                    offset.hash(state);
-                                    color.0.to_bits().hash(state);
-                                    color.1.to_bits().hash(state);
-                                    color.2.to_bits().hash(state);
-                                    color.3.to_bits().hash(state);
-                                }
-                                bounds.x.to_bits().hash(state);
-                                bounds.y.to_bits().hash(state);
-                                bounds.width.to_bits().hash(state);
-                                bounds.height.to_bits().hash(state);
-                            }
-                        }
-                    }
-                }
             }
             RenderNode::Layer(child_layer) => {
                 1u8.hash(state);

@@ -43,14 +43,7 @@ const SHOWCASE_CARD_MAX_PIXEL_DIFFERENCE: u32 = 3;
 const TRANSLATED_TEXT_LOCAL_SIZE: (u32, u32) = (48, 24);
 const MULTISPAN_FRAME_WIDTH: u32 = 420;
 const MULTISPAN_TEXT_WRAPPER_LOCAL_SIZE: (u32, u32) = (340, 40);
-const TRANSLATED_TEXT_PIXEL_TOLERANCE: u32 = 24;
-const TRANSLATED_TEXT_MAX_DIFFERING_PIXELS: u32 = 240;
-const TRANSLATED_TEXT_MAX_PIXEL_DIFFERENCE: u32 = 420;
 const TRANSLATED_THIN_SHAPE_LOCAL_SIZE: (u32, u32) = (40, 18);
-
-fn stats_used_bounded_layer_surface(stats: &RenderStatsSnapshot) -> bool {
-    stats.isolated_layer_renders > 0 || stats.layer_cache_hits > 0
-}
 
 #[test]
 fn subtree_alpha_capture_preserves_group_opacity_and_uses_bounded_surface() {
@@ -95,7 +88,7 @@ fn subtree_alpha_capture_preserves_group_opacity_and_uses_bounded_surface() {
         stats.isolated_layer_renders, 1,
         "alpha capture should isolate only the alpha subtree now that the root renders direct: {stats:?}"
     );
-    assert_local_surface_stats(&frame, stats, ALPHA_LAYER_SIZE, 1, "alpha");
+    assert_local_surface_stats(&frame, stats, ALPHA_LAYER_SIZE, 0, "alpha");
 }
 
 #[test]
@@ -387,7 +380,7 @@ fn translated_text_wrapper_with_text_stays_on_direct_path_under_fractional_motio
 }
 
 #[test]
-fn translated_text_wrapper_preserves_local_picture_under_fractional_motion_on_each_axis() {
+fn translated_text_wrapper_moves_its_raster_by_whole_pixels_under_fractional_motion() {
     let mut renderer = match support::headless_renderer() {
         Ok(renderer) => renderer,
         Err(err) => {
@@ -431,16 +424,24 @@ fn translated_text_wrapper_preserves_local_picture_under_fractional_motion_on_ea
     let vertical_normalized =
         normalize_translated_text_region(&vertical_frame, vertical_translation);
 
-    assert_translated_text_local_picture_stable(
+    assert_exact_normalized_match(
+        "translated text under horizontal fractional motion",
         &base_normalized,
         &horizontal_normalized,
-        "horizontal",
+        TRANSLATED_TEXT_LOCAL_SIZE.0,
+        TRANSLATED_TEXT_LOCAL_SIZE.1,
     );
-    assert_translated_text_local_picture_stable(&base_normalized, &vertical_normalized, "vertical");
+    assert_exact_normalized_match(
+        "translated text under vertical fractional motion",
+        &base_normalized,
+        &vertical_normalized,
+        TRANSLATED_TEXT_LOCAL_SIZE.0,
+        TRANSLATED_TEXT_LOCAL_SIZE.1,
+    );
 }
 
 #[test]
-fn translated_thin_shape_wrapper_uses_bounded_local_surface_under_fractional_motion() {
+fn translated_thin_shape_wrapper_stays_rigid_on_the_direct_path_under_fractional_motion() {
     let mut renderer = match support::headless_renderer() {
         Ok(renderer) => renderer,
         Err(err) => {
@@ -491,31 +492,34 @@ fn translated_thin_shape_wrapper_uses_bounded_local_surface_under_fractional_mot
         bright_pixel_count(
             frame,
             Rect {
-                x: translation.x + 12.0,
-                y: translation.y + 8.0,
+                x: translation.x.round() + 12.0,
+                y: translation.y.round() + 8.0,
                 width: 24.0,
                 height: 10.0,
             },
             120,
         )
     };
+    for stats in [&base_stats, &horizontal_stats, &vertical_stats] {
+        assert_eq!(
+            stats.isolated_layer_renders, 0,
+            "a translated thin-shape wrapper draws directly into the root target: {stats:?}"
+        );
+    }
+    let base_bright = bright_region(&base_frame, base_translation);
     assert!(
-        stats_used_bounded_layer_surface(&base_stats)
-            && stats_used_bounded_layer_surface(&horizontal_stats)
-            && stats_used_bounded_layer_surface(&vertical_stats),
-        "translated thin-shape fixture should render through bounded local surfaces: base={base_stats:?} horizontal={horizontal_stats:?} vertical={vertical_stats:?}"
+        base_bright >= 60,
+        "translated thin-shape base frame should keep visible thin bars, bright={base_bright}"
     );
-    assert!(
-        bright_region(&base_frame, base_translation) >= 60,
-        "translated thin-shape base frame should keep visible thin bars"
+    assert_eq!(
+        bright_region(&horizontal_frame, horizontal_translation),
+        base_bright,
+        "horizontal fractional motion must move the thin bars by whole device pixels"
     );
-    assert!(
-        bright_region(&horizontal_frame, horizontal_translation) >= 60,
-        "translated thin-shape horizontal frame should keep visible thin bars"
-    );
-    assert!(
-        bright_region(&vertical_frame, vertical_translation) >= 60,
-        "translated thin-shape vertical frame should keep visible thin bars"
+    assert_eq!(
+        bright_region(&vertical_frame, vertical_translation),
+        base_bright,
+        "vertical fractional motion must move the thin bars by whole device pixels"
     );
 }
 
@@ -586,7 +590,7 @@ fn translation_only_wrapper_with_underlined_text_stays_on_direct_path() {
 }
 
 #[test]
-fn translated_content_wrapper_with_decorated_shadow_text_uses_bounded_local_surface() {
+fn translated_content_wrapper_with_decorated_shadow_text_stays_on_the_direct_path() {
     let mut renderer = match support::headless_renderer() {
         Ok(renderer) => renderer,
         Err(err) => {
@@ -658,18 +662,13 @@ fn translated_content_wrapper_with_decorated_shadow_text_uses_bounded_local_surf
         background_region_bright >= 40,
         "decorated text fixture should draw a visible background region on the direct path, bright_pixels={background_region_bright}"
     );
-    assert!(
-        stats.isolated_layer_renders >= 1,
-        "translated-content decorated-shadow text should render through a bounded local surface: {stats:?}"
+    assert_eq!(
+        stats.isolated_layer_renders, 0,
+        "translated-content decorated-shadow text draws directly into the root target: {stats:?}"
     );
     assert!(
         stats.blur_passes >= 1,
         "decorated text shadow should still use the bounded blur helper path: {stats:?}"
-    );
-    let isolated = stats.top_isolated_layers().collect::<Vec<_>>();
-    assert!(
-        !isolated.is_empty(),
-        "translated-content decorated text should report an isolated text surface in stats: {stats:?}"
     );
 }
 
@@ -747,10 +746,6 @@ fn shadow_blur_composite_render_submits_one_frame_command_buffer() {
     assert!(
         stats.blur_passes >= 1,
         "drop-shadow frame should encode blur passes: {stats:?}"
-    );
-    assert!(
-        stats.composite_passes >= 1,
-        "drop-shadow frame should encode composite passes: {stats:?}"
     );
     assert_eq!(
         stats.encoder_count, 1,
@@ -968,11 +963,12 @@ fn translated_multispan_showcase_text_with_padding_stays_exact_at_fractional_roo
         FRACTIONAL_ROOT_SCALE,
     );
     let moved_stats = renderer.last_frame_stats().expect("moved frame stats");
-    assert!(
-        stats_used_bounded_layer_surface(&base_stats)
-            && stats_used_bounded_layer_surface(&moved_stats),
-        "padded multispan translated text should use bounded layer surfaces: base={base_stats:?} moved={moved_stats:?}"
-    );
+    for stats in [&base_stats, &moved_stats] {
+        assert_eq!(
+            stats.isolated_layer_renders, 0,
+            "padded multispan translated text draws directly into the root target: {stats:?}"
+        );
+    }
 
     let width = scaled_dimension(MULTISPAN_TEXT_WRAPPER_LOCAL_SIZE.0, FRACTIONAL_ROOT_SCALE);
     let height = scaled_dimension(MULTISPAN_TEXT_WRAPPER_LOCAL_SIZE.1, FRACTIONAL_ROOT_SCALE);
@@ -1049,7 +1045,7 @@ fn bounded_blur_capture_stays_inside_layer_bounds() {
         stats.isolated_layer_renders, 1,
         "bounded blur capture should isolate only the blur child now that the root renders direct: {stats:?}"
     );
-    assert_local_surface_stats(&frame, stats, BLUR_LAYER_SIZE, 3, "blur");
+    assert_local_surface_stats(&frame, stats, BLUR_LAYER_SIZE, 12, "blur");
 }
 
 #[test]
@@ -1095,7 +1091,7 @@ fn bounded_backdrop_capture_only_filters_local_snapshot() {
         stats.isolated_layer_renders <= 1,
         "capture should isolate at most the backdrop child under the readable composition root: {stats:?}"
     );
-    assert_local_surface_stats(&frame, stats, BACKDROP_LAYER_SIZE, 4, "backdrop");
+    assert_local_surface_stats(&frame, stats, BACKDROP_LAYER_SIZE, 8, "backdrop");
 }
 
 #[test]
@@ -1370,78 +1366,7 @@ fn nested_backdrop_blur_radius_changes_rendered_pixels() {
 }
 
 #[test]
-fn cached_nested_backdrop_blur_radius_changes_rendered_pixels() {
-    let mut renderer = match support::headless_renderer() {
-        Ok(renderer) => renderer,
-        Err(err) => {
-            eprintln!(
-                "skipping cached nested backdrop radius assertions because headless WGPU init failed: {}",
-                err
-            );
-            return;
-        }
-    };
-
-    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_NO_BACKDROP_FLATTEN", Some("1"));
-    renderer.scene_mut().graph = Some(cached_nested_backdrop_effect_fixture(0.0));
-    let base_frame = renderer
-        .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
-        .expect("cached nested backdrop base capture should succeed");
-
-    renderer.scene_mut().graph = Some(cached_nested_backdrop_effect_fixture(18.0));
-    let blurred_frame = renderer
-        .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
-        .expect("cached nested backdrop blurred capture should succeed");
-    let stats = renderer
-        .last_frame_stats()
-        .expect("cached nested backdrop blur frame stats");
-    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_NO_BACKDROP_FLATTEN", None);
-
-    assert!(
-        stats.layer_cache_hits > 0,
-        "cached nested backdrop fixture should exercise retained layer cache: {stats:?}"
-    );
-    assert!(
-        stats.blur_passes >= 1,
-        "cached nested backdrop blur radius should execute blur passes: {stats:?}"
-    );
-
-    let compare_rect = Rect {
-        x: 62.0,
-        y: 34.0,
-        width: 36.0,
-        height: 28.0,
-    };
-    let width = compare_rect.width as u32;
-    let height = compare_rect.height as u32;
-    let base = normalize_rgba_region(
-        &base_frame.pixels,
-        base_frame.width,
-        base_frame.height,
-        compare_rect,
-        width,
-        height,
-    );
-    let blurred = normalize_rgba_region(
-        &blurred_frame.pixels,
-        blurred_frame.width,
-        blurred_frame.height,
-        compare_rect,
-        width,
-        height,
-    );
-    let diff = image_difference_stats(&base, &blurred, width, height, 10);
-
-    assert!(
-        diff.differing_pixels > 90,
-        "cached nested backdrop blur radius must invalidate retained layer output; differing_pixels={} max_diff={} stats={stats:?}",
-        diff.differing_pixels,
-        diff.max_difference
-    );
-}
-
-#[test]
-fn static_backdrop_reuses_cache_when_non_overlapping_content_animates() {
+fn static_glass_stays_intact_when_non_overlapping_content_animates() {
     let mut renderer = match support::headless_renderer() {
         Ok(renderer) => renderer,
         Err(err) => {
@@ -1454,7 +1379,7 @@ fn static_backdrop_reuses_cache_when_non_overlapping_content_animates() {
     };
 
     renderer.scene_mut().graph = Some(spatial_backdrop_cache_fixture(Color::RED));
-    renderer
+    let warmup_frame = renderer
         .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
         .expect("backdrop cache warmup should succeed");
     let warmup_stats = renderer
@@ -1473,13 +1398,38 @@ fn static_backdrop_reuses_cache_when_non_overlapping_content_animates() {
         warmup_stats.blur_passes > 0,
         "the warmup frame must materialize the backdrop effect: {warmup_stats:?}"
     );
-    assert!(
-        animated_stats.layer_cache_hits > 0,
-        "static glass should hit its retained backdrop surface: {animated_stats:?}"
-    );
     assert_eq!(
-        animated_stats.blur_passes, 0,
-        "content outside the sampled backdrop region must not rerun the glass blur: {animated_stats:?}"
+        animated_stats.blur_passes, warmup_stats.blur_passes,
+        "the glass resolves the same way whatever animates outside it: {animated_stats:?}"
+    );
+    let glass_region = Rect {
+        x: 10.0,
+        y: 10.0,
+        width: 40.0,
+        height: 30.0,
+    };
+    let warmup_glass = normalize_rgba_region(
+        &warmup_frame.pixels,
+        FRAME_WIDTH,
+        FRAME_HEIGHT,
+        glass_region,
+        40,
+        30,
+    );
+    let animated_glass = normalize_rgba_region(
+        &animated_frame.pixels,
+        FRAME_WIDTH,
+        FRAME_HEIGHT,
+        glass_region,
+        40,
+        30,
+    );
+    assert_exact_normalized_match(
+        "static glass beside animating content",
+        &warmup_glass,
+        &animated_glass,
+        40,
+        30,
     );
     let animated_pixel = rgba(&animated_frame, 112, 80);
     assert!(
@@ -1937,20 +1887,6 @@ fn nested_backdrop_effect_fixture(child_blur_radius: f32) -> RenderGraph {
     ])
 }
 
-fn cached_nested_backdrop_effect_fixture(child_blur_radius: f32) -> RenderGraph {
-    let mut graph = nested_backdrop_effect_fixture(child_blur_radius);
-    let Some(RenderNode::Layer(parent)) = graph.root.children.get_mut(1) else {
-        panic!("expected nested backdrop parent layer");
-    };
-    parent.cache_policy = CachePolicy::Auto;
-    let Some(RenderNode::Layer(child)) = parent.children.get_mut(2) else {
-        panic!("expected nested backdrop child layer");
-    };
-    child.cache_policy = CachePolicy::Auto;
-    graph.root.recompute_raster_cache_hashes();
-    graph
-}
-
 fn translated_backdrop_fixture(translation: Point) -> RenderGraph {
     let backdrop_layer = layer(
         Rect {
@@ -2329,7 +2265,7 @@ fn a_cutout_drop_shadow_keeps_its_penumbra_outside_and_none_inside() {
 }
 
 #[test]
-fn a_row_whose_glass_reads_only_its_own_draws_keeps_its_raster() {
+fn a_draw_outside_a_glass_row_leaves_the_row_and_its_glass_intact() {
     let mut renderer = match support::headless_renderer() {
         Ok(renderer) => renderer,
         Err(err) => {
@@ -2361,10 +2297,6 @@ fn a_row_whose_glass_reads_only_its_own_draws_keeps_its_raster() {
     assert_eq!(
         animated_stats.isolated_layer_renders, 0,
         "a draw outside the row must not re-render the row: {animated_stats:?}"
-    );
-    assert!(
-        animated_stats.layer_cache_hit_pixels >= 112 * 32,
-        "the whole row raster, glass and blur included, must be replayed: {animated_stats:?}"
     );
 
     let glass_pixel = rgba(&animated, 76, 30);
@@ -2428,29 +2360,8 @@ fn solid_page() -> RenderNode {
     solid_rect(frame_rect(), Color::from_rgb_u8(20, 40, 90))
 }
 
-fn gradient_page() -> RenderNode {
-    RenderNode::Primitive(PrimitiveEntry {
-        phase: PrimitivePhase::BeforeChildren,
-        node: PrimitiveNode::Draw(DrawPrimitiveNode {
-            primitive: DrawPrimitive::Rect {
-                rect: frame_rect(),
-                brush: Brush::vertical_gradient(
-                    vec![
-                        Color::from_rgb_u8(20, 40, 90),
-                        Color::from_rgb_u8(200, 40, 20),
-                    ],
-                    0.0,
-                    FRAME_HEIGHT as f32,
-                ),
-                stroke: None,
-            },
-            clip: None,
-        }),
-    })
-}
-
 #[test]
-fn a_row_over_a_solid_page_keeps_its_raster_while_it_moves() {
+fn a_glass_row_over_a_solid_page_composes_correctly_where_it_moves() {
     let mut renderer = match support::headless_renderer() {
         Ok(renderer) => renderer,
         Err(err) => {
@@ -2472,9 +2383,9 @@ fn a_row_over_a_solid_page_keeps_its_raster_while_it_moves() {
         .expect("moved row frame should succeed");
     let moved_stats = renderer.last_frame_stats().expect("moved row frame stats");
 
-    assert!(
-        moved_stats.layer_cache_hit_pixels >= 112 * 32,
-        "the glass reads one colour wherever the row sits, so the row raster must be replayed: {moved_stats:?}"
+    assert_eq!(
+        moved_stats.isolated_layer_renders, 0,
+        "a translated row draws directly into the root target: {moved_stats:?}"
     );
 
     let row_pixel = rgba(&moved, 20, 54);
@@ -2482,39 +2393,6 @@ fn a_row_over_a_solid_page_keeps_its_raster_while_it_moves() {
     assert!(
         row_pixel[0] > above_row[0] && row_pixel[1] > above_row[1],
         "the card must sit over the page at its new place: row={row_pixel:?} page={above_row:?}"
-    );
-}
-
-#[test]
-fn a_row_over_a_gradient_page_re_renders_when_it_moves() {
-    let mut renderer = match support::headless_renderer() {
-        Ok(renderer) => renderer,
-        Err(err) => {
-            eprintln!(
-                "skipping gradient page raster assertions because headless WGPU init failed: {err}"
-            );
-            return;
-        }
-    };
-
-    renderer.scene_mut().graph = Some(see_through_row_fixture(gradient_page(), 20.0));
-    renderer
-        .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
-        .expect("row warmup should succeed");
-
-    renderer.scene_mut().graph = Some(see_through_row_fixture(gradient_page(), 44.0));
-    renderer
-        .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
-        .expect("moved row frame should succeed");
-    let moved_stats = renderer.last_frame_stats().expect("moved row frame stats");
-
-    assert!(
-        moved_stats.layer_cache_hit_pixels < 112 * 32,
-        "a gradient under the row gives the glass a different colour at every place, so the raster must not be replayed: {moved_stats:?}"
-    );
-    assert!(
-        moved_stats.isolated_layer_renders > 0,
-        "the row must render again: {moved_stats:?}"
     );
 }
 
@@ -3608,42 +3486,14 @@ fn normalize_translated_text_region(frame: &CapturedFrame, translation: Point) -
         frame.width,
         frame.height,
         Rect {
-            x: translation.x + 9.0,
-            y: translation.y + 7.0,
+            x: translation.x.round() + 9.0,
+            y: translation.y.round() + 7.0,
             width: TRANSLATED_TEXT_LOCAL_SIZE.0 as f32,
             height: TRANSLATED_TEXT_LOCAL_SIZE.1 as f32,
         },
         TRANSLATED_TEXT_LOCAL_SIZE.0,
         TRANSLATED_TEXT_LOCAL_SIZE.1,
     )
-}
-
-fn assert_translated_text_local_picture_stable(base: &[u8], moved: &[u8], axis: &str) {
-    let stats = image_difference_stats(
-        base,
-        moved,
-        TRANSLATED_TEXT_LOCAL_SIZE.0,
-        TRANSLATED_TEXT_LOCAL_SIZE.1,
-        TRANSLATED_TEXT_PIXEL_TOLERANCE,
-    );
-    if stats.differing_pixels > TRANSLATED_TEXT_MAX_DIFFERING_PIXELS
-        || stats.max_difference > TRANSLATED_TEXT_MAX_PIXEL_DIFFERENCE
-    {
-        let diff = stats
-            .first_difference
-            .as_ref()
-            .expect("failing translated text comparison should report first difference");
-        panic!(
-            "translated text local picture changed too much under {axis} fractional motion; differing_pixels={} max_diff={} first differing normalized pixel at ({}, {}) base={:?} moved={:?} diff={}",
-            stats.differing_pixels,
-            stats.max_difference,
-            diff.x,
-            diff.y,
-            diff.lhs,
-            diff.rhs,
-            diff.difference
-        );
-    }
 }
 
 fn translated_backdrop_compare_dimensions() -> (u32, u32) {
@@ -3748,27 +3598,31 @@ fn assert_blue(pixel: [u8; 4], label: &str) {
     );
 }
 
+/// The atlas texels a capture of a layer may occupy: the layer, its effect
+/// padding on every side, the blur gap around the region and the atlas size
+/// rounding.
+const ATLAS_ROUNDING: u32 = 16;
+
 fn assert_local_surface_stats(
     frame: &CapturedFrame,
     stats: RenderStatsSnapshot,
     layer_size: (u32, u32),
-    extra_local_targets: u64,
+    effect_padding: u32,
     label: &str,
 ) {
-    let frame_bytes = (frame.width as u64) * (frame.height as u64) * 4;
     let frame_pixels = (frame.width as u64) * (frame.height as u64);
-    let layer_pixels = (layer_size.0 as u64) * (layer_size.1 as u64);
-    let expected_bytes_upper_bound = frame_bytes + layer_pixels * 4 * extra_local_targets;
+    let layer_pixels =
+        u64::from(layer_size.0 + effect_padding * 2) * u64::from(layer_size.1 + effect_padding * 2);
+    let atlas_pixels = u64::from(layer_size.0 + effect_padding * 4 + ATLAS_ROUNDING)
+        * u64::from(layer_size.1 + effect_padding * 4 + ATLAS_ROUNDING);
+    let transient_pixels =
+        stats.transient_texture_bytes / cranpose_render_wgpu::composition_bytes_per_pixel();
     assert!(
-        stats.offscreen_acquires > 0,
-        "{label} should acquire effect offscreen targets: {stats:?}"
+        transient_pixels <= atlas_pixels * 2 && transient_pixels < frame_pixels * 2,
+        "{label} should resolve through a capture atlas and a blur scratch bounded by the layer, never frame-sized scratch targets: atlas_pixels={atlas_pixels} stats={stats:?}"
     );
     assert!(
-        stats.offscreen_total_bytes <= expected_bytes_upper_bound,
-        "{label} should stay within the root frame surface plus bounded local scratch targets: max_bytes={expected_bytes_upper_bound} stats={stats:?}"
-    );
-    assert!(
-        stats.isolated_layer_pixels <= frame_pixels + layer_pixels,
-        "{label} should only isolate the root frame plus one bounded child layer: {stats:?}"
+        stats.isolated_layer_pixels <= layer_pixels,
+        "{label} should isolate no more than the child layer's own surface plus its effect padding: {stats:?}"
     );
 }

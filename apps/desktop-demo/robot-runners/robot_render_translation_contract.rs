@@ -144,7 +144,7 @@ fn log_render_stats(robot: &cranpose::Robot, stage: &str) {
             );
             for (index, layer) in stats.top_isolated_layers().enumerate() {
                 println!(
-                    "  isolated_layer stage={} rank={} node={:?} rect=({:.1},{:.1},{:.1},{:.1}) target={}x{} reasons={}",
+                    "  isolated_layer stage={} rank={} node={:?} rect=({:.1},{:.1},{:.1},{:.1}) target={}x{}",
                     stage,
                     index,
                     layer.node_id,
@@ -153,8 +153,7 @@ fn log_render_stats(robot: &cranpose::Robot, stage: &str) {
                     layer.logical_rect.width,
                     layer.logical_rect.height,
                     layer.width,
-                    layer.height,
-                    layer.reasons.display()
+                    layer.height
                 );
             }
         }

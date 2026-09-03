@@ -151,6 +151,7 @@ pub fn specialize_liquid_glass(shader: &mut RuntimeShader) {
 /// specialized to the features its uniforms enable.
 pub fn liquid_glass_runtime_effect(mut shader: RuntimeShader) -> RenderEffect {
     specialize_liquid_glass(&mut shader);
+    shader.set_batched_source(true);
     RenderEffect::runtime_shader(shader)
 }
 
