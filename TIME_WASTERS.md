@@ -638,3 +638,13 @@ alone and the runtime check on `texture.usage()` correctly fell back. Check
 the device's per-pass inventory for the pass you removed, and log the
 configured usage next to the capabilities (`Android surface: ... configured
 ...`) so the fallback is visible.
+
+## The Android toggle table compiles only for Android
+
+`crates/cranpose/src/android_frame_telemetry.rs` declares its property-backed
+toggle table with an explicit array length. Every host gate (`just test`,
+`just clippy`, the mac CI job) passed with a 56-row table declared as 55 rows,
+because that file is only compiled for the Android target; the first thing
+that caught it was the phone APK build six seconds in. When you add a row,
+bump the length in the same edit and build the APK before pushing: the
+"Android release build" CI job is the only gate that compiles it.
