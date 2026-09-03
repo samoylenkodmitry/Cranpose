@@ -243,6 +243,14 @@ impl GpuRenderer {
                 Ok(false)
             }
             Ok(()) => {
+                let composite_draws = batches
+                    .iter()
+                    .filter(|batch| matches!(batch, Batch::Composite(_) | Batch::Shader(_)))
+                    .count() as u32;
+                if composite_draws > 0 {
+                    self.effect_renderer.record_composite_pass();
+                    self.frame_stats.add_draw_calls(composite_draws);
+                }
                 let draw_result = {
                     let mut pass = recorder.begin_color_pass(label, target.view, load_op);
                     self.draw_batches(
@@ -724,7 +732,6 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                         std::slice::from_ref(&item),
                     )
                     .ok_or_else(|| "shader composite preparation failed".to_string())?;
-                renderer.effect_renderer.record_composite_pass();
                 self.batches.extend(prepared.into_iter().map(Batch::Shader));
             }
             ResolvedCompositeKind::Projective {

@@ -76,6 +76,9 @@ pub struct FrameStatsSnapshot {
     pub shadow_fully_occluded_composites: u32,
     pub shadow_text_blur_fallbacks: u32,
     pub blur_passes: u32,
+    /// Passes that draw at least one resolved composite: a final pass holding
+    /// twelve glass tails counts once, a composite resolved into its own
+    /// texture counts its own pass.
     pub composite_passes: u32,
     pub effect_applies: u32,
     /// Pixels shaded by runtime shader composites: what every glass surface
@@ -88,12 +91,12 @@ pub struct FrameStatsSnapshot {
     pub shape_passes: u32,
     pub image_passes: u32,
     pub text_passes: u32,
-    /// Shape, image and glyph `draw_indexed` calls recorded this frame. The
-    /// `*_passes` counters above count *batches*, so a single image batch
-    /// reports `image_passes=1` however many images it draws; this counts what
-    /// the driver actually sees. Composite and effect quads are not included —
-    /// they are one draw each and already counted by `composite_passes`,
-    /// `blur_passes` and `effect_applies`.
+    /// Shape, image, glyph and composite draws recorded this frame. The
+    /// `*_passes` counters above count *batches* or passes, so a single image
+    /// batch reports `image_passes=1` however many images it draws; this
+    /// counts what the driver actually sees. Blur and effect quads are not
+    /// included: they are one draw each and already counted by `blur_passes`
+    /// and `effect_applies`.
     pub draw_calls: u32,
     pub text_image_cache_hits: u32,
     pub text_image_cache_misses: u32,
