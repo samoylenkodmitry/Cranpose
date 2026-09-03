@@ -7,6 +7,14 @@ set -euo pipefail
 #   --shared     a build. Any number may hold this at once.
 #   --exclusive  a measurement. One at a time, and no build while it runs.
 #
+# The wrapper is reentrant: a command that already runs under a lock which
+# covers the requested mode (shared under shared or exclusive, exclusive
+# under exclusive) runs directly. A nested take would otherwise queue behind
+# the turnstile an exclusive waiter holds while it waits for the outer
+# holder, and the two would wait for each other until the job timeout, which
+# is how `just budgets` (shared) calling `size-budget` (shared) parked the
+# architecture-budgets job for 45 minutes beside a queued robot suite.
+#
 # One Linux machine serves every `[self-hosted, Linux, cranpose-heavy]` job.
 # Two runners are registered on it, so two heavy jobs land there at once, and
 # a heavy job here means twelve rustc processes. The robot suite's per-frame
@@ -71,6 +79,10 @@ if ! host_capacity_lock_available; then
   echo "with_host_lock: no flock on this host; running without the $mode lock"
   exec "$@"
 fi
+if [[ "${CRANPOSE_HOST_LOCK_HELD:-}" == "exclusive" || ( "${CRANPOSE_HOST_LOCK_HELD:-}" == "shared" && "$mode" == "shared" ) ]]; then
+  echo "with_host_lock: already inside the $CRANPOSE_HOST_LOCK_HELD lock; running the nested $mode command under it"
+  exec "$@"
+fi
 
 # Before the lock fd below exists, not after: this wrapper's whole job is to
 # run a build (`--shared`) or a measurement (`--exclusive`) underneath it,
@@ -117,4 +129,4 @@ fi
 # 8) closed in that CHILD ONLY -- so nothing it spawns, sccache's daemon
 # included, can inherit a copy either -- while this process keeps fd 9 open
 # until the child actually exits, then exits with its status.
-"$@" 7>&- 8>&- 9>&-
+CRANPOSE_HOST_LOCK_HELD="$mode" "$@" 7>&- 8>&- 9>&-
