@@ -95,6 +95,16 @@ no pass.
 The root goes through the same function as every child, so a root with a
 shadow or a backdrop behaves like any layer would.
 
+An isolated child whose transform is a uniform scale and a translation
+renders its surface on the parent's pixel grid: the surface is the child's
+device rect snapped outward in parent space, the child draws with the
+fractional remainder as its target offset, and the composite is a one-to-one
+nearest blit at whole pixels, so a scaling box keeps analytic edges on every
+side instead of one hard and one resampled edge. `LayerCache` keys carry the
+1/16-pixel device phase, so a cached surface is never reused at another
+phase; `effect_semantics.rs` pins both against the same box drawn directly.
+Any other transform composites the surface through the projective path.
+
 ## Rigid motion
 
 A translated content context (a scroll container) carries one rigid
@@ -102,7 +112,12 @@ A translated content context (a scroll container) carries one rigid
 one device-pixel delta per frame, and the subtree moves as one raster. Text
 rasterizes at a canonical device origin under an anchor and re-rasterizes
 only when its device phase changes; images and shapes translate their quads
-by the same delta.
+by the same delta. A gradient's ordered dither is keyed on the device
+position relative to the anchor's snapped device origin
+(`ShapeData.dither_origin`), so the pattern rides with the subtree; a shape
+outside any anchor keeps the origin at zero and dithers by device pixel as
+Skia does. `effect_semantics.rs` pins that a translated gradient's local
+picture is byte-identical after undoing the rounded translation.
 
 Outside a translated context a layer snaps when its own primitives are
 pixel-sensitive (`layer_needs_rigid_snap`: text or images, or any drawn
@@ -163,8 +178,11 @@ of shape fill and from 15.9 ms to 10.6 ms present with this.
   (`glass_specialization_parity.rs` proves the specialized pipeline matches
   the general one byte for byte).
 - `LayerCache`: textures of isolated children that read no backdrop and whose
-  `cache_policy` is `Auto`, keyed by content hash, effect hash, size and scale
-  bucket.
+  `cache_policy` is `Auto`, keyed by content hash, size, scale bucket and the
+  1/16-pixel device phase. The texture holds the child's content before its
+  render effect, so an animated shader over static content re-applies the
+  shader each frame and re-renders nothing (`raster_cache.rs`); a translated
+  child lands on whole device pixels, so a scrolling card keeps its texture.
 
 Nothing else is cached. A backdrop effect resolves every frame it is drawn;
 when the page under a still glass card animates elsewhere, the card's

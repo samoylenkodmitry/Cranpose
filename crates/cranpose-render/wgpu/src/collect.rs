@@ -58,7 +58,6 @@ pub(crate) struct ChildLayer {
     pub(crate) snap_anchor: Option<SnapAnchor>,
     pub(crate) surface_scale: f32,
     pub(crate) content_hash: u64,
-    pub(crate) effect_hash: u64,
     pub(crate) cache_policy: CachePolicy,
     pub(crate) content: LayerScene,
 }
@@ -78,18 +77,25 @@ struct WalkContext {
 }
 
 pub(crate) fn direct_translation(transform: ProjectiveTransform) -> Option<Point> {
+    uniform_scale_translation(transform)
+        .filter(|(scale, _)| (scale - 1.0).abs() <= AFFINE_TOLERANCE)
+        .map(|(_, translation)| translation)
+}
+
+pub(crate) fn uniform_scale_translation(transform: ProjectiveTransform) -> Option<(f32, Point)> {
     let matrix = transform.matrix();
-    if (matrix[0][0] - 1.0).abs() > AFFINE_TOLERANCE
+    let scale = matrix[0][0];
+    if scale <= 0.0
+        || (matrix[1][1] - scale).abs() > AFFINE_TOLERANCE
         || matrix[0][1].abs() > AFFINE_TOLERANCE
         || matrix[1][0].abs() > AFFINE_TOLERANCE
-        || (matrix[1][1] - 1.0).abs() > AFFINE_TOLERANCE
         || matrix[2][0].abs() > AFFINE_TOLERANCE
         || matrix[2][1].abs() > AFFINE_TOLERANCE
         || (matrix[2][2] - 1.0).abs() > AFFINE_TOLERANCE
     {
         return None;
     }
-    Some(Point::new(matrix[0][2], matrix[1][2]))
+    Some((scale, Point::new(matrix[0][2], matrix[1][2])))
 }
 
 fn graphics_layer_is_rigid(layer: &GraphicsLayer) -> bool {
@@ -500,7 +506,6 @@ fn isolated_child(
         snap_anchor,
         surface_scale: layer_uniform_scale(&layer.graphics_layer),
         content_hash: layer.target_content_hash(),
-        effect_hash: layer.effect_hash(),
         cache_policy: layer.cache_policy,
         content,
     }

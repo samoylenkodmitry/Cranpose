@@ -41,9 +41,10 @@ use crate::{
     },
     frame_packet::{CancelReason, FramePacket, PresentOutcome, RenderReturns},
     geometry::{
-        DevicePixelBounds, axis_aligned_quad_rect, canonicalize_device_coordinate,
-        canonicalized_scaled_quad, canonicalized_scaled_rect, offscreen_byte_size, scaled_quad,
-        snap_delta_for_anchor, translate_quad, translation_stable_anchored_device_pixel_bounds,
+        DevicePixelBounds, anchored_device_rect, axis_aligned_quad_rect,
+        canonicalize_device_coordinate, canonicalized_scaled_quad, canonicalized_scaled_rect,
+        offscreen_byte_size, scaled_quad, snap_delta_for_anchor, snapped_anchor_device_origin,
+        translate_quad, translation_stable_anchored_device_pixel_bounds,
     },
     gpu_stats::{self, gpu_stats_enabled},
     layer_cache::LayerCache,
@@ -58,7 +59,7 @@ use crate::{
     shaders,
 };
 #[cfg(target_arch = "wasm32")]
-const MAX_SHAPES_PER_BATCH: usize = 102;
+const MAX_SHAPES_PER_BATCH: usize = shaders::UNIFORM_SHAPE_CAPACITY;
 #[cfg(not(target_arch = "wasm32"))]
 const MAX_SHAPES_PER_BATCH: usize = 768;
 #[cfg(target_arch = "wasm32")]
@@ -267,13 +268,17 @@ fn intersect_device_rects(a: DeviceRect4, b: DeviceRect4) -> Option<DeviceRect4>
     (right > left && bottom > top).then_some((left, top, right - left, bottom - top))
 }
 
-fn logical_rect_to_device(rect: Rect, root_scale: f32) -> DeviceRect4 {
-    (
-        rect.x * root_scale,
-        rect.y * root_scale,
-        rect.width * root_scale,
-        rect.height * root_scale,
-    )
+fn anchored_rect_to_device(
+    rect: Rect,
+    snap_anchor: Option<SnapAnchor>,
+    root_scale: f32,
+) -> DeviceRect4 {
+    let device = anchored_device_rect(rect, snap_anchor, root_scale);
+    (device.x, device.y, device.width, device.height)
+}
+
+fn mask_rect(rect: Rect) -> [f32; 4] {
+    [rect.x, rect.y, rect.width, rect.height]
 }
 
 /// The parts of a shadow's covered device rect that lie outside its
@@ -909,7 +914,10 @@ fn shape_shader_source(batch_limits: ShapeBatchLimits) -> Cow<'static, str> {
         return Cow::Owned(
             shaders::SHADER
                 .replace(
-                    "var<uniform> shape_data: array<ShapeData, 102>;",
+                    &format!(
+                        "var<uniform> shape_data: {};",
+                        shaders::uniform_shape_array()
+                    ),
                     "var<storage, read> shape_data: array<ShapeData>;",
                 )
                 .replace(
@@ -921,7 +929,7 @@ fn shape_shader_source(batch_limits: ShapeBatchLimits) -> Cow<'static, str> {
     Cow::Owned(
         shaders::SHADER
             .replace(
-                "array<ShapeData, 102>",
+                &shaders::uniform_shape_array(),
                 &format!("array<ShapeData, {}>", batch_limits.max_shapes_per_batch),
             )
             .replace(
@@ -1248,6 +1256,8 @@ pub(crate) struct ShapeData {
     pub(crate) gradient_start: u32,
     pub(crate) gradient_count: u32,
     pub(crate) gradient_tile_mode: u32,
+    pub(crate) dither_origin: [f32; 2],
+    pub(crate) dither_padding: [f32; 2],
 }
 
 const SHAPE_KIND_FILL: u32 = 0;
@@ -1286,6 +1296,14 @@ fn shape_gradient_stop_count(shape: &DrawShape, brushes: &[Brush]) -> usize {
     }
 }
 
+fn shape_dither_origin(shape: &DrawShape, root_scale: f32) -> [f32; 2] {
+    let origin = shape
+        .snap_anchor
+        .map(|anchor| snapped_anchor_device_origin(anchor, root_scale))
+        .unwrap_or_default();
+    [origin.x, origin.y]
+}
+
 fn convert_shape_into_slots(
     shape: &DrawShape,
     brushes: &[Brush],
@@ -1302,6 +1320,7 @@ fn convert_shape_into_slots(
     let quad = translate_quad(shape.quad, snap_delta);
     let clip = shape.clip;
     let canonicalize = shape.snap_anchor.is_some();
+    let dither_origin = shape_dither_origin(shape, root_scale);
     let device_local_rect = if canonicalize {
         canonicalized_scaled_rect(local_rect, root_scale)
     } else {
@@ -1545,6 +1564,8 @@ fn convert_shape_into_slots(
         gradient_start,
         gradient_count,
         gradient_tile_mode,
+        dither_origin,
+        dither_padding: [0.0; 2],
     };
 }
 
@@ -3382,6 +3403,7 @@ impl GpuRenderer {
         Some((source, false))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn resolve_blurred_shadow<C: FrameCommandRecorder>(
         &mut self,
         recorder: &mut C,
@@ -3422,11 +3444,12 @@ impl GpuRenderer {
         };
         let max_texture_dim = self.max_texture_dim();
         let shape_only = shadow.texts.is_empty();
+        let anchor = shared_shape_shadow_snap_anchor(&shadow.shapes);
         let source_device = shape_only
             .then(|| {
                 translation_stable_anchored_device_pixel_bounds(
                     source_bounds,
-                    shared_shape_shadow_snap_anchor(&shadow.shapes),
+                    anchor,
                     root_scale,
                     max_texture_dim,
                 )
@@ -3456,7 +3479,7 @@ impl GpuRenderer {
         let mut coverage = intersect_device_rects(dest, target_rect);
         if let Some(clip) = shadow.clip {
             coverage = coverage.and_then(|coverage| {
-                intersect_device_rects(coverage, logical_rect_to_device(clip, root_scale))
+                intersect_device_rects(coverage, anchored_rect_to_device(clip, anchor, root_scale))
             });
         }
         let Some(coverage) = coverage else {
@@ -3466,7 +3489,7 @@ impl GpuRenderer {
             coverage,
             shadow
                 .occluder
-                .map(|occluder| logical_rect_to_device(occluder, root_scale)),
+                .map(|occluder| anchored_rect_to_device(occluder, anchor, root_scale)),
         );
         if bands.is_empty() {
             self.frame_stats.record_shadow_fully_occluded();
@@ -3476,7 +3499,7 @@ impl GpuRenderer {
             self.frame_stats
                 .record_shadow_shape_cache_hit(banded_pixels(&bands));
         }
-        let rounded_mask = shadow_composite_mask(shadow, root_scale);
+        let rounded_mask = shadow_composite_mask(shadow, anchor, root_scale);
         for band in bands {
             resolved.push(ResolvedComposite {
                 z_index: z,
@@ -3487,7 +3510,7 @@ impl GpuRenderer {
                     alpha: 1.0,
                     blend_mode: BlendMode::SrcOver,
                     rounded_mask,
-                    sample_mode: CompositeSampleMode::Linear,
+                    sample_mode: CompositeSampleMode::Nearest,
                     source_viewport: None,
                 },
             });
@@ -3724,9 +3747,7 @@ impl GpuRenderer {
         let (x, y, width, height) = scissor.unwrap_or((0, 0, target_size.0, target_size.1));
         pass.set_scissor_rect(x, y, width, height);
         let buffers = &self.shape_slots[batch.slot];
-        let mesh = batch
-            .mesh_index_count
-            .and_then(|count| buffers.mesh.as_ref().map(|mesh| (count, mesh)));
+        let mesh = batch.mesh_index_count.zip(buffers.mesh.as_ref());
         let stage = if mesh.is_some() {
             ShapeVertexStage::Mesh
         } else {
@@ -5263,15 +5284,14 @@ fn scissor_rect_for_image(
 /// The rounded mask a shadow's composite applies, in the scene's device
 /// pixels: an inner shadow masks itself to its fill shape, and a shadow
 /// lowered out of a clipped layer masks itself to that layer's rounded clip.
-fn shadow_composite_mask(shadow: &ShadowDraw, root_scale: f32) -> Option<RoundedCompositeMask> {
+fn shadow_composite_mask(
+    shadow: &ShadowDraw,
+    snap_anchor: Option<SnapAnchor>,
+    root_scale: f32,
+) -> Option<RoundedCompositeMask> {
     inner_shadow_composite_mask(shadow, root_scale).or_else(|| {
         shadow.rounded_clip.map(|clip| RoundedCompositeMask {
-            rect: [
-                clip.rect.x * root_scale,
-                clip.rect.y * root_scale,
-                clip.rect.width * root_scale,
-                clip.rect.height * root_scale,
-            ],
+            rect: mask_rect(anchored_device_rect(clip.rect, snap_anchor, root_scale)),
             radii: clip.radii.map(|radius| radius * root_scale),
         })
     })
@@ -5362,12 +5382,7 @@ fn inner_shadow_composite_mask(
     });
 
     Some(RoundedCompositeMask {
-        rect: [
-            rect.x * root_scale,
-            rect.y * root_scale,
-            rect.width * root_scale,
-            rect.height * root_scale,
-        ],
+        rect: mask_rect(anchored_device_rect(rect, fill.snap_anchor, root_scale)),
         radii,
     })
 }

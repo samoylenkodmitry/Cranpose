@@ -426,6 +426,7 @@ fn a_runtime_shader_layer_with_stable_uniforms_is_served_from_the_layer_cache() 
         .capture_frame(128, 96)
         .expect("second shader capture should succeed");
     let stats = renderer.last_frame_stats().expect("frame stats");
+    let cached_pass_count = stats.pass_count;
     assert_eq!(second.pixels, first.pixels);
     assert!(
         stats.layer_cache_hits >= 1 && stats.isolated_layer_renders == 0,
@@ -439,8 +440,18 @@ fn a_runtime_shader_layer_with_stable_uniforms_is_served_from_the_layer_cache() 
         .expect("third shader capture should succeed");
     let stats = renderer.last_frame_stats().expect("frame stats");
     assert!(
-        third.pixels != second.pixels && stats.isolated_layer_renders >= 1,
+        third.pixels != second.pixels,
         "a changed uniform must re-run the shader: {stats:?}"
+    );
+    assert!(
+        stats.layer_cache_hits >= 1 && stats.isolated_layer_renders == 0,
+        "the cache holds the layer's content, not its effect: a changed uniform re-runs the \
+         shader over the cached content and re-renders nothing: {stats:?}"
+    );
+    assert_eq!(
+        stats.pass_count, cached_pass_count,
+        "a runtime shader over cached content draws in the final pass, not in a pass of its \
+         own: {stats:?}"
     );
 }
 

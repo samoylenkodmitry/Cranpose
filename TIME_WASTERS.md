@@ -710,3 +710,18 @@ them out of the atlas into per-glass capture and effect passes, and the
 Mac inventory grew four unbatched captures per frame. Any rule that decides
 between "stay batched" and "resolve alone" must be measured on both kinds
 of item before it ships.
+
+## Reproduce a robot scroll failure headlessly before writing fixtures (2026-09-03)
+
+Three robot runners failed on CI's X11 host. Two hours went into guessing
+the failing element from diff crops and building four render-graph
+fixtures (layer shadows, cutout shadows, a glass over a shadow) that never
+turned red, then got deleted. What answered in ten minutes was composing
+the real demo page in an `AppShell` over a headless renderer at the CI
+density, driving its scroll state by one physical pixel and comparing
+shifted frames -- `apps/desktop-demo/tests/liquid_scroll_phase.rs`. It
+reproduced the exact 8 800-pixel flicker on the Mac, and every fix could be
+checked in seconds instead of a queued samarch-1 run. The robot log's
+first-diff pixel names a symptom, not the element: read-tail resolve
+regions, gradient dither and shadow bands all showed up as "1 LSB on a
+card". Start from the scene, not from the pixel.

@@ -14,7 +14,7 @@ struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) color: vec4<f32>,
     @location(1) uv: vec2<f32>,
-    @location(2) world_pos: vec2<f32>,
+    @location(2) world_pos: vec4<f32>,
     @location(3) @interpolate(flat) rect: vec4<f32>,
     @location(4) @interpolate(flat) radii: vec4<f32>,
     @location(5) @interpolate(flat) gradient_params: vec4<f32>,
@@ -46,8 +46,6 @@ var<uniform> uniforms: Uniforms;
 // triangles (0, 1, 2) and (2, 1, 3).
 @vertex
 fn vs_main(@builtin(vertex_index) vertex_idx: u32) -> VertexOutput {
-    var output: VertexOutput;
-
     let shape_idx = vertex_idx / 6u;
     let slot = vertex_idx % 6u;
     var corner: u32;
@@ -66,7 +64,15 @@ fn vs_main(@builtin(vertex_index) vertex_idx: u32) -> VertexOutput {
         case 2u: { position = shape.quad23.xy; }
         default: { position = shape.quad23.zw; }
     }
+    return shape_output(shape, position, vec2<f32>(f32(corner & 1u), f32(corner >> 1u)));
+}
 
+// The varyings of one shape record at `position`, the device pixel the
+// vertex lands on, with `uv` its place in the record's rect. `world_pos`
+// carries the device position in xy and, in zw, the same position relative
+// to the record's dither origin.
+fn shape_output(shape: ShapeData, position: vec2<f32>, uv: vec2<f32>) -> VertexOutput {
+    var output: VertexOutput;
     // Convert from pixel coordinates to clip space (viewport_offset shifts the origin
     // so that a sub-region of the viewport maps to the full NDC range)
     let x = ((position.x - uniforms.viewport_offset.x) / uniforms.viewport.x) * 2.0 - 1.0;
@@ -74,8 +80,8 @@ fn vs_main(@builtin(vertex_index) vertex_idx: u32) -> VertexOutput {
 
     output.clip_position = vec4<f32>(x, y, 0.0, 1.0);
     output.color = shape.color;
-    output.uv = vec2<f32>(f32(corner & 1u), f32(corner >> 1u));
-    output.world_pos = position;
+    output.uv = uv;
+    output.world_pos = vec4<f32>(position, position - shape.dither_origin);
     output.rect = shape.rect;
     output.radii = shape.radii;
     output.gradient_params = shape.gradient_params;
@@ -94,7 +100,6 @@ fn vs_main(@builtin(vertex_index) vertex_idx: u32) -> VertexOutput {
     output.stop_color1 = stops.color1;
     output.stop_color2 = stops.color2;
     output.stop_color3 = stops.color3;
-
     return output;
 }
 
@@ -109,34 +114,7 @@ struct MeshVertexInput {
 // exactly as the quad path fills it.
 @vertex
 fn vs_mesh(in: MeshVertexInput) -> VertexOutput {
-    var output: VertexOutput;
-    let shape = shape_data[in.shape_idx];
-    let position = in.position;
-    let x = ((position.x - uniforms.viewport_offset.x) / uniforms.viewport.x) * 2.0 - 1.0;
-    let y = 1.0 - ((position.y - uniforms.viewport_offset.y) / uniforms.viewport.y) * 2.0;
-    output.clip_position = vec4<f32>(x, y, 0.0, 1.0);
-    output.color = shape.color;
-    output.uv = in.uv;
-    output.world_pos = position;
-    output.rect = shape.rect;
-    output.radii = shape.radii;
-    output.gradient_params = shape.gradient_params;
-    output.clip_rect = shape.clip_rect;
-    output.stroke_params = shape.stroke_params;
-    output.arc_params = shape.arc_params;
-    output.brush = vec4<u32>(
-        shape.brush_type,
-        shape.gradient_start,
-        shape.gradient_count,
-        shape.gradient_tile_mode,
-    );
-    let stops = load_inline_gradient_stops(shape.gradient_start, shape.gradient_count);
-    output.stop_offsets = stops.offsets;
-    output.stop_color0 = stops.color0;
-    output.stop_color1 = stops.color1;
-    output.stop_color2 = stops.color2;
-    output.stop_color3 = stops.color3;
-    return output;
+    return shape_output(shape_data[in.shape_idx], in.position, in.uv);
 }
 
 // Fragment shader structs and data
@@ -166,6 +144,8 @@ struct ShapeData {
     gradient_start: u32,
     gradient_count: u32,
     gradient_tile_mode: u32,    // 0=Clamp, 1=Repeated, 2=Mirror, 3=Decal
+    dither_origin: vec2<f32>,   // device origin the gradient dither is anchored to
+    dither_padding: vec2<f32>,
 }
 
 struct GradientStop {
@@ -175,12 +155,12 @@ struct GradientStop {
 
 // Use uniform buffers for WebGL compatibility
 // Note: WebGL has a minimum uniform buffer size of 16KB
-// ShapeData is 160 bytes now (quad corners + color ride along), so 102 shapes =
-// 16320 bytes, the most that fits the 16KB floor. Native pipelines rewrite
+// ShapeData is 176 bytes, so 93 shapes = 16368 bytes, the most that fits the
+// 16KB floor. Native pipelines rewrite
 // both array lengths from the real device limits — see `shape_shader_source`,
 // which string-replaces these exact literals.
 @group(1) @binding(0)
-var<uniform> shape_data: array<ShapeData, 102>;
+var<uniform> shape_data: array<ShapeData, 93>;
 
 @group(1) @binding(1)
 var<uniform> gradient_stops: array<GradientStop, 256>;
@@ -349,7 +329,10 @@ fn remap_gradient_t(raw_t: f32, tile_mode: u32) -> GradientSample {
 // which carries the derivation and the tests; the CPU sampler bins by these
 // same scene device coordinates, so the two backends dither a gradient the
 // same way. `world_pos` rather than `@builtin(position)` for exactly that
-// reason — on Android the two read the same pixel anyway.
+// reason — on Android the two read the same pixel anyway. The coordinate is
+// the device position relative to the record's dither origin (`world_pos.zw`):
+// a subtree moving rigidly by whole pixels carries its pattern with it, and a
+// record outside any motion anchor keeps the origin at zero, Skia's phase.
 fn gradient_dither(device_pos: vec2<f32>) -> f32 {
     let x = u32(max(floor(device_pos.x), 0.0)) + 1u;
     let y = u32(max(floor(device_pos.y), 0.0)) + 1u;
@@ -489,7 +472,7 @@ fn sample_gradient(gradient_start: u32, count: u32, t: f32) -> vec4<f32> {
 /// on Vulkan it did not, and `solid_fs_parity` measured three pixels apart by
 /// up to 2/255 (the macOS CI runner, on Metal, saw none of it).
 fn shape_coverage_alpha(input: VertexOutput) -> f32 {
-    let world_pos = input.world_pos;
+    let world_pos = input.world_pos.xy;
     // Local layer-space pixel coordinate derived from uv, independent of
     // world-space quad deformation (rotation/perspective).
     let rect_pos = input.rect.xy + input.uv * input.rect.zw;
@@ -577,7 +560,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 
     // Re-derived rather than threaded out of the coverage pass: both are pure
     // functions of `input`, so the compiler folds them back together.
-    let world_pos = input.world_pos;
+    let world_pos = input.world_pos.xy;
     let rect_pos = input.rect.xy + input.uv * input.rect.zw;
 
     var color = input.color;
@@ -634,7 +617,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     // to band, and Skia leaves it alone too, which is why solid fills already
     // land byte-for-byte on the Compose build's.
     if (is_gradient && color.a > 0.0) {
-        let offset = gradient_dither(world_pos) * (1.0 / 255.0);
+        let offset = gradient_dither(input.world_pos.zw) * (1.0 / 255.0);
         color = vec4<f32>(clamp(color.rgb + vec3<f32>(offset), vec3<f32>(0.0), vec3<f32>(1.0)),
                           color.a);
     }

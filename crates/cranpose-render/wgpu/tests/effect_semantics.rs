@@ -23,7 +23,7 @@ use cranpose_ui_graphics::{
     BlendMode, Brush, Color, CompositingStrategy, DrawPrimitive, GraphicsLayer, ImageBitmap,
     ImageSampling, Point, Rect, RenderEffect, ShadowPrimitive,
 };
-use support::solid_rect;
+use support::{brush_rect, solid_rect};
 
 const FRAME_WIDTH: u32 = 128;
 const FRAME_HEIGHT: u32 = 96;
@@ -44,7 +44,14 @@ const SHOWCASE_CARD_MAX_PIXEL_DIFFERENCE: u32 = 3;
 const TRANSLATED_TEXT_LOCAL_SIZE: (u32, u32) = (48, 24);
 const MULTISPAN_FRAME_WIDTH: u32 = 420;
 const MULTISPAN_TEXT_WRAPPER_LOCAL_SIZE: (u32, u32) = (340, 40);
+const SCALED_CHILD_SIZE: f32 = 36.0;
+const SCALED_CHILD_RADIUS: f32 = 6.0;
+const SCALED_CHILD_ALPHA: f32 = 0.7;
+const SCALED_CHILD_SCALE: f32 = 0.97;
+const SCALED_CHILD_COMPARE_MARGIN: f32 = 4.0;
+const SCALED_CHILD_CHANNEL_ROUNDING: u32 = 3;
 const TRANSLATED_THIN_SHAPE_LOCAL_SIZE: (u32, u32) = (40, 18);
+const TRANSLATED_GRADIENT_LOCAL_SIZE: (u32, u32) = (40, 20);
 
 #[test]
 fn subtree_alpha_capture_preserves_group_opacity_and_uses_bounded_surface() {
@@ -522,6 +529,225 @@ fn translated_thin_shape_wrapper_stays_rigid_on_the_direct_path_under_fractional
         base_bright,
         "vertical fractional motion must move the thin bars by whole device pixels"
     );
+}
+
+#[test]
+fn translated_gradient_wrapper_keeps_its_dither_under_fractional_motion() {
+    let mut renderer = match support::headless_renderer() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!(
+                "skipping translated gradient assertions because headless WGPU init failed: {}",
+                err
+            );
+            return;
+        }
+    };
+
+    let base_translation = Point::new(12.0, 14.0);
+    let mut frames = [
+        base_translation,
+        Point::new(12.35, 14.0),
+        Point::new(12.0, 14.65),
+        Point::new(13.0, 15.0),
+    ]
+    .map(|translation| {
+        let mut graph = translation_only_wrapper_with_gradient_fixture(translation);
+        mark_translated_shape_wrapper(&mut graph);
+        renderer.scene_mut().graph = Some(graph);
+        let frame = renderer
+            .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
+            .expect("translated gradient capture should succeed");
+        let stats = renderer
+            .last_frame_stats()
+            .expect("translated gradient frame stats");
+        assert_eq!(
+            stats.isolated_layer_renders, 0,
+            "a translated gradient wrapper draws directly into the root target: {stats:?}"
+        );
+        (
+            translation,
+            normalize_translated_gradient_region(&frame, translation),
+        )
+    })
+    .into_iter();
+    let (_, base) = frames.next().expect("base frame");
+    for (translation, moved) in frames {
+        assert_exact_normalized_match(
+            &format!(
+                "translated gradient moved to ({}, {})",
+                translation.x, translation.y
+            ),
+            &base,
+            &moved,
+            TRANSLATED_GRADIENT_LOCAL_SIZE.0,
+            TRANSLATED_GRADIENT_LOCAL_SIZE.1,
+        );
+    }
+}
+
+#[test]
+fn a_scaled_isolated_child_rasterizes_on_the_parent_pixel_grid() {
+    let mut renderer = match support::headless_renderer() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!(
+                "skipping scaled child raster assertions because headless WGPU init failed: {}",
+                err
+            );
+            return;
+        }
+    };
+
+    let translation = Point::new(20.0, 20.0);
+    let composited = capture_scaled_child_region(&mut renderer, translation);
+    let reference = capture_scaled_reference_region(&mut renderer, translation);
+    assert_scaled_child_matches_reference("a scaled isolated child", &composited, &reference);
+}
+
+#[test]
+fn a_cached_scaled_child_is_not_reused_at_another_device_phase() {
+    let mut renderer = match support::headless_renderer() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!(
+                "skipping scaled child cache assertions because headless WGPU init failed: {}",
+                err
+            );
+            return;
+        }
+    };
+
+    let warm = Point::new(20.0, 20.0);
+    let _ = capture_scaled_child_region(&mut renderer, warm);
+    let moved = Point::new(20.3, 20.0);
+    let composited = capture_scaled_child_region(&mut renderer, moved);
+    let reference = capture_scaled_reference_region(&mut renderer, moved);
+    assert_scaled_child_matches_reference(
+        "a scaled child moved to another device phase after its surface was cached",
+        &composited,
+        &reference,
+    );
+}
+
+fn scaled_child_compare_size() -> (u32, u32) {
+    let side = (SCALED_CHILD_SIZE + SCALED_CHILD_COMPARE_MARGIN * 2.0) as u32;
+    (side, side)
+}
+
+fn capture_scaled_child_region(renderer: &mut WgpuRenderer, translation: Point) -> Vec<u8> {
+    renderer.scene_mut().graph = Some(scaled_child_fixture(translation));
+    capture_scaled_region(renderer, translation)
+}
+
+fn capture_scaled_reference_region(renderer: &mut WgpuRenderer, translation: Point) -> Vec<u8> {
+    renderer.scene_mut().graph = Some(scaled_reference_fixture(translation));
+    capture_scaled_region(renderer, translation)
+}
+
+fn capture_scaled_region(renderer: &mut WgpuRenderer, translation: Point) -> Vec<u8> {
+    let frame = renderer
+        .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
+        .expect("scaled child capture should succeed");
+    let (width, height) = scaled_child_compare_size();
+    normalize_rgba_region(
+        &frame.pixels,
+        frame.width,
+        frame.height,
+        Rect {
+            x: translation.x.floor() - SCALED_CHILD_COMPARE_MARGIN,
+            y: translation.y.floor() - SCALED_CHILD_COMPARE_MARGIN,
+            width: width as f32,
+            height: height as f32,
+        },
+        width,
+        height,
+    )
+}
+
+fn assert_scaled_child_matches_reference(label: &str, composited: &[u8], reference: &[u8]) {
+    assert_nearly_exact_normalized_match(
+        label,
+        reference,
+        composited,
+        scaled_child_compare_size(),
+        NormalizedMatchTolerance {
+            pixel_tolerance: SCALED_CHILD_CHANNEL_ROUNDING,
+            max_differing_pixels: 0,
+            max_pixel_difference: SCALED_CHILD_CHANNEL_ROUNDING,
+        },
+    );
+}
+
+fn scaled_child_fixture(translation: Point) -> RenderGraph {
+    let bounds = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: SCALED_CHILD_SIZE,
+        height: SCALED_CHILD_SIZE,
+    };
+    let pivot = SCALED_CHILD_SIZE * 0.5;
+    let transform = ProjectiveTransform::translation(-pivot, -pivot)
+        .then(ProjectiveTransform::uniform_scale(SCALED_CHILD_SCALE))
+        .then(ProjectiveTransform::translation(pivot, pivot))
+        .then(ProjectiveTransform::translation(
+            translation.x,
+            translation.y,
+        ));
+    let mut child = layer(
+        bounds,
+        transform,
+        GraphicsLayer {
+            alpha: SCALED_CHILD_ALPHA,
+            scale: SCALED_CHILD_SCALE,
+            ..GraphicsLayer::default()
+        },
+        vec![round_rect(
+            bounds,
+            Color(0.85, 0.35, 0.2, 1.0),
+            SCALED_CHILD_RADIUS,
+        )],
+    );
+    child.cache_policy = CachePolicy::Auto;
+    let mut graph = graph(vec![
+        solid_rect(frame_rect(), Color(0.96, 0.93, 0.9, 1.0)),
+        RenderNode::Layer(Box::new(child)),
+    ]);
+    graph.root.recompute_raster_cache_hashes();
+    graph
+}
+
+fn scaled_reference_fixture(translation: Point) -> RenderGraph {
+    let inset = SCALED_CHILD_SIZE * 0.5 * (1.0 - SCALED_CHILD_SCALE);
+    let rect = Rect {
+        x: translation.x + inset,
+        y: translation.y + inset,
+        width: SCALED_CHILD_SIZE * SCALED_CHILD_SCALE,
+        height: SCALED_CHILD_SIZE * SCALED_CHILD_SCALE,
+    };
+    graph(vec![
+        solid_rect(frame_rect(), Color(0.96, 0.93, 0.9, 1.0)),
+        round_rect(
+            rect,
+            Color(0.85, 0.35, 0.2, SCALED_CHILD_ALPHA),
+            SCALED_CHILD_RADIUS * SCALED_CHILD_SCALE,
+        ),
+    ])
+}
+
+fn round_rect(rect: Rect, color: Color, radius: f32) -> RenderNode {
+    RenderNode::Primitive(PrimitiveEntry {
+        phase: PrimitivePhase::BeforeChildren,
+        node: PrimitiveNode::Draw(DrawPrimitiveNode {
+            primitive: DrawPrimitive::RoundRect {
+                rect,
+                brush: Brush::solid(color),
+                radii: cranpose_ui_graphics::CornerRadii::uniform(radius),
+                stroke: None,
+            },
+            clip: None,
+        }),
+    })
 }
 
 #[test]
@@ -2557,6 +2783,47 @@ fn translation_only_wrapper_with_underlined_text_fixture(
     )
 }
 
+fn translation_only_wrapper_with_gradient_fixture(wrapper_translation: Point) -> RenderGraph {
+    let gradient_leaf = layer(
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: TRANSLATED_GRADIENT_LOCAL_SIZE.0 as f32,
+            height: TRANSLATED_GRADIENT_LOCAL_SIZE.1 as f32,
+        },
+        ProjectiveTransform::translation(9.0, 7.0),
+        GraphicsLayer::default(),
+        vec![brush_rect(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: TRANSLATED_GRADIENT_LOCAL_SIZE.0 as f32,
+                height: TRANSLATED_GRADIENT_LOCAL_SIZE.1 as f32,
+            },
+            Brush::linear_gradient(vec![
+                Color(0.20, 0.24, 0.30, 1.0),
+                Color(0.26, 0.31, 0.38, 1.0),
+            ]),
+        )],
+    );
+    let wrapper = layer(
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 64.0,
+            height: 40.0,
+        },
+        ProjectiveTransform::translation(wrapper_translation.x, wrapper_translation.y),
+        GraphicsLayer::default(),
+        vec![RenderNode::Layer(Box::new(gradient_leaf))],
+    );
+
+    graph(vec![
+        solid_rect(frame_rect(), Color::BLACK),
+        RenderNode::Layer(Box::new(wrapper)),
+    ])
+}
+
 fn translation_only_wrapper_with_thin_shapes_fixture(wrapper_translation: Point) -> RenderGraph {
     let shape_leaf = layer(
         Rect {
@@ -3465,6 +3732,22 @@ fn assert_nearly_exact_normalized_match(
         diff.rhs,
         diff.difference
     );
+}
+
+fn normalize_translated_gradient_region(frame: &CapturedFrame, translation: Point) -> Vec<u8> {
+    normalize_rgba_region(
+        &frame.pixels,
+        frame.width,
+        frame.height,
+        Rect {
+            x: translation.x.round() + 9.0,
+            y: translation.y.round() + 7.0,
+            width: TRANSLATED_GRADIENT_LOCAL_SIZE.0 as f32,
+            height: TRANSLATED_GRADIENT_LOCAL_SIZE.1 as f32,
+        },
+        TRANSLATED_GRADIENT_LOCAL_SIZE.0,
+        TRANSLATED_GRADIENT_LOCAL_SIZE.1,
+    )
 }
 
 fn normalize_translated_text_region(frame: &CapturedFrame, translation: Point) -> Vec<u8> {

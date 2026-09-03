@@ -498,12 +498,16 @@ pub fn FramePage(width: u32, height: u32, background: Color, content: impl Fn() 
 
 /// One solid-filled rectangle drawn before the children.
 pub fn solid_rect(rect: Rect, color: Color) -> RenderNode {
+    brush_rect(rect, Brush::solid(color))
+}
+
+pub fn brush_rect(rect: Rect, brush: Brush) -> RenderNode {
     RenderNode::Primitive(PrimitiveEntry {
         phase: PrimitivePhase::BeforeChildren,
         node: PrimitiveNode::Draw(DrawPrimitiveNode {
             primitive: DrawPrimitive::Rect {
                 rect,
-                brush: Brush::solid(color),
+                brush,
                 stroke: None,
             },
             clip: None,

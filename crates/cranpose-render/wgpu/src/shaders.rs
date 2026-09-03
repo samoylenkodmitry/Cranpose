@@ -1,5 +1,14 @@
 pub const SHADER: &str = cranpose_ui_graphics::framework_shaders::SHAPE_WGSL;
 
+pub(crate) const WEBGL_UNIFORM_BINDING_FLOOR: usize = 16 * 1024;
+pub(crate) const UNIFORM_SHAPE_CAPACITY: usize =
+    WEBGL_UNIFORM_BINDING_FLOOR / std::mem::size_of::<crate::render::ShapeData>();
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn uniform_shape_array() -> String {
+    format!("array<ShapeData, {UNIFORM_SHAPE_CAPACITY}>")
+}
+
 pub const IMAGE_SHADER: &str = cranpose_ui_graphics::framework_shaders::IMAGE_WGSL;
 
 pub const GLYPH_ATLAS_SHADER: &str = cranpose_ui_graphics::framework_shaders::GLYPH_ATLAS_WGSL;
@@ -223,9 +232,18 @@ mod tests {
     }
 
     #[test]
+    fn shape_shader_declares_the_uniform_shape_capacity() {
+        let declaration = format!("var<uniform> shape_data: {};", super::uniform_shape_array());
+        assert!(
+            super::SHADER.contains(&declaration),
+            "shape.wgsl must declare `{declaration}`"
+        );
+    }
+
+    #[test]
     fn resized_shape_shader_still_validates_for_both_targets() {
         let resized = super::SHADER
-            .replace("array<ShapeData, 102>", "array<ShapeData, 409>")
+            .replace(&super::uniform_shape_array(), "array<ShapeData, 409>")
             .replace("array<GradientStop, 256>", "array<GradientStop, 1024>");
         assert!(
             resized.contains("array<ShapeData, 409>"),

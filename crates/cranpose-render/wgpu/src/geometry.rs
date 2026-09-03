@@ -18,17 +18,12 @@ pub(crate) struct DevicePixelBounds {
     pub(crate) height: u32,
 }
 
-pub(crate) fn translation_stable_anchored_device_pixel_bounds(
+pub(crate) fn anchored_device_rect(
     rect: Rect,
     snap_anchor: Option<SnapAnchor>,
     root_scale: f32,
-    max_texture_dim: u32,
-) -> Option<DevicePixelBounds> {
-    if !root_scale.is_finite() || root_scale <= 0.0 {
-        return None;
-    }
-
-    let device_rect = snap_anchor
+) -> Rect {
+    snap_anchor
         .and_then(|anchor| {
             axis_aligned_quad_rect(canonicalized_anchored_scaled_quad(
                 [
@@ -41,7 +36,20 @@ pub(crate) fn translation_stable_anchored_device_pixel_bounds(
                 root_scale,
             ))
         })
-        .unwrap_or_else(|| canonicalized_scaled_rect(rect, root_scale));
+        .unwrap_or_else(|| canonicalized_scaled_rect(rect, root_scale))
+}
+
+pub(crate) fn translation_stable_anchored_device_pixel_bounds(
+    rect: Rect,
+    snap_anchor: Option<SnapAnchor>,
+    root_scale: f32,
+    max_texture_dim: u32,
+) -> Option<DevicePixelBounds> {
+    if !root_scale.is_finite() || root_scale <= 0.0 {
+        return None;
+    }
+
+    let device_rect = anchored_device_rect(rect, snap_anchor, root_scale);
     let min_x = device_rect.x.floor();
     let min_y = device_rect.y.floor();
     let width = (device_rect.width.ceil() + 1.0).max(0.0) as u32;
@@ -103,38 +111,42 @@ pub(crate) fn canonicalized_anchored_scaled_quad(
     if !root_scale.is_finite() || root_scale <= 0.0 {
         return canonicalized_scaled_quad(quad, root_scale);
     }
-    let device_pixel_step =
-        if anchor.device_pixel_step.is_finite() && anchor.device_pixel_step > 0.0 {
-            anchor.device_pixel_step
-        } else {
-            1.0
-        };
-    let snapped_device_origin = |origin: f32| {
+    let origin = snapped_anchor_device_origin(anchor, root_scale);
+    quad.map(|[x, y]| {
+        [
+            origin.x + canonicalize_device_coordinate((x - anchor.origin.x) * root_scale),
+            origin.y + canonicalize_device_coordinate((y - anchor.origin.y) * root_scale),
+        ]
+    })
+}
+
+pub(crate) fn snapped_anchor_device_origin(anchor: SnapAnchor, root_scale: f32) -> Point {
+    if !root_scale.is_finite() || root_scale <= 0.0 {
+        return Point::default();
+    }
+    let device_pixel_step = anchor_device_pixel_step(anchor);
+    let snapped = |origin: f32| {
         let snap_units = f64::from(origin) * f64::from(root_scale) / f64::from(device_pixel_step);
         let canonical_snap_units =
             (snap_units * DEVICE_SNAP_SUBPIXEL_STEPS).round() / DEVICE_SNAP_SUBPIXEL_STEPS;
         (canonical_snap_units.round() * f64::from(device_pixel_step)) as f32
     };
-    let anchor_x = snapped_device_origin(anchor.origin.x);
-    let anchor_y = snapped_device_origin(anchor.origin.y);
-    quad.map(|[x, y]| {
-        [
-            anchor_x + canonicalize_device_coordinate((x - anchor.origin.x) * root_scale),
-            anchor_y + canonicalize_device_coordinate((y - anchor.origin.y) * root_scale),
-        ]
-    })
+    Point::new(snapped(anchor.origin.x), snapped(anchor.origin.y))
+}
+
+fn anchor_device_pixel_step(anchor: SnapAnchor) -> f32 {
+    if anchor.device_pixel_step.is_finite() && anchor.device_pixel_step > 0.0 {
+        anchor.device_pixel_step
+    } else {
+        1.0
+    }
 }
 
 pub(crate) fn snap_delta_for_anchor(anchor: SnapAnchor, root_scale: f32) -> Point {
     if !root_scale.is_finite() || root_scale <= 0.0 {
         return Point::default();
     }
-    let device_pixel_step =
-        if anchor.device_pixel_step.is_finite() && anchor.device_pixel_step > 0.0 {
-            anchor.device_pixel_step
-        } else {
-            1.0
-        };
+    let device_pixel_step = anchor_device_pixel_step(anchor);
     let snapped_axis_delta = |origin: f32| {
         let root_scale = f64::from(root_scale);
         let device_pixel_step = f64::from(device_pixel_step);

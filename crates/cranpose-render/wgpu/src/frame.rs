@@ -7,7 +7,7 @@ use cranpose_render_common::{
 use cranpose_ui_graphics::{BlendMode, Point, Rect, RenderEffect, RuntimeShader, TileMode};
 
 use crate::{
-    collect::{ChildLayer, LayerScene, direct_translation},
+    collect::{ChildLayer, LayerScene, uniform_scale_translation},
     draw_pass::{PassSegment, PassTarget, ResolvedComposite, ResolvedCompositeKind},
     effect_renderer::{
         BlurRegion, CompositeSampleMode, EffectScratchTargetProvider, RoundedCompositeMask,
@@ -79,6 +79,14 @@ impl DeviceRect {
     }
 
     /// Snaps to whole pixels, growing outward.
+    fn translated(self, delta: Point) -> Self {
+        Self {
+            x: self.x + delta.x,
+            y: self.y + delta.y,
+            ..self
+        }
+    }
+
     fn snap_out(self) -> Self {
         let left = self.x.floor();
         let top = self.y.floor();
@@ -387,36 +395,119 @@ struct ChildPlacement {
     visible: DeviceRect,
     dest: DeviceRect,
     translation: Option<Point>,
+    snap: Point,
 }
 
-/// A translated child's surface blitted at its device offset: on whole
-/// pixels with nearest sampling when the offset is integral.
-fn translated_child_composite(
+/// A child's device bounds in its parent, and the part of them its clip and
+/// the target leave visible.
+fn child_device_placement(
+    child: &ChildLayer,
+    snap: Point,
+    scale: f32,
+    target_rect: DeviceRect,
+) -> (DeviceRect, Option<DeviceRect>) {
+    let dest_bounds_logical =
+        quad_bounds(child.transform.map_rect(child.local_bounds)).translate(snap.x, snap.y);
+    let dest = DeviceRect::from_logical(dest_bounds_logical, scale);
+    let clipped = match child.clip {
+        Some(clip) => dest.intersect(DeviceRect::from_logical(
+            clip.translate(snap.x, snap.y),
+            scale,
+        )),
+        None => Some(dest),
+    };
+    (dest, clipped.and_then(|rect| rect.intersect(target_rect)))
+}
+
+/// Whether a child's runtime shader can draw in the final pass over the
+/// child's content: the shader must apply the child's clip and alpha itself
+/// unless the child has neither.
+fn shader_tail_composites(child: &ChildLayer, shader: &RuntimeShader) -> bool {
+    let plain = child.alpha >= 1.0 && child.rounded_clip.is_none();
+    child.blend_mode == BlendMode::SrcOver && (plain || shader.batched_source())
+}
+
+/// The child's layer bounds in the pixels of a surface at `surface_rect`.
+fn layer_pixel_rect(child: &ChildLayer, surface_rect: DeviceRect, scale: f32) -> [f32; 4] {
+    let bounds = DeviceRect::from_logical(child.local_bounds, scale);
+    [
+        bounds.x - surface_rect.x,
+        bounds.y - surface_rect.y,
+        bounds.width,
+        bounds.height,
+    ]
+}
+
+/// A runtime shader drawn in the final pass over `source`, the child's
+/// content, at `dest`.
+#[allow(clippy::too_many_arguments)]
+fn shader_tail_composite(
+    child: &ChildLayer,
+    shader: &RuntimeShader,
+    z: usize,
+    source: Rc<OffscreenTarget>,
+    dest: DeviceRect,
+    layer_pixel_rect: [f32; 4],
+    rounded_mask: Option<RoundedCompositeMask>,
+    visible: DeviceRect,
+) -> ResolvedComposite {
+    ResolvedComposite {
+        z_index: z,
+        source,
+        dest: dest.tuple(),
+        scissor: Some(visible.tuple()),
+        kind: ResolvedCompositeKind::Shader {
+            shader: Rc::new(shader.clone()),
+            layer_pixel_rect,
+            source_region: None,
+            rounded_mask,
+            alpha: child.alpha,
+        },
+    }
+}
+
+/// A translated child's runtime shader drawn in the final pass over its
+/// rendered content, so an animated shader over cached content costs no
+/// pass; none when the child is not on the parent grid or the shader cannot
+/// apply the child's clip and alpha.
+fn shader_tail_over_surface(
+    child: &ChildLayer,
+    surface: &SurfaceRender,
+    translation: Option<Point>,
+    snap: Point,
+    z: usize,
+    scale: f32,
+    visible: DeviceRect,
+) -> Option<ResolvedComposite> {
+    let Some(RenderEffect::Shader { shader }) = &child.effect else {
+        return None;
+    };
+    let dest = surface.grid_dest.filter(|_| translation.is_some())?;
+    shader_tail_composites(child, shader).then(|| {
+        shader_tail_composite(
+            child,
+            shader,
+            z,
+            Rc::clone(&surface.texture),
+            dest,
+            layer_pixel_rect(child, surface.rect, surface.scale),
+            grid_rounded_mask(child, snap, scale),
+            visible,
+        )
+    })
+}
+
+/// A child whose surface lies on the parent's pixel grid, blitted one to one
+/// at `dest`.
+fn grid_child_composite(
     child: &ChildLayer,
     z: usize,
     texture: Rc<OffscreenTarget>,
-    surface: &SurfaceRender,
-    translation: Point,
+    dest: DeviceRect,
+    snap: Point,
     scale: f32,
     visible: DeviceRect,
 ) -> ResolvedComposite {
-    let dest = DeviceRect {
-        x: surface.rect.x + translation.x * scale,
-        y: surface.rect.y + translation.y * scale,
-        width: surface.rect.width,
-        height: surface.rect.height,
-    };
-    let integer_aligned =
-        (dest.x - dest.x.round()).abs() <= 1e-3 && (dest.y - dest.y.round()).abs() <= 1e-3;
-    let dest = if integer_aligned {
-        DeviceRect {
-            x: dest.x.round(),
-            y: dest.y.round(),
-            ..dest
-        }
-    } else {
-        dest
-    };
     ResolvedComposite {
         z_index: z,
         source: texture,
@@ -425,12 +516,8 @@ fn translated_child_composite(
         kind: ResolvedCompositeKind::Blit {
             alpha: child.alpha,
             blend_mode: child.blend_mode,
-            rounded_mask: translated_rounded_mask(child, translation, scale),
-            sample_mode: if integer_aligned {
-                CompositeSampleMode::Nearest
-            } else {
-                CompositeSampleMode::Linear
-            },
+            rounded_mask: grid_rounded_mask(child, snap, scale),
+            sample_mode: CompositeSampleMode::Nearest,
             source_viewport: None,
         },
     }
@@ -642,6 +729,7 @@ struct SurfaceRender {
     texture: Rc<OffscreenTarget>,
     rect: DeviceRect,
     scale: f32,
+    grid_dest: Option<DeviceRect>,
 }
 
 enum Event {
@@ -960,7 +1048,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             .enumerate()
             .filter(|(_, composite)| matches!(composite.kind, ResolvedCompositeKind::Shader { .. }))
             .filter_map(|(index, composite)| {
-                let visible = DeviceRect::from_tuple(composite.scissor?);
+                let visible = DeviceRect::from_tuple(composite.scissor?).snap_out();
                 readers
                     .reads(composite.z_index, visible)
                     .then_some((index, visible))
@@ -1063,6 +1151,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             visible,
             dest,
             translation,
+            snap,
         } = placement;
         let padding = ((backdrop.input_padding() + backdrop.output_padding()) * scale).ceil();
         let capture_rect = visible
@@ -1085,8 +1174,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             dest.width,
             dest.height,
         ];
-        let rounded_mask =
-            translation.and_then(|translation| translated_rounded_mask(child, translation, scale));
+        let rounded_mask = translation.and_then(|_| grid_rounded_mask(child, snap, scale));
         if let RenderEffect::Shader { shader } = backdrop
             && (rounded_mask.is_none() || shader.batched_source())
         {
@@ -1549,22 +1637,11 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             .snap_anchor
             .map(|anchor| snap_delta_for_anchor(anchor, scale))
             .unwrap_or_default();
-        let translation = direct_translation(child.transform)
-            .filter(|_| (child.surface_scale - 1.0).abs() <= 1e-4)
-            .map(|translation| Point::new(translation.x + snap.x, translation.y + snap.y));
-        let dest_bounds_logical =
-            quad_bounds(child.transform.map_rect(child.local_bounds)).translate(snap.x, snap.y);
-        let clip_device = child
-            .clip
-            .map(|clip| DeviceRect::from_logical(clip.translate(snap.x, snap.y), scale));
-        let visible_device = {
-            let dest = DeviceRect::from_logical(dest_bounds_logical, scale);
-            match clip_device {
-                Some(clip) => dest.intersect(clip),
-                None => Some(dest),
-            }
-        };
-        let visible_device = visible_device.and_then(|rect| rect.intersect(target_rect));
+        let grid = uniform_scale_translation(child.transform)
+            .filter(|(uniform, _)| (uniform - child.surface_scale).abs() <= 1e-4)
+            .map(|(_, translation)| Point::new(translation.x + snap.x, translation.y + snap.y));
+        let translation = grid.filter(|_| (child.surface_scale - 1.0).abs() <= 1e-4);
+        let (dest, visible_device) = child_device_placement(child, snap, scale, target_rect);
 
         if let Some(backdrop) = &child.backdrop
             && let Some(visible) = visible_device
@@ -1572,8 +1649,9 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             let placement = ChildPlacement {
                 z,
                 visible,
-                dest: DeviceRect::from_logical(dest_bounds_logical, scale),
+                dest,
                 translation,
+                snap,
             };
             let composite = self.resolve_child_backdrop(
                 layer,
@@ -1592,33 +1670,32 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             return Ok(());
         };
         if readers.tail_allowed(z, visible)
-            && let Some(composite) = self.shader_only_child(child, z, scale, visible, translation)
+            && let Some(composite) =
+                self.shader_only_child(child, z, scale, visible, translation, snap)
         {
             resolved.push(composite);
             return Ok(());
         }
         let Some(surface) =
-            self.render_child_surface(layer, child, z, scale, beneath, resolved, translation)?
+            self.render_child_surface(layer, child, z, scale, beneath, resolved, grid)?
         else {
             return Ok(());
         };
+        if let Some(composite) =
+            shader_tail_over_surface(child, &surface, translation, snap, z, scale, visible)
+        {
+            resolved.push(composite);
+            return Ok(());
+        }
         let texture = match &child.effect {
             Some(effect) => {
-                let bounds = DeviceRect::from_logical(child.local_bounds, surface.scale);
-                let layer_pixel_rect = [
-                    bounds.x - surface.rect.x,
-                    bounds.y - surface.rect.y,
-                    bounds.width,
-                    bounds.height,
-                ];
+                let layer_pixel_rect = layer_pixel_rect(child, surface.rect, surface.scale);
                 self.apply_effect(&surface.texture, effect, layer_pixel_rect, "Layer Effect")?
             }
             None => Rc::clone(&surface.texture),
         };
-        let composite = match translation {
-            Some(translation) => {
-                translated_child_composite(child, z, texture, &surface, translation, scale, visible)
-            }
+        let composite = match surface.grid_dest {
+            Some(dest) => grid_child_composite(child, z, texture, dest, snap, scale, visible),
             None => {
                 let Some(composite) =
                     projected_child_composite(child, z, texture, &surface, snap, scale, visible)
@@ -1646,6 +1723,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         scale: f32,
         visible: DeviceRect,
         translation: Option<Point>,
+        snap: Point,
     ) -> Option<ResolvedComposite> {
         let translation = translation?;
         let Some(RenderEffect::Shader { shader }) = &child.effect else {
@@ -1656,11 +1734,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             && content.children.is_empty()
             && content.scene.backdrop_layers.is_empty()
             && content.scene.effect_layers.is_empty();
-        let plain = child.alpha >= 1.0 && child.rounded_clip.is_none();
-        if !draws_nothing
-            || !(plain || shader.batched_source())
-            || child.blend_mode != BlendMode::SrcOver
-        {
+        if !draws_nothing || !shader_tail_composites(child, shader) {
             return None;
         }
         let surface_logical = child_surface_rect(child)?;
@@ -1672,41 +1746,22 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let source = self
             .renderer
             .transparent_source(self.recorder, width, height);
-        let bounds = DeviceRect::from_logical(child.local_bounds, scale);
         let dest = DeviceRect {
             x: (surface_rect.x + translation.x * scale).round(),
             y: (surface_rect.y + translation.y * scale).round(),
             width: surface_rect.width,
             height: surface_rect.height,
         };
-        let rounded_mask = child.rounded_clip.map(|clip| {
-            rounded_mask(
-                LayerRoundedClip {
-                    rect: clip.rect.translate(translation.x, translation.y),
-                    radii: clip.radii,
-                },
-                Point::default(),
-                scale,
-            )
-        });
-        Some(ResolvedComposite {
-            z_index: z,
+        Some(shader_tail_composite(
+            child,
+            shader,
+            z,
             source,
-            dest: dest.tuple(),
-            scissor: Some(visible.tuple()),
-            kind: ResolvedCompositeKind::Shader {
-                shader: Rc::new(shader.clone()),
-                layer_pixel_rect: [
-                    bounds.x - surface_rect.x,
-                    bounds.y - surface_rect.y,
-                    bounds.width,
-                    bounds.height,
-                ],
-                source_region: None,
-                rounded_mask,
-                alpha: child.alpha,
-            },
-        })
+            dest,
+            layer_pixel_rect(child, surface_rect, scale),
+            grid_rounded_mask(child, snap, scale),
+            visible,
+        ))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1718,26 +1773,46 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         scale: f32,
         beneath: &Beneath<'_>,
         resolved: &[ResolvedComposite],
-        translation: Option<Point>,
+        grid: Option<Point>,
     ) -> Result<Option<SurfaceRender>, String> {
         let surface_scale = scale * child.surface_scale;
+        let translated = (child.surface_scale - 1.0).abs() <= 1e-4;
         let Some(surface_logical) = child_surface_rect(child) else {
             return Ok(None);
         };
-        let surface_rect = DeviceRect::from_logical(surface_logical, surface_scale).snap_out();
+        let child_rect = DeviceRect::from_logical(surface_logical, surface_scale).snap_out();
+        let grid_offset = grid.map(|grid| {
+            let offset = Point::new(grid.x * scale, grid.y * scale);
+            if translated {
+                Point::new(offset.x.round(), offset.y.round())
+            } else {
+                offset
+            }
+        });
+        let (surface_rect, grid_dest, device_phase) = match grid_offset {
+            Some(offset) => {
+                let dest = child_rect.translated(offset).snap_out();
+                (
+                    dest.translated(Point::new(-offset.x, -offset.y)),
+                    Some(dest),
+                    Point::new(offset.x - offset.x.floor(), offset.y - offset.y.floor()),
+                )
+            }
+            None => (child_rect, None, Point::default()),
+        };
         let (width, height) = surface_rect.pixel_size();
         if u64::from(width) * u64::from(height) > MAX_SURFACE_PIXELS {
             return Ok(None);
         }
         let reads_backdrop = child.reads_backdrop();
         let cache_key = (!reads_backdrop && child.cache_policy == CachePolicy::Auto).then(|| {
-            LayerRasterCacheKey::new(
+            LayerRasterCacheKey::source_content(
                 child.node_id,
                 child.content_hash,
-                child.effect_hash,
                 surface_logical,
                 (width, height),
                 ScaleBucket::from_scale(surface_scale),
+                device_phase,
             )
         });
         if let Some(key) = cache_key
@@ -1750,6 +1825,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 texture,
                 rect: surface_rect,
                 scale: surface_scale,
+                grid_dest,
             }));
         }
         let texture = if cache_key.is_some() {
@@ -1764,7 +1840,15 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             offset: [surface_rect.x, surface_rect.y],
         };
         let child_beneath = if reads_backdrop {
-            self.beneath_for_child(layer, child, z, scale, beneath, resolved, translation)?
+            self.beneath_for_child(
+                layer,
+                child,
+                z,
+                scale,
+                beneath,
+                resolved,
+                grid_offset.filter(|_| translated),
+            )?
         } else {
             Beneath {
                 base: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
@@ -1795,6 +1879,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             texture,
             rect: surface_rect,
             scale: surface_scale,
+            grid_dest,
         }))
     }
 
@@ -1812,11 +1897,11 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         scale: f32,
         beneath: &Beneath<'a>,
         resolved: &'a [ResolvedComposite],
-        translation: Option<Point>,
+        shift: Option<Point>,
     ) -> Result<Beneath<'a>, String> {
         let own_end = resolved.partition_point(|composite| composite.z_index <= z);
-        if let Some(translation) = translation {
-            let shift = [translation.x * scale, translation.y * scale];
+        if let Some(shift) = shift {
+            let shift = [shift.x, shift.y];
             let mut segments: Vec<BeneathSegment<'_>> = beneath
                 .segments
                 .iter()
@@ -1904,16 +1989,12 @@ fn shader_tail(effect: &RenderEffect) -> Option<(Option<&RenderEffect>, &Runtime
 }
 
 /// The rounded mask of a child composited at `translation`.
-fn translated_rounded_mask(
-    child: &ChildLayer,
-    translation: Point,
-    scale: f32,
-) -> Option<RoundedCompositeMask> {
+fn grid_rounded_mask(child: &ChildLayer, snap: Point, scale: f32) -> Option<RoundedCompositeMask> {
     child.rounded_clip.map(|clip| {
         rounded_mask(
             LayerRoundedClip {
-                rect: clip.rect.translate(translation.x, translation.y),
-                radii: clip.radii,
+                rect: quad_bounds(child.transform.map_rect(clip.rect)).translate(snap.x, snap.y),
+                radii: clip.radii.map(|radius| radius * child.surface_scale),
             },
             Point::default(),
             scale,

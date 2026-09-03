@@ -794,6 +794,7 @@ mod tests {
             },
             (5, 6),
             cranpose_render_common::raster_cache::ScaleBucket::from_scale(1.0),
+            cranpose_ui_graphics::Point::default(),
         )
     }
 

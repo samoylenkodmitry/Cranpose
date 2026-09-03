@@ -88,6 +88,7 @@ cranpose-render-common = { path = "../../crates/cranpose-render/common" }
 cranpose-render-wgpu = { path = "../../crates/cranpose-render/wgpu" }
 cranpose-testing = { path = "../../crates/cranpose-testing", features = ["desktop-robot"] }
 pollster = "0.4.0"
+wgpu = { version = "29.0", default-features = false }
 
 # Robot test runners
 [[example]]

@@ -1,5 +1,5 @@
 use cranpose_core::NodeId;
-use cranpose_ui_graphics::Rect;
+use cranpose_ui_graphics::{Point, Rect};
 
 const SCALE_BUCKET_STEPS: f32 = 256.0;
 
@@ -29,15 +29,14 @@ pub struct LayerRasterCacheHashes {
 
 /// Number of distinct [`LayerRasterCacheKey`] kinds; see
 /// [`LayerRasterCacheKey::kind_slot`] and [`LAYER_RASTER_CACHE_KIND_LABELS`].
-pub const LAYER_RASTER_CACHE_KIND_COUNT: usize = 5;
+pub const LAYER_RASTER_CACHE_KIND_COUNT: usize = 4;
 
 /// Short labels per kind slot, in [`LayerRasterCacheKey::kind_slot`] order.
 pub const LAYER_RASTER_CACHE_KIND_LABELS: [&str; LAYER_RASTER_CACHE_KIND_COUNT] =
-    ["full", "src", "backdrop", "range", "prefix"];
+    ["src", "backdrop", "range", "prefix"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum LayerRasterCacheKind {
-    FullSurface,
     SourceContent,
     BackdropEffect,
     SceneRange,
@@ -47,11 +46,10 @@ enum LayerRasterCacheKind {
 impl LayerRasterCacheKind {
     fn identity_kind(self) -> u8 {
         match self {
-            Self::FullSurface => 0,
-            Self::SourceContent => 1,
-            Self::BackdropEffect => 2,
-            Self::SceneRange => 3,
-            Self::PrefixSnapshot => 4,
+            Self::SourceContent => 0,
+            Self::BackdropEffect => 1,
+            Self::SceneRange => 2,
+            Self::PrefixSnapshot => 3,
         }
     }
 }
@@ -71,6 +69,16 @@ pub struct LayerRasterCacheKey {
     local_bounds_bits: [u32; 4],
     pixel_size: [u32; 2],
     scale_bucket: ScaleBucket,
+    device_phase_steps: [u32; 2],
+}
+
+const DEVICE_PHASE_STEPS: f32 = 16.0;
+
+fn device_phase_steps(phase: Point) -> [u32; 2] {
+    let steps = |value: f32| {
+        ((value.rem_euclid(1.0) * DEVICE_PHASE_STEPS).round() as u32) % DEVICE_PHASE_STEPS as u32
+    };
+    [steps(phase.x), steps(phase.y)]
 }
 
 fn local_bounds_bits(local_bounds: Rect) -> [u32; 4] {
@@ -83,31 +91,13 @@ fn local_bounds_bits(local_bounds: Rect) -> [u32; 4] {
 }
 
 impl LayerRasterCacheKey {
-    pub fn new(
-        stable_id: Option<NodeId>,
-        content_hash: u64,
-        effect_hash: u64,
-        local_bounds: Rect,
-        pixel_size: (u32, u32),
-        scale_bucket: ScaleBucket,
-    ) -> Self {
-        Self {
-            kind: LayerRasterCacheKind::FullSurface,
-            stable_id,
-            content_hash,
-            effect_hash,
-            local_bounds_bits: local_bounds_bits(local_bounds),
-            pixel_size: [pixel_size.0, pixel_size.1],
-            scale_bucket,
-        }
-    }
-
     pub fn source_content(
         stable_id: Option<NodeId>,
         content_hash: u64,
         local_bounds: Rect,
         pixel_size: (u32, u32),
         scale_bucket: ScaleBucket,
+        device_phase: Point,
     ) -> Self {
         Self {
             kind: LayerRasterCacheKind::SourceContent,
@@ -117,6 +107,7 @@ impl LayerRasterCacheKey {
             local_bounds_bits: local_bounds_bits(local_bounds),
             pixel_size: [pixel_size.0, pixel_size.1],
             scale_bucket,
+            device_phase_steps: device_phase_steps(device_phase),
         }
     }
 
@@ -136,6 +127,7 @@ impl LayerRasterCacheKey {
             local_bounds_bits: local_bounds_bits(local_bounds),
             pixel_size: [pixel_size.0, pixel_size.1],
             scale_bucket,
+            device_phase_steps: [0; 2],
         }
     }
 
@@ -153,6 +145,7 @@ impl LayerRasterCacheKey {
             local_bounds_bits: local_bounds_bits(local_bounds),
             pixel_size: [pixel_size.0, pixel_size.1],
             scale_bucket,
+            device_phase_steps: [0; 2],
         }
     }
 
@@ -176,6 +169,7 @@ impl LayerRasterCacheKey {
             local_bounds_bits: local_bounds_bits(local_bounds),
             pixel_size: [pixel_size.0, pixel_size.1],
             scale_bucket,
+            device_phase_steps: [0; 2],
         }
     }
 
@@ -259,29 +253,29 @@ mod tests {
             width: 30.0,
             height: 40.0,
         };
-        let base = LayerRasterCacheKey::new(
+        let base = LayerRasterCacheKey::source_content(
             Some(7),
             11,
-            13,
             rect,
             (30, 40),
             ScaleBucket::from_scale(1.0),
+            Point::default(),
         );
-        let moved = LayerRasterCacheKey::new(
+        let moved = LayerRasterCacheKey::source_content(
             Some(7),
             11,
-            13,
             Rect { x: 2.0, ..rect },
             (30, 40),
             ScaleBucket::from_scale(1.0),
+            Point::default(),
         );
-        let resized = LayerRasterCacheKey::new(
+        let resized = LayerRasterCacheKey::source_content(
             Some(7),
             11,
-            13,
             rect,
             (60, 80),
             ScaleBucket::from_scale(2.0),
+            Point::default(),
         );
 
         assert_ne!(base, moved);
@@ -291,7 +285,30 @@ mod tests {
     }
 
     #[test]
-    fn source_content_keys_do_not_collide_with_full_surface_keys() {
+    fn layer_raster_cache_key_captures_the_device_phase() {
+        let rect = Rect {
+            x: 1.0,
+            y: 2.0,
+            width: 30.0,
+            height: 40.0,
+        };
+        let key = |phase: Point| {
+            LayerRasterCacheKey::source_content(
+                Some(7),
+                11,
+                rect,
+                (30, 40),
+                ScaleBucket::from_scale(1.0),
+                phase,
+            )
+        };
+        assert_ne!(key(Point::default()), key(Point::new(0.5, 0.0)));
+        assert_eq!(key(Point::new(0.5, 0.25)), key(Point::new(1.5, -0.75)));
+        assert_eq!(key(Point::new(0.01, 0.0)), key(Point::default()));
+    }
+
+    #[test]
+    fn source_content_keys_separate_by_content_hash() {
         let rect = Rect {
             x: 1.0,
             y: 2.0,
@@ -299,11 +316,25 @@ mod tests {
             height: 40.0,
         };
         let scale = ScaleBucket::from_scale(1.0);
-        let source = LayerRasterCacheKey::source_content(Some(7), 11, rect, (30, 40), scale);
-        let full = LayerRasterCacheKey::new(Some(7), 11, 0, rect, (30, 40), scale);
+        let source = LayerRasterCacheKey::source_content(
+            Some(7),
+            11,
+            rect,
+            (30, 40),
+            scale,
+            Point::default(),
+        );
+        let other = LayerRasterCacheKey::source_content(
+            Some(7),
+            12,
+            rect,
+            (30, 40),
+            scale,
+            Point::default(),
+        );
 
-        assert_ne!(source, full);
-        assert_ne!(source.identity(), full.identity());
+        assert_ne!(source, other);
+        assert_eq!(source.identity(), other.identity());
     }
 
     #[test]
@@ -316,13 +347,17 @@ mod tests {
         };
         let scale = ScaleBucket::from_scale(1.0);
         let backdrop = LayerRasterCacheKey::backdrop_effect(Some(7), 11, 13, rect, (30, 40), scale);
-        let source = LayerRasterCacheKey::source_content(Some(7), 11, rect, (30, 40), scale);
-        let full = LayerRasterCacheKey::new(Some(7), 11, 13, rect, (30, 40), scale);
+        let source = LayerRasterCacheKey::source_content(
+            Some(7),
+            11,
+            rect,
+            (30, 40),
+            scale,
+            Point::default(),
+        );
 
         assert_ne!(backdrop, source);
-        assert_ne!(backdrop, full);
         assert_ne!(backdrop.identity(), source.identity());
-        assert_ne!(backdrop.identity(), full.identity());
     }
 
     #[test]
@@ -355,11 +390,16 @@ mod tests {
         };
         let scale = ScaleBucket::from_scale(1.0);
         let range = LayerRasterCacheKey::scene_range(11, rect, (320, 240), scale);
-        let source = LayerRasterCacheKey::source_content(None, 11, rect, (320, 240), scale);
-        let full = LayerRasterCacheKey::new(None, 11, 0, rect, (320, 240), scale);
+        let source = LayerRasterCacheKey::source_content(
+            None,
+            11,
+            rect,
+            (320, 240),
+            scale,
+            Point::default(),
+        );
 
         assert_ne!(range, source);
-        assert_ne!(range, full);
         assert_eq!(range.identity(), None);
     }
 }

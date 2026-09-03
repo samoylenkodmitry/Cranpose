@@ -382,7 +382,9 @@ fn triangle_area(a: [f64; 2], b: [f64; 2], c: [f64; 2]) -> f64 {
 /// The pixels the triangles of `indices` rasterize.
 pub(crate) fn triangles_area(vertices: &[MeshVertex], indices: &[u32]) -> f64 {
     indices
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .map(|triangle| {
             let point = |index: u32| {
                 let position = vertices[index as usize].position;
@@ -463,6 +465,8 @@ mod tests {
             gradient_start: 0,
             gradient_count: 0,
             gradient_tile_mode: 0,
+            dither_origin: [0.0; 2],
+            dither_padding: [0.0; 2],
         }
     }
 
@@ -508,7 +512,7 @@ mod tests {
     }
 
     fn mesh_covers(vertices: &[MeshVertex], indices: &[u32], point: [f32; 2]) -> bool {
-        indices.chunks_exact(3).any(|triangle| {
+        indices.as_chunks::<3>().0.iter().any(|triangle| {
             inside_triangle(
                 point,
                 vertices[triangle[0] as usize].position,
