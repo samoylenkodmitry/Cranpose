@@ -238,35 +238,21 @@ mod tests {
     use super::validate_runtime_shader_source;
     use crate::pipeline::GPU_TEXT_BRUSH_EFFECT_SHADER;
 
-    const VALID_SHADER: &str = r#"
-struct VertexOutput {
-    @builtin(position) position: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-}
-
-@vertex
-fn fullscreen_vs(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
-    var output: VertexOutput;
-    let x = f32(i32(vertex_index & 1u) * 2 - 1);
-    let y = f32(i32(vertex_index >> 1u) * 2 - 1);
-    output.uv = vec2<f32>(x * 0.5 + 0.5, 1.0 - (y * 0.5 + 0.5));
-    output.position = vec4<f32>(x, y, 0.0, 1.0);
-    return output;
-}
-
-@group(0) @binding(0) var input_texture: texture_2d<f32>;
-@group(0) @binding(1) var input_sampler: sampler;
-@group(1) @binding(0) var<uniform> u: array<vec4<f32>, 64>;
-
-@fragment
+    fn valid_shader() -> String {
+        format!(
+            "{}\n{}",
+            cranpose_ui_graphics::RUNTIME_SHADER_PRELUDE_WGSL,
+            r#"@fragment
 fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     return textureSample(input_texture, input_sampler, input.uv);
 }
-"#;
+"#
+        )
+    }
 
     #[test]
     fn validator_accepts_valid_runtime_shader() {
-        assert!(validate_runtime_shader_source(VALID_SHADER, wgpu::Backend::Vulkan).is_ok());
+        assert!(validate_runtime_shader_source(&valid_shader(), wgpu::Backend::Vulkan).is_ok());
     }
 
     #[test]

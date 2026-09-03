@@ -618,6 +618,10 @@ fn draw_rect_is_visible_in_viewport(
         width: viewport.width as f32 / root_scale,
         height: viewport.height as f32 / root_scale,
     };
+    rect_is_visible_in_rect(rect, clip, viewport_rect)
+}
+
+fn rect_is_visible_in_rect(rect: Rect, clip: Option<Rect>, viewport_rect: Rect) -> bool {
     let visible_rect = match clip {
         Some(clip) => clip.intersect(viewport_rect),
         None => Some(viewport_rect),
@@ -625,21 +629,45 @@ fn draw_rect_is_visible_in_viewport(
     visible_rect.is_some_and(|visible| rect.intersect(visible).is_some())
 }
 
+fn snapped_quad_bounds(quad: [[f32; 2]; 4], anchor: Option<SnapAnchor>, root_scale: f32) -> Rect {
+    let snap_delta = anchor
+        .map(|anchor| snap_delta_for_anchor(anchor, root_scale))
+        .unwrap_or_default();
+    quad_bounds(translate_quad(quad, snap_delta))
+}
+
+pub(crate) fn text_draw_is_visible_in_rect(
+    text: &TextDraw,
+    viewport_rect: Rect,
+    root_scale: f32,
+) -> bool {
+    text_raster_geometry_for_draw(text, root_scale).is_some_and(|(logical_rect, _, clip, _, _)| {
+        rect_is_visible_in_rect(logical_rect, clip, viewport_rect)
+    })
+}
+
+pub(crate) fn image_draw_is_visible_in_rect(
+    image: &ImageDraw,
+    viewport_rect: Rect,
+    root_scale: f32,
+) -> bool {
+    rect_is_visible_in_rect(
+        snapped_quad_bounds(image.quad, image.snap_anchor, root_scale),
+        image.clip,
+        viewport_rect,
+    )
+}
+
 pub(crate) fn shape_draw_is_visible_in_rect(
     shape: &DrawShape,
     viewport_rect: Rect,
     root_scale: f32,
 ) -> bool {
-    let snap_delta = shape
-        .snap_anchor
-        .map(|anchor| snap_delta_for_anchor(anchor, root_scale))
-        .unwrap_or_default();
-    let rect = quad_bounds(translate_quad(shape.quad, snap_delta));
-    let visible_rect = match shape.clip {
-        Some(clip) => clip.intersect(viewport_rect),
-        None => Some(viewport_rect),
-    };
-    visible_rect.is_some_and(|visible| rect.intersect(visible).is_some())
+    rect_is_visible_in_rect(
+        snapped_quad_bounds(shape.quad, shape.snap_anchor, root_scale),
+        shape.clip,
+        viewport_rect,
+    )
 }
 
 fn cached_text_glyph_quad(

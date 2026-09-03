@@ -79,6 +79,13 @@ and the heavily read shader child resolves exactly once.
 `backdrop_pass_batching.rs` pins the budget: extra glasses in a stage add
 no pass.
 
+A capture region draws only what reaches into it: shapes, texts and images
+are judged by their snapped bounds and clip against the region, composites
+by their destination against the region's scissor. `capture_culling.rs`
+holds a pass-through glass over a text, an image and an isolated child that
+each straddle one of its edges and requires the glass to show exactly the
+page beneath.
+
 ## Direct or isolated
 
 `collect_child` decides per layer, with `child_placement`:

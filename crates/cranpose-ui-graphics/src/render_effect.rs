@@ -101,6 +101,15 @@ impl Default for BlurredEdgeTreatment {
 ///
 /// RuntimeShader pipelines operate on premultiplied-alpha textures. Custom
 /// shaders should preserve premultiplied output semantics.
+/// The vertex stage and bindings every runtime shader starts from: a
+/// fullscreen triangle whose `uv` spans the input, the input texture and
+/// sampler at group 0, and the 64 uniform vectors at group 1. A shader
+/// source is this prelude followed by an `effect_fs` fragment stage.
+pub const RUNTIME_SHADER_PRELUDE_WGSL: &str = concat!(
+    include_str!("../shaders/fullscreen_quad_vs.wgsl"),
+    include_str!("../shaders/runtime_shader_bindings.wgsl"),
+);
+
 #[derive(Clone, Debug)]
 pub struct RuntimeShader {
     source: Arc<str>,

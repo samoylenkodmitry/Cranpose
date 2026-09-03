@@ -725,3 +725,17 @@ checked in seconds instead of a queued samarch-1 run. The robot log's
 first-diff pixel names a symptom, not the element: read-tail resolve
 regions, gradient dither and shadow bands all showed up as "1 LSB on a
 card". Start from the scene, not from the pixel.
+
+## An ablation worktree keeps every earlier ablation (2026-09-03)
+
+Device ablations were built from a scratch worktree so the live tree stayed
+clean, and the worktree was "synced" by copying the files `git status`
+listed in the live tree. After the live work was committed, `git status`
+listed nothing for `frame.rs`, so the worktree kept the previous ablation's
+`frame.rs` under every later build. A toggle APK meant to split a 22 ms
+capture cost then measured its "none" variant at 32 ms against the live
+tree's 46 ms, and two hours went into the wrong question (a build-location
+confound) before a `diff` of the two trees showed the stale ablation. Sync
+an ablation tree with `diff -rq` against the live tree, or rebuild it from
+the commit plus one patch, and never trust a "none" variant that does not
+reproduce the live baseline first.

@@ -4,7 +4,6 @@ mod support;
 mod shared_test_support;
 
 use cranpose_render_common::{
-    Renderer,
     graph::{ProjectiveTransform, RenderGraph, RenderNode},
     image_compare::image_difference_stats,
 };
@@ -13,7 +12,7 @@ use cranpose_ui_graphics::{
     Color, GraphicsLayer, LayerShape, LiquidGlassRect, LiquidGlassSpec, Rect, RenderEffect,
     RoundedCornerShape, liquid_glass_effect,
 };
-use support::solid_rect;
+use support::{region_pixels, solid_rect};
 
 const FRAME_WIDTH: u32 = 240;
 const FRAME_HEIGHT: u32 = 120;
@@ -112,32 +111,11 @@ fn glasses_page(count: usize, effect: impl Fn() -> RenderEffect) -> RenderGraph 
     for index in 0..count {
         children.push(glass_layer(index, effect()));
     }
-    RenderGraph::new(shared_test_support::layer_node(
-        rect(0.0, 0.0, FRAME_WIDTH as f32, FRAME_HEIGHT as f32),
-        ProjectiveTransform::identity(),
-        GraphicsLayer::default(),
-        children,
-    ))
+    support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children)
 }
 
 fn capture(renderer: &mut support::LockedRenderer, graph: RenderGraph) -> CapturedFrame {
-    renderer.scene_mut().graph = Some(graph);
-    renderer
-        .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
-        .expect("capture should succeed")
-}
-
-fn region_pixels(frame: &CapturedFrame, region: Rect) -> Vec<u8> {
-    let left = region.x as u32;
-    let top = region.y as u32;
-    let width = region.width as u32;
-    let height = region.height as u32;
-    let mut out = Vec::with_capacity((width * height * 4) as usize);
-    for y in top..top + height {
-        let start = ((y * frame.width + left) * 4) as usize;
-        out.extend_from_slice(&frame.pixels[start..start + (width * 4) as usize]);
-    }
-    out
+    support::capture_graph(renderer, graph, FRAME_WIDTH, FRAME_HEIGHT)
 }
 
 /// The first glass with a margin around it: its own pixels plus the page

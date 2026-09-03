@@ -449,6 +449,38 @@ pub fn stable_capture(renderer: &mut LockedRenderer, graph: &RenderGraph, size: 
     passes.pop().expect("three captures")
 }
 
+/// A page of the given size holding `children` in order.
+pub fn page_graph(width: u32, height: u32, children: Vec<RenderNode>) -> RenderGraph {
+    RenderGraph::new(layer_node(None, width as f32, height as f32, children))
+}
+
+/// Renders `graph` through the renderer and captures a frame of the given size.
+pub fn capture_graph(
+    renderer: &mut LockedRenderer,
+    graph: RenderGraph,
+    width: u32,
+    height: u32,
+) -> CapturedFrame {
+    renderer.scene_mut().graph = Some(graph);
+    renderer
+        .capture_frame(width, height)
+        .expect("capture should succeed")
+}
+
+/// The RGBA bytes of `region` of the frame, row by row.
+pub fn region_pixels(frame: &CapturedFrame, region: Rect) -> Vec<u8> {
+    let left = region.x as u32;
+    let top = region.y as u32;
+    let width = region.width as u32;
+    let height = region.height as u32;
+    let mut out = Vec::with_capacity((width * height * 4) as usize);
+    for y in top..top + height {
+        let start = ((y * frame.width + left) * 4) as usize;
+        out.extend_from_slice(&frame.pixels[start..start + (width * 4) as usize]);
+    }
+    out
+}
+
 pub fn distinct_colors(pixels: &[u8]) -> usize {
     let mut colors: Vec<[u8; 4]> = pixels.as_chunks::<4>().0.to_vec();
     colors.sort_unstable();

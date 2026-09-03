@@ -11,8 +11,8 @@ use crate::{
     frame_graph::FrameCommandRecorder,
     offscreen::OffscreenTarget,
     render::{
-        GpuRenderer, ShapeBatch, ViewportUniformParams, shape_draw_is_visible_in_rect,
-        supported_blend_mode,
+        GpuRenderer, ShapeBatch, ViewportUniformParams, image_draw_is_visible_in_rect,
+        shape_draw_is_visible_in_rect, supported_blend_mode, text_draw_is_visible_in_rect,
     },
     scene::{CompositorScene, DrawOp, DrawOpKind, DrawShape, TextDraw},
 };
@@ -214,13 +214,14 @@ fn composite_visible(
     composite: &ResolvedComposite,
     target_size: (u32, u32),
     segment_offset: [f32; 2],
+    segment_scissor: Option<(u32, u32, u32, u32)>,
 ) -> bool {
     let (x, y, width, height) = dest_in_target(composite.dest, segment_offset);
-    if x >= target_size.0 as f32
-        || y >= target_size.1 as f32
-        || x + width <= 0.0
-        || y + height <= 0.0
-    {
+    let (left, top, right, bottom) = match segment_scissor {
+        Some((sx, sy, sw, sh)) => (sx as f32, sy as f32, (sx + sw) as f32, (sy + sh) as f32),
+        None => (0.0, 0.0, target_size.0 as f32, target_size.1 as f32),
+    };
+    if x >= right || y >= bottom || x + width <= left || y + height <= top {
         return false;
     }
     composite
@@ -417,7 +418,7 @@ fn merge_items<'a>(
                 break;
             }
             let composite = composites.next().expect("peeked composite");
-            if composite_visible(composite, target_size, segment.offset) {
+            if composite_visible(composite, target_size, segment.offset, segment.scissor) {
                 items.push(Item::Composite(composite));
             }
         }
@@ -434,8 +435,18 @@ fn merge_items<'a>(
                     });
                 }
             }
-            DrawOpKind::Image(index) => items.push(Item::Image(index)),
-            DrawOpKind::Text(index) => items.push(Item::Text(&segment.scene.texts[index])),
+            DrawOpKind::Image(index) => {
+                let image = &segment.scene.images[index];
+                if image_draw_is_visible_in_rect(image, viewport_rect, root_scale) {
+                    items.push(Item::Image(index));
+                }
+            }
+            DrawOpKind::Text(index) => {
+                let text = &segment.scene.texts[index];
+                if text_draw_is_visible_in_rect(text, viewport_rect, root_scale) {
+                    items.push(Item::Text(text));
+                }
+            }
             DrawOpKind::Shadow(index) => {
                 let shadow = &segment.scene.shadow_draws[index];
                 if shadow.blur_radius > 0.0 {
@@ -450,7 +461,9 @@ fn merge_items<'a>(
                     }
                 }
                 for text in &shadow.texts {
-                    items.push(Item::Text(text));
+                    if text_draw_is_visible_in_rect(text, viewport_rect, root_scale) {
+                        items.push(Item::Text(text));
+                    }
                 }
             }
         }

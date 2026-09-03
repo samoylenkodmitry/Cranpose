@@ -295,31 +295,17 @@ fn text_glyph_atlas_reuses_identical_content_across_node_ids() {
     );
 }
 
-const ANIMATED_SHADER_WGSL: &str = r#"
-struct VertexOutput {
-    @builtin(position) position: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-}
-
-@vertex
-fn fullscreen_vs(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
-    var output: VertexOutput;
-    let x = f32(i32(vertex_index & 1u) * 2 - 1);
-    let y = f32(i32(vertex_index >> 1u) * 2 - 1);
-    output.uv = vec2<f32>(x * 0.5 + 0.5, 1.0 - (y * 0.5 + 0.5));
-    output.position = vec4<f32>(x, y, 0.0, 1.0);
-    return output;
-}
-
-@group(0) @binding(0) var input_texture: texture_2d<f32>;
-@group(0) @binding(1) var input_sampler: sampler;
-@group(1) @binding(0) var<uniform> u: array<vec4<f32>, 64>;
-
-@fragment
+fn animated_shader_wgsl() -> String {
+    format!(
+        "{}\n{}",
+        cranpose_ui_graphics::RUNTIME_SHADER_PRELUDE_WGSL,
+        r#"@fragment
 fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     return vec4<f32>(u[0][0], 0.0, 0.0, 1.0);
 }
-"#;
+"#
+    )
+}
 
 fn shaded_runtime_shader_layer(node_id: NodeId, time: f32) -> LayerNode {
     let shaded_bounds = Rect {
@@ -328,7 +314,7 @@ fn shaded_runtime_shader_layer(node_id: NodeId, time: f32) -> LayerNode {
         width: 64.0,
         height: 48.0,
     };
-    let mut shader = cranpose_ui_graphics::RuntimeShader::new(ANIMATED_SHADER_WGSL);
+    let mut shader = cranpose_ui_graphics::RuntimeShader::new(&animated_shader_wgsl());
     shader.set_float(0, time);
     let mut shaded = test_layer(
         Some(node_id),
