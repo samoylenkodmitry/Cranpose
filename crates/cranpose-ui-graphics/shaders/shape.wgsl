@@ -98,6 +98,47 @@ fn vs_main(@builtin(vertex_index) vertex_idx: u32) -> VertexOutput {
     return output;
 }
 
+struct MeshVertexInput {
+    @location(0) position: vec2<f32>,
+    @location(1) uv: vec2<f32>,
+    @location(2) shape_idx: u32,
+}
+
+// A shape drawn as a mesh: the vertex carries its own position and place in
+// the shape's rect, and everything else comes from the shape record it names,
+// exactly as the quad path fills it.
+@vertex
+fn vs_mesh(in: MeshVertexInput) -> VertexOutput {
+    var output: VertexOutput;
+    let shape = shape_data[in.shape_idx];
+    let position = in.position;
+    let x = ((position.x - uniforms.viewport_offset.x) / uniforms.viewport.x) * 2.0 - 1.0;
+    let y = 1.0 - ((position.y - uniforms.viewport_offset.y) / uniforms.viewport.y) * 2.0;
+    output.clip_position = vec4<f32>(x, y, 0.0, 1.0);
+    output.color = shape.color;
+    output.uv = in.uv;
+    output.world_pos = position;
+    output.rect = shape.rect;
+    output.radii = shape.radii;
+    output.gradient_params = shape.gradient_params;
+    output.clip_rect = shape.clip_rect;
+    output.stroke_params = shape.stroke_params;
+    output.arc_params = shape.arc_params;
+    output.brush = vec4<u32>(
+        shape.brush_type,
+        shape.gradient_start,
+        shape.gradient_count,
+        shape.gradient_tile_mode,
+    );
+    let stops = load_inline_gradient_stops(shape.gradient_start, shape.gradient_count);
+    output.stop_offsets = stops.offsets;
+    output.stop_color0 = stops.color0;
+    output.stop_color1 = stops.color1;
+    output.stop_color2 = stops.color2;
+    output.stop_color3 = stops.color3;
+    return output;
+}
+
 // Fragment shader structs and data
 //
 // `stroke_params.y` packs three 2-bit fields so the struct stays at ten

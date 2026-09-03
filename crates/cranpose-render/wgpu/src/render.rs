@@ -30,6 +30,7 @@ use web_time::Instant;
 
 use crate::{
     DebugCpuAllocationStats,
+    band_mesh::MeshVertex,
     collect::LayerScene,
     draw_pass::{PassSegment, PassTarget, ResolvedComposite, ResolvedCompositeKind},
     effect_renderer::{CompositeSampleMode, EffectRenderer, RoundedCompositeMask},
@@ -1006,6 +1007,15 @@ pub(crate) fn create_render_pipeline_logged<'a>(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// How a shape batch reaches the vertex stage: six generated vertices per
+/// shape record, or a mesh of triangles that each name their record.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ShapeVertexStage {
+    Quads,
+    Mesh,
+}
+
+#[allow(clippy::too_many_arguments)]
 fn create_shape_pipeline(
     device: &wgpu::Device,
     cache: Option<&wgpu::PipelineCache>,
@@ -1015,7 +1025,13 @@ fn create_shape_pipeline(
     blend_mode: BlendMode,
     batch_limits: ShapeBatchLimits,
     fragment_entry: &'static str,
+    stage: ShapeVertexStage,
 ) -> wgpu::RenderPipeline {
+    let mesh_layout = [MeshVertex::layout()];
+    let (vertex_entry, vertex_buffers): (&str, &[wgpu::VertexBufferLayout<'_>]) = match stage {
+        ShapeVertexStage::Quads => ("vs_main", &[]),
+        ShapeVertexStage::Mesh => ("vs_mesh", &mesh_layout),
+    };
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("Shape Shader"),
         source: wgpu::ShaderSource::Wgsl(shape_shader_source(batch_limits)),
@@ -1036,9 +1052,9 @@ fn create_shape_pipeline(
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: Some("vs_main"),
+                entry_point: Some(vertex_entry),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
-                buffers: &[],
+                buffers: vertex_buffers,
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
@@ -1218,25 +1234,25 @@ struct Uniforms {
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
-struct ShapeData {
-    rect: [f32; 4],
-    radii: [f32; 4],
-    gradient_params: [f32; 4],
-    clip_rect: [f32; 4],
-    stroke_params: [f32; 4],
-    arc_params: [f32; 4],
-    quad01: [f32; 4],
-    quad23: [f32; 4],
-    color: [f32; 4],
-    brush_type: u32,
-    gradient_start: u32,
-    gradient_count: u32,
-    gradient_tile_mode: u32,
+pub(crate) struct ShapeData {
+    pub(crate) rect: [f32; 4],
+    pub(crate) radii: [f32; 4],
+    pub(crate) gradient_params: [f32; 4],
+    pub(crate) clip_rect: [f32; 4],
+    pub(crate) stroke_params: [f32; 4],
+    pub(crate) arc_params: [f32; 4],
+    pub(crate) quad01: [f32; 4],
+    pub(crate) quad23: [f32; 4],
+    pub(crate) color: [f32; 4],
+    pub(crate) brush_type: u32,
+    pub(crate) gradient_start: u32,
+    pub(crate) gradient_count: u32,
+    pub(crate) gradient_tile_mode: u32,
 }
 
 const SHAPE_KIND_FILL: u32 = 0;
-const SHAPE_KIND_STROKE: u32 = 1;
-const SHAPE_KIND_ARC: u32 = 2;
+pub(crate) const SHAPE_KIND_STROKE: u32 = 1;
+pub(crate) const SHAPE_KIND_ARC: u32 = 2;
 
 fn stroke_cap_code(cap: StrokeCap) -> u32 {
     match cap {
@@ -1849,6 +1865,7 @@ struct ImageUvRect {
 struct ShapeBatchBuffers {
     shape_buffer: wgpu::Buffer,
     gradient_buffer: wgpu::Buffer,
+    mesh: Option<VertexIndexBuffers<MeshVertex>>,
     bind_group: wgpu::BindGroup,
     shape_capacity: usize,
     gradient_capacity: usize,
@@ -1901,6 +1918,7 @@ impl ShapeBatchBuffers {
         Self {
             shape_buffer,
             gradient_buffer,
+            mesh: None,
             bind_group,
             shape_capacity,
             gradient_capacity,
@@ -1954,37 +1972,44 @@ impl ShapeBatchBuffers {
     }
 }
 
-struct ImageBatchBuffers {
+/// A growable vertex buffer and index buffer pair.
+struct VertexIndexBuffers<V> {
+    label: &'static str,
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     vertex_capacity: usize,
     index_capacity: usize,
+    vertex: std::marker::PhantomData<V>,
 }
 
-impl ImageBatchBuffers {
-    fn new(device: &wgpu::Device) -> Self {
+type ImageBatchBuffers = VertexIndexBuffers<Vertex>;
+
+impl<V: Pod> VertexIndexBuffers<V> {
+    fn new(device: &wgpu::Device, label: &'static str) -> Self {
         let vertex_capacity = 4;
         let index_capacity = 6;
         Self {
-            vertex_buffer: Self::create_vertex_buffer(device, vertex_capacity),
-            index_buffer: Self::create_index_buffer(device, index_capacity),
+            label,
+            vertex_buffer: Self::create_vertex_buffer(device, label, vertex_capacity),
+            index_buffer: Self::create_index_buffer(device, label, index_capacity),
             vertex_capacity,
             index_capacity,
+            vertex: std::marker::PhantomData,
         }
     }
 
-    fn create_vertex_buffer(device: &wgpu::Device, capacity: usize) -> wgpu::Buffer {
+    fn create_vertex_buffer(device: &wgpu::Device, label: &str, capacity: usize) -> wgpu::Buffer {
         device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Image Vertex Buffer"),
-            size: (std::mem::size_of::<Vertex>() * capacity) as u64,
+            label: Some(&format!("{label} Vertex Buffer")),
+            size: (std::mem::size_of::<V>() * capacity) as u64,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         })
     }
 
-    fn create_index_buffer(device: &wgpu::Device, capacity: usize) -> wgpu::Buffer {
+    fn create_index_buffer(device: &wgpu::Device, label: &str, capacity: usize) -> wgpu::Buffer {
         device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Image Index Buffer"),
+            label: Some(&format!("{label} Index Buffer")),
             size: (std::mem::size_of::<u32>() * capacity) as u64,
             usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
@@ -2001,15 +2026,15 @@ impl ImageBatchBuffers {
         if vertices_needed > self.vertex_capacity {
             let capacity = vertices_needed
                 .next_power_of_two()
-                .min(hard_max_bytes / std::mem::size_of::<Vertex>());
-            self.vertex_buffer = Self::create_vertex_buffer(device, capacity);
+                .min(hard_max_bytes / std::mem::size_of::<V>());
+            self.vertex_buffer = Self::create_vertex_buffer(device, self.label, capacity);
             self.vertex_capacity = capacity;
         }
         if indices_needed > self.index_capacity {
             let capacity = indices_needed
                 .next_power_of_two()
                 .min(hard_max_bytes / std::mem::size_of::<u32>());
-            self.index_buffer = Self::create_index_buffer(device, capacity);
+            self.index_buffer = Self::create_index_buffer(device, self.label, capacity);
             self.index_capacity = capacity;
         }
     }
@@ -2126,6 +2151,7 @@ pub(crate) struct ShapeBatch {
     uniform_slot: usize,
     vertex_count: u32,
     has_gradient: bool,
+    mesh_index_count: Option<u32>,
 }
 struct CompositionTarget {
     target: OffscreenTarget,
@@ -2221,6 +2247,9 @@ pub struct GpuRenderer {
     pipeline: LazyGpuResource<wgpu::RenderPipeline>,
     pipeline_dst_out: LazyGpuResource<wgpu::RenderPipeline>,
     pipeline_solid: LazyGpuResource<wgpu::RenderPipeline>,
+    pipeline_mesh: LazyGpuResource<wgpu::RenderPipeline>,
+    pipeline_mesh_dst_out: LazyGpuResource<wgpu::RenderPipeline>,
+    pipeline_mesh_solid: LazyGpuResource<wgpu::RenderPipeline>,
     image_pipeline: LazyGpuResource<wgpu::RenderPipeline>,
     image_pipeline_dst_out: LazyGpuResource<wgpu::RenderPipeline>,
     glyph_atlas_pipeline: LazyGpuResource<wgpu::RenderPipeline>,
@@ -2232,6 +2261,7 @@ pub struct GpuRenderer {
     text_fonts: SoftwareTextFontSet,
     viewport_uniforms: ViewportUniformRing,
     shape_slots: Vec<ShapeBatchBuffers>,
+    band_tessellator: crate::band_mesh::BandTessellator,
     shape_slot_cursor: usize,
     image_slots: Vec<ImageBatchBuffers>,
     image_slot_cursor: usize,
@@ -2412,6 +2442,9 @@ impl GpuRenderer {
             pipeline: LazyGpuResource::new("shape/src-over"),
             pipeline_dst_out: LazyGpuResource::new("shape/dst-out"),
             pipeline_solid: LazyGpuResource::new("shape/solid"),
+            pipeline_mesh: LazyGpuResource::new("shape-mesh/src-over"),
+            pipeline_mesh_dst_out: LazyGpuResource::new("shape-mesh/dst-out"),
+            pipeline_mesh_solid: LazyGpuResource::new("shape-mesh/solid"),
             image_pipeline: LazyGpuResource::new("image/src-over"),
             image_pipeline_dst_out: LazyGpuResource::new("image/dst-out"),
             glyph_atlas_pipeline: LazyGpuResource::new("glyph/atlas"),
@@ -2423,6 +2456,7 @@ impl GpuRenderer {
             text_fonts,
             viewport_uniforms,
             shape_slots: Vec::new(),
+            band_tessellator: crate::band_mesh::BandTessellator::default(),
             shape_slot_cursor: 0,
             image_slots: Vec::new(),
             image_slot_cursor: 0,
@@ -2477,10 +2511,16 @@ impl GpuRenderer {
         renderer
     }
 
-    fn shape_pipeline(&self, blend_mode: BlendMode) -> &wgpu::RenderPipeline {
-        let resource = match blend_mode {
-            BlendMode::DstOut => &self.pipeline_dst_out,
-            _ => &self.pipeline,
+    fn shape_pipeline(
+        &self,
+        blend_mode: BlendMode,
+        stage: ShapeVertexStage,
+    ) -> &wgpu::RenderPipeline {
+        let resource = match (blend_mode, stage) {
+            (BlendMode::DstOut, ShapeVertexStage::Quads) => &self.pipeline_dst_out,
+            (BlendMode::DstOut, ShapeVertexStage::Mesh) => &self.pipeline_mesh_dst_out,
+            (_, ShapeVertexStage::Quads) => &self.pipeline,
+            (_, ShapeVertexStage::Mesh) => &self.pipeline_mesh,
         };
         resource.get_or_init(self.adapter_backend, || {
             create_shape_pipeline(
@@ -2492,12 +2532,17 @@ impl GpuRenderer {
                 blend_mode,
                 self.shape_batch_limits,
                 "fs_main",
+                stage,
             )
         })
     }
 
-    fn shape_pipeline_solid(&self) -> &wgpu::RenderPipeline {
-        self.pipeline_solid.get_or_init(self.adapter_backend, || {
+    fn shape_pipeline_solid(&self, stage: ShapeVertexStage) -> &wgpu::RenderPipeline {
+        let resource = match stage {
+            ShapeVertexStage::Quads => &self.pipeline_solid,
+            ShapeVertexStage::Mesh => &self.pipeline_mesh_solid,
+        };
+        resource.get_or_init(self.adapter_backend, || {
             create_shape_pipeline(
                 &self.device,
                 self.pipeline_cache.as_ref(),
@@ -2507,6 +2552,7 @@ impl GpuRenderer {
                 BlendMode::SrcOver,
                 self.shape_batch_limits,
                 "fs_solid",
+                stage,
             )
         })
     }
@@ -3267,7 +3313,8 @@ impl GpuRenderer {
         let slot = self.image_slot_cursor;
         self.image_slot_cursor += 1;
         while self.image_slots.len() <= slot {
-            self.image_slots.push(ImageBatchBuffers::new(&self.device));
+            self.image_slots
+                .push(ImageBatchBuffers::new(&self.device, "Image"));
         }
         slot
     }
@@ -3614,12 +3661,45 @@ impl GpuRenderer {
             )
             .upload_bytes;
         }
+        let (fill_pixels, mesh_index_count) = match crate::band_mesh::mesh_batch(
+            &mut self.band_tessellator,
+            &self.scratch_shape_data,
+        ) {
+            Some(mesh) => {
+                let mesh_buffers = buffers
+                    .mesh
+                    .get_or_insert_with(|| VertexIndexBuffers::new(&self.device, "Shape Mesh"));
+                mesh_buffers.ensure_capacity(&self.device, mesh.vertices.len(), mesh.indices.len());
+                upload.upload_bytes += write_buffer(
+                    &self.queue,
+                    &mesh_buffers.vertex_buffer,
+                    0,
+                    bytemuck::cast_slice(&mesh.vertices),
+                )
+                .upload_bytes;
+                upload.upload_bytes += write_buffer(
+                    &self.queue,
+                    &mesh_buffers.index_buffer,
+                    0,
+                    bytemuck::cast_slice(&mesh.indices),
+                )
+                .upload_bytes;
+                (mesh.fill_pixels, Some(mesh.indices.len() as u32))
+            }
+            None => (
+                crate::band_mesh::quad_fill_pixels(&self.scratch_shape_data),
+                None,
+            ),
+        };
         self.frame_stats.record_command_stats(upload);
+        self.frame_stats
+            .add_shape_fill_pixels(fill_pixels.round() as u64);
         Some(ShapeBatch {
             slot,
             uniform_slot,
             vertex_count: shape_count as u32 * 6,
             has_gradient: total_gradient_stops > 0,
+            mesh_index_count,
         })
     }
     #[cfg(not(target_arch = "wasm32"))]
@@ -3643,10 +3723,19 @@ impl GpuRenderer {
         self.frame_stats.add_draw_calls(1);
         let (x, y, width, height) = scissor.unwrap_or((0, 0, target_size.0, target_size.1));
         pass.set_scissor_rect(x, y, width, height);
-        let pipeline = if blend_mode == BlendMode::SrcOver && !batch.has_gradient {
-            self.shape_pipeline_solid()
+        let buffers = &self.shape_slots[batch.slot];
+        let mesh = batch
+            .mesh_index_count
+            .and_then(|count| buffers.mesh.as_ref().map(|mesh| (count, mesh)));
+        let stage = if mesh.is_some() {
+            ShapeVertexStage::Mesh
         } else {
-            self.shape_pipeline(blend_mode)
+            ShapeVertexStage::Quads
+        };
+        let pipeline = if blend_mode == BlendMode::SrcOver && !batch.has_gradient {
+            self.shape_pipeline_solid(stage)
+        } else {
+            self.shape_pipeline(blend_mode, stage)
         };
         pass.set_pipeline(pipeline);
         pass.set_bind_group(
@@ -3654,8 +3743,15 @@ impl GpuRenderer {
             &self.viewport_uniforms.bind_group,
             &[self.viewport_uniforms.dynamic_offset(batch.uniform_slot)?],
         );
-        pass.set_bind_group(1, &self.shape_slots[batch.slot].bind_group, &[]);
-        pass.draw(0..batch.vertex_count, 0..1);
+        pass.set_bind_group(1, &buffers.bind_group, &[]);
+        match mesh {
+            Some((index_count, mesh)) => {
+                pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
+                pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(0..index_count, 0, 0..1);
+            }
+            None => pass.draw(0..batch.vertex_count, 0..1),
+        }
         Ok(())
     }
 

@@ -15,6 +15,7 @@ mod frame;
 mod geometry;
 mod layer_cache;
 pub use fast_cores::pin_current_thread_to_fast_cores;
+mod band_mesh;
 mod frame_graph;
 mod frame_packet;
 mod frontend;

@@ -123,6 +123,23 @@ The contract is the rigid one above, tested in
 surface tests: after undoing the rounded translation, the local picture is
 byte-identical.
 
+## Fill-shaped geometry
+
+A shape record draws as its bounding quad and the shape shader decides
+coverage per fragment, so a stroked circle or an arc band would rasterize
+its whole disc for a band a few pixels wide. `band_mesh.rs` turns every
+plain solid, unclipped, axis-aligned stroked circle and arc band whose quad
+exceeds `BAND_MESH_MIN_QUAD_PIXELS` into an annular triangle mesh with one
+pixel of slack around the band; a batch holding one band draws every shape
+as triangles through `vs_mesh`, the other shapes as their quads, with the
+same fragment stage. The stat `shape_fill_pixels` counts what the shape
+draws rasterize. `band_fill.rs` pins the budget (a ring costs its band,
+not its disc) and the pixels (a meshed ring matches the ring drawn as two
+clipped quads to interpolation rounding); the unit tests in `band_mesh.rs`
+walk every pixel center the shader would shade and assert the mesh holds
+it. On the Mate 20 X, cranorbit's MEGA BOSS arena went from 16 MP to 12 MP
+of shape fill and from 15.9 ms to 10.6 ms present with this.
+
 ## Uploads and passes
 
 - `ViewportUniformRing`: one uniform buffer with dynamic offsets. Every pass

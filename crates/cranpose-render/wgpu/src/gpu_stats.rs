@@ -81,6 +81,10 @@ pub struct FrameStatsSnapshot {
     /// Pixels shaded by runtime shader composites: what every glass surface
     /// costs a tiling GPU per frame, each capture that re-shades one included.
     pub shader_pixels: u64,
+    /// Pixels the shape draws rasterize: a band drawn as a mesh counts its
+    /// mesh, everything else its quad. Fill rate is what a scene of rings
+    /// costs a tiling GPU, however few draws it takes.
+    pub shape_fill_pixels: u64,
     pub shape_passes: u32,
     pub image_passes: u32,
     pub text_passes: u32,
@@ -170,7 +174,7 @@ impl FrameStatsSnapshot {
              isolated_layers={} area={:.2}MP | \
              layer_cache: hit={} miss={} {:.1}% hit_px={:.2}MP miss_px={:.2}MP size={}({:.1}MB) hit_by_kind={} miss_px_by_kind={} | \
              shadow_cache: shape_hit={} shape_miss={} hit_px={:.2}MP miss_px={:.2}MP text_blur_fallback={} | \
-             blur={} composite={} effect={} shader_px={:.2}MP | shape={} image={} text={} draws={} | \
+             blur={} composite={} effect={} shader_px={:.2}MP | shape={} shape_fill_px={:.2}MP image={} text={} draws={} | \
              text_img_cache: hit={} miss={} hit_px={:.2}MP miss_px={:.2}MP raster={:.2}MB | \
              text_glyph_atlas: hit={} miss={} miss_px={:.2}MP | \
              caches: text_pool={} img={} txt={}",
@@ -207,6 +211,7 @@ impl FrameStatsSnapshot {
             self.effect_applies,
             self.shader_pixels as f64 / 1_000_000.0,
             self.shape_passes,
+            self.shape_fill_pixels as f64 / 1_000_000.0,
             self.image_passes,
             self.text_passes,
             self.draw_calls,
@@ -270,6 +275,7 @@ pub(crate) struct FrameStats {
     pub composite_passes: Cell<u32>,
     pub effect_applies: Cell<u32>,
     pub shader_pixels: Cell<u64>,
+    pub shape_fill_pixels: Cell<u64>,
     pub shape_passes: Cell<u32>,
     pub image_passes: Cell<u32>,
     pub text_passes: Cell<u32>,
@@ -487,6 +493,11 @@ impl FrameStats {
             .set(self.shadow_text_blur_fallbacks.get().saturating_add(1));
     }
 
+    pub fn add_shape_fill_pixels(&self, pixels: u64) {
+        self.shape_fill_pixels
+            .set(self.shape_fill_pixels.get().saturating_add(pixels));
+    }
+
     pub fn bump_shapes(&self) {
         self.shape_passes.set(self.shape_passes.get() + 1);
     }
@@ -591,6 +602,7 @@ impl FrameStats {
             composite_passes: self.composite_passes.get(),
             effect_applies: self.effect_applies.get(),
             shader_pixels: self.shader_pixels.get(),
+            shape_fill_pixels: self.shape_fill_pixels.get(),
             shape_passes: self.shape_passes.get(),
             image_passes: self.image_passes.get(),
             text_passes: self.text_passes.get(),
@@ -649,6 +661,7 @@ impl FrameStats {
         self.composite_passes.set(0);
         self.effect_applies.set(0);
         self.shader_pixels.set(0);
+        self.shape_fill_pixels.set(0);
         self.shape_passes.set(0);
         self.image_passes.set(0);
         self.text_passes.set(0);
