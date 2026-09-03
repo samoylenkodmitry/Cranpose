@@ -21,6 +21,9 @@ const TOGGLE: &str = "CRANPOSE_NO_BACKDROP_FLATTEN";
 const NESTED: u8 = 0;
 const SIBLINGS: u8 = 1;
 const NO_BUTTON: u8 = 2;
+const CORNER_CIRCLE: u8 = 3;
+const CORNER_CIRCLE_SIBLINGS: u8 = 4;
+const CIRCLE: [f32; 4] = [226.0, 28.0, 40.0, 40.0];
 
 static SCENE: Mutex<()> = Mutex::new(());
 static ARRANGEMENT: AtomicU8 = AtomicU8::new(NESTED);
@@ -85,6 +88,20 @@ fn CardButton(offset: (f32, f32)) {
 
 #[composable]
 #[allow(non_snake_case)]
+fn CornerCircle() {
+    GlassSurface(
+        rect_modifier(CIRCLE),
+        Glass::regular()
+            .shape(LiquidShape::Circle)
+            .blur_radius(24.0)
+            .shadow(false)
+            .no_clip(),
+        || {},
+    );
+}
+
+#[composable]
+#[allow(non_snake_case)]
 fn GlassCardsPage() {
     LiquidTheme(LiquidThemeSpec::default(), || {
         FramePage(
@@ -111,6 +128,25 @@ fn GlassCardsPage() {
                                     CardButton(offset);
                                 },
                             );
+                        }
+                        CORNER_CIRCLE => {
+                            GlassSurface(rect_modifier(card), card_glass(), move || {
+                                Box(
+                                    rect_modifier([0.0, 0.0, card[2], card[3]]),
+                                    BoxSpec::new(),
+                                    || {
+                                        CardText();
+                                        CornerCircle();
+                                    },
+                                );
+                            })
+                        }
+                        CORNER_CIRCLE_SIBLINGS => {
+                            GlassSurface(rect_modifier(card), card_glass(), || {});
+                            Box(rect_modifier(card).clip_to_bounds(), BoxSpec::new(), || {
+                                CardText();
+                                CornerCircle();
+                            });
                         }
                         _ => GlassSurface(rect_modifier(card), card_glass(), || {
                             CardText();
@@ -352,5 +388,37 @@ fn a_flattened_cards_corner_shadow_stays_inside_the_rounded_clip() {
         "a shadow drawn into the parent leaked {} levels into a corner outside the card's \
          rounded clip",
         leaked.max
+    );
+}
+
+#[test]
+fn a_nested_glass_whose_reach_enters_the_corner_cut_still_flattens_the_card_exactly() {
+    let _scene = SCENE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let Some(flattened) = capture(CORNER_CIRCLE, false) else {
+        return;
+    };
+    let isolated = capture(CORNER_CIRCLE, true).expect("headless WGPU init failed mid-suite");
+    assert!(
+        flattened.cold_passes < isolated.cold_passes,
+        "a nested glass only reads through the parent's clip, so its reach never blocks \
+         flattening: {} vs {} passes",
+        flattened.cold_passes,
+        isolated.cold_passes
+    );
+    let siblings =
+        capture(CORNER_CIRCLE_SIBLINGS, false).expect("headless WGPU init failed mid-suite");
+    let inside = delta_where(&flattened.pixels, &siblings.pixels, |_, _| true);
+    eprintln!(
+        "corner circle: max delta {} over {} pixels, {} differing",
+        inside.max, inside.compared, inside.differing
+    );
+    assert!(
+        inside.max <= 1 && inside.differing * 50 < inside.compared,
+        "a flattened card with a round glass near its corner must draw like the sibling \
+         arrangement: max delta {} over {} differing pixels",
+        inside.max,
+        inside.differing
     );
 }

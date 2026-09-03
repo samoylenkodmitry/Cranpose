@@ -1052,6 +1052,71 @@ fn first_inner_cutout_x(primitives: &[DrawPrimitive]) -> Option<f32> {
 }
 
 #[test]
+fn a_transform_layer_after_a_shaped_layer_keeps_the_shape() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let shape = LayerShape::Rounded(RoundedCornerShape::uniform(8.0));
+    let modifier = Modifier::empty()
+        .graphics_layer(move || GraphicsLayer {
+            clip: true,
+            shape,
+            ..Default::default()
+        })
+        .graphics_layer(|| GraphicsLayer {
+            scale_x: 1.2,
+            scale_y: 1.2,
+            ..Default::default()
+        });
+    let layer = collect_slices_from_modifier(&modifier)
+        .graphics_layer()
+        .expect("the stacked layers merge into one");
+    assert!(layer.clip);
+    assert_eq!(
+        layer.shape, shape,
+        "a later layer that declares no shape must not turn the clip rectangular"
+    );
+    assert_eq!(layer.scale_x, 1.2);
+
+    let glass_then_scale = collect_slices_from_modifier(
+        &Modifier::empty()
+            .graphics_layer(move || GraphicsLayer {
+                shape,
+                backdrop_effect: Some(RenderEffect::blur(4.0)),
+                ..Default::default()
+            })
+            .graphics_layer(|| GraphicsLayer {
+                scale: 1.1,
+                ..Default::default()
+            }),
+    )
+    .graphics_layer()
+    .expect("the stacked layers merge into one");
+    assert_eq!(
+        glass_then_scale.shape, shape,
+        "the layer carrying the backdrop keeps the shape its effect covers"
+    );
+
+    let reshaped = collect_slices_from_modifier(
+        &Modifier::empty()
+            .graphics_layer(move || GraphicsLayer {
+                shape,
+                ..Default::default()
+            })
+            .graphics_layer(|| GraphicsLayer {
+                clip: true,
+                shape: LayerShape::Rounded(RoundedCornerShape::uniform(2.0)),
+                ..Default::default()
+            }),
+    )
+    .graphics_layer()
+    .expect("the stacked layers merge into one");
+    assert_eq!(
+        reshaped.shape,
+        LayerShape::Rounded(RoundedCornerShape::uniform(2.0)),
+        "a later layer that declares a shape wins"
+    );
+}
+
+#[test]
 fn draw_commands_chained_before_the_graphics_layer_are_outer() {
     let _app_context = crate::render_state::app_context_test_scope();
     let shape = LayerShape::Rounded(RoundedCornerShape::uniform(8.0));

@@ -1444,7 +1444,10 @@ fn shadow_temporary_surfaces_are_frame_recorder_transients() {
     assert!(
         shape_body.contains(
             "let scratch = frame_encoder.acquire_transient_offscreen(&device, scratch_descriptor);"
-        ) && shape_body.contains("let source_is_cacheable = cache_key.is_some();")
+        ) && shape_body.contains("let source = if retained {")
+            && shape_body.contains("self.acquire_retained_surface(bounds_w, bounds_h)")
+            && shape_body
+                .contains("frame_encoder.acquire_transient_offscreen(&device, source_descriptor)")
             && shape_body
                 .contains("frame_encoder.release_transient_offscreen(scratch_descriptor, scratch)")
             && shape_body

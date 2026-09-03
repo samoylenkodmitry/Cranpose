@@ -1608,11 +1608,7 @@ fn content_survives_rect_clip(
             .filter(|shadow| !shadow_draw_is_blurred_drop(shadow))
             .filter_map(|shadow| shadow_draws_bounds_with_clip(std::slice::from_ref(shadow), false))
             .all(|bounds| corners.admits(reach(bounds, DIRECT_DRAW_COVERAGE_REACH)));
-        let capture_admitted = child.backdrop.as_ref().is_none_or(|backdrop| {
-            let capture = reach(dest, backdrop.input_padding());
-            rect_contains(layer.local_bounds, capture) && corners.admits(capture)
-        });
-        composite_admitted && shadows_admitted && capture_admitted
+        composite_admitted && shadows_admitted
     })
 }
 

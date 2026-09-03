@@ -1522,28 +1522,26 @@ fn draw_op_visible_bounds(scene: &CompositorScene, draw_op: DrawOp) -> Option<Re
 /// shadow reaches beyond its shapes by the blur extent, so it is bounded by
 /// its expanded, clipped rectangle rather than skipped like the chunk cache
 /// skips it.
-fn deferred_range_bounds(
+/// Whether any draw op of the range that is not excluded touches
+/// `dependency_rect`. Ops are tested one by one: the union of a run's bounds
+/// would make every capture depend on everything walked before it.
+fn deferred_range_intersects(
     scene: &CompositorScene,
     z_start: usize,
     z_end: usize,
     excluded: &[Range<usize>],
-) -> Option<Rect> {
-    let mut bounds = None;
-    for op in scene_range_draw_ops(&scene.draw_ops, z_start, z_end) {
-        if is_in_effect_range(op.z_index, excluded) {
-            continue;
-        }
-        let rect = match op.kind {
+    dependency_rect: Rect,
+) -> bool {
+    scene_range_draw_ops(&scene.draw_ops, z_start, z_end)
+        .iter()
+        .filter(|op| !is_in_effect_range(op.z_index, excluded))
+        .filter_map(|op| match op.kind {
             DrawOpKind::Shadow(index) => scene.shadow_draws.get(index).and_then(|shadow| {
                 crate::normalized_scene::shadow_draws_bounds(std::slice::from_ref(shadow))
             }),
             _ => draw_op_visible_bounds(scene, *op),
-        };
-        if let Some(rect) = rect {
-            bounds = union_rect(bounds, rect);
-        }
-    }
-    bounds
+        })
+        .any(|rect| rects_intersect(rect, dependency_rect))
 }
 
 fn scene_range_visible_bounds(
@@ -4774,18 +4772,24 @@ impl<'s> DeferredDirectRun<'s> {
         self.excluded.push(z_index..z_index.saturating_add(1));
     }
 
-    fn next_excluded_after(&self, z_index: usize) -> Option<usize> {
-        self.excluded
+    /// The end of the chunk that may start at `cursor_z`: `None` when the op
+    /// there is excluded, otherwise the caller's end cut at the next exclusion.
+    fn chunk_end_from(&self, cursor_z: usize, chunk_end: usize) -> Option<usize> {
+        if is_in_effect_range(cursor_z, &self.excluded) {
+            return None;
+        }
+        let next_excluded = self
+            .excluded
             .iter()
             .map(|range| range.start)
-            .filter(|start| *start > z_index)
-            .min()
+            .filter(|start| *start > cursor_z)
+            .min();
+        Some(next_excluded.map_or(chunk_end, |next| chunk_end.min(next)))
     }
 
     fn intersects(&self, dependency_rect: Rect, boundary: usize) -> bool {
         self.run.peek(boundary).is_some_and(|(start, end)| {
-            deferred_range_bounds(self.scene, start, end, &self.excluded)
-                .is_some_and(|bounds| rects_intersect(bounds, dependency_rect))
+            deferred_range_intersects(self.scene, start, end, &self.excluded, dependency_rect)
         })
     }
 }
@@ -5980,14 +5984,13 @@ fn render_direct_scene_range_with_pending_composites<B: SurfaceExecutionBackend>
         deferred,
     );
     while cursor_z < z_end {
-        if is_in_effect_range(cursor_z, &deferred.excluded) {
+        let Some(mut chunk_end) = deferred.chunk_end_from(
+            cursor_z,
+            direct_scene_range_cache_chunk_end(scene, cursor_z, z_end, root_scale),
+        ) else {
             cursor_z = cursor_z.saturating_add(1);
             continue;
-        }
-        let mut chunk_end = direct_scene_range_cache_chunk_end(scene, cursor_z, z_end, root_scale);
-        if let Some(next_excluded) = deferred.next_excluded_after(cursor_z) {
-            chunk_end = chunk_end.min(next_excluded);
-        }
+        };
         if chunk_end <= cursor_z {
             return Err("direct scene cache chunk did not advance".to_string());
         }

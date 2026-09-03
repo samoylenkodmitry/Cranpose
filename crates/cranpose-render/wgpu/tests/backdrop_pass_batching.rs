@@ -659,3 +659,116 @@ fn a_shadow_composited_from_its_cache_matches_the_shadow_drawn_in_the_segment() 
          direct {direct_passes}"
     );
 }
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SpreadBoxes {
+    None,
+    Apart,
+    UnderGlass,
+}
+
+#[composable]
+#[allow(non_snake_case)]
+fn SpreadContentUnderGlass(boxes: SpreadBoxes) {
+    Box(
+        Modifier::empty()
+            .size_points(FRAME_WIDTH as f32, FRAME_HEIGHT as f32)
+            .background(Color(0.05, 0.06, 0.08, 1.0)),
+        BoxSpec::new(),
+        move || {
+            Box(
+                Modifier::empty()
+                    .offset(24.0, 24.0)
+                    .width(220.0)
+                    .height(60.0)
+                    .rounded_corners(14.0)
+                    .backdrop_effect(chain_glass_effect(220.0, 60.0, Color(0.9, 0.9, 0.95, 0.1))),
+                BoxSpec::new(),
+                || {},
+            );
+            if boxes != SpreadBoxes::None {
+                let right_x = if boxes == SpreadBoxes::UnderGlass {
+                    260.0
+                } else {
+                    440.0
+                };
+                Box(
+                    Modifier::empty()
+                        .offset(40.0, 200.0)
+                        .width(160.0)
+                        .height(60.0)
+                        .background(Color(1.0, 0.0, 0.0, 1.0)),
+                    BoxSpec::new(),
+                    || {},
+                );
+                Box(
+                    Modifier::empty()
+                        .offset(right_x, 200.0)
+                        .width(160.0)
+                        .height(60.0)
+                        .background(Color(0.0, 0.0, 1.0, 1.0)),
+                    BoxSpec::new(),
+                    || {},
+                );
+            }
+            Box(
+                Modifier::empty()
+                    .offset(250.0, 210.0)
+                    .width(140.0)
+                    .height(40.0)
+                    .rounded_corners(10.0)
+                    .backdrop_effect(chain_glass_effect(140.0, 40.0, Color(0.9, 0.9, 0.95, 0.1))),
+                BoxSpec::new(),
+                || {},
+            );
+        },
+    );
+}
+
+fn spread_frame(boxes: SpreadBoxes) -> (cranpose_render_wgpu::CapturedFrame, u32) {
+    let (_lock, renderer) = support::headless_renderer_parts().expect("headless renderer");
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(renderer, root_key, move || SpreadContentUnderGlass(boxes));
+    shell.set_viewport(FRAME_WIDTH as f32, FRAME_HEIGHT as f32);
+    shell.set_buffer_size(FRAME_WIDTH, FRAME_HEIGHT);
+    shell.update();
+    let frame = shell
+        .renderer()
+        .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
+        .expect("frame capture should succeed");
+    let passes = shell
+        .renderer()
+        .last_frame_stats()
+        .expect("frame stats")
+        .pass_count;
+    (frame, passes)
+}
+
+#[test]
+fn a_glass_between_two_direct_draws_it_does_not_cover_leaves_them_in_the_fused_pass() {
+    let (_, bare_passes) = spread_frame(SpreadBoxes::None);
+    let (_, apart_passes) = spread_frame(SpreadBoxes::Apart);
+    assert_eq!(
+        apart_passes, bare_passes,
+        "a capture depends on the draws it reads, not on the bounding box of everything the \
+         run has walked so far"
+    );
+}
+
+#[test]
+fn a_glass_over_one_of_two_direct_draws_still_captures_it() {
+    let (frame, _) = spread_frame(SpreadBoxes::UnderGlass);
+    let pixel = |x: usize, y: usize| {
+        let index = (y * FRAME_WIDTH as usize + x) * 4;
+        [
+            frame.pixels[index],
+            frame.pixels[index + 1],
+            frame.pixels[index + 2],
+        ]
+    };
+    let under_glass = pixel(320, 230);
+    assert!(
+        under_glass[2] > 120 && under_glass[2] > under_glass[0] + 60,
+        "the glass over the blue box must read it after it was drawn: {under_glass:?}"
+    );
+}

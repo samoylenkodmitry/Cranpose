@@ -2,7 +2,7 @@ use std::{fmt, mem::size_of, rc::Rc};
 
 use cranpose_foundation::{ModifierNodeChain, NodeCapabilities, PointerEvent};
 use cranpose_ui_graphics::{
-    ColorFilter, EdgeInsets, GraphicsLayer, RenderEffect, RoundedCornerShape,
+    ColorFilter, EdgeInsets, GraphicsLayer, LayerShape, RenderEffect, RoundedCornerShape,
 };
 
 use super::{ModifierChainHandle, Point};
@@ -112,13 +112,27 @@ fn merge_graphics_layers(base: GraphicsLayer, overlay: GraphicsLayer) -> Graphic
         shadow_elevation: overlay.shadow_elevation,
         ambient_shadow_color: overlay.ambient_shadow_color,
         spot_shadow_color: overlay.spot_shadow_color,
-        shape: overlay.shape,
+        shape: merged_layer_shape(&base, &overlay),
         clip: base.clip || overlay.clip,
         compositing_strategy: overlay.compositing_strategy,
         blend_mode: overlay.blend_mode,
         color_filter: compose_color_filters(base.color_filter, overlay.color_filter),
         render_effect: compose_render_effects(base.render_effect, overlay.render_effect),
         backdrop_effect: overlay.backdrop_effect.or(base.backdrop_effect),
+    }
+}
+
+/// The shape of two stacked layers merged into one: the layer that clips
+/// owns it, else the layer that carries the backdrop (its effect covers that
+/// shape), else the later layer, whose default resets it like every other
+/// parent-local field.
+fn merged_layer_shape(base: &GraphicsLayer, overlay: &GraphicsLayer) -> LayerShape {
+    if overlay.clip || (!base.clip && overlay.backdrop_effect.is_some()) {
+        overlay.shape
+    } else if base.clip || base.backdrop_effect.is_some() {
+        base.shape
+    } else {
+        overlay.shape
     }
 }
 
