@@ -2,6 +2,7 @@
 
 - no unsafe
 - just test, just clippy, just fmt # `just` lists every gate; CI runs these same recipes
+- just hooks # once per clone: the pre-commit hook runs `just precommit` (fmt-check, typos, complexity-gate, duplication-gate), the fast gates CI would otherwise fail minutes later
 - KISS, DRY, SOLID. don't copy-paste lazily
 - Use `cargo add <crate>` to add dependencies.
 - Use `cargo upgrade` to upgrade dependencies.

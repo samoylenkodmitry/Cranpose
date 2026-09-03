@@ -512,40 +512,19 @@ fn create_fullscreen_pipeline(
     surface_format: wgpu::TextureFormat,
     blend: wgpu::BlendState,
 ) -> wgpu::RenderPipeline {
-    crate::render::create_render_pipeline_logged(
+    crate::render::create_fullscreen_strip_pipeline(
         device,
         cache,
         &format!("effect {label} entry={fragment_entry}"),
-        wgpu::RenderPipelineDescriptor {
-            label: Some(label),
-            layout: Some(layout),
-            vertex: wgpu::VertexState {
-                module: shader,
-                entry_point: Some("fullscreen_vs"),
-                buffers: &[],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: shader,
-                entry_point: Some(fragment_entry),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: surface_format,
-                    blend: Some(blend),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleStrip,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
+        label,
+        layout,
+        shader,
+        fragment_entry,
+        &[],
+        wgpu::ColorTargetState {
+            format: surface_format,
+            blend: Some(blend),
+            write_mask: wgpu::ColorWrites::ALL,
         },
     )
 }
@@ -1002,24 +981,15 @@ impl EffectRenderer {
             bytemuck::bytes_of(&uniforms),
             &self.debug_upload_bytes,
         );
-        let mut pass = recorder.begin_timed_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some(if horizontal {
+        let mut pass = recorder.begin_color_pass(
+            if horizontal {
                 "Blur Horizontal Pass"
             } else {
                 "Blur Vertical Pass"
-            }),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: dest_view,
-                resolve_target: None,
-                depth_slice: None,
-                ops: wgpu::Operations {
-                    load: load_op,
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            ..Default::default()
-        });
+            },
+            dest_view,
+            load_op,
+        );
         pass.set_pipeline(self.blur_pipeline(device));
         pass.set_bind_group(0, source_bind_group, &[]);
         pass.set_bind_group(1, &uniform_bind_group, &[]);
@@ -1174,24 +1144,15 @@ impl EffectRenderer {
                     )
                 })
                 .collect();
-            let mut pass = recorder.begin_timed_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some(if horizontal {
+            let mut pass = recorder.begin_color_pass(
+                if horizontal {
                     "Blur Horizontal Pass"
                 } else {
                     "Blur Vertical Pass"
-                }),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: dest_view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                ..Default::default()
-            });
+                },
+                dest_view,
+                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+            );
             pass.set_pipeline(self.blur_pipeline(device));
             pass.set_bind_group(0, source_bind_group, &[]);
             for (region, uniform_bind_group) in regions.iter().zip(&uniform_bind_groups) {
@@ -1237,20 +1198,11 @@ impl EffectRenderer {
             &self.effect_linear_sampler,
         );
 
-        let mut pass = recorder.begin_timed_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Offset Effect Pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: dest_view,
-                resolve_target: None,
-                depth_slice: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            ..Default::default()
-        });
+        let mut pass = recorder.begin_color_pass(
+            "Offset Effect Pass",
+            dest_view,
+            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+        );
 
         pass.set_pipeline(self.offset_pipeline(device));
         pass.set_bind_group(0, texture_bind_group, &[]);
@@ -1437,20 +1389,7 @@ impl EffectRenderer {
             &self.effect_linear_sampler,
         );
 
-        let mut pass = recorder.begin_timed_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Shader Effect Pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: dest_view,
-                resolve_target: None,
-                depth_slice: None,
-                ops: wgpu::Operations {
-                    load: options.load_op,
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            ..Default::default()
-        });
+        let mut pass = recorder.begin_color_pass("Shader Effect Pass", dest_view, options.load_op);
 
         pass.set_pipeline(pipeline);
         pass.set_bind_group(0, texture_bind_group, &[]);
@@ -1643,20 +1582,7 @@ impl EffectRenderer {
             &self.debug_upload_bytes,
         );
 
-        let mut pass = recorder.begin_timed_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Blit Composite Pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: dest_view,
-                resolve_target: None,
-                depth_slice: None,
-                ops: wgpu::Operations {
-                    load: options.load_op,
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            ..Default::default()
-        });
+        let mut pass = recorder.begin_color_pass("Blit Composite Pass", dest_view, options.load_op);
 
         pass.set_pipeline(self.blit_pipeline(device, options.blend_mode));
         pass.set_bind_group(0, texture_bind_group, &[]);

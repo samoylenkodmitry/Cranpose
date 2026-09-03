@@ -1,0 +1,5 @@
+#!/bin/sh
+# The fast gates CI runs first, run before the commit exists: a formatting,
+# spelling, complexity or duplication failure costs seconds here and a full
+# CI round trip otherwise. Install once per clone with `just hooks`.
+exec just precommit

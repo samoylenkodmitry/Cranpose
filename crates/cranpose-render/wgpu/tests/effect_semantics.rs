@@ -23,6 +23,7 @@ use cranpose_ui_graphics::{
     BlendMode, Brush, Color, CompositingStrategy, DrawPrimitive, GraphicsLayer, ImageBitmap,
     ImageSampling, Point, Rect, RenderEffect, ShadowPrimitive,
 };
+use support::solid_rect;
 
 const FRAME_WIDTH: u32 = 128;
 const FRAME_HEIGHT: u32 = 96;
@@ -3272,20 +3273,6 @@ fn layer(
     children: Vec<RenderNode>,
 ) -> cranpose_render_common::graph::LayerNode {
     shared_test_support::layer_node(local_bounds, transform_to_parent, graphics_layer, children)
-}
-
-fn solid_rect(rect: Rect, color: Color) -> RenderNode {
-    RenderNode::Primitive(PrimitiveEntry {
-        phase: PrimitivePhase::BeforeChildren,
-        node: PrimitiveNode::Draw(DrawPrimitiveNode {
-            primitive: DrawPrimitive::Rect {
-                rect,
-                brush: Brush::solid(color),
-                stroke: None,
-            },
-            clip: None,
-        }),
-    })
 }
 
 fn dstout_rect(rect: Rect) -> RenderNode {

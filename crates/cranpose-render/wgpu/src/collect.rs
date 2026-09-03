@@ -15,7 +15,9 @@ use cranpose_ui_graphics::{
 
 use crate::{
     pipeline::{TextLayoutResolver, push_draw_primitive, push_layer_shadow, push_text_style_draws},
-    scene::{BackdropLayer, CompositorScene, LayerRoundedClip, SceneCapacityHint, SnapAnchor},
+    scene::{
+        BackdropLayer, CompositorScene, LayerRoundedClip, SceneCapacityHint, ShadowDraw, SnapAnchor,
+    },
 };
 
 const AFFINE_TOLERANCE: f32 = 1e-4;
@@ -292,74 +294,67 @@ fn expand_rect(rect: Rect, margin: f32) -> Rect {
 /// mask themselves and are not counted.
 fn content_admits_rounded_clip(layer: &LayerNode, clip: LayerRoundedClip) -> bool {
     let corners = RoundedClipCorners::of(clip);
-    fn admits(
-        layer: &LayerNode,
-        offset: Point,
-        clip: Option<Rect>,
-        corners: &RoundedClipCorners,
-    ) -> bool {
-        let inherited_clip = resolve_clip(
-            clip,
-            layer
-                .clip_rect()
-                .map(|rect| rect.translate(offset.x, offset.y)),
+    layer_admits_corners(layer, Point::default(), None, &corners)
+}
+
+fn layer_admits_corners(
+    layer: &LayerNode,
+    offset: Point,
+    clip: Option<Rect>,
+    corners: &RoundedClipCorners,
+) -> bool {
+    let inherited_clip = resolve_clip(
+        clip,
+        layer
+            .clip_rect()
+            .map(|rect| rect.translate(offset.x, offset.y)),
+    );
+    let check = |rect: Rect, primitive_clip: Option<Rect>| -> bool {
+        let rect = rect.translate(offset.x, offset.y);
+        let clip = resolve_clip(
+            inherited_clip,
+            primitive_clip.map(|clip| clip.translate(offset.x, offset.y)),
         );
-        let check = |rect: Rect, primitive_clip: Option<Rect>| -> bool {
-            let rect = rect.translate(offset.x, offset.y);
-            let clip = resolve_clip(
-                inherited_clip,
-                primitive_clip.map(|clip| clip.translate(offset.x, offset.y)),
-            );
-            let visible = match clip {
-                Some(clip) => rect.intersect(clip),
-                None => Some(rect),
-            };
-            visible
-                .is_none_or(|visible| corners.admits(expand_rect(visible, ROUNDED_CLIP_AA_MARGIN)))
+        let visible = match clip {
+            Some(clip) => rect.intersect(clip),
+            None => Some(rect),
         };
-        for child in &layer.children {
-            match child {
-                RenderNode::Primitive(entry) => match &entry.node {
-                    PrimitiveNode::Draw(draw) => {
-                        if let Some(rect) = primitive_coverage_rect(&draw.primitive)
-                            && !check(rect, draw.clip)
-                        {
-                            return false;
-                        }
-                    }
-                    PrimitiveNode::Text(text) => {
-                        if !check(text.rect, text.clip) {
-                            return false;
-                        }
-                    }
-                },
-                RenderNode::DrawRun(run) => {
-                    for primitive in run.primitives.iter() {
-                        if let Some(rect) = primitive_coverage_rect(primitive)
-                            && !check(rect, None)
-                        {
-                            return false;
-                        }
-                    }
-                }
-                RenderNode::Layer(child) => {
-                    let Some(translation) = direct_translation(child.transform_to_parent) else {
-                        continue;
-                    };
-                    if child_needs_surface(child) {
-                        continue;
-                    }
-                    let child_offset =
-                        Point::new(offset.x + translation.x, offset.y + translation.y);
-                    if !admits(child, child_offset, inherited_clip, corners) {
-                        return false;
-                    }
-                }
+        visible.is_none_or(|visible| corners.admits(expand_rect(visible, ROUNDED_CLIP_AA_MARGIN)))
+    };
+    layer
+        .children
+        .iter()
+        .all(|child| node_admits_corners(child, offset, inherited_clip, corners, &check))
+}
+
+fn node_admits_corners(
+    node: &RenderNode,
+    offset: Point,
+    inherited_clip: Option<Rect>,
+    corners: &RoundedClipCorners,
+    check: &impl Fn(Rect, Option<Rect>) -> bool,
+) -> bool {
+    match node {
+        RenderNode::Primitive(entry) => match &entry.node {
+            PrimitiveNode::Draw(draw) => {
+                primitive_coverage_rect(&draw.primitive).is_none_or(|rect| check(rect, draw.clip))
             }
+            PrimitiveNode::Text(text) => check(text.rect, text.clip),
+        },
+        RenderNode::DrawRun(run) => run.primitives.iter().all(|primitive| {
+            primitive_coverage_rect(primitive).is_none_or(|rect| check(rect, None))
+        }),
+        RenderNode::Layer(child) => {
+            let Some(translation) = direct_translation(child.transform_to_parent) else {
+                return true;
+            };
+            if child_needs_surface(child) {
+                return true;
+            }
+            let child_offset = Point::new(offset.x + translation.x, offset.y + translation.y);
+            layer_admits_corners(child, child_offset, inherited_clip, corners)
         }
-        true
     }
-    admits(layer, Point::default(), None, &corners)
 }
 
 /// Whether the layer's own composition needs its content on a separate
@@ -548,36 +543,17 @@ fn collect_into(
             .then(|| rigid_snap_anchor(layer_bounds, &local_layer))
             .flatten()
     });
-    let motion_context_animated = layer.motion_context_animated || translated;
+    let content = ContentContext {
+        layer_bounds,
+        local_layer: &local_layer,
+        visual_clip,
+        anchor: layer_anchor,
+        motion_context_animated: layer.motion_context_animated || translated,
+    };
     let mut deferred: Vec<&RenderNode> = Vec::new();
 
     for child in &layer.children {
         match child {
-            RenderNode::Primitive(entry) => match entry.phase {
-                PrimitivePhase::BeforeChildren => push_primitive(
-                    out,
-                    text_layout,
-                    entry,
-                    layer_bounds,
-                    &local_layer,
-                    visual_clip,
-                    layer_anchor,
-                    motion_context_animated,
-                ),
-                PrimitivePhase::AfterChildren => deferred.push(child),
-            },
-            RenderNode::DrawRun(run) => match run.phase {
-                PrimitivePhase::BeforeChildren => push_draw_run(
-                    out,
-                    run,
-                    layer_bounds,
-                    &local_layer,
-                    visual_clip,
-                    layer_anchor,
-                    motion_context_animated,
-                ),
-                PrimitivePhase::AfterChildren => deferred.push(child),
-            },
             RenderNode::Layer(child_layer) => {
                 let child_context = WalkContext {
                     offset: context.offset,
@@ -587,32 +563,62 @@ fn collect_into(
                 };
                 collect_child(child_layer, text_layout, child_context, out);
             }
+            _ if content_phase(child) == PrimitivePhase::AfterChildren => deferred.push(child),
+            _ => push_content(out, text_layout, child, &content),
         }
     }
 
     for child in deferred {
-        match child {
-            RenderNode::Primitive(entry) => push_primitive(
-                out,
-                text_layout,
-                entry,
-                layer_bounds,
-                &local_layer,
-                visual_clip,
-                layer_anchor,
-                motion_context_animated,
-            ),
-            RenderNode::DrawRun(run) => push_draw_run(
-                out,
-                run,
-                layer_bounds,
-                &local_layer,
-                visual_clip,
-                layer_anchor,
-                motion_context_animated,
-            ),
-            RenderNode::Layer(_) => {}
-        }
+        push_content(out, text_layout, child, &content);
+    }
+}
+
+/// Where a layer's own primitives land: the layer's bounds and local
+/// graphics layer, the clip and anchor they inherit, and whether their
+/// motion context animates.
+struct ContentContext<'a> {
+    layer_bounds: Rect,
+    local_layer: &'a GraphicsLayer,
+    visual_clip: Option<Rect>,
+    anchor: Option<SnapAnchor>,
+    motion_context_animated: bool,
+}
+
+fn content_phase(node: &RenderNode) -> PrimitivePhase {
+    match node {
+        RenderNode::Primitive(entry) => entry.phase,
+        RenderNode::DrawRun(run) => run.phase,
+        RenderNode::Layer(_) => PrimitivePhase::BeforeChildren,
+    }
+}
+
+fn push_content(
+    out: &mut LayerScene,
+    text_layout: &mut impl TextLayoutResolver,
+    node: &RenderNode,
+    content: &ContentContext<'_>,
+) {
+    match node {
+        RenderNode::Primitive(entry) => push_primitive(
+            out,
+            text_layout,
+            entry,
+            content.layer_bounds,
+            content.local_layer,
+            content.visual_clip,
+            content.anchor,
+            content.motion_context_animated,
+        ),
+        RenderNode::DrawRun(run) => push_draw_run(
+            out,
+            run,
+            content.layer_bounds,
+            content.local_layer,
+            content.visual_clip,
+            content.anchor,
+            content.motion_context_animated,
+        ),
+        RenderNode::Layer(_) => {}
     }
 }
 
@@ -697,10 +703,13 @@ fn assign_shadow_anchor(
     shadows_before: usize,
     snap_anchor: Option<SnapAnchor>,
 ) {
-    let Some(anchor) = snap_anchor else {
-        return;
-    };
-    for shadow in &mut scene.shadow_draws[shadows_before..] {
+    if let Some(anchor) = snap_anchor {
+        anchor_shadows(&mut scene.shadow_draws[shadows_before..], anchor);
+    }
+}
+
+fn anchor_shadows(shadows: &mut [ShadowDraw], anchor: SnapAnchor) {
+    for shadow in shadows {
         for (shape, _) in &mut shadow.shapes {
             shape.snap_anchor = Some(anchor);
         }
@@ -749,17 +758,7 @@ fn assign_snap_anchor_since(
     for text in &mut scene.texts[counts.texts..] {
         text.snap_anchor = Some(anchor);
     }
-    for shadow in &mut scene.shadow_draws[counts.shadow_draws..] {
-        for (shape, _) in &mut shadow.shapes {
-            shape.snap_anchor = Some(anchor);
-        }
-        for (shape, _) in &mut shadow.post_blur_cutouts {
-            shape.snap_anchor = Some(anchor);
-        }
-        for text in &mut shadow.texts {
-            text.snap_anchor = Some(anchor);
-        }
-    }
+    anchor_shadows(&mut scene.shadow_draws[counts.shadow_draws..], anchor);
     for layer in &mut scene.effect_layers[counts.effect_layers..] {
         layer.snap_anchor = Some(anchor);
     }

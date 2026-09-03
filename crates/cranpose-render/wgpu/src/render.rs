@@ -934,6 +934,61 @@ fn shape_shader_source(batch_limits: ShapeBatchLimits) -> Cow<'static, str> {
 fn shape_shader_source(_batch_limits: ShapeBatchLimits) -> Cow<'static, str> {
     Cow::Borrowed(shaders::SHADER)
 }
+/// A pipeline that draws one full-screen triangle strip from `fullscreen_vs`
+/// into a single color target, the shape every effect and composite pass
+/// shares; `constants` fixes the shader's override constants.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn create_fullscreen_strip_pipeline(
+    device: &wgpu::Device,
+    cache: Option<&wgpu::PipelineCache>,
+    log_label: &str,
+    label: &'static str,
+    layout: &wgpu::PipelineLayout,
+    module: &wgpu::ShaderModule,
+    fragment_entry: &'static str,
+    constants: &[(&str, f64)],
+    target: wgpu::ColorTargetState,
+) -> wgpu::RenderPipeline {
+    create_render_pipeline_logged(
+        device,
+        cache,
+        log_label,
+        wgpu::RenderPipelineDescriptor {
+            label: Some(label),
+            layout: Some(layout),
+            vertex: wgpu::VertexState {
+                module,
+                entry_point: Some("fullscreen_vs"),
+                buffers: &[],
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants,
+                    ..wgpu::PipelineCompilationOptions::default()
+                },
+            },
+            fragment: Some(wgpu::FragmentState {
+                module,
+                entry_point: Some(fragment_entry),
+                targets: &[Some(target)],
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants,
+                    ..wgpu::PipelineCompilationOptions::default()
+                },
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleStrip,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        },
+    )
+}
+
 pub(crate) fn create_render_pipeline_logged<'a>(
     device: &wgpu::Device,
     cache: Option<&'a wgpu::PipelineCache>,
@@ -3223,6 +3278,63 @@ impl GpuRenderer {
     /// Shape-only shadows live in the shadow cache, keyed by their content
     /// and device placement, so a scrolling card re-blits its cached blur.
     #[allow(clippy::too_many_arguments)]
+    /// The blurred shadow texture and whether the cache held it: a
+    /// shape-only shadow is cached by content and placement, a shadow with
+    /// text renders every frame.
+    fn blurred_shadow_source<C: FrameCommandRecorder>(
+        &mut self,
+        recorder: &mut C,
+        shadow: &ShadowDraw,
+        source_device: DevicePixelBounds,
+        pixel_radius: f32,
+        root_scale: f32,
+        transients: &mut Vec<(FrameTextureDescriptor, Rc<OffscreenTarget>)>,
+    ) -> Option<(Rc<OffscreenTarget>, bool)> {
+        let shape_only = shadow.texts.is_empty();
+        let key = if shape_only {
+            shape_shadow_surface_cache_key(
+                &shadow.shapes,
+                &shadow.post_blur_cutouts,
+                &shadow.brushes,
+                source_device,
+                pixel_radius,
+                root_scale,
+            )
+        } else {
+            None
+        };
+        if let Some(entry) = key.and_then(|key| self.shadow_surface_cache.get(&key)) {
+            return Some((Rc::clone(&entry.target), true));
+        }
+        if !shape_only {
+            self.frame_stats.record_shadow_text_blur_fallback();
+        }
+        let source = self.render_shadow_source(
+            recorder,
+            shadow,
+            source_device,
+            pixel_radius,
+            root_scale,
+            key.is_some(),
+            transients,
+        )?;
+        if let Some(key) = key {
+            self.frame_stats
+                .record_shadow_shape_cache_miss(source_device.width, source_device.height);
+            self.frame_stats.maybe_print_shadow_shape_cache_miss(
+                source_device.width,
+                source_device.height,
+                key.content_hash,
+                pixel_radius,
+                [source_device.x, source_device.y],
+                shadow.shapes.len(),
+                shadow.clip,
+            );
+            self.insert_cached_shadow_surface(key, Rc::clone(&source));
+        }
+        Some((source, false))
+    }
+
     pub(crate) fn resolve_blurred_shadow<C: FrameCommandRecorder>(
         &mut self,
         recorder: &mut C,
@@ -3278,57 +3390,15 @@ impl GpuRenderer {
             return;
         };
         let pixel_radius = shadow.blur_radius * root_scale;
-        let key = if shape_only {
-            shape_shadow_surface_cache_key(
-                &shadow.shapes,
-                &shadow.post_blur_cutouts,
-                &shadow.brushes,
-                source_device,
-                pixel_radius,
-                root_scale,
-            )
-        } else {
-            None
-        };
-        let cached = key.and_then(|key| {
-            self.shadow_surface_cache
-                .get(&key)
-                .map(|entry| Rc::clone(&entry.target))
-        });
-        let hit = cached.is_some();
-        let source = match cached {
-            Some(source) => source,
-            None => {
-                if !shape_only {
-                    self.frame_stats.record_shadow_text_blur_fallback();
-                }
-                let Some(source) = self.render_shadow_source(
-                    recorder,
-                    shadow,
-                    source_device,
-                    pixel_radius,
-                    root_scale,
-                    key.is_some(),
-                    transients,
-                ) else {
-                    return;
-                };
-                if let Some(key) = key {
-                    self.frame_stats
-                        .record_shadow_shape_cache_miss(source_device.width, source_device.height);
-                    self.frame_stats.maybe_print_shadow_shape_cache_miss(
-                        source_device.width,
-                        source_device.height,
-                        key.content_hash,
-                        pixel_radius,
-                        [source_device.x, source_device.y],
-                        shadow.shapes.len(),
-                        shadow.clip,
-                    );
-                    self.insert_cached_shadow_surface(key, Rc::clone(&source));
-                }
-                source
-            }
+        let Some((source, hit)) = self.blurred_shadow_source(
+            recorder,
+            shadow,
+            source_device,
+            pixel_radius,
+            root_scale,
+            transients,
+        ) else {
+            return;
         };
         let dest = (
             source_device.x,
@@ -3597,20 +3667,7 @@ impl GpuRenderer {
         view: &wgpu::TextureView,
         load_op: wgpu::LoadOp<wgpu::Color>,
     ) {
-        let pass = recorder.begin_timed_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Clear Pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view,
-                resolve_target: None,
-                depth_slice: None,
-                ops: wgpu::Operations {
-                    load: load_op,
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            ..Default::default()
-        });
+        let pass = recorder.begin_color_pass("Clear Pass", view, load_op);
         drop(pass);
         recorder.record_pass();
     }

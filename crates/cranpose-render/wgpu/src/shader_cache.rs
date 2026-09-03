@@ -84,46 +84,19 @@ impl ShaderPipelineCache {
                 immediate_size: 0,
             });
 
-            crate::render::create_render_pipeline_logged(
+            crate::render::create_fullscreen_strip_pipeline(
                 device,
                 self.pipeline_cache.as_ref(),
                 &format!("runtime-shader mode={mode:?}"),
-                wgpu::RenderPipelineDescriptor {
-                    label: Some("RuntimeShader Effect Pipeline"),
-                    layout: Some(&pipeline_layout),
-                    vertex: wgpu::VertexState {
-                        module: &shader_module,
-                        entry_point: Some("fullscreen_vs"),
-                        buffers: &[],
-                        compilation_options: wgpu::PipelineCompilationOptions {
-                            constants,
-                            ..wgpu::PipelineCompilationOptions::default()
-                        },
-                    },
-                    fragment: Some(wgpu::FragmentState {
-                        module: &shader_module,
-                        entry_point: Some("effect_fs"),
-                        targets: &[Some(wgpu::ColorTargetState {
-                            format,
-                            blend: Some(mode.blend_state()),
-                            write_mask: wgpu::ColorWrites::ALL,
-                        })],
-                        compilation_options: wgpu::PipelineCompilationOptions {
-                            constants,
-                            ..wgpu::PipelineCompilationOptions::default()
-                        },
-                    }),
-                    primitive: wgpu::PrimitiveState {
-                        topology: wgpu::PrimitiveTopology::TriangleStrip,
-                        strip_index_format: None,
-                        front_face: wgpu::FrontFace::Ccw,
-                        cull_mode: None,
-                        ..Default::default()
-                    },
-                    depth_stencil: None,
-                    multisample: wgpu::MultisampleState::default(),
-                    multiview_mask: None,
-                    cache: None,
+                "RuntimeShader Effect Pipeline",
+                &pipeline_layout,
+                &shader_module,
+                "effect_fs",
+                constants,
+                wgpu::ColorTargetState {
+                    format,
+                    blend: Some(mode.blend_state()),
+                    write_mask: wgpu::ColorWrites::ALL,
                 },
             )
         };

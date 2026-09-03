@@ -214,294 +214,26 @@ impl GpuRenderer {
         root_scale: f32,
         label: &'static str,
     ) -> Result<bool, String> {
-        let mut batches: Vec<Batch<'s>> = Vec::new();
-        let mut image_vertices = std::mem::take(&mut self.scratch_image_vertices);
-        let mut image_indices = std::mem::take(&mut self.scratch_image_indices);
-        let mut image_cmds = std::mem::take(&mut self.scratch_image_cmds);
-        let mut glyph_cmds = std::mem::take(&mut self.scratch_glyph_cmds);
-        image_vertices.clear();
-        image_indices.clear();
-        image_cmds.clear();
-        glyph_cmds.clear();
-        let target_size = (target.width, target.height);
+        let mut scratch = self.take_pass_scratch();
         let device = self.device.clone();
-
-        let mut prepare = |renderer: &mut Self,
-                           batches: &mut Vec<Batch<'s>>,
-                           image_vertices: &mut Vec<crate::render::Vertex>,
-                           image_indices: &mut Vec<u32>,
-                           image_cmds: &mut Vec<crate::render::ImageDrawCmd>,
-                           glyph_cmds: &mut Vec<crate::render::GlyphDrawCmd>|
-         -> Result<(), String> {
-            for segment in segments {
-                let viewport = ViewportUniformParams {
-                    width: target.width,
-                    height: target.height,
-                    offset: segment.offset,
-                };
-                let viewport_rect = match segment.scissor {
-                    Some((x, y, width, height)) => PassTarget {
-                        offset: [segment.offset[0] + x as f32, segment.offset[1] + y as f32],
-                        width,
-                        height,
-                        ..target
-                    },
-                    None => PassTarget {
-                        offset: segment.offset,
-                        ..target
-                    },
-                }
-                .logical_rect(root_scale);
-                let uniform_slot = renderer.claim_uniform_slot(viewport);
-                let items = merge_items(segment, viewport_rect, root_scale, target_size);
-                let mut index = 0;
-                while index < items.len() {
-                    match &items[index] {
-                        Item::Shape { shape, brushes } => {
-                            let blend_mode = supported_blend_mode(shape.blend_mode);
-                            let brushes_ptr = brushes.as_ptr();
-                            let limit = renderer.max_shapes_per_batch();
-                            let mut end = index;
-                            while end < items.len()
-                                && end - index < limit
-                                && matches!(
-                                    &items[end],
-                                    Item::Shape { shape, brushes }
-                                        if supported_blend_mode(shape.blend_mode) == blend_mode
-                                            && brushes.as_ptr() == brushes_ptr
-                                )
-                            {
-                                end += 1;
-                            }
-                            let shapes = items[index..end].iter().map(|item| match item {
-                                Item::Shape { shape, .. } => *shape,
-                                _ => unreachable!("shape run holds only shapes"),
-                            });
-                            if let Some(batch) = renderer.prepare_shape_batch(
-                                shapes,
-                                brushes,
-                                root_scale,
-                                uniform_slot,
-                            ) {
-                                batches.push(Batch::Shapes {
-                                    batch,
-                                    blend_mode,
-                                    scissor: segment.scissor,
-                                });
-                            }
-                            index = end;
-                        }
-                        Item::Image(image_index) => {
-                            let blend_mode =
-                                supported_blend_mode(segment.scene.images[*image_index].blend_mode);
-                            let cmd_start = image_cmds.len();
-                            let mut end = index;
-                            while end < items.len() {
-                                let Item::Image(other) = &items[end] else {
-                                    break;
-                                };
-                                let image = &segment.scene.images[*other];
-                                if supported_blend_mode(image.blend_mode) != blend_mode {
-                                    break;
-                                }
-                                renderer.append_image_draw_cmd(
-                                    image,
-                                    viewport,
-                                    root_scale,
-                                    image_vertices,
-                                    image_indices,
-                                    image_cmds,
-                                )?;
-                                end += 1;
-                            }
-                            if cmd_start < image_cmds.len() {
-                                batches.push(Batch::Images {
-                                    cmds: cmd_start..image_cmds.len(),
-                                    blend_mode,
-                                    uniform_slot,
-                                    scissor: segment.scissor,
-                                });
-                            }
-                            index = end;
-                        }
-                        Item::Text(text) => {
-                            let glyph_start = glyph_cmds.len();
-                            let drew_glyphs = renderer.append_text_glyph_draws(
-                                std::iter::once(*text),
-                                viewport,
-                                root_scale,
-                                image_vertices,
-                                image_indices,
-                                glyph_cmds,
-                            )?;
-                            if drew_glyphs {
-                                if glyph_start < glyph_cmds.len() {
-                                    match batches.last_mut() {
-                                        Some(Batch::Glyphs {
-                                            cmds,
-                                            uniform_slot: slot,
-                                            ..
-                                        }) if cmds.end == glyph_start && *slot == uniform_slot => {
-                                            cmds.end = glyph_cmds.len();
-                                        }
-                                        _ => batches.push(Batch::Glyphs {
-                                            cmds: glyph_start..glyph_cmds.len(),
-                                            uniform_slot,
-                                            scissor: segment.scissor,
-                                        }),
-                                    }
-                                }
-                            } else {
-                                let cmd_start = image_cmds.len();
-                                renderer.append_text_image_draw_cmds(
-                                    std::iter::once(*text),
-                                    viewport,
-                                    root_scale,
-                                    image_vertices,
-                                    image_indices,
-                                    image_cmds,
-                                )?;
-                                if cmd_start < image_cmds.len() {
-                                    match batches.last_mut() {
-                                        Some(Batch::Images {
-                                            cmds,
-                                            blend_mode,
-                                            uniform_slot: slot,
-                                            ..
-                                        }) if cmds.end == cmd_start
-                                            && *blend_mode == BlendMode::SrcOver
-                                            && *slot == uniform_slot =>
-                                        {
-                                            cmds.end = image_cmds.len();
-                                        }
-                                        _ => batches.push(Batch::Images {
-                                            cmds: cmd_start..image_cmds.len(),
-                                            blend_mode: BlendMode::SrcOver,
-                                            uniform_slot,
-                                            scissor: segment.scissor,
-                                        }),
-                                    }
-                                }
-                            }
-                            index += 1;
-                        }
-                        Item::Composite(composite) => {
-                            let own_scissor = composite.scissor.and_then(|scissor| {
-                                scissor_in_target(scissor, target_size, segment.offset)
-                            });
-                            if composite.scissor.is_some() && own_scissor.is_none() {
-                                index += 1;
-                                continue;
-                            }
-                            let Some(scissor) = intersect_scissors(own_scissor, segment.scissor)
-                            else {
-                                index += 1;
-                                continue;
-                            };
-                            let dest = dest_in_target(composite.dest, segment.offset);
-                            match &composite.kind {
-                                ResolvedCompositeKind::Blit {
-                                    alpha,
-                                    blend_mode,
-                                    rounded_mask,
-                                    sample_mode,
-                                    source_viewport,
-                                } => {
-                                    let item = CompositeBatchItem {
-                                        source: composite.source.as_ref(),
-                                        alpha: *alpha,
-                                        scissor,
-                                        rounded_mask: mask_in_target(*rounded_mask, segment.offset),
-                                        blend_mode: supported_blend_mode(*blend_mode),
-                                        dest_viewport: Some(dest),
-                                        source_viewport: *source_viewport,
-                                        sample_mode: *sample_mode,
-                                    };
-                                    let prepared =
-                                        renderer.effect_renderer.prepare_composite_batch_draws(
-                                            recorder,
-                                            &device,
-                                            load_op,
-                                            std::slice::from_ref(&item),
-                                        );
-                                    batches.extend(prepared.into_iter().map(Batch::Composite));
-                                }
-                                ResolvedCompositeKind::Shader {
-                                    shader,
-                                    layer_pixel_rect,
-                                    source_region,
-                                    rounded_mask,
-                                    alpha,
-                                } => {
-                                    let item = ShaderCompositeBatchItem {
-                                        source: composite.source.as_ref(),
-                                        shader: shader.as_ref(),
-                                        layer_pixel_rect: *layer_pixel_rect,
-                                        source_region: *source_region,
-                                        rounded_mask: mask_in_target(*rounded_mask, segment.offset),
-                                        alpha: *alpha,
-                                        scissor,
-                                        dest_viewport: dest,
-                                    };
-                                    let prepared = renderer
-                                        .effect_renderer
-                                        .prepare_shader_batch_draws(
-                                            recorder,
-                                            &device,
-                                            std::slice::from_ref(&item),
-                                        )
-                                        .ok_or_else(|| {
-                                            "shader composite preparation failed".to_string()
-                                        })?;
-                                    renderer.effect_renderer.record_composite_pass();
-                                    batches.extend(prepared.into_iter().map(Batch::Shader));
-                                }
-                                ResolvedCompositeKind::Projective {
-                                    dest_quad,
-                                    inverse,
-                                    alpha,
-                                    blend_mode,
-                                    sample_mode,
-                                } => {
-                                    let item = ProjectiveCompositeItem {
-                                        source: composite.source.as_ref(),
-                                        viewport: target_size,
-                                        dest_quad: dest_quad.map(|[x, y]| {
-                                            [x - segment.offset[0], y - segment.offset[1]]
-                                        }),
-                                        inverse: translate_inverse(*inverse, segment.offset),
-                                        alpha: *alpha,
-                                        blend_mode: supported_blend_mode(*blend_mode),
-                                        sample_mode: *sample_mode,
-                                    };
-                                    let prepared =
-                                        renderer.effect_renderer.prepare_projective_composite_draw(
-                                            recorder, &device, &item,
-                                        );
-                                    batches.push(Batch::Projective(prepared));
-                                }
-                            }
-                            index += 1;
-                        }
-                    }
-                }
-            }
-            Ok(())
+        let mut prep = PassPrep {
+            recorder,
+            device: &device,
+            target,
+            root_scale,
+            load_op,
+            batches: Vec::new(),
         };
-        let prepared = prepare(
-            self,
-            &mut batches,
-            &mut image_vertices,
-            &mut image_indices,
-            &mut image_cmds,
-            &mut glyph_cmds,
-        );
+        let prepared = segments
+            .iter()
+            .try_for_each(|segment| prep.segment(self, segment, &mut scratch));
         let image_slot = match &prepared {
-            Ok(()) if !image_indices.is_empty() => {
-                Some(self.upload_image_slot(&image_vertices, &image_indices))
+            Ok(()) if !scratch.image_indices.is_empty() => {
+                Some(self.upload_image_slot(&scratch.image_vertices, &scratch.image_indices))
             }
             _ => None,
         };
+        let batches = prep.batches;
         let result = match prepared {
             Err(error) => Err(error),
             Ok(()) if batches.is_empty() => {
@@ -512,26 +244,13 @@ impl GpuRenderer {
             }
             Ok(()) => {
                 let draw_result = {
-                    let mut pass = recorder.begin_timed_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some(label),
-                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: target.view,
-                            resolve_target: None,
-                            depth_slice: None,
-                            ops: wgpu::Operations {
-                                load: load_op,
-                                store: wgpu::StoreOp::Store,
-                            },
-                        })],
-                        depth_stencil_attachment: None,
-                        ..Default::default()
-                    });
+                    let mut pass = recorder.begin_color_pass(label, target.view, load_op);
                     self.draw_batches(
                         &mut pass,
-                        target_size,
+                        (target.width, target.height),
                         &batches,
-                        &image_cmds,
-                        &glyph_cmds,
+                        &scratch.image_cmds,
+                        &scratch.glyph_cmds,
                         image_slot,
                     )
                 };
@@ -540,11 +259,29 @@ impl GpuRenderer {
             }
         };
         drop(batches);
-        self.scratch_image_vertices = image_vertices;
-        self.scratch_image_indices = image_indices;
-        self.scratch_image_cmds = image_cmds;
-        self.scratch_glyph_cmds = glyph_cmds;
+        self.return_pass_scratch(scratch);
         result
+    }
+
+    fn take_pass_scratch(&mut self) -> PassScratch {
+        let mut scratch = PassScratch {
+            image_vertices: std::mem::take(&mut self.scratch_image_vertices),
+            image_indices: std::mem::take(&mut self.scratch_image_indices),
+            image_cmds: std::mem::take(&mut self.scratch_image_cmds),
+            glyph_cmds: std::mem::take(&mut self.scratch_glyph_cmds),
+        };
+        scratch.image_vertices.clear();
+        scratch.image_indices.clear();
+        scratch.image_cmds.clear();
+        scratch.glyph_cmds.clear();
+        scratch
+    }
+
+    fn return_pass_scratch(&mut self, scratch: PassScratch) {
+        self.scratch_image_vertices = scratch.image_vertices;
+        self.scratch_image_indices = scratch.image_indices;
+        self.scratch_image_cmds = scratch.image_cmds;
+        self.scratch_glyph_cmds = scratch.glyph_cmds;
     }
 
     fn draw_batches(
@@ -684,4 +421,343 @@ fn merge_items<'a>(
     }
     push_composites_below(&mut items, usize::MAX);
     items
+}
+
+/// The per-frame vectors a pass fills: image and glyph geometry and draw
+/// commands, kept on the renderer between frames so they never reallocate.
+struct PassScratch {
+    image_vertices: Vec<crate::render::Vertex>,
+    image_indices: Vec<u32>,
+    image_cmds: Vec<crate::render::ImageDrawCmd>,
+    glyph_cmds: Vec<crate::render::GlyphDrawCmd>,
+}
+
+/// Turns the segments of one pass into batches, one item run at a time.
+struct PassPrep<'a, 's, C> {
+    recorder: &'a mut C,
+    device: &'a wgpu::Device,
+    target: PassTarget<'a>,
+    root_scale: f32,
+    load_op: wgpu::LoadOp<wgpu::Color>,
+    batches: Vec<Batch<'s>>,
+}
+
+impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
+    fn target_size(&self) -> (u32, u32) {
+        (self.target.width, self.target.height)
+    }
+
+    fn segment(
+        &mut self,
+        renderer: &mut GpuRenderer,
+        segment: &PassSegment<'s>,
+        scratch: &mut PassScratch,
+    ) -> Result<(), String> {
+        let viewport = ViewportUniformParams {
+            width: self.target.width,
+            height: self.target.height,
+            offset: segment.offset,
+        };
+        let viewport_rect = match segment.scissor {
+            Some((x, y, width, height)) => PassTarget {
+                offset: [segment.offset[0] + x as f32, segment.offset[1] + y as f32],
+                width,
+                height,
+                ..self.target
+            },
+            None => PassTarget {
+                offset: segment.offset,
+                ..self.target
+            },
+        }
+        .logical_rect(self.root_scale);
+        let uniform_slot = renderer.claim_uniform_slot(viewport);
+        let items = merge_items(segment, viewport_rect, self.root_scale, self.target_size());
+        let run = SegmentRun {
+            segment,
+            viewport,
+            uniform_slot,
+        };
+        let mut index = 0;
+        while index < items.len() {
+            index = match &items[index] {
+                Item::Shape { .. } => self.shape_run(renderer, &items, index, &run),
+                Item::Image(_) => self.image_run(renderer, &items, index, &run, scratch)?,
+                Item::Text(text) => {
+                    self.text_item(renderer, text, &run, scratch)?;
+                    index + 1
+                }
+                Item::Composite(composite) => {
+                    self.composite_item(renderer, composite, &run)?;
+                    index + 1
+                }
+            };
+        }
+        Ok(())
+    }
+
+    /// Batches the shapes from `index` that share a blend mode and a brush
+    /// table, up to the batch limit; returns where the run ends.
+    fn shape_run(
+        &mut self,
+        renderer: &mut GpuRenderer,
+        items: &[Item<'s>],
+        index: usize,
+        run: &SegmentRun<'s, '_>,
+    ) -> usize {
+        let Item::Shape { shape, brushes } = &items[index] else {
+            unreachable!("shape run starts at a shape");
+        };
+        let blend_mode = supported_blend_mode(shape.blend_mode);
+        let brushes_ptr = brushes.as_ptr();
+        let limit = renderer.max_shapes_per_batch();
+        let mut end = index;
+        while end < items.len()
+            && end - index < limit
+            && matches!(
+                &items[end],
+                Item::Shape { shape, brushes }
+                    if supported_blend_mode(shape.blend_mode) == blend_mode
+                        && brushes.as_ptr() == brushes_ptr
+            )
+        {
+            end += 1;
+        }
+        let shapes = items[index..end].iter().map(|item| match item {
+            Item::Shape { shape, .. } => *shape,
+            _ => unreachable!("shape run holds only shapes"),
+        });
+        if let Some(batch) =
+            renderer.prepare_shape_batch(shapes, brushes, self.root_scale, run.uniform_slot)
+        {
+            self.batches.push(Batch::Shapes {
+                batch,
+                blend_mode,
+                scissor: run.segment.scissor,
+            });
+        }
+        end
+    }
+
+    /// Batches the images from `index` that share a blend mode; returns
+    /// where the run ends.
+    fn image_run(
+        &mut self,
+        renderer: &mut GpuRenderer,
+        items: &[Item<'s>],
+        index: usize,
+        run: &SegmentRun<'s, '_>,
+        scratch: &mut PassScratch,
+    ) -> Result<usize, String> {
+        let Item::Image(first) = &items[index] else {
+            unreachable!("image run starts at an image");
+        };
+        let images = &run.segment.scene.images;
+        let blend_mode = supported_blend_mode(images[*first].blend_mode);
+        let cmd_start = scratch.image_cmds.len();
+        let mut end = index;
+        while let Some(Item::Image(other)) = items.get(end) {
+            let image = &images[*other];
+            if supported_blend_mode(image.blend_mode) != blend_mode {
+                break;
+            }
+            renderer.append_image_draw_cmd(
+                image,
+                run.viewport,
+                self.root_scale,
+                &mut scratch.image_vertices,
+                &mut scratch.image_indices,
+                &mut scratch.image_cmds,
+            )?;
+            end += 1;
+        }
+        if cmd_start < scratch.image_cmds.len() {
+            self.batches.push(Batch::Images {
+                cmds: cmd_start..scratch.image_cmds.len(),
+                blend_mode,
+                uniform_slot: run.uniform_slot,
+                scissor: run.segment.scissor,
+            });
+        }
+        Ok(end)
+    }
+
+    /// Draws one text as glyphs when its glyphs are in the atlas, joining
+    /// the previous glyph batch, else as image quads joining the previous
+    /// src-over image batch.
+    fn text_item(
+        &mut self,
+        renderer: &mut GpuRenderer,
+        text: &'s TextDraw,
+        run: &SegmentRun<'s, '_>,
+        scratch: &mut PassScratch,
+    ) -> Result<(), String> {
+        let glyph_start = scratch.glyph_cmds.len();
+        let drew_glyphs = renderer.append_text_glyph_draws(
+            std::iter::once(text),
+            run.viewport,
+            self.root_scale,
+            &mut scratch.image_vertices,
+            &mut scratch.image_indices,
+            &mut scratch.glyph_cmds,
+        )?;
+        if drew_glyphs {
+            if glyph_start < scratch.glyph_cmds.len() {
+                match self.batches.last_mut() {
+                    Some(Batch::Glyphs {
+                        cmds,
+                        uniform_slot: slot,
+                        ..
+                    }) if cmds.end == glyph_start && *slot == run.uniform_slot => {
+                        cmds.end = scratch.glyph_cmds.len();
+                    }
+                    _ => self.batches.push(Batch::Glyphs {
+                        cmds: glyph_start..scratch.glyph_cmds.len(),
+                        uniform_slot: run.uniform_slot,
+                        scissor: run.segment.scissor,
+                    }),
+                }
+            }
+            return Ok(());
+        }
+        let cmd_start = scratch.image_cmds.len();
+        renderer.append_text_image_draw_cmds(
+            std::iter::once(text),
+            run.viewport,
+            self.root_scale,
+            &mut scratch.image_vertices,
+            &mut scratch.image_indices,
+            &mut scratch.image_cmds,
+        )?;
+        if cmd_start < scratch.image_cmds.len() {
+            match self.batches.last_mut() {
+                Some(Batch::Images {
+                    cmds,
+                    blend_mode,
+                    uniform_slot: slot,
+                    ..
+                }) if cmds.end == cmd_start
+                    && *blend_mode == BlendMode::SrcOver
+                    && *slot == run.uniform_slot =>
+                {
+                    cmds.end = scratch.image_cmds.len();
+                }
+                _ => self.batches.push(Batch::Images {
+                    cmds: cmd_start..scratch.image_cmds.len(),
+                    blend_mode: BlendMode::SrcOver,
+                    uniform_slot: run.uniform_slot,
+                    scissor: run.segment.scissor,
+                }),
+            }
+        }
+        Ok(())
+    }
+
+    /// Prepares one resolved composite where it lands in the target,
+    /// skipping it when its scissor falls outside.
+    fn composite_item(
+        &mut self,
+        renderer: &mut GpuRenderer,
+        composite: &'s ResolvedComposite,
+        run: &SegmentRun<'s, '_>,
+    ) -> Result<(), String> {
+        let offset = run.segment.offset;
+        let own_scissor = composite
+            .scissor
+            .and_then(|scissor| scissor_in_target(scissor, self.target_size(), offset));
+        if composite.scissor.is_some() && own_scissor.is_none() {
+            return Ok(());
+        }
+        let Some(scissor) = intersect_scissors(own_scissor, run.segment.scissor) else {
+            return Ok(());
+        };
+        let dest = dest_in_target(composite.dest, offset);
+        match &composite.kind {
+            ResolvedCompositeKind::Blit {
+                alpha,
+                blend_mode,
+                rounded_mask,
+                sample_mode,
+                source_viewport,
+            } => {
+                let item = CompositeBatchItem {
+                    source: composite.source.as_ref(),
+                    alpha: *alpha,
+                    scissor,
+                    rounded_mask: mask_in_target(*rounded_mask, offset),
+                    blend_mode: supported_blend_mode(*blend_mode),
+                    dest_viewport: Some(dest),
+                    source_viewport: *source_viewport,
+                    sample_mode: *sample_mode,
+                };
+                let prepared = renderer.effect_renderer.prepare_composite_batch_draws(
+                    self.recorder,
+                    self.device,
+                    self.load_op,
+                    std::slice::from_ref(&item),
+                );
+                self.batches
+                    .extend(prepared.into_iter().map(Batch::Composite));
+            }
+            ResolvedCompositeKind::Shader {
+                shader,
+                layer_pixel_rect,
+                source_region,
+                rounded_mask,
+                alpha,
+            } => {
+                let item = ShaderCompositeBatchItem {
+                    source: composite.source.as_ref(),
+                    shader: shader.as_ref(),
+                    layer_pixel_rect: *layer_pixel_rect,
+                    source_region: *source_region,
+                    rounded_mask: mask_in_target(*rounded_mask, offset),
+                    alpha: *alpha,
+                    scissor,
+                    dest_viewport: dest,
+                };
+                let prepared = renderer
+                    .effect_renderer
+                    .prepare_shader_batch_draws(
+                        self.recorder,
+                        self.device,
+                        std::slice::from_ref(&item),
+                    )
+                    .ok_or_else(|| "shader composite preparation failed".to_string())?;
+                renderer.effect_renderer.record_composite_pass();
+                self.batches.extend(prepared.into_iter().map(Batch::Shader));
+            }
+            ResolvedCompositeKind::Projective {
+                dest_quad,
+                inverse,
+                alpha,
+                blend_mode,
+                sample_mode,
+            } => {
+                let item = ProjectiveCompositeItem {
+                    source: composite.source.as_ref(),
+                    viewport: self.target_size(),
+                    dest_quad: dest_quad.map(|[x, y]| [x - offset[0], y - offset[1]]),
+                    inverse: translate_inverse(*inverse, offset),
+                    alpha: *alpha,
+                    blend_mode: supported_blend_mode(*blend_mode),
+                    sample_mode: *sample_mode,
+                };
+                let prepared = renderer.effect_renderer.prepare_projective_composite_draw(
+                    self.recorder,
+                    self.device,
+                    &item,
+                );
+                self.batches.push(Batch::Projective(prepared));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// One segment's viewport and uniform slot while its items are batched.
+struct SegmentRun<'s, 'a> {
+    segment: &'a PassSegment<'s>,
+    viewport: ViewportUniformParams,
+    uniform_slot: usize,
 }

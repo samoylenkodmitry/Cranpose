@@ -129,19 +129,11 @@ impl OutputConverter {
         bind_group: &wgpu::BindGroup,
         backend: wgpu::Backend,
     ) {
-        let mut pass = recorder.begin_timed_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Output Conversion Pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: destination,
-                resolve_target: None,
-                depth_slice: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            ..Default::default()
-        });
+        let mut pass = recorder.begin_color_pass(
+            "Output Conversion Pass",
+            destination,
+            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+        );
         pass.set_pipeline(self.pipeline(device, backend));
         pass.set_bind_group(0, bind_group, &[]);
         pass.draw(0..3, 0..1);

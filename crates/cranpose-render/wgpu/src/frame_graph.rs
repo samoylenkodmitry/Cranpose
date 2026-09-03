@@ -745,6 +745,30 @@ pub(crate) trait FrameCommandRecorder {
         &mut self,
         descriptor: &wgpu::RenderPassDescriptor<'_>,
     ) -> wgpu::RenderPass<'_>;
+
+    /// A pass with one color attachment that loads with `load_op` and
+    /// stores, the shape of every pass this renderer records.
+    fn begin_color_pass<'p>(
+        &'p mut self,
+        label: &'static str,
+        view: &wgpu::TextureView,
+        load_op: wgpu::LoadOp<wgpu::Color>,
+    ) -> wgpu::RenderPass<'p> {
+        self.begin_timed_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some(label),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: load_op,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            ..Default::default()
+        })
+    }
     fn upload_uniform(
         &mut self,
         id: UploadAllocatorId,

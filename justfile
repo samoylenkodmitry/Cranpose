@@ -164,6 +164,14 @@ complexity-gate base="origin/main":
 duplication-gate base="origin/main":
     cargo xtask duplication-gate --base {{base}}
 
+# The gates fast enough to run before every commit: what `.githooks/pre-commit`
+# runs. Everything here finishes in seconds against a warm xtask build.
+precommit: fmt-check typos complexity-gate duplication-gate
+
+# Point git at the repository's hooks. Once per clone.
+hooks:
+    git config core.hooksPath .githooks
+
 # --- test ------------------------------------------------------------------
 
 # `--profile ci` keeps the debuginfo that the local dev profile strips, so a

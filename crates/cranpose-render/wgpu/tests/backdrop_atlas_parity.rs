@@ -5,17 +5,15 @@ mod shared_test_support;
 
 use cranpose_render_common::{
     Renderer,
-    graph::{
-        DrawPrimitiveNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform,
-        RenderGraph, RenderNode,
-    },
+    graph::{ProjectiveTransform, RenderGraph, RenderNode},
     image_compare::image_difference_stats,
 };
 use cranpose_render_wgpu::CapturedFrame;
 use cranpose_ui_graphics::{
-    Brush, Color, DrawPrimitive, GraphicsLayer, LayerShape, LiquidGlassRect, LiquidGlassSpec, Rect,
-    RenderEffect, RoundedCornerShape, liquid_glass_effect,
+    Color, GraphicsLayer, LayerShape, LiquidGlassRect, LiquidGlassSpec, Rect, RenderEffect,
+    RoundedCornerShape, liquid_glass_effect,
 };
+use support::solid_rect;
 
 const FRAME_WIDTH: u32 = 240;
 const FRAME_HEIGHT: u32 = 120;
@@ -34,20 +32,6 @@ fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect {
         width,
         height,
     }
-}
-
-fn solid_rect(rect: Rect, color: Color) -> RenderNode {
-    RenderNode::Primitive(PrimitiveEntry {
-        phase: PrimitivePhase::BeforeChildren,
-        node: PrimitiveNode::Draw(DrawPrimitiveNode {
-            primitive: DrawPrimitive::Rect {
-                rect,
-                brush: Brush::solid(color),
-                stroke: None,
-            },
-            clip: None,
-        }),
-    })
 }
 
 /// A page with enough structure under every glass that a wrong sample or a
@@ -198,8 +182,9 @@ fn glass_has_content(frame: &CapturedFrame) {
     );
 }
 
-#[test]
-fn a_blurred_glass_renders_the_same_pixels_alone_and_packed_beside_others() {
+/// Renders one glass alone and packed beside two others and asserts the
+/// first glass matches within `tolerance`.
+fn assert_packed_parity(label: &str, effect: impl Fn() -> RenderEffect, tolerance: u32) {
     let mut renderer = match support::headless_renderer() {
         Ok(renderer) => renderer,
         Err(err) => {
@@ -207,16 +192,19 @@ fn a_blurred_glass_renders_the_same_pixels_alone_and_packed_beside_others() {
             return;
         }
     };
-    let alone = capture(
-        &mut renderer,
-        glasses_page(1, || RenderEffect::blur(BLUR_RADIUS)),
-    );
-    let packed = capture(
-        &mut renderer,
-        glasses_page(3, || RenderEffect::blur(BLUR_RADIUS)),
-    );
+    let alone = capture(&mut renderer, glasses_page(1, &effect));
+    let packed = capture(&mut renderer, glasses_page(3, &effect));
     glass_has_content(&alone);
-    assert_region_matches("blurred glass packed beside two others", &alone, &packed, 0);
+    assert_region_matches(label, &alone, &packed, tolerance);
+}
+
+#[test]
+fn a_blurred_glass_renders_the_same_pixels_alone_and_packed_beside_others() {
+    assert_packed_parity(
+        "blurred glass packed beside two others",
+        || RenderEffect::blur(BLUR_RADIUS),
+        0,
+    );
 }
 
 /// Packed beside others the shader reads its region through a float
@@ -226,41 +214,18 @@ const REGION_MAPPING_TOLERANCE: u32 = 1;
 
 #[test]
 fn a_shader_glass_renders_the_same_pixels_alone_and_packed_beside_others() {
-    let mut renderer = match support::headless_renderer() {
-        Ok(renderer) => renderer,
-        Err(err) => {
-            eprintln!("skipping atlas parity: {err}");
-            return;
-        }
-    };
-    let alone = capture(&mut renderer, glasses_page(1, glass_shader));
-    let packed = capture(&mut renderer, glasses_page(3, glass_shader));
-    glass_has_content(&alone);
-    assert_region_matches(
+    assert_packed_parity(
         "shader glass packed beside two others",
-        &alone,
-        &packed,
+        glass_shader,
         REGION_MAPPING_TOLERANCE,
     );
 }
 
 #[test]
 fn a_blur_then_shader_glass_renders_the_same_pixels_alone_and_packed_beside_others() {
-    let chain = || RenderEffect::blur(BLUR_RADIUS).then(glass_shader());
-    let mut renderer = match support::headless_renderer() {
-        Ok(renderer) => renderer,
-        Err(err) => {
-            eprintln!("skipping atlas parity: {err}");
-            return;
-        }
-    };
-    let alone = capture(&mut renderer, glasses_page(1, chain));
-    let packed = capture(&mut renderer, glasses_page(3, chain));
-    glass_has_content(&alone);
-    assert_region_matches(
+    assert_packed_parity(
         "blur-then-shader glass packed beside two others",
-        &alone,
-        &packed,
+        || RenderEffect::blur(BLUR_RADIUS).then(glass_shader()),
         REGION_MAPPING_TOLERANCE,
     );
 }

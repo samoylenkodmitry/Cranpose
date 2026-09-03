@@ -10,7 +10,10 @@ use cranpose_app_shell::AppShell;
 use cranpose_core::NodeId;
 use cranpose_render_common::{
     Renderer,
-    graph::{LayerNode, RenderGraph, RenderNode},
+    graph::{
+        DrawPrimitiveNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, RenderGraph,
+        RenderNode,
+    },
     software_text_raster::DEFAULT_SOFTWARE_TEXT_FONT_BYTES,
 };
 use cranpose_render_wgpu::{CapturedFrame, RenderStatsSnapshot, WgpuRenderer};
@@ -18,7 +21,7 @@ use cranpose_ui::{
     AppContext, Color, Modifier, Size, composable,
     widgets::{Box, BoxSpec},
 };
-use cranpose_ui_graphics::Rect;
+use cranpose_ui_graphics::{Brush, DrawPrimitive, Rect};
 
 pub static TEST_FONT: &[u8] = DEFAULT_SOFTWARE_TEXT_FONT_BYTES;
 
@@ -491,4 +494,19 @@ pub fn FramePage(width: u32, height: u32, background: Color, content: impl Fn() 
         BoxSpec::new(),
         content,
     );
+}
+
+/// One solid-filled rectangle drawn before the children.
+pub fn solid_rect(rect: Rect, color: Color) -> RenderNode {
+    RenderNode::Primitive(PrimitiveEntry {
+        phase: PrimitivePhase::BeforeChildren,
+        node: PrimitiveNode::Draw(DrawPrimitiveNode {
+            primitive: DrawPrimitive::Rect {
+                rect,
+                brush: Brush::solid(color),
+                stroke: None,
+            },
+            clip: None,
+        }),
+    })
 }

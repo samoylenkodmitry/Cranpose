@@ -286,6 +286,38 @@ impl PendingBackdrop<'_> {
     }
 }
 
+/// Everything a layer scene resolves before its final pass, in the order
+/// it resolves: by z, and at one z a backdrop before the shadow before the
+/// effect range before the child.
+fn layer_events(layer: &LayerScene) -> Vec<(usize, Event)> {
+    let scene = &layer.scene;
+    let mut events: Vec<(usize, Event)> = Vec::new();
+    for (index, child) in layer.children.iter().enumerate() {
+        events.push((child.z_index, Event::Child(index)));
+    }
+    for (index, backdrop) in scene.backdrop_layers.iter().enumerate() {
+        events.push((backdrop.z_index, Event::Backdrop(index)));
+    }
+    for (index, effect) in scene.effect_layers.iter().enumerate() {
+        events.push((effect.z_start, Event::Effect(index)));
+    }
+    for (index, shadow) in scene.shadow_draws.iter().enumerate() {
+        if shadow.blur_radius > 0.0 {
+            events.push((shadow.z_index, Event::Shadow(index)));
+        }
+    }
+    events.sort_by_key(|(z, event)| {
+        let order = match event {
+            Event::Backdrop(_) => 0,
+            Event::Shadow(_) => 1,
+            Event::Effect(_) => 2,
+            Event::Child(_) => 3,
+        };
+        (*z, order)
+    });
+    events
+}
+
 fn plan_backdrop(
     backdrop: &BackdropLayer,
     z: usize,
@@ -345,6 +377,150 @@ impl<'a> ResolveStages<'a> {
             .unwrap_or(0);
         self.pending.push(item);
     }
+}
+
+/// Where a child lands in its parent: its z, the device pixels it may
+/// touch, its device bounds, and its translation when it only translates.
+#[derive(Clone, Copy)]
+struct ChildPlacement {
+    z: usize,
+    visible: DeviceRect,
+    dest: DeviceRect,
+    translation: Option<Point>,
+}
+
+/// A translated child's surface blitted at its device offset: on whole
+/// pixels with nearest sampling when the offset is integral.
+fn translated_child_composite(
+    child: &ChildLayer,
+    z: usize,
+    texture: Rc<OffscreenTarget>,
+    surface: &SurfaceRender,
+    translation: Point,
+    scale: f32,
+    visible: DeviceRect,
+) -> ResolvedComposite {
+    let dest = DeviceRect {
+        x: surface.rect.x + translation.x * scale,
+        y: surface.rect.y + translation.y * scale,
+        width: surface.rect.width,
+        height: surface.rect.height,
+    };
+    let integer_aligned =
+        (dest.x - dest.x.round()).abs() <= 1e-3 && (dest.y - dest.y.round()).abs() <= 1e-3;
+    let dest = if integer_aligned {
+        DeviceRect {
+            x: dest.x.round(),
+            y: dest.y.round(),
+            ..dest
+        }
+    } else {
+        dest
+    };
+    ResolvedComposite {
+        z_index: z,
+        source: texture,
+        dest: dest.tuple(),
+        scissor: Some(visible.tuple()),
+        kind: ResolvedCompositeKind::Blit {
+            alpha: child.alpha,
+            blend_mode: child.blend_mode,
+            rounded_mask: translated_rounded_mask(child, translation, scale),
+            sample_mode: if integer_aligned {
+                CompositeSampleMode::Nearest
+            } else {
+                CompositeSampleMode::Linear
+            },
+            source_viewport: None,
+        },
+    }
+}
+
+/// A transformed child's surface projected through its transform; none
+/// when the transform cannot be inverted.
+fn projected_child_composite(
+    child: &ChildLayer,
+    z: usize,
+    texture: Rc<OffscreenTarget>,
+    surface: &SurfaceRender,
+    snap: Point,
+    scale: f32,
+    visible: DeviceRect,
+) -> Option<ResolvedComposite> {
+    let source_to_parent = surface_to_parent_device(surface, child.transform, snap, scale);
+    let inverse = source_to_parent.inverse()?;
+    let dest_quad = source_to_parent.map_rect(Rect {
+        x: 0.0,
+        y: 0.0,
+        width: surface.rect.width,
+        height: surface.rect.height,
+    });
+    Some(ResolvedComposite {
+        z_index: z,
+        source: texture,
+        dest: quad_device_bounds(dest_quad).tuple(),
+        scissor: Some(visible.tuple()),
+        kind: ResolvedCompositeKind::Projective {
+            dest_quad,
+            inverse: inverse.matrix(),
+            alpha: child.alpha,
+            blend_mode: child.blend_mode,
+            sample_mode: CompositeSampleMode::Linear,
+        },
+    })
+}
+
+/// The composite of every member of one capture atlas: a blur reads its
+/// blurred region, a shader reads its capture region.
+fn stage_composites(
+    texture: &Rc<OffscreenTarget>,
+    blurred: Option<&BlurredRegions>,
+    items: &[&PendingBackdrop<'_>],
+    members: &[(usize, AtlasPlacement)],
+) -> Vec<ResolvedComposite> {
+    members
+        .iter()
+        .enumerate()
+        .map(|(member, (index, placement))| {
+            let item = items[*index];
+            let (region_width, region_height) = item.capture_rect.pixel_size();
+            let (source, origin) = match blurred.and_then(|blurred| blurred.slot(member)) {
+                Some((blurred, origin)) => (blurred, origin),
+                None => (texture, (placement.x, placement.y)),
+            };
+            let region = (
+                origin.0 as f32,
+                origin.1 as f32,
+                region_width as f32,
+                region_height as f32,
+            );
+            let kind = match item.batched.expect("packed items are batched") {
+                BatchedEffect::Blur(_) => ResolvedCompositeKind::Blit {
+                    alpha: 1.0,
+                    blend_mode: BlendMode::SrcOver,
+                    rounded_mask: item.rounded_mask,
+                    sample_mode: CompositeSampleMode::Nearest,
+                    source_viewport: Some(region),
+                },
+                BatchedEffect::Shader(shader) | BatchedEffect::BlurThenShader(_, shader) => {
+                    ResolvedCompositeKind::Shader {
+                        shader: Rc::new(shader.clone()),
+                        layer_pixel_rect: item.layer_pixel_rect(),
+                        source_region: Some(region),
+                        rounded_mask: item.rounded_mask,
+                        alpha: 1.0,
+                    }
+                }
+            };
+            ResolvedComposite {
+                z_index: item.z,
+                source: Rc::clone(source),
+                dest: item.capture_rect.tuple(),
+                scissor: Some(item.visible.tuple()),
+                kind,
+            }
+        })
+        .collect()
 }
 
 /// The blurred regions of one capture atlas: the texture holding them and,
@@ -584,38 +760,13 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         beneath: &Beneath<'_>,
     ) -> Result<(), String> {
         let scene = &layer.scene;
-        let mut events: Vec<(usize, Event)> = Vec::new();
-        for (index, child) in layer.children.iter().enumerate() {
-            events.push((child.z_index, Event::Child(index)));
-        }
-        for (index, backdrop) in scene.backdrop_layers.iter().enumerate() {
-            events.push((backdrop.z_index, Event::Backdrop(index)));
-        }
-        for (index, effect) in scene.effect_layers.iter().enumerate() {
-            events.push((effect.z_start, Event::Effect(index)));
-        }
-        for (index, shadow) in scene.shadow_draws.iter().enumerate() {
-            if shadow.blur_radius > 0.0 {
-                events.push((shadow.z_index, Event::Shadow(index)));
-            }
-        }
-        events.sort_by_key(|(z, event)| {
-            let order = match event {
-                Event::Backdrop(_) => 0,
-                Event::Shadow(_) => 1,
-                Event::Effect(_) => 2,
-                Event::Child(_) => 3,
-            };
-            (*z, order)
-        });
-
         let mut resolved: Vec<ResolvedComposite> = Vec::new();
         let mut excluded: Vec<(usize, usize)> = Vec::new();
         let mut stages = ResolveStages::default();
         let target_rect = Self::target_rect(target);
         let readers = CaptureReaders::of(layer, scale, target_rect);
 
-        for (z, event) in events {
+        for (z, event) in layer_events(layer) {
             match event {
                 Event::Backdrop(index) => {
                     let backdrop = &scene.backdrop_layers[index];
@@ -730,21 +881,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         items: &[&PendingBackdrop<'_>],
     ) -> Result<Vec<ResolvedComposite>, String> {
         let mut outputs = Vec::with_capacity(items.len());
-        let limit = self.renderer.max_texture_dim().min(MAX_ATLAS_DIM);
-        let mut packer = AtlasPacker::new(limit);
-        let mut order: Vec<usize> = (0..items.len()).collect();
-        order.sort_by_key(|index| std::cmp::Reverse(items[*index].capture_rect.pixel_size().1));
-        let mut placements: Vec<Option<AtlasPlacement>> = vec![None; items.len()];
-        for index in order {
-            let item = items[index];
-            let Some(batched) = item.batched else {
-                continue;
-            };
-            let (width, height) = item.capture_rect.pixel_size();
-            let gap = batched.blur().map_or(1, |blur| blur.gap(scale));
-            placements[index] = packer.place(width, height, gap);
-        }
-
+        let (packer, placements) = self.pack_stage(items, scale);
         for (atlas_index, atlas) in packer.atlases.iter().enumerate() {
             let members: Vec<(usize, AtlasPlacement)> = placements
                 .iter()
@@ -782,47 +919,12 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             )?;
 
             let blurred = self.blur_regions(&texture, items, &members, scale)?;
-
-            for (member, (index, placement)) in members.iter().enumerate() {
-                let item = items[*index];
-                let (region_width, region_height) = item.capture_rect.pixel_size();
-                let (source, origin) =
-                    match blurred.as_ref().and_then(|blurred| blurred.slot(member)) {
-                        Some((blurred, origin)) => (blurred, origin),
-                        None => (&texture, (placement.x, placement.y)),
-                    };
-                let region = (
-                    origin.0 as f32,
-                    origin.1 as f32,
-                    region_width as f32,
-                    region_height as f32,
-                );
-                let kind = match item.batched.expect("packed items are batched") {
-                    BatchedEffect::Blur(_) => ResolvedCompositeKind::Blit {
-                        alpha: 1.0,
-                        blend_mode: BlendMode::SrcOver,
-                        rounded_mask: item.rounded_mask,
-                        sample_mode: CompositeSampleMode::Nearest,
-                        source_viewport: Some(region),
-                    },
-                    BatchedEffect::Shader(shader) | BatchedEffect::BlurThenShader(_, shader) => {
-                        ResolvedCompositeKind::Shader {
-                            shader: Rc::new(shader.clone()),
-                            layer_pixel_rect: item.layer_pixel_rect(),
-                            source_region: Some(region),
-                            rounded_mask: item.rounded_mask,
-                            alpha: 1.0,
-                        }
-                    }
-                };
-                outputs.push(ResolvedComposite {
-                    z_index: item.z,
-                    source: Rc::clone(source),
-                    dest: item.capture_rect.tuple(),
-                    scissor: Some(item.visible.tuple()),
-                    kind,
-                });
-            }
+            outputs.extend(stage_composites(
+                &texture,
+                blurred.as_ref(),
+                items,
+                &members,
+            ));
         }
 
         for (index, item) in items.iter().enumerate() {
@@ -939,6 +1041,113 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             }
         }
         Ok(())
+    }
+
+    /// Resolves the backdrop a child reads: captures the ops beneath it and
+    /// either hands the capture to a shader tail in the final pass or applies
+    /// the effect into a texture blitted through the child's mask.
+    #[allow(clippy::too_many_arguments)]
+    fn resolve_child_backdrop(
+        &mut self,
+        layer: &LayerScene,
+        child: &ChildLayer,
+        backdrop: &RenderEffect,
+        placement: ChildPlacement,
+        scale: f32,
+        target_rect: DeviceRect,
+        beneath: &Beneath<'_>,
+        resolved: &[ResolvedComposite],
+    ) -> Result<ResolvedComposite, String> {
+        let ChildPlacement {
+            z,
+            visible,
+            dest,
+            translation,
+        } = placement;
+        let padding = ((backdrop.input_padding() + backdrop.output_padding()) * scale).ceil();
+        let capture_rect = visible
+            .expand(padding)
+            .intersect(target_rect)
+            .unwrap_or(visible)
+            .snap_out();
+        let capture = self.capture(
+            layer,
+            z,
+            scale,
+            capture_rect,
+            beneath,
+            resolved,
+            "Child Backdrop Capture",
+        )?;
+        let layer_pixel_rect = [
+            dest.x - capture_rect.x,
+            dest.y - capture_rect.y,
+            dest.width,
+            dest.height,
+        ];
+        let rounded_mask =
+            translation.and_then(|translation| translated_rounded_mask(child, translation, scale));
+        if let RenderEffect::Shader { shader } = backdrop
+            && (rounded_mask.is_none() || shader.batched_source())
+        {
+            return Ok(ResolvedComposite {
+                z_index: z,
+                source: capture,
+                dest: capture_rect.tuple(),
+                scissor: Some(visible.tuple()),
+                kind: ResolvedCompositeKind::Shader {
+                    shader: Rc::new(shader.clone()),
+                    layer_pixel_rect,
+                    source_region: None,
+                    rounded_mask,
+                    alpha: 1.0,
+                },
+            });
+        }
+        let result = self.apply_effect(
+            &capture,
+            backdrop,
+            layer_pixel_rect,
+            "Child Backdrop Effect",
+        )?;
+        Ok(ResolvedComposite {
+            z_index: z,
+            source: result,
+            dest: capture_rect.tuple(),
+            scissor: Some(visible.tuple()),
+            kind: ResolvedCompositeKind::Blit {
+                alpha: 1.0,
+                blend_mode: BlendMode::SrcOver,
+                rounded_mask,
+                sample_mode: CompositeSampleMode::Nearest,
+                source_viewport: None,
+            },
+        })
+    }
+
+    /// Packs every batched item of a stage into as few atlases as the
+    /// dimension limit allows, tallest first; an unbatched item gets no
+    /// placement and captures alone.
+    fn pack_stage(
+        &self,
+        items: &[&PendingBackdrop<'_>],
+        scale: f32,
+    ) -> (AtlasPacker, Vec<Option<AtlasPlacement>>) {
+        let limit = self.renderer.max_texture_dim().min(MAX_ATLAS_DIM);
+        let mut packer = AtlasPacker::new(limit);
+        let mut order: Vec<usize> = (0..items.len()).collect();
+        order.sort_by_key(|index| std::cmp::Reverse(items[*index].capture_rect.pixel_size().1));
+        let mut placements: Vec<Option<AtlasPlacement>> = vec![None; items.len()];
+        for index in order {
+            let item = items[index];
+            let Some(batched) = item.batched else {
+                continue;
+            };
+            let (width, height) = item.capture_rect.pixel_size();
+            let gap = batched.blur().map_or(1, |blur| blur.gap(scale));
+            placements[index] = packer.place(width, height, gap);
+        }
+        (packer, placements)
     }
 
     /// Runs the blur pass pair over the blurred members of one capture atlas.
@@ -1360,76 +1569,22 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         if let Some(backdrop) = &child.backdrop
             && let Some(visible) = visible_device
         {
-            let padding = ((backdrop.input_padding() + backdrop.output_padding()) * scale).ceil();
-            let capture_rect = visible
-                .expand(padding)
-                .intersect(target_rect)
-                .unwrap_or(visible)
-                .snap_out();
-            let capture = self.capture(
-                layer,
+            let placement = ChildPlacement {
                 z,
+                visible,
+                dest: DeviceRect::from_logical(dest_bounds_logical, scale),
+                translation,
+            };
+            let composite = self.resolve_child_backdrop(
+                layer,
+                child,
+                backdrop,
+                placement,
                 scale,
-                capture_rect,
+                target_rect,
                 beneath,
                 resolved,
-                "Child Backdrop Capture",
             )?;
-            let dest_device = DeviceRect::from_logical(dest_bounds_logical, scale);
-            let layer_pixel_rect = [
-                dest_device.x - capture_rect.x,
-                dest_device.y - capture_rect.y,
-                dest_device.width,
-                dest_device.height,
-            ];
-            let rounded_mask = match (translation, child.rounded_clip) {
-                (Some(translation), Some(clip)) => Some(rounded_mask(
-                    LayerRoundedClip {
-                        rect: clip.rect.translate(translation.x, translation.y),
-                        radii: clip.radii,
-                    },
-                    Point::default(),
-                    scale,
-                )),
-                _ => None,
-            };
-            let composite = if let RenderEffect::Shader { shader } = backdrop
-                && (rounded_mask.is_none() || shader.batched_source())
-            {
-                ResolvedComposite {
-                    z_index: z,
-                    source: capture,
-                    dest: capture_rect.tuple(),
-                    scissor: Some(visible.tuple()),
-                    kind: ResolvedCompositeKind::Shader {
-                        shader: Rc::new(shader.clone()),
-                        layer_pixel_rect,
-                        source_region: None,
-                        rounded_mask,
-                        alpha: 1.0,
-                    },
-                }
-            } else {
-                let result = self.apply_effect(
-                    &capture,
-                    backdrop,
-                    layer_pixel_rect,
-                    "Child Backdrop Effect",
-                )?;
-                ResolvedComposite {
-                    z_index: z,
-                    source: result,
-                    dest: capture_rect.tuple(),
-                    scissor: Some(visible.tuple()),
-                    kind: ResolvedCompositeKind::Blit {
-                        alpha: 1.0,
-                        blend_mode: BlendMode::SrcOver,
-                        rounded_mask,
-                        sample_mode: CompositeSampleMode::Nearest,
-                        source_viewport: None,
-                    },
-                }
-            };
             resolved.push(composite);
         }
 
@@ -1462,76 +1617,15 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         };
         let composite = match translation {
             Some(translation) => {
-                let dest = DeviceRect {
-                    x: surface.rect.x + translation.x * scale,
-                    y: surface.rect.y + translation.y * scale,
-                    width: surface.rect.width,
-                    height: surface.rect.height,
-                };
-                let integer_aligned = (dest.x - dest.x.round()).abs() <= 1e-3
-                    && (dest.y - dest.y.round()).abs() <= 1e-3;
-                let dest = if integer_aligned {
-                    DeviceRect {
-                        x: dest.x.round(),
-                        y: dest.y.round(),
-                        ..dest
-                    }
-                } else {
-                    dest
-                };
-                let rounded_mask = child.rounded_clip.map(|clip| {
-                    rounded_mask(
-                        LayerRoundedClip {
-                            rect: clip.rect.translate(translation.x, translation.y),
-                            radii: clip.radii,
-                        },
-                        Point::default(),
-                        scale,
-                    )
-                });
-                ResolvedComposite {
-                    z_index: z,
-                    source: texture,
-                    dest: dest.tuple(),
-                    scissor: Some(visible.tuple()),
-                    kind: ResolvedCompositeKind::Blit {
-                        alpha: child.alpha,
-                        blend_mode: child.blend_mode,
-                        rounded_mask,
-                        sample_mode: if integer_aligned {
-                            CompositeSampleMode::Nearest
-                        } else {
-                            CompositeSampleMode::Linear
-                        },
-                        source_viewport: None,
-                    },
-                }
+                translated_child_composite(child, z, texture, &surface, translation, scale, visible)
             }
             None => {
-                let source_to_parent =
-                    surface_to_parent_device(&surface, child.transform, snap, scale);
-                let Some(inverse) = source_to_parent.inverse() else {
+                let Some(composite) =
+                    projected_child_composite(child, z, texture, &surface, snap, scale, visible)
+                else {
                     return Ok(());
                 };
-                let dest_quad = source_to_parent.map_rect(Rect {
-                    x: 0.0,
-                    y: 0.0,
-                    width: surface.rect.width,
-                    height: surface.rect.height,
-                });
-                ResolvedComposite {
-                    z_index: z,
-                    source: texture,
-                    dest: quad_device_bounds(dest_quad).tuple(),
-                    scissor: Some(visible.tuple()),
-                    kind: ResolvedCompositeKind::Projective {
-                        dest_quad,
-                        inverse: inverse.matrix(),
-                        alpha: child.alpha,
-                        blend_mode: child.blend_mode,
-                        sample_mode: CompositeSampleMode::Linear,
-                    },
-                }
+                composite
             }
         };
         resolved.push(composite);
@@ -1807,6 +1901,24 @@ fn shader_tail(effect: &RenderEffect) -> Option<(Option<&RenderEffect>, &Runtime
         },
         _ => None,
     }
+}
+
+/// The rounded mask of a child composited at `translation`.
+fn translated_rounded_mask(
+    child: &ChildLayer,
+    translation: Point,
+    scale: f32,
+) -> Option<RoundedCompositeMask> {
+    child.rounded_clip.map(|clip| {
+        rounded_mask(
+            LayerRoundedClip {
+                rect: clip.rect.translate(translation.x, translation.y),
+                radii: clip.radii,
+            },
+            Point::default(),
+            scale,
+        )
+    })
 }
 
 fn rounded_mask(clip: LayerRoundedClip, snap: Point, scale: f32) -> RoundedCompositeMask {
