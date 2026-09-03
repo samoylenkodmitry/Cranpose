@@ -234,9 +234,10 @@ impl<F: FnMut() + 'static> IosApp<F> {
                     ..Default::default()
                 });
                 let (width, height) = shell.buffer_size();
-                if let Err(error) = shell
-                    .renderer()
-                    .render_surface_texture(&view, width, height)
+                if let Err(error) =
+                    shell
+                        .renderer()
+                        .render_surface_texture(&frame.texture, &view, width, height)
                 {
                     log::error!("iOS render error: {error:?}");
                 }

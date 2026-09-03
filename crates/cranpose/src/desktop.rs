@@ -2603,6 +2603,7 @@ impl App {
             ..Default::default()
         });
         if let Err(error) = native.app.renderer().render_surface_texture(
+            &output.texture,
             &view,
             native.surface_config.width,
             native.surface_config.height,
@@ -4693,6 +4694,7 @@ impl ApplicationHandler for App {
                     });
 
                     if let Err(err) = app.renderer().render_surface_texture(
+                        &output.texture,
                         &view,
                         surface_config.width,
                         surface_config.height,

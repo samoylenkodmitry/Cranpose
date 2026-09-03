@@ -4938,6 +4938,77 @@ struct CompositionTarget {
     output_bind_group: wgpu::BindGroup,
 }
 
+/// Where a frame renders: straight into the presentable image, or into the
+/// reusable composition target that the output conversion then copies out.
+enum FrameRoot {
+    Surface(OffscreenTarget),
+    Composition(CompositionTarget),
+}
+
+impl FrameRoot {
+    fn target(&self) -> &OffscreenTarget {
+        match self {
+            Self::Surface(target) => target,
+            Self::Composition(composition) => &composition.target,
+        }
+    }
+
+    /// The output conversion's destination and source bind group; nothing
+    /// when the frame already rendered into the presentable image.
+    fn output<'a>(
+        &'a self,
+        output_view: Option<&'a wgpu::TextureView>,
+        screenshot_bind_group: Option<&'a wgpu::BindGroup>,
+    ) -> Option<(&'a wgpu::TextureView, &'a wgpu::BindGroup)> {
+        match self {
+            Self::Surface(_) => None,
+            Self::Composition(composition) => output_view.map(|view| {
+                (
+                    view,
+                    screenshot_bind_group.unwrap_or(&composition.output_bind_group),
+                )
+            }),
+        }
+    }
+}
+
+const DIRECT_SURFACE_ROOT_USAGES: wgpu::TextureUsages = wgpu::TextureUsages::RENDER_ATTACHMENT
+    .union(wgpu::TextureUsages::TEXTURE_BINDING)
+    .union(wgpu::TextureUsages::COPY_SRC)
+    .union(wgpu::TextureUsages::COPY_DST);
+
+/// The usages a presentable image needs to serve as the frame's root
+/// target: rendering plus the capture usages the composition target has.
+/// Callers configuring a surface ask for them when the surface offers them
+/// all; a partial set falls back to the composition copy, so nothing is
+/// requested in that case beyond rendering.
+pub fn presentable_root_usages(supported: wgpu::TextureUsages) -> wgpu::TextureUsages {
+    if supported.contains(DIRECT_SURFACE_ROOT_USAGES) {
+        DIRECT_SURFACE_ROOT_USAGES
+    } else {
+        wgpu::TextureUsages::RENDER_ATTACHMENT
+    }
+}
+
+fn direct_surface_root_enabled() -> bool {
+    crate::debug_toggles::debug_toggle("CRANPOSE_NO_DIRECT_SURFACE").as_deref() != Some("1")
+}
+
+/// Whether the presented image can be the frame's root target: its bytes
+/// are the composition format (so the 8-bit output conversion would be an
+/// identity), it can be captured and sampled the way the composition target
+/// is, and it is the viewport's size.
+fn surface_is_direct_root(
+    texture: &wgpu::Texture,
+    composition_format: wgpu::TextureFormat,
+    viewport: (u32, u32),
+) -> bool {
+    direct_surface_root_enabled()
+        && texture.format().remove_srgb_suffix() == composition_format
+        && texture.usage().contains(DIRECT_SURFACE_ROOT_USAGES)
+        && (texture.width(), texture.height()) == viewport
+}
+
 #[derive(Clone, Copy)]
 enum OutputMode {
     Display,
@@ -6329,6 +6400,25 @@ impl GpuRenderer {
 
     fn acquire_retained_surface(&mut self, width: u32, height: u32) -> OffscreenTarget {
         self.acquire_offscreen(width, height)
+    }
+
+    fn frame_root(
+        &mut self,
+        output_mode: OutputMode,
+        output_view: Option<&wgpu::TextureView>,
+        output_texture: Option<&wgpu::Texture>,
+        viewport: (u32, u32),
+    ) -> FrameRoot {
+        if let (OutputMode::Display, Some(view), Some(texture)) =
+            (output_mode, output_view, output_texture)
+            && surface_is_direct_root(texture, self.composition_format, viewport)
+        {
+            return FrameRoot::Surface(OffscreenTarget::from_surface(
+                texture.clone(),
+                view.clone(),
+            ));
+        }
+        FrameRoot::Composition(self.take_composition_target(viewport.0.max(1), viewport.1.max(1)))
     }
 
     fn take_composition_target(&mut self, width: u32, height: u32) -> CompositionTarget {
@@ -8092,6 +8182,7 @@ impl GpuRenderer {
     #[allow(clippy::too_many_arguments)]
     pub fn render(
         &mut self,
+        texture: &wgpu::Texture,
         view: &wgpu::TextureView,
         width: u32,
         height: u32,
@@ -8107,6 +8198,7 @@ impl GpuRenderer {
             returns,
             OutputMode::Display,
             Some(view),
+            Some(texture),
         )
     }
 
@@ -8120,6 +8212,7 @@ impl GpuRenderer {
         returns: &mut RenderReturns,
         output_mode: OutputMode,
         output_view: Option<&wgpu::TextureView>,
+        output_texture: Option<&wgpu::Texture>,
     ) -> Result<(), String> {
         if let Some(confirmations) = packet.recycled_confirmations.take() {
             self.restore_replay_ack_confirmations(confirmations);
@@ -8164,33 +8257,24 @@ impl GpuRenderer {
         }
 
         let text_cache_len = packet.text_cache_len;
-        let composition = self.take_composition_target(width.max(1), height.max(1));
+        let frame_root = self.frame_root(output_mode, output_view, output_texture, (width, height));
+        let root = frame_root.target();
         #[cfg(not(target_arch = "wasm32"))]
         {
-            self.display_clip.frame_root_view = Some(composition.target.view.clone());
+            self.display_clip.frame_root_view = Some(root.view.clone());
         }
-        let composition_root = Some(&composition.target);
         let screenshot_bind_group = output_view.and_then(|_| {
             matches!(output_mode, OutputMode::Screenshot).then(|| {
                 self.screenshot_converter
-                    .bind_group(&self.device, &composition.target.view)
+                    .bind_group(&self.device, &root.view)
             })
         });
-        let output = output_view.map(|view| {
-            let bind_group = screenshot_bind_group
-                .as_ref()
-                .unwrap_or(&composition.output_bind_group);
-            (view, bind_group)
-        });
-        let result = self.render_graph(
-            &composition.target.view,
-            composition_root,
-            packet,
-            returns,
-            output_mode,
-            output,
-        );
-        self.composition_target = Some(composition);
+        let output = frame_root.output(output_view, screenshot_bind_group.as_ref());
+        let result =
+            self.render_graph(&root.view, Some(root), packet, returns, output_mode, output);
+        if let FrameRoot::Composition(composition) = frame_root {
+            self.composition_target = Some(composition);
+        }
         #[cfg(not(target_arch = "wasm32"))]
         {
             self.display_clip.frame_root_view = None;
@@ -8428,6 +8512,7 @@ impl GpuRenderer {
             returns,
             OutputMode::Screenshot,
             Some(&output_view),
+            None,
         )?;
 
         let bytes_per_pixel = 4u32;
@@ -22131,6 +22216,23 @@ mod tests {
         assert!(
             !appendix.contains("output.gradient_params") && !appendix.contains("output.brush"),
             "the trimmed vertex entries must not write the dropped varyings"
+        );
+    }
+
+    #[test]
+    fn presentable_root_usages_are_all_or_nothing() {
+        let full = wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::COPY_DST
+            | wgpu::TextureUsages::STORAGE_BINDING;
+        assert_eq!(presentable_root_usages(full), DIRECT_SURFACE_ROOT_USAGES);
+        assert_eq!(
+            presentable_root_usages(
+                wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC
+            ),
+            wgpu::TextureUsages::RENDER_ATTACHMENT,
+            "a surface that cannot be sampled keeps the composition copy and asks for nothing extra"
         );
     }
 

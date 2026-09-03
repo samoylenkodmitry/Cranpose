@@ -5,10 +5,11 @@ use std::{
     sync::{Arc, Mutex, MutexGuard},
 };
 
+use cranpose_app_shell::AppShell;
 use cranpose_core::NodeId;
 use cranpose_render_common::{
     Renderer,
-    graph::{LayerNode, RenderNode},
+    graph::{LayerNode, RenderGraph, RenderNode},
     software_text_raster::DEFAULT_SOFTWARE_TEXT_FONT_BYTES,
 };
 use cranpose_render_wgpu::{CapturedFrame, RenderStatsSnapshot, WgpuRenderer};
@@ -103,23 +104,15 @@ impl LockedRenderer {
                 .renderer
                 .try_device()
                 .ok_or_else(|| "renderer GPU device was not initialized".to_string())?;
-            let texture = device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("WGPU contract render target"),
-                size: wgpu::Extent3d {
-                    width,
-                    height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Bgra8UnormSrgb,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-                view_formats: &[],
-            });
-            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            let (texture, view) = render_target(
+                device,
+                width,
+                height,
+                wgpu::TextureFormat::Bgra8UnormSrgb,
+                wgpu::TextureUsages::RENDER_ATTACHMENT,
+            );
             self.renderer
-                .render(&view, width, height)
+                .render(&texture, &view, width, height)
                 .map_err(|err| format!("{err:?}"))?;
             self.renderer
                 .last_frame_stats()
@@ -182,6 +175,14 @@ pub fn headless_renderer_unencoded() -> Result<LockedRenderer, String> {
 pub fn headless_renderer_parts() -> Result<(MutexGuard<'static, ()>, WgpuRenderer), String> {
     let lock = lock_gpu_test();
     let renderer = create_headless_renderer()?;
+    Ok((lock, renderer))
+}
+
+pub fn headless_renderer_parts_with_display_format(
+    format: wgpu::TextureFormat,
+) -> Result<(MutexGuard<'static, ()>, WgpuRenderer), String> {
+    let lock = lock_gpu_test();
+    let renderer = create_headless_renderer_with_format(format)?;
     Ok((lock, renderer))
 }
 
@@ -265,6 +266,149 @@ fn create_headless_renderer_with_format(
         adapter.get_downlevel_capabilities().flags,
     );
     Ok(renderer)
+}
+
+/// Composes `page` in an app shell over a fresh headless renderer, laid out
+/// and updated twice so caches are warm, or `None` when no GPU is available.
+/// Everything a composable page test imports: the page widgets and the
+/// frame helpers below.
+#[allow(unused_imports)]
+pub mod page {
+    pub use cranpose_ui::{
+        Color, Modifier, RenderEffect, TextStyle, composable,
+        widgets::{Box, BoxSpec, Text},
+    };
+
+    pub use super::{FramePage, rect_modifier};
+}
+
+/// Everything a raw render-graph test imports: the graph node types and the
+/// drawing primitives that fill a draw run.
+#[allow(unused_imports)]
+pub mod graph {
+    pub use cranpose_render_common::{
+        Renderer,
+        graph::{RenderGraph, RenderNode},
+    };
+    pub use cranpose_ui_graphics::{
+        Brush, Color, CornerRadii, DrawScope, DrawScopeDefault, Point, Rect, Stroke, TileMode,
+    };
+
+    pub use super::draw_run_graph;
+}
+
+/// A root layer of `size` square pixels holding one draw run of `scope`'s
+/// primitives.
+pub fn draw_run_graph(size: u32, scope: cranpose_ui_graphics::DrawScopeDefault) -> RenderGraph {
+    use cranpose_render_common::graph::{DrawRunNode, PrimitivePhase};
+    use cranpose_ui_graphics::DrawScope;
+    RenderGraph::new(layer_node(
+        None,
+        size as f32,
+        size as f32,
+        vec![RenderNode::DrawRun(DrawRunNode::new(
+            PrimitivePhase::BeforeChildren,
+            scope.into_primitives(),
+        ))],
+    ))
+}
+
+/// A render-attachment texture of `format` and its default view, the shape
+/// every presentable-target test hands to the renderer.
+pub fn render_target(
+    device: &wgpu::Device,
+    width: u32,
+    height: u32,
+    format: wgpu::TextureFormat,
+    usage: wgpu::TextureUsages,
+) -> (wgpu::Texture, wgpu::TextureView) {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("Test Render Target"),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    (texture, view)
+}
+
+pub fn app_shell_for(
+    page: fn(),
+    width: u32,
+    height: u32,
+    display_format: wgpu::TextureFormat,
+    configure: impl FnOnce(&mut WgpuRenderer),
+) -> Option<(MutexGuard<'static, ()>, AppShell<WgpuRenderer>)> {
+    let (lock, mut renderer) = match headless_renderer_parts_with_display_format(display_format) {
+        Ok(parts) => parts,
+        Err(err) => {
+            eprintln!("skipping (headless WGPU init failed): {err}");
+            return None;
+        }
+    };
+    configure(&mut renderer);
+    let root_key = cranpose_core::location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(renderer, root_key, page);
+    shell.set_viewport(width as f32, height as f32);
+    shell.set_buffer_size(width, height);
+    shell.update();
+    shell.update();
+    Some((lock, shell))
+}
+
+/// Captures `graph` three times and returns the last frame, after checking
+/// that repeated captures of one graph are byte-stable.
+pub fn stable_capture(renderer: &mut LockedRenderer, graph: &RenderGraph, size: u32) -> Vec<u8> {
+    let mut passes = Vec::new();
+    for _ in 0..3 {
+        renderer.scene_mut().graph = Some(graph.clone());
+        let captured = renderer
+            .capture_frame(size, size)
+            .unwrap_or_else(|err| panic!("capture failed: {err:?}"));
+        assert_eq!((captured.width, captured.height), (size, size));
+        passes.push(captured.pixels);
+    }
+    assert_eq!(
+        passes[1], passes[2],
+        "same-graph control passes must be byte-stable before the cross-arm compare"
+    );
+    passes.pop().expect("three captures")
+}
+
+pub fn distinct_colors(pixels: &[u8]) -> usize {
+    let mut colors: Vec<[u8; 4]> = pixels.as_chunks::<4>().0.to_vec();
+    colors.sort_unstable();
+    colors.dedup();
+    colors.len()
+}
+
+/// Asserts two RGBA frames of `width` pixels per row are identical, naming
+/// the first differing pixel otherwise.
+pub fn assert_same_bytes(label: &str, width: u32, a: &[u8], b: &[u8]) {
+    assert_eq!(a.len(), b.len(), "{label}: capture sizes differ");
+    let mut differing = 0usize;
+    let mut worst = 0u8;
+    let mut first = None;
+    for (index, (x, y)) in a.iter().zip(b).enumerate() {
+        let diff = x.abs_diff(*y);
+        if diff > 0 {
+            differing += 1;
+            worst = worst.max(diff);
+            first.get_or_insert((index / 4 % width as usize, index / 4 / width as usize));
+        }
+    }
+    assert_eq!(
+        differing, 0,
+        "{label}: {differing} bytes diverged (worst {worst}, first at {first:?})"
+    );
 }
 
 pub fn rect_modifier(rect: [f32; 4]) -> Modifier {

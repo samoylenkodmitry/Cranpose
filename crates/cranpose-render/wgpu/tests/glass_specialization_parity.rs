@@ -119,13 +119,6 @@ fn capture_card_with_current_toggles() -> Result<CapturedFrame, String> {
     Ok(frame)
 }
 
-fn distinct_colors(pixels: &[u8]) -> usize {
-    let mut colors: Vec<[u8; 4]> = pixels.as_chunks::<4>().0.to_vec();
-    colors.sort_unstable();
-    colors.dedup();
-    colors.len()
-}
-
 #[test]
 fn the_card_material_raises_most_specialization_flags() {
     let RenderEffect::Shader { shader } = cranpose_ui_graphics::liquid_glass_effect(
@@ -163,7 +156,7 @@ fn a_specialized_glass_pipeline_matches_the_general_one_byte_for_byte() {
     };
     let general = capture_card(true).expect("headless WGPU init failed mid-suite");
     assert_eq!(specialized.pixels.len(), general.pixels.len());
-    let distinct = distinct_colors(&specialized.pixels);
+    let distinct = support::distinct_colors(&specialized.pixels);
     if let Ok(dir) = std::env::var("CRANPOSE_PARITY_DUMP_DIR") {
         let rgb: Vec<u8> = specialized
             .pixels
@@ -187,24 +180,11 @@ fn a_specialized_glass_pipeline_matches_the_general_one_byte_for_byte() {
         "{distinct} distinct colors — the scene must carry a refracted star field, not a \
          flat fill"
     );
-    let mut differing = 0usize;
-    let mut worst = 0u8;
-    let mut first = None;
-    for (index, (a, b)) in specialized.pixels.iter().zip(&general.pixels).enumerate() {
-        let diff = a.abs_diff(*b);
-        if diff > 0 {
-            differing += 1;
-            worst = worst.max(diff);
-            first.get_or_insert((
-                index / 4 % FRAME_WIDTH as usize,
-                index / 4 / FRAME_WIDTH as usize,
-            ));
-        }
-    }
-    assert_eq!(
-        differing, 0,
-        "{differing} bytes diverged (worst {worst}, first at {first:?}) between the \
-         material-specialized glass pipeline and the general one — a raised flag must \
-         substitute exactly the value its uniform held"
+    support::assert_same_bytes(
+        "material-specialized glass pipeline vs the general one; a raised flag must substitute \
+         exactly the value its uniform held",
+        FRAME_WIDTH,
+        &specialized.pixels,
+        &general.pixels,
     );
 }

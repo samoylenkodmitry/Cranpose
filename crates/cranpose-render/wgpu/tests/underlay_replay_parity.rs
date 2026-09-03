@@ -87,59 +87,55 @@ fn card_glass() -> Glass {
 
 #[composable]
 #[allow(non_snake_case)]
-fn BarredGlassCardsPage() {
-    LiquidTheme(LiquidThemeSpec::default(), || {
-        FramePage(
-            FRAME_WIDTH,
-            FRAME_HEIGHT,
-            Color(0.08, 0.12, 0.30, 1.0),
-            || {
-                Stripes();
-                for card in CARDS {
-                    GlassSurface(rect_modifier(card), card_glass(), || {
-                        Text(
-                            "Under a bar",
-                            Modifier::empty().offset(16.0, 16.0),
-                            TextStyle::default(),
-                        );
-                    });
-                }
-                Box(
-                    rect_modifier(BAR)
-                        .backdrop_effect(RenderEffect::blur(6.0))
-                        .background(Color(1.0, 1.0, 1.0, 0.2)),
-                    BoxSpec::new(),
-                    || {},
-                );
-            },
-        );
-    });
+fn GlassCardsPage() {
+    GlassCards(false);
 }
 
 #[composable]
 #[allow(non_snake_case)]
-fn GlassCardsPage() {
-    LiquidTheme(LiquidThemeSpec::default(), || {
+fn BarredGlassCardsPage() {
+    GlassCards(true);
+}
+
+#[composable]
+#[allow(non_snake_case)]
+fn GlassCards(barred: bool) {
+    LiquidTheme(LiquidThemeSpec::default(), move || {
         FramePage(
             FRAME_WIDTH,
             FRAME_HEIGHT,
             Color(0.08, 0.12, 0.30, 1.0),
-            || {
+            move || {
                 Stripes();
                 for card in CARDS {
-                    GlassSurface(rect_modifier(card), card_glass(), || {
+                    GlassSurface(rect_modifier(card), card_glass(), move || {
                         Text(
-                            "Replayed glass",
+                            if barred {
+                                "Under a bar"
+                            } else {
+                                "Replayed glass"
+                            },
                             Modifier::empty().offset(16.0, 16.0),
                             TextStyle::default(),
                         );
-                        GlassButton(
-                            rect_modifier(BUTTON_IN_CARD),
-                            GlassButtonSpec::glass(),
-                            || {},
-                            || {},
-                        );
+                        if !barred {
+                            GlassButton(
+                                rect_modifier(BUTTON_IN_CARD),
+                                GlassButtonSpec::glass(),
+                                || {},
+                                || {},
+                            );
+                        }
                     });
+                }
+                if barred {
+                    Box(
+                        rect_modifier(BAR)
+                            .backdrop_effect(RenderEffect::blur(6.0))
+                            .background(Color(1.0, 1.0, 1.0, 0.2)),
+                        BoxSpec::new(),
+                        || {},
+                    );
                 }
             },
         );

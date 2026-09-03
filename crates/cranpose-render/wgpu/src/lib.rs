@@ -7,6 +7,7 @@
 mod cost_tuner;
 pub(crate) use cranpose_render_common::debug_toggles;
 pub use debug_toggles::{debug_toggle, debug_toggle_os, set_debug_toggle, set_debug_toggle_os};
+pub use render::presentable_root_usages;
 mod display_clip;
 mod effect_renderer;
 mod fast_cores;
@@ -617,24 +618,30 @@ impl WgpuRenderer {
     /// into the frontend afterwards.
     pub fn render(
         &mut self,
+        texture: &wgpu::Texture,
         view: &wgpu::TextureView,
         width: u32,
         height: u32,
     ) -> Result<(), WgpuRendererError> {
-        self.render_frame(view, width, height)
+        self.render_frame(texture, view, width, height)
     }
 
+    /// Renders the frame into a presentable image. When the image carries the
+    /// composition format and the capture usages, the scene renders into it
+    /// directly and no output conversion pass runs.
     pub fn render_surface_texture(
         &mut self,
+        texture: &wgpu::Texture,
         view: &wgpu::TextureView,
         width: u32,
         height: u32,
     ) -> Result<(), WgpuRendererError> {
-        self.render_frame(view, width, height)
+        self.render_frame(texture, view, width, height)
     }
 
     fn render_frame(
         &mut self,
+        texture: &wgpu::Texture,
         view: &wgpu::TextureView,
         width: u32,
         height: u32,
@@ -658,6 +665,7 @@ impl WgpuRenderer {
         let frontend = &mut self.frontend;
         let mut returns = RenderReturns::default();
         let result = gpu_renderer.render(
+            texture,
             view,
             width,
             height,
@@ -1074,6 +1082,11 @@ impl WgpuRenderer {
     }
 
     #[doc(hidden)]
+    pub fn try_queue_for_tests(&self) -> Option<&wgpu::Queue> {
+        self.sync_gpu_renderer().map(|r| &*r.queue)
+    }
+
+    #[doc(hidden)]
     pub fn device_error_count_for_tests(&self) -> u64 {
         self.sync_gpu_renderer()
             .map(GpuRenderer::device_error_count)
@@ -1180,6 +1193,7 @@ impl WgpuRenderer {
     #[doc(hidden)]
     pub fn render_held_packet_for_tests(
         &mut self,
+        texture: &wgpu::Texture,
         view: &wgpu::TextureView,
         width: u32,
         height: u32,
@@ -1194,6 +1208,7 @@ impl WgpuRenderer {
         let frontend = &mut self.frontend;
         let mut returns = RenderReturns::default();
         let result = gpu_renderer.render(
+            texture,
             view,
             width,
             height,

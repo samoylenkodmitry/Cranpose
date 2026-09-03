@@ -860,6 +860,7 @@ pub async fn run(
                     {
                         let mut app_mut = app.borrow_mut();
                         if let Err(err) = app_mut.renderer().render_surface_texture(
+                            &output.texture,
                             &view,
                             render_width,
                             render_height,

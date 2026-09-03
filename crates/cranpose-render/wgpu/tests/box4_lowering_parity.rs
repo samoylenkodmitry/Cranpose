@@ -1,12 +1,6 @@
 mod support;
 
-use cranpose_app_shell::AppShell;
-use cranpose_core::location_key;
-use cranpose_ui::{
-    Color, Modifier, RenderEffect, TextStyle, composable,
-    widgets::{Box, BoxSpec, Text},
-};
-use support::{FramePage, rect_modifier};
+use support::page::*;
 
 const FRAME_WIDTH: u32 = 320;
 const FRAME_HEIGHT: u32 = 240;
@@ -64,19 +58,13 @@ fn capture(keep_box4: bool) -> Option<Vec<u8>> {
 }
 
 fn capture_with_current_toggles() -> Option<Vec<u8>> {
-    let (_lock, renderer) = match support::headless_renderer_parts() {
-        Ok(parts) => parts,
-        Err(err) => {
-            eprintln!("skipping (headless WGPU init failed): {err}");
-            return None;
-        }
-    };
-    let root_key = location_key(file!(), line!(), column!());
-    let mut shell = AppShell::new(renderer, root_key, CardsPage);
-    shell.set_viewport(FRAME_WIDTH as f32, FRAME_HEIGHT as f32);
-    shell.set_buffer_size(FRAME_WIDTH, FRAME_HEIGHT);
-    shell.update();
-    shell.update();
+    let (_lock, mut shell) = support::app_shell_for(
+        CardsPage,
+        FRAME_WIDTH,
+        FRAME_HEIGHT,
+        wgpu::TextureFormat::Bgra8UnormSrgb,
+        |_| {},
+    )?;
     let frame = shell
         .renderer()
         .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
@@ -91,25 +79,11 @@ fn a_lowered_box_resolve_matches_the_full_walk_byte_for_byte() {
         return;
     };
     let kept = capture(true).expect("headless WGPU init failed mid-suite");
-    assert_eq!(lowered.len(), kept.len());
-    let mut differing = 0usize;
-    let mut worst = 0u8;
-    let mut first = None;
-    for (index, (a, b)) in lowered.iter().zip(&kept).enumerate() {
-        let diff = a.abs_diff(*b);
-        if diff > 0 {
-            differing += 1;
-            worst = worst.max(diff);
-            first.get_or_insert((
-                index / 4 % FRAME_WIDTH as usize,
-                index / 4 / FRAME_WIDTH as usize,
-            ));
-        }
-    }
-    assert_eq!(
-        differing, 0,
-        "{differing} bytes diverged (worst {worst}, first at {first:?}) between a lowered \
-         texel fetch and the box resolve it replaced — the lowering may only fire when the \
-         box covers exactly one texel with weight one"
+    support::assert_same_bytes(
+        "lowered texel fetch vs box resolve, which may only be lowered where the box covers \
+         exactly one texel with weight one",
+        FRAME_WIDTH,
+        &lowered,
+        &kept,
     );
 }

@@ -218,7 +218,7 @@ fn main() {
         shell.update();
         shell
             .renderer()
-            .render(&view, FRAME_WIDTH, FRAME_HEIGHT)
+            .render(&target, &view, FRAME_WIDTH, FRAME_HEIGHT)
             .expect("frame render");
     }
     let start = std::time::Instant::now();
@@ -228,7 +228,7 @@ fn main() {
         shell.update();
         shell
             .renderer()
-            .render(&view, FRAME_WIDTH, FRAME_HEIGHT)
+            .render(&target, &view, FRAME_WIDTH, FRAME_HEIGHT)
             .expect("frame render");
     }
     let elapsed = start.elapsed().as_secs_f64();

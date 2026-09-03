@@ -627,3 +627,14 @@ gradient-free fragment (`vec4(t)`) ran at the solid-fill floor. The remaining
 cost is the per-fragment data fetch itself; a big fill would need its
 per-shape data in statically indexed uniforms (preloaded per draw) to reach
 the floor.
+
+## A surface configured for rendering only silently keeps the composition copy
+
+Rendering the frame straight into the swapchain image needs that image to be
+samplable and copyable, which the Mate 20 X swapchain supports; the parity
+test passed on the Mac, the phone build still ran the output conversion pass
+because the Android `SurfaceConfiguration` requested `RENDER_ATTACHMENT`
+alone and the runtime check on `texture.usage()` correctly fell back. Check
+the device's per-pass inventory for the pass you removed, and log the
+configured usage next to the capabilities (`Android surface: ... configured
+...`) so the fallback is visible.

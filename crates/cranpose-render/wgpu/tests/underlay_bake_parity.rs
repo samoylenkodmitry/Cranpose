@@ -1,12 +1,6 @@
 mod support;
 
-use cranpose_app_shell::AppShell;
-use cranpose_core::location_key;
-use cranpose_ui::{
-    Color, Modifier, RenderEffect, TextStyle, composable,
-    widgets::{Box, BoxSpec, Text},
-};
-use support::{FramePage, rect_modifier};
+use support::page::*;
 
 const FRAME_WIDTH: u32 = 320;
 const FRAME_HEIGHT: u32 = 240;
@@ -58,19 +52,13 @@ fn GradientPage() {
 }
 
 fn cold_capture(bake: bool) -> Option<(Vec<u8>, cranpose_render_wgpu::RenderStatsSnapshot)> {
-    let (_lock, mut renderer) = match support::headless_renderer_parts() {
-        Ok(parts) => parts,
-        Err(err) => {
-            eprintln!("skipping (headless WGPU init failed): {err}");
-            return None;
-        }
-    };
-    renderer.set_underlay_bake_enabled(bake);
-    let root_key = location_key(file!(), line!(), column!());
-    let mut shell = AppShell::new(renderer, root_key, GradientPage);
-    shell.set_viewport(FRAME_WIDTH as f32, FRAME_HEIGHT as f32);
-    shell.set_buffer_size(FRAME_WIDTH, FRAME_HEIGHT);
-    shell.update();
+    let (_lock, mut shell) = support::app_shell_for(
+        GradientPage,
+        FRAME_WIDTH,
+        FRAME_HEIGHT,
+        wgpu::TextureFormat::Bgra8UnormSrgb,
+        |renderer| renderer.set_underlay_bake_enabled(bake),
+    )?;
     let frame = shell
         .renderer()
         .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)

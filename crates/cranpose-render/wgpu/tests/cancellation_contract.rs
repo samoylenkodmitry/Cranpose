@@ -85,25 +85,21 @@ fn command_for(node_id: usize) -> DrawCommandId {
     }
 }
 
-fn target_view(renderer: &support::LockedRenderer, width: u32, height: u32) -> wgpu::TextureView {
+fn target_view(
+    renderer: &support::LockedRenderer,
+    width: u32,
+    height: u32,
+) -> (wgpu::Texture, wgpu::TextureView) {
     let device = renderer
         .try_device()
         .expect("renderer GPU device was not initialized");
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("Cancellation Contract Render Target"),
-        size: wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Bgra8UnormSrgb,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-        view_formats: &[],
-    });
-    texture.create_view(&wgpu::TextureViewDescriptor::default())
+    support::render_target(
+        device,
+        width,
+        height,
+        wgpu::TextureFormat::Bgra8UnormSrgb,
+        wgpu::TextureUsages::RENDER_ATTACHMENT,
+    )
 }
 
 #[test]
@@ -123,9 +119,9 @@ fn renderer_replacement_cancels_in_flight_packet() {
         .expect("direct graph must lower into a packet");
     support::reinit_gpu(&mut renderer).expect("GPU reinit failed");
 
-    let view = target_view(&renderer, WIDTH, HEIGHT);
+    let (texture, view) = target_view(&renderer, WIDTH, HEIGHT);
     let outcome = renderer
-        .render_held_packet_for_tests(&view, WIDTH, HEIGHT, packet)
+        .render_held_packet_for_tests(&texture, &view, WIDTH, HEIGHT, packet)
         .expect("a cancel is a protocol outcome, not a draw error");
     assert_eq!(
         outcome,
@@ -155,7 +151,7 @@ fn renderer_replacement_cancels_in_flight_packet() {
         .build_frame_packet_for_tests(WIDTH, HEIGHT)
         .expect("the next build must lower normally");
     let outcome = renderer
-        .render_held_packet_for_tests(&view, WIDTH, HEIGHT, packet)
+        .render_held_packet_for_tests(&texture, &view, WIDTH, HEIGHT, packet)
         .expect("the post-replacement packet must draw");
     assert_eq!(
         outcome,
@@ -180,9 +176,9 @@ fn surface_reconfigure_cancels_waiting_packet() {
         .expect("direct graph must lower into a packet");
     renderer.note_surface_reconfigured();
 
-    let view = target_view(&renderer, WIDTH, HEIGHT);
+    let (texture, view) = target_view(&renderer, WIDTH, HEIGHT);
     let outcome = renderer
-        .render_held_packet_for_tests(&view, WIDTH, HEIGHT, packet)
+        .render_held_packet_for_tests(&texture, &view, WIDTH, HEIGHT, packet)
         .expect("a cancel is a protocol outcome, not a draw error");
     assert_eq!(
         outcome,
@@ -198,7 +194,7 @@ fn surface_reconfigure_cancels_waiting_packet() {
         .build_frame_packet_for_tests(WIDTH, HEIGHT)
         .expect("the next build must lower normally");
     let outcome = renderer
-        .render_held_packet_for_tests(&view, WIDTH, HEIGHT, packet)
+        .render_held_packet_for_tests(&texture, &view, WIDTH, HEIGHT, packet)
         .expect("the post-reconfigure packet must draw");
     assert_eq!(outcome, PresentOutcome::Presented);
 }
@@ -217,9 +213,9 @@ fn viewport_mismatch_cancels_packet() {
     let packet = renderer
         .build_frame_packet_for_tests(WIDTH, HEIGHT)
         .expect("direct graph must lower into a packet");
-    let view = target_view(&renderer, WIDTH / 2, HEIGHT / 2);
+    let (texture, view) = target_view(&renderer, WIDTH / 2, HEIGHT / 2);
     let outcome = renderer
-        .render_held_packet_for_tests(&view, WIDTH / 2, HEIGHT / 2, packet)
+        .render_held_packet_for_tests(&texture, &view, WIDTH / 2, HEIGHT / 2, packet)
         .expect("a cancel is a protocol outcome, not a draw error");
     assert_eq!(
         outcome,
@@ -251,9 +247,9 @@ fn cancelled_packet_returns_scene_and_replay_buffers() {
     );
 
     renderer.note_surface_reconfigured();
-    let view = target_view(&renderer, WIDTH, HEIGHT);
+    let (texture, view) = target_view(&renderer, WIDTH, HEIGHT);
     let outcome = renderer
-        .render_held_packet_for_tests(&view, WIDTH, HEIGHT, packet)
+        .render_held_packet_for_tests(&texture, &view, WIDTH, HEIGHT, packet)
         .expect("a cancel is a protocol outcome, not a draw error");
     assert_eq!(
         outcome,
@@ -285,7 +281,7 @@ fn cancelled_packet_returns_scene_and_replay_buffers() {
         "the next build must take the recycled scene from the pool"
     );
     let outcome = renderer
-        .render_held_packet_for_tests(&view, WIDTH, HEIGHT, packet)
+        .render_held_packet_for_tests(&texture, &view, WIDTH, HEIGHT, packet)
         .expect("the next packet must draw");
     assert_eq!(outcome, PresentOutcome::Presented);
 }

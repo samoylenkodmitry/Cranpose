@@ -1,17 +1,6 @@
 mod support;
 
-use cranpose_render_common::{
-    Renderer,
-    graph::{
-        CachePolicy, DrawRunNode, IsolationReasons, LayerNode, PrimitivePhase, ProjectiveTransform,
-        RenderGraph, RenderNode,
-    },
-    raster_cache::LayerRasterCacheHashes,
-};
-use cranpose_ui_graphics::{
-    Brush, Color, CornerRadii, DrawScope, DrawScopeDefault, GraphicsLayer, Point, Rect, Stroke,
-    TileMode,
-};
+use support::graph::*;
 
 const SIZE: u32 = 224;
 
@@ -163,31 +152,7 @@ fn gradient_graph() -> RenderGraph {
     let mut scope =
         DrawScopeDefault::new(cranpose_ui_graphics::Size::new(SIZE as f32, SIZE as f32));
     record_gradient_scene(&mut scope);
-    RenderGraph::new(LayerNode {
-        node_id: None,
-        local_bounds: rect(0.0, 0.0, SIZE as f32, SIZE as f32),
-        transform_to_parent: ProjectiveTransform::identity(),
-        content_offset: Point::default(),
-        motion_context_animated: false,
-        translated_content_context: false,
-        translated_content_offset: Point::default(),
-        scene_children_origin: Point::default(),
-        scene_children_layer_translation: Point::default(),
-        graphics_layer: GraphicsLayer::default(),
-        clip_to_bounds: false,
-        shadow_clip: None,
-        hit_test: None,
-        has_hit_targets: false,
-        has_origin_sinks: false,
-        isolation: IsolationReasons::default(),
-        cache_policy: CachePolicy::None,
-        cache_hashes: LayerRasterCacheHashes::default(),
-        cache_hashes_valid: false,
-        children: vec![RenderNode::DrawRun(DrawRunNode::new(
-            PrimitivePhase::BeforeChildren,
-            scope.into_primitives(),
-        ))],
-    })
+    draw_run_graph(SIZE, scope)
 }
 
 fn render_arm(uniform_stops: bool) -> Option<Vec<u8>> {
@@ -215,28 +180,8 @@ fn render_with_current_toggles() -> Option<(Vec<u8>, u64)> {
             return None;
         }
     };
-    let graph = gradient_graph();
-    let mut passes = Vec::new();
-    for _ in 0..3 {
-        renderer.scene_mut().graph = Some(graph.clone());
-        let captured = renderer
-            .capture_frame(SIZE, SIZE)
-            .unwrap_or_else(|err| panic!("capture failed: {err:?}"));
-        assert_eq!((captured.width, captured.height), (SIZE, SIZE));
-        passes.push(captured.pixels);
-    }
-    assert_eq!(
-        passes[1], passes[2],
-        "same-graph passes must be byte-stable"
-    );
-    Some((passes.pop()?, renderer.device_error_count_for_tests()))
-}
-
-fn distinct_colors(pixels: &[u8]) -> usize {
-    let mut colors: Vec<[u8; 4]> = pixels.as_chunks::<4>().0.to_vec();
-    colors.sort_unstable();
-    colors.dedup();
-    colors.len()
+    let pixels = support::stable_capture(&mut renderer, &gradient_graph(), SIZE);
+    Some((pixels, renderer.device_error_count_for_tests()))
 }
 
 #[test]
@@ -248,7 +193,7 @@ fn inline_gradient_stops_match_the_uniform_stop_walk_byte_for_byte() {
         let (Some(inline), Some(uniform)) = arms else {
             return;
         };
-        let distinct = distinct_colors(&inline);
+        let distinct = support::distinct_colors(&inline);
         if let Ok(dir) = std::env::var("CRANPOSE_PARITY_DUMP_DIR") {
             let rgb: Vec<u8> = inline
                 .as_chunks::<4>()
@@ -267,24 +212,14 @@ fn inline_gradient_stops_match_the_uniform_stop_walk_byte_for_byte() {
             "instanced={instanced}: {distinct} distinct colors — the scene must be a ramp, \
              not a flat fill"
         );
-        assert_eq!(inline.len(), uniform.len());
-        let mut differing = 0usize;
-        let mut worst = 0u8;
-        let mut first = None;
-        for (index, (a, b)) in inline.iter().zip(&uniform).enumerate() {
-            let diff = a.abs_diff(*b);
-            if diff > 0 {
-                differing += 1;
-                worst = worst.max(diff);
-                first.get_or_insert((index / 4 % SIZE as usize, index / 4 / SIZE as usize));
-            }
-        }
-        assert_eq!(
-            differing, 0,
-            "instanced={instanced}: {differing} bytes diverged (worst {worst}, first at \
-             {first:?}) between the inline stop varyings and the uniform stop walk — the \
-             inline path runs the same segment arithmetic over the same stop values, so \
-             any movement is a wrong stop, a wrong segment or a misrouted varying"
+        support::assert_same_bytes(
+            &format!(
+                "instanced={instanced}: inline stop varyings vs the uniform stop walk; the inline \
+                 path runs the same segment arithmetic over the same stop values"
+            ),
+            SIZE,
+            &inline,
+            &uniform,
         );
     }
 }
