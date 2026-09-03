@@ -165,6 +165,7 @@ pub(crate) fn push_layer_shadow(
             texts: vec![],
             blur_radius: ambient_pass.blur_radius,
             clip,
+            rounded_clip: None,
             occluder,
             z_index: 0,
         });
@@ -184,6 +185,7 @@ pub(crate) fn push_layer_shadow(
             texts: vec![],
             blur_radius: spot_pass.blur_radius,
             clip,
+            rounded_clip: None,
             occluder,
             z_index: 0,
         });
@@ -816,6 +818,7 @@ impl TextStyleDrawSink for CompositorScene {
             }],
             blur_radius,
             clip,
+            rounded_clip: None,
             occluder: None,
             z_index: 0,
         });
@@ -2154,6 +2157,7 @@ fn push_shadow_primitive(
                 texts: vec![],
                 blur_radius,
                 clip,
+                rounded_clip: None,
                 occluder: None,
                 z_index: 0,
             });
@@ -2196,6 +2200,7 @@ fn push_shadow_primitive(
                 clip: clip.map_or(Some(transformed_clip), |parent_clip| {
                     parent_clip.intersect(transformed_clip)
                 }),
+                rounded_clip: None,
                 occluder: None,
                 z_index: 0,
             });

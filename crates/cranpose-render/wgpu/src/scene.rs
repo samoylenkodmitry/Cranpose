@@ -11,7 +11,9 @@ use cranpose_ui_graphics::{
     RenderEffect, RoundedCornerShape, Stroke,
 };
 
-use crate::surface_requirements::SurfaceRequirementSet;
+use crate::{
+    surface_executor::backend::LayerSurfaceRoundedClip, surface_requirements::SurfaceRequirementSet,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct SnapAnchor {
@@ -250,6 +252,7 @@ pub(crate) struct ShadowDraw {
     pub texts: Vec<TextDraw>,
     pub blur_radius: f32,
     pub clip: Option<Rect>,
+    pub rounded_clip: Option<LayerSurfaceRoundedClip>,
     pub occluder: Option<Rect>,
     pub z_index: usize,
 }

@@ -6579,11 +6579,7 @@ impl GpuRenderer {
                 shadow.occluder,
             );
         }
-        let rounded_mask = inner_shadow_composite_mask(shadow, root_scale).map(|mut mask| {
-            mask.rect[0] -= viewport_offset[0];
-            mask.rect[1] -= viewport_offset[1];
-            mask
-        });
+        let rounded_mask = shadow_composite_mask(shadow, root_scale, viewport_offset);
         let dest_viewport = Some((
             viewport_offset[0],
             viewport_offset[1],
@@ -11009,11 +11005,7 @@ impl GpuRenderer {
             .clip
             .and_then(|clip| scissor_rect_for_rect(clip, root_scale, width, height));
         let scissor = clip_scissor.or(processing_scissor);
-        let rounded_mask = inner_shadow_composite_mask(shadow, root_scale).map(|mut mask| {
-            mask.rect[0] -= viewport_offset[0];
-            mask.rect[1] -= viewport_offset[1];
-            mask
-        });
+        let rounded_mask = shadow_composite_mask(shadow, root_scale, viewport_offset);
         let dest_viewport = Some((
             viewport_offset[0],
             viewport_offset[1],
@@ -11222,12 +11214,7 @@ impl GpuRenderer {
                     scissor,
                     (width, height),
                 );
-                let rounded_mask =
-                    inner_shadow_composite_mask(shadow, root_scale).map(|mut mask| {
-                        mask.rect[0] -= viewport_offset[0];
-                        mask.rect[1] -= viewport_offset[1];
-                        mask
-                    });
+                let rounded_mask = shadow_composite_mask(shadow, root_scale, viewport_offset);
                 let dest_viewport = Some((
                     viewport_offset[0],
                     viewport_offset[1],
@@ -11341,11 +11328,7 @@ impl GpuRenderer {
             .clip
             .and_then(|clip| scissor_rect_for_rect(clip, root_scale, width, height));
         let scissor = clip_scissor.or(processing_scissor);
-        let rounded_mask = inner_shadow_composite_mask(shadow, root_scale).map(|mut mask| {
-            mask.rect[0] -= viewport_offset[0];
-            mask.rect[1] -= viewport_offset[1];
-            mask
-        });
+        let rounded_mask = shadow_composite_mask(shadow, root_scale, viewport_offset);
         let dest_viewport = (
             viewport_offset[0],
             viewport_offset[1],
@@ -15760,6 +15743,30 @@ fn scissor_rect_for_image(
     scissor_rect_for_layer(image.rect, image.clip, root_scale, width, height)
 }
 
+/// The rounded mask a shadow's composite applies, in the target's pixels: an
+/// inner shadow masks itself to its fill shape, and a shadow lowered out of a
+/// clipped layer masks itself to that layer's rounded clip.
+fn shadow_composite_mask(
+    shadow: &ShadowDraw,
+    root_scale: f32,
+    viewport_offset: [f32; 2],
+) -> Option<RoundedCompositeMask> {
+    if let Some(mut mask) = inner_shadow_composite_mask(shadow, root_scale) {
+        mask.rect[0] -= viewport_offset[0];
+        mask.rect[1] -= viewport_offset[1];
+        return Some(mask);
+    }
+    shadow.rounded_clip.map(|clip| RoundedCompositeMask {
+        rect: [
+            clip.rect.x * root_scale,
+            clip.rect.y * root_scale,
+            clip.rect.width * root_scale,
+            clip.rect.height * root_scale,
+        ],
+        radii: clip.radii.map(|radius| radius * root_scale),
+    })
+}
+
 fn inner_shadow_composite_mask(
     shadow: &ShadowDraw,
     root_scale: f32,
@@ -17078,6 +17085,7 @@ mod tests {
             texts: vec![],
             blur_radius: 8.0,
             clip: None,
+            rounded_clip: None,
             occluder: None,
             z_index: 0,
         }
@@ -21067,6 +21075,7 @@ mod tests {
             texts: Vec::new(),
             blur_radius: 8.0,
             clip: None,
+            rounded_clip: None,
             occluder: None,
             z_index: 1,
         }];
@@ -21120,6 +21129,7 @@ mod tests {
             texts: Vec::new(),
             blur_radius: 8.0,
             clip: None,
+            rounded_clip: None,
             occluder: None,
             z_index: 1,
         }];

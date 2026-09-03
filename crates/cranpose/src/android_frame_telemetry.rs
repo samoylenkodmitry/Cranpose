@@ -32,7 +32,7 @@ fn property_flag(name: &str) -> bool {
     }
 }
 
-const PROPERTY_BACKED_ENV_VARS: [(&str, &str); 54] = [
+const PROPERTY_BACKED_ENV_VARS: [(&str, &str); 55] = [
     ("debug.cranpose.root_direct", "CRANPOSE_ROOT_DIRECT_DIAG"),
     ("debug.cranpose.recomp_diag", "CRANPOSE_RECOMP_DIAG"),
     (
@@ -166,6 +166,11 @@ const PROPERTY_BACKED_ENV_VARS: [(&str, &str); 54] = [
         "debug.cranpose.no_direct_surface",
         "CRANPOSE_NO_DIRECT_SURFACE",
     ),
+    (
+        "debug.cranpose.no_backdrop_flatten",
+        "CRANPOSE_NO_BACKDROP_FLATTEN",
+    ),
+    ("debug.cranpose.no_deferred_run", "CRANPOSE_NO_DEFERRED_RUN"),
     (
         "debug.cranpose.survive_gpu_errors",
         "CRANPOSE_SURVIVE_GPU_ERRORS",

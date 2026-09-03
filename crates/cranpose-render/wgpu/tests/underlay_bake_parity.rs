@@ -52,6 +52,7 @@ fn GradientPage() {
 }
 
 fn cold_capture(bake: bool) -> Option<(Vec<u8>, cranpose_render_wgpu::RenderStatsSnapshot)> {
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_NO_BACKDROP_FLATTEN", Some("1"));
     let (_lock, mut shell) = support::app_shell_for(
         GradientPage,
         FRAME_WIDTH,

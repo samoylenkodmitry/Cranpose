@@ -347,3 +347,174 @@ fn an_overlapping_capture_still_sees_the_glass_below_it() {
          {differing}/{total} sampled pixels differ from the red-less scene"
     );
 }
+
+#[composable]
+#[allow(non_snake_case)]
+fn DeferredContentUnderGlass(overlap: bool) {
+    Box(
+        Modifier::empty()
+            .size_points(FRAME_WIDTH as f32, FRAME_HEIGHT as f32)
+            .background(Color(0.05, 0.06, 0.08, 1.0)),
+        BoxSpec::new(),
+        move || {
+            Box(
+                Modifier::empty()
+                    .offset(24.0, 24.0)
+                    .width(220.0)
+                    .height(88.0)
+                    .rounded_corners(14.0)
+                    .backdrop_effect(chain_glass_effect(220.0, 88.0, Color(0.9, 0.9, 0.95, 0.1))),
+                BoxSpec::new(),
+                || {},
+            );
+            Box(
+                Modifier::empty()
+                    .offset(40.0, 200.0)
+                    .width(200.0)
+                    .height(60.0)
+                    .background(Color(1.0, 0.0, 0.0, 1.0)),
+                BoxSpec::new(),
+                || {},
+            );
+            let y = if overlap { 210.0 } else { 400.0 };
+            Box(
+                Modifier::empty()
+                    .offset(60.0, y)
+                    .width(160.0)
+                    .height(40.0)
+                    .rounded_corners(10.0)
+                    .backdrop_effect(chain_glass_effect(160.0, 40.0, Color(0.9, 0.9, 0.95, 0.1))),
+                BoxSpec::new(),
+                || {},
+            );
+        },
+    );
+}
+
+fn deferred_frame(overlap: bool) -> (cranpose_render_wgpu::CapturedFrame, u32) {
+    let (_lock, renderer) = support::headless_renderer_parts().expect("headless renderer");
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(renderer, root_key, move || {
+        DeferredContentUnderGlass(overlap)
+    });
+    shell.set_viewport(FRAME_WIDTH as f32, FRAME_HEIGHT as f32);
+    shell.set_buffer_size(FRAME_WIDTH, FRAME_HEIGHT);
+    shell.update();
+    let frame = shell
+        .renderer()
+        .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
+        .expect("frame capture should succeed");
+    let passes = shell
+        .renderer()
+        .last_frame_stats()
+        .expect("frame stats")
+        .pass_count;
+    (frame, passes)
+}
+
+#[test]
+fn a_direct_draw_between_two_glasses_is_captured_by_the_glass_that_covers_it() {
+    let (frame, _) = deferred_frame(true);
+    let pixel = |x: usize, y: usize| {
+        let index = (y * FRAME_WIDTH as usize + x) * 4;
+        [
+            frame.pixels[index],
+            frame.pixels[index + 1],
+            frame.pixels[index + 2],
+        ]
+    };
+    let under_glass = pixel(140, 230);
+    let beside_glass = pixel(40 + 8, 205);
+    assert!(
+        beside_glass[0] > 200 && beside_glass[1] < 40,
+        "the red box draws where nothing covers it: {beside_glass:?}"
+    );
+    assert!(
+        under_glass[0] > 120 && under_glass[0] > under_glass[1] + 60,
+        "the glass covering the red box must have captured it after it was drawn, not the \
+         empty page beneath: {under_glass:?}"
+    );
+}
+
+#[test]
+fn direct_draws_between_non_overlapping_glasses_share_one_fused_pass() {
+    let (_, overlapping_passes) = deferred_frame(true);
+    let (_, disjoint_passes) = deferred_frame(false);
+    assert!(
+        disjoint_passes < overlapping_passes,
+        "a draw no later capture reads must ride the frame's single fused pass; disjoint \
+         {disjoint_passes} vs overlapping {overlapping_passes}"
+    );
+}
+
+#[composable]
+#[allow(non_snake_case)]
+fn ShadowedGlassAfterAnotherGlass() {
+    Box(
+        Modifier::empty()
+            .size_points(FRAME_WIDTH as f32, FRAME_HEIGHT as f32)
+            .background(Color(0.92, 0.92, 0.94, 1.0)),
+        BoxSpec::new(),
+        || {
+            Box(
+                Modifier::empty()
+                    .offset(60.0, 20.0)
+                    .width(200.0)
+                    .height(40.0)
+                    .rounded_corners(12.0)
+                    .backdrop_effect(chain_glass_effect(200.0, 40.0, Color(1.0, 1.0, 1.0, 0.05))),
+                BoxSpec::new(),
+                || {},
+            );
+            Box(
+                Modifier::empty()
+                    .offset(60.0, 120.0)
+                    .width(200.0)
+                    .height(90.0)
+                    .rounded_corners(16.0)
+                    .drop_shadow(
+                        cranpose_ui::LayerShape::Rounded(cranpose_ui::RoundedCornerShape::uniform(
+                            16.0,
+                        )),
+                        |scope| {
+                            scope.radius = 24.0;
+                            scope.offset.y = 12.0;
+                            scope.color = Color(0.0, 0.0, 0.0, 0.9);
+                        },
+                    )
+                    .backdrop_effect(chain_glass_effect(200.0, 90.0, Color(1.0, 1.0, 1.0, 0.05))),
+                BoxSpec::new(),
+                || {},
+            );
+        },
+    );
+}
+
+#[test]
+fn a_glass_captures_its_own_drop_shadow_when_that_shadow_is_all_that_is_pending() {
+    let (_lock, renderer) = support::headless_renderer_parts().expect("headless renderer");
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(renderer, root_key, ShadowedGlassAfterAnotherGlass);
+    shell.set_viewport(FRAME_WIDTH as f32, FRAME_HEIGHT as f32);
+    shell.set_buffer_size(FRAME_WIDTH, FRAME_HEIGHT);
+    shell.update();
+    let frame = shell
+        .renderer()
+        .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
+        .expect("frame capture should succeed");
+    let luma = |x: usize, y: usize| {
+        let index = (y * FRAME_WIDTH as usize + x) * 4;
+        (u32::from(frame.pixels[index])
+            + u32::from(frame.pixels[index + 1])
+            + u32::from(frame.pixels[index + 2]))
+            / 3
+    };
+    let bottom_inside = luma(160, 204);
+    let top_inside = luma(160, 126);
+    assert!(
+        top_inside > bottom_inside + 20,
+        "the second glass must read its own shadow off the page below it while the first \
+         glass already consumed everything else pending: top {top_inside} vs bottom \
+         {bottom_inside}"
+    );
+}

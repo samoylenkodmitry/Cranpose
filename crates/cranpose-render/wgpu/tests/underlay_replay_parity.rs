@@ -148,6 +148,7 @@ struct Capture {
 }
 
 fn cold_capture(replay: bool, page: fn(), frames: usize) -> Option<Vec<Capture>> {
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_NO_BACKDROP_FLATTEN", Some("1"));
     let (_lock, mut renderer) = match support::headless_renderer_parts() {
         Ok(parts) => parts,
         Err(err) => {
