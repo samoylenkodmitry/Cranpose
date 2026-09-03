@@ -518,3 +518,144 @@ fn a_glass_captures_its_own_drop_shadow_when_that_shadow_is_all_that_is_pending(
          {bottom_inside}"
     );
 }
+
+const SHADOWED_CARD_COUNT: usize = 3;
+const SHADOWED_CARD_PITCH: f32 = 160.0;
+const SHADOWED_CARD_TOP: f32 = 40.0;
+const SHADOWED_CARD_HEIGHT: f32 = 100.0;
+
+#[composable]
+#[allow(non_snake_case)]
+fn ShadowedGlassColumn(shadowed: bool, scroll: f32) {
+    Box(
+        Modifier::empty()
+            .size_points(FRAME_WIDTH as f32, FRAME_HEIGHT as f32)
+            .background(Color(0.92, 0.92, 0.94, 1.0)),
+        BoxSpec::new(),
+        move || {
+            for index in 0..SHADOWED_CARD_COUNT {
+                let y = SHADOWED_CARD_TOP + index as f32 * SHADOWED_CARD_PITCH - scroll;
+                let modifier = Modifier::empty()
+                    .offset(60.0, y)
+                    .width(220.0)
+                    .height(SHADOWED_CARD_HEIGHT)
+                    .rounded_corners(16.0);
+                let modifier = if shadowed {
+                    modifier.drop_shadow(
+                        cranpose_ui::LayerShape::Rounded(cranpose_ui::RoundedCornerShape::uniform(
+                            16.0,
+                        )),
+                        |scope| {
+                            scope.radius = 24.0;
+                            scope.offset.y = 12.0;
+                            scope.color = Color(0.0, 0.0, 0.0, 0.9);
+                        },
+                    )
+                } else {
+                    modifier
+                };
+                Box(
+                    modifier.backdrop_effect(chain_glass_effect(
+                        220.0,
+                        SHADOWED_CARD_HEIGHT,
+                        Color(1.0, 1.0, 1.0, 0.05),
+                    )),
+                    BoxSpec::new(),
+                    || {},
+                );
+            }
+        },
+    );
+}
+
+fn scrolled_column_frame(
+    shadowed: bool,
+    queue_shadows: bool,
+) -> (cranpose_render_wgpu::CapturedFrame, u32) {
+    let (_lock, renderer) = support::headless_renderer_parts().expect("headless renderer");
+    cranpose_render_wgpu::set_debug_toggle(
+        "CRANPOSE_NO_SHADOW_COMPOSITE_QUEUE",
+        (!queue_shadows).then_some("1"),
+    );
+    let root_key = location_key(file!(), line!(), column!());
+    let scroll = Rc::new(std::cell::Cell::new(0.0f32));
+    let scroll_for_app = Rc::clone(&scroll);
+    let mut shell = AppShell::new(renderer, root_key, move || {
+        ShadowedGlassColumn(shadowed, scroll_for_app.get())
+    });
+    shell.set_viewport(FRAME_WIDTH as f32, FRAME_HEIGHT as f32);
+    shell.set_buffer_size(FRAME_WIDTH, FRAME_HEIGHT);
+    let mut passes = 0;
+    let mut frame = None;
+    for step in 0..WARMUP_FRAMES + 1 {
+        scroll.set(step as f32 * 2.0);
+        shell.update();
+        frame = Some(
+            shell
+                .renderer()
+                .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
+                .expect("frame capture should succeed"),
+        );
+        passes = shell
+            .renderer()
+            .last_frame_stats()
+            .expect("frame stats")
+            .pass_count;
+    }
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_NO_SHADOW_COMPOSITE_QUEUE", None);
+    (frame.expect("a frame was captured"), passes)
+}
+
+#[test]
+fn drop_shadows_under_a_column_of_glass_cards_ride_the_frames_fused_pass() {
+    let (plain, plain_passes) = scrolled_column_frame(false, true);
+    let (shadowed, shadowed_passes) = scrolled_column_frame(true, true);
+    let luma = |frame: &cranpose_render_wgpu::CapturedFrame, x: usize, y: usize| {
+        let index = (y * FRAME_WIDTH as usize + x) * 4;
+        (u32::from(frame.pixels[index])
+            + u32::from(frame.pixels[index + 1])
+            + u32::from(frame.pixels[index + 2]))
+            / 3
+    };
+    let scroll = WARMUP_FRAMES as f32 * 2.0;
+    for index in 0..SHADOWED_CARD_COUNT {
+        let below = (SHADOWED_CARD_TOP + index as f32 * SHADOWED_CARD_PITCH + SHADOWED_CARD_HEIGHT
+            - scroll) as usize
+            + 6;
+        let plain_luma = luma(&plain, 170, below);
+        let shadowed_luma = luma(&shadowed, 170, below);
+        assert!(
+            shadowed_luma + 20 < plain_luma,
+            "card {index} must cast its shadow onto the page: shadowed {shadowed_luma} vs plain \
+             {plain_luma}"
+        );
+    }
+    assert_eq!(
+        shadowed_passes, plain_passes,
+        "a cached drop shadow is a composite the glass above it replays, not a direct draw that \
+         splits the frame's fused pass before every card"
+    );
+}
+
+#[test]
+fn a_shadow_composited_from_its_cache_matches_the_shadow_drawn_in_the_segment() {
+    let (direct, direct_passes) = scrolled_column_frame(true, false);
+    let (queued, queued_passes) = scrolled_column_frame(true, true);
+    let max_delta = direct
+        .pixels
+        .iter()
+        .zip(&queued.pixels)
+        .map(|(a, b)| a.abs_diff(*b))
+        .max()
+        .unwrap_or(0);
+    assert!(
+        max_delta <= 1,
+        "the queued shadow composite must land the same texels as the segment's own composite \
+         of the same cached shadow: max delta {max_delta}"
+    );
+    assert!(
+        queued_passes < direct_passes,
+        "queuing the shadows must remove the per-card run flushes: queued {queued_passes} vs \
+         direct {direct_passes}"
+    );
+}

@@ -1,6 +1,8 @@
 use std::{
     cell::RefCell,
     hash::{Hash, Hasher},
+    ops::Range,
+    rc::Rc,
 };
 
 use cranpose_core::{NodeId, collections::map::HashMap};
@@ -38,11 +40,11 @@ use crate::{
         ChildLayerComposite, CollectedLayer, LoweredChildSource, ResolvedChildSurfaceComposite,
         SceneWindowSource, TranslateBy, build_scene_window, collected_layer_bounds,
         filtered_effect_layer_index, motion_stable_capture_bounds_from_parts,
-        resolved_child_surface_composite, resolved_layer_surface_rect_from_parts, translate_quad,
-        visible_draw_rect,
+        resolved_child_surface_composite, resolved_layer_surface_rect_from_parts,
+        shadow_draw_is_blurred_drop, translate_quad, visible_draw_rect,
     },
     offscreen::OffscreenTarget,
-    render::{has_backdrop_layer_in_range, scissor_rect_for_rect},
+    render::{has_backdrop_layer_in_range, is_in_effect_range, scissor_rect_for_rect},
     scene::{
         BackdropLayer, CompositorScene, DrawOp, DrawOpKind, DrawShape, EffectLayer, ImageDraw,
         SceneBrush, ShadowDraw, SnapAnchor, TextDraw,
@@ -105,6 +107,10 @@ fn prefix_snapshot_enabled() -> bool {
 
 fn deferred_direct_run_enabled() -> bool {
     crate::debug_toggles::debug_toggle("CRANPOSE_NO_DEFERRED_RUN").as_deref() != Some("1")
+}
+
+fn shadow_composite_queue_enabled() -> bool {
+    crate::debug_toggles::debug_toggle("CRANPOSE_NO_SHADOW_COMPOSITE_QUEUE").as_deref() != Some("1")
 }
 
 fn direct_scene_range_coalesce_enabled() -> bool {
@@ -1516,9 +1522,17 @@ fn draw_op_visible_bounds(scene: &CompositorScene, draw_op: DrawOp) -> Option<Re
 /// shadow reaches beyond its shapes by the blur extent, so it is bounded by
 /// its expanded, clipped rectangle rather than skipped like the chunk cache
 /// skips it.
-fn deferred_range_bounds(scene: &CompositorScene, z_start: usize, z_end: usize) -> Option<Rect> {
+fn deferred_range_bounds(
+    scene: &CompositorScene,
+    z_start: usize,
+    z_end: usize,
+    excluded: &[Range<usize>],
+) -> Option<Rect> {
     let mut bounds = None;
     for op in scene_range_draw_ops(&scene.draw_ops, z_start, z_end) {
+        if is_in_effect_range(op.z_index, excluded) {
+            continue;
+        }
         let rect = match op.kind {
             DrawOpKind::Shadow(index) => scene.shadow_draws.get(index).and_then(|shadow| {
                 crate::normalized_scene::shadow_draws_bounds(std::slice::from_ref(shadow))
@@ -2608,6 +2622,7 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
                         &mut pending_shader_composites,
                         &mut pending_shader_load_op,
                         &mut next_load_op,
+                        &deferred.excluded,
                     )?;
                     let backdrop_input_hashes = scene_backdrop_input_hashes(
                         &local_scene,
@@ -2646,7 +2661,7 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
                         &mut pending_shader_composites,
                         &mut pending_shader_load_op,
                         &mut next_load_op,
-                        &mut deferred.run,
+                        &mut deferred,
                         !deferred_direct_run_enabled(),
                     )?;
                     if !deferred_direct_run_enabled() {
@@ -2706,6 +2721,7 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
                     &mut pending_shader_composites,
                     &mut pending_shader_load_op,
                     &mut next_load_op,
+                    &deferred.excluded,
                 )?;
                 flush_pending_clear(backend, surface_view, &mut next_load_op);
                 for shadow in &resolved_child.shadow_draws {
@@ -2968,6 +2984,7 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
                             &mut pending_shader_composites,
                             &mut pending_shader_load_op,
                             &mut next_load_op,
+                            &deferred.excluded,
                         )?;
                         let composite_load_op = next_load_op;
                         composite_layer_surface_to_view(
@@ -3071,6 +3088,7 @@ fn finish_root_ranges<B: SurfaceExecutionBackend>(
                 pending_shader_composites,
                 pending_shader_load_op,
                 next_load_op,
+                &deferred.excluded,
             )?;
             let backdrop_input_hashes = scene_backdrop_input_hashes(
                 local_scene,
@@ -3109,7 +3127,7 @@ fn finish_root_ranges<B: SurfaceExecutionBackend>(
                 pending_shader_composites,
                 pending_shader_load_op,
                 next_load_op,
-                &mut deferred.run,
+                deferred,
                 true,
             )?;
             render_non_effect_range_with_pending_composites(
@@ -3126,6 +3144,7 @@ fn finish_root_ranges<B: SurfaceExecutionBackend>(
                 pending_shader_composites,
                 pending_shader_load_op,
                 next_load_op,
+                &deferred.excluded,
             )?;
         }
     } else {
@@ -3159,6 +3178,7 @@ fn finish_root_ranges<B: SurfaceExecutionBackend>(
                 pending_shader_composites,
                 pending_shader_load_op,
                 next_load_op,
+                &deferred.excluded,
             )?;
         }
     }
@@ -4736,6 +4756,7 @@ struct PendingQueues<'a, 's> {
 struct DeferredDirectRun<'s> {
     scene: &'s CompositorScene,
     run: DirectChunkRunCoalescer,
+    excluded: Vec<Range<usize>>,
 }
 
 impl<'s> DeferredDirectRun<'s> {
@@ -4743,12 +4764,27 @@ impl<'s> DeferredDirectRun<'s> {
         Self {
             scene,
             run: DirectChunkRunCoalescer::default(),
+            excluded: Vec::new(),
         }
+    }
+
+    /// Takes the draw op at `z_index` out of the run: it is drawn as a pending
+    /// composite instead, so segments and dependency checks skip it.
+    fn exclude(&mut self, z_index: usize) {
+        self.excluded.push(z_index..z_index.saturating_add(1));
+    }
+
+    fn next_excluded_after(&self, z_index: usize) -> Option<usize> {
+        self.excluded
+            .iter()
+            .map(|range| range.start)
+            .filter(|start| *start > z_index)
+            .min()
     }
 
     fn intersects(&self, dependency_rect: Rect, boundary: usize) -> bool {
         self.run.peek(boundary).is_some_and(|(start, end)| {
-            deferred_range_bounds(self.scene, start, end)
+            deferred_range_bounds(self.scene, start, end, &self.excluded)
                 .is_some_and(|bounds| rects_intersect(bounds, dependency_rect))
         })
     }
@@ -4787,7 +4823,10 @@ fn flush_deferred_run<B: SurfaceExecutionBackend>(
         pending_shader_composites,
         pending_shader_load_op,
         next_load_op,
-    )
+        &deferred.excluded,
+    )?;
+    deferred.excluded.retain(|range| range.start >= run_end);
+    Ok(())
 }
 
 fn flush_deferred_run_for_dependency<B: SurfaceExecutionBackend>(
@@ -5254,6 +5293,7 @@ fn render_non_effect_range_with_pending_composites<B: SurfaceExecutionBackend>(
     pending_shader_composites: &mut Vec<PendingShaderLayerComposite>,
     pending_shader_load_op: &mut Option<wgpu::LoadOp<wgpu::Color>>,
     next_load_op: &mut wgpu::LoadOp<wgpu::Color>,
+    excluded: &[Range<usize>],
 ) -> Result<(), String> {
     if pending_composites.is_empty() && pending_shader_composites.is_empty() {
         backend.render_non_effect_segment(
@@ -5267,7 +5307,7 @@ fn render_non_effect_range_with_pending_composites<B: SurfaceExecutionBackend>(
             &scene.draw_ops,
             z_start,
             z_end,
-            &[],
+            excluded,
             width,
             height,
             root_scale,
@@ -5298,7 +5338,7 @@ fn render_non_effect_range_with_pending_composites<B: SurfaceExecutionBackend>(
         &scene.draw_ops,
         z_start,
         z_end,
-        &[],
+        excluded,
         &composite_items,
         &shader_composite_items,
         width,
@@ -5811,6 +5851,82 @@ fn serve_or_capture_prefix_snapshot<B: SurfaceExecutionBackend>(
     }
 }
 
+/// Turns every cacheable blurred drop shadow of the range into pending
+/// composites of its cached shadow texture, one per band, and takes the ops
+/// out of the deferred run. A capture above the shadow then replays the
+/// composite into its copy instead of forcing the whole run onto the target.
+#[allow(clippy::too_many_arguments)]
+fn queue_blurred_shadow_composites<B: SurfaceExecutionBackend>(
+    backend: &mut B,
+    scene: &CompositorScene,
+    z_start: usize,
+    z_end: usize,
+    viewport: (u32, u32),
+    root_scale: f32,
+    pending_composites: &mut Vec<PendingLayerComposite>,
+    composite_seq: &mut usize,
+    pending_composite_load_op: &mut Option<wgpu::LoadOp<wgpu::Color>>,
+    next_load_op: &mut wgpu::LoadOp<wgpu::Color>,
+    deferred: &mut DeferredDirectRun<'_>,
+) {
+    if !root_scale.is_finite() || root_scale <= 0.0 || !shadow_composite_queue_enabled() {
+        return;
+    }
+    for op in scene_range_draw_ops(&scene.draw_ops, z_start, z_end) {
+        let DrawOpKind::Shadow(index) = op.kind else {
+            continue;
+        };
+        let Some(shadow) = scene.shadow_draws.get(index) else {
+            continue;
+        };
+        if !shadow_draw_is_blurred_drop(shadow) {
+            continue;
+        }
+        let Some(prepared) =
+            backend.prepare_shadow_composite(shadow, viewport.0, viewport.1, root_scale)
+        else {
+            continue;
+        };
+        deferred.exclude(op.z_index);
+        let (x, y, width, height) = prepared.dest_viewport;
+        let dest_quad = crate::rect_to_quad(Rect {
+            x,
+            y,
+            width,
+            height,
+        });
+        let logical_rect = Rect {
+            x: x / root_scale,
+            y: y / root_scale,
+            width: width / root_scale,
+            height: height / root_scale,
+        };
+        for band in prepared.bands {
+            if pending_composites.is_empty() {
+                *pending_composite_load_op = Some(*next_load_op);
+            }
+            pending_composites.push(PendingLayerComposite {
+                z_index: op.z_index,
+                seq: next_composite_seq(composite_seq),
+                surface: LayerSurface {
+                    target: LayerSurfaceTexture::Cached(Rc::clone(&prepared.source)),
+                    logical_rect,
+                    composite_alpha: 1.0,
+                    blend_mode: BlendMode::SrcOver,
+                    rounded_clip: shadow.rounded_clip,
+                    backdrop: None,
+                    deferred_effect: None,
+                    effect_content_rect: None,
+                    sample_mode: CompositeSampleMode::Nearest,
+                },
+                dest_quad,
+                scissor: Some(band),
+            });
+            *next_load_op = wgpu::LoadOp::Load;
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn render_direct_scene_range_with_pending_composites<B: SurfaceExecutionBackend>(
     backend: &mut B,
@@ -5828,7 +5944,7 @@ fn render_direct_scene_range_with_pending_composites<B: SurfaceExecutionBackend>
     pending_shader_composites: &mut Vec<PendingShaderLayerComposite>,
     pending_shader_load_op: &mut Option<wgpu::LoadOp<wgpu::Color>>,
     next_load_op: &mut wgpu::LoadOp<wgpu::Color>,
-    direct_run: &mut DirectChunkRunCoalescer,
+    deferred: &mut DeferredDirectRun<'_>,
     flush_at_end: bool,
 ) -> Result<(), String> {
     let cache_enabled = direct_scene_range_cache_enabled();
@@ -5847,11 +5963,31 @@ fn render_direct_scene_range_with_pending_composites<B: SurfaceExecutionBackend>
             composite_seq,
             pending_composite_load_op,
             next_load_op,
-            direct_run,
+            &mut deferred.run,
         )?;
     }
+    queue_blurred_shadow_composites(
+        backend,
+        scene,
+        cursor_z,
+        z_end,
+        (width, height),
+        root_scale,
+        pending_composites,
+        composite_seq,
+        pending_composite_load_op,
+        next_load_op,
+        deferred,
+    );
     while cursor_z < z_end {
+        if is_in_effect_range(cursor_z, &deferred.excluded) {
+            cursor_z = cursor_z.saturating_add(1);
+            continue;
+        }
         let mut chunk_end = direct_scene_range_cache_chunk_end(scene, cursor_z, z_end, root_scale);
+        if let Some(next_excluded) = deferred.next_excluded_after(cursor_z) {
+            chunk_end = chunk_end.min(next_excluded);
+        }
         if chunk_end <= cursor_z {
             return Err("direct scene cache chunk did not advance".to_string());
         }
@@ -5886,7 +6022,7 @@ fn render_direct_scene_range_with_pending_composites<B: SurfaceExecutionBackend>
                 next_load_op,
             )?
         {
-            if let Some((run_start, run_end)) = direct_run.flush_at(cursor_z) {
+            if let Some((run_start, run_end)) = deferred.run.flush_at(cursor_z) {
                 render_non_effect_range_with_pending_composites(
                     backend,
                     target_view,
@@ -5901,15 +6037,16 @@ fn render_direct_scene_range_with_pending_composites<B: SurfaceExecutionBackend>
                     pending_shader_composites,
                     pending_shader_load_op,
                     next_load_op,
+                    &deferred.excluded,
                 )?;
             }
             cursor_z = chunk_end;
             continue;
         }
-        direct_run.absorb(cursor_z);
+        deferred.run.absorb(cursor_z);
         cursor_z = chunk_end;
         if !direct_scene_range_coalesce_enabled()
-            && let Some((run_start, run_end)) = direct_run.flush_at(cursor_z)
+            && let Some((run_start, run_end)) = deferred.run.flush_at(cursor_z)
         {
             render_non_effect_range_with_pending_composites(
                 backend,
@@ -5925,10 +6062,11 @@ fn render_direct_scene_range_with_pending_composites<B: SurfaceExecutionBackend>
                 pending_shader_composites,
                 pending_shader_load_op,
                 next_load_op,
+                &deferred.excluded,
             )?;
         }
     }
-    if flush_at_end && let Some((run_start, run_end)) = direct_run.flush_at(z_end) {
+    if flush_at_end && let Some((run_start, run_end)) = deferred.run.flush_at(z_end) {
         render_non_effect_range_with_pending_composites(
             backend,
             target_view,
@@ -5943,6 +6081,7 @@ fn render_direct_scene_range_with_pending_composites<B: SurfaceExecutionBackend>
             pending_shader_composites,
             pending_shader_load_op,
             next_load_op,
+            &deferred.excluded,
         )?;
     }
     Ok(())
@@ -6042,6 +6181,7 @@ fn render_nested_range<B: SurfaceExecutionBackend>(
             queues.shader_composites,
             queues.shader_load_op,
             queues.next_load_op,
+            &queues.deferred.excluded,
         );
     }
     flush_pending_composite_queues_fused(

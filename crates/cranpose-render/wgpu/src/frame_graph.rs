@@ -706,13 +706,12 @@ pub(crate) fn note_render_pass(descriptor: &wgpu::RenderPassDescriptor<'_>) {
     if frame_graph_pass_telemetry_threshold_ms().is_none() {
         return;
     }
-    let label = descriptor.label.unwrap_or("<unlabeled>");
+    let label = fence_profile::bucket_label(descriptor);
     RENDER_PASS_LABELS.with(|labels| {
         let mut labels = labels.borrow_mut();
-        if let Some(entry) = labels.iter_mut().find(|(name, _)| name == label) {
-            entry.1 += 1;
-        } else {
-            labels.push((label.to_owned(), 1));
+        match labels.last_mut() {
+            Some((name, count)) if *name == label => *count += 1,
+            _ => labels.push((label, 1)),
         }
     });
 }

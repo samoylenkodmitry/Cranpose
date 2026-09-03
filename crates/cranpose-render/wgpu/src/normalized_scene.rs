@@ -1535,7 +1535,7 @@ fn reach(rect: Rect, distance: f32) -> Rect {
     }
 }
 
-fn shadow_draw_is_blurred_drop(shadow: &ShadowDraw) -> bool {
+pub(crate) fn shadow_draw_is_blurred_drop(shadow: &ShadowDraw) -> bool {
     shadow.blur_radius > 0.0
         && shadow.texts.is_empty()
         && !shadow.shapes.is_empty()

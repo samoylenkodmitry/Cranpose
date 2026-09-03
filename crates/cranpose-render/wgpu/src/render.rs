@@ -106,7 +106,8 @@ use crate::{
     },
     shaders,
     surface_executor::{
-        CacheAdmission, DevicePixelBounds, LayerSurfaceTexture, SurfaceExecutionBackend,
+        CacheAdmission, DevicePixelBounds, LayerSurfaceTexture, PreparedShadowComposite,
+        SurfaceExecutionBackend,
         apply_backdrop_layer_to_target as execute_apply_backdrop_layer_to_target,
         axis_aligned_quad_rect, backdrop_underlay_is_covered_by_local_content,
         canonicalize_device_coordinate, canonicalized_scaled_quad, canonicalized_scaled_rect,
@@ -472,22 +473,24 @@ struct CachedShadowSurface {
     byte_size: u64,
 }
 
-struct CachedShadowComposite {
-    source: Rc<OffscreenTarget>,
+struct ShadowBandLayout {
     bands: SmallVec<[(u32, u32, u32, u32); 4]>,
     rounded_mask: Option<RoundedCompositeMask>,
-    dest_viewport: Option<(f32, f32, f32, f32)>,
+    dest_viewport: (f32, f32, f32, f32),
 }
 
-impl CachedShadowComposite {
-    fn band_items(&self) -> impl Iterator<Item = CompositeBatchItem<'_>> + '_ {
+impl ShadowBandLayout {
+    fn band_items<'a>(
+        &'a self,
+        source: &'a OffscreenTarget,
+    ) -> impl Iterator<Item = CompositeBatchItem<'a>> + 'a {
         self.bands.iter().map(move |band| CompositeBatchItem {
-            source: &self.source,
+            source,
             alpha: 1.0,
             scissor: Some(*band),
             rounded_mask: self.rounded_mask,
             blend_mode: BlendMode::SrcOver,
-            dest_viewport: self.dest_viewport,
+            dest_viewport: Some(self.dest_viewport),
             source_viewport: None,
             sample_mode: CompositeSampleMode::Nearest,
         })
@@ -498,6 +501,17 @@ impl CachedShadowComposite {
             .iter()
             .map(|(_, _, w, h)| u64::from(*w) * u64::from(*h))
             .sum()
+    }
+}
+
+struct CachedShadowComposite {
+    source: Rc<OffscreenTarget>,
+    layout: ShadowBandLayout,
+}
+
+impl CachedShadowComposite {
+    fn band_items(&self) -> impl Iterator<Item = CompositeBatchItem<'_>> + '_ {
+        self.layout.band_items(&self.source)
     }
 }
 
@@ -6522,13 +6536,16 @@ impl GpuRenderer {
             .map(|cached| cached.target.clone())
     }
 
-    fn cached_shape_shadow_composite(
-        &mut self,
+    /// The surface plan and cache key of a blurred, shape-only drop shadow.
+    /// `None` when the shadow cannot live in the cache: text shadows, zero
+    /// blur, no plan, or shadows switched off.
+    fn shape_shadow_cache_plan(
+        &self,
         shadow: &ShadowDraw,
         width: u32,
         height: u32,
         root_scale: f32,
-    ) -> Option<CachedShadowComposite> {
+    ) -> Option<(ShapeShadowSurfacePlan, ShadowSurfaceCacheKey)> {
         if shadow.blur_radius <= 0.0
             || shadow.shapes.is_empty()
             || !shadow.texts.is_empty()
@@ -6536,7 +6553,6 @@ impl GpuRenderer {
         {
             return None;
         }
-
         let plan = shape_shadow_surface_plan(
             &shadow.shapes,
             shadow.clip,
@@ -6554,23 +6570,80 @@ impl GpuRenderer {
             plan.pixel_radius,
             root_scale,
         )?;
-        let cached = self.cached_shadow_surface(&key)?;
-        let viewport_offset = [plan.source_device_bounds.x, plan.source_device_bounds.y];
+        Some((plan, key))
+    }
 
+    /// The cached composite of a blurred, shape-only drop shadow, rendering the
+    /// shadow into the cache first when it is not resident.
+    fn ensure_cached_shape_shadow<C: FrameCommandRecorder>(
+        &mut self,
+        frame_encoder: &mut C,
+        shadow: &ShadowDraw,
+        width: u32,
+        height: u32,
+        root_scale: f32,
+    ) -> Option<CachedShadowComposite> {
+        let (plan, key) = self.shape_shadow_cache_plan(shadow, width, height, root_scale)?;
+        if let Some(cached) = self.cached_shadow_surface(&key) {
+            return Some(
+                self.cached_shape_shadow_hit(shadow, &plan, cached, width, height, root_scale),
+            );
+        }
+        self.render_shape_shadow_into_cache(frame_encoder, shadow, &plan, key, root_scale);
+        let source = self.cached_shadow_surface(&key)?;
+        Some(CachedShadowComposite {
+            source,
+            layout: self.shadow_band_layout(shadow, &plan, width, height, root_scale),
+        })
+    }
+
+    fn cached_shape_shadow_hit(
+        &self,
+        shadow: &ShadowDraw,
+        plan: &ShapeShadowSurfacePlan,
+        source: Rc<OffscreenTarget>,
+        width: u32,
+        height: u32,
+        root_scale: f32,
+    ) -> CachedShadowComposite {
+        let layout = self.shadow_band_layout(shadow, plan, width, height, root_scale);
+        self.frame_stats
+            .record_shadow_shape_cache_hit(layout.banded_pixels());
+        CachedShadowComposite { source, layout }
+    }
+
+    fn cached_shape_shadow_composite(
+        &mut self,
+        shadow: &ShadowDraw,
+        width: u32,
+        height: u32,
+        root_scale: f32,
+    ) -> Option<CachedShadowComposite> {
+        let (plan, key) = self.shape_shadow_cache_plan(shadow, width, height, root_scale)?;
+        let cached = self.cached_shadow_surface(&key)?;
+        Some(self.cached_shape_shadow_hit(shadow, &plan, cached, width, height, root_scale))
+    }
+
+    fn shadow_band_layout(
+        &self,
+        shadow: &ShadowDraw,
+        plan: &ShapeShadowSurfacePlan,
+        width: u32,
+        height: u32,
+        root_scale: f32,
+    ) -> ShadowBandLayout {
+        let viewport_offset = [plan.source_device_bounds.x, plan.source_device_bounds.y];
+        let dest_viewport = (
+            viewport_offset[0],
+            viewport_offset[1],
+            plan.source_device_bounds.width as f32,
+            plan.source_device_bounds.height as f32,
+        );
         let clip_scissor = shadow
             .clip
             .and_then(|clip| scissor_rect_for_rect(clip, root_scale, width, height));
         let scissor = clip_scissor.or(plan.processing_scissor);
-        let coverage = shadow_composite_coverage(
-            (
-                viewport_offset[0],
-                viewport_offset[1],
-                plan.source_device_bounds.width as f32,
-                plan.source_device_bounds.height as f32,
-            ),
-            scissor,
-            (width, height),
-        );
+        let coverage = shadow_composite_coverage(dest_viewport, scissor, (width, height));
         let bands = shadow_band_scissors(coverage, shadow.occluder, root_scale);
         if cranpose_core::env_flag!("CRANPOSE_SHADOW_BAND_DIAG") {
             eprintln!(
@@ -6579,23 +6652,11 @@ impl GpuRenderer {
                 shadow.occluder,
             );
         }
-        let rounded_mask = shadow_composite_mask(shadow, root_scale, viewport_offset);
-        let dest_viewport = Some((
-            viewport_offset[0],
-            viewport_offset[1],
-            plan.source_device_bounds.width as f32,
-            plan.source_device_bounds.height as f32,
-        ));
-
-        let composite = CachedShadowComposite {
-            source: cached,
+        ShadowBandLayout {
             bands,
-            rounded_mask,
+            rounded_mask: shadow_composite_mask(shadow, root_scale, viewport_offset),
             dest_viewport,
-        };
-        self.frame_stats
-            .record_shadow_shape_cache_hit(composite.banded_pixels());
-        Some(composite)
+        }
     }
 
     fn insert_cached_shadow_surface(
@@ -7550,7 +7611,7 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
             ) else {
                 continue;
             };
-            let band_count = composite.bands.len();
+            let band_count = composite.layout.bands.len();
             if band_count == 0 {
                 self.renderer.frame_stats.record_shadow_fully_occluded();
                 fully_occluded_zs.push(*z_index);
@@ -7710,6 +7771,27 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
             height,
             root_scale,
         );
+    }
+
+    fn prepare_shadow_composite(
+        &mut self,
+        shadow: &ShadowDraw,
+        width: u32,
+        height: u32,
+        root_scale: f32,
+    ) -> Option<PreparedShadowComposite> {
+        let composite = self.renderer.ensure_cached_shape_shadow(
+            self.recorder,
+            shadow,
+            width,
+            height,
+            root_scale,
+        )?;
+        Some(PreparedShadowComposite {
+            source: composite.source,
+            dest_viewport: composite.layout.dest_viewport,
+            bands: composite.layout.bands,
+        })
     }
 
     fn composite_to_view_projective(
@@ -10852,18 +10934,16 @@ impl GpuRenderer {
                 root_scale,
                 self.max_texture_dim(),
             )
-            && self.encode_shape_only_blurred_shadow_draw(
+        {
+            self.encode_shape_only_blurred_shadow_draw(
                 frame_encoder,
                 target_view,
                 shadow,
-                plan.source_device_bounds,
-                plan.pixel_radius,
-                plan.processing_scissor,
+                &plan,
                 width,
                 height,
                 root_scale,
-            )
-        {
+            );
             return;
         }
 
@@ -11179,90 +11259,118 @@ impl GpuRenderer {
         frame_encoder: &mut C,
         target_view: &wgpu::TextureView,
         shadow: &ShadowDraw,
-        device_bounds: DevicePixelBounds,
-        pixel_radius: f32,
-        processing_scissor: Option<(u32, u32, u32, u32)>,
+        plan: &ShapeShadowSurfacePlan,
         width: u32,
         height: u32,
         root_scale: f32,
-    ) -> bool {
-        let bounds_w = device_bounds.width;
-        let bounds_h = device_bounds.height;
-        let viewport_offset = [device_bounds.x, device_bounds.y];
-        let cache_key = shape_shadow_surface_cache_key(
-            &shadow.shapes,
-            &shadow.post_blur_cutouts,
-            &shadow.brushes,
-            device_bounds,
-            pixel_radius,
-            root_scale,
-        );
-
-        if let Some(key) = cache_key {
-            if let Some(cached) = self.cached_shadow_surface(&key) {
-                let clip_scissor = shadow
-                    .clip
-                    .and_then(|clip| scissor_rect_for_rect(clip, root_scale, width, height));
-                let scissor = clip_scissor.or(processing_scissor);
-                let coverage = shadow_composite_coverage(
-                    (
-                        viewport_offset[0],
-                        viewport_offset[1],
-                        bounds_w as f32,
-                        bounds_h as f32,
-                    ),
-                    scissor,
-                    (width, height),
-                );
-                let rounded_mask = shadow_composite_mask(shadow, root_scale, viewport_offset);
-                let dest_viewport = Some((
-                    viewport_offset[0],
-                    viewport_offset[1],
-                    bounds_w as f32,
-                    bounds_h as f32,
-                ));
-                let composite = CachedShadowComposite {
-                    source: cached,
-                    bands: shadow_band_scissors(coverage, shadow.occluder, root_scale),
-                    rounded_mask,
-                    dest_viewport,
-                };
-                self.frame_stats
-                    .record_shadow_shape_cache_hit(composite.banded_pixels());
-                let band_items: SmallVec<[CompositeBatchItem<'_>; 4]> =
-                    composite.band_items().collect();
-                if !band_items.is_empty() {
-                    self.effect_renderer.encode_composite_batch_to_view_pass(
-                        frame_encoder,
-                        &self.device,
-                        target_view,
-                        (width, height),
-                        wgpu::LoadOp::Load,
-                        &band_items,
-                    );
-                    frame_encoder.record_pass();
-                    self.effect_renderer.record_composite_pass();
-                }
-                return true;
-            }
-            self.frame_stats
-                .record_shadow_shape_cache_miss(bounds_w, bounds_h);
-            self.frame_stats.maybe_print_shadow_shape_cache_miss(
-                bounds_w,
-                bounds_h,
-                key.content_hash,
-                pixel_radius,
-                viewport_offset,
-                shadow.shapes.len(),
-                shadow.clip,
+    ) {
+        if let Some(composite) =
+            self.ensure_cached_shape_shadow(frame_encoder, shadow, width, height, root_scale)
+        {
+            self.composite_shadow_bands_to_view(
+                frame_encoder,
+                target_view,
+                (width, height),
+                composite.band_items(),
             );
+            return;
         }
+        if self
+            .shape_shadow_cache_plan(shadow, width, height, root_scale)
+            .is_some()
+        {
+            return;
+        }
+        let Some(source) =
+            self.render_blurred_shape_shadow_source(frame_encoder, shadow, plan, root_scale, false)
+        else {
+            return;
+        };
+        let bounds = plan.source_device_bounds;
+        let layout = self.shadow_band_layout(shadow, plan, width, height, root_scale);
+        self.composite_shadow_bands_to_view(
+            frame_encoder,
+            target_view,
+            (width, height),
+            layout.band_items(&source),
+        );
+        let source_descriptor =
+            self.transient_offscreen_descriptor("Shape Shadow Source", bounds.width, bounds.height);
+        frame_encoder.release_transient_offscreen(source_descriptor, source);
+    }
 
+    fn composite_shadow_bands_to_view<'a, C: FrameCommandRecorder>(
+        &mut self,
+        frame_encoder: &mut C,
+        target_view: &wgpu::TextureView,
+        viewport: (u32, u32),
+        band_items: impl Iterator<Item = CompositeBatchItem<'a>>,
+    ) {
+        let band_items: SmallVec<[CompositeBatchItem<'_>; 4]> = band_items.collect();
+        if band_items.is_empty() {
+            return;
+        }
+        self.effect_renderer.encode_composite_batch_to_view_pass(
+            frame_encoder,
+            &self.device,
+            target_view,
+            viewport,
+            wgpu::LoadOp::Load,
+            &band_items,
+        );
+        frame_encoder.record_pass();
+        self.effect_renderer.record_composite_pass();
+    }
+
+    /// Renders a blurred shape-only shadow into the shadow cache under its
+    /// key. Shadows whose shapes draw nothing are recorded as a miss and skipped.
+    fn render_shape_shadow_into_cache<C: FrameCommandRecorder>(
+        &mut self,
+        frame_encoder: &mut C,
+        shadow: &ShadowDraw,
+        plan: &ShapeShadowSurfacePlan,
+        key: ShadowSurfaceCacheKey,
+        root_scale: f32,
+    ) {
+        let bounds = plan.source_device_bounds;
+        self.frame_stats
+            .record_shadow_shape_cache_miss(bounds.width, bounds.height);
+        self.frame_stats.maybe_print_shadow_shape_cache_miss(
+            bounds.width,
+            bounds.height,
+            key.content_hash,
+            plan.pixel_radius,
+            [bounds.x, bounds.y],
+            shadow.shapes.len(),
+            shadow.clip,
+        );
+        if let Some(source) =
+            self.render_blurred_shape_shadow_source(frame_encoder, shadow, plan, root_scale, true)
+        {
+            self.insert_cached_shadow_surface(key, source);
+        }
+    }
+
+    /// Draws the shadow's shapes into a fresh surface and blurs them in place,
+    /// applying the post-blur cutouts. Retained surfaces feed the cache;
+    /// transient ones are released by the caller. `None` when the shapes draw
+    /// nothing.
+    fn render_blurred_shape_shadow_source<C: FrameCommandRecorder>(
+        &mut self,
+        frame_encoder: &mut C,
+        shadow: &ShadowDraw,
+        plan: &ShapeShadowSurfacePlan,
+        root_scale: f32,
+        retained: bool,
+    ) -> Option<OffscreenTarget> {
+        let bounds = plan.source_device_bounds;
+        let (bounds_w, bounds_h) = (bounds.width, bounds.height);
+        let viewport_offset = [bounds.x, bounds.y];
+        let pixel_radius = plan.pixel_radius;
         let device = self.device.clone();
         let source_descriptor =
             self.transient_offscreen_descriptor("Shape Shadow Source", bounds_w, bounds_h);
-        let source_is_cacheable = cache_key.is_some();
-        let source = if source_is_cacheable {
+        let source = if retained {
             self.acquire_retained_surface(bounds_w, bounds_h)
         } else {
             frame_encoder.acquire_transient_offscreen(&device, source_descriptor)
@@ -11289,30 +11397,26 @@ impl GpuRenderer {
             &mut next_load_op,
         );
         frame_encoder.record_passes(source_outcome.pass_count);
-
         if !source_outcome.rendered_any {
             frame_encoder.release_transient_offscreen(scratch_descriptor, scratch);
-            if source_is_cacheable {
+            if retained {
                 self.defer_offscreen_release(source);
             } else {
                 frame_encoder.release_transient_offscreen(source_descriptor, source);
             }
-            return true;
+            return None;
         }
-
-        {
-            self.effect_renderer.encode_blur_scissored_ping_pong_passes(
-                frame_encoder,
-                &device,
-                &source,
-                &scratch,
-                &source.view,
-                pixel_radius,
-                pixel_radius,
-                TileMode::Decal,
-                None,
-            );
-        }
+        self.effect_renderer.encode_blur_scissored_ping_pong_passes(
+            frame_encoder,
+            &device,
+            &source,
+            &scratch,
+            &source.view,
+            pixel_radius,
+            pixel_radius,
+            TileMode::Decal,
+            None,
+        );
         frame_encoder.record_passes(2);
         self.encode_post_blur_cutout_passes(
             frame_encoder,
@@ -11323,55 +11427,9 @@ impl GpuRenderer {
             viewport_offset,
             root_scale,
         );
-
-        let clip_scissor = shadow
-            .clip
-            .and_then(|clip| scissor_rect_for_rect(clip, root_scale, width, height));
-        let scissor = clip_scissor.or(processing_scissor);
-        let rounded_mask = shadow_composite_mask(shadow, root_scale, viewport_offset);
-        let dest_viewport = (
-            viewport_offset[0],
-            viewport_offset[1],
-            bounds_w as f32,
-            bounds_h as f32,
-        );
-        let coverage = shadow_composite_coverage(dest_viewport, scissor, (width, height));
-        let bands = shadow_band_scissors(coverage, shadow.occluder, root_scale);
-        let band_items: SmallVec<[CompositeBatchItem<'_>; 4]> = bands
-            .iter()
-            .map(|band| CompositeBatchItem {
-                source: &source,
-                alpha: 1.0,
-                scissor: Some(*band),
-                rounded_mask,
-                blend_mode: BlendMode::SrcOver,
-                dest_viewport: Some(dest_viewport),
-                source_viewport: None,
-                sample_mode: CompositeSampleMode::Nearest,
-            })
-            .collect();
-        if !band_items.is_empty() {
-            self.effect_renderer.encode_composite_batch_to_view_pass(
-                frame_encoder,
-                &device,
-                target_view,
-                (width, height),
-                wgpu::LoadOp::Load,
-                &band_items,
-            );
-            frame_encoder.record_pass();
-            self.effect_renderer.record_composite_pass();
-        }
-        drop(band_items);
-
         self.effect_renderer.record_blur_pass();
         frame_encoder.release_transient_offscreen(scratch_descriptor, scratch);
-        if let Some(key) = cache_key {
-            self.insert_cached_shadow_surface(key, source);
-        } else {
-            frame_encoder.release_transient_offscreen(source_descriptor, source);
-        }
-        true
+        Some(source)
     }
 
     fn prepare_shapes_batch<'a, I>(
@@ -14776,7 +14834,7 @@ impl GpuRenderer {
     }
 }
 
-fn is_in_effect_range(z_index: usize, effect_z_ranges: &[Range<usize>]) -> bool {
+pub(crate) fn is_in_effect_range(z_index: usize, effect_z_ranges: &[Range<usize>]) -> bool {
     effect_z_ranges.iter().any(|range| range.contains(&z_index))
 }
 
