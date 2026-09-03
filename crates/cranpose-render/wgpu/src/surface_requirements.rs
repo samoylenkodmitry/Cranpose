@@ -65,6 +65,23 @@ impl SurfaceRequirementSet {
             != 0
     }
 
+    /// Whether the only isolating requirement is the backdrop itself, so the
+    /// layer's own content could render into its parent once the backdrop
+    /// effect has been composited there: no group opacity, blend mode,
+    /// render effect, explicit offscreen, text mask or resampling transform.
+    /// A shape clip is allowed because the caller proves the content stays
+    /// inside the shape.
+    pub(crate) fn isolates_only_for_backdrop(self) -> bool {
+        self.contains(SurfaceRequirement::Backdrop)
+            && (self.bits
+                & !(Self::BACKDROP
+                    | Self::SHAPE_CLIP
+                    | Self::MIXED_DIRECT_CONTENT
+                    | Self::IMMEDIATE_SHADOW
+                    | Self::PIXEL_STABLE_COMPOSITE))
+                == 0
+    }
+
     pub(crate) fn has_renderer_forced_surface(self) -> bool {
         self.contains(SurfaceRequirement::TextMaterialMask)
             || self.contains(SurfaceRequirement::NonTranslationTransform)

@@ -2,7 +2,7 @@ use std::{fmt, mem::size_of, rc::Rc};
 
 use cranpose_foundation::{ModifierNodeChain, NodeCapabilities, PointerEvent};
 use cranpose_ui_graphics::{
-    ColorFilter, EdgeInsets, GraphicsLayer, RenderEffect, RoundedCornerShape,
+    ColorFilter, EdgeInsets, GraphicsLayer, LayerShape, RenderEffect, RoundedCornerShape,
 };
 
 use super::{ModifierChainHandle, Point};
@@ -25,6 +25,7 @@ use crate::{
 #[derive(Default)]
 pub struct ModifierNodeSlices {
     draw_commands: Vec<DrawCommand>,
+    layer_draw_boundary: Option<usize>,
     pointer_inputs: Vec<Rc<dyn Fn(PointerEvent)>>,
     pointer_input_sizes: Vec<Rc<std::cell::Cell<cranpose_ui_graphics::Size>>>,
     click_handlers: Vec<Rc<dyn Fn(Point)>>,
@@ -71,6 +72,7 @@ impl Clone for ModifierNodeSlices {
     fn clone(&self) -> Self {
         Self {
             draw_commands: self.draw_commands.clone(),
+            layer_draw_boundary: self.layer_draw_boundary,
             pointer_inputs: self.pointer_inputs.clone(),
             pointer_input_sizes: self.pointer_input_sizes.clone(),
             click_handlers: self.click_handlers.clone(),
@@ -110,13 +112,27 @@ fn merge_graphics_layers(base: GraphicsLayer, overlay: GraphicsLayer) -> Graphic
         shadow_elevation: overlay.shadow_elevation,
         ambient_shadow_color: overlay.ambient_shadow_color,
         spot_shadow_color: overlay.spot_shadow_color,
-        shape: overlay.shape,
+        shape: merged_layer_shape(&base, &overlay),
         clip: base.clip || overlay.clip,
         compositing_strategy: overlay.compositing_strategy,
         blend_mode: overlay.blend_mode,
         color_filter: compose_color_filters(base.color_filter, overlay.color_filter),
         render_effect: compose_render_effects(base.render_effect, overlay.render_effect),
         backdrop_effect: overlay.backdrop_effect.or(base.backdrop_effect),
+    }
+}
+
+/// The shape of two stacked layers merged into one: the layer that clips
+/// owns it, else the layer that carries the backdrop (its effect covers that
+/// shape), else the later layer, whose default resets it like every other
+/// parent-local field.
+fn merged_layer_shape(base: &GraphicsLayer, overlay: &GraphicsLayer) -> LayerShape {
+    if overlay.clip || (!base.clip && overlay.backdrop_effect.is_some()) {
+        overlay.shape
+    } else if base.clip || base.backdrop_effect.is_some() {
+        base.shape
+    } else {
+        overlay.shape
     }
 }
 
@@ -145,6 +161,35 @@ fn compose_color_filters(
 impl ModifierNodeSlices {
     pub fn draw_commands(&self) -> &[DrawCommand] {
         &self.draw_commands
+    }
+
+    /// How many leading [`draw_commands`](Self::draw_commands) come from
+    /// modifiers chained before the node's graphics layer or clip. Those draw
+    /// around the layer in the parent's space, outside its clip, alpha and
+    /// transform, exactly as an outer `drawBehind` wraps a `graphicsLayer`.
+    pub fn outer_draw_command_count(&self) -> usize {
+        self.layer_draw_boundary.unwrap_or(0)
+    }
+
+    fn insert_background_draw(
+        &mut self,
+        insert_index: Option<usize>,
+        precedes_layer: bool,
+        command: DrawCommand,
+    ) {
+        let insert_index = insert_index.unwrap_or(0).min(self.draw_commands.len());
+        self.draw_commands.insert(insert_index, command);
+        if let Some(boundary) = self.layer_draw_boundary.as_mut()
+            && precedes_layer
+        {
+            *boundary += 1;
+        }
+    }
+
+    fn mark_layer_draw_boundary(&mut self) {
+        if self.layer_draw_boundary.is_none() {
+            self.layer_draw_boundary = Some(self.draw_commands.len());
+        }
     }
 
     pub fn pointer_inputs(&self) -> &[Rc<dyn Fn(PointerEvent)>] {
@@ -340,6 +385,7 @@ impl ModifierNodeSlices {
     /// Resets the slice collection for reuse, retaining vector capacity.
     pub fn clear(&mut self) {
         self.draw_commands.clear();
+        self.layer_draw_boundary = None;
         self.pointer_inputs.clear();
         self.pointer_input_sizes.clear();
         self.click_handlers.clear();
@@ -419,6 +465,7 @@ pub fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut Modi
 
     let mut background_color = None;
     let mut background_insert_index = None::<usize>;
+    let mut background_precedes_layer = false;
     let mut corner_shape = None;
     let mut padding = EdgeInsets::default();
 
@@ -444,6 +491,7 @@ pub fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut Modi
                 if let Some(bg_node) = any.downcast_ref::<BackgroundNode>() {
                     background_color = Some(bg_node.color());
                     background_insert_index = Some(slices.draw_commands.len());
+                    background_precedes_layer = slices.layer_draw_boundary.is_none();
                     if bg_node.shape().is_some() {
                         corner_shape = bg_node.shape();
                     }
@@ -486,6 +534,7 @@ pub fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut Modi
                 }
 
                 if let Some(layer_node) = any.downcast_ref::<GraphicsLayerNode>() {
+                    slices.mark_layer_draw_boundary();
                     slices.push_graphics_layer(
                         layer_node.layer_snapshot(),
                         layer_node.layer_resolver(),
@@ -493,6 +542,7 @@ pub fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut Modi
                 }
 
                 if any.is::<ClipToBoundsNode>() {
+                    slices.mark_layer_draw_boundary();
                     slices.clip_to_bounds = true;
                 }
             }
@@ -565,12 +615,11 @@ pub fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut Modi
             }
         });
 
-        let insert_index = background_insert_index
-            .unwrap_or(0)
-            .min(slices.draw_commands.len());
-        slices
-            .draw_commands
-            .insert(insert_index, DrawCommand::Behind(draw_cmd));
+        slices.insert_background_draw(
+            background_insert_index,
+            background_precedes_layer,
+            DrawCommand::Behind(draw_cmd),
+        );
     }
 }
 

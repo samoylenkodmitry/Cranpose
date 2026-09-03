@@ -507,3 +507,144 @@ as long as the stale offset. Any other animation on the same transition kept
 moving, which is what made it look like a rendering bug. Reproduce with the
 exact user sequence, and when a value looks frozen log the *state value* in the
 draw closure before touching the renderer.
+
+## A "frozen backdrop" verdict from a shift search over a featureless lane
+
+`robot_glass_backdrop_scroll_stability` went red on main at "Remove blur from
+Receipts glass surfaces" and stayed red for two days, reading exactly like a
+stale backdrop cache. It was not: the compositor re-captured the bar's
+backdrop every frame (`CRANPOSE_BACKDROP_DIAG=1` showed a fresh `prepare
+MISS copied=true` per frame) and a cold render of the same scroll position
+matched the incrementally scrolled frame pixel for pixel. The test searched
+for a one-pixel vertical shift inside a 32px lane of the bar; with the blur
+gone that lane held only a card's diagonal gradient, whose vertical change
+per pixel is below one colour step, so the best-fit shift was 0 and the test
+called it "frozen". The blur had been smearing card edges and text into the
+lane, which is the only reason it ever measured a shift. The lens optics that
+followed compress vertical motion under the bar as well, so the "identity
+lane" premise does not hold for this material at all. A shift heuristic on a
+glass output cannot tell "frozen" from "no vertical texture"; the test now
+compares every incremental step against a cold render of the same scroll
+position (remount the tab, scroll straight there, capture), which is the
+cache's actual contract and fails from step 2 when the backdrop cache key is
+deliberately frozen. Reproduce such failures headlessly on the Mac first
+(`robot_glass_backdrop_scroll_headless`): a samarch iteration was queued
+10+ minutes behind CI's host lock, the Mac loop is 90 seconds.
+
+## Ranking GPU cost on the Mate 20 X: no timestamps, so ablate the scene
+
+`debug.cranpose.pass_timing` prints only "adapter lacks TIMESTAMP_QUERY" on
+the Mate 20 X (Mali-G76, Vulkan), and logcat's chatty filter drops most of
+the per-node `[layer-cache-diag]` lines, so neither a pass profile nor a
+per-frame miss list is available there. What worked, at 2.5 minutes per
+build-and-measure round on the showcase copy in the scratchpad: freeze or
+remove one thing at a time and read `present p50`. Baseline 41.5 ms; cards
+without glass 5.5 ms; starfield frozen 6.8 ms; planets frozen 35.8 ms; card
+glass with a trivial shader 38.8 ms; header blur removed 41.2 ms; tab bar
+blur off 43.5 ms. Read together: the glass cards cost 36 ms only while the
+backdrop beneath them changes, and the shader is 3 ms of that. The rest is
+five root backdrop captures plus five underlay bakes per frame, each a flush
+of the pending composites and a copy out of the live composition target,
+which on a tile-based GPU is a full tile store and reload of the 2.4 MP
+target every time. The per-kind `miss_px_by_kind` field on the `[GPU f#]`
+line is the cheap way to see which cache kind is churning without logcat.
+
+## A fence-split pass profile ranks by latency, and one sampled GPU line lies
+
+Two instruments cost an evening on the Mate 20 X. `debug.cranpose.gpu_fence_profile`
+(submit and wait at every pass boundary, minus an empty round trip) charged
+each full-screen composite pass about 11 ms and every small pass under 1 ms,
+so seven root composites looked like 77 ms of a 45 ms frame. Removing six of
+them changed present time by nothing: the profiler measures each pass's
+latency in isolation, and a tiler hides most of a big target's write-back
+and reload behind the next pass's work. Use the profile only to list passes
+per frame and their targets, never to rank them; on this GPU the frame cost
+tracks the pass count (about 0.4 ms of fixed cost each, 11 passes present in
+5 ms, 37 in 30 ms) far more than the pixels. The second trap is the
+`[GPU f#]` line: it is one sampled frame out of sixty, and on this screen
+consecutive frames alternate between a star step (56 passes, 2 backdrop hits)
+and a quiet frame (38 passes, 16 hits), so two runs of the same build read as
+a regression or a fix depending on which frame the sampler landed on. Compare
+several consecutive samples, or `pass_px` averaged over a run, before
+believing a difference.
+
+## `present` is not GPU time: a 50 ms animation period hides a 45 ms GPU frame
+
+The Mate 20 X showcase reported present p50 of 6.8 ms with the stars frozen and
+33 ms with them moving, at identical pass and cache counts, and an evening went
+into "what makes a relowered scene 4x slower on the GPU". Nothing does. A
+whole-frame fence (`debug.cranpose.gpu_fence_profile frame`) puts both at
+50 ms of GPU per frame; the frozen variant only steps its planets, every 50 ms,
+so the GPU finished each frame just before the next one was submitted and
+neither acquire nor present ever blocked. Present and acquire block only by the
+amount the GPU falls behind the app's own frame period, so on an
+animation-paced screen they read as small right up until the GPU is slower
+than the period, then jump. Measure GPU time with the whole-frame fence, or
+compare `pass_px` and the Mac's `CRANPOSE_GPU_PASS_TIMING` occupancy, never
+the present column.
+
+## An uber-shader's OFF features cost more than its ON ones on Mali
+
+The liquid glass fragment program gates a dozen optional features on
+uniforms (loupe, fold, morph shapes, wobble, touch, shadow, content mask,
+optical blur, zoom...). The showcase cards use none of them, and the per-pass
+fence still put the four card passes at 47 ms, ~33 ns per pixel for 19 taps.
+Ablating the live features one at a time never explained it: removing the
+chromatic channels saved 12 ms, removing reflection plus frost 16 ms, and an
+early return before the tail saved 32 ms, none of it proportional to the taps
+removed. Folding the thirteen inactive uniforms to constants brought the same
+passes to 21 ms with byte-identical output. The dead branches were not free:
+they held registers and their uniforms were fetched per fragment. Specialize
+per material with `override` constants (`specialize_liquid_glass`,
+`CRANPOSE_NO_SHADER_SPECIALIZATION` to compare); do not ablate live features
+looking for the cost of dead ones.
+
+## Whole-frame fence under DVFS hides a 26 ms GPU saving
+
+Cutting 36 ms of isolated pass time from the showcase frame moved the
+`gpu_fence_profile frame` reading from ~89 ms to 65-90 ms depending on the
+run: the GPU governor drops its clock as the work shrinks, so wall time per
+frame barely moves until the work is small enough to change the clock's
+target. Judge a device change by scroll fps (`measure.sh ... scroll`, here
+14.3 to 18.5) and by the per-pass inventory (`gpu_fence_profile 1`, stable to
+within a millisecond across runs), not by the whole-frame number.
+
+## A stacked bench on a tiler measures one layer
+
+Drawing the same opaque full-screen fill eight times per frame to amplify a
+shader difference above governor noise measured about one layer: Mali's
+forward pixel kill discards fragments of earlier quads once a later opaque
+quad covers them. Stack translucent layers, or compare single-layer runs
+interleaved several times.
+
+## Flat varyings fetch like uniform loads on Mali
+
+Moving the gradient stops from a per-fragment loop over a dynamically indexed
+uniform array into five flat varyings saved about 3 ms of the 11 ms a
+full-screen three-stop radial costs, not the 11 ms hoped for: reading a flat
+`vec4` varying per fragment costs about what one uniform load did, and a
+gradient-free fragment (`vec4(t)`) ran at the solid-fill floor. The remaining
+cost is the per-fragment data fetch itself; a big fill would need its
+per-shape data in statically indexed uniforms (preloaded per draw) to reach
+the floor.
+
+## A surface configured for rendering only silently keeps the composition copy
+
+Rendering the frame straight into the swapchain image needs that image to be
+samplable and copyable, which the Mate 20 X swapchain supports; the parity
+test passed on the Mac, the phone build still ran the output conversion pass
+because the Android `SurfaceConfiguration` requested `RENDER_ATTACHMENT`
+alone and the runtime check on `texture.usage()` correctly fell back. Check
+the device's per-pass inventory for the pass you removed, and log the
+configured usage next to the capabilities (`Android surface: ... configured
+...`) so the fallback is visible.
+
+## The Android toggle table compiles only for Android
+
+`crates/cranpose/src/android_frame_telemetry.rs` declares its property-backed
+toggle table with an explicit array length. Every host gate (`just test`,
+`just clippy`, the mac CI job) passed with a 56-row table declared as 55 rows,
+because that file is only compiled for the Android target; the first thing
+that caught it was the phone APK build six seconds in. When you add a row,
+bump the length in the same edit and build the APK before pushing: the
+"Android release build" CI job is the only gate that compiles it.

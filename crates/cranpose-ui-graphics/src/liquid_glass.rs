@@ -8,6 +8,152 @@
 
 use crate::{Color, RenderEffect, RuntimeShader};
 
+/// One pipeline-overridable flag of `liquid_glass.wgsl` and the uniform
+/// slots it folds away.
+///
+/// The shader gates each optional feature on a uniform; a raised flag
+/// replaces that uniform read with the feature's inactive value, which is
+/// the value the uniform holds when `inactive` reports true, so the
+/// specialized pipeline computes exactly what the general one did and the
+/// compiler removes the dead feature. See [`specialize_liquid_glass`].
+#[derive(Clone, Copy, Debug)]
+pub struct LiquidGlassSpecialization {
+    /// The `override NAME: bool` declared by the shader.
+    pub flag: &'static str,
+    /// Uniform slots the flag replaces.
+    pub slots: &'static [usize],
+    /// Whether the uniforms hold the feature's inactive value.
+    pub inactive: fn(&[f32]) -> bool,
+}
+
+fn slot(uniforms: &[f32], index: usize) -> f32 {
+    uniforms.get(index).copied().unwrap_or(0.0)
+}
+
+/// Every specialization flag of `liquid_glass.wgsl`, the single table the
+/// shader's `override` declarations, [`specialize_liquid_glass`] and the
+/// contract tests share.
+pub const LIQUID_GLASS_SPECIALIZATIONS: &[LiquidGlassSpecialization] = &[
+    LiquidGlassSpecialization {
+        flag: "GLASS_LOUPE_OFF",
+        slots: &[80],
+        inactive: |u| slot(u, 80) == 0.0,
+    },
+    LiquidGlassSpecialization {
+        flag: "GLASS_FOLD_OFF",
+        slots: &[GLASS_FOLD_DEPTH_UNIFORM],
+        inactive: |u| slot(u, GLASS_FOLD_DEPTH_UNIFORM) == 0.0,
+    },
+    LiquidGlassSpecialization {
+        flag: "GLASS_SCENE_SHAPES_OFF",
+        slots: &[30],
+        inactive: |u| slot(u, 30) == 0.0,
+    },
+    LiquidGlassSpecialization {
+        flag: "GLASS_WOBBLE_OFF",
+        slots: &[32, 26],
+        inactive: |u| slot(u, 32) == 0.0 && slot(u, 26) == 0.0,
+    },
+    LiquidGlassSpecialization {
+        flag: "GLASS_ELLIPSE_BLEND_OFF",
+        slots: &[110],
+        inactive: |u| slot(u, 110) == 0.0,
+    },
+    LiquidGlassSpecialization {
+        flag: "GLASS_STRAIN_OFF",
+        slots: &[106, 107, 108, 109],
+        inactive: |u| {
+            let axis_identity = (slot(u, 106) == 0.0 && slot(u, 107) == 0.0)
+                || (slot(u, 106) == 1.0 && slot(u, 107) == 0.0);
+            let ratio_identity = slot(u, 108) <= 0.0
+                || slot(u, 109) <= 0.0
+                || (slot(u, 108) == 1.0 && slot(u, 109) == 1.0);
+            axis_identity && ratio_identity
+        },
+    },
+    LiquidGlassSpecialization {
+        flag: "GLASS_ZOOM_ANCHOR_OFF",
+        slots: &[
+            GLASS_OPTICAL_ZOOM_ANCHOR_UNIFORM,
+            GLASS_OPTICAL_ZOOM_ANCHOR_UNIFORM + 1,
+        ],
+        inactive: |u| {
+            slot(u, GLASS_OPTICAL_ZOOM_ANCHOR_UNIFORM) == 0.0
+                && slot(u, GLASS_OPTICAL_ZOOM_ANCHOR_UNIFORM + 1) == 0.0
+        },
+    },
+    LiquidGlassSpecialization {
+        flag: "GLASS_TOUCH_OFF",
+        slots: &[120],
+        inactive: |u| slot(u, 120) <= 0.0,
+    },
+    LiquidGlassSpecialization {
+        flag: "GLASS_CONTENT_MASK_OFF",
+        slots: &[112],
+        inactive: |u| slot(u, 112) <= 0.5,
+    },
+    LiquidGlassSpecialization {
+        flag: "GLASS_OPTICAL_BLUR_OFF",
+        slots: &[GLASS_BLUR_RADIUS_UNIFORM],
+        inactive: |u| slot(u, GLASS_BLUR_RADIUS_UNIFORM) <= 0.0,
+    },
+    LiquidGlassSpecialization {
+        flag: "GLASS_SHADOW_OFF",
+        slots: &[102],
+        inactive: |u| slot(u, 102) <= 0.0,
+    },
+    LiquidGlassSpecialization {
+        flag: "GLASS_ZOOM_OFF",
+        slots: &[GLASS_OPTICAL_ZOOM_UNIFORM],
+        inactive: |u| slot(u, GLASS_OPTICAL_ZOOM_UNIFORM) <= 1.0,
+    },
+    LiquidGlassSpecialization {
+        flag: "GLASS_PHYSICAL_REFRACTION_OFF",
+        slots: &[GLASS_PHYSICAL_REFRACTION_DEPTH_ENABLED_UNIFORM],
+        inactive: |u| slot(u, GLASS_PHYSICAL_REFRACTION_DEPTH_ENABLED_UNIFORM) <= 0.5,
+    },
+    LiquidGlassSpecialization {
+        flag: "GLASS_FULL_TRANSMISSION",
+        slots: &[GLASS_TRANSMISSION_REFRACTION_UNIFORM],
+        inactive: |u| slot(u, GLASS_TRANSMISSION_REFRACTION_UNIFORM) >= 1.0,
+    },
+    LiquidGlassSpecialization {
+        flag: "GLASS_DISPERSION_OFF",
+        slots: &[GLASS_DISPERSION_UNIFORM],
+        inactive: |u| slot(u, GLASS_DISPERSION_UNIFORM) <= 0.0,
+    },
+    LiquidGlassSpecialization {
+        flag: "GLASS_ADAPTIVE_FROST_OFF",
+        slots: &[91],
+        inactive: |u| slot(u, 91) <= 0.0,
+    },
+    LiquidGlassSpecialization {
+        flag: "GLASS_INK_OFF",
+        slots: &[127],
+        inactive: |u| slot(u, 127) <= 0.0,
+    },
+];
+
+/// Raises every specialization flag whose feature the shader's uniforms
+/// leave inactive, so the pipeline compiled for this material carries only
+/// the features it uses. Byte-exact: a raised flag substitutes the value the
+/// uniform already holds.
+pub fn specialize_liquid_glass(shader: &mut RuntimeShader) {
+    let uniforms: Vec<f32> = shader.uniforms().to_vec();
+    for specialization in LIQUID_GLASS_SPECIALIZATIONS {
+        if (specialization.inactive)(&uniforms) {
+            shader.set_override(specialization.flag, 1.0);
+        }
+    }
+}
+
+/// Wraps a fully configured `liquid_glass.wgsl` shader as a render effect,
+/// specialized to the features its uniforms enable.
+pub fn liquid_glass_runtime_effect(mut shader: RuntimeShader) -> RenderEffect {
+    specialize_liquid_glass(&mut shader);
+    RenderEffect::runtime_shader(shader)
+}
+
 /// Uniform slot containing wcKSRD-owned backdrop blur reach in physical pixels.
 pub const GLASS_BLUR_RADIUS_UNIFORM: usize = 93;
 /// Uniform slot containing the normalized wcKSRD ray-return exponent.
@@ -194,7 +340,7 @@ pub fn liquid_glass_effect(
     shader.set_float(GLASS_ACTIVITY_UNIFORM, 1.0);
     shader.set_input_padding(liquid_glass_input_padding(spec));
 
-    RenderEffect::runtime_shader(shader)
+    liquid_glass_runtime_effect(shader)
 }
 
 /// How far the shader's refracted and internally reflected samples can reach
@@ -283,7 +429,7 @@ pub fn liquid_loupe_effect(node_size: (f32, f32), spec: &LiquidLoupeSpec) -> Ren
     shader.set_float(90, activity);
     let focus_reach = (spec.focus_offset.0.powi(2) + spec.focus_offset.1.powi(2)).sqrt();
     shader.set_input_padding((focus_reach + 8.0).ceil());
-    RenderEffect::runtime_shader(shader)
+    liquid_glass_runtime_effect(shader)
 }
 
 /// The text edit-menu material measured from the reference: a 44 dp glass
@@ -330,7 +476,7 @@ pub fn liquid_menu_glass_effect(
     };
     shader.set_float(GLASS_BLUR_RADIUS_UNIFORM, wcksrd_blur);
     shader.set_input_padding(12.0 + requested_blur);
-    let optical = RenderEffect::runtime_shader(shader);
+    let optical = liquid_glass_runtime_effect(shader);
     if gaussian_blur > f32::EPSILON {
         RenderEffect::blur_with_edge_treatment(gaussian_blur, crate::TileMode::Mirror).then(optical)
     } else {
@@ -370,6 +516,114 @@ mod tests {
             height: 100.0,
             tint_color: Color(0.5, 0.5, 1.0, 0.1),
         }
+    }
+
+    fn shader_lines_reading(slot: usize) -> Vec<&'static str> {
+        let needles = [format!("get_float({slot}u)"), format!("get_vec2({slot}u)")];
+        LIQUID_GLASS_WGSL
+            .lines()
+            .filter(|line| needles.iter().any(|needle| line.contains(needle)))
+            .collect()
+    }
+
+    #[test]
+    fn every_specialization_flag_is_a_shader_override_and_guards_all_of_its_slot_reads() {
+        for specialization in LIQUID_GLASS_SPECIALIZATIONS {
+            let declaration = format!("override {}: bool = false;", specialization.flag);
+            assert!(
+                LIQUID_GLASS_WGSL.contains(&declaration),
+                "`{declaration}` missing from liquid_glass.wgsl"
+            );
+            let mut guarded_reads = 0;
+            for slot in specialization.slots {
+                for line in shader_lines_reading(*slot) {
+                    assert!(
+                        line.contains(specialization.flag),
+                        "slot {slot} is read outside its `{}` guard: `{}`",
+                        specialization.flag,
+                        line.trim()
+                    );
+                    guarded_reads += 1;
+                }
+            }
+            assert!(
+                guarded_reads > 0,
+                "`{}` guards no uniform read; the flag would fold nothing",
+                specialization.flag
+            );
+        }
+        let declared: Vec<&str> = LIQUID_GLASS_WGSL
+            .lines()
+            .filter_map(|line| line.strip_prefix("override "))
+            .filter_map(|rest| rest.split(':').next())
+            .collect();
+        for flag in &declared {
+            assert!(
+                LIQUID_GLASS_SPECIALIZATIONS
+                    .iter()
+                    .any(|specialization| specialization.flag == *flag),
+                "shader override `{flag}` is missing from LIQUID_GLASS_SPECIALIZATIONS, so \
+                 nothing ever raises it"
+            );
+        }
+        assert_eq!(declared.len(), LIQUID_GLASS_SPECIALIZATIONS.len());
+    }
+
+    fn raised_flags(effect: &RenderEffect) -> Vec<&'static str> {
+        let RenderEffect::Shader { shader } = effect else {
+            panic!("liquid glass must be one runtime shader");
+        };
+        shader.overrides().iter().map(|(flag, _)| *flag).collect()
+    }
+
+    #[test]
+    fn a_plain_pane_raises_every_flag() {
+        let flags = raised_flags(&liquid_glass_effect(
+            &rect(),
+            &LiquidGlassSpec::default(),
+            800.0,
+            600.0,
+        ));
+        let every_flag: Vec<&str> = LIQUID_GLASS_SPECIALIZATIONS
+            .iter()
+            .map(|specialization| specialization.flag)
+            .collect();
+        let mut sorted = every_flag.clone();
+        sorted.sort_unstable();
+        assert_eq!(
+            flags, sorted,
+            "a plain pane uses no optional feature, so every flag folds"
+        );
+    }
+
+    #[test]
+    fn a_blurred_dispersive_loupe_keeps_its_features_live() {
+        let flags = raised_flags(&liquid_loupe_effect(
+            (200.0, 120.0),
+            &LiquidLoupeSpec::default(),
+        ));
+        for live in ["GLASS_LOUPE_OFF", "GLASS_DISPERSION_OFF"] {
+            assert!(
+                !flags.contains(&live),
+                "{live} must stay live for a loupe: {flags:?}"
+            );
+        }
+        assert!(flags.contains(&"GLASS_FOLD_OFF"));
+        assert!(flags.contains(&"GLASS_SCENE_SHAPES_OFF"));
+
+        let blurred = liquid_glass_effect(
+            &rect(),
+            &LiquidGlassSpec {
+                blur_radius: 1.5,
+                ..LiquidGlassSpec::default()
+            },
+            800.0,
+            600.0,
+        );
+        assert!(
+            !raised_flags(&blurred).contains(&"GLASS_OPTICAL_BLUR_OFF"),
+            "an optical blur radius keeps the wcKSRD footprint live"
+        );
     }
 
     #[test]

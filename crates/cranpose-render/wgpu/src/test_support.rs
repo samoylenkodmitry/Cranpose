@@ -12,6 +12,7 @@ pub fn layer_node(
 ) -> LayerNode {
     LayerNode {
         node_id: None,
+        wraps: None,
         local_bounds,
         transform_to_parent,
         motion_context_animated: false,

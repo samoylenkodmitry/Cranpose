@@ -538,21 +538,29 @@ fn first_child_composite_consumes_pending_clear_load_op() {
             && source.contains("composite_load_op,"),
         "first child surface composites should consume the pending clear load-op instead of forcing a standalone clear submit"
     );
-    let nested_underlay_start = source
-        .find(
-            "if child.needs_nested_underlay {\n            flush_pending_composite_queues_fused(\n                backend,\n                &mut pending_composites,",
-        )
-        .expect("nested underlay branch must initialize target before child capture");
-    let nested_underlay_end = source[nested_underlay_start..]
-        .find("let underlay = sample_child_underlay(")
-        .map(|offset| nested_underlay_start + offset)
-        .expect("nested underlay capture should follow target initialization");
-    let nested_underlay_body = &source[nested_underlay_start..nested_underlay_end];
-    let backdrop_body = block_after(&source, "if let Some(backdrop) = &child.backdrop");
+    let underlay_start = source
+        .find("fn sample_child_underlay<")
+        .expect("child underlays must be sampled through the shared helper");
+    let underlay_end = source[underlay_start..]
+        .find("\nstruct ReplayedWrite")
+        .map(|offset| underlay_start + offset)
+        .expect("the underlay helper must be followed by the replay write");
+    let underlay_body = &source[underlay_start..underlay_end];
+    let capture_source_start = source
+        .find("fn prepare_capture_source<")
+        .expect("backdrop captures must decide their source through the shared helper");
+    let capture_source_end = source[capture_source_start..]
+        .find("\n#[allow(clippy::too_many_arguments)]\nfn prepare_cached_backdrop_layer_composite<")
+        .map(|offset| capture_source_start + offset)
+        .expect("the capture source helper must be followed by the prepare function");
+    let capture_source_body = &source[capture_source_start..capture_source_end];
     let shadow_body = block_after(&source, "if !resolved_child.shadow_draws.is_empty()");
     assert!(
-        nested_underlay_body.contains("flush_pending_clear")
-            && backdrop_body.contains("flush_pending_queues_for_backdrop_capture")
+        underlay_body.contains("flush_pending_clear")
+            && underlay_body.contains("flush_pending_queues_for_backdrop_capture")
+            && capture_source_body.contains("flush_pending_queues_for_backdrop_capture")
+            && capture_source_body.contains("flush_pending_clear")
+            && source.matches("prepare_capture_source(").count() >= 2
             && shadow_body.contains("flush_pending_clear"),
         "target readers such as underlays, backdrop snapshots, and shadow draws must still initialize the target before reading/compositing"
     );
@@ -1436,7 +1444,10 @@ fn shadow_temporary_surfaces_are_frame_recorder_transients() {
     assert!(
         shape_body.contains(
             "let scratch = frame_encoder.acquire_transient_offscreen(&device, scratch_descriptor);"
-        ) && shape_body.contains("let source_is_cacheable = cache_key.is_some();")
+        ) && shape_body.contains("let source = if retained {")
+            && shape_body.contains("self.acquire_retained_surface(bounds_w, bounds_h)")
+            && shape_body
+                .contains("frame_encoder.acquire_transient_offscreen(&device, source_descriptor)")
             && shape_body
                 .contains("frame_encoder.release_transient_offscreen(scratch_descriptor, scratch)")
             && shape_body

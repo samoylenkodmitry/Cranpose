@@ -1,35 +1,19 @@
 mod support;
 
-use cranpose_app_shell::AppShell;
-use cranpose_core::location_key;
-use cranpose_ui::{
-    Color, Modifier, RenderEffect, Size, TextStyle, composable,
-    widgets::{Box, BoxSpec, Text},
-};
+use support::page::*;
 
 const FRAME_WIDTH: u32 = 320;
 const FRAME_HEIGHT: u32 = 240;
 const CARD: [f32; 4] = [24.0, 40.0, 272.0, 120.0];
 const BUTTON: [f32; 4] = [236.0, 80.0, 40.0, 40.0];
 
-fn rect_modifier(rect: [f32; 4]) -> Modifier {
-    Modifier::empty().offset(rect[0], rect[1]).size(Size {
-        width: rect[2],
-        height: rect[3],
-    })
-}
-
 #[composable]
 #[allow(non_snake_case)]
 fn GradientPage() {
-    Box(
-        Modifier::empty()
-            .size(Size {
-                width: FRAME_WIDTH as f32,
-                height: FRAME_HEIGHT as f32,
-            })
-            .background(Color(0.08, 0.12, 0.30, 1.0)),
-        BoxSpec::new(),
+    FramePage(
+        FRAME_WIDTH,
+        FRAME_HEIGHT,
+        Color(0.08, 0.12, 0.30, 1.0),
         || {
             Box(
                 rect_modifier([0.0, 0.0, 160.0, 240.0]).background(Color(0.55, 0.20, 0.12, 1.0)),
@@ -68,19 +52,14 @@ fn GradientPage() {
 }
 
 fn cold_capture(bake: bool) -> Option<(Vec<u8>, cranpose_render_wgpu::RenderStatsSnapshot)> {
-    let (_lock, mut renderer) = match support::headless_renderer_parts() {
-        Ok(parts) => parts,
-        Err(err) => {
-            eprintln!("skipping (headless WGPU init failed): {err}");
-            return None;
-        }
-    };
-    renderer.set_underlay_bake_enabled(bake);
-    let root_key = location_key(file!(), line!(), column!());
-    let mut shell = AppShell::new(renderer, root_key, GradientPage);
-    shell.set_viewport(FRAME_WIDTH as f32, FRAME_HEIGHT as f32);
-    shell.set_buffer_size(FRAME_WIDTH, FRAME_HEIGHT);
-    shell.update();
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_NO_BACKDROP_FLATTEN", Some("1"));
+    let (_lock, mut shell) = support::app_shell_for(
+        GradientPage,
+        FRAME_WIDTH,
+        FRAME_HEIGHT,
+        wgpu::TextureFormat::Bgra8UnormSrgb,
+        |renderer| renderer.set_underlay_bake_enabled(bake),
+    )?;
     let frame = shell
         .renderer()
         .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)

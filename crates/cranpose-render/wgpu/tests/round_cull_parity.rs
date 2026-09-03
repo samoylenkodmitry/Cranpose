@@ -94,6 +94,7 @@ fn graph_from(record: impl FnOnce(&mut DrawScopeDefault)) -> RenderGraph {
     };
     RenderGraph::new(LayerNode {
         node_id: None,
+        wraps: None,
         local_bounds: bounds,
         transform_to_parent: ProjectiveTransform::identity(),
         content_offset: Point::default(),

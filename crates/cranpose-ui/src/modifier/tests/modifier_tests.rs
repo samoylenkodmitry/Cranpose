@@ -1052,6 +1052,116 @@ fn first_inner_cutout_x(primitives: &[DrawPrimitive]) -> Option<f32> {
 }
 
 #[test]
+fn a_transform_layer_after_a_shaped_layer_keeps_the_shape() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let shape = LayerShape::Rounded(RoundedCornerShape::uniform(8.0));
+    let modifier = Modifier::empty()
+        .graphics_layer(move || GraphicsLayer {
+            clip: true,
+            shape,
+            ..Default::default()
+        })
+        .graphics_layer(|| GraphicsLayer {
+            scale_x: 1.2,
+            scale_y: 1.2,
+            ..Default::default()
+        });
+    let layer = collect_slices_from_modifier(&modifier)
+        .graphics_layer()
+        .expect("the stacked layers merge into one");
+    assert!(layer.clip);
+    assert_eq!(
+        layer.shape, shape,
+        "a later layer that declares no shape must not turn the clip rectangular"
+    );
+    assert_eq!(layer.scale_x, 1.2);
+
+    let glass_then_scale = collect_slices_from_modifier(
+        &Modifier::empty()
+            .graphics_layer(move || GraphicsLayer {
+                shape,
+                backdrop_effect: Some(RenderEffect::blur(4.0)),
+                ..Default::default()
+            })
+            .graphics_layer(|| GraphicsLayer {
+                scale: 1.1,
+                ..Default::default()
+            }),
+    )
+    .graphics_layer()
+    .expect("the stacked layers merge into one");
+    assert_eq!(
+        glass_then_scale.shape, shape,
+        "the layer carrying the backdrop keeps the shape its effect covers"
+    );
+
+    let reshaped = collect_slices_from_modifier(
+        &Modifier::empty()
+            .graphics_layer(move || GraphicsLayer {
+                shape,
+                ..Default::default()
+            })
+            .graphics_layer(|| GraphicsLayer {
+                clip: true,
+                shape: LayerShape::Rounded(RoundedCornerShape::uniform(2.0)),
+                ..Default::default()
+            }),
+    )
+    .graphics_layer()
+    .expect("the stacked layers merge into one");
+    assert_eq!(
+        reshaped.shape,
+        LayerShape::Rounded(RoundedCornerShape::uniform(2.0)),
+        "a later layer that declares a shape wins"
+    );
+}
+
+#[test]
+fn draw_commands_chained_before_the_graphics_layer_are_outer() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let shape = LayerShape::Rounded(RoundedCornerShape::uniform(8.0));
+    let modifier = Modifier::empty()
+        .drop_shadow(shape, |_| {})
+        .graphics_layer(|| GraphicsLayer {
+            clip: true,
+            ..Default::default()
+        })
+        .background(Color(1.0, 0.0, 0.0, 1.0));
+    let slices = collect_slices_from_modifier(&modifier);
+
+    assert_eq!(slices.draw_commands().len(), 2);
+    assert_eq!(
+        slices.outer_draw_command_count(),
+        1,
+        "the shadow precedes the layer and draws around it; the background follows it and is \
+         clipped by it"
+    );
+
+    let inner_only = collect_slices_from_modifier(
+        &Modifier::empty()
+            .graphics_layer(|| GraphicsLayer {
+                clip: true,
+                ..Default::default()
+            })
+            .drop_shadow(shape, |_| {}),
+    );
+    assert_eq!(inner_only.outer_draw_command_count(), 0);
+
+    let background_before_clip = collect_slices_from_modifier(
+        &Modifier::empty()
+            .background(Color(1.0, 0.0, 0.0, 1.0))
+            .clip_to_bounds(),
+    );
+    assert_eq!(background_before_clip.outer_draw_command_count(), 1);
+    assert_eq!(
+        collect_slices_from_modifier(&Modifier::empty().drop_shadow(shape, |_| {}))
+            .outer_draw_command_count(),
+        0,
+        "without a layer or clip nothing is outer"
+    );
+}
+
+#[test]
 fn drop_shadow_cutout_knocks_element_shape_out_of_silhouette() {
     let _app_context = crate::render_state::app_context_test_scope();
     let modifier = Modifier::empty().drop_shadow_value(

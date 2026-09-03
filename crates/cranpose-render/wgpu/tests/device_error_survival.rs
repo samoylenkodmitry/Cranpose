@@ -43,25 +43,21 @@ fn direct_graph() -> RenderGraph {
     ))
 }
 
-fn target_view(renderer: &support::LockedRenderer, width: u32, height: u32) -> wgpu::TextureView {
+fn target_view(
+    renderer: &support::LockedRenderer,
+    width: u32,
+    height: u32,
+) -> (wgpu::Texture, wgpu::TextureView) {
     let device = renderer
         .try_device()
         .expect("renderer GPU device was not initialized");
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("Device Error Survival Render Target"),
-        size: wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Bgra8UnormSrgb,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-        view_formats: &[],
-    });
-    texture.create_view(&wgpu::TextureViewDescriptor::default())
+    support::render_target(
+        device,
+        width,
+        height,
+        wgpu::TextureFormat::Bgra8UnormSrgb,
+        wgpu::TextureUsages::RENDER_ATTACHMENT,
+    )
 }
 
 #[test]
@@ -74,13 +70,13 @@ fn uncaptured_device_error_poisons_one_frame_then_recovers() {
         }
     };
     renderer.scene_mut().graph = Some(direct_graph());
-    let view = target_view(&renderer, WIDTH, HEIGHT);
+    let (texture, view) = target_view(&renderer, WIDTH, HEIGHT);
 
     let packet = renderer
         .build_frame_packet_for_tests(WIDTH, HEIGHT)
         .expect("direct graph must lower into a packet");
     let outcome = renderer
-        .render_held_packet_for_tests(&view, WIDTH, HEIGHT, packet)
+        .render_held_packet_for_tests(&texture, &view, WIDTH, HEIGHT, packet)
         .expect("the pre-error packet must draw");
     assert_eq!(outcome, PresentOutcome::Presented);
     assert_eq!(
@@ -115,7 +111,7 @@ fn uncaptured_device_error_poisons_one_frame_then_recovers() {
         .build_frame_packet_for_tests(WIDTH, HEIGHT)
         .expect("the post-error build must lower normally");
     let outcome = renderer
-        .render_held_packet_for_tests(&view, WIDTH, HEIGHT, packet)
+        .render_held_packet_for_tests(&texture, &view, WIDTH, HEIGHT, packet)
         .expect("a device-error skip is a protocol outcome, not a draw error");
     assert_eq!(
         outcome,
@@ -131,7 +127,7 @@ fn uncaptured_device_error_poisons_one_frame_then_recovers() {
         .build_frame_packet_for_tests(WIDTH, HEIGHT)
         .expect("the recovery build must lower normally");
     let outcome = renderer
-        .render_held_packet_for_tests(&view, WIDTH, HEIGHT, packet)
+        .render_held_packet_for_tests(&texture, &view, WIDTH, HEIGHT, packet)
         .expect("the recovery packet must draw");
     assert_eq!(
         outcome,

@@ -948,6 +948,7 @@ mod tests {
         let mut scene = Scene::new();
         scene.graph = Some(RenderGraph::new(LayerNode {
             node_id: None,
+            wraps: None,
             local_bounds: Rect {
                 x: 0.0,
                 y: 0.0,

@@ -83,6 +83,7 @@ fn scene_graph(frame: u32, bg: Color, vignette: Color, glow: Option<Color>) -> R
     };
     RenderGraph::new(LayerNode {
         node_id: None,
+        wraps: None,
         local_bounds: bounds,
         transform_to_parent: ProjectiveTransform::identity(),
         content_offset: Point::default(),

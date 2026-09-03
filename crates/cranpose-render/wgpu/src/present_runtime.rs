@@ -364,6 +364,7 @@ impl PresentState {
         });
         let mut returns = RenderReturns::default();
         let result = self.gpu_renderer.render(
+            &frame.texture,
             &view,
             width,
             height,
@@ -491,6 +492,7 @@ impl PresentState {
         let after_acquire_ns = self.now();
         let mut returns = RenderReturns::default();
         let result = self.gpu_renderer.render(
+            &texture,
             &view,
             width,
             height,

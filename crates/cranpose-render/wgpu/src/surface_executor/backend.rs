@@ -3,6 +3,7 @@ use std::{ops::Range, rc::Rc};
 use cranpose_core::NodeId;
 use cranpose_render_common::{graph::LayerNode, raster_cache::LayerRasterCacheKey};
 use cranpose_ui_graphics::{BlendMode, Brush, LayerShape, Rect, RenderEffect, RuntimeShader};
+use smallvec::SmallVec;
 
 use crate::{
     effect_renderer::{
@@ -94,6 +95,15 @@ impl LayerSurfaceRoundedClip {
     }
 }
 
+/// A blurred drop shadow resident in the shadow cache, ready to composite:
+/// the texture, the destination it maps to in target pixels, the scissor
+/// bands that skip the occluded interior and the rounded mask it carries.
+pub(crate) struct PreparedShadowComposite {
+    pub(crate) source: Rc<OffscreenTarget>,
+    pub(crate) dest_viewport: (f32, f32, f32, f32),
+    pub(crate) bands: SmallVec<[(u32, u32, u32, u32); 4]>,
+}
+
 pub(crate) enum LayerSurfaceTexture {
     Owned(OffscreenTarget),
     Cached(Rc<OffscreenTarget>),
@@ -153,6 +163,11 @@ pub(crate) trait SurfaceExecutionBackend {
     /// `CRANPOSE_DISABLE_UNDERLAY_BAKE` and through
     /// [`crate::WgpuRenderer::set_underlay_bake_enabled`].
     fn underlay_bake_enabled(&self) -> bool;
+    /// Whether the pending composites overlapping a baked underlay copy are
+    /// replayed into that copy instead of flushed to the parent target first.
+    /// Off under `CRANPOSE_DISABLE_UNDERLAY_REPLAY` and through
+    /// [`crate::WgpuRenderer::set_underlay_replay_enabled`].
+    fn underlay_replay_enabled(&self) -> bool;
     fn insert_cached_layer_surface(
         &mut self,
         key: LayerRasterCacheKey,
@@ -235,6 +250,16 @@ pub(crate) trait SurfaceExecutionBackend {
         height: u32,
         root_scale: f32,
     );
+    /// Renders a blurred drop shadow into its cached texture when it is not
+    /// there yet and describes how to composite it, so the walk can queue it
+    /// with the pending composites instead of drawing it into the target.
+    fn prepare_shadow_composite(
+        &mut self,
+        shadow: &ShadowDraw,
+        width: u32,
+        height: u32,
+        root_scale: f32,
+    ) -> Option<PreparedShadowComposite>;
     #[allow(clippy::too_many_arguments)]
     fn composite_to_view_projective(
         &mut self,

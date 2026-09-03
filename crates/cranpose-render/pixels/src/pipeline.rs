@@ -1316,6 +1316,7 @@ mod tests {
     fn snapped_text_leaf_root(animated: bool, translated_content_context: bool) -> RenderGraph {
         let text_leaf = LayerNode {
             node_id: Some(77),
+            wraps: None,
             local_bounds: Rect {
                 x: 0.0,
                 y: 0.0,
@@ -1406,6 +1407,7 @@ mod tests {
 
         RenderGraph::new(LayerNode {
             node_id: None,
+            wraps: None,
             local_bounds: Rect {
                 x: 0.0,
                 y: 0.0,
@@ -1536,6 +1538,7 @@ mod tests {
     fn build_raster_scene_uses_graph_transform_to_parent() {
         let graph = RenderGraph::new(LayerNode {
             node_id: None,
+            wraps: None,
             local_bounds: Rect {
                 x: 0.0,
                 y: 0.0,
@@ -1561,6 +1564,7 @@ mod tests {
             cache_hashes_valid: false,
             children: vec![RenderNode::Layer(Box::new(LayerNode {
                 node_id: None,
+                wraps: None,
                 local_bounds: Rect {
                     x: 0.0,
                     y: 0.0,

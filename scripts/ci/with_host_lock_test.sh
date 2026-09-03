@@ -234,6 +234,30 @@ case_writer_is_not_starved_by_a_reader_stream() {
 
 # --- run -------------------------------------------------------------------
 
+case_nested_shared_take_inside_a_shared_holder_does_not_wait_for_a_queued_exclusive() {
+    local max_secs=4 elapsed
+    local started=$SECONDS
+    with_lock --shared bash -c '
+        "$0" --exclusive true &
+        sleep 1
+        "$0" --shared true
+    ' "$WITH_HOST_LOCK" &
+    local holder_pid=$!
+    local acquired=1
+    wait "$holder_pid" || acquired=0
+    elapsed=$((SECONDS - started))
+    if [ "$acquired" = 0 ]; then
+        fail "a nested shared take inside a shared holder does not deadlock behind a queued exclusive" \
+            "the nested take failed after ${elapsed}s" \
+            "the exclusive waiter holds the turnstile until the outer holder releases, and the outer holder waits on the nested take"
+    elif [ "$elapsed" -le "$max_secs" ]; then
+        pass "a nested shared take inside a shared holder does not deadlock behind a queued exclusive (${elapsed}s)"
+    else
+        fail "a nested shared take inside a shared holder does not deadlock behind a queued exclusive" \
+            "took ${elapsed}s, over the ${max_secs}s bound"
+    fi
+}
+
 echo "host lock suite: locks under $SCRATCH_DIR"
 
 case_default_paths
@@ -243,6 +267,7 @@ if command -v flock >/dev/null 2>&1; then
     case_lock_lands_on_the_overridden_file
     case_exclusive_waits_for_a_shared_holder
     case_writer_is_not_starved_by_a_reader_stream
+    case_nested_shared_take_inside_a_shared_holder_does_not_wait_for_a_queued_exclusive
 else
     skip "the lock cases" "no flock(1) on this host, so the wrapper runs unlocked here"
 fi

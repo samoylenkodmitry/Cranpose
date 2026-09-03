@@ -13,7 +13,7 @@
 //
 // LOCATION DISCIPLINE — the rule this file exists to encode: the surviving
 // varyings KEEP the location indices they hold in `VertexOutput`, and
-// locations 5 and 9 stay VACANT. The first attempt at this trim (16a5d312,
+// locations 5, 9 and 10-14 stay VACANT. The first attempt at this trim (16a5d312,
 // reverted in 371dd06a) renumbered the survivors densely (clip_rect 6 -> 5,
 // stroke_params 7 -> 6, arc_params 8 -> 7) and a watch died with it on; the
 // crash was never diagnosed and the renumbering was suspect #1. With the
@@ -36,8 +36,9 @@
 //   against the occluder like every other content pipeline.
 
 // The solid pipelines' inter-stage interface: `VertexOutput` minus
-// `gradient_params` (its location 5 left vacant) and `brush` (its location 9
-// left vacant). See LOCATION DISCIPLINE above before touching an index.
+// `gradient_params` (its location 5 left vacant), `brush` (its location 9
+// left vacant) and the inline gradient stops (locations 10-14 left vacant).
+// See LOCATION DISCIPLINE above before touching an index.
 struct VertexOutputSolid {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) color: vec4<f32>,
@@ -50,6 +51,7 @@ struct VertexOutputSolid {
     @location(7) @interpolate(flat) stroke_params: vec4<f32>,
     @location(8) @interpolate(flat) arc_params: vec4<f32>,
     // location 9 is `brush`'s slot in `VertexOutput` — VACANT.
+    // locations 10-14 are the inline gradient stops' slots — VACANT.
 }
 
 // BIT-EXACTNESS REQUIREMENT: every expression below is copied verbatim from

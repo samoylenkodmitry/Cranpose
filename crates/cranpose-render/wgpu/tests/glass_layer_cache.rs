@@ -253,10 +253,10 @@ fn an_animated_overlay_leaves_still_glass_rows_fully_cached() {
         let (pulse, drift) = animation(WARMUP_FRAMES + frame_index);
         let stats = harness.frame(0.0, pulse, drift);
         assert_eq!(
-            stats.misses, 2,
-            "an animated overlay re-renders exactly its own content and its own \
-             backdrop blur; anything more means a still row lost its cache \
-             (frame {frame_index}): {stats:?}"
+            stats.misses, 1,
+            "an animated overlay re-renders exactly its own backdrop blur, its content \
+             draws straight into the page; anything more means a still row lost its \
+             cache (frame {frame_index}): {stats:?}"
         );
         assert!(
             stats.hits >= 12,

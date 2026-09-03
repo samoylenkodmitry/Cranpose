@@ -761,8 +761,15 @@ where
     /// Note: Cursor blink is now timer-based and uses WaitUntil scheduling, not continuous redraw.
     pub fn needs_redraw(&self) -> bool {
         let app_context = Rc::clone(&self.app_context);
-        app_context
-            .enter(|| self.has_stale_pixels_in_context() || self.renderer.needs_frame_warmup())
+        app_context.enter(|| self.has_stale_pixels_in_context() || self.renderer_warmup_due())
+    }
+
+    /// A renderer warmup is a frame rendered only so caches see their content
+    /// a second time. While a frame callback is armed the app is about to
+    /// produce a frame anyway, and rendering the same scene again first would
+    /// double every animated frame's cost for entries the next frame replaces.
+    fn renderer_warmup_due(&self) -> bool {
+        self.renderer.needs_frame_warmup() && !self.runtime.runtime_handle().has_frame_callbacks()
     }
 
     /// Marks the shell as dirty, indicating a redraw is needed.
@@ -904,7 +911,7 @@ where
         let needs_frame = self.is_dirty
             || self.should_render()
             || self.has_active_pointer_gesture()
-            || self.renderer.needs_frame_warmup();
+            || self.renderer_warmup_due();
         FrameSchedule {
             needs_update,
             needs_frame,

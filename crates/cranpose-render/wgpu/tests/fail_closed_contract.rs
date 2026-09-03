@@ -590,7 +590,7 @@ fn cancelled_packet_requeues_feed_releases() {
     });
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
     let outcome = renderer
-        .render_held_packet_for_tests(&view, SIZE, SIZE, packet)
+        .render_held_packet_for_tests(&texture, &view, SIZE, SIZE, packet)
         .expect("a cancel is a protocol outcome, not a draw error");
     assert_eq!(
         outcome,

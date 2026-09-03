@@ -197,6 +197,60 @@ mod tests {
         }
     }
 
+    const GLES_VARYING_VECTOR_FLOOR: u32 = 15;
+
+    fn fragment_input_locations(source: &str, entry_point: &str) -> Vec<u32> {
+        let module = naga::front::wgsl::parse_str(source).expect("shader must parse");
+        let entry = module
+            .entry_points
+            .iter()
+            .find(|entry| entry.name == entry_point)
+            .unwrap_or_else(|| panic!("{entry_point} missing"));
+        let mut locations = Vec::new();
+        for argument in &entry.function.arguments {
+            match &module.types[argument.ty].inner {
+                naga::TypeInner::Struct { members, .. } => {
+                    for member in members {
+                        if let Some(naga::Binding::Location { location, .. }) = member.binding {
+                            locations.push(location);
+                        }
+                    }
+                }
+                _ => {
+                    if let Some(naga::Binding::Location { location, .. }) = argument.binding {
+                        locations.push(location);
+                    }
+                }
+            }
+        }
+        locations.sort_unstable();
+        locations
+    }
+
+    #[test]
+    fn shape_fragment_inputs_fit_the_gles_varying_floor() {
+        for (source, entry_point) in [
+            (super::SHADER.to_string(), "fs_main"),
+            (super::SHADER.to_string(), "fs_solid"),
+            (
+                format!("{}\n{}", super::SHADER, super::SOLID_TRIM_APPENDIX),
+                "fs_solid_trim",
+            ),
+        ] {
+            let locations = fragment_input_locations(&source, entry_point);
+            let highest = locations.last().copied().expect("fragment inputs");
+            assert!(
+                highest < GLES_VARYING_VECTOR_FLOOR,
+                "{entry_point} reads location {highest}; GLSL ES 3.0 only guarantees \
+                 {GLES_VARYING_VECTOR_FLOOR} varying vectors, so every location must \
+                 stay below it: {locations:?}"
+            );
+            let mut deduplicated = locations.clone();
+            deduplicated.dedup();
+            assert_eq!(deduplicated, locations, "{entry_point} reuses a location");
+        }
+    }
+
     #[test]
     fn shape_shader_declares_the_stroke_and_arc_parameters() {
         for needle in [

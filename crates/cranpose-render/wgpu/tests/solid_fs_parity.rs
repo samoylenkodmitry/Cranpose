@@ -98,6 +98,7 @@ fn graph_for(with_gradient: bool) -> RenderGraph {
     };
     RenderGraph::new(LayerNode {
         node_id: None,
+        wraps: None,
         local_bounds: bounds,
         transform_to_parent: ProjectiveTransform::identity(),
         content_offset: Point::default(),

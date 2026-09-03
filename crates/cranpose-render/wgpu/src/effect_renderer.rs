@@ -1916,17 +1916,20 @@ impl EffectRenderer {
             .filter(|(_, _, width, height)| *width > 0.0 && *height > 0.0)
             .map(|(_, _, width, height)| (source_span.0 / width, source_span.1 / height))
             .unwrap_or((0.0, 0.0));
+        let sample_mode = resolve_composite_sample_mode(
+            options.sample_mode,
+            viewport_blit_is_integer_unit_mapping(
+                options.dest_viewport,
+                options.source_viewport,
+                (source.width as f32, source.height as f32),
+            ),
+        );
         BlitUniforms {
             alpha: [options.alpha.clamp(0.0, 1.0), 0.0, 0.0, 0.0],
             mask_rect,
             mask_radii,
             mask_enabled,
-            sampling: [
-                composite_sampling_mode_value(options.sample_mode),
-                0.0,
-                0.0,
-                0.0,
-            ],
+            sampling: [composite_sampling_mode_value(sample_mode), 0.0, 0.0, 0.0],
             dest_viewport: [
                 dest_viewport_uniform.0,
                 dest_viewport_uniform.1,
@@ -2147,7 +2150,10 @@ impl EffectRenderer {
             ],
             alpha: [item.alpha.clamp(0.0, 1.0), 0.0, 0.0, 0.0],
             sampling: [
-                composite_sampling_mode_value(item.sample_mode),
+                composite_sampling_mode_value(resolve_composite_sample_mode(
+                    item.sample_mode,
+                    inverse_is_integer_unit_translation(item.inverse),
+                )),
                 0.0,
                 0.0,
                 0.0,
@@ -2307,7 +2313,15 @@ impl EffectRenderer {
                 0.0,
             ],
             alpha: [alpha.clamp(0.0, 1.0), 0.0, 0.0, 0.0],
-            sampling: [composite_sampling_mode_value(sample_mode), 0.0, 0.0, 0.0],
+            sampling: [
+                composite_sampling_mode_value(resolve_composite_sample_mode(
+                    sample_mode,
+                    inverse_is_integer_unit_translation(inverse_matrix),
+                )),
+                0.0,
+                0.0,
+                0.0,
+            ],
         };
 
         let sampler = self.sampler_for_mode(sample_mode);
@@ -2403,11 +2417,155 @@ fn composite_sampling_mode_value(sample_mode: CompositeSampleMode) -> f32 {
     }
 }
 
+fn keep_box4_resolve() -> bool {
+    crate::debug_toggles::debug_toggle("CRANPOSE_KEEP_BOX4").as_deref() == Some("1")
+}
+
+/// Lowers a box resolve to a single texel fetch when the two are the same
+/// bytes: at a unit scale with integer source and destination origins every
+/// destination pixel centre lands on a source texel centre, the box spans
+/// exactly that texel with weight one, and the resolve's 6x6 texel walk
+/// returns it unchanged. `CRANPOSE_KEEP_BOX4` keeps the walk for comparison.
+fn resolve_composite_sample_mode(
+    sample_mode: CompositeSampleMode,
+    integer_unit_mapping: bool,
+) -> CompositeSampleMode {
+    if sample_mode == CompositeSampleMode::Box4 && integer_unit_mapping && !keep_box4_resolve() {
+        CompositeSampleMode::Nearest
+    } else {
+        sample_mode
+    }
+}
+
+fn is_integer(value: f32) -> bool {
+    value.is_finite() && value.fract() == 0.0
+}
+
+/// Whether a viewport blit maps destination pixels onto source texels one to
+/// one with integer origins, so its box resolve is an exact texel fetch.
+fn viewport_blit_is_integer_unit_mapping(
+    dest_viewport: Option<(f32, f32, f32, f32)>,
+    source_viewport: Option<(f32, f32, f32, f32)>,
+    source_size: (f32, f32),
+) -> bool {
+    let Some((dest_x, dest_y, dest_w, dest_h)) = dest_viewport else {
+        return false;
+    };
+    let (source_x, source_y, source_w, source_h) = source_viewport
+        .filter(|(_, _, width, height)| *width > 0.0 && *height > 0.0)
+        .unwrap_or((0.0, 0.0, source_size.0, source_size.1));
+    dest_w > 0.0
+        && dest_h > 0.0
+        && dest_w == source_w
+        && dest_h == source_h
+        && [dest_x, dest_y, source_x, source_y]
+            .iter()
+            .all(|v| is_integer(*v))
+}
+
+/// Whether a projective composite's destination-to-source matrix is a pure
+/// integer translation at unit scale, so its box resolve is an exact texel
+/// fetch.
+fn inverse_is_integer_unit_translation(inverse: [[f32; 3]; 3]) -> bool {
+    inverse[0][0] == 1.0
+        && inverse[0][1] == 0.0
+        && inverse[1][0] == 0.0
+        && inverse[1][1] == 1.0
+        && inverse[2][0] == 0.0
+        && inverse[2][1] == 0.0
+        && inverse[2][2] == 1.0
+        && is_integer(inverse[0][2])
+        && is_integer(inverse[1][2])
+}
+
 #[cfg(test)]
 mod tests {
     use cranpose_ui_graphics::{RenderEffect, RuntimeShader};
 
-    use super::{BlurUniforms, direct_tail_intermediate_size, projective_dest_bounds_rect};
+    use super::{
+        BlurUniforms, CompositeSampleMode, direct_tail_intermediate_size,
+        inverse_is_integer_unit_translation, projective_dest_bounds_rect,
+        resolve_composite_sample_mode,
+    };
+
+    fn translation(tx: f32, ty: f32) -> [[f32; 3]; 3] {
+        [[1.0, 0.0, tx], [0.0, 1.0, ty], [0.0, 0.0, 1.0]]
+    }
+
+    #[test]
+    fn integer_unit_translations_lower_box4_to_a_texel_fetch() {
+        assert!(inverse_is_integer_unit_translation(translation(
+            -40.0, 96.0
+        )));
+        assert!(inverse_is_integer_unit_translation(translation(0.0, 0.0)));
+        assert_eq!(
+            resolve_composite_sample_mode(CompositeSampleMode::Box4, true),
+            CompositeSampleMode::Nearest
+        );
+    }
+
+    #[test]
+    fn fractional_scaled_or_rotated_mappings_keep_the_box_resolve() {
+        assert!(!inverse_is_integer_unit_translation(translation(0.5, 0.0)));
+        assert!(!inverse_is_integer_unit_translation(translation(
+            0.0, -12.25
+        )));
+        assert!(!inverse_is_integer_unit_translation([
+            [0.5, 0.0, 0.0],
+            [0.0, 0.5, 0.0],
+            [0.0, 0.0, 1.0]
+        ]));
+        assert!(!inverse_is_integer_unit_translation([
+            [0.0, 1.0, 0.0],
+            [-1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0]
+        ]));
+        assert!(!inverse_is_integer_unit_translation([
+            [1.0, 0.0, 3.0],
+            [0.0, 1.0, 3.0],
+            [0.001, 0.0, 1.0]
+        ]));
+        assert_eq!(
+            resolve_composite_sample_mode(CompositeSampleMode::Box4, false),
+            CompositeSampleMode::Box4
+        );
+        assert_eq!(
+            resolve_composite_sample_mode(CompositeSampleMode::Linear, true),
+            CompositeSampleMode::Linear
+        );
+    }
+
+    #[test]
+    fn viewport_blits_lower_only_at_unit_scale_with_integer_origins() {
+        use super::viewport_blit_is_integer_unit_mapping;
+        let source = (200.0, 100.0);
+        assert!(viewport_blit_is_integer_unit_mapping(
+            Some((8.0, 16.0, 200.0, 100.0)),
+            None,
+            source
+        ));
+        assert!(viewport_blit_is_integer_unit_mapping(
+            Some((8.0, 16.0, 50.0, 40.0)),
+            Some((10.0, 20.0, 50.0, 40.0)),
+            source
+        ));
+        assert!(!viewport_blit_is_integer_unit_mapping(None, None, source));
+        assert!(!viewport_blit_is_integer_unit_mapping(
+            Some((8.5, 16.0, 200.0, 100.0)),
+            None,
+            source
+        ));
+        assert!(!viewport_blit_is_integer_unit_mapping(
+            Some((8.0, 16.0, 100.0, 50.0)),
+            None,
+            source
+        ));
+        assert!(!viewport_blit_is_integer_unit_mapping(
+            Some((8.0, 16.0, 50.0, 40.0)),
+            Some((10.5, 20.0, 50.0, 40.0)),
+            source
+        ));
+    }
 
     #[test]
     fn a_frost_chain_tail_intermediate_shrinks_to_the_blur_scratch() {

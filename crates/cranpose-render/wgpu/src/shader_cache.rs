@@ -18,9 +18,13 @@ impl RuntimeShaderPipelineMode {
     }
 }
 
+fn shader_specialization_enabled() -> bool {
+    crate::debug_toggles::debug_toggle("CRANPOSE_NO_SHADER_SPECIALIZATION").as_deref() != Some("1")
+}
+
 pub(crate) struct ShaderPipelineCache {
     backend: wgpu::Backend,
-    cache: HashMap<(u64, RuntimeShaderPipelineMode, bool), wgpu::RenderPipeline>,
+    cache: HashMap<(u64, u64, RuntimeShaderPipelineMode, bool), wgpu::RenderPipeline>,
     disabled: HashSet<u64>,
     pipeline_cache: Option<wgpu::PipelineCache>,
 }
@@ -47,7 +51,17 @@ impl ShaderPipelineCache {
         depth: bool,
     ) -> Option<&wgpu::RenderPipeline> {
         let source_hash = shader.source_hash();
-        let cache_key = (source_hash, mode, depth);
+        let constants: &[(&str, f64)] = if shader_specialization_enabled() {
+            shader.overrides()
+        } else {
+            &[]
+        };
+        let overrides_hash = if constants.is_empty() {
+            0
+        } else {
+            shader.overrides_hash()
+        };
+        let cache_key = (source_hash, overrides_hash, mode, depth);
         if self.disabled.contains(&source_hash) {
             return None;
         }
@@ -82,7 +96,10 @@ impl ShaderPipelineCache {
                         module: &shader_module,
                         entry_point: Some("fullscreen_vs"),
                         buffers: &[],
-                        compilation_options: wgpu::PipelineCompilationOptions::default(),
+                        compilation_options: wgpu::PipelineCompilationOptions {
+                            constants,
+                            ..wgpu::PipelineCompilationOptions::default()
+                        },
                     },
                     fragment: Some(wgpu::FragmentState {
                         module: &shader_module,
@@ -92,7 +109,10 @@ impl ShaderPipelineCache {
                             blend: Some(mode.blend_state()),
                             write_mask: wgpu::ColorWrites::ALL,
                         })],
-                        compilation_options: wgpu::PipelineCompilationOptions::default(),
+                        compilation_options: wgpu::PipelineCompilationOptions {
+                            constants,
+                            ..wgpu::PipelineCompilationOptions::default()
+                        },
                     }),
                     primitive: wgpu::PrimitiveState {
                         topology: wgpu::PrimitiveTopology::TriangleStrip,
@@ -200,10 +220,17 @@ fn validate_glsl_portability(
         multiview: None,
     };
 
-    let mut writer = glsl::Writer::new(
-        &mut glsl_source,
+    let (module, module_info) = naga::back::pipeline_constants::process_overrides(
         module,
         module_info,
+        Some((shader_stage, entry_point)),
+        &naga::back::PipelineConstants::default(),
+    )
+    .map_err(|err| format!("override resolution failed for `{entry_point}`: {err}"))?;
+    let mut writer = glsl::Writer::new(
+        &mut glsl_source,
+        &module,
+        &module_info,
         &options,
         &pipeline_options,
         naga::proc::BoundsCheckPolicies::default(),

@@ -128,6 +128,22 @@ impl OffscreenTarget {
     pub(crate) fn texture(&self) -> &wgpu::Texture {
         &self.texture
     }
+
+    /// Wraps a swapchain image as the frame's root target so the scene
+    /// renders into it directly, with no composition copy behind it.
+    pub(crate) fn from_surface(texture: wgpu::Texture, view: wgpu::TextureView) -> Self {
+        let width = texture.width();
+        let height = texture.height();
+        let format = texture.format().remove_srgb_suffix();
+        Self {
+            texture,
+            view,
+            width,
+            height,
+            bytes_per_pixel: crate::frame_graph::texture_format_bytes_per_pixel(format),
+            cached_bind_group: OnceCell::new(),
+        }
+    }
 }
 
 pub(crate) fn composition_bytes_per_pixel() -> u64 {

@@ -1,16 +1,6 @@
 mod support;
 
-use cranpose_render_common::{
-    Renderer,
-    graph::{
-        CachePolicy, DrawRunNode, IsolationReasons, LayerNode, PrimitivePhase, ProjectiveTransform,
-        RenderGraph, RenderNode,
-    },
-    raster_cache::LayerRasterCacheHashes,
-};
-use cranpose_ui_graphics::{
-    Brush, Color, CornerRadii, DrawScope, DrawScopeDefault, GraphicsLayer, Point, Rect, Stroke,
-};
+use support::graph::*;
 
 const SIZE: u32 = 400;
 const RIM_RECT: Rect = Rect {
@@ -76,54 +66,11 @@ fn rim_graph() -> RenderGraph {
     let mut scope =
         DrawScopeDefault::new(cranpose_ui_graphics::Size::new(SIZE as f32, SIZE as f32));
     record_scene(&mut scope);
-    let bounds = Rect {
-        x: 0.0,
-        y: 0.0,
-        width: SIZE as f32,
-        height: SIZE as f32,
-    };
-    RenderGraph::new(LayerNode {
-        node_id: None,
-        local_bounds: bounds,
-        transform_to_parent: ProjectiveTransform::identity(),
-        content_offset: Point::default(),
-        motion_context_animated: false,
-        translated_content_context: false,
-        translated_content_offset: Point::default(),
-        scene_children_origin: Point::default(),
-        scene_children_layer_translation: Point::default(),
-        graphics_layer: GraphicsLayer::default(),
-        clip_to_bounds: false,
-        shadow_clip: None,
-        hit_test: None,
-        has_hit_targets: false,
-        has_origin_sinks: false,
-        isolation: IsolationReasons::default(),
-        cache_policy: CachePolicy::None,
-        cache_hashes: LayerRasterCacheHashes::default(),
-        cache_hashes_valid: false,
-        children: vec![RenderNode::DrawRun(DrawRunNode::new(
-            PrimitivePhase::BeforeChildren,
-            scope.into_primitives(),
-        ))],
-    })
+    draw_run_graph(SIZE, scope)
 }
 
 fn render_arm(renderer: &mut support::LockedRenderer, graph: &RenderGraph) -> Vec<u8> {
-    let mut passes = Vec::new();
-    for _ in 0..3 {
-        renderer.scene_mut().graph = Some(graph.clone());
-        let captured = renderer
-            .capture_frame(SIZE, SIZE)
-            .unwrap_or_else(|err| panic!("capture failed: {err:?}"));
-        assert_eq!((captured.width, captured.height), (SIZE, SIZE));
-        passes.push(captured.pixels);
-    }
-    assert_eq!(
-        passes[1], passes[2],
-        "same-graph control passes must be byte-stable before the cross-arm compare"
-    );
-    passes.pop().unwrap()
+    support::stable_capture(renderer, graph, SIZE)
 }
 
 #[test]

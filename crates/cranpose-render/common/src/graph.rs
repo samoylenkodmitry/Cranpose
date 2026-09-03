@@ -277,6 +277,11 @@ pub struct PrimitiveEntry {
 #[derive(Clone)]
 pub struct LayerNode {
     pub node_id: Option<NodeId>,
+    /// Set on the synthetic layer that holds a node's outer draws, those chained
+    /// before its graphics layer, around that node's own layer. Scene updates
+    /// address the node through this id because the node's layer has none of the
+    /// outer draws and the wrapper has no node id of its own.
+    pub wraps: Option<NodeId>,
     pub local_bounds: Rect,
     pub transform_to_parent: ProjectiveTransform,
     pub content_offset: Point,
@@ -312,6 +317,7 @@ impl Default for LayerNode {
     fn default() -> Self {
         Self {
             node_id: None,
+            wraps: None,
             local_bounds: Rect {
                 x: 0.0,
                 y: 0.0,

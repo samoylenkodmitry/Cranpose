@@ -240,6 +240,7 @@ fn hash_color_filter<H: Hasher>(filter: ColorFilter, state: &mut H) {
 
 fn hash_runtime_shader<H: Hasher>(shader: &RuntimeShader, state: &mut H) {
     shader.source_hash().hash(state);
+    shader.overrides_hash().hash(state);
     hash_f32_bits(shader.input_padding(), state);
     hash_f32_bits(shader.output_padding(), state);
     shader.uniforms().len().hash(state);
@@ -430,6 +431,19 @@ fn hash_shadow_primitive<H: Hasher>(shadow: &ShadowPrimitive, state: &mut H) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn runtime_shader_overrides_change_the_render_hash() {
+        let plain = crate::RuntimeShader::new("// hash-overrides");
+        let mut raised = plain.clone();
+        raised.set_override("FLAG", 1.0);
+        assert_ne!(
+            crate::RenderEffect::runtime_shader(plain).render_hash(),
+            crate::RenderEffect::runtime_shader(raised).render_hash(),
+            "a specialized pipeline renders through different code, so cached output keyed \
+             without the overrides would serve the wrong program"
+        );
+    }
+
     use super::*;
     use crate::render_effect::TileMode;
 

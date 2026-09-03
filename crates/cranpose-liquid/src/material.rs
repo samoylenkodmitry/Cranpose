@@ -14,6 +14,7 @@ use cranpose_ui_graphics::{
     GLASS_PHYSICAL_REFRACTION_DEPTH_UNIFORM, GLASS_REFRACTION_CURVE_UNIFORM,
     GLASS_RESTING_TINT_UNIFORM, GLASS_TRANSMISSION_REFRACTION_UNIFORM, GraphicsLayer,
     LIQUID_GLASS_WGSL, LayerShape, RenderEffect, RoundedCornerShape, RuntimeShader, TileMode,
+    liquid_glass_runtime_effect,
 };
 
 use crate::theme::LiquidColors;
@@ -904,7 +905,7 @@ impl ResolvedGlass {
             shader.set_output_padding(morph_pad + shadow_reach + 4.0);
         }
 
-        let optical_effect = RenderEffect::runtime_shader(shader);
+        let optical_effect = liquid_glass_runtime_effect(shader);
         if gaussian_blur_radius > f32::EPSILON {
             RenderEffect::blur_with_edge_treatment(gaussian_blur_radius, TileMode::Mirror)
                 .then(optical_effect)

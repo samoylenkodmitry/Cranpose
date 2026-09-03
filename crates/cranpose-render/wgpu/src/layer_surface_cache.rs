@@ -40,6 +40,97 @@ fn take_unshared<T>(pending: &mut Vec<Rc<T>>) -> Vec<T> {
     free
 }
 
+const UNREWARDED_STORES_BEFORE_BACKOFF: u32 = 3;
+const ADMISSION_BACKOFF_BASE_FRAMES: u64 = 8;
+const ADMISSION_BACKOFF_MAX_FRAMES: u64 = 64;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum AdmissionScope {
+    Identity(LayerRasterCacheIdentity),
+    Place {
+        kind_slot: usize,
+        local_bounds_bits: [u32; 4],
+        pixel_size: (u32, u32),
+    },
+}
+
+fn admission_scope(key: &LayerRasterCacheKey) -> AdmissionScope {
+    key.identity()
+        .map(AdmissionScope::Identity)
+        .unwrap_or_else(|| AdmissionScope::Place {
+            kind_slot: key.kind_slot(),
+            local_bounds_bits: key.local_bounds_bits(),
+            pixel_size: key.pixel_size(),
+        })
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct AdmissionBackoff {
+    unrewarded_stores: u32,
+    resume_at_frame: u64,
+}
+
+/// Speculative (repeat-admitted) stores that never get served are pure
+/// cost: the entry is rendered, kept, and replaced by the next key before
+/// anything reads it. Content that holds for a couple of frames and then
+/// moves on -- a stepped animation, a starfield that advances at half the
+/// presented rate -- passes the repeat check every time and would be
+/// re-stored forever. The ledger counts, per node identity (or per place for
+/// keys without one: kind, bounds and size), consecutive frames that stored
+/// without a hit, and once
+/// that streak reaches [`UNREWARDED_STORES_BEFORE_BACKOFF`] refuses further
+/// repeat admissions for a window that doubles per extra unrewarded store up
+/// to [`ADMISSION_BACKOFF_MAX_FRAMES`]. A hit clears the scope, so content
+/// that settles is cached again at most one window later.
+#[derive(Debug, Default)]
+struct AdmissionLedger {
+    frame: u64,
+    backoff: HashMap<AdmissionScope, AdmissionBackoff>,
+    stored_this_frame: HashSet<AdmissionScope>,
+    hit_this_frame: HashSet<AdmissionScope>,
+}
+
+impl AdmissionLedger {
+    fn note_hit(&mut self, key: &LayerRasterCacheKey) {
+        self.hit_this_frame.insert(admission_scope(key));
+    }
+
+    fn note_store(&mut self, key: &LayerRasterCacheKey) {
+        self.stored_this_frame.insert(admission_scope(key));
+    }
+
+    fn is_backed_off(&self, key: &LayerRasterCacheKey) -> bool {
+        self.backoff
+            .get(&admission_scope(key))
+            .is_some_and(|backoff| backoff.resume_at_frame > self.frame)
+    }
+
+    fn finish_frame(&mut self) {
+        let hit_this_frame = std::mem::take(&mut self.hit_this_frame);
+        for scope in self.stored_this_frame.drain() {
+            if hit_this_frame.contains(&scope) {
+                continue;
+            }
+            let backoff = self.backoff.entry(scope).or_default();
+            backoff.unrewarded_stores = backoff.unrewarded_stores.saturating_add(1);
+            if backoff.unrewarded_stores >= UNREWARDED_STORES_BEFORE_BACKOFF {
+                let doublings = (backoff.unrewarded_stores - UNREWARDED_STORES_BEFORE_BACKOFF)
+                    .min(u32::BITS - 1);
+                let window =
+                    (ADMISSION_BACKOFF_BASE_FRAMES << doublings).min(ADMISSION_BACKOFF_MAX_FRAMES);
+                backoff.resume_at_frame = self.frame + 1 + window;
+            }
+        }
+        for scope in hit_this_frame {
+            self.backoff.remove(&scope);
+        }
+        let frame = self.frame;
+        self.backoff
+            .retain(|_, backoff| backoff.resume_at_frame + ADMISSION_BACKOFF_MAX_FRAMES > frame);
+        self.frame += 1;
+    }
+}
+
 pub(crate) struct LayerSurfaceCache {
     entries: BoundedLruCache<LayerRasterCacheKey, CachedLayerSurface>,
     scene_range_entries: BoundedLruCache<LayerRasterCacheKey, CachedLayerSurface>,
@@ -48,6 +139,7 @@ pub(crate) struct LayerSurfaceCache {
     scene_range_bytes: u64,
     seen_this_frame: HashSet<usize>,
     recycled: Vec<Rc<OffscreenTarget>>,
+    admission: AdmissionLedger,
     #[cfg(debug_assertions)]
     inserted_this_frame: HashSet<LayerRasterCacheKey>,
 }
@@ -76,9 +168,16 @@ impl LayerSurfaceCache {
             scene_range_bytes: 0,
             seen_this_frame: HashSet::new(),
             recycled: Vec::new(),
+            admission: AdmissionLedger::default(),
             #[cfg(debug_assertions)]
             inserted_this_frame: HashSet::new(),
         }
+    }
+
+    /// Whether a repeat-admitted store for this key would only feed the
+    /// unrewarded-store streak its scope is already backing off from.
+    pub(crate) fn repeat_admission_backed_off(&self, key: &LayerRasterCacheKey) -> bool {
+        self.admission.is_backed_off(key)
     }
 
     fn recycle(&mut self, entry: CachedLayerSurface) {
@@ -103,7 +202,8 @@ impl LayerSurfaceCache {
             self.entries.get(key)?
         };
         let (width, height) = key.pixel_size();
-        frame_stats.record_layer_cache_hit(width, height);
+        frame_stats.record_layer_cache_hit(key, width, height);
+        self.admission.note_hit(key);
         Some((cached.target.clone(), cached.logical_rect))
     }
 
@@ -116,6 +216,7 @@ impl LayerSurfaceCache {
     ) -> Rc<OffscreenTarget> {
         #[cfg(debug_assertions)]
         self.inserted_this_frame.insert(key);
+        self.admission.note_store(&key);
 
         if key.is_scene_range() {
             return self.insert_scene_range(key, target, logical_rect, frame_stats);
@@ -198,6 +299,7 @@ impl LayerSurfaceCache {
 
         #[cfg(debug_assertions)]
         self.inserted_this_frame.clear();
+        self.admission.finish_frame();
 
         self.identity.retain(|_, key| self.entries.contains(key));
         frame_stats
@@ -292,6 +394,133 @@ impl LayerSurfaceCache {
 impl Default for LayerSurfaceCache {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod admission_ledger_tests {
+    use cranpose_render_common::raster_cache::{LayerRasterCacheKey, ScaleBucket};
+    use cranpose_ui_graphics::Rect;
+
+    use super::{
+        ADMISSION_BACKOFF_BASE_FRAMES, ADMISSION_BACKOFF_MAX_FRAMES, AdmissionLedger,
+        UNREWARDED_STORES_BEFORE_BACKOFF,
+    };
+
+    fn prefix_key(content_hash: u64) -> LayerRasterCacheKey {
+        LayerRasterCacheKey::prefix_snapshot(
+            content_hash,
+            4,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 10.0,
+                height: 10.0,
+            },
+            (10, 10),
+            ScaleBucket::from_scale(1.0),
+        )
+    }
+
+    fn card_key(node: usize, content_hash: u64) -> LayerRasterCacheKey {
+        LayerRasterCacheKey::source_content(
+            Some(node),
+            content_hash,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 10.0,
+                height: 10.0,
+            },
+            (10, 10),
+            ScaleBucket::from_scale(1.0),
+        )
+    }
+
+    #[test]
+    fn stores_that_are_never_served_back_off_after_the_streak() {
+        let mut ledger = AdmissionLedger::default();
+        for frame in 0..UNREWARDED_STORES_BEFORE_BACKOFF as u64 {
+            assert!(!ledger.is_backed_off(&prefix_key(frame)));
+            ledger.note_store(&prefix_key(frame));
+            ledger.finish_frame();
+        }
+        assert!(ledger.is_backed_off(&prefix_key(99)));
+        for _ in 0..ADMISSION_BACKOFF_BASE_FRAMES {
+            assert!(ledger.is_backed_off(&prefix_key(99)));
+            ledger.finish_frame();
+        }
+        assert!(!ledger.is_backed_off(&prefix_key(99)));
+    }
+
+    #[test]
+    fn a_served_store_keeps_admission_open() {
+        let mut ledger = AdmissionLedger::default();
+        for frame in 0..8u64 {
+            ledger.note_store(&prefix_key(frame));
+            ledger.note_hit(&prefix_key(frame));
+            ledger.finish_frame();
+            assert!(!ledger.is_backed_off(&prefix_key(frame + 1)));
+        }
+    }
+
+    #[test]
+    fn the_window_doubles_per_unrewarded_store_and_caps() {
+        let mut ledger = AdmissionLedger::default();
+        let mut windows = Vec::new();
+        for round in 0..6u64 {
+            let store_frames = if round == 0 {
+                UNREWARDED_STORES_BEFORE_BACKOFF as u64
+            } else {
+                1
+            };
+            for _ in 0..store_frames {
+                ledger.note_store(&prefix_key(round));
+                ledger.finish_frame();
+            }
+            let mut window = 0u64;
+            while ledger.is_backed_off(&prefix_key(round)) {
+                ledger.finish_frame();
+                window += 1;
+            }
+            windows.push(window);
+        }
+        assert_eq!(windows[0], ADMISSION_BACKOFF_BASE_FRAMES);
+        assert_eq!(windows[1], ADMISSION_BACKOFF_BASE_FRAMES * 2);
+        assert_eq!(windows[2], ADMISSION_BACKOFF_BASE_FRAMES * 4);
+        assert_eq!(*windows.last().unwrap(), ADMISSION_BACKOFF_MAX_FRAMES);
+    }
+
+    #[test]
+    fn a_hit_clears_the_backoff_and_the_streak() {
+        let mut ledger = AdmissionLedger::default();
+        for frame in 0..UNREWARDED_STORES_BEFORE_BACKOFF as u64 {
+            ledger.note_store(&prefix_key(frame));
+            ledger.finish_frame();
+        }
+        assert!(ledger.is_backed_off(&prefix_key(7)));
+        ledger.note_hit(&prefix_key(7));
+        ledger.finish_frame();
+        assert!(!ledger.is_backed_off(&prefix_key(7)));
+        ledger.note_store(&prefix_key(8));
+        ledger.finish_frame();
+        assert!(
+            !ledger.is_backed_off(&prefix_key(8)),
+            "one unrewarded store after a hit must not reopen the backoff"
+        );
+    }
+
+    #[test]
+    fn scopes_are_independent_per_node_identity() {
+        let mut ledger = AdmissionLedger::default();
+        for frame in 0..UNREWARDED_STORES_BEFORE_BACKOFF as u64 {
+            ledger.note_store(&card_key(1, frame));
+            ledger.note_store(&card_key(2, frame));
+            ledger.note_hit(&card_key(2, frame));
+            ledger.finish_frame();
+        }
+        assert!(ledger.is_backed_off(&card_key(1, 50)));
+        assert!(!ledger.is_backed_off(&card_key(2, 50)));
     }
 }
 

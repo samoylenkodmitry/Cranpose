@@ -553,6 +553,7 @@ mod tests {
     fn test_layer(local_bounds: Rect) -> LayerNode {
         LayerNode {
             node_id: None,
+            wraps: None,
             local_bounds,
             transform_to_parent: ProjectiveTransform::identity(),
             motion_context_animated: false,

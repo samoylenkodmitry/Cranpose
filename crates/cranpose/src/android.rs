@@ -666,9 +666,10 @@ fn render_once(
             });
             let (width, height) = shell.buffer_size();
 
-            if let Err(e) = shell
-                .renderer()
-                .render_surface_texture(&view, width, height)
+            if let Err(e) =
+                shell
+                    .renderer()
+                    .render_surface_texture(&frame.texture, &view, width, height)
             {
                 log::error!("Render error: {:?}", e);
             }
@@ -1336,14 +1337,17 @@ fn create_android_surface_config(
     let desired_maximum_frame_latency = android_frame_latency(
         crate::android_frame_telemetry::system_property("debug.cranpose.frame_latency").as_deref(),
     );
+    let usage = cranpose_render_wgpu::presentable_root_usages(surface_caps.usages);
     log::info!(
-        "Android surface: supported present modes {:?}, selected {:?}, desired_maximum_frame_latency {}",
+        "Android surface: formats {:?}, usages {:?} (configured {usage:?}), supported present modes {:?}, selected {:?}, desired_maximum_frame_latency {}",
+        surface_caps.formats,
+        surface_caps.usages,
         surface_caps.present_modes,
         present_mode,
         desired_maximum_frame_latency,
     );
     Ok(wgpu::SurfaceConfiguration {
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        usage,
         format: surface_format,
         width,
         height,

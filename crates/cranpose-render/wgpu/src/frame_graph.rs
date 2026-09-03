@@ -22,6 +22,7 @@ pub(crate) struct FrameCommandStats {
     pub(crate) encoder_count: u32,
     pub(crate) submit_count: u32,
     pub(crate) pass_count: u32,
+    pub(crate) pass_pixels: u64,
     pub(crate) transient_texture_bytes: u64,
     pub(crate) retained_texture_bytes: u64,
     pub(crate) upload_bytes: u64,
@@ -332,6 +333,7 @@ impl ResourceGraph {
 }
 
 pub(crate) struct PassContext<'pass> {
+    device: &'pass wgpu::Device,
     queue_handle: &'pass wgpu::Queue,
     pub(crate) encoder: &'pass mut wgpu::CommandEncoder,
     uploads: &'pass mut FrameUploadAllocators,
@@ -515,6 +517,7 @@ impl WgpuFrameGraphExecutor {
                 .next()
                 .expect("single-pass graph should contain one pass");
             match self.encode_pass_node(
+                device,
                 queue,
                 &mut encoder,
                 &mut pending_transient_releases,
@@ -542,6 +545,7 @@ impl WgpuFrameGraphExecutor {
                     return Err(FrameGraphError::ScheduledPassTwice { pass_index });
                 };
                 match self.encode_pass_node(
+                    device,
                     queue,
                     &mut encoder,
                     &mut pending_transient_releases,
@@ -567,6 +571,9 @@ impl WgpuFrameGraphExecutor {
             release_pending_transients(&mut self.transient_textures, pending_transient_releases);
             return Err(FrameGraphError::NoDeclaredPasses);
         }
+        if fence_profile::enabled() {
+            fence_profile::end_frame(device, queue, &mut encoder);
+        }
         let submission = Self::submit_with_timing(queue, encoder);
         release_pending_transients(&mut self.transient_textures, pending_transient_releases);
         let retained_texture_bytes = self.retained_texture_bytes();
@@ -576,6 +583,7 @@ impl WgpuFrameGraphExecutor {
                 encoder_count: 1,
                 submit_count: 1,
                 pass_count,
+                pass_pixels: take_render_pass_pixels(),
                 transient_texture_bytes,
                 retained_texture_bytes,
                 ..FrameCommandStats::default()
@@ -586,6 +594,7 @@ impl WgpuFrameGraphExecutor {
     #[allow(clippy::too_many_arguments)]
     fn encode_pass_node(
         &mut self,
+        device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         pending_transient_releases: &mut Vec<(FrameTextureDescriptor, OffscreenTarget)>,
@@ -597,6 +606,7 @@ impl WgpuFrameGraphExecutor {
         let pass_label = pass.label();
         let pass_start = Instant::now();
         let mut context = PassContext {
+            device,
             queue_handle: queue,
             encoder,
             uploads: &mut self.upload_allocators,
@@ -674,19 +684,40 @@ std::thread_local! {
         const { std::cell::RefCell::new(Vec::new()) };
 }
 
-pub(crate) fn note_render_pass(label: Option<&str>) {
+std::thread_local! {
+    static RENDER_PASS_PIXELS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Accounts one render pass: its first color target's area, the tile
+/// traffic a tiling GPU pays to open and close the pass, and its label when
+/// the stage telemetry is on.
+pub(crate) fn note_render_pass(descriptor: &wgpu::RenderPassDescriptor<'_>) {
+    let pixels = descriptor
+        .color_attachments
+        .iter()
+        .flatten()
+        .next()
+        .map(|attachment| {
+            let texture = attachment.view.texture();
+            u64::from(texture.width()) * u64::from(texture.height())
+        })
+        .unwrap_or(0);
+    RENDER_PASS_PIXELS.with(|total| total.set(total.get().saturating_add(pixels)));
     if frame_graph_pass_telemetry_threshold_ms().is_none() {
         return;
     }
-    let label = label.unwrap_or("<unlabeled>");
+    let label = fence_profile::bucket_label(descriptor);
     RENDER_PASS_LABELS.with(|labels| {
         let mut labels = labels.borrow_mut();
-        if let Some(entry) = labels.iter_mut().find(|(name, _)| name == label) {
-            entry.1 += 1;
-        } else {
-            labels.push((label.to_owned(), 1));
+        match labels.last_mut() {
+            Some((name, count)) if *name == label => *count += 1,
+            _ => labels.push((label, 1)),
         }
     });
+}
+
+fn take_render_pass_pixels() -> u64 {
+    RENDER_PASS_PIXELS.with(|total| total.replace(0))
 }
 
 fn take_render_pass_labels() -> Vec<(String, u32)> {
@@ -766,6 +797,10 @@ impl FrameCommandRecorder for PassContext<'_> {
         &mut self,
         descriptor: &wgpu::RenderPassDescriptor<'_>,
     ) -> wgpu::RenderPass<'_> {
+        if fence_profile::enabled() {
+            let bucket = fence_profile::bucket_label(descriptor);
+            fence_profile::split(self.device, self.queue_handle, self.encoder, Some(&bucket));
+        }
         crate::pass_timing::begin_timed_render_pass(self.pass_timer, self.encoder, descriptor)
     }
 
@@ -872,6 +907,7 @@ impl WgpuFrameEncoder<'_> {
                 encoder_count: 1,
                 submit_count: 1,
                 pass_count,
+                pass_pixels: take_render_pass_pixels(),
                 transient_texture_bytes,
                 retained_texture_bytes,
                 ..FrameCommandStats::default()
@@ -1542,5 +1578,193 @@ mod tests {
 
         assert_eq!(graph.node_count(), 1);
         assert_eq!(graph.declared_pass_count(), 1);
+    }
+}
+
+/// Lives beside the executor because it is the only other place that may
+/// finish an encoder and submit it.
+pub(crate) mod fence_profile {
+    use std::cell::RefCell;
+
+    use web_time::Instant;
+
+    const DEFAULT_REPORT_EVERY_FRAMES: u32 = 60;
+
+    fn report_every_frames() -> u32 {
+        static FRAMES: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+        *FRAMES.get_or_init(|| {
+            crate::debug_toggles::debug_toggle("CRANPOSE_GPU_FENCE_PROFILE")
+                .and_then(|value| value.parse::<u32>().ok())
+                .filter(|frames| *frames > 0)
+                .unwrap_or(DEFAULT_REPORT_EVERY_FRAMES)
+        })
+    }
+
+    /// Every render pass a frame records, bucketed by label, target size and
+    /// load op, with the wall time of each measured through submission fences
+    /// for adapters without timestamp queries (`CRANPOSE_GPU_FENCE_PROFILE`,
+    /// mirrored as `debug.cranpose.gpu_fence_profile` on Android; a numeric
+    /// value is the report period in frames, 60 by default). Every pass
+    /// boundary submits the commands recorded so far and waits for the queue
+    /// to drain, minus the round trip of an empty submission, so a bucket's
+    /// time is the isolated latency of its passes plus the copies encoded
+    /// after them. Isolated latency overstates large targets, whose store and
+    /// reload a tiler otherwise overlaps with the next pass, so the buckets
+    /// are a per-frame pass inventory, not a cost ranking.
+    pub(crate) fn enabled() -> bool {
+        static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *ENABLED.get_or_init(|| {
+            crate::debug_toggles::debug_toggle("CRANPOSE_GPU_FENCE_PROFILE").is_some()
+        })
+    }
+
+    /// `CRANPOSE_GPU_FENCE_PROFILE=frame`: one fence per frame instead of one
+    /// per pass, so the report is the frame's whole GPU time with the
+    /// pipeline intact.
+    fn whole_frame() -> bool {
+        static WHOLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *WHOLE.get_or_init(|| {
+            crate::debug_toggles::debug_toggle("CRANPOSE_GPU_FENCE_PROFILE").as_deref()
+                == Some("frame")
+        })
+    }
+
+    #[derive(Default)]
+    struct Profile {
+        current_label: Option<String>,
+        totals: Vec<(String, f64, u32)>,
+        frames: u32,
+    }
+
+    thread_local! {
+        static PROFILE: RefCell<Profile> = RefCell::new(Profile::default());
+    }
+
+    fn submit_and_wait(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: wgpu::CommandEncoder,
+    ) -> f64 {
+        let start = Instant::now();
+        let submission = queue.submit(std::iter::once(encoder.finish()));
+        let _ = device.poll(wgpu::PollType::Wait {
+            submission_index: Some(submission),
+            timeout: None,
+        });
+        start.elapsed().as_secs_f64() * 1000.0
+    }
+
+    fn new_encoder(device: &wgpu::Device) -> wgpu::CommandEncoder {
+        device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("fence profile split"),
+        })
+    }
+
+    /// Wall time of the recorded commands minus the round trip of an empty
+    /// submission, so the fixed cost of the fence itself does not count.
+    fn drain(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+    ) -> f64 {
+        let finished = std::mem::replace(encoder, new_encoder(device));
+        let recorded = submit_and_wait(device, queue, finished);
+        let empty = submit_and_wait(device, queue, new_encoder(device));
+        (recorded - empty).max(0.0)
+    }
+
+    /// The pass label extended with its first color target's size, so passes on
+    /// the full-screen target rank apart from the same pass on a small layer.
+    pub(crate) fn bucket_label(descriptor: &wgpu::RenderPassDescriptor<'_>) -> String {
+        let label = descriptor.label.unwrap_or("<unlabeled>");
+        match descriptor
+            .color_attachments
+            .first()
+            .and_then(|attachment| attachment.as_ref())
+        {
+            Some(attachment) => {
+                let texture = attachment.view.texture();
+                let load = match attachment.ops.load {
+                    wgpu::LoadOp::Load => "load",
+                    wgpu::LoadOp::Clear(_) => "clear",
+                    wgpu::LoadOp::DontCare(_) => "dontcare",
+                };
+                format!("{label} {}x{} {load}", texture.width(), texture.height())
+            }
+            None => label.to_owned(),
+        }
+    }
+
+    /// Closes the pass that was running, charges its GPU time, and opens the
+    /// accounting for `next_label`.
+    pub(crate) fn split(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        next_label: Option<&str>,
+    ) {
+        if whole_frame() && next_label.is_some() {
+            PROFILE.with(|profile| {
+                profile
+                    .borrow_mut()
+                    .current_label
+                    .get_or_insert_with(|| "frame".to_owned());
+            });
+            return;
+        }
+        let elapsed = drain(device, queue, encoder);
+        PROFILE.with(|profile| {
+            let mut profile = profile.borrow_mut();
+            if let Some(label) = profile.current_label.take() {
+                match profile
+                    .totals
+                    .iter_mut()
+                    .find(|(name, _, _)| *name == label)
+                {
+                    Some(entry) => {
+                        entry.1 += elapsed;
+                        entry.2 += 1;
+                    }
+                    None => profile.totals.push((label, elapsed, 1)),
+                }
+            }
+            profile.current_label = next_label.map(str::to_owned);
+        });
+    }
+
+    /// Charges the frame's last pass and prints the per-label ranking once per
+    /// report period.
+    pub(crate) fn end_frame(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+    ) {
+        split(device, queue, encoder, None);
+        PROFILE.with(|profile| {
+            let mut profile = profile.borrow_mut();
+            profile.frames += 1;
+            if profile.frames < report_every_frames() {
+                return;
+            }
+            let frames = f64::from(profile.frames);
+            let mut totals = std::mem::take(&mut profile.totals);
+            totals.sort_by(|a, b| b.1.total_cmp(&a.1));
+            let total_ms: f64 = totals.iter().map(|(_, ms, _)| ms).sum::<f64>() / frames;
+            let mut line = format!(
+                "[gpu-fence] frames={} total={total_ms:.2}ms/frame",
+                profile.frames
+            );
+            for (label, ms, count) in &totals {
+                use std::fmt::Write;
+                let _ = write!(
+                    line,
+                    " [{label}]={:.2}ms x{:.1}",
+                    ms / frames,
+                    f64::from(*count) / frames
+                );
+            }
+            eprintln!("{line}");
+            profile.frames = 0;
+        });
     }
 }

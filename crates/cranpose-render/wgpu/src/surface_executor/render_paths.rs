@@ -1,6 +1,8 @@
 use std::{
     cell::RefCell,
     hash::{Hash, Hasher},
+    ops::Range,
+    rc::Rc,
 };
 
 use cranpose_core::{NodeId, collections::map::HashMap};
@@ -38,11 +40,11 @@ use crate::{
         ChildLayerComposite, CollectedLayer, LoweredChildSource, ResolvedChildSurfaceComposite,
         SceneWindowSource, TranslateBy, build_scene_window, collected_layer_bounds,
         filtered_effect_layer_index, motion_stable_capture_bounds_from_parts,
-        resolved_child_surface_composite, resolved_layer_surface_rect_from_parts, translate_quad,
-        visible_draw_rect,
+        resolved_child_surface_composite, resolved_layer_surface_rect_from_parts,
+        shadow_draw_is_blurred_drop, translate_quad, visible_draw_rect,
     },
     offscreen::OffscreenTarget,
-    render::{has_backdrop_layer_in_range, scissor_rect_for_rect},
+    render::{has_backdrop_layer_in_range, is_in_effect_range, scissor_rect_for_rect},
     scene::{
         BackdropLayer, CompositorScene, DrawOp, DrawOpKind, DrawShape, EffectLayer, ImageDraw,
         SceneBrush, ShadowDraw, SnapAnchor, TextDraw,
@@ -103,6 +105,14 @@ fn prefix_snapshot_enabled() -> bool {
     crate::debug_toggles::debug_toggle("CRANPOSE_DISABLE_PREFIX_SNAPSHOT").is_none()
 }
 
+fn deferred_direct_run_enabled() -> bool {
+    crate::debug_toggles::debug_toggle("CRANPOSE_NO_DEFERRED_RUN").as_deref() != Some("1")
+}
+
+fn shadow_composite_queue_enabled() -> bool {
+    crate::debug_toggles::debug_toggle("CRANPOSE_NO_SHADOW_COMPOSITE_QUEUE").as_deref() != Some("1")
+}
+
 fn direct_scene_range_coalesce_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED.get_or_init(|| {
@@ -119,6 +129,12 @@ struct DirectChunkRunCoalescer {
 impl DirectChunkRunCoalescer {
     fn absorb(&mut self, chunk_start: usize) {
         self.run_start.get_or_insert(chunk_start);
+    }
+
+    fn peek(&self, boundary: usize) -> Option<(usize, usize)> {
+        self.run_start
+            .filter(|start| *start < boundary)
+            .map(|start| (start, boundary))
     }
 
     fn flush_at(&mut self, boundary: usize) -> Option<(usize, usize)> {
@@ -1502,6 +1518,32 @@ fn draw_op_visible_bounds(scene: &CompositorScene, draw_op: DrawOp) -> Option<Re
     }
 }
 
+/// Every pixel a deferred range can write, shadows included: a blurred
+/// shadow reaches beyond its shapes by the blur extent, so it is bounded by
+/// its expanded, clipped rectangle rather than skipped like the chunk cache
+/// skips it.
+/// Whether any draw op of the range that is not excluded touches
+/// `dependency_rect`. Ops are tested one by one: the union of a run's bounds
+/// would make every capture depend on everything walked before it.
+fn deferred_range_intersects(
+    scene: &CompositorScene,
+    z_start: usize,
+    z_end: usize,
+    excluded: &[Range<usize>],
+    dependency_rect: Rect,
+) -> bool {
+    scene_range_draw_ops(&scene.draw_ops, z_start, z_end)
+        .iter()
+        .filter(|op| !is_in_effect_range(op.z_index, excluded))
+        .filter_map(|op| match op.kind {
+            DrawOpKind::Shadow(index) => scene.shadow_draws.get(index).and_then(|shadow| {
+                crate::normalized_scene::shadow_draws_bounds(std::slice::from_ref(shadow))
+            }),
+            _ => draw_op_visible_bounds(scene, *op),
+        })
+        .any(|rect| rects_intersect(rect, dependency_rect))
+}
+
 fn scene_range_visible_bounds(
     scene: &CompositorScene,
     z_start: usize,
@@ -1654,11 +1696,23 @@ struct ChildUnderlay {
     baked: bool,
 }
 
-/// The pixels beneath a child that carries nested backdrops, sampled from the
-/// parent target once everything below the child, its own backdrop included,
-/// has been flushed into it. A whole-pixel translated child gets a verbatim
-/// copy it bakes as its surface's base; any other placement gets a projected
-/// resample its nested captures read through.
+/// The parent target a child's underlay is sampled from, with the composite
+/// queues still waiting to land on it.
+struct UnderlayCaptureSource<'a, 'q, 's> {
+    target_view: &'a wgpu::TextureView,
+    viewport: (u32, u32),
+    dependency_rect: Rect,
+    queues: &'a mut PendingQueues<'q, 's>,
+}
+
+/// The pixels beneath a child that carries nested backdrops. A whole-pixel
+/// translated child gets a verbatim copy it bakes as its surface's base, and
+/// the pending composites that overlap it, its own backdrop included, are
+/// replayed into that copy instead of being flushed to the parent first: the
+/// same blend on the same source and destination pixels, shifted by the
+/// copy's whole-pixel origin, so the copy carries the bytes a flush would
+/// have produced while the parent keeps batching. Any other placement
+/// flushes the queues and reads a projected resample through them.
 #[allow(clippy::too_many_arguments)]
 fn sample_child_underlay<B: SurfaceExecutionBackend>(
     backend: &mut B,
@@ -1669,7 +1723,8 @@ fn sample_child_underlay<B: SurfaceExecutionBackend>(
     underlay_identity: Option<u64>,
     parent_scale: f32,
     translation_context: TranslationRenderContext,
-) -> ChildUnderlay {
+    source: UnderlayCaptureSource<'_, '_, '_>,
+) -> Result<ChildUnderlay, String> {
     let child_scale = child_surface_target_scale(child, parent_scale, translation_context);
     let device_origin = (backend.underlay_bake_enabled()
         && parent_underlay.is_none()
@@ -1688,28 +1743,81 @@ fn sample_child_underlay<B: SurfaceExecutionBackend>(
             )
         })
         .flatten();
+    flush_deferred_run_for_dependency(
+        backend,
+        source.target_view,
+        source.viewport,
+        parent_scale,
+        source.dependency_rect,
+        child.z_index,
+        source.queues,
+    )?;
+    let dependency_pixels = surface_pixel_rect(source.dependency_rect, parent_scale);
+    let conflicts = pending_capture_conflicts(
+        source.queues.composites,
+        source.queues.composite_load_op,
+        source.queues.shader_composites,
+        source.queues.shader_load_op,
+        dependency_pixels,
+    );
+    let replay =
+        device_origin.is_some() && backend.underlay_replay_enabled() && !conflicts.clear_held;
     if backdrop_diag_enabled() {
         eprintln!(
-            "[backdrop-diag] underlay node={:?} plain={} identity={} device_origin={:?}",
+            "[backdrop-diag] underlay node={:?} plain={} identity={} device_origin={:?} replay={replay} conflicts={}:{}",
             child.node_id,
             child_composites_plainly(child),
             underlay_identity.is_some(),
             device_origin,
+            conflicts.composites,
+            conflicts.shaders,
         );
     }
-    if let Some(target) = device_origin.and_then(|origin| {
-        copy_child_underlay(
+    let flush_queues = |backend: &mut B, queues: &mut PendingQueues<'_, '_>| {
+        flush_pending_queues_for_backdrop_capture(
+            backend,
+            queues.composites,
+            queues.composite_load_op,
+            queues.shader_composites,
+            queues.shader_load_op,
+            source.target_view,
+            source.viewport,
+            queues.next_load_op,
+            source.dependency_rect,
+            parent_scale,
+        )
+    };
+    if replay {
+        flush_pending_clear(backend, source.target_view, source.queues.next_load_op);
+    } else {
+        flush_queues(backend, source.queues)?;
+    }
+    if let Some(origin) = device_origin {
+        if let Some(target) = copy_child_underlay(
             backend,
             parent_target,
             origin,
             placement.logical_rect,
             parent_scale,
-        )
-    }) {
-        return ChildUnderlay {
-            target,
-            baked: true,
-        };
+        ) {
+            if replay && conflicts.any() {
+                replay_pending_into_copy(
+                    backend,
+                    &target,
+                    origin,
+                    source.queues.composites,
+                    source.queues.shader_composites,
+                    dependency_pixels,
+                )?;
+            }
+            return Ok(ChildUnderlay {
+                target,
+                baked: true,
+            });
+        }
+        if replay {
+            flush_queues(backend, source.queues)?;
+        }
     }
     let target = create_projected_child_underlay(
         backend,
@@ -1721,10 +1829,166 @@ fn sample_child_underlay<B: SurfaceExecutionBackend>(
         child_scale,
         underlay_sample_rect(&child.source),
     );
-    ChildUnderlay {
+    Ok(ChildUnderlay {
         target,
         baked: false,
+    })
+}
+
+/// A pending write moved from parent pixels into the underlay copy's own
+/// pixel space: the same destination shifted by the copy's origin, with its
+/// scissor cut down to the copy. `None` when the scissor leaves nothing of
+/// the write inside the copy.
+struct ReplayedWrite {
+    dest_quad: [[f32; 2]; 4],
+    dest_rect: Option<Rect>,
+    scissor: Option<(u32, u32, u32, u32)>,
+}
+
+fn replayed_write(
+    dest_quad: [[f32; 2]; 4],
+    scissor: Option<(u32, u32, u32, u32)>,
+    origin: (u32, u32),
+    underlay_size: (u32, u32),
+) -> Option<ReplayedWrite> {
+    let (origin_x, origin_y) = (origin.0 as f32, origin.1 as f32);
+    let dest_quad = dest_quad.map(|[x, y]| [x - origin_x, y - origin_y]);
+    let scissor = match scissor {
+        None => None,
+        Some((x, y, width, height)) => {
+            let left = x.max(origin.0);
+            let top = y.max(origin.1);
+            let right = x
+                .saturating_add(width)
+                .min(origin.0.saturating_add(underlay_size.0));
+            let bottom = y
+                .saturating_add(height)
+                .min(origin.1.saturating_add(underlay_size.1));
+            if right <= left || bottom <= top {
+                return None;
+            }
+            Some((left - origin.0, top - origin.1, right - left, bottom - top))
+        }
+    };
+    Some(ReplayedWrite {
+        dest_quad,
+        dest_rect: axis_aligned_quad_rect(dest_quad),
+        scissor,
+    })
+}
+
+/// Draws the pending composites that touch `dependency_pixels` into a copy
+/// taken out of the parent at `origin`, in the order they will later land on
+/// the parent, without consuming them: the copy then holds what the parent
+/// will show there, and the parent's own batch stays intact.
+fn replay_pending_into_copy<B: SurfaceExecutionBackend>(
+    backend: &mut B,
+    underlay: &OffscreenTarget,
+    origin: (u32, u32),
+    pending_composites: &[PendingLayerComposite],
+    pending_shader_composites: &[PendingShaderLayerComposite],
+    dependency_pixels: Rect,
+) -> Result<(), String> {
+    let viewport = (underlay.width, underlay.height);
+    let mut order: Vec<(usize, usize, bool, usize)> = pending_composites
+        .iter()
+        .enumerate()
+        .filter(|(_, pending)| {
+            pending_write_intersects_rect(pending.dest_quad, pending.scissor, dependency_pixels)
+        })
+        .map(|(index, pending)| (pending.z_index, pending.seq, false, index))
+        .chain(
+            pending_shader_composites
+                .iter()
+                .enumerate()
+                .filter(|(_, pending)| {
+                    pending_write_intersects_rect(
+                        pending.dest_quad,
+                        pending.scissor,
+                        dependency_pixels,
+                    )
+                })
+                .map(|(index, pending)| (pending.z_index, pending.seq, true, index)),
+        )
+        .collect();
+    order.sort_by_key(|&(z_index, seq, _, _)| (z_index, seq));
+
+    let mut items = Vec::with_capacity(order.len());
+    let mut writes = Vec::with_capacity(order.len());
+    for &(_, _, is_shader, index) in &order {
+        let (dest_quad, scissor) = if is_shader {
+            let pending = &pending_shader_composites[index];
+            (pending.dest_quad, pending.scissor)
+        } else {
+            let pending = &pending_composites[index];
+            (pending.dest_quad, pending.scissor)
+        };
+        let Some(write) = replayed_write(dest_quad, scissor, origin, viewport) else {
+            continue;
+        };
+        let item = if is_shader {
+            let pending = &pending_shader_composites[index];
+            let source = pending.surface.target.target();
+            let (origin_x, origin_y) = (origin.0 as f32, origin.1 as f32);
+            let (x, y, width, height) = pending.dest_viewport;
+            FusedCompositeItem::Shader(ShaderCompositeBatchItem {
+                source,
+                shader: &pending.shader,
+                layer_pixel_rect: content_effect_pixel_rect(
+                    pending.surface.effect_content_rect,
+                    pending.surface.logical_rect,
+                    source.width,
+                    source.height,
+                ),
+                scissor: write.scissor,
+                dest_viewport: (x - origin_x, y - origin_y, width, height),
+            })
+        } else {
+            let pending = &pending_composites[index];
+            let Some(mut item) = layer_surface_composite_batch_item(pending) else {
+                return Err("a pending layer composite must be batchable".to_string());
+            };
+            let source = pending.surface.target.target();
+            item.scissor = write.scissor;
+            item.rounded_mask = write
+                .dest_rect
+                .and_then(|dest_rect| layer_surface_rounded_mask(&pending.surface, dest_rect));
+            item.dest_viewport = write.dest_rect.map(|dest_rect| {
+                composite_dest_viewport(
+                    dest_rect,
+                    source.width,
+                    source.height,
+                    pending.surface.sample_mode,
+                )
+            });
+            FusedCompositeItem::Blit(item)
+        };
+        items.push(item);
+        writes.push((is_shader, index, write));
     }
+    if items.is_empty() {
+        return Ok(());
+    }
+    if backend.fused_composite_batch_to_view(&underlay.view, viewport, wgpu::LoadOp::Load, &items) {
+        return Ok(());
+    }
+    for (is_shader, index, write) in writes {
+        let surface = if is_shader {
+            &pending_shader_composites[index].surface
+        } else {
+            &pending_composites[index].surface
+        };
+        composite_layer_surface_to_view(
+            backend,
+            surface,
+            &underlay.view,
+            viewport,
+            write.dest_quad,
+            wgpu::LoadOp::Load,
+            write.scissor,
+        )?;
+    }
+    Ok(())
 }
 
 /// Copies the device pixels the child's surface will be composited onto out
@@ -2319,6 +2583,7 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
         let mut pending_shader_load_op = None;
         let mut composite_seq = 0usize;
         let mut prior_child_contributions = Vec::new();
+        let mut deferred = DeferredDirectRun::new(&local_scene);
         for mut child in child_layers {
             if cursor_z < child.z_index {
                 let range_has_events = range_contains_layer_events(
@@ -2328,6 +2593,19 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
                     child.z_index,
                 );
                 if range_has_events {
+                    flush_deferred_run(
+                        backend,
+                        surface_view,
+                        (width, height),
+                        root_scale,
+                        cursor_z,
+                        &mut deferred,
+                        &mut pending_composites,
+                        &mut pending_composite_load_op,
+                        &mut pending_shader_composites,
+                        &mut pending_shader_load_op,
+                        &mut next_load_op,
+                    )?;
                     render_non_effect_range_with_pending_composites(
                         backend,
                         surface_view,
@@ -2342,6 +2620,7 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
                         &mut pending_shader_composites,
                         &mut pending_shader_load_op,
                         &mut next_load_op,
+                        &deferred.excluded,
                     )?;
                     let backdrop_input_hashes = scene_backdrop_input_hashes(
                         &local_scene,
@@ -2380,9 +2659,13 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
                         &mut pending_shader_composites,
                         &mut pending_shader_load_op,
                         &mut next_load_op,
+                        &mut deferred,
+                        !deferred_direct_run_enabled(),
                     )?;
+                    if !deferred_direct_run_enabled() {
+                        next_load_op = wgpu::LoadOp::Load;
+                    }
                 }
-                next_load_op = wgpu::LoadOp::Load;
             }
 
             let resolved_child = resolved_child_surface_composite(&child);
@@ -2409,6 +2692,19 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
 
             let child_backdrop_reads_target = child.backdrop.is_some() && root_target.is_some();
             if !resolved_child.shadow_draws.is_empty() && !child_backdrop_reads_target {
+                flush_deferred_run(
+                    backend,
+                    surface_view,
+                    (width, height),
+                    root_scale,
+                    child.z_index,
+                    &mut deferred,
+                    &mut pending_composites,
+                    &mut pending_composite_load_op,
+                    &mut pending_shader_composites,
+                    &mut pending_shader_load_op,
+                    &mut next_load_op,
+                )?;
                 render_non_effect_range_with_pending_composites(
                     backend,
                     surface_view,
@@ -2423,6 +2719,7 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
                     &mut pending_shader_composites,
                     &mut pending_shader_load_op,
                     &mut next_load_op,
+                    &deferred.excluded,
                 )?;
                 flush_pending_clear(backend, surface_view, &mut next_load_op);
                 for shadow in &resolved_child.shadow_draws {
@@ -2430,17 +2727,21 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
                 }
             }
 
-            if child.needs_nested_underlay {
-                flush_pending_shader_layer_composites(
-                    backend,
-                    &mut pending_shader_composites,
-                    surface_view,
-                    (width, height),
-                    &mut pending_shader_load_op,
-                    &mut next_load_op,
-                )?;
-            }
-
+            let wants_underlay = child.needs_nested_underlay;
+            let child_underlay_identity = wants_underlay
+                .then(|| {
+                    underlay_identity_before(
+                        &local_scene,
+                        &prior_child_contributions,
+                        child.z_index,
+                        axis_aligned_quad_rect(resolved_child.dest_quad)?,
+                        (width, height),
+                        root_scale,
+                        None,
+                        false,
+                    )
+                })
+                .flatten();
             composite_root_child_backdrop(
                 backend,
                 root_target,
@@ -2458,38 +2759,25 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
                     shader_load_op: &mut pending_shader_load_op,
                     next_load_op: &mut next_load_op,
                     composite_seq: &mut composite_seq,
+                    deferred: &mut deferred,
                 },
             )?;
-            let child_underlay_identity = child
-                .needs_nested_underlay
-                .then(|| {
-                    underlay_identity_before(
-                        &local_scene,
-                        &prior_child_contributions,
-                        child.z_index,
-                        axis_aligned_quad_rect(resolved_child.dest_quad)?,
-                        (width, height),
-                        root_scale,
-                        None,
-                        false,
-                    )
-                })
-                .flatten();
+            if child_is_bare_backdrop(&child) {
+                let scissor = child
+                    .visual_clip
+                    .and_then(|clip| scissor_rect_for_rect(clip, root_scale, width, height));
+                prior_child_contributions.push(bare_backdrop_child_contribution(
+                    &child,
+                    &resolved_child,
+                    scissor,
+                ));
+                cursor_z = child.z_index.saturating_add(1);
+                continue;
+            }
             let mut bake_underlay = false;
-            let child_underlay = if child.needs_nested_underlay {
+            let child_underlay = if wants_underlay {
                 Some(match root_target {
                     Some(root_target) => {
-                        flush_pending_composite_queues_fused(
-                            backend,
-                            &mut pending_composites,
-                            &mut pending_composite_load_op,
-                            &mut pending_shader_composites,
-                            &mut pending_shader_load_op,
-                            surface_view,
-                            (width, height),
-                            &mut next_load_op,
-                        )?;
-                        flush_pending_clear(backend, surface_view, &mut next_load_op);
                         let underlay = sample_child_underlay(
                             backend,
                             root_target,
@@ -2505,19 +2793,43 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
                             child_underlay_identity,
                             root_scale,
                             TranslationRenderContext::default(),
-                        );
+                            UnderlayCaptureSource {
+                                target_view: surface_view,
+                                viewport: (width, height),
+                                dependency_rect: quad_bounds(child_dest_quad),
+                                queues: &mut PendingQueues {
+                                    composites: &mut pending_composites,
+                                    composite_load_op: &mut pending_composite_load_op,
+                                    shader_composites: &mut pending_shader_composites,
+                                    shader_load_op: &mut pending_shader_load_op,
+                                    next_load_op: &mut next_load_op,
+                                    composite_seq: &mut composite_seq,
+                                    deferred: &mut deferred,
+                                },
+                            },
+                        )?;
                         bake_underlay = underlay.baked;
                         underlay.target
                     }
-                    None => create_direct_root_child_underlay(
-                        backend,
-                        &local_scene,
-                        resolved_child.logical_rect,
-                        resolved_child.dest_quad,
-                        child.z_index,
-                        &pending_composites,
-                        root_scale,
-                    )?,
+                    None => {
+                        flush_pending_shader_layer_composites(
+                            backend,
+                            &mut pending_shader_composites,
+                            surface_view,
+                            (width, height),
+                            &mut pending_shader_load_op,
+                            &mut next_load_op,
+                        )?;
+                        create_direct_root_child_underlay(
+                            backend,
+                            &local_scene,
+                            resolved_child.logical_rect,
+                            resolved_child.dest_quad,
+                            child.z_index,
+                            &pending_composites,
+                            root_scale,
+                        )?
+                    }
                 })
             } else {
                 None
@@ -2543,6 +2855,28 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
             }
             let child_surface = child_surface_result?;
             if child_backdrop_reads_target && !resolved_child.shadow_draws.is_empty() {
+                if backdrop_diag_enabled() {
+                    eprintln!(
+                        "[backdrop-diag] shadow-flush node={:?} shadows={} pending={} shader_pending={}",
+                        child.node_id,
+                        resolved_child.shadow_draws.len(),
+                        pending_composites.len(),
+                        pending_shader_composites.len()
+                    );
+                }
+                flush_deferred_run(
+                    backend,
+                    surface_view,
+                    (width, height),
+                    root_scale,
+                    child.z_index,
+                    &mut deferred,
+                    &mut pending_composites,
+                    &mut pending_composite_load_op,
+                    &mut pending_shader_composites,
+                    &mut pending_shader_load_op,
+                    &mut next_load_op,
+                )?;
                 flush_pending_composite_queues_fused(
                     backend,
                     &mut pending_composites,
@@ -2621,6 +2955,19 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
                         next_load_op = wgpu::LoadOp::Load;
                     }
                     Err(child_surface) => {
+                        flush_deferred_run(
+                            backend,
+                            surface_view,
+                            (width, height),
+                            root_scale,
+                            child.z_index,
+                            &mut deferred,
+                            &mut pending_composites,
+                            &mut pending_composite_load_op,
+                            &mut pending_shader_composites,
+                            &mut pending_shader_load_op,
+                            &mut next_load_op,
+                        )?;
                         render_non_effect_range_with_pending_composites(
                             backend,
                             surface_view,
@@ -2635,6 +2982,7 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
                             &mut pending_shader_composites,
                             &mut pending_shader_load_op,
                             &mut next_load_op,
+                            &deferred.excluded,
                         )?;
                         let composite_load_op = next_load_op;
                         composite_layer_surface_to_view(
@@ -2655,109 +3003,185 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
             cursor_z = child.z_index.saturating_add(1);
         }
 
-        if cursor_z < local_scene.next_z {
-            let range_has_events = range_contains_layer_events(
-                &local_scene.effect_layers,
-                &local_scene.backdrop_layers,
-                cursor_z,
-                local_scene.next_z,
-            );
-            if range_has_events {
-                render_non_effect_range_with_pending_composites(
-                    backend,
-                    surface_view,
-                    &local_scene,
-                    cursor_z,
-                    cursor_z,
-                    width,
-                    height,
-                    root_scale,
-                    &mut pending_composites,
-                    &mut pending_composite_load_op,
-                    &mut pending_shader_composites,
-                    &mut pending_shader_load_op,
-                    &mut next_load_op,
-                )?;
-                let backdrop_input_hashes = scene_backdrop_input_hashes(
-                    &local_scene,
-                    &prior_child_contributions,
-                    (width, height),
-                    root_scale,
-                );
-                render_range_with_layer_events_to_view(
-                    backend,
-                    surface_view,
-                    root_target,
-                    &backdrop_input_hashes,
-                    &local_scene,
-                    cursor_z,
-                    local_scene.next_z,
-                    None,
-                    width,
-                    height,
-                    root_scale,
-                    next_load_op,
-                )?;
-            } else {
-                render_direct_scene_range_with_pending_composites(
-                    backend,
-                    surface_view,
-                    root_target,
-                    &local_scene,
-                    cursor_z,
-                    local_scene.next_z,
-                    width,
-                    height,
-                    root_scale,
-                    &mut pending_composites,
-                    &mut composite_seq,
-                    &mut pending_composite_load_op,
-                    &mut pending_shader_composites,
-                    &mut pending_shader_load_op,
-                    &mut next_load_op,
-                )?;
-                render_non_effect_range_with_pending_composites(
-                    backend,
-                    surface_view,
-                    &local_scene,
-                    local_scene.next_z,
-                    local_scene.next_z,
-                    width,
-                    height,
-                    root_scale,
-                    &mut pending_composites,
-                    &mut pending_composite_load_op,
-                    &mut pending_shader_composites,
-                    &mut pending_shader_load_op,
-                    &mut next_load_op,
-                )?;
-            }
-        } else if matches!(next_load_op, wgpu::LoadOp::Clear(_)) {
-            backend.clear_target_view_with_load_op(surface_view, next_load_op);
-        } else {
-            render_non_effect_range_with_pending_composites(
-                backend,
-                surface_view,
-                &local_scene,
-                local_scene.next_z,
-                local_scene.next_z,
-                width,
-                height,
-                root_scale,
-                &mut pending_composites,
-                &mut pending_composite_load_op,
-                &mut pending_shader_composites,
-                &mut pending_shader_load_op,
-                &mut next_load_op,
-            )?;
-        }
-
+        finish_root_ranges(
+            backend,
+            surface_view,
+            root_target,
+            &local_scene,
+            &prior_child_contributions,
+            cursor_z,
+            width,
+            height,
+            root_scale,
+            &mut deferred,
+            &mut pending_composites,
+            &mut composite_seq,
+            &mut pending_composite_load_op,
+            &mut pending_shader_composites,
+            &mut pending_shader_load_op,
+            &mut next_load_op,
+        )?;
         Ok(())
     })();
     match result {
         Ok(()) => Ok(local_scene),
         Err(error) => Err((error, local_scene)),
     }
+}
+
+/// Draws whatever the root walk left after its last child: the trailing
+/// range, the deferred run and every pending composite, as one fused pass
+/// where the scene allows it.
+#[allow(clippy::too_many_arguments)]
+fn finish_root_ranges<B: SurfaceExecutionBackend>(
+    backend: &mut B,
+    surface_view: &wgpu::TextureView,
+    root_target: Option<&OffscreenTarget>,
+    local_scene: &CompositorScene,
+    prior_child_contributions: &[BackdropPrefixChildContribution],
+    cursor_z: usize,
+    width: u32,
+    height: u32,
+    root_scale: f32,
+    deferred: &mut DeferredDirectRun<'_>,
+    pending_composites: &mut Vec<PendingLayerComposite>,
+    composite_seq: &mut usize,
+    pending_composite_load_op: &mut Option<wgpu::LoadOp<wgpu::Color>>,
+    pending_shader_composites: &mut Vec<PendingShaderLayerComposite>,
+    pending_shader_load_op: &mut Option<wgpu::LoadOp<wgpu::Color>>,
+    next_load_op: &mut wgpu::LoadOp<wgpu::Color>,
+) -> Result<(), String> {
+    if cursor_z < local_scene.next_z {
+        let range_has_events = range_contains_layer_events(
+            &local_scene.effect_layers,
+            &local_scene.backdrop_layers,
+            cursor_z,
+            local_scene.next_z,
+        );
+        if range_has_events {
+            flush_deferred_run(
+                backend,
+                surface_view,
+                (width, height),
+                root_scale,
+                cursor_z,
+                deferred,
+                pending_composites,
+                pending_composite_load_op,
+                pending_shader_composites,
+                pending_shader_load_op,
+                next_load_op,
+            )?;
+            render_non_effect_range_with_pending_composites(
+                backend,
+                surface_view,
+                local_scene,
+                cursor_z,
+                cursor_z,
+                width,
+                height,
+                root_scale,
+                pending_composites,
+                pending_composite_load_op,
+                pending_shader_composites,
+                pending_shader_load_op,
+                next_load_op,
+                &deferred.excluded,
+            )?;
+            let backdrop_input_hashes = scene_backdrop_input_hashes(
+                local_scene,
+                prior_child_contributions,
+                (width, height),
+                root_scale,
+            );
+            render_range_with_layer_events_to_view(
+                backend,
+                surface_view,
+                root_target,
+                &backdrop_input_hashes,
+                local_scene,
+                cursor_z,
+                local_scene.next_z,
+                None,
+                width,
+                height,
+                root_scale,
+                *next_load_op,
+            )?;
+        } else {
+            render_direct_scene_range_with_pending_composites(
+                backend,
+                surface_view,
+                root_target,
+                local_scene,
+                cursor_z,
+                local_scene.next_z,
+                width,
+                height,
+                root_scale,
+                pending_composites,
+                composite_seq,
+                pending_composite_load_op,
+                pending_shader_composites,
+                pending_shader_load_op,
+                next_load_op,
+                deferred,
+                true,
+            )?;
+            render_non_effect_range_with_pending_composites(
+                backend,
+                surface_view,
+                local_scene,
+                local_scene.next_z,
+                local_scene.next_z,
+                width,
+                height,
+                root_scale,
+                pending_composites,
+                pending_composite_load_op,
+                pending_shader_composites,
+                pending_shader_load_op,
+                next_load_op,
+                &deferred.excluded,
+            )?;
+        }
+    } else {
+        flush_deferred_run(
+            backend,
+            surface_view,
+            (width, height),
+            root_scale,
+            local_scene.next_z,
+            deferred,
+            pending_composites,
+            pending_composite_load_op,
+            pending_shader_composites,
+            pending_shader_load_op,
+            next_load_op,
+        )?;
+        if matches!(*next_load_op, wgpu::LoadOp::Clear(_)) {
+            backend.clear_target_view_with_load_op(surface_view, *next_load_op);
+        } else {
+            render_non_effect_range_with_pending_composites(
+                backend,
+                surface_view,
+                local_scene,
+                local_scene.next_z,
+                local_scene.next_z,
+                width,
+                height,
+                root_scale,
+                pending_composites,
+                pending_composite_load_op,
+                pending_shader_composites,
+                pending_shader_load_op,
+                next_load_op,
+                &deferred.excluded,
+            )?;
+        }
+    }
+
+    Ok(())
 }
 
 pub(crate) fn render_layer_surface<B: SurfaceExecutionBackend>(
@@ -3003,8 +3427,12 @@ fn minimum_surface_scale_for_composite(
     }
 }
 
-fn can_materialize_cached_effect(effect: &RenderEffect, backdrop: Option<&RenderEffect>) -> bool {
-    backdrop.is_none() && !effect.contains_runtime_shader()
+/// Whether a layer's effect output can live in the layer cache: every input
+/// of the effect (its parameters, a runtime shader's source and uniforms,
+/// the layer rect) is in the cache key, so only an effect reading the
+/// backdrop is excluded.
+fn can_materialize_cached_effect(_effect: &RenderEffect, backdrop: Option<&RenderEffect>) -> bool {
+    backdrop.is_none()
 }
 
 fn materialize_render_effect_to_target<B: SurfaceExecutionBackend>(
@@ -3211,6 +3639,38 @@ fn backdrop_prefix_child_contribution(
     }
 }
 
+fn child_is_bare_backdrop(child: &ChildLayerComposite) -> bool {
+    child.backdrop.is_some() && child.source.is_empty()
+}
+
+/// The contribution of a backdrop child that draws nothing over its effect
+/// output: only the effect output reaches later captures, so no surface is
+/// rendered or composited for it.
+fn bare_backdrop_child_contribution(
+    child: &ChildLayerComposite,
+    resolved_child: &ResolvedChildSurfaceComposite,
+    scissor: Option<(u32, u32, u32, u32)>,
+) -> BackdropPrefixChildContribution {
+    BackdropPrefixChildContribution {
+        z_index: child.z_index,
+        node_id: child.node_id,
+        content_hash: child.target_content_hash,
+        effect_hash: child.effect_hash,
+        backdrop_hash: child
+            .backdrop
+            .as_ref()
+            .map(retained_render_effect_hash)
+            .unwrap_or(0),
+        deferred_effect_hash: 0,
+        logical_rect: resolved_child.logical_rect,
+        dest_quad: resolved_child.dest_quad,
+        scissor,
+        composite_alpha_bits: 1.0f32.to_bits(),
+        blend_mode: BlendMode::SrcOver,
+        sample_mode: CompositeSampleMode::Linear,
+    }
+}
+
 #[cfg(test)]
 fn backdrop_effect_cache_key(
     layer: &BackdropLayer,
@@ -3276,6 +3736,8 @@ fn backdrop_scene_prefix_hash(
     hash_f32_bits(root_scale, &mut hasher);
     z_end.hash(&mut hasher);
 
+    let diag = backdrop_diag_enabled();
+    let mut draw_op_count = 0usize;
     for draw_op in scene_range_draw_ops(&scene.draw_ops, 0, z_end)
         .iter()
         .filter(|draw_op| {
@@ -3285,7 +3747,10 @@ fn backdrop_scene_prefix_hash(
     {
         0u8.hash(&mut hasher);
         hash_draw_op(scene, draw_op, &mut hasher);
+        draw_op_count += 1;
     }
+    let after_draw_ops = hasher.finish();
+    let mut effect_layer_count = 0usize;
     for effect_layer in scene
         .effect_layers
         .iter()
@@ -3293,7 +3758,9 @@ fn backdrop_scene_prefix_hash(
     {
         1u8.hash(&mut hasher);
         hash_effect_layer(effect_layer, &mut hasher);
+        effect_layer_count += 1;
     }
+    let after_effect_layers = hasher.finish();
     for backdrop_layer in scene.backdrop_layers.iter().filter(|layer| {
         layer.z_index < z_end
             && rects_intersect(
@@ -3310,6 +3777,7 @@ fn backdrop_scene_prefix_hash(
         2u8.hash(&mut hasher);
         hash_backdrop_layer(backdrop_layer, &mut hasher);
     }
+    let after_backdrop_layers = hasher.finish();
     for child in prior_child_contributions.iter().filter(|child| {
         if child.z_index >= z_end {
             return false;
@@ -3331,8 +3799,14 @@ fn backdrop_scene_prefix_hash(
         3u8.hash(&mut hasher);
         hash_backdrop_prefix_child(child, &mut hasher);
     }
-
-    hasher.finish()
+    let result = hasher.finish();
+    if diag {
+        eprintln!(
+            "[backdrop-diag] prefix-hash z_end={z_end} capture=({:.1},{:.1}) ops={draw_op_count}:{after_draw_ops} effects={effect_layer_count}:{after_effect_layers} backdrops={after_backdrop_layers} full={result}",
+            capture_rect.x, capture_rect.y
+        );
+    }
+    result
 }
 
 fn scene_backdrop_input_hashes(
@@ -3770,6 +4244,13 @@ fn hash_shadow_draw<H: Hasher>(shadow: &ShadowDraw, state: &mut H) {
     }
     hash_f32_bits(shadow.blur_radius, state);
     hash_optional_rect(shadow.clip, state);
+    shadow.rounded_clip.is_some().hash(state);
+    if let Some(rounded_clip) = shadow.rounded_clip {
+        hash_rect(rounded_clip.rect, state);
+        for radius in rounded_clip.radii {
+            hash_f32_bits(radius, state);
+        }
+    }
     shadow.z_index.hash(state);
 }
 
@@ -4106,6 +4587,47 @@ fn backdrop_dependency_rect(
     union_rect(Some(capture), output)
 }
 
+/// The pending writes a capture of `dependency_pixels` would have to see
+/// first: composites and shader composites whose destination touches the
+/// rect, and a clear one of the queues still holds, which means the target
+/// carries nothing yet.
+struct CaptureConflicts {
+    composites: usize,
+    shaders: usize,
+    clear_held: bool,
+}
+
+impl CaptureConflicts {
+    fn any(&self) -> bool {
+        self.composites > 0 || self.shaders > 0 || self.clear_held
+    }
+}
+
+fn pending_capture_conflicts(
+    pending_composites: &[PendingLayerComposite],
+    pending_composite_load_op: &Option<wgpu::LoadOp<wgpu::Color>>,
+    pending_shader_composites: &[PendingShaderLayerComposite],
+    pending_shader_load_op: &Option<wgpu::LoadOp<wgpu::Color>>,
+    dependency_pixels: Rect,
+) -> CaptureConflicts {
+    CaptureConflicts {
+        composites: pending_composites
+            .iter()
+            .filter(|pending| {
+                pending_write_intersects_rect(pending.dest_quad, pending.scissor, dependency_pixels)
+            })
+            .count(),
+        shaders: pending_shader_composites
+            .iter()
+            .filter(|pending| {
+                pending_write_intersects_rect(pending.dest_quad, pending.scissor, dependency_pixels)
+            })
+            .count(),
+        clear_held: pending_load_op_holds_clear(pending_composite_load_op)
+            || pending_load_op_holds_clear(pending_shader_load_op),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn flush_pending_queues_for_backdrop_capture<B: SurfaceExecutionBackend>(
     backend: &mut B,
@@ -4120,12 +4642,25 @@ fn flush_pending_queues_for_backdrop_capture<B: SurfaceExecutionBackend>(
     root_scale: f32,
 ) -> Result<(), String> {
     let dependency_pixels = surface_pixel_rect(dependency_rect, root_scale);
-    let must_flush = pending_composites.iter().any(|pending| {
-        pending_write_intersects_rect(pending.dest_quad, pending.scissor, dependency_pixels)
-    }) || pending_shader_composites.iter().any(|pending| {
-        pending_write_intersects_rect(pending.dest_quad, pending.scissor, dependency_pixels)
-    }) || pending_load_op_holds_clear(pending_composite_load_op)
-        || pending_load_op_holds_clear(pending_shader_load_op);
+    let conflicts = pending_capture_conflicts(
+        pending_composites,
+        pending_composite_load_op,
+        pending_shader_composites,
+        pending_shader_load_op,
+        dependency_pixels,
+    );
+    let must_flush = conflicts.any();
+    if backdrop_diag_enabled() {
+        eprintln!(
+            "[backdrop-diag] capture-flush must={must_flush} dep={:?} pending={} hit={} shader_pending={} shader_hit={} clear_held={}",
+            dependency_pixels,
+            pending_composites.len(),
+            conflicts.composites,
+            pending_shader_composites.len(),
+            conflicts.shaders,
+            conflicts.clear_held
+        );
+    }
     if must_flush {
         flush_pending_composite_queues_fused(
             backend,
@@ -4205,19 +4740,137 @@ fn take_ordered_pending_composite_load_op(
 
 /// The composite queues a render loop batches between passes, lent to the
 /// helpers that push into them or flush them.
-struct PendingQueues<'a> {
+struct PendingQueues<'a, 's> {
     composites: &'a mut Vec<PendingLayerComposite>,
     composite_load_op: &'a mut Option<wgpu::LoadOp<wgpu::Color>>,
     shader_composites: &'a mut Vec<PendingShaderLayerComposite>,
     shader_load_op: &'a mut Option<wgpu::LoadOp<wgpu::Color>>,
     next_load_op: &'a mut wgpu::LoadOp<wgpu::Color>,
     composite_seq: &'a mut usize,
+    deferred: &'a mut DeferredDirectRun<'s>,
+}
+
+/// The direct draw ops of a scene that have been walked but not drawn: they
+/// stay pending alongside the composites so that one fused pass draws every
+/// z-ordered range and composite together, instead of one pass per child.
+/// A capture that reads their pixels, an immediate draw that must land above
+/// them, or the end of the walk flushes the run.
+struct DeferredDirectRun<'s> {
+    scene: &'s CompositorScene,
+    run: DirectChunkRunCoalescer,
+    excluded: Vec<Range<usize>>,
+}
+
+impl<'s> DeferredDirectRun<'s> {
+    fn new(scene: &'s CompositorScene) -> Self {
+        Self {
+            scene,
+            run: DirectChunkRunCoalescer::default(),
+            excluded: Vec::new(),
+        }
+    }
+
+    /// Takes the draw op at `z_index` out of the run: it is drawn as a pending
+    /// composite instead, so segments and dependency checks skip it.
+    fn exclude(&mut self, z_index: usize) {
+        self.excluded.push(z_index..z_index.saturating_add(1));
+    }
+
+    /// The end of the chunk that may start at `cursor_z`: `None` when the op
+    /// there is excluded, otherwise the caller's end cut at the next exclusion.
+    fn chunk_end_from(&self, cursor_z: usize, chunk_end: usize) -> Option<usize> {
+        if is_in_effect_range(cursor_z, &self.excluded) {
+            return None;
+        }
+        let next_excluded = self
+            .excluded
+            .iter()
+            .map(|range| range.start)
+            .filter(|start| *start > cursor_z)
+            .min();
+        Some(next_excluded.map_or(chunk_end, |next| chunk_end.min(next)))
+    }
+
+    fn intersects(&self, dependency_rect: Rect, boundary: usize) -> bool {
+        self.run.peek(boundary).is_some_and(|(start, end)| {
+            deferred_range_intersects(self.scene, start, end, &self.excluded, dependency_rect)
+        })
+    }
+}
+
+/// Draws the deferred run up to `boundary` fused with every pending composite,
+/// so nothing drawn into the target afterwards can land beneath it.
+#[allow(clippy::too_many_arguments)]
+fn flush_deferred_run<B: SurfaceExecutionBackend>(
+    backend: &mut B,
+    target_view: &wgpu::TextureView,
+    viewport: (u32, u32),
+    root_scale: f32,
+    boundary: usize,
+    deferred: &mut DeferredDirectRun<'_>,
+    pending_composites: &mut Vec<PendingLayerComposite>,
+    pending_composite_load_op: &mut Option<wgpu::LoadOp<wgpu::Color>>,
+    pending_shader_composites: &mut Vec<PendingShaderLayerComposite>,
+    pending_shader_load_op: &mut Option<wgpu::LoadOp<wgpu::Color>>,
+    next_load_op: &mut wgpu::LoadOp<wgpu::Color>,
+) -> Result<(), String> {
+    let Some((run_start, run_end)) = deferred.run.flush_at(boundary) else {
+        return Ok(());
+    };
+    render_non_effect_range_with_pending_composites(
+        backend,
+        target_view,
+        deferred.scene,
+        run_start,
+        run_end,
+        viewport.0,
+        viewport.1,
+        root_scale,
+        pending_composites,
+        pending_composite_load_op,
+        pending_shader_composites,
+        pending_shader_load_op,
+        next_load_op,
+        &deferred.excluded,
+    )?;
+    deferred.excluded.retain(|range| range.start >= run_end);
+    Ok(())
+}
+
+fn flush_deferred_run_for_dependency<B: SurfaceExecutionBackend>(
+    backend: &mut B,
+    target_view: &wgpu::TextureView,
+    viewport: (u32, u32),
+    root_scale: f32,
+    dependency_rect: Rect,
+    boundary: usize,
+    queues: &mut PendingQueues<'_, '_>,
+) -> Result<(), String> {
+    if !queues.deferred.intersects(dependency_rect, boundary) {
+        return Ok(());
+    }
+    flush_deferred_run(
+        backend,
+        target_view,
+        viewport,
+        root_scale,
+        boundary,
+        queues.deferred,
+        queues.composites,
+        queues.composite_load_op,
+        queues.shader_composites,
+        queues.shader_load_op,
+        queues.next_load_op,
+    )
 }
 
 /// Composites a root child's own backdrop into the root target: capture,
 /// effect and either a pending composite, a deferred shader composite or a
 /// direct application, all ahead of the child's surface so an underlay
-/// sampled beneath the child already carries it.
+/// sampled beneath the child already carries it. A child whose surface bakes
+/// an underlay gets the effect materialized rather than deferred: its
+/// composite is then replayed into the underlay copy and drawn onto the root
+/// as two blits of one effect result instead of two shader runs.
 #[allow(clippy::too_many_arguments)]
 fn composite_root_child_backdrop<B: SurfaceExecutionBackend>(
     backend: &mut B,
@@ -4229,7 +4882,7 @@ fn composite_root_child_backdrop<B: SurfaceExecutionBackend>(
     resolved_child: &ResolvedChildSurfaceComposite,
     viewport: (u32, u32),
     root_scale: f32,
-    queues: &mut PendingQueues<'_>,
+    queues: &mut PendingQueues<'_, '_>,
 ) -> Result<(), String> {
     let (width, height) = viewport;
     if let Some(backdrop) = child.backdrop.clone() {
@@ -4244,38 +4897,30 @@ fn composite_root_child_backdrop<B: SurfaceExecutionBackend>(
             effect: backdrop,
             z_index: child.z_index,
         };
-        if let Some(dependency_rect) = backdrop_dependency_rect(
+        let replay_pixels = match backdrop_dependency_rect(
             resolved_child.backdrop_rect,
             child.visual_clip,
             &backdrop_layer.effect,
             root_scale,
             (width, height),
         ) {
-            flush_pending_queues_for_backdrop_capture(
+            Some(dependency_rect) => prepare_capture_source(
                 backend,
-                queues.composites,
-                queues.composite_load_op,
-                queues.shader_composites,
-                queues.shader_load_op,
-                surface_view,
-                (width, height),
-                queues.next_load_op,
+                root_target,
+                &backdrop_layer,
                 dependency_rect,
+                (width, height),
                 root_scale,
-            )?;
-        }
-        let child_backdrop_capture_rect = visible_backdrop_capture_rect(
-            resolved_child.backdrop_rect,
-            child.visual_clip,
-            &backdrop_layer.effect,
-            root_scale,
-            (width, height),
-        );
-        let backdrop_input_hash = backdrop_scene_prefix_hash(
+                queues,
+            )?,
+            None => None,
+        };
+        let backdrop_input_hash = child_backdrop_input_hash(
             local_scene,
             prior_child_contributions,
-            child.z_index,
-            child_backdrop_capture_rect.unwrap_or(backdrop_layer.rect),
+            child,
+            resolved_child,
+            &backdrop_layer.effect,
             (width, height),
             root_scale,
         );
@@ -4296,7 +4941,12 @@ fn composite_root_child_backdrop<B: SurfaceExecutionBackend>(
             height,
             root_scale,
             Some(backdrop_input_hash),
-            true,
+            !child.needs_nested_underlay,
+            replay_pixels.map(|dependency_pixels| PendingReplaySource {
+                composites: queues.composites,
+                shader_composites: queues.shader_composites,
+                dependency_pixels,
+            }),
         )? {
             let PreparedBackdropComposite {
                 surface: prepared_surface,
@@ -4346,6 +4996,18 @@ fn composite_root_child_backdrop<B: SurfaceExecutionBackend>(
                 *queues.next_load_op = wgpu::LoadOp::Load;
             }
         } else {
+            if replay_pixels.is_some() {
+                flush_pending_composite_queues_fused(
+                    backend,
+                    queues.composites,
+                    queues.composite_load_op,
+                    queues.shader_composites,
+                    queues.shader_load_op,
+                    surface_view,
+                    (width, height),
+                    queues.next_load_op,
+                )?;
+            }
             apply_backdrop_layer_to_target(
                 backend,
                 root_target,
@@ -4385,18 +5047,9 @@ fn composite_nested_child_backdrop<B: SurfaceExecutionBackend>(
     viewport: (u32, u32),
     target_scale: f32,
     context: NestedBackdropContext<'_>,
-    queues: &mut PendingQueues<'_>,
+    queues: &mut PendingQueues<'_, '_>,
 ) -> Result<(), String> {
     let (width, height) = viewport;
-    let child_backdrop_capture_rect = child.backdrop.as_ref().and_then(|backdrop| {
-        visible_backdrop_capture_rect(
-            resolved_child.backdrop_rect,
-            child.visual_clip,
-            backdrop,
-            target_scale,
-            (width, height),
-        )
-    });
 
     if !resolved_child.shadow_draws.is_empty() {
         flush_pending_composite_queues_fused(
@@ -4413,26 +5066,6 @@ fn composite_nested_child_backdrop<B: SurfaceExecutionBackend>(
     }
 
     if let Some(backdrop) = &child.backdrop {
-        if let Some(dependency_rect) = backdrop_dependency_rect(
-            resolved_child.backdrop_rect,
-            child.visual_clip,
-            backdrop,
-            target_scale,
-            (width, height),
-        ) {
-            flush_pending_queues_for_backdrop_capture(
-                backend,
-                queues.composites,
-                queues.composite_load_op,
-                queues.shader_composites,
-                queues.shader_load_op,
-                &target.view,
-                (width, height),
-                queues.next_load_op,
-                dependency_rect,
-                target_scale,
-            )?;
-        }
         let backdrop_layer = BackdropLayer {
             node_id: child.node_id,
             rect: resolved_child.backdrop_rect,
@@ -4441,21 +5074,35 @@ fn composite_nested_child_backdrop<B: SurfaceExecutionBackend>(
             effect: backdrop.clone(),
             z_index: child.z_index,
         };
-        let backdrop_input_hash = {
-            let local_hash = backdrop_scene_prefix_hash(
-                local_scene,
-                prior_child_contributions,
-                child.z_index,
-                child_backdrop_capture_rect.unwrap_or(backdrop_layer.rect),
+        let replay_pixels = match backdrop_dependency_rect(
+            resolved_child.backdrop_rect,
+            child.visual_clip,
+            backdrop,
+            target_scale,
+            (width, height),
+        ) {
+            Some(dependency_rect) => prepare_capture_source(
+                backend,
+                target,
+                &backdrop_layer,
+                dependency_rect,
                 (width, height),
                 target_scale,
-            );
-            if context.baked {
-                content_hash_over_underlay(local_hash, context.underlay_identity)
-            } else {
-                local_hash
-            }
+                queues,
+            )?,
+            None => None,
         };
+        let backdrop_input_hash = nested_child_backdrop_input_hash(
+            local_scene,
+            prior_child_contributions,
+            child,
+            resolved_child,
+            &backdrop_layer.effect,
+            (width, height),
+            target_scale,
+            context.baked,
+            context.underlay_identity,
+        );
         let effective_backdrop_underlay = if context.backdrop_underlay.is_some()
             && backdrop_underlay_is_covered_by_local_content(
                 &local_scene.shapes,
@@ -4481,6 +5128,11 @@ fn composite_nested_child_backdrop<B: SurfaceExecutionBackend>(
             target_scale,
             Some(backdrop_input_hash),
             false,
+            replay_pixels.map(|dependency_pixels| PendingReplaySource {
+                composites: queues.composites,
+                shader_composites: queues.shader_composites,
+                dependency_pixels,
+            }),
         )? {
             if queues.composites.is_empty() {
                 *queues.composite_load_op = Some(*queues.next_load_op);
@@ -4494,6 +5146,18 @@ fn composite_nested_child_backdrop<B: SurfaceExecutionBackend>(
             });
             *queues.next_load_op = wgpu::LoadOp::Load;
         } else {
+            if replay_pixels.is_some() {
+                flush_pending_composite_queues_fused(
+                    backend,
+                    queues.composites,
+                    queues.composite_load_op,
+                    queues.shader_composites,
+                    queues.shader_load_op,
+                    &target.view,
+                    (width, height),
+                    queues.next_load_op,
+                )?;
+            }
             apply_backdrop_layer_to_target(
                 backend,
                 target,
@@ -4637,6 +5301,7 @@ fn render_non_effect_range_with_pending_composites<B: SurfaceExecutionBackend>(
     pending_shader_composites: &mut Vec<PendingShaderLayerComposite>,
     pending_shader_load_op: &mut Option<wgpu::LoadOp<wgpu::Color>>,
     next_load_op: &mut wgpu::LoadOp<wgpu::Color>,
+    excluded: &[Range<usize>],
 ) -> Result<(), String> {
     if pending_composites.is_empty() && pending_shader_composites.is_empty() {
         backend.render_non_effect_segment(
@@ -4650,7 +5315,7 @@ fn render_non_effect_range_with_pending_composites<B: SurfaceExecutionBackend>(
             &scene.draw_ops,
             z_start,
             z_end,
-            &[],
+            excluded,
             width,
             height,
             root_scale,
@@ -4681,7 +5346,7 @@ fn render_non_effect_range_with_pending_composites<B: SurfaceExecutionBackend>(
         &scene.draw_ops,
         z_start,
         z_end,
-        &[],
+        excluded,
         &composite_items,
         &shader_composite_items,
         width,
@@ -5078,30 +5743,36 @@ fn serve_or_capture_prefix_snapshot<B: SurfaceExecutionBackend>(
     pending_composite_load_op: &mut Option<wgpu::LoadOp<wgpu::Color>>,
     next_load_op: &mut wgpu::LoadOp<wgpu::Color>,
 ) -> Result<PrefixSnapshotOutcome, String> {
+    let inert = |reason: &str| {
+        if backdrop_diag_enabled() {
+            eprintln!("[backdrop-diag] prefix-snapshot inert: {reason} z_end={z_end}");
+        }
+        Ok(PrefixSnapshotOutcome::Inert)
+    };
     if z_start != 0 || !prefix_snapshot_enabled() {
-        return Ok(PrefixSnapshotOutcome::Inert);
+        return inert("z_start or disabled");
     }
     let Some(source) = snapshot_source else {
-        return Ok(PrefixSnapshotOutcome::Inert);
+        return inert("no source");
     };
     let wgpu::LoadOp::Clear(clear) = *next_load_op else {
-        return Ok(PrefixSnapshotOutcome::Inert);
+        return inert("load op");
     };
     if source.width != width || source.height != height {
-        return Ok(PrefixSnapshotOutcome::Inert);
+        return inert("size");
     }
     // A pending feed capture copies specific shape slots out of this frame's
     // conversion stream; both replaying past them and splitting the frame's
     // batches around them would corrupt what the store captures. Captures
     // are one-shot events, so sitting the whole frame out is free.
     if any_pending_feed_captures() {
-        return Ok(PrefixSnapshotOutcome::Inert);
+        return inert("pending feed captures");
     }
     let prefix_end = prefix_snapshot_range_end(scene, z_end);
     let Some((key, logical_rect)) =
         prefix_snapshot_key(scene, prefix_end, width, height, root_scale, &clear)
     else {
-        return Ok(PrefixSnapshotOutcome::Inert);
+        return inert(&format!("no key prefix_end={prefix_end}"));
     };
 
     if let Some((cached_target, cached_rect)) = backend.cached_layer_surface(&key) {
@@ -5141,7 +5812,13 @@ fn serve_or_capture_prefix_snapshot<B: SurfaceExecutionBackend>(
     }
 
     if !backend.admit_layer_surface_cache_miss(&key, CacheAdmission::OnRepeat) {
+        if crate::layer_surface_cache::cache_diag_enabled() {
+            log::warn!("[layer-cache-diag] prefix-snapshot observe key={key:?}");
+        }
         return Ok(PrefixSnapshotOutcome::Claimed(prefix_end));
+    }
+    if crate::layer_surface_cache::cache_diag_enabled() {
+        log::warn!("[layer-cache-diag] prefix-snapshot admit key={key:?}");
     }
 
     // The entry renders through the same segment pipeline as the frame,
@@ -5182,6 +5859,82 @@ fn serve_or_capture_prefix_snapshot<B: SurfaceExecutionBackend>(
     }
 }
 
+/// Turns every cacheable blurred drop shadow of the range into pending
+/// composites of its cached shadow texture, one per band, and takes the ops
+/// out of the deferred run. A capture above the shadow then replays the
+/// composite into its copy instead of forcing the whole run onto the target.
+#[allow(clippy::too_many_arguments)]
+fn queue_blurred_shadow_composites<B: SurfaceExecutionBackend>(
+    backend: &mut B,
+    scene: &CompositorScene,
+    z_start: usize,
+    z_end: usize,
+    viewport: (u32, u32),
+    root_scale: f32,
+    pending_composites: &mut Vec<PendingLayerComposite>,
+    composite_seq: &mut usize,
+    pending_composite_load_op: &mut Option<wgpu::LoadOp<wgpu::Color>>,
+    next_load_op: &mut wgpu::LoadOp<wgpu::Color>,
+    deferred: &mut DeferredDirectRun<'_>,
+) {
+    if !root_scale.is_finite() || root_scale <= 0.0 || !shadow_composite_queue_enabled() {
+        return;
+    }
+    for op in scene_range_draw_ops(&scene.draw_ops, z_start, z_end) {
+        let DrawOpKind::Shadow(index) = op.kind else {
+            continue;
+        };
+        let Some(shadow) = scene.shadow_draws.get(index) else {
+            continue;
+        };
+        if !shadow_draw_is_blurred_drop(shadow) {
+            continue;
+        }
+        let Some(prepared) =
+            backend.prepare_shadow_composite(shadow, viewport.0, viewport.1, root_scale)
+        else {
+            continue;
+        };
+        deferred.exclude(op.z_index);
+        let (x, y, width, height) = prepared.dest_viewport;
+        let dest_quad = crate::rect_to_quad(Rect {
+            x,
+            y,
+            width,
+            height,
+        });
+        let logical_rect = Rect {
+            x: x / root_scale,
+            y: y / root_scale,
+            width: width / root_scale,
+            height: height / root_scale,
+        };
+        for band in prepared.bands {
+            if pending_composites.is_empty() {
+                *pending_composite_load_op = Some(*next_load_op);
+            }
+            pending_composites.push(PendingLayerComposite {
+                z_index: op.z_index,
+                seq: next_composite_seq(composite_seq),
+                surface: LayerSurface {
+                    target: LayerSurfaceTexture::Cached(Rc::clone(&prepared.source)),
+                    logical_rect,
+                    composite_alpha: 1.0,
+                    blend_mode: BlendMode::SrcOver,
+                    rounded_clip: shadow.rounded_clip,
+                    backdrop: None,
+                    deferred_effect: None,
+                    effect_content_rect: None,
+                    sample_mode: CompositeSampleMode::Nearest,
+                },
+                dest_quad,
+                scissor: Some(band),
+            });
+            *next_load_op = wgpu::LoadOp::Load;
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn render_direct_scene_range_with_pending_composites<B: SurfaceExecutionBackend>(
     backend: &mut B,
@@ -5199,10 +5952,11 @@ fn render_direct_scene_range_with_pending_composites<B: SurfaceExecutionBackend>
     pending_shader_composites: &mut Vec<PendingShaderLayerComposite>,
     pending_shader_load_op: &mut Option<wgpu::LoadOp<wgpu::Color>>,
     next_load_op: &mut wgpu::LoadOp<wgpu::Color>,
+    deferred: &mut DeferredDirectRun<'_>,
+    flush_at_end: bool,
 ) -> Result<(), String> {
     let cache_enabled = direct_scene_range_cache_enabled();
     let mut cursor_z = z_start;
-    let mut direct_run = DirectChunkRunCoalescer::default();
     if cache_enabled {
         cursor_z = stage_prefix_snapshot_into_walk(
             backend,
@@ -5217,11 +5971,30 @@ fn render_direct_scene_range_with_pending_composites<B: SurfaceExecutionBackend>
             composite_seq,
             pending_composite_load_op,
             next_load_op,
-            &mut direct_run,
+            &mut deferred.run,
         )?;
     }
+    queue_blurred_shadow_composites(
+        backend,
+        scene,
+        cursor_z,
+        z_end,
+        (width, height),
+        root_scale,
+        pending_composites,
+        composite_seq,
+        pending_composite_load_op,
+        next_load_op,
+        deferred,
+    );
     while cursor_z < z_end {
-        let mut chunk_end = direct_scene_range_cache_chunk_end(scene, cursor_z, z_end, root_scale);
+        let Some(mut chunk_end) = deferred.chunk_end_from(
+            cursor_z,
+            direct_scene_range_cache_chunk_end(scene, cursor_z, z_end, root_scale),
+        ) else {
+            cursor_z = cursor_z.saturating_add(1);
+            continue;
+        };
         if chunk_end <= cursor_z {
             return Err("direct scene cache chunk did not advance".to_string());
         }
@@ -5256,7 +6029,7 @@ fn render_direct_scene_range_with_pending_composites<B: SurfaceExecutionBackend>
                 next_load_op,
             )?
         {
-            if let Some((run_start, run_end)) = direct_run.flush_at(cursor_z) {
+            if let Some((run_start, run_end)) = deferred.run.flush_at(cursor_z) {
                 render_non_effect_range_with_pending_composites(
                     backend,
                     target_view,
@@ -5271,15 +6044,16 @@ fn render_direct_scene_range_with_pending_composites<B: SurfaceExecutionBackend>
                     pending_shader_composites,
                     pending_shader_load_op,
                     next_load_op,
+                    &deferred.excluded,
                 )?;
             }
             cursor_z = chunk_end;
             continue;
         }
-        direct_run.absorb(cursor_z);
+        deferred.run.absorb(cursor_z);
         cursor_z = chunk_end;
         if !direct_scene_range_coalesce_enabled()
-            && let Some((run_start, run_end)) = direct_run.flush_at(cursor_z)
+            && let Some((run_start, run_end)) = deferred.run.flush_at(cursor_z)
         {
             render_non_effect_range_with_pending_composites(
                 backend,
@@ -5295,10 +6069,11 @@ fn render_direct_scene_range_with_pending_composites<B: SurfaceExecutionBackend>
                 pending_shader_composites,
                 pending_shader_load_op,
                 next_load_op,
+                &deferred.excluded,
             )?;
         }
     }
-    if let Some((run_start, run_end)) = direct_run.flush_at(z_end) {
+    if flush_at_end && let Some((run_start, run_end)) = deferred.run.flush_at(z_end) {
         render_non_effect_range_with_pending_composites(
             backend,
             target_view,
@@ -5313,8 +6088,152 @@ fn render_direct_scene_range_with_pending_composites<B: SurfaceExecutionBackend>
             pending_shader_composites,
             pending_shader_load_op,
             next_load_op,
+            &deferred.excluded,
         )?;
     }
+    Ok(())
+}
+
+fn child_backdrop_input_hash(
+    local_scene: &CompositorScene,
+    prior_child_contributions: &[BackdropPrefixChildContribution],
+    child: &ChildLayerComposite,
+    resolved_child: &ResolvedChildSurfaceComposite,
+    effect: &RenderEffect,
+    viewport: (u32, u32),
+    scale: f32,
+) -> u64 {
+    let capture_rect = visible_backdrop_capture_rect(
+        resolved_child.backdrop_rect,
+        child.visual_clip,
+        effect,
+        scale,
+        viewport,
+    );
+    backdrop_scene_prefix_hash(
+        local_scene,
+        prior_child_contributions,
+        child.z_index,
+        capture_rect.unwrap_or(resolved_child.backdrop_rect),
+        viewport,
+        scale,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn nested_child_backdrop_input_hash(
+    local_scene: &CompositorScene,
+    prior_child_contributions: &[BackdropPrefixChildContribution],
+    child: &ChildLayerComposite,
+    resolved_child: &ResolvedChildSurfaceComposite,
+    effect: &RenderEffect,
+    viewport: (u32, u32),
+    scale: f32,
+    baked: bool,
+    underlay_identity: Option<u64>,
+) -> u64 {
+    let local_hash = child_backdrop_input_hash(
+        local_scene,
+        prior_child_contributions,
+        child,
+        resolved_child,
+        effect,
+        viewport,
+        scale,
+    );
+    if baked {
+        content_hash_over_underlay(local_hash, underlay_identity)
+    } else {
+        local_hash
+    }
+}
+
+/// Renders the surface's direct ops in `[z_start, z_end)` together with the
+/// composites queued so far, one fused pass when the range carries no layer
+/// events, otherwise the queues flush first and the range renders through
+/// the layer-event path. The caller's loop defers this until a child reads
+/// the target, so the composites of the children in between ride in the
+/// same pass as the ops around them.
+#[allow(clippy::too_many_arguments)]
+fn render_nested_range<B: SurfaceExecutionBackend>(
+    backend: &mut B,
+    target: &OffscreenTarget,
+    local_scene: &CompositorScene,
+    prior_child_contributions: &[BackdropPrefixChildContribution],
+    z_start: usize,
+    z_end: usize,
+    viewport: (u32, u32),
+    target_scale: f32,
+    context: NestedBackdropContext<'_>,
+    queues: &mut PendingQueues<'_, '_>,
+) -> Result<(), String> {
+    let (width, height) = viewport;
+    if !range_contains_layer_events(
+        &local_scene.effect_layers,
+        &local_scene.backdrop_layers,
+        z_start,
+        z_end,
+    ) {
+        return render_non_effect_range_with_pending_composites(
+            backend,
+            &target.view,
+            local_scene,
+            z_start,
+            z_end,
+            width,
+            height,
+            target_scale,
+            queues.composites,
+            queues.composite_load_op,
+            queues.shader_composites,
+            queues.shader_load_op,
+            queues.next_load_op,
+            &queues.deferred.excluded,
+        );
+    }
+    flush_pending_composite_queues_fused(
+        backend,
+        queues.composites,
+        queues.composite_load_op,
+        queues.shader_composites,
+        queues.shader_load_op,
+        &target.view,
+        viewport,
+        queues.next_load_op,
+    )?;
+    let mut local_backdrop_hashes = scene_backdrop_input_hashes(
+        local_scene,
+        prior_child_contributions,
+        viewport,
+        target_scale,
+    );
+    if context.baked {
+        for hash in &mut local_backdrop_hashes {
+            *hash = content_hash_over_underlay(*hash, context.underlay_identity);
+        }
+    }
+    backend.render_range_with_layer_events_to_target(
+        target,
+        &local_scene.shapes,
+        &local_scene.brushes,
+        &local_scene.images,
+        &local_scene.texts,
+        &local_scene.shadow_draws,
+        &local_scene.retained_draws,
+        &local_scene.draw_ops,
+        &local_scene.effect_layers,
+        &local_scene.backdrop_layers,
+        &local_backdrop_hashes,
+        z_start,
+        z_end,
+        None,
+        width,
+        height,
+        target_scale,
+        context.backdrop_underlay,
+        *queues.next_load_op,
+    )?;
+    *queues.next_load_op = wgpu::LoadOp::Load;
     Ok(())
 }
 
@@ -5353,91 +6272,8 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
     let mut pending_shader_load_op = None;
     let mut composite_seq = 0usize;
     let mut prior_child_contributions = Vec::new();
+    let mut deferred = DeferredDirectRun::new(local_scene);
     for mut child in child_layers {
-        if cursor_z < child.z_index {
-            flush_pending_shader_layer_composites(
-                backend,
-                &mut pending_shader_composites,
-                &target.view,
-                (width, height),
-                &mut pending_shader_load_op,
-                &mut next_load_op,
-            )?;
-            if !pending_composites.is_empty()
-                && !range_contains_layer_events(
-                    &local_scene.effect_layers,
-                    &local_scene.backdrop_layers,
-                    cursor_z,
-                    child.z_index,
-                )
-            {
-                let load_op = pending_composite_load_op.take().unwrap_or(next_load_op);
-                let composite_items = pending_layer_composite_batch_items(&pending_composites);
-                backend.render_non_effect_segment_with_composites(
-                    &target.view,
-                    &local_scene.shapes,
-                    &local_scene.brushes,
-                    &local_scene.images,
-                    &local_scene.texts,
-                    &local_scene.shadow_draws,
-                    &local_scene.retained_draws,
-                    &local_scene.draw_ops,
-                    cursor_z,
-                    child.z_index,
-                    &[],
-                    &composite_items,
-                    &[],
-                    width,
-                    height,
-                    target_scale,
-                    load_op,
-                )?;
-                release_pending_layer_composites(backend, &mut pending_composites);
-            } else {
-                flush_pending_layer_composites(
-                    backend,
-                    &mut pending_composites,
-                    &target.view,
-                    (width, height),
-                    &mut pending_composite_load_op,
-                    &mut next_load_op,
-                );
-                let mut local_backdrop_hashes = scene_backdrop_input_hashes(
-                    local_scene,
-                    &prior_child_contributions,
-                    (width, height),
-                    target_scale,
-                );
-                if baked {
-                    for hash in &mut local_backdrop_hashes {
-                        *hash = content_hash_over_underlay(*hash, underlay_identity);
-                    }
-                }
-                backend.render_range_with_layer_events_to_target(
-                    &target,
-                    &local_scene.shapes,
-                    &local_scene.brushes,
-                    &local_scene.images,
-                    &local_scene.texts,
-                    &local_scene.shadow_draws,
-                    &local_scene.retained_draws,
-                    &local_scene.draw_ops,
-                    &local_scene.effect_layers,
-                    &local_scene.backdrop_layers,
-                    &local_backdrop_hashes,
-                    cursor_z,
-                    child.z_index,
-                    None,
-                    width,
-                    height,
-                    target_scale,
-                    backdrop_underlay,
-                    next_load_op,
-                )?;
-            }
-            next_load_op = wgpu::LoadOp::Load;
-        }
-
         let resolved_child = resolved_child_surface_composite(&child);
         let child_dest_quad = if let Some(anchor) = resolved_child.snap_anchor {
             translate_quad(
@@ -5456,21 +6292,45 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
                 height,
             )
         {
-            cursor_z = child.z_index.saturating_add(1);
             continue;
         }
-        if child.needs_nested_underlay {
-            flush_pending_composite_queues_fused(
+        let child_reads_target = child.backdrop.is_some()
+            || child.needs_nested_underlay
+            || !resolved_child.shadow_draws.is_empty();
+        if cursor_z < child.z_index
+            && (child_reads_target
+                || range_contains_layer_events(
+                    &local_scene.effect_layers,
+                    &local_scene.backdrop_layers,
+                    cursor_z,
+                    child.z_index,
+                ))
+        {
+            render_nested_range(
                 backend,
-                &mut pending_composites,
-                &mut pending_composite_load_op,
-                &mut pending_shader_composites,
-                &mut pending_shader_load_op,
-                &target.view,
+                &target,
+                local_scene,
+                &prior_child_contributions,
+                cursor_z,
+                child.z_index,
                 (width, height),
-                &mut next_load_op,
+                target_scale,
+                NestedBackdropContext {
+                    backdrop_underlay,
+                    baked,
+                    underlay_identity,
+                },
+                &mut PendingQueues {
+                    composites: &mut pending_composites,
+                    composite_load_op: &mut pending_composite_load_op,
+                    shader_composites: &mut pending_shader_composites,
+                    shader_load_op: &mut pending_shader_load_op,
+                    next_load_op: &mut next_load_op,
+                    composite_seq: &mut composite_seq,
+                    deferred: &mut deferred,
+                },
             )?;
-            flush_pending_clear(backend, &target.view, &mut next_load_op);
+            cursor_z = child.z_index;
         }
         let child_translation_context = TranslationRenderContext {
             inherited_content_translation: effective_translated_content_context,
@@ -5478,6 +6338,21 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
             surface_capture_active: translation_context.surface_capture_active,
             local_picture_capture_active: translation_context.local_picture_capture_active,
         };
+        let wants_underlay = child.needs_nested_underlay;
+        let child_underlay_identity = wants_underlay
+            .then(|| {
+                underlay_identity_before(
+                    local_scene,
+                    &prior_child_contributions,
+                    child.z_index,
+                    quad_bounds(child_dest_quad),
+                    (width, height),
+                    target_scale,
+                    underlay_identity,
+                    backdrop_underlay.is_some(),
+                )
+            })
+            .flatten();
         composite_nested_child_backdrop(
             backend,
             &target,
@@ -5499,36 +6374,23 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
                 shader_load_op: &mut pending_shader_load_op,
                 next_load_op: &mut next_load_op,
                 composite_seq: &mut composite_seq,
+                deferred: &mut deferred,
             },
         )?;
-        let child_underlay_identity = child
-            .needs_nested_underlay
-            .then(|| {
-                underlay_identity_before(
-                    local_scene,
-                    &prior_child_contributions,
-                    child.z_index,
-                    quad_bounds(child_dest_quad),
-                    (width, height),
-                    target_scale,
-                    underlay_identity,
-                    backdrop_underlay.is_some(),
-                )
-            })
-            .flatten();
         let mut child_bake_underlay = false;
-        let child_underlay = if child.needs_nested_underlay {
-            flush_pending_composite_queues_fused(
-                backend,
-                &mut pending_composites,
-                &mut pending_composite_load_op,
-                &mut pending_shader_composites,
-                &mut pending_shader_load_op,
-                &target.view,
-                (width, height),
-                &mut next_load_op,
-            )?;
-            flush_pending_clear(backend, &target.view, &mut next_load_op);
+        if child_is_bare_backdrop(&child) {
+            let scissor = child
+                .visual_clip
+                .and_then(|clip| scissor_rect_for_rect(clip, target_scale, width, height));
+            prior_child_contributions.push(bare_backdrop_child_contribution(
+                &child,
+                &resolved_child,
+                scissor,
+            ));
+            cursor_z = child.z_index.saturating_add(1);
+            continue;
+        }
+        let child_underlay = if wants_underlay {
             let underlay = sample_child_underlay(
                 backend,
                 &target,
@@ -5544,7 +6406,21 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
                 child_underlay_identity,
                 target_scale,
                 child_translation_context,
-            );
+                UnderlayCaptureSource {
+                    target_view: &target.view,
+                    viewport: (width, height),
+                    dependency_rect: quad_bounds(child_dest_quad),
+                    queues: &mut PendingQueues {
+                        composites: &mut pending_composites,
+                        composite_load_op: &mut pending_composite_load_op,
+                        shader_composites: &mut pending_shader_composites,
+                        shader_load_op: &mut pending_shader_load_op,
+                        next_load_op: &mut next_load_op,
+                        composite_seq: &mut composite_seq,
+                        deferred: &mut deferred,
+                    },
+                },
+            )?;
             child_bake_underlay = underlay.baked;
             Some(underlay.target)
         } else {
@@ -5567,12 +6443,14 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
         )?;
 
         if !resolved_child.shadow_draws.is_empty() {
-            flush_pending_shader_layer_composites(
+            flush_pending_composite_queues_fused(
                 backend,
+                &mut pending_composites,
+                &mut pending_composite_load_op,
                 &mut pending_shader_composites,
+                &mut pending_shader_load_op,
                 &target.view,
                 (width, height),
-                &mut pending_shader_load_op,
                 &mut next_load_op,
             )?;
             flush_pending_clear(backend, &target.view, &mut next_load_op);
@@ -5614,14 +6492,6 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
             child_underlay_identity,
         );
         if child_surface.deferred_effect.is_none() && axis_aligned_quad_rect(dest_quad).is_some() {
-            flush_pending_shader_layer_composites(
-                backend,
-                &mut pending_shader_composites,
-                &target.view,
-                (width, height),
-                &mut pending_shader_load_op,
-                &mut next_load_op,
-            )?;
             if pending_composites.is_empty() {
                 pending_composite_load_op = Some(next_load_op);
             }
@@ -5634,14 +6504,6 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
             });
             next_load_op = wgpu::LoadOp::Load;
         } else {
-            flush_pending_layer_composites(
-                backend,
-                &mut pending_composites,
-                &target.view,
-                (width, height),
-                &mut pending_composite_load_op,
-                &mut next_load_op,
-            );
             match direct_shader_layer_composite(
                 child_surface,
                 child.z_index,
@@ -5657,12 +6519,42 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
                     next_load_op = wgpu::LoadOp::Load;
                 }
                 Err(child_surface) => {
-                    flush_pending_shader_layer_composites(
+                    if cursor_z < child.z_index {
+                        render_nested_range(
+                            backend,
+                            &target,
+                            local_scene,
+                            &prior_child_contributions,
+                            cursor_z,
+                            child.z_index,
+                            (width, height),
+                            target_scale,
+                            NestedBackdropContext {
+                                backdrop_underlay,
+                                baked,
+                                underlay_identity,
+                            },
+                            &mut PendingQueues {
+                                composites: &mut pending_composites,
+                                composite_load_op: &mut pending_composite_load_op,
+                                shader_composites: &mut pending_shader_composites,
+                                shader_load_op: &mut pending_shader_load_op,
+                                next_load_op: &mut next_load_op,
+                                composite_seq: &mut composite_seq,
+
+                                deferred: &mut deferred,
+                            },
+                        )?;
+                        cursor_z = child.z_index;
+                    }
+                    flush_pending_composite_queues_fused(
                         backend,
+                        &mut pending_composites,
+                        &mut pending_composite_load_op,
                         &mut pending_shader_composites,
+                        &mut pending_shader_load_op,
                         &target.view,
                         (width, height),
-                        &mut pending_shader_load_op,
                         &mut next_load_op,
                     )?;
                     let composite_load_op = next_load_op;
@@ -5684,88 +6576,36 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
             backend.release_frame_surface(underlay);
         }
         prior_child_contributions.push(child_prefix_contribution);
-        cursor_z = child.z_index.saturating_add(1);
+        if cursor_z >= child.z_index {
+            cursor_z = child.z_index.saturating_add(1);
+        }
     }
 
     if cursor_z < local_scene.next_z {
-        if (!pending_composites.is_empty() || !pending_shader_composites.is_empty())
-            && !range_contains_layer_events(
-                &local_scene.effect_layers,
-                &local_scene.backdrop_layers,
-                cursor_z,
-                local_scene.next_z,
-            )
-        {
-            let load_op = take_ordered_pending_composite_load_op(
-                &pending_composites,
-                &mut pending_composite_load_op,
-                &pending_shader_composites,
-                &mut pending_shader_load_op,
-                next_load_op,
-            );
-            let composite_items = pending_layer_composite_batch_items(&pending_composites);
-            let shader_composite_items =
-                pending_shader_layer_composite_batch_items(&pending_shader_composites);
-            backend.render_non_effect_segment_with_composites(
-                &target.view,
-                &local_scene.shapes,
-                &local_scene.brushes,
-                &local_scene.images,
-                &local_scene.texts,
-                &local_scene.shadow_draws,
-                &local_scene.retained_draws,
-                &local_scene.draw_ops,
-                cursor_z,
-                local_scene.next_z,
-                &[],
-                &composite_items,
-                &shader_composite_items,
-                width,
-                height,
-                target_scale,
-                load_op,
-            )?;
-            release_pending_layer_composites(backend, &mut pending_composites);
-            release_pending_shader_layer_composites(backend, &mut pending_shader_composites);
-        } else {
-            flush_pending_composite_queues_fused(
-                backend,
-                &mut pending_composites,
-                &mut pending_composite_load_op,
-                &mut pending_shader_composites,
-                &mut pending_shader_load_op,
-                &target.view,
-                (width, height),
-                &mut next_load_op,
-            )?;
-            let local_backdrop_hashes = scene_backdrop_input_hashes(
-                local_scene,
-                &prior_child_contributions,
-                (width, height),
-                target_scale,
-            );
-            backend.render_range_with_layer_events_to_target(
-                &target,
-                &local_scene.shapes,
-                &local_scene.brushes,
-                &local_scene.images,
-                &local_scene.texts,
-                &local_scene.shadow_draws,
-                &local_scene.retained_draws,
-                &local_scene.draw_ops,
-                &local_scene.effect_layers,
-                &local_scene.backdrop_layers,
-                &local_backdrop_hashes,
-                cursor_z,
-                local_scene.next_z,
-                None,
-                width,
-                height,
-                target_scale,
+        render_nested_range(
+            backend,
+            &target,
+            local_scene,
+            &prior_child_contributions,
+            cursor_z,
+            local_scene.next_z,
+            (width, height),
+            target_scale,
+            NestedBackdropContext {
                 backdrop_underlay,
-                next_load_op,
-            )?;
-        }
+                baked,
+                underlay_identity,
+            },
+            &mut PendingQueues {
+                composites: &mut pending_composites,
+                composite_load_op: &mut pending_composite_load_op,
+                shader_composites: &mut pending_shader_composites,
+                shader_load_op: &mut pending_shader_load_op,
+                next_load_op: &mut next_load_op,
+                composite_seq: &mut composite_seq,
+                deferred: &mut deferred,
+            },
+        )?;
     } else if matches!(next_load_op, wgpu::LoadOp::Clear(_)) {
         backend.clear_target_view_with_load_op(&target.view, next_load_op);
     } else {
@@ -6316,6 +7156,165 @@ pub(crate) fn render_effect_layer_to_target<B: SurfaceExecutionBackend>(
     composite_result
 }
 
+/// The device geometry of a backdrop capture: what of the layer is visible,
+/// the padded rect its effect reads, the scale the capture renders at and,
+/// when that scale is the target's own, the whole-pixel copy that samples it.
+struct BackdropCaptureGeometry {
+    layer_rect: Rect,
+    layer_clip: Option<Rect>,
+    visible_rect: Rect,
+    capture_rect: Rect,
+    backdrop_scale: f32,
+    copy_plan: Option<BackdropSnapshotCopyPlan>,
+}
+
+fn backdrop_capture_geometry(
+    layer: &BackdropLayer,
+    root_scale: f32,
+    width: u32,
+    height: u32,
+    target_size: (u32, u32),
+    max_texture_dim: u32,
+) -> Option<BackdropCaptureGeometry> {
+    let (layer_rect, layer_clip) = snapped_backdrop_geometry(layer, root_scale);
+    let visible_rect = visible_layer_rect(layer_rect, layer_clip, root_scale, width, height)?;
+    let capture_rect = backdrop_capture_rect(
+        visible_rect,
+        layer_clip,
+        &layer.effect,
+        root_scale,
+        (width, height),
+    );
+    let backdrop_scale =
+        clamp_effect_surface_scale(capture_rect, root_scale, root_scale, max_texture_dim);
+    let copy_plan = ((backdrop_scale - root_scale).abs() <= 0.01)
+        .then(|| {
+            axis_aligned_backdrop_snapshot_copy_plan(
+                capture_rect,
+                layer_rect,
+                root_scale,
+                target_size,
+                max_texture_dim,
+            )
+        })
+        .flatten();
+    Some(BackdropCaptureGeometry {
+        layer_rect,
+        layer_clip,
+        visible_rect,
+        capture_rect,
+        backdrop_scale,
+        copy_plan,
+    })
+}
+
+/// The composites still queued for the target when a capture copies out of
+/// it: the ones touching `dependency_pixels` are replayed into the copy.
+struct PendingReplaySource<'a> {
+    composites: &'a [PendingLayerComposite],
+    shader_composites: &'a [PendingShaderLayerComposite],
+    dependency_pixels: Rect,
+}
+
+/// Copies the capture's whole-pixel window out of the target and replays the
+/// queued composites that touch it into the copy. A capture that was promised
+/// a replay cannot fall back to sampling the target, which lacks them.
+fn copy_backdrop_capture<B: SurfaceExecutionBackend>(
+    backend: &mut B,
+    target: &OffscreenTarget,
+    copy_plan: Option<&BackdropSnapshotCopyPlan>,
+    destination: &OffscreenTarget,
+    replay: Option<&PendingReplaySource<'_>>,
+) -> Result<bool, String> {
+    let Some(plan) = copy_plan else {
+        if replay.is_some() {
+            return Err("a backdrop capture promised a replay has no copy plan".to_string());
+        }
+        return Ok(false);
+    };
+    let copied =
+        backend.copy_texture_region_to_target(target, plan.source_origin, destination, plan.size);
+    match replay {
+        Some(source) if copied => replay_pending_into_copy(
+            backend,
+            destination,
+            plan.source_origin,
+            source.composites,
+            source.shader_composites,
+            source.dependency_pixels,
+        )?,
+        Some(_) => {
+            return Err(
+                "a backdrop capture promised a replay could not copy its window".to_string(),
+            );
+        }
+        None => {}
+    }
+    Ok(copied)
+}
+
+/// Decides how a backdrop capture of `layer` sees the composites queued for
+/// `target`. With a whole-pixel copy plan and no clear held by a queue, the
+/// queues stay pending and the capture replays the conflicting ones into its
+/// copy; otherwise the queues flush first. Returns the dependency pixels the
+/// capture must replay, when it must.
+#[allow(clippy::too_many_arguments)]
+fn prepare_capture_source<B: SurfaceExecutionBackend>(
+    backend: &mut B,
+    target: &OffscreenTarget,
+    layer: &BackdropLayer,
+    dependency_rect: Rect,
+    viewport: (u32, u32),
+    scale: f32,
+    queues: &mut PendingQueues<'_, '_>,
+) -> Result<Option<Rect>, String> {
+    flush_deferred_run_for_dependency(
+        backend,
+        &target.view,
+        viewport,
+        scale,
+        dependency_rect,
+        layer.z_index,
+        queues,
+    )?;
+    let dependency_pixels = surface_pixel_rect(dependency_rect, scale);
+    let conflicts = pending_capture_conflicts(
+        queues.composites,
+        queues.composite_load_op,
+        queues.shader_composites,
+        queues.shader_load_op,
+        dependency_pixels,
+    );
+    let can_replay = backend.underlay_replay_enabled()
+        && !conflicts.clear_held
+        && backdrop_capture_geometry(
+            layer,
+            scale,
+            viewport.0,
+            viewport.1,
+            (target.width, target.height),
+            backend.max_texture_dim(),
+        )
+        .is_some_and(|geometry| geometry.copy_plan.is_some());
+    if !can_replay {
+        flush_pending_queues_for_backdrop_capture(
+            backend,
+            queues.composites,
+            queues.composite_load_op,
+            queues.shader_composites,
+            queues.shader_load_op,
+            &target.view,
+            viewport,
+            queues.next_load_op,
+            dependency_rect,
+            scale,
+        )?;
+        return Ok(None);
+    }
+    flush_pending_clear(backend, &target.view, queues.next_load_op);
+    Ok(conflicts.any().then_some(dependency_pixels))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn prepare_cached_backdrop_layer_composite<B: SurfaceExecutionBackend>(
     backend: &mut B,
@@ -6327,15 +7326,29 @@ fn prepare_cached_backdrop_layer_composite<B: SurfaceExecutionBackend>(
     root_scale: f32,
     input_content_hash: Option<u64>,
     allow_deferred_tail: bool,
+    replay: Option<PendingReplaySource<'_>>,
 ) -> Result<Option<PreparedBackdropComposite>, String> {
     let diag = backdrop_diag_enabled();
-    let (layer_rect, layer_clip) = snapped_backdrop_geometry(layer, root_scale);
-    let Some(visible_rect) = visible_layer_rect(layer_rect, layer_clip, root_scale, width, height)
+    let Some(BackdropCaptureGeometry {
+        layer_rect,
+        layer_clip,
+        visible_rect,
+        capture_rect,
+        backdrop_scale,
+        copy_plan,
+    }) = backdrop_capture_geometry(
+        layer,
+        root_scale,
+        width,
+        height,
+        (target.width, target.height),
+        backend.max_texture_dim(),
+    )
     else {
         if diag {
             eprintln!(
                 "[backdrop-diag] prepare SKIP: no visible rect for {:?}",
-                layer_rect
+                layer.rect
             );
         }
         return Ok(None);
@@ -6357,38 +7370,15 @@ fn prepare_cached_backdrop_layer_composite<B: SurfaceExecutionBackend>(
         }
         return Ok(None);
     };
-    let capture_rect = backdrop_capture_rect(
-        visible_rect,
-        layer_clip,
-        &layer.effect,
-        root_scale,
-        (width, height),
-    );
     if diag {
         eprintln!(
-            "[backdrop-diag] prepare node={:?} visible={visible_rect:?} capture={capture_rect:?} scissor={scissor:?} in_pad={} out_pad={}",
+            "[backdrop-diag] prepare node={:?} visible={visible_rect:?} capture={capture_rect:?} scissor={scissor:?} in_pad={} out_pad={} replay={}",
             layer.node_id,
             layer.effect.input_padding(),
             layer.effect.output_padding(),
+            replay.is_some(),
         );
     }
-    let backdrop_scale = clamp_effect_surface_scale(
-        capture_rect,
-        root_scale,
-        root_scale,
-        backend.max_texture_dim(),
-    );
-    let copy_plan = if (backdrop_scale - root_scale).abs() <= 0.01 {
-        axis_aligned_backdrop_snapshot_copy_plan(
-            capture_rect,
-            layer_rect,
-            root_scale,
-            (target.width, target.height),
-            backend.max_texture_dim(),
-        )
-    } else {
-        None
-    };
     let (backdrop_width, backdrop_height) = copy_plan.map(|plan| plan.size).unwrap_or_else(|| {
         surface_target_size(capture_rect, backdrop_scale, backend.max_texture_dim())
     });
@@ -6434,14 +7424,13 @@ fn prepare_cached_backdrop_layer_composite<B: SurfaceExecutionBackend>(
         let effect_target = backend.acquire_retained_surface(backdrop_width, backdrop_height);
         if let Some(effect) = materialized_effect {
             let snapshot = backend.acquire_frame_surface(backdrop_width, backdrop_height);
-            let copied_snapshot = copy_plan.is_some_and(|plan| {
-                backend.copy_texture_region_to_target(
-                    target,
-                    plan.source_origin,
-                    &snapshot,
-                    plan.size,
-                )
-            });
+            let copied_snapshot = copy_backdrop_capture(
+                backend,
+                target,
+                copy_plan.as_ref(),
+                &snapshot,
+                replay.as_ref(),
+            )?;
             if !copied_snapshot {
                 copy_projective_backdrop_inputs_to_view(
                     backend,
@@ -6484,14 +7473,13 @@ fn prepare_cached_backdrop_layer_composite<B: SurfaceExecutionBackend>(
             )?;
             backend.release_frame_surface(snapshot);
         } else {
-            let copied_capture = copy_plan.is_some_and(|plan| {
-                backend.copy_texture_region_to_target(
-                    target,
-                    plan.source_origin,
-                    &effect_target,
-                    plan.size,
-                )
-            });
+            let copied_capture = copy_backdrop_capture(
+                backend,
+                target,
+                copy_plan.as_ref(),
+                &effect_target,
+                replay.as_ref(),
+            )?;
             if !copied_capture {
                 copy_projective_backdrop_inputs_to_view(
                     backend,
@@ -6585,6 +7573,7 @@ pub(crate) fn apply_backdrop_layer_to_target<B: SurfaceExecutionBackend>(
         root_scale,
         input_content_hash,
         false,
+        None,
     )? {
         if backdrop_diag_enabled() {
             eprintln!(

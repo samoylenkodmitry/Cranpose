@@ -83,6 +83,21 @@ pub(crate) struct LoweredChildSource {
     pub(crate) children: Vec<ChildLayerComposite>,
 }
 
+impl LoweredChildSource {
+    pub(crate) fn is_empty(&self) -> bool {
+        let scene = &self.scene;
+        self.children.is_empty()
+            && scene.draw_ops.is_empty()
+            && scene.shapes.is_empty()
+            && scene.images.is_empty()
+            && scene.texts.is_empty()
+            && scene.shadow_draws.is_empty()
+            && scene.retained_draws.is_empty()
+            && scene.effect_layers.is_empty()
+            && scene.backdrop_layers.is_empty()
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct ResolvedChildSurfaceComposite {
     pub(crate) logical_rect: Rect,
@@ -236,7 +251,7 @@ fn shadow_draws_bounds_with_clip(shadow_draws: &[ShadowDraw], apply_clip: bool) 
     bounds
 }
 
-fn shadow_draws_bounds(shadow_draws: &[ShadowDraw]) -> Option<Rect> {
+pub(crate) fn shadow_draws_bounds(shadow_draws: &[ShadowDraw]) -> Option<Rect> {
     shadow_draws_bounds_with_clip(shadow_draws, true)
 }
 
@@ -1444,6 +1459,280 @@ pub(crate) fn derived_child_surface_context(
 }
 
 #[allow(clippy::too_many_arguments)]
+fn backdrop_flatten_enabled() -> bool {
+    crate::debug_toggles::debug_toggle("CRANPOSE_NO_BACKDROP_FLATTEN").as_deref() != Some("1")
+}
+
+/// How far a direct draw's anti-aliasing can reach beyond its rectangle.
+const DIRECT_DRAW_COVERAGE_REACH: f32 = 1.0;
+
+/// The corner squares of a rounded clip: the only places where clipping to
+/// the rounded shape differs from clipping to its rectangle. Content that
+/// never enters them, or enters them only inside the corner circles, draws
+/// the same pixels under either clip.
+struct RoundedClipCorners {
+    rect: Rect,
+    radii: [f32; 4],
+}
+
+impl RoundedClipCorners {
+    fn of(layer: &LayerNode) -> Self {
+        let rect = layer.local_bounds;
+        let radii = LayerSurfaceRoundedClip::from_layer(layer)
+            .map(|clip| clip.radii)
+            .unwrap_or([0.0; 4]);
+        Self { rect, radii }
+    }
+
+    /// Whether the part of `region` that falls into a corner square lies
+    /// inside that corner's circle. The intersection is convex, so its four
+    /// corners decide.
+    fn admits(&self, region: Rect) -> bool {
+        let right = self.rect.x + self.rect.width;
+        let bottom = self.rect.y + self.rect.height;
+        let corners = [
+            (self.radii[0], self.rect.x, self.rect.y, 1.0, 1.0),
+            (self.radii[1], right, self.rect.y, -1.0, 1.0),
+            (self.radii[2], self.rect.x, bottom, 1.0, -1.0),
+            (self.radii[3], right, bottom, -1.0, -1.0),
+        ];
+        corners.iter().all(|&(radius, cx, cy, sx, sy)| {
+            if radius <= 0.0 {
+                return true;
+            }
+            let square = Rect {
+                x: cx.min(cx + sx * radius),
+                y: cy.min(cy + sy * radius),
+                width: radius,
+                height: radius,
+            };
+            let Some(inside) = region.intersect(square) else {
+                return true;
+            };
+            let center = (cx + sx * radius, cy + sy * radius);
+            [
+                (inside.x, inside.y),
+                (inside.x + inside.width, inside.y),
+                (inside.x, inside.y + inside.height),
+                (inside.x + inside.width, inside.y + inside.height),
+            ]
+            .iter()
+            .all(|&(px, py)| (px - center.0).hypot(py - center.1) <= radius)
+        })
+    }
+
+    fn admits_all(&self, regions: impl IntoIterator<Item = Rect>) -> bool {
+        regions.into_iter().all(|region| self.admits(region))
+    }
+}
+
+fn reach(rect: Rect, distance: f32) -> Rect {
+    Rect {
+        x: rect.x - distance,
+        y: rect.y - distance,
+        width: rect.width + 2.0 * distance,
+        height: rect.height + 2.0 * distance,
+    }
+}
+
+pub(crate) fn shadow_draw_is_blurred_drop(shadow: &ShadowDraw) -> bool {
+    shadow.blur_radius > 0.0
+        && shadow.texts.is_empty()
+        && !shadow.shapes.is_empty()
+        && shadow
+            .shapes
+            .iter()
+            .all(|(_, mode)| *mode != cranpose_ui_graphics::BlendMode::DstOut)
+}
+
+/// The regions a scene draws with a rectangular clip only. Blurred drop
+/// shadows are left out: flattening masks them with the layer's rounded
+/// clip. Any other blurred shadow spans its shape plus the blur reach.
+fn rect_clipped_draw_regions(scene: &CompositorScene) -> impl Iterator<Item = Rect> + '_ {
+    let shapes = scene
+        .shapes
+        .iter()
+        .filter_map(|shape| visible_draw_rect(shape.rect, shape.clip));
+    let images = scene
+        .images
+        .iter()
+        .filter_map(|image| visible_draw_rect(image.rect, image.clip));
+    let texts = scene
+        .texts
+        .iter()
+        .filter_map(|text| visible_draw_rect(text.rect, text.clip));
+    let retained = scene.retained_draws.iter().map(|draw| draw.bounds);
+    let shadows = scene
+        .shadow_draws
+        .iter()
+        .filter(|shadow| !shadow_draw_is_blurred_drop(shadow))
+        .filter_map(|shadow| {
+            let bounds = shadow_draws_bounds_with_clip(std::slice::from_ref(shadow), false)?;
+            visible_draw_rect(bounds, shadow.clip)
+        });
+    shapes
+        .chain(images)
+        .chain(texts)
+        .chain(retained)
+        .chain(shadows)
+        .map(|rect| reach(rect, DIRECT_DRAW_COVERAGE_REACH))
+}
+
+/// Whether a backdrop layer's content draws the same pixels into its parent
+/// as into its own clipped surface: no rect-clipped draw and no nested
+/// capture region enters a corner square outside the corner circle, and every
+/// nested capture stays inside the layer, because outside it the surface held
+/// nothing while the parent holds the page.
+fn content_survives_rect_clip(
+    layer: &LayerNode,
+    source_scene: &CompositorScene,
+    source_children: &[ChildLayerComposite],
+) -> bool {
+    if !source_scene.effect_layers.is_empty() || !source_scene.backdrop_layers.is_empty() {
+        return false;
+    }
+    let corners = RoundedClipCorners::of(layer);
+    if !corners.admits_all(rect_clipped_draw_regions(source_scene)) {
+        return false;
+    }
+    source_children.iter().all(|child| {
+        let dest = quad_bounds(child.dest_quad);
+        let composite = child
+            .visual_clip
+            .map_or(Some(dest), |clip| dest.intersect(clip));
+        let composite_admitted =
+            composite.is_none_or(|rect| corners.admits(reach(rect, DIRECT_DRAW_COVERAGE_REACH)));
+        let shadows_admitted = child
+            .shadow_draws
+            .iter()
+            .filter(|shadow| !shadow_draw_is_blurred_drop(shadow))
+            .filter_map(|shadow| shadow_draws_bounds_with_clip(std::slice::from_ref(shadow), false))
+            .all(|bounds| corners.admits(reach(bounds, DIRECT_DRAW_COVERAGE_REACH)));
+        composite_admitted && shadows_admitted
+    })
+}
+
+/// Whether a backdrop child draws its content straight into the parent, and
+/// at which translation: only when the backdrop is its sole reason to
+/// isolate and its content survives the parent's rectangular clip.
+fn flatten_translation(
+    layer: &LayerNode,
+    requirements: &LayerSurfaceRequirements,
+    source_scene: CompositorScene,
+    source_children: Vec<ChildLayerComposite>,
+) -> (Option<Point>, CompositorScene, Vec<ChildLayerComposite>) {
+    let translation = requirements.direct_translation.filter(|_| {
+        backdrop_flatten_enabled()
+            && requirements
+                .surface_requirements
+                .isolates_only_for_backdrop()
+            && content_survives_rect_clip(layer, &source_scene, &source_children)
+    });
+    if translation.is_some() {
+        (translation, CompositorScene::new(), Vec::new())
+    } else {
+        (translation, source_scene, source_children)
+    }
+}
+
+struct FlattenedChildPlacement {
+    parent_offset: Point,
+    visual_clip: Option<Rect>,
+    inherited_snap_anchor: Option<SnapAnchor>,
+    snap_content: bool,
+    translation_context: TranslationRenderContext,
+    surface_ctx: TranslationRenderContext,
+}
+
+/// Lowers a flattened backdrop child's content into the parent scene at its
+/// placement, the way a direct child is lowered, and masks the blurred drop
+/// shadows it brought along with the child's rounded clip.
+fn descendant_backdrop_unless_flattened(flattened: Option<Point>, layer: &LayerNode) -> bool {
+    flattened.is_none() && layer_contains_descendant_backdrop(layer)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn flatten_child_into_parent(
+    layer: &LayerNode,
+    text_layout: &mut impl TextLayoutResolver,
+    translation: Option<Point>,
+    placement: FlattenedChildPlacement,
+    local_scene: &mut CompositorScene,
+    child_layers: &mut Vec<ChildLayerComposite>,
+    layer_surface_rect_cache: &mut HashMap<usize, Rect>,
+    layer_surface_requirements_cache: &mut HashMap<usize, LayerSurfaceRequirements>,
+) {
+    let Some(translation) = translation else {
+        return;
+    };
+    let offset = Point::new(
+        placement.parent_offset.x + translation.x,
+        placement.parent_offset.y + translation.y,
+    );
+    let (first_shadow, first_child) = (local_scene.shadow_draws.len(), child_layers.len());
+    let snap_anchor = placement.inherited_snap_anchor.or_else(|| {
+        placement
+            .snap_content
+            .then(|| {
+                rigid_snap_anchor(
+                    layer.local_bounds.translate(offset.x, offset.y),
+                    &local_content_layer_for(&layer.graphics_layer),
+                )
+            })
+            .flatten()
+    });
+    collect_layer_contents_into(
+        layer,
+        text_layout,
+        placement.visual_clip,
+        offset,
+        snap_anchor,
+        placement.translation_context,
+        placement.surface_ctx,
+        local_scene,
+        child_layers,
+        layer_surface_rect_cache,
+        layer_surface_requirements_cache,
+    );
+    mask_flattened_shadows(
+        local_scene,
+        child_layers,
+        first_shadow,
+        first_child,
+        LayerSurfaceRoundedClip::from_layer(layer).map(|clip| LayerSurfaceRoundedClip {
+            rect: clip.rect.translate(offset.x, offset.y),
+            radii: clip.radii,
+        }),
+    );
+}
+
+/// Masks every blurred drop shadow the flattened content lowered into the
+/// parent with the layer's rounded clip, which its surface would have applied
+/// at composite time.
+fn mask_flattened_shadows(
+    scene: &mut CompositorScene,
+    children: &mut [ChildLayerComposite],
+    first_shadow: usize,
+    first_child: usize,
+    rounded_clip: Option<LayerSurfaceRoundedClip>,
+) {
+    let Some(rounded_clip) = rounded_clip else {
+        return;
+    };
+    for shadow in scene.shadow_draws[first_shadow..]
+        .iter_mut()
+        .chain(
+            children[first_child..]
+                .iter_mut()
+                .flat_map(|child| child.shadow_draws.iter_mut()),
+        )
+        .filter(|shadow| shadow_draw_is_blurred_drop(shadow))
+    {
+        shadow.rounded_clip = Some(rounded_clip);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn collect_layer_contents_into(
     layer: &LayerNode,
     text_layout: &mut impl TextLayoutResolver,
@@ -1775,8 +2064,16 @@ fn collect_layer_contents_into(
                         child_layer.transform_to_parent,
                     );
                 }
-                let child_contains_descendant_backdrop =
-                    layer_contains_descendant_backdrop(child_layer.as_ref());
+                let (flatten_around_backdrop, source_scene, source_children) = flatten_translation(
+                    child_layer.as_ref(),
+                    &child_requirements,
+                    source_scene,
+                    source_children,
+                );
+                let child_contains_descendant_backdrop = descendant_backdrop_unless_flattened(
+                    flatten_around_backdrop,
+                    child_layer.as_ref(),
+                );
                 let child_needs_nested_underlay = child_contains_descendant_backdrop
                     && layer_source_uses_external_backdrop_underlay(
                         &source_scene,
@@ -1828,6 +2125,23 @@ fn collect_layer_contents_into(
                     },
                 });
                 local_scene.next_z += 1;
+                flatten_child_into_parent(
+                    child_layer.as_ref(),
+                    text_layout,
+                    flatten_around_backdrop,
+                    FlattenedChildPlacement {
+                        parent_offset: layer_offset,
+                        visual_clip,
+                        inherited_snap_anchor: translated_snap_anchor,
+                        snap_content: effective_translated_content_context,
+                        translation_context: child_translation_context,
+                        surface_ctx: child_surface_ctx,
+                    },
+                    local_scene,
+                    child_layers,
+                    layer_surface_rect_cache,
+                    layer_surface_requirements_cache,
+                );
                 if translated_local_picture_state.is_some() {
                     translated_local_picture_state = Some(TranslatedLocalPictureState {
                         counts: scene_emission_counts(local_scene),
