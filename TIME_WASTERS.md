@@ -567,3 +567,63 @@ and a quiet frame (38 passes, 16 hits), so two runs of the same build read as
 a regression or a fix depending on which frame the sampler landed on. Compare
 several consecutive samples, or `pass_px` averaged over a run, before
 believing a difference.
+
+## `present` is not GPU time: a 50 ms animation period hides a 45 ms GPU frame
+
+The Mate 20 X showcase reported present p50 of 6.8 ms with the stars frozen and
+33 ms with them moving, at identical pass and cache counts, and an evening went
+into "what makes a relowered scene 4x slower on the GPU". Nothing does. A
+whole-frame fence (`debug.cranpose.gpu_fence_profile frame`) puts both at
+50 ms of GPU per frame; the frozen variant only steps its planets, every 50 ms,
+so the GPU finished each frame just before the next one was submitted and
+neither acquire nor present ever blocked. Present and acquire block only by the
+amount the GPU falls behind the app's own frame period, so on an
+animation-paced screen they read as small right up until the GPU is slower
+than the period, then jump. Measure GPU time with the whole-frame fence, or
+compare `pass_px` and the Mac's `CRANPOSE_GPU_PASS_TIMING` occupancy, never
+the present column.
+
+## An uber-shader's OFF features cost more than its ON ones on Mali
+
+The liquid glass fragment program gates a dozen optional features on
+uniforms (loupe, fold, morph shapes, wobble, touch, shadow, content mask,
+optical blur, zoom...). The showcase cards use none of them, and the per-pass
+fence still put the four card passes at 47 ms, ~33 ns per pixel for 19 taps.
+Ablating the live features one at a time never explained it: removing the
+chromatic channels saved 12 ms, removing reflection plus frost 16 ms, and an
+early return before the tail saved 32 ms, none of it proportional to the taps
+removed. Folding the thirteen inactive uniforms to constants brought the same
+passes to 21 ms with byte-identical output. The dead branches were not free:
+they held registers and their uniforms were fetched per fragment. Specialize
+per material with `override` constants (`specialize_liquid_glass`,
+`CRANPOSE_NO_SHADER_SPECIALIZATION` to compare); do not ablate live features
+looking for the cost of dead ones.
+
+## Whole-frame fence under DVFS hides a 26 ms GPU saving
+
+Cutting 36 ms of isolated pass time from the showcase frame moved the
+`gpu_fence_profile frame` reading from ~89 ms to 65-90 ms depending on the
+run: the GPU governor drops its clock as the work shrinks, so wall time per
+frame barely moves until the work is small enough to change the clock's
+target. Judge a device change by scroll fps (`measure.sh ... scroll`, here
+14.3 to 18.5) and by the per-pass inventory (`gpu_fence_profile 1`, stable to
+within a millisecond across runs), not by the whole-frame number.
+
+## A stacked bench on a tiler measures one layer
+
+Drawing the same opaque full-screen fill eight times per frame to amplify a
+shader difference above governor noise measured about one layer: Mali's
+forward pixel kill discards fragments of earlier quads once a later opaque
+quad covers them. Stack translucent layers, or compare single-layer runs
+interleaved several times.
+
+## Flat varyings fetch like uniform loads on Mali
+
+Moving the gradient stops from a per-fragment loop over a dynamically indexed
+uniform array into five flat varyings saved about 3 ms of the 11 ms a
+full-screen three-stop radial costs, not the 11 ms hoped for: reading a flat
+`vec4` varying per fragment costs about what one uniform load did, and a
+gradient-free fragment (`vec4(t)`) ran at the solid-fill floor. The remaining
+cost is the per-fragment data fetch itself; a big fill would need its
+per-shape data in statically indexed uniforms (preloaded per draw) to reach
+the floor.

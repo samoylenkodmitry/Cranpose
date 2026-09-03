@@ -31,6 +31,44 @@ fn get_vec4(index: u32) -> vec4<f32> {
     return vec4<f32>(get_float(index), get_float(index + 1u), get_float(index + 2u), get_float(index + 3u));
 }
 
+// Material specialization. Every optional feature of this program is gated
+// by a uniform, and on a tiler the gates that are OFF still cost: their
+// dead branches hold registers and their uniforms are fetched per fragment.
+// Each flag below is a pipeline-overridable constant the renderer sets to
+// `true` when the uniform it covers holds the feature's inactive value
+// (`LIQUID_GLASS_SPECIALIZATIONS` on the Rust side is the one table of
+// flags, slots and inactive values). A raised flag replaces the uniform read
+// with that value — the same number the uniform carried, so every
+// downstream expression is unchanged and the specialized pipeline is
+// byte-identical to the general one; the compiler then removes the dead
+// feature. Measured on Mali-G76: the showcase card material fell from
+// 47 ms to 21 ms of isolated effect-pass time per frame.
+override GLASS_LOUPE_OFF: bool = false;
+override GLASS_FOLD_OFF: bool = false;
+override GLASS_SCENE_SHAPES_OFF: bool = false;
+override GLASS_WOBBLE_OFF: bool = false;
+override GLASS_ELLIPSE_BLEND_OFF: bool = false;
+override GLASS_STRAIN_OFF: bool = false;
+override GLASS_ZOOM_ANCHOR_OFF: bool = false;
+override GLASS_TOUCH_OFF: bool = false;
+override GLASS_CONTENT_MASK_OFF: bool = false;
+override GLASS_OPTICAL_BLUR_OFF: bool = false;
+override GLASS_SHADOW_OFF: bool = false;
+override GLASS_ZOOM_OFF: bool = false;
+override GLASS_PHYSICAL_REFRACTION_OFF: bool = false;
+override GLASS_FULL_TRANSMISSION: bool = false;
+override GLASS_DISPERSION_OFF: bool = false;
+override GLASS_ADAPTIVE_FROST_OFF: bool = false;
+override GLASS_INK_OFF: bool = false;
+
+fn fixed_or(value: f32, fixed: f32, is_fixed: bool) -> f32 {
+    return select(value, fixed, is_fixed);
+}
+
+fn fixed_or_vec2(value: vec2<f32>, fixed: vec2<f32>, is_fixed: bool) -> vec2<f32> {
+    return select(value, fixed, is_fixed);
+}
+
 // SDF for rounded rectangle
 fn sd_round_rect(p: vec2<f32>, half_size: vec2<f32>, radius: f32) -> f32 {
     let q = abs(p) - half_size + vec2<f32>(radius);
@@ -477,7 +515,7 @@ fn primary_scene_distance(
     );
     let rounded_d = sd_round_rect(strained_p, half_a, r_a);
     let ellipse_d = sd_ellipse_approx(strained_p, half_a);
-    return mix(rounded_d, ellipse_d, clamp(get_float(110u), 0.0, 1.0))
+    return mix(rounded_d, ellipse_d, clamp(fixed_or(get_float(110u), 0.0, GLASS_ELLIPSE_BLEND_OFF), 0.0, 1.0))
         * min(strain_along, strain_across);
 }
 
@@ -617,21 +655,21 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     // Liquid scene: float 30 = extra shape count (shapes at 36+, 5 floats
     // each); 31 = glue radius for the smooth union; 32/33 = wobble
     // amplitude px / phase.
-    let shape_count = u32(max(get_float(30u), 0.0));
+    let shape_count = u32(max(fixed_or(get_float(30u), 0.0, GLASS_SCENE_SHAPES_OFF), 0.0));
     let glue = get_float(31u) * s;
-    let wobble_amp = get_float(32u) * s;
+    let wobble_amp = fixed_or(get_float(32u), 0.0, GLASS_WOBBLE_OFF) * s;
     let wobble_phase = get_float(33u);
-    let bulge_amp = get_float(26u) * s;
+    let bulge_amp = fixed_or(get_float(26u), 0.0, GLASS_WOBBLE_OFF) * s;
     let bulge_dir = get_float(27u);
-    var strain_axis = get_vec2(106u);
+    var strain_axis = fixed_or_vec2(get_vec2(106u), vec2<f32>(1.0, 0.0), GLASS_STRAIN_OFF);
     let strain_axis_length = length(strain_axis);
     if strain_axis_length > 0.001 {
         strain_axis = strain_axis / strain_axis_length;
     } else {
         strain_axis = vec2<f32>(1.0, 0.0);
     }
-    var strain_along = get_float(108u);
-    var strain_across = get_float(109u);
+    var strain_along = fixed_or(get_float(108u), 1.0, GLASS_STRAIN_OFF);
+    var strain_across = fixed_or(get_float(109u), 1.0, GLASS_STRAIN_OFF);
     if strain_along <= 0.0 || strain_across <= 0.0 {
         strain_along = 1.0;
         strain_across = 1.0;
@@ -655,7 +693,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
         select(
             inradius * refraction_depth,
             physical_refraction_depth,
-            get_float(101u) > 0.5,
+            fixed_or(get_float(101u), 0.0, GLASS_PHYSICAL_REFRACTION_OFF) > 0.5,
         ),
         0.001,
     );
@@ -685,7 +723,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     // A morphing glass node uses this same scene SDF as the alpha mask for
     // its foreground content. Keeping the mask in this shader guarantees
     // that blurred children and the refracted backdrop share one silhouette.
-    if get_float(112u) > 0.5 {
+    if fixed_or(get_float(112u), 0.0, GLASS_CONTENT_MASK_OFF) > 0.5 {
         return textureSample(input_texture, input_sampler, input.uv)
             * coverage
             * material_activity;
@@ -703,7 +741,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     if material_activity <= 0.0 {
         return resting_output;
     }
-    let shadow_strength = clamp(get_float(102u), 0.0, 1.0);
+    let shadow_strength = clamp(fixed_or(get_float(102u), 0.0, GLASS_SHADOW_OFF), 0.0, 1.0);
     var shadow_alpha = 0.0;
     if shadow_strength > 0.0 {
         let shadow_offset = vec2<f32>(0.0, get_float(104u) * s);
@@ -749,8 +787,8 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let rim_style = clamp(get_float(28u), 0.0, 1.0);
     // Materials may push past 1 for stronger chromatic splits (the toggle
     // hold runs 1.1); the spread factor keeps the split proportional.
-    let dispersion_strength = clamp(get_float(95u), 0.0, 2.0);
-    let loupe_mode = get_float(80u);
+    let dispersion_strength = clamp(fixed_or(get_float(95u), 0.0, GLASS_DISPERSION_OFF), 0.0, 2.0);
+    let loupe_mode = fixed_or(get_float(80u), 0.0, GLASS_LOUPE_OFF);
     var refraction_curve = get_float(94u);
     if refraction_curve <= 0.0 {
         refraction_curve = 0.25;
@@ -779,7 +817,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     );
     let interior = optical_sample.interior;
 
-    let transmission_refraction = clamp(get_float(96u), 0.0, 1.0);
+    let transmission_refraction = clamp(fixed_or(get_float(96u), 1.0, GLASS_FULL_TRANSMISSION), 0.0, 1.0);
     // Uniform face magnification (uniform 89, dp-free ratio): the riding
     // lens projects its backdrop enlarged across the whole face. Blended by
     // the channel interior so the rim band keeps the wcKSRD edge mapping,
@@ -791,8 +829,8 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     // it rides (the toggle thumb) — anchoring the magnification there keeps
     // the face filled by the ridden content instead of pulling in the well
     // beyond it.
-    let optical_zoom = max(get_float(89u), 1.0);
-    let zoom_anchor = get_vec2(128u) * dp_scale;
+    let optical_zoom = max(fixed_or(get_float(89u), 1.0, GLASS_ZOOM_OFF), 1.0);
+    let zoom_anchor = fixed_or_vec2(get_vec2(128u), vec2<f32>(0.0), GLASS_ZOOM_ANCHOR_OFF) * dp_scale;
     // Displacement that translates the image without bending the ray (the
     // loupe's focus offset — optically a flat-slab shift). Translation does
     // not disperse; only the ray-bend components built per channel below
@@ -835,7 +873,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     // a PURE displacement — the band replays the interior mirrored toward
     // the rim, the reference toggle's "U". No color terms ride on it, so
     // white surround mirrors white and colored tracks mirror themselves.
-    let fold_depth_px = get_float(88u) * optical_scale;
+    let fold_depth_px = fixed_or(get_float(88u), 0.0, GLASS_FOLD_OFF) * optical_scale;
     var fold_displacement = vec2<f32>(0.0);
     var fold_absorb = 0.0;
     if loupe_mode <= 0.5 && fold_depth_px > 0.0 {
@@ -874,7 +912,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     );
 
     // wcKSRD owns source mapping and backdrop blur.
-    let wcksrd_blur_radius = max(max(get_float(93u), 0.0), loupe_rim_softening);
+    let wcksrd_blur_radius = max(max(fixed_or(get_float(93u), 0.0, GLASS_OPTICAL_BLUR_OFF), 0.0), loupe_rim_softening);
     let transmitted_path = sample_wcksrd_path(
         uv,
         tex_size,
@@ -949,7 +987,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     // untouched and only glyph ink takes the color. This lives in the
     // MATERIAL: recoloring the elements instead refracts their accent
     // into smears around the bubble rim (live report).
-    let ink_recolor_strength = clamp(get_float(127u), 0.0, 1.0);
+    let ink_recolor_strength = clamp(fixed_or(get_float(127u), 0.0, GLASS_INK_OFF), 0.0, 1.0);
     if ink_recolor_strength > 0.0 {
         let ink_color = vec3<f32>(get_float(124u), get_float(125u), get_float(126u));
         let transmitted_luma = dot(rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
@@ -1204,7 +1242,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     // gradient UNDER THE FINGER — never a flat surface recolor. Saturation
     // of white is white and the light is a small screen-ish add, so bright
     // backdrops stay safe.
-    let touch_strength = clamp(get_float(120u), 0.0, 1.0);
+    let touch_strength = clamp(fixed_or(get_float(120u), 0.0, GLASS_TOUCH_OFF), 0.0, 1.0);
     if touch_strength > 0.0 {
         let touch_px = vec2<f32>(get_float(118u), get_float(119u)) * dp_scale;
         let touch_reach = 58.0 * optical_scale;
@@ -1222,7 +1260,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     // background and its detail. A per-fragment decision classifies thin
     // light/dark backdrop glyphs as a new background polarity and inverts
     // them, even though the surrounding card already has safe contrast.
-    let adaptive_frost = clamp(get_float(91u), 0.0, 1.0);
+    let adaptive_frost = clamp(fixed_or(get_float(91u), 0.0, GLASS_ADAPTIVE_FROST_OFF), 0.0, 1.0);
     if adaptive_frost > 0.0 {
         let foreground_luma = clamp(get_float(97u), 0.0, 1.0);
         let adaptive_sample = sample_adaptive_neighborhood(

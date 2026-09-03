@@ -91,6 +91,7 @@ pub struct RuntimeShader {
     source: Arc<str>,
     source_hash: u64,
     uniforms: RuntimeShaderUniforms,
+    overrides: Vec<(&'static str, f64)>,
     input_padding: f32,
     output_padding: f32,
 }
@@ -190,6 +191,7 @@ impl RuntimeShader {
             source,
             source_hash,
             uniforms: RuntimeShaderUniforms::new(),
+            overrides: Vec::new(),
             input_padding: 0.0,
             output_padding: 0.0,
         }
@@ -205,9 +207,46 @@ impl RuntimeShader {
             source,
             source_hash,
             uniforms: RuntimeShaderUniforms::new(),
+            overrides: Vec::new(),
             input_padding: 0.0,
             output_padding: 0.0,
         }
+    }
+
+    /// Fixes a pipeline-overridable constant (`override NAME: T = ...;` in
+    /// the WGSL) for every pipeline compiled from this shader. The value is
+    /// converted to the constant's declared scalar type the way WebGPU does
+    /// (a `bool` is `value != 0`). Each distinct override set compiles its
+    /// own pipeline; renderers use this to fold a material's inactive
+    /// features away without changing the shader text.
+    pub fn set_override(&mut self, name: &'static str, value: f64) {
+        match self
+            .overrides
+            .binary_search_by(|(existing, _)| existing.cmp(&name))
+        {
+            Ok(index) => self.overrides[index].1 = value,
+            Err(index) => self.overrides.insert(index, (name, value)),
+        }
+    }
+
+    /// The pipeline-overridable constants fixed by [`Self::set_override`],
+    /// ordered by name.
+    pub fn overrides(&self) -> &[(&'static str, f64)] {
+        &self.overrides
+    }
+
+    /// Hash of the fixed override set; zero when no override is fixed.
+    pub fn overrides_hash(&self) -> u64 {
+        if self.overrides.is_empty() {
+            return 0;
+        }
+        let mut bytes = Vec::new();
+        for (name, value) in &self.overrides {
+            bytes.extend_from_slice(name.as_bytes());
+            bytes.push(0);
+            bytes.extend_from_slice(&value.to_bits().to_le_bytes());
+        }
+        hash_shader_bytes(&bytes)
     }
 
     /// Declares how far the shader may sample outside its effect rect, in
@@ -363,21 +402,28 @@ impl PartialEq for RuntimeShader {
             && (Arc::ptr_eq(&self.source, &other.source)
                 || self.source.as_ref() == other.source.as_ref())
             && self.uniforms == other.uniforms
+            && self.overrides.len() == other.overrides.len()
+            && self
+                .overrides
+                .iter()
+                .zip(&other.overrides)
+                .all(|(a, b)| a.0 == b.0 && a.1.to_bits() == b.1.to_bits())
             && self.input_padding.to_bits() == other.input_padding.to_bits()
             && self.output_padding.to_bits() == other.output_padding.to_bits()
     }
 }
 
 fn hash_shader_source(source: &str) -> u64 {
+    hash_shader_bytes(source.as_bytes())
+}
+
+fn hash_shader_bytes(bytes: &[u8]) -> u64 {
     const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
     const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 
-    source
-        .as_bytes()
-        .iter()
-        .fold(FNV_OFFSET_BASIS, |hash, byte| {
-            (hash ^ u64::from(*byte)).wrapping_mul(FNV_PRIME)
-        })
+    bytes.iter().fold(FNV_OFFSET_BASIS, |hash, byte| {
+        (hash ^ u64::from(*byte)).wrapping_mul(FNV_PRIME)
+    })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -573,6 +619,29 @@ impl RenderEffect {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn overrides_stay_sorted_and_replace_by_name() {
+        let mut shader = super::RuntimeShader::new("// overrides");
+        shader.set_override("ZETA", 1.0);
+        shader.set_override("ALPHA", 0.0);
+        shader.set_override("ZETA", 2.0);
+        assert_eq!(shader.overrides(), &[("ALPHA", 0.0), ("ZETA", 2.0)]);
+    }
+
+    #[test]
+    fn overrides_distinguish_otherwise_equal_shaders() {
+        let plain = super::RuntimeShader::new("// overrides-eq");
+        let mut raised = plain.clone();
+        raised.set_override("FLAG", 1.0);
+        assert_eq!(plain.overrides_hash(), 0);
+        assert_ne!(plain.overrides_hash(), raised.overrides_hash());
+        assert_ne!(plain, raised);
+        let mut lowered = raised.clone();
+        lowered.set_override("FLAG", 0.0);
+        assert_ne!(raised.overrides_hash(), lowered.overrides_hash());
+        assert_ne!(raised, lowered);
+    }
+
     use super::*;
     use crate::RoundedCornerShape;
 
