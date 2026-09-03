@@ -32,7 +32,7 @@ fn property_flag(name: &str) -> bool {
     }
 }
 
-const PROPERTY_BACKED_ENV_VARS: [(&str, &str); 55] = [
+const PROPERTY_BACKED_ENV_VARS: [(&str, &str); 56] = [
     ("debug.cranpose.root_direct", "CRANPOSE_ROOT_DIRECT_DIAG"),
     ("debug.cranpose.recomp_diag", "CRANPOSE_RECOMP_DIAG"),
     (
