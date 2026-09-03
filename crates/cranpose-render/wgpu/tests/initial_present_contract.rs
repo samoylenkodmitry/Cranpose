@@ -1,6 +1,7 @@
-use std::{sync::mpsc, time::Duration};
+mod support;
 
 use cranpose_render_wgpu::{clear_to_default_background, offscreen_render_target_for_tests};
+use support::read_texture_rgba8;
 
 fn headless_device() -> Option<(wgpu::Device, wgpu::Queue)> {
     let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
@@ -37,70 +38,19 @@ fn clears_every_pixel_to_the_frameworks_default_background() {
 
     clear_to_default_background(&device, &queue, &view);
 
-    let unpadded_bytes_per_row = WIDTH * 4;
-    let padded_bytes_per_row =
-        unpadded_bytes_per_row.next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
-    let readback = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("placeholder-clear-test-readback"),
-        size: (padded_bytes_per_row * HEIGHT) as u64,
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-        label: Some("placeholder-clear-test-copy"),
-    });
-    encoder.copy_texture_to_buffer(
-        wgpu::TexelCopyTextureInfo {
-            texture: &texture,
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
-        wgpu::TexelCopyBufferInfo {
-            buffer: &readback,
-            layout: wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(padded_bytes_per_row),
-                rows_per_image: Some(HEIGHT),
-            },
-        },
-        wgpu::Extent3d {
-            width: WIDTH,
-            height: HEIGHT,
-            depth_or_array_layers: 1,
-        },
-    );
-    let submission = queue.submit(Some(encoder.finish()));
+    let pixels = read_texture_rgba8(&device, &queue, &texture);
 
-    let slice = readback.slice(..);
-    let (tx, rx) = mpsc::channel();
-    slice.map_async(wgpu::MapMode::Read, move |result| {
-        let _ = tx.send(result);
-    });
-    let _ = device.poll(wgpu::PollType::Wait {
-        submission_index: Some(submission),
-        timeout: None,
-    });
-    rx.recv_timeout(Duration::from_secs(3))
-        .expect("readback must complete")
-        .expect("map_async must succeed");
-
-    let mapped = slice.get_mapped_range();
     let expected: [u8; 4] = [
         (cranpose_render_common::FRAME_CLEAR_COLOR[0] * 255.0).round() as u8,
         (cranpose_render_common::FRAME_CLEAR_COLOR[1] * 255.0).round() as u8,
         (cranpose_render_common::FRAME_CLEAR_COLOR[2] * 255.0).round() as u8,
         (cranpose_render_common::FRAME_CLEAR_COLOR[3] * 255.0).round() as u8,
     ];
-    for row in 0..HEIGHT as usize {
-        let row_start = row * padded_bytes_per_row as usize;
-        for col in 0..WIDTH as usize {
-            let pixel_start = row_start + col * 4;
-            let pixel = &mapped[pixel_start..pixel_start + 4];
-            assert_eq!(
-                pixel, expected,
-                "pixel ({col}, {row}) must be the framework's default background"
-            );
-        }
+    for (index, pixel) in pixels.chunks_exact(4).enumerate() {
+        let (col, row) = (index % WIDTH as usize, index / WIDTH as usize);
+        assert_eq!(
+            pixel, expected,
+            "pixel ({col}, {row}) must be the framework's default background"
+        );
     }
 }

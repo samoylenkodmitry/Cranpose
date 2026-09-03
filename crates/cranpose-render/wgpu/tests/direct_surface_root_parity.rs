@@ -1,8 +1,6 @@
 mod support;
 
-use std::{sync::mpsc, time::Duration};
-
-use support::page::*;
+use support::{page::*, read_texture_rgba8};
 
 const FRAME_WIDTH: u32 = 320;
 const FRAME_HEIGHT: u32 = 240;
@@ -49,62 +47,6 @@ struct Frames {
     captured: Vec<u8>,
     presented: Vec<u8>,
     presented_passes: u32,
-}
-
-fn read_texture(device: &wgpu::Device, queue: &wgpu::Queue, texture: &wgpu::Texture) -> Vec<u8> {
-    let width = texture.width();
-    let height = texture.height();
-    let unpadded = width * 4;
-    let padded =
-        unpadded.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("direct surface readback"),
-        size: u64::from(padded) * u64::from(height),
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-    encoder.copy_texture_to_buffer(
-        wgpu::TexelCopyTextureInfo {
-            texture,
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
-        wgpu::TexelCopyBufferInfo {
-            buffer: &buffer,
-            layout: wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(padded),
-                rows_per_image: Some(height),
-            },
-        },
-        wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        },
-    );
-    let submission = queue.submit([encoder.finish()]);
-    let slice = buffer.slice(..);
-    let (tx, rx) = mpsc::channel();
-    slice.map_async(wgpu::MapMode::Read, move |result| {
-        let _ = tx.send(result);
-    });
-    let _ = device.poll(wgpu::PollType::Wait {
-        submission_index: Some(submission),
-        timeout: None,
-    });
-    rx.recv_timeout(Duration::from_secs(3))
-        .expect("readback timed out")
-        .expect("readback map failed");
-    let mapped = slice.get_mapped_range();
-    let mut pixels = Vec::with_capacity((unpadded * height) as usize);
-    for row in 0..height as usize {
-        let start = row * padded as usize;
-        pixels.extend_from_slice(&mapped[start..start + unpadded as usize]);
-    }
-    pixels
 }
 
 fn render_frames(disable_direct: bool) -> Option<Frames> {
@@ -162,7 +104,7 @@ fn render_frames_with_current_toggles() -> Option<Frames> {
     assert_eq!(shell.renderer().device_error_count_for_tests(), 0);
     Some(Frames {
         captured: captured.pixels,
-        presented: read_texture(&device, &queue, &texture),
+        presented: read_texture_rgba8(&device, &queue, &texture),
         presented_passes,
     })
 }

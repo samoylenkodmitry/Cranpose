@@ -2,7 +2,8 @@
 
 use std::{
     ops::{Deref, DerefMut},
-    sync::{Arc, Mutex, MutexGuard},
+    sync::{Arc, Mutex, MutexGuard, mpsc},
+    time::Duration,
 };
 
 use cranpose_app_shell::AppShell;
@@ -315,6 +316,65 @@ pub fn draw_run_graph(size: u32, scope: cranpose_ui_graphics::DrawScopeDefault) 
 
 /// A render-attachment texture of `format` and its default view, the shape
 /// every presentable-target test hands to the renderer.
+pub fn read_texture_rgba8(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    texture: &wgpu::Texture,
+) -> Vec<u8> {
+    let width = texture.width();
+    let height = texture.height();
+    let unpadded = width * 4;
+    let padded = unpadded.next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("test readback"),
+        size: u64::from(padded) * u64::from(height),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    encoder.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo {
+            texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyBufferInfo {
+            buffer: &buffer,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(padded),
+                rows_per_image: Some(height),
+            },
+        },
+        wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+    );
+    let submission = queue.submit([encoder.finish()]);
+    let slice = buffer.slice(..);
+    let (tx, rx) = mpsc::channel();
+    slice.map_async(wgpu::MapMode::Read, move |result| {
+        let _ = tx.send(result);
+    });
+    let _ = device.poll(wgpu::PollType::Wait {
+        submission_index: Some(submission),
+        timeout: None,
+    });
+    rx.recv_timeout(Duration::from_secs(3))
+        .expect("readback timed out")
+        .expect("readback map failed");
+    let mapped = slice.get_mapped_range();
+    let mut pixels = Vec::with_capacity((unpadded * height) as usize);
+    for row in 0..height as usize {
+        let start = row * padded as usize;
+        pixels.extend_from_slice(&mapped[start..start + unpadded as usize]);
+    }
+    pixels
+}
+
 pub fn render_target(
     device: &wgpu::Device,
     width: u32,
