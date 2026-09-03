@@ -227,8 +227,9 @@ fn scrolled_pass_counts_with_rows(glass_count: usize, shadowed_rows: bool) -> Ve
         .collect()
 }
 
-/// The frame's final pass.
-const FRAME_PASSES: u32 = 1;
+/// The frame's page drawn in two strata: up to the stage's lowest glass, and
+/// the rest after the stage resolved.
+const FRAME_PASSES: u32 = 2;
 /// One resolve stage: the capture atlas pass and the blur pass pair shared by
 /// every blurred glass in the stage.
 const STAGE_PASSES: u32 = 3;

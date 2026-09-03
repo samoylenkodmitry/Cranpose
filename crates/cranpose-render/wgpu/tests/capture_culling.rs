@@ -134,18 +134,7 @@ fn straddling_page() -> Vec<RenderNode> {
 }
 
 fn passthrough_glass() -> RenderNode {
-    RenderNode::Layer(Box::new(shared_test_support::layer_node(
-        rect(0.0, 0.0, GLASS.width, GLASS.height),
-        ProjectiveTransform::translation(GLASS.x, GLASS.y),
-        GraphicsLayer {
-            backdrop_effect: Some(RenderEffect::runtime_shader(RuntimeShader::new(
-                &passthrough_wgsl(),
-            ))),
-            clip: true,
-            ..GraphicsLayer::default()
-        },
-        Vec::new(),
-    )))
+    passthrough_glass_at(GLASS)
 }
 
 fn page(with_glass: bool) -> RenderGraph {
@@ -191,5 +180,128 @@ fn a_capture_holds_every_text_image_and_composite_that_reaches_into_it() {
         "a pass-through glass must show exactly the page beneath it: differing_pixels={} \
          max_diff={} first={:?}",
         stats.differing_pixels, stats.max_difference, stats.first_difference
+    );
+}
+
+const SECOND_GLASS: Rect = Rect {
+    x: 8.0,
+    y: 60.0,
+    width: 60.0,
+    height: 50.0,
+};
+
+fn passthrough_glass_at(bounds: Rect) -> RenderNode {
+    RenderNode::Layer(Box::new(shared_test_support::layer_node(
+        rect(0.0, 0.0, bounds.width, bounds.height),
+        ProjectiveTransform::translation(bounds.x, bounds.y),
+        GraphicsLayer {
+            backdrop_effect: Some(RenderEffect::runtime_shader(RuntimeShader::new(
+                &passthrough_wgsl(),
+            ))),
+            clip: true,
+            ..GraphicsLayer::default()
+        },
+        Vec::new(),
+    )))
+}
+
+/// Two glasses that do not overlap share one stage; a stripe drawn between
+/// them in z reaches under the later one and must show through it.
+fn staged_page(with_glasses: bool) -> RenderGraph {
+    let mut children = vec![solid_rect(
+        rect(0.0, 0.0, FRAME_WIDTH as f32, FRAME_HEIGHT as f32),
+        Color::from_rgb_u8(24, 28, 40),
+    )];
+    if with_glasses {
+        children.push(passthrough_glass_at(SECOND_GLASS));
+    }
+    children.push(solid_rect(
+        rect(0.0, SECOND_GLASS.y + 10.0, FRAME_WIDTH as f32, 12.0),
+        Color::from_rgb_u8(250, 200, 40),
+    ));
+    if with_glasses {
+        children.push(passthrough_glass_at(GLASS));
+    }
+    children.push(solid_rect(
+        rect(0.0, GLASS.y + 30.0, FRAME_WIDTH as f32, 8.0),
+        Color::from_rgb_u8(40, 220, 120),
+    ));
+    support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children)
+}
+
+#[test]
+fn a_later_glass_of_a_stage_shows_what_was_drawn_after_the_earlier_glass() {
+    let Ok(mut renderer) = support::headless_renderer() else {
+        eprintln!("skipping (headless WGPU init failed)");
+        return;
+    };
+    let without = capture(&mut renderer, staged_page(false));
+    let with = capture(&mut renderer, staged_page(true));
+    for (label, glass) in [("first", SECOND_GLASS), ("second", GLASS)] {
+        let inside = rect(
+            glass.x + 2.0,
+            glass.y + 2.0,
+            glass.width - 4.0,
+            glass.height - 4.0,
+        );
+        let expected = region_pixels(&without, inside);
+        let stats = image_difference_stats(
+            &expected,
+            &region_pixels(&with, inside),
+            inside.width as u32,
+            inside.height as u32,
+            1,
+        );
+        assert_eq!(
+            stats.differing_pixels, 0,
+            "the {label} glass must show the page beneath it, stripe included: \
+             differing_pixels={} first={:?}",
+            stats.differing_pixels, stats.first_difference
+        );
+    }
+}
+
+/// The stripes of `staged_page` drawn before any glass, so every capture
+/// finds them on the page.
+fn glazed_page(with_glasses: bool) -> RenderGraph {
+    let mut children = vec![
+        solid_rect(
+            rect(0.0, 0.0, FRAME_WIDTH as f32, FRAME_HEIGHT as f32),
+            Color::from_rgb_u8(24, 28, 40),
+        ),
+        solid_rect(
+            rect(0.0, SECOND_GLASS.y + 10.0, FRAME_WIDTH as f32, 12.0),
+            Color::from_rgb_u8(250, 200, 40),
+        ),
+        solid_rect(
+            rect(0.0, GLASS.y + 30.0, FRAME_WIDTH as f32, 8.0),
+            Color::from_rgb_u8(40, 220, 120),
+        ),
+    ];
+    if with_glasses {
+        children.push(passthrough_glass_at(SECOND_GLASS));
+        children.push(passthrough_glass_at(GLASS));
+    }
+    support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children)
+}
+
+#[test]
+fn a_capture_adds_no_shape_fill_of_its_own() {
+    let Ok(mut renderer) = support::headless_renderer() else {
+        eprintln!("skipping (headless WGPU init failed)");
+        return;
+    };
+    let fill = |renderer: &mut support::LockedRenderer, graph: RenderGraph| {
+        capture(renderer, graph);
+        renderer
+            .last_frame_stats()
+            .expect("frame stats")
+            .shape_fill_pixels
+    };
+    let plain = fill(&mut renderer, glazed_page(false));
+    let glazed = fill(&mut renderer, glazed_page(true));
+    assert_eq!(
+        glazed, plain,
+        "a capture reads the page's pixels; it never draws the page's shapes again"
     );
 }

@@ -26,15 +26,29 @@ textures.
 
 ## Stages
 
-A tiling GPU pays a fixed cost per render pass whatever the pass draws, so
-the resolve step batches. The backdrop effects of one layer scene queue into
-stages (`ResolveStages`): an effect joins the stage after every queued
-effect below it whose composite lies under its capture, so every capture in
-a stage reads only composites of earlier stages. A stage runs as:
+A tiling GPU pays a fixed cost per render pass whatever the pass draws, and
+a capture that re-draws the page under its glass pays that page's fill
+again for every glass, so the resolve step batches and the page is drawn
+progressively. The backdrop effects of one layer scene queue into stages
+(`ResolveStages`): an effect joins the stage after every queued effect
+below it whose composite lies under its capture, so every capture in a
+stage reads only composites of earlier stages. A layer draws into its page
+(`LayerPass`: the frame's root image, or an isolated child's surface) in
+strata: before a stage captures, the page is drawn up to the stage's lowest
+glass (`flush_page`: the ops from the last flush to that z outside the
+excluded effect ranges, and every resolved composite below it), and after
+the last stage the rest of the layer follows in one more stratum. A stage
+runs as:
 
 1. one capture pass into an atlas that holds every capture of the stage,
    shelf-packed with a gap of the effect's blur radius around each region so
-   no blur tap reads a neighbour;
+   no blur tap reads a neighbour. Each region is a blit of the page's own
+   pixels (and, in an isolated child reading its backdrop, of the parent's
+   page under it), plus the ops and pending composites between the stage's
+   lowest glass and the region's own z that reach into it, so a stripe
+   drawn between two glasses of one stage still shows through the later
+   one (`capture_culling.rs`) and nothing already on the page is drawn a
+   second time (`a_capture_adds_no_shape_fill_of_its_own`);
 2. one blur pass pair over every blurred region: the horizontal pass writes
    each region downscaled into a scratch texture, the vertical pass writes
    it at full size into a result texture, and both textures are packed to
@@ -42,29 +56,32 @@ a stage reads only composites of earlier stages. A stage runs as:
    Mate 20 X the atlas-sized pair cost 9 ms of bandwidth per frame);
 3. composites reading their region: a blur blits its region of the result
    through the effect's rounded mask; a runtime shader that declares
-   `batched_source` draws in the final pass reading its region, applying the
-   mask and alpha through its reserved uniform slots;
-4. one resolve pass for the stage's shader tails that a later capture reads
-   (`CaptureReaders::reads`): a capture re-shades every tail under it, so a
-   read tail is shaded once into a packed texture and becomes a blit for
-   the captures and the final pass alike. `shader_pixels` in the stats
-   counts what the shaders shade per frame; `backdrop_atlas_parity.rs`
-   pins that a glass under two glass buttons shades exactly its own pixels.
+   `batched_source` draws in its stratum reading its region, applying the
+   mask and alpha through its reserved uniform slots. A later stage's
+   captures read the page the shader was drawn into, so every glass is
+   shaded exactly once (`shader_pixels` in the stats counts it;
+   `backdrop_atlas_parity.rs` pins that a glass under two glass buttons
+   shades exactly its own pixels).
 
 Effects the renderer cannot batch (an app shader that reads the whole input
 texture, an offset, a chain the shader does not end) resolve one at a time
-inside their stage. A list of glass cards over a page therefore costs one
-capture pass; the glass buttons inside the cards read the cards' glass and
-form the next stage: one capture pass and one blur pair for all of them.
+inside their stage from their own capture of the page. A list of glass
+cards over a page therefore costs two strata and one capture pass; the
+glass buttons inside the cards read the cards' glass and form the next
+stage: one more stratum, one capture pass and one blur pair for all of
+them.
 
 An isolated child that draws nothing itself and whose effect is a runtime
-shader (a shader-drawn planet) is a shader composite in the final pass over
-a shared transparent input of its surface size, and costs no pass. A shader
-drawn in the final pass is re-run inside every capture above it, so the
-renderer sums the capture area that reads such a child (`CaptureReaders`)
-and resolves it into a texture once when more than half of it is read
-again: a page-wide shader under a list of glass cards runs once, a corner
-shader under one card stays a tail.
+shader (a shader-drawn planet) is a shader composite in its stratum over a
+shared transparent input of its surface size, and costs no pass; captures
+above it read the page, so it is shaded once however many read it.
+
+An isolated child that reads its backdrop renders its own page with the
+parent's page beneath it (`PageBase`): re-based by the child's translation
+when the child only translates at the parent's scale, projected through
+the child's transform otherwise. The parent draws its strata up to the
+child before the child renders, so the child's captures read what the
+parent had drawn.
 
 A shader that reads its region of the atlas maps region-local uv to the
 texture once per fragment (`region_map` in `liquid_glass.wgsl` and
@@ -75,9 +92,9 @@ no tap pays for a texture query or a uniform fetch.
 and packed beside others (a shader within one 8-bit step, the float region
 mapping moving a tap by a few ulps; a blur exactly), the in-shader mask
 matches the masked blit, the shader-only child matches its surface resolve,
-and the heavily read shader child resolves exactly once.
-`backdrop_pass_batching.rs` pins the budget: extra glasses in a stage add
-no pass.
+and a shader child read by three cards shades the same pixels as one read
+by one. `backdrop_pass_batching.rs` pins the budget: extra glasses in a
+stage add no pass.
 
 A capture region draws only what reaches into it: shapes, texts and images
 are judged by their snapped bounds and clip against the region, composites
@@ -228,7 +245,7 @@ runtime shaders shade (`shader_pixels`, the number that decides a glass
 frame's cost on a tiling GPU).
 `backdrop_pass_batching.rs` pins the pass budget: a frame has one full-screen
 pass, a stage adds one capture pass and one blur pair however many glasses it
-holds, and a capture never splits the final pass.
+holds, and a stage adds one stratum of the page, never a pass per glass.
 
 ## Validation bar
 
@@ -238,13 +255,17 @@ pass counts ships with a test that fails without it.
 
 ## Where a glass frame's time goes
 
-Measured on the Mate 20 X (Mali-G76) scrolling the showcase list, by
-removing one thing at a time from a single build and reading the present
-time: with no backdrop effect the page presents in 3 ms at 59 fps. Every
-remaining millisecond is fill: the glass material's own shading at roughly
-10 ms per megapixel of glass, the page re-drawn under each capture (its
-gradient shapes and cached shadow bands), and the shadow bands in the final
-pass. Pass count stopped mattering once the atlas stages landed; the atlas
-blur bandwidth and the re-shading of read tails were the two renderer costs
-left on top of the fill, and both are gone. The material's per-pixel
-cost is the material's; the renderer shades each glass pixel once.
+Measured on the Mate 20 X (Mali-G76) scrolling the showcase list with one
+APK and a `debug.cranpose.ablate` toggle that drops one thing per run
+(present p50, battery temperature steady): the frame presents in 43 ms.
+Dropping every composite from the scissored segments (captures and the
+read-tail resolve pass) presents in 20 ms; dropping the shapes from the
+captures, 35 ms; replacing the glass shader with a blit, 35 ms; dropping
+texts or images from the captures changes nothing. Every capture re-draws
+the page under its glass: the starfield gradient, the neighbours' shadow
+bands and earlier stages' resolved glass, and that re-drawing is half the
+frame. The page under the cards animates every frame, so the backdrop
+result cache never serves this scene. The structural fix is a progressive
+page: the final pass split into strata at the stage boundaries, each
+stratum's pixels materialized once and read by the next stage's captures as
+one blit, so nothing beneath a glass is drawn twice.

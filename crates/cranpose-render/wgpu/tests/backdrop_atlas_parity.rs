@@ -339,28 +339,25 @@ fn cards_over_band(card_count: usize, band: bool) -> RenderGraph {
     ))
 }
 
-/// Surface resolves the band adds on top of the cards alone.
-fn band_surface_resolves(renderer: &mut support::LockedRenderer, card_count: usize) -> u32 {
+/// Surface resolves and shader pixels the band adds on top of the cards
+/// alone.
+fn band_cost(renderer: &mut support::LockedRenderer, card_count: usize) -> (u32, u64) {
     capture(renderer, cards_over_band(card_count, false));
-    let cards_only = renderer
-        .last_frame_stats()
-        .expect("stats")
-        .isolated_layer_renders;
+    let cards_only = renderer.last_frame_stats().expect("stats");
     let frame = capture(renderer, cards_over_band(card_count, true));
     glass_has_content(&frame);
-    let with_band = renderer
-        .last_frame_stats()
-        .expect("stats")
-        .isolated_layer_renders;
-    with_band - cards_only
+    let with_band = renderer.last_frame_stats().expect("stats");
+    (
+        with_band.isolated_layer_renders - cards_only.isolated_layer_renders,
+        with_band.shader_pixels - cards_only.shader_pixels,
+    )
 }
 
-/// A shader drawn in the final pass is re-run inside every capture above
-/// it. One card reading a corner of a page-wide shader leaves it a tail;
-/// three cards reading most of it make one surface resolve cheaper, so the
-/// renderer resolves it once and the captures read the texture.
+/// A shader drawn in the final pass is shaded once, in its stratum; every
+/// capture above it reads the page it was drawn into, so however many cards
+/// read it, it resolves into no surface and shades no pixel twice.
 #[test]
-fn a_shader_child_most_captures_read_resolves_into_a_texture_once() {
+fn a_shader_child_read_by_captures_is_shaded_once_on_the_page() {
     let mut renderer = match support::headless_renderer() {
         Ok(renderer) => renderer,
         Err(err) => {
@@ -368,15 +365,19 @@ fn a_shader_child_most_captures_read_resolves_into_a_texture_once() {
             return;
         }
     };
+    let (one_resolves, one_pixels) = band_cost(&mut renderer, 1);
+    let (three_resolves, three_pixels) = band_cost(&mut renderer, 3);
     assert_eq!(
-        band_surface_resolves(&mut renderer, 1),
-        0,
+        one_resolves, 0,
         "one card reads a corner of the band: it stays a tail"
     );
     assert_eq!(
-        band_surface_resolves(&mut renderer, 3),
-        1,
-        "three cards read most of the band: it resolves once"
+        three_resolves, 0,
+        "three cards read most of the band: it still stays a tail"
+    );
+    assert_eq!(
+        three_pixels, one_pixels,
+        "the band is shaded once whether one card or three read it"
     );
 }
 

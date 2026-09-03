@@ -51,15 +51,6 @@ impl DeviceRect {
         }
     }
 
-    fn from_tuple((x, y, width, height): (f32, f32, f32, f32)) -> Self {
-        Self {
-            x,
-            y,
-            width,
-            height,
-        }
-    }
-
     fn tuple(self) -> (f32, f32, f32, f32) {
         (self.x, self.y, self.width, self.height)
     }
@@ -116,34 +107,194 @@ impl DeviceRect {
     }
 }
 
-/// What lies beneath a layer scene, expressed in that scene's device space:
-/// the base its root chain clears to and every ancestor's ops below the
-/// layer's position, so a capture inside the layer can rebuild the pixels a
-/// backdrop reads without a target ever reading itself.
-#[derive(Clone)]
+/// What a layer's captures read beneath the layer's own pixels: the base its
+/// page starts from, the parent's page under it when it is an isolated child
+/// reading its backdrop, and a description of that parent content for the
+/// backdrop result cache's key.
 struct Beneath<'a> {
     base: wgpu::LoadOp<wgpu::Color>,
-    projected: Option<ProjectedBase>,
-    segments: Vec<BeneathSegment<'a>>,
+    page: Option<PageBase>,
+    described: Vec<BeneathSegment<'a>>,
 }
 
+/// One ancestor scene's content beneath a layer, as the backdrop result
+/// cache hashes it: the ops below `z_end` outside `excluded`, the composites
+/// already drawn and still pending below it, and where the scene's device
+/// origin sits in the layer's device space.
 #[derive(Clone, Copy)]
 struct BeneathSegment<'a> {
     scene: &'a CompositorScene,
     z_end: usize,
-    composites: &'a [ResolvedComposite],
+    drawn: &'a [ResolvedComposite],
+    pending: &'a [ResolvedComposite],
     excluded: &'a [(usize, usize)],
     placement: [f32; 2],
 }
 
-/// The parent's pixels under a transformed child, already captured in the
-/// parent's device space, and the mapping from the child's device space back
-/// into that capture.
+/// The parent's page under an isolated child that reads its backdrop, and
+/// how the child's device space maps into it.
 #[derive(Clone)]
-struct ProjectedBase {
+struct PageBase {
     source: Rc<OffscreenTarget>,
-    dest_quad: [[f32; 2]; 4],
-    inverse: [[f32; 3]; 3],
+    origin: [f32; 2],
+    placement: PagePlacement,
+}
+
+#[derive(Clone)]
+enum PagePlacement {
+    /// A child device point plus `shift` is the parent device point.
+    Translated { shift: [f32; 2] },
+    /// The parent page's pixels under the child, projected into the child's
+    /// device space: `inverse` maps a child device point to a page pixel.
+    Projected {
+        dest_quad: [[f32; 2]; 4],
+        inverse: [[f32; 3]; 3],
+    },
+}
+
+impl PageBase {
+    fn rect(&self) -> DeviceRect {
+        DeviceRect {
+            x: self.origin[0],
+            y: self.origin[1],
+            width: self.source.width as f32,
+            height: self.source.height as f32,
+        }
+    }
+
+    /// The parent pixels under `region` of the child, drawn into the child's
+    /// device space.
+    fn under(&self, region: DeviceRect) -> Option<ResolvedComposite> {
+        match self.placement {
+            PagePlacement::Translated { shift } => {
+                let parent = region
+                    .translated(Point::new(shift[0], shift[1]))
+                    .intersect(self.rect())?;
+                Some(page_blit(
+                    &self.source,
+                    self.origin,
+                    parent,
+                    parent.translated(Point::new(-shift[0], -shift[1])),
+                ))
+            }
+            PagePlacement::Projected { dest_quad, inverse } => Some(ResolvedComposite {
+                z_index: 0,
+                source: Rc::clone(&self.source),
+                content: SourceContent::Transient,
+                dest: quad_device_bounds(dest_quad).tuple(),
+                scissor: None,
+                kind: ResolvedCompositeKind::Projective {
+                    dest_quad,
+                    inverse,
+                    alpha: 1.0,
+                    blend_mode: BlendMode::SrcOver,
+                    sample_mode: CompositeSampleMode::Linear,
+                },
+            }),
+        }
+    }
+}
+
+/// The pixels of `source`, whose origin sits at `origin` in device space,
+/// within `parent`, drawn at `dest`.
+fn page_blit(
+    source: &Rc<OffscreenTarget>,
+    origin: [f32; 2],
+    parent: DeviceRect,
+    dest: DeviceRect,
+) -> ResolvedComposite {
+    ResolvedComposite {
+        z_index: 0,
+        source: Rc::clone(source),
+        content: SourceContent::Transient,
+        dest: dest.tuple(),
+        scissor: None,
+        kind: ResolvedCompositeKind::Blit {
+            alpha: 1.0,
+            blend_mode: BlendMode::SrcOver,
+            rounded_mask: None,
+            sample_mode: CompositeSampleMode::Nearest,
+            source_viewport: Some((
+                parent.x - origin[0],
+                parent.y - origin[1],
+                parent.width,
+                parent.height,
+            )),
+        },
+    }
+}
+
+/// The texture a layer draws its strata into and its captures read back:
+/// the frame's root image, or an isolated child's surface, with the device
+/// offset its origin sits at.
+#[derive(Clone)]
+struct Page {
+    texture: Rc<OffscreenTarget>,
+    offset: [f32; 2],
+}
+
+impl Page {
+    fn pass_target(&self) -> PassTarget<'_> {
+        PassTarget {
+            view: &self.texture.view,
+            width: self.texture.width,
+            height: self.texture.height,
+            offset: self.offset,
+        }
+    }
+
+    fn rect(&self) -> DeviceRect {
+        DeviceRect {
+            x: self.offset[0],
+            y: self.offset[1],
+            width: self.texture.width as f32,
+            height: self.texture.height as f32,
+        }
+    }
+
+    /// The page's pixels within `rect`, drawn back in place.
+    fn blit(&self, rect: DeviceRect) -> Option<ResolvedComposite> {
+        let rect = rect.intersect(self.rect())?;
+        Some(page_blit(&self.texture, self.offset, rect, rect))
+    }
+}
+
+/// One layer's render in progress: the page it draws into, the strata it has
+/// drawn (every op below `drawn_z` and every composite in `drawn`), the
+/// composites still to draw, and the backdrops waiting for their stage.
+struct LayerPass<'a> {
+    layer: &'a LayerScene,
+    page: Page,
+    scale: f32,
+    beneath: &'a Beneath<'a>,
+    drawn: Vec<ResolvedComposite>,
+    pending: Vec<ResolvedComposite>,
+    excluded: Vec<(usize, usize)>,
+    stages: ResolveStages<'a>,
+    drawn_z: usize,
+    load_op: Option<wgpu::LoadOp<wgpu::Color>>,
+}
+
+impl LayerPass<'_> {
+    fn target_rect(&self) -> DeviceRect {
+        self.page.rect()
+    }
+
+    /// The pending composites below `z`, in z order.
+    fn pending_below(&mut self, z: usize) -> &[ResolvedComposite] {
+        self.pending.sort_by_key(|composite| composite.z_index);
+        let end = self
+            .pending
+            .partition_point(|composite| composite.z_index < z);
+        &self.pending[..end]
+    }
+
+    fn drawn_below(&self, z: usize) -> &[ResolvedComposite] {
+        let end = self
+            .drawn
+            .partition_point(|composite| composite.z_index < z);
+        &self.drawn[..end]
+    }
 }
 
 const MAX_ATLAS_DIM: u32 = 4096;
@@ -186,63 +337,6 @@ impl BatchedEffect<'_> {
             Self::Blur(blur) | Self::BlurThenShader(blur, _) => Some(blur),
             Self::Shader(_) => None,
         }
-    }
-}
-
-/// How much a shader drawn straight into the final pass may be re-run by
-/// the captures above it before resolving it into a texture once is
-/// cheaper: the intersecting capture area as a fraction of its own.
-const TAIL_RECAPTURE_LIMIT: f32 = 0.5;
-
-/// The device rects every backdrop capture of a layer scene reads, with the
-/// z it reads at. A runtime shader composited straight into the final pass
-/// is re-run inside each of those captures above it, so a shader that many
-/// captures read (a page-wide shader under a list of glass cards) resolves
-/// into a texture once instead.
-struct CaptureReaders {
-    rects: Vec<(usize, DeviceRect)>,
-}
-
-impl CaptureReaders {
-    fn of(layer: &LayerScene, scale: f32, target_rect: DeviceRect) -> Self {
-        let mut rects: Vec<(usize, DeviceRect)> = layer
-            .scene
-            .backdrop_layers
-            .iter()
-            .filter_map(|backdrop| {
-                plan_backdrop(backdrop, backdrop.z_index, scale, target_rect)
-                    .map(|pending| (pending.z, pending.capture_rect))
-            })
-            .collect();
-        for child in &layer.children {
-            if child.reads_backdrop() {
-                let bounds = quad_bounds(child.transform.map_rect(child.local_bounds));
-                rects.push((child.z_index, DeviceRect::from_logical(bounds, scale)));
-            }
-        }
-        Self { rects }
-    }
-
-    /// Whether any capture above `z` reads pixels of `visible`.
-    fn reads(&self, z: usize, visible: DeviceRect) -> bool {
-        self.rects
-            .iter()
-            .any(|(reader_z, rect)| *reader_z > z && rect.intersect(visible).is_some())
-    }
-
-    fn tail_allowed(&self, z: usize, visible: DeviceRect) -> bool {
-        let own = visible.width * visible.height;
-        if own <= 0.0 {
-            return true;
-        }
-        let recaptured: f32 = self
-            .rects
-            .iter()
-            .filter(|(reader_z, _)| *reader_z > z)
-            .filter_map(|(_, rect)| rect.intersect(visible))
-            .map(|overlap| overlap.width * overlap.height)
-            .sum();
-        recaptured <= own * TAIL_RECAPTURE_LIMIT
     }
 }
 
@@ -508,23 +602,6 @@ fn shader_tail_over_surface(
             visible,
         )
     })
-}
-
-/// The content of a shader tail drawn into its own pixels: the tail's
-/// source shaded by its shader over its layer rect.
-fn resolved_tail_content(tail: &ResolvedComposite) -> SourceContent {
-    match &tail.kind {
-        ResolvedCompositeKind::Shader {
-            shader,
-            layer_pixel_rect,
-            ..
-        } => tail
-            .content
-            .derived(&(shader.render_hash(), layer_pixel_rect.map(f32::to_bits))),
-        ResolvedCompositeKind::Blit { .. } | ResolvedCompositeKind::Projective { .. } => {
-            SourceContent::Transient
-        }
-    }
 }
 
 const TRANSPARENT_SOURCE: &str = "transparent source";
@@ -915,29 +992,33 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         }
     }
 
-    /// Renders the root scene into the frame's target, then the overlay on
-    /// top of it.
+    /// Renders the root scene into the frame's page, then the overlay on top
+    /// of it.
     pub(crate) fn render_frame(
         mut self,
         root: &LayerScene,
         overlay: Option<&LayerScene>,
-        target: PassTarget<'_>,
+        page: Rc<OffscreenTarget>,
         root_scale: f32,
         load_op: wgpu::LoadOp<wgpu::Color>,
     ) -> Result<(), String> {
+        let page = Page {
+            texture: page,
+            offset: [0.0, 0.0],
+        };
         let beneath = Beneath {
             base: load_op,
-            projected: None,
-            segments: Vec::new(),
+            page: None,
+            described: Vec::new(),
         };
-        self.render_layer(root, target, root_scale, load_op, &beneath)?;
+        self.render_layer(root, page.clone(), root_scale, load_op, &beneath)?;
         if let Some(overlay) = overlay {
             let beneath = Beneath {
                 base: wgpu::LoadOp::Load,
-                projected: None,
-                segments: Vec::new(),
+                page: None,
+                described: Vec::new(),
             };
-            self.render_layer(overlay, target, root_scale, wgpu::LoadOp::Load, &beneath)?;
+            self.render_layer(overlay, page, root_scale, wgpu::LoadOp::Load, &beneath)?;
         }
         self.release_transients();
         Ok(())
@@ -973,24 +1054,15 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         target
     }
 
-    fn target_rect(target: PassTarget<'_>) -> DeviceRect {
-        DeviceRect {
-            x: target.offset[0],
-            y: target.offset[1],
-            width: target.width as f32,
-            height: target.height as f32,
-        }
-    }
-
-    /// Resolves every backdrop, isolated child, effect range and blurred
-    /// shadow of the layer into textures, then draws the layer's ops and those
-    /// textures into the target in one pass. Backdrop effects queue into
-    /// stages (`ResolveStages`) and resolve together: one capture pass and one
-    /// blur pair per stage rather than per effect.
+    /// Draws the layer into its page in strata: every backdrop, isolated
+    /// child, effect range and blurred shadow resolves into a texture, and
+    /// the page is drawn up to the lowest backdrop of each stage before that
+    /// stage captures, so a capture reads pixels the page already holds and
+    /// draws nothing beneath its glass twice.
     fn render_layer(
         &mut self,
         layer: &LayerScene,
-        target: PassTarget<'_>,
+        page: Page,
         scale: f32,
         load_op: wgpu::LoadOp<wgpu::Color>,
         beneath: &Beneath<'_>,
@@ -999,7 +1071,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             return Err("layer nesting exceeds the resolve depth limit".to_string());
         }
         self.depth += 1;
-        let result = self.render_layer_inner(layer, target, scale, load_op, beneath);
+        let result = self.render_layer_inner(layer, page, scale, load_op, beneath);
         self.depth -= 1;
         result
     }
@@ -1007,24 +1079,32 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
     fn render_layer_inner(
         &mut self,
         layer: &LayerScene,
-        target: PassTarget<'_>,
+        page: Page,
         scale: f32,
         load_op: wgpu::LoadOp<wgpu::Color>,
         beneath: &Beneath<'_>,
     ) -> Result<(), String> {
         let scene = &layer.scene;
-        let mut resolved: Vec<ResolvedComposite> = Vec::new();
-        let mut excluded: Vec<(usize, usize)> = Vec::new();
-        let mut stages = ResolveStages::default();
-        let target_rect = Self::target_rect(target);
-        let readers = CaptureReaders::of(layer, scale, target_rect);
+        let mut pass = LayerPass {
+            layer,
+            page,
+            scale,
+            beneath,
+            drawn: Vec::new(),
+            pending: Vec::new(),
+            excluded: Vec::new(),
+            stages: ResolveStages::default(),
+            drawn_z: 0,
+            load_op: Some(load_op),
+        };
+        let target_rect = pass.target_rect();
 
         for (z, event) in layer_events(layer) {
             match event {
                 Event::Backdrop(index) => {
                     let backdrop = &scene.backdrop_layers[index];
-                    if let Some(pending) = plan_backdrop(backdrop, z, scale, target_rect) {
-                        stages.push(pending);
+                    if let Some(item) = plan_backdrop(backdrop, z, scale, target_rect) {
+                        pass.stages.push(item);
                     }
                 }
                 Event::Shadow(index) => {
@@ -1036,79 +1116,74 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                         scale,
                         target_rect.tuple(),
                         &mut self.transients,
-                        &mut resolved,
+                        &mut pass.pending,
                     );
                 }
                 Event::Effect(index) => {
-                    self.run_stages(layer, scale, beneath, &readers, &mut stages, &mut resolved)?;
+                    self.run_stages(&mut pass)?;
                     let effect = &scene.effect_layers[index];
-                    excluded.push((effect.z_start, effect.z_end));
-                    if let Some(composite) =
-                        self.resolve_effect_range(scene, effect, scale, target_rect, &resolved)?
-                    {
-                        resolved.push(composite);
+                    pass.excluded.push((effect.z_start, effect.z_end));
+                    if let Some(composite) = self.resolve_effect_range(&mut pass, effect)? {
+                        pass.pending.push(composite);
                     }
                 }
                 Event::Child(index) => {
                     let child = &layer.children[index];
                     if child.reads_backdrop() {
-                        self.run_stages(
-                            layer,
-                            scale,
-                            beneath,
-                            &readers,
-                            &mut stages,
-                            &mut resolved,
-                        )?;
+                        self.run_stages(&mut pass)?;
+                        self.flush_page(&mut pass, z + 1)?;
                     }
-                    self.resolve_child(
-                        layer,
-                        child,
-                        scale,
-                        target_rect,
-                        beneath,
-                        &readers,
-                        &mut resolved,
-                    )?;
+                    self.resolve_child(&mut pass, child)?;
                 }
             }
         }
-        self.run_stages(layer, scale, beneath, &readers, &mut stages, &mut resolved)?;
+        self.run_stages(&mut pass)?;
+        self.flush_page(&mut pass, usize::MAX)
+    }
 
-        let ops = filtered_ops(&scene.draw_ops, usize::MAX, &excluded);
+    /// Draws the next stratum: the ops from the last flush up to `z` outside
+    /// the excluded ranges, and every pending composite below `z`.
+    fn flush_page(&mut self, pass: &mut LayerPass<'_>, z: usize) -> Result<(), String> {
+        let ops =
+            filtered_ops_in_range(&pass.layer.scene.draw_ops, pass.drawn_z, z, &pass.excluded);
+        pass.pending.sort_by_key(|composite| composite.z_index);
+        let end = pass
+            .pending
+            .partition_point(|composite| composite.z_index < z);
+        let composites: Vec<ResolvedComposite> = pass.pending.drain(..end).collect();
+        let load_op = pass.load_op.take();
+        if ops.is_empty() && composites.is_empty() && load_op.is_none() {
+            pass.drawn_z = pass.drawn_z.max(z);
+            return Ok(());
+        }
         let segment = PassSegment {
-            scene,
+            scene: &pass.layer.scene,
             ops: &ops,
-            composites: &resolved,
-            offset: target.offset,
+            composites: &composites,
+            offset: pass.page.offset,
             scissor: None,
         };
         self.renderer.encode_pass(
             self.recorder,
-            target,
+            pass.page.pass_target(),
             std::slice::from_ref(&segment),
-            load_op,
-            scale,
+            load_op.unwrap_or(wgpu::LoadOp::Load),
+            pass.scale,
             "Layer Pass",
         )?;
+        pass.drawn.extend(composites);
+        pass.drawn.sort_by_key(|composite| composite.z_index);
+        pass.drawn_z = pass.drawn_z.max(z);
         Ok(())
     }
 
-    /// Resolves the queued backdrop effects stage by stage. Every stage
-    /// packs the captures it can share into atlases, renders each atlas in
-    /// one capture pass, blurs all its blurred regions in one pass pair, and
-    /// hands the results to the final pass as composites reading their
-    /// region; the rest of the stage resolves one effect at a time.
-    fn run_stages(
-        &mut self,
-        layer: &LayerScene,
-        scale: f32,
-        beneath: &Beneath<'_>,
-        readers: &CaptureReaders,
-        stages: &mut ResolveStages<'_>,
-        resolved: &mut Vec<ResolvedComposite>,
-    ) -> Result<(), String> {
-        let mut pending = self.take_uncached(layer, scale, beneath, stages, resolved);
+    /// Resolves the queued backdrop effects stage by stage. The page is drawn
+    /// up to the stage's lowest backdrop, then every capture of the stage
+    /// reads it: the batched captures packed into atlases and rendered in one
+    /// pass, blurred in one pass pair, and handed on as composites reading
+    /// their region; the rest of the stage captures one effect at a time.
+    fn run_stages(&mut self, pass: &mut LayerPass<'_>) -> Result<(), String> {
+        let mut pending = self.take_uncached(pass);
         if pending.is_empty() {
             return Ok(());
         }
@@ -1117,78 +1192,84 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         for stage in 0..stage_count {
             let items: Vec<&PendingBackdrop<'_>> =
                 pending.iter().filter(|item| item.stage == stage).collect();
-            let mut outputs = self.run_stage(layer, scale, beneath, resolved, &items)?;
-            self.resolve_read_tails(&mut outputs, readers, scale)?;
-            self.admit_backdrops(&items, &mut outputs, scale)?;
-            resolved.extend(outputs);
-            resolved.sort_by_key(|composite| composite.z_index);
+            let Some(stage_z) = items.iter().map(|item| item.z).min() else {
+                continue;
+            };
+            self.flush_page(pass, stage_z)?;
+            let mut outputs = self.run_stage(pass, &items, stage_z)?;
+            self.admit_backdrops(&items, &mut outputs, pass.scale)?;
+            pass.pending.extend(outputs);
         }
         Ok(())
     }
 
     /// Keys every pending backdrop, resolves the ones the cache holds into
     /// blits of their retained result, and returns the rest.
-    fn take_uncached<'a>(
-        &mut self,
-        layer: &LayerScene,
-        scale: f32,
-        beneath: &Beneath<'_>,
-        stages: &mut ResolveStages<'a>,
-        resolved: &mut Vec<ResolvedComposite>,
-    ) -> Vec<PendingBackdrop<'a>> {
-        let pending = std::mem::take(&mut stages.pending);
-        let mut kept = Vec::with_capacity(pending.len());
+    fn take_uncached<'a>(&mut self, pass: &mut LayerPass<'a>) -> Vec<PendingBackdrop<'a>> {
+        let items = std::mem::take(&mut pass.stages.pending);
+        let mut kept = Vec::with_capacity(items.len());
         let mut hits = Vec::new();
-        for mut item in pending {
-            item.key = self.backdrop_cache_key(layer, &item, scale, beneath, resolved);
+        for mut item in items {
+            item.key = self.backdrop_cache_key(pass, &item);
             match self.cached_backdrop(&item) {
                 Some(composite) => hits.push(composite),
                 None => kept.push(item),
             }
         }
-        if !hits.is_empty() {
-            resolved.extend(hits);
-            resolved.sort_by_key(|composite| composite.z_index);
-        }
+        pass.pending.extend(hits);
         kept
     }
 
     /// The cache key of a backdrop whose result can be reused: the hash of
     /// everything its capture reads, relative to the capture, with the
     /// effect and the capture's size. None when the backdrop is not batched,
-    /// has no node, reads a projected parent capture, or reads a texture
-    /// drawn anew every frame.
+    /// has no node, reads a projected parent page, or reads a texture drawn
+    /// anew every frame.
     fn backdrop_cache_key(
         &self,
-        layer: &LayerScene,
+        pass: &mut LayerPass<'_>,
         item: &PendingBackdrop<'_>,
-        scale: f32,
-        beneath: &Beneath<'_>,
-        resolved: &[ResolvedComposite],
     ) -> Option<LayerRasterCacheKey> {
         let node_id = item.node_id?;
         item.batched.as_ref()?;
-        if beneath.projected.is_some() {
+        if matches!(
+            pass.beneath.page,
+            Some(PageBase {
+                placement: PagePlacement::Projected { .. },
+                ..
+            })
+        ) {
             return None;
         }
+        let scale = pass.scale;
         let mut hasher = capture_hasher();
-        hash_base(beneath.base, &mut hasher);
-        for segment in &beneath.segments {
+        hash_base(pass.beneath.base, &mut hasher);
+        for segment in &pass.beneath.described {
             let ops = filtered_ops(&segment.scene.draw_ops, segment.z_end, segment.excluded);
             let window = capture_window(
                 item.capture_rect
                     .translated(Point::new(-segment.placement[0], -segment.placement[1])),
             );
             hash_capture_ops(segment.scene, &ops, window, scale, &mut hasher);
-            if !hash_capture_composites(segment.composites, window, &mut hasher) {
+            let drawn = &segment.drawn[..segment
+                .drawn
+                .partition_point(|composite| composite.z_index < segment.z_end)];
+            let pending = &segment.pending[..segment
+                .pending
+                .partition_point(|composite| composite.z_index < segment.z_end)];
+            if !hash_capture_composites(drawn, window, &mut hasher)
+                || !hash_capture_composites(pending, window, &mut hasher)
+            {
                 return None;
             }
         }
         let window = capture_window(item.capture_rect);
-        let ops = filtered_ops(&layer.scene.draw_ops, item.z, &[]);
-        hash_capture_ops(&layer.scene, &ops, window, scale, &mut hasher);
-        let own_end = resolved.partition_point(|composite| composite.z_index < item.z);
-        if !hash_capture_composites(&resolved[..own_end], window, &mut hasher) {
+        let ops = filtered_ops(&pass.layer.scene.draw_ops, item.z, &[]);
+        hash_capture_ops(&pass.layer.scene, &ops, window, scale, &mut hasher);
+        if !hash_capture_composites(pass.drawn_below(item.z), window, &mut hasher) {
+            return None;
+        }
+        if !hash_capture_composites(pass.pending_below(item.z), window, &mut hasher) {
             return None;
         }
         let [x, y, width, height] = item.layer_pixel_rect();
@@ -1298,12 +1379,11 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
 
     fn run_stage(
         &mut self,
-        layer: &LayerScene,
-        scale: f32,
-        beneath: &Beneath<'_>,
-        resolved: &[ResolvedComposite],
+        pass: &mut LayerPass<'_>,
         items: &[&PendingBackdrop<'_>],
+        stage_z: usize,
     ) -> Result<Vec<ResolvedComposite>, String> {
+        let scale = pass.scale;
         let mut outputs = Vec::with_capacity(items.len());
         let (packer, placements) = self.pack_stage(items, scale);
         for (atlas_index, atlas) in packer.atlases.iter().enumerate() {
@@ -1333,12 +1413,10 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 offset: [0.0, 0.0],
             };
             self.capture_regions(
-                layer,
+                pass,
                 &regions,
                 target,
-                scale,
-                beneath,
-                resolved,
+                stage_z,
                 "Backdrop Capture Atlas Pass",
             )?;
 
@@ -1355,129 +1433,21 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             if placements[index].is_some() {
                 continue;
             }
-            let capture = self.capture(
-                layer,
-                item.z,
-                scale,
-                item.capture_rect,
-                beneath,
-                resolved,
-                "Backdrop Capture",
-            )?;
+            let capture =
+                self.capture(pass, item.z, item.capture_rect, stage_z, "Backdrop Capture")?;
             outputs.push(self.resolve_captured_backdrop(item, capture)?);
         }
         Ok(outputs)
     }
 
-    /// A shader tail of a stage that a later capture reads would be shaded
-    /// again inside every such capture; this draws every read tail of the
-    /// stage once, packed into one texture in one pass, and turns each into a
-    /// blit of its pixels for the captures and the final pass alike.
-    fn resolve_read_tails(
-        &mut self,
-        outputs: &mut [ResolvedComposite],
-        readers: &CaptureReaders,
-        scale: f32,
-    ) -> Result<(), String> {
-        let mut read: Vec<(usize, DeviceRect)> = outputs
-            .iter()
-            .enumerate()
-            .filter(|(_, composite)| matches!(composite.kind, ResolvedCompositeKind::Shader { .. }))
-            .filter_map(|(index, composite)| {
-                let visible = DeviceRect::from_tuple(composite.scissor?).snap_out();
-                readers
-                    .reads(composite.z_index, visible)
-                    .then_some((index, visible))
-            })
-            .collect();
-        if read.is_empty() {
-            return Ok(());
-        }
-        read.sort_by_key(|(_, visible)| std::cmp::Reverse(visible.pixel_size().1));
-        let limit = self.renderer.max_texture_dim().min(MAX_ATLAS_DIM);
-        let mut packer = AtlasPacker::new(limit);
-        let placed: Vec<(usize, AtlasPlacement, DeviceRect)> = read
-            .into_iter()
-            .filter_map(|(index, visible)| {
-                let (width, height) = visible.pixel_size();
-                packer
-                    .place(width, height, 1)
-                    .map(|placement| (index, placement, visible))
-            })
-            .collect();
-        for (atlas_index, atlas) in packer.atlases.iter().enumerate() {
-            let members: Vec<&(usize, AtlasPlacement, DeviceRect)> = placed
-                .iter()
-                .filter(|(_, placement, _)| placement.atlas == atlas_index)
-                .collect();
-            let (width, height) = atlas.padded_size();
-            let texture = self.acquire_transient("Backdrop Resolve", width, height);
-            let segments: Vec<PassSegment<'_>> = members
-                .iter()
-                .map(|(index, placement, visible)| {
-                    let (region_width, region_height) = visible.pixel_size();
-                    PassSegment {
-                        scene: &self.empty_scene,
-                        ops: &[],
-                        composites: std::slice::from_ref(&outputs[*index]),
-                        offset: [
-                            visible.x - placement.x as f32,
-                            visible.y - placement.y as f32,
-                        ],
-                        scissor: Some((placement.x, placement.y, region_width, region_height)),
-                    }
-                })
-                .collect();
-            clear_and_draw(
-                self.renderer,
-                self.recorder,
-                &texture,
-                (width, height),
-                &segments,
-                scale,
-                "Backdrop Resolve Pass",
-            )?;
-            for (index, placement, visible) in members {
-                let (region_width, region_height) = visible.pixel_size();
-                outputs[*index] = ResolvedComposite {
-                    z_index: outputs[*index].z_index,
-                    content: resolved_tail_content(&outputs[*index]),
-                    source: Rc::clone(&texture),
-                    dest: visible.tuple(),
-                    scissor: Some(visible.tuple()),
-                    kind: ResolvedCompositeKind::Blit {
-                        alpha: 1.0,
-                        blend_mode: BlendMode::SrcOver,
-                        rounded_mask: None,
-                        sample_mode: CompositeSampleMode::Nearest,
-                        source_viewport: Some((
-                            placement.x as f32,
-                            placement.y as f32,
-                            region_width as f32,
-                            region_height as f32,
-                        )),
-                    },
-                };
-            }
-        }
-        Ok(())
-    }
-
-    /// Resolves the backdrop a child reads: captures the ops beneath it and
-    /// either hands the capture to a shader tail in the final pass or applies
-    /// the effect into a texture blitted through the child's mask.
-    #[allow(clippy::too_many_arguments)]
     fn resolve_child_backdrop(
         &mut self,
-        layer: &LayerScene,
+        pass: &mut LayerPass<'_>,
         child: &ChildLayer,
         backdrop: &RenderEffect,
         placement: ChildPlacement,
-        scale: f32,
-        target_rect: DeviceRect,
-        beneath: &Beneath<'_>,
-        resolved: &[ResolvedComposite],
     ) -> Result<ResolvedComposite, String> {
+        let scale = pass.scale;
         let ChildPlacement {
             z,
             visible,
@@ -1488,18 +1458,10 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let padding = ((backdrop.input_padding() + backdrop.output_padding()) * scale).ceil();
         let capture_rect = visible
             .expand(padding)
-            .intersect(target_rect)
+            .intersect(pass.target_rect())
             .unwrap_or(visible)
             .snap_out();
-        let capture = self.capture(
-            layer,
-            z,
-            scale,
-            capture_rect,
-            beneath,
-            resolved,
-            "Child Backdrop Capture",
-        )?;
+        let capture = self.capture(pass, z, capture_rect, z, "Child Backdrop Capture")?;
         let layer_pixel_rect = [
             dest.x - capture_rect.x,
             dest.y - capture_rect.y,
@@ -1686,18 +1648,14 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         ))
     }
 
-    /// Renders what a backdrop at `z` in `layer` reads within `rect` into a
-    /// texture that size: the root chain's base, every ancestor's ops beneath
-    /// the layer, and the layer's own ops and resolved composites below `z`.
-    #[allow(clippy::too_many_arguments)]
+    /// Reads what a backdrop at `z` in the layer sees within `rect` into a
+    /// texture that size.
     fn capture(
         &mut self,
-        layer: &LayerScene,
+        pass: &mut LayerPass<'_>,
         z: usize,
-        scale: f32,
         rect: DeviceRect,
-        beneath: &Beneath<'_>,
-        resolved: &[ResolvedComposite],
+        stage_z: usize,
         label: &'static str,
     ) -> Result<Rc<OffscreenTarget>, String> {
         let (width, height) = rect.pixel_size();
@@ -1714,64 +1672,57 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             origin: [0.0, 0.0],
         };
         self.capture_regions(
-            layer,
+            pass,
             std::slice::from_ref(&region),
             target,
-            scale,
-            beneath,
-            resolved,
+            stage_z,
             "Backdrop Capture Pass",
         )?;
         Ok(texture)
     }
 
-    /// Renders every region's beneath into its place in the target in one
-    /// pass: each region draws the ancestors' ops and the layer's ops and
-    /// composites below its z, scissored to its own texels.
-    #[allow(clippy::too_many_arguments)]
+    /// Draws what every region's backdrop reads into its place in the target
+    /// in one pass: the parent's page under the layer, the layer's own page
+    /// as drawn up to the stage, and the ops and pending composites between
+    /// the stage and the region's z that reach into it, scissored to the
+    /// region's texels.
     fn capture_regions(
         &mut self,
-        layer: &LayerScene,
+        pass: &mut LayerPass<'_>,
         regions: &[CaptureRegion],
         target: PassTarget<'_>,
-        scale: f32,
-        beneath: &Beneath<'_>,
-        resolved: &[ResolvedComposite],
+        stage_z: usize,
         label: &'static str,
     ) -> Result<(), String> {
-        let projected: Vec<[ResolvedComposite; 1]> = beneath
-            .projected
+        let scale = pass.scale;
+        let beneath = pass.beneath;
+        let composites: Vec<Vec<ResolvedComposite>> = regions
             .iter()
-            .map(|projected| {
-                [ResolvedComposite {
-                    z_index: 0,
-                    source: Rc::clone(&projected.source),
-                    content: SourceContent::Transient,
-                    dest: quad_device_bounds(projected.dest_quad).tuple(),
-                    scissor: None,
-                    kind: ResolvedCompositeKind::Projective {
-                        dest_quad: projected.dest_quad,
-                        inverse: projected.inverse,
-                        alpha: 1.0,
-                        blend_mode: BlendMode::SrcOver,
-                        sample_mode: CompositeSampleMode::Linear,
-                    },
-                }]
+            .map(|region| {
+                beneath
+                    .page
+                    .as_ref()
+                    .and_then(|base| base.under(region.rect))
+                    .into_iter()
+                    .chain(pass.page.blit(region.rect))
+                    .collect()
             })
             .collect();
-        let beneath_ops: Vec<Cow<'_, [DrawOp]>> = beneath
-            .segments
+        let fixups: Vec<Vec<DrawOp>> = regions
             .iter()
-            .map(|segment| filtered_ops(&segment.scene.draw_ops, segment.z_end, segment.excluded))
+            .map(|region| {
+                filtered_ops_in_range(
+                    &pass.layer.scene.draw_ops,
+                    stage_z,
+                    region.z,
+                    &pass.excluded,
+                )
+            })
             .collect();
-        let own_ops: Vec<Cow<'_, [DrawOp]>> = regions
-            .iter()
-            .map(|region| filtered_ops(&layer.scene.draw_ops, region.z, &[]))
-            .collect();
-        let mut segments: Vec<PassSegment<'_>> =
-            Vec::with_capacity(regions.len() * (beneath.segments.len() + 2));
-        for (region, ops) in regions.iter().zip(&own_ops) {
-            let shift = [
+        pass.pending.sort_by_key(|composite| composite.z_index);
+        let mut segments: Vec<PassSegment<'_>> = Vec::with_capacity(regions.len() * 2);
+        for ((region, composites), fixup) in regions.iter().zip(&composites).zip(&fixups) {
+            let offset = [
                 region.rect.x - region.origin[0],
                 region.rect.y - region.origin[1],
             ];
@@ -1782,53 +1733,42 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 region_width,
                 region_height,
             ));
-            for composites in &projected {
-                segments.push(PassSegment {
-                    scene: &self.empty_scene,
-                    ops: &[],
-                    composites,
-                    offset: shift,
-                    scissor,
-                });
-            }
-            for (segment, beneath_ops) in beneath.segments.iter().zip(&beneath_ops) {
-                segments.push(PassSegment {
-                    scene: segment.scene,
-                    ops: beneath_ops,
-                    composites: segment.composites,
-                    offset: [
-                        shift[0] - segment.placement[0],
-                        shift[1] - segment.placement[1],
-                    ],
-                    scissor,
-                });
-            }
-            let own_end = resolved.partition_point(|composite| composite.z_index < region.z);
             segments.push(PassSegment {
-                scene: &layer.scene,
-                ops,
-                composites: &resolved[..own_end],
-                offset: shift,
+                scene: &self.empty_scene,
+                ops: &[],
+                composites,
+                offset,
+                scissor,
+            });
+            let own_end = pass
+                .pending
+                .partition_point(|composite| composite.z_index < region.z);
+            segments.push(PassSegment {
+                scene: &pass.layer.scene,
+                ops: fixup,
+                composites: &pass.pending[..own_end],
+                offset,
                 scissor,
             });
         }
-        let base = match beneath.projected {
-            Some(_) => wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-            None => beneath.base,
-        };
-        self.renderer
-            .encode_pass(self.recorder, target, &segments, base, scale, label)?;
+        self.renderer.encode_pass(
+            self.recorder,
+            target,
+            &segments,
+            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+            scale,
+            label,
+        )?;
         Ok(())
     }
 
     fn resolve_effect_range(
         &mut self,
-        scene: &CompositorScene,
+        pass: &mut LayerPass<'_>,
         effect: &EffectLayer,
-        scale: f32,
-        target_rect: DeviceRect,
-        resolved: &[ResolvedComposite],
     ) -> Result<Option<ResolvedComposite>, String> {
+        let scale = pass.scale;
+        let scene = &pass.layer.scene;
         let snap = effect
             .snap_anchor
             .map(|anchor| snap_delta_for_anchor(anchor, scale))
@@ -1844,6 +1784,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let padding = effect.effect.as_ref().map_or(0.0, |effect| {
             effect.input_padding() + effect.output_padding()
         }) * scale;
+        let target_rect = pass.target_rect();
         let Some(source_rect) = DeviceRect::from_logical(rect, scale)
             .expand(padding.ceil())
             .intersect(target_rect.expand(padding.ceil()))
@@ -1853,13 +1794,13 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let source_rect = source_rect.snap_out();
         let (width, height) = source_rect.pixel_size();
         let texture = self.acquire_transient("Effect Range Source", width, height);
-        let ops = filtered_ops_in_range(&scene.draw_ops, effect.z_start, effect.z_end);
-        let own_start = resolved.partition_point(|composite| composite.z_index < effect.z_start);
-        let own_end = resolved.partition_point(|composite| composite.z_index < effect.z_end);
+        let ops = filtered_ops_in_range(&scene.draw_ops, effect.z_start, effect.z_end, &[]);
+        let below = pass.pending_below(effect.z_end);
+        let own_start = below.partition_point(|composite| composite.z_index < effect.z_start);
         let segment = PassSegment {
             scene,
             ops: &ops,
-            composites: &resolved[own_start..own_end],
+            composites: &below[own_start..],
             offset: [source_rect.x, source_rect.y],
             scissor: None,
         };
@@ -1951,18 +1892,12 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         Ok(dest)
     }
 
-    #[allow(clippy::too_many_arguments)]
-    #[allow(clippy::too_many_arguments)]
     fn resolve_child(
         &mut self,
-        layer: &LayerScene,
+        pass: &mut LayerPass<'_>,
         child: &ChildLayer,
-        scale: f32,
-        target_rect: DeviceRect,
-        beneath: &Beneath<'_>,
-        readers: &CaptureReaders,
-        resolved: &mut Vec<ResolvedComposite>,
     ) -> Result<(), String> {
+        let scale = pass.scale;
         let z = child.z_index;
         let snap = child
             .snap_anchor
@@ -1972,7 +1907,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             .filter(|(uniform, _)| (uniform - child.surface_scale).abs() <= 1e-4)
             .map(|(_, translation)| Point::new(translation.x + snap.x, translation.y + snap.y));
         let translation = grid.filter(|_| (child.surface_scale - 1.0).abs() <= 1e-4);
-        let (dest, visible_device) = child_device_placement(child, snap, scale, target_rect);
+        let (dest, visible_device) = child_device_placement(child, snap, scale, pass.target_rect());
 
         if let Some(backdrop) = &child.backdrop
             && let Some(visible) = visible_device
@@ -1984,38 +1919,25 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 translation,
                 snap,
             };
-            let composite = self.resolve_child_backdrop(
-                layer,
-                child,
-                backdrop,
-                placement,
-                scale,
-                target_rect,
-                beneath,
-                resolved,
-            )?;
-            resolved.push(composite);
+            let composite = self.resolve_child_backdrop(pass, child, backdrop, placement)?;
+            pass.pending.push(composite);
         }
 
         let Some(visible) = visible_device else {
             return Ok(());
         };
-        if readers.tail_allowed(z, visible)
-            && let Some(composite) =
-                self.shader_only_child(child, z, scale, visible, translation, snap)
+        if let Some(composite) = self.shader_only_child(child, z, scale, visible, translation, snap)
         {
-            resolved.push(composite);
+            pass.pending.push(composite);
             return Ok(());
         }
-        let Some(surface) =
-            self.render_child_surface(layer, child, z, scale, beneath, resolved, grid)?
-        else {
+        let Some(surface) = self.render_child_surface(pass, child, z, grid)? else {
             return Ok(());
         };
         if let Some(composite) =
             shader_tail_over_surface(child, &surface, translation, snap, z, scale, visible)
         {
-            resolved.push(composite);
+            pass.pending.push(composite);
             return Ok(());
         }
         let source = match &child.effect {
@@ -2044,7 +1966,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 composite
             }
         };
-        resolved.push(composite);
+        pass.pending.push(composite);
         Ok(())
     }
 
@@ -2109,14 +2031,12 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
     #[allow(clippy::too_many_arguments)]
     fn render_child_surface(
         &mut self,
-        layer: &LayerScene,
+        pass: &mut LayerPass<'_>,
         child: &ChildLayer,
         z: usize,
-        scale: f32,
-        beneath: &Beneath<'_>,
-        resolved: &[ResolvedComposite],
         grid: Option<Point>,
     ) -> Result<Option<SurfaceRender>, String> {
+        let scale = pass.scale;
         let surface_scale = scale * child.surface_scale;
         let translated = (child.surface_scale - 1.0).abs() <= 1e-4;
         let Some(surface_logical) = child_surface_rect(child) else {
@@ -2178,27 +2098,17 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         } else {
             self.acquire_transient("Layer Surface", width, height)
         };
-        let target = PassTarget {
-            view: &texture.view,
-            width,
-            height,
+        let child_page = Page {
+            texture: Rc::clone(&texture),
             offset: [surface_rect.x, surface_rect.y],
         };
         let child_beneath = if reads_backdrop {
-            self.beneath_for_child(
-                layer,
-                child,
-                z,
-                scale,
-                beneath,
-                resolved,
-                grid_offset.filter(|_| translated),
-            )?
+            beneath_for_child(pass, child, z, grid_offset.filter(|_| translated))?
         } else {
             Beneath {
                 base: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                projected: None,
-                segments: Vec::new(),
+                page: None,
+                described: Vec::new(),
             }
         };
         self.renderer.frame_stats.record_isolated_layer_render(
@@ -2209,7 +2119,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         );
         self.render_layer(
             &child.content,
-            target,
+            child_page,
             surface_scale,
             wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
             &child_beneath,
@@ -2232,95 +2142,112 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             grid_dest,
         }))
     }
+}
 
-    /// What lies beneath an isolated child that reads its backdrop: for a
-    /// translated child at the parent's scale, the parent's own beneath and
-    /// its ops below the child, re-based into the child's device space; for
-    /// any other transform, the parent's pixels under the child captured once
-    /// and projected into the child's space.
-    #[allow(clippy::too_many_arguments)]
-    fn beneath_for_child<'a>(
-        &mut self,
-        layer: &'a LayerScene,
-        child: &ChildLayer,
-        z: usize,
-        scale: f32,
-        beneath: &Beneath<'a>,
-        resolved: &'a [ResolvedComposite],
-        shift: Option<Point>,
-    ) -> Result<Beneath<'a>, String> {
-        let own_end = resolved.partition_point(|composite| composite.z_index <= z);
-        if let Some(shift) = shift {
-            let shift = [shift.x, shift.y];
-            let mut segments: Vec<BeneathSegment<'_>> = beneath
-                .segments
-                .iter()
-                .map(|segment| BeneathSegment {
-                    placement: [
-                        segment.placement[0] - shift[0],
-                        segment.placement[1] - shift[1],
-                    ],
-                    ..*segment
-                })
-                .collect();
-            segments.push(BeneathSegment {
-                scene: &layer.scene,
-                z_end: z + 1,
-                composites: &resolved[..own_end],
-                excluded: &[],
-                placement: [-shift[0], -shift[1]],
-            });
-            return Ok(Beneath {
-                base: beneath.base,
-                projected: beneath.projected.clone(),
-                segments,
-            });
-        }
-        let snap = child
-            .snap_anchor
-            .map(|anchor| snap_delta_for_anchor(anchor, scale))
-            .unwrap_or_default();
-        let dest_bounds =
-            quad_bounds(child.transform.map_rect(child.local_bounds)).translate(snap.x, snap.y);
-        let parent_rect = DeviceRect::from_logical(dest_bounds, scale)
-            .expand(2.0)
-            .snap_out();
-        let capture = self.capture(
-            layer,
-            z + 1,
-            scale,
-            parent_rect,
-            beneath,
-            &resolved[..own_end],
-            "Projected Parent Capture",
-        )?;
-        let surface_scale = scale * child.surface_scale;
-        let child_device_to_parent_device = ProjectiveTransform::uniform_scale(1.0 / surface_scale)
-            .then(child.transform)
-            .then(ProjectiveTransform::translation(snap.x, snap.y))
-            .then(ProjectiveTransform::uniform_scale(scale));
-        let parent_device_to_capture =
-            ProjectiveTransform::translation(-parent_rect.x, -parent_rect.y);
-        let child_device_to_capture = child_device_to_parent_device.then(parent_device_to_capture);
-        let capture_to_child_device = child_device_to_capture
-            .inverse()
-            .ok_or_else(|| "child transform is not invertible".to_string())?;
-        let dest_quad = capture_to_child_device.map_rect(Rect {
+/// What lies beneath an isolated child that reads its backdrop: the parent's
+/// page, drawn up to the child, re-based into the child's device space when
+/// the child only translates at the parent's scale and projected into it
+/// otherwise; and the parent's content described for the cache key.
+fn beneath_for_child<'a>(
+    pass: &'a mut LayerPass<'_>,
+    child: &ChildLayer,
+    z: usize,
+    shift: Option<Point>,
+) -> Result<Beneath<'a>, String> {
+    let scale = pass.scale;
+    let source = Rc::clone(&pass.page.texture);
+    let origin = pass.page.offset;
+    let placement = match shift {
+        Some(shift) => PagePlacement::Translated {
+            shift: [shift.x, shift.y],
+        },
+        None => projected_placement(pass, child, scale)?,
+    };
+    let page = Some(PageBase {
+        source,
+        origin,
+        placement,
+    });
+    let shift = shift.unwrap_or_default();
+    pass.pending.sort_by_key(|composite| composite.z_index);
+    let scene = &pass.layer.scene;
+    let drawn = &pass.drawn[..pass
+        .drawn
+        .partition_point(|composite| composite.z_index <= z)];
+    let pending = &pass.pending[..pass
+        .pending
+        .partition_point(|composite| composite.z_index <= z)];
+    let mut described: Vec<BeneathSegment<'a>> = pass
+        .beneath
+        .described
+        .iter()
+        .map(|segment| BeneathSegment {
+            placement: [
+                segment.placement[0] - shift.x,
+                segment.placement[1] - shift.y,
+            ],
+            ..*segment
+        })
+        .collect();
+    described.push(BeneathSegment {
+        scene,
+        z_end: z + 1,
+        drawn,
+        pending,
+        excluded: &[],
+        placement: [-shift.x, -shift.y],
+    });
+    Ok(Beneath {
+        base: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+        page,
+        described,
+    })
+}
+
+/// The parent page's pixels under a transformed child, mapped into the
+/// child's device space.
+fn projected_placement(
+    pass: &LayerPass<'_>,
+    child: &ChildLayer,
+    scale: f32,
+) -> Result<PagePlacement, String> {
+    let snap = child
+        .snap_anchor
+        .map(|anchor| snap_delta_for_anchor(anchor, scale))
+        .unwrap_or_default();
+    let dest_bounds =
+        quad_bounds(child.transform.map_rect(child.local_bounds)).translate(snap.x, snap.y);
+    let parent_rect = DeviceRect::from_logical(dest_bounds, scale)
+        .expand(2.0)
+        .snap_out()
+        .intersect(pass.target_rect())
+        .unwrap_or(DeviceRect {
             x: 0.0,
             y: 0.0,
-            width: parent_rect.width,
-            height: parent_rect.height,
+            width: 0.0,
+            height: 0.0,
         });
-        Ok(Beneath {
-            base: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-            projected: Some(ProjectedBase {
-                source: capture,
-                dest_quad,
-                inverse: child_device_to_capture.matrix(),
-            }),
-            segments: Vec::new(),
-        })
-    }
+    let surface_scale = scale * child.surface_scale;
+    let child_device_to_parent_device = ProjectiveTransform::uniform_scale(1.0 / surface_scale)
+        .then(child.transform)
+        .then(ProjectiveTransform::translation(snap.x, snap.y))
+        .then(ProjectiveTransform::uniform_scale(scale));
+    let parent_device_to_page =
+        ProjectiveTransform::translation(-pass.page.offset[0], -pass.page.offset[1]);
+    let child_device_to_page = child_device_to_parent_device.then(parent_device_to_page);
+    let page_to_child_device = child_device_to_page
+        .inverse()
+        .ok_or_else(|| "child transform is not invertible".to_string())?;
+    let dest_quad = page_to_child_device.map_rect(Rect {
+        x: parent_rect.x - pass.page.offset[0],
+        y: parent_rect.y - pass.page.offset[1],
+        width: parent_rect.width,
+        height: parent_rect.height,
+    });
+    Ok(PagePlacement::Projected {
+        dest_quad,
+        inverse: child_device_to_page.matrix(),
+    })
 }
 
 /// Splits an effect that ends in a runtime shader into the effects before
@@ -2413,9 +2340,22 @@ fn filtered_ops<'a>(
     )
 }
 
-fn filtered_ops_in_range(ops: &[DrawOp], z_start: usize, z_end: usize) -> Vec<DrawOp> {
-    ops.iter()
-        .filter(|op| op.z_index >= z_start && op.z_index < z_end)
+/// The ops with z in `z_start..z_end` outside the excluded ranges.
+fn filtered_ops_in_range(
+    ops: &[DrawOp],
+    z_start: usize,
+    z_end: usize,
+    excluded: &[(usize, usize)],
+) -> Vec<DrawOp> {
+    let start = ops.partition_point(|op| op.z_index < z_start);
+    let end = ops.partition_point(|op| op.z_index < z_end);
+    ops[start..end]
+        .iter()
+        .filter(|op| {
+            !excluded
+                .iter()
+                .any(|(from, to)| op.z_index >= *from && op.z_index < *to)
+        })
         .copied()
         .collect()
 }

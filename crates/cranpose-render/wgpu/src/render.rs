@@ -2209,19 +2209,19 @@ pub(crate) struct ShapeBatch {
     mesh_index_count: Option<u32>,
 }
 struct CompositionTarget {
-    target: OffscreenTarget,
+    target: Rc<OffscreenTarget>,
     output_bind_group: wgpu::BindGroup,
 }
 
 /// Where a frame renders: straight into the presentable image, or into the
 /// reusable composition target that the output conversion then copies out.
 enum FrameRoot {
-    Surface(OffscreenTarget),
+    Surface(Rc<OffscreenTarget>),
     Composition(CompositionTarget),
 }
 
 impl FrameRoot {
-    fn target(&self) -> &OffscreenTarget {
+    fn target(&self) -> &Rc<OffscreenTarget> {
         match self {
             Self::Surface(target) => target,
             Self::Composition(composition) => &composition.target,
@@ -2761,10 +2761,10 @@ impl GpuRenderer {
             (output_mode, output_view, output_texture)
             && surface_is_direct_root(texture, self.composition_format, viewport)
         {
-            return FrameRoot::Surface(OffscreenTarget::from_surface(
+            return FrameRoot::Surface(Rc::new(OffscreenTarget::from_surface(
                 texture.clone(),
                 view.clone(),
-            ));
+            )));
         }
         FrameRoot::Composition(self.take_composition_target(viewport.0.max(1), viewport.1.max(1)))
     }
@@ -2776,7 +2776,12 @@ impl GpuRenderer {
         {
             return target;
         }
-        let target = OffscreenTarget::new(&self.device, self.composition_format, width, height);
+        let target = Rc::new(OffscreenTarget::new(
+            &self.device,
+            self.composition_format,
+            width,
+            height,
+        ));
         let output_bind_group = self.output_converter.bind_group(&self.device, &target.view);
         CompositionTarget {
             target,
@@ -3195,7 +3200,7 @@ impl GpuRenderer {
 
     fn render_graph(
         &mut self,
-        root_target: &OffscreenTarget,
+        root_target: &Rc<OffscreenTarget>,
         packet: FramePacket,
         returns: &mut RenderReturns,
         output_mode: OutputMode,
@@ -3210,12 +3215,7 @@ impl GpuRenderer {
             root_scale,
             ..
         } = packet;
-        let target = PassTarget {
-            view: &root_target.view,
-            width: root_target.width,
-            height: root_target.height,
-            offset: [0.0, 0.0],
-        };
+        let page = Rc::clone(root_target);
 
         #[cfg(not(target_arch = "wasm32"))]
         let result = {
@@ -3231,7 +3231,7 @@ impl GpuRenderer {
                         frame_encoder,
                         &root,
                         overlay.as_ref(),
-                        target,
+                        Rc::clone(&page),
                         root_scale,
                         output_mode,
                         output,
@@ -3272,7 +3272,7 @@ impl GpuRenderer {
                     &mut frame_encoder,
                     &root,
                     overlay.as_ref(),
-                    target,
+                    Rc::clone(&page),
                     root_scale,
                     output_mode,
                     output,
@@ -3308,7 +3308,7 @@ impl GpuRenderer {
         recorder: &mut C,
         root: &LayerScene,
         overlay: Option<&LayerScene>,
-        target: PassTarget<'_>,
+        page: Rc<OffscreenTarget>,
         root_scale: f32,
         output_mode: OutputMode,
         output: Option<(&wgpu::TextureView, &wgpu::BindGroup)>,
@@ -3316,7 +3316,7 @@ impl GpuRenderer {
         FrameExecutor::new(self, recorder).render_frame(
             root,
             overlay,
-            target,
+            page,
             root_scale,
             wgpu::LoadOp::Clear(CLEAR_COLOR),
         )?;
