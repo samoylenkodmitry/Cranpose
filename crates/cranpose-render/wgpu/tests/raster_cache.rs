@@ -322,7 +322,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
 }
 "#;
 
-fn shader_inside_cached_container_graph(time: f32) -> RenderGraph {
+fn shaded_runtime_shader_layer(node_id: NodeId, time: f32) -> LayerNode {
     let shaded_bounds = Rect {
         x: 0.0,
         y: 0.0,
@@ -332,7 +332,7 @@ fn shader_inside_cached_container_graph(time: f32) -> RenderGraph {
     let mut shader = cranpose_ui_graphics::RuntimeShader::new(ANIMATED_SHADER_WGSL);
     shader.set_float(0, time);
     let mut shaded = test_layer(
-        Some(30_001),
+        Some(node_id),
         CachePolicy::Auto,
         shaded_bounds,
         ProjectiveTransform::translation(8.0, 8.0),
@@ -350,6 +350,11 @@ fn shader_inside_cached_container_graph(time: f32) -> RenderGraph {
     );
     shaded.graphics_layer.render_effect =
         Some(cranpose_ui_graphics::RenderEffect::runtime_shader(shader));
+    shaded
+}
+
+fn shader_inside_cached_container_graph(time: f32) -> RenderGraph {
+    let shaded = shaded_runtime_shader_layer(30_001, time);
 
     let mut container = test_layer(
         Some(30_000),
@@ -378,6 +383,66 @@ fn shader_inside_cached_container_graph(time: f32) -> RenderGraph {
         ProjectiveTransform::identity(),
         vec![RenderNode::Layer(Box::new(container))],
     ))
+}
+
+fn shader_layer_graph(time: f32) -> RenderGraph {
+    let shaded = shaded_runtime_shader_layer(30_101, time);
+    RenderGraph::new(test_layer(
+        Some(30_102),
+        CachePolicy::None,
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 128.0,
+            height: 96.0,
+        },
+        ProjectiveTransform::identity(),
+        vec![RenderNode::Layer(Box::new(shaded))],
+    ))
+}
+
+#[test]
+fn a_runtime_shader_layer_with_stable_uniforms_is_served_from_the_layer_cache() {
+    let mut renderer = match support::headless_renderer() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!(
+                "skipping runtime-shader cache assertion because headless WGPU init failed: {}",
+                err
+            );
+            return;
+        }
+    };
+
+    renderer.scene_mut().graph = Some(shader_layer_graph(0.25));
+    let first = renderer
+        .capture_frame(128, 96)
+        .expect("first shader capture should succeed");
+    renderer.scene_mut().graph = Some(shader_layer_graph(0.25));
+    renderer
+        .capture_frame(128, 96)
+        .expect("the second sighting admits the layer into the cache");
+    renderer.scene_mut().graph = Some(shader_layer_graph(0.25));
+    let second = renderer
+        .capture_frame(128, 96)
+        .expect("second shader capture should succeed");
+    let stats = renderer.last_frame_stats().expect("frame stats");
+    assert_eq!(second.pixels, first.pixels);
+    assert!(
+        stats.layer_cache_hits >= 1 && stats.isolated_layer_renders == 0,
+        "a runtime shader's output depends only on its uniforms, source and layer rect, all in \
+         the cache key, so a repeated frame must not re-run it: {stats:?}"
+    );
+
+    renderer.scene_mut().graph = Some(shader_layer_graph(0.75));
+    let third = renderer
+        .capture_frame(128, 96)
+        .expect("third shader capture should succeed");
+    let stats = renderer.last_frame_stats().expect("frame stats");
+    assert!(
+        third.pixels != second.pixels && stats.isolated_layer_renders >= 1,
+        "a changed uniform must re-run the shader: {stats:?}"
+    );
 }
 
 #[test]

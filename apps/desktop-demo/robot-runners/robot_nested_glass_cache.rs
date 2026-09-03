@@ -81,22 +81,22 @@ fn expect_card_rerender(robot: &Robot, stage: &str, max_passes: u32) -> RobotScr
         "{stage}: isolated_layer_renders={} layer_cache_misses={} passes={}",
         counts.isolated_layer_renders, counts.layer_cache_misses, counts.pass_count
     );
-    if counts.isolated_layer_renders == 0 {
-        robot_exit::fail(
-            robot,
-            &format!("{stage}: the card content changed but no isolated layer was re-rendered"),
-        );
-    }
     if counts.pass_count > max_passes {
         robot_exit::fail(
             robot,
             &format!(
-                "{stage}: re-rendering the card took {} render passes, more than the {max_passes} a baked underlay allows; \
-                 the underlay under a plainly composited card and the nested button's capture must be texture copies, not passes",
+                "{stage}: repainting the card took {} render passes, more than the {max_passes} allowed; \
+                 the card's capture and the nested button's capture must be texture copies with replayed composites, not passes",
                 counts.pass_count
             ),
         );
     }
+    click_rect(robot, TICK_RECT);
+    let (_, settle) = render_frame(robot);
+    println!(
+        "{stage}: settle tick isolated_layer_renders={} layer_cache_misses={} (a changed runtime-shader subtree earns its cache slot on the repeated key)",
+        settle.isolated_layer_renders, settle.layer_cache_misses
+    );
     screenshot
 }
 

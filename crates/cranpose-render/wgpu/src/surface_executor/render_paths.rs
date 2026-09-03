@@ -3427,8 +3427,12 @@ fn minimum_surface_scale_for_composite(
     }
 }
 
-fn can_materialize_cached_effect(effect: &RenderEffect, backdrop: Option<&RenderEffect>) -> bool {
-    backdrop.is_none() && !effect.contains_runtime_shader()
+/// Whether a layer's effect output can live in the layer cache: every input
+/// of the effect (its parameters, a runtime shader's source and uniforms,
+/// the layer rect) is in the cache key, so only an effect reading the
+/// backdrop is excluded.
+fn can_materialize_cached_effect(_effect: &RenderEffect, backdrop: Option<&RenderEffect>) -> bool {
+    backdrop.is_none()
 }
 
 fn materialize_render_effect_to_target<B: SurfaceExecutionBackend>(
