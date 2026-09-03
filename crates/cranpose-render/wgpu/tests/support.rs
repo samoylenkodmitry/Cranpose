@@ -233,6 +233,11 @@ pub fn headless_renderer_parts_unencoded() -> Result<(MutexGuard<'static, ()>, W
     Ok((lock, renderer))
 }
 
+/// A second renderer beside one already holding the GPU test lock.
+pub fn headless_renderer_beside_locked() -> Result<WgpuRenderer, String> {
+    create_headless_renderer()
+}
+
 fn create_headless_renderer() -> Result<WgpuRenderer, String> {
     create_headless_renderer_with_format(wgpu::TextureFormat::Bgra8UnormSrgb)
 }

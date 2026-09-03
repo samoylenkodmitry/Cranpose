@@ -445,6 +445,7 @@ fn push_backdrop_layer(
         .snap_anchor
         .or_else(|| rigid_snap_anchor(rect, &local_content_layer_for(&layer.graphics_layer)));
     scene.push_backdrop_layer(BackdropLayer {
+        node_id: layer.node_id,
         rect,
         clip,
         rounded_clip,

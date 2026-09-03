@@ -37,12 +37,40 @@ impl PassTarget<'_> {
     }
 }
 
+/// What a composite's texture holds beyond this frame: a retained texture
+/// keeps the pixels its cache key names for as long as it lives, so the key's
+/// hash identifies them; a transient one is drawn anew every frame and
+/// identifies nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SourceContent {
+    Retained(u64),
+    Transient,
+}
+
+impl SourceContent {
+    pub(crate) fn retained(key: &impl std::hash::Hash) -> Self {
+        let mut hasher = cranpose_ui_graphics::FxHasher::default();
+        key.hash(&mut hasher);
+        Self::Retained(std::hash::Hasher::finish(&hasher))
+    }
+
+    /// The content of a texture derived from this one by `step`, retained
+    /// exactly when this one is.
+    pub(crate) fn derived(self, step: &impl std::hash::Hash) -> Self {
+        match self {
+            Self::Retained(hash) => Self::retained(&(hash, step)),
+            Self::Transient => Self::Transient,
+        }
+    }
+}
+
 /// A resolved texture drawn into the pass at its z, described in the scene's
 /// device space so one description serves every target the scene is drawn
 /// into.
 pub(crate) struct ResolvedComposite {
     pub(crate) z_index: usize,
     pub(crate) source: Rc<OffscreenTarget>,
+    pub(crate) content: SourceContent,
     pub(crate) dest: (f32, f32, f32, f32),
     pub(crate) scissor: Option<(f32, f32, f32, f32)>,
     pub(crate) kind: ResolvedCompositeKind,

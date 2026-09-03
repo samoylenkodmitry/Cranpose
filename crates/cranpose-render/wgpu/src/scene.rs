@@ -191,6 +191,7 @@ pub(crate) struct LayerRoundedClip {
 
 #[derive(Clone)]
 pub(crate) struct BackdropLayer {
+    pub node_id: Option<NodeId>,
     pub rect: Rect,
     pub clip: Option<Rect>,
     pub rounded_clip: Option<LayerRoundedClip>,

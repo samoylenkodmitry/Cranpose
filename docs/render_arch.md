@@ -184,13 +184,33 @@ of shape fill and from 15.9 ms to 10.6 ms present with this.
   shader each frame and re-renders nothing (`raster_cache.rs`); a translated
   child lands on whole device pixels, so a scrolling card keeps its texture.
 
-Nothing else is cached. A backdrop effect resolves every frame it is drawn;
-when the page under a still glass card animates elsewhere, the card's
-capture and blur run again. A backdrop result cache keyed on the ops its
-capture reads is the one optimization this architecture leaves on the table;
-its correctness gate would be a still-glass frame with zero blur passes next
-to an animated element, and the removed `glass_layer_cache.rs` contract test
-is the template for it.
+- Backdrop results, in the same `LayerCache`: the resolved pixels of a
+  batched backdrop, keyed by the backdrop's node, its effect, its capture
+  size, and a hash of everything the capture reads: every op of the parent
+  segments and of its own scene that touches the capture rect, with its
+  geometry taken relative to the capture (`capture_hash.rs`), and every
+  composite beneath it by what its texture holds. A composite says what it
+  holds through `SourceContent`: `Retained` carries the hash of the cache key
+  whose pixels the texture keeps (a cached child surface, a cached shadow, a
+  cached backdrop result, or a shader tail derived from one), `Transient`
+  means the texture is drawn anew each frame, and a backdrop that reads a
+  transient gets no key at all. Texture identity is never the pointer: an
+  allocator hands a freed address back, so a pointer that matches last
+  frame's proves nothing about the pixels. A key seen in two consecutive
+  frames is admitted: the stage still runs for it, and its unmasked result is
+  resolved into a retained texture in one extra pass; from the third frame
+  the backdrop is a blit of that texture through its rounded mask, with no
+  capture, blur or shader. A key seen once is only remembered, so an animated
+  glass never pays for a resolve it cannot reuse. Rigid scroll keeps the
+  hash: a card moving over a flat page reads the same relative content every
+  frame. `glass_layer_cache.rs` pins the contract: a still glass scene misses
+  nothing and runs no blur, an animated overlay misses exactly itself while
+  every still row hits, a rigid scroll keeps the rows' results, and a change
+  beneath a still glass reaches the pixels and matches a renderer that never
+  cached.
+
+A backdrop over content that changes every frame is resolved every frame;
+nothing shortens that but a cheaper material or less content under it.
 
 ## Stats
 

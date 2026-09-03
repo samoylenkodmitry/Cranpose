@@ -7,6 +7,7 @@ pub(crate) use cranpose_render_common::debug_toggles;
 pub use debug_toggles::{debug_toggle, debug_toggle_os, set_debug_toggle, set_debug_toggle_os};
 pub use offscreen::composition_bytes_per_pixel;
 pub use render::presentable_root_usages;
+mod capture_hash;
 mod collect;
 mod draw_pass;
 mod effect_renderer;

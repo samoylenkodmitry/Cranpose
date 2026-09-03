@@ -1,6 +1,6 @@
 use std::{
     borrow::Cow,
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     hash::{Hash, Hasher},
     rc::Rc,
     sync::{Arc, mpsc},
@@ -13,6 +13,7 @@ use cranpose_render_common::{
     bounded_lru_cache::BoundedLruCache,
     geometry::blur_extent_margin,
     graph::quad_bounds,
+    raster_cache::LayerRasterCacheKey,
     software_text_raster::{
         SoftwareGlyphAtlasGlyph, SoftwareGlyphAtlasKey, SoftwareGlyphAtlasPlacement,
         SoftwareGlyphAtlasRunGlyph, SoftwareGlyphRasterCache, SoftwareTextFontSet,
@@ -32,7 +33,7 @@ use crate::{
     DebugCpuAllocationStats,
     band_mesh::MeshVertex,
     collect::LayerScene,
-    draw_pass::{PassSegment, PassTarget, ResolvedComposite, ResolvedCompositeKind},
+    draw_pass::{PassSegment, PassTarget, ResolvedComposite, ResolvedCompositeKind, SourceContent},
     effect_renderer::{CompositeSampleMode, EffectRenderer, RoundedCompositeMask},
     frame::FrameExecutor,
     frame_graph::{
@@ -511,7 +512,7 @@ pub(crate) fn supported_blend_mode(mode: BlendMode) -> BlendMode {
     BlendMode::SrcOver
 }
 
-fn hash_f32_for_cache<H: Hasher>(value: f32, state: &mut H) {
+pub(crate) fn hash_f32_for_cache<H: Hasher>(value: f32, state: &mut H) {
     value.to_bits().hash(state);
 }
 
@@ -749,12 +750,17 @@ fn should_use_retained_text_glyph_run(quads_len: usize, clip: Option<Rect>) -> b
 
 const SHADOW_CACHE_DEVICE_QUANT: f32 = 16.0;
 
-fn hash_shadow_device_offset<H: Hasher>(value: f32, origin: f32, root_scale: f32, state: &mut H) {
+pub(crate) fn hash_shadow_device_offset<H: Hasher>(
+    value: f32,
+    origin: f32,
+    root_scale: f32,
+    state: &mut H,
+) {
     let quantized = ((value - origin) * root_scale * SHADOW_CACHE_DEVICE_QUANT).round();
     (quantized as i64).hash(state);
 }
 
-fn hash_shadow_device_rect<H: Hasher>(
+pub(crate) fn hash_shadow_device_rect<H: Hasher>(
     rect: Rect,
     origin_x: f32,
     origin_y: f32,
@@ -767,7 +773,7 @@ fn hash_shadow_device_rect<H: Hasher>(
     hash_shadow_device_offset(rect.height, 0.0, root_scale, state);
 }
 
-fn hash_shape_shadow_item<H: Hasher>(
+pub(crate) fn hash_shape_shadow_item<H: Hasher>(
     shape: &DrawShape,
     brushes: &[Brush],
     blend_mode: BlendMode,
@@ -810,7 +816,7 @@ fn hash_shape_shadow_item<H: Hasher>(
     shape.blend_mode.hash(state);
 }
 
-fn shape_shadow_content_hash(
+pub(crate) fn shape_shadow_content_hash(
     shapes: &[(DrawShape, BlendMode)],
     post_blur_cutouts: &[(DrawShape, BlendMode)],
     brushes: &[Brush],
@@ -875,7 +881,7 @@ fn shared_shape_shadow_snap_anchor(shapes: &[(DrawShape, BlendMode)]) -> Option<
         .then_some(anchor)
 }
 
-fn shadow_draw_bounds(shadow: &ShadowDraw) -> Option<Rect> {
+pub(crate) fn shadow_draw_bounds(shadow: &ShadowDraw) -> Option<Rect> {
     shadow
         .shapes
         .iter()
@@ -2307,6 +2313,8 @@ pub struct GpuRenderer {
     deferred_offscreen_releases: Vec<OffscreenTarget>,
     pub(crate) effect_renderer: EffectRenderer,
     pub(crate) layer_cache: LayerCache,
+    pub(crate) backdrop_admission: HashSet<LayerRasterCacheKey>,
+    pub(crate) backdrop_missed: HashSet<LayerRasterCacheKey>,
     transparent_sources: HashMap<(u32, u32), Rc<OffscreenTarget>>,
     shadow_surface_cache: BoundedLruCache<ShadowSurfaceCacheKey, CachedShadowSurface>,
     shadow_surface_cache_bytes: u64,
@@ -2512,6 +2520,8 @@ impl GpuRenderer {
             deferred_offscreen_releases: Vec::new(),
             effect_renderer,
             layer_cache: LayerCache::new(),
+            backdrop_admission: HashSet::new(),
+            backdrop_missed: HashSet::new(),
             transparent_sources: HashMap::new(),
             shadow_surface_cache: BoundedLruCache::with_capacity_at_least_one(
                 MAX_SHADOW_SURFACE_CACHE_ITEMS,
@@ -2796,6 +2806,7 @@ impl GpuRenderer {
     }
 
     fn flush_deferred_offscreen_releases(&mut self) {
+        self.backdrop_admission = std::mem::take(&mut self.backdrop_missed);
         for target in self.deferred_offscreen_releases.drain(..) {
             self.effect_renderer.release_offscreen(target);
         }
@@ -3357,7 +3368,7 @@ impl GpuRenderer {
         pixel_radius: f32,
         root_scale: f32,
         transients: &mut Vec<(FrameTextureDescriptor, Rc<OffscreenTarget>)>,
-    ) -> Option<(Rc<OffscreenTarget>, bool)> {
+    ) -> Option<(Rc<OffscreenTarget>, bool, SourceContent)> {
         let shape_only = shadow.texts.is_empty();
         let key = if shape_only {
             shape_shadow_surface_cache_key(
@@ -3371,8 +3382,11 @@ impl GpuRenderer {
         } else {
             None
         };
+        let content = key.map_or(SourceContent::Transient, |key| {
+            SourceContent::retained(&key)
+        });
         if let Some(entry) = key.and_then(|key| self.shadow_surface_cache.get(&key)) {
-            return Some((Rc::clone(&entry.target), true));
+            return Some((Rc::clone(&entry.target), true, content));
         }
         if !shape_only {
             self.frame_stats.record_shadow_text_blur_fallback();
@@ -3400,7 +3414,7 @@ impl GpuRenderer {
             );
             self.insert_cached_shadow_surface(key, Rc::clone(&source));
         }
-        Some((source, false))
+        Some((source, false, content))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -3460,7 +3474,7 @@ impl GpuRenderer {
             return;
         };
         let pixel_radius = shadow.blur_radius * root_scale;
-        let Some((source, hit)) = self.blurred_shadow_source(
+        let Some((source, hit, content)) = self.blurred_shadow_source(
             recorder,
             shadow,
             source_device,
@@ -3504,6 +3518,7 @@ impl GpuRenderer {
             resolved.push(ResolvedComposite {
                 z_index: z,
                 source: Rc::clone(&source),
+                content,
                 dest,
                 scissor: Some(band),
                 kind: ResolvedCompositeKind::Blit {
