@@ -1500,20 +1500,36 @@ fn gradient_tile_mode_value(tile_mode: TileMode) -> u32 {
     }
 }
 
-fn shape_shader_base(solid_trim: bool) -> Cow<'static, str> {
-    if solid_trim {
-        return Cow::Owned(format!(
+const INLINE_GRADIENT_STOPS_DECLARATION: &str = "const INLINE_GRADIENT_STOPS: u32 = 4u;";
+const UNIFORM_GRADIENT_STOPS_DECLARATION: &str = "const INLINE_GRADIENT_STOPS: u32 = 0u;";
+
+fn uniform_gradient_stops_enabled() -> bool {
+    crate::debug_toggles::debug_toggle("CRANPOSE_UNIFORM_GRADIENT_STOPS").as_deref() == Some("1")
+}
+
+fn shape_shader_base(solid_trim: bool, uniform_gradient_stops: bool) -> Cow<'static, str> {
+    let base: Cow<'static, str> = if solid_trim {
+        Cow::Owned(format!(
             "{}\n{}",
             shaders::SHADER,
             shaders::SOLID_TRIM_APPENDIX
-        ));
+        ))
+    } else {
+        Cow::Borrowed(shaders::SHADER)
+    };
+    if !uniform_gradient_stops {
+        return base;
     }
-    Cow::Borrowed(shaders::SHADER)
+    debug_assert!(base.contains(INLINE_GRADIENT_STOPS_DECLARATION));
+    Cow::Owned(base.replace(
+        INLINE_GRADIENT_STOPS_DECLARATION,
+        UNIFORM_GRADIENT_STOPS_DECLARATION,
+    ))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 fn shape_shader_source(batch_limits: ShapeBatchLimits, solid_trim: bool) -> Cow<'static, str> {
-    let base = shape_shader_base(solid_trim);
+    let base = shape_shader_base(solid_trim, uniform_gradient_stops_enabled());
     if batch_limits.storage {
         return Cow::Owned(
             base.replace(
@@ -1547,7 +1563,7 @@ fn shape_shader_source(batch_limits: ShapeBatchLimits, solid_trim: bool) -> Cow<
 
 #[cfg(target_arch = "wasm32")]
 fn shape_shader_source(_batch_limits: ShapeBatchLimits, solid_trim: bool) -> Cow<'static, str> {
-    shape_shader_base(solid_trim)
+    shape_shader_base(solid_trim, uniform_gradient_stops_enabled())
 }
 
 pub(crate) fn create_render_pipeline_logged<'a>(
@@ -5324,7 +5340,7 @@ impl GpuRenderer {
             },
             wgpu::BindGroupLayoutEntry {
                 binding: 1,
-                visibility: wgpu::ShaderStages::FRAGMENT,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: shape_batch_limits.data_binding_type(),
                     has_dynamic_offset: false,
@@ -22100,10 +22116,49 @@ mod tests {
             "location 9 is brush's slot and must stay VACANT — dense \
              renumbering is the reverted attempt's suspect #1"
         );
+        for location in 10..=14 {
+            let line = format!("@location({location})");
+            assert!(
+                shaders::SHADER.contains(&line),
+                "`{line}` carries an inline gradient stop varying in VertexOutput"
+            );
+            assert!(
+                !appendix.contains(&line),
+                "`{line}` is an inline gradient stop's slot and must stay VACANT \
+                 in the trimmed struct"
+            );
+        }
         assert!(
             !appendix.contains("output.gradient_params") && !appendix.contains("output.brush"),
             "the trimmed vertex entries must not write the dropped varyings"
         );
+    }
+
+    #[test]
+    fn uniform_gradient_stops_toggle_rewrites_the_inline_stop_budget_to_zero() {
+        for solid_trim in [false, true] {
+            let inline = shape_shader_base(solid_trim, false);
+            assert_eq!(
+                inline.matches(INLINE_GRADIENT_STOPS_DECLARATION).count(),
+                1,
+                "the inline stop budget must be declared exactly once"
+            );
+            let uniform = shape_shader_base(solid_trim, true);
+            assert!(
+                !uniform.contains(INLINE_GRADIENT_STOPS_DECLARATION)
+                    && uniform.contains(UNIFORM_GRADIENT_STOPS_DECLARATION),
+                "solid_trim={solid_trim}: the toggle must route every gradient through \
+                 the uniform stop walk"
+            );
+            let module = naga::front::wgsl::parse_str(&uniform)
+                .expect("uniform-stop shape shader must parse as WGSL");
+            naga::valid::Validator::new(
+                naga::valid::ValidationFlags::all(),
+                naga::valid::Capabilities::all(),
+            )
+            .validate(&module)
+            .expect("uniform-stop shape shader must validate for WebGPU");
+        }
     }
 
     #[test]

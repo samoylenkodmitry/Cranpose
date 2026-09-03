@@ -22,6 +22,11 @@ struct VertexOutput {
     @location(7) @interpolate(flat) stroke_params: vec4<f32>,
     @location(8) @interpolate(flat) arc_params: vec4<f32>,
     @location(9) @interpolate(flat) brush: vec4<u32>,
+    @location(10) @interpolate(flat) stop_offsets: vec4<f32>,
+    @location(11) @interpolate(flat) stop_color0: vec4<f32>,
+    @location(12) @interpolate(flat) stop_color1: vec4<f32>,
+    @location(13) @interpolate(flat) stop_color2: vec4<f32>,
+    @location(14) @interpolate(flat) stop_color3: vec4<f32>,
 }
 
 struct Uniforms {
@@ -126,6 +131,12 @@ fn vs_main(@builtin(vertex_index) vertex_idx: u32) -> VertexOutput {
         shape.gradient_count,
         shape.gradient_tile_mode,
     );
+    let stops = load_inline_gradient_stops(shape.gradient_start, shape.gradient_count);
+    output.stop_offsets = stops.offsets;
+    output.stop_color0 = stops.color0;
+    output.stop_color1 = stops.color1;
+    output.stop_color2 = stops.color2;
+    output.stop_color3 = stops.color3;
 
     return output;
 }
@@ -194,6 +205,12 @@ fn vs_shape_instanced(
         shape.gradient_count,
         shape.gradient_tile_mode,
     );
+    let stops = load_inline_gradient_stops(shape.gradient_start, shape.gradient_count);
+    output.stop_offsets = stops.offsets;
+    output.stop_color0 = stops.color0;
+    output.stop_color1 = stops.color1;
+    output.stop_color2 = stops.color2;
+    output.stop_color3 = stops.color3;
 
     return output;
 }
@@ -252,6 +269,12 @@ fn vs_mesh(in: MeshVertexInput) -> VertexOutput {
         shape.gradient_count,
         shape.gradient_tile_mode,
     );
+    let stops = load_inline_gradient_stops(shape.gradient_start, shape.gradient_count);
+    output.stop_offsets = stops.offsets;
+    output.stop_color0 = stops.color0;
+    output.stop_color1 = stops.color1;
+    output.stop_color2 = stops.color2;
+    output.stop_color3 = stops.color3;
 
     return output;
 }
@@ -474,6 +497,96 @@ fn gradient_dither(device_pos: vec2<f32>) -> f32 {
     return f32(m) * (1.0 / 16.0) - (15.0 / 32.0);
 }
 
+// Gradients of up to `INLINE_GRADIENT_STOPS` stops travel to the fragment
+// stage as flat varyings, read once per vertex; longer ramps keep the
+// per-fragment walk over `gradient_stops`. On a tiler the walk is several
+// dynamically indexed uniform loads per fragment, which is what a full-screen
+// three-stop radial cost on Mali (`CRANPOSE_UNIFORM_GRADIENT_STOPS` rewrites
+// this to 0 and routes every gradient back through the walk; the parity test
+// holds the two at zero differing bytes).
+const INLINE_GRADIENT_STOPS: u32 = 4u;
+
+struct InlineGradientStops {
+    offsets: vec4<f32>,
+    color0: vec4<f32>,
+    color1: vec4<f32>,
+    color2: vec4<f32>,
+    color3: vec4<f32>,
+}
+
+fn load_inline_gradient_stops(gradient_start: u32, count: u32) -> InlineGradientStops {
+    var stops: InlineGradientStops;
+    if (count == 0u || count > INLINE_GRADIENT_STOPS) {
+        return stops;
+    }
+    let first = gradient_stops[gradient_start];
+    stops.offsets.x = first.position.x;
+    stops.color0 = first.color;
+    if (count > 1u) {
+        let second = gradient_stops[gradient_start + 1u];
+        stops.offsets.y = second.position.x;
+        stops.color1 = second.color;
+    }
+    if (count > 2u) {
+        let third = gradient_stops[gradient_start + 2u];
+        stops.offsets.z = third.position.x;
+        stops.color2 = third.color;
+    }
+    if (count > 3u) {
+        let fourth = gradient_stops[gradient_start + 3u];
+        stops.offsets.w = fourth.position.x;
+        stops.color3 = fourth.color;
+    }
+    return stops;
+}
+
+fn gradient_segment(
+    from_offset: f32,
+    from_color: vec4<f32>,
+    to_offset: f32,
+    to_color: vec4<f32>,
+    clamped: f32,
+) -> vec4<f32> {
+    let denom = max(to_offset - from_offset, 0.00001);
+    let local_t = clamp((clamped - from_offset) / denom, 0.0, 1.0);
+    return mix(from_color, to_color, local_t);
+}
+
+fn sample_inline_gradient(input: VertexOutput, count: u32, t: f32) -> vec4<f32> {
+    if (count == 1u) {
+        return input.stop_color0;
+    }
+    let offsets = input.stop_offsets;
+    let clamped = clamp(t, 0.0, 1.0);
+    if (clamped <= offsets.x) {
+        return input.stop_color0;
+    }
+    if (clamped <= offsets.y) {
+        return gradient_segment(offsets.x, input.stop_color0, offsets.y, input.stop_color1, clamped);
+    }
+    if (count == 2u) {
+        return input.stop_color1;
+    }
+    if (clamped <= offsets.z) {
+        return gradient_segment(offsets.y, input.stop_color1, offsets.z, input.stop_color2, clamped);
+    }
+    if (count == 3u) {
+        return input.stop_color2;
+    }
+    if (clamped <= offsets.w) {
+        return gradient_segment(offsets.z, input.stop_color2, offsets.w, input.stop_color3, clamped);
+    }
+    return input.stop_color3;
+}
+
+fn gradient_color(input: VertexOutput, t: f32) -> vec4<f32> {
+    let count = input.brush.z;
+    if (count > 0u && count <= INLINE_GRADIENT_STOPS) {
+        return sample_inline_gradient(input, count, t);
+    }
+    return sample_gradient(input.brush.y, count, t);
+}
+
 fn sample_gradient(gradient_start: u32, count: u32, t: f32) -> vec4<f32> {
     if (count == 0u) {
         return vec4<f32>(0.0);
@@ -496,9 +609,9 @@ fn sample_gradient(gradient_start: u32, count: u32, t: f32) -> vec4<f32> {
         let current = gradient_stops[gradient_start + i];
         let next = gradient_stops[gradient_start + i + 1u];
         if (clamped <= next.position.x) {
-            let denom = max(next.position.x - current.position.x, 0.00001);
-            let local_t = clamp((clamped - current.position.x) / denom, 0.0, 1.0);
-            return mix(current.color, next.color, local_t);
+            return gradient_segment(
+                current.position.x, current.color, next.position.x, next.color, clamped,
+            );
         }
         i = i + 1u;
     }
@@ -613,8 +726,6 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 
     // Apply gradient if needed
     let brush_type = input.brush.x;
-    let gradient_start = input.brush.y;
-    let gradient_count = input.brush.z;
     let gradient_tile_mode = input.brush.w;
     if (brush_type == 1u) {
         // Linear gradient projected from start.xy to end.xy
@@ -627,7 +738,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         if (!sample.valid) {
             color = vec4<f32>(0.0);
         } else {
-            color = sample_gradient(gradient_start, gradient_count, sample.t);
+            color = gradient_color(input, sample.t);
             is_gradient = true;
         }
     } else if (brush_type == 2u) {
@@ -640,7 +751,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         if (!sample.valid) {
             color = vec4<f32>(0.0);
         } else {
-            color = sample_gradient(gradient_start, gradient_count, sample.t);
+            color = gradient_color(input, sample.t);
             is_gradient = true;
         }
     } else if (brush_type == 3u) {
@@ -655,7 +766,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         if (!sample.valid) {
             color = vec4<f32>(0.0);
         } else {
-            color = sample_gradient(gradient_start, gradient_count, sample.t);
+            color = gradient_color(input, sample.t);
             is_gradient = true;
         }
     }

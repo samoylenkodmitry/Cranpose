@@ -45,7 +45,28 @@ pub fn gpu_test_lock() -> MutexGuard<'static, ()> {
     lock_gpu_test()
 }
 
+struct StderrWarnings;
+
+impl log::Log for StderrWarnings {
+    fn enabled(&self, metadata: &log::Metadata) -> bool {
+        metadata.level() <= log::Level::Warn
+    }
+
+    fn log(&self, record: &log::Record) {
+        if self.enabled(record.metadata()) {
+            eprintln!("[{}] {}", record.level(), record.args());
+        }
+    }
+
+    fn flush(&self) {}
+}
+
+static STDERR_WARNINGS: StderrWarnings = StderrWarnings;
+
 fn lock_gpu_test() -> MutexGuard<'static, ()> {
+    if log::set_logger(&STDERR_WARNINGS).is_ok() {
+        log::set_max_level(log::LevelFilter::Warn);
+    }
     GPU_TEST_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
