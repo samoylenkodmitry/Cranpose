@@ -46,10 +46,10 @@ fn clears_every_pixel_to_the_frameworks_default_background() {
         (cranpose_render_common::FRAME_CLEAR_COLOR[2] * 255.0).round() as u8,
         (cranpose_render_common::FRAME_CLEAR_COLOR[3] * 255.0).round() as u8,
     ];
-    for (index, pixel) in pixels.chunks_exact(4).enumerate() {
+    for (index, pixel) in pixels.as_chunks::<4>().0.iter().enumerate() {
         let (col, row) = (index % WIDTH as usize, index / WIDTH as usize);
         assert_eq!(
-            pixel, expected,
+            *pixel, expected,
             "pixel ({col}, {row}) must be the framework's default background"
         );
     }

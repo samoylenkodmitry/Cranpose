@@ -37,6 +37,7 @@ struct BuildNodeSnapshot {
     measured_max_width: Option<f32>,
     resolved_modifiers: ResolvedModifiers,
     draw_commands: Vec<DrawCommand>,
+    outer_draw_command_count: usize,
     click_actions: Vec<Rc<dyn Fn(Point)>>,
     pointer_inputs: Vec<Rc<dyn Fn(cranpose_foundation::PointerEvent)>>,
     clip_to_bounds: bool,
@@ -328,10 +329,7 @@ fn replace_dirty_layers_from_applier(
             continue;
         };
 
-        if child_layer
-            .node_id
-            .is_some_and(|node_id| dirty_nodes.remove(&node_id))
-        {
+        if layer_identity(child_layer).is_some_and(|node_id| dirty_nodes.remove(&node_id)) {
             if try_translate_scrolled_layer(
                 applier,
                 child_layer,
@@ -363,9 +361,7 @@ fn replace_dirty_layers_from_applier(
             }
             let mut replacement = build_layer_node_from_applier_internal(
                 applier,
-                child_layer
-                    .node_id
-                    .expect("dirty layer must have a node id"),
+                layer_identity(child_layer).expect("dirty layer must have a node id"),
                 parent.motion_context_animated,
                 child_inherited_translated_content_context,
                 Some(AbsOrigin {
@@ -502,7 +498,7 @@ fn try_translate_scrolled_layer(
         let RenderNode::Layer(layer) = child else {
             return translate_bail("non-layer child");
         };
-        let Some(child_id) = layer.node_id else {
+        let Some(child_id) = layer_identity(layer) else {
             return translate_bail("child without node id");
         };
         old_ids.push(child_id);
@@ -651,7 +647,7 @@ fn try_translate_scrolled_layer(
         let RenderNode::Layer(layer) = child else {
             continue;
         };
-        let child_id = layer.node_id.expect("checked above");
+        let child_id = layer_identity(&layer).expect("checked above");
         if fresh_id_set.contains(&child_id) {
             old_by_id.insert(child_id, layer);
         } else {
@@ -683,7 +679,7 @@ fn try_translate_scrolled_layer(
                     y: new_children_origin.y - layer.scene_children_origin.y,
                 };
                 offset_scene_origins(&mut layer, origin_delta, translation_delta);
-                if let Some(moved_id) = layer.node_id {
+                if let Some(moved_id) = layer_identity(&layer) {
                     changed_nodes.push(moved_id);
                 }
             }
@@ -788,6 +784,7 @@ fn build_layer_node_internal(
         measured_max_width,
         resolved_modifiers,
         draw_commands,
+        outer_draw_command_count,
         click_actions,
         pointer_inputs,
         clip_to_bounds,
@@ -798,6 +795,8 @@ fn build_layer_node_internal(
         graphics_layer,
         children: child_snapshots,
     } = snapshot;
+    let outer = outer_draws(node_id, &draw_commands, outer_draw_command_count, size);
+    let layer_draw_commands = &draw_commands[outer_draw_command_count..];
     let local_bounds = Rect {
         x: 0.0,
         y: 0.0,
@@ -826,7 +825,8 @@ fn build_layer_node_internal(
 
     let mut children = draw_nodes(
         node_id,
-        &draw_commands,
+        layer_draw_commands,
+        outer_draw_command_count,
         DrawPlacement::Behind,
         size,
         PrimitivePhase::BeforeChildren,
@@ -867,7 +867,8 @@ fn build_layer_node_internal(
     }
     children.extend(draw_nodes(
         node_id,
-        &draw_commands,
+        layer_draw_commands,
+        outer_draw_command_count,
         DrawPlacement::Overlay,
         size,
         PrimitivePhase::AfterChildren,
@@ -883,8 +884,9 @@ fn build_layer_node_internal(
             RenderNode::Primitive(_) | RenderNode::DrawRun(_) => false,
         });
 
-    LayerNode {
+    let layer = LayerNode {
         node_id: Some(node_id),
+        wraps: None,
         local_bounds,
         transform_to_parent,
         content_offset,
@@ -908,7 +910,8 @@ fn build_layer_node_internal(
         cache_hashes: LayerRasterCacheHashes::default(),
         cache_hashes_valid: false,
         children,
-    }
+    };
+    finish_layer(layer, placement, outer)
 }
 
 #[derive(Clone, Copy)]
@@ -1097,9 +1100,18 @@ fn build_layer_node_from_data(
         layer_translation,
     });
 
-    let mut render_children = draw_nodes(
+    let outer_draw_command_count = modifier_slices.outer_draw_command_count();
+    let outer = outer_draws(
         node_id,
         modifier_slices.draw_commands(),
+        outer_draw_command_count,
+        layout_state.size(),
+    );
+    let layer_draw_commands = &modifier_slices.draw_commands()[outer_draw_command_count..];
+    let mut render_children = draw_nodes(
+        node_id,
+        layer_draw_commands,
+        outer_draw_command_count,
         DrawPlacement::Behind,
         layout_state.size(),
         PrimitivePhase::BeforeChildren,
@@ -1148,7 +1160,8 @@ fn build_layer_node_from_data(
     }
     render_children.extend(draw_nodes(
         node_id,
-        modifier_slices.draw_commands(),
+        layer_draw_commands,
+        outer_draw_command_count,
         DrawPlacement::Overlay,
         layout_state.size(),
         PrimitivePhase::AfterChildren,
@@ -1166,6 +1179,7 @@ fn build_layer_node_from_data(
 
     let layer = LayerNode {
         node_id: Some(node_id),
+        wraps: None,
         local_bounds,
         transform_to_parent,
         content_offset: layout_state.content_offset,
@@ -1192,7 +1206,7 @@ fn build_layer_node_from_data(
         cache_hashes_valid: false,
         children: render_children,
     };
-    Some(layer)
+    Some(finish_layer(layer, layout_state.position(), outer))
 }
 
 struct RecorderSlot {
@@ -1477,6 +1491,7 @@ fn publish_recording(
 fn draw_nodes(
     node_id: NodeId,
     commands: &[DrawCommand],
+    first_command_index: usize,
     placement: DrawPlacement,
     size: Size,
     phase: PrimitivePhase,
@@ -1486,7 +1501,7 @@ fn draw_nodes(
     for (command_index, command) in commands.iter().enumerate() {
         let id = DrawCommandId {
             node_id,
-            command_index: command_index as u32,
+            command_index: (first_command_index + command_index) as u32,
             placement,
         };
         let (recording, storage, mut replay) = acquire_recording(id);
@@ -1595,7 +1610,90 @@ pub fn draw_command_nodes_for_tests(
     phase: PrimitivePhase,
 ) -> Vec<RenderNode> {
     bump_recording_generation();
-    draw_nodes(node_id, commands, placement, size, phase)
+    draw_nodes(node_id, commands, 0, placement, size, phase)
+}
+
+struct OuterDraws {
+    behind: Vec<RenderNode>,
+    overlay: Vec<RenderNode>,
+}
+
+fn outer_draws(
+    node_id: NodeId,
+    draw_commands: &[DrawCommand],
+    outer_draw_command_count: usize,
+    size: Size,
+) -> Option<OuterDraws> {
+    (outer_draw_command_count > 0).then(|| {
+        let commands = &draw_commands[..outer_draw_command_count];
+        OuterDraws {
+            behind: draw_nodes(
+                node_id,
+                commands,
+                0,
+                DrawPlacement::Behind,
+                size,
+                PrimitivePhase::BeforeChildren,
+            ),
+            overlay: draw_nodes(
+                node_id,
+                commands,
+                0,
+                DrawPlacement::Overlay,
+                size,
+                PrimitivePhase::AfterChildren,
+            ),
+        }
+    })
+}
+
+fn finish_layer(layer: LayerNode, placement: Point, outer: Option<OuterDraws>) -> LayerNode {
+    match outer {
+        Some(outer) => wrap_layer_with_outer_draws(layer, placement, outer),
+        None => layer,
+    }
+}
+
+fn wrap_layer_with_outer_draws(
+    mut layer: LayerNode,
+    placement: Point,
+    outer: OuterDraws,
+) -> LayerNode {
+    let local_bounds = layer.local_bounds;
+    layer.transform_to_parent =
+        layer_transform_to_parent(local_bounds, Point::default(), &layer.graphics_layer);
+    let wrapper = LayerNode {
+        wraps: layer.node_id,
+        local_bounds,
+        transform_to_parent: layer_transform_to_parent(
+            local_bounds,
+            placement,
+            &GraphicsLayer::default(),
+        ),
+        scene_children_origin: Point {
+            x: layer.scene_children_origin.x - layer.content_offset.x,
+            y: layer.scene_children_origin.y - layer.content_offset.y,
+        },
+        scene_children_layer_translation: Point {
+            x: layer.scene_children_layer_translation.x - layer.graphics_layer.translation_x,
+            y: layer.scene_children_layer_translation.y - layer.graphics_layer.translation_y,
+        },
+        motion_context_animated: layer.motion_context_animated,
+        has_hit_targets: layer.has_hit_targets,
+        has_origin_sinks: layer.has_origin_sinks,
+        ..Default::default()
+    };
+    let mut children = outer.behind;
+    children.push(RenderNode::Layer(Box::new(layer)));
+    children.extend(outer.overlay);
+    LayerNode {
+        children,
+        ..wrapper
+    }
+}
+
+fn layer_identity(layer: &LayerNode) -> Option<NodeId> {
+    layer.node_id.or(layer.wraps)
 }
 
 struct TextNodeParts<'a> {
@@ -1733,6 +1831,7 @@ fn layout_box_to_snapshot(node: &LayoutBox, parent: Option<&LayoutBox>) -> Build
         measured_max_width: None,
         resolved_modifiers: node.node_data.resolved_modifiers,
         draw_commands: node.node_data.modifier_slices.draw_commands().to_vec(),
+        outer_draw_command_count: node.node_data.modifier_slices.outer_draw_command_count(),
         click_actions: node.node_data.modifier_slices.click_handlers().to_vec(),
         pointer_inputs: node.node_data.modifier_slices.pointer_inputs().to_vec(),
         clip_to_bounds: node.node_data.modifier_slices.clip_to_bounds(),
@@ -2376,6 +2475,175 @@ mod tests {
             !graph_has_runtime_shader_effect(&graph.root),
             "simple rounded_corners().clip_to_bounds() must not become a runtime shader effect"
         );
+    }
+
+    fn wrapped_card_composition(
+        label: Rc<RefCell<Option<cranpose_core::MutableState<String>>>>,
+        card_id: Rc<RefCell<Option<NodeId>>>,
+    ) -> cranpose_ui::TestComposition {
+        cranpose_ui::run_test_composition(move || {
+            let text = cranpose_core::rememberMutableStateOf(|| "before".to_string());
+            *label.borrow_mut() = Some(text);
+            let card_id = card_id.clone();
+            cranpose_ui::Box(
+                Modifier::empty().size_points(240.0, 120.0),
+                cranpose_ui::BoxSpec::default(),
+                move || {
+                    let shape = cranpose_ui::LayerShape::Rounded(
+                        cranpose_ui::RoundedCornerShape::uniform(12.0),
+                    );
+                    let id = cranpose_ui::Box(
+                        Modifier::empty()
+                            .offset(20.0, 30.0)
+                            .size_points(100.0, 40.0)
+                            .drop_shadow(shape, |scope| scope.radius = 6.0)
+                            .graphics_layer(move || GraphicsLayer {
+                                shape,
+                                clip: true,
+                                translation_x: 5.0,
+                                ..Default::default()
+                            })
+                            .background(cranpose_ui::Color(0.2, 0.4, 0.8, 1.0)),
+                        cranpose_ui::BoxSpec::default(),
+                        move || {
+                            Text(text, Modifier::empty(), TextStyle::default());
+                        },
+                    );
+                    *card_id.borrow_mut() = Some(id);
+                },
+            );
+        })
+    }
+
+    fn wrapper_and_card(root: &LayerNode, card_id: NodeId) -> (&LayerNode, &LayerNode) {
+        let wrapper = root
+            .children
+            .iter()
+            .find_map(|child| match child {
+                RenderNode::Layer(layer) if layer.wraps == Some(card_id) => Some(layer.as_ref()),
+                _ => None,
+            })
+            .expect("the card's outer shadow wraps its clipped layer");
+        let card = find_layer_by_node_id(wrapper, card_id).expect("card layer inside the wrapper");
+        (wrapper, card)
+    }
+
+    #[test]
+    fn a_draw_before_the_graphics_layer_wraps_the_clipped_layer_in_the_parents_space() {
+        let label = Rc::new(RefCell::new(None));
+        let card_id = Rc::new(RefCell::new(None));
+        let mut composition = wrapped_card_composition(label, card_id.clone());
+        let root = composition.root().expect("composition root");
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        applier
+            .compute_layout(
+                root,
+                Size {
+                    width: 240.0,
+                    height: 120.0,
+                },
+            )
+            .expect("layout");
+        let graph = build_graph_from_applier(&mut applier, root, 1.0).expect("graph");
+        applier.clear_runtime_handle();
+        let card_id = card_id.borrow().expect("card id");
+        let (wrapper, card) = wrapper_and_card(&graph.root, card_id);
+
+        assert_eq!(wrapper.node_id, None);
+        assert!(!wrapper.graphics_layer.clip);
+        assert_eq!(
+            wrapper.transform_to_parent.map_point(Point::default()),
+            Point { x: 20.0, y: 30.0 },
+            "the wrapper carries the layout placement alone"
+        );
+        assert_eq!(
+            card.transform_to_parent.map_point(Point::default()),
+            Point { x: 5.0, y: 0.0 },
+            "the clipped layer keeps only its own graphics-layer transform"
+        );
+        assert!(card.graphics_layer.clip);
+        let [shadow, RenderNode::Layer(_)] = wrapper.children.as_slice() else {
+            panic!(
+                "wrapper children must be the outer shadow then the card, got {} children",
+                wrapper.children.len()
+            );
+        };
+        let shadow_is_outer = match shadow {
+            RenderNode::DrawRun(run) => run.summary.has_shadow && !run.summary.has_non_shadow,
+            RenderNode::Primitive(entry) => matches!(
+                &entry.node,
+                PrimitiveNode::Draw(draw) if matches!(draw.primitive, DrawPrimitive::Shadow(_))
+            ),
+            RenderNode::Layer(_) => false,
+        };
+        assert!(shadow_is_outer, "the outer draw is the shadow alone");
+        assert!(
+            card.children.iter().any(|child| match child {
+                RenderNode::DrawRun(run) => run.summary.has_non_shadow,
+                RenderNode::Primitive(entry) => matches!(
+                    &entry.node,
+                    PrimitiveNode::Draw(draw)
+                        if !matches!(draw.primitive, DrawPrimitive::Shadow(_))
+                ),
+                RenderNode::Layer(_) => false,
+            }),
+            "the background chained after the layer stays inside it"
+        );
+    }
+
+    #[test]
+    fn a_dirty_wrapped_node_is_rebuilt_as_one_wrapper() {
+        let label = Rc::new(RefCell::new(None));
+        let card_id = Rc::new(RefCell::new(None));
+        let mut composition = wrapped_card_composition(label.clone(), card_id.clone());
+        let root = composition.root().expect("composition root");
+        let viewport = Size {
+            width: 240.0,
+            height: 120.0,
+        };
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        applier.compute_layout(root, viewport).expect("layout");
+        let mut graph = build_graph_from_applier(&mut applier, root, 1.0).expect("graph");
+        applier.clear_runtime_handle();
+        drop(applier);
+        let card_id = card_id.borrow().expect("card id");
+
+        let text = label.borrow().as_ref().copied().expect("label state");
+        text.set_value("after".to_string());
+        composition
+            .process_invalid_scopes()
+            .expect("text recomposition");
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        applier.compute_layout(root, viewport).expect("layout");
+        assert!(update_graph_from_applier(
+            &mut applier,
+            &mut graph,
+            &[card_id],
+            1.0
+        ));
+        applier.clear_runtime_handle();
+
+        let (wrapper, card) = wrapper_and_card(&graph.root, card_id);
+        assert_eq!(
+            wrapper.transform_to_parent.map_point(Point::default()),
+            Point { x: 20.0, y: 30.0 }
+        );
+        assert!(
+            !card.children.iter().any(|child| matches!(
+                child,
+                RenderNode::Layer(layer) if layer.wraps.is_some()
+            )),
+            "rebuilding the wrapped node must replace its wrapper, not nest a second one"
+        );
+        let mut labels = Vec::new();
+        collect_text_labels(&graph.root, &mut labels);
+        assert_eq!(labels, vec!["after".to_string()]);
     }
 
     #[test]
@@ -3171,6 +3439,97 @@ mod tests {
             updated_row_top < initial_row_top - consumed_scroll * 0.75,
             "the translation must actually land: initial_y={initial_row_top} updated_y={updated_row_top}"
         );
+        assert_dirty_hash_road_matches_full_walk(&graph);
+    }
+
+    #[test]
+    fn a_scrolled_container_translates_rows_that_carry_outer_shadows() {
+        let scroll_holder: Rc<RefCell<Option<ScrollState>>> = Rc::new(RefCell::new(None));
+        let scroll_holder_for_comp = scroll_holder.clone();
+        let mut composition = cranpose_ui::run_test_composition(move || {
+            let scroll_state =
+                cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| *state);
+            *scroll_holder_for_comp.borrow_mut() = Some(scroll_state);
+            Column(
+                Modifier::empty()
+                    .size_points(240.0, 320.0)
+                    .vertical_scroll(scroll_state, false),
+                ColumnSpec::default(),
+                || {
+                    for index in 0..12usize {
+                        let shape = cranpose_ui::LayerShape::Rounded(
+                            cranpose_ui::RoundedCornerShape::uniform(12.0),
+                        );
+                        cranpose_ui::Box(
+                            Modifier::empty()
+                                .size_points(240.0, 60.0)
+                                .drop_shadow(shape, |scope| scope.radius = 6.0)
+                                .graphics_layer(move || GraphicsLayer {
+                                    shape,
+                                    clip: true,
+                                    ..Default::default()
+                                }),
+                            cranpose_ui::BoxSpec::default(),
+                            move || {
+                                Text(
+                                    format!("row {index}"),
+                                    Modifier::empty(),
+                                    TextStyle::default(),
+                                );
+                            },
+                        );
+                    }
+                },
+            );
+        });
+
+        let root = composition.root().expect("composition root");
+        let viewport = Size {
+            width: 240.0,
+            height: 320.0,
+        };
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        applier.compute_layout(root, viewport).expect("layout");
+        let mut graph = build_graph_from_applier(&mut applier, root, 1.0).expect("graph");
+        graph.root.recompute_raster_cache_hashes();
+        let initial_row_top = find_text_top(&graph.root, "row 3").expect("row text");
+        applier.clear_runtime_handle();
+        drop(applier);
+
+        let scroll_state = scroll_holder
+            .borrow()
+            .as_ref()
+            .cloned()
+            .expect("scroll state should be captured");
+        let consumed_scroll = scroll_state.dispatch_raw_delta(96.0);
+        let dirty_nodes = cranpose_ui::pending_layout_repass_nodes_snapshot();
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        applier
+            .compute_layout(root, viewport)
+            .expect("scrolled layout");
+        reset_lowered_layer_count();
+        let report = update_graph_from_applier_report(&mut applier, &mut graph, &dirty_nodes, 1.0);
+        applier.clear_runtime_handle();
+
+        assert!(report.applied(), "got {:?}", report.update);
+        assert_eq!(
+            lowered_layer_count(),
+            0,
+            "rows wrapped in their outer shadow must translate like plain rows"
+        );
+        let updated_row_top = find_text_top(&graph.root, "row 3").expect("row text");
+        assert!(updated_row_top < initial_row_top - consumed_scroll * 0.75);
+        let wrappers = graph
+            .root
+            .children
+            .iter()
+            .filter(|child| matches!(child, RenderNode::Layer(layer) if layer.wraps.is_some()))
+            .count();
+        assert_eq!(wrappers, 12, "every row keeps exactly one wrapper");
         assert_dirty_hash_road_matches_full_walk(&graph);
     }
 

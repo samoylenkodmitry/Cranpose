@@ -2450,6 +2450,7 @@ mod tests {
     fn collect_hits_from_graph_only_populates_hit_regions() {
         let layer = cranpose_render_common::graph::LayerNode {
             node_id: Some(7),
+            wraps: None,
             local_bounds: Rect {
                 x: 0.0,
                 y: 0.0,

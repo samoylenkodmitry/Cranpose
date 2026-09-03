@@ -21,6 +21,7 @@ const HEIGHT: u32 = 96;
 fn test_layer(node_id: Option<NodeId>, children: Vec<RenderNode>) -> LayerNode {
     LayerNode {
         node_id,
+        wraps: None,
         local_bounds: Rect {
             x: 0.0,
             y: 0.0,

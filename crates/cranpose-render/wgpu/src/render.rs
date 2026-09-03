@@ -17373,6 +17373,7 @@ mod tests {
     fn snapped_text_leaf(animated: bool, translated_content_context: bool) -> LayerNode {
         LayerNode {
             node_id: Some(77),
+            wraps: None,
             local_bounds: Rect {
                 x: 0.0,
                 y: 0.0,
@@ -17491,6 +17492,7 @@ mod tests {
 
         let translated_content = LayerNode {
             node_id: Some(78),
+            wraps: None,
             local_bounds: Rect {
                 x: 0.0,
                 y: 0.0,
@@ -17730,6 +17732,7 @@ mod tests {
     fn pure_text_leaf(animated: bool, translated_content_context: bool) -> LayerNode {
         LayerNode {
             node_id: Some(177),
+            wraps: None,
             local_bounds: Rect {
                 x: 0.0,
                 y: 0.0,

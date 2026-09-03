@@ -197,8 +197,8 @@ fn a_surface_glass_edge_carries_no_seam_darker_than_its_body() {
     let scan_y = ((80.0 + 25.0) * TAB_SCALE) as i32;
     let backdrop = median_luma(&frame, 20..60, scan_y);
     let edge_x = (20..TAB_FRAME_WIDTH as i32 - 60)
-        .find(|x| (luma(&frame, *x, scan_y) - backdrop).abs() > 15)
-        .expect("the bar's left cap must be on the scanline");
+        .find(|x| luma(&frame, *x, scan_y) - backdrop > 15)
+        .expect("the bar's left cap must be on the scanline; its drop shadow darkens the backdrop first");
     let interior = median_luma(&frame, edge_x + 40..edge_x + 90, scan_y);
     assert!(
         interior - backdrop > 10,

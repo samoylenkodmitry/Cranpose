@@ -24,6 +24,7 @@ fn test_layer(
 ) -> LayerNode {
     LayerNode {
         node_id,
+        wraps: None,
         local_bounds,
         transform_to_parent,
         motion_context_animated: false,

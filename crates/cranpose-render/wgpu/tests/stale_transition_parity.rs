@@ -106,6 +106,7 @@ fn build_graphs(node_id: usize, flips: &[usize]) -> Vec<RenderGraph> {
             };
             RenderGraph::new(LayerNode {
                 node_id: None,
+                wraps: None,
                 local_bounds: bounds,
                 transform_to_parent: ProjectiveTransform::identity(),
                 content_offset: Point::default(),

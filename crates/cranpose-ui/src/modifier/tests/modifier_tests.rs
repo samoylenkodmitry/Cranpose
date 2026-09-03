@@ -1052,6 +1052,51 @@ fn first_inner_cutout_x(primitives: &[DrawPrimitive]) -> Option<f32> {
 }
 
 #[test]
+fn draw_commands_chained_before_the_graphics_layer_are_outer() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let shape = LayerShape::Rounded(RoundedCornerShape::uniform(8.0));
+    let modifier = Modifier::empty()
+        .drop_shadow(shape, |_| {})
+        .graphics_layer(|| GraphicsLayer {
+            clip: true,
+            ..Default::default()
+        })
+        .background(Color(1.0, 0.0, 0.0, 1.0));
+    let slices = collect_slices_from_modifier(&modifier);
+
+    assert_eq!(slices.draw_commands().len(), 2);
+    assert_eq!(
+        slices.outer_draw_command_count(),
+        1,
+        "the shadow precedes the layer and draws around it; the background follows it and is \
+         clipped by it"
+    );
+
+    let inner_only = collect_slices_from_modifier(
+        &Modifier::empty()
+            .graphics_layer(|| GraphicsLayer {
+                clip: true,
+                ..Default::default()
+            })
+            .drop_shadow(shape, |_| {}),
+    );
+    assert_eq!(inner_only.outer_draw_command_count(), 0);
+
+    let background_before_clip = collect_slices_from_modifier(
+        &Modifier::empty()
+            .background(Color(1.0, 0.0, 0.0, 1.0))
+            .clip_to_bounds(),
+    );
+    assert_eq!(background_before_clip.outer_draw_command_count(), 1);
+    assert_eq!(
+        collect_slices_from_modifier(&Modifier::empty().drop_shadow(shape, |_| {}))
+            .outer_draw_command_count(),
+        0,
+        "without a layer or clip nothing is outer"
+    );
+}
+
+#[test]
 fn drop_shadow_cutout_knocks_element_shape_out_of_silhouette() {
     let _app_context = crate::render_state::app_context_test_scope();
     let modifier = Modifier::empty().drop_shadow_value(
