@@ -691,6 +691,89 @@ the real app. `simpleperf` cannot record on the watch kernel (no perf
 events); the stage properties (`debug.cranpose.render_stage_ms`,
 `update_stage_ms`, `frame_stage_ms`) are the profiler there.
 
+## Reimagined for both scenes (2026-09-05)
+
+Measured on the Pixel Watch 3 with the showcase scrolling, main against
+this branch after the instanced records: 27-28 fps against 16-17. The
+frame telemetry puts the difference on the GPU: present p50 35 ms
+against 18. Per frame the branch blurs four to five card-sized regions
+of 0.24 MP each (one horizontal and one vertical pass per stage, every
+region inside them, at 13-25 taps: some 30 M texture taps a frame on a
+GPU that has ~1 G a second), re-renders one isolated card of 0.24 MP,
+copies five regions and draws 14 passes over 2.6 MP for a 0.17 MP
+screen; main runs two to three blur passes. The CPU is not where main
+wins: the branch encodes in 12.3 ms (pass records 4.2, the plan the
+rest) against main's 15.2, and updates in 6.6 against 4.2 (reconcile
+3.2 against 0.8). The record path is at parity with main on the watch
+(cranorbit 49 fps both). A first draft of this section (one page
+pyramid per stage read by every glass, viewport-cropped surfaces keyed
+by their window, the backdrop cache removed, records split into
+templates and instances) went to review (sol, 2026-09-05,
+`codex_review6.out`) and lost four of its five parts; what stands is
+below, with why each draft part fell.
+
+**1. Crop the transient backdrop-reading surface.** The showcase card
+on the watch is 618 x 423 device pixels on a 408 x 408 screen. It reads
+its backdrop, so no cache holds it, and it renders whole every frame,
+and every glass button inside it blurs a 600 x 396 region of a page that
+is 60% off screen. A child that reads its backdrop, is composited by a
+translation, and carries no unbatched runtime shader renders the part of
+its surface the viewport shows, grown by its effects' padding; its
+captures follow. Nothing visible changes. Not cropped: a cached child
+(its full surface is what makes a partly visible scrolling card a hit,
+so the window stays out of its key), and a child under an unbatched
+`RuntimeShader`, whose contract hands the shader the whole texture and
+its uv (`render_effect.rs`). This is the measured offender and the
+first step, on both devices, by present p50 and the pass inventory.
+
+**2. A frost substrate for liquid glass, rays on the page.** The glass
+shader's frost neighbourhood is nine taps of a blurred page; its
+transmitted, dispersion and reflection paths reconstruct magnified
+detail from level 0 (`liquid_glass.wgsl`: a refractive lookup is not a
+blur) and stay there. The frost becomes one low-frequency texture per
+stage, the page region under the stage's glasses downsampled and
+blurred once at a quarter of its size, read by every liquid glass of the
+stage; the exact per-region captures stay for what needs them. A
+region's blur keeps its own capture, its clamp-to-texel-centre edges and
+its tile mode (`effect_renderer.rs`); no page-wide pyramid replaces
+them, because a stage's glasses sit at different z with ordinary draws
+between them (`capture_culling.rs` pins the pass-through), and because a
+page-wide texture has one boundary where each effect has its own. What
+this buys is the frost's share of the glass's 14 ms on the Mate and the
+per-glass frost taps on the watch, not the blur pairs; the blur pairs
+are already one pair per stage.
+
+**3. The plan's cost, measured before it is cut.** The backdrop result
+cache hit 0 of 5 per frame in the showcase scroll on both devices, but
+the suite pins what it is for: a still glass scene runs no blur and a
+rigid scroll over a flat substrate reuses its rows (`glass_layer_cache.rs`),
+and a watch face that does not move must not rebuild anything. It
+stays. What goes is its per-frame price where it cannot hit: a glass
+whose key has missed for a few frames in a row skips the hash until
+its node rests, and the hash itself stops walking every op under every
+glass (`capture_hash.rs`, linear per glass) and reads command and
+subtree fingerprints instead. The plan's 8 ms on the watch is
+attributed by ablation first (hash off, stages off, copies off), since
+0 of 5 hits says nothing about what the hash costs.
+
+**4. The record, by probe.** The arc's trig, padded sweep and band
+class all follow from start and sweep, so they cannot be template
+fields while start and sweep move; a template/instance split is not a
+split of this record. What the watch measured is the front end's floor
+per record and `write_buffer` at ~400 MB/s, so the questions are bytes
+per frame and bytes per vertex, answered by probes before a layout is
+chosen: a hot/cold split of the 112-byte record (the fields the vertex
+stage reads for position first, the rest after) against the present
+layout, on the upload and on the pass separately; band class decided
+at the placement's effective scale, which the scope does not know
+(`DrawScope` has its logical size only) and the run store does, so the
+class is stamped where the scale is.
+
+**5. Order.** 1, then 2, then 3, each with its device numbers and its
+pass-budget test moved to the new budget, then 4's probes. No number
+is forecast here; the draft's forecasts rested on a pass model that
+counted blur pairs the renderer already shares.
+
 ## Order
 
 Every step ships with its contract proven red first, the robot suite
