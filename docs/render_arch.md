@@ -635,6 +635,17 @@ a bounded pixel change with a reference model and each the user's call.
 This plan does not assume any of them; it states the number they would
 have to earn.
 
+## The showcase on the watch (Pixel Watch 3, 2026-09-04, late)
+
+Showcase scroll, main against this branch after the instanced records,
+alternated (`measure_watch.sh`): main 27-28 fps, branch 16-17. The
+frame telemetry says where: the branch draws 14 passes over 2.69 MP of
+pass pixels with 5 copies where main draws 8 over 0.73 MP; present p50
+35 vs 18 ms, CPU p50 57 vs 42 ms. That is the pass structure of
+resolve-then-compose on a 408 x 408 GPU, not the record path; the Mate
+runs the same scroll at 23 (branch) against 24.2 (main), and the branch
+as it stood before the instanced records ran it at 20.8 there.
+
 ## The watch is CPU-bound and this branch loses it (Pixel Watch 3, 2026-09-04)
 
 A/B/A/B of cranorbit MEGA BOSS on the Pixel Watch 3 (armeabi-v7a, one
