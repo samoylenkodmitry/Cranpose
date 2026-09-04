@@ -12,7 +12,7 @@ use crate::{
     offscreen::OffscreenTarget,
     render::{
         GpuRenderer, ShapeBatch, ViewportUniformParams, image_draw_bounds, shape_draw_bounds,
-        shape_draw_is_visible_in_rect, supported_blend_mode, text_draw_bounds,
+        shape_draw_is_visible_in_rect, shape_is_solid, supported_blend_mode, text_draw_bounds,
         text_draw_is_visible_in_rect,
     },
     scene::{CompositorScene, DrawOp, DrawOpKind, DrawShape, TextDraw},
@@ -605,8 +605,11 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
         Ok(())
     }
 
-    /// Batches the shapes from `index` that share a blend mode and a brush
-    /// table, up to the batch limit; returns where the run ends.
+    /// Batches the shapes from `index` that share a blend mode, a brush
+    /// table and a solid-or-gradient brush class, up to the batch limit;
+    /// returns where the run ends. The brush class is the one cut worth a
+    /// draw: it lets a solid batch fold its gradient path, and a scene's
+    /// gradient records are few (cranorbit's arena: 1.2 of 11.5 MP).
     fn shape_run(
         &mut self,
         renderer: &mut GpuRenderer,
@@ -619,6 +622,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
         };
         let blend_mode = supported_blend_mode(shape.blend_mode);
         let brushes_ptr = brushes.as_ptr();
+        let solid = shape_is_solid(shape, brushes);
         let limit = renderer.max_shapes_per_batch();
         let mut end = index;
         while end < items.len()
@@ -628,6 +632,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                 Item::Shape { shape, brushes }
                     if supported_blend_mode(shape.blend_mode) == blend_mode
                         && brushes.as_ptr() == brushes_ptr
+                        && shape_is_solid(shape, brushes) == solid
             )
         {
             end += 1;

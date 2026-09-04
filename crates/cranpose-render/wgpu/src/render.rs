@@ -1104,14 +1104,14 @@ impl ShapeVariant {
         };
         let mut variant = Self {
             kind: Some(shape_kind(first)),
-            solid: shape_gradient_stop_count(first, brushes) == 0,
+            solid: shape_is_solid(first, brushes),
             clipped: first.clip.is_some(),
         };
         for shape in shapes {
             if variant.kind != Some(shape_kind(shape)) {
                 variant.kind = None;
             }
-            variant.solid &= shape_gradient_stop_count(shape, brushes) == 0;
+            variant.solid &= shape_is_solid(shape, brushes);
             variant.clipped |= shape.clip.is_some();
         }
         variant
@@ -1128,6 +1128,13 @@ impl ShapeVariant {
 
 fn shape_variants_enabled() -> bool {
     crate::debug_toggles::debug_toggle("CRANPOSE_SHAPE_VARIANTS").as_deref() != Some("0")
+}
+
+/// Whether a record's brush is a plain color: the batch cut that lets a
+/// solid batch fold its gradient path, which main's retained spans had by
+/// construction and which decides the arena's fragment cost.
+pub(crate) fn shape_is_solid(shape: &DrawShape, brushes: &[Brush]) -> bool {
+    shape_gradient_stop_count(shape, brushes) == 0
 }
 
 fn shape_kind(shape: &DrawShape) -> u32 {

@@ -228,16 +228,22 @@ of shape fill and from 15.9 ms to 10.6 ms present with this.
   batch whose records share a kind, carry no gradient, or carry no clip
   fixes that into the pipeline's constants (`SHAPE_KIND_FIXED`,
   `SHAPE_SOLID`, `SHAPE_CLIPPED` in `shape.wgsl`), and the fragment program
-  keeps only the branches the batch can take. Batches are still cut by
-  blend mode and brush table alone; a mixed batch takes the general
-  pipeline rather than splitting, because a scene that interleaves kinds
-  record by record (cranorbit's studded bricks) would otherwise become
-  hundreds of draws (measured: 293 draws and 12 fps).
+  keeps only the branches the batch can take. Batches are cut by blend
+  mode, brush table and brush class (solid or gradient), and by nothing
+  else: the brush class is the one cut worth a draw, since a scene's
+  gradient records are few (cranorbit's arena: 1.2 of 11.5 MP, three
+  draws) and a solid batch then folds its whole gradient path, while a
+  cut on kind would fragment a scene that interleaves kinds record by
+  record (the arena's studded bricks: 293 draws and 12 fps, measured).
   `shape_variant_parity.rs` holds every variant to the general program
   within the same bound the solid entry once had, and goes red when a
-  variant's mapping is wrong. On the Mate 20 X cranorbit's arena, a mixed
-  batch that only folds the clip, presents in 18.0 ms against 19.7 with
-  the variants off (55-56 against 51-53.5 fps presented).
+  variant's mapping is wrong. On the Mate 20 X cranorbit's MEGA BOSS
+  arena presents at 61.0 / 61.0 fps (period 16.8 ms, the vsync) against
+  51.6 / 51.9 with the variants off and 55.5 before the brush-class cut;
+  main measured 58. Ablation put the arena's cost where the variant took
+  it: flattening the coverage math alone reached 61 fps, skipping the
+  4.5 MB record upload changed nothing, and drawing the bands as quads
+  cost 1.7 ms.
 - `LayerCache`: textures of isolated children that read no backdrop and whose
   `cache_policy` is `Auto`, keyed by content hash, size, scale bucket and the
   1/16-pixel device phase. The texture holds the child's content before its
@@ -531,9 +537,9 @@ confined to the edge band, the card face shaded below full resolution,
 and a procedural substrate for an affine background. Each is listed with
 its visual cost in the audit; none is assumed here.
 
-Cranorbit reaches the vsync at 11-13 ms of GPU with its CPU cycle at
-~11 ms on the present thread, which is under the vsync and beats main's
-period. The showcase does not reach it with pixel-exact steps: 24.5 ms
+Cranorbit reached the vsync on 2026-09-04 with the brush-class cut and
+the variants (61.0 fps presented, period 16.8 ms, present 1.4 ms); its
+CPU cycle is ~11 ms on the present thread. The showcase does not reach it with pixel-exact steps: 24.5 ms
 is ~41 fps, and the 8 ms to the vsync are the page usage ablation's
 unknown, the four strata (~4 ms this GPU charges per full-page pass, not
 reducible without a render-area wgpu does not expose), and the material
@@ -558,18 +564,15 @@ zero, alternating rounds, temperature logged.
    direct root's 24.0-24.5; the GL difference is not the page's usage.
    The toggle that measured it is gone; the number lives in
    `TIME_WASTERS.md`.
-3. Shape pipelines per (blend mode, stage, variant). Done: +1.7 ms on
-   cranorbit's arena from folding the clip alone; the arena's batch is
-   mixed, so its kinds cannot fold without splitting the batch, and the
-   per-variant varying layouts are the next step here: every fragment of
-   the general program loads its record through up to fifteen flat
-   varyings, and on this GPU 11.5 MP of fragments times those loads is
-   the plausible seat of the ~1.5 ns per pixel. A per-kind vertex output
-   (an arc needs five vec4s, a solid fill four) needs a shader source per
-   variant, not a constant, and is measured by the same toggle.
+3. Shape pipelines per (blend mode, stage, variant), with batches cut on
+   brush class. Done: cranorbit's arena presents at the vsync, 61.0 /
+   61.0 fps against main's 58, single thread, pixel-exact. The varying
+   hypothesis was wrong (skipping the upload and the record traffic
+   changed nothing); the cost was the fragment program's gradient path
+   existing in a solid batch, which main avoided by construction.
 4. Band-mesh margin and disc octagons: the fill split says the arena's
    plain fills are 5.0 MP (its discs and background) and the arc bands
-   4.0, so the disc mesh is worth measuring before the band margin.
+   4.0; headroom for the watch, not a phone gate any more.
 5. Lens field, blur at the scratch scale, shadow extents. The showcase's
    exact steps.
 6. Records from the recorder, the run store, placements, run segments,
