@@ -2187,7 +2187,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             pass.pending.push(composite);
             return Ok(());
         }
-        let Some(surface) = self.render_child_surface(pass, child, z, grid)? else {
+        let Some(surface) = self.render_child_surface(pass, child, z, grid, visible)? else {
             return Ok(());
         };
         if let Some(composite) =
@@ -2284,6 +2284,13 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         ))
     }
 
+    /// Renders the child's content into its own texture. A child that reads
+    /// its backdrop is never cached and renders every frame, so when it sits
+    /// on the parent's pixel grid (a translation, or a uniform scale it
+    /// renders at) and carries no effect of its own it renders the part of
+    /// its surface `visible` shows, grown by what its glasses read past it
+    /// (`backdrop_reach`): a card wider than the screen costs the screen,
+    /// and every capture inside it follows.
     #[allow(clippy::too_many_arguments)]
     fn render_child_surface(
         &mut self,
@@ -2291,6 +2298,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         child: &ChildLayer,
         z: usize,
         grid: Option<Point>,
+        visible: DeviceRect,
     ) -> Result<Option<SurfaceRender>, String> {
         let scale = pass.scale;
         let surface_scale = scale * child.surface_scale;
@@ -2307,9 +2315,19 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 offset
             }
         });
+        let reads_backdrop = child.reads_backdrop();
         let (surface_rect, grid_dest, device_phase) = match grid_offset {
             Some(offset) => {
-                let dest = child_rect.translated(offset).snap_out();
+                let whole = child_rect.translated(offset).snap_out();
+                let dest = if reads_backdrop && child.effect.is_none() {
+                    let reach = (backdrop_reach(&child.content) * surface_scale).ceil() + 1.0;
+                    visible
+                        .expand(reach)
+                        .intersect(whole)
+                        .map_or(whole, DeviceRect::snap_out)
+                } else {
+                    whole
+                };
                 (
                     dest.translated(Point::new(-offset.x, -offset.y)),
                     Some(dest),
@@ -2322,7 +2340,6 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         if u64::from(width) * u64::from(height) > MAX_SURFACE_PIXELS {
             return Ok(None);
         }
-        let reads_backdrop = child.reads_backdrop();
         let cache_key = (!reads_backdrop && child.cache_policy == CachePolicy::Auto).then(|| {
             LayerRasterCacheKey::source_content(
                 child.node_id,
@@ -2398,6 +2415,27 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             grid_dest,
         }))
     }
+}
+
+/// How far, in a layer's logical units, any glass in it reads past the
+/// pixels it shows: the largest input and output padding of its backdrop
+/// effects and of its children's, at the children's surface scale.
+fn backdrop_reach(layer: &LayerScene) -> f32 {
+    let padding = |effect: &RenderEffect| effect.input_padding() + effect.output_padding();
+    let own = layer
+        .scene
+        .backdrop_layers
+        .iter()
+        .map(|backdrop| padding(&backdrop.effect));
+    let children = layer.children.iter().map(|child| {
+        child.surface_scale
+            * child
+                .backdrop
+                .as_ref()
+                .map_or(0.0, padding)
+                .max(backdrop_reach(&child.content))
+    });
+    own.chain(children).fold(0.0, f32::max)
 }
 
 /// What lies beneath an isolated child that reads its backdrop: the parent's

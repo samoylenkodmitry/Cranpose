@@ -162,6 +162,18 @@ impl FrameStatsSnapshot {
         self
     }
 
+    /// The largest isolated surface of the frame as `WxH@(x,y)` in device
+    /// pixels and logical origin, or `-`.
+    fn top_isolated_display(&self) -> String {
+        match &self.top_isolated_layers[0] {
+            Some(top) => format!(
+                "{}x{}@({:.0},{:.0})",
+                top.width, top.height, top.logical_rect.x, top.logical_rect.y
+            ),
+            None => "-".to_string(),
+        }
+    }
+
     pub fn top_isolated_layers(self) -> impl Iterator<Item = IsolatedLayerStat> {
         self.top_isolated_layers
             .into_iter()
@@ -202,7 +214,7 @@ impl FrameStatsSnapshot {
         eprintln!(
             "[GPU f#{}] encoders={} submits={} passes={} pass_px={:.2}MP copies={} copy_px={:.2}MP | offscreen: acq={} new={} {:.1}MB pool={}({:.1}MB) retained={:.1}MB | \
              uploads={:.2}MB | \
-             isolated_layers={} area={:.2}MP | \
+             isolated_layers={} area={:.2}MP top={} | \
              layer_cache: hit={} miss={} {:.1}% hit_px={:.2}MP miss_px={:.2}MP size={}({:.1}MB) hit_by_kind={} miss_px_by_kind={} | \
              shadow_cache: shape_hit={} shape_miss={} hit_px={:.2}MP miss_px={:.2}MP text_blur_fallback={} | \
              blur={} composite={} effect={} shader_px={:.2}MP | shape={} shape_fill_px={:.2}MP{} shape_verts={} image={} text={} draws={} | \
@@ -225,6 +237,7 @@ impl FrameStatsSnapshot {
             upload_mb,
             self.isolated_layer_renders,
             isolated_layer_mpx,
+            self.top_isolated_display(),
             self.layer_cache_hits,
             self.layer_cache_misses,
             self.layer_cache_hit_rate(),

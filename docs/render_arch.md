@@ -719,7 +719,14 @@ and every glass button inside it blurs a 600 x 396 region of a page that
 is 60% off screen. A child that reads its backdrop, is composited by a
 translation, and carries no unbatched runtime shader renders the part of
 its surface the viewport shows, grown by its effects' padding; its
-captures follow. Nothing visible changes. Not cropped: a cached child
+captures follow. Nothing visible changes. Done 2026-09-05
+(`viewport_crop.rs`, red-proven on the surface budget, the pixels
+byte-identical to the card rendered whole): on the watch the card's
+surface went from 618 x 423 to 431 x 226 device pixels, and the
+presented frame did not move on either device (watch 15.7-16.2 against
+15.0-16.7, Mate 23.2 against 23.3), so that surface was not the cost
+and the frame's 14-15 passes over 2.3 MP on the frames that carry the
+card are. Not cropped: a cached child
 (its full surface is what makes a partly visible scrolling card a hit,
 so the window stays out of its key), and a child under an unbatched
 `RuntimeShader`, whose contract hands the shader the whole texture and
