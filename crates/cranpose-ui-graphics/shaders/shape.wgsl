@@ -94,12 +94,14 @@ fn shape_output(shape: ShapeData, position: vec2<f32>, uv: vec2<f32>) -> VertexO
         shape.gradient_count,
         shape.gradient_tile_mode,
     );
-    let stops = load_inline_gradient_stops(shape.gradient_start, shape.gradient_count);
-    output.stop_offsets = stops.offsets;
-    output.stop_color0 = stops.color0;
-    output.stop_color1 = stops.color1;
-    output.stop_color2 = stops.color2;
-    output.stop_color3 = stops.color3;
+    if (!SHAPE_SOLID) {
+        let stops = load_inline_gradient_stops(shape.gradient_start, shape.gradient_count);
+        output.stop_offsets = stops.offsets;
+        output.stop_color0 = stops.color0;
+        output.stop_color1 = stops.color1;
+        output.stop_color2 = stops.color2;
+        output.stop_color3 = stops.color3;
+    }
     return output;
 }
 
@@ -168,6 +170,15 @@ var<uniform> gradient_stops: array<GradientStop, 256>;
 const SHAPE_KIND_FILL: u32 = 0u;
 const SHAPE_KIND_STROKE: u32 = 1u;
 const SHAPE_KIND_ARC: u32 = 2u;
+
+// Pipeline constants a batch fixes when every record it draws agrees: the
+// shape kind (-1 keeps the per-record ladder), whether every brush is solid,
+// and whether any record carries a clip. A fixed value folds the branches
+// the batch cannot take out of the program; the record data stays the same,
+// so the general program and every specialised one shade one record alike.
+override SHAPE_KIND_FIXED: i32 = -1;
+override SHAPE_SOLID: bool = false;
+override SHAPE_CLIPPED: bool = true;
 
 const STROKE_CAP_BUTT: u32 = 0u;
 const STROKE_CAP_SQUARE: u32 = 2u;
@@ -466,11 +477,12 @@ fn sample_gradient(gradient_start: u32, count: u32, t: f32) -> vec4<f32> {
 /// ladder down to an alpha, and the two discards that end a fragment before
 /// anything is shaded.
 ///
-/// Both fragment entry points call this so the arithmetic exists once. It was
-/// duplicated line for line into `fs_solid` on the argument that identical
-/// source in the same order makes the compiler emit identical instructions;
-/// on Vulkan it did not, and `solid_fs_parity` measured three pixels apart by
-/// up to 2/255 (the macOS CI runner, on Metal, saw none of it).
+/// One function for every specialisation, so the arithmetic exists once. An
+/// earlier solid-only entry duplicated it line for line on the argument that
+/// identical source in the same order makes the compiler emit identical
+/// instructions; on Vulkan it did not, and the parity test measured three
+/// pixels apart by up to 2/255 (the macOS CI runner, on Metal, saw none of
+/// it). The pipeline constants fold branches; they never copy code.
 fn shape_coverage_alpha(input: VertexOutput) -> f32 {
     let world_pos = input.world_pos.xy;
     // Local layer-space pixel coordinate derived from uv, independent of
@@ -480,7 +492,7 @@ fn shape_coverage_alpha(input: VertexOutput) -> f32 {
     // Apply clipping: if clip_rect has non-zero size, clip to it
     let clip_w = input.clip_rect.z;
     let clip_h = input.clip_rect.w;
-    if (clip_w > 0.0 && clip_h > 0.0) {
+    if (SHAPE_CLIPPED && clip_w > 0.0 && clip_h > 0.0) {
         let clip_left = input.clip_rect.x;
         let clip_top = input.clip_rect.y;
         let clip_right = clip_left + clip_w;
@@ -503,7 +515,7 @@ fn shape_coverage_alpha(input: VertexOutput) -> f32 {
     // and blend state, so they batch together with fills instead of splitting
     // the batch.
     let flags = u32(max(input.stroke_params.y, 0.0));
-    let shape_kind = flags & 3u;
+    let shape_kind = select(flags & 3u, u32(max(SHAPE_KIND_FIXED, 0)), SHAPE_KIND_FIXED >= 0);
     let stroke_cap = (flags >> 2u) & 3u;
     let stroke_join = (flags >> 4u) & 3u;
 
@@ -566,8 +578,9 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     var color = input.color;
     var is_gradient = false;
 
-    // Apply gradient if needed
-    let brush_type = input.brush.x;
+    // Apply gradient if needed; a solid batch fixes the brush to solid and the
+    // whole ladder folds away.
+    let brush_type = select(input.brush.x, 0u, SHAPE_SOLID);
     let gradient_tile_mode = input.brush.w;
     if (brush_type == 1u) {
         // Linear gradient projected from start.xy to end.xy
@@ -622,21 +635,5 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
                           color.a);
     }
 
-    return vec4<f32>(color.rgb, color.a * alpha);
-}
-
-/// `fs_main` for a draw known to contain only solid brushes.
-///
-/// Coverage is the shared function above, so this entry differs from `fs_main`
-/// by exactly what it leaves out: gradient projection, stop interpolation, tile
-/// remapping and dither. A solid fragment through `fs_main` takes none of those
-/// branches at runtime anyway; what this removes is their cost of existing —
-/// the register footprint and gradient-stop indexing the shader core budgets
-/// for on every fragment of an arc-heavy scene. A batch selects this entry only
-/// when its gradient stop count is zero, so `brush_type` could only ever be 0.
-@fragment
-fn fs_solid(input: VertexOutput) -> @location(0) vec4<f32> {
-    let alpha = shape_coverage_alpha(input);
-    let color = input.color;
     return vec4<f32>(color.rgb, color.a * alpha);
 }

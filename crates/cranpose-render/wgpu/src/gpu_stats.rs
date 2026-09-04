@@ -6,7 +6,7 @@ use cranpose_render_common::raster_cache::{
 };
 use cranpose_ui_graphics::Rect;
 
-use crate::frame_graph::FrameCommandStats;
+use crate::{band_mesh::ShapeFill, frame_graph::FrameCommandStats};
 
 const TOP_ISOLATED_LAYER_LIMIT: usize = 8;
 
@@ -93,6 +93,9 @@ pub struct FrameStatsSnapshot {
     /// mesh, everything else its quad. Fill rate is what a scene of rings
     /// costs a tiling GPU, however few draws it takes.
     pub shape_fill_pixels: u64,
+    /// `shape_fill_pixels` split by shape kind and brush, in the order of
+    /// `ShapeFill::LABELS`: which records a fill-bound frame pays for.
+    pub shape_fill_pixels_by_class: [u64; ShapeFill::CLASSES],
     pub shape_passes: u32,
     pub image_passes: u32,
     pub text_passes: u32,
@@ -123,6 +126,20 @@ pub struct FrameStatsSnapshot {
 }
 
 impl FrameStatsSnapshot {
+    fn shape_fill_by_class_text(&self) -> String {
+        let mut text = String::new();
+        for (label, pixels) in ShapeFill::LABELS
+            .iter()
+            .zip(self.shape_fill_pixels_by_class)
+        {
+            if pixels > 0 {
+                use std::fmt::Write;
+                let _ = write!(text, " {label}={:.2}MP", pixels as f64 / 1_000_000.0);
+            }
+        }
+        text
+    }
+
     pub(crate) fn with_command_stats_added(mut self, stats: FrameCommandStats) -> Self {
         self.submits = self.submits.saturating_add(stats.submit_count);
         self.encoder_count = self.encoder_count.saturating_add(stats.encoder_count);
@@ -184,7 +201,7 @@ impl FrameStatsSnapshot {
              isolated_layers={} area={:.2}MP | \
              layer_cache: hit={} miss={} {:.1}% hit_px={:.2}MP miss_px={:.2}MP size={}({:.1}MB) hit_by_kind={} miss_px_by_kind={} | \
              shadow_cache: shape_hit={} shape_miss={} hit_px={:.2}MP miss_px={:.2}MP text_blur_fallback={} | \
-             blur={} composite={} effect={} shader_px={:.2}MP | shape={} shape_fill_px={:.2}MP image={} text={} draws={} | \
+             blur={} composite={} effect={} shader_px={:.2}MP | shape={} shape_fill_px={:.2}MP{} image={} text={} draws={} | \
              text_img_cache: hit={} miss={} hit_px={:.2}MP miss_px={:.2}MP raster={:.2}MB | \
              text_glyph_atlas: hit={} miss={} miss_px={:.2}MP | \
              caches: text_pool={} img={} txt={}",
@@ -224,6 +241,7 @@ impl FrameStatsSnapshot {
             self.shader_pixels as f64 / 1_000_000.0,
             self.shape_passes,
             self.shape_fill_pixels as f64 / 1_000_000.0,
+            self.shape_fill_by_class_text(),
             self.image_passes,
             self.text_passes,
             self.draw_calls,
@@ -291,6 +309,7 @@ pub(crate) struct FrameStats {
     pub effect_applies: Cell<u32>,
     pub shader_pixels: Cell<u64>,
     pub shape_fill_pixels: Cell<u64>,
+    pub shape_fill_pixels_by_class: Cell<[u64; ShapeFill::CLASSES]>,
     pub shape_passes: Cell<u32>,
     pub image_passes: Cell<u32>,
     pub text_passes: Cell<u32>,
@@ -523,9 +542,17 @@ impl FrameStats {
             .set(self.shadow_text_blur_fallbacks.get().saturating_add(1));
     }
 
-    pub fn add_shape_fill_pixels(&self, pixels: u64) {
-        self.shape_fill_pixels
-            .set(self.shape_fill_pixels.get().saturating_add(pixels));
+    pub fn add_shape_fill(&self, fill: ShapeFill) {
+        self.shape_fill_pixels.set(
+            self.shape_fill_pixels
+                .get()
+                .saturating_add(fill.total().round() as u64),
+        );
+        let mut by_class = self.shape_fill_pixels_by_class.get();
+        for (total, pixels) in by_class.iter_mut().zip(fill.pixels) {
+            *total = total.saturating_add(pixels.round() as u64);
+        }
+        self.shape_fill_pixels_by_class.set(by_class);
     }
 
     pub fn bump_shapes(&self) {
@@ -636,6 +663,7 @@ impl FrameStats {
             effect_applies: self.effect_applies.get(),
             shader_pixels: self.shader_pixels.get(),
             shape_fill_pixels: self.shape_fill_pixels.get(),
+            shape_fill_pixels_by_class: self.shape_fill_pixels_by_class.get(),
             shape_passes: self.shape_passes.get(),
             image_passes: self.image_passes.get(),
             text_passes: self.text_passes.get(),
@@ -698,6 +726,7 @@ impl FrameStats {
         self.effect_applies.set(0);
         self.shader_pixels.set(0);
         self.shape_fill_pixels.set(0);
+        self.shape_fill_pixels_by_class.set([0; ShapeFill::CLASSES]);
         self.shape_passes.set(0);
         self.image_passes.set(0);
         self.text_passes.set(0);

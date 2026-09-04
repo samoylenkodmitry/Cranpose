@@ -116,6 +116,13 @@ mod tests {
             entry_point: entry_point.to_string(),
             multiview: None,
         };
+        let (module, module_info) = naga::back::pipeline_constants::process_overrides(
+            &module,
+            &module_info,
+            Some((shader_stage, entry_point)),
+            &naga::back::PipelineConstants::default(),
+        )
+        .map_err(|err| format!("override resolution failed: {err}"))?;
         let mut writer = glsl::Writer::new(
             &mut glsl_source,
             &module,
@@ -198,11 +205,9 @@ mod tests {
 
     #[test]
     fn shape_fragment_inputs_fit_the_gles_varying_floor() {
-        for (source, entry_point) in [
-            (super::SHADER.to_string(), "fs_main"),
-            (super::SHADER.to_string(), "fs_solid"),
-        ] {
-            let locations = fragment_input_locations(&source, entry_point);
+        {
+            let entry_point = "fs_main";
+            let locations = fragment_input_locations(super::SHADER, entry_point);
             let highest = locations.last().copied().expect("fragment inputs");
             assert!(
                 highest < GLES_VARYING_VECTOR_FLOOR,

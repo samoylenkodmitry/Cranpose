@@ -400,7 +400,41 @@ pub(crate) fn triangles_area(vertices: &[MeshVertex], indices: &[u32]) -> f64 {
 pub(crate) struct BatchMesh {
     pub(crate) vertices: Vec<MeshVertex>,
     pub(crate) indices: Vec<u32>,
-    pub(crate) fill_pixels: f64,
+    pub(crate) fill: ShapeFill,
+}
+
+/// The pixels a batch's shapes rasterize, split by what the fragment stage
+/// does for them: the shape kind and whether the brush is a gradient. The
+/// split is what attributes a fill-bound frame to the records that cost
+/// it, so the count per kind must be exact, not the batch's sum.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct ShapeFill {
+    pub(crate) pixels: [f64; ShapeFill::CLASSES],
+}
+
+impl ShapeFill {
+    pub(crate) const CLASSES: usize = 6;
+    pub(crate) const LABELS: [&'static str; ShapeFill::CLASSES] = [
+        "fill",
+        "fill_grad",
+        "stroke",
+        "stroke_grad",
+        "arc",
+        "arc_grad",
+    ];
+
+    fn class(shape: &ShapeData) -> usize {
+        let kind = (shape.stroke_params[1].max(0.0) as u32 & 3).min(2) as usize;
+        kind * 2 + usize::from(shape.brush_type != 0)
+    }
+
+    fn add(&mut self, shape: &ShapeData, pixels: f64) {
+        self.pixels[Self::class(shape)] += pixels;
+    }
+
+    pub(crate) fn total(&self) -> f64 {
+        self.pixels.iter().sum()
+    }
 }
 
 /// Meshes a batch when at least one of its shapes is a band; `None` means
@@ -416,7 +450,7 @@ pub(crate) fn mesh_batch(
     let mut mesh = BatchMesh {
         vertices: Vec::with_capacity(shapes.len() * 4),
         indices: Vec::with_capacity(shapes.len() * 6),
-        fill_pixels: 0.0,
+        fill: ShapeFill::default(),
     };
     for (index, (shape, band)) in shapes.iter().zip(&bands).enumerate() {
         let start = mesh.indices.len();
@@ -431,18 +465,25 @@ pub(crate) fn mesh_batch(
             )
         });
         if meshed {
-            mesh.fill_pixels += triangles_area(&mesh.vertices, &mesh.indices[start..]);
+            mesh.fill.add(
+                shape,
+                triangles_area(&mesh.vertices, &mesh.indices[start..]),
+            );
         } else if band.is_none() {
             emit_quad(shape, index as u32, &mut mesh.vertices, &mut mesh.indices);
-            mesh.fill_pixels += quad_area(shape);
+            mesh.fill.add(shape, quad_area(shape));
         }
     }
     Some(mesh)
 }
 
 /// The quad pixels of every shape, for a batch drawn without a mesh.
-pub(crate) fn quad_fill_pixels(shapes: &[ShapeData]) -> f64 {
-    shapes.iter().map(quad_area).sum()
+pub(crate) fn quad_fill(shapes: &[ShapeData]) -> ShapeFill {
+    let mut fill = ShapeFill::default();
+    for shape in shapes {
+        fill.add(shape, quad_area(shape));
+    }
+    fill
 }
 
 #[cfg(test)]
@@ -611,9 +652,9 @@ mod tests {
         )
         .expect("a mesh");
         assert!(
-            mesh.fill_pixels < quad_area(&shape) * 0.25,
+            mesh.fill.total() < quad_area(&shape) * 0.25,
             "mesh {} against quad {}",
-            mesh.fill_pixels,
+            mesh.fill.total(),
             quad_area(&shape)
         );
     }

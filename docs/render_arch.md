@@ -224,6 +224,20 @@ of shape fill and from 15.9 ms to 10.6 ms present with this.
 - Runtime-shader pipelines, specialized on the shader's inactive features
   (`glass_specialization_parity.rs` proves the specialized pipeline matches
   the general one byte for byte).
+- Shape pipelines, one per (blend mode, vertex stage, `ShapeVariant`): a
+  batch whose records share a kind, carry no gradient, or carry no clip
+  fixes that into the pipeline's constants (`SHAPE_KIND_FIXED`,
+  `SHAPE_SOLID`, `SHAPE_CLIPPED` in `shape.wgsl`), and the fragment program
+  keeps only the branches the batch can take. Batches are still cut by
+  blend mode and brush table alone; a mixed batch takes the general
+  pipeline rather than splitting, because a scene that interleaves kinds
+  record by record (cranorbit's studded bricks) would otherwise become
+  hundreds of draws (measured: 293 draws and 12 fps).
+  `shape_variant_parity.rs` holds every variant to the general program
+  within the same bound the solid entry once had, and goes red when a
+  variant's mapping is wrong. On the Mate 20 X cranorbit's arena, a mixed
+  batch that only folds the clip, presents in 18.0 ms against 19.7 with
+  the variants off (55-56 against 51-53.5 fps presented).
 - `LayerCache`: textures of isolated children that read no backdrop and whose
   `cache_policy` is `Auto`, keyed by content hash, size, scale bucket and the
   1/16-pixel device phase. The texture holds the child's content before its
@@ -264,8 +278,12 @@ nothing shortens that but a cheaper material or less content under it.
 `RenderStatsSnapshot` reports passes and pass pixels, texture copies and
 their texels, transient and retained texture bytes, uploads, isolated layer
 renders and pixels, layer cache traffic, blur passes, composite passes,
-effect applies and the pixels the runtime shaders shade (`shader_pixels`,
-the number that decides a glass frame's cost on a tiling GPU).
+effect applies, the pixels the runtime shaders shade (`shader_pixels`,
+the number that decides a glass frame's cost on a tiling GPU) and the
+shape fill split by kind and brush (`shape_fill_pixels_by_class`, printed
+after `shape_fill_px` on the `[GPU f#]` line), which is what attributes a
+fill-bound frame: cranorbit's arena is 5.0 MP of plain fills, 4.0 of arc
+bands, 1.2 of stroke bands and 1.2 of gradient fills per frame.
 `backdrop_pass_batching.rs` pins the pass budget: a frame has one full-screen
 pass, a stage adds one copy per glass and one blur pair however many glasses
 it holds, a fix-up under a glass adds one pass over the copies, and a stage
@@ -512,11 +530,24 @@ green, and both scenes measured on the device with the delay probe at
 zero, alternating rounds, temperature logged.
 
 1. Pin the showcase and cranorbit revisions and their scripted inputs;
-   record the two baselines above with the probe method.
-2. Page usage ablation on the showcase.
-3. Shape pipelines per kind, brush class and blend mode; varyings
-   trimmed per variant. Cranorbit's gate.
-4. Band-mesh margin and disc octagons. Cranorbit's margin to the vsync.
+   record the two baselines above with the probe method. Pinned:
+   cranpose-showcase 4ad4080 (v0.1.12), cranorbit 0334e16, the scripts in
+   the session scratchpad (`measure.sh`, `orbit_measure.sh`).
+2. Page usage ablation on the showcase. Done, no gain: an offscreen page
+   and a blit (7 passes, 17 MP) presents at 23.9-24.0 fps against the
+   direct root's 24.0-24.5; the GL difference is not the page's usage.
+3. Shape pipelines per (blend mode, stage, variant). Done: +1.7 ms on
+   cranorbit's arena from folding the clip alone; the arena's batch is
+   mixed, so its kinds cannot fold without splitting the batch, and the
+   per-variant varying layouts are the next step here: every fragment of
+   the general program loads its record through up to fifteen flat
+   varyings, and on this GPU 11.5 MP of fragments times those loads is
+   the plausible seat of the ~1.5 ns per pixel. A per-kind vertex output
+   (an arc needs five vec4s, a solid fill four) needs a shader source per
+   variant, not a constant, and is measured by the same toggle.
+4. Band-mesh margin and disc octagons: the fill split says the arena's
+   plain fills are 5.0 MP (its discs and background) and the arc bands
+   4.0, so the disc mesh is worth measuring before the band margin.
 5. Lens field, blur at the scratch scale, shadow extents. The showcase's
    exact steps.
 6. Records from the recorder, the run store, placements, run segments,

@@ -1060,27 +1060,108 @@ pub(crate) fn create_render_pipeline_logged<'a>(
     pipeline
 }
 
-#[allow(clippy::too_many_arguments)]
 /// How a shape batch reaches the vertex stage: six generated vertices per
 /// shape record, or a mesh of triangles that each name their record.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum ShapeVertexStage {
     Quads,
     Mesh,
 }
 
-#[allow(clippy::too_many_arguments)]
+/// What every record of a batch agrees on, fixed into the batch's pipeline
+/// as shader constants so the fragment program carries only the branches
+/// the batch can take: the shape kind when the batch holds one kind, a
+/// solid-only brush, and whether any record clips. The general pipeline
+/// (`ShapeVariant::GENERAL`) keeps every branch and shades every record the
+/// same, which `shape_variant_parity.rs` pins.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct ShapeVariant {
+    kind: Option<u32>,
+    solid: bool,
+    clipped: bool,
+}
+
+impl ShapeVariant {
+    const GENERAL: Self = Self {
+        kind: None,
+        solid: false,
+        clipped: true,
+    };
+
+    /// The variant of a batch: a kind only when every record shares it, a
+    /// solid brush only when no record carries gradient stops, and unclipped
+    /// only when no record clips. A mixed batch keeps the general pipeline
+    /// rather than splitting, since a scene that interleaves kinds record by
+    /// record (a game's studded bricks) would otherwise become hundreds of
+    /// draws.
+    fn of_batch(shapes: &[&DrawShape], brushes: &[Brush]) -> Self {
+        if !shape_variants_enabled() {
+            return Self::GENERAL;
+        }
+        let mut shapes = shapes.iter();
+        let Some(first) = shapes.next() else {
+            return Self::GENERAL;
+        };
+        let mut variant = Self {
+            kind: Some(shape_kind(first)),
+            solid: shape_gradient_stop_count(first, brushes) == 0,
+            clipped: first.clip.is_some(),
+        };
+        for shape in shapes {
+            if variant.kind != Some(shape_kind(shape)) {
+                variant.kind = None;
+            }
+            variant.solid &= shape_gradient_stop_count(shape, brushes) == 0;
+            variant.clipped |= shape.clip.is_some();
+        }
+        variant
+    }
+
+    fn constants(self) -> [(&'static str, f64); 3] {
+        [
+            ("SHAPE_KIND_FIXED", self.kind.map_or(-1.0, f64::from)),
+            ("SHAPE_SOLID", f64::from(u8::from(self.solid))),
+            ("SHAPE_CLIPPED", f64::from(u8::from(self.clipped))),
+        ]
+    }
+}
+
+fn shape_variants_enabled() -> bool {
+    crate::debug_toggles::debug_toggle("CRANPOSE_SHAPE_VARIANTS").as_deref() != Some("0")
+}
+
+fn shape_kind(shape: &DrawShape) -> u32 {
+    if shape.arc.is_some() {
+        SHAPE_KIND_ARC
+    } else if shape.stroke.is_some() {
+        SHAPE_KIND_STROKE
+    } else {
+        SHAPE_KIND_FILL
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct ShapePipelineKey {
+    blend_mode: BlendMode,
+    stage: ShapeVertexStage,
+    variant: ShapeVariant,
+}
+
 fn create_shape_pipeline(
     device: &wgpu::Device,
     cache: Option<&wgpu::PipelineCache>,
     surface_format: wgpu::TextureFormat,
     uniform_layout: &wgpu::BindGroupLayout,
     shape_layout: &wgpu::BindGroupLayout,
-    blend_mode: BlendMode,
+    key: ShapePipelineKey,
     batch_limits: ShapeBatchLimits,
-    fragment_entry: &'static str,
-    stage: ShapeVertexStage,
 ) -> wgpu::RenderPipeline {
+    let ShapePipelineKey {
+        blend_mode,
+        stage,
+        variant,
+    } = key;
+    let constants = variant.constants();
     let mesh_layout = [MeshVertex::layout()];
     let (vertex_entry, vertex_buffers): (&str, &[wgpu::VertexBufferLayout<'_>]) = match stage {
         ShapeVertexStage::Quads => ("vs_main", &[]),
@@ -1100,20 +1181,26 @@ fn create_shape_pipeline(
     create_render_pipeline_logged(
         device,
         cache,
-        &format!("shape entry={fragment_entry} blend={blend_mode:?}"),
+        &format!("shape blend={blend_mode:?} stage={stage:?} variant={variant:?}"),
         wgpu::RenderPipelineDescriptor {
             label: Some("Shape Pipeline"),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some(vertex_entry),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants: &constants,
+                    ..wgpu::PipelineCompilationOptions::default()
+                },
                 buffers: vertex_buffers,
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: Some(fragment_entry),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                entry_point: Some("fs_main"),
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants: &constants,
+                    ..wgpu::PipelineCompilationOptions::default()
+                },
                 targets: &[Some(wgpu::ColorTargetState {
                     format: surface_format,
                     blend: Some(blend_state_for_mode(blend_mode)),
@@ -2217,7 +2304,7 @@ pub(crate) struct ShapeBatch {
     slot: usize,
     uniform_slot: usize,
     vertex_count: u32,
-    has_gradient: bool,
+    variant: ShapeVariant,
     mesh_index_count: Option<u32>,
 }
 struct CompositionTarget {
@@ -2270,7 +2357,8 @@ const DIRECT_SURFACE_ROOT_USAGES: wgpu::TextureUsages = wgpu::TextureUsages::REN
 /// all; a partial set falls back to the composition copy, so nothing is
 /// requested in that case beyond rendering.
 pub fn presentable_root_usages(supported: wgpu::TextureUsages) -> wgpu::TextureUsages {
-    if supported.contains(DIRECT_SURFACE_ROOT_USAGES) {
+    let direct = crate::debug_toggles::debug_toggle("CRANPOSE_DIRECT_ROOT").as_deref() != Some("0");
+    if direct && supported.contains(DIRECT_SURFACE_ROOT_USAGES) {
         DIRECT_SURFACE_ROOT_USAGES
     } else {
         wgpu::TextureUsages::RENDER_ATTACHMENT
@@ -2311,12 +2399,7 @@ pub struct GpuRenderer {
     adapter_backend: wgpu::Backend,
     shape_batch_limits: ShapeBatchLimits,
     pipeline_cache: Option<wgpu::PipelineCache>,
-    pipeline: LazyGpuResource<wgpu::RenderPipeline>,
-    pipeline_dst_out: LazyGpuResource<wgpu::RenderPipeline>,
-    pipeline_solid: LazyGpuResource<wgpu::RenderPipeline>,
-    pipeline_mesh: LazyGpuResource<wgpu::RenderPipeline>,
-    pipeline_mesh_dst_out: LazyGpuResource<wgpu::RenderPipeline>,
-    pipeline_mesh_solid: LazyGpuResource<wgpu::RenderPipeline>,
+    shape_pipelines: HashMap<ShapePipelineKey, wgpu::RenderPipeline>,
     image_pipeline: LazyGpuResource<wgpu::RenderPipeline>,
     image_pipeline_dst_out: LazyGpuResource<wgpu::RenderPipeline>,
     glyph_atlas_pipeline: LazyGpuResource<wgpu::RenderPipeline>,
@@ -2508,12 +2591,7 @@ impl GpuRenderer {
             adapter_backend,
             shape_batch_limits,
             pipeline_cache,
-            pipeline: LazyGpuResource::new("shape/src-over"),
-            pipeline_dst_out: LazyGpuResource::new("shape/dst-out"),
-            pipeline_solid: LazyGpuResource::new("shape/solid"),
-            pipeline_mesh: LazyGpuResource::new("shape-mesh/src-over"),
-            pipeline_mesh_dst_out: LazyGpuResource::new("shape-mesh/dst-out"),
-            pipeline_mesh_solid: LazyGpuResource::new("shape-mesh/solid"),
+            shape_pipelines: HashMap::new(),
             image_pipeline: LazyGpuResource::new("image/src-over"),
             image_pipeline_dst_out: LazyGpuResource::new("image/dst-out"),
             glyph_atlas_pipeline: LazyGpuResource::new("glyph/atlas"),
@@ -2582,50 +2660,28 @@ impl GpuRenderer {
         renderer
     }
 
-    fn shape_pipeline(
-        &self,
-        blend_mode: BlendMode,
-        stage: ShapeVertexStage,
-    ) -> &wgpu::RenderPipeline {
-        let resource = match (blend_mode, stage) {
-            (BlendMode::DstOut, ShapeVertexStage::Quads) => &self.pipeline_dst_out,
-            (BlendMode::DstOut, ShapeVertexStage::Mesh) => &self.pipeline_mesh_dst_out,
-            (_, ShapeVertexStage::Quads) => &self.pipeline,
-            (_, ShapeVertexStage::Mesh) => &self.pipeline_mesh,
-        };
-        resource.get_or_init(self.adapter_backend, || {
-            create_shape_pipeline(
-                &self.device,
-                self.pipeline_cache.as_ref(),
-                self.composition_format,
-                &self.uniform_bind_group_layout,
-                &self.shape_bind_group_layout,
-                blend_mode,
-                self.shape_batch_limits,
-                "fs_main",
-                stage,
-            )
-        })
-    }
-
-    fn shape_pipeline_solid(&self, stage: ShapeVertexStage) -> &wgpu::RenderPipeline {
-        let resource = match stage {
-            ShapeVertexStage::Quads => &self.pipeline_solid,
-            ShapeVertexStage::Mesh => &self.pipeline_mesh_solid,
-        };
-        resource.get_or_init(self.adapter_backend, || {
-            create_shape_pipeline(
-                &self.device,
-                self.pipeline_cache.as_ref(),
-                self.composition_format,
-                &self.uniform_bind_group_layout,
-                &self.shape_bind_group_layout,
-                BlendMode::SrcOver,
-                self.shape_batch_limits,
-                "fs_solid",
-                stage,
-            )
-        })
+    /// The pipeline for `key`, created on first use; creation happens at
+    /// batch preparation so a draw only looks its pipeline up.
+    fn ensure_shape_pipeline(&mut self, key: ShapePipelineKey) {
+        if self.shape_pipelines.contains_key(&key) {
+            return;
+        }
+        let started = Instant::now();
+        let pipeline = create_shape_pipeline(
+            &self.device,
+            self.pipeline_cache.as_ref(),
+            self.composition_format,
+            &self.uniform_bind_group_layout,
+            &self.shape_bind_group_layout,
+            key,
+            self.shape_batch_limits,
+        );
+        log::info!(
+            "[gpu-pipeline] {:?} shape {key:?} ready in {:.1} ms",
+            self.adapter_backend,
+            instant_ms(started, Instant::now())
+        );
+        self.shape_pipelines.insert(key, pipeline);
     }
 
     fn image_pipeline(&self, blend_mode: BlendMode) -> &wgpu::RenderPipeline {
@@ -3685,6 +3741,7 @@ impl GpuRenderer {
         &mut self,
         shapes: impl Iterator<Item = &'a DrawShape>,
         brushes: &[Brush],
+        blend_mode: BlendMode,
         root_scale: f32,
         uniform_slot: usize,
     ) -> Option<ShapeBatch> {
@@ -3695,6 +3752,7 @@ impl GpuRenderer {
         if shape_count == 0 {
             return None;
         }
+        let variant = ShapeVariant::of_batch(&shape_refs, brushes);
         let mut gradient_offsets: SmallVec<[u32; 64]> = SmallVec::with_capacity(shape_count + 1);
         let mut total_gradient_stops = 0u32;
         gradient_offsets.push(0);
@@ -3739,7 +3797,7 @@ impl GpuRenderer {
             )
             .upload_bytes;
         }
-        let (fill_pixels, mesh_index_count) = match crate::band_mesh::mesh_batch(
+        let (fill, mesh_index_count) = match crate::band_mesh::mesh_batch(
             &mut self.band_tessellator,
             &self.scratch_shape_data,
         ) {
@@ -3762,21 +3820,31 @@ impl GpuRenderer {
                     bytemuck::cast_slice(&mesh.indices),
                 )
                 .upload_bytes;
-                (mesh.fill_pixels, Some(mesh.indices.len() as u32))
+                (mesh.fill, Some(mesh.indices.len() as u32))
             }
-            None => (
-                crate::band_mesh::quad_fill_pixels(&self.scratch_shape_data),
-                None,
-            ),
+            None => (crate::band_mesh::quad_fill(&self.scratch_shape_data), None),
         };
         self.frame_stats.record_command_stats(upload);
-        self.frame_stats
-            .add_shape_fill_pixels(fill_pixels.round() as u64);
+        self.frame_stats.add_shape_fill(fill);
+        debug_assert!(
+            !variant.solid || total_gradient_stops == 0,
+            "a solid variant batch carries no gradient stops"
+        );
+        let stage = if mesh_index_count.is_some() {
+            ShapeVertexStage::Mesh
+        } else {
+            ShapeVertexStage::Quads
+        };
+        self.ensure_shape_pipeline(ShapePipelineKey {
+            blend_mode,
+            stage,
+            variant,
+        });
         Some(ShapeBatch {
             slot,
             uniform_slot,
             vertex_count: shape_count as u32 * 6,
-            has_gradient: total_gradient_stops > 0,
+            variant,
             mesh_index_count,
         })
     }
@@ -3808,11 +3876,15 @@ impl GpuRenderer {
         } else {
             ShapeVertexStage::Quads
         };
-        let pipeline = if blend_mode == BlendMode::SrcOver && !batch.has_gradient {
-            self.shape_pipeline_solid(stage)
-        } else {
-            self.shape_pipeline(blend_mode, stage)
+        let key = ShapePipelineKey {
+            blend_mode,
+            stage,
+            variant: batch.variant,
         };
+        let pipeline = self
+            .shape_pipelines
+            .get(&key)
+            .ok_or_else(|| format!("shape pipeline {key:?} was not prepared with its batch"))?;
         pass.set_pipeline(pipeline);
         pass.set_bind_group(
             0,

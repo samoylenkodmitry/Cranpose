@@ -636,9 +636,13 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
             Item::Shape { shape, .. } => *shape,
             _ => unreachable!("shape run holds only shapes"),
         });
-        if let Some(batch) =
-            renderer.prepare_shape_batch(shapes, brushes, self.root_scale, run.uniform_slot)
-        {
+        if let Some(batch) = renderer.prepare_shape_batch(
+            shapes,
+            brushes,
+            blend_mode,
+            self.root_scale,
+            run.uniform_slot,
+        ) {
             self.batches.push(Batch::Shapes {
                 batch,
                 blend_mode,

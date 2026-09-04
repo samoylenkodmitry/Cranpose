@@ -596,6 +596,21 @@ frame, not this one); if it moves one for one from zero, the present thread
 is the frame and the present block is `gpu - encode` (cranorbit: GPU ~19 ms
 behind an 8 ms present column). Two alternating rounds, temperature logged.
 
+## The swapchain image's usage is not what makes the showcase slower on Vulkan than GL
+
+`debug.cranpose.direct_root 0` renders into an offscreen 8-bit page and blits
+it (two more full-page passes): 23.9-24.0 fps against 24.0-24.5 direct, two
+alternating rounds (2026-09-04). Framebuffer compression on the swapchain
+image is not the ten milliseconds GL saves on this driver; do not spend time
+on the page's usage flags.
+
+## Splitting shape batches by kind is a regression on a studded arena
+
+A batch key of (blend, brush table, kind, solid, clip) turned cranorbit's one
+arena batch into 293 draws with 293 buffer writes and band tessellations:
+12 fps. Derive a pipeline variant from a batch's content instead and keep
+the batch; a mixed batch simply takes the general pipeline.
+
 ## An uber-shader's OFF features cost more than its ON ones on Mali
 
 The liquid glass fragment program gates a dozen optional features on
