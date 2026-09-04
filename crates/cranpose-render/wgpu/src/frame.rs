@@ -16,12 +16,17 @@ use cranpose_ui_graphics::{
 use crate::{
     capture_hash::{CaptureWindow, capture_hasher, hash_capture_composites, hash_capture_ops},
     collect::{ChildLayer, LayerScene, uniform_scale_translation},
-    draw_pass::{PassSegment, PassTarget, ResolvedComposite, ResolvedCompositeKind, SourceContent},
+    draw_pass::{
+        PassSegment, PassTarget, ResolvedComposite, ResolvedCompositeKind, SourceContent,
+        op_draw_bounds, segment_draws_anything,
+    },
     effect_renderer::{
         BlurRegion, CompositeSampleMode, EffectScratchTargetProvider, RoundedCompositeMask,
         blur_scratch_size,
     },
-    frame_graph::{FrameCommandRecorder, FrameTextureDescriptor},
+    frame_graph::{
+        FrameCommandRecorder, FrameTextureDescriptor, TextureRegionCopy, copy_compatible,
+    },
     geometry::snap_delta_for_anchor,
     offscreen::OffscreenTarget,
     render::GpuRenderer,
@@ -97,6 +102,44 @@ impl DeviceRect {
             width: (right - left).max(1.0),
             height: (bottom - top).max(1.0),
         }
+    }
+
+    /// What is left of the rect outside `hole`: up to four rects that
+    /// partition it exactly, none overlapping the hole.
+    fn subtract(self, hole: Self) -> Vec<Self> {
+        let Some(hole) = hole.intersect(self) else {
+            return vec![self];
+        };
+        let right = self.x + self.width;
+        let bottom = self.y + self.height;
+        let hole_right = hole.x + hole.width;
+        let hole_bottom = hole.y + hole.height;
+        let mut parts = Vec::with_capacity(4);
+        let mut push = |x: f32, y: f32, width: f32, height: f32| {
+            if width > 0.0 && height > 0.0 {
+                parts.push(Self {
+                    x,
+                    y,
+                    width,
+                    height,
+                });
+            }
+        };
+        push(self.x, self.y, self.width, hole.y - self.y);
+        push(self.x, hole_bottom, self.width, bottom - hole_bottom);
+        push(self.x, hole.y, hole.x - self.x, hole.height);
+        push(hole_right, hole.y, right - hole_right, hole.height);
+        parts
+    }
+
+    /// The rect minus every hole, as rects that partition what is left.
+    fn subtract_all(self, holes: &[Self]) -> Vec<Self> {
+        holes.iter().fold(vec![self], |parts, hole| {
+            parts
+                .into_iter()
+                .flat_map(|part| part.subtract(*hole))
+                .collect()
+        })
     }
 
     fn pixel_size(self) -> (u32, u32) {
@@ -257,11 +300,54 @@ impl Page {
         let rect = rect.intersect(self.rect())?;
         Some(page_blit(&self.texture, self.offset, rect, rect))
     }
+
+    /// The page's texels within `rect` copied to `origin` of `dest`, when
+    /// the rect lies on whole texels inside the page and the copy fits.
+    fn copy<'a>(
+        &'a self,
+        rect: DeviceRect,
+        dest: &'a OffscreenTarget,
+        origin: [f32; 2],
+    ) -> Option<TextureRegionCopy<'a>> {
+        let source = [rect.x - self.offset[0], rect.y - self.offset[1]];
+        let coords = [
+            source[0],
+            source[1],
+            rect.width,
+            rect.height,
+            origin[0],
+            origin[1],
+        ];
+        if coords
+            .iter()
+            .any(|value| value.fract() != 0.0 || *value < 0.0)
+        {
+            return None;
+        }
+        let size = [rect.width as u32, rect.height as u32];
+        let source_origin = [source[0] as u32, source[1] as u32];
+        let dest_origin = [origin[0] as u32, origin[1] as u32];
+        let fits = |origin: [u32; 2], target: &OffscreenTarget| {
+            origin[0] + size[0] <= target.width && origin[1] + size[1] <= target.height
+        };
+        (fits(source_origin, &self.texture) && fits(dest_origin, dest)).then_some(
+            TextureRegionCopy {
+                source: &self.texture,
+                source_origin,
+                dest,
+                dest_origin,
+                size,
+            },
+        )
+    }
 }
 
 /// One layer's render in progress: the page it draws into, the strata it has
-/// drawn (every op below `drawn_z` and every composite in `drawn`), the
-/// composites still to draw, and the backdrops waiting for their stage.
+/// drawn (every op below `drawn_z` except the deferred ones, and every
+/// composite in `drawn`), the composites still to draw, the ops held back
+/// behind a captured glass, the glasses of the running stage whose
+/// composites are not on the page yet, and the backdrops waiting for their
+/// stage.
 struct LayerPass<'a> {
     layer: &'a LayerScene,
     page: Page,
@@ -269,15 +355,131 @@ struct LayerPass<'a> {
     beneath: &'a Beneath<'a>,
     drawn: Vec<ResolvedComposite>,
     pending: Vec<ResolvedComposite>,
+    deferred: Vec<DrawOp>,
+    blockers: Vec<Blocker>,
     excluded: Vec<(usize, usize)>,
     stages: ResolveStages<'a>,
     drawn_z: usize,
     load_op: Option<wgpu::LoadOp<wgpu::Color>>,
 }
 
+/// Pixels that something not yet on the page will claim: a glass of the
+/// running stage (its capture rect, since its capture must not see what is
+/// above it) or a deferred op or composite part. Anything above it in z
+/// that touches the rect waits behind it.
+#[derive(Clone, Copy)]
+struct Blocker {
+    z: usize,
+    rect: DeviceRect,
+}
+
+/// One thing a flush may draw, in the order the pass draws them: at one z
+/// a composite before an op.
+enum Candidate {
+    Composite(ResolvedComposite),
+    Op(DrawOp),
+}
+
+impl Candidate {
+    fn order(&self) -> (usize, u8) {
+        match self {
+            Candidate::Composite(composite) => (composite.z_index, 0),
+            Candidate::Op(op) => (op.z_index, 1),
+        }
+    }
+}
+
 impl LayerPass<'_> {
     fn target_rect(&self) -> DeviceRect {
         self.page.rect()
+    }
+
+    /// The ops between the page's drawn z and `z` outside the excluded
+    /// ranges, with the deferred ops below `z`, in z order.
+    fn ops_below(&self, z: usize) -> Vec<DrawOp> {
+        let deferred_end = self.deferred.partition_point(|op| op.z_index < z);
+        let mut ops =
+            filtered_ops_in_range(&self.layer.scene.draw_ops, self.drawn_z, z, &self.excluded);
+        ops.extend_from_slice(&self.deferred[..deferred_end]);
+        ops.sort_by_key(|op| op.z_index);
+        ops
+    }
+
+    /// Splits what a flush would draw into what draws now and what waits.
+    /// In z order, anything that touches a blocker below it waits: an op is
+    /// deferred whole, a composite is drawn outside the blockers it overlaps
+    /// and its covered parts stay pending; and what waits blocks in turn, so
+    /// nothing above it that overlaps it is drawn before it.
+    fn release(
+        &mut self,
+        ops: Vec<DrawOp>,
+        composites: Vec<ResolvedComposite>,
+    ) -> (Vec<DrawOp>, Vec<ResolvedComposite>) {
+        let scene = &self.layer.scene;
+        let scale = self.scale;
+        let mut candidates: Vec<Candidate> = composites
+            .into_iter()
+            .map(Candidate::Composite)
+            .chain(ops.into_iter().map(Candidate::Op))
+            .collect();
+        candidates.sort_by_key(Candidate::order);
+        let mut holes = self.blockers.clone();
+        let mut now_ops = Vec::new();
+        let mut now = Vec::new();
+        for candidate in candidates {
+            match candidate {
+                Candidate::Op(op) => {
+                    let bounds = op_draw_bounds(scene, &op, scale)
+                        .map(|bounds| DeviceRect::from_logical(bounds, scale));
+                    let blocked = bounds.filter(|bounds| {
+                        holes.iter().any(|hole| {
+                            hole.z < op.z_index && hole.rect.intersect(*bounds).is_some()
+                        })
+                    });
+                    match blocked {
+                        Some(rect) => {
+                            holes.push(Blocker {
+                                z: op.z_index,
+                                rect,
+                            });
+                            self.deferred.push(op);
+                        }
+                        None => now_ops.push(op),
+                    }
+                }
+                Candidate::Composite(composite) => {
+                    let Some(coverage) = composite_coverage(&composite) else {
+                        continue;
+                    };
+                    let covered: Vec<DeviceRect> = holes
+                        .iter()
+                        .filter(|hole| hole.z < composite.z_index)
+                        .filter_map(|hole| hole.rect.intersect(coverage))
+                        .collect();
+                    if covered.is_empty() {
+                        now.push(composite);
+                        continue;
+                    }
+                    now.extend(
+                        coverage
+                            .subtract_all(&covered)
+                            .into_iter()
+                            .map(|part| with_scissor(&composite, part)),
+                    );
+                    for (index, hole) in covered.iter().enumerate() {
+                        for part in hole.subtract_all(&covered[..index]) {
+                            holes.push(Blocker {
+                                z: composite.z_index,
+                                rect: part,
+                            });
+                            self.pending.push(with_scissor(&composite, part));
+                        }
+                    }
+                }
+            }
+        }
+        self.deferred.sort_by_key(|op| op.z_index);
+        (now_ops, now)
     }
 
     /// The pending composites below `z`, in z order.
@@ -313,13 +515,6 @@ struct BlurSpec {
     radius_x: f32,
     radius_y: f32,
     tile_mode: TileMode,
-}
-
-impl BlurSpec {
-    /// Texels to leave around a region so no blur tap reads a neighbour.
-    fn gap(self, scale: f32) -> u32 {
-        (self.radius_x.max(self.radius_y) * scale).ceil().max(1.0) as u32
-    }
 }
 
 /// A backdrop effect the renderer can resolve from a shared atlas: a blur,
@@ -656,6 +851,34 @@ fn hash_base<H: Hasher>(base: wgpu::LoadOp<wgpu::Color>, state: &mut H) {
     }
 }
 
+/// The pixels a composite may touch: its destination within its scissor.
+fn composite_coverage(composite: &ResolvedComposite) -> Option<DeviceRect> {
+    let (x, y, width, height) = composite.dest;
+    let dest = DeviceRect {
+        x,
+        y,
+        width,
+        height,
+    };
+    match composite.scissor {
+        Some((sx, sy, sw, sh)) => dest.intersect(DeviceRect {
+            x: sx,
+            y: sy,
+            width: sw,
+            height: sh,
+        }),
+        None => Some(dest),
+    }
+}
+
+/// The composite restricted to `scissor`, a part of its coverage.
+fn with_scissor(composite: &ResolvedComposite, scissor: DeviceRect) -> ResolvedComposite {
+    ResolvedComposite {
+        scissor: Some(scissor.tuple()),
+        ..composite.clone()
+    }
+}
+
 /// A backdrop's result blitted where the backdrop sits, through its rounded
 /// mask and scissored to what is visible.
 fn backdrop_blit(item: &PendingBackdrop<'_>, source: CompositeSource) -> ResolvedComposite {
@@ -885,8 +1108,10 @@ impl Atlas {
     }
 }
 
-/// Shelf packing of regions into as few atlases as the dimension limit
-/// allows; every region is surrounded by its gap.
+/// Shelf packing of regions edge to edge into as few atlases as the
+/// dimension limit allows. Nothing separates neighbours: every reader of a
+/// region holds its samples to the region's own texel centers, so a
+/// neighbour's texels are never read and an atlas needs no clearing.
 struct AtlasPacker {
     limit: u32,
     atlases: Vec<Atlas>,
@@ -900,54 +1125,52 @@ impl AtlasPacker {
         }
     }
 
-    fn place(&mut self, width: u32, height: u32, gap: u32) -> Option<AtlasPlacement> {
-        let padded_width = width.checked_add(gap.checked_mul(2)?)?;
-        let padded_height = height.checked_add(gap.checked_mul(2)?)?;
-        if padded_width > self.limit || padded_height > self.limit {
+    fn place(&mut self, width: u32, height: u32) -> Option<AtlasPlacement> {
+        if width > self.limit || height > self.limit {
             return None;
         }
         for (atlas_index, atlas) in self.atlases.iter_mut().enumerate() {
             for shelf in &mut atlas.shelves {
-                if shelf.height >= padded_height && shelf.x + padded_width <= self.limit {
+                if shelf.height >= height && shelf.x + width <= self.limit {
                     let placement = AtlasPlacement {
                         atlas: atlas_index,
-                        x: shelf.x + gap,
-                        y: shelf.y + gap,
+                        x: shelf.x,
+                        y: shelf.y,
                     };
-                    shelf.x += padded_width;
+                    shelf.x += width;
                     atlas.width = atlas.width.max(shelf.x);
                     return Some(placement);
                 }
             }
-            if atlas.height + padded_height <= self.limit {
+            if atlas.height + height <= self.limit {
                 let placement = AtlasPlacement {
                     atlas: atlas_index,
-                    x: gap,
-                    y: atlas.height + gap,
+                    x: 0,
+                    y: atlas.height,
                 };
                 atlas.shelves.push(Shelf {
                     y: atlas.height,
-                    height: padded_height,
-                    x: padded_width,
+                    height,
+                    x: width,
                 });
-                atlas.height += padded_height;
-                atlas.width = atlas.width.max(padded_width);
+                atlas.height += height;
+                atlas.width = atlas.width.max(width);
                 return Some(placement);
             }
         }
         self.atlases.push(Atlas {
-            width: padded_width,
-            height: padded_height,
+            width,
+            height,
             shelves: vec![Shelf {
                 y: 0,
-                height: padded_height,
-                x: padded_width,
+                height,
+                x: width,
             }],
         });
         Some(AtlasPlacement {
             atlas: self.atlases.len() - 1,
-            x: gap,
-            y: gap,
+            x: 0,
+            y: 0,
         })
     }
 }
@@ -1092,6 +1315,8 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             beneath,
             drawn: Vec::new(),
             pending: Vec::new(),
+            deferred: Vec::new(),
+            blockers: Vec::new(),
             excluded: Vec::new(),
             stages: ResolveStages::default(),
             drawn_z: 0,
@@ -1142,15 +1367,18 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
     }
 
     /// Draws the next stratum: the ops from the last flush up to `z` outside
-    /// the excluded ranges, and every pending composite below `z`.
+    /// the excluded ranges, the deferred ops below `z`, and every pending
+    /// composite below `z`, except what still waits behind a blocker.
     fn flush_page(&mut self, pass: &mut LayerPass<'_>, z: usize) -> Result<(), String> {
-        let ops =
-            filtered_ops_in_range(&pass.layer.scene.draw_ops, pass.drawn_z, z, &pass.excluded);
+        let ops = pass.ops_below(z);
+        let deferred_end = pass.deferred.partition_point(|op| op.z_index < z);
+        pass.deferred.drain(..deferred_end);
         pass.pending.sort_by_key(|composite| composite.z_index);
         let end = pass
             .pending
             .partition_point(|composite| composite.z_index < z);
         let composites: Vec<ResolvedComposite> = pass.pending.drain(..end).collect();
+        let (ops, composites) = pass.release(ops, composites);
         let load_op = pass.load_op.take();
         if ops.is_empty() && composites.is_empty() && load_op.is_none() {
             pass.drawn_z = pass.drawn_z.max(z);
@@ -1177,11 +1405,11 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         Ok(())
     }
 
-    /// Resolves the queued backdrop effects stage by stage. The page is drawn
-    /// up to the stage's lowest backdrop, then every capture of the stage
-    /// reads it: the batched captures packed into atlases and rendered in one
-    /// pass, blurred in one pass pair, and handed on as composites reading
-    /// their region; the rest of the stage captures one effect at a time.
+    /// Resolves the queued backdrop effects stage by stage: every capture of
+    /// a stage reads the page as drawn up to its own glass, the batched
+    /// captures packed into atlases, blurred in one pass pair per atlas, and
+    /// handed on as composites reading their region; the rest of the stage
+    /// captures one effect at a time.
     fn run_stages(&mut self, pass: &mut LayerPass<'_>) -> Result<(), String> {
         let mut pending = self.take_uncached(pass);
         if pending.is_empty() {
@@ -1192,13 +1420,13 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         for stage in 0..stage_count {
             let items: Vec<&PendingBackdrop<'_>> =
                 pending.iter().filter(|item| item.stage == stage).collect();
-            let Some(stage_z) = items.iter().map(|item| item.z).min() else {
+            if items.is_empty() {
                 continue;
-            };
-            self.flush_page(pass, stage_z)?;
-            let mut outputs = self.run_stage(pass, &items, stage_z)?;
+            }
+            let mut outputs = self.run_stage(pass, &items)?;
             self.admit_backdrops(&items, &mut outputs, pass.scale)?;
             pass.pending.extend(outputs);
+            pass.blockers.clear();
         }
         Ok(())
     }
@@ -1381,12 +1609,32 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         &mut self,
         pass: &mut LayerPass<'_>,
         items: &[&PendingBackdrop<'_>],
-        stage_z: usize,
     ) -> Result<Vec<ResolvedComposite>, String> {
         let scale = pass.scale;
+        let (packer, placements) = self.pack_stage(items);
+        let atlases: Vec<Rc<OffscreenTarget>> = packer
+            .atlases
+            .iter()
+            .map(|atlas| {
+                let (width, height) = atlas.padded_size();
+                self.acquire_transient("Backdrop Capture Atlas", width, height)
+            })
+            .collect();
+        let mut singles: Vec<Option<Rc<OffscreenTarget>>> = vec![None; items.len()];
+        pass.blockers.extend(items.iter().map(|item| Blocker {
+            z: item.z,
+            rect: item.capture_rect,
+        }));
+        let stage_end = items.iter().map(|item| item.z).max().unwrap_or(0);
+        self.flush_page(pass, stage_end)?;
+        for (index, item) in items.iter().enumerate() {
+            if placements[index].is_none() {
+                singles[index] =
+                    Some(self.capture(pass, item.z, item.capture_rect, "Backdrop Capture")?);
+            }
+        }
         let mut outputs = Vec::with_capacity(items.len());
-        let (packer, placements) = self.pack_stage(items, scale);
-        for (atlas_index, atlas) in packer.atlases.iter().enumerate() {
+        for (atlas_index, texture) in atlases.iter().enumerate() {
             let members: Vec<(usize, AtlasPlacement)> = placements
                 .iter()
                 .enumerate()
@@ -1396,8 +1644,6 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                         .map(|placement| (index, placement))
                 })
                 .collect();
-            let (width, height) = atlas.padded_size();
-            let texture = self.acquire_transient("Backdrop Capture Atlas", width, height);
             let regions: Vec<CaptureRegion> = members
                 .iter()
                 .map(|(index, placement)| CaptureRegion {
@@ -1406,36 +1652,14 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                     origin: [placement.x as f32, placement.y as f32],
                 })
                 .collect();
-            let target = PassTarget {
-                view: &texture.view,
-                width,
-                height,
-                offset: [0.0, 0.0],
-            };
-            self.capture_regions(
-                pass,
-                &regions,
-                target,
-                stage_z,
-                "Backdrop Capture Atlas Pass",
-            )?;
-
-            let blurred = self.blur_regions(&texture, items, &members, scale)?;
-            outputs.extend(stage_composites(
-                &texture,
-                blurred.as_ref(),
-                items,
-                &members,
-            ));
+            self.capture_regions(pass, &regions, texture, "Backdrop Capture Atlas Pass")?;
+            let blurred = self.blur_regions(texture, items, &members, scale)?;
+            outputs.extend(stage_composites(texture, blurred.as_ref(), items, &members));
         }
-
         for (index, item) in items.iter().enumerate() {
-            if placements[index].is_some() {
-                continue;
+            if let Some(capture) = singles[index].take() {
+                outputs.push(self.resolve_captured_backdrop(item, capture)?);
             }
-            let capture =
-                self.capture(pass, item.z, item.capture_rect, stage_z, "Backdrop Capture")?;
-            outputs.push(self.resolve_captured_backdrop(item, capture)?);
         }
         Ok(outputs)
     }
@@ -1461,7 +1685,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             .intersect(pass.target_rect())
             .unwrap_or(visible)
             .snap_out();
-        let capture = self.capture(pass, z, capture_rect, z, "Child Backdrop Capture")?;
+        let capture = self.capture(pass, z, capture_rect, "Child Backdrop Capture")?;
         let layer_pixel_rect = [
             dest.x - capture_rect.x,
             dest.y - capture_rect.y,
@@ -1515,7 +1739,6 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
     fn pack_stage(
         &self,
         items: &[&PendingBackdrop<'_>],
-        scale: f32,
     ) -> (AtlasPacker, Vec<Option<AtlasPlacement>>) {
         let limit = self.renderer.max_texture_dim().min(MAX_ATLAS_DIM);
         let mut packer = AtlasPacker::new(limit);
@@ -1524,12 +1747,11 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let mut placements: Vec<Option<AtlasPlacement>> = vec![None; items.len()];
         for index in order {
             let item = items[index];
-            let Some(batched) = item.batched else {
+            if item.batched.is_none() {
                 continue;
-            };
+            }
             let (width, height) = item.capture_rect.pixel_size();
-            let gap = batched.blur().map_or(1, |blur| blur.gap(scale));
-            placements[index] = packer.place(width, height, gap);
+            placements[index] = packer.place(width, height);
         }
         (packer, placements)
     }
@@ -1569,8 +1791,8 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             let (scaled_width, scaled_height) =
                 blur_scratch_size(radius_x, radius_y, width, height);
             let (Some(scratch), Some(result)) = (
-                scratch_packer.place(scaled_width, scaled_height, 1),
-                result_packer.place(width, height, 1),
+                scratch_packer.place(scaled_width, scaled_height),
+                result_packer.place(width, height),
             ) else {
                 return Err("a blurred region outgrew the atlas that held it".into());
             };
@@ -1655,17 +1877,10 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         pass: &mut LayerPass<'_>,
         z: usize,
         rect: DeviceRect,
-        stage_z: usize,
         label: &'static str,
     ) -> Result<Rc<OffscreenTarget>, String> {
         let (width, height) = rect.pixel_size();
         let texture = self.acquire_transient(label, width, height);
-        let target = PassTarget {
-            view: &texture.view,
-            width,
-            height,
-            offset: [0.0, 0.0],
-        };
         let region = CaptureRegion {
             z,
             rect,
@@ -1674,31 +1889,37 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         self.capture_regions(
             pass,
             std::slice::from_ref(&region),
-            target,
-            stage_z,
+            &texture,
             "Backdrop Capture Pass",
         )?;
         Ok(texture)
     }
 
-    /// Draws what every region's backdrop reads into its place in the target
-    /// in one pass: the parent's page under the layer, the layer's own page
-    /// as drawn up to the stage, and the ops and pending composites between
-    /// the stage and the region's z that reach into it, scissored to the
-    /// region's texels.
+    /// Reads what every region's backdrop sees into its place in `texture`.
+    /// A region of the layer's own page is copied texel for texel; what is
+    /// below the region's z and not on the page (the ops since the last
+    /// flush, the deferred ops and the pending composites) that reaches into
+    /// it is then drawn over the copies in one pass loading them, scissored
+    /// to each region's texels and recorded only when some region has such a
+    /// fix-up. Under a parent's page, or when a region cannot be copied, the
+    /// pass starts from transparent and draws the parent's page, the layer's
+    /// own page and the fix-ups for every region.
     fn capture_regions(
         &mut self,
         pass: &mut LayerPass<'_>,
         regions: &[CaptureRegion],
-        target: PassTarget<'_>,
-        stage_z: usize,
+        texture: &Rc<OffscreenTarget>,
         label: &'static str,
     ) -> Result<(), String> {
         let scale = pass.scale;
+        let copied = self.copy_regions(pass, regions, texture);
         let beneath = pass.beneath;
-        let composites: Vec<Vec<ResolvedComposite>> = regions
+        let bases: Vec<Vec<ResolvedComposite>> = regions
             .iter()
             .map(|region| {
+                if copied {
+                    return Vec::new();
+                }
                 beneath
                     .page
                     .as_ref()
@@ -1710,18 +1931,17 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             .collect();
         let fixups: Vec<Vec<DrawOp>> = regions
             .iter()
-            .map(|region| {
-                filtered_ops_in_range(
-                    &pass.layer.scene.draw_ops,
-                    stage_z,
-                    region.z,
-                    &pass.excluded,
-                )
-            })
+            .map(|region| pass.ops_below(region.z))
             .collect();
         pass.pending.sort_by_key(|composite| composite.z_index);
+        let target = PassTarget {
+            view: &texture.view,
+            width: texture.width,
+            height: texture.height,
+            offset: [0.0, 0.0],
+        };
         let mut segments: Vec<PassSegment<'_>> = Vec::with_capacity(regions.len() * 2);
-        for ((region, composites), fixup) in regions.iter().zip(&composites).zip(&fixups) {
+        for ((region, base), fixup) in regions.iter().zip(&bases).zip(&fixups) {
             let offset = [
                 region.rect.x - region.origin[0],
                 region.rect.y - region.origin[1],
@@ -1733,33 +1953,69 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 region_width,
                 region_height,
             ));
-            segments.push(PassSegment {
-                scene: &self.empty_scene,
-                ops: &[],
-                composites,
-                offset,
-                scissor,
-            });
+            if !copied {
+                segments.push(PassSegment {
+                    scene: &self.empty_scene,
+                    ops: &[],
+                    composites: base,
+                    offset,
+                    scissor,
+                });
+            }
             let own_end = pass
                 .pending
                 .partition_point(|composite| composite.z_index < region.z);
-            segments.push(PassSegment {
+            let segment = PassSegment {
                 scene: &pass.layer.scene,
                 ops: fixup,
                 composites: &pass.pending[..own_end],
                 offset,
                 scissor,
-            });
+            };
+            if !copied || segment_draws_anything(target, &segment, scale) {
+                segments.push(segment);
+            }
         }
-        self.renderer.encode_pass(
-            self.recorder,
-            target,
-            &segments,
-            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-            scale,
-            label,
-        )?;
+        if copied && segments.is_empty() {
+            return Ok(());
+        }
+        let load_op = if copied {
+            wgpu::LoadOp::Load
+        } else {
+            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
+        };
+        self.renderer
+            .encode_pass(self.recorder, target, &segments, load_op, scale, label)?;
+        if copied {
+            self.renderer.frame_stats.record_capture_fixup_pass();
+        }
         Ok(())
+    }
+
+    /// Copies every region of the layer's own page into its place in
+    /// `texture` and reports whether it did: only when the layer reads no
+    /// parent page, the two formats are copy-compatible and every region is
+    /// a whole-texel rect inside the page.
+    fn copy_regions(
+        &mut self,
+        pass: &LayerPass<'_>,
+        regions: &[CaptureRegion],
+        texture: &OffscreenTarget,
+    ) -> bool {
+        if pass.beneath.page.is_some() || !copy_compatible(&pass.page.texture, texture) {
+            return false;
+        }
+        let copies: Option<Vec<TextureRegionCopy<'_>>> = regions
+            .iter()
+            .map(|region| pass.page.copy(region.rect, texture, region.origin))
+            .collect();
+        let Some(copies) = copies else {
+            return false;
+        };
+        for copy in copies {
+            self.recorder.copy_texture_region(copy);
+        }
+        true
     }
 
     fn resolve_effect_range(
@@ -2347,6 +2603,9 @@ fn filtered_ops_in_range(
     z_end: usize,
     excluded: &[(usize, usize)],
 ) -> Vec<DrawOp> {
+    if z_end <= z_start {
+        return Vec::new();
+    }
     let start = ops.partition_point(|op| op.z_index < z_start);
     let end = ops.partition_point(|op| op.z_index < z_end);
     ops[start..end]
@@ -2467,4 +2726,64 @@ pub(crate) fn scene_bounds(layer: &LayerScene) -> Option<Rect> {
         bounds = union_rect(bounds, clipped(child_bounds, child.clip));
     }
     bounds
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scene::DrawOpKind;
+
+    fn op(z_index: usize) -> DrawOp {
+        DrawOp {
+            z_index,
+            kind: DrawOpKind::Shape(0),
+        }
+    }
+
+    #[test]
+    fn an_inverted_op_range_is_empty_even_when_an_op_sits_at_its_end() {
+        let ops = [op(1), op(3), op(3), op(5)];
+        assert!(filtered_ops_in_range(&ops, 4, 3, &[]).is_empty());
+        assert!(filtered_ops_in_range(&ops, 3, 3, &[]).is_empty());
+        assert_eq!(
+            filtered_ops_in_range(&ops, 3, 4, &[])
+                .iter()
+                .map(|op| op.z_index)
+                .collect::<Vec<_>>(),
+            [3, 3]
+        );
+    }
+
+    #[test]
+    fn subtracting_holes_partitions_a_rect_exactly() {
+        let rect = DeviceRect {
+            x: 0.0,
+            y: 0.0,
+            width: 10.0,
+            height: 10.0,
+        };
+        let holes = [
+            DeviceRect {
+                x: 2.0,
+                y: 2.0,
+                width: 3.0,
+                height: 3.0,
+            },
+            DeviceRect {
+                x: 6.0,
+                y: 6.0,
+                width: 10.0,
+                height: 10.0,
+            },
+        ];
+        let parts = rect.subtract_all(&holes);
+        let area: f32 = parts.iter().map(|part| part.width * part.height).sum();
+        assert_eq!(area, 100.0 - 9.0 - 16.0);
+        for (index, a) in parts.iter().enumerate() {
+            assert!(holes.iter().all(|hole| a.intersect(*hole).is_none()));
+            for b in &parts[index + 1..] {
+                assert!(a.intersect(*b).is_none(), "parts overlap: {a:?} {b:?}");
+            }
+        }
+    }
 }

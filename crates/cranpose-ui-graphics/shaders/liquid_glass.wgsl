@@ -29,9 +29,10 @@ fn get_vec2(index: u32) -> vec2<f32> {
 
 // Renderer-reserved slots 236..240: the region of the input texture this
 // effect reads (x, y, width, height in texels), zero when the input is the
-// whole texture. Every sample goes through `region_uv`, so a region packed
-// beside other effects' inputs reads only its own texels and clamps at its
-// own edges exactly as a dedicated texture would.
+// whole texture. Every sample goes through `map_uv`, which holds the
+// coordinate to the region's texel centers, so a region packed edge to edge
+// beside other effects' inputs reads only its own texels and its edge reads
+// exactly as a dedicated texture's clamp-to-edge would.
 fn region_extent() -> vec4<f32> {
     let region = get_vec4(236u);
     let dims = vec2<f32>(textureDimensions(input_texture));
@@ -47,16 +48,18 @@ fn region_extent() -> vec4<f32> {
 struct RegionMap {
     offset: vec2<f32>,
     scale: vec2<f32>,
+    half_texel: vec2<f32>,
 }
 
 fn region_map() -> RegionMap {
     let region = region_extent();
     let dims = max(vec2<f32>(textureDimensions(input_texture)), vec2<f32>(1.0));
-    return RegionMap(region.xy / dims, region.zw / dims);
+    return RegionMap(region.xy / dims, region.zw / dims, 0.5 / max(region.zw, vec2<f32>(1.0)));
 }
 
 fn map_uv(map: RegionMap, local_uv: vec2<f32>) -> vec2<f32> {
-    return map.offset + clamp(local_uv, vec2<f32>(0.0), vec2<f32>(1.0)) * map.scale;
+    let held = clamp(local_uv, map.half_texel, vec2<f32>(1.0) - map.half_texel);
+    return map.offset + held * map.scale;
 }
 
 fn get_vec4(index: u32) -> vec4<f32> {

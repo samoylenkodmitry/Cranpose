@@ -16,8 +16,8 @@ use cranpose_ui::{
     text::{AnnotatedString, SpanStyle, TextStyle, TextUnit},
 };
 use cranpose_ui_graphics::{
-    Color, DrawPrimitive, GraphicsLayer, ImageBitmap, ImageSampling, RUNTIME_SHADER_PRELUDE_WGSL,
-    Rect, RenderEffect, RuntimeShader,
+    BlendMode, Brush, Color, DrawPrimitive, GraphicsLayer, ImageBitmap, ImageSampling,
+    RUNTIME_SHADER_PRELUDE_WGSL, Rect, RenderEffect, RuntimeShader, ShadowPrimitive,
 };
 use support::{distinct_colors, region_pixels, solid_rect};
 
@@ -262,7 +262,8 @@ fn a_later_glass_of_a_stage_shows_what_was_drawn_after_the_earlier_glass() {
 }
 
 /// The stripes of `staged_page` drawn before any glass, so every capture
-/// finds them on the page.
+/// finds them on the page, plus a vertical stripe through each glass so a
+/// capture shifted along either axis reads differently.
 fn glazed_page(with_glasses: bool) -> RenderGraph {
     let mut children = vec![
         solid_rect(
@@ -276,6 +277,14 @@ fn glazed_page(with_glasses: bool) -> RenderGraph {
         solid_rect(
             rect(0.0, GLASS.y + 30.0, FRAME_WIDTH as f32, 8.0),
             Color::from_rgb_u8(40, 220, 120),
+        ),
+        solid_rect(
+            rect(SECOND_GLASS.x + 12.0, 0.0, 6.0, FRAME_HEIGHT as f32),
+            Color::from_rgb_u8(230, 60, 90),
+        ),
+        solid_rect(
+            rect(GLASS.x + 40.0, 0.0, 6.0, FRAME_HEIGHT as f32),
+            Color::from_rgb_u8(90, 140, 240),
         ),
     ];
     if with_glasses {
@@ -321,5 +330,223 @@ fn a_glass_is_shaded_once_over_its_visible_pixels() {
     assert_eq!(
         shaded, visible,
         "two pass-through glasses shade exactly their visible pixels once"
+    );
+}
+
+fn passes_and_copies(renderer: &mut support::LockedRenderer, graph: RenderGraph) -> (u32, u32) {
+    capture(renderer, graph);
+    let stats = renderer.last_frame_stats().expect("frame stats");
+    (stats.pass_count, stats.copy_count)
+}
+
+#[test]
+fn a_capture_of_the_page_is_a_copy_that_records_no_pass() {
+    let Ok(mut renderer) = support::headless_renderer() else {
+        eprintln!("skipping (headless WGPU init failed)");
+        return;
+    };
+    let plain = capture(&mut renderer, glazed_page(false));
+    let (plain_passes, plain_copies) = passes_and_copies(&mut renderer, glazed_page(false));
+    let glazed = capture(&mut renderer, glazed_page(true));
+    let (glazed_passes, glazed_copies) = passes_and_copies(&mut renderer, glazed_page(true));
+    assert_eq!(plain_copies, 0, "a page without captures copies nothing");
+    assert_eq!(
+        glazed_copies, 2,
+        "each glass over the finished page reads it through one copy"
+    );
+    assert_eq!(
+        glazed_passes,
+        plain_passes + 1,
+        "captures with nothing to fix up add only the stratum that draws the glasses"
+    );
+    for glass in [SECOND_GLASS, GLASS] {
+        support::assert_same_bytes(
+            "a copied capture shows the page's texels",
+            glass.width as u32,
+            &region_pixels(&plain, glass),
+            &region_pixels(&glazed, glass),
+        );
+    }
+}
+
+#[test]
+fn a_fix_up_draws_over_the_copies_in_one_loaded_pass() {
+    let Ok(mut renderer) = support::headless_renderer() else {
+        eprintln!("skipping (headless WGPU init failed)");
+        return;
+    };
+    let (plain_passes, _) = passes_and_copies(&mut renderer, staged_page(false));
+    let (staged_passes, staged_copies) = passes_and_copies(&mut renderer, staged_page(true));
+    assert_eq!(staged_copies, 2, "both glasses of the stage copy the page");
+    assert_eq!(
+        staged_passes,
+        plain_passes + 2,
+        "the stripe under the later glass is drawn over the copies in one pass, \
+         and the glasses draw in one more stratum"
+    );
+}
+
+fn tint_wgsl() -> String {
+    format!(
+        "{}\n{}",
+        RUNTIME_SHADER_PRELUDE_WGSL,
+        r#"@fragment
+fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
+    let source = textureSample(input_texture, input_sampler, input.uv);
+    return vec4<f32>(source.rgb * 0.5 + vec3<f32>(0.5, 0.0, 0.0), 1.0);
+}
+"#
+    )
+}
+
+/// A glass at `bounds` that halves what it reads and adds red, so what is
+/// drawn over it and what it reads are told apart by the red channel.
+fn tint_glass_at(bounds: Rect) -> RenderNode {
+    RenderNode::Layer(Box::new(shared_test_support::layer_node(
+        rect(0.0, 0.0, bounds.width, bounds.height),
+        ProjectiveTransform::translation(bounds.x, bounds.y),
+        GraphicsLayer {
+            backdrop_effect: Some(RenderEffect::runtime_shader(RuntimeShader::new(
+                &tint_wgsl(),
+            ))),
+            ..GraphicsLayer::default()
+        },
+        Vec::new(),
+    )))
+}
+
+fn drop_shadow(shape: Rect, alpha: f32, blur_radius: f32) -> RenderNode {
+    primitive(DrawPrimitive::Shadow(ShadowPrimitive::Drop {
+        shape: Box::new(DrawPrimitive::Rect {
+            rect: shape,
+            brush: Brush::solid(Color(0.0, 0.0, 0.0, alpha)),
+            stroke: None,
+        }),
+        cutout: None,
+        blur_radius,
+        blend_mode: BlendMode::SrcOver,
+    }))
+}
+
+/// A blurred shadow drawn in z between two glasses of one stage, lying under
+/// the later glass and clear of the earlier one.
+fn shadowed_stage_page(with_glasses: bool) -> RenderGraph {
+    let mut children = vec![solid_rect(
+        rect(0.0, 0.0, FRAME_WIDTH as f32, FRAME_HEIGHT as f32),
+        Color::from_rgb_u8(200, 200, 210),
+    )];
+    if with_glasses {
+        children.push(passthrough_glass_at(SECOND_GLASS));
+    }
+    children.push(drop_shadow(
+        rect(GLASS.x + 20.0, GLASS.y + 10.0, 50.0, 30.0),
+        0.8,
+        5.0,
+    ));
+    if with_glasses {
+        children.push(passthrough_glass_at(GLASS));
+    }
+    support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children)
+}
+
+#[test]
+fn a_shadow_below_a_later_glass_of_the_stage_is_on_the_page_before_that_glass_copies() {
+    let Ok(mut renderer) = support::headless_renderer() else {
+        eprintln!("skipping (headless WGPU init failed)");
+        return;
+    };
+    let plain = capture(&mut renderer, shadowed_stage_page(false));
+    let glazed = capture(&mut renderer, shadowed_stage_page(true));
+    let stats = renderer.last_frame_stats().expect("frame stats");
+    assert_eq!(stats.copy_count, 2, "both glasses copy the page");
+    assert_eq!(
+        stats.capture_fixup_passes, 0,
+        "the shadow under the later glass is drawn into the page before that glass copies, \
+         never replayed into its capture"
+    );
+    let inside = rect(
+        GLASS.x + 2.0,
+        GLASS.y + 2.0,
+        GLASS.width - 4.0,
+        GLASS.height - 4.0,
+    );
+    assert!(
+        distinct_colors(&region_pixels(&plain, inside)) > 4,
+        "the shadow must fall inside the later glass"
+    );
+    support::assert_same_bytes(
+        "a pass-through glass over its shadow shows the page beneath it",
+        inside.width as u32,
+        &region_pixels(&plain, inside),
+        &region_pixels(&glazed, inside),
+    );
+}
+
+const CONTENT: Rect = Rect {
+    x: 20.0,
+    y: 72.0,
+    width: 30.0,
+    height: 20.0,
+};
+
+/// A tinting glass, content drawn over it, a shadow drawn over it, a stripe
+/// under a second glass of the same stage, then that glass: the stripe makes
+/// the page settle under the second glass, and the content and shadow over
+/// the first must wait for its composite.
+fn covered_glass_page() -> RenderGraph {
+    support::page_graph(
+        FRAME_WIDTH,
+        FRAME_HEIGHT,
+        vec![
+            solid_rect(
+                rect(0.0, 0.0, FRAME_WIDTH as f32, FRAME_HEIGHT as f32),
+                Color::from_rgb_u8(20, 40, 60),
+            ),
+            tint_glass_at(SECOND_GLASS),
+            solid_rect(CONTENT, Color::from_rgb_u8(30, 220, 30)),
+            drop_shadow(
+                rect(SECOND_GLASS.x - 10.0, SECOND_GLASS.y + 20.0, 40.0, 60.0),
+                1.0,
+                4.0,
+            ),
+            solid_rect(
+                rect(GLASS.x - 10.0, GLASS.y + 20.0, GLASS.width + 20.0, 10.0),
+                Color::from_rgb_u8(240, 200, 60),
+            ),
+            passthrough_glass_at(GLASS),
+        ],
+    )
+}
+
+#[test]
+fn content_drawn_over_a_glass_stays_over_it_when_a_later_glass_copies_the_page() {
+    let Ok(mut renderer) = support::headless_renderer() else {
+        eprintln!("skipping (headless WGPU init failed)");
+        return;
+    };
+    let frame = capture(&mut renderer, covered_glass_page());
+    let pixel = |x: f32, y: f32| {
+        let index = ((y as u32 * frame.width + x as u32) * 4) as usize;
+        [
+            frame.pixels[index],
+            frame.pixels[index + 1],
+            frame.pixels[index + 2],
+        ]
+    };
+    let content = pixel(CONTENT.x + 26.0, CONTENT.y + 4.0);
+    assert!(
+        content[1] > 200 && content[0] < 60,
+        "content drawn after the glass keeps its own color over the tint: {content:?}"
+    );
+    let shadowed = pixel(SECOND_GLASS.x + 8.0, SECOND_GLASS.y + 40.0);
+    assert!(
+        shadowed[0] < 40,
+        "a shadow drawn after the glass darkens the tinted result rather than being tinted: \
+         {shadowed:?}"
+    );
+    let tinted = pixel(SECOND_GLASS.x + 50.0, SECOND_GLASS.y + 8.0);
+    assert!(
+        tinted[0] > 120,
+        "the glass itself shows its red tint where nothing covers it: {tinted:?}"
     );
 }

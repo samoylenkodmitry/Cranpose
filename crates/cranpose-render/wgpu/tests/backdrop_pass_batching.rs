@@ -212,52 +212,57 @@ impl Harness {
 const WARMUP_FRAMES: usize = 4;
 const MEASURED_FRAMES: usize = 6;
 
-fn scrolled_pass_counts(glass_count: usize) -> Vec<u32> {
+fn scrolled_pass_counts(glass_count: usize) -> Vec<(u32, u32)> {
     scrolled_pass_counts_with_rows(glass_count, false)
 }
 
-fn scrolled_pass_counts_with_rows(glass_count: usize, shadowed_rows: bool) -> Vec<u32> {
+/// The (pass, copy) counts of the measured scrolled frames.
+fn scrolled_pass_counts_with_rows(glass_count: usize, shadowed_rows: bool) -> Vec<(u32, u32)> {
     let (_lock, renderer) = support::headless_renderer_parts().expect("headless renderer");
     let mut harness = Harness::new(renderer, glass_count, false, shadowed_rows);
     for _ in 0..WARMUP_FRAMES {
         harness.frame(-12.0);
     }
     (0..MEASURED_FRAMES)
-        .map(|_| harness.frame(-12.0).pass_count)
+        .map(|_| {
+            let stats = harness.frame(-12.0);
+            (stats.pass_count, stats.copy_count)
+        })
         .collect()
 }
 
 /// The frame's page drawn in two strata: up to the stage's lowest glass, and
 /// the rest after the stage resolved.
 const FRAME_PASSES: u32 = 2;
-/// One resolve stage: the capture atlas pass and the blur pass pair shared by
-/// every blurred glass in the stage.
-const STAGE_PASSES: u32 = 3;
+/// One resolve stage: the blur pass pair shared by every blurred glass in
+/// the stage; its captures are copies of the page, not passes.
+const STAGE_PASSES: u32 = 2;
 
 #[test]
 fn every_fixed_glass_shares_one_capture_atlas_and_one_blur_pair() {
-    let single: Vec<u32> = scrolled_pass_counts(1);
-    let triple: Vec<u32> = scrolled_pass_counts(3);
+    let single = scrolled_pass_counts(1);
+    let triple = scrolled_pass_counts(3);
     let single_steady = *single.last().expect("single-glass passes");
     let triple_steady = *triple.last().expect("triple-glass passes");
     assert!(
-        single.iter().all(|passes| *passes == single_steady),
+        single.iter().all(|counts| *counts == single_steady),
         "single-glass scrolled frames must encode a steady pass count: {single:?}"
     );
     assert!(
-        triple.iter().all(|passes| *passes == triple_steady),
+        triple.iter().all(|counts| *counts == triple_steady),
         "triple-glass scrolled frames must encode a steady pass count: {triple:?}"
     );
     assert_eq!(
         single_steady,
-        FRAME_PASSES + STAGE_PASSES,
-        "one fixed glass costs the final pass plus one capture atlas and one blur pair: \
+        (FRAME_PASSES + STAGE_PASSES, 1),
+        "one fixed glass costs the final pass, one copy of the page and one blur pair: \
          single={single:?}"
     );
     assert_eq!(
-        triple_steady, single_steady,
-        "extra fixed glasses that read the same content join the same stage and add no \
-         pass; their shader tails draw in the frame's final pass: single={single:?} \
+        triple_steady,
+        (single_steady.0, 3),
+        "extra fixed glasses that read the same content join the same stage and add a copy \
+         each, no pass; their shader tails draw in the frame's final pass: single={single:?} \
          triple={triple:?}"
     );
 }
@@ -457,10 +462,10 @@ fn a_capture_never_splits_the_frames_final_pass() {
     let (_, overlapping_passes) = deferred_frame(true);
     let (_, disjoint_passes) = deferred_frame(false);
     assert_eq!(
-        disjoint_passes, overlapping_passes,
-        "every backdrop resolves from its own small capture, so whether a draw lies under a \
-         later glass changes what the capture reads, never how many passes the frame encodes: \
-         disjoint {disjoint_passes} vs overlapping {overlapping_passes}"
+        overlapping_passes, disjoint_passes,
+        "a draw under a later glass is on the page before that glass copies it, so whether a \
+         draw lies under a later glass changes what the copy holds, never how many passes the \
+         frame encodes: disjoint {disjoint_passes} vs overlapping {overlapping_passes}"
     );
 }
 

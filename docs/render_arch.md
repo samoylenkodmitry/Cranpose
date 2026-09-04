@@ -34,21 +34,44 @@ progressively. The backdrop effects of one layer scene queue into stages
 below it whose composite lies under its capture, so every capture in a
 stage reads only composites of earlier stages. A layer draws into its page
 (`LayerPass`: the frame's root image, or an isolated child's surface) in
-strata: before a stage captures, the page is drawn up to the stage's lowest
-glass (`flush_page`: the ops from the last flush to that z outside the
-excluded effect ranges, and every resolved composite below it), and after
-the last stage the rest of the layer follows in one more stratum. A stage
-runs as:
+strata. Before a stage captures, every glass of the stage is registered as a
+blocker by its capture rect and the page is drawn up to the stage's last
+glass (`flush_page`: the ops since the last flush outside the excluded
+effect ranges, the deferred ops, and every pending composite below it), so
+a card's drop shadow, which sits between the stage's first glass and the
+card, is on the page before the card copies and is never replayed into a
+capture. What a flush would draw is released in z order
+(`LayerPass::release`): anything that touches a blocker below it waits for
+that blocker, an op deferred whole (`LayerPass::deferred`), a composite
+drawn outside the blockers it overlaps with its covered parts kept pending
+under that scissor, and whatever waits blocks in turn, so nothing above it
+that overlaps it lands on the page first. The stage's glass blockers clear
+when its composites join the pending list; the next flush draws them and
+what waited behind them merged by z, and after the last stage the rest of
+the layer follows in one more stratum. `capture_culling.rs` pins the
+semantics: a shadow under a later glass of the stage records no fix-up
+pass and the glass shows the page exactly; content and a shadow drawn over
+a tinting glass keep their own colors over the tint. A stage runs as:
 
-1. one capture pass into an atlas that holds every capture of the stage,
-   shelf-packed with a gap of the effect's blur radius around each region so
-   no blur tap reads a neighbour. Each region is a blit of the page's own
-   pixels (and, in an isolated child reading its backdrop, of the parent's
-   page under it), plus the ops and pending composites between the stage's
-   lowest glass and the region's own z that reach into it, so a stripe
-   drawn between two glasses of one stage still shows through the later
-   one (`capture_culling.rs`) and nothing already on the page is drawn a
-   second time (`a_capture_adds_no_shape_fill_of_its_own`);
+1. the captures of the stage, shelf-packed edge to edge into an atlas.
+   Each region of the layer's own page is a `copy_texture_to_texture` of
+   the page's texels (`Page::copy`, whole texels of a copy-compatible
+   format), outside any pass. What is below a region's z and not on the
+   page (a deferred op, a pending composite part behind a blocker) that
+   reaches into it is drawn over the copies in one pass that loads the
+   atlas, scissored to each region, and that pass is recorded only when
+   some region has such a fix-up (`segment_draws_anything`,
+   `capture_fixup_passes` in the stats), so nothing already on the page is
+   drawn a second time (`a_capture_adds_no_shape_fill_of_its_own`) and a
+   stage over a finished page costs copies and no pass
+   (`a_capture_of_the_page_is_a_copy_that_records_no_pass`). An isolated
+   child reading its backdrop cannot copy: its regions draw the parent's
+   page under it, its own page and their fix-ups in a pass that starts
+   from transparent. Nothing separates the packed regions and the atlas is
+   never cleared: every reader of a region (the blur, a batched shader)
+   holds its sample coordinates to the region's texel centers, so a
+   neighbour's texels, or a pooled texture's stale ones, are never read
+   and a region's edge reads as a dedicated texture's clamp-to-edge would;
 2. one blur pass pair over every blurred region: the horizontal pass writes
    each region downscaled into a scratch texture, the vertical pass writes
    it at full size into a result texture, and both textures are packed to
@@ -65,11 +88,11 @@ runs as:
 
 Effects the renderer cannot batch (an app shader that reads the whole input
 texture, an offset, a chain the shader does not end) resolve one at a time
-inside their stage from their own capture of the page. A list of glass
-cards over a page therefore costs two strata and one capture pass; the
-glass buttons inside the cards read the cards' glass and form the next
-stage: one more stratum, one capture pass and one blur pair for all of
-them.
+inside their stage from their own capture of the page, copied the same way.
+A list of glass cards over a page therefore costs one stratum and one copy
+per card; the glass buttons inside the cards read the cards' glass and form
+the next stage: one more stratum, one copy per button and one blur pair for
+all of them.
 
 An isolated child that draws nothing itself and whose effect is a runtime
 shader (a shader-drawn planet) is a shader composite in its stratum over a
@@ -238,14 +261,15 @@ nothing shortens that but a cheaper material or less content under it.
 
 ## Stats
 
-`RenderStatsSnapshot` reports passes and pass pixels, transient and retained
-texture bytes, uploads, isolated layer renders and pixels, layer cache
-traffic, blur passes, composite passes, effect applies and the pixels the
-runtime shaders shade (`shader_pixels`, the number that decides a glass
-frame's cost on a tiling GPU).
+`RenderStatsSnapshot` reports passes and pass pixels, texture copies and
+their texels, transient and retained texture bytes, uploads, isolated layer
+renders and pixels, layer cache traffic, blur passes, composite passes,
+effect applies and the pixels the runtime shaders shade (`shader_pixels`,
+the number that decides a glass frame's cost on a tiling GPU).
 `backdrop_pass_batching.rs` pins the pass budget: a frame has one full-screen
-pass, a stage adds one capture pass and one blur pair however many glasses it
-holds, and a stage adds one stratum of the page, never a pass per glass.
+pass, a stage adds one copy per glass and one blur pair however many glasses
+it holds, a fix-up under a glass adds one pass over the copies, and a stage
+adds one stratum of the page, never a pass per glass.
 
 ## Validation bar
 
@@ -255,81 +279,58 @@ pass counts ships with a test that fails without it.
 
 ## Where a glass frame's time goes
 
-Measured on the Mate 20 X (Mali-G76) scrolling the showcase list with one
-APK and a `debug.cranpose.ablate` toggle that drops one thing per run
-(present p50, battery temperature steady): the frame presents in 43 ms.
-Dropping every composite from the scissored segments (captures and the
-read-tail resolve pass) presents in 20 ms; dropping the shapes from the
-captures, 35 ms; replacing the glass shader with a blit, 35 ms; dropping
-texts or images from the captures changes nothing. Every capture re-draws
-the page under its glass: the starfield gradient, the neighbours' shadow
-bands and earlier stages' resolved glass, and that re-drawing is half the
-frame. The page under the cards animates every frame, so the backdrop
-result cache never serves this scene. The structural fix is a progressive
-page: the final pass split into strata at the stage boundaries, each
-stratum's pixels materialized once and read by the next stage's captures as
-one blit, so nothing beneath a glass is drawn twice.
+Measured on the Mate 20 X (Mali-G76) scrolling the showcase list, one APK
+per series and a `debug.cranpose.ablate` toggle that drops one thing per
+run (present p50 ms, battery temperature steady). With captures as copies
+but the page still flushed once per stage at the stage's lowest glass
+(2026-09-04 morning, 39.5): the four page loads cleared instead 38.8, so
+the strata's tile traffic is free; no copies 37.2; no fix-up passes 31.8, a
+fix-up pass recorded with no draws 31.8, fix-ups without composites 32.1,
+without ops 39.4, so the whole 7.5 ms was the composites replayed into the
+captures: each card's own drop shadow and the previous card's, and for each
+icon its card's glass shaded again; no blur 28.7, blur horizontal only
+31.4, blur with one tap 33.2, so the vertical blur passes' taps are ~6 ms;
+one flush for the whole layer (captures re-draw instead) 46.7, so strata
+beat re-drawing by 7 ms on this GPU. Drawing the same fix-ups into the page
+instead of the atlas gained only 1.5 ms: the draws were the cost, not the
+pass. Flushing the page before every glass removed every fix-up but added
+15 full-page passes (44 passes, pass pixels 17 to 48 MP) and gained
+nothing; one flush per stage with the stage's glasses as blockers (the
+design above) presents in 32.7-33.1 ms with 25 passes, against 37.9 for
+the stage-lowest flush measured in the same session, and main's old
+renderer at 27-28. What remains: the liquid shader ~14 ms over 3.1 MP, the
+blur pass pairs ~8 ms (three vertical passes of 0.3-0.5 MP at 13-25 taps
+each, over RGBA16F), copies ~2 ms, the page's own fill.
 
 ## Plan: correct and fast (2026-09-04)
 
-Read fresh from the code, not from memory. What the frame is today on the
-Mate 20 X scrolling the showcase list (branch df893512): update 5 ms and
-render 9 ms on the producer thread, then 38 ms in `frame.present()`, which
-on this device is the wait for the GPU; the producer holds one frame of
-credit, so CPU and GPU serialise and the frame is 48 ms (21 fps). main's
-old renderer on the same device: 5 + 12 + 28 ms, 24 fps, the same glass
-area shaded (3.2 MP of backdrop misses against our 3.1 MP `shader_pixels`),
-33 passes and 29 effect applies against our 9 passes. Per-pass overhead is
-not what this GPU pays for; fragment work and bandwidth are. Attribution on
-our build by one-APK toggles: the liquid shader is ~14 ms; everything else
-~24 ms, of which the old renderer's "no captures, no shader" variant was
-13 ms, so the strata and atlas machinery cost ~11 ms that main's copy-based
-captures did not.
+Read fresh from the code, not from memory, then measured by ablation (see
+above). The architecture stays resolve-then-compose with strata; every
+step ships with the contract that proves it and is measured on the device
+against main's 28 ms present. Done: captures are copies (pixel-exact,
+`capture_culling.rs`), one flush per stage with glass blockers and
+deferral, gap-free atlases with texel-center reads.
 
-The architecture stays resolve-then-compose with strata. Nothing below
-changes a pixel; every step ships with the contract that proves it.
-
-1. **Captures are copies.** A capture region of the layer's own page is a
-   `copy_texture_to_texture` from the page into the atlas (same format, no
-   clear, no fragment work, no pass); only a region with fix-up ops or
-   pending composites, or a child reading its parent's page, draws them in
-   a pass that loads the copied atlas. `FrameCommandRecorder` gains a copy
-   command. Contract: the existing atlas parity tests byte for byte, and a
-   budget test that a stage whose regions need no fix-up records no
-   capture pass.
-2. **The page is drawn in the surface's own format.** On a device whose
-   presentable surface is 8-bit, the composition format follows it, so the
-   root is the direct surface, no output conversion pass runs and every
-   stratum, atlas and blur moves half the bytes. Contract: the 16-bit path
-   stays for blur chains that need it (measured, not assumed: the 8-bit
-   toggle gave 1 ms here, so this is a cleanup with a small win, taken
-   only if the parity tests hold).
-3. **Two frames in flight.** The Android producer's depth-one credit
+1. **The blur's vertical passes.** ~8 ms for ~1 MP of output: 13-25 taps
+   per pixel with a per-tap `exp`, sampled from RGBA16F. The kernel is the
+   picture, so the weights stay; what can change without a pixel changing
+   is where they are computed (once, on the CPU, into the uniform) and the
+   sampling structure (paired bilinear taps halve the fetches at the same
+   weights within float rounding). Contract: `backdrop_atlas_parity.rs`
+   blur parity within one 8-bit step, proven red by breaking a weight.
+2. **Two frames in flight.** The Android producer's depth-one credit
    serialises CPU and GPU; a depth of two lets the update and encode of
-   frame N+1 overlap the GPU of frame N, which on this scene is worth the
-   whole CPU stage, ~10 ms of the 48. It costs one frame of input latency,
-   which is the platform's own triple-buffering trade; this is a pacing
-   policy the user decides, and it is measured on the device, not assumed.
-4. **The liquid shader shades the same pixels cheaper.** Per pixel it
-   evaluates the scene SDF three times for a finite-difference normal; for
-   the plain rounded shape every showcase glass is (no scene shapes, no
-   wobble, no strain, already folded away by specialization) the gradient
-   has a closed form, so a specialization flag computes it directly. The
-   sampling structure (one transmitted tap, three with dispersion, five
-   reflection taps, nine adaptive-frost taps, one plain) stays: each is a
-   material term. `f16` arithmetic is measured on the device behind the
-   same parity gate (one 8-bit step on the glass parity scenes) and taken
-   only if it holds. Contract: `backdrop_atlas_parity.rs` and
+   frame N+1 overlap the GPU of frame N, worth the CPU stage, ~10 ms of the
+   frame. It costs one frame of input latency, the platform's own
+   triple-buffering trade; a pacing policy the user decides.
+3. **The page in the surface's own format** on 8-bit devices: measured at
+   1 ms, cleanup-grade, taken only if the parity tests hold.
+4. **The liquid shader shades the same pixels cheaper.** An analytic
+   gradient for the plain rounded shape behind a specialization flag
+   instead of three SDF evaluations; `f16` behind the same one-step parity
+   gate. Contract: `backdrop_atlas_parity.rs`,
    `glass_specialization_parity.rs`.
-5. **The rest is the material.** After 1-4 the GPU frame is the glass
-   shader over its visible area plus a page that costs ~13 ms with the
-   shadows, blur crown, text and starfield. 60 fps is 16.7 ms; on this
-   device that needs the glass under ~8 ms, which is the material's
-   per-pixel cost (dispersion, refraction and highlight are ~4 ms of the
-   14 by ablation; the base optics and frost the rest) or its area. Any
-   step past 4 changes pixels, and is the user's call: a cheaper material
-   spec in the showcase, or a lower internal resolution for the glass.
-
-Order: 1 and 3 first (largest, pixel-neutral), then 2, then 4. Each is
-measured on the device against main's 28 ms present before it merges, and
-the gate for the branch is main's 24 fps, not the previous commit.
+5. **The rest is the material.** 60 fps is 16.7 ms; on this device that
+   needs the glass under ~8 ms, which is the material's per-pixel cost
+   (dispersion, refraction and highlight are ~4 ms of the 14 by ablation)
+   or its area. Any step past 4 changes pixels, and is the user's call.

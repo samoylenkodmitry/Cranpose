@@ -104,9 +104,11 @@ pub const RUNTIME_SHADER_PRELUDE_WGSL: &str = concat!(
 ///
 /// A shader that reads the source region, mask and alpha slots declares it
 /// with [`set_batched_source`](Self::set_batched_source); the renderer then
-/// packs its input beside other effects' inputs in one texture and draws it
-/// straight into the final pass with its clip applied. Every other shader is
-/// given the whole texture as its input and `uv` spans it.
+/// packs its input edge to edge beside other effects' inputs in one texture
+/// and draws it straight into the final pass with its clip applied. Such a
+/// shader holds every sample coordinate to its region's texel centers: the
+/// texels beside the region belong to other effects, or to no one. Every
+/// other shader is given the whole texture as its input and `uv` spans it.
 ///
 /// RuntimeShader pipelines operate on premultiplied-alpha textures. Custom
 /// shaders should preserve premultiplied output semantics.
@@ -387,8 +389,9 @@ impl RuntimeShader {
     }
 
     /// Declares that the shader reads the reserved source region, mask and
-    /// alpha slots, so the renderer may hand it a packed input region and
-    /// draw it straight into the final pass with its clip applied.
+    /// alpha slots and samples only within its region's texel centers, so the
+    /// renderer may hand it an input region packed edge to edge beside others
+    /// and draw it straight into the final pass with its clip applied.
     pub fn set_batched_source(&mut self, batched: bool) {
         self.batched_source = batched;
     }

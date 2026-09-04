@@ -11,8 +11,9 @@ use crate::{
     frame_graph::FrameCommandRecorder,
     offscreen::OffscreenTarget,
     render::{
-        GpuRenderer, ShapeBatch, ViewportUniformParams, image_draw_is_visible_in_rect,
-        shape_draw_is_visible_in_rect, supported_blend_mode, text_draw_is_visible_in_rect,
+        GpuRenderer, ShapeBatch, ViewportUniformParams, image_draw_bounds, shape_draw_bounds,
+        shape_draw_is_visible_in_rect, supported_blend_mode, text_draw_bounds,
+        text_draw_is_visible_in_rect,
     },
     scene::{CompositorScene, DrawOp, DrawOpKind, DrawShape, TextDraw},
 };
@@ -67,6 +68,7 @@ impl SourceContent {
 /// A resolved texture drawn into the pass at its z, described in the scene's
 /// device space so one description serves every target the scene is drawn
 /// into.
+#[derive(Clone)]
 pub(crate) struct ResolvedComposite {
     pub(crate) z_index: usize,
     pub(crate) source: Rc<OffscreenTarget>,
@@ -76,6 +78,7 @@ pub(crate) struct ResolvedComposite {
     pub(crate) kind: ResolvedCompositeKind,
 }
 
+#[derive(Clone)]
 pub(crate) enum ResolvedCompositeKind {
     Blit {
         alpha: f32,
@@ -394,6 +397,90 @@ impl GpuRenderer {
     }
 }
 
+/// The logical rect `op` may draw into: a shape, image or text by its
+/// snapped bounds within its clip, an unblurred shadow by the union of its
+/// parts. A blurred shadow draws nothing itself (it resolves to a
+/// composite).
+pub(crate) fn op_draw_bounds(
+    scene: &CompositorScene,
+    op: &DrawOp,
+    root_scale: f32,
+) -> Option<Rect> {
+    match op.kind {
+        DrawOpKind::Shape(index) => shape_draw_bounds(&scene.shapes[index], root_scale),
+        DrawOpKind::Image(index) => image_draw_bounds(&scene.images[index], root_scale),
+        DrawOpKind::Text(index) => text_draw_bounds(&scene.texts[index], root_scale),
+        DrawOpKind::Shadow(index) => {
+            let shadow = &scene.shadow_draws[index];
+            if shadow.blur_radius > 0.0 {
+                return None;
+            }
+            shadow
+                .shapes
+                .iter()
+                .filter_map(|(shape, _)| shape_draw_bounds(shape, root_scale))
+                .chain(
+                    shadow
+                        .texts
+                        .iter()
+                        .filter_map(|text| text_draw_bounds(text, root_scale)),
+                )
+                .reduce(|a, b| a.union(b))
+        }
+    }
+}
+
+/// Whether `op` draws any pixel inside `viewport_rect`.
+pub(crate) fn op_is_visible_in_rect(
+    scene: &CompositorScene,
+    op: &DrawOp,
+    viewport_rect: Rect,
+    root_scale: f32,
+) -> bool {
+    op_draw_bounds(scene, op, root_scale)
+        .is_some_and(|bounds| bounds.intersect(viewport_rect).is_some())
+}
+
+/// The logical rect a segment's draws are judged against: its scissor
+/// within the target, or the whole target, at the segment's offset.
+fn segment_viewport_rect(
+    target: PassTarget<'_>,
+    segment: &PassSegment<'_>,
+    root_scale: f32,
+) -> Rect {
+    match segment.scissor {
+        Some((x, y, width, height)) => PassTarget {
+            offset: [segment.offset[0] + x as f32, segment.offset[1] + y as f32],
+            width,
+            height,
+            ..target
+        },
+        None => PassTarget {
+            offset: segment.offset,
+            ..target
+        },
+    }
+    .logical_rect(root_scale)
+}
+
+/// Whether drawing `segment` into `target` touches any pixel: some op or
+/// composite of it reaches into its scissor, by the same test the pass
+/// applies when it draws.
+pub(crate) fn segment_draws_anything(
+    target: PassTarget<'_>,
+    segment: &PassSegment<'_>,
+    root_scale: f32,
+) -> bool {
+    let viewport_rect = segment_viewport_rect(target, segment, root_scale);
+    !merge_items(
+        segment,
+        viewport_rect,
+        root_scale,
+        (target.width, target.height),
+    )
+    .is_empty()
+}
+
 /// Re-bases an inverse (target pixel -> source pixel) matrix onto a target
 /// whose origin is `offset` pixels into the space the matrix was built for.
 fn translate_inverse(inverse: [[f32; 3]; 3], offset: [f32; 2]) -> [[f32; 3]; 3] {
@@ -425,33 +512,18 @@ fn merge_items<'a>(
     };
     for op in segment.ops {
         push_composites_below(&mut items, op.z_index);
+        if !op_is_visible_in_rect(segment.scene, op, viewport_rect, root_scale) {
+            continue;
+        }
         match op.kind {
-            DrawOpKind::Shape(index) => {
-                let shape = &segment.scene.shapes[index];
-                if shape_draw_is_visible_in_rect(shape, viewport_rect, root_scale) {
-                    items.push(Item::Shape {
-                        shape,
-                        brushes: &segment.scene.brushes,
-                    });
-                }
-            }
-            DrawOpKind::Image(index) => {
-                let image = &segment.scene.images[index];
-                if image_draw_is_visible_in_rect(image, viewport_rect, root_scale) {
-                    items.push(Item::Image(index));
-                }
-            }
-            DrawOpKind::Text(index) => {
-                let text = &segment.scene.texts[index];
-                if text_draw_is_visible_in_rect(text, viewport_rect, root_scale) {
-                    items.push(Item::Text(text));
-                }
-            }
+            DrawOpKind::Shape(index) => items.push(Item::Shape {
+                shape: &segment.scene.shapes[index],
+                brushes: &segment.scene.brushes,
+            }),
+            DrawOpKind::Image(index) => items.push(Item::Image(index)),
+            DrawOpKind::Text(index) => items.push(Item::Text(&segment.scene.texts[index])),
             DrawOpKind::Shadow(index) => {
                 let shadow = &segment.scene.shadow_draws[index];
-                if shadow.blur_radius > 0.0 {
-                    continue;
-                }
                 for (shape, _) in &shadow.shapes {
                     if shape_draw_is_visible_in_rect(shape, viewport_rect, root_scale) {
                         items.push(Item::Shape {
@@ -507,19 +579,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
             height: self.target.height,
             offset: segment.offset,
         };
-        let viewport_rect = match segment.scissor {
-            Some((x, y, width, height)) => PassTarget {
-                offset: [segment.offset[0] + x as f32, segment.offset[1] + y as f32],
-                width,
-                height,
-                ..self.target
-            },
-            None => PassTarget {
-                offset: segment.offset,
-                ..self.target
-            },
-        }
-        .logical_rect(self.root_scale);
+        let viewport_rect = segment_viewport_rect(self.target, segment, self.root_scale);
         let uniform_slot = renderer.claim_uniform_slot(viewport);
         let items = merge_items(segment, viewport_rect, self.root_scale, self.target_size());
         let run = SegmentRun {

@@ -95,6 +95,14 @@ impl OffscreenTarget {
         }
     }
 
+    pub(crate) fn texture(&self) -> &wgpu::Texture {
+        self.view.texture()
+    }
+
+    pub(crate) fn format(&self) -> wgpu::TextureFormat {
+        self.texture().format()
+    }
+
     fn matches_size(&self, width: u32, height: u32) -> bool {
         self.width == width && self.height == height
     }

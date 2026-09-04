@@ -636,26 +636,41 @@ fn snapped_quad_bounds(quad: [[f32; 2]; 4], anchor: Option<SnapAnchor>, root_sca
     quad_bounds(translate_quad(quad, snap_delta))
 }
 
+/// The logical rect a draw may touch: its snapped bounds within its clip,
+/// `None` when the clip leaves nothing.
+fn clipped_bounds(rect: Rect, clip: Option<Rect>) -> Option<Rect> {
+    match clip {
+        Some(clip) => rect.intersect(clip),
+        None => Some(rect),
+    }
+}
+
+pub(crate) fn text_draw_bounds(text: &TextDraw, root_scale: f32) -> Option<Rect> {
+    text_raster_geometry_for_draw(text, root_scale)
+        .and_then(|(logical_rect, _, clip, _, _)| clipped_bounds(logical_rect, clip))
+}
+
+pub(crate) fn image_draw_bounds(image: &ImageDraw, root_scale: f32) -> Option<Rect> {
+    clipped_bounds(
+        snapped_quad_bounds(image.quad, image.snap_anchor, root_scale),
+        image.clip,
+    )
+}
+
+pub(crate) fn shape_draw_bounds(shape: &DrawShape, root_scale: f32) -> Option<Rect> {
+    clipped_bounds(
+        snapped_quad_bounds(shape.quad, shape.snap_anchor, root_scale),
+        shape.clip,
+    )
+}
+
 pub(crate) fn text_draw_is_visible_in_rect(
     text: &TextDraw,
     viewport_rect: Rect,
     root_scale: f32,
 ) -> bool {
-    text_raster_geometry_for_draw(text, root_scale).is_some_and(|(logical_rect, _, clip, _, _)| {
-        rect_is_visible_in_rect(logical_rect, clip, viewport_rect)
-    })
-}
-
-pub(crate) fn image_draw_is_visible_in_rect(
-    image: &ImageDraw,
-    viewport_rect: Rect,
-    root_scale: f32,
-) -> bool {
-    rect_is_visible_in_rect(
-        snapped_quad_bounds(image.quad, image.snap_anchor, root_scale),
-        image.clip,
-        viewport_rect,
-    )
+    text_draw_bounds(text, root_scale)
+        .is_some_and(|bounds| bounds.intersect(viewport_rect).is_some())
 }
 
 pub(crate) fn shape_draw_is_visible_in_rect(
@@ -663,11 +678,8 @@ pub(crate) fn shape_draw_is_visible_in_rect(
     viewport_rect: Rect,
     root_scale: f32,
 ) -> bool {
-    rect_is_visible_in_rect(
-        snapped_quad_bounds(shape.quad, shape.snap_anchor, root_scale),
-        shape.clip,
-        viewport_rect,
-    )
+    shape_draw_bounds(shape, root_scale)
+        .is_some_and(|bounds| bounds.intersect(viewport_rect).is_some())
 }
 
 fn cached_text_glyph_quad(

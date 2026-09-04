@@ -25,11 +25,16 @@ fn source_region() -> vec4<f32> {
     return vec4<f32>(0.0, 0.0, blur.texture_size_and_tile_mode.xy);
 }
 
-// A region-local coordinate in [0, 1] mapped onto the texture.
+// A region-local coordinate in [0, 1] mapped onto the texture, held to the
+// region's texel centers so a bilinear tap never reads beside the region:
+// regions are packed edge to edge, and the edge reads as a dedicated
+// texture's clamp-to-edge would.
 fn region_texture_uv(local: vec2<f32>) -> vec2<f32> {
     let region = source_region();
     let texture_size = max(blur.texture_size_and_tile_mode.xy, vec2<f32>(1.0, 1.0));
-    return (region.xy + local * region.zw) / texture_size;
+    let half_texel = 0.5 / max(region.zw, vec2<f32>(1.0, 1.0));
+    let held = clamp(local, half_texel, vec2<f32>(1.0, 1.0) - half_texel);
+    return (region.xy + held * region.zw) / texture_size;
 }
 
 fn sample_with_tile_mode(uv: vec2<f32>) -> vec4<f32> {

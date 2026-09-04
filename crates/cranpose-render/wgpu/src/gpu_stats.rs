@@ -49,6 +49,9 @@ pub struct FrameStatsSnapshot {
     /// Sum of every render pass's first color target area: the tile traffic a
     /// tiling GPU pays whatever the passes draw.
     pub pass_pixels: u64,
+    /// Texture regions copied outside any pass, and their texels.
+    pub copy_count: u32,
+    pub copy_pixels: u64,
     pub offscreen_acquires: u32,
     pub offscreen_news: u32,
     pub offscreen_total_bytes: u64,
@@ -58,6 +61,8 @@ pub struct FrameStatsSnapshot {
     pub isolated_layer_renders: u32,
     pub isolated_layer_pixels: u64,
     pub layer_cache_hits: u32,
+    /// Passes that drew fix-ups over copied capture regions.
+    pub capture_fixup_passes: u32,
     pub layer_cache_misses: u32,
     pub layer_cache_hit_pixels: u64,
     pub layer_cache_miss_pixels: u64,
@@ -124,6 +129,8 @@ impl FrameStatsSnapshot {
         self.submit_count = self.submit_count.saturating_add(stats.submit_count);
         self.pass_count = self.pass_count.saturating_add(stats.pass_count);
         self.pass_pixels = self.pass_pixels.saturating_add(stats.pass_pixels);
+        self.copy_count = self.copy_count.saturating_add(stats.copy_count);
+        self.copy_pixels = self.copy_pixels.saturating_add(stats.copy_pixels);
         self.transient_texture_bytes = self
             .transient_texture_bytes
             .saturating_add(stats.transient_texture_bytes);
@@ -172,7 +179,7 @@ impl FrameStatsSnapshot {
         let layer_cache_mb = self.layer_cache_bytes as f64 / (1024.0 * 1024.0);
         let isolated_layer_mpx = self.isolated_layer_pixels as f64 / 1_000_000.0;
         eprintln!(
-            "[GPU f#{}] encoders={} submits={} passes={} pass_px={:.2}MP | offscreen: acq={} new={} {:.1}MB pool={}({:.1}MB) retained={:.1}MB | \
+            "[GPU f#{}] encoders={} submits={} passes={} pass_px={:.2}MP copies={} copy_px={:.2}MP | offscreen: acq={} new={} {:.1}MB pool={}({:.1}MB) retained={:.1}MB | \
              uploads={:.2}MB | \
              isolated_layers={} area={:.2}MP | \
              layer_cache: hit={} miss={} {:.1}% hit_px={:.2}MP miss_px={:.2}MP size={}({:.1}MB) hit_by_kind={} miss_px_by_kind={} | \
@@ -186,6 +193,8 @@ impl FrameStatsSnapshot {
             self.submit_count,
             self.pass_count,
             self.pass_pixels as f64 / 1_000_000.0,
+            self.copy_count,
+            self.copy_pixels as f64 / 1_000_000.0,
             self.offscreen_acquires,
             self.offscreen_news,
             mb,
@@ -252,6 +261,8 @@ pub(crate) struct FrameStats {
     pub command_submit_count: Cell<u32>,
     pub command_pass_count: Cell<u32>,
     pub command_pass_pixels: Cell<u64>,
+    pub command_copy_count: Cell<u32>,
+    pub command_copy_pixels: Cell<u64>,
     pub command_transient_texture_bytes: Cell<u64>,
     pub command_retained_texture_bytes: Cell<u64>,
     pub command_upload_bytes: Cell<u64>,
@@ -262,6 +273,7 @@ pub(crate) struct FrameStats {
     pub isolated_layer_renders: Cell<u32>,
     pub isolated_layer_pixels: Cell<u64>,
     pub layer_cache_hits: Cell<u32>,
+    pub capture_fixup_passes: Cell<u32>,
     pub layer_cache_misses: Cell<u32>,
     pub layer_cache_hit_pixels: Cell<u64>,
     pub layer_cache_miss_pixels: Cell<u64>,
@@ -304,6 +316,11 @@ pub(crate) struct FrameStats {
 }
 
 impl FrameStats {
+    pub fn record_capture_fixup_pass(&self) {
+        self.capture_fixup_passes
+            .set(self.capture_fixup_passes.get().saturating_add(1));
+    }
+
     pub fn record_command_stats(&self, stats: FrameCommandStats) {
         self.submits
             .set(self.submits.get().saturating_add(stats.submit_count));
@@ -326,6 +343,16 @@ impl FrameStats {
             self.command_pass_pixels
                 .get()
                 .saturating_add(stats.pass_pixels),
+        );
+        self.command_copy_count.set(
+            self.command_copy_count
+                .get()
+                .saturating_add(stats.copy_count),
+        );
+        self.command_copy_pixels.set(
+            self.command_copy_pixels
+                .get()
+                .saturating_add(stats.copy_pixels),
         );
         self.command_transient_texture_bytes.set(
             self.command_transient_texture_bytes
@@ -570,6 +597,8 @@ impl FrameStats {
             submit_count: self.command_submit_count.get(),
             pass_count: self.command_pass_count.get(),
             pass_pixels: self.command_pass_pixels.get(),
+            copy_count: self.command_copy_count.get(),
+            copy_pixels: self.command_copy_pixels.get(),
             offscreen_acquires: self.offscreen_acquires.get(),
             offscreen_news: self.offscreen_news.get(),
             offscreen_total_bytes: self.offscreen_total_bytes.get(),
@@ -586,6 +615,7 @@ impl FrameStats {
             isolated_layer_renders: self.isolated_layer_renders.get(),
             isolated_layer_pixels: self.isolated_layer_pixels.get(),
             layer_cache_hits: self.layer_cache_hits.get(),
+            capture_fixup_passes: self.capture_fixup_passes.get(),
             layer_cache_misses: self.layer_cache_misses.get(),
             layer_cache_hit_pixels: self.layer_cache_hit_pixels.get(),
             layer_cache_miss_pixels: self.layer_cache_miss_pixels.get(),
@@ -636,6 +666,8 @@ impl FrameStats {
         self.command_submit_count.set(0);
         self.command_pass_count.set(0);
         self.command_pass_pixels.set(0);
+        self.command_copy_count.set(0);
+        self.command_copy_pixels.set(0);
         self.command_transient_texture_bytes.set(0);
         self.command_retained_texture_bytes.set(0);
         self.command_upload_bytes.set(0);
@@ -646,6 +678,7 @@ impl FrameStats {
         self.isolated_layer_renders.set(0);
         self.isolated_layer_pixels.set(0);
         self.layer_cache_hits.set(0);
+        self.capture_fixup_passes.set(0);
         self.layer_cache_misses.set(0);
         self.layer_cache_hit_pixels.set(0);
         self.layer_cache_miss_pixels.set(0);
@@ -810,6 +843,8 @@ mod tests {
             submit_count: 1,
             pass_count: 2,
             pass_pixels: 0,
+            copy_count: 0,
+            copy_pixels: 0,
             transient_texture_bytes: 256,
             retained_texture_bytes: 128,
             upload_bytes: 64,
@@ -907,6 +942,8 @@ mod tests {
             submit_count: 2,
             pass_count: 5,
             pass_pixels: 0,
+            copy_count: 0,
+            copy_pixels: 0,
             transient_texture_bytes: 1024,
             retained_texture_bytes: 2048,
             upload_bytes: 512,
@@ -941,6 +978,8 @@ mod tests {
             submit_count: 1,
             pass_count: 2,
             pass_pixels: 0,
+            copy_count: 0,
+            copy_pixels: 0,
             transient_texture_bytes: 128,
             retained_texture_bytes: 512,
             upload_bytes: 64,
@@ -952,6 +991,8 @@ mod tests {
                 submit_count: 1,
                 pass_count: 1,
                 pass_pixels: 0,
+                copy_count: 0,
+                copy_pixels: 0,
                 transient_texture_bytes: 0,
                 retained_texture_bytes: 0,
                 upload_bytes: 0,

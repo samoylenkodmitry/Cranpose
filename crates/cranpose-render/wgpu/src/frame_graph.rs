@@ -26,6 +26,66 @@ pub(crate) struct FrameCommandStats {
     pub(crate) transient_texture_bytes: u64,
     pub(crate) retained_texture_bytes: u64,
     pub(crate) upload_bytes: u64,
+    pub(crate) copy_count: u32,
+    pub(crate) copy_pixels: u64,
+}
+
+/// A region of one texture copied texel for texel into another of a
+/// copy-compatible format, outside any pass.
+#[derive(Clone, Copy)]
+pub(crate) struct TextureRegionCopy<'a> {
+    pub(crate) source: &'a OffscreenTarget,
+    pub(crate) source_origin: [u32; 2],
+    pub(crate) dest: &'a OffscreenTarget,
+    pub(crate) dest_origin: [u32; 2],
+    pub(crate) size: [u32; 2],
+}
+
+/// Whether a region can be copied between the two textures: their formats
+/// are equal up to the sRGB suffix.
+pub(crate) fn copy_compatible(a: &OffscreenTarget, b: &OffscreenTarget) -> bool {
+    a.format().remove_srgb_suffix() == b.format().remove_srgb_suffix()
+}
+
+#[derive(Clone, Copy, Default)]
+pub(crate) struct TextureCopyStats {
+    count: u32,
+    pixels: u64,
+}
+
+impl TextureCopyStats {
+    fn note(&mut self, size: [u32; 2]) {
+        self.count = self.count.saturating_add(1);
+        self.pixels = self
+            .pixels
+            .saturating_add(u64::from(size[0]) * u64::from(size[1]));
+    }
+}
+
+fn texel_copy_info(target: &OffscreenTarget, origin: [u32; 2]) -> wgpu::TexelCopyTextureInfo<'_> {
+    wgpu::TexelCopyTextureInfo {
+        texture: target.texture(),
+        mip_level: 0,
+        origin: wgpu::Origin3d {
+            x: origin[0],
+            y: origin[1],
+            z: 0,
+        },
+        aspect: wgpu::TextureAspect::All,
+    }
+}
+
+fn encode_texture_region_copy(encoder: &mut wgpu::CommandEncoder, copy: TextureRegionCopy<'_>) {
+    encoder.copy_texture_to_texture(
+        texel_copy_info(copy.source, copy.source_origin),
+        texel_copy_info(copy.dest, copy.dest_origin),
+        wgpu::Extent3d {
+            width: copy.size[0],
+            height: copy.size[1],
+            depth_or_array_layers: 1,
+        },
+    );
+    note_texture_copy(copy.size);
 }
 
 #[derive(Debug)]
@@ -340,6 +400,7 @@ pub(crate) struct PassContext<'pass> {
     transient_textures: &'pass mut TransientTexturePool,
     pending_transient_releases: &'pass mut Vec<(FrameTextureDescriptor, OffscreenTarget)>,
     transient_texture_bytes: &'pass mut u64,
+    copies: &'pass mut TextureCopyStats,
     pass_count: u32,
     pass_timer: Option<&'pass PassTimer>,
 }
@@ -471,6 +532,7 @@ impl WgpuFrameGraphExecutor {
             uploads: &mut self.upload_allocators,
             transient_releases: PendingTransientReleases::new(&mut self.transient_textures),
             transient_texture_bytes: 0,
+            copies: TextureCopyStats::default(),
             pass_count: 0,
             pass_timer: self.pass_timer.as_ref(),
         }
@@ -487,6 +549,7 @@ impl WgpuFrameGraphExecutor {
         }
         let mut pass_count = 0u32;
         let mut transient_texture_bytes = 0u64;
+        let mut copies = TextureCopyStats::default();
         let mut pending_transient_releases = Vec::new();
         let mut encoder = Self::create_command_encoder(device, graph.label);
 
@@ -502,6 +565,7 @@ impl WgpuFrameGraphExecutor {
                 &mut encoder,
                 &mut pending_transient_releases,
                 &mut transient_texture_bytes,
+                &mut copies,
                 0,
                 pass,
             ) {
@@ -529,6 +593,7 @@ impl WgpuFrameGraphExecutor {
                     &mut encoder,
                     &mut pending_transient_releases,
                     &mut transient_texture_bytes,
+                    &mut copies,
                     pass_index,
                     pass,
                 ) {
@@ -564,6 +629,8 @@ impl WgpuFrameGraphExecutor {
                 pass_pixels: take_render_pass_pixels(),
                 transient_texture_bytes,
                 retained_texture_bytes,
+                copy_count: copies.count,
+                copy_pixels: copies.pixels,
                 ..FrameCommandStats::default()
             },
         })
@@ -577,6 +644,7 @@ impl WgpuFrameGraphExecutor {
         encoder: &mut wgpu::CommandEncoder,
         pending_transient_releases: &mut Vec<(FrameTextureDescriptor, OffscreenTarget)>,
         transient_texture_bytes: &mut u64,
+        copies: &mut TextureCopyStats,
         pass_index: usize,
         pass: PassNode<'_>,
     ) -> Result<u32, FrameGraphError> {
@@ -590,6 +658,7 @@ impl WgpuFrameGraphExecutor {
             transient_textures: &mut self.transient_textures,
             pending_transient_releases,
             transient_texture_bytes,
+            copies,
             pass_count: 0,
             pass_timer: self.pass_timer.as_ref(),
         };
@@ -711,6 +780,21 @@ pub(crate) fn note_render_pass(descriptor: &wgpu::RenderPassDescriptor<'_>) {
     });
 }
 
+/// Accounts one texture copy in the stage telemetry's ordered pass list.
+fn note_texture_copy(size: [u32; 2]) {
+    if frame_graph_pass_telemetry_threshold_ms().is_none() {
+        return;
+    }
+    let label = format!("Copy {}x{}", size[0], size[1]);
+    RENDER_PASS_LABELS.with(|labels| {
+        let mut labels = labels.borrow_mut();
+        match labels.last_mut() {
+            Some((name, count)) if *name == label => *count += 1,
+            _ => labels.push((label, 1)),
+        }
+    });
+}
+
 fn take_render_pass_pixels() -> u64 {
     RENDER_PASS_PIXELS.with(|total| total.replace(0))
 }
@@ -796,6 +880,8 @@ pub(crate) trait FrameCommandRecorder {
         descriptor: FrameTextureDescriptor,
         target: OffscreenTarget,
     );
+    /// Copies a region between two textures of copy-compatible formats.
+    fn copy_texture_region(&mut self, copy: TextureRegionCopy<'_>);
     fn record_passes(&mut self, count: u32);
 
     fn record_pass(&mut self) {
@@ -867,6 +953,11 @@ impl FrameCommandRecorder for PassContext<'_> {
         self.pending_transient_releases.push((descriptor, target));
     }
 
+    fn copy_texture_region(&mut self, copy: TextureRegionCopy<'_>) {
+        encode_texture_region_copy(self.encoder, copy);
+        self.copies.note(copy.size);
+    }
+
     fn record_passes(&mut self, count: u32) {
         self.pass_count = self.pass_count.saturating_add(count);
     }
@@ -883,6 +974,7 @@ pub(crate) struct WgpuFrameEncoder<'a> {
     uploads: &'a mut FrameUploadAllocators,
     transient_releases: PendingTransientReleases<'a>,
     transient_texture_bytes: u64,
+    copies: TextureCopyStats,
     pass_count: u32,
     pass_timer: Option<&'a PassTimer>,
 }
@@ -900,6 +992,7 @@ impl WgpuFrameEncoder<'_> {
     pub(crate) fn finish(self) -> FrameGraphExecution {
         let pass_count = self.pass_count;
         let transient_texture_bytes = self.transient_texture_bytes;
+        let copies = self.copies;
         let mut transient_releases = self.transient_releases;
         let submission = WgpuFrameGraphExecutor::submit(self.queue, self.encoder);
         transient_releases.release_pending();
@@ -913,6 +1006,8 @@ impl WgpuFrameEncoder<'_> {
                 pass_pixels: take_render_pass_pixels(),
                 transient_texture_bytes,
                 retained_texture_bytes,
+                copy_count: copies.count,
+                copy_pixels: copies.pixels,
                 ..FrameCommandStats::default()
             },
         }
@@ -1014,6 +1109,11 @@ impl FrameCommandRecorder for WgpuFrameEncoder<'_> {
         target: OffscreenTarget,
     ) {
         self.transient_releases.push_release(descriptor, target);
+    }
+
+    fn copy_texture_region(&mut self, copy: TextureRegionCopy<'_>) {
+        encode_texture_region_copy(&mut self.encoder, copy);
+        self.copies.note(copy.size);
     }
 
     fn record_passes(&mut self, count: u32) {
