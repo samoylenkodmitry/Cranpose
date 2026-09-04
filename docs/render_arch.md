@@ -642,11 +642,20 @@ zero, alternating rounds, temperature logged; the watch with the
    class: done, cranorbit at the vsync on the Mate 20 X (61.0 / 61.0 fps
    against main's 58), pixel-exact.
 4. The record: `ShapeRecord`, lanes, per-command stop table, coalesced
-   segments, bounds, summary and fingerprint produced while recording;
-   the materialising iterator. Gates: every `DrawScope` call materialises
-   to today's `DrawPrimitive` byte for byte; recorded bounds equal
-   today's; the layer and backdrop cache hashes over a recorded graph
-   equal today's.
+   segments, bounds and summary produced while recording, the
+   fingerprint on first use, the materialising iterator. Gates: every
+   `DrawScope` call materialises to today's `DrawPrimitive` byte for
+   byte (`record.rs` tests, red-proven); the summary and coverage rects
+   equal a scan of the primitives; the layer hash reads the fingerprint.
+   Done 2026-09-04. Measured on the watch core with a 17,600-call
+   microbenchmark (`recbench` in the session scratchpad): the scope's
+   record path went from 708 ns per call to 313 (arcs 372, rects 252)
+   after the tight arc bounds moved to derivation on demand (191 ns),
+   the trig row to the vertex stage (67), the fingerprint to first use
+   (73) and the segment key to one integer compare (70); the arena's
+   scene stage went from 19.1 to 11.4 ms. Collect rose from 16 to 22.5
+   ms because materialisation now derives the arc bounds; step 6 removes
+   the materialisation with it.
 5. The compact GPU path: placement uniform ring, vertex-stage
    canonicalisation, colour matrix and paint order in the shader.
    Gates: pixel parity against today's CPU conversion over the arena and

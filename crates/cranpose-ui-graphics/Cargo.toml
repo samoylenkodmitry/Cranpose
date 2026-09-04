@@ -19,6 +19,7 @@ rustdoc-args = ["--cfg", "docsrs"]
 workspace = true
 
 [dependencies]
+bytemuck = { version = "1.25.2", features = ["derive"] }
 thiserror = "2.0.18"
 
 [features]

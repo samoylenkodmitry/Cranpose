@@ -78,16 +78,17 @@ fn the_modifier_chain_formatter_reports_how_many_nodes_it_walked() {
 
 #[test]
 fn a_reusing_draw_scope_gives_the_callers_buffer_back() {
-    let storage = Vec::with_capacity(64);
-    let capacity = storage.capacity();
+    let mut storage = cranpose_ui_graphics::CommandRecording::default();
+    storage.reserve_shapes(64);
+    let capacity = storage.shape_capacity();
 
     let finished = command_draw_scope_reusing(Size::new(10.0, 10.0), storage).finish();
     assert!(
-        finished.primitives.capacity() >= capacity,
+        finished.shape_capacity() >= capacity,
         "the scope handed back a buffer with less capacity than it was given"
     );
     assert!(
-        finished.primitives.is_empty(),
+        finished.is_empty(),
         "a scope nobody drew into produced primitives"
     );
 }

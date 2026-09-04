@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use cranpose_ui_graphics::{DrawPrimitive, DrawScope, DrawScopeDefault};
+use cranpose_ui_graphics::{CommandRecording, DrawPrimitive, DrawScope, DrawScopeDefault};
 
 use crate::{modifier::Size, text::AppContextTextMeasurer};
 
@@ -27,7 +27,7 @@ pub fn command_draw_scope(size: Size) -> DrawScopeDefault {
 /// [`command_draw_scope`] recording into storage the consumer already owns —
 /// the retained-recorder path where a command's buffer keeps its capacity
 /// across frames.
-pub fn command_draw_scope_reusing(size: Size, storage: Vec<DrawPrimitive>) -> DrawScopeDefault {
+pub fn command_draw_scope_reusing(size: Size, storage: CommandRecording) -> DrawScopeDefault {
     DrawScopeDefault::with_text_measurer_reusing(size, AppContextTextMeasurer::shared(), storage)
 }
 

@@ -1,10 +1,10 @@
-use std::rc::Rc;
+use std::{ops::Range, rc::Rc};
 
 use cranpose_foundation::PointerEvent;
 use cranpose_ui::{Brush, DrawCommand, DrawCommandFn, LayoutNodeData, ModifierNodeSlices};
 use cranpose_ui_graphics::{
-    BlendMode, Color, ColorFilter, CompositingStrategy, CornerRadii, DrawPrimitive, GraphicsLayer,
-    Point, RoundedCornerShape, Size,
+    BlendMode, Color, ColorFilter, CommandRecording, CompositingStrategy, CornerRadii,
+    DrawPrimitive, GraphicsLayer, Point, RoundedCornerShape, Size,
 };
 
 use crate::layer_transform::{layer_scale_x, layer_scale_y, layer_uniform_scale};
@@ -310,19 +310,24 @@ pub fn primitives_for_placement(
     placement: DrawPlacement,
     size: Size,
 ) -> Vec<DrawPrimitive> {
-    primitives_for_placement_reusing(command, placement, size, Vec::new())
+    recording_for_placement_reusing(command, placement, size, CommandRecording::default())
+        .map(|(recording, segments)| recording.primitives(segments).collect())
+        .unwrap_or_default()
 }
 
-/// [`primitives_for_placement`] recording into `storage` the caller retains
-/// between frames: a command that re-records every frame keeps one buffer
-/// whose capacity was earned on earlier frames.
-pub fn primitives_for_placement_reusing(
+/// Records `command` into `storage`, a recording the caller kept from an
+/// earlier frame so its buffers keep the capacity they earned, and names
+/// the segments `placement` draws: everything for a behind or overlay
+/// command, the part before or after the last content marker for a
+/// with-content command. `None` when the command has no `placement` half,
+/// in which case nothing was recorded.
+pub fn recording_for_placement_reusing(
     command: &DrawCommand,
     placement: DrawPlacement,
     size: Size,
-    storage: Vec<DrawPrimitive>,
-) -> Vec<DrawPrimitive> {
-    let record = |func: &DrawCommandFn| {
+    storage: CommandRecording,
+) -> Option<(CommandRecording, Range<u32>)> {
+    let record = move |func: &DrawCommandFn| {
         let mut scope = cranpose_ui::command_draw_scope_reusing(size, storage);
         func(&mut scope);
         scope.finish()
@@ -330,67 +335,17 @@ pub fn primitives_for_placement_reusing(
     match (placement, command) {
         (DrawPlacement::Behind, DrawCommand::Behind(func))
         | (DrawPlacement::Overlay, DrawCommand::Overlay(func)) => {
-            let finished = record(func);
-            filter_content(finished.primitives, finished.content_markers)
+            let recording = record(func);
+            let segments = recording.all_segments();
+            Some((recording, segments))
         }
         (_, DrawCommand::WithContent(func)) => {
-            let finished = record(func);
-            split_with_content(finished.primitives, placement, finished.content_markers)
+            let recording = record(func);
+            let segments = recording.content_split(placement == DrawPlacement::Behind);
+            Some((recording, segments))
         }
-        _ => Vec::new(),
+        _ => None,
     }
-}
-
-fn filter_content(primitives: Vec<DrawPrimitive>, markers: u32) -> Vec<DrawPrimitive> {
-    if markers == 0 {
-        return primitives;
-    }
-    let mut out = Vec::with_capacity(primitives.len());
-    out.extend(
-        primitives
-            .into_iter()
-            .filter(|primitive| !matches!(primitive, DrawPrimitive::Content)),
-    );
-    out
-}
-
-fn split_with_content(
-    primitives: Vec<DrawPrimitive>,
-    placement: DrawPlacement,
-    markers: u32,
-) -> Vec<DrawPrimitive> {
-    let last_content_idx = if markers == 0 {
-        None
-    } else {
-        primitives
-            .iter()
-            .rposition(|primitive| matches!(primitive, DrawPrimitive::Content))
-    };
-    let Some(last_content_idx) = last_content_idx else {
-        return if matches!(placement, DrawPlacement::Overlay) {
-            filter_content(primitives, markers)
-        } else {
-            Vec::new()
-        };
-    };
-    let mut out = Vec::with_capacity(primitives.len());
-    out.extend(
-        primitives
-            .into_iter()
-            .enumerate()
-            .filter_map(|(index, primitive)| {
-                if matches!(primitive, DrawPrimitive::Content) {
-                    return None;
-                }
-                let is_before = index < last_content_idx;
-                match placement {
-                    DrawPlacement::Behind if is_before => Some(primitive),
-                    DrawPlacement::Overlay if !is_before => Some(primitive),
-                    _ => None,
-                }
-            }),
-    );
-    out
 }
 
 #[cfg(test)]
@@ -457,8 +412,11 @@ mod tests {
         let size = Size::new(10.0, 10.0);
         for placement in [DrawPlacement::Behind, DrawPlacement::Overlay] {
             let fresh = primitives_for_placement(&command, placement, size);
-            let dirty = vec![DrawPrimitive::Content; 8];
-            let reused = primitives_for_placement_reusing(&command, placement, size, dirty);
+            let dirty = CommandRecording::from_primitives(vec![DrawPrimitive::Content; 8]);
+            let (recording, segments) =
+                recording_for_placement_reusing(&command, placement, size, dirty)
+                    .expect("a with-content command records for both placements");
+            let reused: Vec<DrawPrimitive> = recording.primitives(segments).collect();
             assert_eq!(fresh, reused);
         }
     }

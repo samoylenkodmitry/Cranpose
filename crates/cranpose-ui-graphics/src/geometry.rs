@@ -3,8 +3,9 @@
 use std::{ops::AddAssign, rc::Rc};
 
 use crate::{
-    Brush, Color, ColorFilter, ImageBitmap, ImageSampling,
-    stroke::{ArcGeometry, Stroke, arc_band},
+    ArcRecordArgs, Brush, Color, ColorFilter, CommandRecording, ImageBitmap, ImageSampling,
+    normalized_band,
+    stroke::Stroke,
     typography::{
         DrawTextMeasurer, DrawTextStyle, TextAlign, TextMeasurement, TextVerticalAlign,
         estimate_text_measurement,
@@ -485,6 +486,41 @@ pub enum BlendMode {
 }
 
 /// Controls how a graphics layer is composited into its parent target.
+impl BlendMode {
+    /// Every mode in declaration order, so `mode as u32` indexes it.
+    pub const ALL: [BlendMode; 29] = [
+        BlendMode::Clear,
+        BlendMode::Src,
+        BlendMode::Dst,
+        BlendMode::SrcOver,
+        BlendMode::DstOver,
+        BlendMode::SrcIn,
+        BlendMode::DstIn,
+        BlendMode::SrcOut,
+        BlendMode::DstOut,
+        BlendMode::SrcAtop,
+        BlendMode::DstAtop,
+        BlendMode::Xor,
+        BlendMode::Plus,
+        BlendMode::Modulate,
+        BlendMode::Screen,
+        BlendMode::Overlay,
+        BlendMode::Darken,
+        BlendMode::Lighten,
+        BlendMode::ColorDodge,
+        BlendMode::ColorBurn,
+        BlendMode::HardLight,
+        BlendMode::SoftLight,
+        BlendMode::Difference,
+        BlendMode::Exclusion,
+        BlendMode::Multiply,
+        BlendMode::Hue,
+        BlendMode::Saturation,
+        BlendMode::Color,
+        BlendMode::Luminosity,
+    ];
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum CompositingStrategy {
     /// Use renderer heuristics (default).
@@ -924,27 +960,13 @@ pub fn align_text_block(rect: Rect, measurement: TextMeasurement, style: &DrawTe
     Point::new(x, y)
 }
 
-/// What [`DrawScopeDefault::finish`] hands back: the recorded primitives and
-/// the count of content markers that travel with them.
-pub struct FinishedRecording {
-    pub primitives: Vec<DrawPrimitive>,
-    pub content_markers: u32,
-}
-
 #[derive(Default)]
 pub struct DrawScopeDefault {
     size: Size,
-    out: Vec<DrawPrimitive>,
-    content_markers: u32,
+    recording: CommandRecording,
     text_measurer: Option<Rc<dyn DrawTextMeasurer>>,
 }
 
-/// Per-thread memory of how many primitives the scope of a given size emitted
-/// last time, keyed by the scope's size bits. Draw closures re-record every
-/// frame, and a heavy animated canvas emits thousands of primitives; starting
-/// its vector at the previous count skips the whole doubling schedule of
-/// reallocations. Keying by size keeps a small HUD scope from inheriting the
-/// arena's multi-thousand capacity.
 const RECORDED_PRIMITIVE_COUNTS_LIMIT: usize = 64;
 
 thread_local! {
@@ -974,7 +996,7 @@ fn note_recorded_primitive_count(size: Size, count: usize) {
 
 impl DrawScopeDefault {
     pub fn new(size: Size) -> Self {
-        Self::with_storage(size, None, Vec::new())
+        Self::with_storage(size, None, CommandRecording::default())
     }
 
     /// A scope that measures text with the app's fonts.
@@ -982,18 +1004,15 @@ impl DrawScopeDefault {
     /// The framework calls this for every draw closure it runs; `new` exists
     /// for callers that never draw text.
     pub fn with_text_measurer(size: Size, text_measurer: Rc<dyn DrawTextMeasurer>) -> Self {
-        Self::with_storage(size, Some(text_measurer), Vec::new())
+        Self::with_storage(size, Some(text_measurer), CommandRecording::default())
     }
 
-    /// Like [`with_text_measurer`](Self::with_text_measurer), but records
-    /// into storage the caller already owns: a command that re-records every
-    /// frame keeps one buffer whose capacity was earned on earlier frames,
-    /// instead of walking a fresh vector through the whole doubling schedule
-    /// again.
+    /// A scope recording into `storage`, a recording the caller kept from an
+    /// earlier frame so its buffers keep the capacity they earned.
     pub fn with_text_measurer_reusing(
         size: Size,
         text_measurer: Rc<dyn DrawTextMeasurer>,
-        storage: Vec<DrawPrimitive>,
+        storage: CommandRecording,
     ) -> Self {
         Self::with_storage(size, Some(text_measurer), storage)
     }
@@ -1001,55 +1020,45 @@ impl DrawScopeDefault {
     fn with_storage(
         size: Size,
         text_measurer: Option<Rc<dyn DrawTextMeasurer>>,
-        mut out: Vec<DrawPrimitive>,
+        mut recording: CommandRecording,
     ) -> Self {
-        out.clear();
-        out.reserve(recorded_primitive_capacity(size));
+        recording.clear();
+        recording.reserve_shapes(recorded_primitive_capacity(size));
         Self {
             size,
-            out,
-            content_markers: 0,
+            recording,
             text_measurer,
         }
     }
 
-    /// How many [`DrawPrimitive::Content`] markers this scope has recorded.
-    /// Command consumers split placements around the count instead of
-    /// re-scanning thousands of just-recorded primitives to learn "none".
+    /// How many `draw_content` markers this scope has recorded.
     pub fn content_marker_count(&self) -> u32 {
-        self.content_markers
+        self.recording.content_markers()
     }
 
-    /// Appends already-recorded primitives verbatim (deferred modifier draws
-    /// recorded earlier, synthesized commands in tests); the marker count
-    /// stays authoritative because the batch is scanned once on the way in.
+    /// Records primitives already built, as if each had been drawn here.
     pub fn push_recorded(&mut self, primitives: Vec<DrawPrimitive>) {
-        self.content_markers += primitives
-            .iter()
-            .filter(|primitive| matches!(primitive, DrawPrimitive::Content))
-            .count() as u32;
-        self.out.extend(primitives);
+        for primitive in primitives {
+            self.recording.push_primitive(primitive);
+        }
     }
 
-    /// Hands back the recorded primitives in the storage they were recorded
-    /// into, so the caller can lend it to the same command's next recording.
-    pub fn finish(self) -> FinishedRecording {
-        note_recorded_primitive_count(self.size, self.out.len());
-        FinishedRecording {
-            primitives: self.out,
-            content_markers: self.content_markers,
-        }
+    /// The recording, in the storage it was recorded into, so the caller
+    /// can lend it to the same command's next recording.
+    pub fn finish(self) -> CommandRecording {
+        note_recorded_primitive_count(self.size, self.recording.len());
+        self.recording
     }
 
     fn push_blended_primitive(&mut self, primitive: DrawPrimitive, blend_mode: BlendMode) {
         if blend_mode != BlendMode::SrcOver {
-            self.out.push(DrawPrimitive::Blend {
+            self.recording.push_other(DrawPrimitive::Blend {
                 primitive: Box::new(primitive),
                 blend_mode,
             });
             return;
         }
-        self.out.push(primitive);
+        self.recording.push_other(primitive);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1064,31 +1073,21 @@ impl DrawScopeDefault {
         inner_radius: f32,
         blend_mode: BlendMode,
     ) {
-        let (band_inner, band_outer, cap) = arc_band(radius, inner_radius, stroke);
-        let geometry = ArcGeometry::new(
+        let args = ArcRecordArgs {
+            brush: &brush,
             center,
-            band_inner,
-            band_outer,
+            radius,
             start_angle,
             sweep_angle,
-            cap,
-        );
+            stroke,
+            inner_radius,
+            blend_mode,
+        };
+        let geometry = normalized_band(&args);
         if geometry.is_degenerate() {
             return;
         }
-        self.push_blended_primitive(
-            DrawPrimitive::Arc {
-                rect: geometry.bounds(),
-                brush,
-                center,
-                radius,
-                start_angle,
-                sweep_angle,
-                stroke,
-                inner_radius,
-            },
-            blend_mode,
-        );
+        self.recording.push_scope_arc(args, geometry);
     }
 }
 
@@ -1098,8 +1097,7 @@ impl DrawScope for DrawScopeDefault {
     }
 
     fn draw_content(&mut self) {
-        self.content_markers += 1;
-        self.out.push(DrawPrimitive::Content);
+        self.recording.push_content();
     }
 
     fn draw_rect(&mut self, brush: Brush) {
@@ -1107,14 +1105,8 @@ impl DrawScope for DrawScopeDefault {
     }
 
     fn draw_rect_blend(&mut self, brush: Brush, blend_mode: BlendMode) {
-        self.push_blended_primitive(
-            DrawPrimitive::Rect {
-                rect: Rect::from_size(self.size),
-                brush,
-                stroke: None,
-            },
-            blend_mode,
-        );
+        self.recording
+            .push_rect(Rect::from_size(self.size), &brush, None, blend_mode);
     }
 
     fn draw_rect_at(&mut self, rect: Rect, brush: Brush) {
@@ -1122,14 +1114,7 @@ impl DrawScope for DrawScopeDefault {
     }
 
     fn draw_rect_at_blend(&mut self, rect: Rect, brush: Brush, blend_mode: BlendMode) {
-        self.push_blended_primitive(
-            DrawPrimitive::Rect {
-                rect,
-                brush,
-                stroke: None,
-            },
-            blend_mode,
-        );
+        self.recording.push_rect(rect, &brush, None, blend_mode);
     }
 
     fn draw_round_rect(&mut self, brush: Brush, radii: CornerRadii) {
@@ -1137,27 +1122,13 @@ impl DrawScope for DrawScopeDefault {
     }
 
     fn draw_round_rect_blend(&mut self, brush: Brush, radii: CornerRadii, blend_mode: BlendMode) {
-        self.push_blended_primitive(
-            DrawPrimitive::RoundRect {
-                rect: Rect::from_size(self.size),
-                brush,
-                radii,
-                stroke: None,
-            },
-            blend_mode,
-        );
+        self.recording
+            .push_round_rect(Rect::from_size(self.size), &brush, radii, None, blend_mode);
     }
 
     fn draw_round_rect_at(&mut self, rect: Rect, brush: Brush, radii: CornerRadii) {
-        self.push_blended_primitive(
-            DrawPrimitive::RoundRect {
-                rect,
-                brush,
-                radii,
-                stroke: None,
-            },
-            BlendMode::SrcOver,
-        );
+        self.recording
+            .push_round_rect(rect, &brush, radii, None, BlendMode::SrcOver);
     }
 
     fn draw_rect_stroked(&mut self, brush: Brush, stroke: Stroke) {
@@ -1182,14 +1153,8 @@ impl DrawScope for DrawScopeDefault {
         if !stroke.is_visible() {
             return;
         }
-        self.push_blended_primitive(
-            DrawPrimitive::Rect {
-                rect,
-                brush,
-                stroke: Some(stroke),
-            },
-            blend_mode,
-        );
+        self.recording
+            .push_rect(rect, &brush, Some(stroke), blend_mode);
     }
 
     fn draw_round_rect_stroked(&mut self, brush: Brush, radii: CornerRadii, stroke: Stroke) {
@@ -1233,15 +1198,8 @@ impl DrawScope for DrawScopeDefault {
         if !stroke.is_visible() {
             return;
         }
-        self.push_blended_primitive(
-            DrawPrimitive::RoundRect {
-                rect,
-                brush,
-                radii,
-                stroke: Some(stroke),
-            },
-            blend_mode,
-        );
+        self.recording
+            .push_round_rect(rect, &brush, radii, Some(stroke), blend_mode);
     }
 
     fn draw_circle_stroked(&mut self, brush: Brush, center: Point, radius: f32, stroke: Stroke) {
@@ -1375,18 +1333,16 @@ impl DrawScope for DrawScopeDefault {
     ) {
         let radius = radius.max(0.0);
         let diameter = radius * 2.0;
-        self.push_blended_primitive(
-            DrawPrimitive::RoundRect {
-                rect: Rect {
-                    x: center.x - radius,
-                    y: center.y - radius,
-                    width: diameter,
-                    height: diameter,
-                },
-                brush,
-                radii: CornerRadii::uniform(radius),
-                stroke: None,
+        self.recording.push_round_rect(
+            Rect {
+                x: center.x - radius,
+                y: center.y - radius,
+                width: diameter,
+                height: diameter,
             },
+            &brush,
+            CornerRadii::uniform(radius),
+            None,
             blend_mode,
         );
     }
@@ -1593,7 +1549,7 @@ impl DrawScope for DrawScopeDefault {
             }
         };
 
-        self.out.push(DrawPrimitive::Image {
+        self.recording.push_other(DrawPrimitive::Image {
             rect: Rect {
                 x: origin.x,
                 y: origin.y,
@@ -1633,16 +1589,17 @@ impl DrawScope for DrawScopeDefault {
         if !origin.x.is_finite() || !origin.y.is_finite() {
             return;
         }
-        self.out.push(DrawPrimitive::Text(Box::new(TextPrimitive {
-            rect: Rect::from_origin_size(origin, measurement.size),
-            text: shared_text_str(text),
-            style: style.clone(),
-            color,
-        })));
+        self.recording
+            .push_other(DrawPrimitive::Text(Box::new(TextPrimitive {
+                rect: Rect::from_origin_size(origin, measurement.size),
+                text: shared_text_str(text),
+                style: style.clone(),
+                color,
+            })));
     }
 
     fn into_primitives(self) -> Vec<DrawPrimitive> {
-        self.finish().primitives
+        self.finish().into_primitives_with_markers()
     }
 }
 
@@ -1751,8 +1708,8 @@ mod tests {
                 stroke: None,
             },
         ];
-        assert_eq!(finished.primitives, expected);
-        assert_eq!(finished.content_markers, 2);
+        assert_eq!(finished.content_markers(), 2);
+        assert_eq!(finished.into_primitives_with_markers(), expected);
     }
 
     #[test]

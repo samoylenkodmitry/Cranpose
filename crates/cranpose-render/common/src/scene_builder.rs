@@ -7,7 +7,7 @@ use cranpose_ui::{
     text::{AnnotatedString, TextAlign, TextStyle, resolve_text_direction},
 };
 use cranpose_ui_graphics::{
-    CompositingStrategy, GraphicsLayer, LayerShape, RoundedCornerShape,
+    CommandRecording, CompositingStrategy, GraphicsLayer, LayerShape, RoundedCornerShape,
     rounded_corner_alpha_mask_effect,
 };
 
@@ -19,7 +19,7 @@ use crate::{
     },
     layer_transform::layer_transform_to_parent,
     raster_cache::LayerRasterCacheHashes,
-    style_shared::{DrawPlacement, primitives_for_placement_reusing},
+    style_shared::{DrawPlacement, recording_for_placement_reusing},
 };
 
 const TEXT_CLIP_PAD: f32 = 1.0;
@@ -1211,7 +1211,7 @@ fn build_layer_node_from_data(
 
 struct RecorderSlot {
     generation: u64,
-    handles: [Option<Rc<Vec<cranpose_ui_graphics::DrawPrimitive>>>; 2],
+    handles: [Option<Rc<CommandRecording>>; 2],
 }
 
 thread_local! {
@@ -1240,14 +1240,14 @@ fn bump_recording_generation() {
     }
 }
 
-/// The primitive buffer this command recorded into two frames ago, once the
-/// graph that referenced it has been dropped, so re-recording keeps the
-/// capacity it earned; an empty vector when no buffer is free yet.
-fn acquire_storage(id: DrawCommandId) -> Vec<cranpose_ui_graphics::DrawPrimitive> {
+/// The recording this command made two frames ago, once the graph that
+/// referenced it has been dropped, so re-recording keeps the capacity it
+/// earned; an empty recording when none is free yet.
+fn acquire_storage(id: DrawCommandId) -> CommandRecording {
     COMMAND_RECORDINGS.with(|map| {
         let mut map = map.borrow_mut();
         let Some(slot) = map.get_mut(&id) else {
-            return Vec::new();
+            return CommandRecording::default();
         };
         for handle in &mut slot.handles {
             if handle
@@ -1258,15 +1258,12 @@ fn acquire_storage(id: DrawCommandId) -> Vec<cranpose_ui_graphics::DrawPrimitive
                 return Rc::try_unwrap(shared).expect("sole owner checked above");
             }
         }
-        Vec::new()
+        CommandRecording::default()
     })
 }
 
-fn publish_primitives(
-    id: DrawCommandId,
-    primitives: Vec<cranpose_ui_graphics::DrawPrimitive>,
-) -> Rc<Vec<cranpose_ui_graphics::DrawPrimitive>> {
-    let shared = Rc::new(primitives);
+fn publish_recording(id: DrawCommandId, recording: CommandRecording) -> Rc<CommandRecording> {
+    let shared = Rc::new(recording);
     COMMAND_RECORDINGS.with(|map| {
         let mut map = map.borrow_mut();
         let generation = RECORDING_GENERATION.with(std::cell::Cell::get);
@@ -1297,13 +1294,14 @@ fn draw_nodes(
             placement,
         };
         let storage = acquire_storage(id);
-        let primitives = primitives_for_placement_reusing(command, placement, size, storage);
-        if primitives.is_empty() && primitives.capacity() == 0 {
+        let Some((recording, segments)) =
+            recording_for_placement_reusing(command, placement, size, storage)
+        else {
             retain_empty_draw_command(&mut nodes, phase, id, placement, command);
             continue;
-        }
-        let shared = publish_primitives(id, primitives);
-        if shared.is_empty() {
+        };
+        let shared = publish_recording(id, recording);
+        if shared.is_empty_in(&segments) {
             retain_empty_draw_command(&mut nodes, phase, id, placement, command);
             continue;
         }
@@ -1311,6 +1309,7 @@ fn draw_nodes(
             phase,
             Some(id),
             shared,
+            segments,
         )));
     }
     nodes
@@ -1970,11 +1969,11 @@ mod tests {
         let RenderNode::DrawRun(static_run) = &static_child.children[0] else {
             panic!("expected draw run");
         };
-        let static_draw = &static_run.primitives[0];
+        let static_draw = static_run.primitives().next().expect("a recorded draw");
         let RenderNode::DrawRun(moved_run) = &moved_child.children[0] else {
             panic!("expected draw run");
         };
-        let moved_draw = &moved_run.primitives[0];
+        let moved_draw = moved_run.primitives().next().expect("a recorded draw");
 
         assert_ne!(
             static_graph.transform_to_parent, moved_graph.transform_to_parent,
@@ -3995,34 +3994,34 @@ mod tests {
         }
 
         let graph_a = build_layer_node_for_test(snapshot(), 1.0, false);
-        let ptr_a = run_of(&graph_a).primitives.as_ptr();
+        let ptr_a = run_of(&graph_a).recording.shapes().as_ptr();
 
         let graph_b = build_layer_node_for_test(snapshot(), 1.0, false);
-        let ptr_b = run_of(&graph_b).primitives.as_ptr();
+        let ptr_b = run_of(&graph_b).recording.shapes().as_ptr();
         assert_ne!(
             ptr_a, ptr_b,
             "a buffer a live graph shares must never be recorded into"
         );
         assert_eq!(
-            run_of(&graph_a).primitives,
-            run_of(&graph_b).primitives,
+            run_of(&graph_a).recording,
+            run_of(&graph_b).recording,
             "re-recording must reproduce the recording"
         );
 
         drop(graph_a);
         let graph_c = build_layer_node_for_test(snapshot(), 1.0, false);
         assert_eq!(
-            run_of(&graph_c).primitives.as_ptr(),
+            run_of(&graph_c).recording.shapes().as_ptr(),
             ptr_a,
             "the released buffer must be reused for the next recording"
         );
 
-        let held = std::rc::Rc::clone(&run_of(&graph_c).primitives);
+        let held = std::rc::Rc::clone(&run_of(&graph_c).recording);
         drop(graph_c);
         let graph_d = build_layer_node_for_test(snapshot(), 1.0, false);
-        let ptr_d = run_of(&graph_d).primitives.as_ptr();
-        assert_ne!(ptr_d, held.as_ptr());
-        assert_ne!(ptr_d, run_of(&graph_b).primitives.as_ptr());
+        let ptr_d = run_of(&graph_d).recording.shapes().as_ptr();
+        assert_ne!(ptr_d, held.shapes().as_ptr());
+        assert_ne!(ptr_d, run_of(&graph_b).recording.shapes().as_ptr());
     }
 
     #[test]

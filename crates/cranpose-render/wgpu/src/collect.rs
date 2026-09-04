@@ -10,7 +10,7 @@ use cranpose_render_common::{
 };
 use cranpose_ui_graphics::{
     BlendMode, CompositingStrategy, DrawPrimitive, GraphicsLayer, LayerShape, Point, Rect,
-    RenderEffect,
+    RenderEffect, expand_rect, primitive_coverage_rect,
 };
 
 use crate::{
@@ -270,30 +270,6 @@ impl RoundedClipCorners {
     }
 }
 
-fn primitive_coverage_rect(primitive: &DrawPrimitive) -> Option<Rect> {
-    match primitive {
-        DrawPrimitive::Blend { primitive, .. } => primitive_coverage_rect(primitive),
-        DrawPrimitive::Rect { rect, stroke, .. }
-        | DrawPrimitive::RoundRect { rect, stroke, .. }
-        | DrawPrimitive::Arc { rect, stroke, .. } => {
-            let half_stroke = stroke.as_ref().map_or(0.0, |stroke| stroke.width * 0.5);
-            Some(expand_rect(*rect, half_stroke))
-        }
-        DrawPrimitive::Image { rect, .. } => Some(*rect),
-        DrawPrimitive::Text(text) => Some(text.rect),
-        DrawPrimitive::Content | DrawPrimitive::Shadow(_) => None,
-    }
-}
-
-fn expand_rect(rect: Rect, margin: f32) -> Rect {
-    Rect {
-        x: rect.x - margin,
-        y: rect.y - margin,
-        width: rect.width + margin * 2.0,
-        height: rect.height + margin * 2.0,
-    }
-}
-
 /// Whether every op the layer would inline into its parent stays out of its
 /// rounded clip's corner cuts, so the rect clip alone reproduces the rounded
 /// clip exactly. Shadows and isolated child composites carry the rounded
@@ -347,9 +323,7 @@ fn node_admits_corners(
             }
             PrimitiveNode::Text(text) => check(text.rect, text.clip),
         },
-        RenderNode::DrawRun(run) => run.primitives.iter().all(|primitive| {
-            primitive_coverage_rect(primitive).is_none_or(|rect| check(rect, None))
-        }),
+        RenderNode::DrawRun(run) => run.coverage_rects().all(|rect| check(rect, None)),
         RenderNode::Layer(child) => {
             let Some(translation) = direct_translation(child.transform_to_parent) else {
                 return true;
@@ -844,9 +818,9 @@ fn push_draw_run(
     motion_context_animated: bool,
 ) {
     let counts = scene_counts(&out.scene);
-    for primitive in run.primitives.iter() {
+    for primitive in run.primitives() {
         push_draw_primitive(
-            primitive,
+            &primitive,
             layer_bounds,
             local_layer,
             visual_clip,

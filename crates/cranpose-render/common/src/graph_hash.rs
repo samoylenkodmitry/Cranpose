@@ -113,10 +113,9 @@ fn hash_layer_content<H: Hasher>(
                     PrimitivePhase::BeforeChildren => 0u8.hash(state),
                     PrimitivePhase::AfterChildren => 1u8.hash(state),
                 }
-                run.primitives.len().hash(state);
-                for primitive in run.primitives.iter() {
-                    primitive.render_hash().hash(state);
-                }
+                run.recording.fingerprint().hash(state);
+                run.segments.start.hash(state);
+                run.segments.end.hash(state);
             }
             RenderNode::Layer(child_layer) => {
                 1u8.hash(state);
