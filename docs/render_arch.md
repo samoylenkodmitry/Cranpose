@@ -511,6 +511,26 @@ a step whose number does not move is reverted.
 | showcase copies, strata, fill, composites | 15 |  15 | page usage ablation decides |
 | showcase total                      |  40 |  24.5 | ~41 fps |
 
+Main, built and measured the same afternoon with the same instruments,
+presents the showcase scroll at 24.15 / 24.09 fps, period 40.5 / 40.4 ms,
+against this branch's 24.2 and 40.0: parity to the tenth of a frame, with
+30-33 passes and 21 MP of pass pixels against 5 passes, 17 copies and 12.4
+MP here. Both renderers spend the frame in the same place, the material.
+An independent audit of the shader and the device (sol, 2026-09-04,
+`codex_review2.out` in the session scratchpad) puts the pixel-exact
+ceiling at 29-32 ms: 19 bilinear taps per shaded pixel (three rays, five
+reflection, nine frost, one resting) over 2.8 MP is 53 M samples a frame
+before any ALU, and the exact steps (a guarded interior path that drops
+the rays and reflection where their weights are provably zero, shadow
+support cut from 3r to the kernel's r, blur variants per tile mode,
+one immutable substrate for cards over a fixed background) earn 8-11 ms
+together. Under that ceiling 60 fps needs what changes pixels: the blur
+result kept at scratch scale, the frost neighbourhood from a
+downsampled source, `f16` on the colour side, dispersion and reflection
+confined to the edge band, the card face shaded below full resolution,
+and a procedural substrate for an affine background. Each is listed with
+its visual cost in the audit; none is assumed here.
+
 Cranorbit reaches the vsync at 11-13 ms of GPU with its CPU cycle at
 ~11 ms on the present thread, which is under the vsync and beats main's
 period. The showcase does not reach it with pixel-exact steps: 24.5 ms
