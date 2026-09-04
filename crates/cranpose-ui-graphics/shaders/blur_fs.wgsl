@@ -37,16 +37,11 @@ fn region_texture_uv(local: vec2<f32>) -> vec2<f32> {
     return (region.xy + held * region.zw) / texture_size;
 }
 
-fn sample_with_tile_mode(uv: vec2<f32>) -> vec4<f32> {
+// The texture value at a region-local coordinate under the tile mode:
+// mirrored or repeated into [0, 1], or held to the region's edge.
+fn tiled_sample(uv: vec2<f32>) -> vec4<f32> {
     let tile_mode = blur.texture_size_and_tile_mode.z;
-    if (tile_mode >= 2.5) {
-        // Decal: out-of-bounds samples are transparent.
-        let clamped_uv = clamp(uv, vec2<f32>(0.0), vec2<f32>(1.0));
-        return textureSampleLevel(input_texture, input_sampler, region_texture_uv(clamped_uv), 0.0)
-            * inside_unit_bounds(uv);
-    }
-
-    if (tile_mode >= 1.5) {
+    if (tile_mode >= 1.5 && tile_mode < 2.5) {
         // Mirror: ... 0->1, 1->0, repeat.
         let wrap_x = uv.x - floor(uv.x / 2.0) * 2.0;
         let wrap_y = uv.y - floor(uv.y / 2.0) * 2.0;
@@ -56,16 +51,25 @@ fn sample_with_tile_mode(uv: vec2<f32>) -> vec4<f32> {
         );
         return textureSampleLevel(input_texture, input_sampler, region_texture_uv(mirrored_uv), 0.0);
     }
-
-    if (tile_mode >= 0.5) {
+    if (tile_mode >= 0.5 && tile_mode < 1.5) {
         // Repeated: wrap to [0,1).
         let repeated_uv = vec2<f32>(uv.x - floor(uv.x), uv.y - floor(uv.y));
         return textureSampleLevel(input_texture, input_sampler, region_texture_uv(repeated_uv), 0.0);
     }
-
-    // Clamp: sample nearest edge texel outside bounds.
+    // Clamp and decal: hold to the region's edge; decal drops the taps
+    // outside through their weights.
     let clamped_uv = clamp(uv, vec2<f32>(0.0), vec2<f32>(1.0));
     return textureSampleLevel(input_texture, input_sampler, region_texture_uv(clamped_uv), 0.0);
+}
+
+// A tap's weight under the tile mode: zero outside the region for decal.
+fn tap_weight(uv: vec2<f32>, weight: f32) -> f32 {
+    let decal = blur.texture_size_and_tile_mode.z >= 2.5;
+    return select(weight, weight * inside_unit_bounds(uv), decal);
+}
+
+fn sample_with_tile_mode(uv: vec2<f32>) -> vec4<f32> {
+    return tiled_sample(uv) * tap_weight(uv, 1.0);
 }
 
 @fragment
@@ -96,19 +100,32 @@ fn blur_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     let inv_2sigma2 = 1.0 / (2.0 * sigma * sigma);
-    var color = vec4<f32>(0.0);
-    var total_weight = 0.0;
+    var color = sample_with_tile_mode(local);
+    var total_weight = tap_weight(local, 1.0);
+    let step = dir * pixel_size;
 
-    // The trip count comes off the uniform buffer, so control flow stays
-    // uniform and the loop shrinks with the radius: a radius-6 blur runs 13
-    // iterations, not a fixed 65. Sampling is explicit-LOD (the sources are
+    // The taps at i and i + 1 on one side become one bilinear fetch between
+    // them, placed where the filter hands each its Gaussian weight, so the
+    // kernel keeps every weight and costs half the fetches. A tap the decal
+    // mode drops leaves the fetch on its partner alone. The trip count comes
+    // off the uniform buffer, so control flow stays uniform and the loop
+    // shrinks with the radius. Sampling is explicit-LOD (the sources are
     // mipless offscreens), which frees the taps from derivative uniformity.
-    for (var i: i32 = -tap_count; i <= tap_count; i = i + 1) {
+    for (var i: i32 = 1; i <= tap_count; i = i + 2) {
         let fi = f32(i);
-        let weight = exp(-(fi * fi) * inv_2sigma2);
-        let offset = dir * fi * pixel_size;
-        color = color + sample_with_tile_mode(local + offset) * weight;
-        total_weight = total_weight + weight;
+        let fj = fi + 1.0;
+        let w1 = exp(-(fi * fi) * inv_2sigma2);
+        let w2 = select(0.0, exp(-(fj * fj) * inv_2sigma2), i + 1 <= tap_count);
+        for (var side: f32 = -1.0; side <= 1.0; side = side + 2.0) {
+            let e1 = tap_weight(local + step * (fi * side), w1);
+            let e2 = tap_weight(local + step * (fj * side), w2);
+            let e = e1 + e2;
+            if (e > 0.0) {
+                let offset = (fi * e1 + fj * e2) / e;
+                color = color + tiled_sample(local + step * (offset * side)) * e;
+                total_weight = total_weight + e;
+            }
+        }
     }
 
     return color / max(total_weight, 0.00001);

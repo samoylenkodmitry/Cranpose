@@ -309,28 +309,26 @@ above). The architecture stays resolve-then-compose with strata; every
 step ships with the contract that proves it and is measured on the device
 against main's 28 ms present. Done: captures are copies (pixel-exact,
 `capture_culling.rs`), one flush per stage with glass blockers and
-deferral, gap-free atlases with texel-center reads.
+deferral, gap-free atlases with texel-center reads, and the blur's taps
+paired into bilinear fetches at the kernel's own weights (`blur_fs.wgsl`;
+`blur_reference.rs` holds the result to its kernel applied by the CPU
+within one 8-bit step and goes red for a shifted pair offset or a scaled
+weight; 32.5 to 31.0-32.0 ms on the device, the vertical passes were
+fetch-bound less than the tap ablation suggested).
 
-1. **The blur's vertical passes.** ~8 ms for ~1 MP of output: 13-25 taps
-   per pixel with a per-tap `exp`, sampled from RGBA16F. The kernel is the
-   picture, so the weights stay; what can change without a pixel changing
-   is where they are computed (once, on the CPU, into the uniform) and the
-   sampling structure (paired bilinear taps halve the fetches at the same
-   weights within float rounding). Contract: `backdrop_atlas_parity.rs`
-   blur parity within one 8-bit step, proven red by breaking a weight.
-2. **Two frames in flight.** The Android producer's depth-one credit
+1. **Two frames in flight.** The Android producer's depth-one credit
    serialises CPU and GPU; a depth of two lets the update and encode of
    frame N+1 overlap the GPU of frame N, worth the CPU stage, ~10 ms of the
    frame. It costs one frame of input latency, the platform's own
    triple-buffering trade; a pacing policy the user decides.
-3. **The page in the surface's own format** on 8-bit devices: measured at
+2. **The page in the surface's own format** on 8-bit devices: measured at
    1 ms, cleanup-grade, taken only if the parity tests hold.
-4. **The liquid shader shades the same pixels cheaper.** An analytic
+3. **The liquid shader shades the same pixels cheaper.** An analytic
    gradient for the plain rounded shape behind a specialization flag
    instead of three SDF evaluations; `f16` behind the same one-step parity
    gate. Contract: `backdrop_atlas_parity.rs`,
    `glass_specialization_parity.rs`.
-5. **The rest is the material.** 60 fps is 16.7 ms; on this device that
+4. **The rest is the material.** 60 fps is 16.7 ms; on this device that
    needs the glass under ~8 ms, which is the material's per-pixel cost
    (dispersion, refraction and highlight are ~4 ms of the 14 by ablation)
-   or its area. Any step past 4 changes pixels, and is the user's call.
+   or its area. Any step past 3 changes pixels, and is the user's call.
