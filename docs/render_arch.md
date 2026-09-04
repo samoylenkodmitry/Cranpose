@@ -549,6 +549,52 @@ a bounded pixel change with a reference model and each the user's call.
 This plan does not assume any of them; it states the number they would
 have to earn.
 
+## The watch is CPU-bound and this branch loses it (Pixel Watch 3, 2026-09-04)
+
+A/B/A/B of cranorbit MEGA BOSS on the Pixel Watch 3 (armeabi-v7a, one
+Cortex-A53 class core doing the frame, 408x408), main and this branch
+built the same hour with the same cranorbit revision, each run 48 s,
+SurfaceFlinger presented frames over a 40 s window:
+
+| build  | presented fps | period p50 | render (encode) | update |
+| ------ | ------------: | ---------: | --------------: | -----: |
+| main   |    44.2, 42.9 |    21.8 ms |          7-9 ms |  13-15 |
+| branch |    12.2, 12.2 |    83.3 ms |           57 ms |  23-25 |
+
+The GPU is idle on both (present 0.5-0.8 ms, pass 0.17 MP). The arena is
+one draw command of 17,500 primitives re-recorded every frame, and this
+branch re-derives every one of them each frame. Its CPU frame, from the
+stage telemetry and a temporary probe inside the pass:
+
+| stage                                   |    ms |
+| --------------------------------------- | ----: |
+| scene rebuild (shell render phase)      |  18.7 |
+| collect graph -> flat scene             | 13-16 |
+| pass: merge items                       |   4.9 |
+| pass: shape run loop (class test, batch)| ~15   |
+| pass: convert records to `ShapeData`    | ~10.5 |
+| pass: band mesh                         |   8.6 |
+| pass: upload (4.7 MB)                   |   2.5 |
+
+Disabling the band mesh moves nothing (pass 42.6 ms either way): the mesh
+is a symptom of the same per-primitive walk. Main uploads 0.24 MB and
+draws 21 calls on the same scene because its scene builder diffed each
+re-recording against the previous one and kept the unchanged spans in
+retained GPU slots; only the changed suffix was resolved and uploaded.
+On the phone the GPU hid this (both at the vsync); on the watch the CPU
+is the frame, and the branch costs 4x. The watch was always the case for
+step 6 below; it is now the measurement that decides it. The reference
+point for step 6 is main's 44 fps on the same watch, and the bar is the
+vsync there.
+
+The build itself: the devices carry the store build (version 109,
+release key), so a benchmark APK collides on install. `-PbenchArena=true`
+now gives the release build a `.bench` application id in cranorbit, the
+same way its debug build already had one, and a benchmark never evicts
+the real app. `simpleperf` cannot record on the watch kernel (no perf
+events); the stage properties (`debug.cranpose.render_stage_ms`,
+`update_stage_ms`, `frame_stage_ms`) are the profiler there.
+
 ## Order
 
 Every step ships with its contract proven red first, the robot suite
@@ -577,6 +623,13 @@ zero, alternating rounds, temperature logged.
    exact steps.
 6. Records from the recorder, the run store, placements, run segments,
    bands from the vertex stage, the upload ring. The watch's frame and
-   the phone's battery.
+   the phone's battery. Measured 2026-09-04: the watch presents 12 fps
+   on this branch against main's 44 because every stage walks all
+   17,500 primitives of one re-recorded command each frame (scene 18.7,
+   collect 13-16, pass 42 ms). The store must keep resolved records per
+   command across re-recordings, compare the new recording against the
+   kept one per primitive, and resolve, mesh and upload only the changed
+   ranges; the collect and the pass then walk runs, not primitives.
+   Bar: the vsync on the watch, main's 44 fps as the floor.
 7. Measure; report what remains on the showcase and what each material
    decision would earn and cost.

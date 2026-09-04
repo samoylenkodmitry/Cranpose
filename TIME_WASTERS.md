@@ -767,3 +767,20 @@ confound) before a `diff` of the two trees showed the stale ablation. Sync
 an ablation tree with `diff -rq` against the live tree, or rebuild it from
 the commit plus one patch, and never trust a "none" variant that does not
 reproduce the live baseline first.
+
+## A benchmark APK collides with the store build on a device (2026-09-04)
+
+The Pixel Watch 3 and the Pixel 9 Pro carry cranorbit from the store
+(versionCode 109, release key). A benchmark release build has versionCode
+1 and the debug signer, so every `adb install -r` fails: downgrade first,
+signature mismatch after any version bump, and neither `-d` nor a higher
+version code gets past the key on a user build. The only ways through are
+uninstalling the user's game with its saves, or a different application
+id. cranorbit's debug build already carried `.debug` for exactly this
+reason; `-PbenchArena=true` now carries `.bench` in the release build.
+Check `dumpsys package <id> | grep -E "versionCode|signatures"` before the
+first install on someone's device, and give a measurement build its own
+id rather than fighting the installer. Also: `simpleperf record` on the
+watch fails with "Event type 'cpu-clock' is not supported" for every
+event; the kernel ships without perf events. Profile there with the
+`debug.cranpose.*_stage_ms` properties.
