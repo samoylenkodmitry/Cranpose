@@ -1130,6 +1130,7 @@ dependencies = [
  "cranpose-ui-graphics",
  "log",
  "naga",
+ "png",
  "pollster",
  "rayon",
  "rustix",

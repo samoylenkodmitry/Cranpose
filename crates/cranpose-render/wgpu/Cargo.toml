@@ -111,4 +111,5 @@ cranpose-macros = { path = "../../cranpose-macros" }
 # on every platform, independent of the production feature set.
 cranpose-render-common = { path = "../common", features = ["embedded-default-font"] }
 naga = { version = "29.0.3", features = ["wgsl-in", "glsl-out"] }
+png = "0.18.1"
 pollster = "0.4.0"
