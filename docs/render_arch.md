@@ -269,3 +269,67 @@ result cache never serves this scene. The structural fix is a progressive
 page: the final pass split into strata at the stage boundaries, each
 stratum's pixels materialized once and read by the next stage's captures as
 one blit, so nothing beneath a glass is drawn twice.
+
+## Plan: correct and fast (2026-09-04)
+
+Read fresh from the code, not from memory. What the frame is today on the
+Mate 20 X scrolling the showcase list (branch df893512): update 5 ms and
+render 9 ms on the producer thread, then 38 ms in `frame.present()`, which
+on this device is the wait for the GPU; the producer holds one frame of
+credit, so CPU and GPU serialise and the frame is 48 ms (21 fps). main's
+old renderer on the same device: 5 + 12 + 28 ms, 24 fps, the same glass
+area shaded (3.2 MP of backdrop misses against our 3.1 MP `shader_pixels`),
+33 passes and 29 effect applies against our 9 passes. Per-pass overhead is
+not what this GPU pays for; fragment work and bandwidth are. Attribution on
+our build by one-APK toggles: the liquid shader is ~14 ms; everything else
+~24 ms, of which the old renderer's "no captures, no shader" variant was
+13 ms, so the strata and atlas machinery cost ~11 ms that main's copy-based
+captures did not.
+
+The architecture stays resolve-then-compose with strata. Nothing below
+changes a pixel; every step ships with the contract that proves it.
+
+1. **Captures are copies.** A capture region of the layer's own page is a
+   `copy_texture_to_texture` from the page into the atlas (same format, no
+   clear, no fragment work, no pass); only a region with fix-up ops or
+   pending composites, or a child reading its parent's page, draws them in
+   a pass that loads the copied atlas. `FrameCommandRecorder` gains a copy
+   command. Contract: the existing atlas parity tests byte for byte, and a
+   budget test that a stage whose regions need no fix-up records no
+   capture pass.
+2. **The page is drawn in the surface's own format.** On a device whose
+   presentable surface is 8-bit, the composition format follows it, so the
+   root is the direct surface, no output conversion pass runs and every
+   stratum, atlas and blur moves half the bytes. Contract: the 16-bit path
+   stays for blur chains that need it (measured, not assumed: the 8-bit
+   toggle gave 1 ms here, so this is a cleanup with a small win, taken
+   only if the parity tests hold).
+3. **Two frames in flight.** The Android producer's depth-one credit
+   serialises CPU and GPU; a depth of two lets the update and encode of
+   frame N+1 overlap the GPU of frame N, which on this scene is worth the
+   whole CPU stage, ~10 ms of the 48. It costs one frame of input latency,
+   which is the platform's own triple-buffering trade; this is a pacing
+   policy the user decides, and it is measured on the device, not assumed.
+4. **The liquid shader shades the same pixels cheaper.** Per pixel it
+   evaluates the scene SDF three times for a finite-difference normal; for
+   the plain rounded shape every showcase glass is (no scene shapes, no
+   wobble, no strain, already folded away by specialization) the gradient
+   has a closed form, so a specialization flag computes it directly. The
+   sampling structure (one transmitted tap, three with dispersion, five
+   reflection taps, nine adaptive-frost taps, one plain) stays: each is a
+   material term. `f16` arithmetic is measured on the device behind the
+   same parity gate (one 8-bit step on the glass parity scenes) and taken
+   only if it holds. Contract: `backdrop_atlas_parity.rs` and
+   `glass_specialization_parity.rs`.
+5. **The rest is the material.** After 1-4 the GPU frame is the glass
+   shader over its visible area plus a page that costs ~13 ms with the
+   shadows, blur crown, text and starfield. 60 fps is 16.7 ms; on this
+   device that needs the glass under ~8 ms, which is the material's
+   per-pixel cost (dispersion, refraction and highlight are ~4 ms of the
+   14 by ablation; the base optics and frost the rest) or its area. Any
+   step past 4 changes pixels, and is the user's call: a cheaper material
+   spec in the showcase, or a lower internal resolution for the glass.
+
+Order: 1 and 3 first (largest, pixel-neutral), then 2, then 4. Each is
+measured on the device against main's 28 ms present before it merges, and
+the gate for the branch is main's 24 fps, not the previous commit.

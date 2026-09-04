@@ -305,3 +305,21 @@ fn a_capture_adds_no_shape_fill_of_its_own() {
         "a capture reads the page's pixels; it never draws the page's shapes again"
     );
 }
+
+#[test]
+fn a_glass_is_shaded_once_over_its_visible_pixels() {
+    let Ok(mut renderer) = support::headless_renderer() else {
+        eprintln!("skipping (headless WGPU init failed)");
+        return;
+    };
+    capture(&mut renderer, staged_page(true));
+    let shaded = renderer
+        .last_frame_stats()
+        .expect("frame stats")
+        .shader_pixels;
+    let visible = (GLASS.width * GLASS.height + SECOND_GLASS.width * SECOND_GLASS.height) as u64;
+    assert_eq!(
+        shaded, visible,
+        "two pass-through glasses shade exactly their visible pixels once"
+    );
+}
