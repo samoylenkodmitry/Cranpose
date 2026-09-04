@@ -408,99 +408,131 @@ frames that did work) into layout 0.7 and the scene phase 3.2 ms; it is
 under the vsync and off the critical path on the phone, and matters on
 the watch, where the sync path runs every stage on one core.
 
-## Architecture: less GPU work per frame, then one record retained by identity
+## Architecture: the recording is the GPU record (low-tier first)
 
-The gate on the phone is the GPU on both scenes, so the GPU steps come
-first and are measured first; the CPU steps that follow remove the work
-the watch and the battery pay, and they are the same steps whether the
-frame overlaps or not.
+The watch measurement inverted the order. On a phone the GPU is the frame
+and the CPU hides under it; on a low-tier device the CPU is the frame,
+and this renderer walks every primitive of a re-recorded command in five
+stages (record into `DrawPrimitive`, rescan for the summary and the
+layer hash, flatten into `CompositorScene`, merge and batch, convert to
+`ShapeData`, tessellate, upload). Cranorbit's arena is one command of
+17,600 primitives that the app re-records every frame, and so will any
+game, dial or chart drawn from state. The app's recording is
+Omega(primitives) and stays; the framework's obligation is the cheapest
+possible record per call and no further per-primitive CPU work after it.
+Everything past the record is O(commands + segments) plus one comparison
+and one upload of the record bytes. Two rounds of unbiased review (sol,
+2026-09-04, `codex_review3.out` and `codex_review4.out` in the session
+scratchpad) shaped this section; the first withdrew a typed-tape,
+similarity-span, patched-slot design as a reproduction of the 44 fps
+renderer with an unsupported budget, the second corrected the record
+format and the order below.
 
-**Cranorbit: the shape fragment program pays for what it does not draw.**
-`shape.wgsl` carries every kind (fill, rounded fill, stroke, arc band),
-every brush (solid, three gradients, four tile modes, dither) and the
-clip in one fragment program, and `fs_solid` already showed that leaving
-the gradient path out of a solid batch pays on Mali. The arena is arcs
-and solid discs. The fix is the one the glass got: a pipeline per (kind,
-brush class, blend mode) selected per draw, with the flat varyings each
-variant does not read removed from its vertex output, and the arc-band
-variant's coverage computed from the record's radii without the branches
-of the other kinds. Contract: byte parity against the general program
-per variant (`glass_specialization_parity.rs` is the shape). Measured
-per variant on the device with the delay probe held at zero, since the
-gate is the GPU; the estimate from the glass precedent is a third of the
-fill cost. What remains after that is pixels: the band mesh's one-texel
-margin on a band a few pixels wide is 20-40% of its fill, and the quads
-of the discs and radial falloffs are 27% more than their circles; the
-mesh's margin is measured by the same walk that pins the mesh, and the
-disc quad becomes an octagon in the vertex stage, both pixel-exact.
+**The record.** `DrawScope` writes a fixed-size POD `ShapeRecord`
+(`f32` geometry throughout, colour as `f32x4`; kind, cap, join and blend
+packed in one flags word; rect, radii, stroke width; for arcs the band
+inner and outer radius, the centre, and the precomputed mid-angle and
+half-sweep sine/cosine the fragment stage reads today; a brush handle for
+gradients; ~112 bytes) straight into the command's record vector, in the
+layer's local space. Degenerate arcs are rejected at record time as
+today; the tight cap-aware rect is computed at record time until the
+vertex-stage band makes the quad irrelevant. Gradient brushes are
+interned per command into a stop table addressed by handle. Text, images
+and shadows go to a general lane and are converted to the send-safe
+scene forms before the packet boundary; every shape, including a
+blend-wrapped one, stays in the compact lane. Recording builds, online,
+the command's coalesced segments (lane, start, count, blend, brush class:
+the cuts `shape_run` makes today, never on kind), its conservative
+bounds, its content summary, and an ordered fingerprint over record
+bytes, lane order, general-lane content and gradient stops, so the layer
+and backdrop caches keep their identity without rescanning anything.
+`DrawRunNode` holds an `Arc` over POD bytes and tables plus these facts
+and is never rescanned; the software renderer and the primitive
+inspection tests read records through a materialising iterator that
+yields today's `DrawPrimitive` exactly (a lossless format, hence `f32`).
 
-**The showcase GPU, in the order of the milliseconds.** The page usage
-ablation first. Then the glass's lens field (the position-only terms
-rendered once per geometry and material into a retained texture, read
-per frame under a content pass of ~20 taps and tone; its own cost is a
-texture read of ~2-3 ms of bandwidth per frame and one render per
-distinct card geometry, counted in the budget), the blur pair at the
-scratch scale with the reference model in `blur_reference.rs`, and the
-shadow bands trimmed to their visible alpha extent. Each is a same-binary
-ablation with cold and warm frames, added passes, retained bytes and
-cache misses during the scroll reported beside the period.
+**Placement.** One uniform per command, in a dynamic-offset ring: the
+snapped translation, root scale, the clip rect, layer alpha and the
+colour matrix, applied in the shader in today's exact paint order
+(`srgb_8bit`, alpha, filter). Only translated children draw direct, as
+`child_placement` admits today; scaled or rotated children stay
+isolated with their snapped-surface semantics. The vertex stage maps the
+record through the placement and reproduces per record what
+`convert_shape_into_slots` does now: every rect edge, quad coordinate,
+clip and gradient coordinate canonicalised to 1/16 device pixel, the
+dither origin from the anchor's snapped origin. The fragment stage
+receives what it receives today and its SDF, anti-aliasing, gradient and
+dither code does not change. The device-space work moves from the CPU,
+once per primitive, to the vertex stage.
 
-**Then the CPU, as work removal.** The draw scope writes the GPU shape
-record once (the layout `shape.wgsl` reads, 176 bytes today and ~112
-without the device quad, clip and dither origin), in the layer's local
-space, into the buffer the draw command retains; `collect` emits a run
-as one op with its placement (the layer-to-device affine with the snapped
-translation, scale times root scale and rotation, a local clip rect
-evaluated through the inverse affine, the dither origin and the pixel
-scale for anti-aliasing) instead of copying its shapes; the encoder draws
-a run's segments, cut where kind or blend mode changes, from a retained
-arena range and uploads only runs whose content changed. Identity is the
-`DrawCommandId` plus a content fingerprint of the record bytes, so a
-dirty command that re-records identical bytes keeps its range and its
-backdrop-cache hits, and two runs at one placement never collide; the
-capture hash of a run is that fingerprint and its placement relative to
-the capture. Gradient stops live in a second arena addressed by the
-record, with the same range lifetime. A child whose transform is a
-similarity and whose content is shapes draws direct through its
-placement, as a Compose `RenderNode` replays its display list under its
-matrix; effects, group alpha, blend modes, explicit offscreens, rounded
-clips the content does not admit and pixel-sensitive content still
-isolate. Arc bands come from the vertex stage as ring strips whose
-length is the largest segment count a draw's records need, so no CPU
-tessellation and no vertex upload. The remaining per-frame bytes go
-through one upload ring per usage class. The software renderer keeps
-consuming `DrawPrimitive` for what it draws; the shape record is the
-wgpu renderer's, and the contract between them is the primitive emitter
-both already share. On the phone this moves nothing the vsync sees; on
-the watch it is the frame, and on the phone it is the battery.
+**The run store.** On the present side, keyed by `DrawCommandId`: one
+GPU buffer per command, grown on demand, and the bytes it last uploaded.
+Per frame per run: same `Arc` as last time, nothing; else compare the
+bytes, equal, nothing; else write the whole command (~2 MB for the arena,
+under 1 ms on the watch by the measured 2.5 ms for 4.7 MB, to be
+measured). No patches, ranges or generations: a rejected packet leaves
+the store equal to its last upload, so a cancellation test asserts the
+next frame draws from consistent bytes and nothing is acknowledged or
+reclaimed. Buffers of commands absent for N frames are dropped.
+Uniform-array devices (WebGL) draw a command in 16 KiB chunks of records
+with aligned dynamic offsets, ~120 draws for the arena, with no CPU
+expansion: the record is the shader's input on every backend.
+
+**Scene and pass.** `collect` pushes one run reference per draw-run node
+(command, segments, placement, z) and walks nodes only; visibility is
+per command bounds. `merge_items`, `shape_run`, the conversion in
+`prepare_shape_batch`, `band_mesh.rs` and the flat `shapes` vector go.
+The pass draws segments: bind the command buffer and uniform, one draw
+per segment under its (blend, variant) pipeline, `6 n` vertices from
+`vertex_index` or one instance per record where instancing exists.
+
+**Bands from the vertex stage.** Arc and ring records draw as instanced
+strips generated from `vertex_index`, in segment-count buckets (a draw
+per bucket, every instance of a bucket with that count), with the same
+one-texel slack and the pixel-centre coverage proof `band_mesh.rs` has
+today. This replaces the CPU mesh in the same landing, because removing
+the mesh first would restore the disc-sized fill measured on the Mate
+20 X (12 to 16 MP, 10.6 to 15.9 ms).
+
+**Budget on the watch, as a bar.** Floors outside the renderer: the
+app's own math plus 17,600 record writes (main's whole process_frame,
+with a 4-byte tape, was 8-10 ms; the record write must stay under
+~0.25 us per call on that core), reconcile 3-4 ms, drain 1-2, layout 1,
+present 0.6. The renderer after the record: compare ~0.3 ms, upload
+under 1 ms, collect and encode ~1 ms. Bar: p50 period at or under
+16.7 ms and p90 under 20 ms over 60 s at steady temperature; floor: beat
+main's 21.8 ms p50 on the same watch. If the record floor makes the vsync
+unreachable, the number is reported, not estimated away. On the phone
+the encode thread drops from ~11 ms to a few, which is battery, not fps.
+
+**Not in this design.** Similarity-span inference, recolour patches and
+persistent patched ranges: only if the bar is missed with everything
+above landed and the numbers show the record floor is not the reason.
 
 ## Review of this design
 
-- The second draft added stage p50s into a frame and read `present` as
-  GPU time; the repository's own attribution guide forbids both, and the
-  delay probe refuted the model: the CPU overlaps the GPU by a frame on
-  this driver. Both scenes are GPU-bound, cranorbit at ~19 ms, not 8.
-- The single-thread requirement stands as a design constraint (the
-  watch), and it changes nothing on the phone: the CPU is already under
-  the vsync there, and the GPU does not care how many threads fed it.
-- Retention by generation was unsafe: a re-record can be byte-identical
-  and two runs can share a generation. Identity is now command plus
-  content fingerprint.
-- A rotated direct child needs its rectangular clip through the inverse
-  affine; the shader's device clip is axis-aligned. The placement carries
-  the local clip.
-- Segments cut on blend mode as well as kind; a pipeline's blend state is
-  fixed at creation.
-- The record is 176 bytes today, not 160; gradients need their own arena
-  and lifetime; the pixels renderer is a second consumer of primitives.
-- The GL measurement is not evidence for a backend change; it is evidence
-  that the Vulkan page configuration costs something the design must
-  measure before it budgets.
-- Neither target workload is pinned: the showcase is an external
-  repository and cranorbit is another; every number here names the day
-  and the build, and the order below starts by pinning both revisions
-  and their scripted inputs so a step's number is a comparison, not a
-  recollection.
+- The first draft (typed tape, per-record similarity verify, patched
+  persistent slots) reproduced the retained feed of the 44 fps renderer,
+  forecast a 1 ms pass the old renderer's 18-20 ms refutes, and needed a
+  producer/present commit protocol. Withdrawn.
+- `Rc` cannot cross the packet boundary (`FramePacket` is `Send`), and
+  `DrawPrimitive::Text` carries `Rc<str>`: the packet payload is an `Arc`
+  over POD bytes and tables, text converted before the boundary.
+- Present-side comparison is too late for cache identity: the fingerprint
+  is produced while recording and covers stops and lane order, or a
+  recoloured gradient behind an unchanged handle reuses stale stops.
+- `f16` would break the exact `PartialEq` gates on `Color` and
+  `CornerRadii` and the GLES 3.0 lowering; geometry and colour stay `f32`.
+- An alpha-only uniform changes output: the colour matrix and the exact
+  paint order ride the uniform.
+- A common integer delta is not today's snapping: the vertex stage
+  canonicalises every coordinate to 1/16 px as the CPU does, pinned by
+  the byte-identity tests in `effect_semantics.rs`.
+- A per-entry tape walked in the pass is the forbidden scan; segments are
+  coalesced at record time.
+- Variable segment counts cannot share one instanced draw: buckets.
+- The earlier draft's own arithmetic (93 records per chunk, ~190 web
+  draws) belonged to the 176-byte `ShapeData`.
 
 ## Budget, GPU ms per frame, from the delay probe and the ablation deltas
 
@@ -582,10 +614,9 @@ draws 21 calls on the same scene because its scene builder diffed each
 re-recording against the previous one and kept the unchanged spans in
 retained GPU slots; only the changed suffix was resolved and uploaded.
 On the phone the GPU hid this (both at the vsync); on the watch the CPU
-is the frame, and the branch costs 4x. The watch was always the case for
-step 6 below; it is now the measurement that decides it. The reference
-point for step 6 is main's 44 fps on the same watch, and the bar is the
-vsync there.
+is the frame, and the branch costs 4x. This measurement put the record
+architecture first; the reference point is main's 44 fps on the same
+watch and the bar is the vsync there.
 
 The build itself: the devices carry the store build (version 109,
 release key), so a benchmark APK collides on install. `-PbenchArena=true`
@@ -599,37 +630,36 @@ events); the stage properties (`debug.cranpose.render_stage_ms`,
 
 Every step ships with its contract proven red first, the robot suite
 green, and both scenes measured on the device with the delay probe at
-zero, alternating rounds, temperature logged.
+zero, alternating rounds, temperature logged; the watch with the
+`.bench` build, 60 s, p50 and p90.
 
-1. Pin the showcase and cranorbit revisions and their scripted inputs;
-   record the two baselines above with the probe method. Pinned:
-   cranpose-showcase 4ad4080 (v0.1.12), cranorbit 0334e16, the scripts in
-   the session scratchpad (`measure.sh`, `orbit_measure.sh`).
-2. Page usage ablation on the showcase. Done, no gain: an offscreen page
-   and a blit (7 passes, 17 MP) presents at 23.9-24.0 fps against the
-   direct root's 24.0-24.5; the GL difference is not the page's usage.
-   The toggle that measured it is gone; the number lives in
-   `TIME_WASTERS.md`.
-3. Shape pipelines per (blend mode, stage, variant), with batches cut on
-   brush class. Done: cranorbit's arena presents at the vsync, 61.0 /
-   61.0 fps against main's 58, single thread, pixel-exact. The varying
-   hypothesis was wrong (skipping the upload and the record traffic
-   changed nothing); the cost was the fragment program's gradient path
-   existing in a solid batch, which main avoided by construction.
-4. Band-mesh margin and disc octagons: the fill split says the arena's
-   plain fills are 5.0 MP (its discs and background) and the arc bands
-   4.0; headroom for the watch, not a phone gate any more.
-5. Lens field, blur at the scratch scale, shadow extents. The showcase's
-   exact steps.
-6. Records from the recorder, the run store, placements, run segments,
-   bands from the vertex stage, the upload ring. The watch's frame and
-   the phone's battery. Measured 2026-09-04: the watch presents 12 fps
-   on this branch against main's 44 because every stage walks all
-   17,500 primitives of one re-recorded command each frame (scene 18.7,
-   collect 13-16, pass 42 ms). The store must keep resolved records per
-   command across re-recordings, compare the new recording against the
-   kept one per primitive, and resolve, mesh and upload only the changed
-   ranges; the collect and the pass then walk runs, not primitives.
-   Bar: the vsync on the watch, main's 44 fps as the floor.
-7. Measure; report what remains on the showcase and what each material
-   decision would earn and cost.
+1. Pinned revisions and baselines: cranpose-showcase 4ad4080 (v0.1.12),
+   cranorbit 0334e16, the scripts in the session scratchpad
+   (`measure.sh`, `orbit_measure.sh`, `orbit_measure_dev.sh`). Done.
+2. Page usage ablation on the showcase: done, no gain (23.9-24.0 against
+   24.0-24.5 fps); the toggle is gone, the number is in `TIME_WASTERS.md`.
+3. Shape pipelines per (blend mode, stage, variant), batches cut on brush
+   class: done, cranorbit at the vsync on the Mate 20 X (61.0 / 61.0 fps
+   against main's 58), pixel-exact.
+4. The record: `ShapeRecord`, lanes, per-command stop table, coalesced
+   segments, bounds, summary and fingerprint produced while recording;
+   the materialising iterator. Gates: every `DrawScope` call materialises
+   to today's `DrawPrimitive` byte for byte; recorded bounds equal
+   today's; the layer and backdrop cache hashes over a recorded graph
+   equal today's.
+5. The compact GPU path: placement uniform ring, vertex-stage
+   canonicalisation, colour matrix and paint order in the shader.
+   Gates: pixel parity against today's CPU conversion over the arena and
+   the showcase pages (bound stated, red-proven), the snapping and
+   translated-gradient byte-identity tests, gradient parity.
+6. The run store and run references in `collect` and the pass, the
+   vertex-stage bands with their coverage proof, and the removal of
+   `merge_items`, `shape_run`'s walk, the CPU conversion and
+   `band_mesh.rs`, in one landing. Gates: the cancellation test (a
+   rejected packet, the next frame consistent), `band_fill.rs` budget and
+   pixels, the robot suite. Measured on both devices; the Mate 20 X fill
+   must not exceed the mesh's 12 MP.
+7. Watch and phone A/B/A/B against main, 60 s, p50/p90, temperature.
+   Then the showcase's exact GPU steps (interior split, shadow support
+   at r, blur variants, substrate) and the material decisions, each with
+   its number.
