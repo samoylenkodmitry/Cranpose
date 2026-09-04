@@ -7,7 +7,7 @@ use cranpose_render_common::{
         RenderGraph, RenderNode,
     },
 };
-use cranpose_ui_graphics::{DrawScopeDefault, Rect};
+use cranpose_ui_graphics::{DrawScope, DrawScopeDefault, Rect};
 use support::{SIZE, record_mixed_scene, record_solid_scene};
 
 fn graph_for(record: fn(&mut DrawScopeDefault), clip: Option<Rect>) -> RenderGraph {

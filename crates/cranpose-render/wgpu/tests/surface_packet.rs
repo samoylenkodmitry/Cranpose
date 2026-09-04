@@ -1,65 +1,14 @@
 mod support;
 
-use cranpose_core::NodeId;
 use cranpose_render_common::{
     Renderer,
-    graph::{
-        CachePolicy, DrawPrimitiveNode, IsolationReasons, LayerNode, PrimitiveEntry, PrimitiveNode,
-        PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode,
-    },
-    raster_cache::LayerRasterCacheHashes,
+    graph::{CachePolicy, ProjectiveTransform, RenderGraph},
 };
 use cranpose_render_wgpu::CapturedFrame;
-use cranpose_ui_graphics::{Brush, Color, GraphicsLayer, Point, Rect, Size};
+use cranpose_ui_graphics::{Color, Rect, Size};
 
 const FRAME_WIDTH: u32 = 128;
 const FRAME_HEIGHT: u32 = 96;
-
-fn test_layer(
-    node_id: Option<NodeId>,
-    cache_policy: CachePolicy,
-    local_bounds: Rect,
-    transform_to_parent: ProjectiveTransform,
-    children: Vec<RenderNode>,
-) -> LayerNode {
-    LayerNode {
-        node_id,
-        wraps: None,
-        local_bounds,
-        transform_to_parent,
-        motion_context_animated: false,
-        translated_content_context: false,
-        translated_content_offset: Point::default(),
-        content_offset: Point::default(),
-        scene_children_origin: Point::default(),
-        scene_children_layer_translation: Point::default(),
-        graphics_layer: GraphicsLayer::default(),
-        clip_to_bounds: false,
-        shadow_clip: None,
-        hit_test: None,
-        has_hit_targets: false,
-        has_origin_sinks: false,
-        isolation: IsolationReasons::default(),
-        cache_policy,
-        cache_hashes: LayerRasterCacheHashes::default(),
-        cache_hashes_valid: false,
-        children,
-    }
-}
-
-fn rect_primitive(rect: Rect, color: Color) -> RenderNode {
-    RenderNode::Primitive(PrimitiveEntry {
-        phase: PrimitivePhase::BeforeChildren,
-        node: PrimitiveNode::Draw(DrawPrimitiveNode {
-            primitive: cranpose_ui_graphics::DrawPrimitive::Rect {
-                rect,
-                brush: Brush::solid(color),
-                stroke: None,
-            },
-            clip: None,
-        }),
-    })
-}
 
 fn shadowed_root_graph(cache_policy: CachePolicy) -> RenderGraph {
     let bounds = Rect {
@@ -68,12 +17,12 @@ fn shadowed_root_graph(cache_policy: CachePolicy) -> RenderGraph {
         width: FRAME_WIDTH as f32,
         height: FRAME_HEIGHT as f32,
     };
-    let mut root = test_layer(
+    let mut root = support::contract_layer(
         Some(4_100),
         cache_policy,
         bounds,
         ProjectiveTransform::identity(),
-        vec![rect_primitive(
+        vec![support::rect_primitive(
             Rect {
                 x: 24.0,
                 y: 20.0,
@@ -185,7 +134,7 @@ fn dev_overlay_packet_renders_over_both_root_kinds() {
     };
 
     let direct_graph = || {
-        RenderGraph::new(test_layer(
+        RenderGraph::new(support::contract_layer(
             Some(4_200),
             CachePolicy::None,
             Rect {
@@ -195,7 +144,7 @@ fn dev_overlay_packet_renders_over_both_root_kinds() {
                 height: FRAME_HEIGHT as f32,
             },
             ProjectiveTransform::identity(),
-            vec![rect_primitive(
+            vec![support::rect_primitive(
                 Rect {
                     x: 0.0,
                     y: 0.0,

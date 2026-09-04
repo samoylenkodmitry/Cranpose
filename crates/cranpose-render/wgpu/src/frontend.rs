@@ -222,7 +222,7 @@ mod tests {
             .build_frame_packet(320, 240, 0, 0)
             .expect("a graph collects into a packet");
         let mut scene = packet.root.scene;
-        scene.shapes.reserve(64);
+        scene.runs.reserve(64);
         let hint = scene.capacity_hint();
         frontend.apply_returns(RenderReturns {
             scene: Some(scene),

@@ -9,14 +9,15 @@ use cranpose_render_common::{
     primitive_emit::{PrimitiveClipSpace, resolve_clip, resolve_primitive_clip},
 };
 use cranpose_ui_graphics::{
-    BlendMode, CompositingStrategy, DrawPrimitive, GraphicsLayer, LayerShape, Point, Rect,
-    RenderEffect, expand_rect, primitive_coverage_rect,
+    BlendMode, CompositingStrategy, DrawPrimitive, GraphicsLayer, LayerShape, Point, RecordLane,
+    Rect, RenderEffect, expand_rect, primitive_coverage_rect,
 };
 
 use crate::{
     pipeline::{TextLayoutResolver, push_draw_primitive, push_layer_shadow, push_text_style_draws},
     scene::{
-        BackdropLayer, CompositorScene, LayerRoundedClip, SceneCapacityHint, ShadowDraw, SnapAnchor,
+        BackdropLayer, CompositorScene, LayerRoundedClip, Placement as RunPlacement, RunDraw,
+        SceneCapacityHint, ShadowDraw, SnapAnchor,
     },
 };
 
@@ -385,6 +386,7 @@ pub(crate) fn collect_root(
         translated: false,
     };
     collect_child(root, text_layout, context, &mut out);
+    out.scene.flush_loose();
     out
 }
 
@@ -433,7 +435,7 @@ fn isolated_child(
     layer: &LayerNode,
     text_layout: &mut impl TextLayoutResolver,
     context: WalkContext,
-    parent_scene: &CompositorScene,
+    parent_scene: &mut CompositorScene,
 ) -> ChildLayer {
     let local_layer = local_content_layer_for(&layer.graphics_layer);
     let content_context = WalkContext {
@@ -447,6 +449,7 @@ fn isolated_child(
         children: Vec::new(),
     };
     collect_into(layer, text_layout, content_context, &mut content);
+    content.scene.flush_loose();
     let transform = layer
         .transform_to_parent
         .then(ProjectiveTransform::translation(
@@ -468,7 +471,7 @@ fn isolated_child(
         GraphicsLayer::composite_alpha_8bit(layer.graphics_layer.alpha)
     };
     ChildLayer {
-        z_index: parent_scene.next_z,
+        z_index: parent_scene.next_z(),
         node_id: layer.node_id,
         local_bounds: layer.local_bounds,
         transform,
@@ -670,7 +673,7 @@ fn collect_child(
                 child_bounds,
                 shadow_clip,
             );
-            let isolated = isolated_child(child, text_layout, context, &out.scene);
+            let isolated = isolated_child(child, text_layout, context, &mut out.scene);
             assign_shadow_anchor(&mut out.scene, shadows_before, isolated.snap_anchor);
             out.children.push(isolated);
             out.scene.next_z += 1;
@@ -690,11 +693,12 @@ fn assign_shadow_anchor(
 
 fn anchor_shadows(shadows: &mut [ShadowDraw], anchor: SnapAnchor) {
     for shadow in shadows {
-        for (shape, _) in &mut shadow.shapes {
-            shape.snap_anchor = Some(anchor);
-        }
-        for (shape, _) in &mut shadow.post_blur_cutouts {
-            shape.snap_anchor = Some(anchor);
+        for run in shadow
+            .shapes
+            .iter_mut()
+            .chain(&mut shadow.post_blur_cutouts)
+        {
+            run.placement.snap_anchor = Some(anchor);
         }
         for text in &mut shadow.texts {
             text.snap_anchor = Some(anchor);
@@ -704,7 +708,6 @@ fn anchor_shadows(shadows: &mut [ShadowDraw], anchor: SnapAnchor) {
 
 #[derive(Clone, Copy)]
 struct SceneCounts {
-    shapes: usize,
     images: usize,
     texts: usize,
     shadow_draws: usize,
@@ -713,7 +716,6 @@ struct SceneCounts {
 
 fn scene_counts(scene: &CompositorScene) -> SceneCounts {
     SceneCounts {
-        shapes: scene.shapes.len(),
         images: scene.images.len(),
         texts: scene.texts.len(),
         shadow_draws: scene.shadow_draws.len(),
@@ -729,9 +731,6 @@ fn assign_snap_anchor_since(
     let Some(anchor) = snap_anchor else {
         return;
     };
-    for shape in &mut scene.shapes[counts.shapes..] {
-        shape.snap_anchor = Some(anchor);
-    }
     for image in &mut scene.images[counts.images..] {
         image.snap_anchor = Some(anchor);
     }
@@ -773,6 +772,7 @@ fn push_primitive(
                 layer_bounds,
                 local_layer,
                 clip,
+                snap_anchor,
                 &mut out.scene,
                 None,
                 motion_context_animated,
@@ -802,12 +802,17 @@ fn push_primitive(
                 text.font_size,
                 text.layout_options,
                 text_clip,
+                snap_anchor,
             );
         }
     }
     assign_snap_anchor_since(&mut out.scene, counts, snap_anchor);
 }
 
+/// Places a recorded run: every maximal stretch of shape segments becomes
+/// one run draw under the layer's placement, and the primitives of the
+/// other lane (text, images, shadows) take their own item paths between
+/// them, in the order the command drew.
 fn push_draw_run(
     out: &mut LayerScene,
     run: &DrawRunNode,
@@ -818,17 +823,45 @@ fn push_draw_run(
     motion_context_animated: bool,
 ) {
     let counts = scene_counts(&out.scene);
-    for primitive in run.primitives() {
-        push_draw_primitive(
-            &primitive,
-            layer_bounds,
-            local_layer,
-            visual_clip,
-            &mut out.scene,
-            None,
-            motion_context_animated,
-        );
+    let placement = RunPlacement::painted(
+        Point::new(layer_bounds.x, layer_bounds.y),
+        snap_anchor,
+        visual_clip,
+        local_layer,
+    );
+    let recording = &*run.recording;
+    let mut shapes_from: Option<u32> = None;
+    let flush_shapes = |out: &mut LayerScene, end: u32, from: &mut Option<u32>| {
+        if let Some(start) = from.take() {
+            out.scene
+                .push_run(RunDraw::of(recording, run.command, start..end, placement));
+        }
+    };
+    for (index, segment) in recording.segments_in(&run.segments).enumerate() {
+        let position = run.segments.start + index as u32;
+        match segment.lane {
+            RecordLane::Shapes => {
+                shapes_from.get_or_insert(position);
+            }
+            RecordLane::Content => {}
+            RecordLane::Others => {
+                flush_shapes(out, position, &mut shapes_from);
+                for primitive in &recording.others()[segment.range()] {
+                    push_draw_primitive(
+                        primitive,
+                        layer_bounds,
+                        local_layer,
+                        visual_clip,
+                        snap_anchor,
+                        &mut out.scene,
+                        None,
+                        motion_context_animated,
+                    );
+                }
+            }
+        }
     }
+    flush_shapes(out, run.segments.end, &mut shapes_from);
     assign_snap_anchor_since(&mut out.scene, counts, snap_anchor);
 }
 

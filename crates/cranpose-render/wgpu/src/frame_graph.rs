@@ -30,6 +30,20 @@ pub(crate) struct FrameCommandStats {
     pub(crate) copy_pixels: u64,
 }
 
+impl std::ops::AddAssign for FrameCommandStats {
+    fn add_assign(&mut self, other: Self) {
+        self.encoder_count += other.encoder_count;
+        self.submit_count += other.submit_count;
+        self.pass_count += other.pass_count;
+        self.pass_pixels += other.pass_pixels;
+        self.transient_texture_bytes += other.transient_texture_bytes;
+        self.retained_texture_bytes += other.retained_texture_bytes;
+        self.upload_bytes += other.upload_bytes;
+        self.copy_count += other.copy_count;
+        self.copy_pixels += other.copy_pixels;
+    }
+}
+
 /// A region of one texture copied texel for texel into another of a
 /// copy-compatible format, outside any pass.
 #[derive(Clone, Copy)]

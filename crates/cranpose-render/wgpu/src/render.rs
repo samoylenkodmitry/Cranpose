@@ -12,7 +12,7 @@ use cranpose_core::hash::default as default_hash;
 use cranpose_render_common::{
     bounded_lru_cache::BoundedLruCache,
     geometry::blur_extent_margin,
-    graph::quad_bounds,
+    graph::{DrawCommandId, quad_bounds},
     raster_cache::LayerRasterCacheKey,
     software_text_raster::{
         SoftwareGlyphAtlasGlyph, SoftwareGlyphAtlasKey, SoftwareGlyphAtlasPlacement,
@@ -23,15 +23,14 @@ use cranpose_render_common::{
     },
 };
 use cranpose_ui_graphics::{
-    BlendMode, Brush, Color, ColorFilter, FxHasher, ImageBitmap, ImageSampling, Point, Rect,
-    RenderHash, StrokeCap, StrokeJoin, TileMode,
+    ARC_BUCKET_SEGMENTS, BlendMode, ColorFilter, FxHasher, ImageBitmap, ImageSampling, Point,
+    RecordSegment, Rect, RenderHash, TileMode,
 };
 use smallvec::SmallVec;
 use web_time::Instant;
 
 use crate::{
     DebugCpuAllocationStats,
-    band_mesh::MeshVertex,
     collect::LayerScene,
     draw_pass::{PassSegment, PassTarget, ResolvedComposite, ResolvedCompositeKind, SourceContent},
     effect_renderer::{CompositeSampleMode, EffectRenderer, RoundedCompositeMask},
@@ -43,9 +42,9 @@ use crate::{
     frame_packet::{CancelReason, FramePacket, PresentOutcome, RenderReturns},
     geometry::{
         DevicePixelBounds, anchored_device_rect, axis_aligned_quad_rect,
-        canonicalize_device_coordinate, canonicalized_scaled_quad, canonicalized_scaled_rect,
-        offscreen_byte_size, scaled_quad, snap_delta_for_anchor, snapped_anchor_device_origin,
-        translate_quad, translation_stable_anchored_device_pixel_bounds,
+        canonicalize_device_coordinate, canonicalized_scaled_quad, offscreen_byte_size,
+        scaled_quad, snap_delta_for_anchor, translate_quad,
+        translation_stable_anchored_device_pixel_bounds,
     },
     gpu_stats::{self, gpu_stats_enabled},
     layer_cache::LayerCache,
@@ -53,108 +52,12 @@ use crate::{
     offscreen::{OffscreenTarget, composition_bytes_per_pixel, composition_format},
     output_conversion::OutputConverter,
     rect_to_quad,
+    run_store::{PlacementData, RunBufferMode, RunDrawCall, RunStore, stored_run_draws},
     scene::{
-        CompositorScene, DrawOp, DrawOpKind, DrawShape, ImageDraw, SceneBrush, ShadowDraw,
-        SnapAnchor, TextDraw,
+        CompositorScene, DrawOp, DrawOpKind, ImageDraw, RunDraw, ShadowDraw, SnapAnchor, TextDraw,
     },
     shaders,
 };
-#[cfg(target_arch = "wasm32")]
-const MAX_SHAPES_PER_BATCH: usize = shaders::UNIFORM_SHAPE_CAPACITY;
-#[cfg(not(target_arch = "wasm32"))]
-const MAX_SHAPES_PER_BATCH: usize = 768;
-#[cfg(target_arch = "wasm32")]
-const MAX_GRADIENT_STOPS: usize = 256;
-#[cfg(not(target_arch = "wasm32"))]
-const MAX_GRADIENT_STOPS: usize = 1024;
-
-#[cfg(not(target_arch = "wasm32"))]
-const MAX_SHAPES_PER_STORAGE_BATCH: usize = 1 << 16;
-#[cfg(not(target_arch = "wasm32"))]
-const MAX_GRADIENT_STOPS_PER_STORAGE_BATCH: usize = 1 << 16;
-
-#[cfg(not(target_arch = "wasm32"))]
-const INITIAL_STORAGE_BATCH_CAPACITY: usize = 1024;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct ShapeBatchLimits {
-    max_shapes_per_batch: usize,
-    max_gradient_stops: usize,
-    storage: bool,
-}
-
-impl ShapeBatchLimits {
-    fn for_device(device: &wgpu::Device, downlevel: wgpu::DownlevelFlags) -> Self {
-        Self::select(&device.limits(), downlevel)
-    }
-
-    fn select(limits: &wgpu::Limits, _downlevel: wgpu::DownlevelFlags) -> Self {
-        #[cfg(not(target_arch = "wasm32"))]
-        if limits.max_storage_buffers_per_shader_stage >= 2
-            && _downlevel.contains(wgpu::DownlevelFlags::VERTEX_STORAGE)
-        {
-            return Self::for_storage_binding_size(limits.max_storage_buffer_binding_size);
-        }
-        Self::for_uniform_binding_size(limits.max_uniform_buffer_binding_size)
-    }
-
-    fn for_uniform_binding_size(max_uniform_buffer_binding_size: u64) -> Self {
-        let binding = max_uniform_buffer_binding_size as usize;
-        Self {
-            max_shapes_per_batch: (binding / std::mem::size_of::<ShapeData>())
-                .clamp(1, MAX_SHAPES_PER_BATCH),
-            max_gradient_stops: (binding / std::mem::size_of::<GradientStop>())
-                .clamp(1, MAX_GRADIENT_STOPS),
-            storage: false,
-        }
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn for_storage_binding_size(max_storage_buffer_binding_size: u64) -> Self {
-        let binding = max_storage_buffer_binding_size as usize;
-        Self {
-            max_shapes_per_batch: (binding / std::mem::size_of::<ShapeData>())
-                .clamp(1, MAX_SHAPES_PER_STORAGE_BATCH),
-            max_gradient_stops: (binding / std::mem::size_of::<GradientStop>())
-                .clamp(1, MAX_GRADIENT_STOPS_PER_STORAGE_BATCH),
-            storage: true,
-        }
-    }
-
-    fn initial_shape_capacity(&self) -> usize {
-        #[cfg(not(target_arch = "wasm32"))]
-        if self.storage {
-            return self
-                .max_shapes_per_batch
-                .min(INITIAL_STORAGE_BATCH_CAPACITY);
-        }
-        self.max_shapes_per_batch
-    }
-
-    fn initial_gradient_capacity(&self) -> usize {
-        #[cfg(not(target_arch = "wasm32"))]
-        if self.storage {
-            return self.max_gradient_stops.min(INITIAL_STORAGE_BATCH_CAPACITY);
-        }
-        self.max_gradient_stops
-    }
-
-    fn data_buffer_usage(&self) -> wgpu::BufferUsages {
-        if self.storage {
-            wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST
-        } else {
-            wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST
-        }
-    }
-
-    fn data_binding_type(&self) -> wgpu::BufferBindingType {
-        if self.storage {
-            wgpu::BufferBindingType::Storage { read_only: true }
-        } else {
-            wgpu::BufferBindingType::Uniform
-        }
-    }
-}
 #[cfg(target_arch = "wasm32")]
 const HARD_MAX_BUFFER_MB: usize = 64;
 #[cfg(not(target_arch = "wasm32"))]
@@ -657,10 +560,15 @@ pub(crate) fn image_draw_bounds(image: &ImageDraw, root_scale: f32) -> Option<Re
     )
 }
 
-pub(crate) fn shape_draw_bounds(shape: &DrawShape, root_scale: f32) -> Option<Rect> {
+pub(crate) fn run_draw_bounds(run: &RunDraw, root_scale: f32) -> Option<Rect> {
+    let snap_delta = run
+        .placement
+        .snap_anchor
+        .map(|anchor| snap_delta_for_anchor(anchor, root_scale))
+        .unwrap_or_default();
     clipped_bounds(
-        snapped_quad_bounds(shape.quad, shape.snap_anchor, root_scale),
-        shape.clip,
+        run.bounds.translate(snap_delta.x, snap_delta.y),
+        run.placement.clip,
     )
 }
 
@@ -673,13 +581,12 @@ pub(crate) fn text_draw_is_visible_in_rect(
         .is_some_and(|bounds| bounds.intersect(viewport_rect).is_some())
 }
 
-pub(crate) fn shape_draw_is_visible_in_rect(
-    shape: &DrawShape,
+pub(crate) fn run_draw_is_visible_in_rect(
+    run: &RunDraw,
     viewport_rect: Rect,
     root_scale: f32,
 ) -> bool {
-    shape_draw_bounds(shape, root_scale)
-        .is_some_and(|bounds| bounds.intersect(viewport_rect).is_some())
+    run_draw_bounds(run, root_scale).is_some_and(|bounds| bounds.intersect(viewport_rect).is_some())
 }
 
 fn cached_text_glyph_quad(
@@ -813,22 +720,16 @@ pub(crate) fn hash_shadow_device_rect<H: Hasher>(
     hash_shadow_device_offset(rect.height, 0.0, root_scale, state);
 }
 
-pub(crate) fn hash_shape_shadow_item<H: Hasher>(
-    shape: &DrawShape,
-    brushes: &[Brush],
-    blend_mode: BlendMode,
+fn hash_placement<H: Hasher>(
+    placement: &crate::scene::Placement,
     origin_x: f32,
     origin_y: f32,
     root_scale: f32,
     state: &mut H,
 ) {
-    hash_shadow_device_rect(shape.rect, origin_x, origin_y, root_scale, state);
-    hash_shadow_device_rect(shape.local_rect, origin_x, origin_y, root_scale, state);
-    for point in shape.quad {
-        hash_shadow_device_offset(point[0], origin_x, root_scale, state);
-        hash_shadow_device_offset(point[1], origin_y, root_scale, state);
-    }
-    match shape.snap_anchor {
+    hash_shadow_device_offset(placement.offset.x, origin_x, root_scale, state);
+    hash_shadow_device_offset(placement.offset.y, origin_y, root_scale, state);
+    match placement.snap_anchor {
         Some(anchor) => {
             1u8.hash(state);
             hash_shadow_device_offset(anchor.origin.x, origin_x, root_scale, state);
@@ -837,95 +738,78 @@ pub(crate) fn hash_shape_shadow_item<H: Hasher>(
         }
         None => 0u8.hash(state),
     }
-    shape.brush.render_hash(brushes).hash(state);
-    match shape.shape {
-        Some(corner_shape) => {
-            1u8.hash(state);
-            corner_shape.radii().render_hash().hash(state);
-        }
-        None => 0u8.hash(state),
-    }
-    match shape.clip {
+    match placement.clip {
         Some(clip) => {
             1u8.hash(state);
             hash_shadow_device_rect(clip, origin_x, origin_y, root_scale, state);
         }
         None => 0u8.hash(state),
     }
-    blend_mode.hash(state);
-    shape.blend_mode.hash(state);
+    hash_f32_for_cache(placement.alpha, state);
+    match placement.color_filter {
+        Some(filter) => {
+            1u8.hash(state);
+            filter.render_hash().hash(state);
+        }
+        None => 0u8.hash(state),
+    }
 }
 
-pub(crate) fn shape_shadow_content_hash(
-    shapes: &[(DrawShape, BlendMode)],
-    post_blur_cutouts: &[(DrawShape, BlendMode)],
-    brushes: &[Brush],
+/// Hashes what a run draws relative to `origin`: its records by
+/// fingerprint and segment range, and its placement in device units, so a
+/// run moving rigidly by whole pixels hashes the same.
+pub(crate) fn hash_run_item<H: Hasher>(
+    run: &RunDraw,
+    origin_x: f32,
+    origin_y: f32,
     root_scale: f32,
-) -> u64 {
+    state: &mut H,
+) {
+    run.tables.fingerprint().hash(state);
+    run.segments.start.hash(state);
+    run.segments.end.hash(state);
+    hash_shadow_device_rect(run.bounds, origin_x, origin_y, root_scale, state);
+    hash_placement(&run.placement, origin_x, origin_y, root_scale, state);
+}
+
+/// What a shadow's casters draw, independent of where the shadow sits to
+/// the whole device pixel: the recordings, and the placement relative to
+/// the casters' bounds.
+pub(crate) fn shadow_content_hash(shadow: &ShadowDraw, root_scale: f32) -> u64 {
     let mut hasher = FxHasher::default();
-    let origin = shape_shadow_bounds(shapes).unwrap_or(Rect {
+    let origin = shape_shadow_bounds(shadow).unwrap_or(Rect {
         x: 0.0,
         y: 0.0,
         width: 0.0,
         height: 0.0,
     });
-
-    shapes.len().hash(&mut hasher);
-    for (shape, blend_mode) in shapes.iter().chain(post_blur_cutouts) {
-        hash_shape_shadow_item(
-            shape,
-            brushes,
-            *blend_mode,
-            origin.x,
-            origin.y,
-            root_scale,
-            &mut hasher,
-        );
+    for run in shadow.shapes.iter().chain(&shadow.post_blur_cutouts) {
+        hash_run_item(run, origin.x, origin.y, root_scale, &mut hasher);
     }
     hasher.finish()
 }
 
 fn shape_shadow_surface_cache_key(
-    shapes: &[(DrawShape, BlendMode)],
-    post_blur_cutouts: &[(DrawShape, BlendMode)],
-    brushes: &[Brush],
+    shadow: &ShadowDraw,
     device_bounds: DevicePixelBounds,
     pixel_radius: f32,
     root_scale: f32,
 ) -> Option<ShadowSurfaceCacheKey> {
     (root_scale.is_finite() && root_scale > 0.0).then(|| ShadowSurfaceCacheKey {
-        content_hash: shape_shadow_content_hash(shapes, post_blur_cutouts, brushes, root_scale),
+        content_hash: shadow_content_hash(shadow, root_scale),
         pixel_size: [device_bounds.width, device_bounds.height],
         root_scale_bits: root_scale.to_bits(),
         blur_radius_bits: pixel_radius.to_bits(),
     })
 }
 
-fn shape_shadow_bounds(shapes: &[(DrawShape, BlendMode)]) -> Option<Rect> {
-    shapes
-        .iter()
-        .map(|(shape, _)| shape.rect)
-        .reduce(|a, b| Rect {
-            x: a.x.min(b.x),
-            y: a.y.min(b.y),
-            width: (a.x + a.width).max(b.x + b.width) - a.x.min(b.x),
-            height: (a.y + a.height).max(b.y + b.height) - a.y.min(b.y),
-        })
-}
-
-fn shared_shape_shadow_snap_anchor(shapes: &[(DrawShape, BlendMode)]) -> Option<SnapAnchor> {
-    let anchor = shapes.first()?.0.snap_anchor?;
-    shapes
-        .iter()
-        .all(|(shape, _)| shape.snap_anchor == Some(anchor))
-        .then_some(anchor)
+fn shape_shadow_bounds(shadow: &ShadowDraw) -> Option<Rect> {
+    shadow.shapes.as_ref().map(|run| run.bounds)
 }
 
 pub(crate) fn shadow_draw_bounds(shadow: &ShadowDraw) -> Option<Rect> {
-    shadow
-        .shapes
-        .iter()
-        .map(|(shape, _)| shape.rect)
+    shape_shadow_bounds(shadow)
+        .into_iter()
         .chain(shadow.texts.iter().map(|text| text.rect))
         .reduce(|a, b| Rect {
             x: a.x.min(b.x),
@@ -935,60 +819,14 @@ pub(crate) fn shadow_draw_bounds(shadow: &ShadowDraw) -> Option<Rect> {
         })
 }
 
-fn resolve_gradient_point(origin: f32, extent: f32, value: f32) -> f32 {
-    if value.is_finite() {
-        origin + value
-    } else if value.is_sign_positive() {
-        origin + extent
+fn shape_shader_source(mode: RunBufferMode) -> Cow<'static, str> {
+    if mode.storage {
+        Cow::Owned(shaders::storage_shape_shader())
     } else {
-        origin
+        Cow::Borrowed(shaders::SHADER)
     }
 }
 
-fn gradient_tile_mode_value(tile_mode: TileMode) -> u32 {
-    match tile_mode {
-        TileMode::Clamp => 0,
-        TileMode::Repeated => 1,
-        TileMode::Mirror => 2,
-        TileMode::Decal => 3,
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn shape_shader_source(batch_limits: ShapeBatchLimits) -> Cow<'static, str> {
-    if batch_limits.storage {
-        return Cow::Owned(
-            shaders::SHADER
-                .replace(
-                    &format!(
-                        "var<uniform> shape_data: {};",
-                        shaders::uniform_shape_array()
-                    ),
-                    "var<storage, read> shape_data: array<ShapeData>;",
-                )
-                .replace(
-                    "var<uniform> gradient_stops: array<GradientStop, 256>;",
-                    "var<storage, read> gradient_stops: array<GradientStop>;",
-                ),
-        );
-    }
-    Cow::Owned(
-        shaders::SHADER
-            .replace(
-                &shaders::uniform_shape_array(),
-                &format!("array<ShapeData, {}>", batch_limits.max_shapes_per_batch),
-            )
-            .replace(
-                "array<GradientStop, 256>",
-                &format!("array<GradientStop, {}>", batch_limits.max_gradient_stops),
-            ),
-    )
-}
-
-#[cfg(target_arch = "wasm32")]
-fn shape_shader_source(_batch_limits: ShapeBatchLimits) -> Cow<'static, str> {
-    Cow::Borrowed(shaders::SHADER)
-}
 /// A pipeline that draws one full-screen triangle strip from `fullscreen_vs`
 /// into a single color target, the shape every effect and composite pass
 /// shares; `constants` fixes the shader's override constants.
@@ -1060,20 +898,21 @@ pub(crate) fn create_render_pipeline_logged<'a>(
     pipeline
 }
 
-/// How a shape batch reaches the vertex stage: six generated vertices per
-/// shape record, or a mesh of triangles that each name their record.
+/// Which tier's tables a shape pipeline reads: a stored run under the
+/// placement uniform, or the frame arena where each record names its
+/// placement.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum ShapeVertexStage {
-    Quads,
-    Mesh,
+pub(crate) enum RunTier {
+    Store,
+    Arena,
 }
 
-/// What every record of a batch agrees on, fixed into the batch's pipeline
-/// as shader constants so the fragment program carries only the branches
-/// the batch can take: the shape kind when the batch holds one kind, a
-/// solid-only brush, and whether any record clips. The general pipeline
-/// (`ShapeVariant::GENERAL`) keeps every branch and shades every record the
-/// same, which `shape_variant_parity.rs` pins.
+/// What every record of a draw agrees on, fixed into its pipeline as
+/// shader constants so the fragment program carries only the branches
+/// the draw can take: the shape kind when the segment holds one kind, a
+/// solid-only brush, and whether the placement clips. The general
+/// pipeline (`ShapeVariant::GENERAL`) keeps every branch and shades every
+/// record the same, which `shape_variant_parity.rs` pins.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct ShapeVariant {
     kind: Option<u32>,
@@ -1088,41 +927,15 @@ impl ShapeVariant {
         clipped: true,
     };
 
-    /// The variant of a batch: a kind only when every record shares it, a
-    /// solid brush only when no record carries gradient stops, and unclipped
-    /// only when no record clips. A mixed batch keeps the general pipeline
-    /// rather than splitting, since a scene that interleaves kinds record by
-    /// record (a game's studded bricks) would otherwise become hundreds of
-    /// draws.
-    fn of_batch(shapes: &[&DrawShape], brushes: &[Brush]) -> Self {
+    pub(crate) fn of_segment(segment: &RecordSegment, clipped: bool) -> Self {
         if !shape_variants_enabled() {
             return Self::GENERAL;
         }
-        let mut shapes = shapes.iter();
-        let Some(first) = shapes.next() else {
-            return Self::GENERAL;
-        };
-        let mut variant = Self {
-            kind: Some(shape_kind(first)),
-            solid: shape_is_solid(first, brushes),
-            clipped: first.clip.is_some(),
-        };
-        for shape in shapes {
-            if variant.kind != Some(shape_kind(shape)) {
-                variant.kind = None;
-            }
-            variant.solid &= shape_is_solid(shape, brushes);
-            variant.clipped |= shape.clip.is_some();
+        Self {
+            kind: segment.uniform_kind(),
+            solid: !segment.gradient,
+            clipped,
         }
-        variant
-    }
-
-    fn constants(self) -> [(&'static str, f64); 3] {
-        [
-            ("SHAPE_KIND_FIXED", self.kind.map_or(-1.0, f64::from)),
-            ("SHAPE_SOLID", f64::from(u8::from(self.solid))),
-            ("SHAPE_CLIPPED", f64::from(u8::from(self.clipped))),
-        ]
     }
 }
 
@@ -1130,28 +943,13 @@ fn shape_variants_enabled() -> bool {
     crate::debug_toggles::debug_toggle("CRANPOSE_SHAPE_VARIANTS").as_deref() != Some("0")
 }
 
-/// Whether a record's brush is a plain color: the batch cut that lets a
-/// solid batch fold its gradient path, which main's retained spans had by
-/// construction and which decides the arena's fragment cost.
-pub(crate) fn shape_is_solid(shape: &DrawShape, brushes: &[Brush]) -> bool {
-    shape_gradient_stop_count(shape, brushes) == 0
-}
-
-fn shape_kind(shape: &DrawShape) -> u32 {
-    if shape.arc.is_some() {
-        SHAPE_KIND_ARC
-    } else if shape.stroke.is_some() {
-        SHAPE_KIND_STROKE
-    } else {
-        SHAPE_KIND_FILL
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-struct ShapePipelineKey {
-    blend_mode: BlendMode,
-    stage: ShapeVertexStage,
-    variant: ShapeVariant,
+pub(crate) struct ShapePipelineKey {
+    pub(crate) blend_mode: BlendMode,
+    pub(crate) tier: RunTier,
+    /// The arc bucket a band pipeline draws; `None` draws quads.
+    pub(crate) band: Option<u8>,
+    pub(crate) variant: ShapeVariant,
 }
 
 fn create_shape_pipeline(
@@ -1159,36 +957,50 @@ fn create_shape_pipeline(
     cache: Option<&wgpu::PipelineCache>,
     surface_format: wgpu::TextureFormat,
     uniform_layout: &wgpu::BindGroupLayout,
-    shape_layout: &wgpu::BindGroupLayout,
+    run_layout: &wgpu::BindGroupLayout,
     key: ShapePipelineKey,
-    batch_limits: ShapeBatchLimits,
+    mode: RunBufferMode,
 ) -> wgpu::RenderPipeline {
     let ShapePipelineKey {
         blend_mode,
-        stage,
+        tier,
+        band,
         variant,
     } = key;
-    let constants = variant.constants();
-    let mesh_layout = [MeshVertex::layout()];
-    let (vertex_entry, vertex_buffers): (&str, &[wgpu::VertexBufferLayout<'_>]) = match stage {
-        ShapeVertexStage::Quads => ("vs_main", &[]),
-        ShapeVertexStage::Mesh => ("vs_mesh", &mesh_layout),
+    let constants = [
+        ("SHAPE_KIND_FIXED", variant.kind.map_or(-1.0, f64::from)),
+        ("SHAPE_SOLID", f64::from(u8::from(variant.solid))),
+        ("SHAPE_CLIPPED", f64::from(u8::from(variant.clipped))),
+        ("TIER_ARENA", f64::from(u8::from(tier == RunTier::Arena))),
+        ("SHAPE_BANDS", f64::from(u8::from(mode.storage))),
+        (
+            "BAND_SEGMENTS",
+            f64::from(band.map_or(ARC_BUCKET_SEGMENTS[0], |bucket| {
+                ARC_BUCKET_SEGMENTS[bucket as usize]
+            })),
+        ),
+        ("SHAPE_BAND", f64::from(u8::from(band.is_some()))),
+    ];
+    let vertex_entry = if band.is_some() {
+        "vs_band"
+    } else {
+        "vs_record"
     };
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("Shape Shader"),
-        source: wgpu::ShaderSource::Wgsl(shape_shader_source(batch_limits)),
+        source: wgpu::ShaderSource::Wgsl(shape_shader_source(mode)),
     });
 
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Shape Pipeline Layout"),
-        bind_group_layouts: &[Some(uniform_layout), Some(shape_layout)],
+        bind_group_layouts: &[Some(uniform_layout), Some(run_layout)],
         immediate_size: 0,
     });
 
     create_render_pipeline_logged(
         device,
         cache,
-        &format!("shape blend={blend_mode:?} stage={stage:?} variant={variant:?}"),
+        &format!("shape blend={blend_mode:?} tier={tier:?} band={band:?} variant={variant:?}"),
         wgpu::RenderPipelineDescriptor {
             label: Some("Shape Pipeline"),
             layout: Some(&pipeline_layout),
@@ -1199,7 +1011,7 @@ fn create_shape_pipeline(
                     constants: &constants,
                     ..wgpu::PipelineCompilationOptions::default()
                 },
-                buffers: vertex_buffers,
+                buffers: &[],
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
@@ -1378,364 +1190,7 @@ impl Vertex {
 struct Uniforms {
     viewport: [f32; 2],
     viewport_offset: [f32; 2],
-}
-
-#[repr(C)]
-#[derive(Copy, Clone, Debug, Pod, Zeroable)]
-pub(crate) struct ShapeData {
-    pub(crate) rect: [f32; 4],
-    pub(crate) radii: [f32; 4],
-    pub(crate) gradient_params: [f32; 4],
-    pub(crate) clip_rect: [f32; 4],
-    pub(crate) stroke_params: [f32; 4],
-    pub(crate) arc_params: [f32; 4],
-    pub(crate) quad01: [f32; 4],
-    pub(crate) quad23: [f32; 4],
-    pub(crate) color: [f32; 4],
-    pub(crate) brush_type: u32,
-    pub(crate) gradient_start: u32,
-    pub(crate) gradient_count: u32,
-    pub(crate) gradient_tile_mode: u32,
-    pub(crate) dither_origin: [f32; 2],
-    pub(crate) dither_padding: [f32; 2],
-}
-
-const SHAPE_KIND_FILL: u32 = 0;
-pub(crate) const SHAPE_KIND_STROKE: u32 = 1;
-pub(crate) const SHAPE_KIND_ARC: u32 = 2;
-
-fn stroke_cap_code(cap: StrokeCap) -> u32 {
-    match cap {
-        StrokeCap::Butt => 0,
-        StrokeCap::Round => 1,
-        StrokeCap::Square => 2,
-    }
-}
-
-fn stroke_join_code(join: StrokeJoin) -> u32 {
-    match join {
-        StrokeJoin::Miter => 0,
-        StrokeJoin::Round => 1,
-        StrokeJoin::Bevel => 2,
-    }
-}
-
-fn pack_shape_flags(kind: u32, cap: StrokeCap, join: StrokeJoin) -> f32 {
-    ((kind & 3) | (stroke_cap_code(cap) << 2) | (stroke_join_code(join) << 4)) as f32
-}
-
-fn shape_gradient_stop_count(shape: &DrawShape, brushes: &[Brush]) -> usize {
-    match shape.brush {
-        SceneBrush::Solid(_) => 0,
-        SceneBrush::Gradient(index) => match &brushes[index as usize] {
-            Brush::Solid(_) => 0,
-            Brush::LinearGradient { colors, .. }
-            | Brush::RadialGradient { colors, .. }
-            | Brush::SweepGradient { colors, .. } => colors.len(),
-        },
-    }
-}
-
-fn shape_dither_origin(shape: &DrawShape, root_scale: f32) -> [f32; 2] {
-    let origin = shape
-        .snap_anchor
-        .map(|anchor| snapped_anchor_device_origin(anchor, root_scale))
-        .unwrap_or_default();
-    [origin.x, origin.y]
-}
-
-fn convert_shape_into_slots(
-    shape: &DrawShape,
-    brushes: &[Brush],
-    root_scale: f32,
-    gradient_start: u32,
-    shape_out: &mut ShapeData,
-    gradient_out: &mut [GradientStop],
-) {
-    let snap_delta = shape
-        .snap_anchor
-        .map(|anchor| snap_delta_for_anchor(anchor, root_scale))
-        .unwrap_or_default();
-    let local_rect = shape.local_rect.translate(snap_delta.x, snap_delta.y);
-    let quad = translate_quad(shape.quad, snap_delta);
-    let clip = shape.clip;
-    let canonicalize = shape.snap_anchor.is_some();
-    let dither_origin = shape_dither_origin(shape, root_scale);
-    let device_local_rect = if canonicalize {
-        canonicalized_scaled_rect(local_rect, root_scale)
-    } else {
-        Rect {
-            x: local_rect.x * root_scale,
-            y: local_rect.y * root_scale,
-            width: local_rect.width * root_scale,
-            height: local_rect.height * root_scale,
-        }
-    };
-    let device_quad = if canonicalize {
-        canonicalized_scaled_quad(quad, root_scale)
-    } else {
-        scaled_quad(quad, root_scale)
-    };
-    let canonicalize_brush_coordinate = |value| {
-        if canonicalize {
-            canonicalize_device_coordinate(value)
-        } else {
-            value
-        }
-    };
-
-    let clip_rect = if let Some(clip) = clip {
-        let device_clip = if canonicalize {
-            canonicalized_scaled_rect(clip, root_scale)
-        } else {
-            Rect {
-                x: clip.x * root_scale,
-                y: clip.y * root_scale,
-                width: clip.width * root_scale,
-                height: clip.height * root_scale,
-            }
-        };
-        [
-            device_clip.x,
-            device_clip.y,
-            device_clip.width,
-            device_clip.height,
-        ]
-    } else {
-        [0.0, 0.0, 0.0, 0.0]
-    };
-
-    let mut fill_gradient_entries = |colors: &[Color], stops: Option<&[f32]>| {
-        let count = colors.len();
-        let explicit_stops = stops.filter(|values| values.len() == count);
-        for (index, color) in colors.iter().enumerate() {
-            let position = explicit_stops
-                .map(|values| values[index])
-                .unwrap_or_else(|| {
-                    if count <= 1 {
-                        0.0
-                    } else {
-                        index as f32 / (count - 1) as f32
-                    }
-                });
-            gradient_out[index] = GradientStop {
-                color: [color.r(), color.g(), color.b(), color.a()],
-                position: [position, 0.0, 0.0, 0.0],
-            };
-        }
-        count as u32
-    };
-    let mut gradient_params = [0.0f32; 4];
-    let (brush_type, gradient_count, gradient_tile_mode) = match &shape.brush {
-        SceneBrush::Solid(_) => (0u32, 0u32, gradient_tile_mode_value(TileMode::Clamp)),
-        SceneBrush::Gradient(index) => match &brushes[*index as usize] {
-            Brush::Solid(_) => (0u32, 0u32, gradient_tile_mode_value(TileMode::Clamp)),
-            Brush::LinearGradient {
-                colors,
-                stops,
-                start,
-                end,
-                tile_mode,
-            } => {
-                let count = fill_gradient_entries(colors, stops.as_deref());
-                gradient_params = [
-                    canonicalize_brush_coordinate(resolve_gradient_point(
-                        device_local_rect.x,
-                        device_local_rect.width,
-                        start.x * root_scale,
-                    )),
-                    canonicalize_brush_coordinate(resolve_gradient_point(
-                        device_local_rect.y,
-                        device_local_rect.height,
-                        start.y * root_scale,
-                    )),
-                    canonicalize_brush_coordinate(resolve_gradient_point(
-                        device_local_rect.x,
-                        device_local_rect.width,
-                        end.x * root_scale,
-                    )),
-                    canonicalize_brush_coordinate(resolve_gradient_point(
-                        device_local_rect.y,
-                        device_local_rect.height,
-                        end.y * root_scale,
-                    )),
-                ];
-                (1u32, count, gradient_tile_mode_value(*tile_mode))
-            }
-            Brush::RadialGradient {
-                colors,
-                stops,
-                center,
-                radius,
-                tile_mode,
-            } => {
-                let count = fill_gradient_entries(colors, stops.as_deref());
-                gradient_params = [
-                    canonicalize_brush_coordinate(device_local_rect.x + center.x * root_scale),
-                    canonicalize_brush_coordinate(device_local_rect.y + center.y * root_scale),
-                    (radius * root_scale).max(f32::EPSILON),
-                    0.0,
-                ];
-                (2u32, count, gradient_tile_mode_value(*tile_mode))
-            }
-            Brush::SweepGradient {
-                colors,
-                stops,
-                center,
-            } => {
-                let count = fill_gradient_entries(colors, stops.as_deref());
-                gradient_params = [
-                    canonicalize_brush_coordinate(device_local_rect.x + center.x * root_scale),
-                    canonicalize_brush_coordinate(device_local_rect.y + center.y * root_scale),
-                    0.0,
-                    0.0,
-                ];
-                (3u32, count, gradient_tile_mode_value(TileMode::Clamp))
-            }
-        },
-    };
-
-    let stroke_outset = shape
-        .stroke
-        .map(|stroke| stroke.half_width())
-        .unwrap_or(0.0);
-    let geometry_width = (local_rect.width - stroke_outset * 2.0).max(0.0);
-    let geometry_height = (local_rect.height - stroke_outset * 2.0).max(0.0);
-
-    let radii = if let Some(arc) = shape.arc {
-        if arc.sweep_angle >= cranpose_ui_graphics::TAU && arc.start_angle == 0.0 {
-            [0.0, -1.0, 0.0, -1.0]
-        } else {
-            let half_sweep = arc.sweep_angle.clamp(0.0, cranpose_ui_graphics::TAU) * 0.5;
-            let (mid_sin, mid_cos) = (arc.start_angle + half_sweep).sin_cos();
-            let (half_sin, half_cos) = half_sweep.sin_cos();
-            [mid_sin, mid_cos, half_sin.max(0.0), half_cos]
-        }
-    } else if let Some(rounded) = shape.shape {
-        let resolved = rounded.resolve(geometry_width, geometry_height);
-        [
-            resolved.top_left * root_scale,
-            resolved.top_right * root_scale,
-            resolved.bottom_left * root_scale,
-            resolved.bottom_right * root_scale,
-        ]
-    } else {
-        [0.0, 0.0, 0.0, 0.0]
-    };
-
-    let device_rect = [
-        device_local_rect.x,
-        device_local_rect.y,
-        device_local_rect.width,
-        device_local_rect.height,
-    ];
-
-    let (stroke_params, arc_params) = match (shape.arc, shape.stroke) {
-        (Some(arc), _) => (
-            [
-                0.0,
-                pack_shape_flags(SHAPE_KIND_ARC, arc.cap, StrokeJoin::Miter),
-                arc.outer_radius * root_scale,
-                arc.inner_radius * root_scale,
-            ],
-            [
-                (arc.center.x + snap_delta.x) * root_scale,
-                (arc.center.y + snap_delta.y) * root_scale,
-                arc.start_angle,
-                arc.sweep_angle,
-            ],
-        ),
-        (None, Some(stroke)) => (
-            [
-                stroke.width.max(0.0) * root_scale,
-                pack_shape_flags(SHAPE_KIND_STROKE, stroke.cap, stroke.join),
-                0.0,
-                0.0,
-            ],
-            [0.0; 4],
-        ),
-        (None, None) => (
-            [
-                0.0,
-                pack_shape_flags(SHAPE_KIND_FILL, StrokeCap::Butt, StrokeJoin::Miter),
-                0.0,
-                0.0,
-            ],
-            [0.0; 4],
-        ),
-    };
-
-    let color = match &shape.brush {
-        SceneBrush::Solid(c) => [c.r(), c.g(), c.b(), c.a()],
-        SceneBrush::Gradient(index) => match &brushes[*index as usize] {
-            Brush::Solid(c) => [c.r(), c.g(), c.b(), c.a()],
-            Brush::LinearGradient { colors, .. } => {
-                let first = colors.first().unwrap_or(&Color(1.0, 1.0, 1.0, 1.0));
-                [first.r(), first.g(), first.b(), first.a()]
-            }
-            Brush::RadialGradient { colors, .. } | Brush::SweepGradient { colors, .. } => {
-                let first = colors.first().unwrap_or(&Color(1.0, 1.0, 1.0, 1.0));
-                [first.r(), first.g(), first.b(), first.a()]
-            }
-        },
-    };
-
-    *shape_out = ShapeData {
-        rect: device_rect,
-        radii,
-        gradient_params,
-        clip_rect,
-        stroke_params,
-        arc_params,
-        quad01: [
-            device_quad[0][0],
-            device_quad[0][1],
-            device_quad[1][0],
-            device_quad[1][1],
-        ],
-        quad23: [
-            device_quad[2][0],
-            device_quad[2][1],
-            device_quad[3][0],
-            device_quad[3][1],
-        ],
-        color,
-        brush_type,
-        gradient_start,
-        gradient_count,
-        gradient_tile_mode,
-        dither_origin,
-        dither_padding: [0.0; 2],
-    };
-}
-
-fn convert_shapes_into_outputs(
-    shape_refs: &[&DrawShape],
-    brushes: &[Brush],
-    gradient_offsets: &[u32],
-    root_scale: f32,
-    shape_data_out: &mut [ShapeData],
-    gradients_out: &mut [GradientStop],
-) {
-    for (idx, shape) in shape_refs.iter().enumerate() {
-        let gradient_start = gradient_offsets[idx];
-        let gradient_end = gradient_offsets[idx + 1];
-        convert_shape_into_slots(
-            shape,
-            brushes,
-            root_scale,
-            gradient_start,
-            &mut shape_data_out[idx],
-            &mut gradients_out[gradient_start as usize..gradient_end as usize],
-        );
-    }
-}
-
-#[repr(C)]
-#[derive(Copy, Clone, Debug, Pod, Zeroable)]
-struct GradientStop {
-    color: [f32; 4],
-    position: [f32; 4],
+    placement: PlacementData,
 }
 
 fn survive_gpu_errors_enabled() -> bool {
@@ -2023,116 +1478,6 @@ struct ImageUvRect {
     sample_bounds: [f32; 4],
 }
 
-struct ShapeBatchBuffers {
-    shape_buffer: wgpu::Buffer,
-    gradient_buffer: wgpu::Buffer,
-    mesh: Option<VertexIndexBuffers<MeshVertex>>,
-    bind_group: wgpu::BindGroup,
-    shape_capacity: usize,
-    gradient_capacity: usize,
-    batch_limits: ShapeBatchLimits,
-}
-
-fn shape_batch_bind_group(
-    device: &wgpu::Device,
-    layout: &wgpu::BindGroupLayout,
-    shape_buffer: &wgpu::Buffer,
-    gradient_buffer: &wgpu::Buffer,
-) -> wgpu::BindGroup {
-    device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("Shape Bind Group"),
-        layout,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: shape_buffer.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: gradient_buffer.as_entire_binding(),
-            },
-        ],
-    })
-}
-
-impl ShapeBatchBuffers {
-    fn new(
-        device: &wgpu::Device,
-        layout: &wgpu::BindGroupLayout,
-        batch_limits: ShapeBatchLimits,
-    ) -> Self {
-        let shape_capacity = batch_limits.initial_shape_capacity();
-        let gradient_capacity = batch_limits.initial_gradient_capacity();
-        let shape_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Shape Data Buffer"),
-            size: (std::mem::size_of::<ShapeData>() * shape_capacity) as u64,
-            usage: batch_limits.data_buffer_usage(),
-            mapped_at_creation: false,
-        });
-        let gradient_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Gradient Buffer"),
-            size: (std::mem::size_of::<GradientStop>() * gradient_capacity) as u64,
-            usage: batch_limits.data_buffer_usage(),
-            mapped_at_creation: false,
-        });
-        let bind_group = shape_batch_bind_group(device, layout, &shape_buffer, &gradient_buffer);
-        Self {
-            shape_buffer,
-            gradient_buffer,
-            mesh: None,
-            bind_group,
-            shape_capacity,
-            gradient_capacity,
-            batch_limits,
-        }
-    }
-
-    fn ensure_capacity(
-        &mut self,
-        device: &wgpu::Device,
-        layout: &wgpu::BindGroupLayout,
-        shapes_needed: usize,
-        gradients_needed: usize,
-    ) {
-        let mut rebind = false;
-        if shapes_needed > self.shape_capacity
-            && self.shape_capacity < self.batch_limits.max_shapes_per_batch
-        {
-            let capacity = shapes_needed
-                .next_power_of_two()
-                .min(self.batch_limits.max_shapes_per_batch);
-            self.shape_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("Shape Data Buffer"),
-                size: (std::mem::size_of::<ShapeData>() * capacity) as u64,
-                usage: self.batch_limits.data_buffer_usage(),
-                mapped_at_creation: false,
-            });
-            self.shape_capacity = capacity;
-            rebind = true;
-        }
-        if gradients_needed > self.gradient_capacity
-            && self.gradient_capacity < self.batch_limits.max_gradient_stops
-        {
-            let capacity = gradients_needed
-                .max(1)
-                .next_power_of_two()
-                .min(self.batch_limits.max_gradient_stops);
-            self.gradient_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("Gradient Buffer"),
-                size: (std::mem::size_of::<GradientStop>() * capacity) as u64,
-                usage: self.batch_limits.data_buffer_usage(),
-                mapped_at_creation: false,
-            });
-            self.gradient_capacity = capacity;
-            rebind = true;
-        }
-        if rebind {
-            self.bind_group =
-                shape_batch_bind_group(device, layout, &self.shape_buffer, &self.gradient_buffer);
-        }
-    }
-}
-
 /// A growable vertex buffer and index buffer pair.
 struct VertexIndexBuffers<V> {
     label: &'static str,
@@ -2305,15 +1650,15 @@ pub(crate) struct ViewportUniformParams {
     pub(crate) offset: [f32; 2],
 }
 
-/// Shapes uploaded into one shape slot, drawn as six vertices per shape
-/// against the viewport uniform slot they were prepared for.
-pub(crate) struct ShapeBatch {
-    slot: usize,
-    uniform_slot: usize,
-    vertex_count: u32,
-    variant: ShapeVariant,
-    mesh_index_count: Option<u32>,
+/// A stored run's draws for one pass: its tables by command, the uniform
+/// slot holding its placement, and the pipeline and vertex range of each
+/// segment's quads and bands.
+pub(crate) struct StoreRunBatch {
+    pub(crate) command: DrawCommandId,
+    pub(crate) uniform_slot: usize,
+    pub(crate) draws: SmallVec<[RunDrawCall; 8]>,
 }
+
 struct CompositionTarget {
     target: Rc<OffscreenTarget>,
     output_bind_group: wgpu::BindGroup,
@@ -2403,22 +1748,18 @@ pub struct GpuRenderer {
     output_converter: OutputConverter,
     screenshot_converter: OutputConverter,
     adapter_backend: wgpu::Backend,
-    shape_batch_limits: ShapeBatchLimits,
     pipeline_cache: Option<wgpu::PipelineCache>,
     shape_pipelines: HashMap<ShapePipelineKey, wgpu::RenderPipeline>,
     image_pipeline: LazyGpuResource<wgpu::RenderPipeline>,
     image_pipeline_dst_out: LazyGpuResource<wgpu::RenderPipeline>,
     glyph_atlas_pipeline: LazyGpuResource<wgpu::RenderPipeline>,
     uniform_bind_group_layout: wgpu::BindGroupLayout,
-    shape_bind_group_layout: wgpu::BindGroupLayout,
     image_bind_group_layout: wgpu::BindGroupLayout,
     image_nearest_sampler: wgpu::Sampler,
     image_linear_sampler: wgpu::Sampler,
     text_fonts: SoftwareTextFontSet,
     viewport_uniforms: ViewportUniformRing,
-    shape_slots: Vec<ShapeBatchBuffers>,
-    band_tessellator: crate::band_mesh::BandTessellator,
-    shape_slot_cursor: usize,
+    run_store: RunStore,
     image_slots: Vec<ImageBatchBuffers>,
     image_slot_cursor: usize,
     image_texture_cache: BoundedLruCache<u64, CachedImageTexture>,
@@ -2429,8 +1770,6 @@ pub struct GpuRenderer {
     text_glyph_gpu_run_cache: BoundedLruCache<TextGlyphRunCacheKey, CachedGpuTextGlyphRun>,
     text_glyph_mask_cache: SoftwareGlyphRasterCache,
     text_line_index_cache: TextLineIndexCache,
-    scratch_shape_data: Vec<ShapeData>,
-    scratch_gradients: Vec<GradientStop>,
     pub(crate) scratch_image_vertices: Vec<Vertex>,
     pub(crate) scratch_image_indices: Vec<u32>,
     pub(crate) scratch_image_cmds: Vec<ImageDrawCmd>,
@@ -2491,7 +1830,13 @@ impl GpuRenderer {
             let sentry = Arc::clone(&device_errors);
             device.on_uncaptured_error(Arc::new(move |error| sentry.record(&error)));
         }
-        let shape_batch_limits = ShapeBatchLimits::for_device(&device, adapter_downlevel);
+        device.set_device_lost_callback(|reason, message| {
+            log::error!("[gpu-device] device lost ({reason:?}): {message}");
+        });
+        let run_store = RunStore::new(
+            &device,
+            RunBufferMode::for_device(&device, adapter_downlevel),
+        );
         let uniform_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("Viewport Uniform Bind Group Layout"),
@@ -2507,21 +1852,6 @@ impl GpuRenderer {
                     },
                     count: None,
                 }],
-            });
-        let shape_binding = |binding: u32| wgpu::BindGroupLayoutEntry {
-            binding,
-            visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-            ty: wgpu::BindingType::Buffer {
-                ty: shape_batch_limits.data_binding_type(),
-                has_dynamic_offset: false,
-                min_binding_size: None,
-            },
-            count: None,
-        };
-        let shape_bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("Shape Bind Group Layout"),
-                entries: &[shape_binding(0), shape_binding(1)],
             });
         let image_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -2595,22 +1925,18 @@ impl GpuRenderer {
             output_converter,
             screenshot_converter,
             adapter_backend,
-            shape_batch_limits,
             pipeline_cache,
             shape_pipelines: HashMap::new(),
             image_pipeline: LazyGpuResource::new("image/src-over"),
             image_pipeline_dst_out: LazyGpuResource::new("image/dst-out"),
             glyph_atlas_pipeline: LazyGpuResource::new("glyph/atlas"),
             uniform_bind_group_layout,
-            shape_bind_group_layout,
             image_bind_group_layout,
             image_nearest_sampler,
             image_linear_sampler,
             text_fonts,
             viewport_uniforms,
-            shape_slots: Vec::new(),
-            band_tessellator: crate::band_mesh::BandTessellator::default(),
-            shape_slot_cursor: 0,
+            run_store,
             image_slots: Vec::new(),
             image_slot_cursor: 0,
             image_texture_cache: BoundedLruCache::with_capacity_at_least_one(
@@ -2631,8 +1957,6 @@ impl GpuRenderer {
                 MAX_TEXT_GLYPH_MASK_CACHE_ITEMS,
             ),
             text_line_index_cache: TextLineIndexCache::new(MAX_TEXT_LINE_INDEX_CACHE_ITEMS),
-            scratch_shape_data: Vec::new(),
-            scratch_gradients: Vec::new(),
             scratch_image_vertices: Vec::new(),
             scratch_image_indices: Vec::new(),
             scratch_image_cmds: Vec::new(),
@@ -2672,20 +1996,14 @@ impl GpuRenderer {
         if self.shape_pipelines.contains_key(&key) {
             return;
         }
-        let started = Instant::now();
         let pipeline = create_shape_pipeline(
             &self.device,
             self.pipeline_cache.as_ref(),
             self.composition_format,
             &self.uniform_bind_group_layout,
-            &self.shape_bind_group_layout,
+            self.run_store.layout(),
             key,
-            self.shape_batch_limits,
-        );
-        log::info!(
-            "[gpu-pipeline] {:?} shape {key:?} ready in {:.1} ms",
-            self.adapter_backend,
-            instant_ms(started, Instant::now())
+            self.run_store.mode(),
         );
         self.shape_pipelines.insert(key, pipeline);
     }
@@ -3014,7 +2332,7 @@ impl GpuRenderer {
         returns.frame_id = packet.frame_id;
         let render_start = Instant::now();
         self.viewport_uniforms.begin_frame();
-        self.shape_slot_cursor = 0;
+        self.run_store.begin_frame(gpu_stats_enabled());
         self.image_slot_cursor = 0;
 
         let text_cache_len = packet.text_cache_len;
@@ -3034,8 +2352,7 @@ impl GpuRenderer {
         let after_graph = Instant::now();
         self.flush_deferred_offscreen_releases();
         const SLOT_POOL_MARGIN: usize = 4;
-        self.shape_slots
-            .truncate(self.shape_slot_cursor.saturating_add(SLOT_POOL_MARGIN));
+        self.run_store.end_frame();
         self.image_slots
             .truncate(self.image_slot_cursor.saturating_add(SLOT_POOL_MARGIN));
 
@@ -3145,8 +2462,9 @@ impl GpuRenderer {
             text_renderer_pool_cap: self.text_image_cache.cap().get(),
             image_texture_cache_len: self.image_texture_cache.len(),
             image_texture_cache_cap: self.image_texture_cache.cap().get(),
-            scratch_shape_data_cap: self.scratch_shape_data.capacity(),
-            scratch_gradients_cap: self.scratch_gradients.capacity(),
+            run_arena_staging_bytes: self.run_store.arena_staging_bytes(),
+            run_store_bytes: self.run_store.stored_bytes(),
+            run_store_runs: self.run_store.stored_count(),
             scratch_image_vertices_cap: self.scratch_image_vertices.capacity(),
             scratch_image_indices_cap: self.scratch_image_indices.capacity(),
             scratch_image_cmds_cap: self.scratch_image_cmds.capacity(),
@@ -3416,6 +2734,7 @@ impl GpuRenderer {
         Uniforms {
             viewport: [params.width as f32, params.height as f32],
             viewport_offset: params.offset,
+            placement: PlacementData::zeroed(),
         }
     }
 
@@ -3424,23 +2743,6 @@ impl GpuRenderer {
         let uniforms = Self::viewport_uniforms(params);
         self.viewport_uniforms
             .claim(&self.device, &self.uniform_bind_group_layout, &uniforms)
-    }
-
-    pub(crate) fn max_shapes_per_batch(&self) -> usize {
-        self.shape_batch_limits.max_shapes_per_batch
-    }
-
-    fn claim_shape_slot(&mut self) -> usize {
-        let slot = self.shape_slot_cursor;
-        self.shape_slot_cursor += 1;
-        while self.shape_slots.len() <= slot {
-            self.shape_slots.push(ShapeBatchBuffers::new(
-                &self.device,
-                &self.shape_bind_group_layout,
-                self.shape_batch_limits,
-            ));
-        }
-        slot
     }
 
     fn claim_image_slot(&mut self) -> usize {
@@ -3473,14 +2775,7 @@ impl GpuRenderer {
     ) -> Option<(Rc<OffscreenTarget>, bool, SourceContent)> {
         let shape_only = shadow.texts.is_empty();
         let key = if shape_only {
-            shape_shadow_surface_cache_key(
-                &shadow.shapes,
-                &shadow.post_blur_cutouts,
-                &shadow.brushes,
-                source_device,
-                pixel_radius,
-                root_scale,
-            )
+            shape_shadow_surface_cache_key(shadow, source_device, pixel_radius, root_scale)
         } else {
             None
         };
@@ -3511,7 +2806,7 @@ impl GpuRenderer {
                 key.content_hash,
                 pixel_radius,
                 [source_device.x, source_device.y],
-                shadow.shapes.len(),
+                shadow.shapes.as_ref().map_or(0, RunDraw::record_count) as usize,
                 shadow.clip,
             );
             self.insert_cached_shadow_surface(key, Rc::clone(&source));
@@ -3560,7 +2855,10 @@ impl GpuRenderer {
         };
         let max_texture_dim = self.max_texture_dim();
         let shape_only = shadow.texts.is_empty();
-        let anchor = shared_shape_shadow_snap_anchor(&shadow.shapes);
+        let anchor = shadow
+            .shapes
+            .as_ref()
+            .and_then(|run| run.placement.snap_anchor);
         let source_device = shape_only
             .then(|| {
                 translation_stable_anchored_device_pixel_bounds(
@@ -3667,7 +2965,7 @@ impl GpuRenderer {
             height,
             offset,
         };
-        let scene = shadow_scene(&shadow.shapes, &shadow.brushes, &shadow.texts);
+        let scene = shadow_scene(shadow.shapes.as_ref(), &shadow.texts);
         let segment = PassSegment {
             scene: &scene,
             ops: &scene.draw_ops,
@@ -3718,8 +3016,8 @@ impl GpuRenderer {
         recorder.record_passes(2);
         self.effect_renderer.record_blur_pass();
         recorder.release_transient_offscreen(scratch_descriptor, scratch);
-        if !shadow.post_blur_cutouts.is_empty() {
-            let cutouts = shadow_scene(&shadow.post_blur_cutouts, &shadow.brushes, &[]);
+        if let Some(cutout_run) = &shadow.post_blur_cutouts {
+            let cutouts = shadow_scene(Some(cutout_run), &[]);
             let segment = PassSegment {
                 scene: &cutouts,
                 ops: &cutouts.draw_ops,
@@ -3740,119 +3038,186 @@ impl GpuRenderer {
         }
         Some(source)
     }
-    /// Converts up to one batch of shapes into a fresh shape slot and
-    /// uploads their data and gradient stops. `None` when nothing is left
-    /// to draw.
-    pub(crate) fn prepare_shape_batch<'a>(
+    /// Whether `run` draws from retained buffers keyed by its command.
+    pub(crate) fn run_is_stored(&self, run: &RunDraw) -> bool {
+        self.run_store.is_stored(run)
+    }
+
+    fn run_pipeline_key(
+        segment: &RecordSegment,
+        clipped: bool,
+        tier: RunTier,
+        band: Option<usize>,
+    ) -> ShapePipelineKey {
+        ShapePipelineKey {
+            blend_mode: supported_blend_mode(segment.blend),
+            tier,
+            band: band.map(|bucket| bucket as u8),
+            variant: ShapeVariant::of_segment(segment, clipped),
+        }
+    }
+
+    /// Brings a stored run's tables up to date and records its draws under
+    /// a placement uniform of its own.
+    pub(crate) fn prepare_store_run(
         &mut self,
-        shapes: impl Iterator<Item = &'a DrawShape>,
-        brushes: &[Brush],
-        blend_mode: BlendMode,
+        run: &RunDraw,
+        viewport: ViewportUniformParams,
         root_scale: f32,
-        uniform_slot: usize,
-    ) -> Option<ShapeBatch> {
-        let shape_refs: SmallVec<[&DrawShape; 64]> = shapes
-            .take(self.shape_batch_limits.max_shapes_per_batch)
-            .collect();
-        let shape_count = shape_refs.len();
-        if shape_count == 0 {
-            return None;
-        }
-        let variant = ShapeVariant::of_batch(&shape_refs, brushes);
-        let mut gradient_offsets: SmallVec<[u32; 64]> = SmallVec::with_capacity(shape_count + 1);
-        let mut total_gradient_stops = 0u32;
-        gradient_offsets.push(0);
-        for shape in &shape_refs {
-            total_gradient_stops += shape_gradient_stop_count(shape, brushes) as u32;
-            gradient_offsets.push(total_gradient_stops);
-        }
-        self.scratch_shape_data.clear();
-        self.scratch_shape_data
-            .resize(shape_count, ShapeData::zeroed());
-        self.scratch_gradients.clear();
-        self.scratch_gradients
-            .resize(total_gradient_stops as usize, GradientStop::zeroed());
-        convert_shapes_into_outputs(
-            &shape_refs,
-            brushes,
-            &gradient_offsets,
-            root_scale,
-            &mut self.scratch_shape_data,
-            &mut self.scratch_gradients,
-        );
-        let slot = self.claim_shape_slot();
-        let buffers = &mut self.shape_slots[slot];
-        buffers.ensure_capacity(
-            &self.device,
-            &self.shape_bind_group_layout,
-            shape_count,
-            self.scratch_gradients.len().max(1),
-        );
-        let mut upload = write_buffer(
-            &self.queue,
-            &buffers.shape_buffer,
-            0,
-            bytemuck::cast_slice(&self.scratch_shape_data),
-        );
-        if !self.scratch_gradients.is_empty() {
-            upload.upload_bytes += write_buffer(
-                &self.queue,
-                &buffers.gradient_buffer,
-                0,
-                bytemuck::cast_slice(&self.scratch_gradients),
-            )
-            .upload_bytes;
-        }
-        let (fill, mesh_index_count) = match crate::band_mesh::mesh_batch(
-            &mut self.band_tessellator,
-            &self.scratch_shape_data,
-        ) {
-            Some(mesh) => {
-                let mesh_buffers = buffers
-                    .mesh
-                    .get_or_insert_with(|| VertexIndexBuffers::new(&self.device, "Shape Mesh"));
-                mesh_buffers.ensure_capacity(&self.device, mesh.vertices.len(), mesh.indices.len());
-                upload.upload_bytes += write_buffer(
-                    &self.queue,
-                    &mesh_buffers.vertex_buffer,
-                    0,
-                    bytemuck::cast_slice(&mesh.vertices),
-                )
-                .upload_bytes;
-                upload.upload_bytes += write_buffer(
-                    &self.queue,
-                    &mesh_buffers.index_buffer,
-                    0,
-                    bytemuck::cast_slice(&mesh.indices),
-                )
-                .upload_bytes;
-                (mesh.fill, Some(mesh.indices.len() as u32))
-            }
-            None => (crate::band_mesh::quad_fill(&self.scratch_shape_data), None),
-        };
+    ) -> StoreRunBatch {
+        let command = run.command.expect("a stored run has a command");
+        let (upload, fill) =
+            self.run_store
+                .upload_stored(&self.device, &self.queue, run, root_scale);
         self.frame_stats.record_command_stats(upload);
-        self.frame_stats.add_shape_fill(fill);
-        debug_assert!(
-            !variant.solid || total_gradient_stops == 0,
-            "a solid variant batch carries no gradient stops"
-        );
-        let stage = if mesh_index_count.is_some() {
-            ShapeVertexStage::Mesh
-        } else {
-            ShapeVertexStage::Quads
+        if let Some(fill) = fill {
+            self.frame_stats.add_shape_fill(fill);
+        }
+        let uniforms = Uniforms {
+            viewport: [viewport.width as f32, viewport.height as f32],
+            viewport_offset: viewport.offset,
+            placement: PlacementData::of(&run.placement, root_scale),
         };
-        self.ensure_shape_pipeline(ShapePipelineKey {
-            blend_mode,
-            stage,
-            variant,
-        });
-        Some(ShapeBatch {
-            slot,
+        let uniform_slot =
+            self.viewport_uniforms
+                .claim(&self.device, &self.uniform_bind_group_layout, &uniforms);
+        let clipped = run.placement.clip.is_some();
+        let mut draws = SmallVec::new();
+        let stored = self
+            .run_store
+            .stored(&command)
+            .expect("the run was just uploaded");
+        stored_run_draws(
+            stored,
+            run,
+            &mut |segment, bucket| Self::run_pipeline_key(segment, clipped, RunTier::Store, bucket),
+            &mut draws,
+        );
+        for draw in &draws {
+            self.ensure_shape_pipeline(draw.key);
+        }
+        StoreRunBatch {
+            command,
             uniform_slot,
-            vertex_count: shape_count as u32 * 6,
-            variant,
-            mesh_index_count,
-        })
+            draws,
+        }
+    }
+
+    pub(crate) fn open_arena(&mut self) -> usize {
+        self.run_store.open_arena(&self.device)
+    }
+
+    pub(crate) fn arena_accepts(&self, chunk: usize, run: &RunDraw) -> bool {
+        self.run_store.arena_accepts(chunk, run)
+    }
+
+    /// Copies `run` from record `from` into the open chunk; returns how
+    /// many records it took.
+    pub(crate) fn append_arena_run(
+        &mut self,
+        chunk: usize,
+        run: &RunDraw,
+        from: u32,
+        root_scale: f32,
+    ) -> u32 {
+        let clipped = run.placement.clip.is_some();
+        let mut keys: SmallVec<[ShapePipelineKey; 4]> = SmallVec::new();
+        let taken =
+            self.run_store
+                .append_arena(chunk, run, from, root_scale, &mut |segment, bucket| {
+                    let key = Self::run_pipeline_key(segment, clipped, RunTier::Arena, bucket);
+                    if !keys.contains(&key) {
+                        keys.push(key);
+                    }
+                    key
+                });
+        for key in keys {
+            self.ensure_shape_pipeline(key);
+        }
+        taken
+    }
+
+    /// Uploads the open chunk and returns its draws.
+    pub(crate) fn close_arena(&mut self, chunk: usize) -> Vec<RunDrawCall> {
+        let (upload, draws, fill) = self.run_store.close_arena(&self.device, &self.queue, chunk);
+        self.frame_stats.record_command_stats(upload);
+        if let Some(fill) = fill {
+            self.frame_stats.add_shape_fill(fill);
+        }
+        draws
+    }
+
+    pub(crate) fn draw_run_calls(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        tables: &wgpu::BindGroup,
+        uniform_slot: usize,
+        draws: &[RunDrawCall],
+        target_size: (u32, u32),
+        scissor: Option<(u32, u32, u32, u32)>,
+    ) -> Result<(), String> {
+        if draws.is_empty() {
+            return Ok(());
+        }
+        self.frame_stats.bump_shapes();
+        self.frame_stats.add_draw_calls(draws.len() as u32);
+        let (x, y, width, height) = scissor.unwrap_or((0, 0, target_size.0, target_size.1));
+        pass.set_scissor_rect(x, y, width, height);
+        pass.set_bind_group(
+            0,
+            &self.viewport_uniforms.bind_group,
+            &[self.viewport_uniforms.dynamic_offset(uniform_slot)?],
+        );
+        pass.set_bind_group(1, tables, &[]);
+        for draw in draws {
+            let pipeline = self
+                .shape_pipelines
+                .get(&draw.key)
+                .ok_or_else(|| format!("shape pipeline {:?} was not prepared", draw.key))?;
+            pass.set_pipeline(pipeline);
+            pass.draw(draw.vertices.clone(), 0..1);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn draw_store_run(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        batch: &StoreRunBatch,
+        target_size: (u32, u32),
+        scissor: Option<(u32, u32, u32, u32)>,
+    ) -> Result<(), String> {
+        let stored = self
+            .run_store
+            .stored(&batch.command)
+            .ok_or_else(|| "a stored run left the store before its draw".to_string())?;
+        self.draw_run_calls(
+            pass,
+            &stored.buffers.bind_group,
+            batch.uniform_slot,
+            &batch.draws,
+            target_size,
+            scissor,
+        )
+    }
+
+    pub(crate) fn draw_arena(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        chunk: usize,
+        uniform_slot: usize,
+        draws: &[RunDrawCall],
+        target_size: (u32, u32),
+        scissor: Option<(u32, u32, u32, u32)>,
+    ) -> Result<(), String> {
+        self.draw_run_calls(
+            pass,
+            &self.run_store.arena(chunk).bind_group,
+            uniform_slot,
+            draws,
+            target_size,
+            scissor,
+        )
     }
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn surface_format(&self) -> wgpu::TextureFormat {
@@ -3861,52 +3226,6 @@ impl GpuRenderer {
 
     pub fn device_error_count(&self) -> u64 {
         self.device_errors.error_count()
-    }
-
-    pub(crate) fn draw_shape_batch(
-        &self,
-        pass: &mut wgpu::RenderPass<'_>,
-        blend_mode: BlendMode,
-        batch: &ShapeBatch,
-        target_size: (u32, u32),
-        scissor: Option<(u32, u32, u32, u32)>,
-    ) -> Result<(), String> {
-        self.frame_stats.bump_shapes();
-        self.frame_stats.add_draw_calls(1);
-        let (x, y, width, height) = scissor.unwrap_or((0, 0, target_size.0, target_size.1));
-        pass.set_scissor_rect(x, y, width, height);
-        let buffers = &self.shape_slots[batch.slot];
-        let mesh = batch.mesh_index_count.zip(buffers.mesh.as_ref());
-        let stage = if mesh.is_some() {
-            ShapeVertexStage::Mesh
-        } else {
-            ShapeVertexStage::Quads
-        };
-        let key = ShapePipelineKey {
-            blend_mode,
-            stage,
-            variant: batch.variant,
-        };
-        let pipeline = self
-            .shape_pipelines
-            .get(&key)
-            .ok_or_else(|| format!("shape pipeline {key:?} was not prepared with its batch"))?;
-        pass.set_pipeline(pipeline);
-        pass.set_bind_group(
-            0,
-            &self.viewport_uniforms.bind_group,
-            &[self.viewport_uniforms.dynamic_offset(batch.uniform_slot)?],
-        );
-        pass.set_bind_group(1, &buffers.bind_group, &[]);
-        match mesh {
-            Some((index_count, mesh)) => {
-                pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
-                pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-                pass.draw_indexed(0..index_count, 0, 0..1);
-            }
-            None => pass.draw(0..batch.vertex_count, 0..1),
-        }
-        Ok(())
     }
 
     /// A pass that only applies `load_op` to the target, for a scene with
@@ -5433,27 +4752,13 @@ fn shadow_composite_mask(
 /// A scene holding just a shadow's own draws, in the order they arrive, so
 /// the shadow source renders through the same pass encoder as everything
 /// else.
-fn shadow_scene(
-    shapes: &[(DrawShape, BlendMode)],
-    brushes: &[Brush],
-    texts: &[TextDraw],
-) -> CompositorScene {
+fn shadow_scene(shapes: Option<&RunDraw>, texts: &[TextDraw]) -> CompositorScene {
     let mut scene = CompositorScene::new();
-    scene.brushes.extend_from_slice(brushes);
-    for (shape, blend_mode) in shapes {
-        let z_index = scene.next_z;
-        scene.draw_ops.push(DrawOp {
-            z_index,
-            kind: DrawOpKind::Shape(scene.shapes.len()),
-        });
-        scene.shapes.push(DrawShape {
-            blend_mode: *blend_mode,
-            ..*shape
-        });
-        scene.next_z += 1;
+    if let Some(run) = shapes {
+        scene.push_run(run.clone());
     }
     for text in texts {
-        let z_index = scene.next_z;
+        let z_index = scene.next_z();
         scene.draw_ops.push(DrawOp {
             z_index,
             kind: DrawOpKind::Text(scene.texts.len()),
@@ -5491,31 +4796,41 @@ fn inner_shadow_composite_mask(
     shadow: &ShadowDraw,
     root_scale: f32,
 ) -> Option<RoundedCompositeMask> {
-    if !shadow
+    let run = shadow.shapes.as_ref()?;
+    if !run
+        .tables
         .shapes
         .iter()
-        .any(|(_, mode)| *mode == BlendMode::DstOut)
+        .any(|record| record.blend_mode() == BlendMode::DstOut)
     {
         return None;
     }
-    let (fill, _) = shadow.shapes.first()?;
-    let rect = fill.local_rect;
+    let fill = run.tables.shapes.first()?;
+    let rect = run.placement.translated_bounds(fill.stored_rect());
     if rect.width <= 0.0 || rect.height <= 0.0 {
         return None;
     }
-
-    let radii = fill.shape.map_or([0.0; 4], |rounded| {
-        let resolved = rounded.resolve(rect.width, rect.height);
-        [
-            resolved.top_left * root_scale,
-            resolved.top_right * root_scale,
-            resolved.bottom_left * root_scale,
-            resolved.bottom_right * root_scale,
-        ]
-    });
+    let resolved =
+        cranpose_ui_graphics::RoundedCornerShape::with_radii(cranpose_ui_graphics::CornerRadii {
+            top_left: fill.radii[0],
+            top_right: fill.radii[1],
+            bottom_right: fill.radii[2],
+            bottom_left: fill.radii[3],
+        })
+        .resolve(rect.width, rect.height);
+    let radii = [
+        resolved.top_left * root_scale,
+        resolved.top_right * root_scale,
+        resolved.bottom_left * root_scale,
+        resolved.bottom_right * root_scale,
+    ];
 
     Some(RoundedCompositeMask {
-        rect: mask_rect(anchored_device_rect(rect, fill.snap_anchor, root_scale)),
+        rect: mask_rect(anchored_device_rect(
+            rect,
+            run.placement.snap_anchor,
+            root_scale,
+        )),
         radii,
     })
 }

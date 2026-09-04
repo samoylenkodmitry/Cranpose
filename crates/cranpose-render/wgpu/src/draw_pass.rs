@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use cranpose_ui_graphics::{BlendMode, Brush, Rect, RuntimeShader};
+use cranpose_ui_graphics::{BlendMode, Rect, RuntimeShader};
 
 use crate::{
     effect_renderer::{
@@ -11,11 +11,12 @@ use crate::{
     frame_graph::FrameCommandRecorder,
     offscreen::OffscreenTarget,
     render::{
-        GpuRenderer, ShapeBatch, ViewportUniformParams, image_draw_bounds, shape_draw_bounds,
-        shape_draw_is_visible_in_rect, shape_is_solid, supported_blend_mode, text_draw_bounds,
+        GpuRenderer, StoreRunBatch, ViewportUniformParams, image_draw_bounds, run_draw_bounds,
+        run_draw_is_visible_in_rect, supported_blend_mode, text_draw_bounds,
         text_draw_is_visible_in_rect,
     },
-    scene::{CompositorScene, DrawOp, DrawOpKind, DrawShape, TextDraw},
+    run_store::{RunDrawCall, run_has_shapes},
+    scene::{CompositorScene, DrawOp, DrawOpKind, RunDraw, TextDraw},
 };
 
 /// A render target and where its origin sits in the scene's device space.
@@ -116,19 +117,22 @@ pub(crate) struct PassSegment<'a> {
 }
 
 enum Item<'a> {
-    Shape {
-        shape: &'a DrawShape,
-        brushes: &'a [Brush],
-    },
+    Run(&'a RunDraw),
+    ShadowRun(RunDraw),
     Image(usize),
     Text(&'a TextDraw),
     Composite(&'a ResolvedComposite),
 }
 
 enum Batch<'a> {
-    Shapes {
-        batch: ShapeBatch,
-        blend_mode: BlendMode,
+    StoreRun {
+        batch: StoreRunBatch,
+        scissor: Option<(u32, u32, u32, u32)>,
+    },
+    Arena {
+        chunk: usize,
+        uniform_slot: usize,
+        draws: Vec<RunDrawCall>,
         scissor: Option<(u32, u32, u32, u32)>,
     },
     Images {
@@ -335,12 +339,16 @@ impl GpuRenderer {
     ) -> Result<(), String> {
         for batch in batches {
             match batch {
-                Batch::Shapes {
-                    batch,
-                    blend_mode,
+                Batch::StoreRun { batch, scissor } => {
+                    self.draw_store_run(pass, batch, target_size, *scissor)?;
+                }
+                Batch::Arena {
+                    chunk,
+                    uniform_slot,
+                    draws,
                     scissor,
                 } => {
-                    self.draw_shape_batch(pass, *blend_mode, batch, target_size, *scissor)?;
+                    self.draw_arena(pass, *chunk, *uniform_slot, draws, target_size, *scissor)?;
                 }
                 Batch::Images {
                     cmds,
@@ -407,7 +415,7 @@ pub(crate) fn op_draw_bounds(
     root_scale: f32,
 ) -> Option<Rect> {
     match op.kind {
-        DrawOpKind::Shape(index) => shape_draw_bounds(&scene.shapes[index], root_scale),
+        DrawOpKind::Run(index) => run_draw_bounds(&scene.runs[index], root_scale),
         DrawOpKind::Image(index) => image_draw_bounds(&scene.images[index], root_scale),
         DrawOpKind::Text(index) => text_draw_bounds(&scene.texts[index], root_scale),
         DrawOpKind::Shadow(index) => {
@@ -415,10 +423,8 @@ pub(crate) fn op_draw_bounds(
             if shadow.blur_radius > 0.0 {
                 return None;
             }
-            shadow
-                .shapes
-                .iter()
-                .filter_map(|(shape, _)| shape_draw_bounds(shape, root_scale))
+            shadow_caster_bounds(shadow, root_scale)
+                .into_iter()
                 .chain(
                     shadow
                         .texts
@@ -428,6 +434,15 @@ pub(crate) fn op_draw_bounds(
                 .reduce(|a, b| a.union(b))
         }
     }
+}
+
+/// The snapped bounds of an unblurred shadow's casters, within the
+/// shadow's clip.
+fn shadow_caster_bounds(shadow: &crate::scene::ShadowDraw, root_scale: f32) -> Option<Rect> {
+    shadow
+        .shapes
+        .as_ref()
+        .and_then(|run| run_draw_bounds(run, root_scale))
 }
 
 /// Whether `op` draws any pixel inside `viewport_rect`.
@@ -516,21 +531,18 @@ fn merge_items<'a>(
             continue;
         }
         match op.kind {
-            DrawOpKind::Shape(index) => items.push(Item::Shape {
-                shape: &segment.scene.shapes[index],
-                brushes: &segment.scene.brushes,
-            }),
+            DrawOpKind::Run(index) => {
+                let run = &segment.scene.runs[index];
+                if run_has_shapes(run) {
+                    items.push(Item::Run(run));
+                }
+            }
             DrawOpKind::Image(index) => items.push(Item::Image(index)),
             DrawOpKind::Text(index) => items.push(Item::Text(&segment.scene.texts[index])),
             DrawOpKind::Shadow(index) => {
                 let shadow = &segment.scene.shadow_draws[index];
-                for (shape, _) in &shadow.shapes {
-                    if shape_draw_is_visible_in_rect(shape, viewport_rect, root_scale) {
-                        items.push(Item::Shape {
-                            shape,
-                            brushes: &shadow.brushes,
-                        });
-                    }
+                if let Some(run) = unblurred_shadow_run(shadow, viewport_rect, root_scale) {
+                    items.push(Item::ShadowRun(run));
                 }
                 for text in &shadow.texts {
                     if text_draw_is_visible_in_rect(text, viewport_rect, root_scale) {
@@ -542,6 +554,17 @@ fn merge_items<'a>(
     }
     push_composites_below(&mut items, usize::MAX);
     items
+}
+
+/// An unblurred shadow's casters as a run, when any of them reaches the
+/// viewport.
+fn unblurred_shadow_run(
+    shadow: &crate::scene::ShadowDraw,
+    viewport_rect: Rect,
+    root_scale: f32,
+) -> Option<RunDraw> {
+    let run = shadow.shapes.as_ref()?;
+    run_draw_is_visible_in_rect(run, viewport_rect, root_scale).then(|| run.clone())
 }
 
 /// The per-frame vectors a pass fills: image and glyph geometry and draw
@@ -590,7 +613,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
         let mut index = 0;
         while index < items.len() {
             index = match &items[index] {
-                Item::Shape { .. } => self.shape_run(renderer, &items, index, &run),
+                Item::Run(_) | Item::ShadowRun(_) => self.run_items(renderer, &items, index, &run),
                 Item::Image(_) => self.image_run(renderer, &items, index, &run, scratch)?,
                 Item::Text(text) => {
                     self.text_item(renderer, text, &run, scratch)?;
@@ -605,55 +628,66 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
         Ok(())
     }
 
-    /// Batches the shapes from `index` that share a blend mode, a brush
-    /// table and a solid-or-gradient brush class, up to the batch limit;
-    /// returns where the run ends. The brush class is the one cut worth a
-    /// draw: it lets a solid batch fold its gradient path, and a scene's
-    /// gradient records are few (cranorbit's arena: 1.2 of 11.5 MP).
-    fn shape_run(
+    /// Draws the runs from `index`: a stored run takes a batch of its own
+    /// under its placement uniform; consecutive arena runs are copied into
+    /// one chunk and share a batch, and a uniform-mode chunk that fills
+    /// closes and the next opens. Returns where the runs end.
+    fn run_items(
         &mut self,
         renderer: &mut GpuRenderer,
         items: &[Item<'s>],
         index: usize,
         run: &SegmentRun<'s, '_>,
     ) -> usize {
-        let Item::Shape { shape, brushes } = &items[index] else {
-            unreachable!("shape run starts at a shape");
-        };
-        let blend_mode = supported_blend_mode(shape.blend_mode);
-        let brushes_ptr = brushes.as_ptr();
-        let solid = shape_is_solid(shape, brushes);
-        let limit = renderer.max_shapes_per_batch();
         let mut end = index;
-        while end < items.len()
-            && end - index < limit
-            && matches!(
-                &items[end],
-                Item::Shape { shape, brushes }
-                    if supported_blend_mode(shape.blend_mode) == blend_mode
-                        && brushes.as_ptr() == brushes_ptr
-                        && shape_is_solid(shape, brushes) == solid
-            )
-        {
+        let mut chunk: Option<usize> = None;
+        let close = |renderer: &mut GpuRenderer,
+                     chunk: &mut Option<usize>,
+                     batches: &mut Vec<Batch<'s>>| {
+            if let Some(open) = chunk.take() {
+                let draws = renderer.close_arena(open);
+                if !draws.is_empty() {
+                    batches.push(Batch::Arena {
+                        chunk: open,
+                        uniform_slot: run.uniform_slot,
+                        draws,
+                        scissor: run.segment.scissor,
+                    });
+                }
+            }
+        };
+        while end < items.len() {
+            let draw = match &items[end] {
+                Item::Run(draw) => *draw,
+                Item::ShadowRun(draw) => draw,
+                _ => break,
+            };
+            if renderer.run_is_stored(draw) {
+                close(renderer, &mut chunk, &mut self.batches);
+                let batch = renderer.prepare_store_run(draw, run.viewport, self.root_scale);
+                self.batches.push(Batch::StoreRun {
+                    batch,
+                    scissor: run.segment.scissor,
+                });
+            } else {
+                let total = draw.record_count();
+                let mut from = 0;
+                while from < total {
+                    if chunk.is_some_and(|open| !renderer.arena_accepts(open, draw)) {
+                        close(renderer, &mut chunk, &mut self.batches);
+                    }
+                    let open = *chunk.get_or_insert_with(|| renderer.open_arena());
+                    let taken = renderer.append_arena_run(open, draw, from, self.root_scale);
+                    if taken == 0 {
+                        close(renderer, &mut chunk, &mut self.batches);
+                        continue;
+                    }
+                    from += taken;
+                }
+            }
             end += 1;
         }
-        let shapes = items[index..end].iter().map(|item| match item {
-            Item::Shape { shape, .. } => *shape,
-            _ => unreachable!("shape run holds only shapes"),
-        });
-        if let Some(batch) = renderer.prepare_shape_batch(
-            shapes,
-            brushes,
-            blend_mode,
-            self.root_scale,
-            run.uniform_slot,
-        ) {
-            self.batches.push(Batch::Shapes {
-                batch,
-                blend_mode,
-                scissor: run.segment.scissor,
-            });
-        }
+        close(renderer, &mut chunk, &mut self.batches);
         end
     }
 

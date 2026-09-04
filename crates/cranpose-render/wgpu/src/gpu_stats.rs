@@ -6,7 +6,7 @@ use cranpose_render_common::raster_cache::{
 };
 use cranpose_ui_graphics::Rect;
 
-use crate::{band_mesh::ShapeFill, frame_graph::FrameCommandStats};
+use crate::{frame_graph::FrameCommandStats, run_geometry::ShapeFill};
 
 const TOP_ISOLATED_LAYER_LIMIT: usize = 8;
 
@@ -96,6 +96,10 @@ pub struct FrameStatsSnapshot {
     /// `shape_fill_pixels` split by shape kind and brush, in the order of
     /// `ShapeFill::LABELS`: which records a fill-bound frame pays for.
     pub shape_fill_pixels_by_class: [u64; ShapeFill::CLASSES],
+    /// Vertices the shape draws run through the vertex stage: six per quad,
+    /// six per band segment. A tiling GPU stores every vertex's varyings
+    /// before it shades a pixel, so this bounds a frame as fill does.
+    pub shape_vertices: u64,
     pub shape_passes: u32,
     pub image_passes: u32,
     pub text_passes: u32,
@@ -201,7 +205,7 @@ impl FrameStatsSnapshot {
              isolated_layers={} area={:.2}MP | \
              layer_cache: hit={} miss={} {:.1}% hit_px={:.2}MP miss_px={:.2}MP size={}({:.1}MB) hit_by_kind={} miss_px_by_kind={} | \
              shadow_cache: shape_hit={} shape_miss={} hit_px={:.2}MP miss_px={:.2}MP text_blur_fallback={} | \
-             blur={} composite={} effect={} shader_px={:.2}MP | shape={} shape_fill_px={:.2}MP{} image={} text={} draws={} | \
+             blur={} composite={} effect={} shader_px={:.2}MP | shape={} shape_fill_px={:.2}MP{} shape_verts={} image={} text={} draws={} | \
              text_img_cache: hit={} miss={} hit_px={:.2}MP miss_px={:.2}MP raster={:.2}MB | \
              text_glyph_atlas: hit={} miss={} miss_px={:.2}MP | \
              caches: text_pool={} img={} txt={}",
@@ -242,6 +246,7 @@ impl FrameStatsSnapshot {
             self.shape_passes,
             self.shape_fill_pixels as f64 / 1_000_000.0,
             self.shape_fill_by_class_text(),
+            self.shape_vertices,
             self.image_passes,
             self.text_passes,
             self.draw_calls,
@@ -310,6 +315,7 @@ pub(crate) struct FrameStats {
     pub shader_pixels: Cell<u64>,
     pub shape_fill_pixels: Cell<u64>,
     pub shape_fill_pixels_by_class: Cell<[u64; ShapeFill::CLASSES]>,
+    pub shape_vertices: Cell<u64>,
     pub shape_passes: Cell<u32>,
     pub image_passes: Cell<u32>,
     pub text_passes: Cell<u32>,
@@ -553,6 +559,8 @@ impl FrameStats {
             *total = total.saturating_add(pixels.round() as u64);
         }
         self.shape_fill_pixels_by_class.set(by_class);
+        self.shape_vertices
+            .set(self.shape_vertices.get().saturating_add(fill.vertices));
     }
 
     pub fn bump_shapes(&self) {
@@ -664,6 +672,7 @@ impl FrameStats {
             shader_pixels: self.shader_pixels.get(),
             shape_fill_pixels: self.shape_fill_pixels.get(),
             shape_fill_pixels_by_class: self.shape_fill_pixels_by_class.get(),
+            shape_vertices: self.shape_vertices.get(),
             shape_passes: self.shape_passes.get(),
             image_passes: self.image_passes.get(),
             text_passes: self.text_passes.get(),
@@ -727,6 +736,7 @@ impl FrameStats {
         self.shader_pixels.set(0);
         self.shape_fill_pixels.set(0);
         self.shape_fill_pixels_by_class.set([0; ShapeFill::CLASSES]);
+        self.shape_vertices.set(0);
         self.shape_passes.set(0);
         self.image_passes.set(0);
         self.text_passes.set(0);

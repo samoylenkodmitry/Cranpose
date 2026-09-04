@@ -8,67 +8,33 @@ use std::{
 use cranpose_core::NodeId;
 use cranpose_render_common::{
     Renderer,
-    graph::{
-        CachePolicy, DrawPrimitiveNode, IsolationReasons, LayerNode, PrimitiveEntry, PrimitiveNode,
-        PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode,
-    },
-    raster_cache::LayerRasterCacheHashes,
+    graph::{CachePolicy, LayerNode, ProjectiveTransform, RenderGraph, RenderNode},
 };
 use cranpose_render_wgpu::{CancelReason, PresentOutcome, PublishOutcome, WgpuRenderer};
-use cranpose_ui_graphics::{Brush, Color, GraphicsLayer, Point, Rect};
+use cranpose_ui_graphics::{Color, Rect};
 
 const WIDTH: u32 = 128;
 const HEIGHT: u32 = 96;
 
 fn test_layer(node_id: Option<NodeId>, children: Vec<RenderNode>) -> LayerNode {
-    LayerNode {
+    support::contract_layer(
         node_id,
-        wraps: None,
-        local_bounds: Rect {
+        CachePolicy::None,
+        Rect {
             x: 0.0,
             y: 0.0,
             width: WIDTH as f32,
             height: HEIGHT as f32,
         },
-        transform_to_parent: ProjectiveTransform::identity(),
-        motion_context_animated: false,
-        translated_content_context: false,
-        translated_content_offset: Point::default(),
-        content_offset: Point::default(),
-        scene_children_origin: Point::default(),
-        scene_children_layer_translation: Point::default(),
-        graphics_layer: GraphicsLayer::default(),
-        clip_to_bounds: false,
-        shadow_clip: None,
-        hit_test: None,
-        has_hit_targets: false,
-        has_origin_sinks: false,
-        isolation: IsolationReasons::default(),
-        cache_policy: CachePolicy::None,
-        cache_hashes: LayerRasterCacheHashes::default(),
-        cache_hashes_valid: false,
+        ProjectiveTransform::identity(),
         children,
-    }
-}
-
-fn rect_primitive(rect: Rect, color: Color) -> RenderNode {
-    RenderNode::Primitive(PrimitiveEntry {
-        phase: PrimitivePhase::BeforeChildren,
-        node: PrimitiveNode::Draw(DrawPrimitiveNode {
-            primitive: cranpose_ui_graphics::DrawPrimitive::Rect {
-                rect,
-                brush: Brush::solid(color),
-                stroke: None,
-            },
-            clip: None,
-        }),
-    })
+    )
 }
 
 fn direct_graph() -> RenderGraph {
     RenderGraph::new(test_layer(
         Some(7_700),
-        vec![rect_primitive(
+        vec![support::rect_primitive(
             Rect {
                 x: 16.0,
                 y: 12.0,

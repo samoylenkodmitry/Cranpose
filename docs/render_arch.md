@@ -189,26 +189,48 @@ byte-identical.
 
 A shape record draws as its bounding quad and the shape shader decides
 coverage per fragment, so a stroked circle or an arc band would rasterize
-its whole disc for a band a few pixels wide. `band_mesh.rs` turns every
-plain solid, unclipped, axis-aligned stroked circle and arc band whose quad
-exceeds `BAND_MESH_MIN_QUAD_PIXELS` into an annular triangle mesh with one
-pixel of slack around the band; a batch holding one band draws every shape
-as triangles through `vs_mesh`, the other shapes as their quads, with the
-same fragment stage. The stat `shape_fill_pixels` counts what the shape
-draws rasterize. `band_fill.rs` pins the budget (a ring costs its band,
-not its disc) and the pixels (a meshed ring matches the ring drawn as two
-clipped quads to interpolation rounding); the unit tests in `band_mesh.rs`
-walk every pixel center the shader would shade and assert the mesh holds
-it. On the Mate 20 X, cranorbit's MEGA BOSS arena went from 16 MP to 12 MP
-of shape fill and from 15.9 ms to 10.6 ms present with this.
+its whole disc for a band a few pixels wide. The recorder marks an arc,
+or a stroked circle, as banded when `band_pays` says its strip costs
+less than the quad it would otherwise draw (the disc, for a scope-recorded
+arc): the pixels each rasterizes plus what their vertices cost a tiling
+GPU (`BAND_VERTEX_PIXELS`), which stores every vertex's sixteen varyings
+before it shades a pixel. A band keeps the angular step a full ring takes
+at its radius (`ARC_RING_SEGMENTS`) and takes only the segments its padded
+sweep needs, rounded up to a power of two; the record files in the bucket
+of that count (`ARC_BUCKET_SEGMENTS`, one to sixty-four). Bucketing by
+radius alone gave MEGA BOSS's short bricks a full ring's segments each,
+2.5 M vertices a frame, which the Pixel 9 Pro absorbed at 56 fps, the
+Pixel Watch 3 presented at 4 fps and the Mate 20 X's Mali answered by
+losing the device on the first frame. The vertex stage draws a banded
+record as that strip from `vertex_index` (`vs_band`): the ring padded by
+one device pixel, the sweep padded by the ring's angle, the outer vertices
+riding out so the polygon circumscribes the padded circle; the quad entry
+point collapses banded records where band pipelines draw. A band pipeline
+discards outside the record's rect, the quad path's raster extent, so the
+two paths cover the same pixels. `run_geometry.rs` mirrors the strip on
+the CPU for the fill estimate and for the coverage proof, which walks
+every pixel center the arc SDF shades and asserts the strip holds it.
+`band_fill.rs` pins the budget (a ring costs its band, not its disc) and
+the pixels (a banded ring matches the ring drawn in two clipped halves,
+byte for byte). On the Mate 20 X, cranorbit's MEGA BOSS arena went from
+16 MP to 12 MP of shape fill and from 15.9 ms to 10.6 ms present when the
+CPU mesh introduced this; the vertex-stage strip keeps the fill and costs
+no CPU per record.
 
 ## Uploads and passes
 
 - `ViewportUniformRing`: one uniform buffer with dynamic offsets. Every pass
   and every retained glyph run claims a slot; the whole ring is written once
   per frame.
-- Shape and image batches write into per-frame slot pools
-  (`shape_slots`, `image_slots`), trimmed after the frame to what it used.
+- Shape records draw from the run store (`run_store.rs`): a run of at
+  least `STORE_RUN_MIN_RECORDS` records with a command keeps retained
+  buffers keyed by its `DrawCommandId`, written only when the recorder
+  hands back other bytes (`Arc` pointer, then a byte compare) or another
+  paint; smaller runs and shadows are copied into per-pass arena chunks,
+  every record naming its placement, and consecutive runs share a draw.
+  The uniform-buffer floor (WebGL) has only the arena, in 16 KB chunks,
+  drawn as quads. Image batches write into per-frame slot pools
+  (`image_slots`), trimmed after the frame to what it used.
 - All queue writes and command encoders live in `frame_graph.rs`
   (`render_contract.rs` pins this).
 - Transient textures for captures, blur ping-pong and child surfaces come
@@ -451,10 +473,14 @@ and is never rescanned; the software renderer and the primitive
 inspection tests read records through a materialising iterator that
 yields today's `DrawPrimitive` exactly (a lossless format, hence `f32`).
 
-**Placement.** One uniform per command, in a dynamic-offset ring: the
+**Placement.** One uniform per stored run, in the viewport ring (the
+arena reads its placements from a table the record indexes): the
 snapped translation, root scale, the clip rect, layer alpha and the
-colour matrix, applied in the shader in today's exact paint order
-(`srgb_8bit`, alpha, filter). Only translated children draw direct, as
+colour matrix, applied in the shader in the CPU resolution's exact paint
+order (a painting layer quantizes to 8-bit sRGB, then alpha, then the
+filter; an unpainted solid colour passes through, as `resolve_layer_brush`
+passed it). Gradient stops are painted on the CPU at upload, few per
+command. Only translated children draw direct, as
 `child_placement` admits today; scaled or rotated children stay
 isolated with their snapped-surface semantics. The vertex stage maps the
 record through the placement and reproduces per record what
@@ -466,33 +492,41 @@ dither code does not change. The device-space work moves from the CPU,
 once per primitive, to the vertex stage.
 
 **The run store.** On the present side, keyed by `DrawCommandId`: one
-GPU buffer per command, grown on demand, and the bytes it last uploaded.
-Per frame per run: same `Arc` as last time, nothing; else compare the
-bytes, equal, nothing; else write the whole command (~2 MB for the arena,
-under 1 ms on the watch by the measured 2.5 ms for 4.7 MB, to be
-measured). No patches, ranges or generations: a rejected packet leaves
-the store equal to its last upload, so a cancellation test asserts the
-next frame draws from consistent bytes and nothing is acknowledged or
-reclaimed. Buffers of commands absent for N frames are dropped.
-Uniform-array devices (WebGL) draw a command in 16 KiB chunks of records
-with aligned dynamic offsets, ~120 draws for the arena, with no CPU
-expansion: the record is the shader's input on every backend.
+set of GPU buffers per command of `STORE_RUN_MIN_RECORDS` records or
+more, grown on demand, and the tables it last uploaded. Per frame per
+run: same `Arc` as last time, nothing; else compare the bytes, equal,
+nothing; else write the whole command. No patches, ranges or
+generations: a rejected packet leaves the store equal to its last
+upload, which `cancellation_contract.rs` pins (a cancelled packet
+carrying new tables, the next presented packet drawing them, red-proven
+against a store that skips the byte compare). Buffers of commands absent
+for `STORE_IDLE_FRAMES` are dropped. Runs below the threshold, loose
+primitives and shadows go to the frame arena instead: per pass, one
+chunk of records copied with their brushes re-based and their placement
+index in the record's spare word, so a page of hundreds of small commands
+is a handful of draws, not hundreds of bind groups. The uniform floor
+(WebGL) is the arena alone, in 16 KB chunks, quads only.
 
-**Scene and pass.** `collect` pushes one run reference per draw-run node
-(command, segments, placement, z) and walks nodes only; visibility is
-per command bounds. `merge_items`, `shape_run`, the conversion in
-`prepare_shape_batch`, `band_mesh.rs` and the flat `shapes` vector go.
-The pass draws segments: bind the command buffer and uniform, one draw
-per segment under its (blend, variant) pipeline, `6 n` vertices from
-`vertex_index` or one instance per record where instancing exists.
+**Scene and pass.** `collect` pushes one `RunDraw` per stretch of shape
+segments of a draw-run node (the command, the segment range, the
+placement, the tables' `Arc`, the fingerprint, the bounds) and hands the
+other lane's primitives to their item paths between them; a layer's own
+primitives record into a loose `ShapeRecorder` under one placement and
+close into a run when the placement changes or anything else takes a z.
+Visibility is per run bounds. `merge_items`, `shape_run`, the conversion
+in `prepare_shape_batch`, `band_mesh.rs`, `ShapeData` and the flat
+`shapes` vector are gone. The pass draws a stored run as one draw per
+segment under its (blend, kind, brush class, clip) pipeline, `6 n`
+vertices from `vertex_index`, then one band draw per bucket the segment
+has banded arcs in; arena runs merge into the chunk's draws.
 
-**Bands from the vertex stage.** Arc and ring records draw as instanced
-strips generated from `vertex_index`, in segment-count buckets (a draw
-per bucket, every instance of a bucket with that count), with the same
-one-texel slack and the pixel-centre coverage proof `band_mesh.rs` has
-today. This replaces the CPU mesh in the same landing, because removing
-the mesh first would restore the disc-sized fill measured on the Mate
-20 X (12 to 16 MP, 10.6 to 15.9 ms).
+**Bands from the vertex stage.** Arc and ring records draw as strips
+generated from `vertex_index`, in segment-count buckets (a draw per
+bucket per segment), with the same one-texel slack and the pixel-centre
+coverage proof the CPU mesh had; see "Fill-shaped geometry". This
+replaced the CPU mesh in the same landing, because removing the mesh
+first would have restored the disc-sized fill measured on the Mate 20 X
+(12 to 16 MP, 10.6 to 15.9 ms).
 
 **Budget on the watch, as a bar.** Floors outside the renderer: the
 app's own math plus 17,600 record writes (main's whole process_frame,
@@ -658,17 +692,46 @@ zero, alternating rounds, temperature logged; the watch with the
    the materialisation with it.
 5. The compact GPU path: placement uniform ring, vertex-stage
    canonicalisation, colour matrix and paint order in the shader.
-   Gates: pixel parity against today's CPU conversion over the arena and
-   the showcase pages (bound stated, red-proven), the snapping and
-   translated-gradient byte-identity tests, gradient parity.
-6. The run store and run references in `collect` and the pass, the
-   vertex-stage bands with their coverage proof, and the removal of
-   `merge_items`, `shape_run`'s walk, the CPU conversion and
-   `band_mesh.rs`, in one landing. Gates: the cancellation test (a
-   rejected packet, the next frame consistent), `band_fill.rs` budget and
-   pixels, the robot suite. Measured on both devices; the Mate 20 X fill
-   must not exceed the mesh's 12 MP.
-7. Watch and phone A/B/A/B against main, 60 s, p50/p90, temperature.
+   Gates: the seven `record_path_goldens.rs` scenes captured from the
+   CPU conversion before the landing (arena, scaled arena, clipped
+   primitives, translated thin shapes, painted layers, blend modes,
+   shadows), the snapping and translated-gradient byte-identity tests
+   (`effect_semantics.rs`), the variant parity. Done 2026-09-04 with 6.
+   The goldens caught two real defects on the way: the paint quantized
+   every colour where the CPU path quantized only painted ones (one
+   level in 3% of the arena's pixels), and a loose run closed during a
+   later push took that push's snap anchor (a one-pixel shift of the
+   background rect).
+6. The run store with its arena tier, run references in `collect` and
+   the pass, the vertex-stage bands with their coverage proof
+   (`run_geometry.rs`), and the removal of `merge_items`, `shape_run`,
+   the CPU conversion, `ShapeData` and `band_mesh.rs`, in one landing.
+   Gates: the cancellation test (`cancellation_contract.rs`, red-proven),
+   `band_fill.rs` budget and pixels, the goldens, the wgpu suite. Done
+   2026-09-04. The first watch run showed the fill estimate walking every
+   band vertex with trig on the present thread (render stage 128 ms);
+   the strip area is analytic now. The first device runs then presented
+   4 fps on the watch and 1 on the Mate 20 X, whose Mali lost the
+   device on the first frame: bands bucketed by radius alone gave the
+   arena's short bricks 2.53 M vertices a frame (the `shape_verts` stat
+   was added to see it). Bands now take the segments their padded
+   sweep needs and `band_pays` charges the vertices: 137 k vertices,
+   Mate 62 fps. On the watch the remaining gap to main is the recorder
+   itself (simpleperf through `--app`: `push_arc_band`, `band_pays`,
+   `push_shape`, the 112-byte record copies), trimmed to one
+   `Arc::make_mut` per record, tables re-allocated at their old
+   capacities when a scene still holds them, the fingerprint and the
+   fill estimate computed only when asked: scene 15.4 -> 11.6 ms.
+7. A/B/A/B against main, 30 s windows, SurfaceFlinger presented frames,
+   2026-09-04. Mate 20 X: main 60.6 / 56.1 fps, branch 62.2 / 62.0 (the
+   vsync; period p50 16.6 ms both runs). Pixel Watch 3, run back to
+   back while it heated: main 51.3, branch 25.8, main 31.5, branch 16.4;
+   the branch presents half of main's frames whatever the temperature.
+   Its frame is the CPU: update 16.2 ms (scene 11.6, the recorder over
+   17.6 k arcs) and render 8.7 against main's 10.0 and 7.3, with 1.9 MB
+   re-uploaded every frame because the arena command re-records and the
+   store compares whole tables. The next step is the recorder's cost per
+   arc and the whole-table compare, measured by simpleperf on the watch.
    Then the showcase's exact GPU steps (interior split, shadow support
    at r, blur variants, substrate) and the material decisions, each with
    its number.

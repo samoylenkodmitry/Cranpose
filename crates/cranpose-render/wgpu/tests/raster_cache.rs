@@ -4,48 +4,15 @@ use cranpose_core::NodeId;
 use cranpose_render_common::{
     Renderer,
     graph::{
-        CachePolicy, DrawPrimitiveNode, IsolationReasons, LayerNode, PrimitiveEntry, PrimitiveNode,
-        PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode, TextPrimitiveNode,
+        CachePolicy, DrawPrimitiveNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase,
+        ProjectiveTransform, RenderGraph, RenderNode, TextPrimitiveNode,
     },
-    raster_cache::LayerRasterCacheHashes,
 };
 use cranpose_ui::{
     TextLayoutOptions, TextStyle,
     text::{AnnotatedString, SpanStyle},
 };
-use cranpose_ui_graphics::{Brush, Color, GraphicsLayer, Point, Rect};
-
-fn test_layer(
-    node_id: Option<NodeId>,
-    cache_policy: CachePolicy,
-    local_bounds: Rect,
-    transform_to_parent: ProjectiveTransform,
-    children: Vec<RenderNode>,
-) -> LayerNode {
-    LayerNode {
-        node_id,
-        wraps: None,
-        local_bounds,
-        transform_to_parent,
-        motion_context_animated: false,
-        translated_content_context: false,
-        translated_content_offset: Point::default(),
-        content_offset: Point::default(),
-        scene_children_origin: cranpose_ui_graphics::Point::default(),
-        scene_children_layer_translation: cranpose_ui_graphics::Point::default(),
-        graphics_layer: GraphicsLayer::default(),
-        clip_to_bounds: false,
-        shadow_clip: None,
-        hit_test: None,
-        has_hit_targets: false,
-        has_origin_sinks: false,
-        isolation: IsolationReasons::default(),
-        cache_policy,
-        cache_hashes: LayerRasterCacheHashes::default(),
-        cache_hashes_valid: false,
-        children,
-    }
-}
+use cranpose_ui_graphics::{Brush, Color, Rect};
 
 fn card_layer(node_id: NodeId, y: f32) -> LayerNode {
     let local_bounds = Rect {
@@ -65,7 +32,7 @@ fn card_layer(node_id: NodeId, y: f32) -> LayerNode {
             clip: None,
         }),
     };
-    let mut layer = test_layer(
+    let mut layer = support::contract_layer(
         Some(node_id),
         CachePolicy::Auto,
         local_bounds,
@@ -82,7 +49,7 @@ fn scroll_like_graph(offsets: &[f32]) -> RenderGraph {
         .enumerate()
         .map(|(index, y)| RenderNode::Layer(Box::new(card_layer(index + 1, *y))))
         .collect();
-    RenderGraph::new(test_layer(
+    RenderGraph::new(support::contract_layer(
         Some(10_000),
         CachePolicy::None,
         Rect {
@@ -97,7 +64,7 @@ fn scroll_like_graph(offsets: &[f32]) -> RenderGraph {
 }
 
 fn text_scroll_like_graph(y: f32) -> RenderGraph {
-    RenderGraph::new(test_layer(
+    RenderGraph::new(support::contract_layer(
         Some(20_000),
         CachePolicy::None,
         Rect {
@@ -117,7 +84,7 @@ fn text_scroll_like_graph(y: f32) -> RenderGraph {
 }
 
 fn repeated_text_graph() -> RenderGraph {
-    RenderGraph::new(test_layer(
+    RenderGraph::new(support::contract_layer(
         Some(20_001),
         CachePolicy::None,
         Rect {
@@ -166,7 +133,7 @@ fn text_layer(node_id: NodeId, x: f32, y: f32, text_value: &str) -> LayerNode {
             clip: None,
         })),
     };
-    test_layer(
+    support::contract_layer(
         Some(node_id),
         CachePolicy::None,
         local_bounds,
@@ -316,7 +283,7 @@ fn shaded_runtime_shader_layer(node_id: NodeId, time: f32) -> LayerNode {
     };
     let mut shader = cranpose_ui_graphics::RuntimeShader::new(&animated_shader_wgsl());
     shader.set_float(0, time);
-    let mut shaded = test_layer(
+    let mut shaded = support::contract_layer(
         Some(node_id),
         CachePolicy::Auto,
         shaded_bounds,
@@ -341,7 +308,7 @@ fn shaded_runtime_shader_layer(node_id: NodeId, time: f32) -> LayerNode {
 fn shader_inside_cached_container_graph(time: f32) -> RenderGraph {
     let shaded = shaded_runtime_shader_layer(30_001, time);
 
-    let mut container = test_layer(
+    let mut container = support::contract_layer(
         Some(30_000),
         CachePolicy::Auto,
         Rect {
@@ -356,7 +323,7 @@ fn shader_inside_cached_container_graph(time: f32) -> RenderGraph {
     container.clip_to_bounds = true;
     container.isolation.shape_clip = true;
 
-    RenderGraph::new(test_layer(
+    RenderGraph::new(support::contract_layer(
         Some(30_002),
         CachePolicy::None,
         Rect {
@@ -372,7 +339,7 @@ fn shader_inside_cached_container_graph(time: f32) -> RenderGraph {
 
 fn shader_layer_graph(time: f32) -> RenderGraph {
     let shaded = shaded_runtime_shader_layer(30_101, time);
-    RenderGraph::new(test_layer(
+    RenderGraph::new(support::contract_layer(
         Some(30_102),
         CachePolicy::None,
         Rect {

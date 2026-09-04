@@ -7,8 +7,8 @@ use crate::{
     draw_pass::{ResolvedComposite, ResolvedCompositeKind, SourceContent},
     effect_renderer::{CompositeSampleMode, RoundedCompositeMask},
     render::{
-        hash_f32_for_cache, hash_shadow_device_offset, hash_shadow_device_rect,
-        hash_shape_shadow_item, shadow_draw_bounds, shape_shadow_content_hash,
+        hash_f32_for_cache, hash_run_item, hash_shadow_device_offset, hash_shadow_device_rect,
+        shadow_content_hash, shadow_draw_bounds,
     },
     scene::{CompositorScene, DrawOp, DrawOpKind, ImageDraw, ShadowDraw, SnapAnchor, TextDraw},
 };
@@ -67,19 +67,11 @@ pub(crate) fn hash_capture_ops<H: Hasher>(
     let origin = window.origin(scale);
     for op in ops {
         match op.kind {
-            DrawOpKind::Shape(index) => {
-                let shape = &scene.shapes[index];
-                if window.touches_logical(shape.rect, OP_MARGIN, scale) {
+            DrawOpKind::Run(index) => {
+                let run = &scene.runs[index];
+                if window.touches_logical(run.bounds, OP_MARGIN, scale) {
                     0u8.hash(state);
-                    hash_shape_shadow_item(
-                        shape,
-                        &scene.brushes,
-                        shape.blend_mode,
-                        origin.x,
-                        origin.y,
-                        scale,
-                        state,
-                    );
+                    hash_run_item(run, origin.x, origin.y, scale, state);
                 }
             }
             DrawOpKind::Image(index) => {
@@ -173,17 +165,12 @@ fn hash_image<H: Hasher>(image: &ImageDraw, origin: Point, scale: f32, state: &m
 }
 
 fn hash_shadow<H: Hasher>(shadow: &ShadowDraw, origin: Point, scale: f32, state: &mut H) {
-    shape_shadow_content_hash(
-        &shadow.shapes,
-        &shadow.post_blur_cutouts,
-        &shadow.brushes,
-        scale,
-    )
-    .hash(state);
+    shadow_content_hash(shadow, scale).hash(state);
     hash_optional_rect(shadow_draw_bounds(shadow), origin, scale, state);
-    for (shape, _) in shadow.shapes.iter().chain(&shadow.post_blur_cutouts) {
-        hash_shadow_device_rect(shape.rect, origin.x, origin.y, scale, state);
-        hash_anchor(shape.snap_anchor, origin, scale, state);
+    if let Some(run) = &shadow.shapes {
+        hash_shadow_device_offset(run.placement.offset.x, origin.x, scale, state);
+        hash_shadow_device_offset(run.placement.offset.y, origin.y, scale, state);
+        hash_anchor(run.placement.snap_anchor, origin, scale, state);
     }
     for text in &shadow.texts {
         hash_text(text, origin, scale, state);

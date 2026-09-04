@@ -2675,9 +2675,9 @@ pub(crate) fn scene_bounds(layer: &LayerScene) -> Option<Rect> {
     let mut bounds = None;
     for op in &scene.draw_ops {
         let rect = match op.kind {
-            DrawOpKind::Shape(index) => {
-                let shape = &scene.shapes[index];
-                clipped(quad_bounds(shape.quad), shape.clip)
+            DrawOpKind::Run(index) => {
+                let run = &scene.runs[index];
+                clipped(run.bounds, run.placement.clip)
             }
             DrawOpKind::Image(index) => {
                 let image = &scene.images[index];
@@ -2690,8 +2690,8 @@ pub(crate) fn scene_bounds(layer: &LayerScene) -> Option<Rect> {
             DrawOpKind::Shadow(index) => {
                 let shadow = &scene.shadow_draws[index];
                 let mut shadow_bounds = None;
-                for (shape, _) in &shadow.shapes {
-                    shadow_bounds = union_rect(shadow_bounds, Some(quad_bounds(shape.quad)));
+                if let Some(run) = &shadow.shapes {
+                    shadow_bounds = union_rect(shadow_bounds, Some(run.bounds));
                 }
                 for text in &shadow.texts {
                     shadow_bounds = union_rect(shadow_bounds, Some(text.rect));
@@ -2736,7 +2736,7 @@ mod tests {
     fn op(z_index: usize) -> DrawOp {
         DrawOp {
             z_index,
-            kind: DrawOpKind::Shape(0),
+            kind: DrawOpKind::Run(0),
         }
     }
 

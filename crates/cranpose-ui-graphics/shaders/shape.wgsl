@@ -1,15 +1,14 @@
-
 // Shared structs
 //
-// Everything the fragment shader needs from ShapeData rides here as a flat
-// varying instead of being re-fetched from the uniform array per fragment.
-// The vertex shader runs six times per shape; the fragment shader runs once
-// per covered pixel — thousands of times more in an overdraw-heavy scene —
-// and a dynamically indexed uniform array cannot be promoted to registers,
-// so every one of those fragment fetches was a real memory load on the
-// GPU's load/store pipe. Flat varyings move that traffic to the (otherwise
-// idle) varying interpolator. Only the gradient-stop array is still fetched
-// per fragment, and solid brushes never touch it.
+// Everything the fragment shader needs from a record rides here as a flat
+// varying instead of being re-fetched per fragment. The vertex shader runs
+// six times per record; the fragment shader runs once per covered pixel —
+// thousands of times more in an overdraw-heavy scene — and a dynamically
+// indexed array cannot be promoted to registers, so every one of those
+// fragment fetches was a real memory load. Flat varyings move that traffic
+// to the (otherwise idle) varying interpolator. Only the gradient-stop walk
+// for ramps longer than four stops is still fetched per fragment, and solid
+// brushes never touch it.
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) color: vec4<f32>,
@@ -29,73 +28,314 @@ struct VertexOutput {
     @location(14) @interpolate(flat) stop_color3: vec4<f32>,
 }
 
+// Where a recording lands on the device: the logical offset of its record
+// space (the layer origin with the rigid snap delta folded in), the root
+// scale, the clip, the dither origin and the paint every record takes.
+//
+//   flags bit 0  canonicalize: the placement is rigidly snapped, so every
+//                device coordinate rounds to the 1/16 px grid
+//   flags bit 1  clip: `clip` holds a device clip rect
+//   flags bit 2  color filter: `color_matrix`/`color_offset` apply
+//   flags bit 3  painted: the layer's alpha or filter applies, so a solid
+//                colour is quantized to 8-bit sRGB first, as the CPU
+//                brush resolution did; an unpainted colour passes as is
+struct Placement {
+    offset: vec2<f32>,
+    root_scale: f32,
+    flags: u32,
+    clip: vec4<f32>,
+    dither_origin: vec2<f32>,
+    alpha: f32,
+    reserved: f32,
+    color_matrix: mat4x4<f32>,
+    color_offset: vec4<f32>,
+}
+
 struct Uniforms {
     viewport: vec2<f32>,
     viewport_offset: vec2<f32>,
+    placement: Placement,
 }
 
 @group(0) @binding(0)
 var<uniform> uniforms: Uniforms;
 
-// Vertex shader
-//
-// There is no vertex buffer: each shape is six unindexed vertices whose
-// corner positions, color and UVs are pulled from `shape_data` by
-// `vertex_index`. Corner numbering matches the quad the CPU records:
-// 0 = top-left, 1 = top-right, 2 = bottom-left, 3 = bottom-right, drawn as
-// triangles (0, 1, 2) and (2, 1, 3).
-@vertex
-fn vs_main(@builtin(vertex_index) vertex_idx: u32) -> VertexOutput {
-    let shape_idx = vertex_idx / 6u;
-    let slot = vertex_idx % 6u;
-    var corner: u32;
-    switch slot {
-        case 0u: { corner = 0u; }
-        case 1u, 4u: { corner = 1u; }
-        case 2u, 3u: { corner = 2u; }
-        default: { corner = 3u; }
-    }
-
-    let shape = shape_data[shape_idx];
-    var position: vec2<f32>;
-    switch corner {
-        case 0u: { position = shape.quad01.xy; }
-        case 1u: { position = shape.quad01.zw; }
-        case 2u: { position = shape.quad23.xy; }
-        default: { position = shape.quad23.zw; }
-    }
-    return shape_output(shape, position, vec2<f32>(f32(corner & 1u), f32(corner >> 1u)));
+// One recorded shape, byte for byte what the draw scope wrote: local
+// space, the app's own units, nothing resolved. `flags` packs the record
+// kind (bits 0-1: rect, round rect, arc), the stroke bit (2), the stroke
+// cap (3-4) and join (5-6), the blend mode (8-15), the arc band's cap
+// (16-17), and the arc facts: degenerate (18), loose rect (19), banded (20).
+// `placement` names the record's placement in the arena tier and is unused
+// in the store tier.
+struct ShapeRecord {
+    rect: vec4<f32>,
+    radii: vec4<f32>,
+    color: vec4<f32>,
+    stroke_width: f32,
+    flags: u32,
+    brush: u32,
+    placement: u32,
+    arc: vec4<f32>,
+    arc_band: vec4<f32>,
+    arc_normalized: vec4<f32>,
 }
 
-// The varyings of one shape record at `position`, the device pixel the
-// vertex lands on, with `uv` its place in the record's rect. `world_pos`
-// carries the device position in xy and, in zw, the same position relative
-// to the record's dither origin.
-fn shape_output(shape: ShapeData, position: vec2<f32>, uv: vec2<f32>) -> VertexOutput {
+struct BrushRecord {
+    kind: u32,
+    tile_mode: u32,
+    stop_start: u32,
+    stop_count: u32,
+    params: vec4<f32>,
+    explicit_start: u32,
+    explicit_len: u32,
+    reserved: vec2<u32>,
+}
+
+struct GradientStop {
+    color: vec4<f32>,
+    position: vec4<f32>,
+}
+
+// The uniform-buffer form is the WebGL floor: 16 KB bindings, so a chunk of
+// 128 records, 256 brushes, 256 stops and 64 placements, drawn as quads.
+// Native pipelines rewrite these five declarations to unbounded storage
+// arrays — see `shape_shader_source`, which string-replaces the exact
+// literals.
+@group(1) @binding(0)
+var<uniform> records: array<ShapeRecord, 128>;
+
+@group(1) @binding(1)
+var<uniform> brushes: array<BrushRecord, 256>;
+
+@group(1) @binding(2)
+var<uniform> gradient_stops: array<GradientStop, 256>;
+
+@group(1) @binding(3)
+var<uniform> band_records: array<vec4<u32>, 4>;
+
+@group(1) @binding(4)
+var<uniform> placements: array<Placement, 64>;
+
+const RECORD_KIND_ROUND_RECT: u32 = 1u;
+const RECORD_KIND_ARC: u32 = 2u;
+const RECORD_STROKED: u32 = 4u;
+const RECORD_CAP_SHIFT: u32 = 3u;
+const RECORD_JOIN_SHIFT: u32 = 5u;
+const RECORD_BAND_CAP_SHIFT: u32 = 16u;
+const RECORD_ARC_DEGENERATE: u32 = 262144u;
+const RECORD_ARC_BANDED: u32 = 1048576u;
+
+const BRUSH_LINEAR: u32 = 1u;
+const BRUSH_RADIAL: u32 = 2u;
+const BRUSH_SWEEP: u32 = 3u;
+
+const PLACEMENT_CANONICALIZE: u32 = 1u;
+const PLACEMENT_CLIPPED: u32 = 2u;
+const PLACEMENT_FILTERED: u32 = 4u;
+const PLACEMENT_PAINTED: u32 = 8u;
+
+// A band's slack beyond its ring, in device pixels, so every pixel the
+// fragment stage anti-aliases lies inside the strip.
+const BAND_MARGIN: f32 = 1.0;
+const BAND_ANGULAR_PAD: f32 = 0.05;
+const INFINITE_GRADIENT_POINT: f32 = 1.0e30;
+const PI: f32 = 3.14159265358979;
+
+// Which tier a pipeline draws from. The store tier draws one recording from
+// its retained buffers under the placement in `uniforms`, and hands wide
+// arcs to `vs_band`; the arena tier draws many small recordings copied
+// into one buffer, each record naming its placement, every record a quad.
+override TIER_ARENA: bool = false;
+// Whether band pipelines draw the banded arcs of this tier, so the quad
+// entry point collapses them; false on the uniform floor, which has no
+// band table and draws every record as its quad.
+override SHAPE_BANDS: bool = true;
+// The strip segments of a band pipeline; unused by the quad entry points.
+override BAND_SEGMENTS: u32 = 8u;
+// A band pipeline shades only inside the record's rect, the quad path's
+// raster extent, so the two paths cover the same pixels.
+override SHAPE_BAND: bool = false;
+
+fn record_placement(record: ShapeRecord) -> Placement {
+    if (TIER_ARENA) {
+        return placements[record.placement];
+    }
+    return uniforms.placement;
+}
+
+// The device coordinate the CPU would have written: rounded to the 1/16
+// device pixel grid when the placement is snapped, so a rigidly moving
+// subtree lands on the same sub-pixel phase every frame.
+fn canonical(value: f32) -> f32 {
+    return sign(value) * floor(abs(value) * 16.0 + 0.5) / 16.0;
+}
+
+fn device_coordinate(value: f32, canonicalize: bool) -> f32 {
+    return select(value, canonical(value), canonicalize);
+}
+
+struct RecordGeometry {
+    // The device rect the record rasterizes: the stroke's outer half
+    // included, canonicalized under a snapped placement.
+    rect: vec4<f32>,
+    canonicalize: bool,
+    scale: f32,
+}
+
+fn record_geometry(record: ShapeRecord, placement: Placement) -> RecordGeometry {
+    let kind = record.flags & 3u;
+    let stroked = (record.flags & RECORD_STROKED) != 0u && kind != RECORD_KIND_ARC;
+    let half_width = select(0.0, record.stroke_width * 0.5, stroked);
+    let scale = placement.root_scale;
+    let canonicalize = (placement.flags & PLACEMENT_CANONICALIZE) != 0u;
+    let left = device_coordinate((record.rect.x - half_width + placement.offset.x) * scale, canonicalize);
+    let top = device_coordinate((record.rect.y - half_width + placement.offset.y) * scale, canonicalize);
+    let right = device_coordinate(
+        (record.rect.x + record.rect.z + half_width + placement.offset.x) * scale, canonicalize);
+    let bottom = device_coordinate(
+        (record.rect.y + record.rect.w + half_width + placement.offset.y) * scale, canonicalize);
+    var geometry: RecordGeometry;
+    geometry.rect = vec4<f32>(left, top, right - left, bottom - top);
+    geometry.canonicalize = canonicalize;
+    geometry.scale = scale;
+    return geometry;
+}
+
+// The colour a record paints with under its placement. An unpainted
+// placement passes the colour through; a painting one quantizes it to
+// 8-bit sRGB, applies the layer alpha and then the colour filter, in the
+// order the CPU brush resolution applies them.
+fn paint(color: vec4<f32>, placement: Placement) -> vec4<f32> {
+    if ((placement.flags & PLACEMENT_PAINTED) == 0u) {
+        return color;
+    }
+    var painted = floor(clamp(color, vec4<f32>(0.0), vec4<f32>(1.0)) * 255.0 + 0.5) / 255.0;
+    painted.a = clamp(painted.a * placement.alpha, 0.0, 1.0);
+    if ((placement.flags & PLACEMENT_FILTERED) != 0u) {
+        painted = clamp(placement.color_matrix * painted + placement.color_offset,
+                        vec4<f32>(0.0), vec4<f32>(1.0));
+    }
+    return painted;
+}
+
+// A gradient endpoint: relative to the record's device rect, with an
+// infinite coordinate meaning the rect's far edge (positive) or origin.
+fn resolve_gradient_point(origin: f32, extent: f32, value: f32) -> f32 {
+    if (abs(value) < INFINITE_GRADIENT_POINT) {
+        return origin + value;
+    }
+    return select(origin, origin + extent, value > 0.0);
+}
+
+fn arc_trig(start: f32, sweep: f32) -> vec4<f32> {
+    if (sweep >= TAU && start == 0.0) {
+        return vec4<f32>(0.0, -1.0, 0.0, -1.0);
+    }
+    let half_sweep = clamp(sweep, 0.0, TAU) * 0.5;
+    let mid = start + half_sweep;
+    return vec4<f32>(sin(mid), cos(mid), max(sin(half_sweep), 0.0), cos(half_sweep));
+}
+
+fn resolved_radii(record: ShapeRecord, scale: f32) -> vec4<f32> {
+    let limit = max(min(record.rect.z, record.rect.w) * 0.5, 0.0);
+    // The record stores top-left, top-right, bottom-right, bottom-left; the
+    // fragment stage reads top-left, top-right, bottom-left, bottom-right.
+    let stored = vec4<f32>(record.radii.x, record.radii.y, record.radii.w, record.radii.z);
+    return clamp(stored, vec4<f32>(0.0), vec4<f32>(limit)) * scale;
+}
+
+fn shape_output(
+    record: ShapeRecord,
+    placement: Placement,
+    geometry: RecordGeometry,
+    position: vec2<f32>,
+    uv: vec2<f32>,
+) -> VertexOutput {
     var output: VertexOutput;
-    // Convert from pixel coordinates to clip space (viewport_offset shifts the origin
-    // so that a sub-region of the viewport maps to the full NDC range)
     let x = ((position.x - uniforms.viewport_offset.x) / uniforms.viewport.x) * 2.0 - 1.0;
     let y = 1.0 - ((position.y - uniforms.viewport_offset.y) / uniforms.viewport.y) * 2.0;
-
     output.clip_position = vec4<f32>(x, y, 0.0, 1.0);
-    output.color = shape.color;
+    output.color = paint(record.color, placement);
     output.uv = uv;
-    output.world_pos = vec4<f32>(position, position - shape.dither_origin);
-    output.rect = shape.rect;
-    output.radii = shape.radii;
-    output.gradient_params = shape.gradient_params;
-    output.clip_rect = shape.clip_rect;
-    output.stroke_params = shape.stroke_params;
-    output.arc_params = shape.arc_params;
-    output.brush = vec4<u32>(
-        shape.brush_type,
-        shape.gradient_start,
-        shape.gradient_count,
-        shape.gradient_tile_mode,
-    );
-    if (!SHAPE_SOLID) {
-        let stops = load_inline_gradient_stops(shape.gradient_start, shape.gradient_count);
+    output.world_pos = vec4<f32>(position, position - placement.dither_origin);
+    output.rect = geometry.rect;
+    let scale = geometry.scale;
+    let kind = record.flags & 3u;
+    let stroked = (record.flags & RECORD_STROKED) != 0u;
+
+    if (kind == RECORD_KIND_ARC) {
+        output.radii = arc_trig(record.arc_normalized.x, record.arc_normalized.y);
+        let cap = (record.flags >> RECORD_BAND_CAP_SHIFT) & 3u;
+        output.stroke_params = vec4<f32>(
+            0.0,
+            f32(SHAPE_KIND_ARC | (cap << 2u)),
+            record.arc_band.w * scale,
+            record.arc_band.z * scale,
+        );
+        output.arc_params = vec4<f32>(
+            (record.arc.x + placement.offset.x) * scale,
+            (record.arc.y + placement.offset.y) * scale,
+            record.arc_normalized.x,
+            record.arc_normalized.y,
+        );
+    } else {
+        if (kind == RECORD_KIND_ROUND_RECT) {
+            output.radii = resolved_radii(record, scale);
+        } else {
+            output.radii = vec4<f32>(0.0);
+        }
+        if (stroked) {
+            let cap = (record.flags >> RECORD_CAP_SHIFT) & 3u;
+            let join = (record.flags >> RECORD_JOIN_SHIFT) & 3u;
+            output.stroke_params = vec4<f32>(
+                max(record.stroke_width, 0.0) * scale,
+                f32(SHAPE_KIND_STROKE | (cap << 2u) | (join << 4u)),
+                0.0,
+                0.0,
+            );
+        } else {
+            output.stroke_params = vec4<f32>(0.0);
+        }
+        output.arc_params = vec4<f32>(0.0);
+    }
+
+    if (SHAPE_CLIPPED && (placement.flags & PLACEMENT_CLIPPED) != 0u) {
+        output.clip_rect = placement.clip;
+    } else {
+        output.clip_rect = vec4<f32>(0.0);
+    }
+
+    output.gradient_params = vec4<f32>(0.0);
+    output.brush = vec4<u32>(0u);
+    if (!SHAPE_SOLID && record.brush != 0u) {
+        let brush = brushes[record.brush - 1u];
+        let rect = geometry.rect;
+        let canonicalize = geometry.canonicalize;
+        let params = brush.params * scale;
+        if (brush.kind == BRUSH_LINEAR) {
+            output.gradient_params = vec4<f32>(
+                device_coordinate(resolve_gradient_point(rect.x, rect.z, params.x), canonicalize),
+                device_coordinate(resolve_gradient_point(rect.y, rect.w, params.y), canonicalize),
+                device_coordinate(resolve_gradient_point(rect.x, rect.z, params.z), canonicalize),
+                device_coordinate(resolve_gradient_point(rect.y, rect.w, params.w), canonicalize),
+            );
+        } else if (brush.kind == BRUSH_RADIAL) {
+            output.gradient_params = vec4<f32>(
+                device_coordinate(rect.x + params.x, canonicalize),
+                device_coordinate(rect.y + params.y, canonicalize),
+                max(params.z, 1.1920929e-7),
+                0.0,
+            );
+        } else {
+            output.gradient_params = vec4<f32>(
+                device_coordinate(rect.x + params.x, canonicalize),
+                device_coordinate(rect.y + params.y, canonicalize),
+                0.0,
+                0.0,
+            );
+        }
+        output.brush = vec4<u32>(brush.kind, brush.stop_start, brush.stop_count, brush.tile_mode);
+        let stops = load_inline_gradient_stops(brush.stop_start, brush.stop_count);
         output.stop_offsets = stops.offsets;
         output.stop_color0 = stops.color0;
         output.stop_color1 = stops.color1;
@@ -105,24 +345,116 @@ fn shape_output(shape: ShapeData, position: vec2<f32>, uv: vec2<f32>) -> VertexO
     return output;
 }
 
-struct MeshVertexInput {
-    @location(0) position: vec2<f32>,
-    @location(1) uv: vec2<f32>,
-    @location(2) shape_idx: u32,
+// Six vertices at one point: nothing rasterizes.
+fn collapsed() -> VertexOutput {
+    var output: VertexOutput;
+    output.clip_position = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    return output;
 }
 
-// A shape drawn as a mesh: the vertex carries its own position and place in
-// the shape's rect, and everything else comes from the shape record it names,
-// exactly as the quad path fills it.
-@vertex
-fn vs_mesh(in: MeshVertexInput) -> VertexOutput {
-    return shape_output(shape_data[in.shape_idx], in.position, in.uv);
+fn quad_corner(slot: u32) -> u32 {
+    switch slot {
+        case 0u: { return 0u; }
+        case 1u, 4u: { return 1u; }
+        case 2u, 3u: { return 2u; }
+        default: { return 3u; }
+    }
 }
 
-// Fragment shader structs and data
+// Vertex shader: quads
 //
-// `stroke_params.y` packs three 2-bit fields so the struct stays at ten
-// vec4-sized slots (160 bytes) instead of eleven:
+// There is no vertex buffer: each record is six unindexed vertices whose
+// corner positions and UVs come from the record by `vertex_index`. Corner
+// numbering: 0 = top-left, 1 = top-right, 2 = bottom-left,
+// 3 = bottom-right, drawn as triangles (0, 1, 2) and (2, 1, 3). A draw
+// starts at the first record of its segment times six, so the record index
+// indexes the whole table. Where band pipelines draw, a banded record
+// collapses here: its strip draws it.
+@vertex
+fn vs_record(@builtin(vertex_index) vertex_idx: u32) -> VertexOutput {
+    let record = records[vertex_idx / 6u];
+    if ((record.flags & RECORD_ARC_DEGENERATE) != 0u) {
+        return collapsed();
+    }
+    if (SHAPE_BANDS && (record.flags & RECORD_ARC_BANDED) != 0u) {
+        return collapsed();
+    }
+    let corner = quad_corner(vertex_idx % 6u);
+    let uv = vec2<f32>(f32(corner & 1u), f32(corner >> 1u));
+    let placement = record_placement(record);
+    let geometry = record_geometry(record, placement);
+    let position = geometry.rect.xy + uv * geometry.rect.zw;
+    return shape_output(record, placement, geometry, position, uv);
+}
+
+// Vertex shader: bands
+//
+// A wide arc, or a stroked circle, rasterizes as a strip of
+// `BAND_SEGMENTS` quads around its ring instead of the disc's quad; the
+// record's arc fields carry the ring either way. The strip covers every pixel the
+// fragment stage anti-aliases: the ring is padded by `BAND_MARGIN`, the
+// sweep by the padding's angle, the outer vertices ride out so the
+// polygon circumscribes the padded outer circle, and the inner vertices
+// sit on the padded inner circle, whose chords only ever fall inside it.
+// The draw's vertex range names the bucket entries: `band_records` lists
+// the banded records of the recording, bucket by bucket.
+@vertex
+fn vs_band(@builtin(vertex_index) vertex_idx: u32) -> VertexOutput {
+    let per_band = BAND_SEGMENTS * 6u;
+    let slot = vertex_idx / per_band;
+    let local = vertex_idx % per_band;
+    let segment = local / 6u;
+    let k = local % 6u;
+    let packed = band_records[slot / 4u];
+    var record_index: u32;
+    switch (slot % 4u) {
+        case 0u: { record_index = packed.x; }
+        case 1u: { record_index = packed.y; }
+        case 2u: { record_index = packed.z; }
+        default: { record_index = packed.w; }
+    }
+    let record = records[record_index];
+    let placement = record_placement(record);
+    let geometry = record_geometry(record, placement);
+    let scale = placement.root_scale;
+    let center = (record.arc.xy + placement.offset) * scale;
+    let inner = record.arc_band.z * scale;
+    let outer = record.arc_band.w * scale;
+    let start = record.arc_normalized.x;
+    let sweep = record.arc_normalized.y;
+    let mid = (outer + inner) * 0.5;
+    let ring_half = max((outer - inner) * 0.5, 0.0) + BAND_MARGIN;
+    let outer_padded = mid + ring_half;
+    let inner_padded = max(mid - ring_half, 0.0);
+    var range_start = 0.0;
+    var range = TAU;
+    if (sweep < TAU) {
+        let pad = select(PI, asin(ring_half / mid) + BAND_ANGULAR_PAD, ring_half < mid);
+        let padded = sweep + pad + pad;
+        if (padded < TAU) {
+            range_start = start - pad;
+            range = padded;
+        }
+    }
+    let step = range / f32(BAND_SEGMENTS);
+    let outer_vertex = outer_padded / cos(step * 0.5);
+    var boundary = segment;
+    var radius = inner_padded;
+    switch k {
+        case 1u: { radius = outer_vertex; }
+        case 2u, 4u: { boundary = segment + 1u; radius = outer_vertex; }
+        case 5u: { boundary = segment + 1u; }
+        default: {}
+    }
+    let angle = range_start + step * f32(boundary);
+    let position = center + vec2<f32>(cos(angle), sin(angle)) * radius;
+    let uv = (position - geometry.rect.xy) / geometry.rect.zw;
+    return shape_output(record, placement, geometry, position, uv);
+}
+
+// Fragment shader
+//
+// `stroke_params.y` packs three 2-bit fields:
 //
 //   bits 0-1  shape kind : 0 = fill, 1 = stroked rect/round-rect, 2 = arc band
 //   bits 2-3  stroke cap : 0 = butt, 1 = round, 2 = square   (arcs only)
@@ -131,42 +463,6 @@ fn vs_mesh(in: MeshVertexInput) -> VertexOutput {
 // Angle convention for arcs: radians, 0 = +X, increasing CLOCKWISE on screen
 // (y-down device space) — the same convention the sweep-gradient branch below
 // gets from atan2(dy, dx).
-struct ShapeData {
-    rect: vec4<f32>,            // x, y, width, height
-    radii: vec4<f32>,           // rects: top_left, top_right, bottom_left, bottom_right
-                                // arcs: mid-angle (sin, cos), half-sweep (sin, cos)
-    gradient_params: vec4<f32>, // linear: start.xy,end.xy; radial: center.xy,radius,unused
-    clip_rect: vec4<f32>,       // clip_x, clip_y, clip_width, clip_height (0,0,0,0 = no clip)
-    stroke_params: vec4<f32>,   // stroke width, packed flags, arc outer radius, arc inner radius
-    arc_params: vec4<f32>,      // arc center.xy, start_angle, sweep_angle
-    quad01: vec4<f32>,          // device-space quad corners 0 (xy) and 1 (zw)
-    quad23: vec4<f32>,          // device-space quad corners 2 (xy) and 3 (zw)
-    color: vec4<f32>,           // vertex color (solid brush color or first gradient stop)
-    brush_type: u32,            // 0=solid, 1=linear_gradient, 2=radial_gradient, 3=sweep
-    gradient_start: u32,
-    gradient_count: u32,
-    gradient_tile_mode: u32,    // 0=Clamp, 1=Repeated, 2=Mirror, 3=Decal
-    dither_origin: vec2<f32>,   // device origin the gradient dither is anchored to
-    dither_padding: vec2<f32>,
-}
-
-struct GradientStop {
-    color: vec4<f32>,
-    position: vec4<f32>,
-}
-
-// Use uniform buffers for WebGL compatibility
-// Note: WebGL has a minimum uniform buffer size of 16KB
-// ShapeData is 176 bytes, so 93 shapes = 16368 bytes, the most that fits the
-// 16KB floor. Native pipelines rewrite
-// both array lengths from the real device limits — see `shape_shader_source`,
-// which string-replaces these exact literals.
-@group(1) @binding(0)
-var<uniform> shape_data: array<ShapeData, 93>;
-
-@group(1) @binding(1)
-var<uniform> gradient_stops: array<GradientStop, 256>;
-
 const SHAPE_KIND_FILL: u32 = 0u;
 const SHAPE_KIND_STROKE: u32 = 1u;
 const SHAPE_KIND_ARC: u32 = 2u;
@@ -263,10 +559,10 @@ fn sdf_stroked_rounded_rect(
 // half-planes.
 //
 // The two direction vectors are (sin, cos) of the sweep's midpoint angle and
-// of the half sweep. They are constants of the shape, so the CPU computes
-// them once per shape (see `convert_shape_into_slots`) instead of this
-// shader paying four transcendentals on every fragment — in an arc-heavy
-// scene that is by far the largest ALU term of the whole pipeline.
+// of the half sweep. They are constants of the shape, so the vertex stage
+// computes them once per vertex (`arc_trig`) instead of this shader paying
+// four transcendentals on every fragment — in an arc-heavy scene that is by
+// far the largest ALU term of the whole pipeline.
 fn sdf_arc_band(
     p: vec2<f32>,
     center: vec2<f32>,
@@ -501,6 +797,15 @@ fn shape_coverage_alpha(input: VertexOutput) -> f32 {
         // Discard fragments outside clip rect
         if (world_pos.x < clip_left || world_pos.x > clip_right ||
             world_pos.y < clip_top || world_pos.y > clip_bottom) {
+            discard;
+        }
+    }
+
+    if (SHAPE_BAND) {
+        // The quad path shades nothing outside the record's rect; a band's
+        // strip reaches past it, so the strip stops there too.
+        if (rect_pos.x < input.rect.x || rect_pos.x > input.rect.x + input.rect.z ||
+            rect_pos.y < input.rect.y || rect_pos.y > input.rect.y + input.rect.w) {
             discard;
         }
     }

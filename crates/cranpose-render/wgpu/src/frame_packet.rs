@@ -1,7 +1,7 @@
 use crate::{
     collect::{ChildLayer, LayerScene},
     scene::{
-        BackdropLayer, CompositorScene, DrawOp, DrawShape, EffectLayer, ImageDraw, ShadowDraw,
+        BackdropLayer, CompositorScene, DrawOp, EffectLayer, ImageDraw, RunDraw, ShadowDraw,
         TextDraw,
     },
 };
@@ -85,7 +85,7 @@ const _: () = {
     assert_send::<LayerScene>();
     assert_send::<ChildLayer>();
     assert_send::<CompositorScene>();
-    assert_send::<DrawShape>();
+    assert_send::<RunDraw>();
     assert_send::<ImageDraw>();
     assert_send::<TextDraw>();
     assert_send::<ShadowDraw>();

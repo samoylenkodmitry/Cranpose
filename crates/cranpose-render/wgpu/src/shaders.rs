@@ -1,14 +1,5 @@
 pub const SHADER: &str = cranpose_ui_graphics::framework_shaders::SHAPE_WGSL;
 
-pub(crate) const WEBGL_UNIFORM_BINDING_FLOOR: usize = 16 * 1024;
-pub(crate) const UNIFORM_SHAPE_CAPACITY: usize =
-    WEBGL_UNIFORM_BINDING_FLOOR / std::mem::size_of::<crate::render::ShapeData>();
-
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn uniform_shape_array() -> String {
-    format!("array<ShapeData, {UNIFORM_SHAPE_CAPACITY}>")
-}
-
 pub const IMAGE_SHADER: &str = cranpose_ui_graphics::framework_shaders::IMAGE_WGSL;
 
 pub const GLYPH_ATLAS_SHADER: &str = cranpose_ui_graphics::framework_shaders::GLYPH_ATLAS_WGSL;
@@ -21,6 +12,44 @@ pub const SDF_ROUNDED_RECT_FN: &str =
 
 pub const COMPOSITE_SAMPLE_FN: &str =
     cranpose_ui_graphics::framework_shaders::COMPOSITE_SAMPLE_FN_WGSL;
+
+/// The five run-table declarations of `shape.wgsl` in their uniform form,
+/// each paired with the storage form the native pipelines rewrite it to.
+pub(crate) const RUN_TABLE_DECLARATIONS: [(&str, &str); 5] = [
+    (
+        "var<uniform> records: array<ShapeRecord, 128>;",
+        "var<storage, read> records: array<ShapeRecord>;",
+    ),
+    (
+        "var<uniform> brushes: array<BrushRecord, 256>;",
+        "var<storage, read> brushes: array<BrushRecord>;",
+    ),
+    (
+        "var<uniform> gradient_stops: array<GradientStop, 256>;",
+        "var<storage, read> gradient_stops: array<GradientStop>;",
+    ),
+    (
+        "var<uniform> band_records: array<vec4<u32>, 4>;",
+        "var<storage, read> band_records: array<vec4<u32>>;",
+    ),
+    (
+        "var<uniform> placements: array<Placement, 64>;",
+        "var<storage, read> placements: array<Placement>;",
+    ),
+];
+
+/// `shape.wgsl` with its run tables as unbounded storage arrays.
+pub(crate) fn storage_shape_shader() -> String {
+    let mut source = SHADER.to_string();
+    for (uniform, storage) in RUN_TABLE_DECLARATIONS {
+        assert!(
+            source.contains(uniform),
+            "shape.wgsl must declare `{uniform}`"
+        );
+        source = source.replace(uniform, storage);
+    }
+    source
+}
 
 pub fn blur_shader() -> String {
     format!(
@@ -156,16 +185,21 @@ mod tests {
     }
 
     #[test]
-    fn shape_shader_validates_for_webgpu() {
+    fn shape_shader_validates_for_webgpu_in_both_table_forms() {
         if let Err(err) = validate_wgsl_module(super::SHADER) {
             panic!("shape.wgsl must validate for WebGPU: {err}");
+        }
+        if let Err(err) = validate_wgsl_module(&storage_shape_shader()) {
+            panic!("shape.wgsl with storage tables must validate for WebGPU: {err}");
         }
     }
 
     #[test]
     fn shape_shader_validates_for_webgl() {
-        if let Err(err) = validate_glsl_portability(super::SHADER, "vs_main", ShaderStage::Vertex) {
-            panic!("shape.wgsl vertex stage must lower to GLSL ES 300: {err}");
+        for entry in ["vs_record", "vs_band"] {
+            if let Err(err) = validate_glsl_portability(super::SHADER, entry, ShaderStage::Vertex) {
+                panic!("shape.wgsl `{entry}` must lower to GLSL ES 300: {err}");
+            }
         }
         if let Err(err) = validate_glsl_portability(super::SHADER, "fs_main", ShaderStage::Fragment)
         {
@@ -205,29 +239,34 @@ mod tests {
 
     #[test]
     fn shape_fragment_inputs_fit_the_gles_varying_floor() {
-        {
-            let entry_point = "fs_main";
-            let locations = fragment_input_locations(super::SHADER, entry_point);
-            let highest = locations.last().copied().expect("fragment inputs");
-            assert!(
-                highest < GLES_VARYING_VECTOR_FLOOR,
-                "{entry_point} reads location {highest}; GLSL ES 3.0 only guarantees \
-                 {GLES_VARYING_VECTOR_FLOOR} varying vectors, so every location must \
-                 stay below it: {locations:?}"
-            );
-            let mut deduplicated = locations.clone();
-            deduplicated.dedup();
-            assert_eq!(deduplicated, locations, "{entry_point} reuses a location");
-        }
+        let entry_point = "fs_main";
+        let locations = fragment_input_locations(super::SHADER, entry_point);
+        let highest = locations.last().copied().expect("fragment inputs");
+        assert!(
+            highest < GLES_VARYING_VECTOR_FLOOR,
+            "{entry_point} reads location {highest}; GLSL ES 3.0 only guarantees \
+             {GLES_VARYING_VECTOR_FLOOR} varying vectors, so every location must \
+             stay below it: {locations:?}"
+        );
+        let mut deduplicated = locations.clone();
+        deduplicated.dedup();
+        assert_eq!(deduplicated, locations, "{entry_point} reuses a location");
     }
 
     #[test]
-    fn shape_shader_declares_the_stroke_and_arc_parameters() {
+    fn shape_shader_declares_the_record_layout_the_recorder_writes() {
         for needle in [
-            "stroke_params: vec4<f32>",
-            "arc_params: vec4<f32>",
+            "struct ShapeRecord {",
+            "struct BrushRecord {",
+            "struct GradientStop {",
+            "struct Placement {",
             "fn sdf_arc_band(",
             "fn sdf_stroked_rounded_rect(",
+            "fn vs_record(",
+            "fn vs_band(",
+            "override TIER_ARENA: bool",
+            "override BAND_SEGMENTS: u32",
+            "override SHAPE_BAND: bool",
         ] {
             assert!(
                 super::SHADER.contains(needle),
@@ -237,24 +276,14 @@ mod tests {
     }
 
     #[test]
-    fn shape_shader_declares_the_uniform_shape_capacity() {
-        let declaration = format!("var<uniform> shape_data: {};", super::uniform_shape_array());
-        assert!(
-            super::SHADER.contains(&declaration),
-            "shape.wgsl must declare `{declaration}`"
-        );
-    }
-
-    #[test]
-    fn resized_shape_shader_still_validates_for_both_targets() {
-        let resized = super::SHADER
-            .replace(&super::uniform_shape_array(), "array<ShapeData, 409>")
-            .replace("array<GradientStop, 256>", "array<GradientStop, 1024>");
-        assert!(
-            resized.contains("array<ShapeData, 409>"),
-            "array length literal drifted from `shape_shader_source`"
-        );
-        assert!(validate_wgsl_module(&resized).is_ok());
-        assert!(validate_glsl_portability(&resized, "fs_main", ShaderStage::Fragment).is_ok());
+    fn the_uniform_chunk_sizes_in_the_shader_match_the_run_store() {
+        use crate::run_store::{BRUSH_CHUNK, PLACEMENT_CHUNK, RECORD_CHUNK, STOP_CHUNK};
+        for (uniform, _) in RUN_TABLE_DECLARATIONS {
+            assert!(super::SHADER.contains(uniform), "missing `{uniform}`");
+        }
+        assert!(super::SHADER.contains(&format!("array<ShapeRecord, {RECORD_CHUNK}>")));
+        assert!(super::SHADER.contains(&format!("array<BrushRecord, {BRUSH_CHUNK}>")));
+        assert!(super::SHADER.contains(&format!("array<GradientStop, {STOP_CHUNK}>")));
+        assert!(super::SHADER.contains(&format!("array<Placement, {PLACEMENT_CHUNK}>")));
     }
 }

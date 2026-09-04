@@ -1,10 +1,15 @@
-use std::{cell::OnceCell, hash::Hasher, ops::Range};
+use std::{
+    cell::OnceCell,
+    hash::Hasher,
+    ops::Range,
+    sync::{Arc, OnceLock},
+};
 
 use bytemuck::{Pod, Zeroable};
 
 use crate::{
     ArcGeometry, BlendMode, Brush, Color, CornerRadii, DrawPrimitive, FxHasher, Point, Rect,
-    RenderHash, Stroke, StrokeCap, StrokeJoin, TileMode, arc_band,
+    RenderHash, Stroke, StrokeCap, StrokeJoin, TAU, TileMode, arc_band,
 };
 
 /// The kind bits of [`ShapeRecord::flags`]: a plain rect.
@@ -22,7 +27,172 @@ const BLEND_SHIFT: u32 = 8;
 const BAND_CAP_SHIFT: u32 = 16;
 const ARC_DEGENERATE_BIT: u32 = 1 << 18;
 const ARC_RECT_LOOSE_BIT: u32 = 1 << 19;
+const ARC_BANDED_BIT: u32 = 1 << 20;
 const NO_SEGMENT_KEY: u32 = u32::MAX;
+
+/// How many segment-count buckets band-drawn arcs fall into: one per
+/// power-of-two segment count of [`ARC_BUCKET_SEGMENTS`].
+pub const ARC_BUCKETS: usize = 7;
+/// The strip segments a bucket's arcs are drawn with.
+pub const ARC_BUCKET_SEGMENTS: [u32; ARC_BUCKETS] = [1, 2, 4, 8, 16, 32, 64];
+/// The segments a full ring takes with an outer radius up to each of
+/// [`ARC_RING_RADII`], and above the last: the angular step a band at that
+/// radius keeps whatever its sweep, so its chords overshoot the circle by
+/// the same few pixels and a short arc takes only the segments its sweep
+/// needs.
+pub const ARC_RING_SEGMENTS: [u32; 4] = [8, 16, 32, 64];
+/// The outer radius, in the command's units, above which a full ring moves
+/// to the next of [`ARC_RING_SEGMENTS`].
+pub const ARC_RING_RADII: [f32; 3] = [24.0, 96.0, 384.0];
+/// Bands narrower than this radius draw as their quad: the pixels a band
+/// would save cost less than its vertices.
+pub const ARC_BAND_MIN_RADIUS: f32 = 11.0;
+/// A band whose inner radius is within the strip's margin of the centre is
+/// a disc: its strip would be the whole disc's quad and more.
+pub const ARC_BAND_MIN_INNER_RADIUS: f32 = 1.0;
+/// The pixels a band's strip extends past the ring on each side, so the
+/// edge the fragment stage anti-aliases lies inside the strip. `vs_band`
+/// in `shape.wgsl` pads by the same amount.
+pub const BAND_MARGIN: f32 = 1.0;
+/// The radians a band's strip extends past each end of its sweep beyond
+/// the margin's own angle; `vs_band` pads by the same amount.
+pub const BAND_ANGULAR_PAD: f32 = 0.05;
+/// Vertices of one quad drawn as two triangles.
+pub const QUAD_VERTICES: u32 = 6;
+/// What one strip vertex costs against fill, in pixels of the command's
+/// units. A tiling GPU writes every vertex's varyings, sixteen vectors
+/// here, to memory before it shades a pixel, and reads the record the
+/// vertex came from; a pixel reads and writes a few bytes and runs the
+/// distance field once. A band of many segments over few pixels is dearer
+/// than the quad it replaces.
+pub const BAND_VERTEX_PIXELS: f32 = 32.0;
+/// The strip's outer vertices ride out past the padded ring so its chords
+/// circumscribe the circle; the estimate allows for that and the margin.
+const BAND_STRIP_OVERSHOOT: f32 = 1.25;
+
+/// The ring a band's strip is built around, in the command's units: what
+/// `vs_band` derives from a record, derived here from the geometry the
+/// record is made of or from the record itself, with the padded sweep
+/// the strip covers computed once.
+struct BandRing {
+    mid: f32,
+    ring_half: f32,
+    range: f32,
+    ring_segments: u32,
+}
+
+impl BandRing {
+    fn of_geometry(geometry: &ArcGeometry) -> Self {
+        Self::new(
+            geometry.inner_radius,
+            geometry.outer_radius,
+            geometry.sweep_angle,
+        )
+    }
+
+    fn of_record(record: &ShapeRecord) -> Self {
+        Self::new(
+            record.arc_band[2],
+            record.arc_band[3],
+            record.arc_normalized[1],
+        )
+    }
+
+    fn new(inner: f32, outer: f32, sweep: f32) -> Self {
+        let mid = (outer + inner) * 0.5;
+        let ring_half = ((outer - inner) * 0.5).max(0.0) + BAND_MARGIN;
+        Self {
+            mid,
+            ring_half,
+            range: Self::padded_range(mid, ring_half, sweep),
+            ring_segments: Self::ring_segments(outer),
+        }
+    }
+
+    /// The segments a full ring takes at `outer_radius`: the angular step
+    /// every band at that radius keeps.
+    fn ring_segments(outer_radius: f32) -> u32 {
+        ARC_RING_RADII
+            .iter()
+            .position(|limit| outer_radius <= *limit)
+            .map_or(ARC_RING_SEGMENTS[ARC_RING_SEGMENTS.len() - 1], |bucket| {
+                ARC_RING_SEGMENTS[bucket]
+            })
+    }
+
+    /// The padded sweep the strip covers, with the angular pad bounded
+    /// above (asin(x) is at most πx/2): never less than the strip
+    /// `vs_band` draws, and no transcendental per arc.
+    fn padded_range(mid: f32, ring_half: f32, sweep: f32) -> f32 {
+        if ring_half >= mid {
+            return TAU;
+        }
+        let pad = ring_half / mid * std::f32::consts::FRAC_PI_2 + BAND_ANGULAR_PAD;
+        (sweep + pad + pad).min(TAU)
+    }
+
+    /// The fewest of [`ARC_BUCKET_SEGMENTS`] whose step over the padded
+    /// sweep stays within the ring step at this radius.
+    fn segments(&self) -> u32 {
+        let exact = self.range * (self.ring_segments as f32 / TAU);
+        let floor = exact as u32;
+        let needed = if (floor as f32) < exact {
+            floor + 1
+        } else {
+            floor
+        };
+        needed
+            .max(1)
+            .next_power_of_two()
+            .min(ARC_BUCKET_SEGMENTS[ARC_BUCKETS - 1])
+    }
+
+    /// The strip's cost in pixels: the padded ring's area over the padded
+    /// sweep, plus what its `segments` quads' vertices cost.
+    fn strip_pixels(&self, segments: u32) -> f32 {
+        self.range * self.mid * (self.ring_half + self.ring_half) * BAND_STRIP_OVERSHOOT
+            + vertex_pixels(segments * QUAD_VERTICES)
+    }
+}
+
+fn vertex_pixels(vertices: u32) -> f32 {
+    vertices as f32 * BAND_VERTEX_PIXELS
+}
+
+/// The bucket of [`ARC_BUCKET_SEGMENTS`] a strip of `segments` draws from.
+pub fn band_bucket(segments: u32) -> usize {
+    segments.trailing_zeros() as usize
+}
+
+/// The bucket an arc's band draws from when its strip costs less than
+/// `rect`, the quad it would otherwise draw: the pixels each rasterizes
+/// plus what their vertices cost a tiling GPU. `None` when the quad is
+/// cheaper.
+pub fn band_bucket_for(geometry: &ArcGeometry, rect: Rect) -> Option<usize> {
+    if geometry.is_degenerate()
+        || geometry.outer_radius < ARC_BAND_MIN_RADIUS
+        || geometry.inner_radius <= ARC_BAND_MIN_INNER_RADIUS
+    {
+        return None;
+    }
+    let ring = BandRing::of_geometry(geometry);
+    let segments = ring.segments();
+    (ring.strip_pixels(segments) < rect.width * rect.height + vertex_pixels(QUAD_VERTICES))
+        .then(|| band_bucket(segments))
+}
+
+/// Whether an arc's band strip costs less than `rect`; see
+/// [`band_bucket_for`].
+pub fn band_pays(geometry: &ArcGeometry, rect: Rect) -> bool {
+    band_bucket_for(geometry, rect).is_some()
+}
+
+/// The fragment program's shape kinds: a filled rect or round rect, a
+/// stroked one, and an arc band.
+pub const FRAGMENT_KIND_FILL: u32 = 0;
+pub const FRAGMENT_KIND_STROKE: u32 = 1;
+pub const FRAGMENT_KIND_ARC: u32 = 2;
+
 const TWO_BITS: u32 = 0b11;
 const BLEND_MASK: u32 = 0xff;
 
@@ -77,6 +247,17 @@ impl ShapeRecord {
         self.flags & STROKED_BIT != 0
     }
 
+    /// Which coverage program the fragment stage runs for this record.
+    pub fn fragment_kind(&self) -> u32 {
+        if self.kind() == RECORD_KIND_ARC {
+            FRAGMENT_KIND_ARC
+        } else if self.is_stroked() {
+            FRAGMENT_KIND_STROKE
+        } else {
+            FRAGMENT_KIND_FILL
+        }
+    }
+
     pub fn stroke(&self) -> Option<Stroke> {
         self.is_stroked().then(|| Stroke {
             width: self.stroke_width,
@@ -103,6 +284,17 @@ impl ShapeRecord {
 
     pub fn is_gradient(&self) -> bool {
         self.brush != 0
+    }
+
+    /// An arc wide enough to draw as a band strip from the vertex stage;
+    /// its index sits in the recording's bucket for its radius.
+    pub fn is_banded(&self) -> bool {
+        self.flags & ARC_BANDED_BIT != 0
+    }
+
+    /// The strip segments this record draws with when [`Self::is_banded`].
+    pub fn band_segments(&self) -> u32 {
+        BandRing::of_record(self).segments()
     }
 
     /// An arc recorded by the draw scope: its rect is the disc around the
@@ -231,11 +423,113 @@ pub struct RecordSegment {
     pub count: u32,
     pub blend: BlendMode,
     pub gradient: bool,
+    /// One bit per `FRAGMENT_KIND_*` present in the segment.
+    pub kinds: u8,
 }
 
 impl RecordSegment {
     pub fn range(&self) -> Range<usize> {
         self.start as usize..(self.start + self.count) as usize
+    }
+
+    /// The one kind every record of the segment has, if they agree.
+    pub fn uniform_kind(&self) -> Option<u32> {
+        (self.kinds.count_ones() == 1).then(|| self.kinds.trailing_zeros())
+    }
+}
+
+/// The POD half of a recording: what the GPU reads, shared with the
+/// renderer behind an `Arc` so a packet carries it without a copy.
+#[derive(Clone, Debug, Default)]
+pub struct RecordTables {
+    pub shapes: Vec<ShapeRecord>,
+    pub brushes: Vec<BrushRecord>,
+    pub stops: Vec<GradientStopRecord>,
+    pub explicit_stops: Vec<f32>,
+    pub segments: Vec<RecordSegment>,
+    /// The indices of the band-drawn arcs, per segment-count bucket.
+    pub arc_buckets: [Vec<u32>; ARC_BUCKETS],
+    fingerprint: OnceLock<u64>,
+}
+
+impl PartialEq for RecordTables {
+    fn eq(&self, other: &Self) -> bool {
+        self.shapes == other.shapes
+            && self.brushes == other.brushes
+            && self.stops == other.stops
+            && self.explicit_stops == other.explicit_stops
+            && self.segments == other.segments
+            && self.arc_buckets == other.arc_buckets
+    }
+}
+
+impl RecordTables {
+    fn clear(&mut self) {
+        self.shapes.clear();
+        self.brushes.clear();
+        self.stops.clear();
+        self.explicit_stops.clear();
+        self.segments.clear();
+        for bucket in &mut self.arc_buckets {
+            bucket.clear();
+        }
+        self.fingerprint.take();
+    }
+
+    /// Empty tables with this one's capacities, so a recording that starts
+    /// while a scene still holds the last one grows nothing.
+    fn with_capacity_of(&self) -> Self {
+        Self {
+            shapes: Vec::with_capacity(self.shapes.capacity()),
+            brushes: Vec::with_capacity(self.brushes.capacity()),
+            stops: Vec::with_capacity(self.stops.capacity()),
+            explicit_stops: Vec::with_capacity(self.explicit_stops.capacity()),
+            segments: Vec::with_capacity(self.segments.capacity()),
+            arc_buckets: std::array::from_fn(|bucket| {
+                Vec::with_capacity(self.arc_buckets[bucket].capacity())
+            }),
+            fingerprint: OnceLock::new(),
+        }
+    }
+
+    /// A hash of everything the GPU reads and of the segments, computed
+    /// the first time a cache asks and kept while the tables stand.
+    pub fn fingerprint(&self) -> u64 {
+        *self.fingerprint.get_or_init(|| {
+            let mut hasher = FxHasher::default();
+            hasher.write(bytemuck::cast_slice(&self.shapes));
+            hasher.write(bytemuck::cast_slice(&self.brushes));
+            hasher.write(bytemuck::cast_slice(&self.stops));
+            hasher.write(bytemuck::cast_slice(&self.explicit_stops));
+            for segment in &self.segments {
+                hasher.write_u8(segment.lane as u8);
+                hasher.write_u32(segment.start);
+                hasher.write_u32(segment.count);
+            }
+            hasher.finish()
+        })
+    }
+
+    /// The heap the tables hold, capacity included.
+    pub fn heap_bytes(&self) -> usize {
+        self.shapes.capacity() * std::mem::size_of::<ShapeRecord>()
+            + self.brushes.capacity() * std::mem::size_of::<BrushRecord>()
+            + self.stops.capacity() * std::mem::size_of::<GradientStopRecord>()
+            + self.explicit_stops.capacity() * std::mem::size_of::<f32>()
+            + self.segments.capacity() * std::mem::size_of::<RecordSegment>()
+            + self
+                .arc_buckets
+                .iter()
+                .map(|bucket| bucket.capacity() * std::mem::size_of::<u32>())
+                .sum::<usize>()
+    }
+
+    /// Whether the GPU would read the same bytes from both.
+    pub fn same_upload(&self, other: &Self) -> bool {
+        self.shapes == other.shapes
+            && self.brushes == other.brushes
+            && self.stops == other.stops
+            && self.arc_buckets == other.arc_buckets
     }
 }
 
@@ -318,6 +612,474 @@ pub fn primitive_coverage_rect(primitive: &DrawPrimitive) -> Option<Rect> {
     }
 }
 
+/// The POD half of a recording as it is written: the shape records with
+/// their brush and stop tables and coalesced segments, and the bounds
+/// those records reach. Plain data throughout, so a scene carries one
+/// across threads; [`CommandRecording`] wraps it with the other lane.
+#[derive(Clone, Debug)]
+pub struct ShapeRecorder {
+    tables: Arc<RecordTables>,
+    last_segment_key: u32,
+    min: [f32; 2],
+    max: [f32; 2],
+}
+
+impl Default for ShapeRecorder {
+    fn default() -> Self {
+        Self {
+            tables: Arc::default(),
+            last_segment_key: NO_SEGMENT_KEY,
+            min: [f32::INFINITY; 2],
+            max: [f32::NEG_INFINITY; 2],
+        }
+    }
+}
+
+impl PartialEq for ShapeRecorder {
+    fn eq(&self, other: &Self) -> bool {
+        self.tables == other.tables
+    }
+}
+
+/// What [`ShapeRecorder::push_primitive`] did with a primitive.
+pub enum Recorded {
+    /// A shape was recorded; its coverage rect.
+    Shape(Rect),
+    /// The primitive is not a shape and is handed back.
+    Other(DrawPrimitive),
+}
+
+fn extend_segment_in(
+    tables: &mut RecordTables,
+    extend: bool,
+    lane: RecordLane,
+    index: u32,
+    blend: BlendMode,
+    gradient: bool,
+    kind_bit: u8,
+) {
+    if extend {
+        let last = tables.segments.last_mut().expect("a keyed segment exists");
+        last.count += 1;
+        last.kinds |= kind_bit;
+        return;
+    }
+    tables.segments.push(RecordSegment {
+        lane,
+        start: index,
+        count: 1,
+        blend,
+        gradient,
+        kinds: kind_bit,
+    })
+}
+
+impl ShapeRecorder {
+    /// The POD tables, shared: the renderer keeps this handle across frames
+    /// and compares it by pointer before it compares bytes.
+    pub fn tables(&self) -> &Arc<RecordTables> {
+        &self.tables
+    }
+
+    fn tables_mut(&mut self) -> &mut RecordTables {
+        let tables = Arc::make_mut(&mut self.tables);
+        tables.fingerprint.take();
+        tables
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.tables.shapes.is_empty()
+    }
+
+    /// Every segment, the range a run of the whole recording draws.
+    pub fn all_segments(&self) -> Range<u32> {
+        0..self.tables.segments.len() as u32
+    }
+
+    /// The rect every recorded shape's pixels lie within; `None` when
+    /// nothing was recorded.
+    pub fn bounds(&self) -> Option<Rect> {
+        (self.min[0] <= self.max[0] && self.min[1] <= self.max[1]).then(|| Rect {
+            x: self.min[0],
+            y: self.min[1],
+            width: self.max[0] - self.min[0],
+            height: self.max[1] - self.min[1],
+        })
+    }
+
+    /// The tables' fingerprint; see [`RecordTables::fingerprint`].
+    pub fn fingerprint(&self) -> u64 {
+        self.tables.fingerprint()
+    }
+
+    /// Empties the recorder, keeping the tables' capacity: in place when
+    /// nothing else holds them, in fresh tables of the same capacities when
+    /// a scene still does.
+    pub fn clear(&mut self) {
+        match Arc::get_mut(&mut self.tables) {
+            Some(tables) => tables.clear(),
+            None => self.tables = Arc::new(self.tables.with_capacity_of()),
+        }
+        self.last_segment_key = NO_SEGMENT_KEY;
+        self.min = [f32::INFINITY; 2];
+        self.max = [f32::NEG_INFINITY; 2];
+    }
+
+    /// Records a rect, rounded rect or arc, blended or not; hands any
+    /// other primitive back untouched.
+    pub fn push_primitive(&mut self, primitive: DrawPrimitive) -> Recorded {
+        match primitive {
+            DrawPrimitive::Blend {
+                primitive,
+                blend_mode,
+            } => match self.push_shape_primitive(*primitive, blend_mode) {
+                Recorded::Other(inner) => Recorded::Other(DrawPrimitive::Blend {
+                    primitive: Box::new(inner),
+                    blend_mode,
+                }),
+                recorded => recorded,
+            },
+            other => self.push_shape_primitive(other, BlendMode::SrcOver),
+        }
+    }
+
+    fn push_shape_primitive(
+        &mut self,
+        primitive: DrawPrimitive,
+        blend_mode: BlendMode,
+    ) -> Recorded {
+        Recorded::Shape(match primitive {
+            DrawPrimitive::Rect {
+                rect,
+                brush,
+                stroke,
+            } => self.push_rect(rect, &brush, stroke, blend_mode),
+            DrawPrimitive::RoundRect {
+                rect,
+                brush,
+                radii,
+                stroke,
+            } => self.push_round_rect(rect, &brush, radii, stroke, blend_mode),
+            DrawPrimitive::Arc {
+                rect,
+                brush,
+                center,
+                radius,
+                start_angle,
+                sweep_angle,
+                stroke,
+                inner_radius,
+            } => self.push_arc(
+                rect,
+                ArcRecordArgs {
+                    brush: &brush,
+                    center,
+                    radius,
+                    start_angle,
+                    sweep_angle,
+                    stroke,
+                    inner_radius,
+                    blend_mode,
+                },
+            ),
+            other => return Recorded::Other(other),
+        })
+    }
+
+    fn push_content_segment(&mut self) {
+        self.last_segment_key = NO_SEGMENT_KEY;
+        self.tables_mut().segments.push(RecordSegment {
+            lane: RecordLane::Content,
+            start: 0,
+            count: 1,
+            blend: BlendMode::SrcOver,
+            gradient: false,
+            kinds: 0,
+        });
+    }
+
+    pub fn push_rect(
+        &mut self,
+        rect: Rect,
+        brush: &Brush,
+        stroke: Option<Stroke>,
+        blend: BlendMode,
+    ) -> Rect {
+        let (handle, color) = self.intern_brush(brush);
+        self.push_shape(
+            ShapeRecord {
+                rect: rect_row(rect),
+                radii: [0.0; 4],
+                color,
+                stroke_width: stroke.map_or(0.0, |stroke| stroke.width),
+                flags: pack_flags(RECORD_KIND_RECT, stroke, blend, StrokeCap::Butt),
+                brush: handle,
+                reserved: 0,
+                arc: [0.0; 4],
+                arc_band: [0.0; 4],
+                arc_normalized: [0.0; 4],
+            },
+            None,
+        )
+    }
+
+    pub fn push_round_rect(
+        &mut self,
+        rect: Rect,
+        brush: &Brush,
+        radii: CornerRadii,
+        stroke: Option<Stroke>,
+        blend: BlendMode,
+    ) -> Rect {
+        let (handle, color) = self.intern_brush(brush);
+        let mut flags = pack_flags(RECORD_KIND_ROUND_RECT, stroke, blend, StrokeCap::Butt);
+        let mut arc = [0.0; 4];
+        let mut arc_band = [0.0; 4];
+        let mut arc_normalized = [0.0; 4];
+        let mut bucket = None;
+        if let Some(ring) = stroked_circle_ring(rect, radii, stroke)
+            && let Some(ring_bucket) =
+                band_bucket_for(&ring, expand_rect(rect, ring.half_thickness()))
+        {
+            flags |= ARC_BANDED_BIT;
+            arc = [
+                ring.center.x,
+                ring.center.y,
+                ring.mid_radius(),
+                ring.inner_radius,
+            ];
+            arc_band = [0.0, TAU, ring.inner_radius, ring.outer_radius];
+            arc_normalized = [0.0, TAU, 0.0, 0.0];
+            bucket = Some(ring_bucket);
+        }
+        self.push_shape(
+            ShapeRecord {
+                rect: rect_row(rect),
+                radii: [
+                    radii.top_left,
+                    radii.top_right,
+                    radii.bottom_right,
+                    radii.bottom_left,
+                ],
+                color,
+                stroke_width: stroke.map_or(0.0, |stroke| stroke.width),
+                flags,
+                brush: handle,
+                reserved: 0,
+                arc,
+                arc_band,
+                arc_normalized,
+            },
+            bucket,
+        )
+    }
+
+    /// Records an arc band or annular sector with the rect the primitive
+    /// carries.
+    pub fn push_arc(&mut self, rect: Rect, args: ArcRecordArgs<'_>) -> Rect {
+        let geometry = normalized_band(&args);
+        self.push_arc_band(args, geometry, Some(rect))
+    }
+
+    /// Records an arc the draw scope drew, whose band the scope already
+    /// normalised: the record keeps the disc around the band as its rect
+    /// and derives the primitive's tight bounds only when asked.
+    pub fn push_scope_arc(&mut self, args: ArcRecordArgs<'_>, geometry: ArcGeometry) -> Rect {
+        self.push_arc_band(args, geometry, None)
+    }
+
+    fn push_arc_band(
+        &mut self,
+        args: ArcRecordArgs<'_>,
+        geometry: ArcGeometry,
+        rect: Option<Rect>,
+    ) -> Rect {
+        let (handle, color) = self.intern_brush(args.brush);
+        let mut flags = pack_flags(RECORD_KIND_ARC, args.stroke, args.blend_mode, geometry.cap);
+        if geometry.is_degenerate() {
+            flags |= ARC_DEGENERATE_BIT;
+        }
+        let rect = rect.unwrap_or_else(|| {
+            flags |= ARC_RECT_LOOSE_BIT;
+            band_disc(&geometry)
+        });
+        let bucket = band_bucket_for(&geometry, rect);
+        if bucket.is_some() {
+            flags |= ARC_BANDED_BIT;
+        }
+        self.push_shape(
+            ShapeRecord {
+                rect: rect_row(rect),
+                radii: [0.0; 4],
+                color,
+                stroke_width: args.stroke.map_or(0.0, |stroke| stroke.width),
+                flags,
+                brush: handle,
+                reserved: 0,
+                arc: [args.center.x, args.center.y, args.radius, args.inner_radius],
+                arc_band: [
+                    args.start_angle,
+                    args.sweep_angle,
+                    geometry.inner_radius,
+                    geometry.outer_radius,
+                ],
+                arc_normalized: [geometry.start_angle, geometry.sweep_angle, 0.0, 0.0],
+            },
+            bucket,
+        )
+    }
+
+    /// Appends `record`, filing it in `band_bucket` when it draws as a
+    /// band, and extends the open segment or opens one: the tables are
+    /// taken once per record.
+    #[inline]
+    fn push_shape(&mut self, record: ShapeRecord, band_bucket: Option<usize>) -> Rect {
+        let coverage = expand_rect(record.stored_rect(), record.half_stroke());
+        self.include_bounds(coverage);
+        let index = self.tables.shapes.len() as u32;
+        let blend = record.blend_mode();
+        let gradient = record.is_gradient();
+        let kind_bit = 1u8 << record.fragment_kind();
+        let extend = self.note_segment_key(RecordLane::Shapes, blend, gradient);
+        let tables = self.tables_mut();
+        if let Some(bucket) = band_bucket {
+            tables.arc_buckets[bucket].push(index);
+        }
+        tables.shapes.push(record);
+        extend_segment_in(
+            tables,
+            extend,
+            RecordLane::Shapes,
+            index,
+            blend,
+            gradient,
+            kind_bit,
+        );
+        coverage
+    }
+
+    fn extend_segment(
+        &mut self,
+        lane: RecordLane,
+        index: u32,
+        blend: BlendMode,
+        gradient: bool,
+        kind_bit: u8,
+    ) {
+        let extend = self.note_segment_key(lane, blend, gradient);
+        extend_segment_in(
+            self.tables_mut(),
+            extend,
+            lane,
+            index,
+            blend,
+            gradient,
+            kind_bit,
+        );
+    }
+
+    /// Whether the next record continues the open segment, and makes its
+    /// key the open one.
+    fn note_segment_key(&mut self, lane: RecordLane, blend: BlendMode, gradient: bool) -> bool {
+        let key = ((lane as u32) << 16) | ((blend as u32) << 1) | gradient as u32;
+        let extend = key == self.last_segment_key;
+        self.last_segment_key = key;
+        extend
+    }
+
+    fn include_bounds(&mut self, rect: Rect) {
+        self.min[0] = self.min[0].min(rect.x);
+        self.min[1] = self.min[1].min(rect.y);
+        self.max[0] = self.max[0].max(rect.x + rect.width);
+        self.max[1] = self.max[1].max(rect.y + rect.height);
+    }
+
+    fn intern_brush(&mut self, brush: &Brush) -> (u32, [f32; 4]) {
+        let (kind, tile_mode, params, colors, stops) = match brush {
+            Brush::Solid(color) => return (0, [color.0, color.1, color.2, color.3]),
+            Brush::LinearGradient {
+                colors,
+                stops,
+                start,
+                end,
+                tile_mode,
+            } => (
+                BRUSH_KIND_LINEAR,
+                *tile_mode,
+                [start.x, start.y, end.x, end.y],
+                colors,
+                stops,
+            ),
+            Brush::RadialGradient {
+                colors,
+                stops,
+                center,
+                radius,
+                tile_mode,
+            } => (
+                BRUSH_KIND_RADIAL,
+                *tile_mode,
+                [center.x, center.y, *radius, 0.0],
+                colors,
+                stops,
+            ),
+            Brush::SweepGradient {
+                colors,
+                stops,
+                center,
+            } => (
+                BRUSH_KIND_SWEEP,
+                TileMode::Clamp,
+                [center.x, center.y, 0.0, 0.0],
+                colors,
+                stops,
+            ),
+        };
+        let tables = self.tables_mut();
+        let stop_start = tables.stops.len() as u32;
+        let count = colors.len();
+        let positions = stops.as_deref().filter(|values| values.len() == count);
+        for (index, color) in colors.iter().enumerate() {
+            let position = positions.map_or_else(
+                || {
+                    if count <= 1 {
+                        0.0
+                    } else {
+                        index as f32 / (count - 1) as f32
+                    }
+                },
+                |values| values[index],
+            );
+            tables.stops.push(GradientStopRecord {
+                color: [color.0, color.1, color.2, color.3],
+                position: [position, 0.0, 0.0, 0.0],
+            });
+        }
+        let (explicit_start, explicit_len) = match stops {
+            Some(values) => {
+                let start = tables.explicit_stops.len() as u32;
+                tables.explicit_stops.extend_from_slice(values);
+                (start, values.len() as u32)
+            }
+            None => (0, NO_EXPLICIT_STOPS),
+        };
+        let record = BrushRecord {
+            kind,
+            tile_mode: tile_mode as u32,
+            stop_start,
+            stop_count: count as u32,
+            params,
+            explicit_start,
+            explicit_len,
+            reserved: [0; 2],
+        };
+        tables.brushes.push(record);
+        let handle = tables.brushes.len() as u32;
+        let first = colors.first().copied().unwrap_or(Color(0.0, 0.0, 0.0, 0.0));
+        (handle, [first.0, first.1, first.2, first.3])
+    }
+}
+
 /// Everything one draw command recorded, written once by the draw scope in
 /// the form the renderer keeps: POD shape records with their brush and
 /// stop tables, the primitives that are not shapes, the coalesced segments
@@ -326,13 +1088,8 @@ pub fn primitive_coverage_rect(primitive: &DrawPrimitive) -> Option<Rect> {
 /// cache asks.
 #[derive(Clone, Debug)]
 pub struct CommandRecording {
-    shapes: Vec<ShapeRecord>,
-    brushes: Vec<BrushRecord>,
-    stops: Vec<GradientStopRecord>,
-    explicit_stops: Vec<f32>,
+    shapes: ShapeRecorder,
     others: Vec<DrawPrimitive>,
-    segments: Vec<RecordSegment>,
-    last_segment_key: u32,
     min: [f32; 2],
     max: [f32; 2],
     summary: RecordingSummary,
@@ -343,13 +1100,8 @@ pub struct CommandRecording {
 impl Default for CommandRecording {
     fn default() -> Self {
         Self {
-            shapes: Vec::new(),
-            brushes: Vec::new(),
-            stops: Vec::new(),
-            explicit_stops: Vec::new(),
+            shapes: ShapeRecorder::default(),
             others: Vec::new(),
-            segments: Vec::new(),
-            last_segment_key: NO_SEGMENT_KEY,
             min: [f32::INFINITY; 2],
             max: [f32::NEG_INFINITY; 2],
             summary: RecordingSummary::default(),
@@ -362,11 +1114,7 @@ impl Default for CommandRecording {
 impl PartialEq for CommandRecording {
     fn eq(&self, other: &Self) -> bool {
         self.shapes == other.shapes
-            && self.brushes == other.brushes
-            && self.stops == other.stops
-            && self.explicit_stops == other.explicit_stops
             && self.others == other.others
-            && self.segments == other.segments
             && self.content_markers == other.content_markers
     }
 }
@@ -384,12 +1132,7 @@ impl CommandRecording {
     /// recording into it.
     pub fn clear(&mut self) {
         self.shapes.clear();
-        self.brushes.clear();
-        self.stops.clear();
-        self.explicit_stops.clear();
         self.others.clear();
-        self.segments.clear();
-        self.last_segment_key = NO_SEGMENT_KEY;
         self.min = [f32::INFINITY; 2];
         self.max = [f32::NEG_INFINITY; 2];
         self.summary = RecordingSummary::default();
@@ -398,20 +1141,27 @@ impl CommandRecording {
     }
 
     pub fn reserve_shapes(&mut self, additional: usize) {
-        self.shapes.reserve(additional);
+        self.shapes.tables_mut().shapes.reserve(additional);
     }
 
     pub fn shape_capacity(&self) -> usize {
-        self.shapes.capacity()
+        self.shapes.tables.shapes.capacity()
     }
 
     /// The heap the POD tables hold, capacity included.
     pub fn pod_heap_bytes(&self) -> usize {
-        self.shapes.capacity() * std::mem::size_of::<ShapeRecord>()
-            + self.brushes.capacity() * std::mem::size_of::<BrushRecord>()
-            + self.stops.capacity() * std::mem::size_of::<GradientStopRecord>()
-            + self.explicit_stops.capacity() * std::mem::size_of::<f32>()
-            + self.segments.capacity() * std::mem::size_of::<RecordSegment>()
+        self.shapes.tables.heap_bytes()
+    }
+
+    /// The POD tables, shared: the renderer keeps this handle across frames
+    /// and compares it by pointer before it compares bytes.
+    pub fn tables(&self) -> &Arc<RecordTables> {
+        self.shapes.tables()
+    }
+
+    /// The POD half of the recording: the shapes as recorded.
+    pub fn shape_recorder(&self) -> &ShapeRecorder {
+        &self.shapes
     }
 
     /// The entries inside `segments` that draw, content markers left out.
@@ -423,15 +1173,15 @@ impl CommandRecording {
     }
 
     pub fn shapes(&self) -> &[ShapeRecord] {
-        &self.shapes
+        &self.shapes.tables.shapes
     }
 
     pub fn brushes(&self) -> &[BrushRecord] {
-        &self.brushes
+        &self.shapes.tables.brushes
     }
 
     pub fn stops(&self) -> &[GradientStopRecord] {
-        &self.stops
+        &self.shapes.tables.stops
     }
 
     pub fn others(&self) -> &[DrawPrimitive] {
@@ -439,12 +1189,12 @@ impl CommandRecording {
     }
 
     pub fn segments(&self) -> &[RecordSegment] {
-        &self.segments
+        &self.shapes.tables.segments
     }
 
     /// Every segment, the range a placement without a content split draws.
     pub fn all_segments(&self) -> Range<u32> {
-        0..self.segments.len() as u32
+        0..self.shapes.tables.segments.len() as u32
     }
 
     /// A rect containing every entry's coverage rect: exact for rects and
@@ -468,7 +1218,7 @@ impl CommandRecording {
 
     /// Entries of every lane, content markers included.
     pub fn len(&self) -> usize {
-        self.shapes.len() + self.others.len() + self.content_markers as usize
+        self.shapes.tables.shapes.len() + self.others.len() + self.content_markers as usize
     }
 
     pub fn is_empty(&self) -> bool {
@@ -482,17 +1232,9 @@ impl CommandRecording {
     pub fn fingerprint(&self) -> u64 {
         *self.fingerprint.get_or_init(|| {
             let mut hasher = FxHasher::default();
-            hasher.write(bytemuck::cast_slice(&self.shapes));
-            hasher.write(bytemuck::cast_slice(&self.brushes));
-            hasher.write(bytemuck::cast_slice(&self.stops));
-            hasher.write(bytemuck::cast_slice(&self.explicit_stops));
+            hasher.write_u64(self.shapes.fingerprint());
             for primitive in &self.others {
                 hasher.write_u64(primitive.render_hash());
-            }
-            for segment in &self.segments {
-                hasher.write_u8(segment.lane as u8);
-                hasher.write_u32(segment.start);
-                hasher.write_u32(segment.count);
             }
             hasher.write_u32(self.content_markers);
             hasher.finish()
@@ -507,7 +1249,7 @@ impl CommandRecording {
     }
 
     pub fn segments_in(&self, segments: &Range<u32>) -> std::slice::Iter<'_, RecordSegment> {
-        self.segments[segments.start as usize..segments.end as usize].iter()
+        self.shapes.tables.segments[segments.start as usize..segments.end as usize].iter()
     }
 
     /// The summary of the entries inside `segments` only.
@@ -534,12 +1276,14 @@ impl CommandRecording {
     /// with no marker, behind is empty and overlay is everything.
     pub fn content_split(&self, behind: bool) -> Range<u32> {
         let last_marker = self
+            .shapes
+            .tables
             .segments
             .iter()
             .rposition(|segment| segment.lane == RecordLane::Content);
         match (last_marker, behind) {
             (Some(index), true) => 0..index as u32,
-            (Some(index), false) => index as u32 + 1..self.segments.len() as u32,
+            (Some(index), false) => index as u32 + 1..self.shapes.tables.segments.len() as u32,
             (None, true) => 0..0,
             (None, false) => self.all_segments(),
         }
@@ -551,7 +1295,7 @@ impl CommandRecording {
             .flat_map(|segment| -> Box<dyn Iterator<Item = Rect> + '_> {
                 match segment.lane {
                     RecordLane::Shapes => Box::new(
-                        self.shapes[segment.range()]
+                        self.shapes.tables.shapes[segment.range()]
                             .iter()
                             .map(ShapeRecord::coverage_rect),
                     ),
@@ -574,7 +1318,9 @@ impl CommandRecording {
 
     /// Every primitive in recorded order, content markers included.
     pub fn primitives_with_markers(&self) -> impl Iterator<Item = DrawPrimitive> + '_ {
-        self.segments
+        self.shapes
+            .tables
+            .segments
             .iter()
             .flat_map(|segment| self.segment_primitives(segment, true))
     }
@@ -605,7 +1351,7 @@ impl CommandRecording {
 
     /// The exact [`DrawPrimitive`] the record was made from.
     pub fn materialize_shape(&self, index: usize) -> DrawPrimitive {
-        let record = &self.shapes[index];
+        let record = &self.shapes.tables.shapes[index];
         let rect = record.rect_value();
         let brush = self.brush_of(record);
         let stroke = record.stroke();
@@ -659,14 +1405,15 @@ impl CommandRecording {
                 record.color[3],
             ));
         }
-        let brush = &self.brushes[record.brush as usize - 1];
-        let colors = self.stops
+        let tables = &*self.shapes.tables;
+        let brush = &tables.brushes[record.brush as usize - 1];
+        let colors = tables.stops
             [brush.stop_start as usize..(brush.stop_start + brush.stop_count) as usize]
             .iter()
             .map(|stop| Color(stop.color[0], stop.color[1], stop.color[2], stop.color[3]))
             .collect();
         let stops = (brush.explicit_len != NO_EXPLICIT_STOPS).then(|| {
-            self.explicit_stops[brush.explicit_start as usize
+            tables.explicit_stops[brush.explicit_start as usize
                 ..(brush.explicit_start + brush.explicit_len) as usize]
                 .to_vec()
         });
@@ -697,95 +1444,32 @@ impl CommandRecording {
 
     pub fn push_content(&mut self) {
         self.content_markers += 1;
-        self.last_segment_key = NO_SEGMENT_KEY;
-        self.segments.push(RecordSegment {
-            lane: RecordLane::Content,
-            start: 0,
-            count: 1,
-            blend: BlendMode::SrcOver,
-            gradient: false,
-        });
+        self.shapes.push_content_segment();
     }
 
     /// Records a primitive the way the draw scope would have: shapes and
     /// blended shapes become records, everything else joins the others lane.
     pub fn push_primitive(&mut self, primitive: DrawPrimitive) {
-        match primitive {
-            DrawPrimitive::Content => self.push_content(),
-            DrawPrimitive::Blend {
-                primitive,
-                blend_mode,
-            } => {
-                if let Some(inner) = self.push_shape_primitive(*primitive, blend_mode) {
-                    self.push_other(DrawPrimitive::Blend {
-                        primitive: Box::new(inner),
-                        blend_mode,
-                    });
-                }
-            }
-            other => {
-                if let Some(other) = self.push_shape_primitive(other, BlendMode::SrcOver) {
-                    self.push_other(other);
-                }
-            }
+        if matches!(primitive, DrawPrimitive::Content) {
+            self.push_content();
+            return;
+        }
+        match self.shapes.push_primitive(primitive) {
+            Recorded::Shape(coverage) => self.note_shape(coverage),
+            Recorded::Other(other) => self.push_other(other),
         }
     }
 
-    /// Records a rect, rounded rect or arc under `blend_mode`; hands any
-    /// other primitive back untouched.
-    fn push_shape_primitive(
-        &mut self,
-        primitive: DrawPrimitive,
-        blend_mode: BlendMode,
-    ) -> Option<DrawPrimitive> {
-        match primitive {
-            DrawPrimitive::Rect {
-                rect,
-                brush,
-                stroke,
-            } => self.push_rect(rect, &brush, stroke, blend_mode),
-            DrawPrimitive::RoundRect {
-                rect,
-                brush,
-                radii,
-                stroke,
-            } => self.push_round_rect(rect, &brush, radii, stroke, blend_mode),
-            DrawPrimitive::Arc {
-                rect,
-                brush,
-                center,
-                radius,
-                start_angle,
-                sweep_angle,
-                stroke,
-                inner_radius,
-            } => self.push_arc(
-                rect,
-                ArcRecordArgs {
-                    brush: &brush,
-                    center,
-                    radius,
-                    start_angle,
-                    sweep_angle,
-                    stroke,
-                    inner_radius,
-                    blend_mode,
-                },
-            ),
-            other => return Some(other),
-        }
-        None
+    fn note_shape(&mut self, coverage: Rect) {
+        self.summary.has_non_shadow = true;
+        self.include_bounds(coverage);
     }
 
-    /// Records an image, text, shadow or nested blend.
-    pub fn push_other(&mut self, primitive: DrawPrimitive) {
-        self.summary.note(&primitive);
-        if let Some(rect) = primitive_coverage_rect(&primitive) {
-            self.include_bounds(rect);
-        }
-        let index = self.others.len() as u32;
-        self.others.push(primitive);
-        self.extend_segment(RecordLane::Others, index, BlendMode::SrcOver, false);
+    fn include_bounds(&mut self, rect: Rect) {
+        self.min[0] = self.min[0].min(rect.x);
+        self.min[1] = self.min[1].min(rect.y);
+        self.max[0] = self.max[0].max(rect.x + rect.width);
+        self.max[1] = self.max[1].max(rect.y + rect.height);
     }
 
     pub fn push_rect(
@@ -795,19 +1479,8 @@ impl CommandRecording {
         stroke: Option<Stroke>,
         blend: BlendMode,
     ) {
-        let (handle, color) = self.intern_brush(brush);
-        self.push_shape(ShapeRecord {
-            rect: rect_row(rect),
-            radii: [0.0; 4],
-            color,
-            stroke_width: stroke.map_or(0.0, |stroke| stroke.width),
-            flags: pack_flags(RECORD_KIND_RECT, stroke, blend, StrokeCap::Butt),
-            brush: handle,
-            reserved: 0,
-            arc: [0.0; 4],
-            arc_band: [0.0; 4],
-            arc_normalized: [0.0; 4],
-        });
+        let coverage = self.shapes.push_rect(rect, brush, stroke, blend);
+        self.note_shape(coverage);
     }
 
     pub fn push_round_rect(
@@ -818,192 +1491,36 @@ impl CommandRecording {
         stroke: Option<Stroke>,
         blend: BlendMode,
     ) {
-        let (handle, color) = self.intern_brush(brush);
-        self.push_shape(ShapeRecord {
-            rect: rect_row(rect),
-            radii: [
-                radii.top_left,
-                radii.top_right,
-                radii.bottom_right,
-                radii.bottom_left,
-            ],
-            color,
-            stroke_width: stroke.map_or(0.0, |stroke| stroke.width),
-            flags: pack_flags(RECORD_KIND_ROUND_RECT, stroke, blend, StrokeCap::Butt),
-            brush: handle,
-            reserved: 0,
-            arc: [0.0; 4],
-            arc_band: [0.0; 4],
-            arc_normalized: [0.0; 4],
-        });
+        let coverage = self
+            .shapes
+            .push_round_rect(rect, brush, radii, stroke, blend);
+        self.note_shape(coverage);
     }
 
     /// Records an arc band or annular sector with the rect the primitive
     /// carries.
     pub fn push_arc(&mut self, rect: Rect, args: ArcRecordArgs<'_>) {
-        let geometry = normalized_band(&args);
-        self.push_arc_band(args, geometry, Some(rect));
+        let coverage = self.shapes.push_arc(rect, args);
+        self.note_shape(coverage);
     }
 
     /// Records an arc the draw scope drew, whose band the scope already
     /// normalised: the record keeps the disc around the band as its rect
     /// and derives the primitive's tight bounds only when asked.
     pub fn push_scope_arc(&mut self, args: ArcRecordArgs<'_>, geometry: ArcGeometry) {
-        self.push_arc_band(args, geometry, None);
+        let coverage = self.shapes.push_scope_arc(args, geometry);
+        self.note_shape(coverage);
     }
 
-    fn push_arc_band(
-        &mut self,
-        args: ArcRecordArgs<'_>,
-        geometry: ArcGeometry,
-        rect: Option<Rect>,
-    ) {
-        let (handle, color) = self.intern_brush(args.brush);
-        let mut flags = pack_flags(RECORD_KIND_ARC, args.stroke, args.blend_mode, geometry.cap);
-        if geometry.is_degenerate() {
-            flags |= ARC_DEGENERATE_BIT;
+    pub fn push_other(&mut self, primitive: DrawPrimitive) {
+        self.summary.note(&primitive);
+        if let Some(rect) = primitive_coverage_rect(&primitive) {
+            self.include_bounds(rect);
         }
-        let rect = rect.unwrap_or_else(|| {
-            flags |= ARC_RECT_LOOSE_BIT;
-            band_disc(&geometry)
-        });
-        self.push_shape(ShapeRecord {
-            rect: rect_row(rect),
-            radii: [0.0; 4],
-            color,
-            stroke_width: args.stroke.map_or(0.0, |stroke| stroke.width),
-            flags,
-            brush: handle,
-            reserved: 0,
-            arc: [args.center.x, args.center.y, args.radius, args.inner_radius],
-            arc_band: [
-                args.start_angle,
-                args.sweep_angle,
-                geometry.inner_radius,
-                geometry.outer_radius,
-            ],
-            arc_normalized: [geometry.start_angle, geometry.sweep_angle, 0.0, 0.0],
-        });
-    }
-
-    fn push_shape(&mut self, record: ShapeRecord) {
-        self.summary.has_non_shadow = true;
-        self.include_bounds(expand_rect(record.stored_rect(), record.half_stroke()));
-        let index = self.shapes.len() as u32;
-        let blend = record.blend_mode();
-        let gradient = record.is_gradient();
-        self.shapes.push(record);
-        self.extend_segment(RecordLane::Shapes, index, blend, gradient);
-    }
-
-    fn extend_segment(&mut self, lane: RecordLane, index: u32, blend: BlendMode, gradient: bool) {
-        let key = ((lane as u32) << 16) | ((blend as u32) << 1) | gradient as u32;
-        if key == self.last_segment_key {
-            let last = self.segments.last_mut().expect("a keyed segment exists");
-            last.count += 1;
-            return;
-        }
-        self.last_segment_key = key;
-        self.segments.push(RecordSegment {
-            lane,
-            start: index,
-            count: 1,
-            blend,
-            gradient,
-        });
-    }
-
-    fn include_bounds(&mut self, rect: Rect) {
-        self.min[0] = self.min[0].min(rect.x);
-        self.min[1] = self.min[1].min(rect.y);
-        self.max[0] = self.max[0].max(rect.x + rect.width);
-        self.max[1] = self.max[1].max(rect.y + rect.height);
-    }
-
-    fn intern_brush(&mut self, brush: &Brush) -> (u32, [f32; 4]) {
-        let (kind, tile_mode, params, colors, stops) = match brush {
-            Brush::Solid(color) => return (0, [color.0, color.1, color.2, color.3]),
-            Brush::LinearGradient {
-                colors,
-                stops,
-                start,
-                end,
-                tile_mode,
-            } => (
-                BRUSH_KIND_LINEAR,
-                *tile_mode,
-                [start.x, start.y, end.x, end.y],
-                colors,
-                stops,
-            ),
-            Brush::RadialGradient {
-                colors,
-                stops,
-                center,
-                radius,
-                tile_mode,
-            } => (
-                BRUSH_KIND_RADIAL,
-                *tile_mode,
-                [center.x, center.y, *radius, 0.0],
-                colors,
-                stops,
-            ),
-            Brush::SweepGradient {
-                colors,
-                stops,
-                center,
-            } => (
-                BRUSH_KIND_SWEEP,
-                TileMode::Clamp,
-                [center.x, center.y, 0.0, 0.0],
-                colors,
-                stops,
-            ),
-        };
-        let stop_start = self.stops.len() as u32;
-        let count = colors.len();
-        let positions = stops.as_deref().filter(|values| values.len() == count);
-        for (index, color) in colors.iter().enumerate() {
-            let position = positions.map_or_else(
-                || {
-                    if count <= 1 {
-                        0.0
-                    } else {
-                        index as f32 / (count - 1) as f32
-                    }
-                },
-                |values| values[index],
-            );
-            self.stops.push(GradientStopRecord {
-                color: [color.0, color.1, color.2, color.3],
-                position: [position, 0.0, 0.0, 0.0],
-            });
-        }
-        let (explicit_start, explicit_len) = match stops {
-            Some(values) => {
-                let start = self.explicit_stops.len() as u32;
-                self.explicit_stops.extend_from_slice(values);
-                (start, values.len() as u32)
-            }
-            None => (0, NO_EXPLICIT_STOPS),
-        };
-        let record = BrushRecord {
-            kind,
-            tile_mode: tile_mode as u32,
-            stop_start,
-            stop_count: count as u32,
-            params,
-            explicit_start,
-            explicit_len,
-            reserved: [0; 2],
-        };
-        self.brushes.push(record);
-        let first = colors.first().copied().unwrap_or(Color(0.0, 0.0, 0.0, 0.0));
-        (
-            self.brushes.len() as u32,
-            [first.0, first.1, first.2, first.3],
-        )
+        let index = self.others.len() as u32;
+        self.others.push(primitive);
+        self.shapes
+            .extend_segment(RecordLane::Others, index, BlendMode::SrcOver, false, 0);
     }
 
     /// Folds `other`'s summary into this recording's, for callers that
@@ -1024,6 +1541,40 @@ pub struct ArcRecordArgs<'a> {
     pub stroke: Option<Stroke>,
     pub inner_radius: f32,
     pub blend_mode: BlendMode,
+}
+
+/// The ring a stroked round rect draws when it is a circle: a square
+/// whose four radii are half its side, stroked. Its band is the stroke.
+fn stroked_circle_ring(
+    rect: Rect,
+    radii: CornerRadii,
+    stroke: Option<Stroke>,
+) -> Option<ArcGeometry> {
+    const CIRCLE_TOLERANCE: f32 = 0.01;
+    let stroke = stroke?;
+    if rect.width.to_bits() != rect.height.to_bits() || !stroke.is_visible() {
+        return None;
+    }
+    let half = rect.width * 0.5;
+    let radius = radii.top_left;
+    if !radius.is_finite()
+        || radius <= 0.0
+        || (radius - half).abs() > CIRCLE_TOLERANCE
+        || radii.top_right.to_bits() != radius.to_bits()
+        || radii.bottom_right.to_bits() != radius.to_bits()
+        || radii.bottom_left.to_bits() != radius.to_bits()
+    {
+        return None;
+    }
+    let half_width = stroke.half_width();
+    Some(ArcGeometry::new(
+        Point::new(rect.x + half, rect.y + half),
+        (half - half_width).max(0.0),
+        half + half_width,
+        0.0,
+        TAU,
+        StrokeCap::Round,
+    ))
 }
 
 fn rect_row(rect: Rect) -> [f32; 4] {
@@ -1410,7 +1961,7 @@ mod tests {
         recording.push_other(text());
         recording.push_content();
         recording.push_rect(rect(0.0, 0.0, 1.0, 1.0), &solid(), None, BlendMode::SrcOver);
-        let lanes: Vec<(RecordLane, u32, u32, BlendMode, bool)> = recording
+        let lanes: Vec<(RecordLane, u32, u32, BlendMode, bool, u8)> = recording
             .segments()
             .iter()
             .map(|segment| {
@@ -1420,19 +1971,25 @@ mod tests {
                     segment.count,
                     segment.blend,
                     segment.gradient,
+                    segment.kinds,
                 )
             })
             .collect();
         assert_eq!(
             lanes,
             vec![
-                (RecordLane::Shapes, 0, 3, BlendMode::SrcOver, false),
-                (RecordLane::Shapes, 3, 1, BlendMode::SrcOver, true),
-                (RecordLane::Shapes, 4, 1, BlendMode::Plus, false),
-                (RecordLane::Others, 0, 2, BlendMode::SrcOver, false),
-                (RecordLane::Content, 0, 1, BlendMode::SrcOver, false),
-                (RecordLane::Shapes, 5, 1, BlendMode::SrcOver, false),
+                (RecordLane::Shapes, 0, 3, BlendMode::SrcOver, false, 0b111),
+                (RecordLane::Shapes, 3, 1, BlendMode::SrcOver, true, 0b1),
+                (RecordLane::Shapes, 4, 1, BlendMode::Plus, false, 0b1),
+                (RecordLane::Others, 0, 2, BlendMode::SrcOver, false, 0),
+                (RecordLane::Content, 0, 1, BlendMode::SrcOver, false, 0),
+                (RecordLane::Shapes, 5, 1, BlendMode::SrcOver, false, 0b1),
             ]
+        );
+        assert_eq!(recording.segments()[0].uniform_kind(), None);
+        assert_eq!(
+            recording.segments()[1].uniform_kind(),
+            Some(FRAGMENT_KIND_FILL)
         );
     }
 
@@ -1621,5 +2178,141 @@ mod tests {
         assert_eq!(std::mem::size_of::<ShapeRecord>(), 112);
         assert_eq!(std::mem::size_of::<BrushRecord>(), 48);
         assert_eq!(std::mem::size_of::<GradientStopRecord>(), 32);
+    }
+}
+
+#[cfg(test)]
+mod band_tests {
+    use super::*;
+    use crate::{DrawScope, DrawScopeDefault, Size};
+
+    #[test]
+    fn wide_arcs_are_bucketed_by_radius_and_narrow_ones_stay_quads() {
+        let mut scope = DrawScopeDefault::new(Size::new(400.0, 400.0));
+        let brush = Brush::Solid(Color::WHITE);
+        let center = Point::new(200.0, 200.0);
+        scope.draw_annular_sector(brush.clone(), center, 4.0, 8.0, 0.0, 1.0);
+        scope.draw_annular_sector(brush.clone(), center, 10.0, 20.0, 0.0, 1.0);
+        scope.draw_arc(brush.clone(), center, 50.0, 0.0, 1.0, Stroke::new(3.0));
+        scope.draw_arc(brush.clone(), center, 200.0, 0.0, 1.0, Stroke::new(3.0));
+        scope.draw_arc(brush.clone(), center, 500.0, 0.0, 1.0, Stroke::new(3.0));
+        scope.draw_annular_sector(brush.clone(), center, 0.0, 40.0, 0.0, 3.0);
+        scope.draw_annular_sector(brush, center, 30.0, 40.0, 0.0, 0.05);
+        let recording = scope.finish();
+        let banded: Vec<bool> = recording
+            .shapes()
+            .iter()
+            .map(ShapeRecord::is_banded)
+            .collect();
+        assert_eq!(
+            banded,
+            [false, true, true, true, true, false, true],
+            "a disc stays a quad: its strip would be the disc and more; a sliver's \
+             strip beats the disc the quad path would draw"
+        );
+        let segments: Vec<u32> = recording
+            .shapes()
+            .iter()
+            .map(ShapeRecord::band_segments)
+            .collect();
+        assert_eq!(
+            segments[1..5],
+            [4, 4, 8, 16],
+            "a band takes the segments its padded sweep needs at the ring step of its radius"
+        );
+        assert_eq!(
+            segments[6], 2,
+            "a sliver's strip is two segments, not a ring's worth"
+        );
+        let buckets: Vec<Vec<u32>> = recording.tables().arc_buckets.to_vec();
+        assert_eq!(
+            buckets,
+            vec![
+                vec![],
+                vec![6],
+                vec![1, 2],
+                vec![3],
+                vec![4],
+                vec![],
+                vec![]
+            ]
+        );
+        assert_eq!(band_bucket(1), 0);
+        assert_eq!(band_bucket(64), ARC_BUCKETS - 1);
+    }
+
+    #[test]
+    fn a_stroked_circle_is_a_band_and_a_stroked_pill_is_not() {
+        let mut scope = DrawScopeDefault::new(Size::new(400.0, 400.0));
+        let brush = Brush::Solid(Color::WHITE);
+        let square = Rect {
+            x: 10.0,
+            y: 10.0,
+            width: 100.0,
+            height: 100.0,
+        };
+        scope.draw_round_rect_at_stroked(
+            square,
+            brush.clone(),
+            CornerRadii::uniform(50.0),
+            Stroke::new(4.0),
+        );
+        scope.draw_round_rect_at_stroked(
+            square,
+            brush.clone(),
+            CornerRadii::uniform(20.0),
+            Stroke::new(4.0),
+        );
+        scope.draw_round_rect_at(square, brush.clone(), CornerRadii::uniform(50.0));
+        scope.draw_round_rect_at_stroked(
+            Rect {
+                x: 10.0,
+                y: 10.0,
+                width: 100.0,
+                height: 60.0,
+            },
+            brush,
+            CornerRadii::uniform(30.0),
+            Stroke::new(4.0),
+        );
+        let recording = scope.finish();
+        let banded: Vec<bool> = recording
+            .shapes()
+            .iter()
+            .map(ShapeRecord::is_banded)
+            .collect();
+        assert_eq!(banded, [true, false, false, false]);
+        let ring = recording.shapes()[0];
+        assert_eq!(ring.kind(), RECORD_KIND_ROUND_RECT);
+        assert_eq!(ring.fragment_kind(), FRAGMENT_KIND_STROKE);
+        assert_eq!(ring.arc, [60.0, 60.0, 50.0, 48.0]);
+        assert_eq!(ring.arc_band, [0.0, TAU, 48.0, 52.0]);
+        assert_eq!(ring.band_segments(), 16);
+        assert_eq!(recording.tables().arc_buckets[4], vec![0]);
+    }
+
+    #[test]
+    fn the_tables_are_shared_until_recorded_into_again() {
+        let mut recording = CommandRecording::from_primitives(vec![DrawPrimitive::Rect {
+            rect: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+            brush: Brush::Solid(Color::WHITE),
+            stroke: None,
+        }]);
+        let held = Arc::clone(recording.tables());
+        recording.clear();
+        assert!(!Arc::ptr_eq(&held, recording.tables()));
+        assert_eq!(held.shapes.len(), 1);
+        assert!(recording.is_empty());
+        let unique = CommandRecording::default();
+        assert!(held.same_upload(&RecordTables {
+            shapes: held.shapes.clone(),
+            ..RecordTables::default()
+        }));
+        assert!(!held.same_upload(unique.tables()));
     }
 }

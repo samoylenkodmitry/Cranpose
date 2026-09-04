@@ -1,14 +1,14 @@
 //! Scene structures for GPU rendering
 
-use std::rc::Rc;
+use std::{ops::Range, rc::Rc, sync::Arc};
 
 use cranpose_core::NodeId;
+use cranpose_render_common::graph::DrawCommandId;
 pub use cranpose_render_common::graph_scene::{ClickAction, HitRegion, Scene};
-use cranpose_render_common::style_shared::ResolvedBrush;
 use cranpose_ui::{TextLayoutOptions, TextStyle};
 use cranpose_ui_graphics::{
-    ArcGeometry, BlendMode, Brush, Color, ColorFilter, ImageBitmap, ImageSampling, Point, Rect,
-    RenderEffect, RoundedCornerShape, Stroke,
+    BlendMode, Color, ColorFilter, CommandRecording, DrawPrimitive, GraphicsLayer, ImageBitmap,
+    ImageSampling, Point, RecordTables, Recorded, Rect, RenderEffect, ShapeRecorder,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -26,45 +26,125 @@ impl SnapAnchor {
     }
 }
 
+/// Where a recording's record space lands in the scene: the logical
+/// offset of its origin, the rigid anchor it snaps with, the clip its
+/// records take, and the paint every record takes on the way to the
+/// device. One placement per run; the vertex stage reads it as a uniform.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) enum SceneBrush {
-    Solid(Color),
-    Gradient(u32),
-}
-
-pub(crate) fn intern_brush_into(table: &mut Vec<Brush>, brush: ResolvedBrush) -> SceneBrush {
-    match brush {
-        ResolvedBrush::Solid(color) => SceneBrush::Solid(color),
-        ResolvedBrush::Other(brush) => {
-            let index = table.len() as u32;
-            table.push(brush);
-            SceneBrush::Gradient(index)
-        }
-    }
-}
-
-impl SceneBrush {
-    pub fn render_hash(&self, brushes: &[Brush]) -> u64 {
-        use cranpose_ui_graphics::RenderHash as _;
-        match *self {
-            SceneBrush::Solid(color) => Brush::Solid(color).render_hash(),
-            SceneBrush::Gradient(index) => brushes[index as usize].render_hash(),
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-pub(crate) struct DrawShape {
-    pub rect: Rect,
-    pub local_rect: Rect,
-    pub quad: [[f32; 2]; 4],
+pub(crate) struct Placement {
+    pub offset: Point,
     pub snap_anchor: Option<SnapAnchor>,
-    pub brush: SceneBrush,
-    pub shape: Option<RoundedCornerShape>,
-    pub stroke: Option<Stroke>,
-    pub arc: Option<ArcGeometry>,
     pub clip: Option<Rect>,
-    pub blend_mode: BlendMode,
+    pub alpha: f32,
+    pub color_filter: Option<ColorFilter>,
+}
+
+impl Placement {
+    pub(crate) fn at(offset: Point, snap_anchor: Option<SnapAnchor>, clip: Option<Rect>) -> Self {
+        Self {
+            offset,
+            snap_anchor,
+            clip,
+            alpha: 1.0,
+            color_filter: None,
+        }
+    }
+
+    /// A placement that paints its records with the layer's alpha and
+    /// colour filter; the layer's affine part is identity for anything
+    /// drawn direct.
+    pub(crate) fn painted(
+        offset: Point,
+        snap_anchor: Option<SnapAnchor>,
+        clip: Option<Rect>,
+        layer: &GraphicsLayer,
+    ) -> Self {
+        Self {
+            offset,
+            snap_anchor,
+            clip,
+            alpha: layer.alpha.clamp(0.0, 1.0),
+            color_filter: layer.color_filter,
+        }
+    }
+
+    pub(crate) fn translated_bounds(&self, local: Rect) -> Rect {
+        local.translate(self.offset.x, self.offset.y)
+    }
+}
+
+/// One recording's shapes drawn under one placement: the POD tables the
+/// GPU reads, shared with the recorder, and the segment range this run
+/// covers. `command` keys the retained GPU copy; a run without one (a
+/// layer's loose primitives, a shadow) is copied into the frame arena.
+#[derive(Clone)]
+pub(crate) struct RunDraw {
+    pub tables: Arc<RecordTables>,
+    pub command: Option<DrawCommandId>,
+    pub segments: Range<u32>,
+    pub placement: Placement,
+    /// The scene-space rect the run's records can reach, before snapping.
+    pub bounds: Rect,
+}
+
+impl RunDraw {
+    pub(crate) fn of(
+        recording: &CommandRecording,
+        command: Option<DrawCommandId>,
+        segments: Range<u32>,
+        placement: Placement,
+    ) -> Self {
+        Self::of_recorder(recording.shape_recorder(), command, segments, placement)
+    }
+
+    pub(crate) fn of_recorder(
+        recorder: &ShapeRecorder,
+        command: Option<DrawCommandId>,
+        segments: Range<u32>,
+        placement: Placement,
+    ) -> Self {
+        Self {
+            tables: Arc::clone(recorder.tables()),
+            command,
+            segments,
+            placement,
+            bounds: recorder
+                .bounds()
+                .map(|bounds| placement.translated_bounds(bounds))
+                .unwrap_or(Rect {
+                    x: placement.offset.x,
+                    y: placement.offset.y,
+                    width: 0.0,
+                    height: 0.0,
+                }),
+        }
+    }
+
+    /// The whole recorder as one run, when it recorded anything.
+    pub(crate) fn whole(recorder: &ShapeRecorder, placement: Placement) -> Option<Self> {
+        (!recorder.is_empty())
+            .then(|| Self::of_recorder(recorder, None, recorder.all_segments(), placement))
+    }
+
+    pub(crate) fn segment_records(
+        &self,
+    ) -> impl Iterator<Item = &cranpose_ui_graphics::RecordSegment> {
+        self.tables.segments[self.segments.start as usize..self.segments.end as usize]
+            .iter()
+            .filter(|segment| segment.lane == cranpose_ui_graphics::RecordLane::Shapes)
+    }
+
+    pub(crate) fn record_count(&self) -> u32 {
+        self.segment_records().map(|segment| segment.count).sum()
+    }
+}
+
+/// The primitives a layer pushes one by one, recorded together under the
+/// placement they share until one arrives under another placement or
+/// something else takes a z between them.
+struct LooseRun {
+    recorder: ShapeRecorder,
+    placement: Placement,
 }
 
 #[derive(Clone)]
@@ -144,7 +224,7 @@ pub(crate) struct ImageDraw {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum DrawOpKind {
-    Shape(usize),
+    Run(usize),
     Image(usize),
     Text(usize),
     Shadow(usize),
@@ -156,11 +236,13 @@ pub(crate) struct DrawOp {
     pub kind: DrawOpKind,
 }
 
+/// A shadow's casters: the shapes as one run in the shadow's own space,
+/// the cutouts taken after the blur as another under the same placement,
+/// and the texts. The shapes' blend modes ride in the records.
 #[derive(Clone)]
 pub(crate) struct ShadowDraw {
-    pub shapes: Vec<(DrawShape, BlendMode)>,
-    pub post_blur_cutouts: Vec<(DrawShape, BlendMode)>,
-    pub brushes: Vec<Brush>,
+    pub shapes: Option<RunDraw>,
+    pub post_blur_cutouts: Option<RunDraw>,
     pub texts: Vec<TextDraw>,
     pub blur_radius: f32,
     pub clip: Option<Rect>,
@@ -201,8 +283,8 @@ pub(crate) struct BackdropLayer {
 }
 
 pub(crate) struct CompositorScene {
-    pub shapes: Vec<DrawShape>,
-    pub brushes: Vec<Brush>,
+    pub runs: Vec<RunDraw>,
+    loose: LooseRun,
     pub images: Vec<ImageDraw>,
     pub texts: Vec<TextDraw>,
     pub shadow_draws: Vec<ShadowDraw>,
@@ -214,7 +296,7 @@ pub(crate) struct CompositorScene {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct SceneCapacityHint {
-    pub shapes: usize,
+    pub runs: usize,
     pub images: usize,
     pub texts: usize,
     pub shadow_draws: usize,
@@ -231,8 +313,8 @@ thread_local! {
 }
 
 struct SceneBuffers {
-    shapes: Vec<DrawShape>,
-    brushes: Vec<Brush>,
+    runs: Vec<RunDraw>,
+    loose: ShapeRecorder,
     images: Vec<ImageDraw>,
     texts: Vec<TextDraw>,
     shadow_draws: Vec<ShadowDraw>,
@@ -252,8 +334,8 @@ impl Drop for CompositorScene {
             }
             self.clear();
             pool.push(SceneBuffers {
-                shapes: std::mem::take(&mut self.shapes),
-                brushes: std::mem::take(&mut self.brushes),
+                runs: std::mem::take(&mut self.runs),
+                loose: std::mem::take(&mut self.loose.recorder),
                 images: std::mem::take(&mut self.images),
                 texts: std::mem::take(&mut self.texts),
                 shadow_draws: std::mem::take(&mut self.shadow_draws),
@@ -273,8 +355,11 @@ impl CompositorScene {
     pub fn with_capacity(hint: SceneCapacityHint) -> Self {
         if let Some(buffers) = SCENE_BUFFER_POOL.with(|pool| pool.borrow_mut().pop()) {
             return Self {
-                shapes: buffers.shapes,
-                brushes: buffers.brushes,
+                runs: buffers.runs,
+                loose: LooseRun {
+                    recorder: buffers.loose,
+                    placement: Placement::at(Point::default(), None, None),
+                },
                 images: buffers.images,
                 texts: buffers.texts,
                 shadow_draws: buffers.shadow_draws,
@@ -285,8 +370,11 @@ impl CompositorScene {
             };
         }
         Self {
-            shapes: Vec::with_capacity(hint.shapes),
-            brushes: Vec::new(),
+            runs: Vec::with_capacity(hint.runs),
+            loose: LooseRun {
+                recorder: ShapeRecorder::default(),
+                placement: Placement::at(Point::default(), None, None),
+            },
             images: Vec::with_capacity(hint.images),
             texts: Vec::with_capacity(hint.texts),
             shadow_draws: Vec::with_capacity(hint.shadow_draws),
@@ -299,7 +387,7 @@ impl CompositorScene {
 
     pub fn capacity_hint(&self) -> SceneCapacityHint {
         SceneCapacityHint {
-            shapes: self.shapes.len(),
+            runs: self.runs.len(),
             images: self.images.len(),
             texts: self.texts.len(),
             shadow_draws: self.shadow_draws.len(),
@@ -310,8 +398,8 @@ impl CompositorScene {
     }
 
     pub fn clear(&mut self) {
-        self.shapes.clear();
-        self.brushes.clear();
+        self.runs.clear();
+        self.loose.recorder.clear();
         self.images.clear();
         self.texts.clear();
         self.shadow_draws.clear();
@@ -321,85 +409,49 @@ impl CompositorScene {
         self.next_z = 0;
     }
 
-    pub fn intern_brush(&mut self, brush: ResolvedBrush) -> SceneBrush {
-        intern_brush_into(&mut self.brushes, brush)
+    /// The z the next push takes. Closes the open loose run first, since
+    /// whatever the caller places at this z must draw above it.
+    pub fn next_z(&mut self) -> usize {
+        self.flush_loose();
+        self.next_z
     }
 
-    pub fn push_shape(
-        &mut self,
-        rect: Rect,
-        brush: Brush,
-        shape: Option<RoundedCornerShape>,
-        clip: Option<Rect>,
-        blend_mode: BlendMode,
-    ) {
-        self.push_shape_with_geometry(
-            rect,
-            rect,
-            rect_to_quad(rect),
-            brush,
-            shape,
-            clip,
-            blend_mode,
-        );
+    /// Records one shape primitive under `placement`, joining the open
+    /// loose run when it shares the placement and closing it otherwise.
+    /// The primitive is in the placement's record space and carries its
+    /// own paint; the placement's alpha and filter are identity.
+    pub fn push_loose(&mut self, primitive: DrawPrimitive, placement: Placement) {
+        if !self.loose.recorder.is_empty() && self.loose.placement != placement {
+            self.flush_loose();
+        }
+        self.loose.placement = placement;
+        if let Recorded::Other(other) = self.loose.recorder.push_primitive(primitive) {
+            unreachable!("only shapes join a loose run, not {other:?}");
+        }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub fn push_shape_with_geometry(
-        &mut self,
-        rect: Rect,
-        local_rect: Rect,
-        quad: [[f32; 2]; 4],
-        brush: Brush,
-        shape: Option<RoundedCornerShape>,
-        clip: Option<Rect>,
-        blend_mode: BlendMode,
-    ) {
-        self.push_shape_with_stroke_and_arc(
-            rect,
-            local_rect,
-            quad,
-            ResolvedBrush::from_brush(brush),
-            shape,
-            None,
-            None,
-            clip,
-            blend_mode,
-        );
+    /// Closes the open loose run into a run draw at the next z.
+    pub fn flush_loose(&mut self) {
+        let Some(run) = RunDraw::whole(&self.loose.recorder, self.loose.placement) else {
+            return;
+        };
+        self.loose.recorder.clear();
+        self.push_run_unflushed(run);
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub fn push_shape_with_stroke_and_arc(
-        &mut self,
-        rect: Rect,
-        local_rect: Rect,
-        quad: [[f32; 2]; 4],
-        brush: ResolvedBrush,
-        shape: Option<RoundedCornerShape>,
-        stroke: Option<Stroke>,
-        arc: Option<ArcGeometry>,
-        clip: Option<Rect>,
-        blend_mode: BlendMode,
-    ) {
-        let brush = self.intern_brush(brush);
+    pub fn push_run(&mut self, run: RunDraw) {
+        self.flush_loose();
+        self.push_run_unflushed(run);
+    }
+
+    fn push_run_unflushed(&mut self, run: RunDraw) {
         let z_index = self.next_z;
         self.next_z += 1;
-        let index = self.shapes.len();
-        self.shapes.push(DrawShape {
-            rect,
-            local_rect,
-            quad,
-            snap_anchor: None,
-            brush,
-            shape,
-            stroke,
-            arc,
-            clip,
-            blend_mode,
-        });
+        let index = self.runs.len();
+        self.runs.push(run);
         self.draw_ops.push(DrawOp {
             z_index,
-            kind: DrawOpKind::Shape(index),
+            kind: DrawOpKind::Run(index),
         });
     }
 
@@ -418,6 +470,7 @@ impl CompositorScene {
         blend_mode: BlendMode,
         motion_context_animated: bool,
     ) {
+        self.flush_loose();
         let z_index = self.next_z;
         self.next_z += 1;
         let index = self.images.len();
@@ -455,6 +508,7 @@ impl CompositorScene {
         layout_options: TextLayoutOptions,
         clip: Option<Rect>,
     ) {
+        self.flush_loose();
         let z_index = self.next_z;
         self.next_z += 1;
         let index = self.texts.len();
@@ -477,6 +531,7 @@ impl CompositorScene {
     }
 
     pub fn push_shadow_draw(&mut self, mut draw: ShadowDraw) {
+        self.flush_loose();
         let z_index = self.next_z;
         self.next_z += 1;
         let index = self.shadow_draws.len();
@@ -499,6 +554,7 @@ impl CompositorScene {
         z_start: usize,
         z_end: usize,
     ) {
+        self.flush_loose();
         self.effect_layers.push(EffectLayer {
             rect,
             clip,
@@ -512,6 +568,7 @@ impl CompositorScene {
     }
 
     pub fn push_backdrop_layer(&mut self, mut layer: BackdropLayer) {
+        self.flush_loose();
         layer.z_index = self.next_z;
         self.next_z += 1;
         self.backdrop_layers.push(layer);
@@ -524,11 +581,76 @@ impl Default for CompositorScene {
     }
 }
 
-use crate::rect_to_quad;
-
 #[cfg(test)]
 mod tests {
+    use cranpose_ui_graphics::Brush;
+
     use super::*;
+
+    fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect {
+        Rect {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    fn loose_rect(x: f32) -> DrawPrimitive {
+        DrawPrimitive::Rect {
+            rect: rect(x, 0.0, 10.0, 10.0),
+            brush: Brush::solid(Color::WHITE),
+            stroke: None,
+        }
+    }
+
+    #[test]
+    fn loose_primitives_under_one_placement_share_a_run_and_close_before_anything_else() {
+        let mut scene = CompositorScene::new();
+        let placement = Placement::at(Point::new(5.0, 5.0), None, None);
+        scene.push_loose(loose_rect(0.0), placement);
+        scene.push_loose(loose_rect(20.0), placement);
+        assert!(scene.runs.is_empty());
+        let z = scene.next_z();
+        assert_eq!(scene.runs.len(), 1);
+        assert_eq!(z, 1);
+        assert_eq!(scene.runs[0].record_count(), 2);
+        assert_eq!(scene.runs[0].bounds, rect(5.0, 5.0, 30.0, 10.0));
+        scene.push_loose(
+            loose_rect(40.0),
+            Placement::at(Point::default(), None, None),
+        );
+        scene.push_loose(
+            loose_rect(60.0),
+            Placement::at(Point::default(), None, Some(rect(0.0, 0.0, 1.0, 1.0))),
+        );
+        scene.flush_loose();
+        assert_eq!(scene.runs.len(), 3);
+        assert_eq!(
+            scene
+                .draw_ops
+                .iter()
+                .map(|op| op.z_index)
+                .collect::<Vec<_>>(),
+            [0, 1, 2]
+        );
+    }
+
+    #[test]
+    fn a_run_pushed_after_loose_primitives_draws_above_them() {
+        let mut scene = CompositorScene::new();
+        scene.push_loose(loose_rect(0.0), Placement::at(Point::default(), None, None));
+        let recording = CommandRecording::from_primitives(vec![loose_rect(1.0)]);
+        scene.push_run(RunDraw::of(
+            &recording,
+            None,
+            recording.all_segments(),
+            Placement::at(Point::default(), None, None),
+        ));
+        assert_eq!(scene.runs.len(), 2);
+        assert!(matches!(scene.draw_ops[0].kind, DrawOpKind::Run(0)));
+        assert!(matches!(scene.draw_ops[1].kind, DrawOpKind::Run(1)));
+    }
 
     #[test]
     fn scene_drop_skips_pooling_when_the_pool_is_held() {

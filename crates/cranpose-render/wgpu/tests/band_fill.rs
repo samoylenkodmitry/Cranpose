@@ -151,17 +151,11 @@ fn an_arc_band_rasterizes_its_sector_not_its_disc() {
     );
 }
 
-/// The rasterizer interpolates the world position across a 400-pixel quad
-/// and across a 6-pixel triangle with different rounding, which moves an
-/// anti-aliased edge pixel by a step or two; a pixel the mesh missed would
-/// differ by the ring's whole intensity.
-const INTERPOLATION_TOLERANCE: u32 = 2;
-
-/// The mesh only restricts where the shape shader runs, so a ring drawn
-/// through it matches the same ring drawn as two clipped halves, which take
-/// the quad path, to interpolation rounding.
+/// A band is only a raster extent: the fragment stage decides every pixel,
+/// so the band-drawn ring and the same ring split into two clipped halves
+/// hold the same pixels, and both hold fewer raster pixels than the disc.
 #[test]
-fn a_meshed_ring_matches_the_ring_drawn_as_clipped_quads() {
+fn a_banded_ring_matches_the_ring_drawn_in_clipped_halves() {
     let mut renderer = match support::headless_renderer() {
         Ok(renderer) => renderer,
         Err(err) => {
@@ -169,30 +163,24 @@ fn a_meshed_ring_matches_the_ring_drawn_as_clipped_quads() {
             return;
         }
     };
-    let meshed = capture(&mut renderer, frame_of(vec![ring(None)]));
+    let whole = capture(&mut renderer, frame_of(vec![ring(None)]));
     let half = FRAME as f32 / 2.0;
-    let quads = capture(
+    let halves = capture(
         &mut renderer,
         frame_of(vec![
             ring(Some(rect(0.0, 0.0, half, FRAME as f32))),
             ring(Some(rect(half, 0.0, half, FRAME as f32))),
         ]),
     );
-    let distinct = support::distinct_colors(&meshed.pixels);
+    let distinct = support::distinct_colors(&whole.pixels);
     assert!(
         distinct > 2,
         "the ring must be visible, saw {distinct} colours"
     );
-    let stats = image_difference_stats(
-        &meshed.pixels,
-        &quads.pixels,
-        FRAME,
-        FRAME,
-        INTERPOLATION_TOLERANCE,
-    );
+    let stats = image_difference_stats(&whole.pixels, &halves.pixels, FRAME, FRAME, 0);
     assert_eq!(
         stats.differing_pixels, 0,
-        "the meshed ring and the clipped-quad ring differ: differing={} max={} first={:?}",
+        "the whole ring and the clipped-half ring differ: differing={} max={} first={:?}",
         stats.differing_pixels, stats.max_difference, stats.first_difference
     );
 }

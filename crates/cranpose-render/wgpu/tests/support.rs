@@ -654,3 +654,52 @@ pub fn record_mixed_scene(scope: &mut DrawScopeDefault) {
         },
     );
 }
+
+/// A layer node with every field spelled out, for contract tests that
+/// build graphs by hand.
+pub fn contract_layer(
+    node_id: Option<NodeId>,
+    cache_policy: cranpose_render_common::graph::CachePolicy,
+    local_bounds: Rect,
+    transform_to_parent: cranpose_render_common::graph::ProjectiveTransform,
+    children: Vec<RenderNode>,
+) -> LayerNode {
+    LayerNode {
+        node_id,
+        wraps: None,
+        local_bounds,
+        transform_to_parent,
+        motion_context_animated: false,
+        translated_content_context: false,
+        translated_content_offset: Point::default(),
+        content_offset: Point::default(),
+        scene_children_origin: Point::default(),
+        scene_children_layer_translation: Point::default(),
+        graphics_layer: cranpose_ui_graphics::GraphicsLayer::default(),
+        clip_to_bounds: false,
+        shadow_clip: None,
+        hit_test: None,
+        has_hit_targets: false,
+        has_origin_sinks: false,
+        isolation: cranpose_render_common::graph::IsolationReasons::default(),
+        cache_policy,
+        cache_hashes: cranpose_render_common::raster_cache::LayerRasterCacheHashes::default(),
+        cache_hashes_valid: false,
+        children,
+    }
+}
+
+/// A solid rect primitive node.
+pub fn rect_primitive(rect: Rect, color: Color) -> RenderNode {
+    RenderNode::Primitive(PrimitiveEntry {
+        phase: PrimitivePhase::BeforeChildren,
+        node: PrimitiveNode::Draw(DrawPrimitiveNode {
+            primitive: DrawPrimitive::Rect {
+                rect,
+                brush: Brush::solid(color),
+                stroke: None,
+            },
+            clip: None,
+        }),
+    })
+}

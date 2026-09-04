@@ -669,10 +669,10 @@ fn text_rendering_uses_cached_raster_image_batches() {
         "wasm segment batching must not split draw chunks by repeated batch kind"
     );
     assert!(
-        render_source.contains("shape_slots: Vec<ShapeBatchBuffers>")
+        render_source.contains("run_store: RunStore")
             && render_source.contains("image_slots: Vec<ImageBatchBuffers>")
             && render_source.contains("viewport_uniforms: ViewportUniformRing"),
-        "draw batches must own retained per-slot GPU resources"
+        "draw batches must own retained per-run and per-slot GPU resources"
     );
 }
 

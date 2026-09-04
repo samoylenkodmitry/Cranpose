@@ -11,8 +11,7 @@ use cranpose_render_common::{
     layer_shadow::layer_shadow_geometry,
     layer_transform::{apply_layer_to_rect, layer_uniform_scale},
     primitive_emit::{
-        DrawPrimitiveSink, ImageDrawParams, ShapeDrawParams, TextDrawParams,
-        draw_shape_params_for_primitive, emit_draw_primitive,
+        DrawPrimitiveSink, ImageDrawParams, ShapeDrawParams, TextDrawParams, emit_draw_primitive,
     },
 };
 #[cfg(test)]
@@ -30,16 +29,15 @@ use cranpose_ui::{
     text::{TextDecoration, TextDrawStyle, TextStyle},
     text_layout_result::TextLayoutResult,
 };
-#[cfg(test)]
-use cranpose_ui_graphics::Point;
 use cranpose_ui_graphics::{
-    BlendMode, Color, DrawPrimitive, GraphicsLayer, LayerShape, Rect, RenderEffect,
-    RoundedCornerShape, RuntimeShader, TileMode,
+    BlendMode, Color, DrawPrimitive, GraphicsLayer, LayerShape, Point, Recorded, Rect,
+    RenderEffect, RoundedCornerShape, RuntimeShader, ShapeRecorder, TileMode,
 };
 
-use crate::scene::{CompositorScene, DrawShape, Scene, ShadowDraw, TextDraw};
+use crate::scene::{CompositorScene, Placement, RunDraw, Scene, ShadowDraw, SnapAnchor, TextDraw};
 
 mod style;
+use cranpose_render_common::style_shared::resolve_layer_brush;
 use style::{apply_layer_to_brush, apply_layer_to_color, scale_corner_radii};
 
 const GPU_TEXT_BRUSH_EFFECT_MAX_STOPS: usize = 16;
@@ -70,28 +68,29 @@ impl TextLayoutResolver for UiTextLayoutResolver {
     }
 }
 
-use crate::rect_to_quad;
-
-fn shadow_shape(
-    rect: Rect,
-    color: Color,
-    shape: Option<RoundedCornerShape>,
-) -> (DrawShape, BlendMode) {
-    (
-        DrawShape {
+/// A layer shadow's caster: the shadow rect as a solid shape, recorded
+/// relative to its own origin so a shadow that scrolls keeps its
+/// fingerprint.
+fn layer_shadow_run(rect: Rect, color: Color, shape: Option<RoundedCornerShape>) -> RunDraw {
+    let origin = Point::new(rect.x, rect.y);
+    let rect = rect.translate(-origin.x, -origin.y);
+    let brush = Brush::solid(color);
+    let primitive = match shape {
+        Some(shape) => DrawPrimitive::RoundRect {
             rect,
-            local_rect: rect,
-            quad: rect_to_quad(rect),
-            snap_anchor: None,
-            brush: crate::scene::SceneBrush::Solid(color),
-            shape,
+            brush,
+            radii: shape.radii(),
             stroke: None,
-            arc: None,
-            clip: None,
-            blend_mode: BlendMode::SrcOver,
         },
-        BlendMode::SrcOver,
-    )
+        None => DrawPrimitive::Rect {
+            rect,
+            brush,
+            stroke: None,
+        },
+    };
+    let mut recorder = ShapeRecorder::default();
+    recorder.push_primitive(primitive);
+    RunDraw::whole(&recorder, Placement::at(origin, None, None)).expect("a shadow rect")
 }
 
 fn shadow_occluder(
@@ -155,9 +154,8 @@ pub(crate) fn push_layer_shadow(
             ambient_pass.alpha,
         );
         scene.push_shadow_draw(ShadowDraw {
-            shapes: vec![shadow_shape(ambient_pass.rect, ambient, resolved_shape)],
-            post_blur_cutouts: vec![],
-            brushes: vec![],
+            shapes: Some(layer_shadow_run(ambient_pass.rect, ambient, resolved_shape)),
+            post_blur_cutouts: None,
             texts: vec![],
             blur_radius: ambient_pass.blur_radius,
             clip,
@@ -175,9 +173,8 @@ pub(crate) fn push_layer_shadow(
             spot_pass.alpha,
         );
         scene.push_shadow_draw(ShadowDraw {
-            shapes: vec![shadow_shape(spot_pass.rect, spot, resolved_shape)],
-            post_blur_cutouts: vec![],
-            brushes: vec![],
+            shapes: Some(layer_shadow_run(spot_pass.rect, spot, resolved_shape)),
+            post_blur_cutouts: None,
             texts: vec![],
             blur_radius: spot_pass.blur_radius,
             clip,
@@ -661,15 +658,14 @@ fn text_for_gpu_mask_batch(
 }
 
 trait TextStyleDrawSink {
-    fn current_z(&self) -> usize;
+    fn current_z(&mut self) -> usize;
 
+    /// A decoration shape in scene space, painted already.
     fn push_shape(
         &mut self,
-        rect: Rect,
-        brush: Brush,
-        shape: Option<RoundedCornerShape>,
+        primitive: DrawPrimitive,
         clip: Option<Rect>,
-        blend_mode: BlendMode,
+        anchor: Option<SnapAnchor>,
     );
 
     #[allow(clippy::too_many_arguments)]
@@ -737,19 +733,17 @@ trait TextStyleDrawSink {
 }
 
 impl TextStyleDrawSink for CompositorScene {
-    fn current_z(&self) -> usize {
-        self.next_z
+    fn current_z(&mut self) -> usize {
+        self.next_z()
     }
 
     fn push_shape(
         &mut self,
-        rect: Rect,
-        brush: Brush,
-        shape: Option<RoundedCornerShape>,
+        primitive: DrawPrimitive,
         clip: Option<Rect>,
-        blend_mode: BlendMode,
+        anchor: Option<SnapAnchor>,
     ) {
-        CompositorScene::push_shape(self, rect, brush, shape, clip, blend_mode);
+        self.push_loose(primitive, Placement::at(Point::default(), anchor, clip));
     }
 
     fn push_text(
@@ -792,9 +786,8 @@ impl TextStyleDrawSink for CompositorScene {
         clip: Option<Rect>,
     ) {
         self.push_shadow_draw(ShadowDraw {
-            shapes: vec![],
-            post_blur_cutouts: vec![],
-            brushes: vec![],
+            shapes: None,
+            post_blur_cutouts: None,
             texts: vec![TextDraw {
                 node_id,
                 rect,
@@ -869,18 +862,20 @@ struct TextBoundsCollector {
 
 #[cfg(test)]
 impl TextStyleDrawSink for TextBoundsCollector {
-    fn current_z(&self) -> usize {
+    fn current_z(&mut self) -> usize {
         self.next_z
     }
 
     fn push_shape(
         &mut self,
-        rect: Rect,
-        _brush: Brush,
-        _shape: Option<RoundedCornerShape>,
+        primitive: DrawPrimitive,
         _clip: Option<Rect>,
-        _blend_mode: BlendMode,
+        _anchor: Option<SnapAnchor>,
     ) {
+        let (DrawPrimitive::Rect { rect, .. } | DrawPrimitive::RoundRect { rect, .. }) = primitive
+        else {
+            unreachable!("text decorations are rects");
+        };
         self.bounds = union_rect(self.bounds, rect);
         self.next_z += 1;
     }
@@ -988,6 +983,7 @@ fn push_span_gpu_text_material_draws<S: TextStyleDrawSink>(
             options,
             text_clip,
         );
+        let z_end = sink.current_z();
         sink.push_effect_layer_with_surface(
             effect_rect,
             text_clip,
@@ -995,7 +991,7 @@ fn push_span_gpu_text_material_draws<S: TextStyleDrawSink>(
             BlendMode::SrcOver,
             1.0,
             z_start,
-            sink.current_z(),
+            z_end,
         );
     }
 
@@ -1015,6 +1011,7 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
     font_size: f32,
     options: TextLayoutOptions,
     text_clip: Option<Rect>,
+    snap_anchor: Option<SnapAnchor>,
 ) {
     let text_scale = layer_uniform_scale(content_layer);
     let baseline_shift_px = text_style
@@ -1033,11 +1030,13 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
     if let Some(background) = text_style.span_style.background {
         let brush = apply_layer_to_brush(Brush::solid(background), content_layer);
         sink.push_shape(
-            transformed_shifted_text_rect,
-            brush,
-            None,
+            DrawPrimitive::Rect {
+                rect: transformed_shifted_text_rect,
+                brush,
+                stroke: None,
+            },
             text_clip,
-            BlendMode::SrcOver,
+            snap_anchor,
         );
     }
 
@@ -1107,6 +1106,7 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
             text_style,
             &text_brush,
             text_clip,
+            snap_anchor,
         );
         return;
     }
@@ -1157,6 +1157,7 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
             text_clip,
         );
 
+        let z_end = sink.current_z();
         sink.push_effect_layer_with_surface(
             effect_rect,
             text_clip,
@@ -1164,7 +1165,7 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
             BlendMode::SrcOver,
             1.0,
             z_start,
-            sink.current_z(),
+            z_end,
         );
         push_text_decorations(
             sink,
@@ -1176,6 +1177,7 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
             text_style,
             &text_brush,
             text_clip,
+            snap_anchor,
         );
         return;
     }
@@ -1203,6 +1205,7 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
         text_style,
         &text_brush,
         text_clip,
+        snap_anchor,
     );
 }
 
@@ -1245,6 +1248,7 @@ pub(crate) fn push_text_style_draws(
     font_size: f32,
     options: TextLayoutOptions,
     text_clip: Option<Rect>,
+    snap_anchor: Option<SnapAnchor>,
 ) {
     emit_text_style_draws(
         scene,
@@ -1258,6 +1262,7 @@ pub(crate) fn push_text_style_draws(
         font_size,
         options,
         text_clip,
+        snap_anchor,
     );
 }
 
@@ -1289,6 +1294,7 @@ pub(crate) fn estimate_text_style_draw_bounds(
         font_size,
         options,
         text_clip,
+        None,
     );
     collector.bounds
 }
@@ -1304,6 +1310,7 @@ fn push_text_decorations<S: TextStyleDrawSink>(
     global_style: &TextStyle,
     text_brush: &Brush,
     text_clip: Option<Rect>,
+    snap_anchor: Option<SnapAnchor>,
 ) {
     if annotated_text.is_empty() || !text_has_visible_decoration(annotated_text, global_style) {
         return;
@@ -1346,11 +1353,13 @@ fn push_text_decorations<S: TextStyleDrawSink>(
             );
             let transformed = apply_layer_to_rect(underline_rect, rect, content_layer);
             sink.push_shape(
-                transformed,
-                brush.clone(),
-                None,
+                DrawPrimitive::Rect {
+                    rect: transformed,
+                    brush: brush.clone(),
+                    stroke: None,
+                },
                 text_clip,
-                BlendMode::SrcOver,
+                snap_anchor,
             );
         }
 
@@ -1362,7 +1371,15 @@ fn push_text_decorations<S: TextStyleDrawSink>(
                 thickness,
             );
             let transformed = apply_layer_to_rect(strike_rect, rect, content_layer);
-            sink.push_shape(transformed, brush, None, text_clip, BlendMode::SrcOver);
+            sink.push_shape(
+                DrawPrimitive::Rect {
+                    rect: transformed,
+                    brush,
+                    stroke: None,
+                },
+                text_clip,
+                snap_anchor,
+            );
         }
     }
 }
@@ -1819,32 +1836,105 @@ pub(crate) fn update_from_applier(
 
 const DRAW_PRIMITIVE_TEXT_NODE_ID: cranpose_core::NodeId = 0;
 
+/// The primitive with the layer's paint folded into its brushes, for a
+/// shape that joins the layer's loose run; `None` for text, images,
+/// shadows and content, which take their own paths. The layer's affine
+/// part is identity for anything drawn direct, so only the paint applies.
+fn loose_shape(primitive: &DrawPrimitive, layer: &GraphicsLayer) -> Option<DrawPrimitive> {
+    let painted = |brush: &Brush| resolve_layer_brush(brush, layer).into_brush();
+    Some(match primitive {
+        DrawPrimitive::Rect {
+            rect,
+            brush,
+            stroke,
+        } => DrawPrimitive::Rect {
+            rect: *rect,
+            brush: painted(brush),
+            stroke: *stroke,
+        },
+        DrawPrimitive::RoundRect {
+            rect,
+            brush,
+            radii,
+            stroke,
+        } => DrawPrimitive::RoundRect {
+            rect: *rect,
+            brush: painted(brush),
+            radii: *radii,
+            stroke: *stroke,
+        },
+        DrawPrimitive::Arc {
+            rect,
+            brush,
+            center,
+            radius,
+            start_angle,
+            sweep_angle,
+            stroke,
+            inner_radius,
+        } => DrawPrimitive::Arc {
+            rect: *rect,
+            brush: painted(brush),
+            center: *center,
+            radius: *radius,
+            start_angle: *start_angle,
+            sweep_angle: *sweep_angle,
+            stroke: *stroke,
+            inner_radius: *inner_radius,
+        },
+        DrawPrimitive::Blend {
+            primitive,
+            blend_mode,
+        } => DrawPrimitive::Blend {
+            primitive: Box::new(loose_shape(primitive, layer)?),
+            blend_mode: *blend_mode,
+        },
+        DrawPrimitive::Content
+        | DrawPrimitive::Image { .. }
+        | DrawPrimitive::Text(_)
+        | DrawPrimitive::Shadow(_) => return None,
+    })
+}
+
+fn blended(primitive: DrawPrimitive, blend_mode: Option<BlendMode>) -> DrawPrimitive {
+    match blend_mode {
+        Some(blend_mode) if blend_mode != BlendMode::SrcOver => DrawPrimitive::Blend {
+            primitive: Box::new(primitive),
+            blend_mode,
+        },
+        _ => primitive,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn push_draw_primitive(
     primitive: &DrawPrimitive,
     layer_bounds: Rect,
     layer: &GraphicsLayer,
     clip: Option<Rect>,
+    snap_anchor: Option<SnapAnchor>,
     scene: &mut CompositorScene,
     blend_mode: Option<BlendMode>,
     motion_context_animated: bool,
 ) {
+    if let Some(shape) = loose_shape(primitive, layer) {
+        let placement = Placement::at(
+            Point::new(layer_bounds.x, layer_bounds.y),
+            snap_anchor,
+            clip,
+        );
+        scene.push_loose(blended(shape, blend_mode), placement);
+        return;
+    }
+
     struct SceneEmitter<'a> {
         scene: &'a mut CompositorScene,
+        snap_anchor: Option<SnapAnchor>,
     }
 
     impl DrawPrimitiveSink for SceneEmitter<'_> {
-        fn push_shape(&mut self, params: ShapeDrawParams) {
-            self.scene.push_shape_with_stroke_and_arc(
-                params.rect,
-                params.local_rect,
-                params.quad,
-                params.brush,
-                params.shape,
-                params.stroke,
-                params.arc,
-                params.clip,
-                params.blend_mode,
-            );
+        fn push_shape(&mut self, _params: ShapeDrawParams) {
+            unreachable!("shape primitives are recorded before emission");
         }
 
         fn push_image(&mut self, params: ImageDrawParams) {
@@ -1870,7 +1960,14 @@ pub(crate) fn push_draw_primitive(
             layer: &GraphicsLayer,
             clip: Option<Rect>,
         ) {
-            push_shadow_primitive(shadow_primitive, layer_bounds, layer, clip, self.scene);
+            push_shadow_primitive(
+                shadow_primitive,
+                layer_bounds,
+                layer,
+                clip,
+                self.snap_anchor,
+                self.scene,
+            );
         }
 
         fn push_text(&mut self, params: TextDrawParams) {
@@ -1888,7 +1985,7 @@ pub(crate) fn push_draw_primitive(
         }
     }
 
-    let mut emitter = SceneEmitter { scene };
+    let mut emitter = SceneEmitter { scene, snap_anchor };
     emit_draw_primitive(
         primitive,
         layer_bounds,
@@ -1900,38 +1997,37 @@ pub(crate) fn push_draw_primitive(
     );
 }
 
+/// Records a shadow primitive's caster or cutout into `recorder` in the
+/// layer's record space, painted by the layer, under `blend_mode`; false
+/// when the primitive is not a shape.
+fn record_shadow_caster(
+    recorder: &mut ShapeRecorder,
+    primitive: DrawPrimitive,
+    layer: &GraphicsLayer,
+    blend_mode: BlendMode,
+) -> bool {
+    let Some(shape) = loose_shape(&primitive, layer) else {
+        return false;
+    };
+    matches!(
+        recorder.push_primitive(blended(shape, Some(blend_mode))),
+        Recorded::Shape(_)
+    )
+}
+
 fn push_shadow_primitive(
     shadow_prim: cranpose_ui_graphics::ShadowPrimitive,
     layer_bounds: Rect,
     layer: &GraphicsLayer,
     clip: Option<Rect>,
+    snap_anchor: Option<SnapAnchor>,
     scene: &mut CompositorScene,
 ) {
-    fn shape_pair_for_primitive(
-        prim: DrawPrimitive,
-        layer_bounds: Rect,
-        layer: &GraphicsLayer,
-        blend_mode: BlendMode,
-        brushes: &mut Vec<Brush>,
-    ) -> Option<(DrawShape, BlendMode)> {
-        let params = draw_shape_params_for_primitive(prim, layer_bounds, layer, None, blend_mode)?;
-        Some((
-            DrawShape {
-                rect: params.rect,
-                local_rect: params.local_rect,
-                quad: params.quad,
-                snap_anchor: None,
-                brush: crate::scene::intern_brush_into(brushes, params.brush),
-                shape: params.shape,
-                stroke: params.stroke,
-                arc: params.arc,
-                clip: params.clip,
-                blend_mode: params.blend_mode,
-            },
-            params.blend_mode,
-        ))
-    }
-
+    let placement = Placement::at(
+        Point::new(layer_bounds.x, layer_bounds.y),
+        snap_anchor,
+        None,
+    );
     match shadow_prim {
         cranpose_ui_graphics::ShadowPrimitive::Drop {
             shape,
@@ -1939,29 +2035,19 @@ fn push_shadow_primitive(
             blur_radius,
             blend_mode,
         } => {
-            let mut brushes = Vec::new();
-            let Some(shape_pair) =
-                shape_pair_for_primitive(*shape, layer_bounds, layer, blend_mode, &mut brushes)
-            else {
+            let mut shapes = ShapeRecorder::default();
+            if !record_shadow_caster(&mut shapes, *shape, layer, blend_mode) {
                 return;
-            };
-            let mut post_blur_cutouts = Vec::new();
-            if let Some(cutout) = cutout {
-                let Some(cutout_pair) = shape_pair_for_primitive(
-                    *cutout,
-                    layer_bounds,
-                    layer,
-                    BlendMode::DstOut,
-                    &mut brushes,
-                ) else {
-                    return;
-                };
-                post_blur_cutouts.push(cutout_pair);
+            }
+            let mut cutouts = ShapeRecorder::default();
+            if let Some(cutout) = cutout
+                && !record_shadow_caster(&mut cutouts, *cutout, layer, BlendMode::DstOut)
+            {
+                return;
             }
             scene.push_shadow_draw(ShadowDraw {
-                shapes: vec![shape_pair],
-                post_blur_cutouts,
-                brushes,
+                shapes: RunDraw::whole(&shapes, placement),
+                post_blur_cutouts: RunDraw::whole(&cutouts, placement),
                 texts: vec![],
                 blur_radius,
                 clip,
@@ -1977,21 +2063,12 @@ fn push_shadow_primitive(
             blend_mode,
             clip_rect,
         } => {
-            let mut brushes = Vec::new();
-            let Some(fill_pair) =
-                shape_pair_for_primitive(*fill, layer_bounds, layer, blend_mode, &mut brushes)
-            else {
+            let mut shapes = ShapeRecorder::default();
+            if !record_shadow_caster(&mut shapes, *fill, layer, blend_mode)
+                || !record_shadow_caster(&mut shapes, *cutout, layer, BlendMode::DstOut)
+            {
                 return;
-            };
-            let Some(cutout_pair) = shape_pair_for_primitive(
-                *cutout,
-                layer_bounds,
-                layer,
-                BlendMode::DstOut,
-                &mut brushes,
-            ) else {
-                return;
-            };
+            }
             let abs_clip = Rect {
                 x: clip_rect.x + layer_bounds.x,
                 y: clip_rect.y + layer_bounds.y,
@@ -2000,9 +2077,8 @@ fn push_shadow_primitive(
             };
             let transformed_clip = apply_layer_to_rect(abs_clip, layer_bounds, layer);
             scene.push_shadow_draw(ShadowDraw {
-                shapes: vec![fill_pair, cutout_pair],
-                post_blur_cutouts: vec![],
-                brushes,
+                shapes: RunDraw::whole(&shapes, placement),
+                post_blur_cutouts: None,
                 texts: vec![],
                 blur_radius,
                 clip: clip.map_or(Some(transformed_clip), |parent_clip| {
@@ -2114,14 +2190,38 @@ mod tests {
                 font_size,
                 options,
                 text_clip,
+                None,
             )
         });
     }
 
-    fn scene_bounds_for_test(scene: &Scene) -> Option<Rect> {
+    /// Every recorded shape of the scene with the placement it draws
+    /// under, the open loose run closed first.
+    fn shape_records(
+        scene: &mut Scene,
+    ) -> Vec<(cranpose_ui_graphics::ShapeRecord, crate::scene::Placement)> {
+        scene.flush_loose();
+        scene
+            .runs
+            .iter()
+            .flat_map(|run| {
+                run.tables
+                    .shapes
+                    .iter()
+                    .map(move |record| (*record, run.placement))
+            })
+            .collect()
+    }
+
+    fn record_rect(entry: &(cranpose_ui_graphics::ShapeRecord, crate::scene::Placement)) -> Rect {
+        entry.1.translated_bounds(entry.0.stored_rect())
+    }
+
+    fn scene_bounds_for_test(scene: &mut Scene) -> Option<Rect> {
+        scene.flush_loose();
         let mut bounds = None;
-        for shape in &scene.shapes {
-            bounds = union_rect(bounds, shape.rect);
+        for run in &scene.runs {
+            bounds = union_rect(bounds, run.bounds);
         }
         for image in &scene.images {
             bounds = union_rect(bounds, image.rect);
@@ -2131,8 +2231,8 @@ mod tests {
         }
         for shadow in &scene.shadow_draws {
             let mut shadow_bounds = None;
-            for (shape, _) in &shadow.shapes {
-                shadow_bounds = union_rect(shadow_bounds, shape.rect);
+            if let Some(run) = &shadow.shapes {
+                shadow_bounds = union_rect(shadow_bounds, run.bounds);
             }
             for text in &shadow.texts {
                 shadow_bounds = union_rect(shadow_bounds, text.rect);
@@ -2183,19 +2283,16 @@ mod tests {
             ambient.blur_radius > 0.0,
             "ambient shadow should have a blur radius"
         );
-        let ambient_shape = &ambient.shapes[0].0;
+        let ambient_shape = ambient.shapes.as_ref().expect("ambient caster");
         assert!(
-            ambient_shape.rect.x <= bounds.x - 2.0,
+            ambient_shape.bounds.x <= bounds.x - 2.0,
             "ambient shadow should clearly expand left"
         );
         assert!(
-            ambient_shape.rect.width > bounds.width,
+            ambient_shape.bounds.width > bounds.width,
             "ambient shadow should clearly expand width"
         );
-        let ambient_peak_alpha = match &ambient_shape.brush {
-            crate::scene::SceneBrush::Solid(color) => color.a(),
-            _ => 0.0,
-        };
+        let ambient_peak_alpha = ambient_shape.tables.shapes[0].color[3];
         assert!(
             ambient_peak_alpha > 0.02,
             "ambient alpha should remain visible"
@@ -2203,15 +2300,13 @@ mod tests {
 
         let spot = &scene.shadow_draws[1];
         assert!(spot.blur_radius > 0.0, "spot shadow should have blur");
-        let spot_shape = &spot.shapes[0].0;
+        let spot_shape = spot.shapes.as_ref().expect("spot caster");
         assert!(
-            spot_shape.rect.y > bounds.y,
+            spot_shape.bounds.y > bounds.y,
             "spot shadow should be offset downward from source bounds"
         );
-        let crate::scene::SceneBrush::Solid(spot_color) = &spot_shape.brush else {
-            panic!("spot shadow must use solid color");
-        };
-        assert!(spot_color.a() > 0.02, "spot alpha should remain visible");
+        let spot_alpha = spot_shape.tables.shapes[0].color[3];
+        assert!(spot_alpha > 0.02, "spot alpha should remain visible");
     }
 
     #[test]
@@ -2596,15 +2691,13 @@ mod tests {
             Some(clip),
         );
 
+        let records = shape_records(&mut scene);
+        assert_eq!(records.len(), 1, "span background should emit one shape");
+        let expected = Color(0.2, 0.3, 0.52, 0.55).srgb_8bit();
         assert_eq!(
-            scene.shapes.len(),
-            1,
-            "span background should emit one shape"
+            records[0].0.color,
+            [expected.0, expected.1, expected.2, expected.3]
         );
-        let crate::scene::SceneBrush::Solid(background) = &scene.shapes[0].brush else {
-            panic!("background draw should use a solid brush");
-        };
-        assert_eq!(*background, Color(0.2, 0.3, 0.52, 0.55).srgb_8bit());
 
         assert_eq!(scene.texts.len(), 1, "content text expected");
         assert_eq!(scene.shadow_draws.len(), 1, "shadow draw expected");
@@ -2739,7 +2832,7 @@ mod tests {
             )
         });
 
-        assert_eq!(estimated, scene_bounds_for_test(&scene));
+        assert_eq!(estimated, scene_bounds_for_test(&mut scene));
     }
 
     #[test]
@@ -2776,7 +2869,11 @@ mod tests {
             None,
         );
 
-        assert_eq!(scene.shapes.len(), 2, "underline + line-through expected");
+        assert_eq!(
+            shape_records(&mut scene).len(),
+            2,
+            "underline + line-through expected"
+        );
         assert_eq!(scene.texts.len(), 1, "main text expected");
     }
 
@@ -2828,9 +2925,11 @@ mod tests {
             None,
         );
 
-        assert_eq!(base_scene.shapes.len(), 1);
-        assert_eq!(shifted_scene.shapes.len(), 1);
-        let delta = shifted_scene.shapes[0].rect.y - base_scene.shapes[0].rect.y;
+        let base = shape_records(&mut base_scene);
+        let shifted = shape_records(&mut shifted_scene);
+        assert_eq!(base.len(), 1);
+        assert_eq!(shifted.len(), 1);
+        let delta = record_rect(&shifted[0]).y - record_rect(&base[0]).y;
         assert!(
             (delta - 0.35).abs() < 0.001,
             "text decoration y must move by the same fractional delta as the text; got {delta}"
@@ -2868,9 +2967,10 @@ mod tests {
             None,
         );
 
-        assert_eq!(scene.shapes.len(), 3, "one underline per visual line");
+        let records = shape_records(&mut scene);
+        assert_eq!(records.len(), 3, "one underline per visual line");
         let line_height = measure_text_for_test(&text, &style).line_height.max(1.0);
-        let mut ys: Vec<f32> = scene.shapes.iter().map(|shape| shape.rect.y).collect();
+        let mut ys: Vec<f32> = records.iter().map(|entry| record_rect(entry).y).collect();
         ys.sort_by(|a, b| a.total_cmp(b));
         assert!(ys[1] > ys[0], "second underline should be below first line");
         assert!(ys[2] > ys[1], "third underline should be below second line");
@@ -3210,15 +3310,14 @@ mod tests {
             None,
         );
 
-        assert_eq!(scene.shapes.len(), 1, "one underline expected");
-        let crate::scene::SceneBrush::Solid(color) = scene.shapes[0].brush else {
-            panic!("span color decoration should resolve to solid brush");
-        };
-        assert!((color.r() - 1.0).abs() < 1e-6);
-        assert!(color.g() < 1e-6);
-        assert!(color.b() < 1e-6);
+        let records = shape_records(&mut scene);
+        assert_eq!(records.len(), 1, "one underline expected");
+        let color = records[0].0.color;
+        assert!((color[0] - 1.0).abs() < 1e-6);
+        assert!(color[1] < 1e-6);
+        assert!(color[2] < 1e-6);
         assert!(
-            (color.a() - 0.2).abs() < 1e-3,
+            (color[3] - 0.2).abs() < 1e-3,
             "span alpha and layer alpha should both modulate decoration alpha"
         );
     }
@@ -3275,10 +3374,12 @@ mod tests {
             None,
         );
 
-        assert_eq!(base_scene.shapes.len(), 1, "base underline expected");
-        assert_eq!(shifted_scene.shapes.len(), 1, "shifted underline expected");
+        let base = shape_records(&mut base_scene);
+        let shifted = shape_records(&mut shifted_scene);
+        assert_eq!(base.len(), 1, "base underline expected");
+        assert_eq!(shifted.len(), 1, "shifted underline expected");
         assert!(
-            shifted_scene.shapes[0].rect.y < base_scene.shapes[0].rect.y,
+            record_rect(&shifted[0]).y < record_rect(&base[0]).y,
             "baseline shift should move decoration geometry with shifted text"
         );
     }
@@ -4432,6 +4533,7 @@ mod tests {
             },
             &GraphicsLayer::default(),
             None,
+            None,
             &mut scene,
             None,
             false,
@@ -4439,7 +4541,7 @@ mod tests {
 
         assert_eq!(scene.texts.len(), 1, "text must reach the glyph-atlas path");
         assert!(
-            scene.shapes.is_empty() && scene.images.is_empty(),
+            shape_records(&mut scene).is_empty() && scene.images.is_empty(),
             "text must not be lowered into a shape or a rasterized image"
         );
         let text = &scene.texts[0];
@@ -4487,13 +4589,14 @@ mod tests {
                 bounds,
                 &GraphicsLayer::default(),
                 None,
+                None,
                 &mut scene,
                 None,
                 false,
             );
         }
 
-        assert_eq!(scene.shapes.len(), 1);
+        assert_eq!(shape_records(&mut scene).len(), 1);
         assert_eq!(scene.texts.len(), 1);
         let z_of = |kind: fn(&crate::scene::DrawOpKind) -> bool| {
             scene
@@ -4505,7 +4608,7 @@ mod tests {
         };
         assert!(
             z_of(|kind| matches!(kind, crate::scene::DrawOpKind::Text(_)))
-                > z_of(|kind| matches!(kind, crate::scene::DrawOpKind::Shape(_))),
+                > z_of(|kind| matches!(kind, crate::scene::DrawOpKind::Run(_))),
             "text drawn after a rect must composite above it"
         );
     }

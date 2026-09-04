@@ -16,7 +16,6 @@ mod frame;
 mod geometry;
 mod layer_cache;
 pub use fast_cores::pin_current_thread_to_fast_cores;
-mod band_mesh;
 mod frame_graph;
 mod frame_packet;
 mod frontend;
@@ -32,6 +31,8 @@ mod pipeline_disk_cache;
 #[cfg(not(target_arch = "wasm32"))]
 mod present_runtime;
 mod render;
+mod run_geometry;
+mod run_store;
 mod scene;
 mod shader_cache;
 mod shaders;
@@ -131,8 +132,9 @@ pub struct DebugCpuAllocationStats {
     pub text_renderer_pool_cap: usize,
     pub image_texture_cache_len: usize,
     pub image_texture_cache_cap: usize,
-    pub scratch_shape_data_cap: usize,
-    pub scratch_gradients_cap: usize,
+    pub run_arena_staging_bytes: usize,
+    pub run_store_bytes: usize,
+    pub run_store_runs: usize,
     pub scratch_image_vertices_cap: usize,
     pub scratch_image_indices_cap: usize,
     pub scratch_image_cmds_cap: usize,
