@@ -11,12 +11,13 @@ use cranpose_core::NodeId;
 use cranpose_render_common::{
     Renderer,
     graph::{
-        DrawPrimitiveNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, RenderGraph,
-        RenderNode,
+        CachePolicy, DrawCommandId, DrawPrimitiveNode, DrawRunNode, LayerNode, PrimitiveEntry,
+        PrimitiveNode, PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode,
     },
     software_text_raster::DEFAULT_SOFTWARE_TEXT_FONT_BYTES,
+    style_shared::DrawPlacement,
 };
-use cranpose_render_wgpu::{CapturedFrame, RenderStatsSnapshot, WgpuRenderer};
+use cranpose_render_wgpu::{CapturedFrame, PresentOutcome, RenderStatsSnapshot, WgpuRenderer};
 use cranpose_ui::{
     AppContext, Color, Modifier, Size, composable,
     widgets::{Box, BoxSpec},
@@ -702,4 +703,81 @@ pub fn rect_primitive(rect: Rect, color: Color) -> RenderNode {
             clip: None,
         }),
     })
+}
+
+/// The node id of the one command of [`stored_run_graph`].
+pub const STORED_RUN_NODE: NodeId = 7_200;
+
+/// The rect the record at `index` of [`stored_run_graph`] draws: eight
+/// per row, apart from each other and from the edges.
+pub fn stored_run_rect(index: usize) -> Rect {
+    Rect {
+        x: (index % 8) as f32 * 14.0 + 4.0,
+        y: (index / 8) as f32 * 9.0 + 4.0,
+        width: 10.0,
+        height: 6.0,
+    }
+}
+
+/// A `width` by `height` graph whose one command records one rect per
+/// colour of `colors`: enough records for the run store to retain the
+/// command's tables when there are as many as a stored run needs.
+pub fn stored_run_graph(width: u32, height: u32, colors: &[Color]) -> RenderGraph {
+    let primitives = colors
+        .iter()
+        .enumerate()
+        .map(|(index, color)| DrawPrimitive::Rect {
+            rect: stored_run_rect(index),
+            brush: Brush::solid(*color),
+            stroke: None,
+        })
+        .collect();
+    RenderGraph::new(contract_layer(
+        Some(STORED_RUN_NODE),
+        CachePolicy::None,
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: width as f32,
+            height: height as f32,
+        },
+        ProjectiveTransform::identity(),
+        vec![RenderNode::DrawRun(DrawRunNode::for_command(
+            PrimitivePhase::BeforeChildren,
+            Some(DrawCommandId {
+                node_id: STORED_RUN_NODE,
+                command_index: 0,
+                placement: DrawPlacement::Behind,
+            }),
+            primitives,
+        ))],
+    ))
+}
+
+/// Presents `graph` at `width` by `height` through the renderer's own
+/// packet path and reads the pixels back as RGBA8 rows.
+pub fn present_and_read(
+    renderer: &mut LockedRenderer,
+    width: u32,
+    height: u32,
+    graph: RenderGraph,
+) -> Vec<u8> {
+    renderer.scene_mut().graph = Some(graph);
+    let packet = renderer
+        .build_frame_packet_for_tests(width, height)
+        .expect("the graph must lower into a packet");
+    let (texture, view) = render_target(
+        renderer.try_device().expect("device"),
+        width,
+        height,
+        wgpu::TextureFormat::Bgra8UnormSrgb,
+        wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+    );
+    let outcome = renderer
+        .render_held_packet_for_tests(&texture, &view, width, height, packet)
+        .expect("the packet must draw");
+    assert_eq!(outcome, PresentOutcome::Presented);
+    let device = renderer.try_device().expect("device");
+    let queue = renderer.try_queue_for_tests().expect("queue");
+    read_texture_rgba8(device, queue, &texture)
 }

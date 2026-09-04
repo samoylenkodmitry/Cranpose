@@ -1062,6 +1062,7 @@ impl DrawScopeDefault {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[inline]
     fn push_arc(
         &mut self,
         brush: Brush,
@@ -1087,7 +1088,7 @@ impl DrawScopeDefault {
         if geometry.is_degenerate() {
             return;
         }
-        self.recording.push_scope_arc(args, geometry);
+        self.recording.push_scope_arc(&args, &geometry);
     }
 }
 

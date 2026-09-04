@@ -44,6 +44,17 @@ pub const ARC_RING_SEGMENTS: [u32; 4] = [8, 16, 32, 64];
 /// The outer radius, in the command's units, above which a full ring moves
 /// to the next of [`ARC_RING_SEGMENTS`].
 pub const ARC_RING_RADII: [f32; 3] = [24.0, 96.0, 384.0];
+const ARC_RING_SEGMENTS_PER_RADIAN: [f32; ARC_RING_SEGMENTS.len()] = ring_segments_per_radian();
+
+const fn ring_segments_per_radian() -> [f32; ARC_RING_SEGMENTS.len()] {
+    let mut out = [0.0; ARC_RING_SEGMENTS.len()];
+    let mut index = 0;
+    while index < ARC_RING_SEGMENTS.len() {
+        out[index] = ARC_RING_SEGMENTS[index] as f32 / TAU;
+        index += 1;
+    }
+    out
+}
 /// Bands narrower than this radius draw as their quad: the pixels a band
 /// would save cost less than its vertices.
 pub const ARC_BAND_MIN_RADIUS: f32 = 11.0;
@@ -78,7 +89,7 @@ struct BandRing {
     mid: f32,
     ring_half: f32,
     range: f32,
-    ring_segments: u32,
+    segments_per_radian: f32,
 }
 
 impl BandRing {
@@ -105,19 +116,18 @@ impl BandRing {
             mid,
             ring_half,
             range: Self::padded_range(mid, ring_half, sweep),
-            ring_segments: Self::ring_segments(outer),
+            segments_per_radian: Self::segments_per_radian(outer),
         }
     }
 
-    /// The segments a full ring takes at `outer_radius`: the angular step
-    /// every band at that radius keeps.
-    fn ring_segments(outer_radius: f32) -> u32 {
-        ARC_RING_RADII
-            .iter()
-            .position(|limit| outer_radius <= *limit)
-            .map_or(ARC_RING_SEGMENTS[ARC_RING_SEGMENTS.len() - 1], |bucket| {
-                ARC_RING_SEGMENTS[bucket]
-            })
+    /// The segments per radian a full ring takes at `outer_radius`: the
+    /// angular step every band at that radius keeps.
+    #[inline]
+    fn segments_per_radian(outer_radius: f32) -> f32 {
+        let bucket = usize::from(outer_radius > ARC_RING_RADII[0])
+            + usize::from(outer_radius > ARC_RING_RADII[1])
+            + usize::from(outer_radius > ARC_RING_RADII[2]);
+        ARC_RING_SEGMENTS_PER_RADIAN[bucket]
     }
 
     /// The padded sweep the strip covers, with the angular pad bounded
@@ -133,8 +143,9 @@ impl BandRing {
 
     /// The fewest of [`ARC_BUCKET_SEGMENTS`] whose step over the padded
     /// sweep stays within the ring step at this radius.
+    #[inline]
     fn segments(&self) -> u32 {
-        let exact = self.range * (self.ring_segments as f32 / TAU);
+        let exact = self.range * self.segments_per_radian;
         let floor = exact as u32;
         let needed = if (floor as f32) < exact {
             floor + 1
@@ -168,6 +179,7 @@ pub fn band_bucket(segments: u32) -> usize {
 /// `rect`, the quad it would otherwise draw: the pixels each rasterizes
 /// plus what their vertices cost a tiling GPU. `None` when the quad is
 /// cheaper.
+#[inline]
 pub fn band_bucket_for(geometry: &ArcGeometry, rect: Rect) -> Option<usize> {
     if geometry.is_degenerate()
         || geometry.outer_radius < ARC_BAND_MIN_RADIUS
@@ -359,6 +371,7 @@ const TILE_MODES: [TileMode; 4] = [
     TileMode::Decal,
 ];
 
+#[inline]
 fn pack_flags(kind: u32, stroke: Option<Stroke>, blend: BlendMode, band_cap: StrokeCap) -> u32 {
     let mut flags = (kind << KIND_SHIFT) | ((blend as u32) << BLEND_SHIFT);
     if let Some(stroke) = stroke {
@@ -649,6 +662,7 @@ pub enum Recorded {
     Other(DrawPrimitive),
 }
 
+#[inline]
 fn extend_segment_in(
     tables: &mut RecordTables,
     extend: bool,
@@ -771,7 +785,7 @@ impl ShapeRecorder {
                 inner_radius,
             } => self.push_arc(
                 rect,
-                ArcRecordArgs {
+                &ArcRecordArgs {
                     brush: &brush,
                     center,
                     radius,
@@ -798,6 +812,7 @@ impl ShapeRecorder {
         });
     }
 
+    #[inline]
     pub fn push_rect(
         &mut self,
         rect: Rect,
@@ -876,22 +891,24 @@ impl ShapeRecorder {
 
     /// Records an arc band or annular sector with the rect the primitive
     /// carries.
-    pub fn push_arc(&mut self, rect: Rect, args: ArcRecordArgs<'_>) -> Rect {
-        let geometry = normalized_band(&args);
-        self.push_arc_band(args, geometry, Some(rect))
+    pub fn push_arc(&mut self, rect: Rect, args: &ArcRecordArgs<'_>) -> Rect {
+        let geometry = normalized_band(args);
+        self.push_arc_band(args, &geometry, Some(rect))
     }
 
     /// Records an arc the draw scope drew, whose band the scope already
     /// normalised: the record keeps the disc around the band as its rect
     /// and derives the primitive's tight bounds only when asked.
-    pub fn push_scope_arc(&mut self, args: ArcRecordArgs<'_>, geometry: ArcGeometry) -> Rect {
+    #[inline]
+    pub fn push_scope_arc(&mut self, args: &ArcRecordArgs<'_>, geometry: &ArcGeometry) -> Rect {
         self.push_arc_band(args, geometry, None)
     }
 
+    #[inline]
     fn push_arc_band(
         &mut self,
-        args: ArcRecordArgs<'_>,
-        geometry: ArcGeometry,
+        args: &ArcRecordArgs<'_>,
+        geometry: &ArcGeometry,
         rect: Option<Rect>,
     ) -> Rect {
         let (handle, color) = self.intern_brush(args.brush);
@@ -901,9 +918,9 @@ impl ShapeRecorder {
         }
         let rect = rect.unwrap_or_else(|| {
             flags |= ARC_RECT_LOOSE_BIT;
-            band_disc(&geometry)
+            band_disc(geometry)
         });
-        let bucket = band_bucket_for(&geometry, rect);
+        let bucket = band_bucket_for(geometry, rect);
         if bucket.is_some() {
             flags |= ARC_BANDED_BIT;
         }
@@ -980,6 +997,7 @@ impl ShapeRecorder {
 
     /// Whether the next record continues the open segment, and makes its
     /// key the open one.
+    #[inline]
     fn note_segment_key(&mut self, lane: RecordLane, blend: BlendMode, gradient: bool) -> bool {
         let key = ((lane as u32) << 16) | ((blend as u32) << 1) | gradient as u32;
         let extend = key == self.last_segment_key;
@@ -987,14 +1005,40 @@ impl ShapeRecorder {
         extend
     }
 
+    /// Widens the bounds to `rect`; plain compares, not the NaN-ordering
+    /// `f32::min`, which armv7 lowers to a libm call per edge.
+    #[inline]
     fn include_bounds(&mut self, rect: Rect) {
-        self.min[0] = self.min[0].min(rect.x);
-        self.min[1] = self.min[1].min(rect.y);
-        self.max[0] = self.max[0].max(rect.x + rect.width);
-        self.max[1] = self.max[1].max(rect.y + rect.height);
+        let right = rect.x + rect.width;
+        let bottom = rect.y + rect.height;
+        if rect.x < self.min[0] {
+            self.min[0] = rect.x;
+        }
+        if rect.y < self.min[1] {
+            self.min[1] = rect.y;
+        }
+        if right > self.max[0] {
+            self.max[0] = right;
+        }
+        if bottom > self.max[1] {
+            self.max[1] = bottom;
+        }
     }
 
+    /// The brush handle a record carries and its colour row: the colour
+    /// itself for a solid brush, the first stop for a gradient, which is
+    /// interned into the brush and stop tables.
+    #[inline]
     fn intern_brush(&mut self, brush: &Brush) -> (u32, [f32; 4]) {
+        match brush {
+            Brush::Solid(color) => (0, [color.0, color.1, color.2, color.3]),
+            gradient => self.intern_gradient(gradient),
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn intern_gradient(&mut self, brush: &Brush) -> (u32, [f32; 4]) {
         let (kind, tile_mode, params, colors, stops) = match brush {
             Brush::Solid(color) => return (0, [color.0, color.1, color.2, color.3]),
             Brush::LinearGradient {
@@ -1200,12 +1244,16 @@ impl CommandRecording {
     /// A rect containing every entry's coverage rect: exact for rects and
     /// the other lanes, the disc around the band for a scope-recorded arc.
     pub fn bounds(&self) -> Option<Rect> {
-        (self.min[0] <= self.max[0] && self.min[1] <= self.max[1]).then(|| Rect {
+        let others = (self.min[0] <= self.max[0] && self.min[1] <= self.max[1]).then(|| Rect {
             x: self.min[0],
             y: self.min[1],
             width: self.max[0] - self.min[0],
             height: self.max[1] - self.min[1],
-        })
+        });
+        match (self.shapes.bounds(), others) {
+            (Some(shapes), Some(others)) => Some(union_rect(shapes, others)),
+            (shapes, others) => shapes.or(others),
+        }
     }
 
     pub fn summary(&self) -> RecordingSummary {
@@ -1455,14 +1503,14 @@ impl CommandRecording {
             return;
         }
         match self.shapes.push_primitive(primitive) {
-            Recorded::Shape(coverage) => self.note_shape(coverage),
+            Recorded::Shape(_) => self.note_shape(),
             Recorded::Other(other) => self.push_other(other),
         }
     }
 
-    fn note_shape(&mut self, coverage: Rect) {
+    #[inline]
+    fn note_shape(&mut self) {
         self.summary.has_non_shadow = true;
-        self.include_bounds(coverage);
     }
 
     fn include_bounds(&mut self, rect: Rect) {
@@ -1479,8 +1527,8 @@ impl CommandRecording {
         stroke: Option<Stroke>,
         blend: BlendMode,
     ) {
-        let coverage = self.shapes.push_rect(rect, brush, stroke, blend);
-        self.note_shape(coverage);
+        self.shapes.push_rect(rect, brush, stroke, blend);
+        self.note_shape();
     }
 
     pub fn push_round_rect(
@@ -1491,25 +1539,26 @@ impl CommandRecording {
         stroke: Option<Stroke>,
         blend: BlendMode,
     ) {
-        let coverage = self
-            .shapes
+        self.shapes
             .push_round_rect(rect, brush, radii, stroke, blend);
-        self.note_shape(coverage);
+        self.note_shape();
     }
 
     /// Records an arc band or annular sector with the rect the primitive
     /// carries.
-    pub fn push_arc(&mut self, rect: Rect, args: ArcRecordArgs<'_>) {
-        let coverage = self.shapes.push_arc(rect, args);
-        self.note_shape(coverage);
+    #[inline]
+    pub fn push_arc(&mut self, rect: Rect, args: &ArcRecordArgs<'_>) {
+        self.shapes.push_arc(rect, args);
+        self.note_shape();
     }
 
     /// Records an arc the draw scope drew, whose band the scope already
     /// normalised: the record keeps the disc around the band as its rect
     /// and derives the primitive's tight bounds only when asked.
-    pub fn push_scope_arc(&mut self, args: ArcRecordArgs<'_>, geometry: ArcGeometry) {
-        let coverage = self.shapes.push_scope_arc(args, geometry);
-        self.note_shape(coverage);
+    #[inline]
+    pub fn push_scope_arc(&mut self, args: &ArcRecordArgs<'_>, geometry: &ArcGeometry) {
+        self.shapes.push_scope_arc(args, geometry);
+        self.note_shape();
     }
 
     pub fn push_other(&mut self, primitive: DrawPrimitive) {
@@ -1575,6 +1624,17 @@ fn stroked_circle_ring(
         TAU,
         StrokeCap::Round,
     ))
+}
+
+fn union_rect(a: Rect, b: Rect) -> Rect {
+    let x = a.x.min(b.x);
+    let y = a.y.min(b.y);
+    Rect {
+        x,
+        y,
+        width: (a.x + a.width).max(b.x + b.width) - x,
+        height: (a.y + a.height).max(b.y + b.height) - y,
+    }
 }
 
 fn rect_row(rect: Rect) -> [f32; 4] {
@@ -1939,7 +1999,7 @@ mod tests {
         );
         recording.push_arc(
             rect(0.0, 0.0, 1.0, 1.0),
-            ArcRecordArgs {
+            &ArcRecordArgs {
                 brush: &solid(),
                 center: Point::new(0.0, 0.0),
                 radius: 5.0,

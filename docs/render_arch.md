@@ -721,17 +721,32 @@ zero, alternating rounds, temperature logged; the watch with the
    `push_shape`, the 112-byte record copies), trimmed to one
    `Arc::make_mut` per record, tables re-allocated at their old
    capacities when a scene still holds them, the fingerprint and the
-   fill estimate computed only when asked: scene 15.4 -> 11.6 ms.
+   fill estimate computed only when asked: scene 15.4 -> 11.6 ms. A
+   stored run's tables are then re-written only in the 4 KB chunks that
+   differ (`run_store_upload.rs`, red-proven), which the orbiting boss
+   rings do not exercise: every arc's angle changes each frame and the
+   store uploads 1.8 MB whichever way it compares. The recorder path,
+   profiled per line on the watch itself (`simpleperf record -- recbench`
+   with line tables, `annotate.py`), lost its by-value struct copies
+   through the scope layers, the division and loop in the band decision,
+   the NaN-ordering `f32::min` in the bounds (a libm call per edge on
+   armv7) and a second bounds union: 588 -> 369 ns per arc, 346 -> 289
+   per rect on the watch core; scene 11.6 -> 8.6 ms, update 16.8 ->
+   13.6.
 7. A/B/A/B against main, 30 s windows, SurfaceFlinger presented frames,
    2026-09-04. Mate 20 X: main 60.6 / 56.1 fps, branch 62.2 / 62.0 (the
    vsync; period p50 16.6 ms both runs). Pixel Watch 3, run back to
    back while it heated: main 51.3, branch 25.8, main 31.5, branch 16.4;
    the branch presents half of main's frames whatever the temperature.
-   Its frame is the CPU: update 16.2 ms (scene 11.6, the recorder over
-   17.6 k arcs) and render 8.7 against main's 10.0 and 7.3, with 1.9 MB
-   re-uploaded every frame because the arena command re-records and the
-   store compares whole tables. The next step is the recorder's cost per
-   arc and the whole-table compare, measured by simpleperf on the watch.
+   With the recorder trimmed its period stayed 28.8 ms while the update
+   stage fell from 16.2 to 13.6 ms: the frame is a chain, the update
+   thread waits on the scene, the scene waits on the render, and the
+   render's pass spends 6.8 ms p50 (`[wgpu-render-stage:run-upload]`)
+   comparing and staging the 1.9 MB the orbiting rings change every
+   frame, before the present wait of 10 ms. The next steps are
+   structural: the stored run's records written once into GPU-visible
+   memory instead of recorded, compared and staged, and the update of
+   frame n+1 overlapping the render of frame n instead of waiting on it.
    Then the showcase's exact GPU steps (interior split, shadow support
    at r, blur variants, substrate) and the material decisions, each with
    its number.

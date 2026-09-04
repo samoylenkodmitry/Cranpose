@@ -3066,9 +3066,17 @@ impl GpuRenderer {
         root_scale: f32,
     ) -> StoreRunBatch {
         let command = run.command.expect("a stored run has a command");
+        let upload_start = Instant::now();
         let (upload, fill) =
             self.run_store
                 .upload_stored(&self.device, &self.queue, run, root_scale);
+        if let Some(total_ms) = should_log_wgpu_render_stage(upload_start, Instant::now()) {
+            log::warn!(
+                "[wgpu-render-stage:run-upload] total_ms={total_ms:.2} bytes={} records={}",
+                upload.upload_bytes,
+                run.tables.shapes.len()
+            );
+        }
         self.frame_stats.record_command_stats(upload);
         if let Some(fill) = fill {
             self.frame_stats.add_shape_fill(fill);

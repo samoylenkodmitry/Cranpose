@@ -236,6 +236,12 @@ pub(crate) struct RunBuffers {
     mode: RunBufferMode,
 }
 
+/// Bytes compared at a time when a stored run's tables change, so the
+/// arena whose ball moved re-uploads the ball's chunk, not the arena.
+/// Every element size divides it or is divided by it, so a chunk edge is
+/// an element edge and a copy-aligned offset.
+const UPLOAD_CHUNK_BYTES: usize = 4096;
+
 const ELEMENT_SIZES: [usize; RUN_BINDINGS] = [
     std::mem::size_of::<ShapeRecord>(),
     std::mem::size_of::<BrushRecord>(),
@@ -292,14 +298,15 @@ impl RunBuffers {
         })
     }
 
-    /// Grows any buffer below `needed` elements and rebinds.
+    /// Grows any buffer below `needed` elements and rebinds; says, per
+    /// buffer, whether it was recreated and so holds nothing yet.
     fn ensure(
         &mut self,
         device: &wgpu::Device,
         layout: &wgpu::BindGroupLayout,
         needed: [usize; RUN_BINDINGS],
-    ) {
-        let mut rebind = false;
+    ) -> [bool; RUN_BINDINGS] {
+        let mut fresh = [false; RUN_BINDINGS];
         for index in 0..RUN_BINDINGS {
             if needed[index] > self.capacities[index] {
                 let capacity = needed[index].next_power_of_two();
@@ -310,12 +317,13 @@ impl RunBuffers {
                     mapped_at_creation: false,
                 });
                 self.capacities[index] = capacity;
-                rebind = true;
+                fresh[index] = true;
             }
         }
-        if rebind {
+        if fresh.contains(&true) {
             self.bind_group = Self::bind(device, layout, &self.buffers);
         }
+        fresh
     }
 
     fn write<T: Pod>(&self, queue: &wgpu::Queue, index: usize, data: &[T]) -> FrameCommandStats {
@@ -323,6 +331,52 @@ impl RunBuffers {
             return FrameCommandStats::default();
         }
         write_buffer(queue, &self.buffers[index], 0, bytemuck::cast_slice(data))
+    }
+
+    /// Writes what `data` changes against `previous`, the buffer's
+    /// contents: the chunks of [`UPLOAD_CHUNK_BYTES`] that differ, joined
+    /// when adjacent, and everything past the shorter table; the whole of
+    /// `data` when `fresh` says the buffer holds nothing.
+    fn write_changed<T: Pod>(
+        &self,
+        queue: &wgpu::Queue,
+        index: usize,
+        previous: &[T],
+        data: &[T],
+        fresh: bool,
+    ) -> FrameCommandStats {
+        let bytes = bytemuck::cast_slice::<T, u8>(data);
+        if fresh {
+            return write_buffer(queue, &self.buffers[index], 0, bytes);
+        }
+        let previous = bytemuck::cast_slice::<T, u8>(previous);
+        let shared = previous.len().min(bytes.len());
+        let mut stats = FrameCommandStats::default();
+        let mut pending = None;
+        let mut offset = 0;
+        while offset < shared {
+            let end = (offset + UPLOAD_CHUNK_BYTES).min(shared);
+            let changed = bytes[offset..end] != previous[offset..end];
+            match (changed, pending) {
+                (true, None) => pending = Some(offset),
+                (false, Some(from)) => {
+                    stats += write_buffer(
+                        queue,
+                        &self.buffers[index],
+                        from as u64,
+                        &bytes[from..offset],
+                    );
+                    pending = None;
+                }
+                _ => {}
+            }
+            offset = end;
+        }
+        let from = pending.unwrap_or(shared);
+        if from < bytes.len() {
+            stats += write_buffer(queue, &self.buffers[index], from as u64, &bytes[from..]);
+        }
+        stats
     }
 }
 
@@ -340,6 +394,7 @@ fn packed_bands(tables: &RecordTables) -> (Vec<[u32; 4]>, [u32; ARC_BUCKETS]) {
 pub(crate) struct StoredRun {
     pub(crate) buffers: RunBuffers,
     tables: Arc<RecordTables>,
+    bands: Vec<[u32; 4]>,
     paint: PaintKey,
     /// Where each bucket's entries start in the band table.
     pub(crate) band_bases: [u32; ARC_BUCKETS],
@@ -615,6 +670,7 @@ impl RunStore {
                 ],
             ),
             tables: Arc::new(RecordTables::default()),
+            bands: Vec::new(),
             paint,
             band_bases: [0; ARC_BUCKETS],
             fill: None,
@@ -624,14 +680,13 @@ impl RunStore {
         });
         let first_use = entry.last_used_frame == 0;
         entry.last_used_frame = frame;
-        let same_tables = !first_use
-            && (Arc::ptr_eq(&entry.tables, &run.tables) || entry.tables.same_upload(&run.tables));
         let same_paint = entry.paint == paint;
         let mut stats = FrameCommandStats::default();
-        if !same_tables {
+        let mut stops_changed = first_use;
+        if first_use || !Arc::ptr_eq(&entry.tables, &run.tables) {
             let tables = &*run.tables;
             let (bands, bases) = packed_bands(tables);
-            entry.buffers.ensure(
+            let fresh = entry.buffers.ensure(
                 device,
                 layout,
                 [
@@ -642,13 +697,32 @@ impl RunStore {
                     DUMMY_VEC4S,
                 ],
             );
-            stats += entry.buffers.write(queue, 0, &tables.shapes);
-            stats += entry.buffers.write(queue, 1, &tables.brushes);
-            stats += entry.buffers.write(queue, 3, &bands);
+            let previous = &*entry.tables;
+            stats += entry.buffers.write_changed(
+                queue,
+                0,
+                &previous.shapes,
+                &tables.shapes,
+                first_use || fresh[0],
+            );
+            stats += entry.buffers.write_changed(
+                queue,
+                1,
+                &previous.brushes,
+                &tables.brushes,
+                first_use || fresh[1],
+            );
+            stats +=
+                entry
+                    .buffers
+                    .write_changed(queue, 3, &entry.bands, &bands, first_use || fresh[3]);
+            stops_changed |= fresh[2] || previous.stops != tables.stops;
+            entry.bands = bands;
             entry.band_bases = bases;
             entry.tables = Arc::clone(&run.tables);
         }
-        if !same_tables || !same_paint {
+        let changed = stats.upload_bytes > 0 || stops_changed;
+        if stops_changed || !same_paint {
             painted_stops(
                 &run.tables.stops,
                 &paint_layer(&run.placement),
@@ -661,7 +735,7 @@ impl RunStore {
             run.placement.offset.x.to_bits(),
             run.placement.offset.y.to_bits(),
         ];
-        if !same_tables
+        if changed
             || entry.fill_scale_bits != root_scale.to_bits()
             || entry.fill_offset_bits != offset_bits
         {
