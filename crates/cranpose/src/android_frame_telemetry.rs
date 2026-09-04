@@ -32,7 +32,7 @@ fn property_flag(name: &str) -> bool {
     }
 }
 
-const PROPERTY_BACKED_ENV_VARS: [(&str, &str); 24] = [
+const PROPERTY_BACKED_ENV_VARS: [(&str, &str); 25] = [
     ("debug.cranpose.recomp_diag", "CRANPOSE_RECOMP_DIAG"),
     (
         "debug.cranpose.layout_ms",
@@ -50,6 +50,10 @@ const PROPERTY_BACKED_ENV_VARS: [(&str, &str); 24] = [
         "CRANPOSE_COMPOSITION_8BIT",
     ),
     ("debug.cranpose.skip_shadows", "CRANPOSE_SKIP_SHADOWS"),
+    (
+        "debug.cranpose.shadow_cache_diag",
+        "CRANPOSE_GPU_SHADOW_CACHE_DIAG",
+    ),
     ("debug.cranpose.a11y_sync", "CRANPOSE_A11Y_SYNC"),
     ("debug.cranpose.present_thread", "CRANPOSE_PRESENT_THREAD"),
     ("debug.cranpose.adpf", "CRANPOSE_ADPF"),

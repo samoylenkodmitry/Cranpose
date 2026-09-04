@@ -726,7 +726,33 @@ surface went from 618 x 423 to 431 x 226 device pixels, and the
 presented frame did not move on either device (watch 15.7-16.2 against
 15.0-16.7, Mate 23.2 against 23.3), so that surface was not the cost
 and the frame's 14-15 passes over 2.3 MP on the frames that carry the
-card are. Not cropped: a cached child
+card are. The watch has GPU timestamps, so the frame was then read per
+pass (`passes_watch.sh`, `debug.cranpose.pass_timing`): 49-61 ms of GPU
+a frame, of which the layer passes (5-6 a frame) 25-38 ms, the vertical
+blur passes (3.1 a frame) 18-20, the horizontal 1.7, everything else
+under 3. A constant liquid-glass fragment takes the layer passes to
+10.7-11.0 and the frame to 31-35 ms, so the glass material is 15-27 ms
+of the watch's frame over 0.34 MP; shadows off takes the vertical blur
+to 11.6-11.9 and the blur passes from 3.1 to 2.8 a frame, so the one
+shadow that misses its cache every frame (`shadow_cache: shape_miss=1`)
+re-blurs ~0.24 MP at full size for ~7 ms a frame. The shadow cache
+diagnostic (`debug.cranpose.shadow_cache_diag`, wired to the property
+table for this) names it: a card-sized shape shadow whose pixel radius
+runs 44.0 to 45.3 with its size in step, a 3% uniform scale, the press
+animation of the card a swipe touches, which re-renders the card, its
+shadow and its glass at each scale exactly, as this renderer's grid
+placement promises; main resampled a scaled surface instead. The
+steady scroll frame without a press is 4-6 passes over 0.8-1.2 MP and
+still ~35-45 ms of GPU: the glass ~20, the stage blurs ~12, the page
+~11. Read for an exact cut, `liquid_glass.wgsl` offers little: its transmitted path is 25 taps
+(81 in loupe mode) whenever the optical blur is on, each dispersion
+channel 25 more, the frost 9, the reflection 5; only the reflection's
+weights (`meniscus_reflection`, `bevel_reflection`) are exactly zero
+past the rim bands, so a guarded interior skips 5 taps of 40 to 90 bit
+for bit, and the rest is the material as specified. Everything larger
+(the frost from a quarter-resolution source, the interior below full
+resolution, one glass surface per card) changes pixels and is a
+material decision, not a renderer one. Not cropped: a cached child
 (its full surface is what makes a partly visible scrolling card a hit,
 so the window stays out of its key), and a child under an unbatched
 `RuntimeShader`, whose contract hands the shader the whole texture and
