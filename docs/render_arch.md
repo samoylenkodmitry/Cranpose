@@ -536,6 +536,8 @@ zero, alternating rounds, temperature logged.
 2. Page usage ablation on the showcase. Done, no gain: an offscreen page
    and a blit (7 passes, 17 MP) presents at 23.9-24.0 fps against the
    direct root's 24.0-24.5; the GL difference is not the page's usage.
+   The toggle that measured it is gone; the number lives in
+   `TIME_WASTERS.md`.
 3. Shape pipelines per (blend mode, stage, variant). Done: +1.7 ms on
    cranorbit's arena from folding the clip alone; the arena's batch is
    mixed, so its kinds cannot fold without splitting the batch, and the

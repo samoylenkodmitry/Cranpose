@@ -598,9 +598,9 @@ behind an 8 ms present column). Two alternating rounds, temperature logged.
 
 ## The swapchain image's usage is not what makes the showcase slower on Vulkan than GL
 
-`debug.cranpose.direct_root 0` renders into an offscreen 8-bit page and blits
-it (two more full-page passes): 23.9-24.0 fps against 24.0-24.5 direct, two
-alternating rounds (2026-09-04). Framebuffer compression on the swapchain
+Rendering into an offscreen 8-bit page and blitting it (two more full-page
+passes, a temporary toggle on `presentable_root_usages`) measured 23.9-24.0
+fps against 24.0-24.5 direct, two alternating rounds (2026-09-04). Framebuffer compression on the swapchain
 image is not the ten milliseconds GL saves on this driver; do not spend time
 on the page's usage flags.
 

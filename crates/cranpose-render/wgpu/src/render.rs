@@ -2357,8 +2357,7 @@ const DIRECT_SURFACE_ROOT_USAGES: wgpu::TextureUsages = wgpu::TextureUsages::REN
 /// all; a partial set falls back to the composition copy, so nothing is
 /// requested in that case beyond rendering.
 pub fn presentable_root_usages(supported: wgpu::TextureUsages) -> wgpu::TextureUsages {
-    let direct = crate::debug_toggles::debug_toggle("CRANPOSE_DIRECT_ROOT").as_deref() != Some("0");
-    if direct && supported.contains(DIRECT_SURFACE_ROOT_USAGES) {
+    if supported.contains(DIRECT_SURFACE_ROOT_USAGES) {
         DIRECT_SURFACE_ROOT_USAGES
     } else {
         wgpu::TextureUsages::RENDER_ATTACHMENT
