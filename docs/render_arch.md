@@ -774,6 +774,53 @@ pass-budget test moved to the new budget, then 4's probes. No number
 is forecast here; the draft's forecasts rested on a pass model that
 counted blur pairs the renderer already shares.
 
+**Candidates from a second reviewer (astra, 2026-09-05,
+`codex_review7.out`), ranked by its impact per week; its numbers are
+acceptance targets, not measurements, and they overlap.**
+
+- *Compile the blur's resampling kernel, resize phase included* (~1
+  week): the vertical pass reads the reduced scratch and writes full
+  size (`effect_renderer.rs`, `blur_fs.wgsl` spaces its paired taps in
+  destination pixels), so at 4x many fetches interpolate the same
+  scratch rows; expanding the bilinear fetches into source-texel
+  weights, merging repeats and re-pairing takes a 13-25 fetch interior
+  to ~4-8 and drops the fragment's weight arithmetic. Contract: the
+  same footprint, capture z, tile modes and decal normalisation, at
+  most one 8-bit level from the reference, the scroll-stability
+  contract intact. Target: 4-8 ms of the watch showcase's GPU, 2-4 on
+  the Mate; measure on frozen captures first, then the scroll.
+- *Native instance attributes as a record delivery path* (2-3 days): an
+  instance-step vertex layout over the record buffer instead of
+  storage pulls in the vertex stage, same bits, same arithmetic, all
+  goldens byte-identical; a probe of the tiler's attribute path. Keep
+  only if it takes 2 ms off the watch arena pass; a nil result closes
+  the layout question rather than opening more variants.
+- *Optical groups* (~2 weeks): one glass surface per card with its
+  buttons as lens parameters inside it, declared in `render_effect.rs`
+  and lowered through `collect.rs` and `frame.rs`, so a button no
+  longer captures and blurs the already-composited card. A material
+  and API decision that changes pixels by design (reference images to
+  approve); worth it only if captures, blur texels and glass fragments
+  disappear in the count. Target 8-15 ms watch, 5-8 Mate.
+- *Retain the execution plan across scrolling frames* (2-3 weeks):
+  keep the layer event order, dependency edges, batches and atlas
+  decisions in `frame.rs`, with topology, footprint, placement and
+  content on separate revisions, and patch placements per frame;
+  target planning of 2-4 ms on the watch (4-6 ms off), latency and
+  thermal headroom before fps.
+- *Ordered tile compute for dense commands* (4-6 weeks, cranorbit
+  only): conservative arc-to-tile lists in recording order, each tile
+  evaluating coverage and blending locally, the raster path kept for
+  WebGL and sparse scenes; hurdle 12-14 ms total GPU for the watch
+  arena including list building, and the attachment's per-draw
+  quantisation and colour conversion reproduced, not accumulated in
+  float and rounded once.
+
+The first two are probes that fit before step 3 above and do not
+disturb it; the optical group is the one that reaches the showcase's
+watch number and is the user's material call; the plan retention is
+the CPU side's proper shape once the GPU side is known.
+
 ## Order
 
 Every step ships with its contract proven red first, the robot suite
