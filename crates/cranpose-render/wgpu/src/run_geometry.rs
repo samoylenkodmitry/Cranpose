@@ -1,11 +1,11 @@
 use cranpose_ui_graphics::{
-    BAND_ANGULAR_PAD, BAND_MARGIN, FRAGMENT_KIND_ARC, Point, QUAD_VERTICES, RecordTables,
-    ShapeRecord, TAU,
+    BAND_MARGIN, FRAGMENT_KIND_ARC, Point, QUAD_VERTICES, RecordLane, RecordTables, ShapeRecord,
+    band_class_segments, strip_vertices,
 };
 
 /// The strip a banded arc rasterizes as: `segments` quads between the
 /// padded inner circle and a polygon circumscribing the padded outer
-/// circle, over the padded sweep. Mirrors `vs_band` in `shape.wgsl`: the
+/// circle, over the padded sweep. Mirrors `band_position` in `shape.wgsl`: the
 /// fill estimate and the coverage proof read the same geometry the GPU
 /// draws.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -26,26 +26,12 @@ impl BandStrip {
         ];
         let inner = record.arc_band[2] * scale;
         let outer = record.arc_band[3] * scale;
-        let start = record.arc_normalized[0];
-        let sweep = record.arc_normalized[1];
         let mid = (outer + inner) * 0.5;
         let ring_half = ((outer - inner) * 0.5).max(0.0) + BAND_MARGIN;
         let outer_padded = mid + ring_half;
         let inner_padded = (mid - ring_half).max(0.0);
-        let mut range_start = 0.0;
-        let mut range = TAU;
-        if sweep < TAU {
-            let pad = if ring_half < mid {
-                (ring_half / mid).asin() + BAND_ANGULAR_PAD
-            } else {
-                std::f32::consts::PI
-            };
-            let padded = sweep + pad + pad;
-            if padded < TAU {
-                range_start = start - pad;
-                range = padded;
-            }
-        }
+        let range_start = record.arc_normalized[2];
+        let range = record.arc_normalized[3];
         let step = range / segments as f32;
         Self {
             center,
@@ -57,22 +43,16 @@ impl BandStrip {
         }
     }
 
-    /// The `segments` quads' triangles the GPU draws, six vertices each.
-    fn vertex_count(&self) -> u32 {
-        self.segments * QUAD_VERTICES
-    }
-
-    /// The device position of strip vertex `index`, as `vs_band` places it.
+    /// The device position of strip vertex `index`, as `band_position`
+    /// places it: boundary `index / 2`, outer when odd.
     #[cfg(test)]
     fn vertex(&self, index: u32) -> [f32; 2] {
-        let segment = index / 6;
-        let (boundary, radius) = match index % 6 {
-            1 => (segment, self.outer_vertex),
-            2 | 4 => (segment + 1, self.outer_vertex),
-            5 => (segment + 1, self.inner),
-            _ => (segment, self.inner),
+        let radius = if index % 2 == 1 {
+            self.outer_vertex
+        } else {
+            self.inner
         };
-        let angle = self.range_start + self.step * boundary as f32;
+        let angle = self.range_start + self.step * (index / 2) as f32;
         let (sin, cos) = angle.sin_cos();
         [self.center[0] + cos * radius, self.center[1] + sin * radius]
     }
@@ -89,19 +69,29 @@ impl BandStrip {
         quad * f64::from(self.segments)
     }
 
-    /// The area summed over the strip's triangles, the slow form the
-    /// analytic one must equal.
+    /// The triangles the strip's index pattern draws, in device space.
+    #[cfg(test)]
+    fn triangles(&self) -> Vec<[[f32; 2]; 3]> {
+        let indices: Vec<u32> = cranpose_ui_graphics::strip_index_pattern(self.segments).collect();
+        indices
+            .chunks(3)
+            .map(|triangle| {
+                [
+                    self.vertex(triangle[0]),
+                    self.vertex(triangle[1]),
+                    self.vertex(triangle[2]),
+                ]
+            })
+            .collect()
+    }
+
+    /// The area summed over the triangles the strip's index pattern
+    /// draws, the slow form the analytic one must equal.
     #[cfg(test)]
     fn triangle_area_sum(&self) -> f64 {
-        (0..self.vertex_count())
-            .step_by(3)
-            .map(|first| {
-                triangle_area(
-                    self.vertex(first),
-                    self.vertex(first + 1),
-                    self.vertex(first + 2),
-                )
-            })
+        self.triangles()
+            .into_iter()
+            .map(|[a, b, c]| triangle_area(a, b, c))
             .sum()
     }
 }
@@ -155,33 +145,42 @@ impl ShapeFill {
         record.fragment_kind() as usize * 2 + usize::from(record.is_gradient())
     }
 
-    /// Counts one record: its strip when `bands` draw it and it is banded,
-    /// its quad otherwise; a degenerate arc draws nothing.
+    /// Counts one record drawn in a segment of `class_segments` strip
+    /// segments, or as a quad on the uniform floor: the pixels of its
+    /// strip when it is banded and bands draw, of its quad otherwise, and
+    /// the vertices the draw invokes for it, the segment's stride, which
+    /// its own strip may leave pinned. A degenerate arc draws nothing.
     pub(crate) fn add_record(
         &mut self,
         record: &ShapeRecord,
         offset: Point,
         scale: f32,
-        bands: bool,
+        class_segments: Option<u32>,
     ) {
         if record.is_degenerate_arc() {
             return;
         }
-        let (pixels, vertices) = if bands && record.is_banded() {
-            let strip = BandStrip::of(record, offset, scale, record.band_segments());
-            (strip.area(), strip.vertex_count())
+        let pixels = if class_segments.is_some() && record.is_banded() {
+            BandStrip::of(record, offset, scale, record.band_segments()).area()
         } else {
-            (quad_area(record, scale), QUAD_VERTICES)
+            quad_area(record, scale)
         };
         self.pixels[Self::class(record)] += pixels;
-        self.vertices += vertices as u64;
+        self.vertices += u64::from(class_segments.map_or(QUAD_VERTICES, strip_vertices));
     }
 
-    /// The fill of `tables` under `offset` at `scale`.
+    /// The fill of `tables` under `offset` at `scale`, segment by segment
+    /// so each record is charged the stride it is drawn at.
     pub(crate) fn of_tables(tables: &RecordTables, offset: Point, scale: f32, bands: bool) -> Self {
         let mut fill = Self::default();
-        for record in &tables.shapes {
-            fill.add_record(record, offset, scale, bands);
+        for segment in &tables.segments {
+            if segment.lane != RecordLane::Shapes {
+                continue;
+            }
+            let class_segments = bands.then(|| band_class_segments(segment.band_class));
+            for record in &tables.shapes[segment.range()] {
+                fill.add_record(record, offset, scale, class_segments);
+            }
         }
         fill
     }
@@ -195,6 +194,7 @@ impl ShapeFill {
 mod tests {
     use cranpose_ui_graphics::{
         ARC_BAND_MIN_RADIUS, Brush, Color, DrawScope, DrawScopeDefault, Size, Stroke, StrokeCap,
+        TAU,
     };
 
     use super::*;
@@ -212,14 +212,10 @@ mod tests {
     }
 
     fn strip_covers(strip: &BandStrip, point: [f32; 2]) -> bool {
-        (0..strip.vertex_count()).step_by(3).any(|first| {
-            inside_triangle(
-                point,
-                strip.vertex(first),
-                strip.vertex(first + 1),
-                strip.vertex(first + 2),
-            )
-        })
+        strip
+            .triangles()
+            .into_iter()
+            .any(|[a, b, c]| inside_triangle(point, a, b, c))
     }
 
     fn sdf_arc_band(p: [f32; 2], record: &ShapeRecord, scale: f32) -> f32 {
@@ -313,18 +309,38 @@ mod tests {
             scope.draw_annular_sector(brush.clone(), center, 100.0, 140.0, 1.0, 0.4);
             scope.draw_annular_sector(brush.clone(), center, 12.0, 30.0, 2.0, 3.0);
             scope.draw_arc(
-                brush,
+                brush.clone(),
                 Point::new(100.0, 100.0),
                 ARC_BAND_MIN_RADIUS,
                 0.0,
                 TAU,
                 Stroke::new(2.0),
             );
+            scope.draw_annular_sector(brush.clone(), center, 10.0, 30.0, 0.7, 0.3);
+            scope.draw_arc(brush.clone(), center, 80.0, 5.0, 0.2, Stroke::new(2.0));
+            scope.draw_arc(
+                brush.clone(),
+                center,
+                60.0,
+                2.0,
+                0.15,
+                Stroke::new(14.0).with_cap(StrokeCap::Square),
+            );
+            scope.draw_arc(
+                brush,
+                center,
+                40.0,
+                3.0,
+                0.5,
+                Stroke::new(16.0).with_cap(StrokeCap::Round),
+            );
         });
         let banded: Vec<bool> = records.iter().map(ShapeRecord::is_banded).collect();
         assert_eq!(
             banded,
-            [true, true, true, true, true, true, false],
+            [
+                true, true, true, true, true, true, false, true, true, true, true
+            ],
             "the ring at the smallest band radius costs more as a strip than as \
              its quad once its vertices are charged"
         );
@@ -357,33 +373,45 @@ mod tests {
 
     #[test]
     fn the_fill_estimate_counts_strips_for_bands_and_quads_for_the_rest() {
-        let records = recorded_arcs(|scope| {
-            scope.draw_arc(
-                Brush::solid(Color::WHITE),
-                Point::new(300.0, 300.0),
-                200.0,
-                0.0,
-                TAU,
-                Stroke::new(4.0),
-            );
-            scope.draw_rect_at(
-                cranpose_ui_graphics::Rect {
-                    x: 0.0,
-                    y: 0.0,
-                    width: 10.0,
-                    height: 20.0,
-                },
-                Brush::solid(Color::WHITE),
-            );
-        });
-        let mut tables = RecordTables::default();
-        tables.shapes = records.clone();
-        let banded = ShapeFill::of_tables(&tables, Point::default(), 1.0, true);
-        let quads = ShapeFill::of_tables(&tables, Point::default(), 1.0, false);
+        let mut scope = DrawScopeDefault::new(Size::new(600.0, 600.0));
+        scope.draw_arc(
+            Brush::solid(Color::WHITE),
+            Point::new(300.0, 300.0),
+            200.0,
+            0.0,
+            TAU,
+            Stroke::new(4.0),
+        );
+        scope.draw_rect_at(
+            cranpose_ui_graphics::Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 10.0,
+                height: 20.0,
+            },
+            Brush::solid(Color::WHITE),
+        );
+        let recording = scope.finish();
+        let tables = recording.tables();
+        let banded = ShapeFill::of_tables(tables, Point::default(), 1.0, true);
+        let quads = ShapeFill::of_tables(tables, Point::default(), 1.0, false);
         assert_eq!(banded.pixels[0], 200.0);
         assert_eq!(quads.pixels[0], 200.0);
         assert!(banded.pixels[4] < 2.0 * 6284.0 * 8.0);
         assert!(quads.pixels[4] > 150_000.0);
         assert_eq!(banded.total(), banded.pixels[0] + banded.pixels[4]);
+        let [segment] = tables.segments.as_slice() else {
+            panic!(
+                "the ring and the rect share one segment: {:?}",
+                tables.segments
+            );
+        };
+        assert_eq!(
+            banded.vertices,
+            2 * u64::from(strip_vertices(band_class_segments(segment.band_class))),
+            "every record of a segment is charged the stride the segment draws at, the rect's \
+             pinned vertices included"
+        );
+        assert_eq!(quads.vertices, 2 * u64::from(QUAD_VERTICES));
     }
 }

@@ -52,7 +52,7 @@ use crate::{
     offscreen::{OffscreenTarget, composition_bytes_per_pixel, composition_format},
     output_conversion::OutputConverter,
     rect_to_quad,
-    run_store::{PlacementData, RunBufferMode, RunDrawCall, RunStore, stored_run_draws},
+    run_store::{PlacementData, RunBufferMode, RunDrawCall, RunStore},
     scene::{
         CompositorScene, DrawOp, DrawOpKind, ImageDraw, RunDraw, ShadowDraw, SnapAnchor, TextDraw,
     },
@@ -947,8 +947,9 @@ fn shape_variants_enabled() -> bool {
 pub(crate) struct ShapePipelineKey {
     pub(crate) blend_mode: BlendMode,
     pub(crate) tier: RunTier,
-    /// The arc bucket a band pipeline draws; `None` draws quads.
-    pub(crate) band: Option<u8>,
+    /// The band class whose strip segments are every record's vertex
+    /// budget in this pipeline; class zero draws one quad per record.
+    pub(crate) band_class: u8,
     pub(crate) variant: ShapeVariant,
 }
 
@@ -964,7 +965,7 @@ fn create_shape_pipeline(
     let ShapePipelineKey {
         blend_mode,
         tier,
-        band,
+        band_class,
         variant,
     } = key;
     let constants = [
@@ -975,17 +976,15 @@ fn create_shape_pipeline(
         ("SHAPE_BANDS", f64::from(u8::from(mode.storage))),
         (
             "BAND_SEGMENTS",
-            f64::from(band.map_or(ARC_BUCKET_SEGMENTS[0], |bucket| {
-                ARC_BUCKET_SEGMENTS[bucket as usize]
-            })),
+            f64::from(ARC_BUCKET_SEGMENTS[band_class as usize]),
         ),
-        ("SHAPE_BAND", f64::from(u8::from(band.is_some()))),
     ];
-    let vertex_entry = if band.is_some() {
-        "vs_band"
+    let vertex_entry = if variant.solid {
+        "vs_record_solid"
     } else {
         "vs_record"
     };
+    let fragment_entry = if variant.solid { "fs_solid" } else { "fs_main" };
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("Shape Shader"),
         source: wgpu::ShaderSource::Wgsl(shape_shader_source(mode)),
@@ -1000,7 +999,7 @@ fn create_shape_pipeline(
     create_render_pipeline_logged(
         device,
         cache,
-        &format!("shape blend={blend_mode:?} tier={tier:?} band={band:?} variant={variant:?}"),
+        &format!("shape blend={blend_mode:?} tier={tier:?} class={band_class} variant={variant:?}"),
         wgpu::RenderPipelineDescriptor {
             label: Some("Shape Pipeline"),
             layout: Some(&pipeline_layout),
@@ -1015,7 +1014,7 @@ fn create_shape_pipeline(
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: Some("fs_main"),
+                entry_point: Some(fragment_entry),
                 compilation_options: wgpu::PipelineCompilationOptions {
                     constants: &constants,
                     ..wgpu::PipelineCompilationOptions::default()
@@ -3047,12 +3046,12 @@ impl GpuRenderer {
         segment: &RecordSegment,
         clipped: bool,
         tier: RunTier,
-        band: Option<usize>,
+        mode: RunBufferMode,
     ) -> ShapePipelineKey {
         ShapePipelineKey {
             blend_mode: supported_blend_mode(segment.blend),
             tier,
-            band: band.map(|bucket| bucket as u8),
+            band_class: if mode.storage { segment.band_class } else { 0 },
             variant: ShapeVariant::of_segment(segment, clipped),
         }
     }
@@ -3091,14 +3090,11 @@ impl GpuRenderer {
                 .claim(&self.device, &self.uniform_bind_group_layout, &uniforms);
         let clipped = run.placement.clip.is_some();
         let mut draws = SmallVec::new();
-        let stored = self
-            .run_store
-            .stored(&command)
-            .expect("the run was just uploaded");
-        stored_run_draws(
-            stored,
+        let mode = self.run_store.mode();
+        self.run_store.stored_run_draws(
+            &self.device,
             run,
-            &mut |segment, bucket| Self::run_pipeline_key(segment, clipped, RunTier::Store, bucket),
+            &mut |segment| Self::run_pipeline_key(segment, clipped, RunTier::Store, mode),
             &mut draws,
         );
         for draw in &draws {
@@ -3129,16 +3125,17 @@ impl GpuRenderer {
         root_scale: f32,
     ) -> u32 {
         let clipped = run.placement.clip.is_some();
+        let mode = self.run_store.mode();
         let mut keys: SmallVec<[ShapePipelineKey; 4]> = SmallVec::new();
-        let taken =
-            self.run_store
-                .append_arena(chunk, run, from, root_scale, &mut |segment, bucket| {
-                    let key = Self::run_pipeline_key(segment, clipped, RunTier::Arena, bucket);
-                    if !keys.contains(&key) {
-                        keys.push(key);
-                    }
-                    key
-                });
+        let taken = self
+            .run_store
+            .append_arena(chunk, run, from, root_scale, &mut |segment| {
+                let key = Self::run_pipeline_key(segment, clipped, RunTier::Arena, mode);
+                if !keys.contains(&key) {
+                    keys.push(key);
+                }
+                key
+            });
         for key in keys {
             self.ensure_shape_pipeline(key);
         }
@@ -3177,13 +3174,23 @@ impl GpuRenderer {
             &[self.viewport_uniforms.dynamic_offset(uniform_slot)?],
         );
         pass.set_bind_group(1, tables, &[]);
+        let mut bound_class = None;
         for draw in draws {
             let pipeline = self
                 .shape_pipelines
                 .get(&draw.key)
                 .ok_or_else(|| format!("shape pipeline {:?} was not prepared", draw.key))?;
+            if bound_class != Some(draw.key.band_class) {
+                pass.set_index_buffer(
+                    self.run_store
+                        .strip_index_buffer(draw.key.band_class)
+                        .slice(..),
+                    wgpu::IndexFormat::Uint32,
+                );
+                bound_class = Some(draw.key.band_class);
+            }
             pass.set_pipeline(pipeline);
-            pass.draw(draw.vertices.clone(), 0..1);
+            pass.draw_indexed(draw.indices(), 0, draw.records.clone());
         }
         Ok(())
     }

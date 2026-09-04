@@ -184,3 +184,88 @@ fn a_banded_ring_matches_the_ring_drawn_in_clipped_halves() {
         stats.differing_pixels, stats.max_difference, stats.first_difference
     );
 }
+
+/// A quad that shares a draw with a wide ring is instanced over the ring's
+/// strip pattern, its vertices past its four corners pinned onto its last
+/// corner; a pinned vertex anywhere else would draw a real triangle from
+/// the quad's edge and blend the translucent quad's pixels twice.
+#[test]
+fn a_translucent_quad_sharing_a_draw_with_a_wide_ring_blends_once() {
+    let mut renderer = match support::headless_renderer() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!("skipping band pinning: {err}");
+            return;
+        }
+    };
+    let veil = || {
+        primitive(
+            DrawPrimitive::Rect {
+                rect: rect(20.0, 20.0, 120.0, 90.0),
+                brush: Brush::solid(Color(0.9, 0.3, 0.2, 0.5)),
+                stroke: None,
+            },
+            None,
+        )
+    };
+    let with_ring = capture(&mut renderer, frame_of(vec![ring(None), veil()]));
+    let alone = capture(&mut renderer, frame_of(vec![veil()]));
+    let mut differing = 0u32;
+    for y in 0..FRAME {
+        for x in 0..FRAME {
+            let dx = x as f32 + 0.5 - CENTER;
+            let dy = y as f32 + 0.5 - CENTER;
+            let on_ring = ((dx * dx + dy * dy).sqrt() - RADIUS).abs() < STROKE + 2.0;
+            if !on_ring && pixel(&with_ring, x, y) != pixel(&alone, x, y) {
+                differing += 1;
+            }
+        }
+    }
+    assert_eq!(
+        differing, 0,
+        "pixels off the ring differ between the veil drawn beside the ring and alone"
+    );
+}
+
+fn pixel(frame: &CapturedFrame, x: u32, y: u32) -> [u8; 4] {
+    let at = ((y * FRAME + x) * 4) as usize;
+    [
+        frame.pixels[at],
+        frame.pixels[at + 1],
+        frame.pixels[at + 2],
+        frame.pixels[at + 3],
+    ]
+}
+
+/// Records draw in the order they were recorded whatever geometry each
+/// takes: a rect recorded after a band-drawn ring covers the ring where
+/// they overlap, exactly as it does when the ring draws as its disc.
+#[test]
+fn a_rect_recorded_after_a_banded_ring_covers_it() {
+    let mut renderer = match support::headless_renderer() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!("skipping band order: {err}");
+            return;
+        }
+    };
+    let cover = primitive(
+        DrawPrimitive::Rect {
+            rect: rect(CENTER + RADIUS - 40.0, CENTER - 40.0, 80.0, 80.0),
+            brush: Brush::solid(Color::from_rgb_u8(200, 40, 40)),
+            stroke: None,
+        },
+        None,
+    );
+    let frame = capture(&mut renderer, frame_of(vec![ring(None), cover]));
+    let on_ring = pixel(&frame, (CENTER + RADIUS) as u32, CENTER as u32);
+    assert!(
+        on_ring[0] > 150 && on_ring[1] < 100,
+        "the rect recorded after the ring must cover it: saw {on_ring:?}"
+    );
+    let ring_only = pixel(&frame, (CENTER - RADIUS) as u32, CENTER as u32);
+    assert!(
+        ring_only[1] > 150,
+        "the ring must still draw where nothing covers it: saw {ring_only:?}"
+    );
+}

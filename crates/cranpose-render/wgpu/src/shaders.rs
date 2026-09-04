@@ -13,9 +13,9 @@ pub const SDF_ROUNDED_RECT_FN: &str =
 pub const COMPOSITE_SAMPLE_FN: &str =
     cranpose_ui_graphics::framework_shaders::COMPOSITE_SAMPLE_FN_WGSL;
 
-/// The five run-table declarations of `shape.wgsl` in their uniform form,
+/// The four run-table declarations of `shape.wgsl` in their uniform form,
 /// each paired with the storage form the native pipelines rewrite it to.
-pub(crate) const RUN_TABLE_DECLARATIONS: [(&str, &str); 5] = [
+pub(crate) const RUN_TABLE_DECLARATIONS: [(&str, &str); 4] = [
     (
         "var<uniform> records: array<ShapeRecord, 128>;",
         "var<storage, read> records: array<ShapeRecord>;",
@@ -27,10 +27,6 @@ pub(crate) const RUN_TABLE_DECLARATIONS: [(&str, &str); 5] = [
     (
         "var<uniform> gradient_stops: array<GradientStop, 256>;",
         "var<storage, read> gradient_stops: array<GradientStop>;",
-    ),
-    (
-        "var<uniform> band_records: array<vec4<u32>, 4>;",
-        "var<storage, read> band_records: array<vec4<u32>>;",
     ),
     (
         "var<uniform> placements: array<Placement, 64>;",
@@ -196,14 +192,16 @@ mod tests {
 
     #[test]
     fn shape_shader_validates_for_webgl() {
-        for entry in ["vs_record", "vs_band"] {
+        for entry in ["vs_record", "vs_record_solid"] {
             if let Err(err) = validate_glsl_portability(super::SHADER, entry, ShaderStage::Vertex) {
                 panic!("shape.wgsl `{entry}` must lower to GLSL ES 300: {err}");
             }
         }
-        if let Err(err) = validate_glsl_portability(super::SHADER, "fs_main", ShaderStage::Fragment)
-        {
-            panic!("shape.wgsl fragment stage must lower to GLSL ES 300: {err}");
+        for entry in ["fs_main", "fs_solid"] {
+            if let Err(err) = validate_glsl_portability(super::SHADER, entry, ShaderStage::Fragment)
+            {
+                panic!("shape.wgsl `{entry}` must lower to GLSL ES 300: {err}");
+            }
         }
     }
 
@@ -239,18 +237,24 @@ mod tests {
 
     #[test]
     fn shape_fragment_inputs_fit_the_gles_varying_floor() {
-        let entry_point = "fs_main";
-        let locations = fragment_input_locations(super::SHADER, entry_point);
-        let highest = locations.last().copied().expect("fragment inputs");
-        assert!(
-            highest < GLES_VARYING_VECTOR_FLOOR,
-            "{entry_point} reads location {highest}; GLSL ES 3.0 only guarantees \
-             {GLES_VARYING_VECTOR_FLOOR} varying vectors, so every location must \
-             stay below it: {locations:?}"
+        for entry_point in ["fs_main", "fs_solid"] {
+            let locations = fragment_input_locations(super::SHADER, entry_point);
+            let highest = locations.last().copied().expect("fragment inputs");
+            assert!(
+                highest < GLES_VARYING_VECTOR_FLOOR,
+                "{entry_point} reads location {highest}; GLSL ES 3.0 only guarantees \
+                 {GLES_VARYING_VECTOR_FLOOR} varying vectors, so every location must \
+                 stay below it: {locations:?}"
+            );
+            let mut deduplicated = locations.clone();
+            deduplicated.dedup();
+            assert_eq!(deduplicated, locations, "{entry_point} reuses a location");
+        }
+        assert_eq!(
+            fragment_input_locations(super::SHADER, "fs_solid").len(),
+            8,
+            "a solid batch carries the coverage vectors and nothing of the brush"
         );
-        let mut deduplicated = locations.clone();
-        deduplicated.dedup();
-        assert_eq!(deduplicated, locations, "{entry_point} reuses a location");
     }
 
     #[test]
@@ -263,10 +267,11 @@ mod tests {
             "fn sdf_arc_band(",
             "fn sdf_stroked_rounded_rect(",
             "fn vs_record(",
-            "fn vs_band(",
+            "fn vs_record_solid(",
+            "fn band_position(",
+            "fn fs_solid(",
             "override TIER_ARENA: bool",
             "override BAND_SEGMENTS: u32",
-            "override SHAPE_BAND: bool",
         ] {
             assert!(
                 super::SHADER.contains(needle),

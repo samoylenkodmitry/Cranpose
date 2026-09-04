@@ -1,6 +1,6 @@
 use std::{
     cell::OnceCell,
-    hash::Hasher,
+    hash::{Hash, Hasher},
     ops::Range,
     sync::{Arc, OnceLock},
 };
@@ -28,6 +28,8 @@ const BAND_CAP_SHIFT: u32 = 16;
 const ARC_DEGENERATE_BIT: u32 = 1 << 18;
 const ARC_RECT_LOOSE_BIT: u32 = 1 << 19;
 const ARC_BANDED_BIT: u32 = 1 << 20;
+const BAND_CLASS_SHIFT: u32 = 21;
+const BAND_CLASS_MASK: u32 = 0b111;
 const NO_SEGMENT_KEY: u32 = u32::MAX;
 
 /// How many segment-count buckets band-drawn arcs fall into: one per
@@ -62,14 +64,47 @@ pub const ARC_BAND_MIN_RADIUS: f32 = 11.0;
 /// a disc: its strip would be the whole disc's quad and more.
 pub const ARC_BAND_MIN_INNER_RADIUS: f32 = 1.0;
 /// The pixels a band's strip extends past the ring on each side, so the
-/// edge the fragment stage anti-aliases lies inside the strip. `vs_band`
+/// edge the fragment stage anti-aliases lies inside the strip. `band_position`
 /// in `shape.wgsl` pads by the same amount.
 pub const BAND_MARGIN: f32 = 1.0;
 /// The radians a band's strip extends past each end of its sweep beyond
-/// the margin's own angle; `vs_band` pads by the same amount.
-pub const BAND_ANGULAR_PAD: f32 = 0.05;
-/// Vertices of one quad drawn as two triangles.
-pub const QUAD_VERTICES: u32 = 6;
+/// the angle the ring's padded half-width subtends at its padded inner
+/// radius, which covers every cap and the margin; float slack only.
+/// `band_position` pads by the same amount.
+pub const BAND_ANGULAR_PAD: f32 = 0.001;
+/// The vertices of one quad: its four corners, which its two triangles
+/// share through the strip index pattern.
+pub const QUAD_VERTICES: u32 = 4;
+/// The indices one quad's two triangles take.
+pub const QUAD_INDICES: u32 = 6;
+/// The fewest strip segments a band draws with, so a band never shares a
+/// pipeline with the quads: a pipeline whose strips are one quad wide
+/// would test every quad's fragments against the record's rect.
+pub const BAND_MIN_SEGMENTS: u32 = 2;
+
+/// The vertices a strip of `segments` quads shares: an inner and an
+/// outer vertex at each of its `segments + 1` boundaries.
+pub const fn strip_vertices(segments: u32) -> u32 {
+    segments * 2 + 2
+}
+
+/// The indices a strip of `segments` quads draws with.
+pub const fn strip_indices(segments: u32) -> u32 {
+    segments * QUAD_INDICES
+}
+
+/// The index pattern of one record's strip of `segments` quads over its
+/// [`strip_vertices`]: vertex `2b` sits at boundary `b` on the inner
+/// radius and `2b + 1` on the outer, and quad `j` is the triangles
+/// `(2j, 2j + 1, 2j + 2)` and `(2j + 2, 2j + 1, 2j + 3)`. A quad-drawn
+/// record is the pattern's first quad over the rect's corners: vertex
+/// `2x + y` is corner `(x, y)`.
+pub fn strip_index_pattern(segments: u32) -> impl Iterator<Item = u32> {
+    (0..segments).flat_map(|quad| {
+        let base = quad * 2;
+        [base, base + 1, base + 2, base + 2, base + 1, base + 3]
+    })
+}
 /// What one strip vertex costs against fill, in pixels of the command's
 /// units. A tiling GPU writes every vertex's varyings, sixteen vectors
 /// here, to memory before it shades a pixel, and reads the record the
@@ -80,14 +115,20 @@ pub const BAND_VERTEX_PIXELS: f32 = 32.0;
 /// The strip's outer vertices ride out past the padded ring so its chords
 /// circumscribe the circle; the estimate allows for that and the margin.
 const BAND_STRIP_OVERSHOOT: f32 = 1.25;
+/// The quads a segment may leave pinned before it is cut: a segment
+/// draws every record at its largest band class, so a quad among rings
+/// or a ring among quads costs pinned vertices, while a cut costs a
+/// draw call, which on a low-end GPU is worth about this many quads.
+const SEGMENT_WASTE_QUADS: u32 = 512;
 
 /// The ring a band's strip is built around, in the command's units: what
-/// `vs_band` derives from a record, derived here from the geometry the
+/// `band_position` derives from a record, derived here from the geometry the
 /// record is made of or from the record itself, with the padded sweep
 /// the strip covers computed once.
 struct BandRing {
     mid: f32,
     ring_half: f32,
+    range_start: f32,
     range: f32,
     segments_per_radian: f32,
 }
@@ -97,25 +138,20 @@ impl BandRing {
         Self::new(
             geometry.inner_radius,
             geometry.outer_radius,
+            geometry.start_angle,
             geometry.sweep_angle,
         )
     }
 
-    fn of_record(record: &ShapeRecord) -> Self {
-        Self::new(
-            record.arc_band[2],
-            record.arc_band[3],
-            record.arc_normalized[1],
-        )
-    }
-
-    fn new(inner: f32, outer: f32, sweep: f32) -> Self {
+    fn new(inner: f32, outer: f32, start: f32, sweep: f32) -> Self {
         let mid = (outer + inner) * 0.5;
         let ring_half = ((outer - inner) * 0.5).max(0.0) + BAND_MARGIN;
+        let (range_start, range) = Self::padded_range(mid, ring_half, start, sweep);
         Self {
             mid,
             ring_half,
-            range: Self::padded_range(mid, ring_half, sweep),
+            range_start,
+            range,
             segments_per_radian: Self::segments_per_radian(outer),
         }
     }
@@ -130,15 +166,22 @@ impl BandRing {
         ARC_RING_SEGMENTS_PER_RADIAN[bucket]
     }
 
-    /// The padded sweep the strip covers, with the angular pad bounded
-    /// above (asin(x) is at most πx/2): never less than the strip
-    /// `vs_band` draws, and no transcendental per arc.
-    fn padded_range(mid: f32, ring_half: f32, sweep: f32) -> f32 {
-        if ring_half >= mid {
-            return TAU;
+    /// Where the strip starts and the padded sweep it covers, which the
+    /// record carries for the vertex stage: the angular pad is bounded
+    /// above (atan(x) is at most x), so no transcendental per arc, and a
+    /// sweep the pad closes is the full circle.
+    fn padded_range(mid: f32, ring_half: f32, start: f32, sweep: f32) -> (f32, f32) {
+        let inner_padded = mid - ring_half;
+        if inner_padded <= 0.0 {
+            return (0.0, TAU);
         }
-        let pad = ring_half / mid * std::f32::consts::FRAC_PI_2 + BAND_ANGULAR_PAD;
-        (sweep + pad + pad).min(TAU)
+        let pad = ring_half / inner_padded + BAND_ANGULAR_PAD;
+        let padded = sweep + pad + pad;
+        if padded < TAU {
+            (start - pad, padded)
+        } else {
+            (0.0, TAU)
+        }
     }
 
     /// The fewest of [`ARC_BUCKET_SEGMENTS`] whose step over the padded
@@ -153,7 +196,7 @@ impl BandRing {
             floor
         };
         needed
-            .max(1)
+            .max(BAND_MIN_SEGMENTS)
             .next_power_of_two()
             .min(ARC_BUCKET_SEGMENTS[ARC_BUCKETS - 1])
     }
@@ -162,7 +205,7 @@ impl BandRing {
     /// sweep, plus what its `segments` quads' vertices cost.
     fn strip_pixels(&self, segments: u32) -> f32 {
         self.range * self.mid * (self.ring_half + self.ring_half) * BAND_STRIP_OVERSHOOT
-            + vertex_pixels(segments * QUAD_VERTICES)
+            + vertex_pixels(strip_vertices(segments))
     }
 }
 
@@ -175,28 +218,32 @@ pub fn band_bucket(segments: u32) -> usize {
     segments.trailing_zeros() as usize
 }
 
+/// The strip segments every record of band class `class` is drawn at.
+pub fn band_class_segments(class: u8) -> u32 {
+    ARC_BUCKET_SEGMENTS[class as usize]
+}
+
 /// The bucket an arc's band draws from when its strip costs less than
 /// `rect`, the quad it would otherwise draw: the pixels each rasterizes
 /// plus what their vertices cost a tiling GPU. `None` when the quad is
 /// cheaper.
 #[inline]
-pub fn band_bucket_for(geometry: &ArcGeometry, rect: Rect) -> Option<usize> {
+fn band_bucket_for(geometry: &ArcGeometry, ring: &BandRing, rect: Rect) -> Option<usize> {
     if geometry.is_degenerate()
         || geometry.outer_radius < ARC_BAND_MIN_RADIUS
         || geometry.inner_radius <= ARC_BAND_MIN_INNER_RADIUS
     {
         return None;
     }
-    let ring = BandRing::of_geometry(geometry);
     let segments = ring.segments();
     (ring.strip_pixels(segments) < rect.width * rect.height + vertex_pixels(QUAD_VERTICES))
         .then(|| band_bucket(segments))
 }
 
-/// Whether an arc's band strip costs less than `rect`; see
-/// [`band_bucket_for`].
+/// Whether an arc's band strip costs less than `rect`, the quad it would
+/// otherwise draw; see [`ShapeRecord::is_banded`].
 pub fn band_pays(geometry: &ArcGeometry, rect: Rect) -> bool {
-    band_bucket_for(geometry, rect).is_some()
+    band_bucket_for(geometry, &BandRing::of_geometry(geometry), rect).is_some()
 }
 
 /// The fragment program's shape kinds: a filled rect or round rect, a
@@ -227,7 +274,7 @@ pub struct ShapeRecord {
     /// band that the tight bounds are derived from on demand.
     pub rect: [f32; 4],
     /// Rects: the corner radii, top-left, top-right, bottom-right,
-    /// bottom-left. Arcs: unused; the vertex stage derives the band's trig.
+    /// bottom-left. Arcs: the band's trig, see [`arc_trig`].
     pub radii: [f32; 4],
     /// The solid colour, or the first stop of a gradient brush.
     pub color: [f32; 4],
@@ -246,7 +293,8 @@ pub struct ShapeRecord {
     /// Arcs: start angle and sweep as the app drew them, then the normalised
     /// band's inner and outer radius.
     pub arc_band: [f32; 4],
-    /// Arcs: the normalised start angle and sweep.
+    /// Arcs: the normalised start angle and sweep, then where the band's
+    /// strip starts and the padded sweep it covers.
     pub arc_normalized: [f32; 4],
 }
 
@@ -299,14 +347,21 @@ impl ShapeRecord {
     }
 
     /// An arc wide enough to draw as a band strip from the vertex stage;
-    /// its index sits in the recording's bucket for its radius.
+    /// its band class sits in its flags.
     pub fn is_banded(&self) -> bool {
         self.flags & ARC_BANDED_BIT != 0
     }
 
+    /// The band class this record was filed in: the index into
+    /// [`ARC_BUCKET_SEGMENTS`] of the strip segments it draws with when
+    /// [`Self::is_banded`], zero otherwise.
+    pub fn band_class(&self) -> usize {
+        ((self.flags >> BAND_CLASS_SHIFT) & BAND_CLASS_MASK) as usize
+    }
+
     /// The strip segments this record draws with when [`Self::is_banded`].
     pub fn band_segments(&self) -> u32 {
-        BandRing::of_record(self).segments()
+        ARC_BUCKET_SEGMENTS[self.band_class()]
     }
 
     /// An arc recorded by the draw scope: its rect is the disc around the
@@ -438,6 +493,10 @@ pub struct RecordSegment {
     pub gradient: bool,
     /// One bit per `FRAGMENT_KIND_*` present in the segment.
     pub kinds: u8,
+    /// The band class every record of the segment is drawn at: the index
+    /// into [`ARC_BUCKET_SEGMENTS`] of the strip each record is instanced
+    /// over, so one draw covers the segment in record order.
+    pub band_class: u8,
 }
 
 impl RecordSegment {
@@ -460,8 +519,6 @@ pub struct RecordTables {
     pub stops: Vec<GradientStopRecord>,
     pub explicit_stops: Vec<f32>,
     pub segments: Vec<RecordSegment>,
-    /// The indices of the band-drawn arcs, per segment-count bucket.
-    pub arc_buckets: [Vec<u32>; ARC_BUCKETS],
     fingerprint: OnceLock<u64>,
 }
 
@@ -472,7 +529,6 @@ impl PartialEq for RecordTables {
             && self.stops == other.stops
             && self.explicit_stops == other.explicit_stops
             && self.segments == other.segments
-            && self.arc_buckets == other.arc_buckets
     }
 }
 
@@ -483,9 +539,6 @@ impl RecordTables {
         self.stops.clear();
         self.explicit_stops.clear();
         self.segments.clear();
-        for bucket in &mut self.arc_buckets {
-            bucket.clear();
-        }
         self.fingerprint.take();
     }
 
@@ -498,9 +551,6 @@ impl RecordTables {
             stops: Vec::with_capacity(self.stops.capacity()),
             explicit_stops: Vec::with_capacity(self.explicit_stops.capacity()),
             segments: Vec::with_capacity(self.segments.capacity()),
-            arc_buckets: std::array::from_fn(|bucket| {
-                Vec::with_capacity(self.arc_buckets[bucket].capacity())
-            }),
             fingerprint: OnceLock::new(),
         }
     }
@@ -514,11 +564,7 @@ impl RecordTables {
             hasher.write(bytemuck::cast_slice(&self.brushes));
             hasher.write(bytemuck::cast_slice(&self.stops));
             hasher.write(bytemuck::cast_slice(&self.explicit_stops));
-            for segment in &self.segments {
-                hasher.write_u8(segment.lane as u8);
-                hasher.write_u32(segment.start);
-                hasher.write_u32(segment.count);
-            }
+            self.segments.hash(&mut hasher);
             hasher.finish()
         })
     }
@@ -530,19 +576,6 @@ impl RecordTables {
             + self.stops.capacity() * std::mem::size_of::<GradientStopRecord>()
             + self.explicit_stops.capacity() * std::mem::size_of::<f32>()
             + self.segments.capacity() * std::mem::size_of::<RecordSegment>()
-            + self
-                .arc_buckets
-                .iter()
-                .map(|bucket| bucket.capacity() * std::mem::size_of::<u32>())
-                .sum::<usize>()
-    }
-
-    /// Whether the GPU would read the same bytes from both.
-    pub fn same_upload(&self, other: &Self) -> bool {
-        self.shapes == other.shapes
-            && self.brushes == other.brushes
-            && self.stops == other.stops
-            && self.arc_buckets == other.arc_buckets
     }
 }
 
@@ -633,6 +666,7 @@ pub fn primitive_coverage_rect(primitive: &DrawPrimitive) -> Option<Rect> {
 pub struct ShapeRecorder {
     tables: Arc<RecordTables>,
     last_segment_key: u32,
+    segment_waste: u32,
     min: [f32; 2],
     max: [f32; 2],
 }
@@ -642,6 +676,7 @@ impl Default for ShapeRecorder {
         Self {
             tables: Arc::default(),
             last_segment_key: NO_SEGMENT_KEY,
+            segment_waste: 0,
             min: [f32::INFINITY; 2],
             max: [f32::NEG_INFINITY; 2],
         }
@@ -663,29 +698,15 @@ pub enum Recorded {
 }
 
 #[inline]
-fn extend_segment_in(
-    tables: &mut RecordTables,
-    extend: bool,
-    lane: RecordLane,
-    index: u32,
-    blend: BlendMode,
-    gradient: bool,
-    kind_bit: u8,
-) {
+fn extend_segment_in(tables: &mut RecordTables, extend: bool, opened: RecordSegment) {
     if extend {
         let last = tables.segments.last_mut().expect("a keyed segment exists");
         last.count += 1;
-        last.kinds |= kind_bit;
+        last.kinds |= opened.kinds;
+        last.band_class = last.band_class.max(opened.band_class);
         return;
     }
-    tables.segments.push(RecordSegment {
-        lane,
-        start: index,
-        count: 1,
-        blend,
-        gradient,
-        kinds: kind_bit,
-    })
+    tables.segments.push(opened)
 }
 
 impl ShapeRecorder {
@@ -735,6 +756,7 @@ impl ShapeRecorder {
             None => self.tables = Arc::new(self.tables.with_capacity_of()),
         }
         self.last_segment_key = NO_SEGMENT_KEY;
+        self.segment_waste = 0;
         self.min = [f32::INFINITY; 2];
         self.max = [f32::NEG_INFINITY; 2];
     }
@@ -809,6 +831,7 @@ impl ShapeRecorder {
             blend: BlendMode::SrcOver,
             gradient: false,
             kinds: 0,
+            band_class: 0,
         });
     }
 
@@ -853,8 +876,9 @@ impl ShapeRecorder {
         let mut arc_normalized = [0.0; 4];
         let mut bucket = None;
         if let Some(ring) = stroked_circle_ring(rect, radii, stroke)
+            && let band = BandRing::of_geometry(&ring)
             && let Some(ring_bucket) =
-                band_bucket_for(&ring, expand_rect(rect, ring.half_thickness()))
+                band_bucket_for(&ring, &band, expand_rect(rect, ring.half_thickness()))
         {
             flags |= ARC_BANDED_BIT;
             arc = [
@@ -864,7 +888,7 @@ impl ShapeRecorder {
                 ring.inner_radius,
             ];
             arc_band = [0.0, TAU, ring.inner_radius, ring.outer_radius];
-            arc_normalized = [0.0, TAU, 0.0, 0.0];
+            arc_normalized = [0.0, TAU, band.range_start, band.range];
             bucket = Some(ring_bucket);
         }
         self.push_shape(
@@ -920,14 +944,15 @@ impl ShapeRecorder {
             flags |= ARC_RECT_LOOSE_BIT;
             band_disc(geometry)
         });
-        let bucket = band_bucket_for(geometry, rect);
+        let ring = BandRing::of_geometry(geometry);
+        let bucket = band_bucket_for(geometry, &ring, rect);
         if bucket.is_some() {
             flags |= ARC_BANDED_BIT;
         }
         self.push_shape(
             ShapeRecord {
                 rect: rect_row(rect),
-                radii: [0.0; 4],
+                radii: arc_trig(geometry),
                 color,
                 stroke_width: args.stroke.map_or(0.0, |stroke| stroke.width),
                 flags,
@@ -940,37 +965,52 @@ impl ShapeRecorder {
                     geometry.inner_radius,
                     geometry.outer_radius,
                 ],
-                arc_normalized: [geometry.start_angle, geometry.sweep_angle, 0.0, 0.0],
+                arc_normalized: [
+                    geometry.start_angle,
+                    geometry.sweep_angle,
+                    ring.range_start,
+                    ring.range,
+                ],
             },
             bucket,
         )
     }
 
-    /// Appends `record`, filing it in `band_bucket` when it draws as a
-    /// band, and extends the open segment or opens one: the tables are
-    /// taken once per record.
+    /// Appends `record`, stamped with `band_bucket` as its band class when
+    /// it draws as a band, and extends the open segment or opens one. A
+    /// segment is one draw at its largest band class's strip, in record
+    /// order; it takes a record of another class while the quads that
+    /// strip leaves pinned stay within [`SEGMENT_WASTE_QUADS`], and is cut
+    /// past that. The tables are taken once per record.
     #[inline]
-    fn push_shape(&mut self, record: ShapeRecord, band_bucket: Option<usize>) -> Rect {
+    fn push_shape(&mut self, mut record: ShapeRecord, band_bucket: Option<usize>) -> Rect {
         let coverage = expand_rect(record.stored_rect(), record.half_stroke());
         self.include_bounds(coverage);
         let index = self.tables.shapes.len() as u32;
         let blend = record.blend_mode();
         let gradient = record.is_gradient();
         let kind_bit = 1u8 << record.fragment_kind();
-        let extend = self.note_segment_key(RecordLane::Shapes, blend, gradient);
-        let tables = self.tables_mut();
-        if let Some(bucket) = band_bucket {
-            tables.arc_buckets[bucket].push(index);
+        let band_class = band_bucket.unwrap_or(0) as u8;
+        record.flags |= u32::from(band_class) << BAND_CLASS_SHIFT;
+        let extend = self.note_segment_key(RecordLane::Shapes, blend, gradient)
+            && self.segment_takes_class(band_class);
+        if !extend {
+            self.segment_waste = 0;
         }
+        let tables = self.tables_mut();
         tables.shapes.push(record);
         extend_segment_in(
             tables,
             extend,
-            RecordLane::Shapes,
-            index,
-            blend,
-            gradient,
-            kind_bit,
+            RecordSegment {
+                lane: RecordLane::Shapes,
+                start: index,
+                count: 1,
+                blend,
+                gradient,
+                kinds: kind_bit,
+                band_class,
+            },
         );
         coverage
     }
@@ -984,15 +1024,43 @@ impl ShapeRecorder {
         kind_bit: u8,
     ) {
         let extend = self.note_segment_key(lane, blend, gradient);
+        if !extend {
+            self.segment_waste = 0;
+        }
         extend_segment_in(
             self.tables_mut(),
             extend,
-            lane,
-            index,
-            blend,
-            gradient,
-            kind_bit,
+            RecordSegment {
+                lane,
+                start: index,
+                count: 1,
+                blend,
+                gradient,
+                kinds: kind_bit,
+                band_class: 0,
+            },
         );
+    }
+
+    /// Whether the open segment takes a record of `band_class` without
+    /// leaving more than [`SEGMENT_WASTE_QUADS`] pinned: a larger class
+    /// raises every earlier record's budget, a smaller one collapses its
+    /// own surplus. Accounts the waste when it does.
+    #[inline]
+    fn segment_takes_class(&mut self, band_class: u8) -> bool {
+        let last = self.tables.segments.last().expect("a keyed segment exists");
+        let held = ARC_BUCKET_SEGMENTS[last.band_class as usize];
+        let wanted = ARC_BUCKET_SEGMENTS[band_class as usize];
+        let waste = if wanted > held {
+            last.count * (wanted - held)
+        } else {
+            held - wanted
+        };
+        if self.segment_waste + waste > SEGMENT_WASTE_QUADS {
+            return false;
+        }
+        self.segment_waste += waste;
+        true
     }
 
     /// Whether the next record continues the open segment, and makes its
@@ -1963,13 +2031,21 @@ mod tests {
         );
         assert_eq!(geometry, expected);
         assert_eq!(
-            record.radii, [0.0; 4],
-            "the trig row is the vertex stage's, not the recording's"
+            record.radii,
+            arc_trig(&expected),
+            "the trig row the fragment stage reads is computed once, when recorded"
         );
         assert_eq!(
-            arc_trig(&expected)[1],
+            record.radii[1],
             (expected.start_angle + expected.sweep_angle * 0.5).cos()
         );
+        let ring = BandRing::of_geometry(&expected);
+        assert_eq!(
+            record.arc_normalized[2..],
+            [ring.range_start, ring.range],
+            "the strip's padded sweep the vertex stage reads is computed once, when recorded"
+        );
+        assert!(ring.range_start < expected.start_angle && ring.range > 2.0);
         assert!(!record.is_degenerate_arc());
         assert!(!record.has_loose_rect());
         assert_eq!(record.rect_value(), rect(0.0, 0.0, 1.0, 1.0));
@@ -2247,7 +2323,7 @@ mod band_tests {
     use crate::{DrawScope, DrawScopeDefault, Size};
 
     #[test]
-    fn wide_arcs_are_bucketed_by_radius_and_narrow_ones_stay_quads() {
+    fn wide_arcs_are_banded_by_sweep_and_radius_and_narrow_ones_stay_quads() {
         let mut scope = DrawScopeDefault::new(Size::new(400.0, 400.0));
         let brush = Brush::Solid(Color::WHITE);
         let center = Point::new(200.0, 200.0);
@@ -2284,21 +2360,92 @@ mod band_tests {
             segments[6], 2,
             "a sliver's strip is two segments, not a ring's worth"
         );
-        let buckets: Vec<Vec<u32>> = recording.tables().arc_buckets.to_vec();
+        let classes: Vec<usize> = recording
+            .shapes()
+            .iter()
+            .map(ShapeRecord::band_class)
+            .collect();
+        assert_eq!(classes, [0, 2, 2, 3, 4, 0, 1]);
+        let segment_classes: Vec<u8> = recording
+            .tables()
+            .segments
+            .iter()
+            .map(|segment| segment.band_class)
+            .collect();
         assert_eq!(
-            buckets,
-            vec![
-                vec![],
-                vec![6],
-                vec![1, 2],
-                vec![3],
-                vec![4],
-                vec![],
-                vec![]
-            ]
+            segment_classes,
+            [4],
+            "a few records of mixed classes share one segment at the largest \
+             class, so one draw keeps record order"
         );
         assert_eq!(band_bucket(1), 0);
         assert_eq!(band_bucket(64), ARC_BUCKETS - 1);
+    }
+
+    #[test]
+    fn a_strip_pattern_stays_within_the_vertices_it_shares_and_no_band_is_one_quad_wide() {
+        for segments in ARC_BUCKET_SEGMENTS {
+            let indices: Vec<u32> = strip_index_pattern(segments).collect();
+            assert_eq!(indices.len() as u32, strip_indices(segments));
+            assert_eq!(
+                indices.iter().max().copied(),
+                Some(strip_vertices(segments) - 1)
+            );
+        }
+        let ring = BandRing::new(20.0, 22.0, 0.0, 0.01);
+        assert_eq!(ring.segments(), BAND_MIN_SEGMENTS);
+        assert_eq!(band_bucket(BAND_MIN_SEGMENTS), 1);
+    }
+
+    #[test]
+    fn a_segment_is_cut_where_its_largest_class_would_collapse_more_than_a_draw_is_worth() {
+        let mut scope = DrawScopeDefault::new(Size::new(2000.0, 2000.0));
+        let brush = Brush::Solid(Color::WHITE);
+        let quad = Rect {
+            x: 1.0,
+            y: 1.0,
+            width: 4.0,
+            height: 4.0,
+        };
+        let rects = 40;
+        for _ in 0..rects {
+            scope.draw_rect_at(quad, brush.clone());
+        }
+        scope.draw_arc(
+            brush.clone(),
+            Point::new(500.0, 500.0),
+            400.0,
+            0.0,
+            TAU,
+            Stroke::new(3.0),
+        );
+        for _ in 0..rects {
+            scope.draw_rect_at(quad, brush.clone());
+        }
+        let recording = scope.finish();
+        let ring = recording.shapes()[rects];
+        assert!(ring.is_banded());
+        let ring_quads = ring.band_segments();
+        assert!(ring_quads > 1);
+        let segments: Vec<(u32, u8)> = recording
+            .tables()
+            .segments
+            .iter()
+            .map(|segment| (segment.count, segment.band_class))
+            .collect();
+        let after = SEGMENT_WASTE_QUADS / (ring_quads - 1);
+        assert_eq!(
+            segments,
+            [
+                (rects as u32, 0),
+                (1 + after, ring.band_class() as u8),
+                (rects as u32 - after, 0)
+            ],
+            "the ring would collapse {rects} quads times {} vertices each, more than a draw is \
+             worth, so it opens a segment; the rects after it join until their own collapse \
+             passes the budget",
+            ring_quads - 1
+        );
     }
 
     #[test]
@@ -2348,7 +2495,7 @@ mod band_tests {
         assert_eq!(ring.arc, [60.0, 60.0, 50.0, 48.0]);
         assert_eq!(ring.arc_band, [0.0, TAU, 48.0, 52.0]);
         assert_eq!(ring.band_segments(), 16);
-        assert_eq!(recording.tables().arc_buckets[4], vec![0]);
+        assert_eq!(ring.band_class(), 4);
     }
 
     #[test]
@@ -2368,11 +2515,6 @@ mod band_tests {
         assert!(!Arc::ptr_eq(&held, recording.tables()));
         assert_eq!(held.shapes.len(), 1);
         assert!(recording.is_empty());
-        let unique = CommandRecording::default();
-        assert!(held.same_upload(&RecordTables {
-            shapes: held.shapes.clone(),
-            ..RecordTables::default()
-        }));
-        assert!(!held.same_upload(unique.tables()));
+        assert_ne!(*held, **CommandRecording::default().tables());
     }
 }

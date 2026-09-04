@@ -3,8 +3,8 @@ use std::{collections::HashMap, sync::Arc};
 use bytemuck::{Pod, Zeroable};
 use cranpose_render_common::{graph::DrawCommandId, style_shared::apply_layer_to_color};
 use cranpose_ui_graphics::{
-    ARC_BUCKET_SEGMENTS, ARC_BUCKETS, BrushRecord, Color, GradientStopRecord, GraphicsLayer,
-    QUAD_VERTICES, RecordLane, RecordTables, ShapeRecord, band_bucket,
+    ARC_BUCKETS, BrushRecord, Color, GradientStopRecord, GraphicsLayer, RecordLane, RecordSegment,
+    RecordTables, ShapeRecord, band_class_segments, strip_index_pattern, strip_indices,
 };
 use smallvec::SmallVec;
 
@@ -21,7 +21,6 @@ pub(crate) const RECORD_CHUNK: usize = 128;
 pub(crate) const BRUSH_CHUNK: usize = 256;
 pub(crate) const STOP_CHUNK: usize = 256;
 pub(crate) const PLACEMENT_CHUNK: usize = 64;
-const BAND_CHUNK_VEC4S: usize = 4;
 
 /// Runs with at least this many records keep retained GPU buffers keyed by
 /// their command; smaller runs are copied into the frame arena, where
@@ -33,8 +32,8 @@ const INITIAL_ARENA_RECORDS: usize = 1024;
 const INITIAL_BRUSHES: usize = 64;
 const INITIAL_STOPS: usize = 128;
 const INITIAL_PLACEMENTS: usize = 64;
-const INITIAL_BAND_VEC4S: usize = 64;
-const DUMMY_VEC4S: usize = 4;
+/// The store tier binds a placement table it never reads: one entry.
+const STORE_PLACEMENTS: usize = 1;
 
 const PLACEMENT_CANONICALIZE: u32 = 1;
 const PLACEMENT_CLIPPED: u32 = 2;
@@ -91,7 +90,7 @@ impl RunBufferMode {
     }
 }
 
-const RUN_BINDINGS: usize = 5;
+const RUN_BINDINGS: usize = 4;
 
 /// A placement as the vertex stage reads it: the offset with the snap
 /// delta folded in, the device clip, the dither origin and the paint.
@@ -246,14 +245,12 @@ const ELEMENT_SIZES: [usize; RUN_BINDINGS] = [
     std::mem::size_of::<ShapeRecord>(),
     std::mem::size_of::<BrushRecord>(),
     std::mem::size_of::<GradientStopRecord>(),
-    std::mem::size_of::<[u32; 4]>(),
     std::mem::size_of::<PlacementData>(),
 ];
 const LABELS: [&str; RUN_BINDINGS] = [
     "Run Records",
     "Run Brushes",
     "Run Gradient Stops",
-    "Run Band Records",
     "Run Placements",
 ];
 
@@ -380,51 +377,59 @@ impl RunBuffers {
     }
 }
 
-fn packed_bands(tables: &RecordTables) -> (Vec<[u32; 4]>, [u32; ARC_BUCKETS]) {
-    let mut flat: Vec<u32> = Vec::new();
-    let mut bases = [0u32; ARC_BUCKETS];
-    for (bucket, indices) in tables.arc_buckets.iter().enumerate() {
-        bases[bucket] = flat.len() as u32;
-        flat.extend_from_slice(indices);
-    }
-    (pack_vec4s(flat), bases)
-}
-
 /// A recording's tables resident on the GPU, keyed by its command.
 pub(crate) struct StoredRun {
     pub(crate) buffers: RunBuffers,
     tables: Arc<RecordTables>,
-    bands: Vec<[u32; 4]>,
     paint: PaintKey,
-    /// Where each bucket's entries start in the band table.
-    pub(crate) band_bases: [u32; ARC_BUCKETS],
     fill: Option<ShapeFill>,
     fill_scale_bits: u32,
     fill_offset_bits: [u32; 2],
     last_used_frame: u64,
 }
 
-/// A draw the pass records for one run: a pipeline and a vertex range
-/// into the tables its batch binds.
+/// A draw the pass records for one run: a pipeline and the records it
+/// instances, in order, over the strip index pattern of the pipeline's
+/// band class, from the tables its batch binds.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RunDrawCall {
     pub(crate) key: crate::render::ShapePipelineKey,
-    pub(crate) vertices: std::ops::Range<u32>,
+    pub(crate) records: std::ops::Range<u32>,
 }
 
-/// A draw an arena chunk will make, before the chunk's band table is
-/// packed: quads name their vertices; a band draw names its bucket and the
-/// bucket entries it covers, resolved to vertices at close.
-enum PendingDraw {
-    Quads {
-        key: crate::render::ShapePipelineKey,
-        vertices: std::ops::Range<u32>,
-    },
-    Bands {
-        key: crate::render::ShapePipelineKey,
-        bucket: usize,
-        entries: std::ops::Range<u32>,
-    },
+impl RunDrawCall {
+    /// The indices each record of the draw is instanced over.
+    pub(crate) fn indices(&self) -> std::ops::Range<u32> {
+        0..strip_indices(band_class_segments(self.key.band_class))
+    }
+}
+
+/// The index buffer every draw at one band class instances over: the
+/// class's strip pattern, once.
+#[derive(Default)]
+struct StripIndexBuffer {
+    buffer: Option<wgpu::Buffer>,
+}
+
+impl StripIndexBuffer {
+    fn ensure(&mut self, device: &wgpu::Device, segments: u32) {
+        if self.buffer.is_some() {
+            return;
+        }
+        let indices: Vec<u32> = strip_index_pattern(segments).collect();
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Run Strip Indices"),
+            size: std::mem::size_of_val(indices.as_slice()) as u64,
+            usage: wgpu::BufferUsages::INDEX,
+            mapped_at_creation: true,
+        });
+        buffer
+            .slice(..)
+            .get_mapped_range_mut()
+            .copy_from_slice(bytemuck::cast_slice(&indices));
+        buffer.unmap();
+        self.buffer = Some(buffer);
+    }
 }
 
 /// The CPU side of one arena chunk while a pass fills it.
@@ -434,10 +439,9 @@ pub(crate) struct ArenaStaging {
     brushes: Vec<BrushRecord>,
     stops: Vec<GradientStopRecord>,
     placements: Vec<PlacementData>,
-    bands: [Vec<u32>; ARC_BUCKETS],
     brush_map: Vec<u32>,
     painted: Vec<GradientStopRecord>,
-    pending: Vec<PendingDraw>,
+    draws: Vec<RunDrawCall>,
     pub(crate) fill: ShapeFill,
 }
 
@@ -447,10 +451,7 @@ impl ArenaStaging {
         self.brushes.clear();
         self.stops.clear();
         self.placements.clear();
-        for bucket in &mut self.bands {
-            bucket.clear();
-        }
-        self.pending.clear();
+        self.draws.clear();
         self.fill = ShapeFill::default();
     }
 
@@ -475,58 +476,21 @@ impl ArenaStaging {
             && self.placements.len() < PLACEMENT_CHUNK
     }
 
-    fn push_quads(&mut self, key: crate::render::ShapePipelineKey, vertices: std::ops::Range<u32>) {
-        if let Some(PendingDraw::Quads {
-            key: last_key,
-            vertices: last,
-        }) = self.pending.last_mut()
-            && *last_key == key
-            && last.end == vertices.start
+    /// Records `record` under `key`, extending the last draw when it
+    /// continues it.
+    fn push_draw(&mut self, key: crate::render::ShapePipelineKey, record: u32) {
+        if let Some(last) = self.draws.last_mut()
+            && last.key == key
+            && last.records.end == record
         {
-            last.end = vertices.end;
+            last.records.end = record + 1;
             return;
         }
-        self.pending.push(PendingDraw::Quads { key, vertices });
+        self.draws.push(RunDrawCall {
+            key,
+            records: record..record + 1,
+        });
     }
-
-    /// The chunk's draws with the band table packed: bucket after bucket,
-    /// so a band draw's entries become vertices from its bucket's base.
-    fn resolve_draws(&mut self) -> (Vec<[u32; 4]>, Vec<RunDrawCall>) {
-        let mut flat: Vec<u32> = Vec::new();
-        let mut bases = [0u32; ARC_BUCKETS];
-        for (bucket, indices) in self.bands.iter().enumerate() {
-            bases[bucket] = flat.len() as u32;
-            flat.extend_from_slice(indices);
-        }
-        let draws = self
-            .pending
-            .drain(..)
-            .map(|draw| match draw {
-                PendingDraw::Quads { key, vertices } => RunDrawCall { key, vertices },
-                PendingDraw::Bands {
-                    key,
-                    bucket,
-                    entries,
-                } => {
-                    let per_band = ARC_BUCKET_SEGMENTS[bucket] * QUAD_VERTICES;
-                    let base = bases[bucket];
-                    RunDrawCall {
-                        key,
-                        vertices: (base + entries.start) * per_band
-                            ..(base + entries.end) * per_band,
-                    }
-                }
-            })
-            .collect();
-        (pack_vec4s(flat), draws)
-    }
-}
-
-fn pack_vec4s(mut flat: Vec<u32>) -> Vec<[u32; 4]> {
-    while !flat.len().is_multiple_of(4) {
-        flat.push(0);
-    }
-    flat.as_chunks::<4>().0.to_vec()
 }
 
 /// The GPU home of every run: retained tables per command, and the
@@ -539,6 +503,7 @@ pub(crate) struct RunStore {
     arena_staging: Vec<ArenaStaging>,
     arena_cursor: usize,
     scratch_stops: Vec<GradientStopRecord>,
+    strip_indices: [StripIndexBuffer; ARC_BUCKETS],
     frame: u64,
     fill_stats: bool,
 }
@@ -557,7 +522,7 @@ impl RunStore {
         };
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Run Tables Bind Group Layout"),
-            entries: &[binding(0), binding(1), binding(2), binding(3), binding(4)],
+            entries: &[binding(0), binding(1), binding(2), binding(3)],
         });
         Self {
             mode,
@@ -568,8 +533,43 @@ impl RunStore {
             arena_cursor: 0,
             fill_stats: false,
             scratch_stops: Vec::new(),
+            strip_indices: Default::default(),
             frame: 0,
         }
+    }
+
+    /// The index buffer draws at band class `class` instance over; every
+    /// draw's was created when the draw was recorded.
+    pub(crate) fn strip_index_buffer(&self, class: u8) -> &wgpu::Buffer {
+        self.strip_indices[class as usize]
+            .buffer
+            .as_ref()
+            .expect("a draw's strip index buffer was created when the draw was recorded")
+    }
+
+    fn ensure_strip_indices(&mut self, device: &wgpu::Device, draws: &[RunDrawCall]) {
+        for draw in draws {
+            let class = draw.key.band_class;
+            self.strip_indices[class as usize].ensure(device, band_class_segments(class));
+        }
+    }
+
+    /// The draws one stored run takes for one segment range: one per
+    /// segment, its records in order.
+    pub(crate) fn stored_run_draws(
+        &mut self,
+        device: &wgpu::Device,
+        run: &RunDraw,
+        key_for: &mut dyn FnMut(&RecordSegment) -> crate::render::ShapePipelineKey,
+        out: &mut SmallVec<[RunDrawCall; 8]>,
+    ) {
+        for segment in run.segment_records() {
+            out.push(RunDrawCall {
+                key: key_for(segment),
+                records: segment.start..segment.start + segment.count,
+            });
+        }
+        self.ensure_strip_indices(device, out);
     }
 
     pub(crate) fn mode(&self) -> RunBufferMode {
@@ -665,14 +665,11 @@ impl RunStore {
                     INITIAL_STORE_RECORDS,
                     INITIAL_BRUSHES,
                     INITIAL_STOPS,
-                    INITIAL_BAND_VEC4S,
-                    DUMMY_VEC4S,
+                    STORE_PLACEMENTS,
                 ],
             ),
             tables: Arc::new(RecordTables::default()),
-            bands: Vec::new(),
             paint,
-            band_bases: [0; ARC_BUCKETS],
             fill: None,
             fill_scale_bits: 0,
             fill_offset_bits: [0; 2],
@@ -685,7 +682,6 @@ impl RunStore {
         let mut stops_changed = first_use;
         if first_use || !Arc::ptr_eq(&entry.tables, &run.tables) {
             let tables = &*run.tables;
-            let (bands, bases) = packed_bands(tables);
             let fresh = entry.buffers.ensure(
                 device,
                 layout,
@@ -693,8 +689,7 @@ impl RunStore {
                     tables.shapes.len().max(1),
                     tables.brushes.len().max(1),
                     tables.stops.len().max(1),
-                    bands.len().max(DUMMY_VEC4S),
-                    DUMMY_VEC4S,
+                    STORE_PLACEMENTS,
                 ],
             );
             let previous = &*entry.tables;
@@ -712,13 +707,7 @@ impl RunStore {
                 &tables.brushes,
                 first_use || fresh[1],
             );
-            stats +=
-                entry
-                    .buffers
-                    .write_changed(queue, 3, &entry.bands, &bands, first_use || fresh[3]);
             stops_changed |= fresh[2] || previous.stops != tables.stops;
-            entry.bands = bands;
-            entry.band_bases = bases;
             entry.tables = Arc::clone(&run.tables);
         }
         let changed = stats.upload_bytes > 0 || stops_changed;
@@ -777,11 +766,6 @@ impl RunStore {
                         STOP_CHUNK
                     },
                     if self.mode.storage {
-                        DUMMY_VEC4S
-                    } else {
-                        BAND_CHUNK_VEC4S
-                    },
-                    if self.mode.storage {
                         INITIAL_PLACEMENTS
                     } else {
                         PLACEMENT_CHUNK
@@ -813,20 +797,17 @@ impl RunStore {
 
     /// Copies `run` into the open chunk, one placement for all its records,
     /// its brushes and painted stops re-based onto the chunk's tables, and
-    /// records the draws its segments take: the quads, then the bands of
-    /// each bucket the segment put arcs in. Returns how many records were
-    /// taken from `from`; the caller continues with the rest in a new
-    /// chunk when a uniform chunk fills mid-run.
+    /// records the draw each segment takes, its records in order at the
+    /// segment's vertex budget. Returns how many records were taken from
+    /// `from`; the caller continues with the rest in a new chunk when a
+    /// uniform chunk fills mid-run.
     pub(crate) fn append_arena(
         &mut self,
         chunk: usize,
         run: &RunDraw,
         from: u32,
         root_scale: f32,
-        key_for: &mut dyn FnMut(
-            &cranpose_ui_graphics::RecordSegment,
-            Option<usize>,
-        ) -> crate::render::ShapePipelineKey,
+        key_for: &mut dyn FnMut(&RecordSegment) -> crate::render::ShapePipelineKey,
     ) -> u32 {
         let mode = self.mode;
         let fill_stats = self.fill_stats;
@@ -843,9 +824,10 @@ impl RunStore {
         let mut taken = 0u32;
         let mut skipped = 0u32;
         for segment in run.segment_records() {
-            let key = key_for(segment, None);
-            let bands_before: [u32; ARC_BUCKETS] =
-                std::array::from_fn(|bucket| staging.bands[bucket].len() as u32);
+            let key = key_for(segment);
+            let class_segments = mode
+                .storage
+                .then(|| band_class_segments(segment.band_class));
             let mut segment_complete = true;
             for index in segment.range() {
                 if skipped < from {
@@ -884,32 +866,16 @@ impl RunStore {
                 record.reserved = placement_index;
                 let record_index = staging.records.len() as u32;
                 staging.records.push(record);
-                staging.push_quads(
-                    key,
-                    record_index * QUAD_VERTICES..(record_index + 1) * QUAD_VERTICES,
-                );
-                if mode.storage && record.is_banded() {
-                    staging.bands[band_bucket(record.band_segments())].push(record_index);
-                }
+                staging.push_draw(key, record_index);
                 if fill_stats {
                     staging.fill.add_record(
                         &record,
                         run.placement.offset,
                         root_scale,
-                        mode.storage,
+                        class_segments,
                     );
                 }
                 taken += 1;
-            }
-            for (bucket, before) in bands_before.into_iter().enumerate() {
-                let after = staging.bands[bucket].len() as u32;
-                if after > before {
-                    staging.pending.push(PendingDraw::Bands {
-                        key: key_for(segment, Some(bucket)),
-                        bucket,
-                        entries: before..after,
-                    });
-                }
             }
             if !segment_complete {
                 return taken;
@@ -930,7 +896,11 @@ impl RunStore {
         if staging.is_empty() {
             return (FrameCommandStats::default(), Vec::new(), None);
         }
-        let (bands, draws) = staging.resolve_draws();
+        let draws = std::mem::take(&mut staging.draws);
+        for draw in &draws {
+            let class = draw.key.band_class;
+            self.strip_indices[class as usize].ensure(device, band_class_segments(class));
+        }
         buffers.ensure(
             device,
             &self.layout,
@@ -938,58 +908,14 @@ impl RunStore {
                 staging.records.len(),
                 staging.brushes.len().max(1),
                 staging.stops.len().max(1),
-                bands.len().max(DUMMY_VEC4S),
                 staging.placements.len(),
             ],
         );
         let mut stats = buffers.write(queue, 0, &staging.records);
         stats += buffers.write(queue, 1, &staging.brushes);
         stats += buffers.write(queue, 2, &staging.stops);
-        stats += buffers.write(queue, 3, &bands);
-        stats += buffers.write(queue, 4, &staging.placements);
+        stats += buffers.write(queue, 3, &staging.placements);
         (stats, draws, self.fill_stats.then_some(staging.fill))
-    }
-}
-
-/// The draws one stored run takes for one segment range: the quad draw of
-/// the segment's records, then one band draw per bucket the segment has
-/// banded arcs in.
-pub(crate) fn stored_run_draws(
-    stored: &StoredRun,
-    run: &RunDraw,
-    key_for: &mut dyn FnMut(
-        &cranpose_ui_graphics::RecordSegment,
-        Option<usize>,
-    ) -> crate::render::ShapePipelineKey,
-    out: &mut SmallVec<[RunDrawCall; 8]>,
-) {
-    let tables = &*run.tables;
-    for segment in run.segment_records() {
-        let start = segment.start;
-        let end = segment.start + segment.count;
-        out.push(RunDrawCall {
-            key: key_for(segment, None),
-            vertices: start * QUAD_VERTICES..end * QUAD_VERTICES,
-        });
-        if !tables.shapes[segment.range()]
-            .iter()
-            .any(ShapeRecord::is_banded)
-        {
-            continue;
-        }
-        for (bucket, indices) in tables.arc_buckets.iter().enumerate() {
-            let first = indices.partition_point(|index| *index < start);
-            let last = indices.partition_point(|index| *index < end);
-            if first == last {
-                continue;
-            }
-            let per_band = ARC_BUCKET_SEGMENTS[bucket] * QUAD_VERTICES;
-            let base = stored.band_bases[bucket];
-            out.push(RunDrawCall {
-                key: key_for(segment, Some(bucket)),
-                vertices: (base + first as u32) * per_band..(base + last as u32) * per_band,
-            });
-        }
     }
 }
 
@@ -1037,15 +963,5 @@ mod tests {
         assert_eq!(plain.flags, 0);
         assert_eq!(plain.color_matrix[2][2], 1.0);
         assert_eq!(std::mem::size_of::<PlacementData>(), 128);
-    }
-
-    #[test]
-    fn bands_pack_bucket_by_bucket_with_their_bases() {
-        let mut tables = RecordTables::default();
-        tables.arc_buckets[0] = vec![3, 5];
-        tables.arc_buckets[2] = vec![7, 8, 9];
-        let (packed, bases) = packed_bands(&tables);
-        assert_eq!(bases, [0, 2, 2, 5, 5, 5, 5]);
-        assert_eq!(packed, vec![[3, 5, 7, 8], [9, 0, 0, 0]]);
     }
 }

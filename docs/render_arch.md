@@ -201,13 +201,33 @@ of that count (`ARC_BUCKET_SEGMENTS`, one to sixty-four). Bucketing by
 radius alone gave MEGA BOSS's short bricks a full ring's segments each,
 2.5 M vertices a frame, which the Pixel 9 Pro absorbed at 56 fps, the
 Pixel Watch 3 presented at 4 fps and the Mate 20 X's Mali answered by
-losing the device on the first frame. The vertex stage draws a banded
-record as that strip from `vertex_index` (`vs_band`): the ring padded by
-one device pixel, the sweep padded by the ring's angle, the outer vertices
-riding out so the polygon circumscribes the padded circle; the quad entry
-point collapses banded records where band pipelines draw. A band pipeline
-discards outside the record's rect, the quad path's raster extent, so the
-two paths cover the same pixels. `run_geometry.rs` mirrors the strip on
+losing the device on the first frame. A record carries its band class
+in its flags and a segment is one draw at its largest class's vertex
+budget, records in order, cut where the budget would leave more quads
+collapsed than a draw call is worth (`SEGMENT_WASTE_QUADS`). A draw
+instances its records, one instance a record, over the strip index
+pattern of the segment's class (`strip_index_pattern`, one small static
+index buffer per class in the run store): `2 * segments + 2` shared
+vertices a record, so a quad is four vertex invocations and a strip of n
+quads is 2(n + 1), not six a quad. The vertex stage takes a quad
+record's first four vertices as the rect's corners and draws a banded
+record as its strip (`band_position`): the ring padded by one device
+pixel, the sweep padded by the angle that padding subtends at the padded
+inner radius, the outer vertices riding out so the polygon circumscribes
+the padded circle. The record carries what the vertex stage would
+otherwise derive per vertex: the fragment's trig row (`arc_trig`) and
+where the padded sweep starts and how far it runs (`BandRing`), computed
+once when the arc is recorded. A vertex past a record's own pins onto
+its last one: the pattern shares each boundary between neighbouring
+quads, so a vertex collapsed anywhere else draws a real triangle from
+the record's last edge (the first indexed build did, and the parity
+test caught 55 k pixels; `a_translucent_quad_sharing_a_draw_with_a_wide_ring_blends_once`
+goes red on it). The fragment stage discards outside the record's rect,
+the quad path's raster extent, so the two paths cover the same pixels;
+no band is one quad wide (`BAND_MIN_SEGMENTS`), so the class-0 pipeline
+holds only quads and folds that test out, which was worth 1 ms of the
+watch's pass. `run_geometry.rs` mirrors
+the strip on
 the CPU for the fill estimate and for the coverage proof, which walks
 every pixel center the arc SDF shades and asserts the strip holds it.
 `band_fill.rs` pins the budget (a ring costs its band, not its disc) and
@@ -743,10 +763,84 @@ zero, alternating rounds, temperature logged; the watch with the
    thread waits on the scene, the scene waits on the render, and the
    render's pass spends 6.8 ms p50 (`[wgpu-render-stage:run-upload]`)
    comparing and staging the 1.9 MB the orbiting rings change every
-   frame, before the present wait of 10 ms. The next steps are
-   structural: the stored run's records written once into GPU-visible
-   memory instead of recorded, compared and staged, and the update of
-   frame n+1 overlapping the render of frame n instead of waiting on it.
+   frame, before the present wait of 10 ms. The wait is the GPU:
+   `debug.cranpose.pass_timing` puts the watch's Layer Pass at 29 ms a
+   frame against main's 14-18, and skipping the band draws leaves 15.8
+   ms, skipping the quad draws 21.4, with every band a single quad
+   (radii under 96 px take one segment), so the cost is fill, 8-9 ms per
+   megapixel of this fragment program, and main wins on fill. The
+   strip's angular pad was the waste: a constant 0.05 rad plus asin at
+   the mid radius, 65% more length on a 0.2 rad brick edge; it is now
+   the angle the padded half-width subtends at the padded inner radius
+   plus float slack, in the shader, the CPU mirror and the estimate, with
+   the coverage proof widened to fat rings, thick caps and small radii:
+   arc fill 1.64 -> 0.78 MP, the pass 29 -> 24.3 ms, 41 fps presented.
+   Two probes then said what the rest is not: with no draws the pass is
+   0.28 ms, and `fs_solid`, a brushless 8-vector varying set for solid
+   batches (built, kept, byte-identical by the variant parity test),
+   leaves the pass at 25 ms, so neither a fixed cost nor varying traffic
+   carries it; a fragment stage returning a constant leaves 14 ms, so the
+   fragment program is 11 ms and the rest is vertex work, raster and tile
+   traffic. Reading the draw structure for that found a correctness hole
+   with it: a segment drew its quads first and its bands after, so a rect
+   recorded over a band-drawn ring ended up under it
+   (`a_rect_recorded_after_a_banded_ring_covers_it`, red-proven). Now a
+   record carries its band class in its flags and each segment is one
+   draw at its largest class's vertex budget per record, in record order:
+   the band lists, their table binding and the collapsed quad draws of
+   banded records are gone. Cutting a segment at every class change gave
+   MEGA BOSS 91 draws and a slower pass (28.4 ms against 24.4: on this
+   GPU a draw call costs about what a few thousand collapsed vertices
+   do), so a segment takes a record of another class while the quads its
+   budget leaves collapsed stay under `SEGMENT_WASTE_QUADS` and is cut
+   past that (unit test on the cut point): 10 draws, 105 k vertices, and
+   still 27.2 ms against fix8's 25.0 in the same alternation. Turning
+   the clip and rect rejections into a zero fragment under blends where
+   one is a no-op, on the theory that the `discard` cost the tiler its
+   early fragment paths, measured 28.5 / 25.0 / 28.2 against fix8 and
+   moved five pixels of the clipped-halves parity by 1/255: the
+   alpha-cutoff `discard` is in every program on main as well, so no
+   pipeline was discard-free to begin with, and a zero fragment still
+   blends, through the sRGB encode of the target. Rejection stays a
+   `discard`. Ablation on the watch, alternated against fix8's 25.0:
+   fix12 (unified draw, budget cut) 27.1; without the strip's rect test
+   in every pipeline 26.2; without the segment cuts (three draws, every
+   record at the largest class) 83 ms. The last one prices a vertex
+   invocation: 6.6 M collapsed vertices, each a flags load and an
+   early return, cost 56 ms, about 8.5 ns each, so this GPU shades some
+   120 M vertices a second and the 104 k real ones, each fetching a
+   record and a placement and deriving its varyings, are the pass's
+   second half. Main's vertex stage is a copy of precomputed data. The
+   lever is invocations: shared vertices through a per-class index
+   buffer (four a quad, 2(n + 1) a strip) and a quad-only class-0
+   pipeline. The first indexed build repeated the pattern per record
+   (50 MB of indices for the widest class at the store's capacity) and
+   collapsed surplus vertices to the screen centre; both went with the
+   instanced draw and the pinned collapse above. The record carries the
+   trig row and the padded sweep again: 67 ns per arc on the watch core
+   (1.2 ms of the scene stage) against eight transcendentals per vertex
+   invocation, and the GPU pass is the binding stage. Alternated on the
+   watch: fix8 25.0, instanced 20.4 / 20.2 / 20.1, fix8 25.0 ms, ten
+   draws, the same fill; main's pass was 14 to 18. The review that
+   found the collapse (2026-09-04) also holds the rest of the list:
+   the fingerprint hashed a segment's lane and range only (fixed: whole
+   segments); the vertex stat charged each record its own class where
+   the draw charges the segment's (fixed); `band_bucket_for` decides
+   segments and the one-pixel margin in the command's units, before the
+   root scale is known, so a scaled-up arc gets fewer segments and a
+   wider overshoot than the shader's device-space strip wants, and a
+   small arc that scales to forty pixels stays a quad; the store writes
+   1.97 MB of records a frame for 17,600 arcs whose useful change is a
+   few floats each, so the next record format keeps immutable
+   templates apart from compact per-frame instances; `scene_budgets.rs`
+   gates cached layers and never the 17,600-changing-record arena, which
+   needs a gate of its own on indices, invocations, upload bytes and
+   pass time. After that the levers are the fragment program's cost
+   per pixel (the interior of a band shaded without the distance field,
+   the analytic coverage only on its fringes), the stored run's records
+   written once into GPU-visible memory instead of recorded, compared
+   and staged, and the update of frame n+1 overlapping the render of
+   frame n instead of waiting on it.
    Then the showcase's exact GPU steps (interior split, shadow support
    at r, blur variants, substrate) and the material decisions, each with
    its number.
