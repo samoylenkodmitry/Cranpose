@@ -298,37 +298,222 @@ pass. Flushing the page before every glass removed every fix-up but added
 nothing; one flush per stage with the stage's glasses as blockers (the
 design above) presents in 32.7-33.1 ms with 25 passes, against 37.9 for
 the stage-lowest flush measured in the same session, and main's old
-renderer at 27-28. What remains: the liquid shader ~14 ms over 3.1 MP, the
-blur pass pairs ~8 ms (three vertical passes of 0.3-0.5 MP at 13-25 taps
-each, over RGBA16F), copies ~2 ms, the page's own fill.
+renderer at 27-28. What remains: the liquid shader ~14 ms over 2.8 MP, the
+blur pass pairs ~8 ms (three vertical passes of 0.2-0.5 MP at 13-25 taps
+each, written at full size), copies ~2 ms, the cached shadow bands (5.7 MP
+composited per frame), the page's own fill.
 
-## Plan: correct and fast (2026-09-04)
+## Why the frame is not 60 fps (read 2026-09-04)
 
-Read fresh from the code, not from memory, then measured by ablation (see
-above). The architecture stays resolve-then-compose with strata; every
-step ships with the contract that proves it and is measured on the device
-against main's 28 ms present. Done: captures are copies (pixel-exact,
-`capture_culling.rs`), one flush per stage with glass blockers and
-deferral, gap-free atlases with texel-center reads, and the blur's taps
-paired into bilinear fetches at the kernel's own weights (`blur_fs.wgsl`;
-`blur_reference.rs` holds the result to its kernel applied by the CPU
-within one 8-bit step and goes red for a shifted pair offset or a scaled
-weight; 32.5 to 31.0-32.0 ms on the device, the vertical passes were
-fetch-bound less than the tap ablation suggested).
+Two scenes on the Mate 20 X (Mali-G76 MP10, 1080x2143, Vulkan, FIFO, 8-bit
+page drawn straight into the swapchain image), present-thread telemetry
+p50 in ms. `update` is compose, layout and the scene graph patch on the
+producer thread; `collect` (the packet build) is inside `acquire`, which is
+otherwise the wait between the producer publishing and the present thread
+taking the packet; `render` is the encode (plan, record, finish, submit) on
+the present thread; `present` is the `frame.present()` call.
 
-1. **Two frames in flight.** The Android producer's depth-one credit
-   serialises CPU and GPU; a depth of two lets the update and encode of
-   frame N+1 overlap the GPU of frame N, worth the CPU stage, ~10 ms of the
-   frame. It costs one frame of input latency, the platform's own
-   triple-buffering trade; a pacing policy the user decides.
-2. **The page in the surface's own format** on 8-bit devices: measured at
-   1 ms, cleanup-grade, taken only if the parity tests hold.
-3. **The liquid shader shades the same pixels cheaper.** An analytic
-   gradient for the plain rounded shape behind a specialization flag
-   instead of three SDF evaluations; `f16` behind the same one-step parity
-   gate. Contract: `backdrop_atlas_parity.rs`,
-   `glass_specialization_parity.rs`.
-4. **The rest is the material.** 60 fps is 16.7 ms; on this device that
-   needs the glass under ~8 ms, which is the material's per-pixel cost
-   (dispersion, refraction and highlight are ~4 ms of the 14 by ablation)
-   or its area. Any step past 3 changes pixels, and is the user's call.
+| scene                | period | update | acquire | render | present | GPU stats |
+| -------------------- | -----: | -----: | ------: | -----: | ------: | --------- |
+| showcase scroll      |   40.0 |    4.5 |    29.4 |    7.7 |    32.0 | 5 passes, 17 copies, shader 2.8 MP, shadow bands 5.7 MP, 110 draws, 0.1 MB uploads |
+| cranorbit MEGA BOSS  |   18.7 |    6.9 |     6.4 |    9.9 |     8.1 | 1 pass, 1 draw of ~15k shapes, 11 MP shape fill, 4.5 MB uploads |
+
+Both periods are the present thread's own cycle: `render + present`. On
+cranorbit 9.9 + 8.1 = 18.0 of the 18.7 ms period; on the showcase 7.7 + 32
+of 40. Four things follow from the code, and each is what stops 60 fps.
+
+1. **The present thread serialises the CPU encode with the GPU.** The
+   producer may run two packets ahead (`PresentHandle::has_credit` is
+   `outstanding < 2`), so backpressure is not the limit. The present thread
+   is: `PresentState::run` takes one packet, encodes and submits it, then
+   calls `frame.present()`, which blocks in the driver until the GPU has
+   drained the FIFO queue, and `acquire` waits on a fence for the image's
+   previous use (`wgpu-hal` `swapchain/native.rs`). Only then does it look at
+   the next packet. The GPU therefore idles for every encode, and the CPU
+   idles for every GPU frame. Frame time is `encode + gpu`, never
+   `max(encode, gpu)`. On cranorbit the GPU is 8 ms and the producer 7 ms:
+   the scene is already a 60 fps scene on every stage but this sum.
+2. **Encode time is wgpu submission, not scene work.** The showcase draws
+   110 things and spends 7.7 ms encoding: `finish` 2.2 ms and `submit` 3.3
+   ms (`[wgpu-render-stage:submit]`), with 105-156 `queue.write_buffer`
+   calls per frame, each a staging allocation that the submit copies. Main
+   had the same shape (finish 2.4-3.9, submit 3.1-4.3, 101-111 writes), so
+   this is not the rewrite's regression, it is the cost the renderer has
+   always paid. Cranorbit's 9.9 ms is that plus real work that runs on the
+   encode's critical path though nothing in it needs the GPU: 15k
+   `DrawShape` records converted to `ShapeData`, the band meshes tessellated
+   on the CPU, 4.5 MB written, every frame, while the producer thread sits
+   idle for the difference.
+3. **The glass shades 2.8 MP at ~5 ns per pixel: 14 ms.** The showcase
+   cards use `blur_radius(0.0)`: the transmission is sharp (one tap per
+   wavelength), so the cost is ALU and the ~20 taps of the reflection,
+   plain, and adaptive-frost paths, not a blur. The shader evaluates the
+   scene SDF three times for the normal, three lens displacements with
+   `pow` and `sin`, two meniscus bands, the bevel axes, three tone curves,
+   and reads ~60 uniforms, per pixel, all of it a function of the pixel's
+   position in the card and none of it of the frame's content. Seven cards
+   of identical geometry recompute the identical field every frame.
+4. **The blur pair writes its vertical pass at full size**, 13-25 taps per
+   pixel over 0.2-0.5 MP per region, ~8 ms for the header and the glass
+   buttons; the cached drop shadows composite 5.7 MP of bands per frame,
+   most of it the transparent tail of a Gaussian; the four strata load and
+   store the whole page four times (~1 ms each on this tiler).
+
+The architecture below removes 1 and 2 without touching a pixel, which is
+cranorbit's whole gap and the showcase's CPU half; the GPU half of the
+showcase is 3 and 4, planned as exact steps first and pixel-changing steps
+last, each behind the contract that pins it.
+
+## Architecture: a three-stage frame
+
+```text
+producer thread        encoder thread                 presenter thread
+compose, layout,       plan strata and stages,        acquire the next image
+scene graph patch,     record passes, one upload      ahead of need,
+collect -> packet      ring write, submit             present, return timings
+      |  credit 2            |  acquired image <-------------|
+      +--------------------->+  submitted frame ------------->+
+```
+
+**Present runtime.** `PresentState` splits in two. The encoder thread owns
+`GpuRenderer` and does exactly what `render_to_surface` does today minus the
+swapchain calls: validate the packet, encode, submit, hand `RenderReturns`
+back. The presenter thread owns the `wgpu::Surface`: it acquires one
+`SurfaceTexture` ahead of the encoder's need and parks it in a one-slot
+mailbox, and after every submit it takes the frame's texture and calls
+`present`, then acquires the next. `SurfaceTexture`, `Surface` and `Queue`
+are `Send + Sync` in wgpu 30, so nothing is unsafe about this. The encoder
+never blocks on the swapchain unless no image is free, which is the
+GPU-bound case where nothing can help. Surface control messages (replace,
+reconfigure, drop) go to the presenter, which drains its mailbox and bumps
+the epoch exactly as `handle_control` does now, so the cancellation
+protocol and its tests keep their meaning: a packet built against an old
+epoch is refused whole. The frame period becomes
+`max(producer, encoder, gpu)`. On cranorbit that is `max(7 + collect, 9.9,
+8.1)`, a vsync-paced 60 fps before any other step; on the showcase it is
+the GPU alone, 32 ms today, and the encode is no longer added to it.
+Telemetry reports the three stages by name (`producer`, `encoder`, `gpu`,
+where `gpu` is submit-to-present-return) instead of the present thread's
+`acquire`/`render`/`present`, which mean something else once the thread is
+split. The contract test runs the runtime inline with an injected clock and
+a presenter whose `present` sleeps: the encoder's second packet must finish
+encoding before the first present returns.
+
+**One upload ring per frame.** Every per-frame byte the GPU reads (viewport
+uniforms, shape and gradient data, band meshes, image and glyph vertices,
+blur, composite and shader uniforms) is sub-allocated from one persistently
+sized buffer per usage class, written with one `write_buffer` at the end of
+the encode, and bound with dynamic offsets. `ViewportUniformRing` is
+already this shape; `UploadAllocator`'s per-slot buffers and cached bind
+groups become ranges of the ring with one bind group per ring. The
+`upload_writes` count on the submit line is the contract: a frame has at
+most one write per ring, the test pins that on the atlas scene. Expected:
+finish + submit from 5.5 ms to under 2 on the showcase.
+
+**GPU-ready records leave the producer.** `collect` already knows the root
+scale and every op's snap anchor, so `convert_shape_into_slots` and
+`band_mesh::mesh_batch` run there, once, and the packet carries `ShapeData`
+and mesh geometry per z-ordered run with the blend mode and brush table the
+encoder batches by; the encoder copies bytes into the ring and records
+draws. This is the same conversion in one place (`render_contract.rs`
+keeps queue writes in `frame_graph.rs`; the conversion is not a write). On
+cranorbit the encoder drops to the copy and the draw, the producer rises to
+~10 ms, and both sit under the vsync. Retained GPU records for unchanged
+draw runs are not planned: a `Canvas` re-records each frame in the
+reference too, and with the stages overlapped the per-frame conversion is
+paid on a thread that has the time.
+
+**The glass shades content, not geometry, per frame.** `liquid_glass.wgsl`
+partitions by what each term depends on. Everything that depends only on
+the fragment's position in the effect rect and the material's uniforms
+(the scene SDF and its normal, coverage and the two coverage bands, the
+three channel displacements, the reflection displacement and tangent, the
+meniscus, bevel, specular and face-light weights) is the *lens field*, and
+everything that depends on the captured pixels (the transmitted, plain,
+reflection and adaptive taps, tone, tint, ink, dither) is the *content
+pass*. The lens field is rendered once per distinct (effect rect size,
+material uniforms, scale) into a retained texture keyed like the layer
+cache (`Rg32Float` for the three displacements, `Rgba16Float` for the
+weights, exact to the shader's own arithmetic), and the per-frame draw
+reads it and does the content pass: ~20 taps and ~100 ops per pixel. The
+seven showcase cards share one field. A morphing or wobbling glass whose
+uniforms change every frame misses the cache and renders its field every
+frame in the same two draws, so it costs what it costs today plus one
+small write; the specialisation that folds inactive features stays for
+that path. Contract: `backdrop_atlas_parity.rs` gains the field-cached
+glass against the monolithic shader, byte for byte, with the field
+rendered at the effect's own resolution. Expected on the showcase: 14 ms
+to ~6 (field reads ~2-3 ms of bandwidth, taps and tone ~3).
+
+**Blur at the scratch scale, once.** The vertical pass writes at the
+scratch scale too, and the composite (the masked blit, or the glass's
+region read) samples the small result bilinearly. This is the reference's
+own algorithm (Skia downsamples a wide blur, blurs, and upsamples), and it
+changes pixels: the upsampled result differs from the full-size vertical
+pass by the bilinear reconstruction of a signal the kernel already
+band-limited. `blur_reference.rs` gets the reference model of that
+pipeline (downsample, separable Gaussian at the scaled radius, bilinear
+upsample) and holds the GPU to it within one step; the robot fixtures
+that show a blurred glass are re-baked against the reference model, not
+loosened. Expected: ~8 ms to ~2.
+
+**Shadow bands to their visible extent.** A cached blurred shadow is
+composited as up to four bands of the full blur margin; the band outside
+the radius where the cached alpha is zero contributes nothing. The cache
+entry records the alpha extent it holds (measured from its own content
+once, when it is rendered), and the bands shrink to it. Pixel-exact by
+construction; the contract test draws a shadow with and without the trim
+and compares byte for byte, and pins `shadow_cache` `hit_px` on the card
+row to the visible extent. Expected: 5.7 MP to ~2.5 MP, ~1.5 ms.
+
+**Strata stay.** Four full-page passes are ~3-4 ms of tile traffic here;
+wgpu has no render-area, so a stratum cannot be confined to the tiles it
+touches, and merging strata reintroduces the re-draws the copies removed.
+They are the price of exact captures on a tiler and are not on the path
+to 16 ms.
+
+## Budget
+
+Showcase scroll, GPU ms, present-thread p50:
+
+| item                          | now | after | step |
+| ----------------------------- | --: | ----: | ---- |
+| liquid shader                 |  14 |     6 | lens field |
+| blur pairs                    |   8 |     2 | scratch-scale vertical pass |
+| shadow bands                  |   3 |   1.5 | visible extent |
+| copies                        |   2 |     2 | |
+| page fill, strata, composites |   5 |     5 | |
+| total                         |  32 |  16.5 | |
+
+CPU per frame, ms: producer 4.5 + collect ~1; encoder 7.7 to ~3 (ring);
+neither on the GPU's path once the stages overlap. The showcase's 60 fps
+is therefore the GPU budget above, and the table lands at the vsync with
+no margin. The only remaining lever that does not change what the glass
+transmits is the material's own arithmetic (`f16` behind the one-step
+parity gate, an analytic normal for the plain rounded shape), worth an
+estimated 1-2 ms of the field's render, which the cache already takes off
+the per-frame path. Past that the levers change pixels (the tone curves,
+the frost neighbourhood, the field at half resolution) and are the user's
+call; the plan does not assume any of them.
+
+Cranorbit MEGA BOSS: the three-stage frame alone makes the period
+`max(7 + collect, 9.9, 8.1)` ms, under the 16.7 ms vsync; moving the
+conversion to the producer balances it to ~10 / ~4 / 8. No pixel changes.
+
+## Order
+
+Each step ships with its contract test proven red first and the device
+numbers for both scenes against the numbers above; a step whose number
+does not move is reverted, not kept.
+
+1. Three-stage frame (present runtime split, telemetry renamed). Both
+   scenes; cranorbit's 60 fps lands here.
+2. One upload ring per frame. Both scenes.
+3. GPU-ready records from the producer. Cranorbit's encoder margin.
+4. Lens field cache. Showcase's largest GPU item, pixel-exact.
+5. Shadow bands to their visible extent. Pixel-exact.
+6. Blur at the scratch scale. Pixel-changing within the reference model;
+   fixtures re-baked against it.
+7. Measure; if the showcase is not at the vsync, the material's arithmetic
+   (`f16`, analytic normal) behind the parity gate, then stop and report
+   what remains and what it would cost in pixels.
