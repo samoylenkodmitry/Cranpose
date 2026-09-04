@@ -310,6 +310,11 @@ impl PresentState {
             }
         };
         let after_acquire_ns = self.now();
+        if let Some(delay) = crate::debug_toggles::debug_toggle("CRANPOSE_ENCODE_DELAY_MS")
+            .and_then(|value| value.parse::<u64>().ok())
+        {
+            std::thread::sleep(std::time::Duration::from_millis(delay));
+        }
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
             format: Some(self.gpu_renderer.surface_format().remove_srgb_suffix()),
             ..Default::default()

@@ -583,6 +583,19 @@ than the period, then jump. Measure GPU time with the whole-frame fence, or
 compare `pass_px` and the Mac's `CRANPOSE_GPU_PASS_TIMING` occupancy, never
 the present column.
 
+## A fence cannot time the GPU here either; inject CPU delay and read the period
+
+The whole-frame fence reports 43 ms per frame on a scene running at 52 fps
+unfenced (cranorbit MEGA BOSS, 2026-09-04), so on this device it has a
+round-trip floor larger than the frame and cannot rank anything. What does
+discriminate is `debug.cranpose.encode_delay_ms`: a sleep on the present
+thread between acquire and encode. If the period does not move, the GPU is
+the frame and the CPU hides under it (showcase: +20 ms cost nothing, +40 ms
+cost a frame, so the GPU frame is ~40 ms and present blocks on the previous
+frame, not this one); if it moves one for one from zero, the present thread
+is the frame and the present block is `gpu - encode` (cranorbit: GPU ~19 ms
+behind an 8 ms present column). Two alternating rounds, temperature logged.
+
 ## An uber-shader's OFF features cost more than its ON ones on Mali
 
 The liquid glass fragment program gates a dozen optional features on
