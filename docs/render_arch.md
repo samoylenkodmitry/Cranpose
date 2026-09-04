@@ -821,7 +821,39 @@ zero, alternating rounds, temperature logged; the watch with the
    (1.2 ms of the scene stage) against eight transcendentals per vertex
    invocation, and the GPU pass is the binding stage. Alternated on the
    watch: fix8 25.0, instanced 20.4 / 20.2 / 20.1, fix8 25.0 ms, ten
-   draws, the same fill; main's pass was 14 to 18. The review that
+   draws, the same fill; main's pass was 14 to 18. A constant fragment
+   on top of it, alternated: 20.2 / 18.6 / 29.1 (throttling) / 27.3 ms,
+   so the whole fragment stage, distance fields and blending over 1.7 MP,
+   is 1.6 ms of the pass, and the 18.6 ms floor is the vertex stage and
+   what the tiler does around it: ~104 k invocations each loading a
+   112-byte record and storing eight vectors of varyings, run again per
+   bin (that early return also lets the linker drop every varying the
+   fragment no longer reads, so the 18.6 covers neither varying traffic
+   nor per-pixel work; the earlier 14 ms "constant fragment" kept the
+   coverage and its discard). Folding the canonicalisation and the
+   paint out of the vertex stage on top of it moves nothing (18.3 /
+   17.9, 18.7 / 18.5), so the floor is not that arithmetic either; what
+   is left is the record loads, the primitive processing and the
+   binning. A flat indexed draw (the pattern repeated per record,
+   `base_vertex` at the segment start, no instancing) is slower again:
+   20.2 / 24.8 / 28.6 / 34.5 ms, the same vertices and shader, so this
+   front end is bound by what it does per vertex and per index, and
+   instancing, which fetches six indices once, is the cheapest draw
+   form it has. One triangle over the rect instead of the quad's four
+   vertices (a quarter fewer invocations, twice the quad's fill, the
+   rect test back in the class-0 pipeline) is slower too: 20.2 / 22.7,
+   28.8 / 32.0. So neither pixels, nor vertex arithmetic, nor vertex
+   count, nor varyings move the 18 ms floor; what the four probes leave
+   is the per-record work the tiler does for 17,600 instances and the
+   record loads behind them, and the frame is CPU-bound at 28.8 ms
+   anyway (update 13.6, upload 6.8 cool), so the CPU side is the next
+   cut whatever the GPU floor turns out to be. Of the upload, the 4 KB
+   chunk compare is free: uploading the whole table without comparing
+   measures the same or worse (run-upload 4.2 / 5.1 / 5.2 / 8.2 ms as
+   the watch heated), so the cost is `write_buffer` moving 1.85 MB into
+   staging at some 400 MB/s, and only fewer bytes cut it: a smaller
+   record, then per-frame instances beside immutable templates. The
+   review that
    found the collapse (2026-09-04) also holds the rest of the list:
    the fingerprint hashed a segment's lane and range only (fixed: whole
    segments); the vertex stat charged each record its own class where
