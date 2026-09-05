@@ -1574,6 +1574,7 @@ impl CommandRecording {
     }
 
     pub fn push_content(&mut self) {
+        self.fingerprint.take();
         self.content_markers += 1;
         self.shapes.push_content_segment();
     }
@@ -1593,6 +1594,7 @@ impl CommandRecording {
 
     #[inline]
     fn note_shape(&mut self) {
+        self.fingerprint.take();
         self.summary.has_non_shadow = true;
     }
 
@@ -1645,6 +1647,7 @@ impl CommandRecording {
     }
 
     pub fn push_other(&mut self, primitive: DrawPrimitive) {
+        self.fingerprint.take();
         self.summary.note(&primitive);
         if let Some(rect) = primitive_coverage_rect(&primitive) {
             self.include_bounds(rect);

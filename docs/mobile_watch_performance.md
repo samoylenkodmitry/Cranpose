@@ -273,3 +273,12 @@ The short-strip, column and staging implementation passes workspace tests,
 Clippy, precommit, release web and Android builds. The exact robot recipes pass
 162 GPU tests and all four software capture tests, with no failures or skips.
 Software presentation measurements are not device FPS evidence.
+
+Preparing existing columns in place on Rayon workers preserves the complete
+workload fingerprint, but takes 6.41–6.44 ms against 6.74–6.77 ms for serial
+recording. Its 90th percentile rises to 8.50–8.69 ms from 6.83–6.93 ms. Most column
+construction still runs on the caller, and the worker boundary adds scheduling
+variance. This version is rejected; its source and patch remain outside the
+branch. The experiment's mixed-record test also catches stale command identity
+after appending to a fingerprinted recording. All three append lanes invalidate
+that fingerprint, with the regression proven red before the fix.
