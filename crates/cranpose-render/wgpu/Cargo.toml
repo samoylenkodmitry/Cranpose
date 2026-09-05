@@ -33,7 +33,7 @@ cranpose-ui-graphics = { workspace = true }
 cranpose-foundation = { workspace = true }
 cranpose-ui = { workspace = true }
 cranpose-core = { workspace = true }
-bytemuck = { version = "1.25", features = ["derive"] }
+bytemuck = { workspace = true }
 log = "0.4"
 naga = { version = "29.0.3", features = ["wgsl-in"] }
 web-time = { workspace = true }
