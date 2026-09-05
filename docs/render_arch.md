@@ -1513,6 +1513,57 @@ gain); the page usage ablation (no gain); a compute blur (no evidence it
 beats the pass pair on either GPU); a whole-result backdrop cache without
 the rigid-motion rule (the stale-image scroll regression of 2026-08-29).
 
+## The split draws cannot rasterize their bands exactly; the shader keeps a frozen reference (2026-09-05, late)
+
+The candidate after the support unit was the split glass draws' raster
+support: the interior pipeline rasterizing one quad (the shape rect
+deflated by the rim reach less a margin) and the rim pipeline a ten-vertex
+ring (outer edge the viewport, inner edge the rect deflated by the reach,
+the margin and the corner sagitta), the fragment discards left in place as
+the exact gate, the reach computed by one WGSL function both stages call.
+A showcase card's rim draw discards ~74% of its fragments after the
+uniform preamble and the scene field, so the prize was those fragments'
+ALU.
+
+**Measured** on the Mate 20 X, full 14-body scroll against 939c5ddd, A B
+A B then B A B A without cooling: 39.40 / 39.61 (band) / 39.52 / 40.15
+(band) then 39.50 (band) / 39.19 / 39.64 (band) / 38.85, 35 to 42 C: the
+band ahead in every pair by 0.21, 0.63, 0.31 and 0.79 fps, means 39.24
+against 39.72, +1.2%, about 0.3 ms of a 25 ms frame. The watch was not
+measured; the taps model predicts nothing there, since discarded fragments
+fetch nothing.
+
+**Not exact, twice.** `glass_reference_shader.rs` renders the same graphs
+through the same renderer with the shipped shader and with
+`tests/fixtures/liquid_glass_reference.wgsl` (the 939c5ddd source,
+verbatim), byte identity required: cover-mode cards on the page path,
+cards on the child path with content, cards at 1.5x and 0.75x, and lenses
+with blur and substrates. The band with uv derived from
+`@builtin(position)` and a reserved viewport slot flipped 788 to 1,407
+pixels by one level per scenario; the band with the interpolated uv
+varying flipped 18,510, because a ring and a strip cover a pixel with
+different triangles and the interpolator's plane equations do not agree to
+the bit. The preamble extraction alone (`glass_geometry()` and
+`rim_reach_of()`, the same expressions in one function) was byte-identical,
+so the refactor was exact and the geometry was the drift. The exact form
+of the idea is scissors: the interior draw scissored to the deflated rect
+and the rim draw issued four times, one scissor per side band, all on the
+unchanged strip so the varyings are the same; that costs five draws per
+glass instead of two and a Rust copy of the reach formula the material
+would have to keep in step with the WGSL, for a Mali gain of ~0.3 ms and
+a watch gain of nothing. Dropped: the band, the position-derived uv, the
+viewport slot, the vertex-count per variant and the vertex-visible bind
+groups are all reverted; the shipped shader is the 939c5ddd source.
+
+**What stays.** `glass_reference_shader.rs` and its fixture, the exactness
+guard for every later shader edit: a refactor must render byte-for-byte
+against the fixture, and a deliberate picture change re-freezes the file
+in the same commit. `Glass::backdrop_effect` is public so a graph test can
+build the real card and lens materials without composing a page. The
+lens's blur is the next exact lever only with a proven sample domain for
+the material's refraction; the cards' remaining cost is the material's
+taps over the band and the interior, which no raster trick removes.
+
 ## A material declares where it writes and where it reads; the renderer shades and blurs only that (2026-09-05, night)
 
 The tab bar's lens carries deformation headroom in its node: the node is

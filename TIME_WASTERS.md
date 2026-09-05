@@ -884,3 +884,7 @@ recording architecture on the strength of a compression ratio.
 
 An A B A B + B A B A matrix of 60 s legs runs about 13 minutes. Claude Code's background Bash tasks are limited to 10 minutes, so run the driver detached (`python3 -c 'subprocess.Popen([...], start_new_session=True)'`; macOS ships no `setsid`) and watch its log. When two agents run the same `measure_orbit.py` from the shared mailbox on one Mac, `pkill -f measure_orbit.py` kills both: the other agent's leg dies without its cleanup, leaving the device's debug properties, SurfaceFlinger timestats and the app as they were. Stop only the PID you launched.
 ||||||| 77deb8fe
+
+## Trimming a fullscreen-strip shader draw to a quad or a ring is never byte-exact
+
+Two hours on 2026-09-05: the glass split draws rasterized as an interior quad and a rim ring rendered byte-for-byte against the same shader drawn whole (the parity test was green and red-provable), yet against the previous shader source they flipped ~1% of glass pixels by one level with uv from `@builtin(position)` and 18,510 pixels with the interpolated varying: a varying's plane equation is per triangle, so different triangles over a pixel give different ULPs, and position-derived uv differs from the old interpolated value as well. A parity test that compares two arms sharing the new math proves nothing about the old picture. Freeze the previous shader source as a fixture and compare against it (`glass_reference_shader.rs`), and cut fragment work only with scissors on the unchanged strip.
