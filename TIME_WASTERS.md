@@ -4,6 +4,11 @@ Signature → cause → what to do. One lesson per line, no incident history.
 
 ## Triage before blaming the code
 
+- **A restored source file still runs the mutant:** `rsync -a` restores its earlier timestamp too, so Cargo can reuse the newer mutant artifact. Touch the restored source, rebuild, and verify the intended assertion passes.
+- **Identity capture differs by one byte on lavapipe:** a bilinear sample from a half-float texture can add rounding even at a nominal texel centre. Isolate each capture; an identity fixture that requires exact bytes should use `textureLoad`. Keep the pixel assertion strict and leave material sampling unchanged.
+- **Fewer upload bytes with more writes can be slower:** measure allocation calls as well as bytes. On Adreno 702, pooled staging helps dozens of scattered writes but leaves a single dense write unchanged. Packing columns after recording adds a CPU conversion; write the columns in the recorder.
+- **Compute blending differs from the attachment:** Adreno 702 quantizes source RGBA before blending into RGBA8. Quantizing only the accumulated destination differs even when the blend equation is identical. Prove the attachment rule with overlapping random colours before building a tile renderer.
+
 - **Rebase first.** `git fetch origin main && git log --oneline origin/main -3` costs seconds. Four "broken on main" robots were four commits already fixed upstream. A stashed clean tree proves the failure is not in *your* changes — it says nothing about your base being current.
 - **Confirm a cause by REMOVING it and re-running, before writing the fix.** Binary-search by cutting half the code.
 - **A/B two revisions on ONE machine, back to back.** Byte-identical output (same SHA-256, empty `ImageChops.difference` bbox) ends the question. Two machines — or one machine hours apart — compares host state as much as code.
@@ -16,6 +21,8 @@ Signature → cause → what to do. One lesson per line, no incident history.
 - "No test names it" and "no code calls it" are different questions. Uncalled *and* untested is dead; called but untested wants a test. Deleting on the first signal broke four modifier files (`InspectorInfo::add_dimension`: four callers, no test).
 
 ## Host and display gates
+
+- **A first offscreen GPU control can be much slower than the warmed control:** on the watch, the same frozen raster draw measured 41 ms first and 14–16 ms after a compute experiment. Alternate the unchanged control after every variant; a few warm-up frames do not establish stable clocks.
 
 - **Thermal guard has TWO knobs**: `CRANPOSE_HOST_MAX_TEMP_C` (default 90) trips, `CRANPOSE_HOST_RESUME_TEMP_C` (default 85) releases. Raising only MAX is useless when ambient sits above RESUME — one spike arms a wait for a cooldown that never comes, and the run dies `host_not_ready` after `CRANPOSE_HOST_MAX_WAIT_SECS` (300). On a busy desktop use `CRANPOSE_HOST_MAX_TEMP_C=97 CRANPOSE_HOST_RESUME_TEMP_C=93` and a longer wait. `host_not_ready` with no robot binary launched is an environmental block — report it, do not wait it out. Schedule robot suites LAST, never beside a cargo/gradle build.
 - **Robot over ssh needs an explicit `DISPLAY`.** Without it every test fails "neither WAYLAND_DISPLAY nor WAYLAND_SOCKET nor DISPLAY is set" — 153 failures that look catastrophic are one env var. `DISPLAY=:0` on samarch-1; `run_robot_test.sh` needs one even for `CRANPOSE_HEADLESS=1` (winit still builds an event loop).
@@ -785,3 +792,5 @@ id rather than fighting the installer. Also: `simpleperf record` on the
 watch fails with "Event type 'cpu-clock' is not supported" for every
 event; the kernel ships without perf events. Profile there with the
 `debug.cranpose.*_stage_ms` properties.
+
+- ARMv7 record append probes (2026-09-05): forcing column append out of line costs ~10%; the supported thumbv7neon Android target gives no measurable gain. The 15,161-arc probe needs parallel preparation for a substantial CPU gain. Evidence and limitations: `docs/mobile_watch_performance.md`.

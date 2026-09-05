@@ -6,6 +6,7 @@
 #![allow(non_snake_case)]
 
 pub mod alpha_mask;
+mod arc_trig_cache;
 mod brush;
 mod color;
 pub mod framework_shaders;
@@ -18,6 +19,7 @@ mod record;
 pub mod render_effect;
 mod render_hash;
 mod shadow;
+mod shape_records;
 mod stroke;
 mod typography;
 pub mod unit;
@@ -35,6 +37,7 @@ pub use record::*;
 pub use render_effect::*;
 pub use render_hash::*;
 pub use shadow::*;
+pub use shape_records::*;
 pub use stroke::*;
 pub use typography::*;
 pub use unit::*;

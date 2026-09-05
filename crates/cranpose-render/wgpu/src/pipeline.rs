@@ -2208,7 +2208,7 @@ mod tests {
                 run.tables
                     .shapes
                     .iter()
-                    .map(move |record| (*record, run.placement))
+                    .map(move |record| (record, run.placement))
             })
             .collect()
     }
@@ -2292,7 +2292,7 @@ mod tests {
             ambient_shape.bounds.width > bounds.width,
             "ambient shadow should clearly expand width"
         );
-        let ambient_peak_alpha = ambient_shape.tables.shapes[0].color[3];
+        let ambient_peak_alpha = ambient_shape.tables.shapes.get(0).unwrap().color[3];
         assert!(
             ambient_peak_alpha > 0.02,
             "ambient alpha should remain visible"
@@ -2305,7 +2305,7 @@ mod tests {
             spot_shape.bounds.y > bounds.y,
             "spot shadow should be offset downward from source bounds"
         );
-        let spot_alpha = spot_shape.tables.shapes[0].color[3];
+        let spot_alpha = spot_shape.tables.shapes.get(0).unwrap().color[3];
         assert!(spot_alpha > 0.02, "spot alpha should remain visible");
     }
 

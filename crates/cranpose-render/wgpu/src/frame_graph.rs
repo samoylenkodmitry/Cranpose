@@ -1,5 +1,8 @@
+mod buffer_uploads;
+
 use std::fmt;
 
+use buffer_uploads::BufferUploads;
 use web_time::Instant;
 
 use crate::{
@@ -628,11 +631,13 @@ impl WgpuFrameGraphExecutor {
             release_pending_transients(&mut self.transient_textures, pending_transient_releases);
             return Err(FrameGraphError::NoDeclaredPasses);
         }
+        self.upload_allocators.buffers.finish();
         if fence_profile::enabled() {
             fence_profile::end_frame(device, queue, &mut encoder);
         }
         let uploads = self.upload_allocators.flush(queue);
         let (submission, upload_writes) = Self::submit_with_timing(queue, encoder);
+        self.upload_allocators.buffers.recall();
         release_pending_transients(&mut self.transient_textures, pending_transient_releases);
         let retained_texture_bytes = self.retained_texture_bytes();
         Ok(FrameGraphExecution {
@@ -845,6 +850,14 @@ fn log_frame_graph_pass_timing(start: Instant, label: Option<&'static str>, pass
 }
 
 pub(crate) trait FrameCommandRecorder {
+    fn stage_buffer_copy(
+        &mut self,
+        device: &wgpu::Device,
+        buffer: &wgpu::Buffer,
+        offset: u64,
+        bytes: &[u8],
+    ) -> FrameCommandStats;
+
     fn begin_timed_render_pass(
         &mut self,
         descriptor: &wgpu::RenderPassDescriptor<'_>,
@@ -909,11 +922,28 @@ pub(crate) trait FrameCommandRecorder {
 }
 
 impl FrameCommandRecorder for PassContext<'_> {
+    fn stage_buffer_copy(
+        &mut self,
+        device: &wgpu::Device,
+        buffer: &wgpu::Buffer,
+        offset: u64,
+        bytes: &[u8],
+    ) -> FrameCommandStats {
+        FrameCommandStats {
+            upload_bytes: self
+                .uploads
+                .buffers
+                .write(device, self.encoder, buffer, offset, bytes),
+            ..FrameCommandStats::default()
+        }
+    }
+
     fn begin_timed_render_pass(
         &mut self,
         descriptor: &wgpu::RenderPassDescriptor<'_>,
     ) -> wgpu::RenderPass<'_> {
         if fence_profile::enabled() {
+            self.uploads.buffers.finish();
             let bucket = fence_profile::bucket_label(descriptor);
             fence_profile::split(self.device, self.queue_handle, self.encoder, Some(&bucket));
         }
@@ -999,8 +1029,10 @@ impl WgpuFrameEncoder<'_> {
         let transient_texture_bytes = self.transient_texture_bytes;
         let copies = self.copies;
         let mut transient_releases = self.transient_releases;
+        self.uploads.buffers.finish();
         let uploads = self.uploads.flush(self.queue);
         let (submission, upload_writes) = WgpuFrameGraphExecutor::submit(self.queue, self.encoder);
+        self.uploads.buffers.recall();
         transient_releases.release_pending();
         let retained_texture_bytes = transient_releases.retained_texture_bytes();
         FrameGraphExecution {
@@ -1067,6 +1099,25 @@ impl Drop for PendingTransientReleases<'_> {
 
 #[cfg(target_arch = "wasm32")]
 impl FrameCommandRecorder for WgpuFrameEncoder<'_> {
+    fn stage_buffer_copy(
+        &mut self,
+        device: &wgpu::Device,
+        buffer: &wgpu::Buffer,
+        offset: u64,
+        bytes: &[u8],
+    ) -> FrameCommandStats {
+        FrameCommandStats {
+            upload_bytes: self.uploads.buffers.write(
+                device,
+                &mut self.encoder,
+                buffer,
+                offset,
+                bytes,
+            ),
+            ..FrameCommandStats::default()
+        }
+    }
+
     fn begin_timed_render_pass(
         &mut self,
         descriptor: &wgpu::RenderPassDescriptor<'_>,
@@ -1444,12 +1495,14 @@ impl UploadRing {
 /// offset, so a frame of a hundred blocks costs one staging write, not a
 /// hundred buffers and their barriers.
 pub(crate) struct FrameUploadAllocators {
+    buffers: BufferUploads,
     rings: [UploadRing; 3],
 }
 
 impl Default for FrameUploadAllocators {
     fn default() -> Self {
         Self {
+            buffers: BufferUploads::default(),
             rings: [
                 UploadRing::new(
                     wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
@@ -1543,6 +1596,7 @@ impl FrameUploadAllocators {
     }
 
     pub(crate) fn reset(&mut self) {
+        self.buffers.reset();
         for ring in &mut self.rings {
             ring.reset();
         }

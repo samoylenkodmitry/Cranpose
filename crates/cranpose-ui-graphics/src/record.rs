@@ -9,7 +9,8 @@ use bytemuck::{Pod, Zeroable};
 
 use crate::{
     ArcGeometry, BlendMode, Brush, Color, CornerRadii, DrawPrimitive, FxHasher, Point, Rect,
-    RenderHash, Stroke, StrokeCap, StrokeJoin, TAU, TileMode, arc_band,
+    RenderHash, ShapeRecords, Stroke, StrokeCap, StrokeJoin, TAU, TileMode, arc_band,
+    arc_trig_cache::ArcTrigCache,
 };
 
 /// The kind bits of [`ShapeRecord::flags`]: a plain rect.
@@ -77,10 +78,9 @@ pub const BAND_ANGULAR_PAD: f32 = 0.001;
 pub const QUAD_VERTICES: u32 = 4;
 /// The indices one quad's two triangles take.
 pub const QUAD_INDICES: u32 = 6;
-/// The fewest strip segments a band draws with, so a band never shares a
-/// pipeline with the quads: a pipeline whose strips are one quad wide
-/// would test every quad's fragments against the record's rect.
-pub const BAND_MIN_SEGMENTS: u32 = 2;
+/// The fewest strip segments a band draws with. A short band's strip and a
+/// rectangular shape both use four vertices in the same segment class.
+pub const BAND_MIN_SEGMENTS: u32 = 1;
 
 /// The vertices a strip of `segments` quads shares: an inner and an
 /// outer vertex at each of its `segments + 1` boundaries.
@@ -262,8 +262,8 @@ pub const BRUSH_KIND_RADIAL: u32 = 2;
 /// See [`BRUSH_KIND_LINEAR`].
 pub const BRUSH_KIND_SWEEP: u32 = 3;
 
-/// One recorded shape, in the draw command's local space, laid out as the
-/// GPU reads it. Every value the app passed is kept verbatim, so the record
+/// One complete recorded shape in the draw command's local space.
+/// Every value the app passed is kept verbatim, so the record
 /// materialises back into the exact [`DrawPrimitive`] the call described,
 /// and the derived arc values the fragment stage needs sit beside them.
 #[repr(C)]
@@ -514,7 +514,7 @@ impl RecordSegment {
 /// renderer behind an `Arc` so a packet carries it without a copy.
 #[derive(Clone, Debug, Default)]
 pub struct RecordTables {
-    pub shapes: Vec<ShapeRecord>,
+    pub shapes: ShapeRecords,
     pub brushes: Vec<BrushRecord>,
     pub stops: Vec<GradientStopRecord>,
     pub explicit_stops: Vec<f32>,
@@ -546,7 +546,7 @@ impl RecordTables {
     /// while a scene still holds the last one grows nothing.
     fn with_capacity_of(&self) -> Self {
         Self {
-            shapes: Vec::with_capacity(self.shapes.capacity()),
+            shapes: ShapeRecords::with_capacity(self.shapes.capacity()),
             brushes: Vec::with_capacity(self.brushes.capacity()),
             stops: Vec::with_capacity(self.stops.capacity()),
             explicit_stops: Vec::with_capacity(self.explicit_stops.capacity()),
@@ -560,7 +560,9 @@ impl RecordTables {
     pub fn fingerprint(&self) -> u64 {
         *self.fingerprint.get_or_init(|| {
             let mut hasher = FxHasher::default();
-            hasher.write(bytemuck::cast_slice(&self.shapes));
+            hasher.write(bytemuck::cast_slice(self.shapes.bodies()));
+            hasher.write(bytemuck::cast_slice(self.shapes.curves()));
+            hasher.write(self.shapes.source_bytes());
             hasher.write(bytemuck::cast_slice(&self.brushes));
             hasher.write(bytemuck::cast_slice(&self.stops));
             hasher.write(bytemuck::cast_slice(&self.explicit_stops));
@@ -571,7 +573,7 @@ impl RecordTables {
 
     /// The heap the tables hold, capacity included.
     pub fn heap_bytes(&self) -> usize {
-        self.shapes.capacity() * std::mem::size_of::<ShapeRecord>()
+        self.shapes.heap_bytes()
             + self.brushes.capacity() * std::mem::size_of::<BrushRecord>()
             + self.stops.capacity() * std::mem::size_of::<GradientStopRecord>()
             + self.explicit_stops.capacity() * std::mem::size_of::<f32>()
@@ -665,6 +667,7 @@ pub fn primitive_coverage_rect(primitive: &DrawPrimitive) -> Option<Rect> {
 #[derive(Clone, Debug)]
 pub struct ShapeRecorder {
     tables: Arc<RecordTables>,
+    arc_trig: ArcTrigCache,
     last_segment_key: u32,
     segment_waste: u32,
     min: [f32; 2],
@@ -675,6 +678,7 @@ impl Default for ShapeRecorder {
     fn default() -> Self {
         Self {
             tables: Arc::default(),
+            arc_trig: ArcTrigCache::default(),
             last_segment_key: NO_SEGMENT_KEY,
             segment_waste: 0,
             min: [f32::INFINITY; 2],
@@ -949,10 +953,11 @@ impl ShapeRecorder {
         if bucket.is_some() {
             flags |= ARC_BANDED_BIT;
         }
+        let radii = self.arc_trig.resolve(geometry);
         self.push_shape(
             ShapeRecord {
                 rect: rect_row(rect),
-                radii: arc_trig(geometry),
+                radii,
                 color,
                 stroke_width: args.stroke.map_or(0.0, |stroke| stroke.width),
                 flags,
@@ -1284,7 +1289,8 @@ impl CommandRecording {
             .sum()
     }
 
-    pub fn shapes(&self) -> &[ShapeRecord] {
+    /// The shape columns, with complete records available on demand.
+    pub fn shapes(&self) -> &ShapeRecords {
         &self.shapes.tables.shapes
     }
 
@@ -1411,9 +1417,13 @@ impl CommandRecording {
             .flat_map(|segment| -> Box<dyn Iterator<Item = Rect> + '_> {
                 match segment.lane {
                     RecordLane::Shapes => Box::new(
-                        self.shapes.tables.shapes[segment.range()]
+                        self.shapes
+                            .tables
+                            .shapes
                             .iter()
-                            .map(ShapeRecord::coverage_rect),
+                            .skip(segment.start as usize)
+                            .take(segment.count as usize)
+                            .map(|record| record.coverage_rect()),
                     ),
                     RecordLane::Others => Box::new(
                         self.others[segment.range()]
@@ -1467,9 +1477,14 @@ impl CommandRecording {
 
     /// The exact [`DrawPrimitive`] the record was made from.
     pub fn materialize_shape(&self, index: usize) -> DrawPrimitive {
-        let record = &self.shapes.tables.shapes[index];
+        let record = self
+            .shapes
+            .tables
+            .shapes
+            .get(index)
+            .expect("recorded shape index");
         let rect = record.rect_value();
-        let brush = self.brush_of(record);
+        let brush = self.brush_of(&record);
         let stroke = record.stroke();
         let primitive = match record.kind() {
             RECORD_KIND_ROUND_RECT => DrawPrimitive::RoundRect {
@@ -1738,13 +1753,7 @@ fn band_disc(geometry: &ArcGeometry) -> Rect {
 /// The arc row the fragment stage reads: the mid-angle sine and cosine and
 /// the half-sweep sine and cosine, with the full circle's sentinel.
 pub fn arc_trig(geometry: &ArcGeometry) -> [f32; 4] {
-    if geometry.sweep_angle >= crate::TAU && geometry.start_angle == 0.0 {
-        return [0.0, -1.0, 0.0, -1.0];
-    }
-    let half_sweep = geometry.sweep_angle.clamp(0.0, crate::TAU) * 0.5;
-    let (mid_sin, mid_cos) = (geometry.start_angle + half_sweep).sin_cos();
-    let (half_sin, half_cos) = half_sweep.sin_cos();
-    [mid_sin, mid_cos, half_sin.max(0.0), half_cos]
+    ArcTrigCache::default().resolve(geometry)
 }
 
 #[cfg(test)]
@@ -2019,7 +2028,7 @@ mod tests {
             stroke: Some(Stroke::new(4.0).with_cap(StrokeCap::Square)),
             inner_radius: 0.0,
         }]);
-        let record = recording.shapes()[0];
+        let record = recording.shapes().get(0).unwrap();
         let geometry = record.arc_geometry().expect("an arc");
         let expected = ArcGeometry::new(
             Point::new(3.0, 4.0),
@@ -2059,7 +2068,7 @@ mod tests {
             stroke: None,
             inner_radius: 0.0,
         }]);
-        assert!(degenerate.shapes()[0].is_degenerate_arc());
+        assert!(degenerate.shapes().get(0).unwrap().is_degenerate_arc());
     }
 
     #[test]
@@ -2200,7 +2209,7 @@ mod tests {
         let mut scope = DrawScopeDefault::new(Size::new(100.0, 100.0));
         scope.draw_arc(solid(), center, 30.0, 0.5, 1.0, Stroke::new(4.0));
         let recording = scope.finish();
-        let record = recording.shapes()[0];
+        let record = recording.shapes().get(0).unwrap();
         assert!(record.has_loose_rect());
         let tight = ArcGeometry::new(center, 28.0, 32.0, 0.5, 1.0, StrokeCap::Butt).bounds();
         assert_eq!(record.rect_value(), tight);
@@ -2338,7 +2347,7 @@ mod band_tests {
         let banded: Vec<bool> = recording
             .shapes()
             .iter()
-            .map(ShapeRecord::is_banded)
+            .map(|record| record.is_banded())
             .collect();
         assert_eq!(
             banded,
@@ -2349,7 +2358,7 @@ mod band_tests {
         let segments: Vec<u32> = recording
             .shapes()
             .iter()
-            .map(ShapeRecord::band_segments)
+            .map(|record| record.band_segments())
             .collect();
         assert_eq!(
             segments[1..5],
@@ -2358,12 +2367,12 @@ mod band_tests {
         );
         assert_eq!(
             segments[6], 2,
-            "a sliver's strip is two segments, not a ring's worth"
+            "the wide band needs two segments to cover its padded sweep"
         );
         let classes: Vec<usize> = recording
             .shapes()
             .iter()
-            .map(ShapeRecord::band_class)
+            .map(|record| record.band_class())
             .collect();
         assert_eq!(classes, [0, 2, 2, 3, 4, 0, 1]);
         let segment_classes: Vec<u8> = recording
@@ -2383,7 +2392,7 @@ mod band_tests {
     }
 
     #[test]
-    fn a_strip_pattern_stays_within_the_vertices_it_shares_and_no_band_is_one_quad_wide() {
+    fn a_strip_pattern_stays_within_its_vertices_including_a_single_segment() {
         for segments in ARC_BUCKET_SEGMENTS {
             let indices: Vec<u32> = strip_index_pattern(segments).collect();
             assert_eq!(indices.len() as u32, strip_indices(segments));
@@ -2394,7 +2403,7 @@ mod band_tests {
         }
         let ring = BandRing::new(20.0, 22.0, 0.0, 0.01);
         assert_eq!(ring.segments(), BAND_MIN_SEGMENTS);
-        assert_eq!(band_bucket(BAND_MIN_SEGMENTS), 1);
+        assert_eq!(band_bucket(BAND_MIN_SEGMENTS), 0);
     }
 
     #[test]
@@ -2423,7 +2432,7 @@ mod band_tests {
             scope.draw_rect_at(quad, brush.clone());
         }
         let recording = scope.finish();
-        let ring = recording.shapes()[rects];
+        let ring = recording.shapes().get(rects).unwrap();
         assert!(ring.is_banded());
         let ring_quads = ring.band_segments();
         assert!(ring_quads > 1);
@@ -2486,10 +2495,10 @@ mod band_tests {
         let banded: Vec<bool> = recording
             .shapes()
             .iter()
-            .map(ShapeRecord::is_banded)
+            .map(|record| record.is_banded())
             .collect();
         assert_eq!(banded, [true, false, false, false]);
-        let ring = recording.shapes()[0];
+        let ring = recording.shapes().get(0).unwrap();
         assert_eq!(ring.kind(), RECORD_KIND_ROUND_RECT);
         assert_eq!(ring.fragment_kind(), FRAGMENT_KIND_STROKE);
         assert_eq!(ring.arc, [60.0, 60.0, 50.0, 48.0]);

@@ -3994,10 +3994,10 @@ mod tests {
         }
 
         let graph_a = build_layer_node_for_test(snapshot(), 1.0, false);
-        let ptr_a = run_of(&graph_a).recording.shapes().as_ptr();
+        let ptr_a = run_of(&graph_a).recording.shapes().bodies().as_ptr();
 
         let graph_b = build_layer_node_for_test(snapshot(), 1.0, false);
-        let ptr_b = run_of(&graph_b).recording.shapes().as_ptr();
+        let ptr_b = run_of(&graph_b).recording.shapes().bodies().as_ptr();
         assert_ne!(
             ptr_a, ptr_b,
             "a buffer a live graph shares must never be recorded into"
@@ -4011,7 +4011,7 @@ mod tests {
         drop(graph_a);
         let graph_c = build_layer_node_for_test(snapshot(), 1.0, false);
         assert_eq!(
-            run_of(&graph_c).recording.shapes().as_ptr(),
+            run_of(&graph_c).recording.shapes().bodies().as_ptr(),
             ptr_a,
             "the released buffer must be reused for the next recording"
         );
@@ -4019,9 +4019,9 @@ mod tests {
         let held = std::rc::Rc::clone(&run_of(&graph_c).recording);
         drop(graph_c);
         let graph_d = build_layer_node_for_test(snapshot(), 1.0, false);
-        let ptr_d = run_of(&graph_d).recording.shapes().as_ptr();
-        assert_ne!(ptr_d, held.shapes().as_ptr());
-        assert_ne!(ptr_d, run_of(&graph_b).recording.shapes().as_ptr());
+        let ptr_d = run_of(&graph_d).recording.shapes().bodies().as_ptr();
+        assert_ne!(ptr_d, held.shapes().bodies().as_ptr());
+        assert_ne!(ptr_d, run_of(&graph_b).recording.shapes().bodies().as_ptr());
     }
 
     #[test]

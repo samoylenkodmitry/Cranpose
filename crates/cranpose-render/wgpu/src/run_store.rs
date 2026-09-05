@@ -4,19 +4,20 @@ use bytemuck::{Pod, Zeroable};
 use cranpose_render_common::{graph::DrawCommandId, style_shared::apply_layer_to_color};
 use cranpose_ui_graphics::{
     ARC_BUCKETS, BrushRecord, Color, GradientStopRecord, GraphicsLayer, RecordLane, RecordSegment,
-    RecordTables, ShapeRecord, band_class_segments, strip_index_pattern, strip_indices,
+    RecordTables, ShapeRecordBody, ShapeRecordCurve, band_class_segments, strip_index_pattern,
+    strip_indices,
 };
 use smallvec::SmallVec;
 
 use crate::{
-    frame_graph::{FrameCommandStats, UploadPlacement, place_upload, write_buffer},
+    frame_graph::{
+        FrameCommandRecorder, FrameCommandStats, UploadPlacement, place_upload, write_buffer,
+    },
     geometry::{canonicalized_scaled_rect, snap_delta_for_anchor, snapped_anchor_device_origin},
     run_geometry::ShapeFill,
     scene::{Placement, RunDraw},
 };
 
-/// The records one uniform-mode chunk holds: the 16 KB WebGL binding floor
-/// over the 112-byte record, rounded down to a 256-byte offset multiple.
 pub(crate) const RECORD_CHUNK: usize = 128;
 pub(crate) const BRUSH_CHUNK: usize = 256;
 pub(crate) const STOP_CHUNK: usize = 256;
@@ -55,7 +56,7 @@ impl RunBufferMode {
 
     pub(crate) fn select(limits: &wgpu::Limits, _downlevel: wgpu::DownlevelFlags) -> Self {
         #[cfg(not(target_arch = "wasm32"))]
-        if limits.max_storage_buffers_per_shader_stage >= RUN_BINDINGS as u32
+        if limits.max_storage_buffers_per_shader_stage >= TABLE_COUNT as u32
             && _downlevel.contains(wgpu::DownlevelFlags::VERTEX_STORAGE)
         {
             return Self { storage: true };
@@ -90,7 +91,14 @@ impl RunBufferMode {
     }
 }
 
-pub(crate) const RUN_BINDINGS: usize = 4;
+#[cfg(not(target_arch = "wasm32"))]
+const TABLE_COUNT: usize = 3;
+const BUFFER_COUNT: usize = 5;
+const BODY_BUFFER: usize = 0;
+const CURVE_BUFFER: usize = 1;
+const BRUSH_BUFFER: usize = 2;
+const STOP_BUFFER: usize = 3;
+const PLACEMENT_BUFFER: usize = 4;
 
 /// A placement as the vertex stage reads it: the offset with the snap
 /// delta folded in, the device clip, the dither origin and the paint.
@@ -226,11 +234,9 @@ fn painted_stops(
     }));
 }
 
-/// The five buffers one bind group of run tables reads, with the element
-/// capacity of each.
 pub(crate) struct RunBuffers {
-    buffers: [wgpu::Buffer; RUN_BINDINGS],
-    capacities: [usize; RUN_BINDINGS],
+    buffers: [wgpu::Buffer; BUFFER_COUNT],
+    capacities: [usize; BUFFER_COUNT],
     pub(crate) bind_group: wgpu::BindGroup,
     mode: RunBufferMode,
 }
@@ -241,14 +247,16 @@ pub(crate) struct RunBuffers {
 /// an element edge and a copy-aligned offset.
 const UPLOAD_CHUNK_BYTES: usize = 4096;
 
-const ELEMENT_SIZES: [usize; RUN_BINDINGS] = [
-    std::mem::size_of::<ShapeRecord>(),
+const ELEMENT_SIZES: [usize; BUFFER_COUNT] = [
+    std::mem::size_of::<ShapeRecordBody>(),
+    std::mem::size_of::<ShapeRecordCurve>(),
     std::mem::size_of::<BrushRecord>(),
     std::mem::size_of::<GradientStopRecord>(),
     std::mem::size_of::<PlacementData>(),
 ];
-const LABELS: [&str; RUN_BINDINGS] = [
-    "Run Records",
+const LABELS: [&str; BUFFER_COUNT] = [
+    "Run Record Bodies",
+    "Run Record Curves",
     "Run Brushes",
     "Run Gradient Stops",
     "Run Placements",
@@ -259,13 +267,13 @@ impl RunBuffers {
         device: &wgpu::Device,
         layout: &wgpu::BindGroupLayout,
         mode: RunBufferMode,
-        capacities: [usize; RUN_BINDINGS],
+        capacities: [usize; BUFFER_COUNT],
     ) -> Self {
         let buffers = std::array::from_fn(|index| {
             device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some(LABELS[index]),
                 size: (ELEMENT_SIZES[index] * capacities[index]) as u64,
-                usage: mode.usage(),
+                usage: buffer_usage(mode, index),
                 mapped_at_creation: false,
             })
         });
@@ -281,12 +289,14 @@ impl RunBuffers {
     fn bind(
         device: &wgpu::Device,
         layout: &wgpu::BindGroupLayout,
-        buffers: &[wgpu::Buffer; RUN_BINDINGS],
+        buffers: &[wgpu::Buffer; BUFFER_COUNT],
     ) -> wgpu::BindGroup {
-        let entries: [wgpu::BindGroupEntry<'_>; RUN_BINDINGS] =
-            std::array::from_fn(|index| wgpu::BindGroupEntry {
-                binding: index as u32,
-                resource: buffers[index].as_entire_binding(),
+        let entries =
+            [(1, BRUSH_BUFFER), (2, STOP_BUFFER), (3, PLACEMENT_BUFFER)].map(|(binding, index)| {
+                wgpu::BindGroupEntry {
+                    binding,
+                    resource: buffers[index].as_entire_binding(),
+                }
             });
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Run Tables Bind Group"),
@@ -301,16 +311,16 @@ impl RunBuffers {
         &mut self,
         device: &wgpu::Device,
         layout: &wgpu::BindGroupLayout,
-        needed: [usize; RUN_BINDINGS],
-    ) -> [bool; RUN_BINDINGS] {
-        let mut fresh = [false; RUN_BINDINGS];
-        for index in 0..RUN_BINDINGS {
+        needed: [usize; BUFFER_COUNT],
+    ) -> [bool; BUFFER_COUNT] {
+        let mut fresh = [false; BUFFER_COUNT];
+        for index in 0..BUFFER_COUNT {
             if needed[index] > self.capacities[index] {
                 let capacity = needed[index].next_power_of_two();
                 self.buffers[index] = device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some(LABELS[index]),
                     size: (ELEMENT_SIZES[index] * capacity) as u64,
-                    usage: self.mode.usage(),
+                    usage: buffer_usage(self.mode, index),
                     mapped_at_creation: false,
                 });
                 self.capacities[index] = capacity;
@@ -323,11 +333,25 @@ impl RunBuffers {
         fresh
     }
 
-    fn write<T: Pod>(&self, queue: &wgpu::Queue, index: usize, data: &[T]) -> FrameCommandStats {
+    fn write<T: Pod>(
+        &self,
+        device: &wgpu::Device,
+        recorder: &mut impl FrameCommandRecorder,
+        index: usize,
+        data: &[T],
+    ) -> FrameCommandStats {
         if data.is_empty() {
             return FrameCommandStats::default();
         }
-        write_buffer(queue, &self.buffers[index], 0, bytemuck::cast_slice(data))
+        recorder.stage_buffer_copy(device, &self.buffers[index], 0, bytemuck::cast_slice(data))
+    }
+
+    pub(crate) fn binding(&self) -> ArenaBinding<'_> {
+        ArenaBinding {
+            records: [&self.buffers[BODY_BUFFER], &self.buffers[CURVE_BUFFER]],
+            bind_group: &self.bind_group,
+            offsets: [0; BUFFER_COUNT],
+        }
     }
 
     /// Writes what `data` changes against `previous`, the buffer's
@@ -336,7 +360,8 @@ impl RunBuffers {
     /// `data` when `fresh` says the buffer holds nothing.
     fn write_changed<T: Pod>(
         &self,
-        queue: &wgpu::Queue,
+        device: &wgpu::Device,
+        recorder: &mut impl FrameCommandRecorder,
         index: usize,
         previous: &[T],
         data: &[T],
@@ -344,7 +369,7 @@ impl RunBuffers {
     ) -> FrameCommandStats {
         let bytes = bytemuck::cast_slice::<T, u8>(data);
         if fresh {
-            return write_buffer(queue, &self.buffers[index], 0, bytes);
+            return recorder.stage_buffer_copy(device, &self.buffers[index], 0, bytes);
         }
         let previous = bytemuck::cast_slice::<T, u8>(previous);
         let shared = previous.len().min(bytes.len());
@@ -357,8 +382,8 @@ impl RunBuffers {
             match (changed, pending) {
                 (true, None) => pending = Some(offset),
                 (false, Some(from)) => {
-                    stats += write_buffer(
-                        queue,
+                    stats += recorder.stage_buffer_copy(
+                        device,
                         &self.buffers[index],
                         from as u64,
                         &bytes[from..offset],
@@ -371,9 +396,22 @@ impl RunBuffers {
         }
         let from = pending.unwrap_or(shared);
         if from < bytes.len() {
-            stats += write_buffer(queue, &self.buffers[index], from as u64, &bytes[from..]);
+            stats += recorder.stage_buffer_copy(
+                device,
+                &self.buffers[index],
+                from as u64,
+                &bytes[from..],
+            );
         }
         stats
+    }
+}
+
+fn buffer_usage(mode: RunBufferMode, index: usize) -> wgpu::BufferUsages {
+    if index == BODY_BUFFER || index == CURVE_BUFFER {
+        wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::VERTEX
+    } else {
+        mode.usage()
     }
 }
 
@@ -388,19 +426,17 @@ pub(crate) struct StoredRun {
     last_used_frame: u64,
 }
 
-/// A draw the pass records for one run: a pipeline and the records it
-/// instances, in order, over the strip index pattern of the pipeline's
-/// band class, from the tables its batch binds.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RunDrawCall {
     pub(crate) key: crate::render::ShapePipelineKey,
+    pub(crate) band_class: u8,
     pub(crate) records: std::ops::Range<u32>,
 }
 
 impl RunDrawCall {
     /// The indices each record of the draw is instanced over.
     pub(crate) fn indices(&self) -> std::ops::Range<u32> {
-        0..strip_indices(band_class_segments(self.key.band_class))
+        0..strip_indices(band_class_segments(self.band_class))
     }
 }
 
@@ -435,7 +471,8 @@ impl StripIndexBuffer {
 /// The CPU side of one arena chunk while a pass fills it.
 #[derive(Default)]
 pub(crate) struct ArenaStaging {
-    records: Vec<ShapeRecord>,
+    bodies: Vec<ShapeRecordBody>,
+    curves: Vec<ShapeRecordCurve>,
     brushes: Vec<BrushRecord>,
     stops: Vec<GradientStopRecord>,
     placements: Vec<PlacementData>,
@@ -447,7 +484,8 @@ pub(crate) struct ArenaStaging {
 
 impl ArenaStaging {
     fn clear(&mut self) {
-        self.records.clear();
+        self.bodies.clear();
+        self.curves.clear();
         self.brushes.clear();
         self.stops.clear();
         self.placements.clear();
@@ -456,21 +494,22 @@ impl ArenaStaging {
     }
 
     pub(crate) fn heap_bytes(&self) -> usize {
-        self.records.capacity() * std::mem::size_of::<ShapeRecord>()
+        self.bodies.capacity() * std::mem::size_of::<ShapeRecordBody>()
+            + self.curves.capacity() * std::mem::size_of::<ShapeRecordCurve>()
             + self.brushes.capacity() * std::mem::size_of::<BrushRecord>()
             + self.stops.capacity() * std::mem::size_of::<GradientStopRecord>()
             + self.placements.capacity() * std::mem::size_of::<PlacementData>()
     }
 
     fn is_empty(&self) -> bool {
-        self.records.is_empty()
+        self.bodies.is_empty()
     }
 
     fn fits(&self, mode: RunBufferMode, records: usize, brushes: usize, stops: usize) -> bool {
         if mode.storage {
             return true;
         }
-        self.records.len() + records <= RECORD_CHUNK
+        self.bodies.len() + records <= RECORD_CHUNK
             && self.brushes.len() + brushes <= BRUSH_CHUNK
             && self.stops.len() + stops <= STOP_CHUNK
             && self.placements.len() < PLACEMENT_CHUNK
@@ -478,9 +517,10 @@ impl ArenaStaging {
 
     /// Records `record` under `key`, extending the last draw when it
     /// continues it.
-    fn push_draw(&mut self, key: crate::render::ShapePipelineKey, record: u32) {
+    fn push_draw(&mut self, key: crate::render::ShapePipelineKey, band_class: u8, record: u32) {
         if let Some(last) = self.draws.last_mut()
             && last.key == key
+            && last.band_class == band_class
             && last.records.end == record
         {
             last.records.end = record + 1;
@@ -488,6 +528,7 @@ impl ArenaStaging {
         }
         self.draws.push(RunDrawCall {
             key,
+            band_class,
             records: record..record + 1,
         });
     }
@@ -498,21 +539,22 @@ impl ArenaStaging {
 #[derive(Clone, Copy, Default)]
 struct ArenaChunk {
     generation: usize,
-    offsets: [u32; RUN_BINDINGS],
+    offsets: [u32; BUFFER_COUNT],
 }
 
 /// The tables a chunk's draws bind.
 pub(crate) struct ArenaBinding<'a> {
+    pub(crate) records: [&'a wgpu::Buffer; 2],
     pub(crate) bind_group: &'a wgpu::BindGroup,
-    pub(crate) offsets: [u32; RUN_BINDINGS],
+    pub(crate) offsets: [u32; BUFFER_COUNT],
 }
 
 /// One buffer per table with every chunk of the frame laid in it at an
 /// aligned offset, the bytes staged on the CPU until the frame's flush.
 struct ArenaGeneration {
-    buffers: [wgpu::Buffer; RUN_BINDINGS],
-    capacities: [u64; RUN_BINDINGS],
-    staged: [Vec<u8>; RUN_BINDINGS],
+    buffers: [wgpu::Buffer; BUFFER_COUNT],
+    capacities: [u64; BUFFER_COUNT],
+    staged: [Vec<u8>; BUFFER_COUNT],
     bind_group: wgpu::BindGroup,
 }
 
@@ -521,14 +563,14 @@ impl ArenaGeneration {
         device: &wgpu::Device,
         layout: &wgpu::BindGroupLayout,
         mode: RunBufferMode,
-        capacities: [u64; RUN_BINDINGS],
-        bindings: [u64; RUN_BINDINGS],
+        capacities: [u64; BUFFER_COUNT],
+        bindings: [u64; BUFFER_COUNT],
     ) -> Self {
         let buffers = std::array::from_fn(|index| {
             device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some(LABELS[index]),
                 size: capacities[index],
-                usage: mode.usage(),
+                usage: buffer_usage(mode, index),
                 mapped_at_creation: false,
             })
         });
@@ -544,17 +586,19 @@ impl ArenaGeneration {
     fn bind(
         device: &wgpu::Device,
         layout: &wgpu::BindGroupLayout,
-        buffers: &[wgpu::Buffer; RUN_BINDINGS],
-        bindings: [u64; RUN_BINDINGS],
+        buffers: &[wgpu::Buffer; BUFFER_COUNT],
+        bindings: [u64; BUFFER_COUNT],
     ) -> wgpu::BindGroup {
-        let entries: [wgpu::BindGroupEntry<'_>; RUN_BINDINGS] =
-            std::array::from_fn(|index| wgpu::BindGroupEntry {
-                binding: index as u32,
-                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: &buffers[index],
-                    offset: 0,
-                    size: wgpu::BufferSize::new(bindings[index]),
-                }),
+        let entries =
+            [(1, BRUSH_BUFFER), (2, STOP_BUFFER), (3, PLACEMENT_BUFFER)].map(|(binding, index)| {
+                wgpu::BindGroupEntry {
+                    binding,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &buffers[index],
+                        offset: 0,
+                        size: wgpu::BufferSize::new(bindings[index]),
+                    }),
+                }
             });
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Run Arena Bind Group"),
@@ -574,21 +618,27 @@ impl ArenaGeneration {
 struct ArenaTables {
     mode: RunBufferMode,
     alignment: u64,
-    bindings: [u64; RUN_BINDINGS],
+    bindings: [u64; BUFFER_COUNT],
     generations: Vec<ArenaGeneration>,
     chunks: Vec<ArenaChunk>,
     staging: ArenaStaging,
 }
 
-const INITIAL_ARENA_CAPACITIES: [usize; RUN_BINDINGS] = [
+const INITIAL_ARENA_CAPACITIES: [usize; BUFFER_COUNT] = [
+    INITIAL_ARENA_RECORDS,
     INITIAL_ARENA_RECORDS,
     INITIAL_BRUSHES,
     INITIAL_STOPS,
     INITIAL_PLACEMENTS,
 ];
 
-const UNIFORM_CHUNKS: [usize; RUN_BINDINGS] =
-    [RECORD_CHUNK, BRUSH_CHUNK, STOP_CHUNK, PLACEMENT_CHUNK];
+const UNIFORM_CHUNKS: [usize; BUFFER_COUNT] = [
+    RECORD_CHUNK,
+    RECORD_CHUNK,
+    BRUSH_CHUNK,
+    STOP_CHUNK,
+    PLACEMENT_CHUNK,
+];
 
 impl ArenaTables {
     fn new(mode: RunBufferMode, alignment: u64) -> Self {
@@ -614,7 +664,7 @@ impl ArenaTables {
         &mut self,
         device: &wgpu::Device,
         layout: &wgpu::BindGroupLayout,
-        tables: [&[u8]; RUN_BINDINGS],
+        tables: [&[u8]; BUFFER_COUNT],
     ) -> ArenaChunk {
         let mut rebind = false;
         for (binding, table) in self.bindings.iter_mut().zip(tables) {
@@ -625,7 +675,7 @@ impl ArenaTables {
             }
         }
         let current = self.generations.last();
-        let placements: [UploadPlacement; RUN_BINDINGS] = std::array::from_fn(|index| {
+        let placements: [UploadPlacement; BUFFER_COUNT] = std::array::from_fn(|index| {
             place_upload(
                 current.map_or(0, |generation| generation.staged[index].len() as u64),
                 tables[index].len() as u64,
@@ -723,7 +773,7 @@ impl RunStore {
         };
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Run Tables Bind Group Layout"),
-            entries: &[binding(0), binding(1), binding(2), binding(3)],
+            entries: &[binding(1), binding(2), binding(3)],
         });
         let limits = device.limits();
         let alignment = u64::from(if mode.storage {
@@ -755,7 +805,7 @@ impl RunStore {
 
     fn ensure_strip_indices(&mut self, device: &wgpu::Device, draws: &[RunDrawCall]) {
         for draw in draws {
-            let class = draw.key.band_class;
+            let class = draw.band_class;
             self.strip_indices[class as usize].ensure(device, band_class_segments(class));
         }
     }
@@ -772,6 +822,11 @@ impl RunStore {
         for segment in run.segment_records() {
             out.push(RunDrawCall {
                 key: key_for(segment),
+                band_class: if self.mode.storage {
+                    segment.band_class
+                } else {
+                    0
+                },
                 records: segment.start..segment.start + segment.count,
             });
         }
@@ -790,6 +845,10 @@ impl RunStore {
     /// for a while leave the store.
     /// Opens a frame; `fill_stats` says whether the frame's fill estimate
     /// is wanted, the only reason to walk every record a second time.
+    pub(crate) fn invalidate_uploads(&mut self) {
+        self.stored.clear();
+    }
+
     pub(crate) fn begin_frame(&mut self, fill_stats: bool) {
         self.fill_stats = fill_stats;
         self.frame += 1;
@@ -842,8 +901,13 @@ impl RunStore {
     /// group and the chunk's dynamic offsets into it.
     pub(crate) fn arena_binding(&self, chunk: usize) -> ArenaBinding<'_> {
         let chunk = self.arena.chunks[chunk];
+        let generation = &self.arena.generations[chunk.generation];
         ArenaBinding {
-            bind_group: &self.arena.generations[chunk.generation].bind_group,
+            records: [
+                &generation.buffers[BODY_BUFFER],
+                &generation.buffers[CURVE_BUFFER],
+            ],
+            bind_group: &generation.bind_group,
             offsets: chunk.offsets,
         }
     }
@@ -860,7 +924,7 @@ impl RunStore {
     pub(crate) fn upload_stored(
         &mut self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        recorder: &mut impl FrameCommandRecorder,
         run: &RunDraw,
         root_scale: f32,
     ) -> (FrameCommandStats, Option<ShapeFill>) {
@@ -876,6 +940,7 @@ impl RunStore {
                 layout,
                 mode,
                 [
+                    INITIAL_STORE_RECORDS,
                     INITIAL_STORE_RECORDS,
                     INITIAL_BRUSHES,
                     INITIAL_STOPS,
@@ -901,6 +966,7 @@ impl RunStore {
                 layout,
                 [
                     tables.shapes.len().max(1),
+                    tables.shapes.len().max(1),
                     tables.brushes.len().max(1),
                     tables.stops.len().max(1),
                     STORE_PLACEMENTS,
@@ -908,20 +974,30 @@ impl RunStore {
             );
             let previous = &*entry.tables;
             stats += entry.buffers.write_changed(
-                queue,
-                0,
-                &previous.shapes,
-                &tables.shapes,
-                first_use || fresh[0],
+                device,
+                recorder,
+                BODY_BUFFER,
+                previous.shapes.bodies(),
+                tables.shapes.bodies(),
+                first_use || fresh[BODY_BUFFER],
             );
             stats += entry.buffers.write_changed(
-                queue,
-                1,
+                device,
+                recorder,
+                CURVE_BUFFER,
+                previous.shapes.curves(),
+                tables.shapes.curves(),
+                first_use || fresh[CURVE_BUFFER],
+            );
+            stats += entry.buffers.write_changed(
+                device,
+                recorder,
+                BRUSH_BUFFER,
                 &previous.brushes,
                 &tables.brushes,
-                first_use || fresh[1],
+                first_use || fresh[BRUSH_BUFFER],
             );
-            stops_changed |= fresh[2] || previous.stops != tables.stops;
+            stops_changed |= fresh[STOP_BUFFER] || previous.stops != tables.stops;
             entry.tables = Arc::clone(&run.tables);
         }
         let changed = stats.upload_bytes > 0 || stops_changed;
@@ -931,7 +1007,9 @@ impl RunStore {
                 &paint_layer(&run.placement),
                 scratch_stops,
             );
-            stats += entry.buffers.write(queue, 2, scratch_stops);
+            stats += entry
+                .buffers
+                .write(device, recorder, STOP_BUFFER, scratch_stops);
             entry.paint = paint;
         }
         let offset_bits = [
@@ -1017,6 +1095,7 @@ impl RunStore {
         let mut skipped = 0u32;
         for segment in run.segment_records() {
             let key = key_for(segment);
+            let band_class = if mode.storage { segment.band_class } else { 0 };
             let class_segments = mode
                 .storage
                 .then(|| band_class_segments(segment.band_class));
@@ -1026,13 +1105,13 @@ impl RunStore {
                     skipped += 1;
                     continue;
                 }
-                if staging.records.len() >= record_limit {
+                if staging.bodies.len() >= record_limit {
                     segment_complete = false;
                     break;
                 }
-                let mut record = tables.shapes[index];
-                if record.brush != 0 {
-                    let source = (record.brush - 1) as usize;
+                let mut body = tables.shapes.bodies()[index];
+                if body.brush != 0 {
+                    let source = (body.brush - 1) as usize;
                     if staging.brush_map[source] == u32::MAX {
                         let brush = tables.brushes[source];
                         let stop_range = brush.stop_start as usize
@@ -1053,15 +1132,16 @@ impl RunStore {
                         });
                         staging.brush_map[source] = staging.brushes.len() as u32;
                     }
-                    record.brush = staging.brush_map[source];
+                    body.brush = staging.brush_map[source];
                 }
-                record.reserved = placement_index;
-                let record_index = staging.records.len() as u32;
-                staging.records.push(record);
-                staging.push_draw(key, record_index);
+                body.placement = placement_index;
+                let record_index = staging.bodies.len() as u32;
+                staging.bodies.push(body);
+                staging.curves.push(tables.shapes.curves()[index]);
+                staging.push_draw(key, band_class, record_index);
                 if fill_stats {
                     staging.fill.add_record(
-                        &record,
+                        &tables.shapes.get(index).expect("recorded shape index"),
                         run.placement.offset,
                         root_scale,
                         class_segments,
@@ -1094,14 +1174,15 @@ impl RunStore {
         let mut staging = std::mem::take(&mut self.arena.staging);
         let draws = std::mem::take(&mut staging.draws);
         for draw in &draws {
-            let class = draw.key.band_class;
+            let class = draw.band_class;
             self.strip_indices[class as usize].ensure(device, band_class_segments(class));
         }
         let placed = self.arena.place(
             device,
             &self.layout,
             [
-                bytemuck::cast_slice(&staging.records),
+                bytemuck::cast_slice(&staging.bodies),
+                bytemuck::cast_slice(&staging.curves),
                 bytemuck::cast_slice(&staging.brushes),
                 bytemuck::cast_slice(&staging.stops),
                 bytemuck::cast_slice(&staging.placements),
@@ -1124,9 +1205,37 @@ pub(crate) fn run_has_shapes(run: &RunDraw) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use cranpose_ui_graphics::{ColorFilter, Point};
+    use cranpose_ui_graphics::{BlendMode, ColorFilter, Point};
 
     use super::*;
+
+    #[test]
+    fn shared_pipelines_preserve_each_draws_strip_index_count() {
+        let segment = RecordSegment {
+            lane: RecordLane::Shapes,
+            start: 0,
+            count: 1,
+            blend: BlendMode::SrcOver,
+            gradient: false,
+            kinds: 4,
+            band_class: 0,
+        };
+        let key = crate::render::ShapePipelineKey {
+            blend_mode: segment.blend,
+            tier: crate::render::RunTier::Arena,
+            variant: crate::render::ShapeVariant::of_segment(&segment, false),
+        };
+        let mut staging = ArenaStaging::default();
+        for (record, class) in [0, 0, 3, 3, 0].into_iter().enumerate() {
+            staging.push_draw(key, class, record as u32);
+        }
+        let draws: Vec<_> = staging
+            .draws
+            .iter()
+            .map(|draw| (draw.records.clone(), draw.indices()))
+            .collect();
+        assert_eq!(draws, [(0..2, 0..6), (2..4, 0..48), (4..5, 0..6)]);
+    }
 
     #[test]
     fn a_placement_folds_its_snap_delta_clip_and_filter_into_the_uniform() {

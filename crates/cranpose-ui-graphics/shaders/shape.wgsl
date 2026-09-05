@@ -12,7 +12,6 @@
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) color: vec4<f32>,
-    @location(1) uv: vec2<f32>,
     @location(2) world_pos: vec4<f32>,
     @location(3) @interpolate(flat) rect: vec4<f32>,
     @location(4) @interpolate(flat) radii: vec4<f32>,
@@ -35,7 +34,6 @@ struct VertexOutput {
 struct SolidOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) color: vec4<f32>,
-    @location(1) uv: vec2<f32>,
     @location(2) world_pos: vec4<f32>,
     @location(3) @interpolate(flat) rect: vec4<f32>,
     @location(4) @interpolate(flat) radii: vec4<f32>,
@@ -48,7 +46,6 @@ fn solid_output(full: VertexOutput) -> SolidOutput {
     var output: SolidOutput;
     output.clip_position = full.clip_position;
     output.color = full.color;
-    output.uv = full.uv;
     output.world_pos = full.world_pos;
     output.rect = full.rect;
     output.radii = full.radii;
@@ -62,7 +59,6 @@ fn full_output(solid: SolidOutput) -> VertexOutput {
     var output: VertexOutput;
     output.clip_position = solid.clip_position;
     output.color = solid.color;
-    output.uv = solid.uv;
     output.world_pos = solid.world_pos;
     output.rect = solid.rect;
     output.radii = solid.radii;
@@ -111,24 +107,16 @@ struct Uniforms {
 @group(0) @binding(0)
 var<uniform> uniforms: Uniforms;
 
-// One recorded shape, byte for byte what the draw scope wrote: local
-// space, the app's own units, nothing resolved. `flags` packs the record
-// kind (bits 0-1: rect, round rect, arc), the stroke bit (2), the stroke
-// cap (3-4) and join (5-6), the blend mode (8-15), the arc band's cap
-// (16-17), and the arc facts: degenerate (18), loose rect (19), banded (20).
-// `placement` names the record's placement in the arena tier and is unused
-// in the store tier.
 struct ShapeRecord {
-    rect: vec4<f32>,
-    radii: vec4<f32>,
-    color: vec4<f32>,
-    stroke_width: f32,
-    flags: u32,
-    brush: u32,
-    placement: u32,
-    arc: vec4<f32>,
-    arc_band: vec4<f32>,
-    arc_normalized: vec4<f32>,
+    @location(0) rect: vec4<f32>,
+    @location(1) radii: vec4<f32>,
+    @location(2) color: vec4<f32>,
+    @location(3) stroke_width: f32,
+    @location(4) flags: u32,
+    @location(5) brush: u32,
+    @location(6) placement: u32,
+    @location(7) arc_geometry: vec4<f32>,
+    @location(8) arc_normalized: vec4<f32>,
 }
 
 struct BrushRecord {
@@ -146,14 +134,6 @@ struct GradientStop {
     color: vec4<f32>,
     position: vec4<f32>,
 }
-
-// The uniform-buffer form is the WebGL floor: 16 KB bindings, so a chunk of
-// 128 records, 256 brushes, 256 stops and 64 placements, drawn as quads.
-// Native pipelines rewrite these five declarations to unbounded storage
-// arrays — see `shape_shader_source`, which string-replaces the exact
-// literals.
-@group(1) @binding(0)
-var<uniform> records: array<ShapeRecord, 128>;
 
 @group(1) @binding(1)
 var<uniform> brushes: array<BrushRecord, 256>;
@@ -198,10 +178,6 @@ override TIER_ARENA: bool = false;
 // Whether banded arcs draw as strips on this tier; false on the uniform
 // floor, which draws every record as its quad.
 override SHAPE_BANDS: bool = true;
-// The strip segments every record a pipeline draws is indexed at: those
-// of the segment's band class. A quad record uses the first four shared
-// vertices and collapses the rest; a band uses its own segments' worth.
-override BAND_SEGMENTS: u32 = 1u;
 fn record_placement(record: ShapeRecord) -> Placement {
     if (TIER_ARENA) {
         return placements[record.placement];
@@ -286,12 +262,10 @@ fn shape_output(
     placement: Placement,
     geometry: RecordGeometry,
     position: vec2<f32>,
-    uv: vec2<f32>,
 ) -> VertexOutput {
     var output: VertexOutput;
     output.clip_position = clip_position(position);
     output.color = paint(record.color, placement);
-    output.uv = uv;
     output.world_pos = vec4<f32>(position, position - placement.dither_origin);
     output.rect = geometry.rect;
     let scale = geometry.scale;
@@ -304,12 +278,12 @@ fn shape_output(
         output.stroke_params = vec4<f32>(
             0.0,
             f32(SHAPE_KIND_ARC | (cap << 2u)),
-            record.arc_band.w * scale,
-            record.arc_band.z * scale,
+            record.arc_geometry.w * scale,
+            record.arc_geometry.z * scale,
         );
         output.arc_params = vec4<f32>(
-            (record.arc.x + placement.offset.x) * scale,
-            (record.arc.y + placement.offset.y) * scale,
+            (record.arc_geometry.x + placement.offset.x) * scale,
+            (record.arc_geometry.y + placement.offset.y) * scale,
             record.arc_normalized.x,
             record.arc_normalized.y,
         );
@@ -389,20 +363,7 @@ fn collapsed() -> VertexOutput {
 
 // Vertex stage
 //
-// There is no vertex buffer: a draw instances a segment's records, one
-// instance a record in record order, over the strip index pattern of
-// the segment's band class (`strip_index_pattern` in `record.rs`), so
-// the instance index is the record and the vertex index its shared
-// vertex. Vertex `2b + s` of a record is the strip boundary `b`, outer
-// when `s` is one: a rect or a quad-drawn arc takes its first four as
-// the rect's corners `(b, s)`, a banded record takes its own segments'
-// worth, and the rest pin onto the record's last vertex. The pattern
-// shares each boundary between the quads on either side, so a vertex
-// past the record's own must sit exactly on its last one for the quads
-// that reach it to be degenerate; a degenerate arc pins every vertex to
-// one point.
-fn record_vertex(record_index: u32, local: u32) -> VertexOutput {
-    let record = records[record_index];
+fn record_vertex(record: ShapeRecord, local: u32) -> VertexOutput {
     if ((record.flags & RECORD_ARC_DEGENERATE) != 0u) {
         return collapsed();
     }
@@ -414,15 +375,14 @@ fn record_vertex(record_index: u32, local: u32) -> VertexOutput {
             return pinned(band_position(record, placement, segments, 1u, segments));
         }
         let position = band_position(record, placement, local >> 1u, local & 1u, segments);
-        let uv = (position - geometry.rect.xy) / geometry.rect.zw;
-        return shape_output(record, placement, geometry, position, uv);
+        return shape_output(record, placement, geometry, position);
     }
     if (local >= 4u) {
         return pinned(geometry.rect.xy + geometry.rect.zw);
     }
     let uv = vec2<f32>(f32(local >> 1u), f32(local & 1u));
     let position = geometry.rect.xy + uv * geometry.rect.zw;
-    return shape_output(record, placement, geometry, position, uv);
+    return shape_output(record, placement, geometry, position);
 }
 
 fn clip_position(position: vec2<f32>) -> vec4<f32> {
@@ -442,17 +402,17 @@ fn pinned(position: vec2<f32>) -> VertexOutput {
 @vertex
 fn vs_record(
     @builtin(vertex_index) vertex_idx: u32,
-    @builtin(instance_index) record_index: u32,
+    record: ShapeRecord,
 ) -> VertexOutput {
-    return record_vertex(record_index, vertex_idx);
+    return record_vertex(record, vertex_idx);
 }
 
 @vertex
 fn vs_record_solid(
     @builtin(vertex_index) vertex_idx: u32,
-    @builtin(instance_index) record_index: u32,
+    record: ShapeRecord,
 ) -> SolidOutput {
-    return solid_output(record_vertex(record_index, vertex_idx));
+    return solid_output(record_vertex(record, vertex_idx));
 }
 
 // A wide arc, or a stroked circle, rasterizes as a strip of `segments`
@@ -475,9 +435,9 @@ fn band_position(
     segments: u32,
 ) -> vec2<f32> {
     let scale = placement.root_scale;
-    let center = (record.arc.xy + placement.offset) * scale;
-    let inner = record.arc_band.z * scale;
-    let outer = record.arc_band.w * scale;
+    let center = (record.arc_geometry.xy + placement.offset) * scale;
+    let inner = record.arc_geometry.z * scale;
+    let outer = record.arc_geometry.w * scale;
     let mid = (outer + inner) * 0.5;
     let ring_half = max((outer - inner) * 0.5, 0.0) + BAND_MARGIN;
     let outer_padded = mid + ring_half;
@@ -820,9 +780,7 @@ fn sample_gradient(gradient_start: u32, count: u32, t: f32) -> vec4<f32> {
 /// it). The pipeline constants fold branches; they never copy code.
 fn shape_coverage_alpha(input: VertexOutput) -> f32 {
     let world_pos = input.world_pos.xy;
-    // Local layer-space pixel coordinate derived from uv, independent of
-    // world-space quad deformation (rotation/perspective).
-    let rect_pos = input.rect.xy + input.uv * input.rect.zw;
+    let rect_pos = input.clip_position.xy + uniforms.viewport_offset;
 
     // Apply clipping: if clip_rect has non-zero size, clip to it
     let clip_w = input.clip_rect.z;
@@ -839,11 +797,7 @@ fn shape_coverage_alpha(input: VertexOutput) -> f32 {
         }
     }
 
-    if (SHAPE_BANDS && BAND_SEGMENTS > 1u) {
-        // The quad path shades nothing outside the record's rect; a band's
-        // strip reaches past it, so the strip stops there too. No band is
-        // one quad wide, so the pipeline whose stride is a quad's holds
-        // only quads and folds this out.
+    if (SHAPE_BANDS) {
         if (rect_pos.x < input.rect.x || rect_pos.x > input.rect.x + input.rect.z ||
             rect_pos.y < input.rect.y || rect_pos.y > input.rect.y + input.rect.w) {
             discard;
@@ -927,7 +881,7 @@ fn fragment(input: VertexOutput) -> vec4<f32> {
     // Re-derived rather than threaded out of the coverage pass: both are pure
     // functions of `input`, so the compiler folds them back together.
     let world_pos = input.world_pos.xy;
-    let rect_pos = input.rect.xy + input.uv * input.rect.zw;
+    let rect_pos = input.clip_position.xy + uniforms.viewport_offset;
 
     var color = input.color;
     var is_gradient = false;

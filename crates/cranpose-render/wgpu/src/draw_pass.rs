@@ -668,7 +668,8 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
             };
             if renderer.run_is_stored(draw) {
                 close(renderer, &mut chunk, &mut self.batches);
-                let batch = renderer.prepare_store_run(draw, run.viewport, self.root_scale);
+                let batch =
+                    renderer.prepare_store_run(self.recorder, draw, run.viewport, self.root_scale);
                 self.batches.push(Batch::StoreRun {
                     batch,
                     scissor: run.segment.scissor,

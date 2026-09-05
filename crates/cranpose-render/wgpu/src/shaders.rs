@@ -13,13 +13,7 @@ pub const SDF_ROUNDED_RECT_FN: &str =
 pub const COMPOSITE_SAMPLE_FN: &str =
     cranpose_ui_graphics::framework_shaders::COMPOSITE_SAMPLE_FN_WGSL;
 
-/// The four run-table declarations of `shape.wgsl` in their uniform form,
-/// each paired with the storage form the native pipelines rewrite it to.
-pub(crate) const RUN_TABLE_DECLARATIONS: [(&str, &str); 4] = [
-    (
-        "var<uniform> records: array<ShapeRecord, 128>;",
-        "var<storage, read> records: array<ShapeRecord>;",
-    ),
+pub(crate) const RUN_TABLE_DECLARATIONS: [(&str, &str); 3] = [
     (
         "var<uniform> brushes: array<BrushRecord, 256>;",
         "var<storage, read> brushes: array<BrushRecord>;",
@@ -34,7 +28,6 @@ pub(crate) const RUN_TABLE_DECLARATIONS: [(&str, &str); 4] = [
     ),
 ];
 
-/// `shape.wgsl` with its run tables as unbounded storage arrays.
 pub(crate) fn storage_shape_shader() -> String {
     let mut source = SHADER.to_string();
     for (uniform, storage) in RUN_TABLE_DECLARATIONS {
@@ -194,6 +187,63 @@ mod tests {
     }
 
     #[test]
+    fn shape_vertices_receive_every_record_field_from_its_column() {
+        let module = naga::front::wgsl::parse_str(&storage_shape_shader()).unwrap();
+        for entry_name in ["vs_record", "vs_record_solid"] {
+            let entry = module
+                .entry_points
+                .iter()
+                .find(|entry| entry.name == entry_name)
+                .unwrap();
+            let argument = entry
+                .function
+                .arguments
+                .iter()
+                .find(|argument| argument.name.as_deref() == Some("record"))
+                .expect("native vertices must receive the record through instance attributes");
+            let naga::TypeInner::Struct { members, span } = &module.types[argument.ty].inner else {
+                panic!("the instance input must be a shape record");
+            };
+            let layouts = crate::record_columns::record_vertex_layouts();
+            assert_eq!(members.len(), 9);
+            assert_eq!(
+                layouts
+                    .iter()
+                    .map(|layout| layout.array_stride)
+                    .sum::<u64>(),
+                u64::from(*span)
+            );
+            assert!(
+                layouts
+                    .iter()
+                    .all(|layout| layout.step_mode == wgpu::VertexStepMode::Instance)
+            );
+            for (index, member) in members.iter().enumerate() {
+                assert!(
+                    matches!(member.binding, Some(naga::Binding::Location { location, .. }) if location == index as u32)
+                );
+                let (layout, attribute) = layouts
+                    .iter()
+                    .find_map(|layout| {
+                        layout
+                            .attributes
+                            .iter()
+                            .find(|attribute| attribute.shader_location == index as u32)
+                            .map(|attribute| (layout, attribute))
+                    })
+                    .expect("the field must have an instance attribute");
+                assert!(attribute.offset + attribute.format.size() <= layout.array_stride);
+                let format = match member.name.as_deref().unwrap() {
+                    "flags" | "brush" | "placement" => wgpu::VertexFormat::Uint32,
+                    "stroke_width" => wgpu::VertexFormat::Float32,
+                    _ => wgpu::VertexFormat::Float32x4,
+                };
+                assert_eq!(attribute.format, format);
+            }
+        }
+    }
+
+    #[test]
     fn shape_shader_validates_for_webgl() {
         for entry in ["vs_record", "vs_record_solid"] {
             if let Err(err) = validate_glsl_portability(super::SHADER, entry, ShaderStage::Vertex) {
@@ -255,7 +305,7 @@ mod tests {
         }
         assert_eq!(
             fragment_input_locations(super::SHADER, "fs_solid").len(),
-            8,
+            7,
             "a solid batch carries the coverage vectors and nothing of the brush"
         );
     }
@@ -274,7 +324,6 @@ mod tests {
             "fn band_position(",
             "fn fs_solid(",
             "override TIER_ARENA: bool",
-            "override BAND_SEGMENTS: u32",
         ] {
             assert!(
                 super::SHADER.contains(needle),
@@ -285,11 +334,10 @@ mod tests {
 
     #[test]
     fn the_uniform_chunk_sizes_in_the_shader_match_the_run_store() {
-        use crate::run_store::{BRUSH_CHUNK, PLACEMENT_CHUNK, RECORD_CHUNK, STOP_CHUNK};
+        use crate::run_store::{BRUSH_CHUNK, PLACEMENT_CHUNK, STOP_CHUNK};
         for (uniform, _) in RUN_TABLE_DECLARATIONS {
             assert!(super::SHADER.contains(uniform), "missing `{uniform}`");
         }
-        assert!(super::SHADER.contains(&format!("array<ShapeRecord, {RECORD_CHUNK}>")));
         assert!(super::SHADER.contains(&format!("array<BrushRecord, {BRUSH_CHUNK}>")));
         assert!(super::SHADER.contains(&format!("array<GradientStop, {STOP_CHUNK}>")));
         assert!(super::SHADER.contains(&format!("array<Placement, {PLACEMENT_CHUNK}>")));
