@@ -296,8 +296,12 @@ establish a gain across both GPUs.
 The full combined test suite exposes one channel value differing by one at
 pixel (103, 263) in the glass specialization comparison on lavapipe. The clean
 `90e14d68` baseline repeats the same failure, while Metal passes. Removing
-the split draws on that baseline restores exact parity. This is under
-investigation with the assertion unchanged.
+the split draws on that baseline restores exact parity. Removing only the
+bevel screen blend also restores it. At zero bevel strength, the expression
+`1 - (1 - rgb) * (1 - bevel)` can round through two subtractions, while the
+compiled interior folds it to `rgb`. Expressing the same screen blend as
+`rgb + (1 - rgb) * bevel` preserves its zero-strength identity in both paths.
+The split draws remain enabled, and the strict Linux parity test passes.
 
 Review also finds the compiled-pipeline key omits the split override's name.
 Two shaders with identical source and different split names consequently share
