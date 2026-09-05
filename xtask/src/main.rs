@@ -7031,6 +7031,7 @@ version = \"0.1.0\"
 
     fn git(args: &[&str], cwd: &Path) -> std::process::Output {
         Command::new("git")
+            .args(["-c", "commit.gpgsign=false"])
             .args(args)
             .current_dir(cwd)
             .output()
@@ -7063,6 +7064,19 @@ version = \"0.1.0\"
         git_ok(&["init", "--quiet", "-b", initial_branch], repo);
         git_ok(&["config", "user.email", "test@example.com"], repo);
         git_ok(&["config", "user.name", "Test"], repo);
+    }
+
+    #[test]
+    fn fixture_commits_are_independent_of_user_signing_configuration() {
+        let repo = unique_temp_dir();
+        init_repo(&repo, "main");
+        git_ok(&["config", "commit.gpgsign", "true"], &repo);
+        git_ok(
+            &["config", "gpg.program", "cranpose-missing-test-signer"],
+            &repo,
+        );
+        let commit = commit_file(&repo, "fixture");
+        assert_eq!(git_ok(&["rev-parse", "HEAD"], &repo), commit);
     }
 
     fn shallow_checkout_of_branch_tip(origin: &Path, branch: &str, work: &Path) {

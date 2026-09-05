@@ -37,7 +37,8 @@ fn passthrough_wgsl() -> String {
         RUNTIME_SHADER_PRELUDE_WGSL,
         r#"@fragment
 fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
-    return textureSample(input_texture, input_sampler, input.uv);
+    let texel = vec2<i32>(input.uv * vec2<f32>(textureDimensions(input_texture)));
+    return textureLoad(input_texture, texel, 0);
 }
 "#
     )
