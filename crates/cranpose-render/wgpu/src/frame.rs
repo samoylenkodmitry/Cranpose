@@ -1,5 +1,6 @@
 use std::{
     borrow::Cow,
+    collections::hash_map::Entry,
     hash::{Hash, Hasher},
     rc::Rc,
 };
@@ -1288,6 +1289,64 @@ pub(crate) struct FrameExecutor<'r, 'c, C: FrameCommandRecorder> {
 /// glass a second time; spreading them over frames keeps the frame that
 /// stops from paying for all of them. The first resolve of a frame always
 /// goes, so a glass larger than the budget still gets in.
+const MAX_ADMISSION_PATIENCE: u32 = 16;
+
+/// What one glass has shown the backdrop cache: the key its capture hashed
+/// to, how many frames running that key has held, how many it must hold
+/// before its result is worth retaining, and whether the current key's
+/// retained result still waits to be read back.
+pub(crate) struct BackdropGate {
+    key: LayerRasterCacheKey,
+    run: u32,
+    patience: u32,
+    unread: bool,
+    seen: bool,
+}
+
+impl BackdropGate {
+    fn new(key: LayerRasterCacheKey) -> Self {
+        Self {
+            key,
+            run: 1,
+            patience: 1,
+            unread: false,
+            seen: true,
+        }
+    }
+
+    fn observe(&mut self, key: LayerRasterCacheKey) {
+        self.seen = true;
+        if self.key == key {
+            self.run = self.run.saturating_add(1);
+            return;
+        }
+        if self.unread {
+            self.patience = (self.patience * 2).min(MAX_ADMISSION_PATIENCE);
+        }
+        self.key = key;
+        self.run = 1;
+        self.unread = false;
+    }
+
+    fn admits(&self) -> bool {
+        self.run > self.patience
+    }
+
+    fn admitted(&mut self) {
+        self.unread = true;
+    }
+
+    fn hit(&mut self) {
+        self.seen = true;
+        self.patience = 1;
+        self.unread = false;
+    }
+
+    pub(crate) fn end_frame(&mut self) -> bool {
+        std::mem::take(&mut self.seen)
+    }
+}
+
 const MAX_BACKDROP_ADMISSION_PIXELS: u64 = 120_000;
 
 /// A texture a composite draws and what it holds.
@@ -1634,6 +1693,12 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
     fn cached_backdrop(&mut self, item: &PendingBackdrop<'_>) -> Option<ResolvedComposite> {
         let key = item.key?;
         let texture = self.renderer.layer_cache.get(&key)?;
+        if let Some(gate) = item
+            .node_id
+            .and_then(|node_id| self.renderer.backdrop_gates.get_mut(&node_id))
+        {
+            gate.hit();
+        }
         let (width, height) = item.capture_rect.pixel_size();
         self.renderer
             .frame_stats
@@ -1647,10 +1712,12 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         ))
     }
 
-    /// Resolves the results of the backdrops whose input matched last
-    /// frame's into retained textures and caches them; a backdrop seen with
-    /// this input for the first time is only remembered, so an animated
-    /// glass never pays for a resolve it cannot reuse.
+    /// Resolves the results of the backdrops whose input has held for
+    /// longer than their gate's patience into retained textures and caches
+    /// them; a backdrop seen with this input for the first time is only
+    /// remembered, and one whose last admission was never read back waits
+    /// twice as long the next time, so an animated glass never keeps paying
+    /// for resolves it cannot reuse.
     fn admit_backdrops(
         &mut self,
         items: &[&PendingBackdrop<'_>],
@@ -1658,17 +1725,24 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         scale: f32,
     ) -> Result<(), String> {
         for item in items {
-            let Some(key) = item.key else {
+            let (Some(key), Some(node_id)) = (item.key, item.node_id) else {
                 continue;
             };
             let (width, height) = item.capture_rect.pixel_size();
             self.renderer
                 .frame_stats
                 .record_layer_cache_miss(&key, width, height);
-            if !self.renderer.backdrop_admission.contains(&key)
-                || self.admitted_pixels >= MAX_BACKDROP_ADMISSION_PIXELS
-            {
-                self.renderer.backdrop_missed.insert(key);
+            let admits = match self.renderer.backdrop_gates.entry(node_id) {
+                Entry::Occupied(mut gate) => {
+                    gate.get_mut().observe(key);
+                    gate.get().admits()
+                }
+                Entry::Vacant(slot) => {
+                    slot.insert(BackdropGate::new(key));
+                    false
+                }
+            };
+            if !admits || self.admitted_pixels >= MAX_BACKDROP_ADMISSION_PIXELS {
                 continue;
             }
             let Some(index) = outputs
@@ -1680,6 +1754,9 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             let texture = self.resolve_whole(&outputs[index], item.capture_rect, scale)?;
             self.admitted_pixels += u64::from(width) * u64::from(height);
             self.renderer.frame_stats.record_backdrop_admission();
+            if let Some(gate) = self.renderer.backdrop_gates.get_mut(&node_id) {
+                gate.admitted();
+            }
             self.renderer.layer_cache.insert(key, Rc::clone(&texture));
             outputs[index] = backdrop_blit(
                 item,
@@ -2990,6 +3067,91 @@ pub(crate) fn scene_bounds(layer: &LayerScene, scale: f32) -> Option<Rect> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_gate_admits_a_key_that_held_for_more_than_its_patience() {
+        let key = gate_key(1);
+        let mut gate = BackdropGate::new(key);
+        assert!(!gate.admits(), "a key seen once is only remembered");
+        gate.observe(key);
+        assert!(gate.admits(), "the second frame of a key admits it");
+        gate.admitted();
+        gate.hit();
+        assert_eq!(gate.patience, 1);
+        assert!(gate.end_frame(), "a gate seen this frame stays");
+        assert!(!gate.end_frame(), "a gate not seen since goes");
+    }
+
+    fn gate_frame(gate: &mut BackdropGate, key: LayerRasterCacheKey) -> bool {
+        if gate.unread && gate.key == key {
+            gate.hit();
+            return false;
+        }
+        gate.observe(key);
+        if gate.admits() {
+            gate.admitted();
+            return true;
+        }
+        false
+    }
+
+    fn admissions_over(gate: &mut BackdropGate, holds: impl IntoIterator<Item = u32>) -> u32 {
+        let mut admissions = 0;
+        for (step, hold) in holds.into_iter().enumerate() {
+            for _ in 0..hold {
+                admissions += u32::from(gate_frame(gate, gate_key(step as u64 + 1)));
+            }
+        }
+        admissions
+    }
+
+    #[test]
+    fn a_gate_waits_twice_as_long_after_an_admission_nothing_read_back() {
+        let mut gate = BackdropGate::new(gate_key(0));
+        assert_eq!(
+            admissions_over(&mut gate, std::iter::repeat_n(2, 40)),
+            1,
+            "a key that never holds a third frame is admitted once"
+        );
+        assert_eq!(gate.patience, 2);
+        let mut gate = BackdropGate::new(gate_key(0));
+        assert_eq!(
+            admissions_over(&mut gate, std::iter::repeat_n(3, 12)),
+            12,
+            "a key that holds a third frame is read back once per admission"
+        );
+        assert_eq!(
+            gate.patience, 1,
+            "an admission read back does not double the patience"
+        );
+    }
+
+    #[test]
+    fn a_gate_never_waits_longer_than_the_cap() {
+        let mut gate = BackdropGate::new(gate_key(0));
+        let admissions = admissions_over(&mut gate, [2, 3, 5, 9, 17, 17, 17]);
+        assert_eq!(
+            admissions, 7,
+            "each hold one frame past the patience is admitted on its last frame"
+        );
+        assert_eq!(gate.patience, MAX_ADMISSION_PATIENCE);
+    }
+
+    fn gate_key(content: u64) -> LayerRasterCacheKey {
+        LayerRasterCacheKey::backdrop_effect(
+            None,
+            content,
+            0,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+            (1, 1),
+            ScaleBucket::from_scale(1.0),
+        )
+    }
+
     use super::*;
     use crate::scene::DrawOpKind;
 

@@ -445,3 +445,39 @@ fn a_scene_that_stops_admits_its_glasses_over_several_frames() {
     );
     assert_eq!(settled.hits, first.misses, "{settled:?}");
 }
+
+/// A glass whose backdrop changes every second frame is a glass whose
+/// admitted results are never read back: each admission resolved it whole
+/// into a retained surface that the next frame's key no longer named. After
+/// the first wasted admission the glass waits twice as long for the next,
+/// so forty such frames admit it once or twice, not twenty times.
+#[test]
+fn a_glass_whose_backdrop_changes_every_other_frame_stops_being_admitted() {
+    let Some((_lock, mut harness)) = harness() else {
+        return;
+    };
+    let still = SceneInput::default();
+    for _ in 0..WARMUP_FRAMES {
+        harness.stats(still);
+    }
+    let settled = harness.stats(still);
+    assert_eq!(
+        settled.misses, 0,
+        "the warm-up must leave the scene cached: {settled:?}"
+    );
+    let mut admissions = 0;
+    for step in 1..=20 {
+        let input = SceneInput {
+            drift: step as f32 * 0.01,
+            ..still
+        };
+        for _ in 0..2 {
+            admissions += harness.stats(input).admissions;
+        }
+    }
+    assert!(
+        admissions <= 2,
+        "the overlay's backdrop changed every second frame for forty frames and was admitted \
+         {admissions} times, each a whole resolve into a retained surface nothing read back"
+    );
+}

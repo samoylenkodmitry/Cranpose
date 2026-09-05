@@ -1,6 +1,6 @@
 use std::{
     borrow::Cow,
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     hash::{Hash, Hasher},
     rc::Rc,
     sync::{Arc, mpsc},
@@ -8,12 +8,11 @@ use std::{
 };
 
 use bytemuck::{Pod, Zeroable};
-use cranpose_core::hash::default as default_hash;
+use cranpose_core::{NodeId, hash::default as default_hash};
 use cranpose_render_common::{
     bounded_lru_cache::BoundedLruCache,
     geometry::blur_reach,
     graph::{DrawCommandId, quad_bounds},
-    raster_cache::LayerRasterCacheKey,
     software_text_raster::{
         SoftwareGlyphAtlasGlyph, SoftwareGlyphAtlasKey, SoftwareGlyphAtlasPlacement,
         SoftwareGlyphAtlasRunGlyph, SoftwareGlyphRasterCache, SoftwareTextFontSet,
@@ -35,7 +34,7 @@ use crate::{
     debug_toggles::DebugToggle,
     draw_pass::{PassSegment, PassTarget, ResolvedComposite, ResolvedCompositeKind, SourceContent},
     effect_renderer::{CompositeSampleMode, EffectRenderer, RoundedCompositeMask},
-    frame::FrameExecutor,
+    frame::{BackdropGate, FrameExecutor},
     frame_graph::{
         BufferUpload, FrameCommandRecorder, FrameCommandStats, FrameTextureDescriptor,
         UploadAllocatorSpec, WgpuFrameGraph, WgpuFrameGraphExecutor, write_buffer,
@@ -1729,8 +1728,7 @@ pub struct GpuRenderer {
     deferred_offscreen_releases: Vec<OffscreenTarget>,
     pub(crate) effect_renderer: EffectRenderer,
     pub(crate) layer_cache: LayerCache,
-    pub(crate) backdrop_admission: HashSet<LayerRasterCacheKey>,
-    pub(crate) backdrop_missed: HashSet<LayerRasterCacheKey>,
+    pub(crate) backdrop_gates: HashMap<NodeId, BackdropGate>,
     transparent_sources: HashMap<(u32, u32), Rc<OffscreenTarget>>,
     shadow_surface_cache: BoundedLruCache<ShadowSurfaceCacheKey, CachedShadowSurface>,
     shadow_surface_cache_bytes: u64,
@@ -1914,8 +1912,7 @@ impl GpuRenderer {
             deferred_offscreen_releases: Vec::new(),
             effect_renderer,
             layer_cache: LayerCache::new(),
-            backdrop_admission: HashSet::new(),
-            backdrop_missed: HashSet::new(),
+            backdrop_gates: HashMap::new(),
             transparent_sources: HashMap::new(),
             shadow_surface_cache: BoundedLruCache::with_capacity_at_least_one(
                 MAX_SHADOW_SURFACE_CACHE_ITEMS,
@@ -2177,7 +2174,7 @@ impl GpuRenderer {
     }
 
     fn flush_deferred_offscreen_releases(&mut self) {
-        self.backdrop_admission = std::mem::take(&mut self.backdrop_missed);
+        self.backdrop_gates.retain(|_, gate| gate.end_frame());
         for target in self.deferred_offscreen_releases.drain(..) {
             self.effect_renderer.release_offscreen(target);
         }
