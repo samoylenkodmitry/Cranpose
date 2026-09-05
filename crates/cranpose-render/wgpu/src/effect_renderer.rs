@@ -68,6 +68,8 @@ pub(crate) struct EffectRenderer {
     blur_shader: wgpu::ShaderModule,
     blur_pipeline_layout: wgpu::PipelineLayout,
     blur_pipeline: LazyGpuResource<wgpu::RenderPipeline>,
+    blur_downsample_pipelines:
+        [LazyGpuResource<wgpu::RenderPipeline>; BLUR_DOWNSAMPLE_BLOCKS.len()],
     blur_uniform_bind_group_layout: wgpu::BindGroupLayout,
 
     offset_shader: wgpu::ShaderModule,
@@ -265,20 +267,46 @@ struct ProjectiveBlitVertex {
     position: [f32; 2],
 }
 
-fn blur_uniform_spec(horizontal: bool) -> UploadAllocatorSpec {
-    if horizontal {
-        UploadAllocatorSpec::uniform(
+/// The blocks of source texels a blur's downsample averages per scratch
+/// pixel: the downscales `blur_scratch_size` chooses.
+const BLUR_DOWNSAMPLE_BLOCKS: [u32; 2] = [2, 4];
+
+/// The block of source texels one pixel of a blur's scratch stands for: one
+/// when `scratch` is `source`'s size.
+fn blur_block(source: (u32, u32, u32, u32), scratch: (u32, u32, u32, u32)) -> u32 {
+    (source.2 as f32 / scratch.2.max(1) as f32).round().max(1.0) as u32
+}
+
+fn blur_uniform_spec(pass: UploadAllocatorId) -> UploadAllocatorSpec {
+    let (buffer, bind_group) = match pass {
+        UploadAllocatorId::BlurDownsample => (
+            "Blur Downsample Uniform Buffer",
+            "Blur Downsample Uniform Bind Group",
+        ),
+        UploadAllocatorId::BlurHorizontal => (
             "Blur Horizontal Uniform Buffer",
             "Blur Horizontal Uniform Bind Group",
-            std::mem::size_of::<BlurUniforms>() as u64,
-        )
-    } else {
-        UploadAllocatorSpec::uniform(
+        ),
+        _ => (
             "Blur Vertical Uniform Buffer",
             "Blur Vertical Uniform Bind Group",
-            std::mem::size_of::<BlurUniforms>() as u64,
-        )
-    }
+        ),
+    };
+    UploadAllocatorSpec::uniform(
+        buffer,
+        bind_group,
+        std::mem::size_of::<BlurUniforms>() as u64,
+    )
+}
+
+/// One draw of a blur pass: the texture it samples, its uniforms, the
+/// downsample block it averages (the kernel when `None`) and the
+/// destination pixels it covers.
+struct BlurDraw<'a> {
+    source: &'a OffscreenTarget,
+    uniforms: BlurUniforms,
+    downsample: Option<u32>,
+    scissor: Option<(u32, u32, u32, u32)>,
 }
 
 fn offset_uniform_spec() -> UploadAllocatorSpec {
@@ -348,17 +376,19 @@ struct ShaderPassOptions {
 }
 
 /// A runtime shader drawn into a pass over `dest_viewport`, reading
-/// `source_region` of `source` (the whole texture when `None`) with
-/// `layer_pixel_rect` relative to that region, masked by `rounded_mask`
-/// (target pixels) and scaled by `alpha`. Region, mask and alpha reach the
-/// shader through its reserved uniform slots and require a shader that
-/// declares `batched_source`.
+/// `source_region` of `source` (the whole texture when `None`), which
+/// stands for `source_logical_size` pixels when it is a downscaled result,
+/// with `layer_pixel_rect` relative to that region, masked by
+/// `rounded_mask` (target pixels) and scaled by `alpha`. Region, logical
+/// size, mask and alpha reach the shader through its reserved uniform slots
+/// and require a shader that declares `batched_source`.
 #[derive(Clone, Copy)]
 pub(crate) struct ShaderCompositeBatchItem<'a> {
     pub(crate) source: &'a OffscreenTarget,
     pub(crate) shader: &'a RuntimeShader,
     pub(crate) layer_pixel_rect: [f32; 4],
     pub(crate) source_region: Option<(f32, f32, f32, f32)>,
+    pub(crate) source_logical_size: Option<(f32, f32)>,
     pub(crate) rounded_mask: Option<RoundedCompositeMask>,
     pub(crate) alpha: f32,
     pub(crate) scissor: Option<(u32, u32, u32, u32)>,
@@ -420,22 +450,23 @@ fn region_uniform(region: (u32, u32, u32, u32)) -> [f32; 4] {
 }
 
 /// One region of a blur atlas pass: the capture texels to blur, the
-/// downscaled slot of the scratch texture the horizontal pass writes, the
-/// origin in the result texture the vertical pass writes at full size, and
-/// the blur to run.
+/// downscaled slot the horizontal pass writes in the scratch texture and
+/// the vertical pass writes in the result texture, and the blur to run.
 #[derive(Clone, Copy)]
 pub(crate) struct BlurRegion {
     pub(crate) source: (u32, u32, u32, u32),
     pub(crate) scratch: (u32, u32, u32, u32),
-    pub(crate) dest: (u32, u32),
     pub(crate) radius_x: f32,
     pub(crate) radius_y: f32,
     pub(crate) tile_mode: TileMode,
 }
 
 impl BlurRegion {
-    fn dest_rect(&self) -> (u32, u32, u32, u32) {
-        (self.dest.0, self.dest.1, self.source.2, self.source.3)
+    fn scratch_radius(&self) -> (f32, f32) {
+        (
+            self.radius_x * self.scratch.2 as f32 / self.source.2.max(1) as f32,
+            self.radius_y * self.scratch.3 as f32 / self.source.3.max(1) as f32,
+        )
     }
 }
 
@@ -509,6 +540,7 @@ fn create_fullscreen_pipeline(
     layout: &wgpu::PipelineLayout,
     shader: &wgpu::ShaderModule,
     fragment_entry: &'static str,
+    constants: &[(&str, f64)],
     surface_format: wgpu::TextureFormat,
     blend: wgpu::BlendState,
 ) -> wgpu::RenderPipeline {
@@ -520,7 +552,7 @@ fn create_fullscreen_pipeline(
         layout,
         shader,
         fragment_entry,
-        &[],
+        constants,
         wgpu::ColorTargetState {
             format: surface_format,
             blend: Some(blend),
@@ -655,6 +687,10 @@ impl EffectRenderer {
         });
 
         let blur_pipeline = LazyGpuResource::new("effect/blur");
+        let blur_downsample_pipelines = [
+            LazyGpuResource::new("effect/blur-downsample/2"),
+            LazyGpuResource::new("effect/blur-downsample/4"),
+        ];
 
         let offset_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Offset Shader"),
@@ -723,6 +759,7 @@ impl EffectRenderer {
             blur_shader,
             blur_pipeline_layout,
             blur_pipeline,
+            blur_downsample_pipelines,
             blur_uniform_bind_group_layout,
             offset_shader,
             offset_pipeline_layout,
@@ -762,6 +799,31 @@ impl EffectRenderer {
                 &self.blur_pipeline_layout,
                 &self.blur_shader,
                 "blur_fs",
+                &[],
+                self.surface_format,
+                wgpu::BlendState::REPLACE,
+            )
+        })
+    }
+
+    /// The downsample pipeline averaging `block` source texels per axis into
+    /// one pixel of a blur's scratch.
+    fn blur_downsample_pipeline(&self, device: &wgpu::Device, block: u32) -> &wgpu::RenderPipeline {
+        let index = BLUR_DOWNSAMPLE_BLOCKS
+            .iter()
+            .position(|candidate| *candidate == block)
+            .unwrap_or_else(|| {
+                panic!("a blur downsample block of {block}; the scratch is 2 or 4 to 1")
+            });
+        self.blur_downsample_pipelines[index].get_or_init(self.adapter_backend, || {
+            create_fullscreen_pipeline(
+                device,
+                self.pipeline_cache.as_ref(),
+                "Blur Downsample Pipeline",
+                &self.blur_pipeline_layout,
+                &self.blur_shader,
+                "blur_downsample_fs",
+                &[("BLUR_BLOCK", f64::from(block))],
                 self.surface_format,
                 wgpu::BlendState::REPLACE,
             )
@@ -777,6 +839,7 @@ impl EffectRenderer {
                 &self.offset_pipeline_layout,
                 &self.offset_shader,
                 "offset_fs",
+                &[],
                 self.surface_format,
                 wgpu::BlendState::REPLACE,
             )
@@ -809,6 +872,7 @@ impl EffectRenderer {
                 &self.blit_pipeline_layout,
                 &self.blit_shader,
                 "blit_fs",
+                &[],
                 self.surface_format,
                 blend,
             )
@@ -952,75 +1016,89 @@ impl EffectRenderer {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn encode_blur_axis_pass<C: FrameCommandRecorder>(
+    /// Encodes one blur pass over `dest_view`: the draws in order, each
+    /// with its own source, uniforms and pipeline.
+    fn encode_blur_pass<C: FrameCommandRecorder>(
         &mut self,
         recorder: &mut C,
         device: &wgpu::Device,
-        source: &OffscreenTarget,
+        label: &'static str,
+        pass_id: UploadAllocatorId,
         dest_view: &wgpu::TextureView,
-        uniforms: BlurUniforms,
-        horizontal: bool,
-        load_op: wgpu::LoadOp<wgpu::Color>,
-        scissor: Option<(u32, u32, u32, u32)>,
+        draws: &[BlurDraw<'_>],
     ) {
-        let source_bind_group = source.get_or_create_bind_group(
-            device,
-            &self.effect_texture_bind_group_layout,
-            &self.effect_linear_sampler,
-        );
-
-        let uniform_bind_group = recorder.upload_uniform(
-            if horizontal {
-                UploadAllocatorId::BlurHorizontal
-            } else {
-                UploadAllocatorId::BlurVertical
-            },
-            blur_uniform_spec(horizontal),
-            device,
-            &self.blur_uniform_bind_group_layout,
-            bytemuck::bytes_of(&uniforms),
-            &self.debug_upload_bytes,
-        );
+        let uniform_bind_groups: Vec<wgpu::BindGroup> = draws
+            .iter()
+            .map(|draw| {
+                recorder.upload_uniform(
+                    pass_id,
+                    blur_uniform_spec(pass_id),
+                    device,
+                    &self.blur_uniform_bind_group_layout,
+                    bytemuck::bytes_of(&draw.uniforms),
+                    &self.debug_upload_bytes,
+                )
+            })
+            .collect();
         let mut pass = recorder.begin_color_pass(
-            if horizontal {
-                "Blur Horizontal Pass"
-            } else {
-                "Blur Vertical Pass"
-            },
+            label,
             dest_view,
-            load_op,
+            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
         );
-        pass.set_pipeline(self.blur_pipeline(device));
-        pass.set_bind_group(0, source_bind_group, &[]);
-        pass.set_bind_group(1, &uniform_bind_group, &[]);
-        if let Some((x, y, w, h)) = scissor {
-            pass.set_scissor_rect(x, y, w, h);
+        let mut bound = None;
+        for (draw, uniform_bind_group) in draws.iter().zip(&uniform_bind_groups) {
+            if bound != Some(draw.downsample) {
+                pass.set_pipeline(match draw.downsample {
+                    Some(block) => self.blur_downsample_pipeline(device, block),
+                    None => self.blur_pipeline(device),
+                });
+                bound = Some(draw.downsample);
+            }
+            let source_bind_group = draw.source.get_or_create_bind_group(
+                device,
+                &self.effect_texture_bind_group_layout,
+                &self.effect_linear_sampler,
+            );
+            pass.set_bind_group(0, source_bind_group, &[]);
+            pass.set_bind_group(1, uniform_bind_group, &[]);
+            if let Some((x, y, width, height)) = draw.scissor {
+                pass.set_scissor_rect(x, y, width, height);
+            }
+            pass.draw(0..4, 0..1);
         }
-        pass.draw(0..4, 0..1);
     }
 
+    /// The uniforms of one blur pass sampling `sampled`, reading its
+    /// `source` region and writing the `dest` region of the target; the
+    /// radius counts kernel steps, the coarser of a source texel and a
+    /// destination pixel.
     fn blur_uniforms(
         horizontal: bool,
-        width: u32,
-        height: u32,
-        radius_x: f32,
-        radius_y: f32,
+        sampled: (u32, u32),
+        source: (u32, u32, u32, u32),
+        dest: (u32, u32, u32, u32),
+        radius: (f32, f32),
         tile_mode: TileMode,
     ) -> BlurUniforms {
         let direction = if horizontal { [1.0, 0.0] } else { [0.0, 1.0] };
         BlurUniforms {
-            direction_and_radius: [direction[0], direction[1], radius_x, radius_y],
+            direction_and_radius: [direction[0], direction[1], radius.0, radius.1],
             texture_size_and_tile_mode: [
-                width as f32,
-                height as f32,
+                sampled.0 as f32,
+                sampled.1 as f32,
                 tile_mode_uniform_value(tile_mode),
                 0.0,
             ],
-            source_region: [0.0; 4],
-            dest_region: [0.0; 4],
+            source_region: region_uniform(source),
+            dest_region: region_uniform(dest),
         }
     }
 
+    /// Blurs `source` into `dest_view` through `scratch`: a wide blur first
+    /// averages each block of source texels into a scratch-size downsample
+    /// and runs its horizontal pass over that, so no source texel is skipped;
+    /// the vertical pass reads the scratch back up to `dest_view` at the
+    /// source's size. Returns the passes encoded.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn encode_blur_scissored_ping_pong_passes<C: FrameCommandRecorder>(
         &mut self,
@@ -1033,63 +1111,113 @@ impl EffectRenderer {
         radius_y: f32,
         tile_mode: TileMode,
         scissor: Option<(u32, u32, u32, u32)>,
-    ) {
+    ) -> u32 {
         debug_assert!(
             radius_x > 0.0 || radius_y > 0.0,
             "zero-radius blur should use the composite fast path"
         );
         let scale_x = source.width as f32 / scratch.width.max(1) as f32;
         let scale_y = source.height as f32 / scratch.height.max(1) as f32;
-
-        self.encode_blur_axis_pass(
+        let radius = (radius_x / scale_x, radius_y / scale_y);
+        let whole_source = (0, 0, source.width, source.height);
+        let whole_scratch = (0, 0, scratch.width, scratch.height);
+        let scratch_scissor =
+            scaled_scissor(scissor, scale_x, scale_y, scratch.width, scratch.height);
+        let block = blur_block(whole_source, whole_scratch);
+        let small = (block > 1).then(|| {
+            let descriptor = FrameTextureDescriptor::render_attachment(
+                "Blur Downsample",
+                scratch.width,
+                scratch.height,
+                self.surface_format,
+            );
+            (
+                descriptor,
+                recorder.acquire_transient_offscreen(device, descriptor),
+            )
+        });
+        if let Some((_, small)) = &small {
+            self.encode_blur_pass(
+                recorder,
+                device,
+                "Blur Downsample Pass",
+                UploadAllocatorId::BlurDownsample,
+                &small.view,
+                &[BlurDraw {
+                    source,
+                    uniforms: Self::blur_uniforms(
+                        true,
+                        (source.width, source.height),
+                        whole_source,
+                        whole_scratch,
+                        (0.0, 0.0),
+                        tile_mode,
+                    ),
+                    downsample: Some(block),
+                    scissor: scratch_scissor,
+                }],
+            );
+        }
+        let (horizontal_source, horizontal_region) = match &small {
+            Some((_, small)) => (small, whole_scratch),
+            None => (source, whole_source),
+        };
+        self.encode_blur_pass(
             recorder,
             device,
-            source,
+            "Blur Horizontal Pass",
+            UploadAllocatorId::BlurHorizontal,
             &scratch.view,
-            Self::blur_uniforms(
-                true,
-                scratch.width,
-                scratch.height,
-                radius_x / scale_x,
-                radius_y / scale_y,
-                tile_mode,
-            ),
-            true,
-            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-            scaled_scissor(scissor, scale_x, scale_y, scratch.width, scratch.height),
+            &[BlurDraw {
+                source: horizontal_source,
+                uniforms: Self::blur_uniforms(
+                    true,
+                    (horizontal_source.width, horizontal_source.height),
+                    horizontal_region,
+                    whole_scratch,
+                    radius,
+                    tile_mode,
+                ),
+                downsample: None,
+                scissor: scratch_scissor,
+            }],
         );
-        self.encode_blur_axis_pass(
+        self.encode_blur_pass(
             recorder,
             device,
-            scratch,
+            "Blur Vertical Pass",
+            UploadAllocatorId::BlurVertical,
             dest_view,
-            Self::blur_uniforms(
-                false,
-                scratch.width,
-                scratch.height,
-                radius_x / scale_x,
-                radius_y / scale_y,
-                tile_mode,
-            ),
-            false,
-            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-            scissor,
+            &[BlurDraw {
+                source: scratch,
+                uniforms: Self::blur_uniforms(
+                    false,
+                    (scratch.width, scratch.height),
+                    whole_scratch,
+                    whole_source,
+                    radius,
+                    tile_mode,
+                ),
+                downsample: None,
+                scissor,
+            }],
         );
+        match small {
+            Some((descriptor, small)) => {
+                recorder.release_transient_offscreen(descriptor, small);
+                3
+            }
+            None => 2,
+        }
     }
 
-    /// Blurs several regions of `atlas` in two passes: every region's
-    /// horizontal pass into `scratch`, then every region's vertical pass back
-    /// into `atlas`. A wide blur runs its horizontal pass into a downscaled
-    /// copy of its region (the scratch region at the top-left of the same
-    /// slot) and the vertical pass back up to full size, the way a single
-    /// blur uses a smaller scratch. Regions must sit at least their blur
-    /// radius apart so no tap reads a neighbour; the caller packs them that
-    /// way.
-    /// Blurs every region of the capture atlas: the horizontal pass writes
-    /// each region downscaled into its scratch slot, the vertical pass reads
-    /// the slot and writes the region at full size into the result texture.
-    /// Both targets hold only the blurred regions, so neither pass loads or
-    /// stores the atlas.
+    /// Blurs every region of the capture atlas: a wide region's downsample
+    /// averages its blocks of texels into its scratch slot of the result
+    /// texture, the horizontal pass writes each region's scratch slot from
+    /// that downsample or, unscaled, from the atlas, and the vertical pass
+    /// reads the slot and writes the same slot of the result texture. Both
+    /// targets hold only the blurred regions, so no pass loads or stores
+    /// the atlas.
     pub(crate) fn encode_blur_atlas_passes<C: FrameCommandRecorder>(
         &mut self,
         recorder: &mut C,
@@ -1099,73 +1227,94 @@ impl EffectRenderer {
         result: &OffscreenTarget,
         regions: &[BlurRegion],
     ) {
-        for horizontal in [true, false] {
-            let (source, dest_view) = if horizontal {
-                (atlas, &scratch.view)
-            } else {
-                (scratch, &result.view)
-            };
-            let source_bind_group = source.get_or_create_bind_group(
+        let blocks: Vec<u32> = regions
+            .iter()
+            .map(|region| blur_block(region.source, region.scratch))
+            .collect();
+        let downsample: Vec<BlurDraw<'_>> = regions
+            .iter()
+            .zip(&blocks)
+            .filter(|(_, block)| **block > 1)
+            .map(|(region, block)| BlurDraw {
+                source: atlas,
+                uniforms: Self::blur_uniforms(
+                    true,
+                    (atlas.width, atlas.height),
+                    region.source,
+                    region.scratch,
+                    (0.0, 0.0),
+                    region.tile_mode,
+                ),
+                downsample: Some(*block),
+                scissor: Some(region.scratch),
+            })
+            .collect();
+        if !downsample.is_empty() {
+            self.encode_blur_pass(
+                recorder,
                 device,
-                &self.effect_texture_bind_group_layout,
-                &self.effect_linear_sampler,
+                "Blur Downsample Pass",
+                UploadAllocatorId::BlurDownsample,
+                &result.view,
+                &downsample,
             );
-            let uniform_bind_groups: Vec<wgpu::BindGroup> = regions
-                .iter()
-                .map(|region| {
-                    let (source_region, dest_region) = if horizontal {
-                        (region.source, region.scratch)
-                    } else {
-                        (region.scratch, region.dest_rect())
-                    };
-                    let scale_x = region.source.2 as f32 / region.scratch.2.max(1) as f32;
-                    let scale_y = region.source.3 as f32 / region.scratch.3.max(1) as f32;
-                    let mut uniforms = Self::blur_uniforms(
-                        horizontal,
-                        source.width,
-                        source.height,
-                        region.radius_x / scale_x,
-                        region.radius_y / scale_y,
-                        region.tile_mode,
-                    );
-                    uniforms.source_region = region_uniform(source_region);
-                    uniforms.dest_region = region_uniform(dest_region);
-                    recorder.upload_uniform(
-                        if horizontal {
-                            UploadAllocatorId::BlurHorizontal
-                        } else {
-                            UploadAllocatorId::BlurVertical
-                        },
-                        blur_uniform_spec(horizontal),
-                        device,
-                        &self.blur_uniform_bind_group_layout,
-                        bytemuck::bytes_of(&uniforms),
-                        &self.debug_upload_bytes,
-                    )
-                })
-                .collect();
-            let mut pass = recorder.begin_color_pass(
-                if horizontal {
-                    "Blur Horizontal Pass"
-                } else {
-                    "Blur Vertical Pass"
-                },
-                dest_view,
-                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-            );
-            pass.set_pipeline(self.blur_pipeline(device));
-            pass.set_bind_group(0, source_bind_group, &[]);
-            for (region, uniform_bind_group) in regions.iter().zip(&uniform_bind_groups) {
-                let (x, y, width, height) = if horizontal {
-                    region.scratch
-                } else {
-                    region.dest_rect()
-                };
-                pass.set_bind_group(1, uniform_bind_group, &[]);
-                pass.set_scissor_rect(x, y, width, height);
-                pass.draw(0..4, 0..1);
-            }
         }
+        let horizontal: Vec<BlurDraw<'_>> = regions
+            .iter()
+            .zip(&blocks)
+            .map(|(region, block)| {
+                let (source, source_region) = if *block > 1 {
+                    (result, region.scratch)
+                } else {
+                    (atlas, region.source)
+                };
+                BlurDraw {
+                    source,
+                    uniforms: Self::blur_uniforms(
+                        true,
+                        (source.width, source.height),
+                        source_region,
+                        region.scratch,
+                        region.scratch_radius(),
+                        region.tile_mode,
+                    ),
+                    downsample: None,
+                    scissor: Some(region.scratch),
+                }
+            })
+            .collect();
+        self.encode_blur_pass(
+            recorder,
+            device,
+            "Blur Horizontal Pass",
+            UploadAllocatorId::BlurHorizontal,
+            &scratch.view,
+            &horizontal,
+        );
+        let vertical: Vec<BlurDraw<'_>> = regions
+            .iter()
+            .map(|region| BlurDraw {
+                source: scratch,
+                uniforms: Self::blur_uniforms(
+                    false,
+                    (scratch.width, scratch.height),
+                    region.scratch,
+                    region.scratch,
+                    region.scratch_radius(),
+                    region.tile_mode,
+                ),
+                downsample: None,
+                scissor: Some(region.scratch),
+            })
+            .collect();
+        self.encode_blur_pass(
+            recorder,
+            device,
+            "Blur Vertical Pass",
+            UploadAllocatorId::BlurVertical,
+            &result.view,
+            &vertical,
+        );
         self.record_blur_pass();
     }
 
@@ -1268,7 +1417,7 @@ impl EffectRenderer {
                 layer_pixel_rect: item.layer_pixel_rect,
                 source_region: item.source_region,
                 mask,
-                logical_size: None,
+                logical_size: item.source_logical_size,
                 alpha: item.alpha,
             }
             .write(&mut padded);
@@ -1443,7 +1592,7 @@ impl EffectRenderer {
                 }
 
                 let intermediate = scratch_targets.next()?;
-                self.encode_blur_scissored_ping_pong_passes(
+                let passes = self.encode_blur_scissored_ping_pong_passes(
                     recorder,
                     device,
                     source,
@@ -1455,7 +1604,7 @@ impl EffectRenderer {
                     None,
                 );
                 self.record_blur_pass();
-                Ok(2)
+                Ok(passes)
             }
             RenderEffect::Offset { offset_x, offset_y } => {
                 self.encode_offset(recorder, device, source, dest_view, *offset_x, *offset_y);

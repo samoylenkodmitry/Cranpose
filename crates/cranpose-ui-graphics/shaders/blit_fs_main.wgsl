@@ -25,6 +25,17 @@ fn blit_fs(input: VertexOutput) -> @location(0) vec4<f32> {
             source_origin.y + local_dest.y * source_size.y / blit.dest_viewport.w,
         );
     }
+    if use_source_viewport {
+        // Held to the viewport's texel centers: a viewport is one packed
+        // region of the texture, and a bilinear tap at its edge reads as a
+        // dedicated texture's clamp-to-edge would, never a neighbour's texels.
+        let half_texel = vec2<f32>(0.5);
+        source_pos = clamp(
+            source_pos,
+            source_origin + half_texel,
+            source_origin + source_size - half_texel,
+        );
+    }
     let sampled =
         composite_sample(source_pos, tex_size, blit.sampling.x) * blit.alpha.x;
     if (blit.mask_enabled.x <= 0.5) {

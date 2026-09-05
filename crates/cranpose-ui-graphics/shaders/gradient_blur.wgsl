@@ -37,6 +37,17 @@ fn region_extent() -> vec4<f32> {
     return vec4<f32>(0.0, 0.0, dims.x, dims.y);
 }
 
+// Renderer-reserved slots 252/253: the pixel extent the input region stands
+// for when it was rasterized smaller than that (a blur's downscaled
+// result); zero when the region is at its logical size.
+fn logical_extent() -> vec2<f32> {
+    let logical = get_vec4(252u).xy;
+    if logical.x > 0.5 && logical.y > 0.5 {
+        return logical;
+    }
+    return region_extent().zw;
+}
+
 // The region as a map from region-local uv to texture uv, computed once
 // per fragment so no tap pays for a texture query or a uniform fetch.
 struct RegionMap {
@@ -68,7 +79,7 @@ fn composite_coverage(local_uv: vec2<f32>) -> f32 {
         return 1.0;
     }
     let radii = get_vec4(244u);
-    let p = local_uv * region_extent().zw;
+    let p = local_uv * logical_extent();
     let half_size = mask_rect.zw * 0.5;
     let center = mask_rect.xy + half_size;
     let local = p - center;
@@ -127,7 +138,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
 
 fn blur_fs(input: VertexOutput) -> vec4<f32> {
     let map = region_map();
-    let texture_size = region_extent().zw;
+    let texture_size = logical_extent();
     let effect_rect = vec4<f32>(
         get_float(248u), get_float(249u), get_float(250u), get_float(251u)
     );

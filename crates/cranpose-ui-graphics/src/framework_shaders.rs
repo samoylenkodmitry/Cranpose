@@ -18,7 +18,6 @@ pub const SDF_ROUNDED_RECT_FN_WGSL: &str = include_str!("../shaders/sdf_rounded_
 pub const COMPOSITE_SAMPLE_FN_WGSL: &str = include_str!("../shaders/composite_sample_fn.wgsl");
 
 pub const BLUR_FS_WGSL: &str = include_str!("../shaders/blur_fs.wgsl");
-pub const BLUR_ROUNDED_MASK_FS_WGSL: &str = include_str!("../shaders/blur_rounded_mask_fs.wgsl");
 pub const OFFSET_FS_WGSL: &str = include_str!("../shaders/offset_fs.wgsl");
 pub const BLIT_FS_WGSL: &str = include_str!("../shaders/blit_fs.wgsl");
 pub const BLIT_FS_MAIN_WGSL: &str = include_str!("../shaders/blit_fs_main.wgsl");

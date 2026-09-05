@@ -1,7 +1,7 @@
 
 struct BlurUniforms {
-    direction_and_radius: vec4<f32>,      // direction.xy, radius.xy in destination pixels
-    texture_size_and_tile_mode: vec4<f32>,// texture_size.xy, tile_mode, unused
+    direction_and_radius: vec4<f32>,      // direction.xy, radius.xy in source texels
+    texture_size_and_tile_mode: vec4<f32>,// sampled texture size.xy, tile_mode, unused
     source_region: vec4<f32>,             // x, y, width, height in source texels; zero = whole
     dest_region: vec4<f32>,               // x, y, width, height in destination pixels; zero = whole
 }
@@ -9,6 +9,10 @@ struct BlurUniforms {
 @group(0) @binding(0) var input_texture: texture_2d<f32>;
 @group(0) @binding(1) var input_sampler: sampler;
 @group(1) @binding(0) var<uniform> blur: BlurUniforms;
+
+// The source texels one destination pixel of the downsample stands for on
+// each axis. A pipeline constant, so the block's fetch loops unroll.
+override BLUR_BLOCK: i32 = 2;
 
 fn inside_unit_bounds(uv: vec2<f32>) -> f32 {
     let inside = uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0;
@@ -68,41 +72,59 @@ fn tap_weight(uv: vec2<f32>, weight: f32) -> f32 {
     return select(weight, weight * inside_unit_bounds(uv), decal);
 }
 
-fn sample_with_tile_mode(uv: vec2<f32>) -> vec4<f32> {
-    return tiled_sample(uv) * tap_weight(uv, 1.0);
-}
-
-@fragment
-fn blur_fs(input: VertexOutput) -> @location(0) vec4<f32> {
-    // The fragment's place in its destination region, in [0, 1]: the whole
-    // target unless the uniform names a region of it. One region-local unit
-    // spans one source region, so a step of one destination pixel is one
-    // source region width over the destination width, which is the
-    // downscale the caller chose for a wide blur.
-    var local = input.uv;
-    var dest_size = max(blur.texture_size_and_tile_mode.xy, vec2<f32>(1.0, 1.0));
+// The fragment's place in its destination region, in [0, 1]: the whole
+// target unless the uniform names a region of it. One region-local unit
+// spans one source region.
+fn region_local(input: VertexOutput) -> vec2<f32> {
     let dest = blur.dest_region;
     if (dest.z > 0.5 && dest.w > 0.5) {
-        local = (input.position.xy - dest.xy) / dest.zw;
-        dest_size = dest.zw;
+        return (input.position.xy - dest.xy) / dest.zw;
     }
-    let pixel_size = 1.0 / dest_size;
+    return input.uv;
+}
+
+// The downsample: each destination pixel is the average of the block of
+// source texels it stands for. The pixel's centre is the block's centre, a
+// texel corner for an even block, so the fetches at every other corner
+// across the block read each of its texels once through the bilinear
+// filter.
+@fragment
+fn blur_downsample_fs(input: VertexOutput) -> @location(0) vec4<f32> {
+    let local = region_local(input);
+    let texel = 1.0 / max(source_region().zw, vec2<f32>(1.0, 1.0));
+    let fetches = max(BLUR_BLOCK / 2, 1);
+    var sum = vec4<f32>(0.0);
+    for (var y: i32 = 0; y < fetches; y = y + 1) {
+        for (var x: i32 = 0; x < fetches; x = x + 1) {
+            let corner = vec2<f32>(f32(2 * x + 1 - fetches), f32(2 * y + 1 - fetches));
+            sum = sum + tiled_sample(local + corner * texel);
+        }
+    }
+    return sum / f32(fetches * fetches);
+}
+
+// One axis of the separable kernel over a source whose texels are the
+// destination's pixels, or coarser: a step is one source texel, so a pass
+// reading the downscaled scratch back up to full size steps by the scratch
+// texel, and the radius counts those texels.
+@fragment
+fn blur_fs(input: VertexOutput) -> @location(0) vec4<f32> {
+    let local = region_local(input);
+    let source_size = max(source_region().zw, vec2<f32>(1.0, 1.0));
+    let step = blur.direction_and_radius.xy / source_size;
     let dir = blur.direction_and_radius.xy;
-    // Use the radius component matching the direction.
     let radius = max(dot(dir, blur.direction_and_radius.zw), 0.0);
     let sigma = max(radius * 0.5, 0.001);
 
-    // Number of taps on each side (capped for shader cost stability).
     let tap_count = min(i32(ceil(radius)), 32);
 
+    var color = tiled_sample(local) * tap_weight(local, 1.0);
+    var total_weight = tap_weight(local, 1.0);
     if (tap_count <= 0) {
-        return sample_with_tile_mode(local);
+        return color;
     }
 
     let inv_2sigma2 = 1.0 / (2.0 * sigma * sigma);
-    var color = sample_with_tile_mode(local);
-    var total_weight = tap_weight(local, 1.0);
-    let step = dir * pixel_size;
 
     // The taps at i and i + 1 on one side become one bilinear fetch between
     // them, placed where the filter hands each its Gaussian weight, so the

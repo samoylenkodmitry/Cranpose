@@ -42,6 +42,20 @@ fn region_extent() -> vec4<f32> {
     return vec4<f32>(0.0, 0.0, dims.x, dims.y);
 }
 
+// Renderer-reserved slots 252/253: the LOGICAL pixel extent the input
+// region represents, injected when it is rasterized smaller than that (a
+// blur chain's scratch-size intermediate). Pixel-calibrated offsets divide
+// by the logical extent — dividing by the physical dimensions of a
+// quarter-scale texture would inflate every displacement fourfold. Zero
+// means the input is at its logical size.
+fn logical_extent() -> vec2<f32> {
+    let logical = get_vec2(252u);
+    if (logical.x > 0.5 && logical.y > 0.5) {
+        return logical;
+    }
+    return region_extent().zw;
+}
+
 // The region as a map from region-local uv to texture uv, computed once
 // per fragment and threaded through the sampling helpers so no tap pays for
 // a texture query or a uniform fetch.
@@ -627,7 +641,7 @@ fn composite_coverage(local_uv: vec2<f32>) -> f32 {
         return 1.0;
     }
     let radii = get_vec4(244u);
-    let p = local_uv * region_extent().zw;
+    let p = local_uv * logical_extent();
     let half_size = mask_rect.zw * 0.5;
     let center = mask_rect.xy + half_size;
     let local = p - center;
@@ -648,17 +662,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
 fn glass_fs(input: VertexOutput) -> vec4<f32> {
     let uv = input.uv;
     let map = region_map();
-    // Renderer-reserved slot 252/253: the LOGICAL pixel extent the input
-    // texture represents, injected when it is rasterized smaller than that
-    // (a blur chain's scratch-size intermediate). Pixel-calibrated offsets
-    // divide by the logical extent — dividing by the physical dimensions of
-    // a quarter-scale texture would inflate every displacement fourfold.
-    // Zero means the input is at its logical size.
-    let logical_size = get_vec2(252u);
-    var tex_size = region_extent().zw;
-    if (logical_size.x > 0.5 && logical_size.y > 0.5) {
-        tex_size = logical_size;
-    }
+    let tex_size = logical_extent();
     let material_activity = clamp(get_float(111u), 0.0, 1.0);
 
     // Effect layer pixel rect injected by the renderer at uniform slot 62

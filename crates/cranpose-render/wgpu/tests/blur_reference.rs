@@ -9,6 +9,7 @@ use support::{region_pixels, solid_rect};
 
 const FRAME: u32 = 160;
 const RADIUS: f32 = 4.0;
+const WIDE_RADIUS: f32 = 20.0;
 const GLASS: Rect = Rect {
     x: 40.0,
     y: 40.0,
@@ -27,7 +28,7 @@ fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect {
 
 /// Bars and blocks of distinct colors under the glass, so every tap of the
 /// kernel meets an edge somewhere.
-fn page(with_blur: bool) -> RenderGraph {
+fn page(blur: Option<f32>) -> RenderGraph {
     let mut children = vec![
         solid_rect(
             rect(0.0, 0.0, FRAME as f32, FRAME as f32),
@@ -50,13 +51,13 @@ fn page(with_blur: bool) -> RenderGraph {
             Color::from_rgb_u8(255, 255, 255),
         ),
     ];
-    if with_blur {
+    if let Some(radius) = blur {
         children.push(RenderNode::Layer(Box::new(
             shared_test_support::layer_node(
                 rect(0.0, 0.0, GLASS.width, GLASS.height),
                 ProjectiveTransform::translation(GLASS.x, GLASS.y),
                 GraphicsLayer {
-                    backdrop_effect: Some(RenderEffect::blur(RADIUS)),
+                    backdrop_effect: Some(RenderEffect::blur(radius)),
                     ..GraphicsLayer::default()
                 },
                 Vec::new(),
@@ -68,9 +69,9 @@ fn page(with_blur: bool) -> RenderGraph {
 
 /// The renderer's kernel: `ceil(radius)` taps each side, `sigma = radius /
 /// 2`, truncated there and normalized.
-fn kernel() -> Vec<f32> {
-    let taps = RADIUS.ceil() as i32;
-    let sigma = RADIUS * 0.5;
+fn kernel(radius: f32) -> Vec<f32> {
+    let taps = radius.ceil() as i32;
+    let sigma = radius * 0.5;
     let weights: Vec<f32> = (-taps..=taps)
         .map(|i| (-(i * i) as f32 / (2.0 * sigma * sigma)).exp())
         .collect();
@@ -80,9 +81,9 @@ fn kernel() -> Vec<f32> {
 
 /// A separable blur of the 8-bit page, horizontal then vertical, clamped at
 /// the frame's edges, in float.
-fn reference_blur(pixels: &[u8]) -> Vec<f32> {
+fn reference_blur(pixels: &[u8], radius: f32) -> Vec<f32> {
     let size = FRAME as i32;
-    let kernel = kernel();
+    let kernel = kernel(radius);
     let taps = kernel.len() as i32 / 2;
     let at = |x: i32, y: i32, c: usize| {
         let x = x.clamp(0, size - 1);
@@ -120,15 +121,24 @@ fn reference_blur(pixels: &[u8]) -> Vec<f32> {
     out
 }
 
-#[test]
-fn a_blur_matches_its_kernel_applied_by_the_cpu_within_one_step() {
+/// The worst channel deviation of the blurred glass interior from the CPU
+/// kernel, where it is, and how many of the interior's channels the blur
+/// changed.
+struct KernelDeviation {
+    worst: f32,
+    worst_at: (usize, usize, usize),
+    changed: usize,
+    channels: usize,
+}
+
+fn worst_kernel_deviation(radius: f32) -> Option<KernelDeviation> {
     let Ok(mut renderer) = support::headless_renderer() else {
         eprintln!("skipping (headless WGPU init failed)");
-        return;
+        return None;
     };
-    let plain = support::capture_graph(&mut renderer, page(false), FRAME, FRAME);
-    let blurred = support::capture_graph(&mut renderer, page(true), FRAME, FRAME);
-    let expected = reference_blur(&plain.pixels);
+    let plain = support::capture_graph(&mut renderer, page(None), FRAME, FRAME);
+    let blurred = support::capture_graph(&mut renderer, page(Some(radius)), FRAME, FRAME);
+    let expected = reference_blur(&plain.pixels, radius);
     let inside = rect(
         GLASS.x + 2.0,
         GLASS.y + 2.0,
@@ -153,13 +163,74 @@ fn a_blur_matches_its_kernel_applied_by_the_cpu_within_one_step() {
             changed += 1;
         }
     }
+    Some(KernelDeviation {
+        worst,
+        worst_at,
+        changed,
+        channels: actual.len(),
+    })
+}
+
+fn assert_blur_follows_its_kernel(radius: f32, budget: f32) {
+    let Some(KernelDeviation {
+        worst,
+        worst_at,
+        changed,
+        channels,
+    }) = worst_kernel_deviation(radius)
+    else {
+        return;
+    };
     assert!(
-        changed > actual.len() / 4,
+        changed > channels / 4,
         "the blur must change most pixels under the glass"
     );
     assert!(
-        worst <= 1.0,
-        "the blur diverges from its kernel by {worst} at {worst_at:?}; every weight and \
-         tap offset must reproduce the kernel"
+        worst <= budget,
+        "the radius-{radius} blur diverges from its kernel by {worst} at {worst_at:?}; every \
+         weight and tap offset must reproduce the kernel within {budget}"
+    );
+}
+
+#[test]
+fn a_blur_matches_its_kernel_applied_by_the_cpu_within_one_step() {
+    assert_blur_follows_its_kernel(RADIUS, 1.0);
+}
+
+/// A wide blur averages each block of four texels, runs both passes at a
+/// quarter of the capture's size and interpolates the pixels between: a CPU
+/// model of exactly that lands 5.3 levels from the kernel on this page and
+/// the GPU 5.9, while a pass at the wrong pitch or a tap that skips texels
+/// lands 30 to 95 away.
+const DOWNSCALE_BUDGET: f32 = 8.0;
+
+#[test]
+fn a_wide_blur_matches_its_kernel_within_the_downscale_budget() {
+    assert_blur_follows_its_kernel(WIDE_RADIUS, DOWNSCALE_BUDGET);
+}
+
+/// A wide blur's two passes each cover a sixteenth of its capture, while a
+/// narrow blur's cover the capture whole; the rest of the page renders the
+/// same for both. The narrow page therefore spends more than half a wide
+/// capture more on its blur than the wide page, which a wide vertical pass
+/// left at the capture's size would erase.
+#[test]
+fn a_wide_blur_runs_both_passes_at_the_scratch_size() {
+    let Ok(mut renderer) = support::headless_renderer() else {
+        eprintln!("skipping (headless WGPU init failed)");
+        return;
+    };
+    let pass_pixels = |renderer: &mut support::LockedRenderer, radius: f32| {
+        support::capture_graph(renderer, page(Some(radius)), FRAME, FRAME);
+        renderer.last_frame_stats().expect("stats").pass_pixels
+    };
+    let narrow = pass_pixels(&mut renderer, RADIUS);
+    let wide = pass_pixels(&mut renderer, WIDE_RADIUS);
+    let wide_capture = (GLASS.width + 2.0 * WIDE_RADIUS) * (GLASS.height + 2.0 * WIDE_RADIUS);
+    let saved = narrow.saturating_sub(wide);
+    assert!(
+        saved as f32 > wide_capture / 2.0,
+        "the wide blur must run both passes at the scratch size: narrow={narrow} wide={wide} \
+         saved={saved} wide capture={wide_capture}"
     );
 }

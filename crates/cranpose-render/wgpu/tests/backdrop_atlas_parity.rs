@@ -9,8 +9,9 @@ use cranpose_render_common::{
 };
 use cranpose_render_wgpu::CapturedFrame;
 use cranpose_ui_graphics::{
-    Color, GraphicsLayer, LayerShape, LiquidGlassRect, LiquidGlassSpec, Rect, RenderEffect,
-    RoundedCornerShape, liquid_glass_effect,
+    Color, GraphicsLayer, LayerShape, LiquidGlassRect, LiquidGlassSpec,
+    RUNTIME_SHADER_PRELUDE_WGSL, Rect, RenderEffect, RoundedCornerShape, RuntimeShader,
+    liquid_glass_effect,
 };
 use support::{region_pixels, solid_rect};
 
@@ -34,7 +35,8 @@ fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect {
 }
 
 /// A page with enough structure under every glass that a wrong sample or a
-/// neighbour's texels would change pixels: vertical stripes in three hues.
+/// neighbour's texels would change pixels: vertical stripes in three hues
+/// crossed by horizontal bands, so a blur too narrow on either axis shows.
 fn striped_page() -> Vec<RenderNode> {
     let mut nodes = vec![solid_rect(
         rect(0.0, 0.0, FRAME_WIDTH as f32, FRAME_HEIGHT as f32),
@@ -48,6 +50,13 @@ fn striped_page() -> Vec<RenderNode> {
             _ => Color::from_rgb_u8(80, 110, 240),
         };
         nodes.push(solid_rect(rect(x, 0.0, 4.0, FRAME_HEIGHT as f32), color));
+    }
+    for index in 0..12 {
+        let y = index as f32 * 10.0 + 3.0;
+        nodes.push(solid_rect(
+            rect(0.0, y, FRAME_WIDTH as f32, 3.0),
+            Color::from_rgb_u8(245, 225, 90),
+        ));
     }
     nodes
 }
@@ -205,6 +214,107 @@ fn a_blur_then_shader_glass_renders_the_same_pixels_alone_and_packed_beside_othe
         "blur-then-shader glass packed beside two others",
         || RenderEffect::blur(BLUR_RADIUS).then(glass_shader()),
         REGION_MAPPING_TOLERANCE,
+    );
+}
+
+/// A shader that paints the reserved slots it is handed: the logical size
+/// its source region stands for in red and green, the region's height in
+/// blue. Read just inside the glass's top edge, clear of its inset content.
+fn probe_shader() -> RenderEffect {
+    let mut shader = RuntimeShader::new(&format!(
+        "{}\n{}",
+        RUNTIME_SHADER_PRELUDE_WGSL,
+        r#"@fragment
+fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
+    let logical = u[63u].xy;
+    let region = u[59u];
+    return vec4<f32>(logical.x / 255.0, logical.y / 255.0, region.w / 255.0, 1.0);
+}
+"#
+    ));
+    shader.set_batched_source(true);
+    RenderEffect::Shader { shader }
+}
+
+fn pixel_at(frame: &CapturedFrame, x: f32, y: f32) -> [u8; 4] {
+    let pixels = region_pixels(frame, rect(x, y, 1.0, 1.0));
+    [pixels[0], pixels[1], pixels[2], pixels[3]]
+}
+
+/// A shader after a blur reads the blur's downscaled result and is told the
+/// capture size that result stands for, so its pixel-calibrated offsets
+/// keep their length; without that size it would calibrate to the
+/// downscaled texels and displace every ray by the downscale.
+#[test]
+fn a_shader_after_a_blur_is_told_the_size_its_downscaled_source_stands_for() {
+    let mut renderer = match support::headless_renderer() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!("skipping logical size probe: {err}");
+            return;
+        }
+    };
+    let effect = || RenderEffect::blur(BLUR_RADIUS).then(probe_shader());
+    let padding = (effect().input_padding() + effect().output_padding()).ceil();
+    let capture_size = (GLASS_WIDTH + 2.0 * padding, GLASS_HEIGHT + 2.0 * padding);
+    let downscaled_height = (capture_size.1 / 2.0).ceil();
+    let frame = capture(&mut renderer, glasses_page(1, effect));
+    let probe = pixel_at(&frame, GLASS_LEFT + GLASS_WIDTH / 2.0, GLASS_TOP + 4.0);
+    assert_eq!(
+        [probe[0], probe[1], probe[2]],
+        [
+            capture_size.0 as u8,
+            capture_size.1 as u8,
+            downscaled_height as u8
+        ],
+        "the probe paints the logical size and its region's height: {probe:?}"
+    );
+}
+
+/// A blurred glass reads its blur downscaled, and its rounded mask is
+/// measured in the pixels that read stands for: the corner outside the
+/// rounding shows the page, as it does for a plain blurred layer.
+#[test]
+fn a_blurred_glass_keeps_the_page_outside_its_rounded_corners() {
+    let mut renderer = match support::headless_renderer() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!("skipping rounded corner check: {err}");
+            return;
+        }
+    };
+    let page = capture(&mut renderer, glasses_page(0, glass_shader));
+    let glass = capture(
+        &mut renderer,
+        glasses_page(1, || RenderEffect::blur(BLUR_RADIUS).then(glass_shader())),
+    );
+    glass_has_content(&glass);
+    for (x, y) in [
+        (GLASS_LEFT, GLASS_TOP),
+        (
+            GLASS_LEFT + GLASS_WIDTH - 1.0,
+            GLASS_TOP + GLASS_HEIGHT - 1.0,
+        ),
+    ] {
+        assert_eq!(
+            pixel_at(&glass, x, y),
+            pixel_at(&page, x, y),
+            "the page shows through the glass's rounded corner at ({x}, {y})"
+        );
+    }
+    let centre = pixel_at(
+        &glass,
+        GLASS_LEFT + GLASS_WIDTH / 2.0,
+        GLASS_TOP + GLASS_HEIGHT / 2.0,
+    );
+    assert_ne!(
+        centre,
+        pixel_at(
+            &page,
+            GLASS_LEFT + GLASS_WIDTH / 2.0,
+            GLASS_TOP + GLASS_HEIGHT / 2.0
+        ),
+        "the glass shades its centre"
     );
 }
 

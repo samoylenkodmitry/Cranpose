@@ -92,6 +92,7 @@ pub(crate) enum ResolvedCompositeKind {
         shader: Rc<RuntimeShader>,
         layer_pixel_rect: [f32; 4],
         source_region: Option<(f32, f32, f32, f32)>,
+        source_logical_size: Option<(f32, f32)>,
         rounded_mask: Option<RoundedCompositeMask>,
         alpha: f32,
     },
@@ -855,6 +856,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                 shader,
                 layer_pixel_rect,
                 source_region,
+                source_logical_size,
                 rounded_mask,
                 alpha,
             } => {
@@ -863,6 +865,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                     shader: shader.as_ref(),
                     layer_pixel_rect: *layer_pixel_rect,
                     source_region: *source_region,
+                    source_logical_size: *source_logical_size,
                     rounded_mask: mask_in_target(*rounded_mask, offset),
                     alpha: *alpha,
                     scissor,

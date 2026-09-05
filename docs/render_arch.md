@@ -73,10 +73,13 @@ a tinting glass keep their own colors over the tint. A stage runs as:
    neighbour's texels, or a pooled texture's stale ones, are never read
    and a region's edge reads as a dedicated texture's clamp-to-edge would;
 2. one blur pass pair over every blurred region: the horizontal pass writes
-   each region downscaled into a scratch texture, the vertical pass writes
-   it at full size into a result texture, and both textures are packed to
-   the blurred regions alone, so no pass loads or stores the atlas (on the
-   Mate 20 X the atlas-sized pair cost 9 ms of bandwidth per frame);
+   each region downscaled into a scratch texture, averaging the block of
+   source texels each scratch texel stands for, the vertical pass writes
+   the same downscaled slot of a result texture, and both textures are
+   packed to the blurred regions alone, so no pass loads or stores the
+   atlas (on the Mate 20 X the atlas-sized pair cost 9 ms of bandwidth per
+   frame); a composite reads the slot through the capture's size, a blit
+   by bilinear interpolation, a shader through its logical-size slot;
 3. composites reading their region: a blur blits its region of the result
    through the effect's rounded mask; a runtime shader that declares
    `batched_source` draws in its stratum reading its region, applying the
@@ -853,6 +856,92 @@ The first two are probes that fit before step 3 above and do not
 disturb it; the optical group is the one that reaches the showcase's
 watch number and is the user's material call; the plan retention is
 the CPU side's proper shape once the GPU side is known.
+
+## The blur was wrong twice over and full-size (2026-09-05)
+
+Reading the branch's blur beside main's for the watch's 22 ms of
+vertical blur found three things, two of them pixel errors that no test
+covered:
+
+1. **The vertical pass wrote every region at full size.** `blur_regions`
+   packed a full-size result slot per region and `encode_blur_atlas_passes`
+   ran the vertical kernel over it, so at a downscale of 4 the pass shaded
+   16 times the pixels main's does: main's direct shader tail
+   (`direct_tail_intermediate_size`) keeps the chain's result at the
+   scratch size and tells the glass its logical size through slot 252.
+2. **The vertical pass reached a fraction of its radius.** `blur_fs.wgsl`
+   stepped its taps by one destination pixel with the radius given in
+   scratch texels, so writing at full size it blurred `radius / scale`
+   pixels: at radius 20 the result lay 95 levels from the kernel. The
+   glass on the watch (radius 12 px, scale 2) and the Mate (18 px, scale 4)
+   was frosted half or a quarter as far vertically as horizontally.
+3. **The horizontal pass skipped texels.** At scratch pitch it fetched one
+   bilinear pair every `scale` texels, so at 4 half the source never
+   reached the kernel and a 3 px bar could vanish or double: 36 levels
+   from the kernel. Main's horizontal pass does the same; its pairing of
+   taps `i` and `i + 1` into one fetch also assumes adjacent texels.
+
+What stands now. A wide blur first averages each block of `scale x
+scale` texels into a scratch-size downsample (`blur_downsample_fs`, two
+bilinear fetches per axis at a block of four, one at two, a pipeline per
+block), and both kernel passes step by one texel of what they read: the
+horizontal over the downsample, the vertical over the scratch, so the
+kernel keeps its paired taps and no source texel is skipped. The first
+draft folded the block average into the kernel instead, four fetches per
+tap at a block of four, and on the watch that cost 8 ms: the fetch count
+per scratch pixel went from 9 to 68, and this GPU pays ~5 ns a fetch.
+The result texture holds each region at the scratch size in the same
+slot, and doubles as the downsample's target before the vertical pass
+overwrites it; a blit composite reads it bilinearly, held to the
+region's texel centers (`blit_fs_main`), a shader reads it with
+`source_logical_size` in slot 252, and the mask of a batched shader is
+measured in those logical pixels (`composite_coverage` in the glass and
+gradient blur). Both blur paths pass the sampled texture's size and
+explicit source and destination regions, so the shadow blur's horizontal
+pass gets the same downsample (its golden moved by at most 14 levels on
+0.6% of the image and was re-recorded). The unreferenced fused
+blur-mask shader is gone.
+
+Tests, each proven red first: `blur_reference` holds a radius-20 blur
+within 8 levels of the CPU kernel (a CPU model of the block average,
+quarter-size passes and bilinear upsample lands 5.3, the GPU 5.9; the
+old passes 95 and 36) and requires the wide page to spend more than
+half a wide capture less on pass pixels than the narrow one;
+`backdrop_atlas_parity` has a probe shader painting slots 252 and 236 to
+prove a shader after a blur is handed the capture size and the
+downscaled region, keeps a blurred glass's page visible outside its
+rounded corners, and the packed-against-alone parities cover the
+scratch-size slots. The glass-against-its-chain comparison was dropped:
+a scratch-size read and a full-size vertical pass are two
+approximations of one Gaussian, and the glass amplifies their gap into
+tens of levels along thin bands, so no tolerance says anything.
+
+The watch after this, showcase scroll, per-pass GPU spans of the four
+60-frame windows (list top first, glass rows last), main beside:
+
+| build                              | window spans, ms          | Layer | Blur H | Blur V | Downsample |
+|------------------------------------|---------------------------|-------|--------|--------|------------|
+| branch before (full-size vertical) | 48 / 52 / 66 / 58         | 36-40 | 1.7    | 19-22  | -          |
+| block average inside the kernel    | 43 / 44 / 60 / 64         | 33-36 | 9-10   | 15-16  | -          |
+| downsample pass (this)             | 36 / 34 / 43 / 42 (34/31/44/40) | 29-31 | 1.1 | 6.6  | 0.3        |
+| main                               | 36 / 37                   | 28 (fused 14.5 + shader 13.5) | 0.6 | 2.1 | - |
+
+Presented fps in the warm window: 25.4-25.6 against main's 27.5-28.0
+(the branch's `period p50` 31-38 ms against main's 31); the earlier
+branch stood at 16-18. Two ablation builds attributed the rest. With the
+atlas vertical pass removed outright the "Blur Vertical" line still
+read 15.7 ms at 0.4 passes a frame: that is the non-atlas vertical pass
+of one card shadow re-blurred at full size every frame (0.3 MP by 9
+fetches, 3 M fetches, ~15 ms at this GPU's ~5 ns a fetch), astra's third
+point and the next cut (the shadow result at the scratch size, the
+cutout as an inverse mask in the blit). With the block average
+disabled the horizontal returned to 2.4 ms, which put the in-kernel
+block at 8 ms and led to the downsample pass. Every remaining
+`Backdrop Result Pass` (9-10 ms at 2.2 a frame in the list-top windows,
+in every build including main's ancestor) is `resolve_whole`: a glass
+read by captures above it shaded whole into a retained texture, its
+off-screen part included; cropping it to the visible reach as the child
+surfaces are is the cut after the shadow.
 
 ## Order
 

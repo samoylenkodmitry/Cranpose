@@ -1241,6 +1241,7 @@ struct UploadSlot {
 pub(crate) enum UploadAllocatorId {
     BlurHorizontal,
     BlurVertical,
+    BlurDownsample,
     Offset,
     Blit,
     ProjectiveBlitUniform,
@@ -1258,6 +1259,7 @@ impl UploadAllocatorId {
             Self::ProjectiveBlitUniform => 4,
             Self::ProjectiveBlitVertex => 5,
             Self::EffectUniform => 6,
+            Self::BlurDownsample => 7,
         }
     }
 }

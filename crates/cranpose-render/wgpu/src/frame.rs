@@ -762,6 +762,7 @@ fn shader_tail_composite(
             shader: Rc::new(shader.clone()),
             layer_pixel_rect,
             source_region: None,
+            source_logical_size: None,
             rounded_mask,
             alpha: child.alpha,
         },
@@ -919,12 +920,14 @@ fn unmasked_composite(composite: &ResolvedComposite) -> ResolvedComposite {
             shader,
             layer_pixel_rect,
             source_region,
+            source_logical_size,
             alpha,
             ..
         } => ResolvedCompositeKind::Shader {
             shader: Rc::clone(shader),
             layer_pixel_rect: *layer_pixel_rect,
             source_region: *source_region,
+            source_logical_size: *source_logical_size,
             rounded_mask: None,
             alpha: *alpha,
         },
@@ -1015,7 +1018,8 @@ fn projected_child_composite(
 }
 
 /// The composite of every member of one capture atlas: a blur reads its
-/// blurred region, a shader reads its capture region.
+/// blurred region, downscaled by the blur and standing for the capture's
+/// pixels, a shader reads its capture region.
 fn stage_composites(
     texture: &Rc<OffscreenTarget>,
     blurred: Option<&BlurredRegions>,
@@ -1027,23 +1031,32 @@ fn stage_composites(
         .enumerate()
         .map(|(member, (index, placement))| {
             let item = items[*index];
-            let (region_width, region_height) = item.capture_rect.pixel_size();
-            let (source, origin) = match blurred.and_then(|blurred| blurred.slot(member)) {
-                Some((blurred, origin)) => (blurred, origin),
-                None => (texture, (placement.x, placement.y)),
-            };
-            let region = (
-                origin.0 as f32,
-                origin.1 as f32,
-                region_width as f32,
-                region_height as f32,
-            );
+            let (capture_width, capture_height) = item.capture_rect.pixel_size();
+            let capture_size = (capture_width as f32, capture_height as f32);
+            let (source, region, logical_size) =
+                match blurred.and_then(|blurred| blurred.slot(member)) {
+                    Some((blurred, (x, y, width, height))) => (
+                        blurred,
+                        (x as f32, y as f32, width as f32, height as f32),
+                        Some(capture_size),
+                    ),
+                    None => (
+                        texture,
+                        (
+                            placement.x as f32,
+                            placement.y as f32,
+                            capture_size.0,
+                            capture_size.1,
+                        ),
+                        None,
+                    ),
+                };
             let kind = match item.batched.expect("packed items are batched") {
                 BatchedEffect::Blur(_) => ResolvedCompositeKind::Blit {
                     alpha: 1.0,
                     blend_mode: BlendMode::SrcOver,
                     rounded_mask: item.rounded_mask,
-                    sample_mode: CompositeSampleMode::Nearest,
+                    sample_mode: CompositeSampleMode::Linear,
                     source_viewport: Some(region),
                 },
                 BatchedEffect::Shader(shader) | BatchedEffect::BlurThenShader(_, shader) => {
@@ -1051,6 +1064,7 @@ fn stage_composites(
                         shader: Rc::new(shader.clone()),
                         layer_pixel_rect: item.layer_pixel_rect(),
                         source_region: Some(region),
+                        source_logical_size: logical_size,
                         rounded_mask: item.rounded_mask,
                         alpha: 1.0,
                     }
@@ -1068,16 +1082,19 @@ fn stage_composites(
         .collect()
 }
 
+/// A rectangle of texels: x, y, width, height.
+type TexelRect = (u32, u32, u32, u32);
+
 /// The blurred regions of one capture atlas: the texture holding them and,
-/// per atlas member, where its blurred region starts.
+/// per atlas member, the downscaled slot its blur wrote.
 struct BlurredRegions {
     result: Rc<OffscreenTarget>,
-    slots: Vec<Option<(u32, u32)>>,
+    slots: Vec<Option<TexelRect>>,
 }
 
 impl BlurredRegions {
-    fn slot(&self, member: usize) -> Option<(&Rc<OffscreenTarget>, (u32, u32))> {
-        self.slots[member].map(|origin| (&self.result, origin))
+    fn slot(&self, member: usize) -> Option<(&Rc<OffscreenTarget>, TexelRect)> {
+        self.slots[member].map(|slot| (&self.result, slot))
     }
 }
 
@@ -1706,6 +1723,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                     shader: Rc::new(shader.clone()),
                     layer_pixel_rect,
                     source_region: None,
+                    source_logical_size: None,
                     rounded_mask,
                     alpha: 1.0,
                 },
@@ -1757,9 +1775,10 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
     }
 
     /// Runs the blur pass pair over the blurred members of one capture atlas.
-    /// The scratch holds each region downscaled and the result holds each
-    /// region at full size, packed by height so both stay as small as the
-    /// regions themselves; a composite of a blurred member reads the result.
+    /// Runs the blur pass pair over the blurred members of one capture atlas.
+    /// The scratch and the result hold each region downscaled by its blur,
+    /// packed by height so both stay as small as the regions themselves; a
+    /// composite of a blurred member reads the result as the capture's pixels.
     fn blur_regions(
         &mut self,
         atlas: &Rc<OffscreenTarget>,
@@ -1779,8 +1798,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             std::cmp::Reverse(items[members[*member].0].capture_rect.pixel_size().1)
         });
         let limit = self.renderer.max_texture_dim().min(MAX_ATLAS_DIM);
-        let mut scratch_packer = AtlasPacker::new(limit);
-        let mut result_packer = AtlasPacker::new(limit);
+        let mut packer = AtlasPacker::new(limit);
         let mut slots = vec![None; members.len()];
         let mut regions = Vec::with_capacity(blurred.len());
         for (member, blur) in blurred {
@@ -1790,30 +1808,25 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             let radius_y = blur.radius_y * scale;
             let (scaled_width, scaled_height) =
                 blur_scratch_size(radius_x, radius_y, width, height);
-            let (Some(scratch), Some(result)) = (
-                scratch_packer.place(scaled_width, scaled_height),
-                result_packer.place(width, height),
-            ) else {
+            let Some(slot) = packer.place(scaled_width, scaled_height) else {
                 return Err("a blurred region outgrew the atlas that held it".into());
             };
-            if scratch.atlas != 0 || result.atlas != 0 {
+            if slot.atlas != 0 {
                 return Err("blurred regions of one atlas spilled into a second".into());
             }
-            slots[member] = Some((result.x, result.y));
+            let scratch = (slot.x, slot.y, scaled_width, scaled_height);
+            slots[member] = Some(scratch);
             regions.push(BlurRegion {
                 source: (placement.x, placement.y, width, height),
-                scratch: (scratch.x, scratch.y, scaled_width, scaled_height),
-                dest: (result.x, result.y),
+                scratch,
                 radius_x,
                 radius_y,
                 tile_mode: blur.tile_mode,
             });
         }
-        let (scratch_width, scratch_height) = scratch_packer.atlases[0].padded_size();
-        let (result_width, result_height) = result_packer.atlases[0].padded_size();
-        let scratch =
-            self.acquire_transient("Backdrop Blur Scratch", scratch_width, scratch_height);
-        let result = self.acquire_transient("Backdrop Blur Result", result_width, result_height);
+        let (width, height) = packer.atlases[0].padded_size();
+        let scratch = self.acquire_transient("Backdrop Blur Scratch", width, height);
+        let result = self.acquire_transient("Backdrop Blur Result", width, height);
         let device = self.renderer.device.clone();
         self.renderer.effect_renderer.encode_blur_atlas_passes(
             self.recorder,
@@ -1854,6 +1867,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                     shader: Rc::new(shader.clone()),
                     layer_pixel_rect,
                     source_region: None,
+                    source_logical_size: None,
                     rounded_mask: item.rounded_mask,
                     alpha: 1.0,
                 },

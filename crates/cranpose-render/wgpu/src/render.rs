@@ -3001,7 +3001,7 @@ impl GpuRenderer {
             scratch_height,
         );
         let scratch = recorder.acquire_transient_offscreen(&device, scratch_descriptor);
-        self.effect_renderer.encode_blur_scissored_ping_pong_passes(
+        let passes = self.effect_renderer.encode_blur_scissored_ping_pong_passes(
             recorder,
             &device,
             &source,
@@ -3012,7 +3012,7 @@ impl GpuRenderer {
             TileMode::Decal,
             None,
         );
-        recorder.record_passes(2);
+        recorder.record_passes(passes);
         self.effect_renderer.record_blur_pass();
         recorder.release_transient_offscreen(scratch_descriptor, scratch);
         if let Some(cutout_run) = &shadow.post_blur_cutouts {

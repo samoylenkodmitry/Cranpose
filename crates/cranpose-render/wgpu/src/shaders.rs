@@ -173,6 +173,9 @@ mod tests {
         let shader = super::blur_shader();
         assert!(validate_glsl_portability(&shader, "fullscreen_vs", ShaderStage::Vertex).is_ok());
         assert!(validate_glsl_portability(&shader, "blur_fs", ShaderStage::Fragment).is_ok());
+        assert!(
+            validate_glsl_portability(&shader, "blur_downsample_fs", ShaderStage::Fragment).is_ok()
+        );
     }
 
     #[test]
