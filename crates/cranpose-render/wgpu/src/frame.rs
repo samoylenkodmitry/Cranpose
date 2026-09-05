@@ -365,7 +365,17 @@ struct LayerPass<'a> {
     stages: ResolveStages<'a>,
     drawn_z: usize,
     load_op: Option<wgpu::LoadOp<wgpu::Color>>,
+    segments: usize,
 }
+
+const LAYER_PASS_LABELS: [&str; 6] = [
+    "Layer Pass 0",
+    "Layer Pass 1",
+    "Layer Pass 2",
+    "Layer Pass 3",
+    "Layer Pass 4",
+    "Layer Pass 5+",
+];
 
 /// Pixels that something not yet on the page will claim: a glass of the
 /// running stage (its capture rect, since its capture must not see what is
@@ -1488,6 +1498,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             stages: ResolveStages::default(),
             drawn_z: 0,
             load_op: Some(load_op),
+            segments: 0,
         };
         let target_rect = pass.target_rect();
 
@@ -1558,13 +1569,15 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             offset: pass.page.offset,
             scissor: None,
         };
+        let label = LAYER_PASS_LABELS[pass.segments.min(LAYER_PASS_LABELS.len() - 1)];
+        pass.segments += 1;
         self.renderer.encode_pass(
             self.recorder,
             pass.page.pass_target(),
             std::slice::from_ref(&segment),
             load_op.unwrap_or(wgpu::LoadOp::Load),
             pass.scale,
-            "Layer Pass",
+            label,
         )?;
         pass.drawn.extend(composites);
         pass.drawn.sort_by_key(|composite| composite.z_index);
