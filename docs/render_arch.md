@@ -1405,43 +1405,37 @@ sum cut by more than half, and no single term is that big. The plan below
 is therefore several changes that must all land, ordered by the size of
 the term they cut over the confidence of the measurement behind it.
 
-**The architecture: resolve once, at substrate resolution, incrementally;
-compose in one pass.**
+**The levers, with the conditions Codex's review put on them (2026-09-05
+evening; the joint plan is `docs/mobile_60fps_architecture.md`, this
+section is the measurement record behind it).**
 
-1. *One stage for every glass that does not nest.* A stage exists because
-   a later glass's backdrop contains an earlier glass's result. Glasses
-   whose bounds do not overlap read the same page and belong in one
-   stage: one flush, one capture atlas, one blur pair, one composite. The
-   header's search bar, chips and tab bar do not overlap each other, so
-   their three strata (15 passes) become one (5). Cuts the watch encode's
-   per-pass driver share and the framebuffer churn; on the Mate, passes
-   were measured at ~0.4 ms each. Gate: the stage assignment test that
-   fails when two overlapping glasses share a stage, plus the goldens.
-2. *The material at substrate resolution.* The liquid shader's interior
-   reads the blurred backdrop, which already lives at the scratch size;
-   shading the interior at that size and compositing it under a
-   full-resolution rim band cuts the interior's pixels four-fold and
-   leaves the rim, where the refraction and bevel carry the detail, as it
-   is. On the watch that is 3.0 ms of interior and part of the 1.5 ms of
-   raster; on the Mate most of the 14 ms is interior area. The rim's own
-   5.3 ms on the watch is its taps over a band whose shape never changes
-   between frames for a static node: the bevel and normal terms bake once
-   per shape into a small mask and the per-frame rim becomes the backdrop
-   taps alone. Gate: an interior/rim parity fixture against today's
-   shader at the tolerance the blur already holds (one level), red-proven
-   by shading the interior at full size and diffing.
+1. *Stages are already the dependency.* A glass joins the stage after
+   every earlier composite whose visible pixels lie under its capture
+   rect (`ResolveStages::push`), and the capture's blur margin does read
+   the neighbour, so nothing looser is exact: the header's strata are
+   real dependencies, not a pessimistic grouping. Withdrawn as a lever.
+2. *The material at substrate resolution, as a feasibility experiment.*
+   The liquid shader's interior reads the blurred backdrop, which already
+   lives at the scratch size; shading the interior there under a
+   full-resolution rim band would cut the interior's pixels four-fold.
+   But refraction, coverage and dispersion are nonlinear in position, so
+   shading fewer pixels and interpolating changes the picture unless
+   full-motion, edge and adversarial parity says otherwise. It ships only
+   with every exact test unchanged and green, and its gain counts when
+   measured, not before. The same holds for baking the rim's bevel and
+   normal terms per shape.
 3. *Incremental backdrop under rigid motion.* When the page under a fixed
    glass scrolls, the blurred backdrop of frame t+1 is frame t's shifted
    by the scroll, except in the strip the scroll exposed plus one kernel
-   radius. Capture, downsample and blur only that strip; keep the rest.
-   Exact when the shift is a whole number of downsample blocks and the
-   region's content fingerprint is unchanged apart from the translation;
-   otherwise the whole backdrop resolves as today. Cuts the blur pairs
-   (~8 ms Mate, ~3 watch) and the copies to a strip's worth. Gate: the
-   one-pixel scroll stability capture robot (the glass after n one-pixel
-   steps equals a cold render at the same offset), which is exactly the
-   regression this can introduce and already exists, plus a unit test for
-   the block-phase rule.
+   radius. Exact only when the shift is a whole number of downsample
+   blocks and every sampled source under the capture is unchanged apart
+   from the translation, which needs a per-source fingerprint, not the
+   region's. The showcase animates its stars and planets under both
+   header glasses, so it will not hit there; it is a lever for scenes
+   whose content under a glass is static, and it is not in the
+   showcase's budget. Gate if built: the one-pixel scroll stability
+   capture robot, which already exists, plus a unit test for the
+   block-phase rule.
 4. *A raster cache for static expensive fills.* A radial or sweep
    gradient, a star field or any brush the profile shows above ~1 ms is
    drawn once into an atlas at its size and blitted while its brush, size
@@ -1449,34 +1443,36 @@ compose in one pass.**
    watch; the page ops are ~10 ms on the Mate. Exact for a 1:1 blit. Gate:
    byte identity of the blit against the direct draw, red-proven by
    breaking the key.
-5. *Retained frame structures on the present thread.* The encode's 32%
-   libc share is per-frame allocation and copying in the executor; the
-   frame's vectors, draw lists and shadow draws are kept and reused, and
-   the uploads coalesce into one `write_buffer` per stream (23-45 today).
-   Gate: an allocation-count assertion on a steady frame (zero after the
-   first) and the existing upload tests.
-6. *Compact arc records for the orbit.* 112 bytes an arc is the memory
-   traffic that bounds the watch's MEGA BOSS update; an arc needs centre,
-   radius, angles, stroke and a brush index. Halving the record halves
-   the write and the upload. Gate: the record materialisation byte
-   identity tests, which already exist for every `DrawScope` call.
+5. *Retained frame structures on the present thread.* Off the critical
+   path on the header scene by the delay probe; it returns only for a
+   scene whose encode outgrows its GPU.
+6. *The orbit's recording.* The GPU columns are already a 64-byte body
+   and a 32-byte curve per record, the arena writes once per non-empty
+   stream and retained updates go through pooled staging
+   (`run_store.rs`); the CPU `ShapeRecord` is 112 bytes and 15,161 of
+   them are written a frame. The lever is the whole recording-to-
+   submission interval on the device, Codex's track 2 in the joint plan,
+   not a record size quoted from an older tree.
 
-**What each cuts, against the budget.** Mate showcase: 40 ms minus glass
-(14 to ~4), blur (8 to ~2), fills (10 to ~2), composites and copies (9.5
-to ~4) lands near 16; every one of the four must land. Watch header: GPU
-19.5 minus glass (10 to ~3.5), blur (3 to ~1), star fill (2.4 to ~0.3)
-lands near 12, and the encode already fits beside it. Item 5 buys
-nothing on this scene until the GPU is under the encode; it stays for the
-orbit's update and for the card scene if its encode grows past the GPU.
-Watch cards: unknown until the gesture exists; the same four items apply
-per card, and the Mate's card numbers say the material and the composites
-dominate there.
+**No budget from addition.** The numbers above come from different
+revisions, temperatures and gestures, and adding their savings into a
+16.7 ms result would be fiction; the joint plan's first track is one
+timeline for the integrated build on the full-scroll route. What the
+numbers do say under exact pictures: the Mate's glass at ~14 ms over
+2.8 MP is most of a 16.7 ms frame by itself, and the exact reductions
+are the shaded support (the lens's output domain proven, ~1 ms on the
+header) and the per-draw constants hoisted as the blur kernel was. If
+those do not reach the deadline, the remaining choice is the picture,
+fewer glass pixels or a cheaper material within a stated tolerance, and
+that choice is the user's, not the renderer's; the plan names it as a
+decision rather than taking it.
 
 **Order and ownership.** The watch encode delay probe
 (`CRANPOSE_ENCODE_DELAY_MS`) was run first and answered: no response, so
 the GPU levers lead on both devices. The remaining deciding measurement
 is the full-scroll gesture on both devices with the pass inventory on the
-card scene. Then items 2, 3, 4, then 1 (the GPU and the passes; renderer
+card scene. Then item 4 and the lens's output domain, item 2 as an
+experiment (the GPU and the passes; renderer
 side), items 5 and 6 (recording, upload and the present thread; Codex's
 side), each shipping only with its gate red-proven, the capture robots
 and goldens green, and both scenes measured hot A B A B then B A B A on
@@ -1691,8 +1687,8 @@ zero, alternating rounds, temperature logged; the watch with the
 8. The plan of 2026-09-05 (evening), in its order: the watch encode
    delay probe (done: no response, the GPU is the bound), the full-scroll
    gesture on both devices with the card-scene pass inventory, then the
-   material at substrate resolution with a baked rim, the incremental
-   backdrop under rigid motion, the static fill raster cache, one stage
-   per non-nesting glass set, and, on the recording side, compact arc
-   records and retained frame structures with coalesced uploads. Each with its gate red first, the robots
+   static fill raster cache and the lens's proven output domain, the
+   material at substrate resolution as a feasibility experiment under
+   unchanged exact tests, and, on the recording side, Codex's prepared
+   dynamic runs; the joint plan is `docs/mobile_60fps_architecture.md`. Each with its gate red first, the robots
    green, both scenes hot A B A B and B A B A on the full-scroll gesture.
