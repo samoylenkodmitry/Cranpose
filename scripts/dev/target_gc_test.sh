@@ -50,7 +50,7 @@ git -C "$main_wt" config user.email t@t
 git -C "$main_wt" config user.name t
 echo seed > "$main_wt/seed.txt"
 git -C "$main_wt" add -A
-git -C "$main_wt" commit -qm seed
+git -c commit.gpgsign=false -C "$main_wt" commit -qm seed
 git -C "$main_wt" worktree add -q -b wt-old "$root/old"
 git -C "$main_wt" worktree add -q -b wt-new "$root/new"
 
@@ -60,7 +60,7 @@ make_target() {
     local dir="$1" stamp="$2"
     mkdir -p "$dir/ci/.fingerprint" "$dir/ci/deps"
     printf 'Signature: 8a477f597d28d172789f06886806bc55\n' > "$dir/CACHEDIR.TAG"
-    dd if=/dev/zero of="$dir/ci/deps/blob" bs=1m count=120 2>/dev/null
+    dd if=/dev/zero of="$dir/ci/deps/blob" bs=1048576 count=120 2>/dev/null
     touch -t "$stamp" "$dir/ci/.fingerprint" "$dir/ci" "$dir"
 }
 
@@ -68,6 +68,13 @@ make_target "$root/old/target" 202608010000
 make_target "$root/new/target" 202608200000
 
 echo "target_gc.sh invariants"
+
+listing="$(gc --min-free-gb 999999 --busy-minutes 0 2>&1 || true)"
+check "mtime selection keeps candidates parseable across stat implementations" \
+    "$(printf '%s\n' "$listing" | grep -c 'would reclaim')" "2"
+listing="$(gc --root "$root" --min-free-gb 999999 --busy-minutes 0 2>&1 || true)"
+check "overlapping root discovery reports each target once" \
+    "$(printf '%s\n' "$listing" | grep -c 'would reclaim')" "2"
 
 # 1. The core safety invariant. A directory called target with no CACHEDIR.TAG
 #    is not a cargo cache and must survive even when everything else is being
