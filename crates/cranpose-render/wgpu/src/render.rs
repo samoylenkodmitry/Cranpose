@@ -762,7 +762,7 @@ pub(crate) fn hash_run_item<H: Hasher>(
     root_scale: f32,
     state: &mut H,
 ) {
-    run.tables.fingerprint().hash(state);
+    run.tables().fingerprint().hash(state);
     run.segments.start.hash(state);
     run.segments.end.hash(state);
     hash_shadow_device_rect(run.bounds, origin_x, origin_y, root_scale, state);
@@ -3069,7 +3069,7 @@ impl GpuRenderer {
             log::warn!(
                 "[wgpu-render-stage:run-upload] total_ms={total_ms:.2} bytes={} records={}",
                 upload.upload_bytes,
-                run.tables.shapes.len()
+                run.tables().shapes.len()
             );
         }
         self.frame_stats.record_command_stats(upload);
@@ -4801,14 +4801,14 @@ fn inner_shadow_composite_mask(
 ) -> Option<RoundedCompositeMask> {
     let run = shadow.shapes.as_ref()?;
     if !run
-        .tables
+        .tables()
         .shapes
         .iter()
         .any(|record| record.blend_mode() == BlendMode::DstOut)
     {
         return None;
     }
-    let fill = run.tables.shapes.get(0)?;
+    let fill = run.tables().shapes.get(0)?;
     let rect = run.placement.translated_bounds(fill.stored_rect());
     if rect.width <= 0.0 || rect.height <= 0.0 {
         return None;

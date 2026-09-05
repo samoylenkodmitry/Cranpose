@@ -4,8 +4,7 @@ use bytemuck::{Pod, Zeroable};
 use cranpose_render_common::{graph::DrawCommandId, style_shared::apply_layer_to_color};
 use cranpose_ui_graphics::{
     ARC_BUCKETS, BrushRecord, Color, GradientStopRecord, GraphicsLayer, RecordLane, RecordSegment,
-    RecordTables, ShapeRecordBody, ShapeRecordCurve, band_class_segments, strip_index_pattern,
-    strip_indices,
+    ShapeRecordBody, ShapeRecordCurve, band_class_segments, strip_index_pattern, strip_indices,
 };
 use smallvec::SmallVec;
 
@@ -418,7 +417,7 @@ fn buffer_usage(mode: RunBufferMode, index: usize) -> wgpu::BufferUsages {
 /// A recording's tables resident on the GPU, keyed by its command.
 pub(crate) struct StoredRun {
     pub(crate) buffers: RunBuffers,
-    tables: Arc<RecordTables>,
+    recorder: Arc<cranpose_ui_graphics::ShapeRecorder>,
     paint: PaintKey,
     fill: Option<ShapeFill>,
     fill_scale_bits: u32,
@@ -947,7 +946,7 @@ impl RunStore {
                     STORE_PLACEMENTS,
                 ],
             ),
-            tables: Arc::new(RecordTables::default()),
+            recorder: Arc::default(),
             paint,
             fill: None,
             fill_scale_bits: 0,
@@ -959,8 +958,8 @@ impl RunStore {
         let same_paint = entry.paint == paint;
         let mut stats = FrameCommandStats::default();
         let mut stops_changed = first_use;
-        if first_use || !Arc::ptr_eq(&entry.tables, &run.tables) {
-            let tables = &*run.tables;
+        if first_use || !Arc::ptr_eq(&entry.recorder, &run.recorder) {
+            let tables = run.tables();
             let fresh = entry.buffers.ensure(
                 device,
                 layout,
@@ -972,7 +971,7 @@ impl RunStore {
                     STORE_PLACEMENTS,
                 ],
             );
-            let previous = &*entry.tables;
+            let previous = entry.recorder.tables();
             stats += entry.buffers.write_changed(
                 device,
                 recorder,
@@ -998,12 +997,12 @@ impl RunStore {
                 first_use || fresh[BRUSH_BUFFER],
             );
             stops_changed |= fresh[STOP_BUFFER] || previous.stops != tables.stops;
-            entry.tables = Arc::clone(&run.tables);
+            entry.recorder = Arc::clone(&run.recorder);
         }
         let changed = stats.upload_bytes > 0 || stops_changed;
         if stops_changed || !same_paint {
             painted_stops(
-                &run.tables.stops,
+                &run.tables().stops,
                 &paint_layer(&run.placement),
                 scratch_stops,
             );
@@ -1026,7 +1025,7 @@ impl RunStore {
         }
         let fill = self.fill_stats.then(|| {
             *entry.fill.get_or_insert_with(|| {
-                ShapeFill::of_tables(&run.tables, run.placement.offset, root_scale, true)
+                ShapeFill::of_tables(run.tables(), run.placement.offset, root_scale, true)
             })
         });
         (stats, fill)
@@ -1055,8 +1054,8 @@ impl RunStore {
         staging.fits(
             self.mode,
             1,
-            run.tables.brushes.len().min(BRUSH_CHUNK),
-            run.tables.stops.len().min(STOP_CHUNK),
+            run.tables().brushes.len().min(BRUSH_CHUNK),
+            run.tables().stops.len().min(STOP_CHUNK),
         )
     }
 
@@ -1082,7 +1081,7 @@ impl RunStore {
             "only the open chunk appends"
         );
         let staging = &mut self.arena.staging;
-        let tables = &*run.tables;
+        let tables = run.tables();
         let placement_index = staging.placements.len() as u32;
         staging
             .placements
@@ -1198,7 +1197,7 @@ impl RunStore {
 /// The shape segments of `run` that draw: not the content markers and not
 /// the other lane.
 pub(crate) fn run_has_shapes(run: &RunDraw) -> bool {
-    run.tables.segments[run.segments.start as usize..run.segments.end as usize]
+    run.tables().segments[run.segments.start as usize..run.segments.end as usize]
         .iter()
         .any(|segment| segment.lane == RecordLane::Shapes && segment.count > 0)
 }

@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
 use cranpose_ui_graphics::{
-    ArcRecordArgs, BlendMode, Brush, Color, CommandRecording, CornerRadii, DrawPrimitive,
-    DrawScope, DrawScopeDefault, Point, Rect, Size, Stroke, StrokeCap, TAU, TileMode,
-    normalized_band,
+    ArcRecordArgs, BlendMode, Brush, Color, CommandRecorder, CommandRecording, CornerRadii,
+    DrawPrimitive, DrawScope, DrawScopeDefault, Point, Rect, Size, Stroke, StrokeCap, TAU,
+    TileMode, normalized_band,
 };
 
 fn primitive(index: usize) -> DrawPrimitive {
@@ -57,7 +57,7 @@ fn primitive(index: usize) -> DrawPrimitive {
 #[test]
 fn large_recordings_preserve_every_primitive_and_retained_snapshot() {
     let expected: Vec<_> = (0..5003).map(primitive).collect();
-    let mut recording = CommandRecording::from_primitives(expected.clone());
+    let recording = CommandRecording::from_primitives(expected.clone());
     assert_eq!(
         recording.primitives_with_markers().collect::<Vec<_>>(),
         expected
@@ -81,46 +81,57 @@ fn large_recordings_preserve_every_primitive_and_retained_snapshot() {
         );
         shape_index += 1;
     }
-    let retained = Arc::clone(recording.tables());
+    let retained = Arc::clone(recording.shape_recorder());
     let retained_hash = retained.fingerprint();
-    let retained_shapes: Vec<_> = retained.shapes.iter().collect();
+    let retained_shapes: Vec<_> = retained.tables().shapes.iter().collect();
+    let mut recorder = recording.into_recorder();
     for index in 5003..10007 {
-        recording.push_primitive(primitive(index));
+        recorder.push_primitive(primitive(index));
     }
+    let recording = recorder.finish();
     assert_eq!(
         recording.primitives_with_markers().collect::<Vec<_>>(),
         (0..10007).map(primitive).collect::<Vec<_>>()
     );
     assert_eq!(retained.fingerprint(), retained_hash);
-    assert_eq!(retained.shapes.iter().collect::<Vec<_>>(), retained_shapes);
-    recording.clear();
-    recording.push_primitive(primitive(1));
+    assert_eq!(
+        retained.tables().shapes.iter().collect::<Vec<_>>(),
+        retained_shapes
+    );
+    let mut recorder = CommandRecorder::reusing(recording);
+    recorder.push_primitive(primitive(1));
+    let recording = recorder.finish();
     assert_eq!(
         recording.primitives_with_markers().collect::<Vec<_>>(),
         vec![primitive(1)]
     );
-    assert_eq!(retained.shapes.iter().collect::<Vec<_>>(), retained_shapes);
+    assert_eq!(
+        retained.tables().shapes.iter().collect::<Vec<_>>(),
+        retained_shapes
+    );
 }
 
 #[test]
 fn appending_after_a_fingerprint_updates_the_recording_identity() {
-    let mutations: [fn(&mut CommandRecording); 3] = [
+    let mutations: [fn(&mut CommandRecorder); 3] = [
         |recording| recording.push_primitive(primitive(2)),
-        CommandRecording::push_content,
+        CommandRecorder::push_content,
         |recording| recording.push_other(primitive(17)),
     ];
     for append in mutations {
-        let mut recording = CommandRecording::from_primitives([primitive(1)]);
+        let recording = CommandRecording::from_primitives([primitive(1)]);
         let first = recording.fingerprint();
-        append(&mut recording);
+        let mut recorder = recording.into_recorder();
+        append(&mut recorder);
+        let recording = recorder.finish();
         assert_ne!(recording.fingerprint(), first);
-        let mut expected = CommandRecording::from_primitives([primitive(1)]);
+        let mut expected = CommandRecorder::from_primitives([primitive(1)]);
         append(&mut expected);
-        assert_eq!(recording.fingerprint(), expected.fingerprint());
+        assert_eq!(recording.fingerprint(), expected.finish().fingerprint());
     }
 }
 
-fn scope_shape(scope: &mut DrawScopeDefault, expected: &mut CommandRecording, index: usize) {
+fn scope_shape(scope: &mut DrawScopeDefault, expected: &mut CommandRecorder, index: usize) {
     let radius = if index.is_multiple_of(251) {
         f32::NAN
     } else {
@@ -210,7 +221,7 @@ fn assert_recording_bits(actual: &CommandRecording, expected: &CommandRecording)
 #[test]
 fn scope_batches_preserve_bits_order_metadata_and_retained_frames() {
     let mut scope = DrawScopeDefault::new(Size::new(408.0, 408.0));
-    let mut expected = CommandRecording::default();
+    let mut expected = CommandRecorder::default();
     for range in [0..5003, 5003..10007] {
         for index in range {
             scope_shape(&mut scope, &mut expected, index);
@@ -221,16 +232,17 @@ fn scope_batches_preserve_bits_order_metadata_and_retained_frames() {
         scope.draw_content();
         expected.push_content();
     }
-    let mut actual = scope.finish();
-    assert_recording_bits(&actual, &expected);
-    let retained = Arc::clone(actual.tables());
-    let retained_records: Vec<_> = retained.shapes.iter().collect();
+    let actual = scope.finish();
+    assert_recording_bits(&actual, &expected.finish());
+    let retained = Arc::clone(actual.shape_recorder());
+    let retained_records: Vec<_> = retained.tables().shapes.iter().collect();
     let retained_hash = retained.fingerprint();
-    actual.clear();
-    actual.push_primitive(primitive(1));
+    let mut recorder = CommandRecorder::reusing(actual);
+    recorder.push_primitive(primitive(1));
+    assert_eq!(recorder.finish().len(), 1);
     assert_eq!(retained.fingerprint(), retained_hash);
     assert_eq!(
-        bytemuck::cast_slice::<_, u8>(&retained.shapes.iter().collect::<Vec<_>>()),
+        bytemuck::cast_slice::<_, u8>(&retained.tables().shapes.iter().collect::<Vec<_>>()),
         bytemuck::cast_slice::<_, u8>(&retained_records)
     );
 }

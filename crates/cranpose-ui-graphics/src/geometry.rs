@@ -3,8 +3,8 @@
 use std::{ops::AddAssign, rc::Rc};
 
 use crate::{
-    ArcRecordArgs, Brush, Color, ColorFilter, CommandRecording, ImageBitmap, ImageSampling,
-    normalized_band,
+    ArcRecordArgs, Brush, Color, ColorFilter, CommandRecorder, CommandRecording, ImageBitmap,
+    ImageSampling, normalized_band,
     stroke::Stroke,
     typography::{
         DrawTextMeasurer, DrawTextStyle, TextAlign, TextMeasurement, TextVerticalAlign,
@@ -963,7 +963,7 @@ pub fn align_text_block(rect: Rect, measurement: TextMeasurement, style: &DrawTe
 #[derive(Default)]
 pub struct DrawScopeDefault {
     size: Size,
-    recording: CommandRecording,
+    recording: CommandRecorder,
     text_measurer: Option<Rc<dyn DrawTextMeasurer>>,
 }
 
@@ -1020,9 +1020,9 @@ impl DrawScopeDefault {
     fn with_storage(
         size: Size,
         text_measurer: Option<Rc<dyn DrawTextMeasurer>>,
-        mut recording: CommandRecording,
+        recording: CommandRecording,
     ) -> Self {
-        recording.clear();
+        let mut recording = CommandRecorder::reusing(recording);
         recording.reserve_shapes(recorded_primitive_capacity(size));
         Self {
             size,
@@ -1047,7 +1047,7 @@ impl DrawScopeDefault {
     /// can lend it to the same command's next recording.
     pub fn finish(self) -> CommandRecording {
         note_recorded_primitive_count(self.size, self.recording.len());
-        self.recording
+        self.recording.finish()
     }
 
     fn push_blended_primitive(&mut self, primitive: DrawPrimitive, blend_mode: BlendMode) {

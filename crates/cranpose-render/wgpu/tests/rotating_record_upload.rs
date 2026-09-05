@@ -7,8 +7,8 @@ use cranpose_render_common::{
     style_shared::DrawPlacement,
 };
 use cranpose_ui_graphics::{
-    ArcRecordArgs, BlendMode, Brush, Color, CommandRecording, DrawScope, DrawScopeDefault, Point,
-    Rect, Size, normalized_band,
+    ArcRecordArgs, BlendMode, Brush, Color, CommandRecorder, CommandRecording, DrawScope,
+    DrawScopeDefault, Point, Rect, Size, normalized_band,
 };
 
 const SIDE: u32 = 256;
@@ -63,7 +63,7 @@ fn large_arc_run(count: usize, phase: usize, scope_recorded: bool) -> RenderGrap
     const COLUMNS: usize = 104;
     const CELL: f32 = 5.0;
     let mut scope = DrawScopeDefault::new(Size::new(520.0, 520.0));
-    let mut serial = CommandRecording::default();
+    let mut serial = CommandRecorder::default();
     for index in 0..count {
         let brush = Brush::solid(if (index + phase).is_multiple_of(7) {
             Color(0.1, 0.7, 0.3, 1.0)
@@ -103,7 +103,7 @@ fn large_arc_run(count: usize, phase: usize, scope_recorded: bool) -> RenderGrap
         if scope_recorded {
             scope.finish()
         } else {
-            serial
+            serial.finish()
         },
         520,
     )

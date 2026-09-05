@@ -497,3 +497,39 @@ medians were about 50, 34 and 40 ms respectively. These diagnostic ablations
 deliberately omit rendering and are not candidates or acceptance measurements;
 fences also remove inter-frame overlap. Both runs restored the previous APK and
 debug properties. The remaining cost is predominantly GPU shading in this scene.
+
+
+### Owned recording and shared publication
+
+Removing only the per-append shared-ownership check in an external diagnostic
+reduces 15,161-arc public recording from about 7.56 to 7.04 ms on the watch and
+1.86 to 1.70 ms on Huawei. The diagnostic snapshots by copying, so it is not the
+implementation. It isolates the cost before changing the ownership design.
+
+`CommandRecorder` owns its `ShapeRecorder` while drawing. Finishing moves that
+shape recorder into one shared allocation in `CommandRecording`. The GPU retains
+that owner and reads its tables directly. Reusing a sole-owned recording keeps
+its buffers; a recording with retained readers provides fresh capacity without
+changing their data. Explicitly editing a published command makes a copy only
+when another reader retains it. Drawing no longer checks an Arc on every shape.
+
+The complete public scope benchmark includes finish and reuse, with changing
+angles and all 15,161 records. A second variant retains two published snapshots
+to exercise shared-reader reuse. Each entry below is p50 milliseconds from
+interleaved controls and candidates; all complete-record fingerprints match
+`817059c723455dd8`.
+
+| Device and ownership | Control | Owned recording |
+| --- | --- | --- |
+| Huawei, sole owner | 1.852 / 1.854 | 1.686 / 1.702 |
+| Huawei, retained readers | 2.909 / 2.906 | 2.382 / 2.737 |
+| Watch, sole owner | 7.609 / 7.582 | 7.019 / 7.033 |
+| Watch, retained readers | 10.704 / 10.562 | 9.811 / 10.029 |
+
+Huawei stays at 33 C; the watch moves from 40.9 to 40.6 C with the apps stopped.
+These CPU diagnostics do not establish app frame rate. The publication test
+checks that buffer pointers move without a copy and survive unique reuse.
+Removing the reuse clear makes the content-reset regression fail, then restoring
+it passes. All 216 graphics unit tests and the large mixed-lane/bit-preservation
+integrations pass. The seven record goldens, two rotating-run tests and stored
+upload pixel test pass on Metal with their original expectations.

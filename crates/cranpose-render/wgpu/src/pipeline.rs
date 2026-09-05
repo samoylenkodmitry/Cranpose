@@ -90,7 +90,7 @@ fn layer_shadow_run(rect: Rect, color: Color, shape: Option<RoundedCornerShape>)
     };
     let mut recorder = ShapeRecorder::default();
     recorder.push_primitive(primitive);
-    RunDraw::whole(&recorder, Placement::at(origin, None, None)).expect("a shadow rect")
+    RunDraw::whole(recorder, Placement::at(origin, None, None)).expect("a shadow rect")
 }
 
 fn shadow_occluder(
@@ -2046,8 +2046,8 @@ fn push_shadow_primitive(
                 return;
             }
             scene.push_shadow_draw(ShadowDraw {
-                shapes: RunDraw::whole(&shapes, placement),
-                post_blur_cutouts: RunDraw::whole(&cutouts, placement),
+                shapes: RunDraw::whole(shapes, placement),
+                post_blur_cutouts: RunDraw::whole(cutouts, placement),
                 texts: vec![],
                 blur_radius,
                 clip,
@@ -2077,7 +2077,7 @@ fn push_shadow_primitive(
             };
             let transformed_clip = apply_layer_to_rect(abs_clip, layer_bounds, layer);
             scene.push_shadow_draw(ShadowDraw {
-                shapes: RunDraw::whole(&shapes, placement),
+                shapes: RunDraw::whole(shapes, placement),
                 post_blur_cutouts: None,
                 texts: vec![],
                 blur_radius,
@@ -2205,7 +2205,7 @@ mod tests {
             .runs
             .iter()
             .flat_map(|run| {
-                run.tables
+                run.tables()
                     .shapes
                     .iter()
                     .map(move |record| (record, run.placement))
@@ -2292,7 +2292,7 @@ mod tests {
             ambient_shape.bounds.width > bounds.width,
             "ambient shadow should clearly expand width"
         );
-        let ambient_peak_alpha = ambient_shape.tables.shapes.get(0).unwrap().color[3];
+        let ambient_peak_alpha = ambient_shape.tables().shapes.get(0).unwrap().color[3];
         assert!(
             ambient_peak_alpha > 0.02,
             "ambient alpha should remain visible"
@@ -2305,7 +2305,7 @@ mod tests {
             spot_shape.bounds.y > bounds.y,
             "spot shadow should be offset downward from source bounds"
         );
-        let spot_alpha = spot_shape.tables.shapes.get(0).unwrap().color[3];
+        let spot_alpha = spot_shape.tables().shapes.get(0).unwrap().color[3];
         assert!(spot_alpha > 0.02, "spot alpha should remain visible");
     }
 

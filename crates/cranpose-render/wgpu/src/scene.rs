@@ -8,7 +8,7 @@ pub use cranpose_render_common::graph_scene::{ClickAction, HitRegion, Scene};
 use cranpose_ui::{TextLayoutOptions, TextStyle};
 use cranpose_ui_graphics::{
     BlendMode, Color, ColorFilter, CommandRecording, DrawPrimitive, GraphicsLayer, ImageBitmap,
-    ImageSampling, Point, RecordTables, Recorded, Rect, RenderEffect, ShapeRecorder,
+    ImageSampling, Point, Recorded, Rect, RenderEffect, ShapeRecorder,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -79,7 +79,7 @@ impl Placement {
 /// layer's loose primitives, a shadow) is copied into the frame arena.
 #[derive(Clone)]
 pub(crate) struct RunDraw {
-    pub tables: Arc<RecordTables>,
+    pub recorder: Arc<ShapeRecorder>,
     pub command: Option<DrawCommandId>,
     pub segments: Range<u32>,
     pub placement: Placement,
@@ -98,13 +98,13 @@ impl RunDraw {
     }
 
     pub(crate) fn of_recorder(
-        recorder: &ShapeRecorder,
+        recorder: &Arc<ShapeRecorder>,
         command: Option<DrawCommandId>,
         segments: Range<u32>,
         placement: Placement,
     ) -> Self {
         Self {
-            tables: Arc::clone(recorder.tables()),
+            recorder: Arc::clone(recorder),
             command,
             segments,
             placement,
@@ -121,15 +121,21 @@ impl RunDraw {
     }
 
     /// The whole recorder as one run, when it recorded anything.
-    pub(crate) fn whole(recorder: &ShapeRecorder, placement: Placement) -> Option<Self> {
-        (!recorder.is_empty())
-            .then(|| Self::of_recorder(recorder, None, recorder.all_segments(), placement))
+    pub(crate) fn whole(recorder: ShapeRecorder, placement: Placement) -> Option<Self> {
+        (!recorder.is_empty()).then(|| {
+            let segments = recorder.all_segments();
+            Self::of_recorder(&Arc::new(recorder), None, segments, placement)
+        })
+    }
+
+    pub(crate) fn tables(&self) -> &cranpose_ui_graphics::RecordTables {
+        self.recorder.tables()
     }
 
     pub(crate) fn segment_records(
         &self,
     ) -> impl Iterator<Item = &cranpose_ui_graphics::RecordSegment> {
-        self.tables.segments[self.segments.start as usize..self.segments.end as usize]
+        self.tables().segments[self.segments.start as usize..self.segments.end as usize]
             .iter()
             .filter(|segment| segment.lane == cranpose_ui_graphics::RecordLane::Shapes)
     }
@@ -399,7 +405,6 @@ impl CompositorScene {
 
     pub fn clear(&mut self) {
         self.runs.clear();
-        self.loose.recorder.clear();
         self.images.clear();
         self.texts.clear();
         self.shadow_draws.clear();
@@ -432,10 +437,12 @@ impl CompositorScene {
 
     /// Closes the open loose run into a run draw at the next z.
     pub fn flush_loose(&mut self) {
-        let Some(run) = RunDraw::whole(&self.loose.recorder, self.loose.placement) else {
+        let Some(run) = RunDraw::whole(
+            std::mem::take(&mut self.loose.recorder),
+            self.loose.placement,
+        ) else {
             return;
         };
-        self.loose.recorder.clear();
         self.push_run_unflushed(run);
     }
 
