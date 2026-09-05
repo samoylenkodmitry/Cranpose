@@ -1,11 +1,10 @@
 mod support;
 
 use cranpose_liquid::{
-    Glass, GlassDeformation, GlassDynamics, GlassMorph, LiquidModifierExt, LiquidShape,
-    LiquidTheme, LiquidThemeSpec,
+    Glass, GlassDynamics, LiquidModifierExt, LiquidShape, LiquidTheme, LiquidThemeSpec,
 };
 use cranpose_render_wgpu::{CapturedFrame, RenderStatsSnapshot};
-use cranpose_ui_graphics::{Brush, Point, TileMode};
+use cranpose_ui_graphics::{Brush, Point, Rect, TileMode};
 use support::page::*;
 
 const FRAME_WIDTH: u32 = 360;
@@ -22,23 +21,15 @@ fn lens_glass() -> Glass {
 }
 
 fn lens_dynamics() -> GlassDynamics {
-    GlassDynamics {
-        activity: Some(1.0),
-        morph: Some(GlassMorph {
-            node_size: (NODE[2], NODE[3]),
-            primary: (140.0, 80.0, 120.0, 40.0, -1.0),
-            shapes: Vec::new(),
-            glue: 0.0,
-            wobble_amplitude: 1.0,
-            wobble_phase: 0.4,
-            bulge_amplitude: 2.0,
-            bulge_direction: 0.7,
-            ellipse_blend: 0.5,
-            deformation: Some(GlassDeformation::incompressible((1.0, 0.0), 1.05)),
-            zoom_anchor: (0.0, 0.0),
-        }),
-        ..Default::default()
-    }
+    support::morphing_lens_dynamics(
+        Rect {
+            x: NODE[0],
+            y: NODE[1],
+            width: NODE[2],
+            height: NODE[3],
+        },
+        (140.0, 80.0, 120.0, 40.0, -1.0),
+    )
 }
 
 #[composable]
@@ -109,38 +100,13 @@ fn a_lens_composited_within_its_declared_support_is_the_lens_composited_over_its
         return;
     };
     let (whole_node, without_support) = capture(true).expect("headless WGPU init failed mid-suite");
-    let differing: Vec<(usize, usize, [u8; 4], [u8; 4])> = within_support
-        .pixels
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .zip(whole_node.pixels.as_chunks::<4>().0)
-        .enumerate()
-        .filter(|(_, (a, b))| a != b)
-        .map(|(index, (a, b))| {
-            (
-                index % FRAME_WIDTH as usize,
-                index / FRAME_WIDTH as usize,
-                *a,
-                *b,
-            )
-        })
-        .collect();
-    let bbox = differing
-        .iter()
-        .fold((usize::MAX, usize::MAX, 0, 0), |b, (x, y, _, _)| {
-            (b.0.min(*x), b.1.min(*y), b.2.max(*x), b.3.max(*y))
-        });
+    let differing =
+        support::differing_pixels(FRAME_WIDTH, &within_support.pixels, &whole_node.pixels);
     assert!(
         differing.is_empty(),
-        "{} pixels differ between the lens composited within its declared output support \
-         and over its whole node; bbox x {}..={} y {}..={}; first {:?}",
-        differing.len(),
-        bbox.0,
-        bbox.2,
-        bbox.1,
-        bbox.3,
-        &differing[..differing.len().min(6)]
+        "the lens composited within its declared output support differs from the lens \
+         composited over its whole node: {}",
+        support::describe_differing(&differing)
     );
     assert!(
         with_support.shader_pixels < without_support.shader_pixels,

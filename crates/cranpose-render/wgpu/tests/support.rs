@@ -8,6 +8,7 @@ use std::{
 
 use cranpose_app_shell::AppShell;
 use cranpose_core::NodeId;
+use cranpose_liquid::{GlassDeformation, GlassDynamics, GlassMorph};
 use cranpose_render_common::{
     Renderer,
     graph::{
@@ -435,6 +436,28 @@ pub fn app_shell_for(
     Some((lock, shell))
 }
 
+/// The dynamics of a lens morphing inside a node: one primary shape with
+/// wobble, bulge, ellipse blend and an incompressible strain along x.
+pub fn morphing_lens_dynamics(node: Rect, primary: (f32, f32, f32, f32, f32)) -> GlassDynamics {
+    GlassDynamics {
+        activity: Some(1.0),
+        morph: Some(GlassMorph {
+            node_size: (node.width, node.height),
+            primary,
+            shapes: Vec::new(),
+            glue: 0.0,
+            wobble_amplitude: 1.0,
+            wobble_phase: 0.4,
+            bulge_amplitude: 2.0,
+            bulge_direction: 0.7,
+            ellipse_blend: 0.5,
+            deformation: Some(GlassDeformation::incompressible((1.0, 0.0), 1.05)),
+            zoom_anchor: (0.0, 0.0),
+        }),
+        ..Default::default()
+    }
+}
+
 /// Composes `page` in an app shell, captures it twice and returns the second
 /// frame with the stats it recorded; `None` when headless WGPU is unavailable.
 pub fn warm_app_frame(
@@ -463,6 +486,38 @@ pub fn warm_app_frame(
         .last_frame_stats()
         .expect("the capture recorded frame stats");
     Some((frame, stats))
+}
+
+/// The pixels of two RGBA8 frames of `width` that differ: `(x, y, a, b)`.
+pub fn differing_pixels(width: u32, a: &[u8], b: &[u8]) -> Vec<(usize, usize, [u8; 4], [u8; 4])> {
+    assert_eq!(a.len(), b.len(), "frames of different sizes");
+    a.as_chunks::<4>()
+        .0
+        .iter()
+        .zip(b.as_chunks::<4>().0)
+        .enumerate()
+        .filter(|(_, (a, b))| a != b)
+        .map(|(index, (a, b))| (index % width as usize, index / width as usize, *a, *b))
+        .collect()
+}
+
+/// A one-line account of `differing`: the count, the bounding box and the
+/// first few pixels.
+pub fn describe_differing(differing: &[(usize, usize, [u8; 4], [u8; 4])]) -> String {
+    let bbox = differing
+        .iter()
+        .fold((usize::MAX, usize::MAX, 0, 0), |b, (x, y, _, _)| {
+            (b.0.min(*x), b.1.min(*y), b.2.max(*x), b.3.max(*y))
+        });
+    format!(
+        "{} pixels; bbox x {}..={} y {}..={}; first {:?}",
+        differing.len(),
+        bbox.0,
+        bbox.2,
+        bbox.1,
+        bbox.3,
+        &differing[..differing.len().min(6)]
+    )
 }
 
 /// Captures `graph` three times and returns the last frame, after checking
@@ -566,9 +621,21 @@ pub fn capture_graph(
     width: u32,
     height: u32,
 ) -> CapturedFrame {
+    capture_graph_with_scale(renderer, graph, width, height, 1.0)
+}
+
+/// Renders `graph` with its root scaled by `root_scale` and captures a frame
+/// of the given size.
+pub fn capture_graph_with_scale(
+    renderer: &mut LockedRenderer,
+    graph: RenderGraph,
+    width: u32,
+    height: u32,
+    root_scale: f32,
+) -> CapturedFrame {
     renderer.scene_mut().graph = Some(graph);
     renderer
-        .capture_frame(width, height)
+        .capture_frame_with_scale(width, height, root_scale)
         .expect("capture should succeed")
 }
 

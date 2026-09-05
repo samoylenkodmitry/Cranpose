@@ -571,6 +571,18 @@ impl Glass {
         }
     }
 
+    /// The backdrop effect this material produces for a node at `density`
+    /// under `dynamics`, resolved against `colors`: the render effect the
+    /// glass modifiers install, for a layer built without them.
+    pub fn backdrop_effect(
+        &self,
+        colors: &LiquidColors,
+        density: f32,
+        dynamics: GlassDynamics,
+    ) -> RenderEffect {
+        self.resolve(colors).backdrop_effect(density, dynamics)
+    }
+
     pub(crate) fn resolve(&self, colors: &LiquidColors) -> ResolvedGlass {
         let lift = self.lift.unwrap_or(match (self.variant, colors.is_dark) {
             (GlassVariant::Regular, false) => 0.42,
