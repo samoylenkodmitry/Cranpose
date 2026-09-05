@@ -1362,7 +1362,7 @@ Where each scene stands, hot, on the list gesture, SurfaceFlinger frames:
 | Mate 20 X showcase, cards    | 23.5-24.2  |   40.0 | the GPU: `present` 32 ms of the 40, whole-frame fence 49.7 ms, 33.9 without glass, 39.9 without page ops (Codex, 2026-09-05) |
 | Pixel Watch 3 showcase, header only | 31.6 (main 22.8) | 31.6 | the GPU: a 5 ms sleep in the present thread's cycle moved fps not at all (41.4 / 44.7 with it, 38.6 / 42.8 without, warm legs at 37.6-39.6 C); the pass sum equals the period |
 | Pixel Watch 3 cranorbit MEGA BOSS | 52 cool, 31 hot | 19-32 | the update: p50 16.9 ms cool, 30.1 hot; render 4.0-6.8 |
-| Pixel Watch 3 showcase, cards| unmeasured |      - | the swipe never reached them (below)              |
+| Pixel Watch 3 showcase, cards| 27-38 hot (main 18-27) | 24.5 cool GPU | the GPU: the cards' glass is 61% of the span by ablation, its rim band and interior a quarter each (below) |
 
 The watch's showcase row is the header scene alone, and the list never
 scrolled under it: the bench gesture started its swipes at x = 36, which
@@ -1374,6 +1374,32 @@ third and Mercury by the fourteenth. Every watch number before this
 finding is the header at rest under touch, not a scroll; every
 full-scroll acceptance from here uses that drag, several forward and the
 same number back, on both devices.
+
+**The watch's cards, measured with the drag inside the list (2026-09-05,
+evening).** Main 0d195313 against the merged head d61ac06a, same ABI,
+eight forward and eight back drags per cycle, 48 s legs, hot and never
+cooled, A B A B then B A B A: main 24.9 / 26.9 / 24.6 (38.4 C), merged
+38.5 / 34.6 / 33.7 (38.5 to 40.3), main 19.2 / 17.9 / 16.8 (40.3 to
+41.0), merged 28.6 / 26.3 / 27.3 (41.0); then merged 28.6 / 27.4 / 26.4
+(41.0 to 41.7), main 18.1 / 20.5 / 17.6 (41.7 to 42.2), merged 18.5 /
+20.9 / 18.3 (42.2), main 13.0 / 12.1 / 11.7 (42.2 to 42.4). The merged
+head leads in all eight legs by 1.4-1.55x and heats the watch faster,
+which is the extra frames; both throttle past 42 C. Screenshots at rest,
+after three drags, after eight and after the way back match main in
+layout, glass, text and effects; mid-scroll frames differ by a few
+pixels of fling settle and by the animated stars, mean 1.5 levels at
+rest and 2.5-5 mid-scroll, no artifacts. The GPU span on the cards is
+24-25 ms cool. A wgpu-core trace of the same drags on the desktop puts
+13 runtime-shader draws over 1.07 MP of scissor on the 0.17 MP screen
+in the cards' stratum (`Layer Pass 1`), with 12 glyph draws and 11
+blits beside them, and three blur triples a frame at ~0.1 MP. Ablation
+on the same scene, throttled to a 55 ms span so the fractions are the
+reading: no glass 39% of the span remains, no blur 84%, no page ops
+88%, no blits 96%; inside the glass, discarding the rim draw removes
+27% of the span and discarding the interior draw 28%, both together
+54%, so the rim band costs as much as the whole interior and the cards'
+stratum is those two draws (20.6 of its 22.6 ms). The star field's
+stratum is untouched by any glass toggle.
 
 **The frame on each device, by cost.** Mate 20 X, showcase cards, 40 ms
 of GPU: the liquid shader ~14 ms over 2.8 MP; the composites replayed into
@@ -1461,11 +1487,11 @@ timeline for the integrated build on the full-scroll route. What the
 numbers do say under exact pictures: the Mate's glass at ~14 ms over
 2.8 MP is most of a 16.7 ms frame by itself, and the exact reductions
 are the shaded support (the lens's output domain proven, ~1 ms on the
-header) and the per-draw constants hoisted as the blur kernel was. If
-those do not reach the deadline, the remaining choice is the picture,
-fewer glass pixels or a cheaper material within a stated tolerance, and
-that choice is the user's, not the renderer's; the plan names it as a
-decision rather than taking it.
+header) and the per-draw constants hoisted as the blur kernel was. The
+picture is not a lever: the user has ruled out any reduction of it, so
+there is no fallback to a cheaper material and no renewed question; if
+the exact candidates miss the deadline, the remaining cost is reported
+as measured and the search for an exact architecture continues.
 
 **Order and ownership.** The watch encode delay probe
 (`CRANPOSE_ENCODE_DELAY_MS`) was run first and answered: no response, so
