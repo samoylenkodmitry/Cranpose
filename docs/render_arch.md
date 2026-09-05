@@ -1352,6 +1352,143 @@ pipeline at 14 ns/px against a 1:1 blit at ~4), the interior/rim raster
 split (~1 ms). Beyond those the frame is the glass material's own taps
 and the star field's per-pixel gradient, a picture decision.
 
+## The plan to 60 fps on both devices, ranked by what was measured (2026-09-05, evening)
+
+Where each scene stands, hot, on the list gesture, SurfaceFlinger frames:
+
+| scene                        | fps        | period | what bounds it, by the instrument that showed it |
+| ---------------------------- | ---------: | -----: | ------------------------------------------------ |
+| Mate 20 X cranorbit MEGA BOSS| 60-62      |   16.6 | the vsync; done                                   |
+| Mate 20 X showcase, cards    | 23.5-24.2  |   40.0 | the GPU: `present` 32 ms of the 40, whole-frame fence 49.7 ms, 33.9 without glass, 39.9 without page ops (Codex, 2026-09-05) |
+| Pixel Watch 3 showcase, header only | 31.6 (main 22.8) | 31.6 | the encode and the GPU, equal: render stage p50 18.7 ms on the present thread, GPU pass sum 19.5 ms |
+| Pixel Watch 3 cranorbit MEGA BOSS | 52 cool, 31 hot | 19-32 | the update: p50 16.9 ms cool, 30.1 hot; render 4.0-6.8 |
+| Pixel Watch 3 showcase, cards| unmeasured |      - | the swipe never reached them (below)              |
+
+The watch's showcase row is the header scene alone. The bench gesture is a
+400 ms swipe from (36, 300) to (60, 80) and the same swipe back, so each
+cycle scrolls 220 px down and 220 px up: the net displacement is zero and
+the amplitude is under the header's height at the watch's density, so the
+planet cards never enter the frame. The Huawei gesture reaches them because
+its screen is five times taller in pixels. Every full-scroll acceptance
+needs a gesture that keeps the cards on screen for most of the window on
+both devices (several forward swipes, then the same back), and until that
+gesture exists no watch number is a full-scroll number.
+
+**The frame on each device, by cost.** Mate 20 X, showcase cards, 40 ms
+of GPU: the liquid shader ~14 ms over 2.8 MP; the composites replayed into
+captures ~7.5 (each card's own drop shadow, the previous card's, and the
+card's glass shaded again under each icon); the blur pass pairs ~8 (three
+vertical passes at 13-25 taps written at full size, before the kernel
+table); the page's expensive fills ~10 by the ops ablation; copies ~2;
+shadow bands 5.7 MP. Pixel Watch 3, header, GPU 19.5 ms: glass 9.5-11
+(rim pipeline 5.3, interior 3.0, raster of 0.55 MP of glass quads 1.5),
+blur ~3 after the kernel table, page ops 4 of which the star radial
+gradient 2.4, shadow bands 1.9. The same watch frame's encode, 18.7 ms
+p50 on the present thread for ~110 draws: 41% cranpose, 32% libc
+(jemalloc, memcpy, memset from the composer's group slots and frames, the
+frame executor, `ShadowDraw` drops, offscreen creation when sizes change),
+23% the Adreno driver over 14-22 passes and 23-45 `write_buffer` calls.
+Pixel Watch 3 MEGA BOSS, update 17-30 ms: the recorder writes 15,161
+112-byte arc records a frame (369 ns each on this core, 5.6 ms), the
+store uploads 1.8 MB of them because every angle changes, and the rest is
+compose, layout and the scene patch.
+
+**Why the earlier levers stalled.** Every gain so far cut one term of a
+sum whose other terms are the same size: on the watch the blur table took
+2 ms of GPU and the period moved 2 ms, because the encode is as long as
+the GPU and the two overlap only partly; on the Mate the strata, the pool
+and the gate moved the launch scene from 23.6 to 23.5 fps because the
+material and the fills they left untouched are 30 of the 40 ms. Sixty
+frames a second is 16.7 ms for everything, so each device needs its whole
+sum cut by more than half, and no single term is that big. The plan below
+is therefore several changes that must all land, ordered by the size of
+the term they cut over the confidence of the measurement behind it.
+
+**The architecture: resolve once, at substrate resolution, incrementally;
+compose in one pass.**
+
+1. *One stage for every glass that does not nest.* A stage exists because
+   a later glass's backdrop contains an earlier glass's result. Glasses
+   whose bounds do not overlap read the same page and belong in one
+   stage: one flush, one capture atlas, one blur pair, one composite. The
+   header's search bar, chips and tab bar do not overlap each other, so
+   their three strata (15 passes) become one (5). Cuts the watch encode's
+   per-pass driver share and the framebuffer churn; on the Mate, passes
+   were measured at ~0.4 ms each. Gate: the stage assignment test that
+   fails when two overlapping glasses share a stage, plus the goldens.
+2. *The material at substrate resolution.* The liquid shader's interior
+   reads the blurred backdrop, which already lives at the scratch size;
+   shading the interior at that size and compositing it under a
+   full-resolution rim band cuts the interior's pixels four-fold and
+   leaves the rim, where the refraction and bevel carry the detail, as it
+   is. On the watch that is 3.0 ms of interior and part of the 1.5 ms of
+   raster; on the Mate most of the 14 ms is interior area. The rim's own
+   5.3 ms on the watch is its taps over a band whose shape never changes
+   between frames for a static node: the bevel and normal terms bake once
+   per shape into a small mask and the per-frame rim becomes the backdrop
+   taps alone. Gate: an interior/rim parity fixture against today's
+   shader at the tolerance the blur already holds (one level), red-proven
+   by shading the interior at full size and diffing.
+3. *Incremental backdrop under rigid motion.* When the page under a fixed
+   glass scrolls, the blurred backdrop of frame t+1 is frame t's shifted
+   by the scroll, except in the strip the scroll exposed plus one kernel
+   radius. Capture, downsample and blur only that strip; keep the rest.
+   Exact when the shift is a whole number of downsample blocks and the
+   region's content fingerprint is unchanged apart from the translation;
+   otherwise the whole backdrop resolves as today. Cuts the blur pairs
+   (~8 ms Mate, ~3 watch) and the copies to a strip's worth. Gate: the
+   one-pixel scroll stability capture robot (the glass after n one-pixel
+   steps equals a cold render at the same offset), which is exactly the
+   regression this can introduce and already exists, plus a unit test for
+   the block-phase rule.
+4. *A raster cache for static expensive fills.* A radial or sweep
+   gradient, a star field or any brush the profile shows above ~1 ms is
+   drawn once into an atlas at its size and blitted while its brush, size
+   and density are unchanged. The star radial is 2.4 ms a frame on the
+   watch; the page ops are ~10 ms on the Mate. Exact for a 1:1 blit. Gate:
+   byte identity of the blit against the direct draw, red-proven by
+   breaking the key.
+5. *Retained frame structures on the present thread.* The encode's 32%
+   libc share is per-frame allocation and copying in the executor; the
+   frame's vectors, draw lists and shadow draws are kept and reused, and
+   the uploads coalesce into one `write_buffer` per stream (23-45 today).
+   Gate: an allocation-count assertion on a steady frame (zero after the
+   first) and the existing upload tests.
+6. *Compact arc records for the orbit.* 112 bytes an arc is the memory
+   traffic that bounds the watch's MEGA BOSS update; an arc needs centre,
+   radius, angles, stroke and a brush index. Halving the record halves
+   the write and the upload. Gate: the record materialisation byte
+   identity tests, which already exist for every `DrawScope` call.
+
+**What each cuts, against the budget.** Mate showcase: 40 ms minus glass
+(14 to ~4), blur (8 to ~2), fills (10 to ~2), composites and copies (9.5
+to ~4) lands near 16; every one of the four must land. Watch header: GPU
+19.5 minus glass (10 to ~3.5), blur (3 to ~1), star fill (2.4 to ~0.3)
+lands near 12; the encode 18.7 minus the passes and the allocation share
+must reach ~8, which the profile says is available but item 5 must prove.
+Watch cards: unknown until the gesture exists; the same four items apply
+per card, and the Mate's card numbers say the material and the composites
+dominate there.
+
+**Order and ownership.** Before any lever, two measurements that decide
+the order: the watch encode delay probe (`CRANPOSE_ENCODE_DELAY_MS`,
+already an instrument), whose 1:1 response would put item 5 before item
+2; and the full-scroll gesture on both devices with the pass inventory on
+the card scene. Then items 1, 2, 3, 4 (the GPU and the passes; renderer
+side), items 5 and 6 (recording, upload and the present thread; Codex's
+side), each shipping only with its gate red-proven, the capture robots
+and goldens green, and both scenes measured hot A B A B then B A B A on
+the full-scroll gesture with screenshots at three scroll positions
+against main. Nothing counts as done on a header-only number.
+
+**Measured dead ends, not to repeat.** Parallel recording (padding, a
+scalar queue, two workers, no metadata, tables borrowed per batch: none
+beat the watch baseline); per-fragment blur kernels in varyings (3.2x
+slower on the watch); a page flush before every glass (44 passes, no
+gain); the page usage ablation (no gain); a compute blur (no evidence it
+beats the pass pair on either GPU); a whole-result backdrop cache without
+the rigid-motion rule (the stale-image scroll regression of 2026-08-29).
+
 ## Order
 
 Every step ships with its contract proven red first, the robot suite
@@ -1548,3 +1685,12 @@ zero, alternating rounds, temperature logged; the watch with the
    Then the showcase's exact GPU steps (interior split, shadow support
    at r, blur variants, substrate) and the material decisions, each with
    its number.
+
+8. The plan of 2026-09-05 (evening), in its order: the two deciding
+   measurements (the watch encode delay probe; the full-scroll gesture on
+   both devices with the card-scene pass inventory), then one stage per
+   non-nesting glass set, the material at substrate resolution with a
+   baked rim, the incremental backdrop under rigid motion, the static
+   fill raster cache, retained frame structures with coalesced uploads,
+   and compact arc records. Each with its gate red first, the robots
+   green, both scenes hot A B A B and B A B A on the full-scroll gesture.
