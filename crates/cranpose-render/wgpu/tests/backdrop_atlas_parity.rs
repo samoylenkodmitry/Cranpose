@@ -728,8 +728,8 @@ fn a_frame_of_glasses_stages_its_uploads_in_a_handful_of_writes() {
         .render_current_scene_to_texture(FRAME_WIDTH, FRAME_HEIGHT)
         .expect("render should succeed");
     assert!(
-        second.upload_writes <= 4,
-        "the same page staged {} buffer writes on its second frame, expected at most four",
+        second.upload_writes <= 5,
+        "the same page staged {} buffer writes on its second frame, expected at most five",
         second.upload_writes
     );
 }
@@ -774,5 +774,71 @@ fn a_cached_backdrop_tracks_the_effect_of_the_glass_beneath_it() {
         region.height as u32,
         2,
     );
+    assert_eq!(difference.differing_pixels, 0, "{difference:?}");
+}
+
+fn independent_cached_glasses(identified: bool) -> RenderGraph {
+    let mut children = support::striped_page(1104, 720);
+    for index in 0..9 {
+        let mut layer = shared_test_support::layer_node(
+            rect(0.0, 0.0, 300.0, 160.0),
+            ProjectiveTransform::translation(
+                32.0 + (index % 3) as f32 * 368.0,
+                32.0 + (index / 3) as f32 * 240.0,
+            ),
+            GraphicsLayer {
+                backdrop_effect: Some(RenderEffect::blur(12.0)),
+                clip: true,
+                shape: LayerShape::Rounded(RoundedCornerShape::uniform(12.0)),
+                ..GraphicsLayer::default()
+            },
+            vec![inset_content(300.0, 160.0, 12.0)],
+        );
+        layer.node_id = identified.then_some(index + 1);
+        children.push(RenderNode::Layer(Box::new(layer)));
+    }
+    support::page_graph(1104, 720, children)
+}
+
+#[test]
+fn independent_glasses_are_admitted_over_several_frames_without_changing_pixels() {
+    let Ok(mut renderer) = support::headless_renderer() else {
+        return;
+    };
+    let mut render = |identified| {
+        let frame = support::capture_graph(
+            &mut renderer,
+            independent_cached_glasses(identified),
+            1104,
+            720,
+        );
+        (renderer.last_frame_stats().expect("frame stats"), frame)
+    };
+    let (first, _) = render(true);
+    assert_eq!(first.layer_cache_misses, 9);
+    assert_eq!(first.backdrop_admissions, 0);
+    let mut admitted = 0;
+    let mut frames = 0;
+    while admitted < first.layer_cache_misses {
+        let (frame, _) = render(true);
+        assert!(
+            frame.backdrop_admissions > 0,
+            "admissions stalled at frame {frames}"
+        );
+        assert!(
+            frame.backdrop_admissions <= 3,
+            "frame {frames} admitted {} glasses",
+            frame.backdrop_admissions
+        );
+        admitted += frame.backdrop_admissions;
+        frames += 1;
+        assert!(frames <= first.layer_cache_misses);
+    }
+    assert!(frames >= 3);
+    let (settled, settled_frame) = render(true);
+    assert_eq!(settled.layer_cache_misses, 0);
+    assert_eq!(settled.layer_cache_hits, first.layer_cache_misses);
+    let (_, reference) = render(false);
+    let difference = image_difference_stats(&settled_frame.pixels, &reference.pixels, 1104, 720, 1);
     assert_eq!(difference.differing_pixels, 0, "{difference:?}");
 }

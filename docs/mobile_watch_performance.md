@@ -328,3 +328,25 @@ Moving normalized arc geometry into copied worker inputs takes 4.46–5.16 ms
 with three workers, but its 90th percentile varies from 6.91 to 11.84 ms.
 The two-worker path takes 6.83–7.18 ms and also worsens tails. This external
 prototype does not establish a production gain or replace the serial recorder.
+
+## Frame arena integration
+
+The branch includes `a4013903` from the renderer work. Frame uniform, image and
+shape uploads retain its arenas; body and curve columns bind as instance vertex
+buffers, while brushes, stops and placements use three dynamic table offsets.
+Stored recordings keep sparse pooled copies. A frame's shape arena uploads each
+nonempty column once; the warm glass fixture uses five writes with separate
+body and curve columns.
+
+Metal passes the arc tessellation, rotating upload, backdrop parity, glass cache
+and record golden tests. Deliberately binding every arena's vertex columns at
+zero makes the shadow golden empty and changes 20,494 painted-layer bytes by
+more than two levels, with a worst difference of 208. Restoring each column's
+actual chunk offset passes all seven goldens.
+
+The admission budget regression uses nine independent glasses. Overlapping rows
+form a dependency chain once capture keys include resolved lower stages, so they
+cannot test simultaneous admission. The independent fixture checks admission
+progress, the per-frame limit, eventual cache hits and cached/reference pixels.
+Removing the pixel budget makes it fail with nine admissions in one frame;
+restoring the budget passes.
