@@ -5,7 +5,7 @@ mod shared_test_support;
 
 use cranpose_render_common::graph::{ProjectiveTransform, RenderGraph, RenderNode};
 use cranpose_ui_graphics::{Color, GraphicsLayer, Rect, RenderEffect};
-use support::{region_pixels, solid_rect};
+use support::{ReferenceEdge, region_pixels, solid_rect};
 
 const FRAME: u32 = 160;
 const RADIUS: f32 = 4.0;
@@ -67,60 +67,6 @@ fn page(blur: Option<f32>) -> RenderGraph {
     support::page_graph(FRAME, FRAME, children)
 }
 
-/// The renderer's kernel: `ceil(radius)` taps each side, `sigma = radius /
-/// 2`, truncated there and normalized.
-fn kernel(radius: f32) -> Vec<f32> {
-    let taps = radius.ceil() as i32;
-    let sigma = radius * 0.5;
-    let weights: Vec<f32> = (-taps..=taps)
-        .map(|i| (-(i * i) as f32 / (2.0 * sigma * sigma)).exp())
-        .collect();
-    let total: f32 = weights.iter().sum();
-    weights.into_iter().map(|w| w / total).collect()
-}
-
-/// A separable blur of the 8-bit page, horizontal then vertical, clamped at
-/// the frame's edges, in float.
-fn reference_blur(pixels: &[u8], radius: f32) -> Vec<f32> {
-    let size = FRAME as i32;
-    let kernel = kernel(radius);
-    let taps = kernel.len() as i32 / 2;
-    let at = |x: i32, y: i32, c: usize| {
-        let x = x.clamp(0, size - 1);
-        let y = y.clamp(0, size - 1);
-        pixels[((y * size + x) * 4) as usize + c] as f32
-    };
-    let mut horizontal = vec![0.0f32; (size * size * 4) as usize];
-    for y in 0..size {
-        for x in 0..size {
-            for c in 0..4 {
-                let mut sum = 0.0;
-                for (k, weight) in kernel.iter().enumerate() {
-                    sum += weight * at(x + k as i32 - taps, y, c);
-                }
-                horizontal[((y * size + x) * 4 + c as i32) as usize] = sum;
-            }
-        }
-    }
-    let at_h = |x: i32, y: i32, c: usize| {
-        let y = y.clamp(0, size - 1);
-        horizontal[((y * size + x) * 4 + c as i32) as usize]
-    };
-    let mut out = vec![0.0f32; (size * size * 4) as usize];
-    for y in 0..size {
-        for x in 0..size {
-            for c in 0..4 {
-                let mut sum = 0.0;
-                for (k, weight) in kernel.iter().enumerate() {
-                    sum += weight * at_h(x, y + k as i32 - taps, c);
-                }
-                out[((y * size + x) * 4 + c as i32) as usize] = sum;
-            }
-        }
-    }
-    out
-}
-
 /// The worst channel deviation of the blurred glass interior from the CPU
 /// kernel, where it is, and how many of the interior's channels the blur
 /// changed.
@@ -138,7 +84,15 @@ fn worst_kernel_deviation(radius: f32) -> Option<KernelDeviation> {
     };
     let plain = support::capture_graph(&mut renderer, page(None), FRAME, FRAME);
     let blurred = support::capture_graph(&mut renderer, page(Some(radius)), FRAME, FRAME);
-    let expected = reference_blur(&plain.pixels, radius);
+    let plain_values: Vec<f32> = plain.pixels.iter().map(|value| f32::from(*value)).collect();
+    let expected = support::reference_blur(
+        &plain_values,
+        FRAME as usize,
+        FRAME as usize,
+        4,
+        radius,
+        ReferenceEdge::Clamp,
+    );
     let inside = rect(
         GLASS.x + 2.0,
         GLASS.y + 2.0,

@@ -2913,6 +2913,16 @@ impl GpuRenderer {
                 .record_shadow_shape_cache_hit(banded_pixels(&bands));
         }
         let rounded_mask = shadow_composite_mask(shadow, anchor, root_scale);
+        let downscaled =
+            (source.width, source.height) != (source_device.width, source_device.height);
+        let (sample_mode, source_viewport) = if downscaled {
+            (
+                CompositeSampleMode::Linear,
+                Some((0.0, 0.0, source.width as f32, source.height as f32)),
+            )
+        } else {
+            (CompositeSampleMode::Nearest, None)
+        };
         for band in bands {
             resolved.push(ResolvedComposite {
                 z_index: z,
@@ -2924,16 +2934,19 @@ impl GpuRenderer {
                     alpha: 1.0,
                     blend_mode: BlendMode::SrcOver,
                     rounded_mask,
-                    sample_mode: CompositeSampleMode::Nearest,
-                    source_viewport: None,
+                    sample_mode,
+                    source_viewport,
                 },
             });
         }
     }
 
-    /// Draws a shadow's shapes and texts into a surface covering `bounds`,
-    /// blurs it in place and applies the post-blur cutouts. A retained
-    /// surface feeds the shadow cache; a transient one is registered with
+    /// Draws a shadow's shapes and texts into a surface covering `bounds`
+    /// and blurs it. A wide blur runs at its scratch size and its result
+    /// stays there, read bilinearly by the composite; a post-blur cutout
+    /// needs the surface's full size, so the blurred result is interpolated
+    /// back into it first and the cutout drawn at that size. A retained
+    /// result feeds the shadow cache; a transient one is registered with
     /// the frame's transients and released with them. `None` when the
     /// shadow draws nothing.
     #[allow(clippy::too_many_arguments)]
@@ -2949,13 +2962,30 @@ impl GpuRenderer {
     ) -> Option<Rc<OffscreenTarget>> {
         let (width, height) = (bounds.width, bounds.height);
         let device = self.device.clone();
-        let source = if retained {
-            Rc::new(self.acquire_retained_surface(width, height))
+        let (scratch_width, scratch_height) =
+            crate::effect_renderer::blur_scratch_size(pixel_radius, pixel_radius, width, height);
+        let full_size_result = shadow.post_blur_cutouts.is_some()
+            || (scratch_width, scratch_height) == (width, height);
+        let (result_width, result_height) = if full_size_result {
+            (width, height)
         } else {
-            let descriptor = self.transient_offscreen_descriptor("Shadow Source", width, height);
-            let target = Rc::new(recorder.acquire_transient_offscreen(&device, descriptor));
-            transients.push((descriptor, Rc::clone(&target)));
-            target
+            (scratch_width, scratch_height)
+        };
+        let result = if retained {
+            Rc::new(self.acquire_retained_surface(result_width, result_height))
+        } else {
+            self.shadow_transient(
+                recorder,
+                transients,
+                "Shadow Result",
+                result_width,
+                result_height,
+            )
+        };
+        let source = if full_size_result {
+            Rc::clone(&result)
+        } else {
+            self.shadow_transient(recorder, transients, "Shadow Source", width, height)
         };
         let offset = [bounds.x, bounds.y];
         let target = PassTarget {
@@ -2983,7 +3013,8 @@ impl GpuRenderer {
         match drew {
             Ok(true) => {}
             Ok(false) => {
-                if retained && let Ok(target) = Rc::try_unwrap(source) {
+                drop(source);
+                if retained && let Ok(target) = Rc::try_unwrap(result) {
                     self.defer_offscreen_release(target);
                 }
                 return None;
@@ -2993,20 +3024,33 @@ impl GpuRenderer {
                 return None;
             }
         }
-        let (scratch_width, scratch_height) =
-            crate::effect_renderer::blur_scratch_size(pixel_radius, pixel_radius, width, height);
         let scratch_descriptor = self.transient_offscreen_descriptor(
             "Shadow Blur Scratch",
             scratch_width,
             scratch_height,
         );
         let scratch = recorder.acquire_transient_offscreen(&device, scratch_descriptor);
+        let blurred = if full_size_result && (scratch_width, scratch_height) != (width, height) {
+            Some(self.shadow_transient(
+                recorder,
+                transients,
+                "Shadow Blur Result",
+                scratch_width,
+                scratch_height,
+            ))
+        } else {
+            None
+        };
+        let blur_dest = match &blurred {
+            Some(blurred) => (&blurred.view, (scratch_width, scratch_height)),
+            None => (&result.view, (result_width, result_height)),
+        };
         let passes = self.effect_renderer.encode_blur_scissored_ping_pong_passes(
             recorder,
             &device,
             &source,
             &scratch,
-            &source.view,
+            blur_dest,
             pixel_radius,
             pixel_radius,
             TileMode::Decal,
@@ -3015,6 +3059,11 @@ impl GpuRenderer {
         recorder.record_passes(passes);
         self.effect_renderer.record_blur_pass();
         recorder.release_transient_offscreen(scratch_descriptor, scratch);
+        if let Some(blurred) = &blurred {
+            self.effect_renderer
+                .encode_upscale_pass(recorder, &device, blurred, &result.view);
+            recorder.record_pass();
+        }
         if let Some(cutout_run) = &shadow.post_blur_cutouts {
             let cutouts = shadow_scene(Some(cutout_run), &[]);
             let segment = PassSegment {
@@ -3035,8 +3084,25 @@ impl GpuRenderer {
                 log::error!("shadow cutout pass failed: {error}");
             }
         }
-        Some(source)
+        Some(result)
     }
+
+    /// A transient surface of a shadow's frame, released with the frame's
+    /// transients.
+    fn shadow_transient<C: FrameCommandRecorder>(
+        &self,
+        recorder: &mut C,
+        transients: &mut Vec<(FrameTextureDescriptor, Rc<OffscreenTarget>)>,
+        label: &'static str,
+        width: u32,
+        height: u32,
+    ) -> Rc<OffscreenTarget> {
+        let descriptor = self.transient_offscreen_descriptor(label, width, height);
+        let target = Rc::new(recorder.acquire_transient_offscreen(&self.device, descriptor));
+        transients.push((descriptor, Rc::clone(&target)));
+        target
+    }
+
     /// Whether `run` draws from retained buffers keyed by its command.
     pub(crate) fn run_is_stored(&self, run: &RunDraw) -> bool {
         self.run_store.is_stored(run)

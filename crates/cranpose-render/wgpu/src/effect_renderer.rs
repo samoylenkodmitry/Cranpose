@@ -1094,11 +1094,11 @@ impl EffectRenderer {
         }
     }
 
-    /// Blurs `source` into `dest_view` through `scratch`: a wide blur first
+    /// Blurs `source` into `dest` through `scratch`: a wide blur first
     /// averages each block of source texels into a scratch-size downsample
     /// and runs its horizontal pass over that, so no source texel is skipped;
-    /// the vertical pass reads the scratch back up to `dest_view` at the
-    /// source's size. Returns the passes encoded.
+    /// the vertical pass reads the scratch and writes `dest`, at the
+    /// source's size or the scratch's. Returns the passes encoded.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn encode_blur_scissored_ping_pong_passes<C: FrameCommandRecorder>(
         &mut self,
@@ -1106,7 +1106,7 @@ impl EffectRenderer {
         device: &wgpu::Device,
         source: &OffscreenTarget,
         scratch: &OffscreenTarget,
-        dest_view: &wgpu::TextureView,
+        dest: (&wgpu::TextureView, (u32, u32)),
         radius_x: f32,
         radius_y: f32,
         tile_mode: TileMode,
@@ -1123,6 +1123,12 @@ impl EffectRenderer {
         let whole_scratch = (0, 0, scratch.width, scratch.height);
         let scratch_scissor =
             scaled_scissor(scissor, scale_x, scale_y, scratch.width, scratch.height);
+        let (dest_view, dest_size) = dest;
+        let (dest_region, dest_scissor) = if dest_size == (scratch.width, scratch.height) {
+            (whole_scratch, scratch_scissor)
+        } else {
+            ((0, 0, dest_size.0, dest_size.1), scissor)
+        };
         let block = blur_block(whole_source, whole_scratch);
         let small = (block > 1).then(|| {
             let descriptor = FrameTextureDescriptor::render_attachment(
@@ -1194,12 +1200,12 @@ impl EffectRenderer {
                     false,
                     (scratch.width, scratch.height),
                     whole_scratch,
-                    whole_source,
+                    dest_region,
                     radius,
                     tile_mode,
                 ),
                 downsample: None,
-                scissor,
+                scissor: dest_scissor,
             }],
         );
         match small {
@@ -1597,7 +1603,7 @@ impl EffectRenderer {
                     device,
                     source,
                     intermediate,
-                    dest_view,
+                    (dest_view, (source.width, source.height)),
                     *radius_x,
                     *radius_y,
                     *edge_treatment,
@@ -1707,6 +1713,35 @@ impl EffectRenderer {
     }
 
     #[allow(clippy::too_many_arguments)]
+    /// Writes `source` into `dest_view` whole and bilinearly, every fetch
+    /// held to `source`'s texel centres: a downscaled result brought to
+    /// `dest_view`'s size.
+    pub(crate) fn encode_upscale_pass<C: FrameCommandRecorder>(
+        &mut self,
+        recorder: &mut C,
+        device: &wgpu::Device,
+        source: &OffscreenTarget,
+        dest_view: &wgpu::TextureView,
+    ) {
+        self.encode_composite_to_view_pass(
+            recorder,
+            device,
+            source,
+            dest_view,
+            CompositePassOptions {
+                alpha: 1.0,
+                load_op: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                scissor: None,
+                rounded_mask: None,
+                blend_mode: BlendMode::SrcOver,
+                dest_viewport: None,
+                source_viewport: Some((0.0, 0.0, source.width as f32, source.height as f32)),
+                sample_mode: CompositeSampleMode::Linear,
+            },
+        );
+        self.record_composite_pass();
+    }
+
     fn encode_composite_to_view_pass<C: FrameCommandRecorder>(
         &mut self,
         recorder: &mut C,

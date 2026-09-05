@@ -943,6 +943,38 @@ read by captures above it shaded whole into a retained texture, its
 off-screen part included; cropping it to the visible reach as the child
 surfaces are is the cut after the shadow.
 
+### The shadow at the scratch size (2026-09-05, later)
+
+The 15 ms "Blur Vertical" left after the atlas fix was one card shadow
+re-blurred at full size on every press frame: the shadow's surface is the
+caster with a margin of three radii, 0.3 MP on the watch, and its vertical
+pass read the scratch back up to that whole surface. The shadow's result
+now stays at the scratch size and its composite reads it bilinearly; a
+post-blur cutout needs the surface's full size, so the scratch result is
+interpolated back into it by one blit and the cutout drawn there exactly
+as before. Reading the shadow beside its CPU kernel also found that the
+paired-tap kernel dropped decal taps past the region and renormalised to
+what was left, so a shadow near its surface's edge came out too strong
+(16 levels at radius 20); the dropped tap keeps its weight now, as the
+transparent texel it reads would, which is what main's unpaired kernel
+does. `shadow_blur` holds a radius-20 drop shadow within 12 levels of the
+kernel with and without a cutout (9.8 measured; the kernel truncates at
+whole scratch texels, a fraction over four pixels each), and proves the
+scratch-size blur by pass pixels: the cutout page's two extra full-size
+passes size the surface, and the plain page spends under one and a half
+surfaces beyond the empty page (a full-size vertical pass spends four).
+
+Watch, showcase scroll: GPU spans 32-35 ms (Layer 28, every blur pass
+line at or under 1 ms, main 36-37); fps by alternation 27.8-29.1 against
+main's 27.5-28.1, the branch's `period p50` 28.7 ms against main's 31-37.
+The frame is no longer GPU-bound by the blur: the branch encodes in 16 ms
+(`render p50`) against main's 14 with a p99 of 48 against 20, and both
+present at 14-17. The glass material's Layer Pass, 28 ms on both, is the
+GPU floor for both renderers now. One 46 fps run (`period p50` 21) was the
+scroll swipe landing on the nav bar and switching to the empty Saved
+tab; a run whose `update p50` is 16 ms and `render` 3 ms measured that
+tab, not the list.
+
 ## Order
 
 Every step ships with its contract proven red first, the robot suite

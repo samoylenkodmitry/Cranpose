@@ -119,7 +119,7 @@ fn blur_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let tap_count = min(i32(ceil(radius)), 32);
 
     var color = tiled_sample(local) * tap_weight(local, 1.0);
-    var total_weight = tap_weight(local, 1.0);
+    var total_weight = 1.0;
     if (tap_count <= 0) {
         return color;
     }
@@ -129,15 +129,19 @@ fn blur_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     // The taps at i and i + 1 on one side become one bilinear fetch between
     // them, placed where the filter hands each its Gaussian weight, so the
     // kernel keeps every weight and costs half the fetches. A tap the decal
-    // mode drops leaves the fetch on its partner alone. The trip count comes
-    // off the uniform buffer, so control flow stays uniform and the loop
-    // shrinks with the radius. Sampling is explicit-LOD (the sources are
-    // mipless offscreens), which frees the taps from derivative uniformity.
+    // mode drops leaves the fetch on its partner alone and keeps its weight
+    // in the total, as the transparent texel it reads would: the kernel
+    // fades out past the region instead of renormalising to what is left.
+    // The trip count comes off the uniform buffer, so control flow stays
+    // uniform and the loop shrinks with the radius. Sampling is explicit-LOD
+    // (the sources are mipless offscreens), which frees the taps from
+    // derivative uniformity.
     for (var i: i32 = 1; i <= tap_count; i = i + 2) {
         let fi = f32(i);
         let fj = fi + 1.0;
         let w1 = exp(-(fi * fi) * inv_2sigma2);
         let w2 = select(0.0, exp(-(fj * fj) * inv_2sigma2), i + 1 <= tap_count);
+        total_weight = total_weight + 2.0 * (w1 + w2);
         for (var side: f32 = -1.0; side <= 1.0; side = side + 2.0) {
             let e1 = tap_weight(local + step * (fi * side), w1);
             let e2 = tap_weight(local + step * (fj * side), w2);
@@ -145,7 +149,6 @@ fn blur_fs(input: VertexOutput) -> @location(0) vec4<f32> {
             if (e > 0.0) {
                 let offset = (fi * e1 + fj * e2) / e;
                 color = color + tiled_sample(local + step * (offset * side)) * e;
-                total_weight = total_weight + e;
             }
         }
     }

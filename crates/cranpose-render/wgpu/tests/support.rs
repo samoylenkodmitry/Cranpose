@@ -781,3 +781,68 @@ pub fn present_and_read(
     let queue = renderer.try_queue_for_tests().expect("queue");
     read_texture_rgba8(device, queue, &texture)
 }
+
+/// What a reference blur reads past the image: the edge pixel again, or
+/// nothing.
+#[derive(Clone, Copy)]
+pub enum ReferenceEdge {
+    Clamp,
+    Transparent,
+}
+
+/// The renderer's kernel: `ceil(radius)` taps each side, `sigma = radius /
+/// 2`, truncated there and normalized.
+pub fn reference_kernel(radius: f32) -> Vec<f32> {
+    let taps = radius.ceil() as i32;
+    let sigma = radius * 0.5;
+    let weights: Vec<f32> = (-taps..=taps)
+        .map(|i| (-(i * i) as f32 / (2.0 * sigma * sigma)).exp())
+        .collect();
+    let total: f32 = weights.iter().sum();
+    weights.into_iter().map(|w| w / total).collect()
+}
+
+/// A separable blur of an image of `channels` floats per pixel, horizontal
+/// then vertical, reading `edge` past the image.
+pub fn reference_blur(
+    image: &[f32],
+    width: usize,
+    height: usize,
+    channels: usize,
+    radius: f32,
+    edge: ReferenceEdge,
+) -> Vec<f32> {
+    let kernel = reference_kernel(radius);
+    let taps = kernel.len() as i32 / 2;
+    let sample = |image: &[f32], x: i32, y: i32, c: usize| {
+        let (x, y) = match edge {
+            ReferenceEdge::Clamp => (x.clamp(0, width as i32 - 1), y.clamp(0, height as i32 - 1)),
+            ReferenceEdge::Transparent => {
+                if x < 0 || y < 0 || x >= width as i32 || y >= height as i32 {
+                    return 0.0;
+                }
+                (x, y)
+            }
+        };
+        image[(y as usize * width + x as usize) * channels + c]
+    };
+    let pass = |image: &[f32], (dx, dy): (i32, i32)| {
+        let mut out = vec![0.0f32; image.len()];
+        for y in 0..height as i32 {
+            for x in 0..width as i32 {
+                for c in 0..channels {
+                    out[(y as usize * width + x as usize) * channels + c] = kernel
+                        .iter()
+                        .enumerate()
+                        .map(|(k, weight)| {
+                            let offset = k as i32 - taps;
+                            weight * sample(image, x + dx * offset, y + dy * offset, c)
+                        })
+                        .sum();
+                }
+            }
+        }
+        out
+    };
+    pass(&pass(image, (1, 0)), (0, 1))
+}
