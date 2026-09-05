@@ -1292,11 +1292,14 @@ blur V/H/D 2.2 / 2.2 / 0.72 (three passes each); the rest under 0.3.
 **What the strata hold** (desktop trace of the same frame, draws and scissor
 pixels by pipeline per label): stratum 0 is the star background, a
 full-screen radial gradient rect and 118 star instances, plus the shadow
-bands; strata 1 to 3 are the cards' glass (interior and rim draws over
-43k px each), the chips' glass, the text and images, the header's gradient
-blur; stratum 4 is the tab bar, two glass materials (the pill and the lens)
-over one 283 x 214 px rect, the lens rasterized over the bar's whole node
-because its node carries deformation headroom.
+bands; strata 1 to 3 are the search bar's glass (interior and rim draws
+over 43k px), the filter chips' glass, the text and images, the header's
+gradient blur; stratum 4 is the tab bar, two glass materials (the pill and
+the lens) over one 283 x 214 px rect, the lens rasterized over the bar's
+whole node because its node carries deformation headroom. The watch's
+swipe never brings the planet cards into view, so every watch number in
+this section is the header scene alone; the Mate 20 X swipe reaches the
+cards, their glass, star buttons and shadows, and its numbers cover more.
 
 **One-APK ablation** (`debug.cranpose.ablate`, GPU span ms/frame, cool):
 none 21.6-22.1; an extra empty Load pass after every stratum 22.1 with
