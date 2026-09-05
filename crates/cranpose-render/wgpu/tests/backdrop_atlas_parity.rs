@@ -14,17 +14,14 @@ use cranpose_ui_graphics::{
     RUNTIME_SHADER_PRELUDE_WGSL, Rect, RenderEffect, RoundedCornerShape, RuntimeShader,
     SubstrateSpec, liquid_glass_effect,
 };
-use support::{SubstrateProbeRead, region_pixels, solid_rect};
-
-const FRAME_WIDTH: u32 = 240;
-const FRAME_HEIGHT: u32 = 120;
-const GLASS_WIDTH: f32 = 56.0;
-const GLASS_HEIGHT: f32 = 40.0;
-const GLASS_TOP: f32 = 30.0;
-const GLASS_PITCH: f32 = 72.0;
-const GLASS_LEFT: f32 = 12.0;
-const GLASS_RADIUS: f32 = 12.0;
-const BLUR_RADIUS: f32 = 6.0;
+use support::{
+    SubstrateProbeRead,
+    glass_page::{
+        BLUR_RADIUS, FRAME_HEIGHT, FRAME_WIDTH, GLASS_HEIGHT, GLASS_LEFT, GLASS_PITCH,
+        GLASS_RADIUS, GLASS_TOP, GLASS_WIDTH, glass_shader,
+    },
+    region_pixels, solid_rect,
+};
 
 fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect {
     Rect {
@@ -37,21 +34,6 @@ fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect {
 
 fn striped_page() -> Vec<RenderNode> {
     support::striped_page(FRAME_WIDTH, FRAME_HEIGHT)
-}
-
-fn glass_shader() -> RenderEffect {
-    liquid_glass_effect(
-        &LiquidGlassRect {
-            left: 0.0,
-            top: 0.0,
-            width: GLASS_WIDTH,
-            height: GLASS_HEIGHT,
-            tint_color: Color(1.0, 1.0, 1.0, 0.12),
-        },
-        &LiquidGlassSpec::default(),
-        GLASS_WIDTH,
-        GLASS_HEIGHT,
-    )
 }
 
 fn unbatched(effect: RenderEffect) -> RenderEffect {

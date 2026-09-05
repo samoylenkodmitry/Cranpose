@@ -1194,6 +1194,64 @@ a pixel at the bottom edge; an exact reach would free stage 1 of its
 three substrates. Under all of it the driver's 40% of the CPU frame is
 proportional to passes and descriptor churn: fewer passes cut both sides.
 
+## The transient pool that never evicted (2026-09-05, afternoon)
+
+**Instrument.** The showcase list, composed by the robot driver at the
+watch's 408 px over a visible window on the Mac, with wgpu-core's trace log
+counting every API call per submit (the runner and its awk are in the
+session scratchpad, `robot_api_count.rs` and `api_count.awk`). A scroll
+frame issued ~8 render passes, ~5 texture copies, ~60 bind-group sets, ~25
+pipeline sets and ~41 draws, and created 5 textures, 5 views and 5 bind
+groups while dropping 5 of each: 19 resource destroys a frame. The still
+phase was the same, at the same sizes every frame: 3 capture atlases, 3
+blur scratches, 3 blur results and the list card's child capture.
+
+**Cause.** `TransientTexturePool` held 16 entries, matched exact size, and
+never evicted: once the first frames' shadow scratches and results and a
+few odd sizes had filled it, every later release was rejected and every
+acquire missed. A probe counted 10 "pool-full rejected" per still frame
+and no `Rc` unwrap failures. The stats line was blind to it: `acq=0 new=0`
+counted only the effect renderer's retained-surface pool. On the watch this
+is the per-frame `vkCreateImage`, `vkCreateImageView`, bind and destroy
+traffic the DWARF profile charged to the driver and its allocations, and
+on every backend it is a first-use texture the driver must initialise.
+
+**Fix.** The pool keeps its entries in release order, evicts the
+longest-unreleased past 64 entries or 32 MiB, and acquires without
+disturbing that order (`remove`, not `swap_remove`), so a size a frame
+asks for again survives any number of stale ones. Its acquisitions and
+creations now feed `acq=`/`new=`. The contract is
+`tests/transient_pool.rs`: a page of nine distinctly sized shadows, then a
+page of three blurred glasses drawn twice; the second glass frame creates
+nothing. It went red at three creations before the eviction landed. The
+correctness half is beside it: the same glasses drawn over a band right
+after the same page without it, through the atlases, scratches and results
+the first frame filled, match a renderer that never pooled byte for byte;
+a pool that reuses by format alone turns it red with validation errors and
+a mismatch, while a pool blind to height alone stays green here because no
+two pooled sizes of this scene share a width.
+
+**Measured.** Desktop trace, texture creations per counted frame: still
+5.0 -> 1.0, scroll 4.8 -> 0.7, back 5.2 -> 0.2; resource destroys 19 -> 5,
+the rest being the per-write staging buffers. Watch, A B A B, both builds
+armeabi-v7a like every watch build before (the first attempt paired a
+32-bit a4013903 with a 64-bit pool build and was thrown away), list swipe,
+38.5 -> 42.0 C over the four legs: the pool build's stats line reads
+`acq=10-15 new=0` outside admissions where a4013903's could not count
+transients at all; GPU span 21.90 vs 22.38 ms and 31.37 vs 31.27 (the
+second pair throttled), fps 37.4-38.3 vs 37.8-38.9 and 28.7-31.0 vs
+29.3-30.4: unchanged, the frame is the GPU's; CPU p50 21.4-21.7 vs
+21.2-21.6 ms, and p10 14.2-15.9 vs 12.4-14.5: the frames that do not wait
+for the GPU got ~1.5 ms cheaper. The ring reclamation from the same
+commit: an upload ring is discarded after a frame that staged under a
+quarter of its capacity, never below the 64 KiB floor, an empty frame not
+counting (`ring_outlives_frame`). What remains is the backdrop
+result cache's retained surfaces: the showcase's stars drift under every
+glass, so the cache misses every frame and each admission copies a result
+it never reads back (`layer_cache: hit=0` in every watch log), a copy pass
+and a surface a frame for nothing. That is the next cut: admit on the
+second consecutive miss of a key, not the first.
+
 ## Order
 
 Every step ships with its contract proven red first, the robot suite

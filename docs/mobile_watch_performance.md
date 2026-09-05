@@ -398,3 +398,24 @@ same byte values as this branch. The fixture now applies its documented mapping
 allowance per channel, using the cache regression's shared maximum-channel
 helper. The numeric allowance stays one, zero-tolerance blur cases stay exact,
 and shader specialization still requires exact byte equality.
+
+### Texture-pool integration checkpoint
+
+Integrated renderer `f0008069` with `78b24d87`. The release-age texture pool,
+its allocation and exact reused-pixel tests, and the frame resource counters
+are retained. Ring reclamation has one shared predicate and both its unit
+boundary checks and the GPU growth/shrink readback test. The Intel headless
+locks and per-channel atlas assertions remain. Metal validation passed all
+134 renderer unit tests, 15 atlas parity tests, four glass-cache tests, 21
+architecture contracts, and both transient-pool tests. Precommit passed.
+
+The preceding `78b24d87` checkpoint passed all 162 GPU robot tests; capture
+robots are queued behind the shared host lock. This result does not establish
+60 FPS on a physical device.
+
+The full-minute `watch-orbit-arena-team` measurement is 31.061846 FPS over
+60.8785 seconds, with stable process and foreground. Battery temperature was
+40.5 C before launch, 40.9 C at measurement start, and 42.4 C at completion.
+Windowed update medians grew from 16.87 to around 30 ms; render medians grew
+from 3.96 to 6.79 ms. It is a valid hot-device sample, not a comparison with
+the earlier cooler 52.19 FPS reading.

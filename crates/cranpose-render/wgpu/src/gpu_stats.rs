@@ -172,6 +172,10 @@ impl FrameStatsSnapshot {
             .max(stats.retained_texture_bytes);
         self.upload_bytes = self.upload_bytes.saturating_add(stats.upload_bytes);
         self.upload_writes = self.upload_writes.saturating_add(stats.upload_writes);
+        self.offscreen_acquires = self
+            .offscreen_acquires
+            .saturating_add(stats.transient_acquires);
+        self.offscreen_news = self.offscreen_news.saturating_add(stats.transient_news);
         self
     }
 
@@ -438,6 +442,16 @@ impl FrameStats {
         );
         self.upload_writes
             .set(self.upload_writes.get().saturating_add(stats.upload_writes));
+        self.offscreen_acquires.set(
+            self.offscreen_acquires
+                .get()
+                .saturating_add(stats.transient_acquires),
+        );
+        self.offscreen_news.set(
+            self.offscreen_news
+                .get()
+                .saturating_add(stats.transient_news),
+        );
     }
 
     pub fn record_offscreen_acquire(
@@ -923,13 +937,10 @@ mod tests {
             encoder_count: 1,
             submit_count: 1,
             pass_count: 2,
-            pass_pixels: 0,
-            copy_count: 0,
-            copy_pixels: 0,
             transient_texture_bytes: 256,
             retained_texture_bytes: 128,
             upload_bytes: 64,
-            upload_writes: 0,
+            ..FrameCommandStats::default()
         });
         stats.bump_shapes();
         stats.blur_passes.set(1);
@@ -1022,13 +1033,10 @@ mod tests {
             encoder_count: 2,
             submit_count: 2,
             pass_count: 5,
-            pass_pixels: 0,
-            copy_count: 0,
-            copy_pixels: 0,
             transient_texture_bytes: 1024,
             retained_texture_bytes: 2048,
             upload_bytes: 512,
-            upload_writes: 0,
+            ..FrameCommandStats::default()
         });
         stats.bump_shapes();
 
@@ -1059,13 +1067,10 @@ mod tests {
             encoder_count: 1,
             submit_count: 1,
             pass_count: 2,
-            pass_pixels: 0,
-            copy_count: 0,
-            copy_pixels: 0,
             transient_texture_bytes: 128,
             retained_texture_bytes: 512,
             upload_bytes: 64,
-            upload_writes: 0,
+            ..FrameCommandStats::default()
         });
         let snapshot = stats
             .snapshot()
@@ -1073,13 +1078,7 @@ mod tests {
                 encoder_count: 1,
                 submit_count: 1,
                 pass_count: 1,
-                pass_pixels: 0,
-                copy_count: 0,
-                copy_pixels: 0,
-                transient_texture_bytes: 0,
-                retained_texture_bytes: 0,
-                upload_bytes: 0,
-                upload_writes: 0,
+                ..FrameCommandStats::default()
             });
 
         assert_eq!(snapshot.submits, 2);

@@ -798,3 +798,17 @@ event; the kernel ships without perf events. Profile there with the
 - ARMv7 record append probes (2026-09-05): forcing column append out of line costs ~10%; the supported thumbv7neon Android target gives no measurable gain. The 15,161-arc probe needs parallel preparation for a substantial CPU gain. Evidence and limitations: `docs/mobile_watch_performance.md`.
 
 - Android toolchain aliases (2026-09-05): `RUSTUP_TOOLCHAIN=1.98` follows the patch channel and downloaded 1.98.1 without the installed Android targets. Use the repository's exact `1.98.0` pin for external app copies too; their own default toolchain need not match Cranpose.
+
+- **Every watch showcase APK is armeabi-v7a, and a plain
+  `./gradlew :app:assembleRelease` builds arm64 (2026-09-05, one void A/B).**
+  The showcase's `build.gradle.kts` pins `releaseAbis` to `arm64-v8a`; the
+  watch builds get their 32-bit library from a scratch script that seds the
+  pin to `armeabi-v7a` around the Gradle call and back. Build a comparison
+  APK with the default and you pair a 32-bit baseline with a 64-bit
+  candidate: both install and run on the Pixel Watch 3, both scroll at the
+  same fps, and nothing in the logs says which ABI ran. Before an A/B on
+  any device, `unzip -l` both APKs and read the `lib/<abi>/` line; a build
+  whose stats line cannot show the change (here `acq=0` where the new code
+  counts transients) is the other tell. Gradle's stripped library also
+  never hashes equal to `target/<triple>/release/*.so`, so a hash mismatch
+  there proves nothing.
