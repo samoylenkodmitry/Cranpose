@@ -799,3 +799,17 @@ event; the kernel ships without perf events. Profile there with the
   counts transients) is the other tell. Gradle's stripped library also
   never hashes equal to `target/<triple>/release/*.so`, so a hash mismatch
   there proves nothing.
+
+## 2026-09-05: a chained scratch build ran on a tree the patch step had not touched
+
+A watch ablation run measured nothing because the APK had no toggle: the
+patch script's first pattern no longer matched (an earlier patch had
+already changed the same property table), it exited non-zero, and a `;`
+between the patch and the gradle step let gradle build the unpatched tree
+anyway; my grep of the build output for `error|gradle exit` hid the
+traceback. Two device runs and a rebuild were lost. Chain a build on the
+patch with `&&`, and before any device run grep the built tree for the
+marker the run depends on (the property row, the override name) and the
+device log for the line proving the toggle reached the process
+(`debug.cranpose.<name> -> CRANPOSE_<NAME>=...`); a run without that line
+is void, as the silent-instrument rule says.
