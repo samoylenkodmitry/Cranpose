@@ -253,6 +253,61 @@ fn split_override_names_select_distinct_compiled_pipelines() {
     }
 }
 
+fn active_glass(activity: f32, rim_style: f32, specialized: bool) -> RenderEffect {
+    let RenderEffect::Shader { shader: base } = glass_shader() else {
+        panic!("glass shader");
+    };
+    let mut shader = RuntimeShader::new(base.source());
+    for (index, value) in base.uniforms().iter().copied().enumerate() {
+        shader.set_float(index, value);
+    }
+    shader.set_float(cranpose_ui_graphics::GLASS_ACTIVITY_UNIFORM, activity);
+    shader.set_float(6, 4.0);
+    shader.set_float(28, rim_style);
+    shader.set_float(9, 0.65);
+    shader.set_float(cranpose_ui_graphics::GLASS_DISPERSION_UNIFORM, 0.8);
+    shader.set_batched_source(true);
+    if specialized {
+        cranpose_ui_graphics::specialize_liquid_glass(&mut shader);
+    }
+    RenderEffect::blur(BLUR_RADIUS).then(RenderEffect::Shader { shader })
+}
+
+#[test]
+fn split_glass_preserves_resting_partial_and_full_activity() {
+    let mut renderer = support::headless_renderer().expect("headless renderer");
+    let resting = capture(
+        &mut renderer,
+        glasses_page(1, || active_glass(0.0, 0.0, false)),
+    );
+    let full = capture(
+        &mut renderer,
+        glasses_page(1, || active_glass(1.0, 0.0, false)),
+    );
+    assert_ne!(
+        resting.pixels, full.pixels,
+        "activity must change the rendered glass"
+    );
+    for activity in [0.0, 0.4, 1.0] {
+        for rim_style in [0.0, 0.5, 1.0] {
+            let reference = capture(
+                &mut renderer,
+                glasses_page(1, || active_glass(activity, rim_style, false)),
+            );
+            let specialized = capture(
+                &mut renderer,
+                glasses_page(1, || active_glass(activity, rim_style, true)),
+            );
+            support::assert_same_bytes(
+                &format!("glass activity={activity} rim_style={rim_style}"),
+                FRAME_WIDTH,
+                &reference.pixels,
+                &specialized.pixels,
+            );
+        }
+    }
+}
+
 /// A shader after a blur reads the blur's downscaled result and is told the
 /// capture size that result stands for, so its pixel-calibrated offsets
 /// keep their length; without that size it would calibrate to the

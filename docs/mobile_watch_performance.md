@@ -308,3 +308,23 @@ Two shaders with identical source and different split names consequently share
 the first pipeline. A focused probe makes the second shader render red instead
 of blue. Including the actual split name and variant in the key passes that
 regression and all twelve backdrop-atlas tests on Metal.
+
+
+A valid repeat of the combined substrate build gives 23.51 fps on watch
+Showcase; Huawei Megaboss remains at 59.95 fps. Workspace tests, Clippy,
+release web, Android, all 162 GPU robot tests and all four capture robot tests
+pass after the two glass correctness fixes.
+
+Specializing full material activity and removing its zero-weight interior
+plain-backdrop read preserves exact pixels across nine activity/rim cases on
+Metal. Deliberately removing the read for resting material fails 3,692 bytes
+with a maximum difference of 128. A sharp background hid that mutant because
+SrcOver reconstructed the destination; the regression uses a blurred capture.
+The candidate measures 23.50 fps on watch Showcase and 19.96 fps on Huawei,
+which establishes no useful watch gain. Its production change is set aside;
+the activity parity regression remains.
+
+Moving normalized arc geometry into copied worker inputs takes 4.46–5.16 ms
+with three workers, but its 90th percentile varies from 6.91 to 11.84 ms.
+The two-worker path takes 6.83–7.18 ms and also worsens tails. This external
+prototype does not establish a production gain or replace the serial recorder.

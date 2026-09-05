@@ -4,6 +4,8 @@ Signature → cause → what to do. One lesson per line, no incident history.
 
 ## Triage before blaming the code
 
+- **A skipped backdrop read passes a pixel mutant over a sharp background:** SrcOver can reconstruct the same sharp backdrop through destination blending. Use a blurred capture so dropping its read exposes different pixels; also verify the fixture contains the shader region being optimized.
+
 - **A restored source file still runs the mutant:** `rsync -a` restores its earlier timestamp too, so Cargo can reuse the newer mutant artifact. Touch the restored source, rebuild, and verify the intended assertion passes.
 - **Identity capture differs by one byte on lavapipe:** a bilinear sample from a half-float texture can add rounding even at a nominal texel centre. Isolate each capture; an identity fixture that requires exact bytes should use `textureLoad`. Keep the pixel assertion strict and leave material sampling unchanged.
 - **Fewer upload bytes with more writes can be slower:** measure allocation calls as well as bytes. On Adreno 702, pooled staging helps dozens of scattered writes but leaves a single dense write unchanged. Packing columns after recording adds a CPU conversion; write the columns in the recorder.
