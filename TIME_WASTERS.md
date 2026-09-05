@@ -858,3 +858,7 @@ produces frames is not a gesture that scrolls.
 and zero submits after two rebuilds chasing a log-level cap that did
 not exist. The earlier trace had been taken over a visible window. Run
 trace counts with `SHOWCASE_ROBOT_HEADLESS=0`.
+
+## A device matrix in a harness background task is cut at ten minutes; a pattern kill hits the teammate's leg
+
+An A B A B + B A B A matrix of 60 s legs runs about 13 minutes. Claude Code's background Bash tasks are limited to 10 minutes, so run the driver detached (`python3 -c 'subprocess.Popen([...], start_new_session=True)'`; macOS ships no `setsid`) and watch its log. When two agents run the same `measure_orbit.py` from the shared mailbox on one Mac, `pkill -f measure_orbit.py` kills both: the other agent's leg dies without its cleanup, leaving the device's debug properties, SurfaceFlinger timestats and the app as they were. Stop only the PID you launched.

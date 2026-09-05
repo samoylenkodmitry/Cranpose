@@ -24,7 +24,7 @@ use crate::{
         op_draw_bounds, segment_draws_anything,
     },
     effect_renderer::{
-        AtlasSideWork, BlurRegion, CompositeSampleMode, EffectScratchTargetProvider,
+        AtlasSideWork, BlurRegion, CompositeSampleMode, EffectReads, EffectScratchTargetProvider,
         RoundedCompositeMask, SubstrateRegion, SubstrateRegions, blur_scratch_size,
         substrate_scratch_size,
     },
@@ -612,6 +612,7 @@ struct PendingBackdrop<'a> {
     rounded_mask: Option<RoundedCompositeMask>,
     batched: Option<BatchedEffect<'a>>,
     stage: usize,
+    support: Option<DeviceRect>,
 }
 
 impl PendingBackdrop<'_> {
@@ -626,6 +627,40 @@ impl PendingBackdrop<'_> {
 }
 
 static STAGE_DIAG: DebugToggle = DebugToggle::new("CRANPOSE_GPU_STAGE_DIAG");
+static NO_EFFECT_DOMAINS: DebugToggle = DebugToggle::new("CRANPOSE_NO_EFFECT_DOMAINS");
+
+fn declared_support(support: Option<Rect>) -> Option<Rect> {
+    if NO_EFFECT_DOMAINS.flag() {
+        return None;
+    }
+    support
+}
+
+fn declared_domain(domain: Option<Rect>) -> Option<Rect> {
+    if NO_EFFECT_DOMAINS.flag() {
+        return None;
+    }
+    domain
+}
+
+fn output_support(effect: &RenderEffect) -> Option<Rect> {
+    declared_support(effect.output_support())
+}
+
+fn child_composite_support(
+    child: &ChildLayer,
+    support: Option<Rect>,
+    snap: Point,
+    scale: f32,
+    visible: DeviceRect,
+) -> Option<DeviceRect> {
+    let Some(support) = declared_support(support) else {
+        return Some(visible);
+    };
+    let local = support.translate(child.local_bounds.x, child.local_bounds.y);
+    let logical = quad_bounds(child.transform.map_rect(local)).translate(snap.x, snap.y);
+    visible.intersect(DeviceRect::from_logical(logical, scale))
+}
 
 fn stage_diagnostics_enabled() -> bool {
     STAGE_DIAG.flag()
@@ -704,6 +739,13 @@ fn plan_backdrop(
         None => rect,
     };
     let visible = DeviceRect::from_logical(visible, scale).intersect(target_rect)?;
+    let support = match output_support(&backdrop.effect) {
+        Some(support) => Some(
+            DeviceRect::from_logical(support.translate(rect.x, rect.y), scale)
+                .intersect(visible)?,
+        ),
+        None => None,
+    };
     let padding = (backdrop.effect.input_padding() + backdrop.effect.output_padding()) * scale;
     let capture_rect = visible
         .expand(padding.ceil())
@@ -723,7 +765,82 @@ fn plan_backdrop(
             .map(|clip| rounded_mask(clip, snap, scale)),
         batched: batched_effect(&backdrop.effect),
         stage: 0,
+        support,
     })
+}
+
+fn texel_rect_in(rect: DeviceRect, within: DeviceRect) -> TexelRect {
+    let x = (rect.x - within.x).max(0.0) as u32;
+    let y = (rect.y - within.y).max(0.0) as u32;
+    let (width, height) = within.pixel_size();
+    (
+        x,
+        y,
+        (rect.width as u32).min(width.saturating_sub(x)),
+        (rect.height as u32).min(height.saturating_sub(y)),
+    )
+}
+
+fn blit_read_rect(
+    scissor: DeviceRect,
+    capture_rect: DeviceRect,
+    linear: bool,
+) -> Option<DeviceRect> {
+    scissor
+        .expand(if linear { 1.0 } else { 0.0 })
+        .intersect(capture_rect)
+        .map(DeviceRect::snap_out)
+}
+
+fn domain_read_rect(
+    effect: &RenderEffect,
+    layer_rect: DeviceRect,
+    capture_rect: DeviceRect,
+    scale: f32,
+) -> Option<DeviceRect> {
+    let domain = declared_domain(effect.sample_domain())?;
+    let read = DeviceRect {
+        x: layer_rect.x + domain.x * scale,
+        y: layer_rect.y + domain.y * scale,
+        width: domain.width * scale,
+        height: domain.height * scale,
+    };
+    read.expand(1.0)
+        .intersect(capture_rect)
+        .map(DeviceRect::snap_out)
+}
+
+fn effect_reads(
+    effect: &RenderEffect,
+    output: Option<DeviceRect>,
+    layer_rect: DeviceRect,
+    capture_rect: DeviceRect,
+    scale: f32,
+) -> EffectReads {
+    EffectReads {
+        output: output.map(|read| texel_rect_in(read, capture_rect)),
+        shader_input: domain_read_rect(effect, layer_rect, capture_rect, scale)
+            .map(|read| texel_rect_in(read, capture_rect)),
+    }
+}
+
+fn member_read_texels(
+    item: &PendingBackdrop<'_>,
+    placement: AtlasPlacement,
+    scale: f32,
+) -> Option<TexelRect> {
+    let read = match item.batched? {
+        BatchedEffect::Blur(_) => blit_read_rect(
+            item.support.unwrap_or(item.visible),
+            item.capture_rect,
+            true,
+        )?,
+        BatchedEffect::Shader(_) | BatchedEffect::BlurThenShader(..) => {
+            domain_read_rect(item.effect, item.layer_rect, item.capture_rect, scale)?
+        }
+    };
+    let (x, y, width, height) = texel_rect_in(read, item.capture_rect);
+    Some((placement.x + x, placement.y + y, width, height))
 }
 
 /// The backdrop effects of one layer scene grouped into stages: an effect
@@ -756,6 +873,7 @@ impl<'a> ResolveStages<'a> {
 struct ChildPlacement {
     z: usize,
     visible: DeviceRect,
+    support: DeviceRect,
     dest: DeviceRect,
     translation: Option<Point>,
     snap: Point,
@@ -951,7 +1069,7 @@ fn backdrop_blit(item: &PendingBackdrop<'_>, source: CompositeSource) -> Resolve
         source: source.texture,
         content: source.content,
         dest: item.capture_rect.tuple(),
-        scissor: Some(item.visible.tuple()),
+        scissor: Some(item.support.unwrap_or(item.visible).tuple()),
         kind: ResolvedCompositeKind::Blit {
             alpha: 1.0,
             blend_mode: BlendMode::SrcOver,
@@ -1139,7 +1257,7 @@ fn stage_composites(
                 source: Rc::clone(source),
                 content: SourceContent::Transient,
                 dest: item.capture_rect.tuple(),
-                scissor: Some(item.visible.tuple()),
+                scissor: Some(item.support.unwrap_or(item.visible).tuple()),
                 kind,
             }
         })
@@ -1846,7 +1964,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         }
         for (index, item) in items.iter().enumerate() {
             if let Some(capture) = singles[index].take() {
-                outputs.push(self.resolve_captured_backdrop(item, capture)?);
+                outputs.push(self.resolve_captured_backdrop(item, capture, scale)?);
             }
         }
         Ok(outputs)
@@ -1863,6 +1981,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let ChildPlacement {
             z,
             visible,
+            support,
             dest,
             translation,
             snap,
@@ -1889,7 +2008,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 source: capture,
                 content: SourceContent::Transient,
                 dest: capture_rect.tuple(),
-                scissor: Some(visible.tuple()),
+                scissor: Some(support.tuple()),
                 kind: ResolvedCompositeKind::Shader {
                     shader: Rc::new(shader.clone()),
                     layer_pixel_rect,
@@ -1901,10 +2020,18 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 },
             });
         }
+        let reads = effect_reads(
+            backdrop,
+            blit_read_rect(support, capture_rect, false),
+            dest,
+            capture_rect,
+            scale,
+        );
         let result = self.apply_effect(
             &capture,
             backdrop,
             layer_pixel_rect,
+            reads,
             "Child Backdrop Effect",
         )?;
         Ok(ResolvedComposite {
@@ -1912,7 +2039,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             source: result,
             content: SourceContent::Transient,
             dest: capture_rect.tuple(),
-            scissor: Some(visible.tuple()),
+            scissor: Some(support.tuple()),
             kind: ResolvedCompositeKind::Blit {
                 alpha: 1.0,
                 blend_mode: BlendMode::SrcOver,
@@ -2035,6 +2162,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 radius_x,
                 radius_y,
                 tile_mode: blur.tile_mode,
+                read: member_read_texels(items[index], placement, scale),
             });
         }
         let mut averaged = Vec::new();
@@ -2052,11 +2180,13 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                     return Err("substrates of one atlas spilled into a second".into());
                 }
                 let scratch = (slot.x, slot.y, width, height);
+                let read = member_read_texels(items[*index], *placement, scale);
                 match planned.spec {
                     SubstrateSpec::Average { block } => averaged.push(SubstrateRegion {
                         source,
                         scratch,
                         block,
+                        read,
                     }),
                     SubstrateSpec::Blur { radius_px } => regions.push(BlurRegion {
                         source,
@@ -2064,6 +2194,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                         radius_x: radius_px,
                         radius_y: radius_px,
                         tile_mode: TileMode::Clamp,
+                        read,
                     }),
                 }
                 member_regions[member][order] = Some(region_tuple(match planned.atlas_slot {
@@ -2116,14 +2247,23 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         &mut self,
         item: &PendingBackdrop<'_>,
         capture: Rc<OffscreenTarget>,
+        scale: f32,
     ) -> Result<ResolvedComposite, String> {
         let layer_pixel_rect = item.layer_pixel_rect();
+        let scissor = item.support.unwrap_or(item.visible);
         if let Some((pre_shader, shader)) = shader_tail(item.effect)
             && (item.rounded_mask.is_none() || shader.batched_source())
         {
             let source = match pre_shader {
                 Some(effect) => {
-                    self.apply_effect(&capture, effect, layer_pixel_rect, "Backdrop Effect")?
+                    let reads = effect_reads(
+                        effect,
+                        domain_read_rect(item.effect, item.layer_rect, item.capture_rect, scale),
+                        item.layer_rect,
+                        item.capture_rect,
+                        scale,
+                    );
+                    self.apply_effect(&capture, effect, layer_pixel_rect, reads, "Backdrop Effect")?
                 }
                 None => capture,
             };
@@ -2132,7 +2272,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 source,
                 content: SourceContent::Transient,
                 dest: item.capture_rect.tuple(),
-                scissor: Some(item.visible.tuple()),
+                scissor: Some(item.support.unwrap_or(item.visible).tuple()),
                 kind: ResolvedCompositeKind::Shader {
                     shader: Rc::new(shader.clone()),
                     layer_pixel_rect,
@@ -2144,8 +2284,20 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 },
             });
         }
-        let result =
-            self.apply_effect(&capture, item.effect, layer_pixel_rect, "Backdrop Effect")?;
+        let reads = effect_reads(
+            item.effect,
+            blit_read_rect(scissor, item.capture_rect, false),
+            item.layer_rect,
+            item.capture_rect,
+            scale,
+        );
+        let result = self.apply_effect(
+            &capture,
+            item.effect,
+            layer_pixel_rect,
+            reads,
+            "Backdrop Effect",
+        )?;
         Ok(backdrop_blit(
             item,
             CompositeSource {
@@ -2371,6 +2523,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 &texture,
                 render_effect,
                 layer_pixel_rect,
+                EffectReads::default(),
                 "Effect Range Result",
             )?,
             None => texture,
@@ -2398,6 +2551,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         source: &Rc<OffscreenTarget>,
         effect: &RenderEffect,
         layer_pixel_rect: [f32; 4],
+        reads: EffectReads,
         label: &'static str,
     ) -> Result<Rc<OffscreenTarget>, String> {
         let dest = self.acquire_transient(label, source.width, source.height);
@@ -2423,6 +2577,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 &dest.view,
                 effect,
                 layer_pixel_rect,
+                reads,
                 &mut refs,
             );
             passes.and_then(|passes| refs.assert_consumed().map(|()| passes))
@@ -2452,10 +2607,13 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
 
         if let Some(backdrop) = &child.backdrop
             && let Some(visible) = visible_device
+            && let Some(support) =
+                child_composite_support(child, backdrop.output_support(), snap, scale, visible)
         {
             let placement = ChildPlacement {
                 z,
                 visible,
+                support,
                 dest,
                 translation,
                 snap,
@@ -2489,6 +2647,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                         &surface.source.texture,
                         effect,
                         layer_pixel_rect,
+                        EffectReads::default(),
                         "Layer Effect",
                     )?,
                     content: surface.source.content.derived(&effect.render_hash()),
@@ -2531,6 +2690,8 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let Some(RenderEffect::Shader { shader }) = &child.effect else {
             return None;
         };
+        let support =
+            child_composite_support(child, shader.output_support(), snap, scale, visible)?;
         let content = &child.content;
         let draws_nothing = content.scene.draw_ops.is_empty()
             && content.children.is_empty()
@@ -2565,7 +2726,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             dest,
             layer_pixel_rect(child, surface_rect, scale),
             grid_rounded_mask(child, snap, scale),
-            visible,
+            support,
         ))
     }
 
@@ -3056,6 +3217,65 @@ pub(crate) fn scene_bounds(layer: &LayerScene, scale: f32) -> Option<Rect> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_backdrop_keeps_its_capture_and_records_the_part_of_it_inside_the_effects_output_support() {
+        let mut shader = RuntimeShader::new("fn glass_fs() {}");
+        shader.set_input_padding(2.0);
+        shader.set_output_padding(3.0);
+        let rect = Rect {
+            x: 10.0,
+            y: 20.0,
+            width: 100.0,
+            height: 50.0,
+        };
+        let target = DeviceRect {
+            x: 0.0,
+            y: 0.0,
+            width: 400.0,
+            height: 400.0,
+        };
+        let plan = |shader: RuntimeShader| {
+            let layer = BackdropLayer {
+                node_id: None,
+                rect,
+                clip: None,
+                rounded_clip: None,
+                snap_anchor: None,
+                effect: RenderEffect::Shader { shader },
+                z_index: 0,
+            };
+            let planned =
+                plan_backdrop(&layer, 0, 2.0, target).expect("the backdrop is on the target");
+            (planned.visible, planned.capture_rect, planned.support)
+        };
+        let (whole_visible, whole_capture, whole_support) = plan(shader.clone());
+        assert_eq!(whole_visible, DeviceRect::from_logical(rect, 2.0));
+        assert_eq!(whole_capture, whole_visible.expand(10.0).snap_out());
+        assert_eq!(whole_support, None);
+
+        shader.set_output_support(Some(Rect {
+            x: 30.0,
+            y: 5.0,
+            width: 20.0,
+            height: 10.0,
+        }));
+        let (visible, capture_rect, support) = plan(shader);
+        assert_eq!(visible, whole_visible);
+        assert_eq!(capture_rect, whole_capture);
+        assert_eq!(
+            support,
+            Some(DeviceRect::from_logical(
+                Rect {
+                    x: 40.0,
+                    y: 25.0,
+                    width: 20.0,
+                    height: 10.0,
+                },
+                2.0,
+            ))
+        );
+    }
+
     #[test]
     fn a_gate_admits_a_key_that_held_for_more_than_its_patience() {
         let key = gate_key(1);

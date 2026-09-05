@@ -101,6 +101,10 @@ pub struct FrameStatsSnapshot {
     /// Pixels shaded by runtime shader composites: what every glass surface
     /// costs a tiling GPU per frame, each capture that re-shades one included.
     pub shader_pixels: u64,
+    /// Pixels the blur passes write: every downsample, horizontal and
+    /// vertical pass of a backdrop's blur and of its substrates, within
+    /// the scissor the pass was given.
+    pub blur_pixels: u64,
     /// Pixels the shape draws rasterize: a band drawn as a mesh counts its
     /// mesh, everything else its quad. Fill rate is what a scene of rings
     /// costs a tiling GPU, however few draws it takes.
@@ -234,7 +238,7 @@ impl FrameStatsSnapshot {
              isolated_layers={} area={:.2}MP top={} | \
              layer_cache: hit={} miss={} {:.1}% hit_px={:.2}MP miss_px={:.2}MP size={}({:.1}MB) hit_by_kind={} miss_px_by_kind={} | \
              shadow_cache: shape_hit={} shape_miss={} hit_px={:.2}MP miss_px={:.2}MP text_blur_fallback={} | \
-             stages={} admit={} blur={} substrate={} composite={} effect={} shader_px={:.2}MP | shape={} shape_fill_px={:.2}MP{} shape_verts={} image={} text={} draws={} | \
+             stages={} admit={} blur={} substrate={} composite={} effect={} shader_px={:.2}MP blur_px={:.2}MP | shape={} shape_fill_px={:.2}MP{} shape_verts={} image={} text={} draws={} | \
              text_img_cache: hit={} miss={} hit_px={:.2}MP miss_px={:.2}MP raster={:.2}MB | \
              text_glyph_atlas: hit={} miss={} miss_px={:.2}MP | \
              caches: text_pool={} img={} txt={}",
@@ -277,6 +281,7 @@ impl FrameStatsSnapshot {
             self.composite_passes,
             self.effect_applies,
             self.shader_pixels as f64 / 1_000_000.0,
+            self.blur_pixels as f64 / 1_000_000.0,
             self.shape_passes,
             self.shape_fill_pixels as f64 / 1_000_000.0,
             self.shape_fill_by_class_text(),
@@ -350,6 +355,7 @@ pub(crate) struct FrameStats {
     pub composite_passes: Cell<u32>,
     pub effect_applies: Cell<u32>,
     pub shader_pixels: Cell<u64>,
+    pub blur_pixels: Cell<u64>,
     pub shape_fill_pixels: Cell<u64>,
     pub shape_fill_pixels_by_class: Cell<[u64; ShapeFill::CLASSES]>,
     pub shape_vertices: Cell<u64>,
@@ -724,6 +730,7 @@ impl FrameStats {
             composite_passes: self.composite_passes.get(),
             effect_applies: self.effect_applies.get(),
             shader_pixels: self.shader_pixels.get(),
+            blur_pixels: self.blur_pixels.get(),
             shape_fill_pixels: self.shape_fill_pixels.get(),
             shape_fill_pixels_by_class: self.shape_fill_pixels_by_class.get(),
             shape_vertices: self.shape_vertices.get(),
@@ -791,6 +798,7 @@ impl FrameStats {
         self.composite_passes.set(0);
         self.effect_applies.set(0);
         self.shader_pixels.set(0);
+        self.blur_pixels.set(0);
         self.shape_fill_pixels.set(0);
         self.shape_fill_pixels_by_class.set([0; ShapeFill::CLASSES]);
         self.shape_vertices.set(0);

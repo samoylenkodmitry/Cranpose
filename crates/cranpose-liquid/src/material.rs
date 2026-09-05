@@ -13,7 +13,7 @@ use cranpose_ui_graphics::{
     GLASS_OPTICAL_ZOOM_ANCHOR_UNIFORM, GLASS_OPTICAL_ZOOM_UNIFORM,
     GLASS_PHYSICAL_REFRACTION_DEPTH_ENABLED_UNIFORM, GLASS_PHYSICAL_REFRACTION_DEPTH_UNIFORM,
     GLASS_REFRACTION_CURVE_UNIFORM, GLASS_RESTING_TINT_UNIFORM,
-    GLASS_TRANSMISSION_REFRACTION_UNIFORM, GraphicsLayer, LIQUID_GLASS_WGSL, LayerShape,
+    GLASS_TRANSMISSION_REFRACTION_UNIFORM, GraphicsLayer, LIQUID_GLASS_WGSL, LayerShape, Rect,
     RenderEffect, RoundedCornerShape, RuntimeShader, TileMode, liquid_glass_runtime_effect,
 };
 
@@ -896,13 +896,31 @@ impl ResolvedGlass {
             })
             .unwrap_or(0.0);
         shader.set_input_padding(self.input_padding() + morph_pad + wcksrd_blur_radius / density);
-        if dynamics.morph.is_some() {
+        if let Some(morph) = dynamics.morph.as_ref() {
             let shadow_reach = if dynamic_shadow {
                 self.shadow_radius + self.shadow_offset_y.abs() + self.shadow_spread.max(0.0)
             } else {
                 0.0
             };
-            shader.set_output_padding(morph_pad + shadow_reach + 4.0);
+            let support = morph_output_support(
+                morph,
+                activity,
+                morph_pad,
+                shadow_reach,
+                if dynamic_shadow {
+                    self.shadow_offset_y.abs()
+                } else {
+                    0.0
+                },
+            );
+            let (node_w, node_h) = morph.node_size;
+            let overhang = (-support.x)
+                .max(-support.y)
+                .max(support.x + support.width - node_w)
+                .max(support.y + support.height - node_h)
+                .max(0.0);
+            shader.set_output_padding((morph_pad + shadow_reach + 4.0).max(overhang));
+            shader.set_output_support(Some(support));
         }
 
         let optical_effect = liquid_glass_runtime_effect(shader);
@@ -984,6 +1002,52 @@ impl LiquidModifierExt for Modifier {
                 ..Default::default()
             }
         })
+    }
+}
+
+fn morph_output_support(
+    morph: &GlassMorph,
+    activity: f32,
+    morph_pad: f32,
+    shadow_reach: f32,
+    shadow_offset: f32,
+) -> Rect {
+    let (px, py, pw, ph, _) = morph.primary;
+    let (along, (ax, ay)) = morph.deformation.map_or((1.0, (1.0, 0.0)), |deformation| {
+        (
+            1.0 + (deformation.along() - 1.0) * activity,
+            deformation.axis(),
+        )
+    });
+    let across = 1.0 / along;
+    let smallest_strain = along.min(across);
+    let reach = (morph_pad + shadow_reach + 4.0) / smallest_strain;
+    let rows = [
+        (
+            (along * ax * ax + across * ay * ay).abs(),
+            ((along - across) * ax * ay).abs(),
+        ),
+        (
+            ((along - across) * ax * ay).abs(),
+            (along * ay * ay + across * ax * ax).abs(),
+        ),
+    ];
+    let half = (pw * 0.5 + reach, ph * 0.5 + reach);
+    let extent_x = rows[0].0 * half.0 + rows[0].1 * half.1;
+    let extent_y = rows[1].0 * half.0 + rows[1].1 * half.1;
+    let (mut left, mut top) = (px - extent_x, py - extent_y);
+    let (mut right, mut bottom) = (px + extent_x, py + extent_y);
+    for (sx, sy, sw, sh, _) in &morph.shapes {
+        left = left.min(sx - sw * 0.5 - reach);
+        top = top.min(sy - sh * 0.5 - reach);
+        right = right.max(sx + sw * 0.5 + reach);
+        bottom = bottom.max(sy + sh * 0.5 + reach);
+    }
+    Rect {
+        x: left,
+        y: top - shadow_offset,
+        width: right - left,
+        height: bottom - top + 2.0 * shadow_offset,
     }
 }
 
@@ -1456,5 +1520,127 @@ mod tests {
         assert_eq!(untouched.highlight_boost, resting.highlight_boost);
         assert_eq!(untouched.saturation_boost, resting.saturation_boost);
         assert_eq!(untouched.touch, None, "no press, no glow");
+    }
+
+    #[test]
+    fn an_off_axis_strain_widens_the_support_by_the_affine_rows_times_the_half_extents() {
+        let resolved = Glass::regular()
+            .shape(LiquidShape::RoundedRect(0.0))
+            .blur_radius(0.0)
+            .shadow(false)
+            .no_clip()
+            .resolve(&light_colors());
+        let angle = 22.5f32.to_radians();
+        let morph = GlassMorph {
+            node_size: (600.0, 600.0),
+            primary: (300.0, 300.0, 200.0, 200.0, 0.0),
+            deformation: Some(GlassDeformation::incompressible(
+                (angle.cos(), angle.sin()),
+                2.0,
+            )),
+            ..Default::default()
+        };
+        let RenderEffect::Shader { shader } = resolved.backdrop_effect(
+            1.0,
+            GlassDynamics {
+                activity: Some(1.0),
+                morph: Some(morph),
+                ..Default::default()
+            },
+        ) else {
+            panic!("an unblurred glass is one shader");
+        };
+        let support = shader
+            .output_support()
+            .expect("a morphing glass declares its support");
+        let half_x = 100.0 * (2.0 * angle.cos().powi(2) + 0.5 * angle.sin().powi(2))
+            + 100.0 * (1.5 * angle.sin() * angle.cos());
+        assert!(
+            (half_x - 231.066).abs() < 0.01,
+            "the example's half extent is {half_x}"
+        );
+        assert!(
+            support.x <= 300.0 - half_x && support.x + support.width >= 300.0 + half_x,
+            "the support {support:?} must hold the strained square's x extent {half_x}"
+        );
+        let half_y = 100.0 * (1.5 * angle.sin() * angle.cos())
+            + 100.0 * (2.0 * angle.sin().powi(2) + 0.5 * angle.cos().powi(2));
+        assert!(
+            (half_y - 125.0).abs() < 0.01,
+            "the example's y half extent is {half_y}"
+        );
+        assert!(
+            support.y <= 300.0 - half_y && support.y + support.height >= 300.0 + half_y,
+            "the support {support:?} must hold the strained square's y extent {half_y}"
+        );
+    }
+
+    #[test]
+    fn a_morphing_glass_declares_its_output_support_around_its_shapes_and_their_reach() {
+        let resolved = Glass::regular()
+            .shape(LiquidShape::RoundedRect(12.0))
+            .blur_radius(0.0)
+            .shadow(true)
+            .no_clip()
+            .resolve(&light_colors());
+        let morph = GlassMorph {
+            node_size: (280.0, 160.0),
+            primary: (140.0, 80.0, 120.0, 40.0, -1.0),
+            shapes: vec![(230.0, 80.0, 40.0, 40.0, -1.0)],
+            glue: 20.0,
+            wobble_amplitude: 3.0,
+            bulge_amplitude: 8.0,
+            deformation: Some(GlassDeformation::incompressible((1.0, 0.0), 1.25)),
+            ..Default::default()
+        };
+        let dynamics = GlassDynamics {
+            activity: Some(1.0),
+            morph: Some(morph.clone()),
+            ..Default::default()
+        };
+        let RenderEffect::Shader { shader } = resolved.backdrop_effect(2.0, dynamics) else {
+            panic!("an unblurred glass is one shader");
+        };
+        let support = shader
+            .output_support()
+            .expect("a morphing glass declares its support");
+        let shape_reach = (230.0 + 20.0) - (140.0 + 60.0);
+        let shadow_reach = resolved.shadow_radius
+            + resolved.shadow_offset_y.abs()
+            + resolved.shadow_spread.max(0.0);
+        let field_reach = 3.0 * 2.0 + 8.0 + shape_reach + 40.0 + shadow_reach + 4.0;
+        let smallest_strain = 0.8;
+        let reach = field_reach / smallest_strain;
+        let contains = |x: f32, y: f32| {
+            support.x <= x
+                && support.y <= y
+                && support.x + support.width >= x
+                && support.y + support.height >= y
+        };
+        for (cx, cy) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
+            let corner = ((60.0 + reach) * cx, (20.0 + reach) * cy);
+            let stretched = (140.0 + corner.0 * 1.25, 80.0 + corner.1 * 0.8);
+            assert!(
+                contains(stretched.0, stretched.1 - resolved.shadow_offset_y.abs())
+                    && contains(stretched.0, stretched.1 + resolved.shadow_offset_y.abs()),
+                "{support:?} must hold the strained, dilated corner {stretched:?}"
+            );
+        }
+        assert!(
+            contains(230.0 + 20.0 + reach, 80.0),
+            "the glued shape's reach is inside"
+        );
+        assert!(shader.output_padding() >= field_reach);
+
+        let RenderEffect::Shader { shader } =
+            resolved.backdrop_effect(2.0, GlassDynamics::default())
+        else {
+            panic!("an unblurred glass is one shader");
+        };
+        assert_eq!(
+            shader.output_support(),
+            None,
+            "cover-mode glass fills its rect"
+        );
     }
 }

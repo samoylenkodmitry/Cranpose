@@ -117,6 +117,7 @@ pub(crate) struct EffectRenderer {
     pub(crate) debug_composites: Cell<u32>,
     pub(crate) debug_effects: Cell<u32>,
     pub(crate) debug_shader_pixels: Cell<u64>,
+    pub(crate) debug_blur_pixels: Cell<u64>,
 }
 
 pub(crate) trait EffectScratchTargetProvider<'target> {
@@ -508,6 +509,7 @@ pub(crate) struct BlurRegion {
     pub(crate) radius_x: f32,
     pub(crate) radius_y: f32,
     pub(crate) tile_mode: TileMode,
+    pub(crate) read: Option<(u32, u32, u32, u32)>,
 }
 
 /// One averaged substrate of a capture atlas: the capture texels to
@@ -518,6 +520,80 @@ pub(crate) struct SubstrateRegion {
     pub(crate) source: (u32, u32, u32, u32),
     pub(crate) scratch: (u32, u32, u32, u32),
     pub(crate) block: u32,
+    pub(crate) read: Option<(u32, u32, u32, u32)>,
+}
+
+fn axis_span(start: i64, end: i64, margin: u32, len: u32, wraps: bool) -> (u32, u32) {
+    let (low, high) = (start - i64::from(margin), end + i64::from(margin));
+    if wraps && (low < 0 || high > i64::from(len)) {
+        return (0, len.max(1));
+    }
+    let low = low.max(0) as u32;
+    (low, (high.min(i64::from(len)) as u32).max(low + 1))
+}
+
+fn read_scissor(
+    source: (u32, u32, u32, u32),
+    scratch: (u32, u32, u32, u32),
+    read: Option<(u32, u32, u32, u32)>,
+    margin: (u32, u32),
+    wraps: bool,
+) -> (u32, u32, u32, u32) {
+    let Some((ux, uy, uw, uh)) = read else {
+        return scratch;
+    };
+    let fx = scratch.2 as f32 / source.2.max(1) as f32;
+    let fy = scratch.3 as f32 / source.3.max(1) as f32;
+    let span = |start: u32, end: u32, origin: u32, factor: f32| {
+        (
+            ((start as f32 - origin as f32) * factor).floor() as i64,
+            ((end as f32 - origin as f32) * factor).ceil() as i64,
+        )
+    };
+    let (x0, x1) = span(ux, ux + uw, source.0, fx);
+    let (y0, y1) = span(uy, uy + uh, source.1, fy);
+    let (left, right) = axis_span(x0, x1, margin.0, scratch.2, wraps);
+    let (top, bottom) = axis_span(y0, y1, margin.1, scratch.3, wraps);
+    (
+        scratch.0 + left,
+        scratch.1 + top,
+        right - left,
+        bottom - top,
+    )
+}
+
+#[derive(Clone, Copy, Default)]
+pub(crate) struct EffectReads {
+    pub(crate) output: Option<(u32, u32, u32, u32)>,
+    pub(crate) shader_input: Option<(u32, u32, u32, u32)>,
+}
+
+fn widened_scissor(
+    scissor: Option<(u32, u32, u32, u32)>,
+    margin: (u32, u32),
+    bounds: (u32, u32),
+    wraps: bool,
+) -> Option<(u32, u32, u32, u32)> {
+    let (x, y, width, height) = scissor?;
+    let (left, right) = axis_span(
+        i64::from(x),
+        i64::from(x + width),
+        margin.0,
+        bounds.0,
+        wraps,
+    );
+    let (top, bottom) = axis_span(
+        i64::from(y),
+        i64::from(y + height),
+        margin.1,
+        bounds.1,
+        wraps,
+    );
+    Some((left, top, right - left, bottom - top))
+}
+
+fn kernel_margin((radius_x, radius_y): (f32, f32)) -> (u32, u32) {
+    (radius_x.ceil() as u32 + 1, radius_y.ceil() as u32 + 1)
 }
 
 /// What one capture atlas renders beside itself: the regions to blur and
@@ -533,6 +609,23 @@ impl BlurRegion {
             self.radius_x * self.scratch.2 as f32 / self.source.2.max(1) as f32,
             self.radius_y * self.scratch.3 as f32 / self.source.3.max(1) as f32,
         )
+    }
+
+    fn pass_scissor(&self, steps: (u32, u32)) -> (u32, u32, u32, u32) {
+        let (radius_x, radius_y) = kernel_margin(self.scratch_radius());
+        read_scissor(
+            self.source,
+            self.scratch,
+            self.read,
+            (radius_x * steps.0, radius_y * steps.1),
+            self.tile_mode == TileMode::Repeated,
+        )
+    }
+}
+
+impl SubstrateRegion {
+    fn pass_scissor(&self) -> (u32, u32, u32, u32) {
+        read_scissor(self.source, self.scratch, self.read, (1, 1), false)
     }
 }
 
@@ -870,6 +963,7 @@ impl EffectRenderer {
             debug_composites: Cell::new(0),
             debug_effects: Cell::new(0),
             debug_shader_pixels: Cell::new(0),
+            debug_blur_pixels: Cell::new(0),
         }
     }
 
@@ -1067,12 +1161,16 @@ impl EffectRenderer {
         stats
             .shader_pixels
             .set(stats.shader_pixels.get() + self.debug_shader_pixels.get());
+        stats
+            .blur_pixels
+            .set(stats.blur_pixels.get() + self.debug_blur_pixels.get());
         self.debug_command_stats.set(FrameCommandStats::default());
         self.debug_blurs.set(0);
         self.debug_substrates.set(0);
         self.debug_composites.set(0);
         self.debug_effects.set(0);
         self.debug_shader_pixels.set(0);
+        self.debug_blur_pixels.set(0);
     }
 
     pub(crate) fn record_blur_pass(&self) {
@@ -1120,8 +1218,19 @@ impl EffectRenderer {
         label: &'static str,
         pass_id: UploadAllocatorId,
         dest_view: &wgpu::TextureView,
+        dest_size: (u32, u32),
         draws: &[BlurDraw<'_>],
     ) {
+        let written: u64 = draws
+            .iter()
+            .map(|draw| {
+                let (_, _, width, height) =
+                    draw.scissor.unwrap_or((0, 0, dest_size.0, dest_size.1));
+                u64::from(width) * u64::from(height)
+            })
+            .sum();
+        self.debug_blur_pixels
+            .set(self.debug_blur_pixels.get() + written);
         let uniforms: Vec<UniformUpload> = draws
             .iter()
             .map(|draw| {
@@ -1230,6 +1339,12 @@ impl EffectRenderer {
             ((0, 0, dest_size.0, dest_size.1), scissor)
         };
         let block = blur_block(whole_source, whole_scratch);
+        let margin = kernel_margin(radius);
+        let scratch_size = (scratch.width, scratch.height);
+        let wraps = tile_mode == TileMode::Repeated;
+        let horizontal_scissor =
+            widened_scissor(scratch_scissor, (0, margin.1), scratch_size, wraps);
+        let downsample_scissor = widened_scissor(scratch_scissor, margin, scratch_size, wraps);
         let small = (block > 1).then(|| {
             let descriptor = FrameTextureDescriptor::render_attachment(
                 "Blur Downsample",
@@ -1249,6 +1364,7 @@ impl EffectRenderer {
                 "Blur Downsample Pass",
                 UploadAllocatorId::BlurDownsample,
                 &small.view,
+                scratch_size,
                 &[BlurDraw {
                     source,
                     uniforms: Self::blur_uniforms(
@@ -1260,7 +1376,7 @@ impl EffectRenderer {
                         tile_mode,
                     ),
                     downsample: Some(block),
-                    scissor: scratch_scissor,
+                    scissor: downsample_scissor,
                 }],
             );
         }
@@ -1274,6 +1390,7 @@ impl EffectRenderer {
             "Blur Horizontal Pass",
             UploadAllocatorId::BlurHorizontal,
             &scratch.view,
+            scratch_size,
             &[BlurDraw {
                 source: horizontal_source,
                 uniforms: Self::blur_uniforms(
@@ -1285,7 +1402,7 @@ impl EffectRenderer {
                     tile_mode,
                 ),
                 downsample: None,
-                scissor: scratch_scissor,
+                scissor: horizontal_scissor,
             }],
         );
         self.encode_blur_pass(
@@ -1294,6 +1411,7 @@ impl EffectRenderer {
             "Blur Vertical Pass",
             UploadAllocatorId::BlurVertical,
             dest_view,
+            dest_size,
             &[BlurDraw {
                 source: scratch,
                 uniforms: Self::blur_uniforms(
@@ -1362,15 +1480,20 @@ impl EffectRenderer {
             .zip(&blocks)
             .filter(|(_, block)| **block > 1)
             .map(|(region, block)| {
-                downsample_draw(region.source, region.scratch, *block, region.tile_mode)
+                let mut draw =
+                    downsample_draw(region.source, region.scratch, *block, region.tile_mode);
+                draw.scissor = Some(region.pass_scissor((1, 1)));
+                draw
             })
             .chain(substrates.iter().map(|substrate| {
-                downsample_draw(
+                let mut draw = downsample_draw(
                     substrate.source,
                     substrate.scratch,
                     substrate.block,
                     TileMode::Clamp,
-                )
+                );
+                draw.scissor = Some(substrate.pass_scissor());
+                draw
             }))
             .collect();
         if !downsample.is_empty() {
@@ -1380,6 +1503,7 @@ impl EffectRenderer {
                 "Blur Downsample Pass",
                 UploadAllocatorId::BlurDownsample,
                 &result.view,
+                (result.width, result.height),
                 &downsample,
             );
         }
@@ -1406,7 +1530,7 @@ impl EffectRenderer {
                         region.tile_mode,
                     ),
                     downsample: None,
-                    scissor: Some(region.scratch),
+                    scissor: Some(region.pass_scissor((0, 1))),
                 }
             })
             .collect();
@@ -1416,6 +1540,7 @@ impl EffectRenderer {
             "Blur Horizontal Pass",
             UploadAllocatorId::BlurHorizontal,
             &scratch.view,
+            (scratch.width, scratch.height),
             &horizontal,
         );
         let vertical: Vec<BlurDraw<'_>> = regions
@@ -1431,7 +1556,7 @@ impl EffectRenderer {
                     region.tile_mode,
                 ),
                 downsample: None,
-                scissor: Some(region.scratch),
+                scissor: Some(region.pass_scissor((0, 0))),
             })
             .collect();
         self.encode_blur_pass(
@@ -1440,6 +1565,7 @@ impl EffectRenderer {
             "Blur Vertical Pass",
             UploadAllocatorId::BlurVertical,
             &result.view,
+            (result.width, result.height),
             &vertical,
         );
         self.record_blur_pass();
@@ -1494,6 +1620,7 @@ impl EffectRenderer {
         dest_view: &wgpu::TextureView,
         shader: &RuntimeShader,
         layer_pixel_rect: [f32; 4],
+        scissor: Option<(u32, u32, u32, u32)>,
     ) -> bool {
         self.encode_shader_pass(
             recorder,
@@ -1504,7 +1631,7 @@ impl EffectRenderer {
             layer_pixel_rect,
             ShaderPassOptions {
                 load_op: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                scissor: None,
+                scissor,
                 dest_viewport: None,
                 pipeline_mode: RuntimeShaderPipelineMode::Replace,
                 source_logical_size: None,
@@ -1698,6 +1825,7 @@ impl EffectRenderer {
         dest_view: &wgpu::TextureView,
         effect: &RenderEffect,
         layer_pixel_rect: [f32; 4],
+        reads: EffectReads,
         scratch_targets: &mut impl EffectScratchTargetProvider<'scratch>,
     ) -> Result<u32, String> {
         match effect {
@@ -1737,7 +1865,7 @@ impl EffectRenderer {
                     *radius_x,
                     *radius_y,
                     *edge_treatment,
-                    None,
+                    reads.output,
                 );
                 self.record_blur_pass();
                 Ok(passes)
@@ -1755,6 +1883,7 @@ impl EffectRenderer {
                     dest_view,
                     shader,
                     layer_pixel_rect,
+                    reads.output,
                 ) {
                     self.debug_effects.set(self.debug_effects.get() + 1);
                     Ok(1)
@@ -1781,6 +1910,13 @@ impl EffectRenderer {
             }
             RenderEffect::Chain { first, second } => {
                 let intermediate = scratch_targets.next()?;
+                let first_reads = EffectReads {
+                    output: match **second {
+                        RenderEffect::Shader { .. } => reads.shader_input,
+                        _ => None,
+                    },
+                    shader_input: None,
+                };
                 let first_passes = self.encode_effect(
                     recorder,
                     device,
@@ -1788,6 +1924,7 @@ impl EffectRenderer {
                     &intermediate.view,
                     first,
                     layer_pixel_rect,
+                    first_reads,
                     scratch_targets,
                 )?;
                 let second_passes = self.encode_effect(
@@ -1797,6 +1934,7 @@ impl EffectRenderer {
                     dest_view,
                     second,
                     layer_pixel_rect,
+                    reads,
                     scratch_targets,
                 )?;
                 Ok(first_passes.saturating_add(second_passes))

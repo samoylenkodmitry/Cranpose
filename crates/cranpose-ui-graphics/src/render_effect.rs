@@ -5,7 +5,7 @@
 
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
-use crate::LayerShape;
+use crate::{LayerShape, Rect};
 
 const RUNTIME_SHADER_INLINE_UNIFORMS: usize = 16;
 
@@ -129,6 +129,22 @@ pub struct RuntimeShader {
     batched_source: bool,
     substrates: Vec<SubstrateSpec>,
     draw_split: Option<&'static str>,
+    domains: Option<Box<ShaderDomains>>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct ShaderDomains {
+    output_support: Option<Rect>,
+    sample_domain: Option<Rect>,
+}
+
+fn finite_rect(rect: Option<Rect>) -> Option<Rect> {
+    rect.filter(|rect| {
+        rect.x.is_finite()
+            && rect.y.is_finite()
+            && rect.width.is_finite()
+            && rect.height.is_finite()
+    })
 }
 
 /// The most substrates one shader may declare.
@@ -291,6 +307,7 @@ impl RuntimeShader {
             batched_source: false,
             substrates: Vec::new(),
             draw_split: None,
+            domains: None,
         }
     }
 
@@ -361,6 +378,56 @@ impl RuntimeShader {
     /// Returns the declared output padding in logical pixels.
     pub fn output_padding(&self) -> f32 {
         self.output_padding
+    }
+
+    /// Declares the rect outside which the shader writes nothing: every
+    /// pixel its coverage can make nonzero at its current uniforms, the
+    /// output padding's reach included, in logical pixels with the origin
+    /// at the effect rect's top-left. A renderer composites only the part
+    /// of the effect rect inside it; the capture it reads stays whole, so a
+    /// node that carries headroom around a smaller material pays the
+    /// composite for the material alone. It says nothing about sampling:
+    /// see [`Self::set_sample_domain`]. `None`, the default, means the
+    /// whole effect rect and its output padding. A rect with a non-finite
+    /// side clears the declaration.
+    pub fn set_output_support(&mut self, support: Option<Rect>) {
+        self.set_domains(ShaderDomains {
+            output_support: finite_rect(support),
+            sample_domain: self.sample_domain(),
+        });
+    }
+
+    /// The declared output support, when the shader gave one.
+    pub fn output_support(&self) -> Option<Rect> {
+        self.domains
+            .as_ref()
+            .and_then(|domains| domains.output_support)
+    }
+
+    fn set_domains(&mut self, domains: ShaderDomains) {
+        self.domains = (domains != ShaderDomains::default()).then(|| Box::new(domains));
+    }
+
+    /// Declares the rect outside which the shader never samples its input,
+    /// in logical pixels with the origin at the effect rect's top-left. A
+    /// renderer may leave the input outside it unresolved: a blur feeding
+    /// this shader need only write the domain. The default, `None`, is the
+    /// whole effect rect and its input padding, which the input padding
+    /// contract already promises; an output support says nothing about
+    /// sampling, so a shader that shades a small region but reads a far
+    /// one keeps the default. A rect with a non-finite side clears it.
+    pub fn set_sample_domain(&mut self, domain: Option<Rect>) {
+        self.set_domains(ShaderDomains {
+            output_support: self.output_support(),
+            sample_domain: finite_rect(domain),
+        });
+    }
+
+    /// The declared sample domain, when the shader gave one.
+    pub fn sample_domain(&self) -> Option<Rect> {
+        self.domains
+            .as_ref()
+            .and_then(|domains| domains.sample_domain)
     }
 
     /// Set a single float uniform at the given index.
@@ -554,6 +621,7 @@ impl PartialEq for RuntimeShader {
             && self.batched_source == other.batched_source
             && self.substrates == other.substrates
             && self.draw_split == other.draw_split
+            && self.domains == other.domains
     }
 }
 
@@ -757,6 +825,29 @@ impl RenderEffect {
             RenderEffect::Chain { first, second } => {
                 first.output_padding() + second.output_padding()
             }
+        }
+    }
+
+    /// The rect outside which this effect writes nothing, in its logical
+    /// space with the origin at its rect's top-left, when the stage that
+    /// produces its output declared one; blur and offset write their whole
+    /// rect and declare none.
+    pub fn output_support(&self) -> Option<Rect> {
+        match self {
+            RenderEffect::Blur { .. } | RenderEffect::Offset { .. } => None,
+            RenderEffect::Shader { shader } => shader.output_support(),
+            RenderEffect::Chain { second, .. } => second.output_support(),
+        }
+    }
+
+    /// The rect outside which the stage that produces this effect's output
+    /// never samples what it is given, when it declared one; the whole
+    /// input otherwise. A blur samples everything it writes and more.
+    pub fn sample_domain(&self) -> Option<Rect> {
+        match self {
+            RenderEffect::Blur { .. } | RenderEffect::Offset { .. } => None,
+            RenderEffect::Shader { shader } => shader.sample_domain(),
+            RenderEffect::Chain { second, .. } => second.sample_domain(),
         }
     }
 }
@@ -1063,5 +1154,76 @@ mod tests {
         assert_eq!(treatment.shape(), Some(rounded));
         assert!(treatment.clip());
         assert_eq!(treatment.tile_mode(), TileMode::Clamp);
+    }
+
+    #[test]
+    fn an_effect_chains_output_support_is_the_support_of_the_stage_that_writes_its_output() {
+        let mut shader = RuntimeShader::new("fn glass_fs() {}");
+        assert_eq!(shader.output_support(), None);
+        let support = Rect {
+            x: 4.0,
+            y: 6.0,
+            width: 30.0,
+            height: 12.0,
+        };
+        shader.set_output_support(Some(support));
+        assert_eq!(shader.output_support(), Some(support));
+        let effect = RenderEffect::blur(3.0).then(RenderEffect::Shader {
+            shader: shader.clone(),
+        });
+        assert_eq!(effect.output_support(), Some(support));
+        let effect = RenderEffect::Shader {
+            shader: shader.clone(),
+        }
+        .then(RenderEffect::blur(3.0));
+        assert_eq!(effect.output_support(), None);
+        assert_eq!(RenderEffect::blur(3.0).output_support(), None);
+    }
+
+    #[test]
+    fn a_sample_domain_is_the_writers_and_a_blur_declares_none() {
+        let mut shader = RuntimeShader::new("fn glass_fs() {}");
+        let domain = Rect {
+            x: -2.0,
+            y: -2.0,
+            width: 20.0,
+            height: 12.0,
+        };
+        let plain = shader.clone();
+        shader.set_sample_domain(Some(domain));
+        assert_ne!(shader, plain);
+        assert_eq!(shader.sample_domain(), Some(domain));
+        let effect = RenderEffect::blur(3.0).then(RenderEffect::Shader {
+            shader: shader.clone(),
+        });
+        assert_eq!(effect.sample_domain(), Some(domain));
+        assert_eq!(RenderEffect::blur(3.0).output_support(), None);
+        assert_eq!(RenderEffect::blur(3.0).sample_domain(), None);
+        shader.set_sample_domain(Some(Rect {
+            x: f32::INFINITY,
+            ..domain
+        }));
+        assert_eq!(shader.sample_domain(), None);
+    }
+
+    #[test]
+    fn a_non_finite_output_support_clears_the_declaration_and_a_support_tells_shaders_apart() {
+        let mut shader = RuntimeShader::new("fn glass_fs() {}");
+        let plain = shader.clone();
+        shader.set_output_support(Some(Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 10.0,
+            height: 10.0,
+        }));
+        assert_ne!(shader, plain);
+        shader.set_output_support(Some(Rect {
+            x: 0.0,
+            y: 0.0,
+            width: f32::NAN,
+            height: 10.0,
+        }));
+        assert_eq!(shader.output_support(), None);
+        assert_eq!(shader, plain);
     }
 }

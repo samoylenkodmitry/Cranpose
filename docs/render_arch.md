@@ -1513,6 +1513,106 @@ gain); the page usage ablation (no gain); a compute blur (no evidence it
 beats the pass pair on either GPU); a whole-result backdrop cache without
 the rigid-motion rule (the stale-image scroll regression of 2026-08-29).
 
+## A material declares where it writes and where it reads; the renderer shades and blurs only that (2026-09-05, night)
+
+The tab bar's lens carries deformation headroom in its node: the node is
+the bar's width and height, the pill it shades is a fraction of that, and
+until now every pass over that node, the capture, the substrate, the blur
+pair and the composite, ran over the whole node plus its padding. The
+material knows its pill: `GlassMorph` gives the primary shape, its glued
+neighbours, the wobble and bulge amplitudes, the glue and the deformation.
+Two declarations on `RuntimeShader` now carry that knowledge to the
+renderer, each with its own contract and its own default of "everything":
+
+- `set_output_support`: the rect outside which the shader writes nothing.
+  It bounds the composite's scissor, on the page path, the child path and
+  the content-shader tail a glass draws in the final pass. It says nothing
+  about sampling: a shader that shades a small region may still read the
+  far corner of its rect, and the input padding contract only bounds reads
+  outside the effect rect, not around an output pixel. The first cut of
+  this unit pruned the blur to the support widened by the input padding;
+  Codex's review caught it, and `effect_sample_domain.rs` now holds a
+  shader that does exactly that (a small support, a far-corner fetch,
+  padding zero, under a blur) on both paths, red against that pruning
+  (4,928 and 5,408 pixels) and green now.
+- `set_sample_domain`: the rect outside which the shader never samples its
+  input. Only a declared domain lets the passes that feed the shader leave
+  the rest unwritten: a blur before it writes the domain, widened per pass
+  by the reach of the pass that reads it (the vertical pass writes what is
+  read, the horizontal that widened by the vertical radius, the downsample
+  by both; an averaged substrate one texel more), all in the capture's own
+  texel space, so every texel a later pass reads was written and every
+  texel read is the one the whole pass would have written. A blit that
+  reads its scissor one to one prunes its blur to that scissor without any
+  declaration (nearest sampling; linear widens by a texel). A chain hands
+  the domain of its final shader to the stage feeding that shader and
+  nothing to the stages before. Under `TileMode::Repeated` a tap past a
+  slot edge wraps to the opposite edge, so a dilated span that touches
+  either end of an axis writes that whole axis; Mirror reflects back into
+  the same edge and Clamp and Decal read nothing beyond it, so those stay
+  local. Both declarations enter `hash_runtime_shader`, so a draw whose
+  declaration changes is a changed draw to the record cache. `blur_pixels`
+  counts what the blur passes write; `CRANPOSE_NO_EFFECT_DOMAINS` ignores
+  both declarations.
+
+**What the renderer must not do.** The capture rect is exactly what it
+was. Restricting it to the support rendered 99 pixels inside the pill one
+level off: a capture that starts elsewhere moves the shader's texel
+coordinates by float ULPs and moves the frost substrate's block phase.
+Exact reductions keep every texture's origin and size and cut work with
+scissors.
+
+**The material's support.** `cranpose-liquid` declares the primary shape
+widened by every reach the shader subtracts from its field (wobble twice,
+bulge, the glued shapes' reach, the glue, the shadow's spread and blur, and
+four pixels of ramp and slack), divided by the smaller strain because the
+shader measures its field in the unstrained shape and scales the distance
+by that strain, then stretched by the strain's absolute affine rows times
+the half extents; glued shapes sit in display space and take the same
+reach; the shadow's offset widens it vertically. The earlier scalar bound
+under-declared an off-axis stretch: a 200 x 200 square strained 2 : 0.5
+along 22.5 degrees reaches 231 px in x where the scalar gave 204, a
+27 px clip (Codex's example, now a unit test that was red against the
+scalar). The deformation was also missing from the output padding, masked
+by the node's headroom; the padding is now the larger of the old formula
+and the support's overhang past the node, so no capture shrinks and the
+under-captured ones grow. Cover-mode glass, the cards, declares nothing
+and is unchanged. The liquid material declares no sample domain yet: its
+refraction, dispersion, zoom and loupe have no proven sampling bound, so
+its blur stays whole until that bound is derived.
+
+**Gates.** `glass_output_support.rs`: a lens with node 280 x 160 over a
+120 x 40 pill, blur 12, wobble, bulge, ellipse blend and strain on,
+rendered with the declarations and with the toggle: zero differing
+pixels, the composite's shaded pixels smaller, the blur's written pixels
+equal because no domain is declared. Red-proven: a support 6 px too small
+makes 9 pixels differ at the pill's edge. `effect_sample_domain.rs`: the
+far-corner shader on both paths; a shader reading 4 texels past each pixel
+that declares a 4-texel domain lands on the same pixels with the blur
+writing less; the same shader reading 12 past a 4-texel declaration
+renders differently, so the pruning is live; the same far-corner shader
+under a repeated-tile blur with a domain declared at the far corner
+differs by 480 pixels on each path when the wrapped taps are not written
+and by none with the whole-axis rule. The planner keeps its capture
+and records the support; a chain's support and domain are its writer's.
+
+**Measured.** The pre-review build (which still pruned the lens's blur)
+against d61ac06a on the watch, hot, both orders: header at rest 40-46 fps
+against 40-45 cool and 30-32 against 30-32 hot, the card traversal 27-29
+against 27-29: no difference beyond the thermal steps. The final tree
+against d61ac06a on the Mate 20 X, the full 14-body scroll (Codex's
+verified route, 40 swipes per 60 s leg), A B A B then B A B A without
+cooling: 34.50 / 35.25 / 37.50 / 38.21 then 38.70 (final) / 38.68 /
+38.95 (final) / 38.97, battery 34 to 40 C across the run; the device
+climbs 4 fps over the eight legs whichever build runs, the paired gaps
+are +0.75 and +0.71 while it warms and +0.02 and -0.02 once warm, so the
+unit changes nothing on the Huawei either. Preflight screenshots between
+builds differ by the same spread as between legs of one build (the
+settling scroll and the rotating planets). The lens's blur is a small
+share of the header frame and the cards declare nothing; the unit is
+exact infrastructure and a padding fix, and its gain arrives with a
+declared sample domain for the material.
+
 ## Order
 
 Every step ships with its contract proven red first, the robot suite

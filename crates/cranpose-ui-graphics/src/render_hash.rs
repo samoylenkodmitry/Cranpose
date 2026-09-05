@@ -243,6 +243,18 @@ fn hash_runtime_shader<H: Hasher>(shader: &RuntimeShader, state: &mut H) {
     shader.overrides_hash().hash(state);
     hash_f32_bits(shader.input_padding(), state);
     hash_f32_bits(shader.output_padding(), state);
+    for rect in [shader.output_support(), shader.sample_domain()] {
+        match rect {
+            Some(rect) => {
+                1u8.hash(state);
+                hash_f32_bits(rect.x, state);
+                hash_f32_bits(rect.y, state);
+                hash_f32_bits(rect.width, state);
+                hash_f32_bits(rect.height, state);
+            }
+            None => 0u8.hash(state),
+        }
+    }
     shader.hash_substrates(state);
     shader.uniforms().len().hash(state);
     for uniform in shader.uniforms() {
@@ -745,5 +757,23 @@ mod tests {
             }
             .render_hash()
         );
+    }
+
+    #[test]
+    fn a_shaders_declared_support_and_sample_domain_are_part_of_its_hash() {
+        let plain = crate::RuntimeShader::new("fn effect_fs() {}");
+        let rect = crate::Rect {
+            x: 1.0,
+            y: 2.0,
+            width: 3.0,
+            height: 4.0,
+        };
+        let mut supported = plain.clone();
+        supported.set_output_support(Some(rect));
+        let mut bounded = plain.clone();
+        bounded.set_sample_domain(Some(rect));
+        assert_ne!(plain.render_hash(), supported.render_hash());
+        assert_ne!(plain.render_hash(), bounded.render_hash());
+        assert_ne!(supported.render_hash(), bounded.render_hash());
     }
 }

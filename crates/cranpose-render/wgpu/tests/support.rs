@@ -435,6 +435,36 @@ pub fn app_shell_for(
     Some((lock, shell))
 }
 
+/// Composes `page` in an app shell, captures it twice and returns the second
+/// frame with the stats it recorded; `None` when headless WGPU is unavailable.
+pub fn warm_app_frame(
+    page: fn(),
+    width: u32,
+    height: u32,
+) -> Option<(CapturedFrame, RenderStatsSnapshot)> {
+    let (_lock, mut shell) = app_shell_for(
+        page,
+        width,
+        height,
+        wgpu::TextureFormat::Bgra8UnormSrgb,
+        |_| {},
+    )?;
+    shell
+        .renderer()
+        .capture_frame(width, height)
+        .expect("warm-up capture should succeed");
+    let frame = shell
+        .renderer()
+        .capture_frame(width, height)
+        .expect("frame capture should succeed");
+    assert_eq!(shell.renderer().device_error_count_for_tests(), 0);
+    let stats = shell
+        .renderer()
+        .last_frame_stats()
+        .expect("the capture recorded frame stats");
+    Some((frame, stats))
+}
+
 /// Captures `graph` three times and returns the last frame, after checking
 /// that repeated captures of one graph are byte-stable.
 pub fn stable_capture(renderer: &mut LockedRenderer, graph: &RenderGraph, size: u32) -> Vec<u8> {
