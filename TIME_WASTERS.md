@@ -794,3 +794,5 @@ event; the kernel ships without perf events. Profile there with the
 `debug.cranpose.*_stage_ms` properties.
 
 - ARMv7 record append probes (2026-09-05): forcing column append out of line costs ~10%; the supported thumbv7neon Android target gives no measurable gain. The 15,161-arc probe needs parallel preparation for a substantial CPU gain. Evidence and limitations: `docs/mobile_watch_performance.md`.
+
+- Android toolchain aliases (2026-09-05): `RUSTUP_TOOLCHAIN=1.98` follows the patch channel and downloaded 1.98.1 without the installed Android targets. Use the repository's exact `1.98.0` pin for external app copies too; their own default toolchain need not match Cranpose.

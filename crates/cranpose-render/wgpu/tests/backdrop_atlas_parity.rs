@@ -219,6 +219,40 @@ fn pixel_at(frame: &CapturedFrame, x: f32, y: f32) -> [u8; 4] {
     [pixels[0], pixels[1], pixels[2], pixels[3]]
 }
 
+fn split_name_probe(name: &'static str) -> RenderEffect {
+    let mut shader = RuntimeShader::new(&format!(
+        "{RUNTIME_SHADER_PRELUDE_WGSL}\n{}",
+        r#"
+override FIRST: i32 = 0;
+override SECOND: i32 = 0;
+@fragment
+fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
+    let part = max(FIRST, SECOND);
+    if (part == 1 && input.uv.x >= 0.5) || (part == 2 && input.uv.x < 0.5) {
+        discard;
+    }
+    return select(vec4<f32>(0.0, 0.0, 1.0, 1.0), vec4<f32>(1.0, 0.0, 0.0, 1.0), FIRST != 0);
+}
+"#
+    ));
+    shader.set_batched_source(true);
+    shader.set_draw_split(Some(name));
+    RenderEffect::Shader { shader }
+}
+
+#[test]
+fn split_override_names_select_distinct_compiled_pipelines() {
+    let mut renderer = support::headless_renderer().expect("headless renderer");
+    for (name, expected) in [("FIRST", [255, 0, 0, 255]), ("SECOND", [0, 0, 255, 255])] {
+        let frame = capture(&mut renderer, glasses_page(1, || split_name_probe(name)));
+        assert_eq!(
+            pixel_at(&frame, GLASS_LEFT + GLASS_WIDTH / 2.0, GLASS_TOP + 4.0),
+            expected,
+            "the {name} override must select its own split pipelines"
+        );
+    }
+}
+
 /// A shader after a blur reads the blur's downscaled result and is told the
 /// capture size that result stands for, so its pixel-calibrated offsets
 /// keep their length; without that size it would calibrate to the

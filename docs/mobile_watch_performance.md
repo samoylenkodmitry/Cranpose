@@ -10,7 +10,8 @@ resolution, animation work and scene complexity stay fixed.
 
 `perf/mobile-watch-60fps` is in `Cranpose-mobile-watch-60fps`, separate from the
 concurrent renderer checkout. It started at `d4f38bb3`, then incorporated the
-renderer commits `ffde4bf3`, `5204280b` and `4d80a9d0`. Main is `0d195313`, already an ancestor.
+renderer commits `ffde4bf3`, `5204280b`, `4d80a9d0` and `90e14d68`. Main is
+`0d195313`, already an ancestor.
 The concurrent checkout's uncommitted files are never build inputs.
 
 App copies pin cranorbit `0334e16` and showcase `4ad4080`. Cargo overrides select
@@ -282,3 +283,24 @@ variance. This version is rejected; its source and patch remain outside the
 branch. The experiment's mixed-record test also catches stale command identity
 after appending to a fingerprinted recording. All three append lanes invalidate
 that fingerprint, with the regression proven red before the fix.
+
+## Glass split integration
+
+The committed substrate and glass split work from `90e14d68` is incorporated.
+The preceding cache-correct build measures 23.40 fps on watch Showcase and
+22.81 fps on Huawei Showcase. Threaded presentation leaves the watch at
+23.51 fps. The combined substrate build measures 19.23 fps on Huawei; the
+first watch run loses the foreground and is excluded. These figures do not
+establish a gain across both GPUs.
+
+The full combined test suite exposes one channel value differing by one at
+pixel (103, 263) in the glass specialization comparison on lavapipe. The clean
+`90e14d68` baseline repeats the same failure, while Metal passes. Removing
+the split draws on that baseline restores exact parity. This is under
+investigation with the assertion unchanged.
+
+Review also finds the compiled-pipeline key omits the split override's name.
+Two shaders with identical source and different split names consequently share
+the first pipeline. A focused probe makes the second shader render red instead
+of blue. Including the actual split name and variant in the key passes that
+regression and all twelve backdrop-atlas tests on Metal.
