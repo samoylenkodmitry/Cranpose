@@ -1004,6 +1004,122 @@ watch: branch 47.3 and 41.7 against main 50.8 and 44.3 presented fps,
 7% behind in both pairs; on the Mate both sit at the 60 Hz cap (60.0
 against 62.2 over a 40 s SurfaceFlinger window).
 
+## The watch charges per tap (2026-09-05, evening)
+
+Read for 60 fps, the watch showcase frame was attributed by shader
+ablation on the device, one build per cut, the per-pass GPU spans of the
+same four 60-frame windows compared (`passes_watch.sh`; the watch at
+37-41 C, so within ±2 ms):
+
+| build                                            | Layer Pass, ms | span, ms |
+| ------------------------------------------------ | -------------- | -------- |
+| baseline (4d80a9d0)                              | 27.5-30.9      | 32-36    |
+| glass: adaptive frost off (9 taps and their tone)| 18.2-20.5      | 22-27    |
+| glass: dispersion off (2 taps)                   | 29.2-31.0      | 34-36    |
+| glass: 19 plain taps, no arithmetic              | 30.6-33.4      | 36-39    |
+| glass: 19 plain taps within two pixels           | 28.6-31.7      | 32-38    |
+| gradient blur: one tap instead of 37             | 22.8-25.5      | 27-30    |
+
+Nineteen plain taps cost what the whole material costs, taps two pixels
+apart cost what taps thirty apart do, and each tap removed from the
+program takes about a millisecond off the frame over the 0.3 MP the
+glass shades: this GPU charges the texture unit per fetch, ~3.5 ns a
+fetch-pixel, its cache does not enter, and the arithmetic hides under
+the fetches. The frame is therefore a tap count: the liquid glass at 19
+taps a pixel (three rays, five reflection, nine adaptive frost, one
+resting, one plain), the header's gradient blur at 37 over a quarter of
+the screen, and the page under them at ~7 ms. An exact interior guard
+(`GLASS_INTERIOR_GUARD`, an override every material raises: deeper
+inside the shape than the widest rim band every rim term carries a zero
+weight, so the fragment skips the two extra SDF evaluations and the
+reflection's five taps and lands on the same bits, which
+`glass_specialization_parity` holds byte for byte) moved the device
+number by nothing: the branch is flattened and its fetches issued
+anyway. What this GPU rewards is taps removed from the program.
+
+**Substrates.** A batched shader now declares up to three low-frequency
+copies of its capture (`RuntimeShader::set_substrates`,
+`SubstrateSpec::Average { block }` or `Blur { radius_px }`), and the
+stage packs them beside the capture: a slot per substrate in the result
+texture, rendered by the stage's existing passes (an average by the
+downsample pass, a blur as one more region of the pass pair, at its
+scratch size), and for a shader that reads the atlas copied back into a
+slot of the atlas, so every shader keeps one texture binding and reads
+each substrate through a reserved region slot (224..236), held to its
+texel centres like the source. A shader after a blur reads the result
+texture and finds its substrates there without a copy. The adaptive
+frost declares one blur at its neighbourhood radius (16 dp at the
+effect's density) and reads it once where it walked nine points; the
+gradient blur declares three blurs, the wide radius halving twice, and
+realises each fragment's radius as the blend of the two levels around it
+(the sharp source below the quarter level), two taps where it walked a
+37-tap disc. The frost fold: the resting tap was the plain tap at the
+same coordinate and is now one fetch.
+
+Tests, each proven red first by leaving the substrates out of the atlas:
+`backdrop_atlas_parity` probes an averaged substrate against the CPU
+block mean (within 2 levels); `substrate_reference` probes a blurred
+substrate against the CPU kernel at the substrate's own scratch scale
+(11 measured inside, 32 at the edge whose blocks hold to the region;
+budgets 14 and 36; 140 and more without the copy), holds the gradient
+blur's wide row to the wide kernel (3.3, budget 7), its bottom row to
+the page exactly, and the rows midway between levels to the kernel at
+their radius within 14 on a page of four-pixel stripes (4.4, 9.6 and
+4.4 measured; two levels four times apart in radius, the first draft,
+landed 44 away); `glass_specialization_parity` counts the card's
+substrate and holds the guard and the split byte-exact against the
+single general draw. The robot examples for the adaptive frost and the
+gradient blurs pass unchanged.
+
+The watch after the substrates, showcase scroll: Layer Pass 16.5-18.2 ms
+(from 27.5-30.9), the blur pass pair 3.1 + 3.1 ms at 3 a frame (from
+1 + 1: the header's three levels and the frost's neighbourhood ride it),
+frame 25.4-27.7 ms (from 32-36), presented 36-38.5 fps (from 28-29),
+the picture unchanged. Cranorbit does not touch any of this.
+
+**The interior guard, then the split.** The reflection's five taps are
+rim-only; an exact interior guard (`GLASS_INTERIOR_GUARD`: the rim's
+reach from the meniscus, border, rim and fold bands plus a pixel, the
+five taps inside `if (in_rim)`) moved nothing on the watch: the driver
+flattens the branch and issues the fetches either way. Only taps absent
+from the compiled program pay, so the material declares a draw split
+(`RuntimeShader::set_draw_split`, the `GLASS_RIM_DRAW` override) and the
+stage draws it twice from two pipelines of the same specialization,
+interior (1) and rim (2), each discarding the other's fragments before
+its first fetch (`ShaderDrawVariant` in the pipeline key; the parity
+test holds the pair byte-identical to the single draw). Layer Pass
+15.0-15.9 ms, frame 24-25.
+
+**The substrate's scratch scale.** A substrate blur ran at the source's
+scale, so the frost's 16 dp neighbourhood cost the full-size pass pair
+twice a frame. `substrate_scratch_size` blurs at the source's scale below a radius of
+3 px, at half below 8 and at a quarter beyond, the kernel scaled with it
+(the reference test measures at that scale). Blur pass pair 2.37 + 2.37 ms
+(from 3.1 + 3.1), Layer Pass 14.8-15.6, frame 21.9-23.1 ms, presented
+39.5-43.8 fps; the top-of-list screenshot differs from the baseline by
+a mean of 0.3 levels.
+
+**Where the frame stands.** The GPU frame of ~22 ms is the glass at ~4
+taps a pixel inside and ~9 on the rim (~6-7 ms over 0.3 MP), the page
+(~7), the blur pairs (~5.5), copies and captures (~2). The CPU chain, on
+one thread on the watch (`update` 3.9 ms then `render` 16.7, of which
+the encode 6-13, `finish` 5, `submit` 3.5), is ~20.5 ms and is the floor
+once the GPU drops below it. Profiled (`simpleperf`, the scratch
+showcase declared profileable): 41% in cranpose, 32% in libc (jemalloc,
+memcpy, memset), 23% in the Adreno driver; the allocator's callers are
+the composer's group slots and frames, the frame executor, `ShadowDraw`
+drops, offscreen creation on the frames whose sizes change, and the
+driver's own framebuffers and command buffers, one per pass, 14-22
+passes a frame with 23-45 `write_buffer` calls.
+
+**Next, in order.** The blur pass count: the block-2 downsample folds
+into the horizontal pass (each tap a fetch at a texel corner, the block
+average exactly), one pass fewer per stage (~-1.5 ms CPU, -0.5 GPU). The
+uploads: one staging write per allocator per frame instead of one per
+upload (23-45 to ~8). Transient textures whose size moves with the press
+animation pooled by rounded size. Then the CPU chain is measured again
+and the plan retained across frames where the profile says the plan is.
+
 ## Order
 
 Every step ships with its contract proven red first, the robot suite

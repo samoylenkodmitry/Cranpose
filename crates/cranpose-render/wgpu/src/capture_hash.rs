@@ -289,6 +289,7 @@ fn hash_composite_kind<H: Hasher>(
             layer_pixel_rect,
             source_region,
             source_logical_size,
+            substrate_regions,
             rounded_mask,
             alpha,
         } => {
@@ -296,6 +297,9 @@ fn hash_composite_kind<H: Hasher>(
             shader.render_hash().hash(state);
             hash_radii(*layer_pixel_rect, state);
             hash_optional_tuple(*source_region, SOURCE_SPACE, state);
+            for region in substrate_regions {
+                hash_optional_tuple(*region, SOURCE_SPACE, state);
+            }
             source_logical_size.is_some().hash(state);
             if let Some((width, height)) = source_logical_size {
                 hash_f32_for_cache(*width, state);

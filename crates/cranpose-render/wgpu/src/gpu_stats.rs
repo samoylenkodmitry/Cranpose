@@ -81,6 +81,9 @@ pub struct FrameStatsSnapshot {
     pub shadow_fully_occluded_composites: u32,
     pub shadow_text_blur_fallbacks: u32,
     pub blur_passes: u32,
+    /// Captures averaged into a quarter-size substrate for a shader's wide
+    /// taps.
+    pub substrates: u32,
     /// Passes that draw at least one resolved composite: a final pass holding
     /// twelve glass tails counts once, a composite resolved into its own
     /// texture counts its own pass.
@@ -217,7 +220,7 @@ impl FrameStatsSnapshot {
              isolated_layers={} area={:.2}MP top={} | \
              layer_cache: hit={} miss={} {:.1}% hit_px={:.2}MP miss_px={:.2}MP size={}({:.1}MB) hit_by_kind={} miss_px_by_kind={} | \
              shadow_cache: shape_hit={} shape_miss={} hit_px={:.2}MP miss_px={:.2}MP text_blur_fallback={} | \
-             blur={} composite={} effect={} shader_px={:.2}MP | shape={} shape_fill_px={:.2}MP{} shape_verts={} image={} text={} draws={} | \
+             blur={} substrate={} composite={} effect={} shader_px={:.2}MP | shape={} shape_fill_px={:.2}MP{} shape_verts={} image={} text={} draws={} | \
              text_img_cache: hit={} miss={} hit_px={:.2}MP miss_px={:.2}MP raster={:.2}MB | \
              text_glyph_atlas: hit={} miss={} miss_px={:.2}MP | \
              caches: text_pool={} img={} txt={}",
@@ -253,6 +256,7 @@ impl FrameStatsSnapshot {
             shadow_cache_miss_mpx,
             self.shadow_text_blur_fallbacks,
             self.blur_passes,
+            self.substrates,
             self.composite_passes,
             self.effect_applies,
             self.shader_pixels as f64 / 1_000_000.0,
@@ -323,6 +327,7 @@ pub(crate) struct FrameStats {
     pub shadow_fully_occluded_composites: Cell<u32>,
     pub shadow_text_blur_fallbacks: Cell<u32>,
     pub blur_passes: Cell<u32>,
+    pub substrates: Cell<u32>,
     pub composite_passes: Cell<u32>,
     pub effect_applies: Cell<u32>,
     pub shader_pixels: Cell<u64>,
@@ -680,6 +685,7 @@ impl FrameStats {
             shadow_fully_occluded_composites: self.shadow_fully_occluded_composites.get(),
             shadow_text_blur_fallbacks: self.shadow_text_blur_fallbacks.get(),
             blur_passes: self.blur_passes.get(),
+            substrates: self.substrates.get(),
             composite_passes: self.composite_passes.get(),
             effect_applies: self.effect_applies.get(),
             shader_pixels: self.shader_pixels.get(),
@@ -744,6 +750,7 @@ impl FrameStats {
         self.shadow_fully_occluded_composites.set(0);
         self.shadow_text_blur_fallbacks.set(0);
         self.blur_passes.set(0);
+        self.substrates.set(0);
         self.composite_passes.set(0);
         self.effect_applies.set(0);
         self.shader_pixels.set(0);

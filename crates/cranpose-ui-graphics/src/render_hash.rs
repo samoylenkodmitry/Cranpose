@@ -243,6 +243,7 @@ fn hash_runtime_shader<H: Hasher>(shader: &RuntimeShader, state: &mut H) {
     shader.overrides_hash().hash(state);
     hash_f32_bits(shader.input_padding(), state);
     hash_f32_bits(shader.output_padding(), state);
+    shader.hash_substrates(state);
     shader.uniforms().len().hash(state);
     for uniform in shader.uniforms() {
         hash_f32_bits(*uniform, state);

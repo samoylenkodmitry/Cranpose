@@ -7,14 +7,14 @@ use std::{cell::Cell, rc::Rc};
 
 use cranpose_ui::{Modifier, current_density};
 use cranpose_ui_graphics::{
-    Color, GLASS_ACTIVITY_UNIFORM, GLASS_BLUR_RADIUS_UNIFORM, GLASS_DISPERSION_UNIFORM,
-    GLASS_EFFECT_DENSITY_UNIFORM, GLASS_FOLD_DEPTH_UNIFORM, GLASS_LIGHT_DIRECTION_UNIFORM,
-    GLASS_MENISCUS_ABSORPTION_UNIFORM, GLASS_OPTICAL_ZOOM_ANCHOR_UNIFORM,
-    GLASS_OPTICAL_ZOOM_UNIFORM, GLASS_PHYSICAL_REFRACTION_DEPTH_ENABLED_UNIFORM,
-    GLASS_PHYSICAL_REFRACTION_DEPTH_UNIFORM, GLASS_REFRACTION_CURVE_UNIFORM,
-    GLASS_RESTING_TINT_UNIFORM, GLASS_TRANSMISSION_REFRACTION_UNIFORM, GraphicsLayer,
-    LIQUID_GLASS_WGSL, LayerShape, RenderEffect, RoundedCornerShape, RuntimeShader, TileMode,
-    liquid_glass_runtime_effect,
+    Color, GLASS_ACTIVITY_UNIFORM, GLASS_ADAPTIVE_FROST_UNIFORM, GLASS_BLUR_RADIUS_UNIFORM,
+    GLASS_DISPERSION_UNIFORM, GLASS_EFFECT_DENSITY_UNIFORM, GLASS_FOLD_DEPTH_UNIFORM,
+    GLASS_LIGHT_DIRECTION_UNIFORM, GLASS_MENISCUS_ABSORPTION_UNIFORM,
+    GLASS_OPTICAL_ZOOM_ANCHOR_UNIFORM, GLASS_OPTICAL_ZOOM_UNIFORM,
+    GLASS_PHYSICAL_REFRACTION_DEPTH_ENABLED_UNIFORM, GLASS_PHYSICAL_REFRACTION_DEPTH_UNIFORM,
+    GLASS_REFRACTION_CURVE_UNIFORM, GLASS_RESTING_TINT_UNIFORM,
+    GLASS_TRANSMISSION_REFRACTION_UNIFORM, GraphicsLayer, LIQUID_GLASS_WGSL, LayerShape,
+    RenderEffect, RoundedCornerShape, RuntimeShader, TileMode, liquid_glass_runtime_effect,
 };
 
 use crate::theme::LiquidColors;
@@ -856,7 +856,7 @@ impl ResolvedGlass {
             resting_tint.a(),
         );
         shader.set_float(112, if content_mask { 1.0 } else { 0.0 });
-        shader.set_float(91, self.adaptive_frost * activity);
+        shader.set_float(GLASS_ADAPTIVE_FROST_UNIFORM, self.adaptive_frost * activity);
         shader.set_float(97, self.foreground_luma);
         let dynamic_shadow = !self.clip && self.shadow;
         shader.set_float(

@@ -6,7 +6,7 @@
 //! The wcKSRD optical program samples both sharp and blurred rays from one
 //! captured backdrop so displacement never reveals a second scene layer.
 
-use crate::{Color, RenderEffect, RuntimeShader};
+use crate::{Color, RenderEffect, RuntimeShader, SubstrateSpec};
 
 /// One pipeline-overridable flag of `liquid_glass.wgsl` and the uniform
 /// slots it folds away.
@@ -15,7 +15,10 @@ use crate::{Color, RenderEffect, RuntimeShader};
 /// replaces that uniform read with the feature's inactive value, which is
 /// the value the uniform holds when `inactive` reports true, so the
 /// specialized pipeline computes exactly what the general one did and the
-/// compiler removes the dead feature. See [`specialize_liquid_glass`].
+/// compiler removes the dead feature. A flag with no slots is an
+/// optimization the reference pipeline leaves off and every material
+/// raises: it skips only work whose result is exactly zero. See
+/// [`specialize_liquid_glass`].
 #[derive(Clone, Copy, Debug)]
 pub struct LiquidGlassSpecialization {
     /// The `override NAME: bool` declared by the shader.
@@ -124,20 +127,27 @@ pub const LIQUID_GLASS_SPECIALIZATIONS: &[LiquidGlassSpecialization] = &[
     },
     LiquidGlassSpecialization {
         flag: "GLASS_ADAPTIVE_FROST_OFF",
-        slots: &[91],
-        inactive: |u| slot(u, 91) <= 0.0,
+        slots: &[GLASS_ADAPTIVE_FROST_UNIFORM],
+        inactive: |u| slot(u, GLASS_ADAPTIVE_FROST_UNIFORM) <= 0.0,
     },
     LiquidGlassSpecialization {
         flag: "GLASS_INK_OFF",
         slots: &[127],
         inactive: |u| slot(u, 127) <= 0.0,
     },
+    LiquidGlassSpecialization {
+        flag: "GLASS_INTERIOR_GUARD",
+        slots: &[],
+        inactive: |_| true,
+    },
 ];
 
 /// Raises every specialization flag whose feature the shader's uniforms
 /// leave inactive, so the pipeline compiled for this material carries only
 /// the features it uses. Byte-exact: a raised flag substitutes the value the
-/// uniform already holds.
+/// uniform already holds, and the interior guard skips only terms whose
+/// weight is zero. An active adaptive frost declares the blurred substrate
+/// its neighbourhood reads.
 pub fn specialize_liquid_glass(shader: &mut RuntimeShader) {
     let uniforms: Vec<f32> = shader.uniforms().to_vec();
     for specialization in LIQUID_GLASS_SPECIALIZATIONS {
@@ -145,7 +155,27 @@ pub fn specialize_liquid_glass(shader: &mut RuntimeShader) {
             shader.set_override(specialization.flag, 1.0);
         }
     }
+    shader.set_draw_split(Some(GLASS_RIM_DRAW_OVERRIDE));
+    let substrates = if slot(&uniforms, GLASS_ADAPTIVE_FROST_UNIFORM) > 0.0 {
+        vec![SubstrateSpec::Blur {
+            radius_px: GLASS_ADAPTIVE_NEIGHBOURHOOD_DP
+                * slot(&uniforms, GLASS_EFFECT_DENSITY_UNIFORM).max(1.0),
+        }]
+    } else {
+        Vec::new()
+    };
+    shader.set_substrates(substrates);
 }
+
+/// The `override NAME: i32` of `liquid_glass.wgsl` the renderer sets to
+/// draw the glass as its interior and its rim, each without the other's
+/// fetches.
+pub const GLASS_RIM_DRAW_OVERRIDE: &str = "GLASS_RIM_DRAW";
+
+/// The reach of the adaptive frost's neighbourhood in dp: the renderer
+/// blurs the capture by this radius at the effect's density and the shader
+/// reads that substrate once where it sampled nine points this far apart.
+pub const GLASS_ADAPTIVE_NEIGHBOURHOOD_DP: f32 = 16.0;
 
 /// Wraps a fully configured `liquid_glass.wgsl` shader as a render effect,
 /// specialized to the features its uniforms enable.
@@ -155,6 +185,9 @@ pub fn liquid_glass_runtime_effect(mut shader: RuntimeShader) -> RenderEffect {
     RenderEffect::runtime_shader(shader)
 }
 
+/// Uniform slot containing the adaptive frost strength; its neighbourhood
+/// reads the substrate the renderer packs beside the source.
+pub const GLASS_ADAPTIVE_FROST_UNIFORM: usize = 91;
 /// Uniform slot containing wcKSRD-owned backdrop blur reach in physical pixels.
 pub const GLASS_BLUR_RADIUS_UNIFORM: usize = 93;
 /// Uniform slot containing the normalized wcKSRD ray-return exponent.
@@ -548,7 +581,7 @@ mod tests {
                 }
             }
             assert!(
-                guarded_reads > 0,
+                guarded_reads > 0 || specialization.slots.is_empty(),
                 "`{}` guards no uniform read; the flag would fold nothing",
                 specialization.flag
             );
@@ -556,6 +589,7 @@ mod tests {
         let declared: Vec<&str> = LIQUID_GLASS_WGSL
             .lines()
             .filter_map(|line| line.strip_prefix("override "))
+            .filter(|rest| rest.contains(": bool"))
             .filter_map(|rest| rest.split(':').next())
             .collect();
         for flag in &declared {

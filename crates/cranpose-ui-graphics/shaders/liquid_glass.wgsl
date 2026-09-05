@@ -80,6 +80,21 @@ fn get_vec4(index: u32) -> vec4<f32> {
     return vec4<f32>(get_float(index), get_float(index + 1u), get_float(index + 2u), get_float(index + 3u));
 }
 
+// Renderer-reserved slots 232..236: the first substrate region, the source
+// blurred by the adaptive frost's neighbourhood radius and packed in the
+// same texture at the blur's scratch size; zero when the renderer packed
+// none. Read through its own map, held to its texel centers.
+fn substrate_map() -> RegionMap {
+    let region = get_vec4(232u);
+    let dims = max(vec2<f32>(textureDimensions(input_texture)), vec2<f32>(1.0));
+    return RegionMap(region.xy / dims, region.zw / dims, 0.5 / max(region.zw, vec2<f32>(1.0)));
+}
+
+fn has_substrate() -> bool {
+    let region = get_vec4(232u);
+    return region.z > 0.5 && region.w > 0.5;
+}
+
 // Material specialization. Every optional feature of this program is gated
 // by a uniform, and on a tiler the gates that are OFF still cost: their
 // dead branches hold registers and their uniforms are fetched per fragment.
@@ -109,6 +124,18 @@ override GLASS_FULL_TRANSMISSION: bool = false;
 override GLASS_DISPERSION_OFF: bool = false;
 override GLASS_ADAPTIVE_FROST_OFF: bool = false;
 override GLASS_INK_OFF: bool = false;
+// The interior guard: every rim term (meniscus, bevel, border line,
+// specular, the opposite-wall reflection) is a product with a band weight
+// that is exactly zero deeper inside the shape than `rim_reach`, so a
+// fragment there skips the gradient's two extra SDF evaluations and the
+// reflection's five taps and lands on the same bits. Off, the reference
+// evaluates everything everywhere; the renderer raises it with the other
+// specializations, and the parity test holds the two byte-identical.
+override GLASS_INTERIOR_GUARD: bool = false;
+// The renderer draws the glass twice when it can, 1 for the interior and
+// 2 for the rim, each pipeline compiled without the other's work and
+// discarding the other's fragments before any fetch; 0 draws it whole.
+override GLASS_RIM_DRAW: i32 = 0;
 
 fn fixed_or(value: f32, fixed: f32, is_fixed: bool) -> f32 {
     return select(value, fixed, is_fixed);
@@ -314,6 +341,9 @@ fn sample_wcksrd_path(
     return accumulated / 25.0;
 }
 
+// The low-frequency neighbourhood: one tap of the substrate the renderer
+// blurred by the neighbourhood radius, or, without one, nine taps of the
+// source a radius apart.
 fn sample_adaptive_neighborhood(
     map: RegionMap,
     uv: vec2<f32>,
@@ -326,6 +356,9 @@ fn sample_adaptive_neighborhood(
         vec2<f32>(0.0),
         vec2<f32>(1.0),
     );
+    if (has_substrate()) {
+        return textureSampleLevel(input_texture, input_sampler, map_uv(substrate_map(), center_uv), 0.0);
+    }
     var accumulated = vec4<f32>(0.0);
     for (var x = -1; x <= 1; x = x + 1) {
         for (var y = -1; y <= 1; y = y + 1) {
@@ -767,6 +800,23 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
         ),
         0.001,
     );
+    // How far inside the edge any rim term still has weight: the meniscus
+    // bands and their ramp, the border line, the surface rim, and the fold
+    // band, each as wide as the code below makes it, plus a pixel.
+    let guard_ramp = floored_band_width(lens_refraction * 0.25);
+    let guard_border_ramp = max(lens_refraction / max(mix(16.0, 8.0, clamp(get_float(28u), 0.0, 1.0)), 1.0), MIN_LINE_WIDTH_PX);
+    let guard_fold = fixed_or(get_float(88u), 0.0, GLASS_FOLD_OFF) * optical_scale;
+    let rim_reach = max(
+        max(1.5 * gradient_extent + guard_ramp, floored_band_width(gradient_extent)),
+        max(max(edge_extent, MIN_LINE_WIDTH_PX) + guard_border_ramp, guard_fold),
+    ) + 1.0;
+    if (GLASS_RIM_DRAW == 1 && d >= -rim_reach) {
+        discard;
+    }
+    if (GLASS_RIM_DRAW == 2 && d < -rim_reach) {
+        discard;
+    }
+    let in_rim = GLASS_RIM_DRAW == 2 || (GLASS_RIM_DRAW != 1 && (!GLASS_INTERIOR_GUARD || d >= -rim_reach));
     let rounded_box = clamp(-d / lens_refraction, 0.0, 1.0);
     // Coverage AA rides the material's refraction band (wcKSRD's rb1·32).
     // A DRAINED lens (material activity 0) is a soft tint pool, not
@@ -804,8 +854,8 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
     // tint-only resting output reads as an opaque plank — stars behind a
     // resting bar simply vanished instead of glowing through the frost.
     let resting_weight = (1.0 - material_activity) * coverage;
-    let frost_sample = textureSample(input_texture, input_sampler, map_uv(map, input.uv));
-    let resting_frost = frost_sample * (1.0 - resting_tint.a)
+    let plain_path = textureSampleLevel(input_texture, input_sampler, map_uv(map, uv), 0.0);
+    let resting_frost = plain_path * (1.0 - resting_tint.a)
         + vec4<f32>(resting_tint.rgb * resting_tint.a, resting_tint.a);
     let resting_output = resting_frost * resting_weight;
     if material_activity <= 0.0 {
@@ -829,21 +879,25 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
         return vec4<f32>(0.0, 0.0, 0.0, shadow_alpha);
     }
 
-    // Outward SDF normal (gradient) — the lens axis at this fragment.
-    let eps = 0.5;
-    let d_dx = scene_sdf(
-        coord + vec2<f32>(eps, 0.0), p + vec2<f32>(eps, 0.0), half_size, corner_radius,
-        shape_count, dp_scale, s, glue, wobble_amp, wobble_phase, bulge_amp, bulge_dir,
-        strain_axis, strain_along, strain_across,
-    );
-    let d_dy = scene_sdf(
-        coord + vec2<f32>(0.0, eps), p + vec2<f32>(0.0, eps), half_size, corner_radius,
-        shape_count, dp_scale, s, glue, wobble_amp, wobble_phase, bulge_amp, bulge_dir,
-        strain_axis, strain_along, strain_across,
-    );
-    let grad = vec2<f32>(d_dx - d, d_dy - d) / eps;
-    let grad_len = length(grad);
-    let outward_normal = select(vec2<f32>(0.0), grad / grad_len, grad_len > 0.001);
+    // Outward SDF normal (gradient) — the lens axis at this fragment. Deep in
+    // the interior every term it feeds carries a zero band weight.
+    var outward_normal = vec2<f32>(0.0);
+    if (in_rim) {
+        let eps = 0.5;
+        let d_dx = scene_sdf(
+            coord + vec2<f32>(eps, 0.0), p + vec2<f32>(eps, 0.0), half_size, corner_radius,
+            shape_count, dp_scale, s, glue, wobble_amp, wobble_phase, bulge_amp, bulge_dir,
+            strain_axis, strain_along, strain_across,
+        );
+        let d_dy = scene_sdf(
+            coord + vec2<f32>(0.0, eps), p + vec2<f32>(0.0, eps), half_size, corner_radius,
+            shape_count, dp_scale, s, glue, wobble_amp, wobble_phase, bulge_amp, bulge_dir,
+            strain_axis, strain_along, strain_across,
+        );
+        let grad = vec2<f32>(d_dx - d, d_dy - d) / eps;
+        let grad_len = length(grad);
+        outward_normal = select(vec2<f32>(0.0), grad / grad_len, grad_len > 0.001);
+    }
 
     // Refraction uses the wcKSRD source mapping. Loupe focus/magnification
     // are applied to that one path rather than selecting another optical
@@ -991,7 +1045,6 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
         wcksrd_blur_radius,
         loupe_mode > 0.5,
     );
-    let plain_path = textureSampleLevel(input_texture, input_sampler, map_uv(map, uv), 0.0);
     var rgb = transmitted_path.rgb;
     if dispersion_strength > 0.0 {
         // Chromatic transmission as ONE continuous ray model: each channel
@@ -1132,28 +1185,31 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
     // The meniscus returns the ray from the opposite wall of the same glass
     // body. This is the mirrored image visible along the target's long edges;
     // its weight is the wcKSRD gradient band, not a painted bevel mask.
-    let reflection_displacement = opposite_side_reflection_displacement(
-        p,
-        outward_normal,
-        half_size,
-        corner_radius,
-    );
-    let reflection_tangent = vec2<f32>(-outward_normal.y, outward_normal.x);
-    let reflection_path = sample_wcksrd_reflection_path(
-        map,
-        uv,
-        tex_size,
-        reflection_displacement,
-        reflection_tangent,
-        gradient_extent * 1.5,
-    );
-    let reflection_path_length = length(reflection_displacement);
-    let internal_reflection_extinction =
-        0.097 * pow(1.0 - lens_edge_incidence, 2.0);
-    let internal_reflection_transmittance = exp(
-        -reflection_path_length / max(inradius, 1.0) * internal_reflection_extinction,
-    );
-    let reflection_rgb = reflection_path.rgb * internal_reflection_transmittance;
+    var reflection_rgb = vec3<f32>(0.0);
+    if (in_rim) {
+        let reflection_displacement = opposite_side_reflection_displacement(
+            p,
+            outward_normal,
+            half_size,
+            corner_radius,
+        );
+        let reflection_tangent = vec2<f32>(-outward_normal.y, outward_normal.x);
+        let reflection_path = sample_wcksrd_reflection_path(
+            map,
+            uv,
+            tex_size,
+            reflection_displacement,
+            reflection_tangent,
+            gradient_extent * 1.5,
+        );
+        let reflection_path_length = length(reflection_displacement);
+        let internal_reflection_extinction =
+            0.097 * pow(1.0 - lens_edge_incidence, 2.0);
+        let internal_reflection_transmittance = exp(
+            -reflection_path_length / max(inradius, 1.0) * internal_reflection_extinction,
+        );
+        reflection_rgb = reflection_path.rgb * internal_reflection_transmittance;
+    }
     // The opposite-wall return belongs to an interactive lens. Applying it
     // to a regular surface duplicates the rim as a darker band inside it.
     let long_edge_return = 0.40 + 0.60 * pow(abs(outward_normal.y), 1.5);

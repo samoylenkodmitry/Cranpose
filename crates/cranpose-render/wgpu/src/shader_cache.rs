@@ -18,13 +18,35 @@ impl RuntimeShaderPipelineMode {
     }
 }
 
-fn shader_specialization_enabled() -> bool {
+pub(crate) fn shader_specialization_enabled() -> bool {
     crate::debug_toggles::debug_toggle("CRANPOSE_NO_SHADER_SPECIALIZATION").as_deref() != Some("1")
 }
 
+/// Which of a shader's draws a pipeline serves: the one draw, or the
+/// interior and the rim of a shader that declared a draw split, each
+/// compiled with the split override set to its number.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum ShaderDrawVariant {
+    Whole,
+    Interior,
+    Rim,
+}
+
+impl ShaderDrawVariant {
+    fn constant(self) -> Option<f64> {
+        match self {
+            Self::Whole => None,
+            Self::Interior => Some(1.0),
+            Self::Rim => Some(2.0),
+        }
+    }
+}
+
+type PipelineKey = (u64, u64, RuntimeShaderPipelineMode, ShaderDrawVariant);
+
 pub(crate) struct ShaderPipelineCache {
     backend: wgpu::Backend,
-    cache: HashMap<(u64, u64, RuntimeShaderPipelineMode), wgpu::RenderPipeline>,
+    cache: HashMap<PipelineKey, wgpu::RenderPipeline>,
     disabled: HashSet<u64>,
     pipeline_cache: Option<wgpu::PipelineCache>,
 }
@@ -48,19 +70,23 @@ impl ShaderPipelineCache {
         texture_bind_group_layout: &wgpu::BindGroupLayout,
         uniform_bind_group_layout: &wgpu::BindGroupLayout,
         mode: RuntimeShaderPipelineMode,
+        variant: ShaderDrawVariant,
     ) -> Option<&wgpu::RenderPipeline> {
         let source_hash = shader.source_hash();
-        let constants: &[(&str, f64)] = if shader_specialization_enabled() {
-            shader.overrides()
+        let mut constants: Vec<(&str, f64)> = if shader_specialization_enabled() {
+            shader.overrides().to_vec()
         } else {
-            &[]
+            Vec::new()
         };
         let overrides_hash = if constants.is_empty() {
             0
         } else {
             shader.overrides_hash()
         };
-        let cache_key = (source_hash, overrides_hash, mode);
+        if let (Some(name), Some(value)) = (shader.draw_split(), variant.constant()) {
+            constants.push((name, value));
+        }
+        let cache_key = (source_hash, overrides_hash, mode, variant);
         if self.disabled.contains(&source_hash) {
             return None;
         }
@@ -87,12 +113,12 @@ impl ShaderPipelineCache {
             crate::render::create_fullscreen_strip_pipeline(
                 device,
                 self.pipeline_cache.as_ref(),
-                &format!("runtime-shader mode={mode:?}"),
+                &format!("runtime-shader mode={mode:?} variant={variant:?}"),
                 "RuntimeShader Effect Pipeline",
                 &pipeline_layout,
                 &shader_module,
                 "effect_fs",
-                constants,
+                &constants,
                 wgpu::ColorTargetState {
                     format,
                     blend: Some(mode.blend_state()),

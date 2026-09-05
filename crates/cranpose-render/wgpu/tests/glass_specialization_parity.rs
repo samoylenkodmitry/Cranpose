@@ -5,7 +5,7 @@ use cranpose_core::location_key;
 use cranpose_liquid::prelude::*;
 use cranpose_macros::composable;
 use cranpose_render_common::Renderer;
-use cranpose_render_wgpu::CapturedFrame;
+use cranpose_render_wgpu::{CapturedFrame, RenderStatsSnapshot};
 use cranpose_ui::{
     Modifier,
     widgets::{Box, BoxSpec},
@@ -21,11 +21,17 @@ const FRAME_WIDTH: u32 = (VIEW_WIDTH * SCALE) as u32;
 const FRAME_HEIGHT: u32 = (VIEW_HEIGHT * SCALE) as u32;
 const TOGGLE: &str = "CRANPOSE_NO_SHADER_SPECIALIZATION";
 
+/// The showcase's card material: refracting, dispersing, adaptive frost,
+/// no blur.
 fn card_glass() -> Glass {
     Glass::regular()
         .shape(LiquidShape::RoundedRect(20.0))
         .blur_radius(0.0)
+        .refraction_depth(0.58)
+        .refraction_curve(0.62)
         .dispersion(1.0)
+        .transmission_refraction(0.72)
+        .highlight(0.72)
         .adaptive_frost(Color::WHITE, 0.42)
 }
 
@@ -92,6 +98,10 @@ fn capture_card(unspecialized: bool) -> Result<CapturedFrame, String> {
 }
 
 fn capture_card_with_current_toggles() -> Result<CapturedFrame, String> {
+    capture_card_and_stats().map(|(frame, _)| frame)
+}
+
+fn capture_card_and_stats() -> Result<(CapturedFrame, RenderStatsSnapshot), String> {
     let (_lock, mut renderer) = support::headless_renderer_parts()?;
     let app_context = cranpose_ui::AppContext::new();
     renderer.attach_app_context_services(&app_context);
@@ -116,7 +126,30 @@ fn capture_card_with_current_toggles() -> Result<CapturedFrame, String> {
         "the device recorded a validation error, so the frame is whatever the failed \
          pipeline left behind"
     );
-    Ok(frame)
+    let stats = shell
+        .renderer()
+        .last_frame_stats()
+        .ok_or_else(|| "the capture recorded no frame stats".to_string())?;
+    Ok((frame, stats))
+}
+
+/// The card's adaptive frost reads a wide neighbourhood of its capture; the
+/// renderer packs that capture averaged to a quarter of its size beside it
+/// and the material declares it wants that substrate, so the frame carries
+/// exactly one.
+#[test]
+fn a_card_glass_with_adaptive_frost_is_handed_one_substrate() {
+    let (_, stats) = match capture_card_and_stats() {
+        Ok(captured) => captured,
+        Err(err) => {
+            eprintln!("skipping substrate count: {err}");
+            return;
+        }
+    };
+    assert_eq!(
+        stats.substrates, 1,
+        "the card's capture must be averaged into one substrate: {stats:?}"
+    );
 }
 
 #[test]

@@ -11,9 +11,9 @@ use cranpose_render_wgpu::CapturedFrame;
 use cranpose_ui_graphics::{
     Color, GraphicsLayer, LayerShape, LiquidGlassRect, LiquidGlassSpec,
     RUNTIME_SHADER_PRELUDE_WGSL, Rect, RenderEffect, RoundedCornerShape, RuntimeShader,
-    liquid_glass_effect,
+    SubstrateSpec, liquid_glass_effect,
 };
-use support::{region_pixels, solid_rect};
+use support::{SubstrateProbeRead, region_pixels, solid_rect};
 
 const FRAME_WIDTH: u32 = 240;
 const FRAME_HEIGHT: u32 = 120;
@@ -34,31 +34,8 @@ fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect {
     }
 }
 
-/// A page with enough structure under every glass that a wrong sample or a
-/// neighbour's texels would change pixels: vertical stripes in three hues
-/// crossed by horizontal bands, so a blur too narrow on either axis shows.
 fn striped_page() -> Vec<RenderNode> {
-    let mut nodes = vec![solid_rect(
-        rect(0.0, 0.0, FRAME_WIDTH as f32, FRAME_HEIGHT as f32),
-        Color::from_rgb_u8(24, 28, 40),
-    )];
-    for index in 0..30 {
-        let x = index as f32 * 8.0;
-        let color = match index % 3 {
-            0 => Color::from_rgb_u8(230, 90, 60),
-            1 => Color::from_rgb_u8(70, 200, 120),
-            _ => Color::from_rgb_u8(80, 110, 240),
-        };
-        nodes.push(solid_rect(rect(x, 0.0, 4.0, FRAME_HEIGHT as f32), color));
-    }
-    for index in 0..12 {
-        let y = index as f32 * 10.0 + 3.0;
-        nodes.push(solid_rect(
-            rect(0.0, y, FRAME_WIDTH as f32, 3.0),
-            Color::from_rgb_u8(245, 225, 90),
-        ));
-    }
-    nodes
+    support::striped_page(FRAME_WIDTH, FRAME_HEIGHT)
 }
 
 fn glass_shader() -> RenderEffect {
@@ -269,6 +246,66 @@ fn a_shader_after_a_blur_is_told_the_size_its_downscaled_source_stands_for() {
         ],
         "the probe paints the logical size and its region's height: {probe:?}"
     );
+}
+
+/// The mean of the page's 4 x 4 block of pixels at `block` of the first
+/// glass's capture, per channel.
+fn block_mean(page: &CapturedFrame, block: (usize, usize)) -> [f32; 3] {
+    let pixels = region_pixels(
+        page,
+        rect(
+            GLASS_LEFT + 4.0 * block.0 as f32,
+            GLASS_TOP + 4.0 * block.1 as f32,
+            4.0,
+            4.0,
+        ),
+    );
+    let mut mean = [0.0f32; 3];
+    for pixel in pixels.chunks(4) {
+        for (channel, value) in pixel.iter().take(3).enumerate() {
+            mean[channel] += f32::from(*value) / 16.0;
+        }
+    }
+    mean
+}
+
+/// The substrate a batched shader is handed is its capture at a quarter of
+/// its resolution, every texel the mean of a 4 x 4 block, packed in the
+/// same texture: the probe paints each pixel's block mean, read from the
+/// page the glass captures, within the rounding of the average and its
+/// texel.
+#[test]
+fn a_shader_reads_its_capture_averaged_into_blocks_of_four_through_the_substrate_slot() {
+    let mut renderer = match support::headless_renderer() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!("skipping substrate probe: {err}");
+            return;
+        }
+    };
+    let page = capture(&mut renderer, glasses_page(0, glass_shader));
+    let frame = capture(
+        &mut renderer,
+        glasses_page(1, || {
+            support::substrate_probe(
+                SubstrateSpec::Average { block: 4 },
+                SubstrateProbeRead::BlockTexel,
+            )
+        }),
+    );
+    for y in 2..12 {
+        for x in 14..(GLASS_WIDTH as usize - 14) {
+            let actual = pixel_at(&frame, GLASS_LEFT + x as f32, GLASS_TOP + y as f32);
+            let expected = block_mean(&page, (x / 4, y / 4));
+            for channel in 0..3 {
+                let delta = (f32::from(actual[channel]) - expected[channel]).abs();
+                assert!(
+                    delta <= 2.0,
+                    "the probe at ({x}, {y}) paints {actual:?}, its block averages {expected:?}"
+                );
+            }
+        }
+    }
 }
 
 /// A blurred glass reads its blur downscaled, and its rounded mask is

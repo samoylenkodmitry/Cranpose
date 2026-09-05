@@ -6,7 +6,7 @@ use crate::{
     effect_renderer::{
         CompositeBatchItem, CompositeSampleMode, PreparedCompositeDraw,
         PreparedProjectiveComposite, PreparedShaderDraw, ProjectiveCompositeItem,
-        RoundedCompositeMask, ShaderCompositeBatchItem,
+        RoundedCompositeMask, ShaderCompositeBatchItem, SubstrateRegions,
     },
     frame_graph::FrameCommandRecorder,
     offscreen::OffscreenTarget,
@@ -93,6 +93,7 @@ pub(crate) enum ResolvedCompositeKind {
         layer_pixel_rect: [f32; 4],
         source_region: Option<(f32, f32, f32, f32)>,
         source_logical_size: Option<(f32, f32)>,
+        substrate_regions: SubstrateRegions,
         rounded_mask: Option<RoundedCompositeMask>,
         alpha: f32,
     },
@@ -857,6 +858,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                 layer_pixel_rect,
                 source_region,
                 source_logical_size,
+                substrate_regions,
                 rounded_mask,
                 alpha,
             } => {
@@ -866,6 +868,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                     layer_pixel_rect: *layer_pixel_rect,
                     source_region: *source_region,
                     source_logical_size: *source_logical_size,
+                    substrate_regions: *substrate_regions,
                     rounded_mask: mask_in_target(*rounded_mask, offset),
                     alpha: *alpha,
                     scissor,

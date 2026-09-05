@@ -10,7 +10,8 @@ use cranpose_render_common::{
     raster_cache::{LayerRasterCacheKey, ScaleBucket},
 };
 use cranpose_ui_graphics::{
-    BlendMode, Point, Rect, RenderEffect, RenderHash, RuntimeShader, TileMode,
+    BlendMode, MAX_SUBSTRATES, Point, Rect, RenderEffect, RenderHash, RuntimeShader, SubstrateSpec,
+    TileMode,
 };
 
 use crate::{
@@ -21,8 +22,9 @@ use crate::{
         op_draw_bounds, segment_draws_anything,
     },
     effect_renderer::{
-        BlurRegion, CompositeSampleMode, EffectScratchTargetProvider, RoundedCompositeMask,
-        blur_scratch_size,
+        AtlasSideWork, BlurRegion, CompositeSampleMode, EffectScratchTargetProvider,
+        RoundedCompositeMask, SubstrateRegion, SubstrateRegions, blur_scratch_size,
+        substrate_scratch_size,
     },
     frame_graph::{
         FrameCommandRecorder, FrameTextureDescriptor, TextureRegionCopy, copy_compatible,
@@ -374,16 +376,17 @@ struct Blocker {
 }
 
 /// One thing a flush may draw, in the order the pass draws them: at one z
-/// a composite before an op.
+/// a composite before an op. A composite is named by its index in the
+/// flush's list, so the candidates stay small enough to sort in place.
 enum Candidate {
-    Composite(ResolvedComposite),
+    Composite { z: usize, index: usize },
     Op(DrawOp),
 }
 
 impl Candidate {
     fn order(&self) -> (usize, u8) {
         match self {
-            Candidate::Composite(composite) => (composite.z_index, 0),
+            Candidate::Composite { z, .. } => (*z, 0),
             Candidate::Op(op) => (op.z_index, 1),
         }
     }
@@ -418,11 +421,17 @@ impl LayerPass<'_> {
         let scene = &self.layer.scene;
         let scale = self.scale;
         let mut candidates: Vec<Candidate> = composites
-            .into_iter()
-            .map(Candidate::Composite)
+            .iter()
+            .enumerate()
+            .map(|(index, composite)| Candidate::Composite {
+                z: composite.z_index,
+                index,
+            })
             .chain(ops.into_iter().map(Candidate::Op))
             .collect();
         candidates.sort_by_key(Candidate::order);
+        let mut composites: Vec<Option<ResolvedComposite>> =
+            composites.into_iter().map(Some).collect();
         let mut holes = self.blockers.clone();
         let mut now_ops = Vec::new();
         let mut now = Vec::new();
@@ -447,7 +456,10 @@ impl LayerPass<'_> {
                         None => now_ops.push(op),
                     }
                 }
-                Candidate::Composite(composite) => {
+                Candidate::Composite { index, .. } => {
+                    let composite = composites[index]
+                        .take()
+                        .expect("a flush releases each composite once");
                     let Some(coverage) = composite_coverage(&composite) else {
                         continue;
                     };
@@ -526,11 +538,19 @@ enum BatchedEffect<'a> {
     BlurThenShader(BlurSpec, &'a RuntimeShader),
 }
 
-impl BatchedEffect<'_> {
+impl<'a> BatchedEffect<'a> {
     fn blur(self) -> Option<BlurSpec> {
         match self {
             Self::Blur(blur) | Self::BlurThenShader(blur, _) => Some(blur),
             Self::Shader(_) => None,
+        }
+    }
+
+    /// The substrates the member's shader declared, in slot order.
+    fn substrates(self) -> &'a [SubstrateSpec] {
+        match self {
+            Self::Shader(shader) | Self::BlurThenShader(_, shader) => shader.substrates(),
+            Self::Blur(_) => &[],
         }
     }
 }
@@ -763,6 +783,7 @@ fn shader_tail_composite(
             layer_pixel_rect,
             source_region: None,
             source_logical_size: None,
+            substrate_regions: [None; MAX_SUBSTRATES],
             rounded_mask,
             alpha: child.alpha,
         },
@@ -921,6 +942,7 @@ fn unmasked_composite(composite: &ResolvedComposite) -> ResolvedComposite {
             layer_pixel_rect,
             source_region,
             source_logical_size,
+            substrate_regions,
             alpha,
             ..
         } => ResolvedCompositeKind::Shader {
@@ -928,6 +950,7 @@ fn unmasked_composite(composite: &ResolvedComposite) -> ResolvedComposite {
             layer_pixel_rect: *layer_pixel_rect,
             source_region: *source_region,
             source_logical_size: *source_logical_size,
+            substrate_regions: *substrate_regions,
             rounded_mask: None,
             alpha: *alpha,
         },
@@ -1022,7 +1045,7 @@ fn projected_child_composite(
 /// pixels, a shader reads its capture region.
 fn stage_composites(
     texture: &Rc<OffscreenTarget>,
-    blurred: Option<&BlurredRegions>,
+    side: Option<&StageSideRegions>,
     items: &[&PendingBackdrop<'_>],
     members: &[(usize, AtlasPlacement)],
 ) -> Vec<ResolvedComposite> {
@@ -1034,12 +1057,8 @@ fn stage_composites(
             let (capture_width, capture_height) = item.capture_rect.pixel_size();
             let capture_size = (capture_width as f32, capture_height as f32);
             let (source, region, logical_size) =
-                match blurred.and_then(|blurred| blurred.slot(member)) {
-                    Some((blurred, (x, y, width, height))) => (
-                        blurred,
-                        (x as f32, y as f32, width as f32, height as f32),
-                        Some(capture_size),
-                    ),
+                match side.and_then(|side| side.blurred_slot(member)) {
+                    Some((blurred, slot)) => (blurred, region_tuple(slot), Some(capture_size)),
                     None => (
                         texture,
                         (
@@ -1051,6 +1070,8 @@ fn stage_composites(
                         None,
                     ),
                 };
+            let substrate_regions =
+                side.map_or([None; MAX_SUBSTRATES], |side| side.substrates[member]);
             let kind = match item.batched.expect("packed items are batched") {
                 BatchedEffect::Blur(_) => ResolvedCompositeKind::Blit {
                     alpha: 1.0,
@@ -1065,6 +1086,7 @@ fn stage_composites(
                         layer_pixel_rect: item.layer_pixel_rect(),
                         source_region: Some(region),
                         source_logical_size: logical_size,
+                        substrate_regions,
                         rounded_mask: item.rounded_mask,
                         alpha: 1.0,
                     }
@@ -1085,16 +1107,44 @@ fn stage_composites(
 /// A rectangle of texels: x, y, width, height.
 type TexelRect = (u32, u32, u32, u32);
 
-/// The blurred regions of one capture atlas: the texture holding them and,
-/// per atlas member, the downscaled slot its blur wrote.
-struct BlurredRegions {
-    result: Rc<OffscreenTarget>,
-    slots: Vec<Option<TexelRect>>,
+fn region_tuple((x, y, width, height): TexelRect) -> (f32, f32, f32, f32) {
+    (x as f32, y as f32, width as f32, height as f32)
 }
 
-impl BlurredRegions {
-    fn slot(&self, member: usize) -> Option<(&Rc<OffscreenTarget>, TexelRect)> {
-        self.slots[member].map(|slot| (&self.result, slot))
+/// The texels a substrate of a capture occupies: a block average keeps one
+/// texel per block, a blur its scratch size.
+fn substrate_size(spec: SubstrateSpec, (width, height): (u32, u32)) -> (u32, u32) {
+    match spec {
+        SubstrateSpec::Average { block } => {
+            (width.div_ceil(block).max(1), height.div_ceil(block).max(1))
+        }
+        SubstrateSpec::Blur { radius_px } => substrate_scratch_size(radius_px, width, height),
+    }
+}
+
+/// A substrate a stage packs for one of its shader members: its size, and
+/// the slot of the atlas that receives it when the shader reads the atlas;
+/// a shader after a blur reads its input in the result texture and finds
+/// the substrate there.
+#[derive(Clone, Copy)]
+struct PlannedSubstrate {
+    spec: SubstrateSpec,
+    size: (u32, u32),
+    atlas_slot: Option<TexelRect>,
+}
+
+/// What a stage renders beside its capture atlas: the texture holding the
+/// blurred regions, per atlas member the downscaled slot its blur wrote,
+/// and per member the regions of its substrates in the texture it reads.
+struct StageSideRegions {
+    result: Rc<OffscreenTarget>,
+    blurred: Vec<Option<TexelRect>>,
+    substrates: Vec<SubstrateRegions>,
+}
+
+impl StageSideRegions {
+    fn blurred_slot(&self, member: usize) -> Option<(&Rc<OffscreenTarget>, TexelRect)> {
+        self.blurred[member].map(|slot| (&self.result, slot))
     }
 }
 
@@ -1628,7 +1678,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         items: &[&PendingBackdrop<'_>],
     ) -> Result<Vec<ResolvedComposite>, String> {
         let scale = pass.scale;
-        let (packer, placements) = self.pack_stage(items);
+        let (packer, placements, substrates) = self.pack_stage(items);
         let atlases: Vec<Rc<OffscreenTarget>> = packer
             .atlases
             .iter()
@@ -1670,8 +1720,13 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 })
                 .collect();
             self.capture_regions(pass, &regions, texture, "Backdrop Capture Atlas Pass")?;
-            let blurred = self.blur_regions(texture, items, &members, scale)?;
-            outputs.extend(stage_composites(texture, blurred.as_ref(), items, &members));
+            let member_substrates: Vec<&[PlannedSubstrate]> = members
+                .iter()
+                .map(|(index, _)| substrates[*index].as_slice())
+                .collect();
+            let side =
+                self.stage_side_regions(texture, items, &members, &member_substrates, scale)?;
+            outputs.extend(stage_composites(texture, side.as_ref(), items, &members));
         }
         for (index, item) in items.iter().enumerate() {
             if let Some(capture) = singles[index].take() {
@@ -1724,6 +1779,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                     layer_pixel_rect,
                     source_region: None,
                     source_logical_size: None,
+                    substrate_regions: [None; MAX_SUBSTRATES],
                     rounded_mask,
                     alpha: 1.0,
                 },
@@ -1753,45 +1809,86 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
 
     /// Packs every batched item of a stage into as few atlases as the
     /// dimension limit allows, tallest first; an unbatched item gets no
-    /// placement and captures alone.
+    /// placement and captures alone. The substrates a shader over the atlas
+    /// declared get their slots in the same atlas, packed after the
+    /// captures; a substrate the atlas cannot hold is dropped with the ones
+    /// after it, and the shader samples its capture instead. A shader after
+    /// a blur reads the result texture, where its substrates are rendered.
     fn pack_stage(
         &self,
         items: &[&PendingBackdrop<'_>],
-    ) -> (AtlasPacker, Vec<Option<AtlasPlacement>>) {
+    ) -> (
+        AtlasPacker,
+        Vec<Option<AtlasPlacement>>,
+        Vec<Vec<PlannedSubstrate>>,
+    ) {
         let limit = self.renderer.max_texture_dim().min(MAX_ATLAS_DIM);
         let mut packer = AtlasPacker::new(limit);
         let mut order: Vec<usize> = (0..items.len()).collect();
         order.sort_by_key(|index| std::cmp::Reverse(items[*index].capture_rect.pixel_size().1));
         let mut placements: Vec<Option<AtlasPlacement>> = vec![None; items.len()];
-        for index in order {
-            let item = items[index];
+        for index in &order {
+            let item = items[*index];
             if item.batched.is_none() {
                 continue;
             }
             let (width, height) = item.capture_rect.pixel_size();
-            placements[index] = packer.place(width, height);
+            placements[*index] = packer.place(width, height);
         }
-        (packer, placements)
+        let mut substrates: Vec<Vec<PlannedSubstrate>> = vec![Vec::new(); items.len()];
+        for index in order {
+            let item = items[index];
+            let Some(placement) = placements[index] else {
+                continue;
+            };
+            let batched = item.batched.expect("a placed item is batched");
+            let in_atlas = batched.blur().is_none();
+            for spec in batched.substrates() {
+                let size = substrate_size(*spec, item.capture_rect.pixel_size());
+                let atlas_slot = if in_atlas {
+                    let Some(slot) = packer
+                        .place(size.0, size.1)
+                        .filter(|slot| slot.atlas == placement.atlas)
+                    else {
+                        break;
+                    };
+                    Some((slot.x, slot.y, size.0, size.1))
+                } else {
+                    None
+                };
+                substrates[index].push(PlannedSubstrate {
+                    spec: *spec,
+                    size,
+                    atlas_slot,
+                });
+            }
+        }
+        (packer, placements, substrates)
     }
 
-    /// Runs the blur pass pair over the blurred members of one capture atlas.
-    /// Runs the blur pass pair over the blurred members of one capture atlas.
-    /// The scratch and the result hold each region downscaled by its blur,
-    /// packed by height so both stay as small as the regions themselves; a
-    /// composite of a blurred member reads the result as the capture's pixels.
-    fn blur_regions(
+    /// Renders what the members of one capture atlas read beside it. The
+    /// blur pass pair runs over the blurred members: the scratch and the
+    /// result hold each region downscaled by its blur, packed by height so
+    /// both stay as small as the regions themselves, and a composite of a
+    /// blurred member reads the result as the capture's pixels. The
+    /// substrates of the shader members render into the result by the same
+    /// passes, a blurred one as one more region of the pass pair, an
+    /// averaged one by the downsample pass, and the ones a shader over the
+    /// atlas reads are copied back into their atlas slots.
+    fn stage_side_regions(
         &mut self,
         atlas: &Rc<OffscreenTarget>,
         items: &[&PendingBackdrop<'_>],
         members: &[(usize, AtlasPlacement)],
+        substrates: &[&[PlannedSubstrate]],
         scale: f32,
-    ) -> Result<Option<BlurredRegions>, String> {
+    ) -> Result<Option<StageSideRegions>, String> {
         let mut blurred: Vec<(usize, BlurSpec)> = members
             .iter()
             .enumerate()
             .filter_map(|(member, (index, _))| Some((member, items[*index].batched?.blur()?)))
             .collect();
-        if blurred.is_empty() {
+        if blurred.is_empty() && substrates.iter().all(|planned| planned.is_empty()) {
             return Ok(None);
         }
         blurred.sort_by_key(|(member, _)| {
@@ -1824,19 +1921,76 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 tile_mode: blur.tile_mode,
             });
         }
+        let mut averaged = Vec::new();
+        let mut copies: Vec<(TexelRect, [u32; 2])> = Vec::new();
+        let mut member_regions = vec![[None; MAX_SUBSTRATES]; members.len()];
+        for (member, (index, placement)) in members.iter().enumerate() {
+            let (source_width, source_height) = items[*index].capture_rect.pixel_size();
+            let source = (placement.x, placement.y, source_width, source_height);
+            for (order, planned) in substrates[member].iter().enumerate() {
+                let (width, height) = planned.size;
+                let Some(slot) = packer.place(width, height) else {
+                    return Err("a substrate outgrew the atlas that held it".into());
+                };
+                if slot.atlas != 0 {
+                    return Err("substrates of one atlas spilled into a second".into());
+                }
+                let scratch = (slot.x, slot.y, width, height);
+                match planned.spec {
+                    SubstrateSpec::Average { block } => averaged.push(SubstrateRegion {
+                        source,
+                        scratch,
+                        block,
+                    }),
+                    SubstrateSpec::Blur { radius_px } => regions.push(BlurRegion {
+                        source,
+                        scratch,
+                        radius_x: radius_px,
+                        radius_y: radius_px,
+                        tile_mode: TileMode::Clamp,
+                    }),
+                }
+                member_regions[member][order] = Some(region_tuple(match planned.atlas_slot {
+                    Some((x, y, _, _)) => {
+                        copies.push((scratch, [x, y]));
+                        (x, y, width, height)
+                    }
+                    None => scratch,
+                }));
+            }
+        }
         let (width, height) = packer.atlases[0].padded_size();
         let scratch = self.acquire_transient("Backdrop Blur Scratch", width, height);
         let result = self.acquire_transient("Backdrop Blur Result", width, height);
         let device = self.renderer.device.clone();
+        self.renderer
+            .effect_renderer
+            .record_substrates(substrates.iter().map(|planned| planned.len() as u32).sum());
         self.renderer.effect_renderer.encode_blur_atlas_passes(
             self.recorder,
             &device,
             atlas,
             &scratch,
             &result,
-            &regions,
+            AtlasSideWork {
+                blurs: &regions,
+                averages: &averaged,
+            },
         );
-        Ok(Some(BlurredRegions { result, slots }))
+        for ((x, y, width, height), dest_origin) in copies {
+            self.recorder.copy_texture_region(TextureRegionCopy {
+                source: &result,
+                source_origin: [x, y],
+                dest: atlas,
+                dest_origin,
+                size: [width, height],
+            });
+        }
+        Ok(Some(StageSideRegions {
+            result,
+            blurred: slots,
+            substrates: member_regions,
+        }))
     }
 
     /// Resolves one backdrop effect from its own capture texture: a shader
@@ -1868,6 +2022,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                     layer_pixel_rect,
                     source_region: None,
                     source_logical_size: None,
+                    substrate_regions: [None; MAX_SUBSTRATES],
                     rounded_mask: item.rounded_mask,
                     alpha: 1.0,
                 },

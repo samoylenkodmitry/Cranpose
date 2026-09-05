@@ -22,7 +22,10 @@ use cranpose_ui::{
     AppContext, Color, Modifier, Size, composable,
     widgets::{Box, BoxSpec},
 };
-use cranpose_ui_graphics::{Brush, DrawPrimitive, DrawScope, DrawScopeDefault, Point, Rect};
+use cranpose_ui_graphics::{
+    Brush, DrawPrimitive, DrawScope, DrawScopeDefault, Point, RUNTIME_SHADER_PRELUDE_WGSL, Rect,
+    RenderEffect, RuntimeShader, SubstrateSpec,
+};
 
 pub static TEST_FONT: &[u8] = DEFAULT_SOFTWARE_TEXT_FONT_BYTES;
 
@@ -448,6 +451,76 @@ pub fn stable_capture(renderer: &mut LockedRenderer, graph: &RenderGraph, size: 
         "same-graph control passes must be byte-stable before the cross-arm compare"
     );
     passes.pop().expect("three captures")
+}
+/// Vertical stripes in three hues crossed by horizontal bands over a dark
+/// page of `width` x `height`, so every tap of a kernel meets an edge
+/// somewhere: a blur at the wrong radius, a tap in the wrong texels or a
+/// neighbour's texels all change pixels.
+pub fn striped_page(width: u32, height: u32) -> Vec<RenderNode> {
+    let mut nodes = vec![solid_rect(
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: width as f32,
+            height: height as f32,
+        },
+        Color::from_rgb_u8(24, 28, 40),
+    )];
+    for index in 0..width.div_ceil(8) {
+        let color = match index % 3 {
+            0 => Color::from_rgb_u8(230, 90, 60),
+            1 => Color::from_rgb_u8(70, 200, 120),
+            _ => Color::from_rgb_u8(80, 110, 240),
+        };
+        nodes.push(solid_rect(
+            Rect {
+                x: index as f32 * 8.0,
+                y: 0.0,
+                width: 4.0,
+                height: height as f32,
+            },
+            color,
+        ));
+    }
+    for index in 0..height.div_ceil(10) {
+        nodes.push(solid_rect(
+            Rect {
+                x: 0.0,
+                y: index as f32 * 10.0 + 3.0,
+                width: width as f32,
+                height: 3.0,
+            },
+            Color::from_rgb_u8(245, 225, 90),
+        ));
+    }
+    nodes
+}
+/// How a substrate probe reads its substrate: the texel of the block its
+/// pixel lies in, or a bilinear read held to the substrate's texel centers.
+#[derive(Clone, Copy)]
+pub enum SubstrateProbeRead {
+    BlockTexel,
+    Held,
+}
+
+/// A batched shader declaring `spec` that paints its first substrate at its
+/// own coordinate, magenta when the renderer packed none.
+pub fn substrate_probe(spec: SubstrateSpec, read: SubstrateProbeRead) -> RenderEffect {
+    let uv = match read {
+        SubstrateProbeRead::BlockTexel => {
+            "(substrate.xy + floor(input.uv * substrate.zw) + vec2<f32>(0.5)) / dims"
+        }
+        SubstrateProbeRead::Held => {
+            "(substrate.xy + clamp(input.uv, 0.5 / substrate.zw, vec2<f32>(1.0) - 0.5 / substrate.zw) * substrate.zw) / dims"
+        }
+    };
+    let mut shader = RuntimeShader::new(&format!(
+        "{}\n@fragment\nfn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {{\n    let substrate = u[58u];\n    if (substrate.z < 0.5) {{\n        return vec4<f32>(1.0, 0.0, 1.0, 1.0);\n    }}\n    let dims = vec2<f32>(textureDimensions(input_texture));\n    let uv = {uv};\n    return vec4<f32>(textureSampleLevel(input_texture, input_sampler, uv, 0.0).rgb, 1.0);\n}}\n",
+        RUNTIME_SHADER_PRELUDE_WGSL,
+    ));
+    shader.set_batched_source(true);
+    shader.set_substrates(vec![spec]);
+    RenderEffect::Shader { shader }
 }
 
 /// A page of the given size holding `children` in order.

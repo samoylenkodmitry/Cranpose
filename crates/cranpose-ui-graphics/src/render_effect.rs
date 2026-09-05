@@ -90,11 +90,12 @@ pub const RUNTIME_SHADER_PRELUDE_WGSL: &str = concat!(
 ///
 /// Float uniforms are packed linearly into the `u` array. Access them in WGSL
 /// as `u[index / 4][index % 4]` for individual floats, or `u[index / 4].xy`
-/// for vec2, etc. User uniforms may use indices `0..236`; slots `236..256`
+/// for vec2, etc. User uniforms may use indices `0..224`; slots `224..256`
 /// are reserved for renderer metadata:
 ///
 /// | slots     | content                                                     |
 /// |-----------|-------------------------------------------------------------|
+/// | 224..236  | substrate regions `(x, y, w, h)` in input texels, the third at 224, the second at 228, the first at 232; zero = none |
 /// | 236..240  | source region `(x, y, w, h)` in input texels; zero = whole  |
 /// | 240..244  | composite mask rect `(x, y, w, h)` in region pixels; zero = none |
 /// | 244..248  | composite mask corner radii (top-left, top-right, bottom-left, bottom-right) |
@@ -103,7 +104,12 @@ pub const RUNTIME_SHADER_PRELUDE_WGSL: &str = concat!(
 /// | 254       | composite alpha                                             |
 ///
 /// A shader that reads the source region, mask and alpha slots declares it
-/// with [`set_batched_source`](Self::set_batched_source); the renderer then
+/// with [`set_batched_source`](Self::set_batched_source); one that reads a
+/// low-frequency copy of its source declares each with
+/// [`set_substrates`](Self::set_substrates) and samples it through its
+/// substrate region, held to that region's texel centers, so one tap
+/// stands for a neighbourhood the shader would otherwise walk tap by tap.
+/// The renderer then
 /// packs its input edge to edge beside other effects' inputs in one texture
 /// and draws it straight into the final pass with its clip applied. Such a
 /// shader holds every sample coordinate to its region's texel centers: the
@@ -121,6 +127,39 @@ pub struct RuntimeShader {
     input_padding: f32,
     output_padding: f32,
     batched_source: bool,
+    substrates: Vec<SubstrateSpec>,
+    draw_split: Option<&'static str>,
+}
+
+/// The most substrates one shader may declare.
+pub const MAX_SUBSTRATES: usize = 3;
+
+/// A low-frequency copy of a shader's source the renderer packs beside it
+/// and hands the shader through a reserved substrate region slot.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SubstrateSpec {
+    /// The source averaged in blocks of `block` x `block` texels, one
+    /// substrate texel per block.
+    Average { block: u32 },
+    /// The source blurred by a Gaussian of `radius_px` device pixels, kept
+    /// at the blur's scratch resolution.
+    Blur { radius_px: f32 },
+}
+
+impl SubstrateSpec {
+    fn hash_bits<H: std::hash::Hasher>(&self, state: &mut H) {
+        use std::hash::Hash;
+        match self {
+            Self::Average { block } => {
+                0u8.hash(state);
+                block.hash(state);
+            }
+            Self::Blur { radius_px } => {
+                1u8.hash(state);
+                radius_px.to_bits().hash(state);
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -205,7 +244,10 @@ impl RuntimeShader {
     /// The final slots are reserved for renderer-managed data.
     pub const MAX_UNIFORMS: usize = 256;
     /// First renderer-reserved uniform slot.
-    pub const RESERVED_UNIFORM_START: usize = 236;
+    pub const RESERVED_UNIFORM_START: usize = 224;
+    /// Reserved slots of the substrate regions `(x, y, w, h)` in input
+    /// texels, in declaration order.
+    pub const SUBSTRATE_REGION_UNIFORMS: [usize; MAX_SUBSTRATES] = [232, 228, 224];
     /// Reserved slot of the source region `(x, y, w, h)` in input texels.
     pub const SOURCE_REGION_UNIFORM: usize = 236;
     /// Reserved slot of the composite mask rect `(x, y, w, h)` in region pixels.
@@ -226,15 +268,7 @@ impl RuntimeShader {
     pub fn new(wgsl_source: &str) -> Self {
         let (source, source_hash) =
             cached_shader_source(std::panic::Location::caller(), wgsl_source);
-        Self {
-            source,
-            source_hash,
-            uniforms: RuntimeShaderUniforms::new(),
-            overrides: Vec::new(),
-            input_padding: 0.0,
-            output_padding: 0.0,
-            batched_source: false,
-        }
+        Self::with_source(source, source_hash)
     }
 
     /// Create a RuntimeShader from shared WGSL source code.
@@ -243,6 +277,10 @@ impl RuntimeShader {
     /// that rebuild only their uniform payload every frame.
     pub fn from_shared_source(source: Arc<str>) -> Self {
         let source_hash = cached_shared_shader_source_hash(&source);
+        Self::with_source(source, source_hash)
+    }
+
+    fn with_source(source: Arc<str>, source_hash: u64) -> Self {
         Self {
             source,
             source_hash,
@@ -251,6 +289,8 @@ impl RuntimeShader {
             input_padding: 0.0,
             output_padding: 0.0,
             batched_source: false,
+            substrates: Vec::new(),
+            draw_split: None,
         }
     }
 
@@ -402,6 +442,52 @@ impl RuntimeShader {
         self.batched_source
     }
 
+    /// Declares the low-frequency copies of its source the shader reads
+    /// through the reserved substrate region slots, in slot order. Only a
+    /// batched shader packed with its stage is handed them; a shader
+    /// without finds the slots zero and samples the source itself.
+    ///
+    /// # Panics
+    ///
+    /// When more than [`MAX_SUBSTRATES`] are declared.
+    pub fn set_substrates(&mut self, substrates: Vec<SubstrateSpec>) {
+        assert!(
+            substrates.len() <= MAX_SUBSTRATES,
+            "a runtime shader declares at most {MAX_SUBSTRATES} substrates"
+        );
+        self.substrates = substrates;
+    }
+
+    /// The substrates the shader declared, in slot order.
+    pub fn substrates(&self) -> &[SubstrateSpec] {
+        &self.substrates
+    }
+
+    /// Hashes the declared substrates and the draw split into `state`.
+    pub fn hash_substrates<H: std::hash::Hasher>(&self, state: &mut H) {
+        use std::hash::Hash;
+        self.substrates.len().hash(state);
+        for substrate in &self.substrates {
+            substrate.hash_bits(state);
+        }
+        self.draw_split.hash(state);
+    }
+
+    /// Declares an `override NAME: i32` the renderer sets to 1 and 2 to draw
+    /// the shader twice in the final pass, once for its interior and once
+    /// for its rim, each pipeline compiled without the other's work and
+    /// discarding the other's fragments before its fetches. Nothing else
+    /// about the draw changes: the two draws partition the pixels the one
+    /// draw shaded and land on the same bits.
+    pub fn set_draw_split(&mut self, override_name: Option<&'static str>) {
+        self.draw_split = override_name;
+    }
+
+    /// The override selecting the interior or the rim draw, when declared.
+    pub fn draw_split(&self) -> Option<&'static str> {
+        self.draw_split
+    }
+
     /// Get the WGSL source code.
     pub fn source(&self) -> &str {
         &self.source
@@ -466,6 +552,8 @@ impl PartialEq for RuntimeShader {
             && self.input_padding.to_bits() == other.input_padding.to_bits()
             && self.output_padding.to_bits() == other.output_padding.to_bits()
             && self.batched_source == other.batched_source
+            && self.substrates == other.substrates
+            && self.draw_split == other.draw_split
     }
 }
 

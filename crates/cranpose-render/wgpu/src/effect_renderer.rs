@@ -1,6 +1,6 @@
 use std::cell::Cell;
 
-use cranpose_ui_graphics::{BlendMode, RenderEffect, RuntimeShader, TileMode};
+use cranpose_ui_graphics::{BlendMode, MAX_SUBSTRATES, RenderEffect, RuntimeShader, TileMode};
 
 use crate::{
     frame_graph::{
@@ -10,7 +10,10 @@ use crate::{
     gpu_stats::FrameStats,
     lazy_resource::LazyGpuResource,
     offscreen::{OffscreenPool, OffscreenTarget},
-    shader_cache::{RuntimeShaderPipelineMode, ShaderPipelineCache},
+    shader_cache::{
+        RuntimeShaderPipelineMode, ShaderDrawVariant, ShaderPipelineCache,
+        shader_specialization_enabled,
+    },
     shaders,
 };
 
@@ -21,13 +24,31 @@ pub(crate) fn blur_scratch_size(
     height: u32,
 ) -> (u32, u32) {
     let radius = radius_x.max(radius_y);
-    let mut scale = if radius < 6.0 {
+    let scale = if radius < 6.0 {
         1
     } else if radius < 16.0 {
         2
     } else {
         4
     };
+    scratch_size_at(scale, width, height)
+}
+
+/// The scratch a substrate blur of `radius_px` runs at: a low-frequency copy
+/// read once per fragment tolerates a coarser grid than a blur that is the
+/// picture, so the scale doubles at half the radius the blur's does.
+pub(crate) fn substrate_scratch_size(radius_px: f32, width: u32, height: u32) -> (u32, u32) {
+    let scale = if radius_px < 3.0 {
+        1
+    } else if radius_px < 8.0 {
+        2
+    } else {
+        4
+    };
+    scratch_size_at(scale, width, height)
+}
+
+fn scratch_size_at(mut scale: u32, width: u32, height: u32) -> (u32, u32) {
     while scale > 1 && (width / scale < 16 || height / scale < 16) {
         scale /= 2;
     }
@@ -99,6 +120,7 @@ pub(crate) struct EffectRenderer {
 
     pub(crate) debug_command_stats: Cell<FrameCommandStats>,
     pub(crate) debug_blurs: Cell<u32>,
+    pub(crate) debug_substrates: Cell<u32>,
     pub(crate) debug_composites: Cell<u32>,
     pub(crate) debug_effects: Cell<u32>,
     pub(crate) debug_shader_pixels: Cell<u64>,
@@ -389,6 +411,7 @@ pub(crate) struct ShaderCompositeBatchItem<'a> {
     pub(crate) layer_pixel_rect: [f32; 4],
     pub(crate) source_region: Option<(f32, f32, f32, f32)>,
     pub(crate) source_logical_size: Option<(f32, f32)>,
+    pub(crate) substrate_regions: SubstrateRegions,
     pub(crate) rounded_mask: Option<RoundedCompositeMask>,
     pub(crate) alpha: f32,
     pub(crate) scissor: Option<(u32, u32, u32, u32)>,
@@ -397,25 +420,40 @@ pub(crate) struct ShaderCompositeBatchItem<'a> {
 
 /// Fills the renderer-reserved uniform slots of a runtime shader; see
 /// `RuntimeShader`'s slot table.
+/// The regions of a shader's substrates in its input texture, in slot
+/// order; none where the shader declared fewer or the stage packed none.
+pub(crate) type SubstrateRegions = [Option<(f32, f32, f32, f32)>; MAX_SUBSTRATES];
+
 struct ReservedShaderUniforms {
     layer_pixel_rect: [f32; 4],
     source_region: Option<(f32, f32, f32, f32)>,
+    substrate_regions: SubstrateRegions,
     mask: Option<RoundedCompositeMask>,
     logical_size: Option<(f32, f32)>,
     alpha: f32,
 }
 
+fn region_slot(region: Option<(f32, f32, f32, f32)>) -> [f32; 4] {
+    let region = region.unwrap_or((0.0, 0.0, 0.0, 0.0));
+    [region.0, region.1, region.2, region.3]
+}
+
 impl ReservedShaderUniforms {
     fn write(&self, padded: &mut [f32; RuntimeShader::MAX_UNIFORMS]) {
-        let region = self.source_region.unwrap_or((0.0, 0.0, 0.0, 0.0));
         let (mask_rect, mask_radii) = self
             .mask
             .map_or(([0.0; 4], [0.0; 4]), |mask| (mask.rect, mask.radii));
         let logical = self.logical_size.unwrap_or((0.0, 0.0));
+        for (slot, region) in RuntimeShader::SUBSTRATE_REGION_UNIFORMS
+            .iter()
+            .zip(self.substrate_regions)
+        {
+            padded[*slot..*slot + 4].copy_from_slice(&region_slot(region));
+        }
         let slots = [
             (
                 RuntimeShader::SOURCE_REGION_UNIFORM,
-                [region.0, region.1, region.2, region.3],
+                region_slot(self.source_region),
             ),
             (RuntimeShader::MASK_RECT_UNIFORM, mask_rect),
             (RuntimeShader::MASK_RADII_UNIFORM, mask_radii),
@@ -461,6 +499,23 @@ pub(crate) struct BlurRegion {
     pub(crate) tile_mode: TileMode,
 }
 
+/// One averaged substrate of a capture atlas: the capture texels to
+/// average in blocks of `block`, and the slot the downsample writes in the
+/// result texture.
+#[derive(Clone, Copy)]
+pub(crate) struct SubstrateRegion {
+    pub(crate) source: (u32, u32, u32, u32),
+    pub(crate) scratch: (u32, u32, u32, u32),
+    pub(crate) block: u32,
+}
+
+/// What one capture atlas renders beside itself: the regions to blur and
+/// the regions to average.
+pub(crate) struct AtlasSideWork<'a> {
+    pub(crate) blurs: &'a [BlurRegion],
+    pub(crate) averages: &'a [SubstrateRegion],
+}
+
 impl BlurRegion {
     fn scratch_radius(&self) -> (f32, f32) {
         (
@@ -495,6 +550,20 @@ pub(crate) struct PreparedShaderDraw<'a> {
     uniform_bind_group: wgpu::BindGroup,
     scissor: Option<(u32, u32, u32, u32)>,
     dest_viewport: (f32, f32, f32, f32),
+    variants: &'static [ShaderDrawVariant],
+}
+
+const WHOLE_DRAW: &[ShaderDrawVariant] = &[ShaderDrawVariant::Whole];
+const SPLIT_DRAWS: &[ShaderDrawVariant] = &[ShaderDrawVariant::Interior, ShaderDrawVariant::Rim];
+
+/// The draws a shader makes in a pass: its interior and its rim when it
+/// declared a split and the pipelines are specialized, else the one draw.
+fn shader_draw_variants(shader: &RuntimeShader) -> &'static [ShaderDrawVariant] {
+    if shader.draw_split().is_some() && shader_specialization_enabled() {
+        SPLIT_DRAWS
+    } else {
+        WHOLE_DRAW
+    }
 }
 
 pub(crate) struct ProjectiveCompositeItem<'a> {
@@ -783,6 +852,7 @@ impl EffectRenderer {
             adapter_backend,
             debug_command_stats: Cell::new(FrameCommandStats::default()),
             debug_blurs: Cell::new(0),
+            debug_substrates: Cell::new(0),
             debug_composites: Cell::new(0),
             debug_effects: Cell::new(0),
             debug_shader_pixels: Cell::new(0),
@@ -968,6 +1038,9 @@ impl EffectRenderer {
             .blur_passes
             .set(stats.blur_passes.get() + self.debug_blurs.get());
         stats
+            .substrates
+            .set(stats.substrates.get() + self.debug_substrates.get());
+        stats
             .composite_passes
             .set(stats.composite_passes.get() + self.debug_composites.get());
         stats
@@ -979,6 +1052,7 @@ impl EffectRenderer {
         stats.record_upload_bytes(self.debug_upload_bytes.get());
         self.debug_command_stats.set(FrameCommandStats::default());
         self.debug_blurs.set(0);
+        self.debug_substrates.set(0);
         self.debug_composites.set(0);
         self.debug_effects.set(0);
         self.debug_shader_pixels.set(0);
@@ -987,6 +1061,11 @@ impl EffectRenderer {
 
     pub(crate) fn record_blur_pass(&self) {
         self.debug_blurs.set(self.debug_blurs.get() + 1);
+    }
+
+    pub(crate) fn record_substrates(&self, count: u32) {
+        self.debug_substrates
+            .set(self.debug_substrates.get() + count);
     }
 
     pub(crate) fn record_composite_pass(&self) {
@@ -1231,29 +1310,47 @@ impl EffectRenderer {
         atlas: &OffscreenTarget,
         scratch: &OffscreenTarget,
         result: &OffscreenTarget,
-        regions: &[BlurRegion],
+        work: AtlasSideWork<'_>,
     ) {
+        let AtlasSideWork {
+            blurs: regions,
+            averages: substrates,
+        } = work;
         let blocks: Vec<u32> = regions
             .iter()
             .map(|region| blur_block(region.source, region.scratch))
             .collect();
+        let downsample_draw = |source: (u32, u32, u32, u32),
+                               scratch: (u32, u32, u32, u32),
+                               block: u32,
+                               tile_mode: TileMode| BlurDraw {
+            source: atlas,
+            uniforms: Self::blur_uniforms(
+                true,
+                (atlas.width, atlas.height),
+                source,
+                scratch,
+                (0.0, 0.0),
+                tile_mode,
+            ),
+            downsample: Some(block),
+            scissor: Some(scratch),
+        };
         let downsample: Vec<BlurDraw<'_>> = regions
             .iter()
             .zip(&blocks)
             .filter(|(_, block)| **block > 1)
-            .map(|(region, block)| BlurDraw {
-                source: atlas,
-                uniforms: Self::blur_uniforms(
-                    true,
-                    (atlas.width, atlas.height),
-                    region.source,
-                    region.scratch,
-                    (0.0, 0.0),
-                    region.tile_mode,
-                ),
-                downsample: Some(*block),
-                scissor: Some(region.scratch),
+            .map(|(region, block)| {
+                downsample_draw(region.source, region.scratch, *block, region.tile_mode)
             })
+            .chain(substrates.iter().map(|substrate| {
+                downsample_draw(
+                    substrate.source,
+                    substrate.scratch,
+                    substrate.block,
+                    TileMode::Clamp,
+                )
+            }))
             .collect();
         if !downsample.is_empty() {
             self.encode_blur_pass(
@@ -1264,6 +1361,9 @@ impl EffectRenderer {
                 &result.view,
                 &downsample,
             );
+        }
+        if regions.is_empty() {
+            return;
         }
         let horizontal: Vec<BlurDraw<'_>> = regions
             .iter()
@@ -1400,14 +1500,18 @@ impl EffectRenderer {
     ) -> Option<Vec<PreparedShaderDraw<'a>>> {
         let mut prepared = Vec::with_capacity(items.len());
         for item in items {
-            self.shader_cache.get_or_create(
-                device,
-                item.shader,
-                self.surface_format,
-                &self.effect_texture_bind_group_layout,
-                &self.effect_uniform_bind_group_layout,
-                RuntimeShaderPipelineMode::PremultipliedSrcOver,
-            )?;
+            let variants = shader_draw_variants(item.shader);
+            for variant in variants {
+                self.shader_cache.get_or_create(
+                    device,
+                    item.shader,
+                    self.surface_format,
+                    &self.effect_texture_bind_group_layout,
+                    &self.effect_uniform_bind_group_layout,
+                    RuntimeShaderPipelineMode::PremultipliedSrcOver,
+                    *variant,
+                )?;
+            }
             let mut padded = item.shader.uniforms_padded();
             let (dest_x, dest_y, _, _) = item.dest_viewport;
             let mask = item.rounded_mask.map(|mask| RoundedCompositeMask {
@@ -1422,6 +1526,7 @@ impl EffectRenderer {
             ReservedShaderUniforms {
                 layer_pixel_rect: item.layer_pixel_rect,
                 source_region: item.source_region,
+                substrate_regions: item.substrate_regions,
                 mask,
                 logical_size: item.source_logical_size,
                 alpha: item.alpha,
@@ -1447,6 +1552,7 @@ impl EffectRenderer {
                 uniform_bind_group,
                 scissor: item.scissor,
                 dest_viewport: item.dest_viewport,
+                variants,
             });
         }
         Some(prepared)
@@ -1459,18 +1565,6 @@ impl EffectRenderer {
         viewport: (u32, u32),
         draw: &PreparedShaderDraw<'_>,
     ) {
-        let pipeline = self
-            .shader_cache
-            .get_or_create(
-                device,
-                draw.shader,
-                self.surface_format,
-                &self.effect_texture_bind_group_layout,
-                &self.effect_uniform_bind_group_layout,
-                RuntimeShaderPipelineMode::PremultipliedSrcOver,
-            )
-            .expect("shader batch pipeline was prevalidated");
-        pass.set_pipeline(pipeline);
         pass.set_bind_group(0, draw.texture_bind_group, &[]);
         pass.set_bind_group(1, &draw.uniform_bind_group, &[]);
         let (x, y, width, height) = draw.dest_viewport;
@@ -1479,7 +1573,22 @@ impl EffectRenderer {
         pass.set_scissor_rect(scissor.0, scissor.1, scissor.2, scissor.3);
         self.debug_shader_pixels
             .set(self.debug_shader_pixels.get() + shaded_pixels((x, y, width, height), scissor));
-        pass.draw(0..4, 0..1);
+        for variant in draw.variants {
+            let pipeline = self
+                .shader_cache
+                .get_or_create(
+                    device,
+                    draw.shader,
+                    self.surface_format,
+                    &self.effect_texture_bind_group_layout,
+                    &self.effect_uniform_bind_group_layout,
+                    RuntimeShaderPipelineMode::PremultipliedSrcOver,
+                    *variant,
+                )
+                .expect("shader batch pipeline was prevalidated");
+            pass.set_pipeline(pipeline);
+            pass.draw(0..4, 0..1);
+        }
         pass.set_viewport(0.0, 0.0, viewport.0 as f32, viewport.1 as f32, 0.0, 1.0);
         pass.set_scissor_rect(0, 0, viewport.0, viewport.1);
     }
@@ -1498,6 +1607,7 @@ impl EffectRenderer {
         let mut padded = shader.uniforms_padded();
         ReservedShaderUniforms {
             layer_pixel_rect,
+            substrate_regions: [None; MAX_SUBSTRATES],
             source_region: None,
             mask: None,
             logical_size: options.source_logical_size,
@@ -1522,6 +1632,7 @@ impl EffectRenderer {
                 &self.effect_texture_bind_group_layout,
                 &self.effect_uniform_bind_group_layout,
                 options.pipeline_mode,
+                ShaderDrawVariant::Whole,
             )
             .is_none()
         {
@@ -1534,6 +1645,7 @@ impl EffectRenderer {
             &self.effect_texture_bind_group_layout,
             &self.effect_uniform_bind_group_layout,
             options.pipeline_mode,
+            ShaderDrawVariant::Whole,
         ) else {
             return false;
         };
