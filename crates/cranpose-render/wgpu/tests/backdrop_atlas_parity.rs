@@ -823,9 +823,22 @@ fn independent_glasses_are_admitted_over_several_frames_without_changing_pixels(
     assert_eq!(settled.layer_cache_misses, 0);
     assert_eq!(settled.layer_cache_hits, first.layer_cache_misses);
     let (_, reference) = render(false);
-    let max_channel_delta = support::max_channel_delta(&settled_frame.pixels, &reference.pixels);
-    assert!(
-        max_channel_delta <= 1,
-        "cached/reference channel delta {max_channel_delta}"
+    assert_eq!(
+        support::max_channel_delta(&settled_frame.pixels, &reference.pixels),
+        0,
+        "the settled frame must be the bytes of the same scene drawn without caching"
     );
+    for follow_up in 0..2 {
+        let (warm, warm_frame) = render(true);
+        assert_eq!(
+            warm.layer_cache_misses, 0,
+            "warm frame {follow_up} missed {} times",
+            warm.layer_cache_misses
+        );
+        assert_eq!(
+            support::max_channel_delta(&warm_frame.pixels, &reference.pixels),
+            0,
+            "warm frame {follow_up} must be the bytes of the same scene drawn without caching"
+        );
+    }
 }

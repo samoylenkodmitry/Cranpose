@@ -1739,6 +1739,108 @@ removed (the split admission frame drew the effect over the prefix,
 4,878 bytes off). The toggle is `debug.cranpose.no_fill_cache` on
 Android, so one APK measures both ways.
 
+**Measured (2026-09-06, early).** One APK per device with the property
+flipped per leg, A = `debug.cranpose.no_fill_cache=1`, B = default,
+full showcase scroll, 40 swipes in 60 s legs, A B A B then B A B A
+without cooling. Mate 20 X: nocache 39.61 / prefix 41.90 / nocache 39.15
+/ prefix 42.23 / prefix 41.76 / nocache 39.01 / prefix 41.63 / nocache
+37.22 at 39-44 C, pairs +2.29, +3.08, +2.75, +4.41, means 38.75 against
+41.88 (+8%, ~1.9 ms of a 25 ms frame). Pixel Watch 3: nocache 40.83 (34
+C) / prefix 42.82 (37) / nocache 39.99 (39) / prefix 31.69 (41) / prefix
+31.87 / nocache 29.78 / prefix 31.66 / nocache 29.46 (all 41-42 C): the
+watch crossed its thermal step between legs 3 and 4, the cool pair is
++2.0 fps and the hot pairs +2.1 and +2.2 on a ~30 fps hot frame (+7%).
+The flat-fill bound was +4.6 and +2.5; the rest is the nearest blit of
+the full-screen rect and the split pass on admission frames.
+
+## An admitted backdrop keeps its source, not a copy of its result (2026-09-05, night)
+
+Codex's Linux run of `a_cached_glass_result_follows_a_change_beneath_it`
+was red by one channel level, and removing one line made it exact: the
+`outputs[index] = backdrop_blit(...)` substitution in `admit_backdrops`.
+On an admission frame the glass was shaded a second time, whole and
+unmasked, into a retained surface (`resolve_whole`, the "Backdrop Result
+Pass"), and the frame drew a nearest blit of that surface through the
+mask instead of the stage's own composite; every later hit blitted the
+same surface. A stored *result* is not the bytes the composite produces:
+the composite multiplies its shading by the mask and the alpha and lets
+the blender convert the source at a precision the API leaves to the
+implementation, so a value rounded once into the retained surface and
+rounded again through the blit lands a level away from the value the
+composite writes in one step. The prefix cache is exact for the opposite
+reason: its bytes are opaque, same-format and unmasked, so src-over is the
+identity on them. A backdrop's result never has that property.
+
+**What the renderer keeps now.** The cache holds sources. `LayerCache`
+maps a key to `Retained { texture, content }`, where content is
+`Surface` for a texture drawn whole for its entry (retained child layers,
+opaque prefixes) or `Composite(kind)` for an admitted backdrop. Admission
+pins the stage texture the composite reads, the capture atlas or the
+blur result the shader reads its substrates from, and stores the
+composite's resolved kind: its atlas region, substrate regions, logical
+size, shader and sample mode. Nothing is re-rendered, nothing is copied,
+and the frame that admits draws the composite it would have drawn anyway;
+its content is marked retained so a capture above it can hash it from
+that frame on. A hit rebuilds the composite from the retained kind with
+the backdrop's current dest, scissor, rounded mask and layer rect
+(`replayed_kind`): the same texels sampled the same way by the same
+shader with the same uniforms, so a warm frame produces the bytes the
+admitting frame produced, which are the bytes a renderer that never
+cached produces. `resolve_whole`, `unmasked_composite`, `clear_and_draw`
+and `backdrop_blit` are gone.
+
+**Accounting.** A stage texture is shared by every backdrop of its stage,
+so the cache charges bytes per texture, not per entry: an
+`AllocationLedger` keyed by the texture's pointer counts holders and
+charges the texture when its first holder arrives. Eviction is
+least-recently-used by entry under the same 96 MB budget; a texture
+retires once, when its last holder leaves, into a pending list with the
+descriptor it was acquired under, and returns to the transient pool under
+that descriptor (a surface returns to the offscreen pool) only once no
+frame's composite still holds it. The frame's `release_transients` skips a
+pinned texture because the cache's clone keeps `Rc::try_unwrap` from
+succeeding, which is the hand-over. The per-frame admission pixel budget
+and the patience gate are unchanged; admission now costs a pin, not a
+pass.
+
+**Gates.** `layer_cache.rs` unit tests pin the ledger (a shared texture
+charged once, retired by its last holder, a re-charge after retirement
+starting fresh) and the cache with real textures (two entries replaying
+one stage texture pay for it once and retire it once, waiting while
+something else holds it; the budget evicts the least recently used entry
+and hands its surface back). `CRANPOSE_NO_BACKDROP_CACHE` gives the tests
+a renderer that never keys backdrops. `a_cached_glass_result_follows_a_change_beneath_it`
+compares the cached cool frame, the frame after the change, the settled
+(admitting) frame and two warm follow-ups whole-frame to that reference at
+exact zero, and `independent_glasses_are_admitted_over_several_frames_without_changing_pixels`
+compares the settled frame and two warm follow-ups at exact zero; both
+were `<= 1` before and are red against the copied result. The
+still-scene, rigid-scroll, change and stop tests are unchanged.
+
+## A stage flushed past the backdrops still waiting behind it (2026-09-06, early)
+
+The exact-zero test above went red for a reason that was not the cache:
+the cold first frame of a fresh renderer, and every frame with backdrop
+keys off, drew the last glass row of `glass_layer_cache.rs` over its own
+text, blurred. A stage flushes the page up to the highest z among its
+items, and stage 3 there holds row 3 (z 10) and the overlay (z 23), so
+the flush drew every op below z 23, rows 4 and 5 included. The blockers
+that make `release` defer ops covered only that stage's capture rects:
+row 4 escaped because its rect overlaps row 3's capture by four pixels,
+row 5 did not, so stage 5 captured a page already holding its tint and
+text. The cache masked it: a hit's composite is pending before the flush,
+so a warm frame was right and only the fresh frame wrong, which is why
+the old test at tolerance 1 on the overlay's interior never saw it.
+
+`run_stages` now sets the blockers to every backdrop still waiting to
+capture, this stage's and every later one's, before each stage runs, and
+drops a stage's blockers once it has captured, so an op above a waiting
+backdrop inside its rect is deferred until that backdrop has read the
+page. `a_cold_frame_draws_every_row_text_over_its_glass` counts the
+bright glyph pixels of "Gla" in every row's text on the cold frame
+against row 0's (row 5 had none, row 0 sixty-two) and was red before the
+change.
+
 ## Order
 
 Every step ships with its contract proven red first, the robot suite

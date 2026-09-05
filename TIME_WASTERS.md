@@ -888,3 +888,21 @@ An A B A B + B A B A matrix of 60 s legs runs about 13 minutes. Claude Code's ba
 ## Trimming a fullscreen-strip shader draw to a quad or a ring is never byte-exact
 
 Two hours on 2026-09-05: the glass split draws rasterized as an interior quad and a rim ring rendered byte-for-byte against the same shader drawn whole (the parity test was green and red-provable), yet against the previous shader source they flipped ~1% of glass pixels by one level with uv from `@builtin(position)` and 18,510 pixels with the interpolated varying: a varying's plane equation is per triangle, so different triangles over a pixel give different ULPs, and position-derived uv differs from the old interpolated value as well. A parity test that compares two arms sharing the new math proves nothing about the old picture. Freeze the previous shader source as a fixture and compare against it (`glass_reference_shader.rs`), and cut fragment work only with scissors on the unchanged strip.
+
+## `just precommit` on a clean-looking tree does not see untracked files (2026-09-06)
+
+The complexity and duplication gates diff against `origin/main`, and an
+untracked new file is not in that diff, so `just precommit` reported
+"clean" on a tree whose new `opaque_prefix.rs` was 53 against the
+limit of 20; the pre-commit hook then rejected the commit, after the
+suite, clippy and clippy-wasm had all been run on that tree. Stage new
+files (`git add`) before running `just precommit`, or run it exactly as
+the hook does, on the index.
+
+## bash 3.2 under `set -u` treats an empty array as unbound (2026-09-06)
+
+`"${args[@]}"` with `args=()` aborts a `set -u` script on macOS's bash
+3.2 (`args[@]: unbound variable`); two device matrices died after their
+first leg on the leg that passed no properties. Expand optional arrays
+as `${args[@]+"${args[@]}"}`.
+

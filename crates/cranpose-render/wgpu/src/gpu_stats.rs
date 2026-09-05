@@ -87,8 +87,8 @@ pub struct FrameStatsSnapshot {
     /// Backdrop stages resolved: every stage flushes the page and captures
     /// once, so the layer pass count is one more than this.
     pub stages: u32,
-    /// Backdrops resolved into retained textures this frame, each a second
-    /// shading of its glass.
+    /// Backdrops whose stage texture the layer cache pinned this frame, so
+    /// later frames replay their composites from it.
     pub backdrop_admissions: u32,
     /// Opaque page prefixes copied into the layer cache this frame.
     pub prefix_admissions: u32,

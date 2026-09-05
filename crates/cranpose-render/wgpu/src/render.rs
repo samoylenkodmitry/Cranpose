@@ -2175,8 +2175,13 @@ impl GpuRenderer {
         for target in self.deferred_offscreen_releases.drain(..) {
             self.effect_renderer.release_offscreen(target);
         }
-        for target in self.layer_cache.take_released() {
-            self.effect_renderer.release_offscreen(target);
+        for (transient, target) in self.layer_cache.take_released() {
+            match transient {
+                Some(descriptor) => self
+                    .frame_graph_executor
+                    .release_transient(descriptor, target),
+                None => self.effect_renderer.release_offscreen(target),
+            }
         }
     }
 

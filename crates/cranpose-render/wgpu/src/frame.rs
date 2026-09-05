@@ -33,6 +33,7 @@ use crate::{
         FrameCommandRecorder, FrameTextureDescriptor, TextureRegionCopy, copy_compatible,
     },
     geometry::snap_delta_for_anchor,
+    layer_cache::{Retained, RetainedContent},
     offscreen::{OffscreenTarget, composition_format},
     opaque_prefix::{OpaquePrefix, PrefixContext, opaque_prefix},
     render::GpuRenderer,
@@ -648,6 +649,7 @@ impl PendingBackdrop<'_> {
 static STAGE_DIAG: DebugToggle = DebugToggle::new("CRANPOSE_GPU_STAGE_DIAG");
 static NO_EFFECT_DOMAINS: DebugToggle = DebugToggle::new("CRANPOSE_NO_EFFECT_DOMAINS");
 static NO_FILL_CACHE: DebugToggle = DebugToggle::new("CRANPOSE_NO_FILL_CACHE");
+static NO_BACKDROP_CACHE: DebugToggle = DebugToggle::new("CRANPOSE_NO_BACKDROP_CACHE");
 
 fn declared_support(support: Option<Rect>) -> Option<Rect> {
     if NO_EFFECT_DOMAINS.flag() {
@@ -1003,34 +1005,6 @@ fn shader_tail_over_surface(
 
 const TRANSPARENT_SOURCE: &str = "transparent source";
 
-/// Clears the whole of `texture` and draws `segments` into it, its origin
-/// at the target's origin.
-fn clear_and_draw<C: FrameCommandRecorder>(
-    renderer: &mut GpuRenderer,
-    recorder: &mut C,
-    texture: &OffscreenTarget,
-    (width, height): (u32, u32),
-    segments: &[PassSegment<'_>],
-    scale: f32,
-    label: &'static str,
-) -> Result<(), String> {
-    let target = PassTarget {
-        view: &texture.view,
-        width,
-        height,
-        offset: [0.0, 0.0],
-    };
-    renderer.encode_pass(
-        recorder,
-        target,
-        segments,
-        wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-        scale,
-        label,
-    )?;
-    Ok(())
-}
-
 fn capture_window(rect: DeviceRect) -> CaptureWindow {
     CaptureWindow {
         x: rect.x,
@@ -1100,64 +1074,6 @@ fn backdrop_blit(item: &PendingBackdrop<'_>, source: CompositeSource) -> Resolve
     }
 }
 
-/// `composite` drawn whole: no scissor and no rounded mask, so a retained
-/// result holds every pixel of its rect and the mask applies at the blit.
-fn unmasked_composite(composite: &ResolvedComposite) -> ResolvedComposite {
-    let kind = match &composite.kind {
-        ResolvedCompositeKind::Blit {
-            alpha,
-            blend_mode,
-            sample_mode,
-            source_viewport,
-            ..
-        } => ResolvedCompositeKind::Blit {
-            alpha: *alpha,
-            blend_mode: *blend_mode,
-            rounded_mask: None,
-            sample_mode: *sample_mode,
-            source_viewport: *source_viewport,
-        },
-        ResolvedCompositeKind::Shader {
-            shader,
-            layer_pixel_rect,
-            source_region,
-            source_logical_size,
-            substrate_regions,
-            alpha,
-            ..
-        } => ResolvedCompositeKind::Shader {
-            shader: Rc::clone(shader),
-            layer_pixel_rect: *layer_pixel_rect,
-            source_region: *source_region,
-            source_logical_size: *source_logical_size,
-            substrate_regions: *substrate_regions,
-            rounded_mask: None,
-            alpha: *alpha,
-        },
-        ResolvedCompositeKind::Projective {
-            dest_quad,
-            inverse,
-            alpha,
-            blend_mode,
-            sample_mode,
-        } => ResolvedCompositeKind::Projective {
-            dest_quad: *dest_quad,
-            inverse: *inverse,
-            alpha: *alpha,
-            blend_mode: *blend_mode,
-            sample_mode: *sample_mode,
-        },
-    };
-    ResolvedComposite {
-        z_index: composite.z_index,
-        source: Rc::clone(&composite.source),
-        content: composite.content,
-        dest: composite.dest,
-        scissor: None,
-        kind,
-    }
-}
-
 /// A child whose surface lies on the parent's pixel grid, blitted one to one
 /// at `dest`.
 fn grid_child_composite(
@@ -1218,6 +1134,44 @@ fn projected_child_composite(
             sample_mode: CompositeSampleMode::Linear,
         },
     })
+}
+
+fn replayed_kind(
+    kind: &ResolvedCompositeKind,
+    item: &PendingBackdrop<'_>,
+) -> ResolvedCompositeKind {
+    match kind {
+        ResolvedCompositeKind::Blit {
+            alpha,
+            blend_mode,
+            sample_mode,
+            source_viewport,
+            ..
+        } => ResolvedCompositeKind::Blit {
+            alpha: *alpha,
+            blend_mode: *blend_mode,
+            rounded_mask: item.rounded_mask,
+            sample_mode: *sample_mode,
+            source_viewport: *source_viewport,
+        },
+        ResolvedCompositeKind::Shader {
+            shader,
+            source_region,
+            source_logical_size,
+            substrate_regions,
+            alpha,
+            ..
+        } => ResolvedCompositeKind::Shader {
+            shader: Rc::clone(shader),
+            layer_pixel_rect: item.layer_pixel_rect(),
+            source_region: *source_region,
+            source_logical_size: *source_logical_size,
+            substrate_regions: *substrate_regions,
+            rounded_mask: item.rounded_mask,
+            alpha: *alpha,
+        },
+        projective @ ResolvedCompositeKind::Projective { .. } => projective.clone(),
+    }
 }
 
 /// The composite of every member of one capture atlas: a blur reads its
@@ -1753,7 +1707,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         }
         let (x, y, width, height) = prefix.device_rect;
         let (pixel_width, pixel_height) = (width as u32, height as u32);
-        if let Some(texture) = self.renderer.layer_cache.get(&prefix.key) {
+        if let Some(retained) = self.renderer.layer_cache.get(&prefix.key) {
             self.renderer.frame_stats.record_layer_cache_hit(
                 &prefix.key,
                 pixel_width,
@@ -1762,7 +1716,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             if let Some(gate) = self.renderer.fill_gates.get_mut(&prefix.command) {
                 gate.hit(prefix.key);
             }
-            composites.push(prefix_blit(&prefix, texture));
+            composites.push(prefix_blit(&prefix, retained.texture));
             composites.sort_by_key(|composite| composite.z_index);
             return Ok(Some(1..u32::MAX));
         }
@@ -1781,7 +1735,10 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         };
         let pixels = u64::from(pixel_width) * u64::from(pixel_height);
         let budget = u64::from(page_size.0) * u64::from(page_size.1);
-        if !admits || self.prefix_admitted_pixels + pixels > budget {
+        if !admits
+            || self.prefix_admitted_pixels + pixels > budget
+            || !self.renderer.layer_cache.fits(pixel_width, pixel_height)
+        {
             return Ok(None);
         }
         let segment = PassSegment {
@@ -1819,11 +1776,16 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             .ok_or_else(|| "an opaque prefix off the page's texel grid".to_string())?;
         self.recorder.copy_texture_region(copy);
         self.prefix_admitted_pixels += pixels;
-        self.renderer.frame_stats.record_prefix_admission();
-        if let Some(gate) = self.renderer.fill_gates.get_mut(&prefix.command) {
-            gate.admitted();
+        if self
+            .renderer
+            .layer_cache
+            .insert(prefix.key, Retained::surface(texture), None)
+        {
+            self.renderer.frame_stats.record_prefix_admission();
+            if let Some(gate) = self.renderer.fill_gates.get_mut(&prefix.command) {
+                gate.admitted();
+            }
         }
-        self.renderer.layer_cache.insert(prefix.key, texture);
         *load_op = Some(wgpu::LoadOp::Load);
         Ok(Some(1..u32::MAX))
     }
@@ -1834,19 +1796,29 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let stage_count = pending.last().map_or(0, |item| item.stage + 1);
         self.renderer.frame_stats.record_stages(stage_count as u32);
         let diagnose = stage_diagnostics_enabled();
-        for stage in pending.chunk_by_mut(|a, b| a.stage == b.stage) {
-            let items = self.take_uncached(pass, stage);
-            if items.is_empty() {
-                continue;
+        let mut start = 0;
+        while start < pending.len() {
+            let stage = pending[start].stage;
+            let end = start + pending[start..].partition_point(|item| item.stage == stage);
+            pass.blockers = pending[start..]
+                .iter()
+                .map(|item| Blocker {
+                    z: item.z,
+                    rect: item.capture_rect,
+                })
+                .collect();
+            let items = self.take_uncached(pass, &mut pending[start..end]);
+            if !items.is_empty() {
+                if diagnose {
+                    log_stage(stage, &items);
+                }
+                let mut outputs = self.run_stage(pass, &items)?;
+                self.admit_backdrops(&items, &mut outputs);
+                pass.pending.extend(outputs);
             }
-            if diagnose {
-                log_stage(items[0].stage, &items);
-            }
-            let mut outputs = self.run_stage(pass, &items)?;
-            self.admit_backdrops(&items, &mut outputs, pass.scale)?;
-            pass.pending.extend(outputs);
-            pass.blockers.clear();
+            start = end;
         }
+        pass.blockers.clear();
         Ok(())
     }
 
@@ -1880,6 +1852,9 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
     ) -> Option<LayerRasterCacheKey> {
         let node_id = item.node_id?;
         item.batched.as_ref()?;
+        if NO_BACKDROP_CACHE.flag() {
+            return None;
+        }
         if matches!(
             pass.beneath.page,
             Some(PageBase {
@@ -1936,11 +1911,12 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         ))
     }
 
-    /// The backdrop's retained result blitted in place, when the cache holds
-    /// it.
     fn cached_backdrop(&mut self, item: &PendingBackdrop<'_>) -> Option<ResolvedComposite> {
         let key = item.key?;
-        let texture = self.renderer.layer_cache.get(&key)?;
+        let retained = self.renderer.layer_cache.get(&key)?;
+        let RetainedContent::Composite(kind) = &retained.content else {
+            return None;
+        };
         if let Some(gate) = item
             .node_id
             .and_then(|node_id| self.renderer.backdrop_gates.get_mut(&node_id))
@@ -1951,21 +1927,21 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         self.renderer
             .frame_stats
             .record_layer_cache_hit(&key, width, height);
-        Some(backdrop_blit(
-            item,
-            CompositeSource {
-                texture,
-                content: SourceContent::retained(&key),
-            },
-        ))
+        Some(ResolvedComposite {
+            z_index: item.z,
+            source: Rc::clone(&retained.texture),
+            content: SourceContent::retained(&key),
+            dest: item.capture_rect.tuple(),
+            scissor: Some(item.support.unwrap_or(item.visible).tuple()),
+            kind: replayed_kind(kind, item),
+        })
     }
 
     fn admit_backdrops(
         &mut self,
         items: &[&PendingBackdrop<'_>],
         outputs: &mut [ResolvedComposite],
-        scale: f32,
-    ) -> Result<(), String> {
+    ) {
         for item in items {
             let (Some(key), Some(node_id)) = (item.key, item.node_id) else {
                 continue;
@@ -1987,59 +1963,40 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             if !admits || self.admitted_pixels >= MAX_BACKDROP_ADMISSION_PIXELS {
                 continue;
             }
-            let Some(index) = outputs
-                .iter()
-                .position(|composite| composite.z_index == item.z)
+            let Some(output) = outputs
+                .iter_mut()
+                .find(|composite| composite.z_index == item.z)
             else {
                 continue;
             };
-            let texture = self.resolve_whole(&outputs[index], item.capture_rect, scale)?;
+            let Some(descriptor) = self.transient_descriptor(&output.source) else {
+                continue;
+            };
+            let retained = Retained::composite(Rc::clone(&output.source), output.kind.clone());
+            if !self
+                .renderer
+                .layer_cache
+                .insert(key, retained, Some(descriptor))
+            {
+                continue;
+            }
             self.admitted_pixels += u64::from(width) * u64::from(height);
             self.renderer.frame_stats.record_backdrop_admission();
             if let Some(gate) = self.renderer.backdrop_gates.get_mut(&node_id) {
                 gate.admitted();
             }
-            self.renderer.layer_cache.insert(key, Rc::clone(&texture));
-            outputs[index] = backdrop_blit(
-                item,
-                CompositeSource {
-                    texture,
-                    content: SourceContent::retained(&key),
-                },
-            );
+            output.content = SourceContent::retained(&key);
         }
-        Ok(())
     }
 
-    /// Draws `composite` without its mask or scissor into a retained texture
-    /// covering `rect`.
-    fn resolve_whole(
-        &mut self,
-        composite: &ResolvedComposite,
-        rect: DeviceRect,
-        scale: f32,
-    ) -> Result<Rc<OffscreenTarget>, String> {
-        let (width, height) = rect.pixel_size();
-        let texture = Rc::new(self.renderer.acquire_retained_surface(width, height));
-        let whole = unmasked_composite(composite);
-        let segments = [PassSegment {
-            scene: &self.empty_scene,
-            ops: &[],
-            composites: std::slice::from_ref(&whole),
-            offset: [rect.x, rect.y],
-            scissor: None,
-            first_run_window: None,
-        }];
-        clear_and_draw(
-            self.renderer,
-            self.recorder,
-            &texture,
-            (width, height),
-            &segments,
-            scale,
-            "Backdrop Result Pass",
-        )?;
-        Ok(texture)
+    fn transient_descriptor(
+        &self,
+        texture: &Rc<OffscreenTarget>,
+    ) -> Option<FrameTextureDescriptor> {
+        self.transients
+            .iter()
+            .find(|(_, transient)| Rc::ptr_eq(transient, texture))
+            .map(|(descriptor, _)| *descriptor)
     }
 
     fn run_stage(
@@ -2058,10 +2015,6 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             })
             .collect();
         let mut singles: Vec<Option<Rc<OffscreenTarget>>> = vec![None; items.len()];
-        pass.blockers.extend(items.iter().map(|item| Blocker {
-            z: item.z,
-            rect: item.capture_rect,
-        }));
         let stage_end = items.iter().map(|item| item.z).max().unwrap_or(0);
         self.flush_page(pass, stage_end)?;
         for (index, item) in items.iter().enumerate() {
@@ -2936,14 +2889,14 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             )
         });
         if let Some(key) = cache_key
-            && let Some(texture) = self.renderer.layer_cache.get(&key)
+            && let Some(retained) = self.renderer.layer_cache.get(&key)
         {
             self.renderer
                 .frame_stats
                 .record_layer_cache_hit(&key, width, height);
             return Ok(Some(SurfaceRender {
                 source: CompositeSource {
-                    texture,
+                    texture: retained.texture,
                     content: SourceContent::retained(&key),
                 },
                 rect: surface_rect,
@@ -2951,6 +2904,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 grid_dest,
             }));
         }
+        let cache_key = cache_key.filter(|_| self.renderer.layer_cache.fits(width, height));
         let texture = if cache_key.is_some() {
             Rc::new(self.renderer.acquire_retained_surface(width, height))
         } else {
@@ -2982,16 +2936,18 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
             &child_beneath,
         )?;
-        if let Some(key) = cache_key {
+        let retained = cache_key.filter(|key| {
             self.renderer
                 .frame_stats
-                .record_layer_cache_miss(&key, width, height);
-            self.renderer.layer_cache.insert(key, Rc::clone(&texture));
-        }
+                .record_layer_cache_miss(key, width, height);
+            self.renderer
+                .layer_cache
+                .insert(*key, Retained::surface(Rc::clone(&texture)), None)
+        });
         Ok(Some(SurfaceRender {
             source: CompositeSource {
                 texture,
-                content: cache_key.map_or(SourceContent::Transient, |key| {
+                content: retained.map_or(SourceContent::Transient, |key| {
                     SourceContent::retained(&key)
                 }),
             },

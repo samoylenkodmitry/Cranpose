@@ -533,6 +533,14 @@ impl WgpuFrameGraphExecutor {
         self.transient_textures.len()
     }
 
+    pub(crate) fn release_transient(
+        &mut self,
+        descriptor: FrameTextureDescriptor,
+        target: OffscreenTarget,
+    ) {
+        self.transient_textures.release(descriptor, target);
+    }
+
     pub(crate) fn retained_texture_bytes(&self) -> u64 {
         self.transient_textures.estimated_bytes()
     }
@@ -1652,7 +1660,7 @@ impl FrameUploadAllocators {
 }
 
 #[cfg(test)]
-fn upload_test_device() -> (
+pub(crate) fn upload_test_device() -> (
     std::sync::MutexGuard<'static, ()>,
     wgpu::Device,
     wgpu::Queue,

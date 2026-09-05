@@ -17,6 +17,7 @@ const FRAME_HEIGHT: u32 = 640;
 const PAGE_PADDING: f32 = 12.0;
 const ROW_HEIGHT: f32 = 96.0;
 const ROW_SPACING: f32 = 8.0;
+const NO_BACKDROP_CACHE: &str = "CRANPOSE_NO_BACKDROP_CACHE";
 
 fn visible_rows() -> u32 {
     ((FRAME_HEIGHT as f32 - 2.0 * PAGE_PADDING + ROW_SPACING) / (ROW_HEIGHT + ROW_SPACING)).ceil()
@@ -368,29 +369,110 @@ fn a_cached_glass_result_follows_a_change_beneath_it() {
     );
     let (_, after) = harness.frame(warm);
     let (settled, settled_frame) = harness.frame(warm);
-    let before = overlay_interior_pixels(&before);
-    let after = overlay_interior_pixels(&after);
     assert!(
-        max_channel_delta(&before, &after) > 24,
+        max_channel_delta(
+            &overlay_interior_pixels(&before),
+            &overlay_interior_pixels(&after)
+        ) > 24,
         "the overlay reads the first row; a warmer row must show through the glass"
     );
     assert_eq!(
-        max_channel_delta(&after, &overlay_interior_pixels(&settled_frame)),
+        max_channel_delta(&after.pixels, &settled_frame.pixels),
         0,
         "the frame after the change and the settled frame must agree: {settled:?}"
     );
+    let mut follow_ups = Vec::new();
+    let mut warm_frames = 0;
+    while warm_frames < 2 {
+        assert!(
+            follow_ups.len() < 6,
+            "the changed backdrops must settle into the cache within a few frames"
+        );
+        let (stats, frame) = harness.frame(warm);
+        if stats.misses == 0 {
+            assert!(stats.hits > 0, "a warm frame must hit the cache: {stats:?}");
+            warm_frames += 1;
+        } else {
+            warm_frames = 0;
+        }
+        follow_ups.push(frame);
+    }
 
     let mut fresh = GlassHarness::new(
         support::headless_renderer_beside_locked().expect("second headless renderer"),
     );
-    for _ in 0..warmup_frames() {
-        fresh.stats(warm);
-    }
-    let (_, reference) = fresh.frame(warm);
-    assert!(
-        max_channel_delta(&after, &overlay_interior_pixels(&reference)) <= 1,
-        "a glass result reused from the cache must match a renderer that never cached"
+    let cool_reference = never_cached_frame(&mut fresh, cool);
+    assert_eq!(
+        max_channel_delta(&before.pixels, &cool_reference.pixels),
+        0,
+        "a still frame served from the cache must be the bytes of a renderer that never cached"
     );
+    let warm_reference = never_cached_frame(&mut fresh, warm);
+    let frames = [
+        ("the frame after the change", &after),
+        ("the settled frame", &settled_frame),
+    ]
+    .into_iter()
+    .chain(follow_ups.iter().map(|frame| ("a follow-up frame", frame)));
+    for (label, frame) in frames {
+        assert_eq!(
+            max_channel_delta(&frame.pixels, &warm_reference.pixels),
+            0,
+            "{label} must be the bytes of a renderer that never cached"
+        );
+    }
+}
+
+fn never_cached_frame(harness: &mut GlassHarness, input: SceneInput) -> CapturedFrame {
+    cranpose_render_wgpu::set_debug_toggle(NO_BACKDROP_CACHE, Some("1"));
+    for _ in 0..warmup_frames() {
+        harness.stats(input);
+    }
+    let (stats, frame) = harness.frame(input);
+    cranpose_render_wgpu::set_debug_toggle(NO_BACKDROP_CACHE, None);
+    assert_eq!(
+        stats.admissions, 0,
+        "the reference must not cache backdrops: {stats:?}"
+    );
+    frame
+}
+
+fn bright_text_pixels(frame: &CapturedFrame, row: usize) -> usize {
+    let top = (PAGE_PADDING + row as f32 * (ROW_HEIGHT + ROW_SPACING)) as usize + 14;
+    let mut bright = 0;
+    for y in top..top + 20 {
+        for x in 26..58 {
+            let index = (y * frame.width as usize + x) * 4;
+            if frame.pixels[index..index + 3]
+                .iter()
+                .all(|channel| *channel >= 200)
+            {
+                bright += 1;
+            }
+        }
+    }
+    bright
+}
+
+#[test]
+fn a_cold_frame_draws_every_row_text_over_its_glass() {
+    let Some((_lock, mut harness)) = harness() else {
+        return;
+    };
+    let (_, cold) = harness.frame(SceneInput::default());
+    let first = bright_text_pixels(&cold, 0);
+    assert!(
+        first > 50,
+        "row 0 must show its text: {first} bright pixels"
+    );
+    for row in 1..visible_rows() as usize {
+        let bright = bright_text_pixels(&cold, row);
+        assert!(
+            bright * 10 >= first * 9 && bright * 9 <= first * 10,
+            "row {row} shows {bright} bright text pixels against {first} in row 0: its glass must \
+             read the page below it, not its own text"
+        );
+    }
 }
 
 #[test]
