@@ -225,7 +225,9 @@ impl GlassHarness {
     }
 }
 
-const WARMUP_FRAMES: usize = 6;
+fn warmup_frames() -> usize {
+    2 * (visible_rows() as usize + 1)
+}
 const MEASURED_FRAMES: usize = 8;
 
 fn harness() -> Option<(std::sync::MutexGuard<'static, ()>, GlassHarness)> {
@@ -244,7 +246,7 @@ fn a_still_glass_scene_leaves_no_layer_cache_misses() {
         return;
     };
     let still = SceneInput::default();
-    for _ in 0..WARMUP_FRAMES {
+    for _ in 0..warmup_frames() {
         harness.stats(still);
     }
     for frame_index in 0..MEASURED_FRAMES {
@@ -281,11 +283,11 @@ fn an_animated_overlay_leaves_still_glass_rows_fully_cached() {
             ..SceneInput::default()
         }
     };
-    for frame_index in 0..WARMUP_FRAMES {
+    for frame_index in 0..warmup_frames() {
         harness.stats(animation(frame_index));
     }
     for frame_index in 0..MEASURED_FRAMES {
-        let stats = harness.stats(animation(WARMUP_FRAMES + frame_index));
+        let stats = harness.stats(animation(warmup_frames() + frame_index));
         assert_eq!(
             stats.misses, 1,
             "an animated overlay re-renders exactly its own backdrop blur, its content \
@@ -317,7 +319,7 @@ fn a_rigid_scroll_reuses_every_glass_result_whose_input_moved_with_it() {
         scroll_delta: RIGID_SCROLL_STEP,
         ..SceneInput::default()
     };
-    for _ in 0..WARMUP_FRAMES {
+    for _ in 0..warmup_frames() {
         harness.stats(scrolling);
     }
     for frame_index in 0..MEASURED_FRAMES {
@@ -363,7 +365,7 @@ fn a_cached_glass_result_follows_a_change_beneath_it() {
         first_row_warm: true,
         ..SceneInput::default()
     };
-    for _ in 0..WARMUP_FRAMES {
+    for _ in 0..warmup_frames() {
         harness.stats(cool);
     }
     let (cached, before) = harness.frame(cool);
@@ -388,7 +390,7 @@ fn a_cached_glass_result_follows_a_change_beneath_it() {
     let mut fresh = GlassHarness::new(
         support::headless_renderer_beside_locked().expect("second headless renderer"),
     );
-    for _ in 0..WARMUP_FRAMES {
+    for _ in 0..warmup_frames() {
         fresh.stats(warm);
     }
     let (_, reference) = fresh.frame(warm);

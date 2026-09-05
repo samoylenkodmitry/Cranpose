@@ -1513,28 +1513,19 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         Ok(())
     }
 
-    /// Resolves the queued backdrop effects stage by stage: every capture of
-    /// a stage reads the page as drawn up to its own glass, the batched
-    /// captures packed into atlases, blurred in one pass pair per atlas, and
-    /// handed on as composites reading their region; the rest of the stage
-    /// captures one effect at a time.
     fn run_stages(&mut self, pass: &mut LayerPass<'_>) -> Result<(), String> {
-        let mut pending = self.take_uncached(pass);
-        if pending.is_empty() {
-            return Ok(());
-        }
+        let mut pending = std::mem::take(&mut pass.stages.pending);
         pending.sort_by_key(|item| (item.stage, item.z));
         let stage_count = pending.last().map_or(0, |item| item.stage + 1);
         self.renderer.frame_stats.record_stages(stage_count as u32);
         let diagnose = stage_diagnostics_enabled();
-        for stage in 0..stage_count {
-            let items: Vec<&PendingBackdrop<'_>> =
-                pending.iter().filter(|item| item.stage == stage).collect();
+        for stage in pending.chunk_by_mut(|a, b| a.stage == b.stage) {
+            let items = self.take_uncached(pass, stage);
             if items.is_empty() {
                 continue;
             }
             if diagnose {
-                log_stage(stage, &items);
+                log_stage(items[0].stage, &items);
             }
             let mut outputs = self.run_stage(pass, &items)?;
             self.admit_backdrops(&items, &mut outputs, pass.scale)?;
@@ -1544,17 +1535,18 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         Ok(())
     }
 
-    /// Keys every pending backdrop, resolves the ones the cache holds into
-    /// blits of their retained result, and returns the rest.
-    fn take_uncached<'a>(&mut self, pass: &mut LayerPass<'a>) -> Vec<PendingBackdrop<'a>> {
-        let items = std::mem::take(&mut pass.stages.pending);
+    fn take_uncached<'a, 'scene>(
+        &mut self,
+        pass: &mut LayerPass<'_>,
+        items: &'a mut [PendingBackdrop<'scene>],
+    ) -> Vec<&'a PendingBackdrop<'scene>> {
         let mut kept = Vec::with_capacity(items.len());
         let mut hits = Vec::new();
-        for mut item in items {
-            item.key = self.backdrop_cache_key(pass, &item);
-            match self.cached_backdrop(&item) {
+        for item in items {
+            item.key = self.backdrop_cache_key(pass, item);
+            match self.cached_backdrop(item) {
                 Some(composite) => hits.push(composite),
-                None => kept.push(item),
+                None => kept.push(&*item),
             }
         }
         pass.pending.extend(hits);

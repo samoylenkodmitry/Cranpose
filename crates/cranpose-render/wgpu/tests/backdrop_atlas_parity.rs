@@ -644,3 +644,46 @@ fn a_frame_of_glasses_stages_its_uploads_in_a_handful_of_writes() {
         second.upload_writes
     );
 }
+
+fn stacked_cached_glasses(first_blur: f32, identified: bool) -> RenderGraph {
+    let mut children = striped_page();
+    for (index, radius) in [first_blur, 2.0].into_iter().enumerate() {
+        let mut node = glass_layer(0, RenderEffect::blur(radius));
+        let RenderNode::Layer(layer) = &mut node else {
+            unreachable!();
+        };
+        layer.node_id = identified.then_some(100 + index);
+        children.push(node);
+    }
+    support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children)
+}
+
+#[test]
+fn a_cached_backdrop_tracks_the_effect_of_the_glass_beneath_it() {
+    let Ok(mut renderer) = support::headless_renderer() else {
+        return;
+    };
+    for _ in 0..6 {
+        capture(&mut renderer, stacked_cached_glasses(2.0, true));
+    }
+    let before = capture(&mut renderer, stacked_cached_glasses(2.0, true));
+    assert!(renderer.last_frame_stats().expect("stats").layer_cache_hits > 0);
+    let changed = capture(&mut renderer, stacked_cached_glasses(14.0, true));
+    let reference = capture(&mut renderer, stacked_cached_glasses(14.0, false));
+    let region = rect(
+        GLASS_LEFT + 4.0,
+        GLASS_TOP + 4.0,
+        GLASS_WIDTH - 8.0,
+        GLASS_HEIGHT - 8.0,
+    );
+    let expected = region_pixels(&reference, region);
+    assert_ne!(region_pixels(&before, region), expected);
+    let difference = image_difference_stats(
+        &region_pixels(&changed, region),
+        &expected,
+        region.width as u32,
+        region.height as u32,
+        2,
+    );
+    assert_eq!(difference.differing_pixels, 0, "{difference:?}");
+}
