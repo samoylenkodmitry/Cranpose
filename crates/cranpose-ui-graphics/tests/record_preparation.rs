@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
 use cranpose_ui_graphics::{
-    Brush, Color, CommandRecording, DrawPrimitive, Point, Rect, Stroke, StrokeCap, TAU, TileMode,
+    ArcRecordArgs, BlendMode, Brush, Color, CommandRecording, CornerRadii, DrawPrimitive,
+    DrawScope, DrawScopeDefault, Point, Rect, Size, Stroke, StrokeCap, TAU, TileMode,
+    normalized_band,
 };
 
 fn primitive(index: usize) -> DrawPrimitive {
@@ -116,4 +118,119 @@ fn appending_after_a_fingerprint_updates_the_recording_identity() {
         append(&mut expected);
         assert_eq!(recording.fingerprint(), expected.fingerprint());
     }
+}
+
+fn scope_shape(scope: &mut DrawScopeDefault, expected: &mut CommandRecording, index: usize) {
+    let radius = if index.is_multiple_of(251) {
+        f32::NAN
+    } else {
+        12.0 + (index % 400) as f32
+    };
+    let brush = Brush::Solid(Color(
+        if index.is_multiple_of(163) {
+            f32::from_bits(0x7fc0_0021)
+        } else {
+            index as f32 / 16384.0
+        },
+        -0.0,
+        0.75,
+        0.5,
+    ));
+    let blend = if (index / 64).is_multiple_of(2) {
+        BlendMode::SrcOver
+    } else {
+        BlendMode::Plus
+    };
+    let rect = Rect {
+        x: -0.0,
+        y: -3.0,
+        width: 40.0,
+        height: 40.0,
+    };
+    let stroke = Stroke::new(1.25)
+        .with_cap([StrokeCap::Butt, StrokeCap::Round, StrokeCap::Square][index % 3]);
+    match index % 13 {
+        0 => {
+            scope.draw_rect_at_blend(rect, brush.clone(), blend);
+            expected.push_rect(rect, &brush, None, blend);
+        }
+        1 => {
+            let radii = CornerRadii::uniform(20.0);
+            scope.draw_round_rect_at_stroked_blend(rect, brush.clone(), radii, stroke, blend);
+            expected.push_round_rect(rect, &brush, radii, Some(stroke), blend);
+        }
+        _ => {
+            let center = Point::new(0.125, -0.25);
+            let start = if index.is_multiple_of(19) {
+                -0.0
+            } else {
+                index as f32 * -0.125
+            };
+            let sweep = [TAU, 0.0625, -0.25, -0.0][index % 4];
+            scope.draw_arc_blend(brush.clone(), center, radius, start, sweep, stroke, blend);
+            let args = ArcRecordArgs {
+                brush: &brush,
+                center,
+                radius,
+                start_angle: start,
+                sweep_angle: sweep,
+                stroke: Some(stroke),
+                inner_radius: 0.0,
+                blend_mode: blend,
+            };
+            let geometry = normalized_band(&args);
+            if !geometry.is_degenerate() {
+                expected.push_scope_arc(&args, &geometry);
+            }
+        }
+    }
+}
+
+fn assert_recording_bits(actual: &CommandRecording, expected: &CommandRecording) {
+    let actual_records: Vec<_> = actual.shapes().iter().collect();
+    let expected_records: Vec<_> = expected.shapes().iter().collect();
+    assert_eq!(actual_records.len(), expected_records.len());
+    for (index, (actual, expected)) in actual_records.iter().zip(&expected_records).enumerate() {
+        assert_eq!(
+            bytemuck::bytes_of(actual),
+            bytemuck::bytes_of(expected),
+            "record {index}"
+        );
+    }
+    assert_eq!(actual.segments(), expected.segments());
+    assert_eq!(actual.brushes(), expected.brushes());
+    assert_eq!(actual.stops(), expected.stops());
+    assert_eq!(actual.others(), expected.others());
+    assert_eq!(actual.content_markers(), expected.content_markers());
+    assert_eq!(actual.bounds(), expected.bounds());
+    assert_eq!(actual.summary(), expected.summary());
+    assert_eq!(actual.fingerprint(), expected.fingerprint());
+}
+
+#[test]
+fn scope_batches_preserve_bits_order_metadata_and_retained_frames() {
+    let mut scope = DrawScopeDefault::new(Size::new(408.0, 408.0));
+    let mut expected = CommandRecording::default();
+    for range in [0..5003, 5003..10007] {
+        for index in range {
+            scope_shape(&mut scope, &mut expected, index);
+        }
+        let marker = primitive(37);
+        scope.push_recorded(vec![marker.clone()]);
+        expected.push_primitive(marker);
+        scope.draw_content();
+        expected.push_content();
+    }
+    let mut actual = scope.finish();
+    assert_recording_bits(&actual, &expected);
+    let retained = Arc::clone(actual.tables());
+    let retained_records: Vec<_> = retained.shapes.iter().collect();
+    let retained_hash = retained.fingerprint();
+    actual.clear();
+    actual.push_primitive(primitive(1));
+    assert_eq!(retained.fingerprint(), retained_hash);
+    assert_eq!(
+        bytemuck::cast_slice::<_, u8>(&retained.shapes.iter().collect::<Vec<_>>()),
+        bytemuck::cast_slice::<_, u8>(&retained_records)
+    );
 }

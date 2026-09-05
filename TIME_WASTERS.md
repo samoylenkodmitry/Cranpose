@@ -812,3 +812,5 @@ event; the kernel ships without perf events. Profile there with the
   counts transients) is the other tell. Gradle's stripped library also
   never hashes equal to `target/<triple>/release/*.so`, so a hash mismatch
   there proves nothing.
+
+- Parallel shape preparation (2026-09-05): borrowed-input microbenchmarks did not predict the public DrawScope cost. A complete queued/chunked implementation passed record and GPU parity, including deliberately reversed chunks and wrong upload offsets, but regressed both physical devices. ARMv7, 15,161 rotating arcs: Huawei baseline ~1.84 ms versus 6.3-7.2 ms; watch ~7.52 ms versus 8.1-10.2 ms. Two workers were slower, 128-byte separation of worker state did not help, and removing the metadata merge still did not beat the watch baseline. Borrowing tables once per batch also failed to improve the watch. The implementation is stashed, not retained. Benchmark complete public recording with changing inputs before adding a scheduler; all evidence is summarized in `docs/mobile_watch_performance.md`.

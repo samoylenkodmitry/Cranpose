@@ -392,3 +392,34 @@ fn a_cached_glass_result_follows_a_change_beneath_it() {
         "a glass result reused from the cache must match a renderer that never cached"
     );
 }
+
+#[test]
+fn a_glass_whose_backdrop_changes_every_other_frame_stops_being_admitted() {
+    let Some((_lock, mut harness)) = harness() else {
+        return;
+    };
+    let still = SceneInput::default();
+    for _ in 0..warmup_frames() {
+        harness.stats(still);
+    }
+    let settled = harness.stats(still);
+    assert_eq!(
+        settled.misses, 0,
+        "the warm-up must leave the scene cached: {settled:?}"
+    );
+    let mut admissions = 0;
+    for step in 1..=20 {
+        let input = SceneInput {
+            drift: step as f32 * 0.01,
+            ..still
+        };
+        for _ in 0..2 {
+            admissions += harness.stats(input).admissions;
+        }
+    }
+    assert!(
+        admissions <= 2,
+        "the overlay's backdrop changed every second frame for forty frames and was admitted \
+         {admissions} times, each a whole resolve into a retained surface nothing read back"
+    );
+}

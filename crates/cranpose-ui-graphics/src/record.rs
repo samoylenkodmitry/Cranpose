@@ -451,7 +451,7 @@ pub struct BrushRecord {
     /// radius, 0. Sweep: centre x, centre y, 0, 0.
     pub params: [f32; 4],
     /// The app's explicit stop positions in
-    /// [`CommandRecording::explicit_stops`], when it gave any; `explicit_len`
+    /// [`RecordTables::explicit_stops`], when it gave any; `explicit_len`
     /// is `u32::MAX` when it gave none.
     pub explicit_start: u32,
     pub explicit_len: u32,

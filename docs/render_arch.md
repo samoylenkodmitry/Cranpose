@@ -1249,8 +1249,36 @@ counting (`ring_outlives_frame`). What remains is the backdrop
 result cache's retained surfaces: the showcase's stars drift under every
 glass, so the cache misses every frame and each admission copies a result
 it never reads back (`layer_cache: hit=0` in every watch log), a copy pass
-and a surface a frame for nothing. That is the next cut: admit on the
-second consecutive miss of a key, not the first.
+and a surface a frame for nothing. The doorkeeper already admitted only
+on the second consecutive frame of a key; the stars change the key every
+second frame, so every admission was the last frame that key was seen.
+
+**The gate (2026-09-05, evening).** Each glass, by node, keeps a
+`BackdropGate`: the key its capture last hashed to, how many frames
+running it has held, its patience, and whether the current key's retained
+result was ever read back. A key is admitted once it has held for more
+than the patience; a hit resets the patience to one; a key that changes
+while its admitted result was never hit doubles the patience, to sixteen
+frames at most. A still scene admits on its second frame as before, a
+rigid scroll keeps its stable keys and their hits, and a glass over
+something that changes every second frame is admitted once and then
+waits longer than the change ever holds. The contract is
+`a_glass_whose_backdrop_changes_every_other_frame_stops_being_admitted`
+in `tests/glass_layer_cache.rs`: forty frames of an overlay drifting a
+step every second frame, twenty admissions before the gate, at most two
+with it. The five existing cache tests pin the still, scroll, change and
+stop behaviour unchanged.
+
+Measured on the watch, A B A B against f0008069, both armeabi-v7a, list
+swipe, 36.7 -> 41.3 C: admissions 4-5 a frame -> 0, the retained cache
+256 entries at 40 MB -> 8-48 at 1.3-5.9 MB, Backdrop Result Pass
+0.71-1.15 ms -> 0.09-0.16 in the steady windows. The GPU span did not
+move (21.7 ms both): an admitting frame had shaded its glass in the whole
+resolve and blitted the result in the layer pass, so the layer bucket takes
+back what the result pass gave up (15.0-15.4 -> 15.4-16.2 ms). CPU p50
+21.4-21.7 -> 20.9-21.6 ms, p10 13.1-13.8 -> 12.1-12.6; fps 37.6-38.9 ->
+38.2-38.9 in the cool pair, the gate's second leg throttled at 41 C. The
+gate buys memory and CPU, not GPU; the frame is the five layer passes.
 
 ## Order
 

@@ -419,3 +419,45 @@ The full-minute `watch-orbit-arena-team` measurement is 31.061846 FPS over
 Windowed update medians grew from 16.87 to around 30 ms; render medians grew
 from 3.96 to 6.79 ms. It is a valid hot-device sample, not a comparison with
 the earlier cooler 52.19 FPS reading.
+
+### Rejected queued shape preparation
+
+The complete experiment queued solid rectangles, rounded rectangles and arcs,
+prepared large native batches in a bounded Rayon pool, retained independent
+column chunks for direct upload, and rebuilt global segment metadata without
+joining the output buffers. Small batches and WebAssembly used the same scalar
+kernel. It is stashed; none of that implementation or its dependency remains
+in the performance branch. The large public-record and retained-GPU-run tests
+remain useful independently.
+
+The public DrawScope benchmark records 15,161 arcs with changing angles through
+reused storage. Both apps were stopped for isolated CPU measurements. Every
+valid variant produced fingerprint `817059c723455dd8`. Milliseconds, p50:
+
+| Device | Baseline | Worker pool | Scalar queue | Two workers |
+| --- | --- | --- | --- | --- |
+| Huawei | 1.840 / 1.846 | 6.328 / 7.179 | 2.603 / 2.610 | 11.808 / 11.848 |
+| Watch | 7.521 / 7.520 | 8.138 / 10.201 | 10.279 / 10.941 | 11.681 / 11.477 |
+
+Watch temperature was 38.9-39.4 C; Huawei stayed at 33.0 C. Separating worker
+state by 128 bytes did not improve the result. Removing metadata reconstruction
+was an intentionally incorrect ablation, and still took 7.840 ms on the watch.
+Borrowing tables once per batch instead of checking ownership per shape took
+8.552 / 8.621 ms versus interleaved watch baselines 7.556 / 7.495 ms.
+
+A timing probe observed roughly 3.1 ms per watch worker for one third of the
+records, about 4-5 ms for the pool on its faster sampled frames, and another
+1.5 ms to merge metadata. Queueing and scheduling consume the prototype's gain.
+These are CPU diagnostics, not frame-rate acceptance measurements. Raw reports
+are in `/tmp/cranpose-mobile-watch-60fps/*-record-scope-*.json`; their `chunks=0`
+output field was an unused placeholder, not a measured chunk count.
+
+Correctness evidence for the rejected implementation: all 217 graphics unit
+tests and integrations passed; reversing worker completion order failed the
+unit test and the public drawing test at record zero. Writing each chunk to GPU
+offset zero failed the 5,003-input first frame. Restoring both passed exact
+pixel comparisons across rotation, recolouring, changing invalid-arc positions,
+and command sizes 5,003 / 10,007 / 4,201 / 123 / 5,017.
+
+Both GPU and capture robot suites completed successfully at `78b24d87`: 162
+and four tests respectively, with no skipped tests.
