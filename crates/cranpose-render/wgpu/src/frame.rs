@@ -1336,8 +1336,8 @@ impl BackdropGate {
         self.unread = true;
     }
 
-    fn hit(&mut self) {
-        self.seen = true;
+    fn hit(&mut self, key: LayerRasterCacheKey) {
+        self.observe(key);
         self.patience = 1;
         self.unread = false;
     }
@@ -1697,7 +1697,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             .node_id
             .and_then(|node_id| self.renderer.backdrop_gates.get_mut(&node_id))
         {
-            gate.hit();
+            gate.hit(key);
         }
         let (width, height) = item.capture_rect.pixel_size();
         self.renderer
@@ -3075,15 +3075,34 @@ mod tests {
         gate.observe(key);
         assert!(gate.admits(), "the second frame of a key admits it");
         gate.admitted();
-        gate.hit();
+        gate.hit(key);
         assert_eq!(gate.patience, 1);
         assert!(gate.end_frame(), "a gate seen this frame stays");
         assert!(!gate.end_frame(), "a gate not seen since goes");
     }
 
+    #[test]
+    fn a_hit_on_an_earlier_key_restarts_the_run_of_the_key_the_gate_last_saw() {
+        let (a, b) = (gate_key(1), gate_key(2));
+        let mut gate = BackdropGate::new(a);
+        gate.observe(a);
+        assert!(gate.admits());
+        gate.admitted();
+        gate.observe(b);
+        assert!(!gate.admits());
+        gate.observe(b);
+        assert!(!gate.admits());
+        gate.hit(a);
+        gate.observe(b);
+        assert!(
+            !gate.admits(),
+            "b's run restarts after a frame that read a's retained result"
+        );
+    }
+
     fn gate_frame(gate: &mut BackdropGate, key: LayerRasterCacheKey) -> bool {
         if gate.unread && gate.key == key {
-            gate.hit();
+            gate.hit(key);
             return false;
         }
         gate.observe(key);
