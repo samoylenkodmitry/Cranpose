@@ -10,6 +10,7 @@ use cranpose_ui::{
     Color, LinearArrangement, Modifier, RenderEffect, TextStyle, composable,
     widgets::{Box, BoxSpec, Column, ColumnSpec, LazyColumn, LazyColumnSpec, Text},
 };
+use support::max_channel_delta;
 
 const FRAME_WIDTH: u32 = 640;
 const FRAME_HEIGHT: u32 = 640;
@@ -345,14 +346,6 @@ fn overlay_interior_pixels(frame: &CapturedFrame) -> Vec<u8> {
         pixels.extend_from_slice(&frame.pixels[row + left * 4..row + right * 4]);
     }
     pixels
-}
-
-fn max_channel_delta(a: &[u8], b: &[u8]) -> u8 {
-    a.iter()
-        .zip(b)
-        .map(|(a, b)| a.abs_diff(*b))
-        .max()
-        .unwrap_or(0)
 }
 
 #[test]

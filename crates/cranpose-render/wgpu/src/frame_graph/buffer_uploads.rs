@@ -61,11 +61,7 @@ mod tests {
 
     #[test]
     fn discarded_copies_and_reused_staging_keep_destination_offsets() {
-        let instance = wgpu::Instance::default();
-        let adapter = pollster::block_on(instance.request_adapter(&Default::default()))
-            .expect("headless adapter");
-        let (device, queue) = pollster::block_on(adapter.request_device(&Default::default()))
-            .expect("headless device");
+        let (_lock, device, queue) = super::super::upload_test_device();
         let destination = device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
             size: 16,

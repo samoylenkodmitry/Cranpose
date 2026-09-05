@@ -57,6 +57,7 @@ impl Harness {
 }
 
 fn adapter_can_time_passes() -> bool {
+    let _lock = support::gpu_test_lock();
     let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
     instance_descriptor.backends = wgpu::Backends::all();
     let instance = wgpu::Instance::new(instance_descriptor);

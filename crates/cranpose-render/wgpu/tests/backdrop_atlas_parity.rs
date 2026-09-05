@@ -123,17 +123,19 @@ fn assert_region_matches(
     tolerance: u32,
 ) {
     let region = first_glass_region();
+    let alone_pixels = region_pixels(alone, region);
+    let packed_pixels = region_pixels(packed, region);
     let stats = image_difference_stats(
-        &region_pixels(alone, region),
-        &region_pixels(packed, region),
+        &alone_pixels,
+        &packed_pixels,
         region.width as u32,
         region.height as u32,
         tolerance,
     );
-    assert_eq!(
-        stats.differing_pixels, 0,
-        "{label}: differing_pixels={} max_diff={} first={:?}",
-        stats.differing_pixels, stats.max_difference, stats.first_difference
+    let max_channel_delta = support::max_channel_delta(&alone_pixels, &packed_pixels);
+    assert!(
+        u32::from(max_channel_delta) <= tolerance,
+        "{label}: max_channel_delta={max_channel_delta} {stats:?}",
     );
 }
 
@@ -839,13 +841,7 @@ fn independent_glasses_are_admitted_over_several_frames_without_changing_pixels(
     assert_eq!(settled.layer_cache_misses, 0);
     assert_eq!(settled.layer_cache_hits, first.layer_cache_misses);
     let (_, reference) = render(false);
-    let max_channel_delta = settled_frame
-        .pixels
-        .iter()
-        .zip(&reference.pixels)
-        .map(|(cached, reference)| cached.abs_diff(*reference))
-        .max()
-        .unwrap_or(0);
+    let max_channel_delta = support::max_channel_delta(&settled_frame.pixels, &reference.pixels);
     assert!(
         max_channel_delta <= 1,
         "cached/reference channel delta {max_channel_delta}"

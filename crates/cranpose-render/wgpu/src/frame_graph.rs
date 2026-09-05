@@ -1619,6 +1619,24 @@ impl FrameUploadAllocators {
 }
 
 #[cfg(test)]
+fn upload_test_device() -> (
+    std::sync::MutexGuard<'static, ()>,
+    wgpu::Device,
+    wgpu::Queue,
+) {
+    static DEVICE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let lock = DEVICE_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let instance = wgpu::Instance::default();
+    let adapter = pollster::block_on(instance.request_adapter(&Default::default()))
+        .expect("headless adapter");
+    let (device, queue) =
+        pollster::block_on(adapter.request_device(&Default::default())).expect("headless device");
+    (lock, device, queue)
+}
+
+#[cfg(test)]
 fn read_uploaded_bytes(
     device: &wgpu::Device,
     readback: &wgpu::Buffer,
@@ -1647,11 +1665,7 @@ mod tests {
 
     #[test]
     fn frame_uploads_grow_preserve_bytes_and_release_oversized_generations() {
-        let instance = wgpu::Instance::default();
-        let adapter = pollster::block_on(instance.request_adapter(&Default::default()))
-            .expect("headless adapter");
-        let (device, queue) = pollster::block_on(adapter.request_device(&Default::default()))
-            .expect("headless device");
+        let (_lock, device, queue) = super::upload_test_device();
         let mut ring = super::UploadRing::new(
             wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
             "Upload Growth Test",

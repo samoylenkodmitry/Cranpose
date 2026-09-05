@@ -380,3 +380,21 @@ On lavapipe, the independent-glass fixture has three pixels with two channels
 each differing by one output level after caching. Its comparison uses the same
 maximum per-channel bound as the existing glass-layer cache regression, rather
 than summing channels; shader specialization tests still require exact bytes.
+
+The independent upload GPU probes expose a Linux headless setup race when both
+create devices concurrently under the default adapter: the process receives
+SIGSEGV. The same tests pass with one test thread and under lavapipe. A shared
+device fixture serializes these two probes, following the integration suite's
+existing GPU fixture ownership; production renderer scheduling is unchanged.
+
+The timing-report capability probe also initialized an adapter outside the GPU
+test lock; it takes that lock before probing. `LockedRenderer` releases its lock
+last, after its renderer and app context, so another test cannot initialize a GPU
+while the previous one is still tearing down resources.
+
+The default Intel UHD 730 adapter repeats the packed-glass test's one-level
+red/green channel difference on clean `90e14d68`, at the same pixel and with the
+same byte values as this branch. The fixture now applies its documented mapping
+allowance per channel, using the cache regression's shared maximum-channel
+helper. The numeric allowance stays one, zero-tolerance blur cases stay exact,
+and shader specialization still requires exact byte equality.
