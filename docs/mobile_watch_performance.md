@@ -533,3 +533,84 @@ Removing the reuse clear makes the content-reset regression fail, then restoring
 it passes. All 216 graphics unit tests and the large mixed-lane/bit-preservation
 integrations pass. The seven record goldens, two rotating-run tests and stored
 upload pixel test pass on Metal with their original expectations.
+
+### Integrated Megaboss acceptance and removal experiment
+
+Both branches reached `77deb8fe`, with the `f4b83bbf` application runtime.
+Full workspace tests, Clippy, release web, Android, binary budgets, macOS
+documentation, robot Clippy and iOS recipes pass. All 162 GPU robots and four
+capture robots pass with zero skips. The isolated-demo binary is 10,427,608
+bytes. These gates did not detect the following device performance regression.
+
+The watch comparison uses the same Cranorbit `0334e16` source, release features,
+APK shell and ARMv7-only native packaging. Each leg warms for eight seconds,
+then counts actual presents for a full minute. PID and foreground remain stable;
+diagnostic overrides are cleared. Runs alternate without a cooling wait.
+
+| Leg | Cranpose | Display FPS | Battery C, start to end |
+| --- | --- | ---: | --- |
+| 1 | Main `0d195313` | 48.38 | 36.2 to 38.6 |
+| 2 | Shared runtime | 42.12 | 39.6 to 41.5 |
+| 3 | Main | 28.15 | 41.8 to 42.8 |
+| 4 | Shared runtime | 19.50 | 42.9 to 43.4 |
+| 5 | Shared runtime | 16.22 | 43.3 to 43.5 |
+| 6 | Main | 18.34 | 43.4 to 43.9 |
+| 7 | Shared runtime | 16.11 | 43.9 to 44.5 |
+| 8 | Main | 18.34 | 44.3 to 45.0 |
+
+The reverse order confirms an approximately 12% regression against main in
+the hot workload. This checkpoint fails acceptance. Main logs thousands of
+segment-surface composites; the shared renderer retains GPU records but does
+not cache those rendered segments. A same-APK removal experiment toggles only
+main's existing `debug.cranpose.segment_surface` property. Every leg's log
+confirms the property reached the process. This is cause attribution, not a
+shipping configuration or a picture acceptance result.
+
+| Leg | Main segment cache | Display FPS | Battery C, start to end |
+| --- | --- | ---: | --- |
+| 1 | Enabled | 47.84 | 35.9 to 38.9 |
+| 2 | Disabled | 44.46 | 39.4 to 41.0 |
+| 3 | Enabled | 36.68 | 41.4 to 42.4 |
+| 4 | Disabled | 22.54 | 42.5 to 42.8 |
+| 5 | Disabled | 22.57 | 42.8 to 43.2 |
+| 6 | Enabled | 18.81 | 43.3 to 43.9 |
+| 7 | Disabled | 15.74 | 43.9 to 44.3 |
+| 8 | Enabled | 17.95 | 44.2 to 44.7 |
+
+At the hottest pair, disabling the cache brings main close to the shared
+runtime's result, and re-enabling it restores throughput despite the slightly
+hotter leg. This supports the missing reuse as a cause. It does not justify
+copying the cache: main resamples rotations, and its rotation test permits a
+worst channel difference of 200 across up to 110,000 differing bytes. Exact
+static reuse and faster exact drawing remain the permitted design choices.
+
+Raw reports, temperatures, telemetry and screenshots are in
+`/tmp/cranpose-mobile-watch-60fps/watch-megaboss-union-*` and
+`watch-megaboss-cache-ablation-*`. The app continues to render every required
+shape and effect in the accepted implementation; no approximate cache or
+reduced workload has been introduced to recover the number.
+
+### Exact body interning feasibility
+
+The captured 15,161 arcs have only 325 distinct 64-byte bodies. An external
+probe uses their first 15,007 arcs, all in the same strip class, with 296 unique
+bodies. Exact byte keys reduce the body stream from 960,448 bytes to 78,972
+including per-instance indices. Curves, draw order, coverage and hardware
+blending remain unchanged. Both two-segment and one-segment controls compare
+against candidates with the same geometry; no strip reduction is credited to
+interning.
+
+On Adreno 702, the one-segment A B A B then B A B A sequence gives packed-body
+control medians 35.10 / 35.27 / 35.64 / 35.38 ms and interned medians
+36.52 / 36.04 / 36.17 / 35.87 ms. These are submission-to-fence diagnostics,
+not app frame times. Battery temperature moves from 43.4 to 43.2 C. All 665,856
+output bytes match. Two-segment interning also loses. Reading the shared body
+in the fragment stage to reduce varyings is worse: approximately 46–49 ms
+against interleaved 23–26 ms controls after the device's throttle state changes.
+The hot ARMv7 standard-library hash interning costs another 16–23 ms per table.
+
+Changing every template index to the next body makes the exact comparison fail
+in 328,719 bytes, with worst channel difference 171. Restoring the indices
+passes. The representation is rejected on performance and has no production
+implementation. Source and reports remain in
+`/tmp/cranpose-mobile-watch-60fps/template-probe`.

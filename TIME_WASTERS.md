@@ -858,3 +858,24 @@ produces frames is not a gesture that scrolls.
 and zero submits after two rebuilds chasing a log-level cap that did
 not exist. The earlier trace had been taken over a visible window. Run
 trace counts with `SHOWCASE_ROBOT_HEADLESS=0`.
+
+## Passing gates and isolated recording gains missed a hot workload regression (2026-09-05)
+
+The shared renderer passed every gate and reduced complete public recording
+cost, but full-minute watch Megaboss A B A B then B A B A found about 16.1 fps
+against main's 18.3 at 43–45 C. Main still composites cached segments which the
+record renderer redraws. Removing main's cache drops it to 15.74 fps; restoring
+it gives 17.95 in the next, slightly hotter leg. The exact expectations forbid
+transplanting its permissive rotation resampling. Before accepting an ownership
+or record-layout improvement, complete the same hot application comparison;
+neither passing pixels nor a faster append benchmark establishes throughput.
+
+## Repeated record bodies do not establish a faster GPU representation (2026-09-05)
+
+The arena's 15,007-arc sample contains only 296 unique bodies. Exact interning
+cuts their bytes from 960 KB to 79 KB, but indirect vertex reads take about
+36 ms against the unchanged attributes' 35 ms on the hot watch. Moving those
+reads into fragments to shrink varyings costs 46–49 ms against 23–26 ms
+interleaved controls. Both preserve every byte; the wrong-index mutant fails.
+Measure GPU consumption and complete CPU preparation before changing the
+recording architecture on the strength of a compression ratio.
