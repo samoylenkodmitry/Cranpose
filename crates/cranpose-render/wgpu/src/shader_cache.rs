@@ -3,6 +3,8 @@ use std::collections::{HashMap, HashSet};
 use cranpose_ui_graphics::RuntimeShader;
 use naga::ShaderStage;
 
+use crate::debug_toggles::DebugToggle;
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum RuntimeShaderPipelineMode {
     Replace,
@@ -18,8 +20,11 @@ impl RuntimeShaderPipelineMode {
     }
 }
 
+static NO_SHADER_SPECIALIZATION: DebugToggle =
+    DebugToggle::new("CRANPOSE_NO_SHADER_SPECIALIZATION");
+
 pub(crate) fn shader_specialization_enabled() -> bool {
-    crate::debug_toggles::debug_toggle("CRANPOSE_NO_SHADER_SPECIALIZATION").as_deref() != Some("1")
+    !NO_SHADER_SPECIALIZATION.equals("1")
 }
 
 /// Which of a shader's draws a pipeline serves: the one draw, or the

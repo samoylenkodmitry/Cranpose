@@ -9,7 +9,7 @@ use cranpose_ui_graphics::{
 use smallvec::SmallVec;
 
 use crate::{
-    frame_graph::{FrameCommandStats, write_buffer},
+    frame_graph::{FrameCommandStats, UploadPlacement, place_upload, write_buffer},
     geometry::{canonicalized_scaled_rect, snap_delta_for_anchor, snapped_anchor_device_origin},
     run_geometry::ShapeFill,
     scene::{Placement, RunDraw},
@@ -90,7 +90,7 @@ impl RunBufferMode {
     }
 }
 
-const RUN_BINDINGS: usize = 4;
+pub(crate) const RUN_BINDINGS: usize = 4;
 
 /// A placement as the vertex stage reads it: the offset with the snap
 /// delta folded in, the device clip, the dither origin and the paint.
@@ -493,15 +493,216 @@ impl ArenaStaging {
     }
 }
 
+/// Where one closed chunk's tables sit: the frame's generation of arena
+/// buffers and the chunk's dynamic offset into each table.
+#[derive(Clone, Copy, Default)]
+struct ArenaChunk {
+    generation: usize,
+    offsets: [u32; RUN_BINDINGS],
+}
+
+/// The tables a chunk's draws bind.
+pub(crate) struct ArenaBinding<'a> {
+    pub(crate) bind_group: &'a wgpu::BindGroup,
+    pub(crate) offsets: [u32; RUN_BINDINGS],
+}
+
+/// One buffer per table with every chunk of the frame laid in it at an
+/// aligned offset, the bytes staged on the CPU until the frame's flush.
+struct ArenaGeneration {
+    buffers: [wgpu::Buffer; RUN_BINDINGS],
+    capacities: [u64; RUN_BINDINGS],
+    staged: [Vec<u8>; RUN_BINDINGS],
+    bind_group: wgpu::BindGroup,
+}
+
+impl ArenaGeneration {
+    fn new(
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        mode: RunBufferMode,
+        capacities: [u64; RUN_BINDINGS],
+        bindings: [u64; RUN_BINDINGS],
+    ) -> Self {
+        let buffers = std::array::from_fn(|index| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(LABELS[index]),
+                size: capacities[index],
+                usage: mode.usage(),
+                mapped_at_creation: false,
+            })
+        });
+        let bind_group = Self::bind(device, layout, &buffers, bindings);
+        Self {
+            buffers,
+            capacities,
+            staged: Default::default(),
+            bind_group,
+        }
+    }
+
+    fn bind(
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        buffers: &[wgpu::Buffer; RUN_BINDINGS],
+        bindings: [u64; RUN_BINDINGS],
+    ) -> wgpu::BindGroup {
+        let entries: [wgpu::BindGroupEntry<'_>; RUN_BINDINGS] =
+            std::array::from_fn(|index| wgpu::BindGroupEntry {
+                binding: index as u32,
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: &buffers[index],
+                    offset: 0,
+                    size: wgpu::BufferSize::new(bindings[index]),
+                }),
+            });
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Run Arena Bind Group"),
+            layout,
+            entries: &entries,
+        })
+    }
+}
+
+/// The frame's arena: the chunks every pass closed, each a set of offsets
+/// into the generation of buffers that held it, and the staging of the
+/// chunk being filled. A chunk that outgrows the buffers opens a larger
+/// generation; the one it left stays bound to the draws already recorded
+/// until the flush writes both. Each table is bound at a fixed size, the
+/// widest chunk seen, so a chunk's dynamic offset needs that much room
+/// after it.
+struct ArenaTables {
+    mode: RunBufferMode,
+    alignment: u64,
+    bindings: [u64; RUN_BINDINGS],
+    generations: Vec<ArenaGeneration>,
+    chunks: Vec<ArenaChunk>,
+    staging: ArenaStaging,
+}
+
+const INITIAL_ARENA_CAPACITIES: [usize; RUN_BINDINGS] = [
+    INITIAL_ARENA_RECORDS,
+    INITIAL_BRUSHES,
+    INITIAL_STOPS,
+    INITIAL_PLACEMENTS,
+];
+
+const UNIFORM_CHUNKS: [usize; RUN_BINDINGS] =
+    [RECORD_CHUNK, BRUSH_CHUNK, STOP_CHUNK, PLACEMENT_CHUNK];
+
+impl ArenaTables {
+    fn new(mode: RunBufferMode, alignment: u64) -> Self {
+        let bindings = std::array::from_fn(|index| {
+            let elements = if mode.storage {
+                1
+            } else {
+                UNIFORM_CHUNKS[index]
+            };
+            (elements * ELEMENT_SIZES[index]) as u64
+        });
+        Self {
+            mode,
+            alignment,
+            bindings,
+            generations: Vec::new(),
+            chunks: Vec::new(),
+            staging: ArenaStaging::default(),
+        }
+    }
+
+    fn place(
+        &mut self,
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        tables: [&[u8]; RUN_BINDINGS],
+    ) -> ArenaChunk {
+        let mut rebind = false;
+        for (binding, table) in self.bindings.iter_mut().zip(tables) {
+            let needed = table.len() as u64;
+            if self.mode.storage && needed > *binding {
+                *binding = needed;
+                rebind = true;
+            }
+        }
+        let current = self.generations.last();
+        let placements: [UploadPlacement; RUN_BINDINGS] = std::array::from_fn(|index| {
+            place_upload(
+                current.map_or(0, |generation| generation.staged[index].len() as u64),
+                tables[index].len() as u64,
+                self.bindings[index],
+                self.alignment,
+                current.map(|generation| generation.capacities[index]),
+            )
+        });
+        let grows = placements
+            .iter()
+            .any(|placement| matches!(placement, UploadPlacement::Grow(_)));
+        if grows {
+            let capacities = std::array::from_fn(|index| {
+                let least = (INITIAL_ARENA_CAPACITIES[index] * ELEMENT_SIZES[index]) as u64;
+                match placements[index] {
+                    UploadPlacement::Grow(capacity) => capacity.max(least),
+                    UploadPlacement::At(_) => current
+                        .map_or(least, |generation| generation.capacities[index])
+                        .max(least),
+                }
+            });
+            self.generations.push(ArenaGeneration::new(
+                device,
+                layout,
+                self.mode,
+                capacities,
+                self.bindings,
+            ));
+        } else if rebind && let Some(generation) = self.generations.last_mut() {
+            generation.bind_group =
+                ArenaGeneration::bind(device, layout, &generation.buffers, self.bindings);
+        }
+        let index = self.generations.len() - 1;
+        let generation = &mut self.generations[index];
+        let offsets = std::array::from_fn(|table| {
+            let offset = match placements[table] {
+                UploadPlacement::At(offset) if !grows => offset,
+                _ => 0,
+            };
+            let staged = &mut generation.staged[table];
+            staged.resize(offset as usize, 0);
+            staged.extend_from_slice(tables[table]);
+            u32::try_from(offset).expect("a frame's arena tables fit a dynamic offset")
+        });
+        ArenaChunk {
+            generation: index,
+            offsets,
+        }
+    }
+
+    fn flush(&mut self, queue: &wgpu::Queue) -> FrameCommandStats {
+        let mut stats = FrameCommandStats::default();
+        for generation in &mut self.generations {
+            for (buffer, staged) in generation.buffers.iter().zip(&mut generation.staged) {
+                if staged.is_empty() {
+                    continue;
+                }
+                let padded = staged.len().div_ceil(wgpu::COPY_BUFFER_ALIGNMENT as usize)
+                    * wgpu::COPY_BUFFER_ALIGNMENT as usize;
+                staged.resize(padded, 0);
+                stats += write_buffer(queue, buffer, 0, staged);
+                staged.clear();
+            }
+        }
+        let keep = self.generations.len().saturating_sub(1);
+        self.generations.drain(..keep);
+        stats
+    }
+}
+
 /// The GPU home of every run: retained tables per command, and the
 /// per-pass arena chunks small runs are copied into.
 pub(crate) struct RunStore {
     mode: RunBufferMode,
     layout: wgpu::BindGroupLayout,
     stored: HashMap<DrawCommandId, StoredRun>,
-    arena_buffers: Vec<RunBuffers>,
-    arena_staging: Vec<ArenaStaging>,
-    arena_cursor: usize,
+    arena: ArenaTables,
     scratch_stops: Vec<GradientStopRecord>,
     strip_indices: [StripIndexBuffer; ARC_BUCKETS],
     frame: u64,
@@ -515,7 +716,7 @@ impl RunStore {
             visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
             ty: wgpu::BindingType::Buffer {
                 ty: mode.binding_type(),
-                has_dynamic_offset: false,
+                has_dynamic_offset: true,
                 min_binding_size: None,
             },
             count: None,
@@ -524,13 +725,18 @@ impl RunStore {
             label: Some("Run Tables Bind Group Layout"),
             entries: &[binding(0), binding(1), binding(2), binding(3)],
         });
+        let limits = device.limits();
+        let alignment = u64::from(if mode.storage {
+            limits.min_storage_buffer_offset_alignment
+        } else {
+            limits.min_uniform_buffer_offset_alignment
+        })
+        .max(wgpu::COPY_BUFFER_ALIGNMENT);
         Self {
             mode,
             layout,
             stored: HashMap::new(),
-            arena_buffers: Vec::new(),
-            arena_staging: Vec::new(),
-            arena_cursor: 0,
+            arena: ArenaTables::new(mode, alignment),
             fill_stats: false,
             scratch_stops: Vec::new(),
             strip_indices: Default::default(),
@@ -587,18 +793,16 @@ impl RunStore {
     pub(crate) fn begin_frame(&mut self, fill_stats: bool) {
         self.fill_stats = fill_stats;
         self.frame += 1;
-        self.arena_cursor = 0;
+        self.arena.chunks.clear();
         let frame = self.frame;
         self.stored
             .retain(|_, run| frame - run.last_used_frame <= STORE_IDLE_FRAMES);
     }
 
-    pub(crate) fn end_frame(&mut self) {
-        const ARENA_POOL_MARGIN: usize = 4;
-        self.arena_buffers
-            .truncate(self.arena_cursor.saturating_add(ARENA_POOL_MARGIN));
-        self.arena_staging
-            .truncate(self.arena_cursor.saturating_add(ARENA_POOL_MARGIN));
+    /// Writes the frame's arena tables, one write per table, ahead of the
+    /// submit.
+    pub(crate) fn flush(&mut self, queue: &wgpu::Queue) -> FrameCommandStats {
+        self.arena.flush(queue)
     }
 
     pub(crate) fn stored_count(&self) -> usize {
@@ -620,18 +824,28 @@ impl RunStore {
     }
 
     pub(crate) fn arena_staging_bytes(&self) -> usize {
-        self.arena_staging
-            .iter()
-            .map(ArenaStaging::heap_bytes)
-            .sum()
+        self.arena.staging.heap_bytes()
+            + self
+                .arena
+                .generations
+                .iter()
+                .flat_map(|generation| generation.staged.iter())
+                .map(Vec::capacity)
+                .sum::<usize>()
     }
 
     pub(crate) fn stored(&self, command: &DrawCommandId) -> Option<&StoredRun> {
         self.stored.get(command)
     }
 
-    pub(crate) fn arena(&self, chunk: usize) -> &RunBuffers {
-        &self.arena_buffers[chunk]
+    /// The tables a closed chunk's draws bind: the frame's arena bind
+    /// group and the chunk's dynamic offsets into it.
+    pub(crate) fn arena_binding(&self, chunk: usize) -> ArenaBinding<'_> {
+        let chunk = self.arena.chunks[chunk];
+        ArenaBinding {
+            bind_group: &self.arena.generations[chunk.generation].bind_group,
+            offsets: chunk.offsets,
+        }
     }
 
     /// Whether `run` keeps retained buffers rather than joining the arena.
@@ -741,49 +955,22 @@ impl RunStore {
     }
 
     /// Opens the arena chunk a pass appends to.
-    pub(crate) fn open_arena(&mut self, device: &wgpu::Device) -> usize {
-        let chunk = self.arena_cursor;
-        self.arena_cursor += 1;
-        while self.arena_buffers.len() <= chunk {
-            self.arena_buffers.push(RunBuffers::new(
-                device,
-                &self.layout,
-                self.mode,
-                [
-                    if self.mode.storage {
-                        INITIAL_ARENA_RECORDS
-                    } else {
-                        RECORD_CHUNK
-                    },
-                    if self.mode.storage {
-                        INITIAL_BRUSHES
-                    } else {
-                        BRUSH_CHUNK
-                    },
-                    if self.mode.storage {
-                        INITIAL_STOPS
-                    } else {
-                        STOP_CHUNK
-                    },
-                    if self.mode.storage {
-                        INITIAL_PLACEMENTS
-                    } else {
-                        PLACEMENT_CHUNK
-                    },
-                ],
-            ));
-        }
-        while self.arena_staging.len() <= chunk {
-            self.arena_staging.push(ArenaStaging::default());
-        }
-        self.arena_staging[chunk].clear();
+    pub(crate) fn open_arena(&mut self) -> usize {
+        let chunk = self.arena.chunks.len();
+        self.arena.chunks.push(ArenaChunk::default());
+        self.arena.staging.clear();
         chunk
     }
 
     /// Whether `run`'s next part fits the open chunk; a uniform chunk that
     /// cannot take another record closes and the pass opens the next.
     pub(crate) fn arena_accepts(&self, chunk: usize, run: &RunDraw) -> bool {
-        let staging = &self.arena_staging[chunk];
+        debug_assert_eq!(
+            chunk + 1,
+            self.arena.chunks.len(),
+            "only the open chunk accepts"
+        );
+        let staging = &self.arena.staging;
         if staging.is_empty() {
             return true;
         }
@@ -811,7 +998,12 @@ impl RunStore {
     ) -> u32 {
         let mode = self.mode;
         let fill_stats = self.fill_stats;
-        let staging = &mut self.arena_staging[chunk];
+        debug_assert_eq!(
+            chunk + 1,
+            self.arena.chunks.len(),
+            "only the open chunk appends"
+        );
+        let staging = &mut self.arena.staging;
         let tables = &*run.tables;
         let placement_index = staging.placements.len() as u32;
         staging
@@ -884,38 +1076,41 @@ impl RunStore {
         taken
     }
 
-    /// Uploads the open chunk's tables; returns the stats and the draws.
+    /// Places the open chunk's tables in the frame's arena; returns the
+    /// draws and the chunk's fill.
     pub(crate) fn close_arena(
         &mut self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
         chunk: usize,
-    ) -> (FrameCommandStats, Vec<RunDrawCall>, Option<ShapeFill>) {
-        let staging = &mut self.arena_staging[chunk];
-        let buffers = &mut self.arena_buffers[chunk];
-        if staging.is_empty() {
-            return (FrameCommandStats::default(), Vec::new(), None);
+    ) -> (Vec<RunDrawCall>, Option<ShapeFill>) {
+        debug_assert_eq!(
+            chunk + 1,
+            self.arena.chunks.len(),
+            "only the open chunk closes"
+        );
+        if self.arena.staging.is_empty() {
+            return (Vec::new(), None);
         }
+        let mut staging = std::mem::take(&mut self.arena.staging);
         let draws = std::mem::take(&mut staging.draws);
         for draw in &draws {
             let class = draw.key.band_class;
             self.strip_indices[class as usize].ensure(device, band_class_segments(class));
         }
-        buffers.ensure(
+        let placed = self.arena.place(
             device,
             &self.layout,
             [
-                staging.records.len(),
-                staging.brushes.len().max(1),
-                staging.stops.len().max(1),
-                staging.placements.len(),
+                bytemuck::cast_slice(&staging.records),
+                bytemuck::cast_slice(&staging.brushes),
+                bytemuck::cast_slice(&staging.stops),
+                bytemuck::cast_slice(&staging.placements),
             ],
         );
-        let mut stats = buffers.write(queue, 0, &staging.records);
-        stats += buffers.write(queue, 1, &staging.brushes);
-        stats += buffers.write(queue, 2, &staging.stops);
-        stats += buffers.write(queue, 3, &staging.placements);
-        (stats, draws, self.fill_stats.then_some(staging.fill))
+        self.arena.chunks[chunk] = placed;
+        let fill = self.fill_stats.then_some(staging.fill);
+        self.arena.staging = staging;
+        (draws, fill)
     }
 }
 

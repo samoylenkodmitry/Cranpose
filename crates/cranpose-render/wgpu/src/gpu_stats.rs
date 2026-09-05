@@ -6,7 +6,7 @@ use cranpose_render_common::raster_cache::{
 };
 use cranpose_ui_graphics::Rect;
 
-use crate::{frame_graph::FrameCommandStats, run_geometry::ShapeFill};
+use crate::{debug_toggles::DebugToggle, frame_graph::FrameCommandStats, run_geometry::ShapeFill};
 
 const TOP_ISOLATED_LAYER_LIMIT: usize = 8;
 
@@ -58,6 +58,9 @@ pub struct FrameStatsSnapshot {
     pub transient_texture_bytes: u64,
     pub retained_texture_bytes: u64,
     pub upload_bytes: u64,
+    /// Buffer writes the frame staged: uploads that reach the GPU as one
+    /// write each, however many draws they carry.
+    pub upload_writes: u32,
     pub isolated_layer_renders: u32,
     pub isolated_layer_pixels: u64,
     pub layer_cache_hits: u32,
@@ -81,6 +84,12 @@ pub struct FrameStatsSnapshot {
     pub shadow_fully_occluded_composites: u32,
     pub shadow_text_blur_fallbacks: u32,
     pub blur_passes: u32,
+    /// Backdrop stages resolved: every stage flushes the page and captures
+    /// once, so the layer pass count is one more than this.
+    pub stages: u32,
+    /// Backdrops resolved into retained textures this frame, each a second
+    /// shading of its glass.
+    pub backdrop_admissions: u32,
     /// Captures averaged into a quarter-size substrate for a shader's wide
     /// taps.
     pub substrates: u32,
@@ -162,6 +171,7 @@ impl FrameStatsSnapshot {
             .retained_texture_bytes
             .max(stats.retained_texture_bytes);
         self.upload_bytes = self.upload_bytes.saturating_add(stats.upload_bytes);
+        self.upload_writes = self.upload_writes.saturating_add(stats.upload_writes);
         self
     }
 
@@ -216,11 +226,11 @@ impl FrameStatsSnapshot {
         let isolated_layer_mpx = self.isolated_layer_pixels as f64 / 1_000_000.0;
         eprintln!(
             "[GPU f#{}] encoders={} submits={} passes={} pass_px={:.2}MP copies={} copy_px={:.2}MP | offscreen: acq={} new={} {:.1}MB pool={}({:.1}MB) retained={:.1}MB | \
-             uploads={:.2}MB | \
+             uploads={:.2}MB writes={} | \
              isolated_layers={} area={:.2}MP top={} | \
              layer_cache: hit={} miss={} {:.1}% hit_px={:.2}MP miss_px={:.2}MP size={}({:.1}MB) hit_by_kind={} miss_px_by_kind={} | \
              shadow_cache: shape_hit={} shape_miss={} hit_px={:.2}MP miss_px={:.2}MP text_blur_fallback={} | \
-             blur={} substrate={} composite={} effect={} shader_px={:.2}MP | shape={} shape_fill_px={:.2}MP{} shape_verts={} image={} text={} draws={} | \
+             stages={} admit={} blur={} substrate={} composite={} effect={} shader_px={:.2}MP | shape={} shape_fill_px={:.2}MP{} shape_verts={} image={} text={} draws={} | \
              text_img_cache: hit={} miss={} hit_px={:.2}MP miss_px={:.2}MP raster={:.2}MB | \
              text_glyph_atlas: hit={} miss={} miss_px={:.2}MP | \
              caches: text_pool={} img={} txt={}",
@@ -238,6 +248,7 @@ impl FrameStatsSnapshot {
             pool_mb,
             retained_mb,
             upload_mb,
+            self.upload_writes,
             self.isolated_layer_renders,
             isolated_layer_mpx,
             self.top_isolated_display(),
@@ -255,6 +266,8 @@ impl FrameStatsSnapshot {
             shadow_cache_hit_mpx,
             shadow_cache_miss_mpx,
             self.shadow_text_blur_fallbacks,
+            self.stages,
+            self.backdrop_admissions,
             self.blur_passes,
             self.substrates,
             self.composite_passes,
@@ -309,7 +322,7 @@ pub(crate) struct FrameStats {
     pub offscreen_acquires: Cell<u32>,
     pub offscreen_news: Cell<u32>,
     pub offscreen_total_bytes: Cell<u64>,
-    pub upload_bytes: Cell<u64>,
+    pub upload_writes: Cell<u32>,
     pub isolated_layer_renders: Cell<u32>,
     pub isolated_layer_pixels: Cell<u64>,
     pub layer_cache_hits: Cell<u32>,
@@ -327,6 +340,8 @@ pub(crate) struct FrameStats {
     pub shadow_fully_occluded_composites: Cell<u32>,
     pub shadow_text_blur_fallbacks: Cell<u32>,
     pub blur_passes: Cell<u32>,
+    pub stages: Cell<u32>,
+    pub backdrop_admissions: Cell<u32>,
     pub substrates: Cell<u32>,
     pub composite_passes: Cell<u32>,
     pub effect_applies: Cell<u32>,
@@ -362,6 +377,15 @@ impl FrameStats {
     pub fn record_capture_fixup_pass(&self) {
         self.capture_fixup_passes
             .set(self.capture_fixup_passes.get().saturating_add(1));
+    }
+
+    pub fn record_stages(&self, count: u32) {
+        self.stages.set(self.stages.get().saturating_add(count));
+    }
+
+    pub fn record_backdrop_admission(&self) {
+        self.backdrop_admissions
+            .set(self.backdrop_admissions.get().saturating_add(1));
     }
 
     pub fn record_command_stats(&self, stats: FrameCommandStats) {
@@ -412,6 +436,8 @@ impl FrameStats {
                 .get()
                 .saturating_add(stats.upload_bytes),
         );
+        self.upload_writes
+            .set(self.upload_writes.get().saturating_add(stats.upload_writes));
     }
 
     pub fn record_offscreen_acquire(
@@ -432,11 +458,6 @@ impl FrameStats {
                     * (height as u64)
                     * crate::frame_graph::texture_format_bytes_per_pixel(format),
         );
-    }
-
-    pub fn record_upload_bytes(&self, bytes: u64) {
-        self.upload_bytes
-            .set(self.upload_bytes.get().saturating_add(bytes));
     }
 
     pub fn record_isolated_layer_render(
@@ -661,10 +682,8 @@ impl FrameStats {
                 .saturating_add(self.command_transient_texture_bytes.get()),
             retained_texture_bytes: retained_texture_bytes
                 .saturating_add(self.command_retained_texture_bytes.get()),
-            upload_bytes: self
-                .upload_bytes
-                .get()
-                .saturating_add(self.command_upload_bytes.get()),
+            upload_bytes: self.command_upload_bytes.get(),
+            upload_writes: self.upload_writes.get(),
             isolated_layer_renders: self.isolated_layer_renders.get(),
             isolated_layer_pixels: self.isolated_layer_pixels.get(),
             layer_cache_hits: self.layer_cache_hits.get(),
@@ -685,6 +704,8 @@ impl FrameStats {
             shadow_fully_occluded_composites: self.shadow_fully_occluded_composites.get(),
             shadow_text_blur_fallbacks: self.shadow_text_blur_fallbacks.get(),
             blur_passes: self.blur_passes.get(),
+            stages: self.stages.get(),
+            backdrop_admissions: self.backdrop_admissions.get(),
             substrates: self.substrates.get(),
             composite_passes: self.composite_passes.get(),
             effect_applies: self.effect_applies.get(),
@@ -727,10 +748,10 @@ impl FrameStats {
         self.command_transient_texture_bytes.set(0);
         self.command_retained_texture_bytes.set(0);
         self.command_upload_bytes.set(0);
+        self.upload_writes.set(0);
         self.offscreen_acquires.set(0);
         self.offscreen_news.set(0);
         self.offscreen_total_bytes.set(0);
-        self.upload_bytes.set(0);
         self.isolated_layer_renders.set(0);
         self.isolated_layer_pixels.set(0);
         self.layer_cache_hits.set(0);
@@ -750,6 +771,8 @@ impl FrameStats {
         self.shadow_fully_occluded_composites.set(0);
         self.shadow_text_blur_fallbacks.set(0);
         self.blur_passes.set(0);
+        self.stages.set(0);
+        self.backdrop_admissions.set(0);
         self.substrates.set(0);
         self.composite_passes.set(0);
         self.effect_applies.set(0);
@@ -822,10 +845,10 @@ impl FrameStats {
     }
 }
 
+static GPU_STATS: DebugToggle = DebugToggle::new("CRANPOSE_GPU_STATS");
+
 pub(crate) fn gpu_stats_enabled() -> bool {
-    crate::debug_toggles::debug_toggle("CRANPOSE_GPU_STATS")
-        .map(|v| matches!(v.as_str(), "1" | "true" | "yes"))
-        .unwrap_or(false)
+    GPU_STATS.flag()
 }
 
 pub(crate) fn print_gpu_memory_report(device: &wgpu::Device, frame_count: u64) {
@@ -854,10 +877,10 @@ pub(crate) fn print_gpu_memory_report(device: &wgpu::Device, frame_count: u64) {
     );
 }
 
+static SHADOW_CACHE_DIAG: DebugToggle = DebugToggle::new("CRANPOSE_GPU_SHADOW_CACHE_DIAG");
+
 fn shadow_cache_diagnostics_enabled() -> bool {
-    crate::debug_toggles::debug_toggle("CRANPOSE_GPU_SHADOW_CACHE_DIAG")
-        .map(|v| matches!(v.as_str(), "1" | "true" | "yes"))
-        .unwrap_or(false)
+    SHADOW_CACHE_DIAG.flag()
 }
 
 fn by_kind_display<T: Copy + Default + PartialEq>(
@@ -896,7 +919,6 @@ mod tests {
     #[test]
     fn layer_cache_counters_accumulate_and_reset() {
         let stats = FrameStats::default();
-        stats.record_upload_bytes(512);
         stats.record_command_stats(FrameCommandStats {
             encoder_count: 1,
             submit_count: 1,
@@ -907,6 +929,7 @@ mod tests {
             transient_texture_bytes: 256,
             retained_texture_bytes: 128,
             upload_bytes: 64,
+            upload_writes: 0,
         });
         stats.bump_shapes();
         stats.blur_passes.set(1);
@@ -946,7 +969,7 @@ mod tests {
 
         assert_eq!(snapshot.isolated_layer_renders, 1);
         assert_eq!(snapshot.isolated_layer_pixels, 56);
-        assert_eq!(snapshot.upload_bytes, 576);
+        assert_eq!(snapshot.upload_bytes, 64);
         assert_eq!(snapshot.encoder_count, 1);
         assert_eq!(snapshot.submit_count, 1);
         assert_eq!(snapshot.pass_count, 2);
@@ -986,7 +1009,6 @@ mod tests {
         assert_eq!(stats.text_image_cache_hit_pixels.get(), 0);
         assert_eq!(stats.text_image_cache_miss_pixels.get(), 0);
         assert_eq!(stats.text_image_raster_bytes.get(), 0);
-        assert_eq!(stats.upload_bytes.get(), 0);
         assert_eq!(stats.isolated_layer_renders.get(), 0);
         assert_eq!(stats.isolated_layer_pixels.get(), 0);
         assert_eq!(stats.top_isolated_layer_count.get(), 0);
@@ -1006,6 +1028,7 @@ mod tests {
             transient_texture_bytes: 1024,
             retained_texture_bytes: 2048,
             upload_bytes: 512,
+            upload_writes: 0,
         });
         stats.bump_shapes();
 
@@ -1042,6 +1065,7 @@ mod tests {
             transient_texture_bytes: 128,
             retained_texture_bytes: 512,
             upload_bytes: 64,
+            upload_writes: 0,
         });
         let snapshot = stats
             .snapshot()
@@ -1055,6 +1079,7 @@ mod tests {
                 transient_texture_bytes: 0,
                 retained_texture_bytes: 0,
                 upload_bytes: 0,
+                upload_writes: 0,
             });
 
         assert_eq!(snapshot.submits, 2);

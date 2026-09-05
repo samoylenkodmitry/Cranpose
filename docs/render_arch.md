@@ -1120,6 +1120,80 @@ upload (23-45 to ~8). Transient textures whose size moves with the press
 animation pooled by rounded size. Then the CPU chain is measured again
 and the plan retained across frames where the profile says the plan is.
 
+## The frame's other half: passes, uploads and the swipe that pressed the bar (2026-09-05, night)
+
+**Where the watch's CPU goes.** The scroll's main thread (`simpleperf`,
+DWARF unwinding, the profiling library beside the APK): 40% of the samples
+sit in the Adreno Vulkan driver, and a third of the allocator's 42% is
+the driver's own `calloc`/`realloc`, so the driver is the frame's largest
+CPU consumer. Every render pass, staging buffer, barrier and descriptor
+set is a driver call; a frame carried 14-22 passes and 22-45
+`queue.write_buffer` calls, each of the latter a staging buffer created,
+mapped, copied, barriered and destroyed. The renderer's own code, the
+composer and layout are 7%, 7% and 6%. Per-frame `getenv` walks behind
+`debug_toggle` were 2%: every toggle a hot path reads is now a
+`DebugToggle` static that caches the value under a generation the test
+override bumps.
+
+**Where the watch's GPU goes, measured right.** The measurement swipe
+started at (204,340), on the tab bar's pill, so every swipe pressed the
+bar: its lift spring scaled it by 3%, which isolated it into a child layer
+(three layer passes of its own and a blit capture instead of a copy),
+re-blurred its 603x397 shadow at 44 px in half the frames (six passes),
+and at every swipe's end admitted seven backdrops into the cache in one
+frame at ~1.6 ms each. A swipe beside the pill, (36,300) to (60,80), is
+the list scroll: 22-23 ms a frame with five layer passes and three blur
+stages, the tab bar drawn direct. The stage diagnostic
+(`CRANPOSE_GPU_STAGE_DIAG`, `debug.cranpose.gpu_stage_diag`) prints every
+stage's members: the search field's blur (stage 0, read by), the selected
+chip's blur whose 36 px padding reaches 20 px into the field (stage 1),
+and the tab bar's blur whose capture holds both (stage 2) are real
+dependencies, so the chain and its nine tiny blur passes stay; the
+header's three substrates ride stage 1 because its capture padding is the
+wide radius everywhere while its taper reads a pixel at the bottom edge,
+which is a sharper reach for another day.
+
+**What changed.** A shadow's surface, and so its blur, its cache entry and
+its banded blits, ends where the kernel does: `blur_reach_px` is the
+radius (capped by the pass's 32 taps at the scratch block) plus three
+scratch blocks and the caster's own pixel, in place of three times the
+radius. A radius-44 shadow's surface shrinks from 585x389 to 424x227; the
+watch blitted 0.31 MP of shadow bands a frame. Backdrop admission is
+budgeted by pixels per frame (`MAX_BACKDROP_ADMISSION_PIXELS`): the frame a
+scroll stops in resolves a couple of glasses, not all seven at once, and
+the rest follow over the next frames. The frame's uploads are arenas:
+every effect uniform block lands in one uniform buffer at a dynamic
+offset (the layouts are dynamic now, one bind group per block kind per
+buffer), the image and glyph quads in one vertex and one index buffer,
+and the shape arena's four tables in one buffer each with the chunks at
+dynamic offsets; each buffer is written once before the submit. Three
+blurred glasses over a page went from 21 buffer writes to 6 (a still
+frame: 4); the watch's scroll frame from 22-45 writes to 8-9.
+
+**Measured, interleaved.** The previous build and this one ran A B A B on
+the watch under the list swipe, the temperature logged around every leg,
+because the watch throttles above ~40 C (the untouched blur passes read
+2.2 ms at 37 C and 3.1 at 41) and a build measured after another is the
+hotter one. At 37.4 C both legs: GPU frame 22.3-23.3 ms before, 21.4-22.3
+after (Layer Pass 15.2-16.0 -> 14.9-15.9, Backdrop Result 1.15-1.55 ->
+0.75-0.95, shadow band pixels 0.38 -> 0.25 MP), CPU p50 22.05 -> 21.58 ms,
+presented 37.8-39.1 -> 37.4-41.6 fps: unchanged, the frame is the GPU's.
+The second pair, at 40-41 C, was throttled on both builds (29-30 fps).
+The picture is the previous build's within the drifting stars.
+
+**Where 60 fps still is.** The GPU frame of ~22 ms is five 408x408 layer
+passes and the three-stage blur chain's nine tiny passes (~5 ms of pass
+overhead for 5 thousand pixels each), then ~7 ms of page, ~6 of glass,
+~1 of admissions. A render-pass blur cannot go below three passes a
+stage; one compute dispatch a stage (the tile and its apron in workgroup
+memory, both axes in one pass) would take the chain from nine passes to
+three, ~-4.5 ms, and is the largest cut left, at the price of a second
+blur implementation for the WebGL fallback the web build keeps. The
+header's capture reads the wide radius everywhere while its taper reads
+a pixel at the bottom edge; an exact reach would free stage 1 of its
+three substrates. Under all of it the driver's 40% of the CPU frame is
+proportional to passes and descriptor churn: fewer passes cut both sides.
+
 ## Order
 
 Every step ships with its contract proven red first, the robot suite

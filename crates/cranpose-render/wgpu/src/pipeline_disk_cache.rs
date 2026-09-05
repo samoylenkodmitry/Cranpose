@@ -5,8 +5,12 @@ use std::{
 
 use web_time::Instant;
 
+use crate::debug_toggles::DebugToggle;
+
+static DISK_CACHE: DebugToggle = DebugToggle::new("CRANPOSE_PIPELINE_DISK_CACHE");
+
 fn disk_cache_enabled() -> bool {
-    crate::debug_toggles::debug_toggle("CRANPOSE_PIPELINE_DISK_CACHE").as_deref() != Some("0")
+    !DISK_CACHE.equals("0")
 }
 
 pub(crate) fn file_path() -> Option<PathBuf> {

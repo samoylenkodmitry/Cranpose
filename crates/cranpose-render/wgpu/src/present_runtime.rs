@@ -12,6 +12,10 @@ use std::{
 
 use cranpose_render_common::software_text_raster::SoftwareTextFontSet;
 
+use crate::debug_toggles::DebugToggle;
+
+static ENCODE_DELAY_MS: DebugToggle = DebugToggle::new("CRANPOSE_ENCODE_DELAY_MS");
+
 use crate::{
     frame_packet::{CancelReason, FramePacket, PresentOutcome, PresentTimings, RenderReturns},
     render::GpuRenderer,
@@ -310,9 +314,7 @@ impl PresentState {
             }
         };
         let after_acquire_ns = self.now();
-        if let Some(delay) = crate::debug_toggles::debug_toggle("CRANPOSE_ENCODE_DELAY_MS")
-            .and_then(|value| value.parse::<u64>().ok())
-        {
+        if let Some(delay) = ENCODE_DELAY_MS.parse::<u64>() {
             std::thread::sleep(std::time::Duration::from_millis(delay));
         }
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor {

@@ -1,7 +1,11 @@
 mod support;
 
-use cranpose_render_common::graph::{
-    DrawPrimitiveNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, RenderGraph, RenderNode,
+use cranpose_render_common::{
+    Renderer,
+    geometry::blur_reach_px,
+    graph::{
+        DrawPrimitiveNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, RenderGraph, RenderNode,
+    },
 };
 use cranpose_render_wgpu::CapturedFrame;
 use cranpose_ui_graphics::{BlendMode, Brush, Color, DrawPrimitive, Rect, ShadowPrimitive};
@@ -194,4 +198,53 @@ fn a_wide_drop_shadow_blurs_at_the_scratch_size() {
         "the wide shadow must blur at the scratch size: none={none} plain={plain} cut={cut} \
          surface={surface} spent={spent}"
     );
+}
+
+/// A shadow's surface, and so every pixel it blurs, caches and blits, ends
+/// where its kernel does: the caster grown by the blur's reach and the
+/// surface's own pixel of rounding on each side, whatever the radius. At
+/// radius 20 the blur runs on blocks of four, so the reach is the radius,
+/// three blocks and the caster's own pixel, rounded up to the next block.
+/// The ring past it is the page untouched.
+#[test]
+fn a_shadow_surface_ends_where_its_kernel_does() {
+    let Ok(mut renderer) = support::headless_renderer() else {
+        eprintln!("skipping (headless WGPU init failed)");
+        return;
+    };
+    renderer.scene_mut().graph = Some(page(Some(WIDE_RADIUS), false));
+    let stats = renderer
+        .render_current_scene_to_texture(FRAME, FRAME)
+        .expect("render should succeed");
+    let reach = ((WIDE_RADIUS + 3.0 * 4.0 + 1.0) / 4.0).ceil() * 4.0;
+    let budget = (CASTER.width + 2.0 * reach + 2.0) * (CASTER.height + 2.0 * reach + 2.0);
+    assert!(
+        stats.shadow_shape_cache_miss_pixels as f32 <= budget,
+        "the radius-{WIDE_RADIUS} shadow's surface holds {} pixels, more than the {budget} its reach of {reach} allows",
+        stats.shadow_shape_cache_miss_pixels
+    );
+    assert_eq!(blur_reach_px(WIDE_RADIUS), reach);
+
+    let frame = support::capture_graph(&mut renderer, page(Some(WIDE_RADIUS), false), FRAME, FRAME);
+    let background = region_pixels(
+        &support::capture_graph(&mut renderer, page(None, false), FRAME, FRAME),
+        rect(0.0, 0.0, 1.0, 1.0),
+    );
+    let outer = reach + 1.0;
+    for y in 0..FRAME {
+        for x in 0..FRAME {
+            let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+            let dx = (CASTER.x - px).max(px - CASTER.x - CASTER.width);
+            let dy = (CASTER.y - py).max(py - CASTER.y - CASTER.height);
+            if dx.max(dy) < outer {
+                continue;
+            }
+            let at = ((y * FRAME + x) * 4) as usize;
+            assert_eq!(
+                &frame.pixels[at..at + 4],
+                &background[..],
+                "the shadow reaches ({x}, {y}), past its kernel's reach of {reach}"
+            );
+        }
+    }
 }

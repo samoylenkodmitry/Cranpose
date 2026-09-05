@@ -140,6 +140,7 @@ struct GlassHarness {
 struct FrameCacheStats {
     hits: u32,
     misses: u32,
+    admissions: u32,
     blur_passes: u32,
     isolated_layer_renders: u32,
 }
@@ -211,6 +212,7 @@ impl GlassHarness {
             FrameCacheStats {
                 hits: stats.layer_cache_hits,
                 misses: stats.layer_cache_misses,
+                admissions: stats.backdrop_admissions,
                 blur_passes: stats.blur_passes,
                 isolated_layer_renders: stats.isolated_layer_renders,
             },
@@ -223,7 +225,7 @@ impl GlassHarness {
     }
 }
 
-const WARMUP_FRAMES: usize = 4;
+const WARMUP_FRAMES: usize = 6;
 const MEASURED_FRAMES: usize = 8;
 
 fn harness() -> Option<(std::sync::MutexGuard<'static, ()>, GlassHarness)> {
@@ -394,4 +396,52 @@ fn a_cached_glass_result_follows_a_change_beneath_it() {
         max_channel_delta(&after, &overlay_interior_pixels(&reference)) <= 1,
         "a glass result reused from the cache must match a renderer that never cached"
     );
+}
+
+/// The frame a scroll stops in does not resolve every glass at once: the
+/// resolves, each a second shading of its glass, spread over the frames
+/// that follow within a pixel budget, and the scene still ends up wholly
+/// served from the cache.
+#[test]
+fn a_scene_that_stops_admits_its_glasses_over_several_frames() {
+    let Some((_lock, mut harness)) = harness() else {
+        return;
+    };
+    let still = SceneInput::default();
+    let first = harness.stats(still);
+    assert!(
+        first.misses >= 7,
+        "the scene shows at least seven glasses: {first:?}"
+    );
+    assert_eq!(
+        first.admissions, 0,
+        "a capture seen once is only remembered: {first:?}"
+    );
+    let mut admitted = 0;
+    let mut frames = 0;
+    while admitted < first.misses {
+        let stats = harness.stats(still);
+        assert!(
+            stats.admissions <= 3,
+            "frame {frames} after the stop resolved {} glasses at once: {stats:?}",
+            stats.admissions
+        );
+        assert!(stats.admissions > 0, "the admissions stalled: {stats:?}");
+        admitted += stats.admissions;
+        frames += 1;
+        assert!(
+            frames <= first.misses,
+            "admission never completed: {stats:?}"
+        );
+    }
+    assert!(
+        frames >= 3,
+        "seven glasses of 59 thousand pixels each need three frames, took {frames}"
+    );
+    let settled = harness.stats(still);
+    assert_eq!(
+        settled.misses, 0,
+        "every glass is served from the cache: {settled:?}"
+    );
+    assert_eq!(settled.hits, first.misses, "{settled:?}");
 }

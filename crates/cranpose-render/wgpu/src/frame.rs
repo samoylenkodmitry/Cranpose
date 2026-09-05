@@ -17,6 +17,7 @@ use cranpose_ui_graphics::{
 use crate::{
     capture_hash::{CaptureWindow, capture_hasher, hash_capture_composites, hash_capture_ops},
     collect::{ChildLayer, LayerScene, uniform_scale_translation},
+    debug_toggles::DebugToggle,
     draw_pass::{
         PassSegment, PassTarget, ResolvedComposite, ResolvedCompositeKind, SourceContent,
         op_draw_bounds, segment_draws_anything,
@@ -610,6 +611,36 @@ impl PendingBackdrop<'_> {
             self.layer_rect.width,
             self.layer_rect.height,
         ]
+    }
+}
+
+static STAGE_DIAG: DebugToggle = DebugToggle::new("CRANPOSE_GPU_STAGE_DIAG");
+
+fn stage_diagnostics_enabled() -> bool {
+    STAGE_DIAG.flag()
+}
+
+fn log_stage(stage: usize, items: &[&PendingBackdrop<'_>]) {
+    for item in items {
+        let capture = item.capture_rect;
+        let visible = item.visible;
+        let (blur, substrates) = match item.batched {
+            Some(batched) => (batched.blur().is_some(), batched.substrates().len()),
+            None => (false, 0),
+        };
+        log::warn!(
+            "[stage-diag] stage={stage} z={} capture=({:.0},{:.0},{:.0},{:.0}) visible=({:.0},{:.0},{:.0},{:.0}) batched={} blur={blur} substrates={substrates}",
+            item.z,
+            capture.x,
+            capture.y,
+            capture.width,
+            capture.height,
+            visible.x,
+            visible.y,
+            visible.width,
+            visible.height,
+            item.batched.is_some(),
+        );
     }
 }
 
@@ -1248,7 +1279,16 @@ pub(crate) struct FrameExecutor<'r, 'c, C: FrameCommandRecorder> {
     transients: Vec<(FrameTextureDescriptor, Rc<OffscreenTarget>)>,
     empty_scene: CompositorScene,
     depth: usize,
+    admitted_pixels: u64,
 }
+
+/// The pixels of backdrops resolved into retained textures in one frame
+/// before the rest wait for the next. A scroll that stops leaves every
+/// glass with a repeated capture at once, and each resolve shades its
+/// glass a second time; spreading them over frames keeps the frame that
+/// stops from paying for all of them. The first resolve of a frame always
+/// goes, so a glass larger than the budget still gets in.
+const MAX_BACKDROP_ADMISSION_PIXELS: u64 = 120_000;
 
 /// A texture a composite draws and what it holds.
 #[derive(Clone)]
@@ -1279,6 +1319,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             transients: Vec::new(),
             empty_scene: CompositorScene::new(),
             depth: 0,
+            admitted_pixels: 0,
         }
     }
 
@@ -1484,11 +1525,16 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         }
         pending.sort_by_key(|item| (item.stage, item.z));
         let stage_count = pending.last().map_or(0, |item| item.stage + 1);
+        self.renderer.frame_stats.record_stages(stage_count as u32);
+        let diagnose = stage_diagnostics_enabled();
         for stage in 0..stage_count {
             let items: Vec<&PendingBackdrop<'_>> =
                 pending.iter().filter(|item| item.stage == stage).collect();
             if items.is_empty() {
                 continue;
+            }
+            if diagnose {
+                log_stage(stage, &items);
             }
             let mut outputs = self.run_stage(pass, &items)?;
             self.admit_backdrops(&items, &mut outputs, pass.scale)?;
@@ -1619,7 +1665,9 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             self.renderer
                 .frame_stats
                 .record_layer_cache_miss(&key, width, height);
-            if !self.renderer.backdrop_admission.contains(&key) {
+            if !self.renderer.backdrop_admission.contains(&key)
+                || self.admitted_pixels >= MAX_BACKDROP_ADMISSION_PIXELS
+            {
                 self.renderer.backdrop_missed.insert(key);
                 continue;
             }
@@ -1630,6 +1678,8 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 continue;
             };
             let texture = self.resolve_whole(&outputs[index], item.capture_rect, scale)?;
+            self.admitted_pixels += u64::from(width) * u64::from(height);
+            self.renderer.frame_stats.record_backdrop_admission();
             self.renderer.layer_cache.insert(key, Rc::clone(&texture));
             outputs[index] = backdrop_blit(
                 item,
@@ -2423,7 +2473,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         if !draws_nothing || !shader_tail_composites(child, shader) {
             return None;
         }
-        let surface_logical = child_surface_rect(child)?;
+        let surface_logical = child_surface_rect(child, scale)?;
         let surface_rect = DeviceRect::from_logical(surface_logical, scale).snap_out();
         let (width, height) = surface_rect.pixel_size();
         if u64::from(width) * u64::from(height) > MAX_SURFACE_PIXELS {
@@ -2472,7 +2522,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let scale = pass.scale;
         let surface_scale = scale * child.surface_scale;
         let translated = (child.surface_scale - 1.0).abs() <= 1e-4;
-        let Some(surface_logical) = child_surface_rect(child) else {
+        let Some(surface_logical) = child_surface_rect(child, surface_scale) else {
             return Ok(None);
         };
         let child_rect = DeviceRect::from_logical(surface_logical, surface_scale).snap_out();
@@ -2828,8 +2878,11 @@ fn filtered_ops_in_range(
 
 /// The logical rect a child's surface covers: everything its content draws,
 /// clipped to its bounds when it clips, expanded for its effect's reach.
-fn child_surface_rect(child: &ChildLayer) -> Option<Rect> {
-    let mut bounds = union_rect(Some(child.local_bounds), scene_bounds(&child.content));
+fn child_surface_rect(child: &ChildLayer, scale: f32) -> Option<Rect> {
+    let mut bounds = union_rect(
+        Some(child.local_bounds),
+        scene_bounds(&child.content, scale * child.surface_scale),
+    );
     if child.rounded_clip.is_some() || child.content.scene.draw_ops.is_empty() {
         bounds = Some(child.local_bounds);
     }
@@ -2877,7 +2930,7 @@ fn clipped(rect: Rect, clip: Option<Rect>) -> Option<Rect> {
     }
 }
 
-pub(crate) fn scene_bounds(layer: &LayerScene) -> Option<Rect> {
+pub(crate) fn scene_bounds(layer: &LayerScene, scale: f32) -> Option<Rect> {
     let scene = &layer.scene;
     let mut bounds = None;
     for op in &scene.draw_ops {
@@ -2905,7 +2958,7 @@ pub(crate) fn scene_bounds(layer: &LayerScene) -> Option<Rect> {
                 }
                 shadow_bounds.and_then(|rect| {
                     let margin =
-                        cranpose_render_common::geometry::blur_extent_margin(shadow.blur_radius);
+                        cranpose_render_common::geometry::blur_reach(shadow.blur_radius, scale);
                     clipped(
                         Rect {
                             x: rect.x - margin,
@@ -2927,7 +2980,7 @@ pub(crate) fn scene_bounds(layer: &LayerScene) -> Option<Rect> {
         bounds = union_rect(bounds, clipped(backdrop.rect, backdrop.clip));
     }
     for child in &layer.children {
-        let child_bounds = child_surface_rect(child)
+        let child_bounds = child_surface_rect(child, scale)
             .map(|rect| quad_bounds(child.transform.map_rect(rect)))
             .unwrap_or(quad_bounds(child.transform.map_rect(child.local_bounds)));
         bounds = union_rect(bounds, clipped(child_bounds, child.clip));

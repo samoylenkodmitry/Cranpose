@@ -1,6 +1,6 @@
 use std::hash::{Hash, Hasher};
 
-use cranpose_render_common::geometry::blur_extent_margin;
+use cranpose_render_common::geometry::blur_reach;
 use cranpose_ui_graphics::{FxHasher, Point, Rect, RenderHash};
 
 use crate::{
@@ -90,7 +90,7 @@ pub(crate) fn hash_capture_ops<H: Hasher>(
             }
             DrawOpKind::Shadow(index) => {
                 let shadow = &scene.shadow_draws[index];
-                let margin = blur_extent_margin(shadow.blur_radius) * scale + OP_MARGIN;
+                let margin = blur_reach(shadow.blur_radius, scale) * scale + OP_MARGIN;
                 if shadow_draw_bounds(shadow)
                     .is_some_and(|bounds| window.touches_logical(bounds, margin, scale))
                 {

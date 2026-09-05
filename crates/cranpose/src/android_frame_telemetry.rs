@@ -32,7 +32,7 @@ fn property_flag(name: &str) -> bool {
     }
 }
 
-const PROPERTY_BACKED_ENV_VARS: [(&str, &str); 25] = [
+const PROPERTY_BACKED_ENV_VARS: [(&str, &str); 26] = [
     ("debug.cranpose.recomp_diag", "CRANPOSE_RECOMP_DIAG"),
     (
         "debug.cranpose.layout_ms",
@@ -40,6 +40,7 @@ const PROPERTY_BACKED_ENV_VARS: [(&str, &str); 25] = [
     ),
     ("debug.cranpose.core_pin", "CRANPOSE_CORE_PIN"),
     ("debug.cranpose.gpu_stats", "CRANPOSE_GPU_STATS"),
+    ("debug.cranpose.gpu_stage_diag", "CRANPOSE_GPU_STAGE_DIAG"),
     (
         "debug.cranpose.gpu_fence_profile",
         "CRANPOSE_GPU_FENCE_PROFILE",

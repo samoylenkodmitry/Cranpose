@@ -11,7 +11,7 @@ use bytemuck::{Pod, Zeroable};
 use cranpose_core::hash::default as default_hash;
 use cranpose_render_common::{
     bounded_lru_cache::BoundedLruCache,
-    geometry::blur_extent_margin,
+    geometry::blur_reach,
     graph::{DrawCommandId, quad_bounds},
     raster_cache::LayerRasterCacheKey,
     software_text_raster::{
@@ -32,12 +32,13 @@ use web_time::Instant;
 use crate::{
     DebugCpuAllocationStats,
     collect::LayerScene,
+    debug_toggles::DebugToggle,
     draw_pass::{PassSegment, PassTarget, ResolvedComposite, ResolvedCompositeKind, SourceContent},
     effect_renderer::{CompositeSampleMode, EffectRenderer, RoundedCompositeMask},
     frame::FrameExecutor,
     frame_graph::{
-        FrameCommandRecorder, FrameCommandStats, FrameTextureDescriptor, WgpuFrameGraph,
-        WgpuFrameGraphExecutor, write_buffer,
+        BufferUpload, FrameCommandRecorder, FrameCommandStats, FrameTextureDescriptor,
+        UploadAllocatorSpec, WgpuFrameGraph, WgpuFrameGraphExecutor, write_buffer,
     },
     frame_packet::{CancelReason, FramePacket, PresentOutcome, RenderReturns},
     geometry::{
@@ -52,24 +53,20 @@ use crate::{
     offscreen::{OffscreenTarget, composition_bytes_per_pixel, composition_format},
     output_conversion::OutputConverter,
     rect_to_quad,
-    run_store::{PlacementData, RunBufferMode, RunDrawCall, RunStore},
+    run_store::{ArenaBinding, PlacementData, RUN_BINDINGS, RunBufferMode, RunDrawCall, RunStore},
     scene::{
         CompositorScene, DrawOp, DrawOpKind, ImageDraw, RunDraw, ShadowDraw, SnapAnchor, TextDraw,
     },
     shaders,
 };
-#[cfg(target_arch = "wasm32")]
-const HARD_MAX_BUFFER_MB: usize = 64;
-#[cfg(not(target_arch = "wasm32"))]
-const HARD_MAX_BUFFER_MB: usize = 256;
 const MAX_SHADOW_SURFACE_CACHE_ITEMS: usize = 512;
 const MAX_TRANSPARENT_SOURCES: usize = 16;
 const MAX_SHADOW_SURFACE_CACHE_BYTES: u64 = 384 * 1024 * 1024;
 
+static SKIP_SHADOWS: DebugToggle = DebugToggle::new("CRANPOSE_SKIP_SHADOWS");
+
 fn skip_shadow_draws() -> bool {
-    crate::debug_toggles::debug_toggle("CRANPOSE_SKIP_SHADOWS")
-        .map(|v| matches!(v.as_str(), "1" | "true" | "yes"))
-        .unwrap_or(false)
+    SKIP_SHADOWS.flag()
 }
 const MAX_TEXT_IMAGE_CACHE_ITEMS: usize = 1024;
 const MAX_TEXT_GLYPH_MASK_CACHE_ITEMS: usize = 8192;
@@ -895,6 +892,7 @@ pub(crate) fn create_render_pipeline_logged<'a>(
         "[pipeline-create] {tag} {:.1}ms",
         instant_ms(started, Instant::now())
     );
+    #[cfg(not(target_arch = "wasm32"))]
     crate::pipeline_disk_cache::note_pipeline_created();
     pipeline
 }
@@ -940,8 +938,10 @@ impl ShapeVariant {
     }
 }
 
+static SHAPE_VARIANTS: DebugToggle = DebugToggle::new("CRANPOSE_SHAPE_VARIANTS");
+
 fn shape_variants_enabled() -> bool {
-    crate::debug_toggles::debug_toggle("CRANPOSE_SHAPE_VARIANTS").as_deref() != Some("0")
+    !SHAPE_VARIANTS.equals("0")
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -1193,8 +1193,10 @@ struct Uniforms {
     placement: PlacementData,
 }
 
+static SURVIVE_GPU_ERRORS: DebugToggle = DebugToggle::new("CRANPOSE_SURVIVE_GPU_ERRORS");
+
 fn survive_gpu_errors_enabled() -> bool {
-    crate::debug_toggles::debug_toggle("CRANPOSE_SURVIVE_GPU_ERRORS").as_deref() != Some("0")
+    !SURVIVE_GPU_ERRORS.equals("0")
 }
 
 struct CachedImageTexture {
@@ -1479,71 +1481,19 @@ struct ImageUvRect {
 }
 
 /// A growable vertex buffer and index buffer pair.
-struct VertexIndexBuffers<V> {
-    label: &'static str,
-    vertex_buffer: wgpu::Buffer,
-    index_buffer: wgpu::Buffer,
-    vertex_capacity: usize,
-    index_capacity: usize,
-    vertex: std::marker::PhantomData<V>,
+/// One pass's image and shared glyph quads: the frame's vertex and index
+/// uploads they were appended to.
+pub(crate) struct ImageSlot {
+    vertices: BufferUpload,
+    indices: BufferUpload,
 }
 
-type ImageBatchBuffers = VertexIndexBuffers<Vertex>;
+fn image_vertex_spec() -> UploadAllocatorSpec {
+    UploadAllocatorSpec::vertex("Image Vertex Buffer", std::mem::size_of::<Vertex>() as u64)
+}
 
-impl<V: Pod> VertexIndexBuffers<V> {
-    fn new(device: &wgpu::Device, label: &'static str) -> Self {
-        let vertex_capacity = 4;
-        let index_capacity = 6;
-        Self {
-            label,
-            vertex_buffer: Self::create_vertex_buffer(device, label, vertex_capacity),
-            index_buffer: Self::create_index_buffer(device, label, index_capacity),
-            vertex_capacity,
-            index_capacity,
-            vertex: std::marker::PhantomData,
-        }
-    }
-
-    fn create_vertex_buffer(device: &wgpu::Device, label: &str, capacity: usize) -> wgpu::Buffer {
-        device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some(&format!("{label} Vertex Buffer")),
-            size: (std::mem::size_of::<V>() * capacity) as u64,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        })
-    }
-
-    fn create_index_buffer(device: &wgpu::Device, label: &str, capacity: usize) -> wgpu::Buffer {
-        device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some(&format!("{label} Index Buffer")),
-            size: (std::mem::size_of::<u32>() * capacity) as u64,
-            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        })
-    }
-
-    fn ensure_capacity(
-        &mut self,
-        device: &wgpu::Device,
-        vertices_needed: usize,
-        indices_needed: usize,
-    ) {
-        let hard_max_bytes = HARD_MAX_BUFFER_MB * 1024 * 1024;
-        if vertices_needed > self.vertex_capacity {
-            let capacity = vertices_needed
-                .next_power_of_two()
-                .min(hard_max_bytes / std::mem::size_of::<V>());
-            self.vertex_buffer = Self::create_vertex_buffer(device, self.label, capacity);
-            self.vertex_capacity = capacity;
-        }
-        if indices_needed > self.index_capacity {
-            let capacity = indices_needed
-                .next_power_of_two()
-                .min(hard_max_bytes / std::mem::size_of::<u32>());
-            self.index_buffer = Self::create_index_buffer(device, self.label, capacity);
-            self.index_capacity = capacity;
-        }
-    }
+fn image_index_spec() -> UploadAllocatorSpec {
+    UploadAllocatorSpec::index("Image Index Buffer", std::mem::size_of::<u32>() as u64)
 }
 
 /// One frame's viewport uniforms. Every pass, and every retained glyph run
@@ -1760,8 +1710,6 @@ pub struct GpuRenderer {
     text_fonts: SoftwareTextFontSet,
     viewport_uniforms: ViewportUniformRing,
     run_store: RunStore,
-    image_slots: Vec<ImageBatchBuffers>,
-    image_slot_cursor: usize,
     image_texture_cache: BoundedLruCache<u64, CachedImageTexture>,
     image_texture_cache_bytes: usize,
     text_image_cache: BoundedLruCache<TextImageCacheKey, CachedTextImage>,
@@ -1937,8 +1885,6 @@ impl GpuRenderer {
             text_fonts,
             viewport_uniforms,
             run_store,
-            image_slots: Vec::new(),
-            image_slot_cursor: 0,
             image_texture_cache: BoundedLruCache::with_capacity_at_least_one(
                 MAX_TEXTURE_CACHE_ITEMS,
             ),
@@ -2333,7 +2279,6 @@ impl GpuRenderer {
         let render_start = Instant::now();
         self.viewport_uniforms.begin_frame();
         self.run_store.begin_frame(gpu_stats_enabled());
-        self.image_slot_cursor = 0;
 
         let text_cache_len = packet.text_cache_len;
         let frame_root = self.frame_root(output_mode, output_view, output_texture, (width, height));
@@ -2351,10 +2296,6 @@ impl GpuRenderer {
         }
         let after_graph = Instant::now();
         self.flush_deferred_offscreen_releases();
-        const SLOT_POOL_MARGIN: usize = 4;
-        self.run_store.end_frame();
-        self.image_slots
-            .truncate(self.image_slot_cursor.saturating_add(SLOT_POOL_MARGIN));
 
         self.frame_stats.offscreen_pool_size.set(
             self.effect_renderer
@@ -2726,7 +2667,8 @@ impl GpuRenderer {
             );
             recorder.record_pass();
         }
-        let upload = self.viewport_uniforms.flush(&self.queue);
+        let mut upload = self.viewport_uniforms.flush(&self.queue);
+        upload += self.run_store.flush(&self.queue);
         self.frame_stats.record_command_stats(upload);
         Ok(())
     }
@@ -2745,15 +2687,6 @@ impl GpuRenderer {
             .claim(&self.device, &self.uniform_bind_group_layout, &uniforms)
     }
 
-    fn claim_image_slot(&mut self) -> usize {
-        let slot = self.image_slot_cursor;
-        self.image_slot_cursor += 1;
-        while self.image_slots.len() <= slot {
-            self.image_slots
-                .push(ImageBatchBuffers::new(&self.device, "Image"));
-        }
-        slot
-    }
     /// Resolves a blurred shadow at `z` into a texture and queues its
     /// composites. The shadow's shapes and texts render into a source the
     /// size of their blur footprint, blur in place and take the post-blur
@@ -2835,7 +2768,7 @@ impl GpuRenderer {
         let Some(bounds) = shadow_draw_bounds(shadow) else {
             return;
         };
-        let margin = blur_extent_margin(shadow.blur_radius);
+        let margin = blur_reach(shadow.blur_radius, root_scale);
         let source_bounds = expand_rect(bounds, margin, margin);
         let mut visible = source_bounds;
         if let Some(clip) = shadow.clip {
@@ -3175,7 +3108,7 @@ impl GpuRenderer {
     }
 
     pub(crate) fn open_arena(&mut self) -> usize {
-        self.run_store.open_arena(&self.device)
+        self.run_store.open_arena()
     }
 
     pub(crate) fn arena_accepts(&self, chunk: usize, run: &RunDraw) -> bool {
@@ -3211,8 +3144,7 @@ impl GpuRenderer {
 
     /// Uploads the open chunk and returns its draws.
     pub(crate) fn close_arena(&mut self, chunk: usize) -> Vec<RunDrawCall> {
-        let (upload, draws, fill) = self.run_store.close_arena(&self.device, &self.queue, chunk);
-        self.frame_stats.record_command_stats(upload);
+        let (draws, fill) = self.run_store.close_arena(&self.device, chunk);
         if let Some(fill) = fill {
             self.frame_stats.add_shape_fill(fill);
         }
@@ -3222,7 +3154,7 @@ impl GpuRenderer {
     pub(crate) fn draw_run_calls(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
-        tables: &wgpu::BindGroup,
+        tables: ArenaBinding<'_>,
         uniform_slot: usize,
         draws: &[RunDrawCall],
         target_size: (u32, u32),
@@ -3240,7 +3172,7 @@ impl GpuRenderer {
             &self.viewport_uniforms.bind_group,
             &[self.viewport_uniforms.dynamic_offset(uniform_slot)?],
         );
-        pass.set_bind_group(1, tables, &[]);
+        pass.set_bind_group(1, tables.bind_group, &tables.offsets);
         let mut bound_class = None;
         for draw in draws {
             let pipeline = self
@@ -3275,7 +3207,10 @@ impl GpuRenderer {
             .ok_or_else(|| "a stored run left the store before its draw".to_string())?;
         self.draw_run_calls(
             pass,
-            &stored.buffers.bind_group,
+            ArenaBinding {
+                bind_group: &stored.buffers.bind_group,
+                offsets: [0; RUN_BINDINGS],
+            },
             batch.uniform_slot,
             &batch.draws,
             target_size,
@@ -3294,7 +3229,7 @@ impl GpuRenderer {
     ) -> Result<(), String> {
         self.draw_run_calls(
             pass,
-            &self.run_store.arena(chunk).bind_group,
+            self.run_store.arena_binding(chunk),
             uniform_slot,
             draws,
             target_size,
@@ -3325,7 +3260,7 @@ impl GpuRenderer {
     pub(crate) fn draw_image_cmds(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
-        image_slot: usize,
+        image_slot: &ImageSlot,
         uniform_slot: usize,
         cmds: &[ImageDrawCmd],
         blend_mode: BlendMode,
@@ -3336,15 +3271,14 @@ impl GpuRenderer {
         }
         self.frame_stats.bump_images();
         self.frame_stats.add_draw_calls(cmds.len() as u32);
-        let buffers = &self.image_slots[image_slot];
         pass.set_pipeline(self.image_pipeline(blend_mode));
         pass.set_bind_group(
             0,
             &self.viewport_uniforms.bind_group,
             &[self.viewport_uniforms.dynamic_offset(uniform_slot)?],
         );
-        pass.set_index_buffer(buffers.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-        pass.set_vertex_buffer(0, buffers.vertex_buffer.slice(..));
+        pass.set_index_buffer(image_slot.indices.slice(), wgpu::IndexFormat::Uint32);
+        pass.set_vertex_buffer(0, image_slot.vertices.slice());
         for cmd in cmds {
             let Some((x, y, width, height)) = bounded_scissor(cmd.scissor, bound) else {
                 continue;
@@ -3363,7 +3297,7 @@ impl GpuRenderer {
     pub(crate) fn draw_glyph_cmds(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
-        image_slot: Option<usize>,
+        image_slot: Option<&ImageSlot>,
         uniform_slot: usize,
         cmds: &[GlyphDrawCmd],
         bound: Option<(u32, u32, u32, u32)>,
@@ -3390,17 +3324,13 @@ impl GpuRenderer {
                     if !shared_bound {
                         let slot = image_slot
                             .ok_or_else(|| "shared glyph draw without an image slot".to_string())?;
-                        let buffers = &self.image_slots[slot];
                         pass.set_bind_group(
                             0,
                             &self.viewport_uniforms.bind_group,
                             &[uniform_offset],
                         );
-                        pass.set_index_buffer(
-                            buffers.index_buffer.slice(..),
-                            wgpu::IndexFormat::Uint32,
-                        );
-                        pass.set_vertex_buffer(0, buffers.vertex_buffer.slice(..));
+                        pass.set_index_buffer(slot.indices.slice(), wgpu::IndexFormat::Uint32);
+                        pass.set_vertex_buffer(0, slot.vertices.slice());
                         shared_bound = true;
                     }
                     pass.draw_indexed(index_start..(index_start + index_count), 0, 0..1);
@@ -3535,26 +3465,25 @@ impl GpuRenderer {
         Ok(())
     }
 
-    /// Uploads a pass's image and glyph quads into a fresh image slot.
-    pub(crate) fn upload_image_slot(&mut self, vertices: &[Vertex], indices: &[u32]) -> usize {
-        let slot = self.claim_image_slot();
-        let buffers = &mut self.image_slots[slot];
-        buffers.ensure_capacity(&self.device, vertices.len(), indices.len());
-        let mut upload = write_buffer(
-            &self.queue,
-            &buffers.vertex_buffer,
-            0,
-            bytemuck::cast_slice(vertices),
-        );
-        upload.upload_bytes += write_buffer(
-            &self.queue,
-            &buffers.index_buffer,
-            0,
-            bytemuck::cast_slice(indices),
-        )
-        .upload_bytes;
-        self.frame_stats.record_command_stats(upload);
-        slot
+    /// Uploads a pass's image and glyph quads into the frame's buffers.
+    pub(crate) fn upload_image_slot<C: FrameCommandRecorder>(
+        &self,
+        recorder: &mut C,
+        vertices: &[Vertex],
+        indices: &[u32],
+    ) -> ImageSlot {
+        ImageSlot {
+            vertices: recorder.upload_buffer(
+                image_vertex_spec(),
+                &self.device,
+                bytemuck::cast_slice(vertices),
+            ),
+            indices: recorder.upload_buffer(
+                image_index_spec(),
+                &self.device,
+                bytemuck::cast_slice(indices),
+            ),
+        }
     }
     fn glyph_atlas_entry_for(
         &mut self,

@@ -904,12 +904,12 @@ impl TextStyleDrawSink for TextBoundsCollector {
         _color: Color,
         _text_style: TextStyle,
         _font_size: f32,
-        _scale: f32,
+        scale: f32,
         _layout_options: TextLayoutOptions,
         blur_radius: f32,
         clip: Option<Rect>,
     ) {
-        let shadow_bounds = expand_blurred_rect(rect, blur_radius, clip);
+        let shadow_bounds = expand_blurred_rect(rect, blur_radius, scale, clip);
         if let Some(shadow_bounds) = shadow_bounds {
             self.bounds = union_rect(self.bounds, shadow_bounds);
         }
@@ -2239,7 +2239,7 @@ mod tests {
             }
             if let Some(shadow_bounds) = shadow_bounds {
                 let shadow_bounds =
-                    expand_blurred_rect(shadow_bounds, shadow.blur_radius, shadow.clip);
+                    expand_blurred_rect(shadow_bounds, shadow.blur_radius, 1.0, shadow.clip);
                 if let Some(shadow_bounds) = shadow_bounds {
                     bounds = union_rect(bounds, shadow_bounds);
                 }

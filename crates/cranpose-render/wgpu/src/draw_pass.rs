@@ -265,13 +265,15 @@ impl GpuRenderer {
         let prepared = segments
             .iter()
             .try_for_each(|segment| prep.segment(self, segment, &mut scratch));
+        let batches = prep.batches;
         let image_slot = match &prepared {
-            Ok(()) if !scratch.image_indices.is_empty() => {
-                Some(self.upload_image_slot(&scratch.image_vertices, &scratch.image_indices))
-            }
+            Ok(()) if !scratch.image_indices.is_empty() => Some(self.upload_image_slot(
+                recorder,
+                &scratch.image_vertices,
+                &scratch.image_indices,
+            )),
             _ => None,
         };
-        let batches = prep.batches;
         let result = match prepared {
             Err(error) => Err(error),
             Ok(()) if batches.is_empty() => {
@@ -297,7 +299,7 @@ impl GpuRenderer {
                         &batches,
                         &scratch.image_cmds,
                         &scratch.glyph_cmds,
-                        image_slot,
+                        image_slot.as_ref(),
                     )
                 };
                 recorder.record_pass();
@@ -337,7 +339,7 @@ impl GpuRenderer {
         batches: &[Batch<'_>],
         image_cmds: &[crate::render::ImageDrawCmd],
         glyph_cmds: &[crate::render::GlyphDrawCmd],
-        image_slot: Option<usize>,
+        image_slot: Option<&crate::render::ImageSlot>,
     ) -> Result<(), String> {
         for batch in batches {
             match batch {

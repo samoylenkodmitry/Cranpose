@@ -1,11 +1,12 @@
 use std::cell::Cell;
 
+use cranpose_render_common::geometry::blur_scratch_block;
 use cranpose_ui_graphics::{BlendMode, MAX_SUBSTRATES, RenderEffect, RuntimeShader, TileMode};
 
 use crate::{
     frame_graph::{
-        FrameCommandRecorder, FrameCommandStats, FrameTextureDescriptor, UploadAllocatorId,
-        UploadAllocatorSpec,
+        BufferUpload, FrameCommandRecorder, FrameCommandStats, FrameTextureDescriptor,
+        UniformUpload, UploadAllocatorId, UploadAllocatorSpec,
     },
     gpu_stats::FrameStats,
     lazy_resource::LazyGpuResource,
@@ -23,15 +24,7 @@ pub(crate) fn blur_scratch_size(
     width: u32,
     height: u32,
 ) -> (u32, u32) {
-    let radius = radius_x.max(radius_y);
-    let scale = if radius < 6.0 {
-        1
-    } else if radius < 16.0 {
-        2
-    } else {
-        4
-    };
-    scratch_size_at(scale, width, height)
+    scratch_size_at(blur_scratch_block(radius_x.max(radius_y)), width, height)
 }
 
 /// The scratch a substrate blur of `radius_px` runs at: a low-frequency copy
@@ -124,7 +117,6 @@ pub(crate) struct EffectRenderer {
     pub(crate) debug_composites: Cell<u32>,
     pub(crate) debug_effects: Cell<u32>,
     pub(crate) debug_shader_pixels: Cell<u64>,
-    pub(crate) debug_upload_bytes: Cell<u64>,
 }
 
 pub(crate) trait EffectScratchTargetProvider<'target> {
@@ -539,7 +531,7 @@ pub(crate) struct CompositeBatchItem<'a> {
 
 pub(crate) struct PreparedCompositeDraw<'a> {
     texture_bind_group: &'a wgpu::BindGroup,
-    uniform_bind_group: wgpu::BindGroup,
+    uniform: UniformUpload,
     scissor: Option<(u32, u32, u32, u32)>,
     blend_mode: BlendMode,
 }
@@ -547,7 +539,7 @@ pub(crate) struct PreparedCompositeDraw<'a> {
 pub(crate) struct PreparedShaderDraw<'a> {
     shader: &'a RuntimeShader,
     texture_bind_group: &'a wgpu::BindGroup,
-    uniform_bind_group: wgpu::BindGroup,
+    uniform: UniformUpload,
     scissor: Option<(u32, u32, u32, u32)>,
     dest_viewport: (f32, f32, f32, f32),
     variants: &'static [ShaderDrawVariant],
@@ -578,8 +570,8 @@ pub(crate) struct ProjectiveCompositeItem<'a> {
 
 pub(crate) struct PreparedProjectiveComposite<'a> {
     texture_bind_group: &'a wgpu::BindGroup,
-    uniform_bind_group: wgpu::BindGroup,
-    vertex_buffer: wgpu::Buffer,
+    uniform: UniformUpload,
+    vertices: BufferUpload,
     blend_mode: BlendMode,
 }
 
@@ -704,7 +696,7 @@ impl EffectRenderer {
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
+                        has_dynamic_offset: true,
                         min_binding_size: None,
                     },
                     count: None,
@@ -719,7 +711,7 @@ impl EffectRenderer {
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
+                        has_dynamic_offset: true,
                         min_binding_size: None,
                     },
                     count: None,
@@ -734,7 +726,7 @@ impl EffectRenderer {
                     visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
+                        has_dynamic_offset: true,
                         min_binding_size: None,
                     },
                     count: None,
@@ -856,7 +848,6 @@ impl EffectRenderer {
             debug_composites: Cell::new(0),
             debug_effects: Cell::new(0),
             debug_shader_pixels: Cell::new(0),
-            debug_upload_bytes: Cell::new(0),
         }
     }
 
@@ -1049,14 +1040,12 @@ impl EffectRenderer {
         stats
             .shader_pixels
             .set(stats.shader_pixels.get() + self.debug_shader_pixels.get());
-        stats.record_upload_bytes(self.debug_upload_bytes.get());
         self.debug_command_stats.set(FrameCommandStats::default());
         self.debug_blurs.set(0);
         self.debug_substrates.set(0);
         self.debug_composites.set(0);
         self.debug_effects.set(0);
         self.debug_shader_pixels.set(0);
-        self.debug_upload_bytes.set(0);
     }
 
     pub(crate) fn record_blur_pass(&self) {
@@ -1106,7 +1095,7 @@ impl EffectRenderer {
         dest_view: &wgpu::TextureView,
         draws: &[BlurDraw<'_>],
     ) {
-        let uniform_bind_groups: Vec<wgpu::BindGroup> = draws
+        let uniforms: Vec<UniformUpload> = draws
             .iter()
             .map(|draw| {
                 recorder.upload_uniform(
@@ -1115,7 +1104,6 @@ impl EffectRenderer {
                     device,
                     &self.blur_uniform_bind_group_layout,
                     bytemuck::bytes_of(&draw.uniforms),
-                    &self.debug_upload_bytes,
                 )
             })
             .collect();
@@ -1125,7 +1113,7 @@ impl EffectRenderer {
             wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
         );
         let mut bound = None;
-        for (draw, uniform_bind_group) in draws.iter().zip(&uniform_bind_groups) {
+        for (draw, uniform) in draws.iter().zip(&uniforms) {
             if bound != Some(draw.downsample) {
                 pass.set_pipeline(match draw.downsample {
                     Some(block) => self.blur_downsample_pipeline(device, block),
@@ -1139,7 +1127,7 @@ impl EffectRenderer {
                 &self.effect_linear_sampler,
             );
             pass.set_bind_group(0, source_bind_group, &[]);
-            pass.set_bind_group(1, uniform_bind_group, &[]);
+            pass.set_bind_group(1, &uniform.bind_group, &[uniform.offset]);
             if let Some((x, y, width, height)) = draw.scissor {
                 pass.set_scissor_rect(x, y, width, height);
             }
@@ -1438,13 +1426,12 @@ impl EffectRenderer {
             offset: [offset_x, offset_y],
             _padding: [0.0; 2],
         };
-        let uniform_bind_group = recorder.upload_uniform(
+        let uniform = recorder.upload_uniform(
             UploadAllocatorId::Offset,
             offset_uniform_spec(),
             device,
             &self.offset_uniform_bind_group_layout,
             bytemuck::bytes_of(&uniforms),
-            &self.debug_upload_bytes,
         );
 
         let texture_bind_group = source.get_or_create_bind_group(
@@ -1461,7 +1448,7 @@ impl EffectRenderer {
 
         pass.set_pipeline(self.offset_pipeline(device));
         pass.set_bind_group(0, texture_bind_group, &[]);
-        pass.set_bind_group(1, &uniform_bind_group, &[]);
+        pass.set_bind_group(1, &uniform.bind_group, &[uniform.offset]);
         pass.draw(0..4, 0..1);
     }
 
@@ -1532,13 +1519,12 @@ impl EffectRenderer {
                 alpha: item.alpha,
             }
             .write(&mut padded);
-            let uniform_bind_group = recorder.upload_uniform(
+            let uniform = recorder.upload_uniform(
                 UploadAllocatorId::EffectUniform,
                 effect_uniform_spec(),
                 device,
                 &self.effect_uniform_bind_group_layout,
                 bytemuck::cast_slice(&padded),
-                &self.debug_upload_bytes,
             );
 
             let texture_bind_group = item.source.get_or_create_bind_group(
@@ -1549,7 +1535,7 @@ impl EffectRenderer {
             prepared.push(PreparedShaderDraw {
                 shader: item.shader,
                 texture_bind_group,
-                uniform_bind_group,
+                uniform,
                 scissor: item.scissor,
                 dest_viewport: item.dest_viewport,
                 variants,
@@ -1566,7 +1552,7 @@ impl EffectRenderer {
         draw: &PreparedShaderDraw<'_>,
     ) {
         pass.set_bind_group(0, draw.texture_bind_group, &[]);
-        pass.set_bind_group(1, &draw.uniform_bind_group, &[]);
+        pass.set_bind_group(1, &draw.uniform.bind_group, &[draw.uniform.offset]);
         let (x, y, width, height) = draw.dest_viewport;
         pass.set_viewport(x, y, width, height, 0.0, 1.0);
         let scissor = draw.scissor.unwrap_or((0, 0, viewport.0, viewport.1));
@@ -1614,13 +1600,12 @@ impl EffectRenderer {
             alpha: 1.0,
         }
         .write(&mut padded);
-        let uniform_bind_group = recorder.upload_uniform(
+        let uniform = recorder.upload_uniform(
             UploadAllocatorId::EffectUniform,
             effect_uniform_spec(),
             device,
             &self.effect_uniform_bind_group_layout,
             bytemuck::cast_slice(&padded),
-            &self.debug_upload_bytes,
         );
 
         if self
@@ -1660,7 +1645,7 @@ impl EffectRenderer {
 
         pass.set_pipeline(pipeline);
         pass.set_bind_group(0, texture_bind_group, &[]);
-        pass.set_bind_group(1, &uniform_bind_group, &[]);
+        pass.set_bind_group(1, &uniform.bind_group, &[uniform.offset]);
         if let Some((x, y, width, height)) = options.dest_viewport {
             pass.set_viewport(x, y, width, height, 0.0, 1.0);
         }
@@ -1869,20 +1854,19 @@ impl EffectRenderer {
             &self.effect_texture_bind_group_layout,
             sampler,
         );
-        let uniform_bind_group = recorder.upload_uniform(
+        let uniform = recorder.upload_uniform(
             UploadAllocatorId::Blit,
             blit_uniform_spec(),
             device,
             &self.blit_uniform_bind_group_layout,
             bytemuck::bytes_of(&uniforms),
-            &self.debug_upload_bytes,
         );
 
         let mut pass = recorder.begin_color_pass("Blit Composite Pass", dest_view, options.load_op);
 
         pass.set_pipeline(self.blit_pipeline(device, options.blend_mode));
         pass.set_bind_group(0, texture_bind_group, &[]);
-        pass.set_bind_group(1, &uniform_bind_group, &[]);
+        pass.set_bind_group(1, &uniform.bind_group, &[uniform.offset]);
         if let Some((x, y, w, h)) = options.scissor {
             pass.set_scissor_rect(x, y, w, h);
         }
@@ -1916,17 +1900,16 @@ impl EffectRenderer {
                 &self.effect_texture_bind_group_layout,
                 sampler,
             );
-            let uniform_bind_group = recorder.upload_uniform(
+            let uniform = recorder.upload_uniform(
                 UploadAllocatorId::Blit,
                 blit_uniform_spec(),
                 device,
                 &self.blit_uniform_bind_group_layout,
                 bytemuck::bytes_of(&uniforms),
-                &self.debug_upload_bytes,
             );
             prepared.push(PreparedCompositeDraw {
                 texture_bind_group,
-                uniform_bind_group,
+                uniform,
                 scissor: item.scissor,
                 blend_mode: item.blend_mode,
             });
@@ -1942,7 +1925,7 @@ impl EffectRenderer {
     ) {
         pass.set_pipeline(self.initialized_blit_pipeline(draw.blend_mode));
         pass.set_bind_group(0, draw.texture_bind_group, &[]);
-        pass.set_bind_group(1, &draw.uniform_bind_group, &[]);
+        pass.set_bind_group(1, &draw.uniform.bind_group, &[draw.uniform.offset]);
         if let Some((x, y, w, h)) = draw.scissor {
             pass.set_scissor_rect(x, y, w, h);
         } else {
@@ -2007,25 +1990,22 @@ impl EffectRenderer {
             &self.effect_texture_bind_group_layout,
             sampler,
         );
-        let vertex_buffer = recorder.upload_vertex(
-            UploadAllocatorId::ProjectiveBlitVertex,
+        let vertices = recorder.upload_buffer(
             projective_blit_vertex_spec(),
             device,
             bytemuck::cast_slice(&vertices),
-            &self.debug_upload_bytes,
         );
-        let uniform_bind_group = recorder.upload_uniform(
+        let uniform = recorder.upload_uniform(
             UploadAllocatorId::ProjectiveBlitUniform,
             projective_blit_uniform_spec(),
             device,
             &self.blit_uniform_bind_group_layout,
             bytemuck::bytes_of(&uniforms),
-            &self.debug_upload_bytes,
         );
         PreparedProjectiveComposite {
             texture_bind_group,
-            uniform_bind_group,
-            vertex_buffer,
+            uniform,
+            vertices,
             blend_mode: item.blend_mode,
         }
     }
@@ -2038,8 +2018,8 @@ impl EffectRenderer {
     ) {
         pass.set_pipeline(self.initialized_projective_blit_pipeline(draw.blend_mode));
         pass.set_bind_group(0, draw.texture_bind_group, &[]);
-        pass.set_bind_group(1, &draw.uniform_bind_group, &[]);
-        pass.set_vertex_buffer(0, draw.vertex_buffer.slice(..));
+        pass.set_bind_group(1, &draw.uniform.bind_group, &[draw.uniform.offset]);
+        pass.set_vertex_buffer(0, draw.vertices.slice());
         pass.set_scissor_rect(0, 0, viewport.0, viewport.1);
         pass.draw(0..4, 0..1);
     }

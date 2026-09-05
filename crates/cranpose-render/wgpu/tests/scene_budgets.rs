@@ -24,9 +24,10 @@ const FRAMES: usize = 3;
 
 /// The published renderer's third frame of the spinning arena: every ring's
 /// surface comes from the layer cache and only the composites' transforms
-/// reach the GPU.
+/// reach the GPU, twenty blit blocks each padded to the device's uniform
+/// offset alignment in the frame's one uniform write, over two submits.
 const ARENA_MAX_PASSES: u32 = 23;
-const ARENA_MAX_UPLOAD_BYTES: u64 = 4096;
+const ARENA_MAX_UPLOAD_BYTES: u64 = 2 * (20 * 256 + 1024);
 fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect {
     Rect {
         x,
