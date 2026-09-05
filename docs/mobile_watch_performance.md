@@ -461,3 +461,39 @@ and command sizes 5,003 / 10,007 / 4,201 / 123 / 5,017.
 
 Both GPU and capture robot suites completed successfully at `78b24d87`: 162
 and four tests respectively, with no skipped tests.
+
+
+### Admission gate checkpoint and main comparison
+
+`3f948657` incorporates the renderer admission backoff and keeps the key of a
+cache hit in its consecutive-frame history. A regression test first reproduces
+the sequence admit A, observe B twice, hit retained A, miss B: the original gate
+admits B after only one consecutive frame. Observing the hit's actual key before
+crediting it restores the required consecutive run and passes the test.
+
+At this checkpoint, full workspace tests and Clippy pass on Linux. Release web,
+Android and binary budgets pass. Documentation, robot Clippy, iOS Clippy, device
+and simulator build recipes pass on macOS. All 162 GPU robots and four capture
+robots pass with zero skipped tests. The isolated-demo binary is 10,426,072 bytes.
+
+The unchanged Showcase app was built twice for Huawei ARM64, against main
+`0d195313` and this checkpoint. Full-minute launch-scene measurements, with stable
+PID and foreground, present-thread enabled, and battery temperature 34 C:
+
+| Cranpose source | SurfaceFlinger FPS | Frames | Seconds |
+| --- | ---: | ---: | ---: |
+| Main `0d195313` | 23.6164 | 1,430 | 60.5511 |
+| Checkpoint `3f948657` | 23.4819 | 1,423 | 60.6000 |
+
+This comparison demonstrates no launch-scene speed gain. Text, layout and effect
+placement look consistent in the captured images; animation makes these captures
+unsuitable for a byte comparison. The vivid refracted RGB star streaks are also
+present on main. Renderer regression tests provide the deterministic comparisons.
+
+The phone's Mali G76 lacks timestamp-query support. Shader-removal diagnostics
+with an ARMv7 test APK gave about 35 FPS during list swipes, about 54 with glass
+draws removed, and about 41 with page operations removed. Whole-frame fence
+medians were about 50, 34 and 40 ms respectively. These diagnostic ablations
+deliberately omit rendering and are not candidates or acceptance measurements;
+fences also remove inter-frame overlap. Both runs restored the previous APK and
+debug properties. The remaining cost is predominantly GPU shading in this scene.
