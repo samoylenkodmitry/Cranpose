@@ -785,3 +785,17 @@ id rather than fighting the installer. Also: `simpleperf record` on the
 watch fails with "Event type 'cpu-clock' is not supported" for every
 event; the kernel ships without perf events. Profile there with the
 `debug.cranpose.*_stage_ms` properties.
+
+- **Every watch showcase APK is armeabi-v7a, and a plain
+  `./gradlew :app:assembleRelease` builds arm64 (2026-09-05, one void A/B).**
+  The showcase's `build.gradle.kts` pins `releaseAbis` to `arm64-v8a`; the
+  watch builds get their 32-bit library from a scratch script that seds the
+  pin to `armeabi-v7a` around the Gradle call and back. Build a comparison
+  APK with the default and you pair a 32-bit baseline with a 64-bit
+  candidate: both install and run on the Pixel Watch 3, both scroll at the
+  same fps, and nothing in the logs says which ABI ran. Before an A/B on
+  any device, `unzip -l` both APKs and read the `lib/<abi>/` line; a build
+  whose stats line cannot show the change (here `acq=0` where the new code
+  counts transients) is the other tell. Gradle's stripped library also
+  never hashes equal to `target/<triple>/release/*.so`, so a hash mismatch
+  there proves nothing.

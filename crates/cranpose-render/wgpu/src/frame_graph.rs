@@ -27,6 +27,8 @@ pub(crate) struct FrameCommandStats {
     pub(crate) upload_writes: u32,
     pub(crate) copy_count: u32,
     pub(crate) copy_pixels: u64,
+    pub(crate) transient_acquires: u32,
+    pub(crate) transient_news: u32,
 }
 
 impl std::ops::AddAssign for FrameCommandStats {
@@ -41,6 +43,8 @@ impl std::ops::AddAssign for FrameCommandStats {
         self.upload_writes += other.upload_writes;
         self.copy_count += other.copy_count;
         self.copy_pixels += other.copy_pixels;
+        self.transient_acquires += other.transient_acquires;
+        self.transient_news += other.transient_news;
     }
 }
 
@@ -342,6 +346,8 @@ impl FrameTextureDescriptor {
 #[derive(Default)]
 pub(crate) struct TransientTexturePool {
     available: Vec<PooledTransientTexture>,
+    acquires: u32,
+    news: u32,
 }
 
 struct PooledTransientTexture {
@@ -349,7 +355,9 @@ struct PooledTransientTexture {
     target: OffscreenTarget,
 }
 
-const MAX_RETAINED_TRANSIENT_TEXTURES: usize = 16;
+const MAX_RETAINED_TRANSIENT_TEXTURES: usize = 64;
+
+const MAX_RETAINED_TRANSIENT_BYTES: u64 = 32 * 1024 * 1024;
 
 impl TransientTexturePool {
     fn acquire(
@@ -357,14 +365,16 @@ impl TransientTexturePool {
         device: &wgpu::Device,
         descriptor: FrameTextureDescriptor,
     ) -> OffscreenTarget {
+        self.acquires = self.acquires.saturating_add(1);
         if let Some(index) = self
             .available
             .iter()
             .position(|entry| entry.descriptor.is_pool_compatible_with(descriptor))
         {
-            return self.available.swap_remove(index).target;
+            return self.available.remove(index).target;
         }
 
+        self.news = self.news.saturating_add(1);
         OffscreenTarget::new_labeled(
             device,
             descriptor.format,
@@ -375,10 +385,21 @@ impl TransientTexturePool {
     }
 
     fn release(&mut self, descriptor: FrameTextureDescriptor, target: OffscreenTarget) {
-        if self.available.len() < MAX_RETAINED_TRANSIENT_TEXTURES {
-            self.available
-                .push(PooledTransientTexture { descriptor, target });
+        self.available
+            .push(PooledTransientTexture { descriptor, target });
+        let mut bytes = self.estimated_bytes();
+        while self.available.len() > MAX_RETAINED_TRANSIENT_TEXTURES
+            || (bytes > MAX_RETAINED_TRANSIENT_BYTES && self.available.len() > 1)
+        {
+            bytes = bytes.saturating_sub(self.available.remove(0).descriptor.estimated_bytes());
         }
+    }
+
+    fn take_counts(&mut self) -> (u32, u32) {
+        (
+            std::mem::take(&mut self.acquires),
+            std::mem::take(&mut self.news),
+        )
     }
 
     fn len(&self) -> usize {
@@ -635,6 +656,7 @@ impl WgpuFrameGraphExecutor {
         let (submission, upload_writes) = Self::submit_with_timing(queue, encoder);
         release_pending_transients(&mut self.transient_textures, pending_transient_releases);
         let retained_texture_bytes = self.retained_texture_bytes();
+        let (transient_acquires, transient_news) = self.transient_textures.take_counts();
         Ok(FrameGraphExecution {
             submission,
             stats: FrameCommandStats {
@@ -648,6 +670,8 @@ impl WgpuFrameGraphExecutor {
                 copy_pixels: copies.pixels,
                 upload_bytes: uploads.upload_bytes,
                 upload_writes,
+                transient_acquires,
+                transient_news,
             },
         })
     }
@@ -1003,6 +1027,7 @@ impl WgpuFrameEncoder<'_> {
         let (submission, upload_writes) = WgpuFrameGraphExecutor::submit(self.queue, self.encoder);
         transient_releases.release_pending();
         let retained_texture_bytes = transient_releases.retained_texture_bytes();
+        let (transient_acquires, transient_news) = transient_releases.take_counts();
         FrameGraphExecution {
             submission,
             stats: FrameCommandStats {
@@ -1016,6 +1041,8 @@ impl WgpuFrameEncoder<'_> {
                 copy_pixels: copies.pixels,
                 upload_bytes: uploads.upload_bytes,
                 upload_writes,
+                transient_acquires,
+                transient_news,
             },
         }
     }
@@ -1055,6 +1082,10 @@ impl<'a> PendingTransientReleases<'a> {
 
     fn retained_texture_bytes(&self) -> u64 {
         self.transient_textures.estimated_bytes()
+    }
+
+    fn take_counts(&mut self) -> (u32, u32) {
+        self.transient_textures.take_counts()
     }
 }
 
@@ -1430,12 +1461,26 @@ impl UploadRing {
     }
 
     fn reset(&mut self) {
+        let staged = self
+            .generations
+            .iter()
+            .map(|generation| generation.bytes.len() as u64)
+            .sum();
         let keep = self.generations.len().saturating_sub(1);
         self.generations.drain(..keep);
+        if let Some(last) = self.generations.last()
+            && !ring_outlives_frame(last.capacity, staged)
+        {
+            self.generations.clear();
+        }
         for generation in &mut self.generations {
             generation.bytes.clear();
         }
     }
+}
+
+fn ring_outlives_frame(capacity: u64, staged: u64) -> bool {
+    staged == 0 || capacity <= MIN_UPLOAD_BUFFER_BYTES || staged.saturating_mul(4) >= capacity
 }
 
 /// Where a frame's uploads live: one buffer per usage, filled in the order
@@ -1551,6 +1596,23 @@ impl FrameUploadAllocators {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn a_ring_outlives_the_frames_that_fill_a_quarter_of_it() {
+        let capacity = 16 * MIN_UPLOAD_BUFFER_BYTES;
+        assert!(ring_outlives_frame(capacity, capacity / 4));
+        assert!(ring_outlives_frame(capacity, capacity));
+        assert!(!ring_outlives_frame(capacity, capacity / 4 - 1));
+        assert!(!ring_outlives_frame(capacity, 1));
+    }
+
+    #[test]
+    fn a_ring_at_the_floor_and_a_ring_after_an_empty_frame_stay() {
+        assert!(ring_outlives_frame(MIN_UPLOAD_BUFFER_BYTES, 1));
+        assert!(ring_outlives_frame(16 * MIN_UPLOAD_BUFFER_BYTES, 0));
+    }
+
     use super::{
         FrameTextureDescriptor, MIN_UPLOAD_BUFFER_BYTES, UploadPlacement, WgpuFrameGraph,
         build_pass_schedule, place_upload,

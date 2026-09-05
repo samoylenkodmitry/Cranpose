@@ -2297,6 +2297,12 @@ impl GpuRenderer {
         let after_graph = Instant::now();
         self.flush_deferred_offscreen_releases();
 
+        self.frame_stats
+            .layer_cache_size
+            .set(self.layer_cache.len() as u32);
+        self.frame_stats
+            .layer_cache_bytes
+            .set(self.layer_cache.bytes());
         self.frame_stats.offscreen_pool_size.set(
             self.effect_renderer
                 .retained_offscreen_count()

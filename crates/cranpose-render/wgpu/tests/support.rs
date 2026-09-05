@@ -23,8 +23,9 @@ use cranpose_ui::{
     widgets::{Box, BoxSpec},
 };
 use cranpose_ui_graphics::{
-    Brush, DrawPrimitive, DrawScope, DrawScopeDefault, Point, RUNTIME_SHADER_PRELUDE_WGSL, Rect,
-    RenderEffect, RuntimeShader, SubstrateSpec,
+    Brush, DrawPrimitive, DrawScope, DrawScopeDefault, LiquidGlassRect, LiquidGlassSpec, Point,
+    RUNTIME_SHADER_PRELUDE_WGSL, Rect, RenderEffect, RuntimeShader, SubstrateSpec,
+    liquid_glass_effect,
 };
 
 pub static TEST_FONT: &[u8] = DEFAULT_SOFTWARE_TEXT_FONT_BYTES;
@@ -918,4 +919,35 @@ pub fn reference_blur(
         out
     };
     pass(&pass(image, (1, 0)), (0, 1))
+}
+
+/// A page of blurred glasses in a row: the frame, the glasses' size, pitch
+/// and corner radius, their blur, and the liquid glass shader sized to one.
+pub mod glass_page {
+    use super::*;
+
+    pub const FRAME_WIDTH: u32 = 240;
+    pub const FRAME_HEIGHT: u32 = 120;
+    pub const GLASS_WIDTH: f32 = 56.0;
+    pub const GLASS_HEIGHT: f32 = 40.0;
+    pub const GLASS_TOP: f32 = 30.0;
+    pub const GLASS_PITCH: f32 = 72.0;
+    pub const GLASS_LEFT: f32 = 12.0;
+    pub const GLASS_RADIUS: f32 = 12.0;
+    pub const BLUR_RADIUS: f32 = 6.0;
+
+    pub fn glass_shader() -> RenderEffect {
+        liquid_glass_effect(
+            &LiquidGlassRect {
+                left: 0.0,
+                top: 0.0,
+                width: GLASS_WIDTH,
+                height: GLASS_HEIGHT,
+                tint_color: Color(1.0, 1.0, 1.0, 0.12),
+            },
+            &LiquidGlassSpec::default(),
+            GLASS_WIDTH,
+            GLASS_HEIGHT,
+        )
+    }
 }

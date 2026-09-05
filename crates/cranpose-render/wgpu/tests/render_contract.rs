@@ -122,7 +122,7 @@ fn buffer_uploads_are_owned_by_frame_graph_executor() {
 }
 
 #[test]
-fn frame_upload_slots_grow_instead_of_panicking_on_payload_size() {
+fn frame_upload_rings_grow_instead_of_panicking_on_payload_size() {
     let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let frame_graph_source = std::fs::read_to_string(crate_dir.join("src/frame_graph.rs"))
         .expect("failed to read WGPU frame graph source");
@@ -132,16 +132,14 @@ fn frame_upload_slots_grow_instead_of_panicking_on_payload_size() {
         "frame upload allocation must not panic on a larger runtime payload"
     );
     assert!(
-        frame_graph_source.contains("fn required_slot_size(")
-            && frame_graph_source.contains("if self.slots[index].size < required_size")
-            && frame_graph_source
-                .contains("self.slots[index] = self.create_slot(device, required_size);"),
-        "frame upload allocation must grow undersized retained slots before writing data"
+        frame_graph_source.contains("fn place_upload(")
+            && frame_graph_source.contains("UploadPlacement::Grow(capacity) =>"),
+        "frame upload allocation must grow an undersized ring before writing data"
     );
     assert!(
-        frame_graph_source.contains("fn should_retain_slot_size(")
-            && frame_graph_source.contains(".retain(|slot| Self::should_retain_slot_size"),
-        "frame upload allocation must not retain oversized one-frame upload slots forever"
+        frame_graph_source.contains("fn ring_outlives_frame(")
+            && frame_graph_source.contains("!ring_outlives_frame(last.capacity, staged)"),
+        "frame upload allocation must not retain an oversized one-frame ring forever"
     );
 }
 
@@ -262,7 +260,7 @@ fn effects_use_pass_owned_uploads_for_uniforms() {
     );
     assert!(
         frame_graph_source.contains("fn upload_uniform(")
-            && frame_graph_source.contains("fn upload_vertex("),
+            && frame_graph_source.contains("fn upload_buffer("),
         "frame command recorders must expose upload operations without leaking upload allocator ownership"
     );
     assert!(
@@ -670,9 +668,10 @@ fn text_rendering_uses_cached_raster_image_batches() {
     );
     assert!(
         render_source.contains("run_store: RunStore")
-            && render_source.contains("image_slots: Vec<ImageBatchBuffers>")
+            && render_source.contains("struct ImageSlot")
+            && render_source.contains("fn upload_image_slot")
             && render_source.contains("viewport_uniforms: ViewportUniformRing"),
-        "draw batches must own retained per-run and per-slot GPU resources"
+        "draw batches must own their run store and stage image slots through the frame's rings"
     );
 }
 
