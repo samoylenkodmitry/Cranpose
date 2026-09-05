@@ -68,30 +68,6 @@ fn buffer_uploads_are_owned_by_frame_graph_executor() {
 }
 
 #[test]
-fn frame_upload_slots_grow_instead_of_panicking_on_payload_size() {
-    let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let frame_graph_source = std::fs::read_to_string(crate_dir.join("src/frame_graph.rs"))
-        .expect("failed to read WGPU frame graph source");
-
-    assert!(
-        !frame_graph_source.contains("upload payload exceeds allocator slot size"),
-        "frame upload allocation must not panic on a larger runtime payload"
-    );
-    assert!(
-        frame_graph_source.contains("fn required_slot_size(")
-            && frame_graph_source.contains("if self.slots[index].size < required_size")
-            && frame_graph_source
-                .contains("self.slots[index] = self.create_slot(device, required_size);"),
-        "frame upload allocation must grow undersized retained slots before writing data"
-    );
-    assert!(
-        frame_graph_source.contains("fn should_retain_slot_size(")
-            && frame_graph_source.contains(".retain(|slot| Self::should_retain_slot_size"),
-        "frame upload allocation must not retain oversized one-frame upload slots forever"
-    );
-}
-
-#[test]
 fn frame_graph_executor_does_not_export_submit_or_encoder_creation_helpers() {
     let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let source = std::fs::read_to_string(crate_dir.join("src/frame_graph.rs"))
@@ -208,7 +184,7 @@ fn effects_use_pass_owned_uploads_for_uniforms() {
     );
     assert!(
         frame_graph_source.contains("fn upload_uniform(")
-            && frame_graph_source.contains("fn upload_vertex("),
+            && frame_graph_source.contains("fn upload_buffer("),
         "frame command recorders must expose upload operations without leaking upload allocator ownership"
     );
     assert!(
@@ -616,9 +592,10 @@ fn text_rendering_uses_cached_raster_image_batches() {
     );
     assert!(
         render_source.contains("run_store: RunStore")
-            && render_source.contains("image_slots: Vec<ImageBatchBuffers>")
+            && render_source.contains("vertices: BufferUpload")
+            && render_source.contains("indices: BufferUpload")
             && render_source.contains("viewport_uniforms: ViewportUniformRing"),
-        "draw batches must own retained per-run and per-slot GPU resources"
+        "draw batches must own retained runs and frame upload ranges"
     );
 }
 

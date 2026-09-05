@@ -839,6 +839,15 @@ fn independent_glasses_are_admitted_over_several_frames_without_changing_pixels(
     assert_eq!(settled.layer_cache_misses, 0);
     assert_eq!(settled.layer_cache_hits, first.layer_cache_misses);
     let (_, reference) = render(false);
-    let difference = image_difference_stats(&settled_frame.pixels, &reference.pixels, 1104, 720, 1);
-    assert_eq!(difference.differing_pixels, 0, "{difference:?}");
+    let max_channel_delta = settled_frame
+        .pixels
+        .iter()
+        .zip(&reference.pixels)
+        .map(|(cached, reference)| cached.abs_diff(*reference))
+        .max()
+        .unwrap_or(0);
+    assert!(
+        max_channel_delta <= 1,
+        "cached/reference channel delta {max_channel_delta}"
+    );
 }

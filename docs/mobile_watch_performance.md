@@ -350,3 +350,33 @@ cannot test simultaneous admission. The independent fixture checks admission
 progress, the per-frame limit, eventual cache hits and cached/reference pixels.
 Removing the pixel budget makes it fail with nine admissions in one frame;
 restoring the budget passes.
+
+The watch list-scroll A/B/A/B uses the same 36,300 to 60,80 swipe and reverse,
+16 warm-up swipes and a full-minute SurfaceFlinger window per leg. All four
+runs keep the benchmark's PID and foreground stable. The APK before arenas
+measures 26.66 then 19.08 fps; the integrated arenas measure 37.09 then 24.50 fps.
+Starting/ending battery temperatures are 36.5/38.6, 38.6/40.1, 41.0/41.3 and
+41.1/41.1 degrees Celsius, respectively. The gain repeats, but these are not
+cooled steady-state results and do not demonstrate sustained 60 fps.
+
+The shared-channel glass sampling guard is byte-exact on Metal and lavapipe:
+channels whose lens ramp is fully clamped can reuse the green sample. Forcing
+the guard everywhere fails 912 bytes in the activity parity test, maximum two.
+It improved the preceding Huawei substrate build in individual runs, but the
+combined arena A/B/A/B is 23.60/23.53/23.58/23.52 fps. It establishes no gain on
+this renderer and is not retained. The diagnostic patch and APKs stay outside
+production.
+
+Upload ring review catches missing reclamation after a large frame. A GPU test
+forces three buffer generations, reads back each generation's distinct bytes,
+then asks a small frame to release the oversized allocation. The original ring
+fails that last assertion. Reclaiming when nonzero frame workload drops below
+one quarter of retained capacity restores the allocator's reclamation behavior;
+all generation bytes remain correct. Empty reset calls do not trigger shrinking.
+The source-ownership contract checks frame upload ranges and the behavioral test
+covers growth and reclamation directly.
+
+On lavapipe, the independent-glass fixture has three pixels with two channels
+each differing by one output level after caching. Its comparison uses the same
+maximum per-channel bound as the existing glass-layer cache regression, rather
+than summing channels; shader specialization tests still require exact bytes.

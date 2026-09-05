@@ -1377,6 +1377,7 @@ impl UploadAllocatorSpec {
 }
 
 const MIN_UPLOAD_BUFFER_BYTES: u64 = 64 * 1024;
+const UPLOAD_SHRINK_FACTOR: u64 = 4;
 
 /// Where an upload lands in a ring: at an offset of the ring's current
 /// buffer, or at the start of a larger buffer the ring opens for it.
@@ -1481,6 +1482,20 @@ impl UploadRing {
     }
 
     fn reset(&mut self) {
+        let frame_bytes: u64 = self
+            .generations
+            .iter()
+            .map(|generation| generation.bytes.len() as u64)
+            .sum();
+        if frame_bytes > 0
+            && self.generations.last().is_some_and(|generation| {
+                generation.capacity > MIN_UPLOAD_BUFFER_BYTES
+                    && frame_bytes.saturating_mul(UPLOAD_SHRINK_FACTOR) < generation.capacity
+            })
+        {
+            self.generations.clear();
+            return;
+        }
         let keep = self.generations.len().saturating_sub(1);
         self.generations.drain(..keep);
         for generation in &mut self.generations {
@@ -1604,11 +1619,79 @@ impl FrameUploadAllocators {
 }
 
 #[cfg(test)]
+fn read_uploaded_bytes(
+    device: &wgpu::Device,
+    readback: &wgpu::Buffer,
+    submission: wgpu::SubmissionIndex,
+) -> Vec<u8> {
+    readback.map_async(wgpu::MapMode::Read, .., |result| {
+        result.expect("readback map")
+    });
+    device
+        .poll(wgpu::PollType::Wait {
+            submission_index: Some(submission),
+            timeout: None,
+        })
+        .expect("copy completion");
+    let bytes = readback.get_mapped_range(..).to_vec();
+    readback.unmap();
+    bytes
+}
+
+#[cfg(test)]
 mod tests {
     use super::{
         FrameTextureDescriptor, MIN_UPLOAD_BUFFER_BYTES, UploadPlacement, WgpuFrameGraph,
         build_pass_schedule, place_upload,
     };
+
+    #[test]
+    fn frame_uploads_grow_preserve_bytes_and_release_oversized_generations() {
+        let instance = wgpu::Instance::default();
+        let adapter = pollster::block_on(instance.request_adapter(&Default::default()))
+            .expect("headless adapter");
+        let (device, queue) = pollster::block_on(adapter.request_device(&Default::default()))
+            .expect("headless device");
+        let mut ring = super::UploadRing::new(
+            wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+            "Upload Growth Test",
+            256,
+        );
+        let large = vec![2; MIN_UPLOAD_BUFFER_BYTES as usize * 4 + 4];
+        let small = [1; 16];
+        let last = [3; 16];
+        let mut sources = Vec::new();
+        for bytes in [&small[..], &large, &last[..]] {
+            let (generation, offset) = ring.upload(&device, bytes.len() as u64, bytes);
+            sources.push((ring.generations[generation].buffer.clone(), offset));
+        }
+        assert_eq!(ring.generations.len(), 3);
+        ring.flush(&queue);
+        let readback = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: 48,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut encoder = device.create_command_encoder(&Default::default());
+        for (index, (source, offset)) in sources.into_iter().enumerate() {
+            encoder.copy_buffer_to_buffer(&source, offset, &readback, index as u64 * 16, 16);
+        }
+        let submission = queue.submit([encoder.finish()]);
+        assert_eq!(
+            super::read_uploaded_bytes(&device, &readback, submission),
+            [&small[..], &large[..16], &last[..]].concat()
+        );
+        assert_eq!(ring.generations.len(), 1);
+        ring.upload(&device, 16, &small);
+        ring.flush(&queue);
+        assert!(
+            ring.generations.is_empty(),
+            "a small frame must release the oversized generation"
+        );
+        ring.upload(&device, 16, &last);
+        assert_eq!(ring.generations[0].capacity, MIN_UPLOAD_BUFFER_BYTES);
+    }
 
     #[test]
     fn an_upload_lands_aligned_after_the_last_one() {

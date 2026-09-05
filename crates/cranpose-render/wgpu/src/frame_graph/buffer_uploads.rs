@@ -100,17 +100,10 @@ mod tests {
             uploads.finish();
             let submission = queue.submit([encoder.finish()]);
             uploads.recall();
-            readback.map_async(wgpu::MapMode::Read, .., |result| {
-                result.expect("readback map")
-            });
-            device
-                .poll(wgpu::PollType::Wait {
-                    submission_index: Some(submission),
-                    timeout: None,
-                })
-                .expect("copy completion");
-            assert_eq!(readback.get_mapped_range(..).as_ref(), expected);
-            readback.unmap();
+            assert_eq!(
+                super::super::read_uploaded_bytes(&device, &readback, submission),
+                expected
+            );
             uploads.reset();
         }
     }
