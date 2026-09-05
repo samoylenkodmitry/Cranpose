@@ -4,6 +4,8 @@ struct BlurUniforms {
     texture_size_and_tile_mode: vec4<f32>,// sampled texture size.xy, tile_mode, unused
     source_region: vec4<f32>,             // x, y, width, height in source texels; zero = whole
     dest_region: vec4<f32>,               // x, y, width, height in destination pixels; zero = whole
+    pairs: array<vec4<f32>, 16>,
+    kernel: vec4<f32>,
 }
 
 @group(0) @binding(0) var input_texture: texture_2d<f32>;
@@ -13,6 +15,8 @@ struct BlurUniforms {
 // The source texels one destination pixel of the downsample stands for on
 // each axis. A pipeline constant, so the block's fetch loops unroll.
 override BLUR_BLOCK: i32 = 2;
+
+override BLUR_DECAL: bool = false;
 
 fn inside_unit_bounds(uv: vec2<f32>) -> f32 {
     let inside = uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0;
@@ -68,8 +72,7 @@ fn tiled_sample(uv: vec2<f32>) -> vec4<f32> {
 
 // A tap's weight under the tile mode: zero outside the region for decal.
 fn tap_weight(uv: vec2<f32>, weight: f32) -> f32 {
-    let decal = blur.texture_size_and_tile_mode.z >= 2.5;
-    return select(weight, weight * inside_unit_bounds(uv), decal);
+    return select(weight, weight * inside_unit_bounds(uv), BLUR_DECAL);
 }
 
 // The fragment's place in its destination region, in [0, 1]: the whole
@@ -107,24 +110,21 @@ fn blur_downsample_fs(input: VertexOutput) -> @location(0) vec4<f32> {
 // destination's pixels, or coarser: a step is one source texel, so a pass
 // reading the downscaled scratch back up to full size steps by the scratch
 // texel, and the radius counts those texels.
+// One axis of the separable kernel over a source whose texels are the
+// destination's pixels, or coarser: a step is one source texel, so a pass
+// reading the downscaled scratch back up to full size steps by the scratch
+// texel, and the radius counts those texels.
 @fragment
 fn blur_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let local = region_local(input);
     let source_size = max(source_region().zw, vec2<f32>(1.0, 1.0));
     let step = blur.direction_and_radius.xy / source_size;
-    let dir = blur.direction_and_radius.xy;
-    let radius = max(dot(dir, blur.direction_and_radius.zw), 0.0);
-    let sigma = max(radius * 0.5, 0.001);
-
-    let tap_count = min(i32(ceil(radius)), 32);
+    let pair_count = i32(blur.kernel.x);
 
     var color = tiled_sample(local) * tap_weight(local, 1.0);
-    var total_weight = 1.0;
-    if (tap_count <= 0) {
+    if (pair_count <= 0) {
         return color;
     }
-
-    let inv_2sigma2 = 1.0 / (2.0 * sigma * sigma);
 
     // The taps at i and i + 1 on one side become one bilinear fetch between
     // them, placed where the filter hands each its Gaussian weight, so the
@@ -136,22 +136,24 @@ fn blur_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     // uniform and the loop shrinks with the radius. Sampling is explicit-LOD
     // (the sources are mipless offscreens), which frees the taps from
     // derivative uniformity.
-    for (var i: i32 = 1; i <= tap_count; i = i + 2) {
-        let fi = f32(i);
+    for (var k: i32 = 0; k < pair_count; k = k + 1) {
+        let pair = blur.pairs[k];
+        let fi = f32(2 * k + 1);
         let fj = fi + 1.0;
-        let w1 = exp(-(fi * fi) * inv_2sigma2);
-        let w2 = select(0.0, exp(-(fj * fj) * inv_2sigma2), i + 1 <= tap_count);
-        total_weight = total_weight + 2.0 * (w1 + w2);
         for (var side: f32 = -1.0; side <= 1.0; side = side + 2.0) {
-            let e1 = tap_weight(local + step * (fi * side), w1);
-            let e2 = tap_weight(local + step * (fj * side), w2);
-            let e = e1 + e2;
+            var offset = pair.z;
+            var e = pair.w;
+            if (BLUR_DECAL) {
+                let e1 = tap_weight(local + step * (fi * side), pair.x);
+                let e2 = tap_weight(local + step * (fj * side), pair.y);
+                e = e1 + e2;
+                offset = select(0.0, (fi * e1 + fj * e2) / e, e > 0.0);
+            }
             if (e > 0.0) {
-                let offset = (fi * e1 + fj * e2) / e;
                 color = color + tiled_sample(local + step * (offset * side)) * e;
             }
         }
     }
 
-    return color / max(total_weight, 0.00001);
+    return color / max(blur.kernel.y, 0.00001);
 }

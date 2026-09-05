@@ -167,3 +167,122 @@ mod tests {
         );
     }
 }
+
+/// The tap pairs of a kernel of `BLUR_MAX_TAPS` taps: the taps at i and
+/// i + 1 on one side share one bilinear fetch.
+pub const BLUR_TAP_PAIRS: usize = (BLUR_MAX_TAPS / 2) as usize;
+
+/// One pair of kernel taps on one side of the pixel: the Gaussian weights of
+/// the inner and outer tap, and the one bilinear fetch that stands for both,
+/// its `offset` in taps from the pixel and its `weight` their sum. The outer
+/// weight is zero past an odd tap count, which leaves the fetch on the inner
+/// tap alone.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct BlurTapPair {
+    pub inner: f32,
+    pub outer: f32,
+    pub offset: f32,
+    pub weight: f32,
+}
+
+/// The separable Gaussian kernel of a blur of `radius` source texels as the
+/// blur pass samples it: `pair_count` pairs on each side, `total_weight` the
+/// kernel's sum with the centre tap's one, computed once per draw.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BlurKernel {
+    pub pairs: [BlurTapPair; BLUR_TAP_PAIRS],
+    pub pair_count: u32,
+    pub total_weight: f32,
+}
+
+impl BlurKernel {
+    /// The kernel of a blur of `radius` texels: sigma is half the radius,
+    /// the taps on one side its ceiling, at most `BLUR_MAX_TAPS`.
+    pub fn of_radius(radius: f32) -> Self {
+        let radius = radius.max(0.0);
+        let sigma = (radius * 0.5).max(0.001);
+        let tap_count = (radius.ceil() as u32).min(BLUR_MAX_TAPS);
+        let inv_2sigma2 = 1.0 / (2.0 * sigma * sigma);
+        let mut pairs = [BlurTapPair::default(); BLUR_TAP_PAIRS];
+        let mut total_weight = 1.0f32;
+        let mut pair_count = 0;
+        for i in (1..=tap_count).step_by(2) {
+            let fi = i as f32;
+            let fj = fi + 1.0;
+            let inner = (-(fi * fi) * inv_2sigma2).exp();
+            let outer = if i < tap_count {
+                (-(fj * fj) * inv_2sigma2).exp()
+            } else {
+                0.0
+            };
+            total_weight += 2.0 * (inner + outer);
+            let weight = inner + outer;
+            let offset = if weight > 0.0 {
+                (fi * inner + fj * outer) / weight
+            } else {
+                0.0
+            };
+            pairs[pair_count] = BlurTapPair {
+                inner,
+                outer,
+                offset,
+                weight,
+            };
+            pair_count += 1;
+        }
+        Self {
+            pairs,
+            pair_count: pair_count as u32,
+            total_weight,
+        }
+    }
+}
+
+#[cfg(test)]
+mod blur_kernel_tests {
+    use super::*;
+
+    fn gaussian(tap: u32, radius: f32) -> f32 {
+        let sigma = radius * 0.5;
+        (-((tap * tap) as f32) / (2.0 * sigma * sigma)).exp()
+    }
+
+    #[test]
+    fn a_kernel_pairs_its_taps_where_their_weights_meet() {
+        let kernel = BlurKernel::of_radius(5.5);
+        assert_eq!(
+            kernel.pair_count, 3,
+            "a radius of 5.5 takes six taps a side"
+        );
+        let mut total = 1.0;
+        for (k, pair) in kernel.pairs[..3].iter().enumerate() {
+            let (i, j) = (2 * k as u32 + 1, 2 * k as u32 + 2);
+            assert!((pair.inner - gaussian(i, 5.5)).abs() <= 1e-6);
+            assert!((pair.outer - gaussian(j, 5.5)).abs() <= 1e-6);
+            assert_eq!(pair.weight, pair.inner + pair.outer);
+            assert!(pair.offset > i as f32 && pair.offset < j as f32);
+            total += 2.0 * (pair.inner + pair.outer);
+        }
+        assert_eq!(kernel.total_weight, total);
+        assert_eq!(kernel.pairs[3], BlurTapPair::default());
+    }
+
+    #[test]
+    fn an_odd_tap_count_leaves_its_last_fetch_on_the_inner_tap() {
+        let kernel = BlurKernel::of_radius(7.0);
+        assert_eq!(kernel.pair_count, 4);
+        let tail = kernel.pairs[3];
+        assert_eq!(tail.outer, 0.0);
+        assert_eq!(tail.offset, 7.0);
+        assert_eq!(tail.weight, tail.inner);
+    }
+
+    #[test]
+    fn a_kernel_stops_at_the_tap_cap_and_a_zero_radius_has_no_pairs() {
+        let capped = BlurKernel::of_radius(100.0);
+        assert_eq!(capped.pair_count, BLUR_TAP_PAIRS as u32);
+        assert!(capped.pairs[BLUR_TAP_PAIRS - 1].outer > 0.0);
+        let none = BlurKernel::of_radius(0.0);
+        assert_eq!((none.pair_count, none.total_weight), (0, 1.0));
+    }
+}

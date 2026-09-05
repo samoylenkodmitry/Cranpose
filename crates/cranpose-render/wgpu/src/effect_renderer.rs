@@ -1,6 +1,6 @@
 use std::cell::Cell;
 
-use cranpose_render_common::geometry::blur_scratch_block;
+use cranpose_render_common::geometry::{BLUR_TAP_PAIRS, BlurKernel, blur_scratch_block};
 use cranpose_ui_graphics::{BlendMode, MAX_SUBSTRATES, RenderEffect, RuntimeShader, TileMode};
 
 use crate::{
@@ -81,7 +81,7 @@ pub(crate) struct EffectRenderer {
 
     blur_shader: wgpu::ShaderModule,
     blur_pipeline_layout: wgpu::PipelineLayout,
-    blur_pipeline: LazyGpuResource<wgpu::RenderPipeline>,
+    blur_pipelines: [LazyGpuResource<wgpu::RenderPipeline>; 2],
     blur_downsample_pipelines:
         [LazyGpuResource<wgpu::RenderPipeline>; BLUR_DOWNSAMPLE_BLOCKS.len()],
     blur_uniform_bind_group_layout: wgpu::BindGroupLayout,
@@ -242,6 +242,8 @@ struct BlurUniforms {
     texture_size_and_tile_mode: [f32; 4],
     source_region: [f32; 4],
     dest_region: [f32; 4],
+    pairs: [[f32; 4]; BLUR_TAP_PAIRS],
+    kernel: [f32; 4],
 }
 
 #[repr(C)]
@@ -321,6 +323,23 @@ struct BlurDraw<'a> {
     uniforms: BlurUniforms,
     downsample: Option<u32>,
     scissor: Option<(u32, u32, u32, u32)>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BlurPipeline {
+    Downsample(u32),
+    Kernel { decal: bool },
+}
+
+impl BlurDraw<'_> {
+    fn pipeline(&self) -> BlurPipeline {
+        match self.downsample {
+            Some(block) => BlurPipeline::Downsample(block),
+            None => BlurPipeline::Kernel {
+                decal: self.uniforms.texture_size_and_tile_mode[2] >= 2.5,
+            },
+        }
+    }
 }
 
 fn offset_uniform_spec() -> UploadAllocatorSpec {
@@ -747,7 +766,10 @@ impl EffectRenderer {
             immediate_size: 0,
         });
 
-        let blur_pipeline = LazyGpuResource::new("effect/blur");
+        let blur_pipelines = [
+            LazyGpuResource::new("effect/blur"),
+            LazyGpuResource::new("effect/blur-decal"),
+        ];
         let blur_downsample_pipelines = [
             LazyGpuResource::new("effect/blur-downsample/2"),
             LazyGpuResource::new("effect/blur-downsample/4"),
@@ -819,7 +841,7 @@ impl EffectRenderer {
             pipeline_cache,
             blur_shader,
             blur_pipeline_layout,
-            blur_pipeline,
+            blur_pipelines,
             blur_downsample_pipelines,
             blur_uniform_bind_group_layout,
             offset_shader,
@@ -851,16 +873,21 @@ impl EffectRenderer {
         }
     }
 
-    fn blur_pipeline(&self, device: &wgpu::Device) -> &wgpu::RenderPipeline {
-        self.blur_pipeline.get_or_init(self.adapter_backend, || {
+    fn blur_pipeline(&self, device: &wgpu::Device, decal: bool) -> &wgpu::RenderPipeline {
+        let (cell, label) = if decal {
+            (&self.blur_pipelines[1], "Blur Decal Pipeline")
+        } else {
+            (&self.blur_pipelines[0], "Blur Pipeline")
+        };
+        cell.get_or_init(self.adapter_backend, || {
             create_fullscreen_pipeline(
                 device,
                 self.pipeline_cache.as_ref(),
-                "Blur Pipeline",
+                label,
                 &self.blur_pipeline_layout,
                 &self.blur_shader,
                 "blur_fs",
-                &[],
+                &[("BLUR_DECAL", if decal { 1.0 } else { 0.0 })],
                 self.surface_format,
                 wgpu::BlendState::REPLACE,
             )
@@ -1114,12 +1141,13 @@ impl EffectRenderer {
         );
         let mut bound = None;
         for (draw, uniform) in draws.iter().zip(&uniforms) {
-            if bound != Some(draw.downsample) {
-                pass.set_pipeline(match draw.downsample {
-                    Some(block) => self.blur_downsample_pipeline(device, block),
-                    None => self.blur_pipeline(device),
+            let pipeline = draw.pipeline();
+            if bound != Some(pipeline) {
+                pass.set_pipeline(match pipeline {
+                    BlurPipeline::Downsample(block) => self.blur_downsample_pipeline(device, block),
+                    BlurPipeline::Kernel { decal } => self.blur_pipeline(device, decal),
                 });
-                bound = Some(draw.downsample);
+                bound = Some(pipeline);
             }
             let source_bind_group = draw.source.get_or_create_bind_group(
                 device,
@@ -1148,6 +1176,7 @@ impl EffectRenderer {
         tile_mode: TileMode,
     ) -> BlurUniforms {
         let direction = if horizontal { [1.0, 0.0] } else { [0.0, 1.0] };
+        let kernel = BlurKernel::of_radius(if horizontal { radius.0 } else { radius.1 });
         BlurUniforms {
             direction_and_radius: [direction[0], direction[1], radius.0, radius.1],
             texture_size_and_tile_mode: [
@@ -1158,6 +1187,10 @@ impl EffectRenderer {
             ],
             source_region: region_uniform(source),
             dest_region: region_uniform(dest),
+            pairs: kernel
+                .pairs
+                .map(|pair| [pair.inner, pair.outer, pair.offset, pair.weight]),
+            kernel: [kernel.pair_count as f32, kernel.total_weight, 0.0, 0.0],
         }
     }
 
@@ -2047,11 +2080,19 @@ mod tests {
 
     #[test]
     fn blur_uniforms_use_vec4_packing_for_gl_backends() {
-        assert_eq!(std::mem::size_of::<BlurUniforms>(), 64);
+        assert_eq!(
+            std::mem::size_of::<BlurUniforms>(),
+            64 + 16 * super::BLUR_TAP_PAIRS + 16
+        );
         assert_eq!(std::mem::offset_of!(BlurUniforms, direction_and_radius), 0);
         assert_eq!(
             std::mem::offset_of!(BlurUniforms, texture_size_and_tile_mode),
             16
+        );
+        assert_eq!(std::mem::offset_of!(BlurUniforms, pairs), 64);
+        assert_eq!(
+            std::mem::offset_of!(BlurUniforms, kernel),
+            64 + 16 * super::BLUR_TAP_PAIRS
         );
     }
 

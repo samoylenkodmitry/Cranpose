@@ -1280,6 +1280,75 @@ back what the result pass gave up (15.0-15.4 -> 15.4-16.2 ms). CPU p50
 38.2-38.9 in the cool pair, the gate's second leg throttled at 41 C. The
 gate buys memory and CPU, not GPU; the frame is the five layer passes.
 
+## The layer bucket split, and the blur's kernel computed once per draw (2026-09-05, late)
+
+**The strata by label.** Every flush of a layer's page was one "Layer Pass"
+to the pass timer, so a frame's five strata read as one 15 ms bucket. Each
+flush now carries its index in its layer ("Layer Pass 0".."Layer Pass 4",
+"Layer Pass 5+" past that). On the watch, showcase list swipe, 21.7 ms GPU
+span: 3.3 / 3.1 / 3.5 / 3.2 / 2.4 ms, one pass each, no child page passes;
+blur V/H/D 2.2 / 2.2 / 0.72 (three passes each); the rest under 0.3.
+
+**What the strata hold** (desktop trace of the same frame, draws and scissor
+pixels by pipeline per label): stratum 0 is the star background, a
+full-screen radial gradient rect and 118 star instances, plus the shadow
+bands; strata 1 to 3 are the cards' glass (interior and rim draws over
+43k px each), the chips' glass, the text and images, the header's gradient
+blur; stratum 4 is the tab bar, two glass materials (the pill and the lens)
+over one 283 x 214 px rect, the lens rasterized over the bar's whole node
+because its node carries deformation headroom.
+
+**One-APK ablation** (`debug.cranpose.ablate`, GPU span ms/frame, cool):
+none 21.6-22.1; an extra empty Load pass after every stratum 22.1 with
+"Empty Pass 0.00 ms x5", and with the blur shaders discarding at entry the
+three blur labels fall to 0.13 each, so a pass costs ~0.04 ms here and the
+frame is pixels x shader, not pass boundaries; no glass draws 12.2 (glass
+9.5-11 ms); no composite blits 20.0 (shadow bands 1.9); no page ops
+17.5-18.2 (ops 4, the star gradient 2.4).
+
+**The glass by pipeline** (`GLASS_ABLATE` override): the rim pipeline
+discarding at entry 16.7-17.4 (rim shading 5.3 ms: at this rim reach the
+band is a third of a 132 px card and pays five reflection taps and two
+SDFs on top of the interior work), the interior pipeline discarding at
+entry 18.8-19.0 (interior 3.0), both at entry 13.5-13.8 (the raster of
+0.55 MP of glass quads ~1.5), discard after the uniform loads 14.0-14.2 and
+after the SDF 13.5-13.9 (the prologue of a discarded fragment ~0.8 ns/px,
+so a geometric interior/rim split would save at most ~1 ms), interior as
+prologue plus one tap 18.0-18.2 (interior shading beyond the prologue 3.4),
+interior with its ALU but the four extra taps dropped 19.6-20.4 (taps 1.5,
+displacement and optics ALU 1.9). The rim's reflection taps and the
+interior's dispersion taps are the material's definition; an exact
+renderer cannot remove them.
+
+**The blur's kernel, once per draw.** The kernel loop recomputed, per pixel
+and per tap pair, two Gaussian exponentials and the division that places
+the pair's one bilinear fetch, all functions of the draw's radius alone.
+`BlurKernel::of_radius` (render-common) computes the pairs on the CPU, the
+draw's uniform carries them (16 vec4: inner and outer weight, fetch offset,
+fetch weight; then pair count and total weight), and the fragment reads
+them. The decal mode still weighs each tap per pixel by whether it lands
+inside the region, from the pair's two weights, folded by the `BLUR_DECAL`
+pipeline constant into its own pipeline. A first version handed the table
+down from the vertex stage as ten flat vec4 varyings, byte-identical to the
+per-pixel loop on Metal, and was slower on the watch (Blur H/V 3.2x while
+heat grew the rest 1.4x): forty varying floats per fragment cost more on
+this GPU than the exponentials they replaced. Rounding: the CPU exponential
+is not the GPU's, so the table's blur is within one level of the per-pixel
+shader's (Codex's direct shader probe: 28 of 256 cases on Intel UHD 730 and
+21 on lavapipe differ, worst one level); the kernel's contract is the CPU
+reference within one step (`blur_reference.rs`, unchanged), which a
+swapped pair offset misses by 28 and 14 levels. Watch, A B A B against
+2c9fe018, both armeabi-v7a: fps 37.9 / 37.9 / 37.1 to 41.1 / 43.8 / 43.0
+in the cool pair; hot pass timing puts Blur H/V at ~1.5 / 1.5 ms per frame
+cool-equivalent against 2.2 / 2.2, ~1.4 ms of the frame.
+
+**What is left for 60 fps on the watch, exact:** the tab bar lens's node
+support (~1 ms of prologue and raster outside its shape), a cache for
+static expensive fills such as the star gradient (~1.8 ms, the shape
+pipeline at 14 ns/px against a 1:1 blit at ~4), the interior/rim raster
+split (~1 ms). Beyond those the frame is the glass material's own taps
+and the star field's per-pixel gradient, a picture decision.
+
 ## Order
 
 Every step ships with its contract proven red first, the robot suite

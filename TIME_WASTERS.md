@@ -815,7 +815,6 @@ event; the kernel ships without perf events. Profile there with the
 
 - Parallel shape preparation (2026-09-05): borrowed-input microbenchmarks did not predict the public DrawScope cost. A complete queued/chunked implementation passed record and GPU parity, including deliberately reversed chunks and wrong upload offsets, but regressed both physical devices. ARMv7, 15,161 rotating arcs: Huawei baseline ~1.84 ms versus 6.3-7.2 ms; watch ~7.52 ms versus 8.1-10.2 ms. Two workers were slower, 128-byte separation of worker state did not help, and removing the metadata merge still did not beat the watch baseline. Borrowing tables once per batch also failed to improve the watch. The implementation is stashed, not retained. Benchmark complete public recording with changing inputs before adding a scheduler; all evidence is summarized in `docs/mobile_watch_performance.md`.
 
-
 ## Huawei shell Vulkan probe cannot enumerate the app's adapter
 
 On the Mate 20 X, a standalone ARM64 wgpu 29.0.4 executable launched by adb
@@ -823,3 +822,17 @@ returns `request_adapter: NotFound`; the same device runs the Showcase APK
 through Vulkan. Matching the app's empty instance flags does not resolve it.
 The standalone ARMv7 probe works on Adreno702. Use an APK for Huawei shader
 validation; do not mistake this shell-probe limitation for app GPU availability.
+
+## 2026-09-05: a chained scratch build ran on a tree the patch step had not touched
+
+A watch ablation run measured nothing because the APK had no toggle: the
+patch script's first pattern no longer matched (an earlier patch had
+already changed the same property table), it exited non-zero, and a `;`
+between the patch and the gradle step let gradle build the unpatched tree
+anyway; my grep of the build output for `error|gradle exit` hid the
+traceback. Two device runs and a rebuild were lost. Chain a build on the
+patch with `&&`, and before any device run grep the built tree for the
+marker the run depends on (the property row, the override name) and the
+device log for the line proving the toggle reached the process
+(`debug.cranpose.<name> -> CRANPOSE_<NAME>=...`); a run without that line
+is void, as the silent-instrument rule says.
