@@ -10,6 +10,7 @@ use cranpose_ui::{
     Color, LinearArrangement, Modifier, RenderEffect, TextStyle, composable,
     widgets::{Box, BoxSpec, Column, ColumnSpec, LazyColumn, LazyColumnSpec, Text},
 };
+use support::max_channel_delta;
 
 const FRAME_WIDTH: u32 = 640;
 const FRAME_HEIGHT: u32 = 640;
@@ -225,7 +226,9 @@ impl GlassHarness {
     }
 }
 
-const WARMUP_FRAMES: usize = 6;
+fn warmup_frames() -> usize {
+    2 * (visible_rows() as usize + 1)
+}
 const MEASURED_FRAMES: usize = 8;
 
 fn harness() -> Option<(std::sync::MutexGuard<'static, ()>, GlassHarness)> {
@@ -244,7 +247,7 @@ fn a_still_glass_scene_leaves_no_layer_cache_misses() {
         return;
     };
     let still = SceneInput::default();
-    for _ in 0..WARMUP_FRAMES {
+    for _ in 0..warmup_frames() {
         harness.stats(still);
     }
     for frame_index in 0..MEASURED_FRAMES {
@@ -281,11 +284,11 @@ fn an_animated_overlay_leaves_still_glass_rows_fully_cached() {
             ..SceneInput::default()
         }
     };
-    for frame_index in 0..WARMUP_FRAMES {
+    for frame_index in 0..warmup_frames() {
         harness.stats(animation(frame_index));
     }
     for frame_index in 0..MEASURED_FRAMES {
-        let stats = harness.stats(animation(WARMUP_FRAMES + frame_index));
+        let stats = harness.stats(animation(warmup_frames() + frame_index));
         assert_eq!(
             stats.misses, 1,
             "an animated overlay re-renders exactly its own backdrop blur, its content \
@@ -317,7 +320,7 @@ fn a_rigid_scroll_reuses_every_glass_result_whose_input_moved_with_it() {
         scroll_delta: RIGID_SCROLL_STEP,
         ..SceneInput::default()
     };
-    for _ in 0..WARMUP_FRAMES {
+    for _ in 0..warmup_frames() {
         harness.stats(scrolling);
     }
     for frame_index in 0..MEASURED_FRAMES {
@@ -345,14 +348,6 @@ fn overlay_interior_pixels(frame: &CapturedFrame) -> Vec<u8> {
     pixels
 }
 
-fn max_channel_delta(a: &[u8], b: &[u8]) -> u8 {
-    a.iter()
-        .zip(b)
-        .map(|(a, b)| a.abs_diff(*b))
-        .max()
-        .unwrap_or(0)
-}
-
 #[test]
 fn a_cached_glass_result_follows_a_change_beneath_it() {
     let Some((_lock, mut harness)) = harness() else {
@@ -363,7 +358,7 @@ fn a_cached_glass_result_follows_a_change_beneath_it() {
         first_row_warm: true,
         ..SceneInput::default()
     };
-    for _ in 0..WARMUP_FRAMES {
+    for _ in 0..warmup_frames() {
         harness.stats(cool);
     }
     let (cached, before) = harness.frame(cool);
@@ -388,7 +383,7 @@ fn a_cached_glass_result_follows_a_change_beneath_it() {
     let mut fresh = GlassHarness::new(
         support::headless_renderer_beside_locked().expect("second headless renderer"),
     );
-    for _ in 0..WARMUP_FRAMES {
+    for _ in 0..warmup_frames() {
         fresh.stats(warm);
     }
     let (_, reference) = fresh.frame(warm);
@@ -398,66 +393,13 @@ fn a_cached_glass_result_follows_a_change_beneath_it() {
     );
 }
 
-/// The frame a scroll stops in does not resolve every glass at once: the
-/// resolves, each a second shading of its glass, spread over the frames
-/// that follow within a pixel budget, and the scene still ends up wholly
-/// served from the cache.
-#[test]
-fn a_scene_that_stops_admits_its_glasses_over_several_frames() {
-    let Some((_lock, mut harness)) = harness() else {
-        return;
-    };
-    let still = SceneInput::default();
-    let first = harness.stats(still);
-    assert!(
-        first.misses >= 7,
-        "the scene shows at least seven glasses: {first:?}"
-    );
-    assert_eq!(
-        first.admissions, 0,
-        "a capture seen once is only remembered: {first:?}"
-    );
-    let mut admitted = 0;
-    let mut frames = 0;
-    while admitted < first.misses {
-        let stats = harness.stats(still);
-        assert!(
-            stats.admissions <= 3,
-            "frame {frames} after the stop resolved {} glasses at once: {stats:?}",
-            stats.admissions
-        );
-        assert!(stats.admissions > 0, "the admissions stalled: {stats:?}");
-        admitted += stats.admissions;
-        frames += 1;
-        assert!(
-            frames <= first.misses,
-            "admission never completed: {stats:?}"
-        );
-    }
-    assert!(
-        frames >= 3,
-        "seven glasses of 59 thousand pixels each need three frames, took {frames}"
-    );
-    let settled = harness.stats(still);
-    assert_eq!(
-        settled.misses, 0,
-        "every glass is served from the cache: {settled:?}"
-    );
-    assert_eq!(settled.hits, first.misses, "{settled:?}");
-}
-
-/// A glass whose backdrop changes every second frame is a glass whose
-/// admitted results are never read back: each admission resolved it whole
-/// into a retained surface that the next frame's key no longer named. After
-/// the first wasted admission the glass waits twice as long for the next,
-/// so forty such frames admit it once or twice, not twenty times.
 #[test]
 fn a_glass_whose_backdrop_changes_every_other_frame_stops_being_admitted() {
     let Some((_lock, mut harness)) = harness() else {
         return;
     };
     let still = SceneInput::default();
-    for _ in 0..WARMUP_FRAMES {
+    for _ in 0..warmup_frames() {
         harness.stats(still);
     }
     let settled = harness.stats(still);

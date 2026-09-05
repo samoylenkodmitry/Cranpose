@@ -32,6 +32,7 @@ mod pipeline;
 mod pipeline_disk_cache;
 #[cfg(not(target_arch = "wasm32"))]
 mod present_runtime;
+mod record_columns;
 mod render;
 mod run_geometry;
 mod run_store;

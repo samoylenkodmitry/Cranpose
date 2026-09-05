@@ -1365,7 +1365,7 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
     let optical_tint_alpha = tint_color.a * mix(1.0, interior, rim_style);
     rgb = mix(rgb, tint_color.rgb, optical_tint_alpha);
     // The bevel's specular return, on the outermost surface of the glass.
-    rgb = vec3<f32>(1.0) - (vec3<f32>(1.0) - rgb) * (1.0 - bevel_light);
+    rgb = rgb + (vec3<f32>(1.0) - rgb) * bevel_light;
 
     // Touch glow (uniforms 118-119 node-local dp, 120 intensity): a pressed
     // liquid surface concentrates saturation and a soft light in a radial

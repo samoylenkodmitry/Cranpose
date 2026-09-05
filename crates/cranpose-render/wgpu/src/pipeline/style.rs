@@ -228,7 +228,7 @@ mod tests {
 
         scene.flush_loose();
         let run = &scene.runs[0];
-        let record = run.tables.shapes[0];
+        let record = run.tables().shapes.get(0).unwrap();
         assert_eq!(record.radii, [10.0; 4], "the record keeps the app's radii");
         assert_eq!(
             run.placement.offset,

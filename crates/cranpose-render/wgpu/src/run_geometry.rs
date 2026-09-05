@@ -178,8 +178,13 @@ impl ShapeFill {
                 continue;
             }
             let class_segments = bands.then(|| band_class_segments(segment.band_class));
-            for record in &tables.shapes[segment.range()] {
-                fill.add_record(record, offset, scale, class_segments);
+            for record in tables
+                .shapes
+                .iter()
+                .skip(segment.start as usize)
+                .take(segment.count as usize)
+            {
+                fill.add_record(&record, offset, scale, class_segments);
             }
         }
         fill
@@ -265,7 +270,7 @@ mod tests {
     fn recorded_arcs(record: impl FnOnce(&mut DrawScopeDefault)) -> Vec<ShapeRecord> {
         let mut scope = DrawScopeDefault::new(Size::new(600.0, 600.0));
         record(&mut scope);
-        scope.finish().shapes().to_vec()
+        scope.finish().shapes().iter().collect()
     }
 
     fn assert_strip_covers_shader(record: &ShapeRecord, scale: f32) {

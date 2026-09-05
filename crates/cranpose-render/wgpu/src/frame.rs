@@ -1293,18 +1293,8 @@ pub(crate) struct FrameExecutor<'r, 'c, C: FrameCommandRecorder> {
     admitted_pixels: u64,
 }
 
-/// The pixels of backdrops resolved into retained textures in one frame
-/// before the rest wait for the next. A scroll that stops leaves every
-/// glass with a repeated capture at once, and each resolve shades its
-/// glass a second time; spreading them over frames keeps the frame that
-/// stops from paying for all of them. The first resolve of a frame always
-/// goes, so a glass larger than the budget still gets in.
 const MAX_ADMISSION_PATIENCE: u32 = 16;
 
-/// What one glass has shown the backdrop cache: the key its capture hashed
-/// to, how many frames running that key has held, how many it must hold
-/// before its result is worth retaining, and whether the current key's
-/// retained result still waits to be read back.
 pub(crate) struct BackdropGate {
     key: LayerRasterCacheKey,
     run: u32,
@@ -1585,28 +1575,19 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         Ok(())
     }
 
-    /// Resolves the queued backdrop effects stage by stage: every capture of
-    /// a stage reads the page as drawn up to its own glass, the batched
-    /// captures packed into atlases, blurred in one pass pair per atlas, and
-    /// handed on as composites reading their region; the rest of the stage
-    /// captures one effect at a time.
     fn run_stages(&mut self, pass: &mut LayerPass<'_>) -> Result<(), String> {
-        let mut pending = self.take_uncached(pass);
-        if pending.is_empty() {
-            return Ok(());
-        }
+        let mut pending = std::mem::take(&mut pass.stages.pending);
         pending.sort_by_key(|item| (item.stage, item.z));
         let stage_count = pending.last().map_or(0, |item| item.stage + 1);
         self.renderer.frame_stats.record_stages(stage_count as u32);
         let diagnose = stage_diagnostics_enabled();
-        for stage in 0..stage_count {
-            let items: Vec<&PendingBackdrop<'_>> =
-                pending.iter().filter(|item| item.stage == stage).collect();
+        for stage in pending.chunk_by_mut(|a, b| a.stage == b.stage) {
+            let items = self.take_uncached(pass, stage);
             if items.is_empty() {
                 continue;
             }
             if diagnose {
-                log_stage(stage, &items);
+                log_stage(items[0].stage, &items);
             }
             let mut outputs = self.run_stage(pass, &items)?;
             self.admit_backdrops(&items, &mut outputs, pass.scale)?;
@@ -1616,17 +1597,18 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         Ok(())
     }
 
-    /// Keys every pending backdrop, resolves the ones the cache holds into
-    /// blits of their retained result, and returns the rest.
-    fn take_uncached<'a>(&mut self, pass: &mut LayerPass<'a>) -> Vec<PendingBackdrop<'a>> {
-        let items = std::mem::take(&mut pass.stages.pending);
+    fn take_uncached<'a, 'scene>(
+        &mut self,
+        pass: &mut LayerPass<'_>,
+        items: &'a mut [PendingBackdrop<'scene>],
+    ) -> Vec<&'a PendingBackdrop<'scene>> {
         let mut kept = Vec::with_capacity(items.len());
         let mut hits = Vec::new();
-        for mut item in items {
-            item.key = self.backdrop_cache_key(pass, &item);
-            match self.cached_backdrop(&item) {
+        for item in items {
+            item.key = self.backdrop_cache_key(pass, item);
+            match self.cached_backdrop(item) {
                 Some(composite) => hits.push(composite),
-                None => kept.push(item),
+                None => kept.push(&*item),
             }
         }
         pass.pending.extend(hits);
@@ -1725,12 +1707,6 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         ))
     }
 
-    /// Resolves the results of the backdrops whose input has held for
-    /// longer than their gate's patience into retained textures and caches
-    /// them; a backdrop seen with this input for the first time is only
-    /// remembered, and one whose last admission was never read back waits
-    /// twice as long the next time, so an animated glass never keeps paying
-    /// for resolves it cannot reuse.
     fn admit_backdrops(
         &mut self,
         items: &[&PendingBackdrop<'_>],
@@ -3095,24 +3071,24 @@ mod tests {
     }
 
     #[test]
-    fn a_hit_on_an_earlier_key_restarts_the_run_of_the_key_the_gate_last_saw() {
-        let (a, b) = (gate_key(1), gate_key(2));
-        let mut gate = BackdropGate::new(a);
-        gate.observe(a);
+    fn a_cached_key_between_misses_breaks_the_other_keys_consecutive_run() {
+        let first = gate_key(1);
+        let other = gate_key(2);
+        let mut gate = BackdropGate::new(first);
+        gate.observe(first);
         assert!(gate.admits());
         gate.admitted();
-        gate.observe(b);
+        gate.observe(other);
         assert!(!gate.admits());
-        gate.observe(b);
+        gate.observe(other);
         assert!(!gate.admits());
-        gate.hit(a);
-        gate.observe(b);
+        gate.hit(first);
+        gate.observe(other);
         assert!(
             !gate.admits(),
-            "b's run restarts after a frame that read a's retained result"
+            "the other key has held for only one frame since the cache hit"
         );
     }
-
     fn gate_frame(gate: &mut BackdropGate, key: LayerRasterCacheKey) -> bool {
         if gate.unread && gate.key == key {
             gate.hit(key);

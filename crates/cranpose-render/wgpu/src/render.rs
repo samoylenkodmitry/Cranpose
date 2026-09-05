@@ -22,8 +22,8 @@ use cranpose_render_common::{
     },
 };
 use cranpose_ui_graphics::{
-    ARC_BUCKET_SEGMENTS, BlendMode, ColorFilter, FxHasher, ImageBitmap, ImageSampling, Point,
-    RecordSegment, Rect, RenderHash, TileMode,
+    BlendMode, ColorFilter, FxHasher, ImageBitmap, ImageSampling, Point, RecordSegment, Rect,
+    RenderHash, TileMode,
 };
 use smallvec::SmallVec;
 use web_time::Instant;
@@ -51,8 +51,9 @@ use crate::{
     lazy_resource::LazyGpuResource,
     offscreen::{OffscreenTarget, composition_bytes_per_pixel, composition_format},
     output_conversion::OutputConverter,
+    record_columns::record_vertex_layouts,
     rect_to_quad,
-    run_store::{ArenaBinding, PlacementData, RUN_BINDINGS, RunBufferMode, RunDrawCall, RunStore},
+    run_store::{ArenaBinding, PlacementData, RunBufferMode, RunDrawCall, RunStore},
     scene::{
         CompositorScene, DrawOp, DrawOpKind, ImageDraw, RunDraw, ShadowDraw, SnapAnchor, TextDraw,
     },
@@ -761,7 +762,7 @@ pub(crate) fn hash_run_item<H: Hasher>(
     root_scale: f32,
     state: &mut H,
 ) {
-    run.tables.fingerprint().hash(state);
+    run.tables().fingerprint().hash(state);
     run.segments.start.hash(state);
     run.segments.end.hash(state);
     hash_shadow_device_rect(run.bounds, origin_x, origin_y, root_scale, state);
@@ -913,7 +914,7 @@ pub(crate) enum RunTier {
 /// record the same, which `shape_variant_parity.rs` pins.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct ShapeVariant {
-    kind: Option<u32>,
+    kind: Option<u8>,
     solid: bool,
     clipped: bool,
 }
@@ -930,7 +931,7 @@ impl ShapeVariant {
             return Self::GENERAL;
         }
         Self {
-            kind: segment.uniform_kind(),
+            kind: segment.uniform_kind().map(|kind| kind as u8),
             solid: !segment.gradient,
             clipped,
         }
@@ -947,9 +948,6 @@ fn shape_variants_enabled() -> bool {
 pub(crate) struct ShapePipelineKey {
     pub(crate) blend_mode: BlendMode,
     pub(crate) tier: RunTier,
-    /// The band class whose strip segments are every record's vertex
-    /// budget in this pipeline; class zero draws one quad per record.
-    pub(crate) band_class: u8,
     pub(crate) variant: ShapeVariant,
 }
 
@@ -965,7 +963,6 @@ fn create_shape_pipeline(
     let ShapePipelineKey {
         blend_mode,
         tier,
-        band_class,
         variant,
     } = key;
     let constants = [
@@ -974,10 +971,6 @@ fn create_shape_pipeline(
         ("SHAPE_CLIPPED", f64::from(u8::from(variant.clipped))),
         ("TIER_ARENA", f64::from(u8::from(tier == RunTier::Arena))),
         ("SHAPE_BANDS", f64::from(u8::from(mode.storage))),
-        (
-            "BAND_SEGMENTS",
-            f64::from(ARC_BUCKET_SEGMENTS[band_class as usize]),
-        ),
     ];
     let vertex_entry = if variant.solid {
         "vs_record_solid"
@@ -985,6 +978,7 @@ fn create_shape_pipeline(
         "vs_record"
     };
     let fragment_entry = if variant.solid { "fs_solid" } else { "fs_main" };
+    let instance_layout = record_vertex_layouts();
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("Shape Shader"),
         source: wgpu::ShaderSource::Wgsl(shape_shader_source(mode)),
@@ -999,7 +993,7 @@ fn create_shape_pipeline(
     create_render_pipeline_logged(
         device,
         cache,
-        &format!("shape blend={blend_mode:?} tier={tier:?} class={band_class} variant={variant:?}"),
+        &format!("shape blend={blend_mode:?} tier={tier:?} variant={variant:?}"),
         wgpu::RenderPipelineDescriptor {
             label: Some("Shape Pipeline"),
             layout: Some(&pipeline_layout),
@@ -1010,7 +1004,7 @@ fn create_shape_pipeline(
                     constants: &constants,
                     ..wgpu::PipelineCompilationOptions::default()
                 },
-                buffers: &[],
+                buffers: &instance_layout,
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
@@ -1788,7 +1782,7 @@ impl GpuRenderer {
                 label: Some("Viewport Uniform Bind Group Layout"),
                 entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: true,
@@ -2554,7 +2548,7 @@ impl GpuRenderer {
         let page = Rc::clone(root_target);
 
         #[cfg(not(target_arch = "wasm32"))]
-        let result = {
+        let (result, submitted) = {
             let mut executor = std::mem::take(&mut self.frame_graph_executor);
             let mut frame_graph = WgpuFrameGraph::new(Some("Renderer Frame Graph"));
             let surface = frame_graph.import_surface("renderer-surface");
@@ -2590,15 +2584,15 @@ impl GpuRenderer {
                     if execution.stats.pass_count > 0 {
                         self.frame_stats.record_command_stats(execution.stats);
                     }
-                    Ok(())
+                    (Ok(()), true)
                 }
-                Err(crate::frame_graph::FrameGraphError::NoDeclaredPasses) => Ok(()),
-                Err(error) => Err(error.to_string()),
+                Err(crate::frame_graph::FrameGraphError::NoDeclaredPasses) => (Ok(()), false),
+                Err(error) => (Err(error.to_string()), false),
             }
         };
 
         #[cfg(target_arch = "wasm32")]
-        let result = {
+        let (result, submitted) = {
             let mut executor = std::mem::take(&mut self.frame_graph_executor);
             let (result, execution) = {
                 let mut frame_encoder =
@@ -2626,11 +2620,15 @@ impl GpuRenderer {
             if let Some(total_ms) = should_log_wgpu_render_stage(graph_start, after_execute) {
                 log::warn!("[wgpu-render-stage:graph] total_ms={total_ms:.2}",);
             }
+            let submitted = execution.is_some();
             if let Some(execution) = execution {
                 self.frame_stats.record_command_stats(execution.stats);
             }
-            result
+            (result, submitted)
         };
+        if !submitted {
+            self.run_store.invalidate_uploads();
+        }
         returns.scene = Some(root.scene);
         result
     }
@@ -3045,38 +3043,33 @@ impl GpuRenderer {
         self.run_store.is_stored(run)
     }
 
-    fn run_pipeline_key(
-        segment: &RecordSegment,
-        clipped: bool,
-        tier: RunTier,
-        mode: RunBufferMode,
-    ) -> ShapePipelineKey {
+    fn run_pipeline_key(segment: &RecordSegment, clipped: bool, tier: RunTier) -> ShapePipelineKey {
         ShapePipelineKey {
             blend_mode: supported_blend_mode(segment.blend),
             tier,
-            band_class: if mode.storage { segment.band_class } else { 0 },
             variant: ShapeVariant::of_segment(segment, clipped),
         }
     }
 
     /// Brings a stored run's tables up to date and records its draws under
     /// a placement uniform of its own.
-    pub(crate) fn prepare_store_run(
+    pub(crate) fn prepare_store_run<C: FrameCommandRecorder>(
         &mut self,
+        recorder: &mut C,
         run: &RunDraw,
         viewport: ViewportUniformParams,
         root_scale: f32,
     ) -> StoreRunBatch {
         let command = run.command.expect("a stored run has a command");
         let upload_start = Instant::now();
-        let (upload, fill) =
-            self.run_store
-                .upload_stored(&self.device, &self.queue, run, root_scale);
+        let (upload, fill) = self
+            .run_store
+            .upload_stored(&self.device, recorder, run, root_scale);
         if let Some(total_ms) = should_log_wgpu_render_stage(upload_start, Instant::now()) {
             log::warn!(
                 "[wgpu-render-stage:run-upload] total_ms={total_ms:.2} bytes={} records={}",
                 upload.upload_bytes,
-                run.tables.shapes.len()
+                run.tables().shapes.len()
             );
         }
         self.frame_stats.record_command_stats(upload);
@@ -3093,11 +3086,10 @@ impl GpuRenderer {
                 .claim(&self.device, &self.uniform_bind_group_layout, &uniforms);
         let clipped = run.placement.clip.is_some();
         let mut draws = SmallVec::new();
-        let mode = self.run_store.mode();
         self.run_store.stored_run_draws(
             &self.device,
             run,
-            &mut |segment| Self::run_pipeline_key(segment, clipped, RunTier::Store, mode),
+            &mut |segment| Self::run_pipeline_key(segment, clipped, RunTier::Store),
             &mut draws,
         );
         for draw in &draws {
@@ -3128,12 +3120,11 @@ impl GpuRenderer {
         root_scale: f32,
     ) -> u32 {
         let clipped = run.placement.clip.is_some();
-        let mode = self.run_store.mode();
         let mut keys: SmallVec<[ShapePipelineKey; 4]> = SmallVec::new();
         let taken = self
             .run_store
             .append_arena(chunk, run, from, root_scale, &mut |segment| {
-                let key = Self::run_pipeline_key(segment, clipped, RunTier::Arena, mode);
+                let key = Self::run_pipeline_key(segment, clipped, RunTier::Arena);
                 if !keys.contains(&key) {
                     keys.push(key);
                 }
@@ -3175,21 +3166,22 @@ impl GpuRenderer {
             &self.viewport_uniforms.bind_group,
             &[self.viewport_uniforms.dynamic_offset(uniform_slot)?],
         );
-        pass.set_bind_group(1, tables.bind_group, &tables.offsets);
+        pass.set_bind_group(1, tables.bind_group, &tables.offsets[2..]);
+        for (slot, buffer) in tables.records.into_iter().enumerate() {
+            pass.set_vertex_buffer(slot as u32, buffer.slice(u64::from(tables.offsets[slot])..));
+        }
         let mut bound_class = None;
         for draw in draws {
             let pipeline = self
                 .shape_pipelines
                 .get(&draw.key)
                 .ok_or_else(|| format!("shape pipeline {:?} was not prepared", draw.key))?;
-            if bound_class != Some(draw.key.band_class) {
+            if bound_class != Some(draw.band_class) {
                 pass.set_index_buffer(
-                    self.run_store
-                        .strip_index_buffer(draw.key.band_class)
-                        .slice(..),
+                    self.run_store.strip_index_buffer(draw.band_class).slice(..),
                     wgpu::IndexFormat::Uint32,
                 );
-                bound_class = Some(draw.key.band_class);
+                bound_class = Some(draw.band_class);
             }
             pass.set_pipeline(pipeline);
             pass.draw_indexed(draw.indices(), 0, draw.records.clone());
@@ -3210,10 +3202,7 @@ impl GpuRenderer {
             .ok_or_else(|| "a stored run left the store before its draw".to_string())?;
         self.draw_run_calls(
             pass,
-            ArenaBinding {
-                bind_group: &stored.buffers.bind_group,
-                offsets: [0; RUN_BINDINGS],
-            },
+            stored.buffers.binding(),
             batch.uniform_slot,
             &batch.draws,
             target_size,
@@ -4812,14 +4801,14 @@ fn inner_shadow_composite_mask(
 ) -> Option<RoundedCompositeMask> {
     let run = shadow.shapes.as_ref()?;
     if !run
-        .tables
+        .tables()
         .shapes
         .iter()
         .any(|record| record.blend_mode() == BlendMode::DstOut)
     {
         return None;
     }
-    let fill = run.tables.shapes.first()?;
+    let fill = run.tables().shapes.get(0)?;
     let rect = run.placement.translated_bounds(fill.stored_rect());
     if rect.width <= 0.0 || rect.height <= 0.0 {
         return None;

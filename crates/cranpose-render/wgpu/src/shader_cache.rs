@@ -47,7 +47,12 @@ impl ShaderDrawVariant {
     }
 }
 
-type PipelineKey = (u64, u64, RuntimeShaderPipelineMode, ShaderDrawVariant);
+type PipelineKey = (
+    u64,
+    u64,
+    RuntimeShaderPipelineMode,
+    Option<(&'static str, ShaderDrawVariant)>,
+);
 
 pub(crate) struct ShaderPipelineCache {
     backend: wgpu::Backend,
@@ -88,10 +93,16 @@ impl ShaderPipelineCache {
         } else {
             shader.overrides_hash()
         };
-        if let (Some(name), Some(value)) = (shader.draw_split(), variant.constant()) {
+        let split = shader.draw_split().zip(variant.constant());
+        if let Some((name, value)) = split {
             constants.push((name, value));
         }
-        let cache_key = (source_hash, overrides_hash, mode, variant);
+        let cache_key = (
+            source_hash,
+            overrides_hash,
+            mode,
+            split.map(|(name, _)| (name, variant)),
+        );
         if self.disabled.contains(&source_hash) {
             return None;
         }

@@ -415,6 +415,11 @@ fn check(name: &str, graph: RenderGraph, size: u32, scale: f32) {
         }
     };
     let pixels = capture(&mut renderer, &graph, size, scale);
+    if let Some(directory) = std::env::var_os("CRANPOSE_RECORD_CAPTURE_DIR") {
+        let directory = PathBuf::from(directory);
+        std::fs::create_dir_all(&directory).expect("capture output directory");
+        write_png(&directory.join(format!("{name}.png")), size, size, &pixels);
+    }
     assert!(
         support::distinct_colors(&pixels) > 8,
         "{name}: the scene must draw something"

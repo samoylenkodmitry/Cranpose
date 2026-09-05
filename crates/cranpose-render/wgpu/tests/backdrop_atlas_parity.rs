@@ -105,17 +105,19 @@ fn assert_region_matches(
     tolerance: u32,
 ) {
     let region = first_glass_region();
+    let alone_pixels = region_pixels(alone, region);
+    let packed_pixels = region_pixels(packed, region);
     let stats = image_difference_stats(
-        &region_pixels(alone, region),
-        &region_pixels(packed, region),
+        &alone_pixels,
+        &packed_pixels,
         region.width as u32,
         region.height as u32,
         tolerance,
     );
-    assert_eq!(
-        stats.differing_pixels, 0,
-        "{label}: differing_pixels={} max_diff={} first={:?}",
-        stats.differing_pixels, stats.max_difference, stats.first_difference
+    let max_channel_delta = support::max_channel_delta(&alone_pixels, &packed_pixels);
+    assert!(
+        u32::from(max_channel_delta) <= tolerance,
+        "{label}: max_channel_delta={max_channel_delta} {stats:?}",
     );
 }
 
@@ -199,6 +201,95 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
 fn pixel_at(frame: &CapturedFrame, x: f32, y: f32) -> [u8; 4] {
     let pixels = region_pixels(frame, rect(x, y, 1.0, 1.0));
     [pixels[0], pixels[1], pixels[2], pixels[3]]
+}
+
+fn split_name_probe(name: &'static str) -> RenderEffect {
+    let mut shader = RuntimeShader::new(&format!(
+        "{RUNTIME_SHADER_PRELUDE_WGSL}\n{}",
+        r#"
+override FIRST: i32 = 0;
+override SECOND: i32 = 0;
+@fragment
+fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
+    let part = max(FIRST, SECOND);
+    if (part == 1 && input.uv.x >= 0.5) || (part == 2 && input.uv.x < 0.5) {
+        discard;
+    }
+    return select(vec4<f32>(0.0, 0.0, 1.0, 1.0), vec4<f32>(1.0, 0.0, 0.0, 1.0), FIRST != 0);
+}
+"#
+    ));
+    shader.set_batched_source(true);
+    shader.set_draw_split(Some(name));
+    RenderEffect::Shader { shader }
+}
+
+#[test]
+fn split_override_names_select_distinct_compiled_pipelines() {
+    let mut renderer = support::headless_renderer().expect("headless renderer");
+    for (name, expected) in [("FIRST", [255, 0, 0, 255]), ("SECOND", [0, 0, 255, 255])] {
+        let frame = capture(&mut renderer, glasses_page(1, || split_name_probe(name)));
+        assert_eq!(
+            pixel_at(&frame, GLASS_LEFT + GLASS_WIDTH / 2.0, GLASS_TOP + 4.0),
+            expected,
+            "the {name} override must select its own split pipelines"
+        );
+    }
+}
+
+fn active_glass(activity: f32, rim_style: f32, specialized: bool) -> RenderEffect {
+    let RenderEffect::Shader { shader: base } = glass_shader() else {
+        panic!("glass shader");
+    };
+    let mut shader = RuntimeShader::new(base.source());
+    for (index, value) in base.uniforms().iter().copied().enumerate() {
+        shader.set_float(index, value);
+    }
+    shader.set_float(cranpose_ui_graphics::GLASS_ACTIVITY_UNIFORM, activity);
+    shader.set_float(6, 4.0);
+    shader.set_float(28, rim_style);
+    shader.set_float(9, 0.65);
+    shader.set_float(cranpose_ui_graphics::GLASS_DISPERSION_UNIFORM, 0.8);
+    shader.set_batched_source(true);
+    if specialized {
+        cranpose_ui_graphics::specialize_liquid_glass(&mut shader);
+    }
+    RenderEffect::blur(BLUR_RADIUS).then(RenderEffect::Shader { shader })
+}
+
+#[test]
+fn split_glass_preserves_resting_partial_and_full_activity() {
+    let mut renderer = support::headless_renderer().expect("headless renderer");
+    let resting = capture(
+        &mut renderer,
+        glasses_page(1, || active_glass(0.0, 0.0, false)),
+    );
+    let full = capture(
+        &mut renderer,
+        glasses_page(1, || active_glass(1.0, 0.0, false)),
+    );
+    assert_ne!(
+        resting.pixels, full.pixels,
+        "activity must change the rendered glass"
+    );
+    for activity in [0.0, 0.4, 1.0] {
+        for rim_style in [0.0, 0.5, 1.0] {
+            let reference = capture(
+                &mut renderer,
+                glasses_page(1, || active_glass(activity, rim_style, false)),
+            );
+            let specialized = capture(
+                &mut renderer,
+                glasses_page(1, || active_glass(activity, rim_style, true)),
+            );
+            support::assert_same_bytes(
+                &format!("glass activity={activity} rim_style={rim_style}"),
+                FRAME_WIDTH,
+                &reference.pixels,
+                &specialized.pixels,
+            );
+        }
+    }
 }
 
 /// A shader after a blur reads the blur's downscaled result and is told the
@@ -621,8 +712,120 @@ fn a_frame_of_glasses_stages_its_uploads_in_a_handful_of_writes() {
         .render_current_scene_to_texture(FRAME_WIDTH, FRAME_HEIGHT)
         .expect("render should succeed");
     assert!(
-        second.upload_writes <= 4,
-        "the same page staged {} buffer writes on its second frame, expected at most four",
+        second.upload_writes <= 5,
+        "the same page staged {} buffer writes on its second frame, expected at most five",
         second.upload_writes
+    );
+}
+
+fn stacked_cached_glasses(first_blur: f32, identified: bool) -> RenderGraph {
+    let mut children = striped_page();
+    for (index, radius) in [first_blur, 2.0].into_iter().enumerate() {
+        let mut node = glass_layer(0, RenderEffect::blur(radius));
+        let RenderNode::Layer(layer) = &mut node else {
+            unreachable!();
+        };
+        layer.node_id = identified.then_some(100 + index);
+        children.push(node);
+    }
+    support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children)
+}
+
+#[test]
+fn a_cached_backdrop_tracks_the_effect_of_the_glass_beneath_it() {
+    let Ok(mut renderer) = support::headless_renderer() else {
+        return;
+    };
+    for _ in 0..6 {
+        capture(&mut renderer, stacked_cached_glasses(2.0, true));
+    }
+    let before = capture(&mut renderer, stacked_cached_glasses(2.0, true));
+    assert!(renderer.last_frame_stats().expect("stats").layer_cache_hits > 0);
+    let changed = capture(&mut renderer, stacked_cached_glasses(14.0, true));
+    let reference = capture(&mut renderer, stacked_cached_glasses(14.0, false));
+    let region = rect(
+        GLASS_LEFT + 4.0,
+        GLASS_TOP + 4.0,
+        GLASS_WIDTH - 8.0,
+        GLASS_HEIGHT - 8.0,
+    );
+    let expected = region_pixels(&reference, region);
+    assert_ne!(region_pixels(&before, region), expected);
+    let difference = image_difference_stats(
+        &region_pixels(&changed, region),
+        &expected,
+        region.width as u32,
+        region.height as u32,
+        2,
+    );
+    assert_eq!(difference.differing_pixels, 0, "{difference:?}");
+}
+
+fn independent_cached_glasses(identified: bool) -> RenderGraph {
+    let mut children = support::striped_page(1104, 720);
+    for index in 0..9 {
+        let mut layer = shared_test_support::layer_node(
+            rect(0.0, 0.0, 300.0, 160.0),
+            ProjectiveTransform::translation(
+                32.0 + (index % 3) as f32 * 368.0,
+                32.0 + (index / 3) as f32 * 240.0,
+            ),
+            GraphicsLayer {
+                backdrop_effect: Some(RenderEffect::blur(12.0)),
+                clip: true,
+                shape: LayerShape::Rounded(RoundedCornerShape::uniform(12.0)),
+                ..GraphicsLayer::default()
+            },
+            vec![inset_content(300.0, 160.0, 12.0)],
+        );
+        layer.node_id = identified.then_some(index + 1);
+        children.push(RenderNode::Layer(Box::new(layer)));
+    }
+    support::page_graph(1104, 720, children)
+}
+
+#[test]
+fn independent_glasses_are_admitted_over_several_frames_without_changing_pixels() {
+    let Ok(mut renderer) = support::headless_renderer() else {
+        return;
+    };
+    let mut render = |identified| {
+        let frame = support::capture_graph(
+            &mut renderer,
+            independent_cached_glasses(identified),
+            1104,
+            720,
+        );
+        (renderer.last_frame_stats().expect("frame stats"), frame)
+    };
+    let (first, _) = render(true);
+    assert_eq!(first.layer_cache_misses, 9);
+    assert_eq!(first.backdrop_admissions, 0);
+    let mut admitted = 0;
+    let mut frames = 0;
+    while admitted < first.layer_cache_misses {
+        let (frame, _) = render(true);
+        assert!(
+            frame.backdrop_admissions > 0,
+            "admissions stalled at frame {frames}"
+        );
+        assert!(
+            frame.backdrop_admissions <= 3,
+            "frame {frames} admitted {} glasses",
+            frame.backdrop_admissions
+        );
+        admitted += frame.backdrop_admissions;
+        frames += 1;
+        assert!(frames <= first.layer_cache_misses);
+    }
+    assert!(frames >= 3);
+    let (settled, settled_frame) = render(true);
+    assert_eq!(settled.layer_cache_misses, 0);
+    assert_eq!(settled.layer_cache_hits, first.layer_cache_misses);
+    let (_, reference) = render(false);
+    let max_channel_delta = support::max_channel_delta(&settled_frame.pixels, &reference.pixels);
+    assert!(
+        max_channel_delta <= 1,
+        "cached/reference channel delta {max_channel_delta}"
     );
 }

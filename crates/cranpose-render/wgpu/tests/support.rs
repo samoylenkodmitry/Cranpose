@@ -83,9 +83,9 @@ fn lock_gpu_test() -> MutexGuard<'static, ()> {
 }
 
 pub struct LockedRenderer {
-    _lock: MutexGuard<'static, ()>,
-    app_context: std::rc::Rc<AppContext>,
     renderer: WgpuRenderer,
+    app_context: std::rc::Rc<AppContext>,
+    _lock: MutexGuard<'static, ()>,
 }
 
 impl Deref for LockedRenderer {
@@ -921,8 +921,15 @@ pub fn reference_blur(
     pass(&pass(image, (1, 0)), (0, 1))
 }
 
-/// A page of blurred glasses in a row: the frame, the glasses' size, pitch
-/// and corner radius, their blur, and the liquid glass shader sized to one.
+pub fn max_channel_delta(a: &[u8], b: &[u8]) -> u8 {
+    assert_eq!(a.len(), b.len(), "pixel buffer lengths");
+    a.iter()
+        .zip(b)
+        .map(|(a, b)| a.abs_diff(*b))
+        .max()
+        .unwrap_or(0)
+}
+
 pub mod glass_page {
     use super::*;
 

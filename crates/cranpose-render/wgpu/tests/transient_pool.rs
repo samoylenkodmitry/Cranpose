@@ -70,9 +70,6 @@ fn drop_shadow(caster: Rect, blur_radius: f32) -> RenderNode {
     })
 }
 
-/// A page whose shadows each blur through their own surfaces at a size no
-/// other shadow shares: more transient sizes than any pool keeps, none of
-/// which the glass frames after it ask for again.
 fn stale_page() -> RenderGraph {
     let mut children = support::striped_page(FRAME_WIDTH, FRAME_HEIGHT);
     for index in 0..STALE_SHADOWS {
@@ -86,9 +83,6 @@ fn stale_page() -> RenderGraph {
     support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children)
 }
 
-/// Three blurred glasses over the striped page, over a band of `band`
-/// under them when given, so the same glass sizes read a different
-/// backdrop.
 fn glass_page_over(band: Option<Color>) -> RenderGraph {
     let mut children = support::striped_page(FRAME_WIDTH, FRAME_HEIGHT);
     if let Some(color) = band {
@@ -112,11 +106,6 @@ fn glass_page() -> RenderGraph {
     glass_page_over(None)
 }
 
-/// A frame's transient textures, the capture atlases, blur scratches and
-/// results its glasses resolve through, are the previous frame's, whatever
-/// the frames before left in the pool: a page of glasses drawn twice creates
-/// them once, even after a page of shadows filled the pool with sizes no
-/// glass frame asks for.
 #[test]
 fn a_repeated_frame_of_glasses_creates_no_transient_textures() {
     let Ok(mut renderer) = support::headless_renderer() else {
@@ -148,11 +137,6 @@ fn a_repeated_frame_of_glasses_creates_no_transient_textures() {
     );
 }
 
-/// A transient a frame reuses brings the previous frame's texels with it,
-/// and the frame must overwrite every texel it reads. The glasses drawn over
-/// a band, right after the same glasses without it, resolve through the
-/// atlases, scratches and results that first frame filled, and match a
-/// renderer that never pooled anything, byte for byte.
 #[test]
 fn a_frame_through_reused_transients_matches_a_renderer_that_never_pooled() {
     let Ok(mut renderer) = support::headless_renderer() else {

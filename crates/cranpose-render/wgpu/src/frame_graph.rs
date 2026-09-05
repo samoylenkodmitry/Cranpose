@@ -1,5 +1,8 @@
+mod buffer_uploads;
+
 use std::fmt;
 
+use buffer_uploads::BufferUploads;
 use web_time::Instant;
 
 use crate::{
@@ -649,11 +652,13 @@ impl WgpuFrameGraphExecutor {
             release_pending_transients(&mut self.transient_textures, pending_transient_releases);
             return Err(FrameGraphError::NoDeclaredPasses);
         }
+        self.upload_allocators.buffers.finish();
         if fence_profile::enabled() {
             fence_profile::end_frame(device, queue, &mut encoder);
         }
         let uploads = self.upload_allocators.flush(queue);
         let (submission, upload_writes) = Self::submit_with_timing(queue, encoder);
+        self.upload_allocators.buffers.recall();
         release_pending_transients(&mut self.transient_textures, pending_transient_releases);
         let retained_texture_bytes = self.retained_texture_bytes();
         let (transient_acquires, transient_news) = self.transient_textures.take_counts();
@@ -869,6 +874,14 @@ fn log_frame_graph_pass_timing(start: Instant, label: Option<&'static str>, pass
 }
 
 pub(crate) trait FrameCommandRecorder {
+    fn stage_buffer_copy(
+        &mut self,
+        device: &wgpu::Device,
+        buffer: &wgpu::Buffer,
+        offset: u64,
+        bytes: &[u8],
+    ) -> FrameCommandStats;
+
     fn begin_timed_render_pass(
         &mut self,
         descriptor: &wgpu::RenderPassDescriptor<'_>,
@@ -933,11 +946,28 @@ pub(crate) trait FrameCommandRecorder {
 }
 
 impl FrameCommandRecorder for PassContext<'_> {
+    fn stage_buffer_copy(
+        &mut self,
+        device: &wgpu::Device,
+        buffer: &wgpu::Buffer,
+        offset: u64,
+        bytes: &[u8],
+    ) -> FrameCommandStats {
+        FrameCommandStats {
+            upload_bytes: self
+                .uploads
+                .buffers
+                .write(device, self.encoder, buffer, offset, bytes),
+            ..FrameCommandStats::default()
+        }
+    }
+
     fn begin_timed_render_pass(
         &mut self,
         descriptor: &wgpu::RenderPassDescriptor<'_>,
     ) -> wgpu::RenderPass<'_> {
         if fence_profile::enabled() {
+            self.uploads.buffers.finish();
             let bucket = fence_profile::bucket_label(descriptor);
             fence_profile::split(self.device, self.queue_handle, self.encoder, Some(&bucket));
         }
@@ -1023,8 +1053,10 @@ impl WgpuFrameEncoder<'_> {
         let transient_texture_bytes = self.transient_texture_bytes;
         let copies = self.copies;
         let mut transient_releases = self.transient_releases;
+        self.uploads.buffers.finish();
         let uploads = self.uploads.flush(self.queue);
         let (submission, upload_writes) = WgpuFrameGraphExecutor::submit(self.queue, self.encoder);
+        self.uploads.buffers.recall();
         transient_releases.release_pending();
         let retained_texture_bytes = transient_releases.retained_texture_bytes();
         let (transient_acquires, transient_news) = transient_releases.take_counts();
@@ -1098,6 +1130,25 @@ impl Drop for PendingTransientReleases<'_> {
 
 #[cfg(target_arch = "wasm32")]
 impl FrameCommandRecorder for WgpuFrameEncoder<'_> {
+    fn stage_buffer_copy(
+        &mut self,
+        device: &wgpu::Device,
+        buffer: &wgpu::Buffer,
+        offset: u64,
+        bytes: &[u8],
+    ) -> FrameCommandStats {
+        FrameCommandStats {
+            upload_bytes: self.uploads.buffers.write(
+                device,
+                &mut self.encoder,
+                buffer,
+                offset,
+                bytes,
+            ),
+            ..FrameCommandStats::default()
+        }
+    }
+
     fn begin_timed_render_pass(
         &mut self,
         descriptor: &wgpu::RenderPassDescriptor<'_>,
@@ -1357,6 +1408,7 @@ impl UploadAllocatorSpec {
 }
 
 const MIN_UPLOAD_BUFFER_BYTES: u64 = 64 * 1024;
+const UPLOAD_SHRINK_FACTOR: u64 = 4;
 
 /// Where an upload lands in a ring: at an offset of the ring's current
 /// buffer, or at the start of a larger buffer the ring opens for it.
@@ -1480,7 +1532,9 @@ impl UploadRing {
 }
 
 fn ring_outlives_frame(capacity: u64, staged: u64) -> bool {
-    staged == 0 || capacity <= MIN_UPLOAD_BUFFER_BYTES || staged.saturating_mul(4) >= capacity
+    staged == 0
+        || capacity <= MIN_UPLOAD_BUFFER_BYTES
+        || staged.saturating_mul(UPLOAD_SHRINK_FACTOR) >= capacity
 }
 
 /// Where a frame's uploads live: one buffer per usage, filled in the order
@@ -1489,12 +1543,14 @@ fn ring_outlives_frame(capacity: u64, staged: u64) -> bool {
 /// offset, so a frame of a hundred blocks costs one staging write, not a
 /// hundred buffers and their barriers.
 pub(crate) struct FrameUploadAllocators {
+    buffers: BufferUploads,
     rings: [UploadRing; 3],
 }
 
 impl Default for FrameUploadAllocators {
     fn default() -> Self {
         Self {
+            buffers: BufferUploads::default(),
             rings: [
                 UploadRing::new(
                     wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
@@ -1588,6 +1644,7 @@ impl FrameUploadAllocators {
     }
 
     pub(crate) fn reset(&mut self) {
+        self.buffers.reset();
         for ring in &mut self.rings {
             ring.reset();
         }
@@ -1595,8 +1652,49 @@ impl FrameUploadAllocators {
 }
 
 #[cfg(test)]
+fn upload_test_device() -> (
+    std::sync::MutexGuard<'static, ()>,
+    wgpu::Device,
+    wgpu::Queue,
+) {
+    static DEVICE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let lock = DEVICE_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let instance = wgpu::Instance::default();
+    let adapter = pollster::block_on(instance.request_adapter(&Default::default()))
+        .expect("headless adapter");
+    let (device, queue) =
+        pollster::block_on(adapter.request_device(&Default::default())).expect("headless device");
+    (lock, device, queue)
+}
+
+#[cfg(test)]
+fn read_uploaded_bytes(
+    device: &wgpu::Device,
+    readback: &wgpu::Buffer,
+    submission: wgpu::SubmissionIndex,
+) -> Vec<u8> {
+    readback.map_async(wgpu::MapMode::Read, .., |result| {
+        result.expect("readback map")
+    });
+    device
+        .poll(wgpu::PollType::Wait {
+            submission_index: Some(submission),
+            timeout: None,
+        })
+        .expect("copy completion");
+    let bytes = readback.get_mapped_range(..).to_vec();
+    readback.unmap();
+    bytes
+}
+
+#[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        FrameTextureDescriptor, MIN_UPLOAD_BUFFER_BYTES, UploadPlacement, WgpuFrameGraph,
+        build_pass_schedule, place_upload, ring_outlives_frame,
+    };
 
     #[test]
     fn a_ring_outlives_the_frames_that_fill_a_quarter_of_it() {
@@ -1613,10 +1711,49 @@ mod tests {
         assert!(ring_outlives_frame(16 * MIN_UPLOAD_BUFFER_BYTES, 0));
     }
 
-    use super::{
-        FrameTextureDescriptor, MIN_UPLOAD_BUFFER_BYTES, UploadPlacement, WgpuFrameGraph,
-        build_pass_schedule, place_upload,
-    };
+    #[test]
+    fn frame_uploads_grow_preserve_bytes_and_release_oversized_generations() {
+        let (_lock, device, queue) = super::upload_test_device();
+        let mut ring = super::UploadRing::new(
+            wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+            "Upload Growth Test",
+            256,
+        );
+        let large = vec![2; MIN_UPLOAD_BUFFER_BYTES as usize * 4 + 4];
+        let small = [1; 16];
+        let last = [3; 16];
+        let mut sources = Vec::new();
+        for bytes in [&small[..], &large, &last[..]] {
+            let (generation, offset) = ring.upload(&device, bytes.len() as u64, bytes);
+            sources.push((ring.generations[generation].buffer.clone(), offset));
+        }
+        assert_eq!(ring.generations.len(), 3);
+        ring.flush(&queue);
+        let readback = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: 48,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut encoder = device.create_command_encoder(&Default::default());
+        for (index, (source, offset)) in sources.into_iter().enumerate() {
+            encoder.copy_buffer_to_buffer(&source, offset, &readback, index as u64 * 16, 16);
+        }
+        let submission = queue.submit([encoder.finish()]);
+        assert_eq!(
+            super::read_uploaded_bytes(&device, &readback, submission),
+            [&small[..], &large[..16], &last[..]].concat()
+        );
+        assert_eq!(ring.generations.len(), 1);
+        ring.upload(&device, 16, &small);
+        ring.flush(&queue);
+        assert!(
+            ring.generations.is_empty(),
+            "a small frame must release the oversized generation"
+        );
+        ring.upload(&device, 16, &last);
+        assert_eq!(ring.generations[0].capacity, MIN_UPLOAD_BUFFER_BYTES);
+    }
 
     #[test]
     fn an_upload_lands_aligned_after_the_last_one() {

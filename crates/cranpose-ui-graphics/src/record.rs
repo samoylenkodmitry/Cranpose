@@ -9,7 +9,8 @@ use bytemuck::{Pod, Zeroable};
 
 use crate::{
     ArcGeometry, BlendMode, Brush, Color, CornerRadii, DrawPrimitive, FxHasher, Point, Rect,
-    RenderHash, Stroke, StrokeCap, StrokeJoin, TAU, TileMode, arc_band,
+    RenderHash, ShapeRecords, Stroke, StrokeCap, StrokeJoin, TAU, TileMode, arc_band,
+    arc_trig_cache::ArcTrigCache,
 };
 
 /// The kind bits of [`ShapeRecord::flags`]: a plain rect.
@@ -77,10 +78,9 @@ pub const BAND_ANGULAR_PAD: f32 = 0.001;
 pub const QUAD_VERTICES: u32 = 4;
 /// The indices one quad's two triangles take.
 pub const QUAD_INDICES: u32 = 6;
-/// The fewest strip segments a band draws with, so a band never shares a
-/// pipeline with the quads: a pipeline whose strips are one quad wide
-/// would test every quad's fragments against the record's rect.
-pub const BAND_MIN_SEGMENTS: u32 = 2;
+/// The fewest strip segments a band draws with. A short band's strip and a
+/// rectangular shape both use four vertices in the same segment class.
+pub const BAND_MIN_SEGMENTS: u32 = 1;
 
 /// The vertices a strip of `segments` quads shares: an inner and an
 /// outer vertex at each of its `segments + 1` boundaries.
@@ -262,8 +262,8 @@ pub const BRUSH_KIND_RADIAL: u32 = 2;
 /// See [`BRUSH_KIND_LINEAR`].
 pub const BRUSH_KIND_SWEEP: u32 = 3;
 
-/// One recorded shape, in the draw command's local space, laid out as the
-/// GPU reads it. Every value the app passed is kept verbatim, so the record
+/// One complete recorded shape in the draw command's local space.
+/// Every value the app passed is kept verbatim, so the record
 /// materialises back into the exact [`DrawPrimitive`] the call described,
 /// and the derived arc values the fragment stage needs sit beside them.
 #[repr(C)]
@@ -451,7 +451,7 @@ pub struct BrushRecord {
     /// radius, 0. Sweep: centre x, centre y, 0, 0.
     pub params: [f32; 4],
     /// The app's explicit stop positions in
-    /// [`CommandRecording::explicit_stops`], when it gave any; `explicit_len`
+    /// [`RecordTables::explicit_stops`], when it gave any; `explicit_len`
     /// is `u32::MAX` when it gave none.
     pub explicit_start: u32,
     pub explicit_len: u32,
@@ -514,7 +514,7 @@ impl RecordSegment {
 /// renderer behind an `Arc` so a packet carries it without a copy.
 #[derive(Clone, Debug, Default)]
 pub struct RecordTables {
-    pub shapes: Vec<ShapeRecord>,
+    pub shapes: ShapeRecords,
     pub brushes: Vec<BrushRecord>,
     pub stops: Vec<GradientStopRecord>,
     pub explicit_stops: Vec<f32>,
@@ -546,7 +546,7 @@ impl RecordTables {
     /// while a scene still holds the last one grows nothing.
     fn with_capacity_of(&self) -> Self {
         Self {
-            shapes: Vec::with_capacity(self.shapes.capacity()),
+            shapes: ShapeRecords::with_capacity(self.shapes.capacity()),
             brushes: Vec::with_capacity(self.brushes.capacity()),
             stops: Vec::with_capacity(self.stops.capacity()),
             explicit_stops: Vec::with_capacity(self.explicit_stops.capacity()),
@@ -560,7 +560,9 @@ impl RecordTables {
     pub fn fingerprint(&self) -> u64 {
         *self.fingerprint.get_or_init(|| {
             let mut hasher = FxHasher::default();
-            hasher.write(bytemuck::cast_slice(&self.shapes));
+            hasher.write(bytemuck::cast_slice(self.shapes.bodies()));
+            hasher.write(bytemuck::cast_slice(self.shapes.curves()));
+            hasher.write(self.shapes.source_bytes());
             hasher.write(bytemuck::cast_slice(&self.brushes));
             hasher.write(bytemuck::cast_slice(&self.stops));
             hasher.write(bytemuck::cast_slice(&self.explicit_stops));
@@ -571,7 +573,7 @@ impl RecordTables {
 
     /// The heap the tables hold, capacity included.
     pub fn heap_bytes(&self) -> usize {
-        self.shapes.capacity() * std::mem::size_of::<ShapeRecord>()
+        self.shapes.heap_bytes()
             + self.brushes.capacity() * std::mem::size_of::<BrushRecord>()
             + self.stops.capacity() * std::mem::size_of::<GradientStopRecord>()
             + self.explicit_stops.capacity() * std::mem::size_of::<f32>()
@@ -664,7 +666,8 @@ pub fn primitive_coverage_rect(primitive: &DrawPrimitive) -> Option<Rect> {
 /// across threads; [`CommandRecording`] wraps it with the other lane.
 #[derive(Clone, Debug)]
 pub struct ShapeRecorder {
-    tables: Arc<RecordTables>,
+    tables: RecordTables,
+    arc_trig: ArcTrigCache,
     last_segment_key: u32,
     segment_waste: u32,
     min: [f32; 2],
@@ -674,7 +677,8 @@ pub struct ShapeRecorder {
 impl Default for ShapeRecorder {
     fn default() -> Self {
         Self {
-            tables: Arc::default(),
+            tables: RecordTables::default(),
+            arc_trig: ArcTrigCache::default(),
             last_segment_key: NO_SEGMENT_KEY,
             segment_waste: 0,
             min: [f32::INFINITY; 2],
@@ -710,14 +714,13 @@ fn extend_segment_in(tables: &mut RecordTables, extend: bool, opened: RecordSegm
 }
 
 impl ShapeRecorder {
-    /// The POD tables, shared: the renderer keeps this handle across frames
-    /// and compares it by pointer before it compares bytes.
-    pub fn tables(&self) -> &Arc<RecordTables> {
+    /// The owned shape columns and their brush, stop and segment tables.
+    pub fn tables(&self) -> &RecordTables {
         &self.tables
     }
 
     fn tables_mut(&mut self) -> &mut RecordTables {
-        let tables = Arc::make_mut(&mut self.tables);
+        let tables = &mut self.tables;
         tables.fingerprint.take();
         tables
     }
@@ -747,14 +750,9 @@ impl ShapeRecorder {
         self.tables.fingerprint()
     }
 
-    /// Empties the recorder, keeping the tables' capacity: in place when
-    /// nothing else holds them, in fresh tables of the same capacities when
-    /// a scene still does.
+    /// Empties the recorder while retaining its table capacities.
     pub fn clear(&mut self) {
-        match Arc::get_mut(&mut self.tables) {
-            Some(tables) => tables.clear(),
-            None => self.tables = Arc::new(self.tables.with_capacity_of()),
-        }
+        self.tables.clear();
         self.last_segment_key = NO_SEGMENT_KEY;
         self.segment_waste = 0;
         self.min = [f32::INFINITY; 2];
@@ -949,10 +947,11 @@ impl ShapeRecorder {
         if bucket.is_some() {
             flags |= ARC_BANDED_BIT;
         }
+        let radii = self.arc_trig.resolve(geometry);
         self.push_shape(
             ShapeRecord {
                 rect: rect_row(rect),
-                radii: arc_trig(geometry),
+                radii,
                 color,
                 stroke_width: args.stroke.map_or(0.0, |stroke| stroke.width),
                 flags,
@@ -1192,68 +1191,64 @@ impl ShapeRecorder {
     }
 }
 
-/// Everything one draw command recorded, written once by the draw scope in
-/// the form the renderer keeps: POD shape records with their brush and
-/// stop tables, the primitives that are not shapes, the coalesced segments
-/// a pass draws, the bounds and the content summary, each produced while
-/// recording, and a fingerprint over all of it computed the first time a
-/// cache asks.
+/// A completed draw command with shared shape data, ordered segments and
+/// non-shape primitives. Bounds and content metadata are recorded while drawing;
+/// the complete fingerprint is computed when a cache first requests it.
+/// Use [`CommandRecorder`] to build a command and [`Self::into_recorder`] to edit it.
 #[derive(Clone, Debug)]
 pub struct CommandRecording {
-    shapes: ShapeRecorder,
+    shapes: Arc<ShapeRecorder>,
+    content: RecordingContent,
+    fingerprint: OnceCell<u64>,
+}
+
+#[derive(Clone, Debug)]
+struct RecordingContent {
     others: Vec<DrawPrimitive>,
     min: [f32; 2],
     max: [f32; 2],
     summary: RecordingSummary,
     content_markers: u32,
-    fingerprint: OnceCell<u64>,
 }
 
-impl Default for CommandRecording {
+impl Default for RecordingContent {
     fn default() -> Self {
         Self {
-            shapes: ShapeRecorder::default(),
             others: Vec::new(),
             min: [f32::INFINITY; 2],
             max: [f32::NEG_INFINITY; 2],
             summary: RecordingSummary::default(),
             content_markers: 0,
-            fingerprint: OnceCell::new(),
         }
+    }
+}
+
+impl Default for CommandRecording {
+    fn default() -> Self {
+        CommandRecorder::default().finish()
     }
 }
 
 impl PartialEq for CommandRecording {
     fn eq(&self, other: &Self) -> bool {
         self.shapes == other.shapes
-            && self.others == other.others
-            && self.content_markers == other.content_markers
+            && self.content.others == other.content.others
+            && self.content.content_markers == other.content.content_markers
     }
 }
 
 impl CommandRecording {
-    pub fn from_primitives(primitives: impl IntoIterator<Item = DrawPrimitive>) -> Self {
-        let mut recording = Self::default();
-        for primitive in primitives {
-            recording.push_primitive(primitive);
+    /// Returns owned command data for further recording.
+    /// Shape data is copied only when a retained reader still shares it.
+    pub fn into_recorder(self) -> CommandRecorder {
+        CommandRecorder {
+            shapes: Arc::unwrap_or_clone(self.shapes),
+            content: self.content,
         }
-        recording
     }
 
-    /// Empties the recording, keeping every buffer's capacity for the next
-    /// recording into it.
-    pub fn clear(&mut self) {
-        self.shapes.clear();
-        self.others.clear();
-        self.min = [f32::INFINITY; 2];
-        self.max = [f32::NEG_INFINITY; 2];
-        self.summary = RecordingSummary::default();
-        self.content_markers = 0;
-        self.fingerprint.take();
-    }
-
-    pub fn reserve_shapes(&mut self, additional: usize) {
-        self.shapes.tables_mut().shapes.reserve(additional);
+    pub fn from_primitives(primitives: impl IntoIterator<Item = DrawPrimitive>) -> Self {
+        CommandRecorder::from_primitives(primitives).finish()
     }
 
     pub fn shape_capacity(&self) -> usize {
@@ -1265,14 +1260,13 @@ impl CommandRecording {
         self.shapes.tables.heap_bytes()
     }
 
-    /// The POD tables, shared: the renderer keeps this handle across frames
-    /// and compares it by pointer before it compares bytes.
-    pub fn tables(&self) -> &Arc<RecordTables> {
+    /// The published shape columns and their brush, stop and segment tables.
+    pub fn tables(&self) -> &RecordTables {
         self.shapes.tables()
     }
 
-    /// The POD half of the recording: the shapes as recorded.
-    pub fn shape_recorder(&self) -> &ShapeRecorder {
+    /// Shared ownership of the immutable shape recording.
+    pub fn shape_recorder(&self) -> &Arc<ShapeRecorder> {
         &self.shapes
     }
 
@@ -1284,7 +1278,8 @@ impl CommandRecording {
             .sum()
     }
 
-    pub fn shapes(&self) -> &[ShapeRecord] {
+    /// The shape columns, with complete records available on demand.
+    pub fn shapes(&self) -> &ShapeRecords {
         &self.shapes.tables.shapes
     }
 
@@ -1297,7 +1292,7 @@ impl CommandRecording {
     }
 
     pub fn others(&self) -> &[DrawPrimitive] {
-        &self.others
+        &self.content.others
     }
 
     pub fn segments(&self) -> &[RecordSegment] {
@@ -1312,12 +1307,14 @@ impl CommandRecording {
     /// A rect containing every entry's coverage rect: exact for rects and
     /// the other lanes, the disc around the band for a scope-recorded arc.
     pub fn bounds(&self) -> Option<Rect> {
-        let others = (self.min[0] <= self.max[0] && self.min[1] <= self.max[1]).then(|| Rect {
-            x: self.min[0],
-            y: self.min[1],
-            width: self.max[0] - self.min[0],
-            height: self.max[1] - self.min[1],
-        });
+        let others = (self.content.min[0] <= self.content.max[0]
+            && self.content.min[1] <= self.content.max[1])
+            .then(|| Rect {
+                x: self.content.min[0],
+                y: self.content.min[1],
+                width: self.content.max[0] - self.content.min[0],
+                height: self.content.max[1] - self.content.min[1],
+            });
         match (self.shapes.bounds(), others) {
             (Some(shapes), Some(others)) => Some(union_rect(shapes, others)),
             (shapes, others) => shapes.or(others),
@@ -1325,16 +1322,18 @@ impl CommandRecording {
     }
 
     pub fn summary(&self) -> RecordingSummary {
-        self.summary
+        self.content.summary
     }
 
     pub fn content_markers(&self) -> u32 {
-        self.content_markers
+        self.content.content_markers
     }
 
     /// Entries of every lane, content markers included.
     pub fn len(&self) -> usize {
-        self.shapes.tables.shapes.len() + self.others.len() + self.content_markers as usize
+        self.shapes.tables.shapes.len()
+            + self.content.others.len()
+            + self.content.content_markers as usize
     }
 
     pub fn is_empty(&self) -> bool {
@@ -1349,10 +1348,10 @@ impl CommandRecording {
         *self.fingerprint.get_or_init(|| {
             let mut hasher = FxHasher::default();
             hasher.write_u64(self.shapes.fingerprint());
-            for primitive in &self.others {
+            for primitive in &self.content.others {
                 hasher.write_u64(primitive.render_hash());
             }
-            hasher.write_u32(self.content_markers);
+            hasher.write_u32(self.content.content_markers);
             hasher.finish()
         })
     }
@@ -1371,14 +1370,14 @@ impl CommandRecording {
     /// The summary of the entries inside `segments` only.
     pub fn summary_in(&self, segments: &Range<u32>) -> RecordingSummary {
         if *segments == self.all_segments() {
-            return self.summary;
+            return self.content.summary;
         }
         let mut summary = RecordingSummary::default();
         for segment in self.segments_in(segments) {
             match segment.lane {
                 RecordLane::Shapes if segment.count > 0 => summary.has_non_shadow = true,
                 RecordLane::Others => {
-                    for primitive in &self.others[segment.range()] {
+                    for primitive in &self.content.others[segment.range()] {
                         summary.note(primitive);
                     }
                 }
@@ -1411,12 +1410,16 @@ impl CommandRecording {
             .flat_map(|segment| -> Box<dyn Iterator<Item = Rect> + '_> {
                 match segment.lane {
                     RecordLane::Shapes => Box::new(
-                        self.shapes.tables.shapes[segment.range()]
+                        self.shapes
+                            .tables
+                            .shapes
                             .iter()
-                            .map(ShapeRecord::coverage_rect),
+                            .skip(segment.start as usize)
+                            .take(segment.count as usize)
+                            .map(|record| record.coverage_rect()),
                     ),
                     RecordLane::Others => Box::new(
-                        self.others[segment.range()]
+                        self.content.others[segment.range()]
                             .iter()
                             .filter_map(primitive_coverage_rect),
                     ),
@@ -1456,7 +1459,7 @@ impl CommandRecording {
                     .range()
                     .map(move |index| self.materialize_shape(index)),
             ),
-            RecordLane::Others => Box::new(self.others[segment.range()].iter().cloned()),
+            RecordLane::Others => Box::new(self.content.others[segment.range()].iter().cloned()),
             RecordLane::Content if markers => Box::new(std::iter::repeat_n(
                 DrawPrimitive::Content,
                 segment.count as usize,
@@ -1467,9 +1470,14 @@ impl CommandRecording {
 
     /// The exact [`DrawPrimitive`] the record was made from.
     pub fn materialize_shape(&self, index: usize) -> DrawPrimitive {
-        let record = &self.shapes.tables.shapes[index];
+        let record = self
+            .shapes
+            .tables
+            .shapes
+            .get(index)
+            .expect("recorded shape index");
         let rect = record.rect_value();
-        let brush = self.brush_of(record);
+        let brush = self.brush_of(&record);
         let stroke = record.stroke();
         let primitive = match record.kind() {
             RECORD_KIND_ROUND_RECT => DrawPrimitive::RoundRect {
@@ -1521,7 +1529,7 @@ impl CommandRecording {
                 record.color[3],
             ));
         }
-        let tables = &*self.shapes.tables;
+        let tables = &self.shapes.tables;
         let brush = &tables.brushes[record.brush as usize - 1];
         let colors = tables.stops
             [brush.stop_start as usize..(brush.stop_start + brush.stop_count) as usize]
@@ -1557,9 +1565,86 @@ impl CommandRecording {
             },
         }
     }
+}
 
+/// Mutable command data owned exclusively while a draw scope records it.
+/// Publishing with [`Self::finish`] shares the completed shape data without copying it.
+#[derive(Clone, Debug, Default)]
+pub struct CommandRecorder {
+    shapes: ShapeRecorder,
+    content: RecordingContent,
+}
+
+impl CommandRecorder {
+    /// Records primitives in order into owned command data.
+    pub fn from_primitives(primitives: impl IntoIterator<Item = DrawPrimitive>) -> Self {
+        let mut recorder = Self::default();
+        for primitive in primitives {
+            recorder.push_primitive(primitive);
+        }
+        recorder
+    }
+
+    /// Reuses a completed command's buffer capacities for an empty recording.
+    /// Retained readers keep their original shape data.
+    pub fn reusing(recording: CommandRecording) -> Self {
+        let shapes = Arc::try_unwrap(recording.shapes).unwrap_or_else(|shared| ShapeRecorder {
+            tables: shared.tables.with_capacity_of(),
+            ..ShapeRecorder::default()
+        });
+        let mut recorder = Self {
+            shapes,
+            content: recording.content,
+        };
+        recorder.clear();
+        recorder
+    }
+
+    /// Publishes completed command data without copying its shape columns.
+    pub fn finish(self) -> CommandRecording {
+        CommandRecording {
+            shapes: Arc::new(self.shapes),
+            content: self.content,
+            fingerprint: OnceCell::new(),
+        }
+    }
+
+    /// Every recorded entry, including content markers.
+    pub fn len(&self) -> usize {
+        self.shapes.tables.shapes.len()
+            + self.content.others.len()
+            + self.content.content_markers as usize
+    }
+
+    /// Whether this recorder contains no entries.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// The number of recorded content markers.
+    pub fn content_markers(&self) -> u32 {
+        self.content.content_markers
+    }
+
+    /// Empties the recording, keeping every buffer's capacity for the next
+    /// recording into it.
+    pub fn clear(&mut self) {
+        self.shapes.clear();
+        self.content.others.clear();
+        self.content.min = [f32::INFINITY; 2];
+        self.content.max = [f32::NEG_INFINITY; 2];
+        self.content.summary = RecordingSummary::default();
+        self.content.content_markers = 0;
+    }
+
+    /// Reserves capacity for additional shape records.
+    pub fn reserve_shapes(&mut self, additional: usize) {
+        self.shapes.tables_mut().shapes.reserve(additional);
+    }
+
+    /// Records a content marker at the current command position.
     pub fn push_content(&mut self) {
-        self.content_markers += 1;
+        self.content.content_markers += 1;
         self.shapes.push_content_segment();
     }
 
@@ -1578,16 +1663,17 @@ impl CommandRecording {
 
     #[inline]
     fn note_shape(&mut self) {
-        self.summary.has_non_shadow = true;
+        self.content.summary.has_non_shadow = true;
     }
 
     fn include_bounds(&mut self, rect: Rect) {
-        self.min[0] = self.min[0].min(rect.x);
-        self.min[1] = self.min[1].min(rect.y);
-        self.max[0] = self.max[0].max(rect.x + rect.width);
-        self.max[1] = self.max[1].max(rect.y + rect.height);
+        self.content.min[0] = self.content.min[0].min(rect.x);
+        self.content.min[1] = self.content.min[1].min(rect.y);
+        self.content.max[0] = self.content.max[0].max(rect.x + rect.width);
+        self.content.max[1] = self.content.max[1].max(rect.y + rect.height);
     }
 
+    /// Records a rectangle with its brush, optional stroke and blend mode.
     pub fn push_rect(
         &mut self,
         rect: Rect,
@@ -1599,6 +1685,7 @@ impl CommandRecording {
         self.note_shape();
     }
 
+    /// Records a rounded rectangle with its corner radii and paint.
     pub fn push_round_rect(
         &mut self,
         rect: Rect,
@@ -1629,13 +1716,14 @@ impl CommandRecording {
         self.note_shape();
     }
 
+    /// Records a primitive in the non-shape lane and updates its metadata.
     pub fn push_other(&mut self, primitive: DrawPrimitive) {
-        self.summary.note(&primitive);
+        self.content.summary.note(&primitive);
         if let Some(rect) = primitive_coverage_rect(&primitive) {
             self.include_bounds(rect);
         }
-        let index = self.others.len() as u32;
-        self.others.push(primitive);
+        let index = self.content.others.len() as u32;
+        self.content.others.push(primitive);
         self.shapes
             .extend_segment(RecordLane::Others, index, BlendMode::SrcOver, false, 0);
     }
@@ -1643,12 +1731,12 @@ impl CommandRecording {
     /// Folds `other`'s summary into this recording's, for callers that
     /// combine recordings.
     pub fn merge_summary(&mut self, other: RecordingSummary) {
-        self.summary.merge(other);
+        self.content.summary.merge(other);
     }
 }
 
 /// The arc as the app drew it, the arguments of
-/// [`CommandRecording::push_arc`].
+/// [`CommandRecorder::push_arc`].
 pub struct ArcRecordArgs<'a> {
     pub brush: &'a Brush,
     pub center: Point,
@@ -1738,13 +1826,7 @@ fn band_disc(geometry: &ArcGeometry) -> Rect {
 /// The arc row the fragment stage reads: the mid-angle sine and cosine and
 /// the half-sweep sine and cosine, with the full circle's sentinel.
 pub fn arc_trig(geometry: &ArcGeometry) -> [f32; 4] {
-    if geometry.sweep_angle >= crate::TAU && geometry.start_angle == 0.0 {
-        return [0.0, -1.0, 0.0, -1.0];
-    }
-    let half_sweep = geometry.sweep_angle.clamp(0.0, crate::TAU) * 0.5;
-    let (mid_sin, mid_cos) = (geometry.start_angle + half_sweep).sin_cos();
-    let (half_sin, half_cos) = half_sweep.sin_cos();
-    [mid_sin, mid_cos, half_sin.max(0.0), half_cos]
+    ArcTrigCache::default().resolve(geometry)
 }
 
 #[cfg(test)]
@@ -2019,7 +2101,7 @@ mod tests {
             stroke: Some(Stroke::new(4.0).with_cap(StrokeCap::Square)),
             inner_radius: 0.0,
         }]);
-        let record = recording.shapes()[0];
+        let record = recording.shapes().get(0).unwrap();
         let geometry = record.arc_geometry().expect("an arc");
         let expected = ArcGeometry::new(
             Point::new(3.0, 4.0),
@@ -2059,12 +2141,12 @@ mod tests {
             stroke: None,
             inner_radius: 0.0,
         }]);
-        assert!(degenerate.shapes()[0].is_degenerate_arc());
+        assert!(degenerate.shapes().get(0).unwrap().is_degenerate_arc());
     }
 
     #[test]
     fn segments_cut_on_blend_and_brush_class_and_lane_never_on_kind() {
-        let mut recording = CommandRecording::default();
+        let mut recording = CommandRecorder::default();
         recording.push_rect(rect(0.0, 0.0, 1.0, 1.0), &solid(), None, BlendMode::SrcOver);
         recording.push_round_rect(
             rect(0.0, 0.0, 1.0, 1.0),
@@ -2097,6 +2179,7 @@ mod tests {
         recording.push_other(text());
         recording.push_content();
         recording.push_rect(rect(0.0, 0.0, 1.0, 1.0), &solid(), None, BlendMode::SrcOver);
+        let recording = recording.finish();
         let lanes: Vec<(RecordLane, u32, u32, BlendMode, bool, u8)> = recording
             .segments()
             .iter()
@@ -2200,7 +2283,7 @@ mod tests {
         let mut scope = DrawScopeDefault::new(Size::new(100.0, 100.0));
         scope.draw_arc(solid(), center, 30.0, 0.5, 1.0, Stroke::new(4.0));
         let recording = scope.finish();
-        let record = recording.shapes()[0];
+        let record = recording.shapes().get(0).unwrap();
         assert!(record.has_loose_rect());
         let tight = ArcGeometry::new(center, 28.0, 32.0, 0.5, 1.0, StrokeCap::Butt).bounds();
         assert_eq!(record.rect_value(), tight);
@@ -2293,10 +2376,10 @@ mod tests {
 
     #[test]
     fn clearing_keeps_the_capacity_and_forgets_the_content() {
-        let mut recording = CommandRecording::from_primitives(every_primitive());
+        let recording = CommandRecording::from_primitives(every_primitive());
         let capacity = recording.shape_capacity();
         let fingerprint = recording.fingerprint();
-        recording.clear();
+        let recording = CommandRecorder::reusing(recording).finish();
         assert!(recording.is_empty());
         assert_eq!(recording.shape_capacity(), capacity);
         assert_eq!(recording.segments().len(), 0);
@@ -2307,6 +2390,29 @@ mod tests {
             recording.fingerprint(),
             CommandRecording::default().fingerprint()
         );
+    }
+
+    #[test]
+    fn publishing_and_unique_reuse_move_the_shape_columns() {
+        let mut recorder = CommandRecorder::default();
+        assert!(recorder.is_empty());
+        recorder.reserve_shapes(512);
+        recorder.push_primitive(every_primitive().remove(0));
+        recorder.push_content();
+        assert_eq!(recorder.len(), 2);
+        assert_eq!(recorder.content_markers(), 1);
+        let body_pointer = recorder.shapes.tables.shapes.bodies().as_ptr();
+        let published = recorder.finish();
+        assert_eq!(published.shapes().bodies().as_ptr(), body_pointer);
+        let capacity = published.shape_capacity();
+        let mut reused = CommandRecorder::reusing(published);
+        assert!(reused.is_empty());
+        assert_eq!(reused.content_markers(), 0);
+        reused.push_primitive(every_primitive().remove(0));
+        let published = reused.finish();
+        assert_eq!(published.len(), 1);
+        assert_eq!(published.shape_capacity(), capacity);
+        assert_eq!(published.shapes().bodies().as_ptr(), body_pointer);
     }
 
     #[test]
@@ -2338,7 +2444,7 @@ mod band_tests {
         let banded: Vec<bool> = recording
             .shapes()
             .iter()
-            .map(ShapeRecord::is_banded)
+            .map(|record| record.is_banded())
             .collect();
         assert_eq!(
             banded,
@@ -2349,7 +2455,7 @@ mod band_tests {
         let segments: Vec<u32> = recording
             .shapes()
             .iter()
-            .map(ShapeRecord::band_segments)
+            .map(|record| record.band_segments())
             .collect();
         assert_eq!(
             segments[1..5],
@@ -2358,12 +2464,12 @@ mod band_tests {
         );
         assert_eq!(
             segments[6], 2,
-            "a sliver's strip is two segments, not a ring's worth"
+            "the wide band needs two segments to cover its padded sweep"
         );
         let classes: Vec<usize> = recording
             .shapes()
             .iter()
-            .map(ShapeRecord::band_class)
+            .map(|record| record.band_class())
             .collect();
         assert_eq!(classes, [0, 2, 2, 3, 4, 0, 1]);
         let segment_classes: Vec<u8> = recording
@@ -2383,7 +2489,7 @@ mod band_tests {
     }
 
     #[test]
-    fn a_strip_pattern_stays_within_the_vertices_it_shares_and_no_band_is_one_quad_wide() {
+    fn a_strip_pattern_stays_within_its_vertices_including_a_single_segment() {
         for segments in ARC_BUCKET_SEGMENTS {
             let indices: Vec<u32> = strip_index_pattern(segments).collect();
             assert_eq!(indices.len() as u32, strip_indices(segments));
@@ -2394,7 +2500,7 @@ mod band_tests {
         }
         let ring = BandRing::new(20.0, 22.0, 0.0, 0.01);
         assert_eq!(ring.segments(), BAND_MIN_SEGMENTS);
-        assert_eq!(band_bucket(BAND_MIN_SEGMENTS), 1);
+        assert_eq!(band_bucket(BAND_MIN_SEGMENTS), 0);
     }
 
     #[test]
@@ -2423,7 +2529,7 @@ mod band_tests {
             scope.draw_rect_at(quad, brush.clone());
         }
         let recording = scope.finish();
-        let ring = recording.shapes()[rects];
+        let ring = recording.shapes().get(rects).unwrap();
         assert!(ring.is_banded());
         let ring_quads = ring.band_segments();
         assert!(ring_quads > 1);
@@ -2486,10 +2592,10 @@ mod band_tests {
         let banded: Vec<bool> = recording
             .shapes()
             .iter()
-            .map(ShapeRecord::is_banded)
+            .map(|record| record.is_banded())
             .collect();
         assert_eq!(banded, [true, false, false, false]);
-        let ring = recording.shapes()[0];
+        let ring = recording.shapes().get(0).unwrap();
         assert_eq!(ring.kind(), RECORD_KIND_ROUND_RECT);
         assert_eq!(ring.fragment_kind(), FRAGMENT_KIND_STROKE);
         assert_eq!(ring.arc, [60.0, 60.0, 50.0, 48.0]);
@@ -2500,7 +2606,7 @@ mod band_tests {
 
     #[test]
     fn the_tables_are_shared_until_recorded_into_again() {
-        let mut recording = CommandRecording::from_primitives(vec![DrawPrimitive::Rect {
+        let recording = CommandRecording::from_primitives(vec![DrawPrimitive::Rect {
             rect: Rect {
                 x: 0.0,
                 y: 0.0,
@@ -2510,11 +2616,11 @@ mod band_tests {
             brush: Brush::Solid(Color::WHITE),
             stroke: None,
         }]);
-        let held = Arc::clone(recording.tables());
-        recording.clear();
-        assert!(!Arc::ptr_eq(&held, recording.tables()));
-        assert_eq!(held.shapes.len(), 1);
+        let held = Arc::clone(recording.shape_recorder());
+        let recording = CommandRecorder::reusing(recording).finish();
+        assert!(!Arc::ptr_eq(&held, recording.shape_recorder()));
+        assert_eq!(held.tables().shapes.len(), 1);
         assert!(recording.is_empty());
-        assert_ne!(*held, **CommandRecording::default().tables());
+        assert_ne!(held.tables(), CommandRecording::default().tables());
     }
 }

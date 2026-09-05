@@ -19,128 +19,52 @@ fn collect_rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-#[test]
-fn wgpu_command_buffers_are_owned_by_frame_graph_executor() {
+fn assert_frame_graph_owns_calls(calls: &[&str], entry_point: Option<&str>) {
     let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let src_dir = crate_dir.join("src");
     let frame_graph = src_dir.join("frame_graph.rs");
     let mut rust_files = Vec::new();
     collect_rust_files(&src_dir, &mut rust_files);
-
-    let mut violations = Vec::new();
-    for path in rust_files {
-        if path == frame_graph {
-            continue;
-        }
-        let source = std::fs::read_to_string(&path).expect("failed to read renderer source");
-        if source.contains(".submit(") || source.contains(".create_command_encoder(") {
-            violations.push(
-                path.strip_prefix(crate_dir)
-                    .unwrap_or(&path)
-                    .display()
-                    .to_string(),
-            );
-        }
-    }
-
+    let violations: Vec<_> = rust_files
+        .into_iter()
+        .filter(|path| *path != frame_graph && !path.starts_with(src_dir.join("frame_graph")))
+        .filter(|path| {
+            let source = std::fs::read_to_string(path).expect("renderer source");
+            calls.iter().any(|call| source.contains(call))
+        })
+        .map(|path| {
+            path.strip_prefix(crate_dir)
+                .unwrap_or(&path)
+                .display()
+                .to_string()
+        })
+        .collect();
     assert!(
         violations.is_empty(),
-        "WGPU command encoder creation and queue submission must stay inside frame_graph.rs: {violations:?}"
+        "{calls:?} must stay inside the frame_graph module: {violations:?}"
     );
+    if let Some(entry_point) = entry_point {
+        let source = std::fs::read_to_string(frame_graph).expect("frame graph source");
+        assert!(
+            source.contains(entry_point),
+            "missing executor entry point: {entry_point}"
+        );
+    }
+}
+
+#[test]
+fn wgpu_command_buffers_are_owned_by_frame_graph_executor() {
+    assert_frame_graph_owns_calls(&[".submit(", ".create_command_encoder("], None);
 }
 
 #[test]
 fn texture_uploads_are_owned_by_frame_graph_executor() {
-    let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let src_dir = crate_dir.join("src");
-    let frame_graph = src_dir.join("frame_graph.rs");
-    let mut rust_files = Vec::new();
-    collect_rust_files(&src_dir, &mut rust_files);
-
-    let mut violations = Vec::new();
-    for path in rust_files {
-        if path == frame_graph {
-            continue;
-        }
-        let source = std::fs::read_to_string(&path).expect("failed to read renderer source");
-        if source.contains(".write_texture(") {
-            violations.push(
-                path.strip_prefix(crate_dir)
-                    .unwrap_or(&path)
-                    .display()
-                    .to_string(),
-            );
-        }
-    }
-
-    let frame_graph_source =
-        std::fs::read_to_string(frame_graph).expect("failed to read WGPU frame graph source");
-    assert!(
-        frame_graph_source.contains("pub(crate) fn upload_texture("),
-        "retained texture uploads must enter through an executor-owned API"
-    );
-    assert!(
-        violations.is_empty(),
-        "WGPU texture queue uploads must stay inside frame_graph.rs: {violations:?}"
-    );
+    assert_frame_graph_owns_calls(&[".write_texture("], Some("pub(crate) fn upload_texture("));
 }
 
 #[test]
 fn buffer_uploads_are_owned_by_frame_graph_executor() {
-    let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let src_dir = crate_dir.join("src");
-    let frame_graph = src_dir.join("frame_graph.rs");
-    let mut rust_files = Vec::new();
-    collect_rust_files(&src_dir, &mut rust_files);
-
-    let mut violations = Vec::new();
-    for path in rust_files {
-        if path == frame_graph {
-            continue;
-        }
-        let source = std::fs::read_to_string(&path).expect("failed to read renderer source");
-        if source.contains(".write_buffer(") {
-            violations.push(
-                path.strip_prefix(crate_dir)
-                    .unwrap_or(&path)
-                    .display()
-                    .to_string(),
-            );
-        }
-    }
-
-    let frame_graph_source =
-        std::fs::read_to_string(frame_graph).expect("failed to read WGPU frame graph source");
-    assert!(
-        frame_graph_source.contains("pub(crate) fn write_buffer("),
-        "buffer uploads must enter through an executor-owned API"
-    );
-    assert!(
-        violations.is_empty(),
-        "WGPU buffer queue uploads must stay inside frame_graph.rs: {violations:?}"
-    );
-}
-
-#[test]
-fn frame_upload_rings_grow_instead_of_panicking_on_payload_size() {
-    let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let frame_graph_source = std::fs::read_to_string(crate_dir.join("src/frame_graph.rs"))
-        .expect("failed to read WGPU frame graph source");
-
-    assert!(
-        !frame_graph_source.contains("upload payload exceeds allocator slot size"),
-        "frame upload allocation must not panic on a larger runtime payload"
-    );
-    assert!(
-        frame_graph_source.contains("fn place_upload(")
-            && frame_graph_source.contains("UploadPlacement::Grow(capacity) =>"),
-        "frame upload allocation must grow an undersized ring before writing data"
-    );
-    assert!(
-        frame_graph_source.contains("fn ring_outlives_frame(")
-            && frame_graph_source.contains("!ring_outlives_frame(last.capacity, staged)"),
-        "frame upload allocation must not retain an oversized one-frame ring forever"
-    );
+    assert_frame_graph_owns_calls(&[".write_buffer("], Some("pub(crate) fn write_buffer("));
 }
 
 #[test]
@@ -668,10 +592,10 @@ fn text_rendering_uses_cached_raster_image_batches() {
     );
     assert!(
         render_source.contains("run_store: RunStore")
-            && render_source.contains("struct ImageSlot")
-            && render_source.contains("fn upload_image_slot")
+            && render_source.contains("vertices: BufferUpload")
+            && render_source.contains("indices: BufferUpload")
             && render_source.contains("viewport_uniforms: ViewportUniformRing"),
-        "draw batches must own their run store and stage image slots through the frame's rings"
+        "draw batches must own retained runs and frame upload ranges"
     );
 }
 

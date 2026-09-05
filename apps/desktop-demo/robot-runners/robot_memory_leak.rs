@@ -204,7 +204,7 @@ fn log_render_stats(robot: &cranpose::Robot, phase: &str) {
     match robot.get_render_cpu_allocation_stats() {
         Ok(stats) => {
             eprintln!(
-                "[render-cpu:{phase}] graph_nodes={} graph_heap_mb={:.1} hits={}/{} node_index={}/{} text_pool={}/{} image_cache={}/{} scratch_shape_data={} scratch_gradients={} scratch_image={}/{}/{} layer_cache={} layer_cache_mb={:.1}",
+                "[render-cpu:{phase}] graph_nodes={} graph_heap_mb={:.1} hits={}/{} node_index={}/{} text_pool={}/{} image_cache={}/{} run_arena_bytes={} run_store_bytes={} run_store_runs={} scratch_image={}/{}/{} layer_cache={} layer_cache_mb={:.1}",
                 stats.scene_graph_node_count,
                 stats.scene_graph_heap_bytes as f64 / (1024.0 * 1024.0),
                 stats.scene_hits_len,
@@ -215,8 +215,9 @@ fn log_render_stats(robot: &cranpose::Robot, phase: &str) {
                 stats.text_renderer_pool_cap,
                 stats.image_texture_cache_len,
                 stats.image_texture_cache_cap,
-                stats.scratch_shape_data_cap,
-                stats.scratch_gradients_cap,
+                stats.run_arena_staging_bytes,
+                stats.run_store_bytes,
+                stats.run_store_runs,
                 stats.scratch_image_vertices_cap,
                 stats.scratch_image_indices_cap,
                 stats.scratch_image_cmds_cap,
