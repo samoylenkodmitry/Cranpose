@@ -6,6 +6,10 @@ The runtime checkpoint is `f4b83bbf`, combining the renderer work through
 bytemuck manifest requirement and measurement documentation with the same
 application runtime. Main reference: `0d195313`. Fable and Codex reviewed this
 plan together; `render_arch.md` retains the underlying experiment record.
+Both working branches reached `77deb8fe`. Its gates pass, but the full-minute
+watch Megaboss comparison fails acceptance: the shared runtime is slower than
+main in the hot reverse-order legs. The PR must not land until this regression
+and the remaining workload coverage are resolved.
 
 ## Contract and workload
 
@@ -42,7 +46,7 @@ rounding fact must remain visible in the evidence.
 | Workload | Evidence | Implication |
 | --- | --- | --- |
 | Huawei Megaboss | Earlier branch runs reach about 59.95 displayed fps | Preserve this result while fixing the watch; repeat on the combined build |
-| Watch Megaboss | Best earlier valid minute about 52 fps; 15,161-arc recording about 7.6 ms before owned publication, about 7.0 ms after | Recording matters, but the isolated 0.55 ms saving does not close the whole gap |
+| Watch Megaboss | Integrated hot B A B A: 16.22 / 18.34 / 16.11 / 18.34 fps, B = shared runtime, A = main; 43.3–45.0 C | Acceptance fails; recover the lost performance before another runtime checkpoint is accepted |
 | Watch Showcase header | About 21.7 ms GPU before CPU blur kernels; glass about 9.5–11 ms in removal experiments | Reduce useful shading work and redundant evaluation; this is not evidence about cards during full scroll |
 | Huawei Showcase launch | Main 23.62 fps, checkpoint 3f948657 23.48 fps at 34 C | Earlier renderer changes provide no measured launch gain here |
 | Huawei Showcase diagnostic | Removing glass leaves about 34 ms of a roughly 50 ms fenced frame; removing page operations leaves about 40 ms | A glass-only improvement cannot close the entire phone gap; fenced times are diagnostic and include lost overlap |
@@ -52,6 +56,16 @@ rounding fact must remain visible in the evidence.
 These observations came from different revisions, temperatures and protocols.
 Their savings cannot be added into a fictional 16.67 ms result. First establish
 one frame timeline for the integrated code and the actual full-scroll route.
+
+Removing only main's segment-surface cache gives 15.74 fps at 43.9–44.3 C;
+re-enabling it in the next leg gives 17.95 fps at 44.2–44.7 C. The complete
+A B A B then B A B A removal sequence is recorded in
+`mobile_watch_performance.md`. The uncached result is close to the integrated
+runtime's hot result, supporting lost segment reuse as a cause. Main's cache
+also resamples rotating surfaces and permits a 200-level worst difference in
+its rotation test. That implementation cannot be transplanted under this
+plan's exact expectations. Recover its throughput with proven exact reuse or
+lower-cost exact drawing, without weakening the tests.
 
 ## Frame budget and proof
 
