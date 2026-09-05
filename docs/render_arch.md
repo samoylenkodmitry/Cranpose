@@ -1360,19 +1360,20 @@ Where each scene stands, hot, on the list gesture, SurfaceFlinger frames:
 | ---------------------------- | ---------: | -----: | ------------------------------------------------ |
 | Mate 20 X cranorbit MEGA BOSS| 60-62      |   16.6 | the vsync; done                                   |
 | Mate 20 X showcase, cards    | 23.5-24.2  |   40.0 | the GPU: `present` 32 ms of the 40, whole-frame fence 49.7 ms, 33.9 without glass, 39.9 without page ops (Codex, 2026-09-05) |
-| Pixel Watch 3 showcase, header only | 31.6 (main 22.8) | 31.6 | the encode and the GPU, equal: render stage p50 18.7 ms on the present thread, GPU pass sum 19.5 ms |
+| Pixel Watch 3 showcase, header only | 31.6 (main 22.8) | 31.6 | the GPU: a 5 ms sleep in the present thread's cycle moved fps not at all (41.4 / 44.7 with it, 38.6 / 42.8 without, warm legs at 37.6-39.6 C); the pass sum equals the period |
 | Pixel Watch 3 cranorbit MEGA BOSS | 52 cool, 31 hot | 19-32 | the update: p50 16.9 ms cool, 30.1 hot; render 4.0-6.8 |
 | Pixel Watch 3 showcase, cards| unmeasured |      - | the swipe never reached them (below)              |
 
-The watch's showcase row is the header scene alone. The bench gesture is a
-400 ms swipe from (36, 300) to (60, 80) and the same swipe back, so each
-cycle scrolls 220 px down and 220 px up: the net displacement is zero and
-the amplitude is under the header's height at the watch's density, so the
-planet cards never enter the frame. The Huawei gesture reaches them because
-its screen is five times taller in pixels. Every full-scroll acceptance
-needs a gesture that keeps the cards on screen for most of the window on
-both devices (several forward swipes, then the same back), and until that
-gesture exists no watch number is a full-scroll number.
+The watch's showcase row is the header scene alone, and the list never
+scrolled under it: the bench gesture started its swipes at x = 36, which
+on the watch's native 408 x 408 at density 320 lies inside the list's
+40 px margin and outside its hit region (Codex, 2026-09-05, screenshots
+in the session mailbox). Same-direction drags inside the list, from
+(100, 236) to (100, 76) over 500 ms, bring the Sun card into view by the
+third and Mercury by the fourteenth. Every watch number before this
+finding is the header at rest under touch, not a scroll; every
+full-scroll acceptance from here uses that drag, several forward and the
+same number back, on both devices.
 
 **The frame on each device, by cost.** Mate 20 X, showcase cards, 40 ms
 of GPU: the liquid shader ~14 ms over 2.8 MP; the composites replayed into
@@ -1383,11 +1384,11 @@ table); the page's expensive fills ~10 by the ops ablation; copies ~2;
 shadow bands 5.7 MP. Pixel Watch 3, header, GPU 19.5 ms: glass 9.5-11
 (rim pipeline 5.3, interior 3.0, raster of 0.55 MP of glass quads 1.5),
 blur ~3 after the kernel table, page ops 4 of which the star radial
-gradient 2.4, shadow bands 1.9. The same watch frame's encode, 18.7 ms
-p50 on the present thread for ~110 draws: 41% cranpose, 32% libc
-(jemalloc, memcpy, memset from the composer's group slots and frames, the
-frame executor, `ShadowDraw` drops, offscreen creation when sizes change),
-23% the Adreno driver over 14-22 passes and 23-45 `write_buffer` calls.
+gradient 2.4, shadow bands 1.9. The same watch frame's encode, 10-18.7 ms
+p50 on the present thread for ~110 draws (41% cranpose, 32% libc, 23% the
+Adreno driver over 14-22 passes and 23-45 `write_buffer` calls), runs
+beside the GPU with slack to spare: the encode delay probe above added
+5 ms to it and the period did not move.
 Pixel Watch 3 MEGA BOSS, update 17-30 ms: the recorder writes 15,161
 112-byte arc records a frame (369 ns each on this core, 5.6 ms), the
 store uploads 1.8 MB of them because every angle changes, and the rest is
@@ -1395,8 +1396,8 @@ compose, layout and the scene patch.
 
 **Why the earlier levers stalled.** Every gain so far cut one term of a
 sum whose other terms are the same size: on the watch the blur table took
-2 ms of GPU and the period moved 2 ms, because the encode is as long as
-the GPU and the two overlap only partly; on the Mate the strata, the pool
+2 ms of GPU and the period moved 2 ms, one for one, because the GPU is
+the whole period there; on the Mate the strata, the pool
 and the gate moved the launch scene from 23.6 to 23.5 fps because the
 material and the fills they left untouched are 30 of the 40 ms. Sixty
 frames a second is 16.7 ms for everything, so each device needs its whole
@@ -1464,17 +1465,18 @@ compose in one pass.**
 (14 to ~4), blur (8 to ~2), fills (10 to ~2), composites and copies (9.5
 to ~4) lands near 16; every one of the four must land. Watch header: GPU
 19.5 minus glass (10 to ~3.5), blur (3 to ~1), star fill (2.4 to ~0.3)
-lands near 12; the encode 18.7 minus the passes and the allocation share
-must reach ~8, which the profile says is available but item 5 must prove.
+lands near 12, and the encode already fits beside it. Item 5 buys
+nothing on this scene until the GPU is under the encode; it stays for the
+orbit's update and for the card scene if its encode grows past the GPU.
 Watch cards: unknown until the gesture exists; the same four items apply
 per card, and the Mate's card numbers say the material and the composites
 dominate there.
 
-**Order and ownership.** Before any lever, two measurements that decide
-the order: the watch encode delay probe (`CRANPOSE_ENCODE_DELAY_MS`,
-already an instrument), whose 1:1 response would put item 5 before item
-2; and the full-scroll gesture on both devices with the pass inventory on
-the card scene. Then items 1, 2, 3, 4 (the GPU and the passes; renderer
+**Order and ownership.** The watch encode delay probe
+(`CRANPOSE_ENCODE_DELAY_MS`) was run first and answered: no response, so
+the GPU levers lead on both devices. The remaining deciding measurement
+is the full-scroll gesture on both devices with the pass inventory on the
+card scene. Then items 2, 3, 4, then 1 (the GPU and the passes; renderer
 side), items 5 and 6 (recording, upload and the present thread; Codex's
 side), each shipping only with its gate red-proven, the capture robots
 and goldens green, and both scenes measured hot A B A B then B A B A on
@@ -1686,11 +1688,11 @@ zero, alternating rounds, temperature logged; the watch with the
    at r, blur variants, substrate) and the material decisions, each with
    its number.
 
-8. The plan of 2026-09-05 (evening), in its order: the two deciding
-   measurements (the watch encode delay probe; the full-scroll gesture on
-   both devices with the card-scene pass inventory), then one stage per
-   non-nesting glass set, the material at substrate resolution with a
-   baked rim, the incremental backdrop under rigid motion, the static
-   fill raster cache, retained frame structures with coalesced uploads,
-   and compact arc records. Each with its gate red first, the robots
+8. The plan of 2026-09-05 (evening), in its order: the watch encode
+   delay probe (done: no response, the GPU is the bound), the full-scroll
+   gesture on both devices with the card-scene pass inventory, then the
+   material at substrate resolution with a baked rim, the incremental
+   backdrop under rigid motion, the static fill raster cache, one stage
+   per non-nesting glass set, and, on the recording side, compact arc
+   records and retained frame structures with coalesced uploads. Each with its gate red first, the robots
    green, both scenes hot A B A B and B A B A on the full-scroll gesture.
