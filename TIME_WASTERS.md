@@ -836,3 +836,25 @@ marker the run depends on (the property row, the override name) and the
 device log for the line proving the toggle reached the process
 (`debug.cranpose.<name> -> CRANPOSE_<NAME>=...`); a run without that line
 is void, as the silent-instrument rule says.
+
+## The watch list swipe started in the list's margin, so a day of watch numbers was the header at rest (2026-09-05)
+
+Every watch showcase measurement on 2026-09-05 swiped from (36, 300) to
+(60, 80). On the Pixel Watch 3's native 408 x 408 at density 320 the
+list's 20 dp margin is 40 px, so x = 36 never touched the list; the
+frames were the header under a touch, with no scroll, and the planet
+cards never entered the frame. The screenshots showed the header every
+time and were read as "the swipe is too short" instead of "the swipe
+missed". Codex found it by dragging inside the list: (100, 236) to
+(100, 76), same direction, reaches the Sun card by the third drag. The
+desktop API-count runner scaled the same coordinates and shared the
+flaw. Before trusting a gesture on a new device or density, take one
+screenshot after it and confirm the content moved; a gesture that
+produces frames is not a gesture that scrolls.
+
+## The headless robot path renders nothing a wgpu-core trace can count (2026-09-05)
+
+`SHOWCASE_ROBOT_HEADLESS=1` made the API-count runner emit 113 lines
+and zero submits after two rebuilds chasing a log-level cap that did
+not exist. The earlier trace had been taken over a visible window. Run
+trace counts with `SHOWCASE_ROBOT_HEADLESS=0`.
