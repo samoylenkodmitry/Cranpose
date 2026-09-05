@@ -34,7 +34,7 @@ use crate::{
     debug_toggles::DebugToggle,
     draw_pass::{PassSegment, PassTarget, ResolvedComposite, ResolvedCompositeKind, SourceContent},
     effect_renderer::{CompositeSampleMode, EffectRenderer, RoundedCompositeMask},
-    frame::{BackdropGate, FrameExecutor},
+    frame::{AdmissionGate, FrameExecutor},
     frame_graph::{
         BufferUpload, FrameCommandRecorder, FrameCommandStats, FrameTextureDescriptor,
         UploadAllocatorSpec, WgpuFrameGraph, WgpuFrameGraphExecutor, write_buffer,
@@ -1722,7 +1722,8 @@ pub struct GpuRenderer {
     deferred_offscreen_releases: Vec<OffscreenTarget>,
     pub(crate) effect_renderer: EffectRenderer,
     pub(crate) layer_cache: LayerCache,
-    pub(crate) backdrop_gates: HashMap<NodeId, BackdropGate>,
+    pub(crate) backdrop_gates: HashMap<NodeId, AdmissionGate>,
+    pub(crate) fill_gates: HashMap<DrawCommandId, AdmissionGate>,
     transparent_sources: HashMap<(u32, u32), Rc<OffscreenTarget>>,
     shadow_surface_cache: BoundedLruCache<ShadowSurfaceCacheKey, CachedShadowSurface>,
     shadow_surface_cache_bytes: u64,
@@ -1907,6 +1908,7 @@ impl GpuRenderer {
             effect_renderer,
             layer_cache: LayerCache::new(),
             backdrop_gates: HashMap::new(),
+            fill_gates: HashMap::new(),
             transparent_sources: HashMap::new(),
             shadow_surface_cache: BoundedLruCache::with_capacity_at_least_one(
                 MAX_SHADOW_SURFACE_CACHE_ITEMS,
@@ -2169,6 +2171,7 @@ impl GpuRenderer {
 
     fn flush_deferred_offscreen_releases(&mut self) {
         self.backdrop_gates.retain(|_, gate| gate.end_frame());
+        self.fill_gates.retain(|_, gate| gate.end_frame());
         for target in self.deferred_offscreen_releases.drain(..) {
             self.effect_renderer.release_offscreen(target);
         }
@@ -2936,6 +2939,7 @@ impl GpuRenderer {
             composites: &[],
             offset,
             scissor: None,
+            first_run_window: None,
         };
         let drew = self.encode_pass(
             recorder,
@@ -3007,6 +3011,7 @@ impl GpuRenderer {
                 composites: &[],
                 offset,
                 scissor: None,
+                first_run_window: None,
             };
             if let Err(error) = self.encode_pass(
                 recorder,
@@ -3059,6 +3064,7 @@ impl GpuRenderer {
         run: &RunDraw,
         viewport: ViewportUniformParams,
         root_scale: f32,
+        window: &std::ops::Range<u32>,
     ) -> StoreRunBatch {
         let command = run.command.expect("a stored run has a command");
         let upload_start = Instant::now();
@@ -3092,6 +3098,7 @@ impl GpuRenderer {
             &mut |segment| Self::run_pipeline_key(segment, clipped, RunTier::Store),
             &mut draws,
         );
+        window_draws(&mut draws, window);
         for draw in &draws {
             self.ensure_shape_pipeline(draw.key);
         }
@@ -3110,20 +3117,18 @@ impl GpuRenderer {
         self.run_store.arena_accepts(chunk, run)
     }
 
-    /// Copies `run` from record `from` into the open chunk; returns how
-    /// many records it took.
     pub(crate) fn append_arena_run(
         &mut self,
         chunk: usize,
         run: &RunDraw,
-        from: u32,
+        window: std::ops::Range<u32>,
         root_scale: f32,
     ) -> u32 {
         let clipped = run.placement.clip.is_some();
         let mut keys: SmallVec<[ShapePipelineKey; 4]> = SmallVec::new();
         let taken = self
             .run_store
-            .append_arena(chunk, run, from, root_scale, &mut |segment| {
+            .append_arena(chunk, run, window, root_scale, &mut |segment| {
                 let key = Self::run_pipeline_key(segment, clipped, RunTier::Arena);
                 if !keys.contains(&key) {
                     keys.push(key);
@@ -4836,4 +4841,18 @@ fn inner_shadow_composite_mask(
         )),
         radii,
     })
+}
+
+fn window_draws(draws: &mut SmallVec<[RunDrawCall; 8]>, window: &std::ops::Range<u32>) {
+    let mut relative = 0u32;
+    draws.retain(|draw| {
+        let count = draw.records.end - draw.records.start;
+        let first = relative;
+        relative += count;
+        let keep_start = window.start.max(first).min(first + count);
+        let keep_end = window.end.min(first + count).max(keep_start);
+        draw.records =
+            draw.records.start + (keep_start - first)..draw.records.start + (keep_end - first);
+        draw.records.start < draw.records.end
+    });
 }

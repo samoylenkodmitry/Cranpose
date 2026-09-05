@@ -2,6 +2,7 @@ use std::{
     borrow::Cow,
     collections::hash_map::Entry,
     hash::{Hash, Hasher},
+    ops::Range,
     rc::Rc,
 };
 
@@ -32,7 +33,8 @@ use crate::{
         FrameCommandRecorder, FrameTextureDescriptor, TextureRegionCopy, copy_compatible,
     },
     geometry::snap_delta_for_anchor,
-    offscreen::OffscreenTarget,
+    offscreen::{OffscreenTarget, composition_format},
+    opaque_prefix::{OpaquePrefix, PrefixContext, opaque_prefix},
     render::GpuRenderer,
     scene::{BackdropLayer, CompositorScene, DrawOp, DrawOpKind, EffectLayer, LayerRoundedClip},
 };
@@ -244,6 +246,23 @@ impl PageBase {
 
 /// The pixels of `source`, whose origin sits at `origin` in device space,
 /// within `parent`, drawn at `dest`.
+fn prefix_blit(prefix: &OpaquePrefix, texture: Rc<OffscreenTarget>) -> ResolvedComposite {
+    ResolvedComposite {
+        z_index: prefix.z_index,
+        source: texture,
+        content: SourceContent::retained(&prefix.key),
+        dest: prefix.device_rect,
+        scissor: None,
+        kind: ResolvedCompositeKind::Blit {
+            alpha: 1.0,
+            blend_mode: BlendMode::SrcOver,
+            rounded_mask: None,
+            sample_mode: CompositeSampleMode::Nearest,
+            source_viewport: None,
+        },
+    }
+}
+
 fn page_blit(
     source: &Rc<OffscreenTarget>,
     origin: [f32; 2],
@@ -628,6 +647,7 @@ impl PendingBackdrop<'_> {
 
 static STAGE_DIAG: DebugToggle = DebugToggle::new("CRANPOSE_GPU_STAGE_DIAG");
 static NO_EFFECT_DOMAINS: DebugToggle = DebugToggle::new("CRANPOSE_NO_EFFECT_DOMAINS");
+static NO_FILL_CACHE: DebugToggle = DebugToggle::new("CRANPOSE_NO_FILL_CACHE");
 
 fn declared_support(support: Option<Rect>) -> Option<Rect> {
     if NO_EFFECT_DOMAINS.flag() {
@@ -1409,11 +1429,12 @@ pub(crate) struct FrameExecutor<'r, 'c, C: FrameCommandRecorder> {
     empty_scene: CompositorScene,
     depth: usize,
     admitted_pixels: u64,
+    prefix_admitted_pixels: u64,
 }
 
 const MAX_ADMISSION_PATIENCE: u32 = 16;
 
-pub(crate) struct BackdropGate {
+pub(crate) struct AdmissionGate {
     key: LayerRasterCacheKey,
     run: u32,
     patience: u32,
@@ -1421,7 +1442,7 @@ pub(crate) struct BackdropGate {
     seen: bool,
 }
 
-impl BackdropGate {
+impl AdmissionGate {
     fn new(key: LayerRasterCacheKey) -> Self {
         Self {
             key,
@@ -1497,6 +1518,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             empty_scene: CompositorScene::new(),
             depth: 0,
             admitted_pixels: 0,
+            prefix_admitted_pixels: 0,
         }
     }
 
@@ -1664,18 +1686,25 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             .pending
             .partition_point(|composite| composite.z_index < z);
         let composites: Vec<ResolvedComposite> = pass.pending.drain(..end).collect();
-        let (ops, composites) = pass.release(ops, composites);
-        let load_op = pass.load_op.take();
+        let (ops, mut composites) = pass.release(ops, composites);
+        let mut load_op = pass.load_op.take();
         if ops.is_empty() && composites.is_empty() && load_op.is_none() {
             pass.drawn_z = pass.drawn_z.max(z);
             return Ok(());
         }
+        let first_run_window = match load_op {
+            Some(base) => {
+                self.reuse_opaque_prefix(pass, &ops, base, &mut composites, &mut load_op)?
+            }
+            None => None,
+        };
         let segment = PassSegment {
             scene: &pass.layer.scene,
             ops: &ops,
             composites: &composites,
             offset: pass.page.offset,
             scissor: None,
+            first_run_window,
         };
         let label = LAYER_PASS_LABELS[pass.segments.min(LAYER_PASS_LABELS.len() - 1)];
         pass.segments += 1;
@@ -1691,6 +1720,112 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         pass.drawn.sort_by_key(|composite| composite.z_index);
         pass.drawn_z = pass.drawn_z.max(z);
         Ok(())
+    }
+
+    fn reuse_opaque_prefix(
+        &mut self,
+        pass: &mut LayerPass<'_>,
+        ops: &[DrawOp],
+        base: wgpu::LoadOp<wgpu::Color>,
+        composites: &mut Vec<ResolvedComposite>,
+        load_op: &mut Option<wgpu::LoadOp<wgpu::Color>>,
+    ) -> Result<Option<Range<u32>>, String> {
+        if NO_FILL_CACHE.flag() {
+            return Ok(None);
+        }
+        let page_size = (pass.page.texture.width, pass.page.texture.height);
+        let context = PrefixContext {
+            scene: &pass.layer.scene,
+            base,
+            page_offset: pass.page.offset,
+            page_size,
+            scale: pass.scale,
+            format: composition_format(),
+        };
+        let Some(prefix) = opaque_prefix(&context, ops) else {
+            return Ok(None);
+        };
+        if composites
+            .iter()
+            .any(|composite| composite.z_index <= prefix.z_index)
+        {
+            return Ok(None);
+        }
+        let (x, y, width, height) = prefix.device_rect;
+        let (pixel_width, pixel_height) = (width as u32, height as u32);
+        if let Some(texture) = self.renderer.layer_cache.get(&prefix.key) {
+            self.renderer.frame_stats.record_layer_cache_hit(
+                &prefix.key,
+                pixel_width,
+                pixel_height,
+            );
+            if let Some(gate) = self.renderer.fill_gates.get_mut(&prefix.command) {
+                gate.hit(prefix.key);
+            }
+            composites.push(prefix_blit(&prefix, texture));
+            composites.sort_by_key(|composite| composite.z_index);
+            return Ok(Some(1..u32::MAX));
+        }
+        self.renderer
+            .frame_stats
+            .record_layer_cache_miss(&prefix.key, pixel_width, pixel_height);
+        let admits = match self.renderer.fill_gates.entry(prefix.command) {
+            Entry::Occupied(mut gate) => {
+                gate.get_mut().observe(prefix.key);
+                gate.get().admits()
+            }
+            Entry::Vacant(slot) => {
+                slot.insert(AdmissionGate::new(prefix.key));
+                false
+            }
+        };
+        let pixels = u64::from(pixel_width) * u64::from(pixel_height);
+        let budget = u64::from(page_size.0) * u64::from(page_size.1);
+        if !admits || self.prefix_admitted_pixels + pixels > budget {
+            return Ok(None);
+        }
+        let segment = PassSegment {
+            scene: &pass.layer.scene,
+            ops: &ops[..1],
+            composites: &[],
+            offset: pass.page.offset,
+            scissor: None,
+            first_run_window: Some(0..1),
+        };
+        self.renderer.encode_pass(
+            self.recorder,
+            pass.page.pass_target(),
+            std::slice::from_ref(&segment),
+            base,
+            pass.scale,
+            "Layer Pass Prefix",
+        )?;
+        let texture = Rc::new(
+            self.renderer
+                .acquire_retained_surface(pixel_width, pixel_height),
+        );
+        let copy = pass
+            .page
+            .copy(
+                DeviceRect {
+                    x,
+                    y,
+                    width,
+                    height,
+                },
+                &texture,
+                [0.0, 0.0],
+            )
+            .ok_or_else(|| "an opaque prefix off the page's texel grid".to_string())?;
+        self.recorder.copy_texture_region(copy);
+        self.prefix_admitted_pixels += pixels;
+        self.renderer.frame_stats.record_prefix_admission();
+        if let Some(gate) = self.renderer.fill_gates.get_mut(&prefix.command) {
+            gate.admitted();
+        }
+        self.renderer.layer_cache.insert(prefix.key, texture);
+        *load_op = Some(wgpu::LoadOp::Load);
+        Ok(Some(1..u32::MAX))
     }
 
     fn run_stages(&mut self, pass: &mut LayerPass<'_>) -> Result<(), String> {
@@ -1845,7 +1980,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                     gate.get().admits()
                 }
                 Entry::Vacant(slot) => {
-                    slot.insert(BackdropGate::new(key));
+                    slot.insert(AdmissionGate::new(key));
                     false
                 }
             };
@@ -1893,6 +2028,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             composites: std::slice::from_ref(&whole),
             offset: [rect.x, rect.y],
             scissor: None,
+            first_run_window: None,
         }];
         clear_and_draw(
             self.renderer,
@@ -2397,6 +2533,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                     composites: base,
                     offset,
                     scissor,
+                    first_run_window: None,
                 });
             }
             let own_end = pass
@@ -2408,6 +2545,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 composites: &pass.pending[..own_end],
                 offset,
                 scissor,
+                first_run_window: None,
             };
             if !copied || segment_draws_anything(target, &segment, scale) {
                 segments.push(segment);
@@ -2496,6 +2634,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             composites: &below[own_start..],
             offset: [source_rect.x, source_rect.y],
             scissor: None,
+            first_run_window: None,
         };
         let target = PassTarget {
             view: &texture.view,
@@ -3279,7 +3418,7 @@ mod tests {
     #[test]
     fn a_gate_admits_a_key_that_held_for_more_than_its_patience() {
         let key = gate_key(1);
-        let mut gate = BackdropGate::new(key);
+        let mut gate = AdmissionGate::new(key);
         assert!(!gate.admits(), "a key seen once is only remembered");
         gate.observe(key);
         assert!(gate.admits(), "the second frame of a key admits it");
@@ -3294,7 +3433,7 @@ mod tests {
     fn a_cached_key_between_misses_breaks_the_other_keys_consecutive_run() {
         let first = gate_key(1);
         let other = gate_key(2);
-        let mut gate = BackdropGate::new(first);
+        let mut gate = AdmissionGate::new(first);
         gate.observe(first);
         assert!(gate.admits());
         gate.admitted();
@@ -3309,7 +3448,7 @@ mod tests {
             "the other key has held for only one frame since the cache hit"
         );
     }
-    fn gate_frame(gate: &mut BackdropGate, key: LayerRasterCacheKey) -> bool {
+    fn gate_frame(gate: &mut AdmissionGate, key: LayerRasterCacheKey) -> bool {
         if gate.unread && gate.key == key {
             gate.hit(key);
             return false;
@@ -3322,7 +3461,7 @@ mod tests {
         false
     }
 
-    fn admissions_over(gate: &mut BackdropGate, holds: impl IntoIterator<Item = u32>) -> u32 {
+    fn admissions_over(gate: &mut AdmissionGate, holds: impl IntoIterator<Item = u32>) -> u32 {
         let mut admissions = 0;
         for (step, hold) in holds.into_iter().enumerate() {
             for _ in 0..hold {
@@ -3334,14 +3473,14 @@ mod tests {
 
     #[test]
     fn a_gate_waits_twice_as_long_after_an_admission_nothing_read_back() {
-        let mut gate = BackdropGate::new(gate_key(0));
+        let mut gate = AdmissionGate::new(gate_key(0));
         assert_eq!(
             admissions_over(&mut gate, std::iter::repeat_n(2, 40)),
             1,
             "a key that never holds a third frame is admitted once"
         );
         assert_eq!(gate.patience, 2);
-        let mut gate = BackdropGate::new(gate_key(0));
+        let mut gate = AdmissionGate::new(gate_key(0));
         assert_eq!(
             admissions_over(&mut gate, std::iter::repeat_n(3, 12)),
             12,
@@ -3355,7 +3494,7 @@ mod tests {
 
     #[test]
     fn a_gate_never_waits_longer_than_the_cap() {
-        let mut gate = BackdropGate::new(gate_key(0));
+        let mut gate = AdmissionGate::new(gate_key(0));
         let admissions = admissions_over(&mut gate, [2, 3, 5, 9, 17, 17, 17]);
         assert_eq!(
             admissions, 7,

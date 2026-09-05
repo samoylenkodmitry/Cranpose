@@ -25,6 +25,7 @@ pub(crate) mod gpu_stats;
 mod initial_present;
 mod lazy_resource;
 mod offscreen;
+mod opaque_prefix;
 mod output_conversion;
 pub(crate) mod pass_timing;
 mod pipeline;

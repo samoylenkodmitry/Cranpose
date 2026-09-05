@@ -1664,6 +1664,81 @@ share of the header frame and the cards declare nothing; the unit is
 exact infrastructure and a padding fix, and its gain arrives with a
 declared sample domain for the material.
 
+## The page's opaque prefix is drawn once and copied back (2026-09-05, night)
+
+The showcase's starfield records a full-screen three-stop radial rect
+and then ~160 moving stars in one draw callback, so the whole run changes
+every frame and no layer-level cache can hold it, while the rect itself
+never changes. Measured by drawing that rect as a flat fill instead,
+full 14-body scroll, A B A B then B A B A without cooling: Mate 20 X
+39.19 / 44.53 (flat) / 39.83 / 43.75 (flat) / 44.04 (flat) / 39.04 /
+43.93 (flat) / 39.36, +5.3, +3.9, +5.0, +4.6 fps, means 39.36 against
+44.06, 2.7 ms of a 25.4 ms frame; Pixel Watch 3 hot at 41.5 C, base
+29.60 / flat 31.94 / flat 32.10 / base 29.58 (WATCH PAIRS), about +2.4
+fps, 8%. One full-screen gradient rect is that share of the frame on both
+tilers even with its stops already inline in the vertex stage.
+
+**What the renderer does.** `opaque_prefix.rs` looks at the first op of a
+page pass's first flush, when the pass still carries its clear colour:
+it must be a run whose first segment in any lane is the shapes segment,
+whose first record is a plain rect (no radii, no stroke, SrcOver in the
+record and the segment) under a placement with alpha 1 and no colour
+filter, with a solid brush of alpha 1 or a Clamp gradient whose every
+stop has alpha 1, whose device edges, computed exactly as the vertex
+stage computes them (rect plus placement offset and snap delta, times
+the scale, canonicalized to 1/16 px under a snap anchor), are whole
+pixels, and whose clip, if any, contains it; no pending composite may
+sit at or below its z. The key is `LayerRasterCacheKey::prefix_snapshot`
+over a hash of the record bytes, the brush and stop bytes and explicit
+positions, the placement offset, snap, clip, the exact scale bits, the
+clear colour bits, the composition format and the device rect and page
+origin, so any change to what the bytes depend on is a different key.
+
+A gate per draw command (the same patience gate the backdrop cache uses,
+now `AdmissionGate`) admits a key on its second consecutive frame. On the
+admitting frame the page's first pass is split: "Layer Pass Prefix" draws
+the record alone over the clear, `copy_texture_to_texture` takes the
+device rect into a retained texture of the page's format, and the main
+pass loads and draws the rest of the run from its second record. On
+every later frame with the same key the main pass keeps its clear and
+draws a nearest-sampled composite of the retained bytes at the same
+integer rect ahead of the run's remaining records. The run's record
+window (`PassSegment::first_run_window`) reaches both the stored path,
+where each segment's draw call range is clamped, and the arena path,
+which appends from the window's start and stops at its end.
+
+**Why it is exact.** The cached bytes are the bytes the draw produced in
+place over the same clear colour, taken by a same-format copy. On a hit
+the composite samples them nearest at texel centres, so the source is
+the stored value, and it is opaque in the page's own format, so src-over
+is src + dst * 0 and the blender's conversion of the source is the
+identity whatever precision it works at. Nothing is re-rendered and
+nothing is resampled. A retained *result* of a translucent or masked
+composite does not have that property, which is why the backdrop result
+cache's admissions are a separate question (below).
+
+**Gates.** `opaque_prefix_cache.rs` renders every frame twice, through a
+caching renderer and a second renderer that never caches
+(`CRANPOSE_NO_FILL_CACHE`), and requires byte identity: a three-stop
+radial ahead of forty moving stars on a layer at (8, 6), at scales 1.0,
+1.5 (the rect then runs past the page edge and only the intersection is
+retained) and 3.0, a five-stop gradient (the uniform stop walk) and a
+solid fill; the stats prove the path runs (no admission on the first
+frame, one on the second, one prefix hit on every later frame, and the
+warm frame's shape fill smaller than the reference's by the rect); a
+changed stop colour misses, is watched for a frame, re-admitted on the
+next and served with the new bytes; and a translucent stop, a Repeated
+tile, a stroke, corner radii, a fractional edge, a record that is not
+first, a translucent layer and a run with an effect-range sibling
+composited beneath it are never admitted. Each requirement was broken on
+purpose and the suite went red: the stop bytes left out of the key (the
+changed colour served the old bytes), the opacity requirement dropped
+(the translucent stop admitted), the cached record redrawn on a hit (the
+warm fill equal to the reference's), and the composites-beneath guard
+removed (the split admission frame drew the effect over the prefix,
+4,878 bytes off). The toggle is `debug.cranpose.no_fill_cache` on
+Android, so one APK measures both ways.
+
 ## Order
 
 Every step ships with its contract proven red first, the robot suite

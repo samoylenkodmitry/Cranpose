@@ -1069,10 +1069,11 @@ impl RunStore {
         &mut self,
         chunk: usize,
         run: &RunDraw,
-        from: u32,
+        window: std::ops::Range<u32>,
         root_scale: f32,
         key_for: &mut dyn FnMut(&RecordSegment) -> crate::render::ShapePipelineKey,
     ) -> u32 {
+        let from = window.start;
         let mode = self.mode;
         let fill_stats = self.fill_stats;
         debug_assert_eq!(
@@ -1103,6 +1104,9 @@ impl RunStore {
                 if skipped < from {
                     skipped += 1;
                     continue;
+                }
+                if from + taken >= window.end {
+                    return taken;
                 }
                 if staging.bodies.len() >= record_limit {
                     segment_complete = false;

@@ -116,10 +116,11 @@ pub(crate) struct PassSegment<'a> {
     pub(crate) composites: &'a [ResolvedComposite],
     pub(crate) offset: [f32; 2],
     pub(crate) scissor: Option<(u32, u32, u32, u32)>,
+    pub(crate) first_run_window: Option<std::ops::Range<u32>>,
 }
 
 enum Item<'a> {
-    Run(&'a RunDraw),
+    Run(&'a RunDraw, Option<std::ops::Range<u32>>),
     ShadowRun(RunDraw),
     Image(usize),
     Text(&'a TextDraw),
@@ -529,7 +530,7 @@ fn merge_items<'a>(
             }
         }
     };
-    for op in segment.ops {
+    for (op_index, op) in segment.ops.iter().enumerate() {
         push_composites_below(&mut items, op.z_index);
         if !op_is_visible_in_rect(segment.scene, op, viewport_rect, root_scale) {
             continue;
@@ -538,7 +539,10 @@ fn merge_items<'a>(
             DrawOpKind::Run(index) => {
                 let run = &segment.scene.runs[index];
                 if run_has_shapes(run) {
-                    items.push(Item::Run(run));
+                    let window = (op_index == 0)
+                        .then(|| segment.first_run_window.clone())
+                        .flatten();
+                    items.push(Item::Run(run, window));
                 }
             }
             DrawOpKind::Image(index) => items.push(Item::Image(index)),
@@ -617,7 +621,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
         let mut index = 0;
         while index < items.len() {
             index = match &items[index] {
-                Item::Run(_) | Item::ShadowRun(_) => self.run_items(renderer, &items, index, &run),
+                Item::Run(..) | Item::ShadowRun(_) => self.run_items(renderer, &items, index, &run),
                 Item::Image(_) => self.image_run(renderer, &items, index, &run, scratch)?,
                 Item::Text(text) => {
                     self.text_item(renderer, text, &run, scratch)?;
@@ -661,28 +665,33 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
             }
         };
         while end < items.len() {
-            let draw = match &items[end] {
-                Item::Run(draw) => *draw,
-                Item::ShadowRun(draw) => draw,
+            let (draw, window) = match &items[end] {
+                Item::Run(draw, window) => (*draw, window.clone().unwrap_or(0..u32::MAX)),
+                Item::ShadowRun(draw) => (draw, 0..u32::MAX),
                 _ => break,
             };
             if renderer.run_is_stored(draw) {
                 close(renderer, &mut chunk, &mut self.batches);
-                let batch =
-                    renderer.prepare_store_run(self.recorder, draw, run.viewport, self.root_scale);
+                let batch = renderer.prepare_store_run(
+                    self.recorder,
+                    draw,
+                    run.viewport,
+                    self.root_scale,
+                    &window,
+                );
                 self.batches.push(Batch::StoreRun {
                     batch,
                     scissor: run.segment.scissor,
                 });
             } else {
-                let total = draw.record_count();
-                let mut from = 0;
+                let total = draw.record_count().min(window.end);
+                let mut from = window.start;
                 while from < total {
                     if chunk.is_some_and(|open| !renderer.arena_accepts(open, draw)) {
                         close(renderer, &mut chunk, &mut self.batches);
                     }
                     let open = *chunk.get_or_insert_with(|| renderer.open_arena());
-                    let taken = renderer.append_arena_run(open, draw, from, self.root_scale);
+                    let taken = renderer.append_arena_run(open, draw, from..total, self.root_scale);
                     if taken == 0 {
                         close(renderer, &mut chunk, &mut self.batches);
                         continue;

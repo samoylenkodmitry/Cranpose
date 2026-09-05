@@ -90,6 +90,8 @@ pub struct FrameStatsSnapshot {
     /// Backdrops resolved into retained textures this frame, each a second
     /// shading of its glass.
     pub backdrop_admissions: u32,
+    /// Opaque page prefixes copied into the layer cache this frame.
+    pub prefix_admissions: u32,
     /// Captures averaged into a quarter-size substrate for a shader's wide
     /// taps.
     pub substrates: u32,
@@ -351,6 +353,7 @@ pub(crate) struct FrameStats {
     pub blur_passes: Cell<u32>,
     pub stages: Cell<u32>,
     pub backdrop_admissions: Cell<u32>,
+    pub prefix_admissions: Cell<u32>,
     pub substrates: Cell<u32>,
     pub composite_passes: Cell<u32>,
     pub effect_applies: Cell<u32>,
@@ -396,6 +399,11 @@ impl FrameStats {
     pub fn record_backdrop_admission(&self) {
         self.backdrop_admissions
             .set(self.backdrop_admissions.get().saturating_add(1));
+    }
+
+    pub fn record_prefix_admission(&self) {
+        self.prefix_admissions
+            .set(self.prefix_admissions.get().saturating_add(1));
     }
 
     pub fn record_command_stats(&self, stats: FrameCommandStats) {
@@ -726,6 +734,7 @@ impl FrameStats {
             blur_passes: self.blur_passes.get(),
             stages: self.stages.get(),
             backdrop_admissions: self.backdrop_admissions.get(),
+            prefix_admissions: self.prefix_admissions.get(),
             substrates: self.substrates.get(),
             composite_passes: self.composite_passes.get(),
             effect_applies: self.effect_applies.get(),
@@ -794,6 +803,7 @@ impl FrameStats {
         self.blur_passes.set(0);
         self.stages.set(0);
         self.backdrop_admissions.set(0);
+        self.prefix_admissions.set(0);
         self.substrates.set(0);
         self.composite_passes.set(0);
         self.effect_applies.set(0);
