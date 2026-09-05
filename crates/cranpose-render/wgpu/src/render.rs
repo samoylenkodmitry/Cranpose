@@ -895,6 +895,7 @@ pub(crate) fn create_render_pipeline_logged<'a>(
         "[pipeline-create] {tag} {:.1}ms",
         instant_ms(started, Instant::now())
     );
+    crate::pipeline_disk_cache::note_pipeline_created();
     pipeline
 }
 
@@ -1896,7 +1897,7 @@ impl GpuRenderer {
         let pipeline_cache: Option<wgpu::PipelineCache> = None;
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(cache) = pipeline_cache.clone() {
-            crate::pipeline_disk_cache::spawn_persist_schedule(cache);
+            crate::pipeline_disk_cache::spawn_persist_watcher(cache);
         }
 
         let effects_started = Instant::now();

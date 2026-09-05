@@ -975,6 +975,35 @@ scroll swipe landing on the nav bar and switching to the empty Saved
 tab; a run whose `update p50` is 16 ms and `render` 3 ms measured that
 tab, not the list.
 
+### The pipeline cache stopped writing at 28 s (2026-09-05, later)
+
+Every watch run of the showcase compiled four to seven liquid-glass
+pipelines cold, 650-990 ms each, inside the measured window, whichever
+build ran: the disk cache (`pipeline_disk_cache`) loaded 700-800 KB at
+launch and wrote once at 8 s and once at 28 s, so a material variant
+first reached later than that, which a scroll reaches every time, was
+compiled again on every launch. The persist thread now ticks every two
+seconds and writes when the pipeline count has grown since the last
+write and held still for a tick: a burst of compiles is written once,
+after its last one, and a variant reached at any point in a session is
+on disk for the next. `PersistWatch` is unit-tested for both. The
+measured fps means carried those stalls (a 1.4 s `render` max in a
+120-frame window is a third of the window); the medians did not.
+
+Glass on the watch, by ablation on this build: a constant glass fragment
+takes the frame from 36 ms to 16.7 and the Layer Pass from 31 to 12, so
+the material is 19 ms of the frame over `shader_px` 0.28-0.31 MP, 63 ns
+a pixel; main's Shader Effect Pass is 13.5 ms. The visible glass is
+about 0.24 MP, so a fifth of the branch's glass pixels are shaded
+outside the screen or twice; the rest of the gap is per-pixel. At the
+material's current definition neither renderer reaches 60 fps on the
+watch: 16.7 ms a frame needs the glass at 6-8 ms.
+
+Cranorbit, the MEGA BOSS arena, alternated with rests at 38-40 C on the
+watch: branch 47.3 and 41.7 against main 50.8 and 44.3 presented fps,
+7% behind in both pairs; on the Mate both sit at the 60 Hz cap (60.0
+against 62.2 over a 40 s SurfaceFlinger window).
+
 ## Order
 
 Every step ships with its contract proven red first, the robot suite
