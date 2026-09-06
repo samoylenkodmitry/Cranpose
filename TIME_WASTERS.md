@@ -1064,3 +1064,21 @@ and tree first, resolve the stash to its immutable commit hash, and extract
 only the intended file when other staged work is present. Never assume a
 worktree has a private stash list or that a remembered index still names the
 same experiment.
+
+### A recording function's self samples do not measure its call overhead
+
+The watch attributed 10.59% self cycles to `push_shape`. Forcing it inline
+removed the call and reduced the caller's local stack space, but complete
+ABAB/BABA app pairs after the thermal crossing changed by -0.082, -0.026 and
++0.032 FPS near 27.6 FPS. The change is rejected. The sampled function does
+useful work even when the call disappears; do not infer a direct-column or
+worker rewrite's gain from the symbol's self percentage.
+
+### Dynamic arc drawing does not imply unchanged body columns
+
+An actual unchanged-app producer census finds only 2/180 entire body columns
+unchanged at 20 updates/s, and 51/540 at 60/s. Current upload comparison already
+skips unchanged 4 KiB chunks. `CommandRecorder::reusing` can retain capacities,
+but `finish` publishes a new `Arc`; it does not preserve the pointer identity
+used by an unchanged recording's fast path. A body-identity cache still has to
+establish equality and cannot claim a free skip from angle animation alone.
