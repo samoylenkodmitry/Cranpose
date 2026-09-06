@@ -338,6 +338,8 @@ By removal, same APK (`CRANPOSE_ABLATE`), fps switched minus base per pair:
 | text | -1.0, +2.6, +1.4, +0.1 | unmeasurable: the route validates by OCR of text |
 | shape (flat colour) | +1.8, +3.0, +1.6, +1.5 | +3.5, +2.3, +11.2 (plateau crossing), +2.9 on base 24-27 at 42-43 C |
 | shape_fill (discard) | +0.5, +3.5, +1.6, +1.5 | +1.3, +1.2, +1.9, +1.3 on base 24 at 42-43 C |
+| glass_dispersion (two of four fetches) | +3.3, +0.6, -2.4, +2.5 at 39-42 C | +2.2, -10.0, -7.2, +13.4 across the 36 and 24 plateaus; +1.2..+2.6 within one |
+| glass_refraction (physical refraction arithmetic) | -1.8, +1.7, -0.9, -0.8 | +0.8, +0.3, -0.6, -0.0 on base 24.4 at 42.5 C |
 
 The stage pipeline is the frame on both GPUs and its material path is
 nearly all of it; the material-to-blit switch removes arithmetic and
@@ -345,7 +347,20 @@ fetches together and names the path, not which. The shape fragment path
 is a tenth of the watch frame and a twentieth of the Mali one; on Adreno
 the discard-only bound gains less than the flat write, so the two are
 bounds on that path and not its parts. Orbit on the Mate 20 X sits on the
-60 Hz cap under both (59.9 either way). Exact levers, each
+60 Hz cap under both (59.9 either way); on the watch at 43-45 C Orbit
+gives shape +1.0, +2.0, +2.1, +2.1 and shape_fill +2.0, +2.1, +2.8, +2.3
+on a 17 fps base, so discarding every shape fragment leaves 84-88% of
+that frame, a residual the fps alone cannot split between the GPU's
+vertex work and a main thread at 37.7 CPU ms per frame. Neither glass
+switch moves either GPU beyond +2.6 within a thermal plateau: the
+material's fetch count and its refraction arithmetic are not where its
+time goes. Watch Showcase pass timing under `shape` (44 C, 310 MHz):
+the 4 ms come out of layer passes 2, 3 and 4, and layer pass 1, the glass
+cards at 22 ms of a 60 ms span, does not move. Watch Orbit pass timing
+under `shape_fill` (44-45 C, 310 MHz): the one layer pass falls from
+58.5 to 25.7 ms per frame and the frame rate stays at 14.5-15.0, so the
+hot Orbit frame is the main thread, not the GPU; of the GPU's 58 ms, 33
+are the fragment side. Exact levers, each
 against the tree without it:
 
 | change | Mate 20 X | Pixel Watch 3 |
@@ -355,6 +370,7 @@ against the tree without it:
 | activity flag 22aece9d (reverted b297137b) | +1.4, +0.7, -0.5, +1.6 | -6.4 (crossing), +0.1, +0.4, +8.4 (step) |
 | default curve fold 81af46dc (reverted ebdd15ea) | -0.8, -0.9, -4.1, +1.6 | not run |
 | curve as constant, probe only d82d86a8 | +2.7, +2.3, +3.3, +2.0 | not run |
+| coincident-ray reuse 0d63a76f (exact on Metal and Adreno, mutants red; reverted, no return) | -4.7 (43.97 outlier base), -1.4, -0.2, +1.7 | -0.0, -0.1, -0.2, -6.1 (crossing) on base 24.2-24.5 at 42 C |
 
 Watch plateaus: 42-43 fps cool, 31 at 41-42 C, 24 at 43, 16 at the next
 step; every GPU reduction moves the plateau. Legs and reports live under

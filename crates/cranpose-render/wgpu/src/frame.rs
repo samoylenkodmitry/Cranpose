@@ -699,7 +699,7 @@ fn log_stage(stage: usize, items: &[&PendingBackdrop<'_>]) {
             None => (false, 0),
         };
         log::warn!(
-            "[stage-diag] stage={stage} z={} capture=({:.0},{:.0},{:.0},{:.0}) visible=({:.0},{:.0},{:.0},{:.0}) batched={} blur={blur} substrates={substrates}",
+            "[stage-diag] stage={stage} z={} capture=({:.0},{:.0},{:.0},{:.0}) visible=({:.0},{:.0},{:.0},{:.0}) batched={} blur={blur} substrates={substrates} key={:?}",
             item.z,
             capture.x,
             capture.y,
@@ -710,6 +710,7 @@ fn log_stage(stage: usize, items: &[&PendingBackdrop<'_>]) {
             visible.width,
             visible.height,
             item.batched.is_some(),
+            item.key,
         );
     }
 }
