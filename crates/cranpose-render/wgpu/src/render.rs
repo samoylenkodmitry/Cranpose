@@ -2209,8 +2209,16 @@ impl GpuRenderer {
     }
 
     fn flush_deferred_offscreen_releases(&mut self) {
-        self.backdrop_gates.retain(|_, gate| gate.end_frame());
-        self.fill_gates.retain(|_, gate| gate.end_frame());
+        let layer_cache = &mut self.layer_cache;
+        let mut retire = |gate: &mut AdmissionGate| {
+            let seen = gate.end_frame();
+            if !seen && let Some(dead) = gate.dead_entry() {
+                layer_cache.remove(&dead);
+            }
+            seen
+        };
+        self.backdrop_gates.retain(|_, gate| retire(gate));
+        self.fill_gates.retain(|_, gate| retire(gate));
         for target in self.deferred_offscreen_releases.drain(..) {
             self.effect_renderer.release_offscreen(target);
         }

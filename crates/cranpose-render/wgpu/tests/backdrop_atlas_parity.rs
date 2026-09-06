@@ -1065,7 +1065,9 @@ fn independent_glasses_are_admitted_over_several_frames_without_changing_pixels(
     let (settled, settled_frame) = render(true);
     assert_eq!(settled.layer_cache_misses, 0);
     assert_eq!(settled.layer_cache_hits, first.layer_cache_misses);
-    let (_, reference) = render(false);
+    let mut fresh = support::LockedRenderer::beside_locked().expect("second headless renderer");
+    let reference =
+        support::capture_graph(&mut fresh, independent_cached_glasses(false), 1104, 720);
     for (index, frame) in admitting.iter().enumerate() {
         assert_eq!(
             support::max_channel_delta(&frame.pixels, &reference.pixels),

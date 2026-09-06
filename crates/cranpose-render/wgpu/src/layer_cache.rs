@@ -147,6 +147,12 @@ impl LayerCache {
         }
     }
 
+    pub(crate) fn remove(&mut self, key: &LayerRasterCacheKey) {
+        if let Some(entry) = self.entries.pop(key) {
+            self.release(entry);
+        }
+    }
+
     pub(crate) fn take_released(
         &mut self,
     ) -> Vec<(Option<FrameTextureDescriptor>, OffscreenTarget)> {
@@ -226,6 +232,31 @@ mod tests {
             sample_mode: CompositeSampleMode::Nearest,
             source_viewport: None,
         }
+    }
+
+    #[test]
+    fn a_removed_entry_is_retired_and_its_texture_released_once_unshared() {
+        let (_lock, device, _queue) = upload_test_device();
+        let mut cache = LayerCache::with_budget(1 << 20);
+        let atlas = texture(&device, 64);
+        pin(&mut cache, 1, &atlas);
+        cache.remove(&key(2));
+        assert_eq!(cache.len(), 1, "removing an absent key changes nothing");
+        cache.remove(&key(1));
+        assert_eq!(cache.len(), 0);
+        assert_eq!(
+            cache.bytes(),
+            0,
+            "the removed entry no longer counts against the budget"
+        );
+        assert!(
+            cache.take_released().is_empty(),
+            "a texture still held elsewhere is not handed back yet"
+        );
+        drop(atlas);
+        let released = cache.take_released();
+        assert_eq!(released.len(), 1);
+        assert_eq!(released[0].0, Some(descriptor(64)));
     }
 
     #[test]

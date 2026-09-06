@@ -143,6 +143,7 @@ struct FrameCacheStats {
     hits: u32,
     misses: u32,
     admissions: u32,
+    entries: u32,
     blur_passes: u32,
     isolated_layer_renders: u32,
 }
@@ -215,6 +216,7 @@ impl GlassHarness {
                 hits: stats.layer_cache_hits,
                 misses: stats.layer_cache_misses,
                 admissions: stats.backdrop_admissions,
+                entries: stats.layer_cache_size,
                 blur_passes: stats.blur_passes,
                 isolated_layer_renders: stats.isolated_layer_renders,
             },
@@ -420,6 +422,77 @@ fn a_cached_glass_result_follows_a_change_beneath_it() {
             0,
             "{label} must be the bytes of a renderer that never cached"
         );
+    }
+}
+
+#[test]
+fn a_backdrop_changing_every_frame_leaves_no_unread_pin_behind() {
+    let Some((_lock, mut harness)) = harness() else {
+        return;
+    };
+    let still = SceneInput::default();
+    for _ in 0..warmup_frames() {
+        harness.stats(still);
+    }
+    let settled = harness.stats(still);
+    assert_eq!(
+        settled.misses, 0,
+        "the warm-up must leave the scene cached: {settled:?}"
+    );
+    for step in 1..=40 {
+        let stats = harness.stats(SceneInput {
+            drift: step as f32 * 0.01,
+            ..still
+        });
+        assert!(
+            stats.admissions > 0,
+            "step {step}: a new key is pinned the frame it appears: {stats:?}"
+        );
+        assert!(
+            stats.entries <= settled.entries + stats.admissions,
+            "step {step}: a pin nothing read back is released when its key changes, so the \
+             cache holds the settled scene plus this frame's pins, not {} entries against {} \
+             settled",
+            stats.entries,
+            settled.entries
+        );
+    }
+}
+
+#[test]
+fn a_backdrop_that_moves_on_after_a_replay_takes_its_pin_with_it() {
+    let Some((_lock, mut harness)) = harness() else {
+        return;
+    };
+    let still = SceneInput::default();
+    for _ in 0..warmup_frames() {
+        harness.stats(still);
+    }
+    let settled = harness.stats(still);
+    assert_eq!(
+        settled.misses, 0,
+        "the warm-up must leave the scene cached: {settled:?}"
+    );
+    for step in 1..=20 {
+        let input = SceneInput {
+            drift: step as f32 * 0.01,
+            ..still
+        };
+        let pinned = harness.stats(input);
+        let replayed = harness.stats(input);
+        assert!(
+            pinned.admissions > 0 && replayed.misses == 0,
+            "step {step}: pinned on the first frame, replayed on the second: {pinned:?} {replayed:?}"
+        );
+        for (label, stats) in [("pinned", pinned), ("replayed", replayed)] {
+            assert!(
+                stats.entries <= settled.entries + 1,
+                "step {step} {label}: a pin lives exactly as long as its key is current, so the \
+                 cache holds the settled scene plus one pin, not {} entries against {} settled",
+                stats.entries,
+                settled.entries
+            );
+        }
     }
 }
 

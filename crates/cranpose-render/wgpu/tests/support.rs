@@ -89,7 +89,20 @@ fn lock_gpu_test() -> MutexGuard<'static, ()> {
 pub struct LockedRenderer {
     renderer: WgpuRenderer,
     app_context: std::rc::Rc<AppContext>,
-    _lock: MutexGuard<'static, ()>,
+    _lock: Option<MutexGuard<'static, ()>>,
+}
+
+fn with_app_context(
+    mut renderer: WgpuRenderer,
+    lock: Option<MutexGuard<'static, ()>>,
+) -> LockedRenderer {
+    let app_context = AppContext::new();
+    renderer.attach_app_context_services(&app_context);
+    LockedRenderer {
+        renderer,
+        app_context,
+        _lock: lock,
+    }
 }
 
 impl Deref for LockedRenderer {
@@ -107,6 +120,10 @@ impl DerefMut for LockedRenderer {
 }
 
 impl LockedRenderer {
+    pub fn beside_locked() -> Result<LockedRenderer, String> {
+        Ok(with_app_context(create_headless_renderer()?, None))
+    }
+
     pub fn render_current_scene_to_texture(
         &mut self,
         width: u32,
@@ -172,27 +189,15 @@ pub fn headless_renderer_configured(
     backends: wgpu::Backends,
 ) -> Result<LockedRenderer, String> {
     let lock = lock_gpu_test();
-    let mut renderer =
+    let renderer =
         create_headless_renderer_configured(wgpu::TextureFormat::Bgra8UnormSrgb, limits, backends)?;
-    let app_context = AppContext::new();
-    renderer.attach_app_context_services(&app_context);
-    Ok(LockedRenderer {
-        _lock: lock,
-        app_context,
-        renderer,
-    })
+    Ok(with_app_context(renderer, Some(lock)))
 }
 
 pub fn headless_renderer_unencoded() -> Result<LockedRenderer, String> {
     let lock = lock_gpu_test();
-    let mut renderer = create_headless_renderer_with_format(wgpu::TextureFormat::Bgra8Unorm)?;
-    let app_context = AppContext::new();
-    renderer.attach_app_context_services(&app_context);
-    Ok(LockedRenderer {
-        _lock: lock,
-        app_context,
-        renderer,
-    })
+    let renderer = create_headless_renderer_with_format(wgpu::TextureFormat::Bgra8Unorm)?;
+    Ok(with_app_context(renderer, Some(lock)))
 }
 
 pub fn headless_renderer_parts() -> Result<(MutexGuard<'static, ()>, WgpuRenderer), String> {

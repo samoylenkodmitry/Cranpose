@@ -223,15 +223,25 @@ reference below and not by re-tessellation.
   and never ratchets (`AdmissionCost::Pin`; the prefix gate is
   `AdmissionCost::Copy` and keeps its one-frame wait with doubling); the
   per-frame pixel budget goes to the longest-held keys first, so a key
-  changing every frame cannot starve a still one. Because a stage is keyed
+  changing every frame cannot starve a still one. A pin lives exactly as
+  long as its key is the gate's current key: the gate hands it back the
+  frame the key changes or the node vanishes and the cache releases it to
+  the transient pool at once (`AdmissionGate::observe` / `dead_entry`,
+  `LayerCache::remove`); a re-pin costs nothing, so no pin is kept for a
+  recurrence, and an animating backdrop holds one stage texture, never the
+  cache's budget (the Mac count runner held 160 entries at the 96 MB
+  budget when read pins were left to the LRU). A copy stays for the LRU
+  and is handed back only when nothing read it. Because a stage is keyed
   after the stage below is admitted, a stacked header is fully keyed in
   its first frame. Measured on the Mac count runner (204 px, still header,
-  per-item stage diag): uncached items per frame 6.00 to 4.63; before, 129
-  of 300 stage-0 misses carried the previous frame's key and every stage-1
-  and stage-2 item was unkeyed behind a transient; after, no miss at any
-  stage carries the previous frame's key, and the remaining stage-1 and
-  stage-2 keys change every frame with the content drawn between the
-  stages. A hit replays that kind at the backdrop's
+  per-item stage diag): uncached items per frame 6.00 to 4.68 in the still
+  header and 0.60/0.40 to 0.43/0.17 in the scroll tail, with the cache at
+  3 to 7 entries (4 MB) against 7 to 32 before and no steady-state
+  allocation; before, 129 of 300 stage-0 misses carried the previous
+  frame's key and every stage-1 and stage-2 item was unkeyed behind a
+  transient; after, no miss at any stage carries the previous frame's key,
+  and the remaining stage-1 and stage-2 keys change every frame with the
+  content drawn between the stages. A hit replays that kind at the backdrop's
   current dest, scissor, mask and layer rect (`replayed_kind`): same
   texels, same shader, same uniforms, so the bytes are the never-caching
   renderer's. No result is ever copied (a copied result rounded twice and

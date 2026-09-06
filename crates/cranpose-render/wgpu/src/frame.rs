@@ -1530,6 +1530,7 @@ pub(crate) struct AdmissionGate {
     key: LayerRasterCacheKey,
     run: u32,
     cost: AdmissionCost,
+    admitted: bool,
     unread: bool,
     seen: bool,
 }
@@ -1548,23 +1549,35 @@ impl AdmissionGate {
             key,
             run: 1,
             cost,
+            admitted: false,
             unread: false,
             seen: true,
         }
     }
 
-    fn observe(&mut self, key: LayerRasterCacheKey) {
+    fn observe(&mut self, key: LayerRasterCacheKey) -> Option<LayerRasterCacheKey> {
         self.seen = true;
         if self.key == key {
             self.run = self.run.saturating_add(1);
-            return;
+            return None;
         }
         if let (true, AdmissionCost::Copy { patience }) = (self.unread, &mut self.cost) {
             *patience = (*patience * 2).min(MAX_ADMISSION_PATIENCE);
         }
+        let dead = self.dead_entry();
+        self.admitted = false;
+        self.unread = false;
         self.key = key;
         self.run = 1;
-        self.unread = false;
+        dead
+    }
+
+    pub(crate) fn dead_entry(&self) -> Option<LayerRasterCacheKey> {
+        let dead = match self.cost {
+            AdmissionCost::Pin => self.admitted,
+            AdmissionCost::Copy { .. } => self.unread,
+        };
+        dead.then_some(self.key)
     }
 
     fn admits(&self) -> bool {
@@ -1575,6 +1588,7 @@ impl AdmissionGate {
     }
 
     fn admitted(&mut self) {
+        self.admitted = true;
         self.unread = true;
     }
 
@@ -1900,7 +1914,9 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             .record_layer_cache_miss(&prefix.key, pixel_width, pixel_height);
         let admits = match self.renderer.fill_gates.entry(prefix.command) {
             Entry::Occupied(mut gate) => {
-                gate.get_mut().observe(prefix.key);
+                if let Some(dead) = gate.get_mut().observe(prefix.key) {
+                    self.renderer.layer_cache.remove(&dead);
+                }
                 gate.get().admits()
             }
             Entry::Vacant(slot) => slot.insert(AdmissionGate::copied(prefix.key)).admits(),
@@ -2137,7 +2153,9 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             let gate = match self.renderer.backdrop_gates.entry(node_id) {
                 Entry::Occupied(gate) => {
                     let gate = gate.into_mut();
-                    gate.observe(key);
+                    if let Some(dead) = gate.observe(key) {
+                        self.renderer.layer_cache.remove(&dead);
+                    }
                     gate
                 }
                 Entry::Vacant(slot) => slot.insert(AdmissionGate::pinned(key)),
@@ -3714,6 +3732,52 @@ mod tests {
             gate.run(),
             4,
             "a held key's run is what the admission budget ranks by"
+        );
+    }
+
+    #[test]
+    fn a_pin_lives_exactly_as_long_as_its_key_and_a_copy_only_dies_unread() {
+        let mut gate = AdmissionGate::pinned(gate_key(1));
+        assert_eq!(
+            gate.dead_entry(),
+            None,
+            "nothing admitted, nothing to hand back"
+        );
+        gate.admitted();
+        assert_eq!(gate.dead_entry(), Some(gate_key(1)));
+        assert_eq!(
+            gate.observe(gate_key(1)),
+            None,
+            "the same key holds the pin"
+        );
+        assert_eq!(
+            gate.observe(gate_key(2)),
+            Some(gate_key(1)),
+            "a pin nothing read back dies with its key"
+        );
+        assert_eq!(gate.dead_entry(), None);
+        gate.admitted();
+        gate.hit(gate_key(2));
+        assert_eq!(
+            gate.observe(gate_key(3)),
+            Some(gate_key(2)),
+            "a pin that was read back dies with its key too: a re-pin costs nothing"
+        );
+        let mut gate = AdmissionGate::copied(gate_key(1));
+        gate.observe(gate_key(1));
+        gate.admitted();
+        gate.hit(gate_key(1));
+        assert_eq!(
+            gate.observe(gate_key(2)),
+            None,
+            "a copy that was read back stays for the cache to keep or evict"
+        );
+        gate.observe(gate_key(2));
+        gate.admitted();
+        assert_eq!(
+            gate.observe(gate_key(3)),
+            Some(gate_key(2)),
+            "a copy nothing read back is handed back"
         );
     }
 

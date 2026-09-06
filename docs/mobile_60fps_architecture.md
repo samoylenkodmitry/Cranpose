@@ -39,6 +39,7 @@ ABAB then BABA without cooling. Heat and failed legs remain in the evidence.
 | Factory/hash | Held: Huawei +0.16/−1.86/−1.54/−0.24 FPS; watch +8.16/+0.87/+0.32/+0.55, first pair crosses a thermal step | Codex |
 | Reuse before geometry preparation | Watch materialization cost; actual animated input reuse; pixel invariants | Codex |
 | Glass / shape GPU work | Stages reflect real dependencies; blur taps already paired. Measure specialization cost | Fable |
+| Backdrop pin on first sight | Exact (8 glass-cache, 20 parity contracts). Mac still header 6.00→4.68 uncached items/frame; a pin must live exactly as long as its key or the cache saturates (160 entries at 96 MB). Device 10 s ABAB pending | Fable |
 
 **Architecture candidate:** semantic records → reuse verdict → compile changed
 ranges → backend buffers. Main can skip lowering; shared lowers before reuse.
