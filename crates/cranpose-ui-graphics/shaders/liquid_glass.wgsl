@@ -1038,12 +1038,11 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
 
     // wcKSRD owns source mapping and backdrop blur.
     let wcksrd_blur_radius = max(max(fixed_or(get_float(93u), 0.0, GLASS_OPTICAL_BLUR_OFF), 0.0), loupe_rim_softening);
-    let transmitted_displacement = achromatic_displacement + base_displacement;
     let transmitted_path = sample_wcksrd_path(
         map,
         uv,
         tex_size,
-        transmitted_displacement,
+        achromatic_displacement + base_displacement,
         wcksrd_blur_radius,
         loupe_mode > 0.5,
     );
@@ -1061,56 +1060,48 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
         // absorption, meniscus, ink recolor, tone) operates on the merged
         // chromatic transmission.
         let index_spread = dispersion_strength * 0.22;
-        let red_displacement = achromatic_displacement + channel_lens_displacement(
-            sampling_position,
-            d,
-            lens_refraction,
-            1.0 - index_spread,
-            refraction_curve,
-            transmission_refraction,
-            optical_zoom,
-            zoom_anchor,
-            loupe_mode,
-            loupe_activity,
-            loupe_magnification,
-            fold_displacement,
+        let red_path = sample_wcksrd_path(
+            map,
+            uv,
+            tex_size,
+            achromatic_displacement + channel_lens_displacement(
+                sampling_position,
+                d,
+                lens_refraction,
+                1.0 - index_spread,
+                refraction_curve,
+                transmission_refraction,
+                optical_zoom,
+                zoom_anchor,
+                loupe_mode,
+                loupe_activity,
+                loupe_magnification,
+                fold_displacement,
+            ),
+            wcksrd_blur_radius,
+            loupe_mode > 0.5,
         );
-        let blue_displacement = achromatic_displacement + channel_lens_displacement(
-            sampling_position,
-            d,
-            lens_refraction,
-            1.0 + index_spread,
-            refraction_curve,
-            transmission_refraction,
-            optical_zoom,
-            zoom_anchor,
-            loupe_mode,
-            loupe_activity,
-            loupe_magnification,
-            fold_displacement,
+        let blue_path = sample_wcksrd_path(
+            map,
+            uv,
+            tex_size,
+            achromatic_displacement + channel_lens_displacement(
+                sampling_position,
+                d,
+                lens_refraction,
+                1.0 + index_spread,
+                refraction_curve,
+                transmission_refraction,
+                optical_zoom,
+                zoom_anchor,
+                loupe_mode,
+                loupe_activity,
+                loupe_magnification,
+                fold_displacement,
+            ),
+            wcksrd_blur_radius,
+            loupe_mode > 0.5,
         );
-        var red_path = transmitted_path;
-        if any(red_displacement != transmitted_displacement) {
-            red_path = sample_wcksrd_path(
-                map,
-                uv,
-                tex_size,
-                red_displacement,
-                wcksrd_blur_radius,
-                loupe_mode > 0.5,
-            );
-        }
-        var blue_path = transmitted_path;
-        if any(blue_displacement != transmitted_displacement) {
-            blue_path = sample_wcksrd_path(
-                map,
-                uv,
-                tex_size,
-                blue_displacement,
-                wcksrd_blur_radius,
-                loupe_mode > 0.5,
-            );
-        }
         rgb = vec3<f32>(red_path.r, rgb.g, blue_path.b);
     }
     if fold_absorb > 0.0 {
