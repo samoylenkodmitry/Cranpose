@@ -1217,3 +1217,8 @@ self time, with short stack captures only where needed.
 ## Reading a block with `grep -v '//'` hides the comment lines an exact-match edit needs (2026-09-06)
 
 The dispersion block of `liquid_glass.wgsl` was read through `grep -v '^\s*//'` to skip its comments, then edited with a Python `assert source.count(block) == 1` anchor built from that filtered text. The anchor never matched: eleven comment lines sit between `if dispersion_strength > 0.0 {` and `let index_spread`, and the assertion aborted before writing, so a whole proof chain ran on the unedited shader (green, "mutants" green, restore of a file that was never written) and reported success. Read the exact bytes (`sed -n`) before building an anchor, or anchor on the two comment-free fragments either side of a comment run and substitute each separately; a chain that edits must check `git diff --stat` before it tests.
+
+## Main's headless helper disables segment surfaces (2026-09-06)
+
+Set `CRANPOSE_SEGMENT_SURFACE` after constructing the headless renderer,
+and assert nonzero cache composites before interpreting a cache comparison.
