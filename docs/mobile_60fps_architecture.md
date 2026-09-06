@@ -17,6 +17,14 @@ unit. Removing layout identity fails the shader probe; restoration passes with
 source hashes verified. The 46-binary Metal renderer suite also passes; final
 combined platform and device comparisons follow the shared merge.
 
+The final pure `a5710463` snapshot subsequently passes `just test`, native,
+wasm and Android Clippy, release web, release Android, and both CI robot
+partitions on Linux, including all four framebuffer capture tests. The exact
+iOS Clippy recipe also passes on Macm3. Source inventories are verified around
+the Linux recipes. Huawei Megaboss favors this snapshot against freshly rebuilt
+main in every pair; the other three final default workload comparisons remain
+required. These gates do not establish the unmet 60 FPS target.
+
 The two-owner storage experiment remains outside the active branch after a
 Huawei full-scroll regression. The ordered kind-range candidate is isolated,
 with exact pixel proofs passing on Macm3 and the watch. Watch proof counts are
@@ -84,7 +92,7 @@ rounding fact must remain visible in the evidence.
 
 | Workload | Evidence | Implication |
 | --- | --- | --- |
-| Huawei Megaboss | Earlier branch runs reach about 59.95 displayed fps | Preserve this result while fixing the watch; repeat on the combined build |
+| Huawei Megaboss | Final pure shared-a571 holds 59.812–59.875 FPS against fresh main's 56.485–57.657 across all eight valid legs, 41–46 C | Every pair favors the combined build by 2.177–3.389 FPS; preserve it while closing the other workloads |
 | Watch Megaboss | Integrated hot B A B A: 16.22 / 18.34 / 16.11 / 18.34 fps, B = shared runtime, A = main; 43.3–45.0 C | Acceptance fails; recover the lost performance before another runtime checkpoint is accepted |
 | Watch Showcase header | About 21.7 ms GPU before CPU blur kernels; glass about 9.5–11 ms in removal experiments | Reduce useful shading work and redundant evaluation; this is not evidence about cards during full scroll |
 | Huawei Showcase launch | Main 23.62 fps, checkpoint 3f948657 23.48 fps at 34 C | Earlier renderer changes provide no measured launch gain here |
@@ -381,7 +389,7 @@ joins the shared branch:
 | Fable | Opaque page prefix | Exact in-place capture and same-format reuse are committed as `e520addf`. Full-scroll cache-toggle means are 38.75 versus 41.88 FPS on Huawei; the watch's hot adjacent pairs gain about 2.1–2.2 FPS, with a negative thermal-crossing pair retained. Default combined-build acceptance against main remains required. |
 | Fable | Backdrop admission and draw order | Commit `64107979` pins the original source atlas and sampling coordinates, with one budget/lifetime entry per allocation. Every backdrop awaiting capture blocks later drawing in its capture region. Exact focused comparisons, the full renderer suite and Clippy pass; the combined Linux workspace run follows integration. |
 | Codex | Recording storage lifetime | The both-owner eligibility experiment restores 1,900/1,920 reuses and passes red-proven held-snapshot/clear tests, but loses about seven percent in Huawei's hot full-scroll pairs. It is stashed outside the active branch. Storage counters are insufficient adoption evidence. |
-| Codex | Repeated arc calculations | The exact eight-entry half-sweep cache reduces the full watch drawing/finish/reuse CPU probe by roughly 0.27 ms. Interleaving and eviction tests have deliberately wrong-slot RED and restored GREEN proofs. A larger radius/sweep template is rejected: even 98.18% hits increase the full probe from about 7.00 to 10.18 ms. |
+| Codex | Repeated arc calculations | The exact eight-entry half-sweep cache reduces the synthetic GPU-column-derived drawing/finish/reuse fixture by roughly 0.27 ms. This is a component measurement, not an original-argument app replay. Interleaving and eviction tests have deliberately wrong-slot RED and restored GREEN proofs. A larger radius/sweep template is rejected: even 98.18% hits increase that fixture from about 7.00 to 10.18 ms. |
 | Codex | Pipeline readiness | Vulkan specialization compiles on a bounded worker while a correct general blend/tier pipeline draws. Pending-to-ready pixels are exact on watch and Linux. Shared-071 versus candidate Huawei Megaboss stays at about 59.9 FPS; hot watch Megaboss pairs are effectively flat near 25.1 FPS. The corrected Huawei full-scroll comparison favors the candidate in every pair by +0.663–2.247 FPS. Watch full scroll finishes at about 29.6–29.8 FPS on both arms, with the early thermal crossing retained. Main-versus-combined acceptance remains required. |
 
 The clean watch profile, with expensive fill-area diagnostics disabled, has
@@ -466,14 +474,15 @@ stack, calls `push_shape`, then copies the body and curve through another stack
 temporary before writing the owned columns. This is a concrete repeated-data
 boundary, distinct from allocation reuse and shader work.
 
-First remove the call boundary in an isolated build and measure the complete
-app with the same source otherwise. If it saves meaningful work, compare the
-resulting machine code with a direct column writer; preserve materialized source
-arguments, every brush and blend fact, semantic segment classes and fingerprint
-bytes. A larger recording rewrite requires that evidence. Worker queues add
-input ownership and publication costs and remain a lower-ranked option until
-this copy boundary is resolved. No speedup is assumed from fewer source lines
-or fewer conceptual copies.
+The isolated one-attribute inline experiment removes that call in the ARMv7
+binary and reduces the caller's local stack space from 160 to 144 bytes. Both
+graphics suites and the final combined Metal span, variant and prefix pixel
+tests pass. Its complete watch ABAB/BABA comparison gives hot B-minus-A pairs
+of -0.081719, -0.026003 and +0.032120 FPS near 27.6 FPS. The early thermal
+crossing loses 6.705025 FPS and remains in the evidence. The change has no
+measured gain and is rejected. Removing the call boundary does not justify a
+larger direct-column rewrite. Worker queues would additionally pay input
+ownership and publication costs; they still require a complete-path prototype.
 
 The previous GPU-column-derived CPU fixtures are synthetic, not original-argument
 replays. Use actual ArenaRenderer calls or a complete source capture for the
@@ -482,3 +491,45 @@ next producer experiment. The fragment radius-hoist probe is rejected after
 pass the same fractional-scale pixel contract before timing or integration.
 
 A second conservative census tests the captured rings against radial clip bounds. None of the 15,161 arc records has the viewport entirely inside its hole or outside its outer radius, so it supplies no culling opportunity. Only 15 full GPU records are duplicates; no duplicate-work optimization is supported by that count.
+
+### Consecutive-frame data and the next ownership decision
+
+A new census calls the unchanged application's `ArenaRenderer` and `GameSession`
+at 204 by 204 logical pixels and density 2. It compares actual consecutive
+recordings, including all primitive kinds, after one second of warm-up. This
+is a data census at fixed update rates, not a device FPS measurement.
+
+| Update rate | Frames | Entire body column unchanged | Equal bodies at the same index | Body bytes requiring current 4 KiB uploads | Curve bytes requiring uploads |
+| --- | --- | --- | --- | --- | --- |
+| 60/s | 540 | 51 | 46.77% | 62.19% | 85.33% |
+| 20/s | 180 | 2 | 44.12% | 65.62% | 92.25% |
+
+`RunBuffers::write_changed` already compares 4 KiB chunks and joins adjacent
+changed chunks. Both body and curve copies have a median of one range per
+frame. `CommandRecorder::reusing` retains free capacities but `finish` creates
+a new recorder `Arc`; its pointer fast path applies to an unchanged published
+recording, not to a freshly recorded generation. Sharing a body-column identity
+would still require proving equality while constructing those generations.
+The census does not support treating dynamic Megaboss as angle-only drawing,
+and moving the same comparison into recording does not by itself remove work.
+
+The captured 15,161-arc stream also alternates butt and round caps across 4,259
+ranges, none longer than twelve records. Additional cap-specific draw calls
+have no long homogeneous ranges to exploit. No cap specialization or broad
+body-column cache is proposed from this evidence.
+
+### Glass tap gates under device verification
+
+Fable's isolated `7f306f6b` gates the plain backdrop sample and the five-tap
+reflection path by their existing output weights. It retains the plain sample
+for either resting or outer output; reflected outer colour does not feed the
+face colour. Explicit texture sampling has no implicit derivative dependency.
+Independent review finds no finite-input gate error. Frozen-reference tests
+pass on Metal, and three live-tap removal mutants fail before restoration.
+On Adreno, all five reference tests pass, all five fail when live reflection
+taps are removed, and all five pass after restoration. Linux repeats the same
+fixed/broken/restored proof with verified source inventories. The native watch
+log retains wgpu's unconditional warning that the adapter lacks
+`DEPTH_BIAS_CLAMP`; that capability is not used by these tests. Default
+full-scroll FPS remains required before adoption.
+This unit preserves the material equations, coordinates and sample levels.

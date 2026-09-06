@@ -1275,3 +1275,66 @@ for the default app FPS matrices above. The eight-sweep unit has independent
 bit-preservation tests and real application comparisons. Further producer
 experiments must use the actual ArenaRenderer calls or a capture retaining
 every original argument and shape kind.
+
+## Shared-a571 call-boundary removal: no measured gain
+
+A is `kind-a571`; B is the identical source inventory except for
+`#[inline(always)]` on private `push_shape`. Both use accepted runtime `a5710463`
+plus the isolated kind-range candidate. All 70 application source files remain
+unchanged. Native binaries for both ABIs are rebuilt and APK library hashes
+verified. The ARMv7 call disappears and the caller's local stack reservation
+shrinks from 160 to 144 bytes. Both graphics unit suites pass, as do the final
+combined Metal span, variant and prefix tests.
+
+Default watch Megaboss, eight full-minute legs, ABAB then BABA, no cooling:
+
+| Leg | Variant | FPS | Temperature C |
+| --- | --- | --- | --- |
+| 1 | A | 47.622646 | 40.5 → 41.6 |
+| 2 | B | 40.917621 | 41.8 → 42.6 |
+| 3 | A | 27.656329 | 42.5 → 42.8 |
+| 4 | B | 27.574609 | 42.7 → 42.9 |
+| 5 | B | 27.603849 | 42.8 → 42.9 |
+| 6 | A | 27.629851 | 42.7 → 42.9 |
+| 7 | B | 27.632235 | 42.7 → 43.0 |
+| 8 | A | 27.600115 | 42.8 → 43.0 |
+
+All process and scene checks pass. Adjacent B-minus-A pairs are -6.705025,
+-0.081719, -0.026003 and +0.032120 FPS. The hot pairs are effectively flat;
+the early thermal crossing is retained. The experiment is rejected as having
+no measured benefit and remains outside the shared runtime.
+
+## Actual producer data census
+
+The unchanged application's public drawing producer emits 16,958–17,527 shape
+records per sampled frame. At 20 updates/s, two of 180 post-warm-up recordings
+have an entirely unchanged body column; 44.12% of bodies equal the previous
+record at the same index. At 60 updates/s, those counts are 51/540 and 46.77%.
+Existing 4 KiB comparison already avoids 34.38% and 37.81% of body upload bytes,
+respectively, with a median of one merged upload range for each column.
+This is a fixed-rate data census, not an application timing or FPS result.
+It rejects the premise that most of this workload can share a whole immutable
+body column merely because angles animate.
+
+## Final shared-a571 versus fresh main: Huawei Megaboss
+
+A is the audited fresh-main `0d195313` rebuild; B is the pure shared runtime
+`a5710463`, with neither held ownership reuse nor kind spans. Both unchanged-app
+APKs use the same host and audited native libraries. Default settings, native
+resolution, sixty seconds per leg, ABAB then BABA, no cooling wait.
+
+| Leg | Variant | FPS | Temperature C |
+| --- | --- | --- | --- |
+| 1 | A | 57.075488 | 45.0 → 46.0 |
+| 2 | B | 59.811924 | 46.0 → 43.0 |
+| 3 | A | 57.656814 | 43.0 → 44.0 |
+| 4 | B | 59.833693 | 44.0 → 43.0 |
+| 5 | B | 59.854798 | 43.0 → 42.0 |
+| 6 | A | 56.529199 | 42.0 → 42.0 |
+| 7 | B | 59.874835 | 42.0 → 41.0 |
+| 8 | A | 56.485458 | 41.0 → 41.0 |
+
+All scene and process checks pass. B-minus-A pairs are +2.736436, +2.176879,
++3.325599 and +3.389377 FPS. This comparison favors the final shared runtime
+in every pair and places Huawei Megaboss near its display limit. It does not
+establish acceptance for watch Megaboss or either full-scroll Showcase workload.
