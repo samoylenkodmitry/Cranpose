@@ -8,7 +8,7 @@ use cranpose_render_common::graph::{ProjectiveTransform, RenderGraph, RenderNode
 use cranpose_render_wgpu::CapturedFrame;
 use cranpose_ui_graphics::{
     Brush, Color, GraphicsLayer, LIQUID_GLASS_WGSL, Point, Rect, RenderEffect, RuntimeShader,
-    SubstrateSpec, TileMode,
+    TileMode,
 };
 use support::{brush_rect, solid_rect};
 
@@ -234,17 +234,19 @@ fn variants(source: &str) -> RenderGraph {
     support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children)
 }
 
-fn with_substrates(effect: RenderEffect, substrates: Vec<SubstrateSpec>) -> RenderEffect {
-    match effect {
-        RenderEffect::Shader { mut shader } => {
-            shader.set_substrates(substrates);
-            RenderEffect::Shader { shader }
-        }
-        other => other,
-    }
+fn without_adaptive_block(source: &str) -> String {
+    let start = source
+        .find("    if adaptive_frost > 0.0 {\n")
+        .expect("the adaptive frost block");
+    let end = source[start..]
+        .find("\n    }\n")
+        .expect("the adaptive frost block's end")
+        + start
+        + "\n    }\n".len();
+    format!("{}{}", &source[..start], &source[end..])
 }
 
-fn frosted_card(activity: f32, substrates: Option<Vec<SubstrateSpec>>) -> RenderGraph {
+fn frosted_card(activity: f32, source: &str) -> RenderGraph {
     let colors = LiquidColors::dark(Color::from_rgb_u8(120, 140, 255));
     let mut children = backdrop();
     let node = rect(24.0, 20.0, 300.0, 200.0);
@@ -259,17 +261,7 @@ fn frosted_card(activity: f32, substrates: Option<Vec<SubstrateSpec>>) -> Render
                 ..GlassDynamics::default()
             },
         );
-    let effect = match substrates {
-        Some(substrates) => with_substrates(effect, substrates),
-        None => effect,
-    };
-    children.push(glass_layer(
-        node,
-        effect,
-        1.0,
-        Vec::new(),
-        LIQUID_GLASS_WGSL,
-    ));
+    children.push(glass_layer(node, effect, 1.0, Vec::new(), source));
     support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children)
 }
 
@@ -372,29 +364,35 @@ fn a_lens_variant_and_a_resting_card_match_the_reference_shader() {
 }
 
 #[test]
-fn a_resting_frosted_glass_reads_no_substrate() {
+fn a_resting_frosted_glass_never_runs_its_adaptive_block() {
     let Ok(mut renderer) = support::headless_renderer() else {
         eprintln!("skipping (headless WGPU init failed)");
         return;
     };
-    let blur = vec![SubstrateSpec::Blur { radius_px: 24.0 }];
-    let resting = capture(&mut renderer, frosted_card(0.0, None), 1.0);
-    let resting_forced = capture(&mut renderer, frosted_card(0.0, Some(blur)), 1.0);
-    let differing = support::differing_pixels(FRAME_WIDTH, &resting.pixels, &resting_forced.pixels);
+    let cut = without_adaptive_block(LIQUID_GLASS_WGSL);
+    assert!(
+        cut.len() < LIQUID_GLASS_WGSL.len()
+            && LIQUID_GLASS_WGSL.contains("let adaptive_sample = sample_adaptive_neighborhood(")
+            && !cut.contains("let adaptive_sample = sample_adaptive_neighborhood("),
+        "the cut source must have lost the adaptive read and nothing else"
+    );
+    let resting = capture(&mut renderer, frosted_card(0.0, LIQUID_GLASS_WGSL), 1.0);
+    let resting_cut = capture(&mut renderer, frosted_card(0.0, &cut), 1.0);
+    let differing = support::differing_pixels(FRAME_WIDTH, &resting.pixels, &resting_cut.pixels);
     assert!(
         differing.is_empty(),
-        "a resting glass returns before its adaptive block, so a substrate handed to it \
-         must change nothing: {}",
+        "a resting glass returns before its adaptive block, so the shipped shader and the \
+         same source without that block must agree at the same capture geometry: {}",
         support::describe_differing(&differing)
     );
     assert!(
         support::distinct_colors(&resting.pixels) > 64,
         "the resting render is too flat to prove anything"
     );
-    let active = capture(&mut renderer, frosted_card(0.5, None), 1.0);
-    let active_bare = capture(&mut renderer, frosted_card(0.5, Some(Vec::new())), 1.0);
+    let active = capture(&mut renderer, frosted_card(0.5, LIQUID_GLASS_WGSL), 1.0);
+    let active_cut = capture(&mut renderer, frosted_card(0.5, &cut), 1.0);
     assert!(
-        !support::differing_pixels(FRAME_WIDTH, &active.pixels, &active_bare.pixels).is_empty(),
-        "an active glass reads its substrate, so the same comparison must see it"
+        !support::differing_pixels(FRAME_WIDTH, &active.pixels, &active_cut.pixels).is_empty(),
+        "an active glass runs the block, so the same comparison must see it"
     );
 }

@@ -2247,6 +2247,28 @@ substrate's blur triples are the second cost on both devices (+3.4 to
 +3.9 on the watch, +1.7 to +6.1 on the Mate 20 X). The header blur and
 text are within the noise on both.
 
+## A resting glass declares no frost substrate, and what that moves on Adreno (2026-09-06)
+
+A material at activity 0 returns before its adaptive block, so the blur
+substrate its frost declared was rendered every frame and never read;
+`specialize_liquid_glass` now declares the substrate only when the
+activity uniform is positive (`LiquidCard` and any widget resting at 0;
+the showcase has no resting glass). The claim "never read" is proven
+at equal capture geometry: `glass_reference_shader` renders a resting
+frosted card with the shipped shader and with the same source minus its
+adaptive block and requires zero differing pixels, and renders the same
+card at activity 0.5 both ways and requires a difference, so the
+comparison is shown to see the block when it runs. The first version of
+that test compared "no substrate" against "substrate forced on", and on
+Adreno it failed by five pixels one level apart: a member with a blur
+substrate gets its capture expanded by the blur margin, so omitting the
+substrate shrinks and shifts the capture, and Adreno's texture
+coordinate rounding then moves a few pixels where Metal and llvmpipe do
+not. That is the rule's real effect on a resting glass's picture: exact
+against the same build's never-cache reference, one level off at a few
+pixels against a build that still declared the substrate, on Adreno.
+The shared tree holds the rule until that trade is judged.
+
 ## The default refraction curve folds; every other value stays a uniform (2026-09-06)
 
 Uniform 94 is the ray-return exponent, `refraction_curve * activity` at
