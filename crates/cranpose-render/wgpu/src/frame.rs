@@ -698,8 +698,14 @@ fn log_stage(stage: usize, items: &[&PendingBackdrop<'_>]) {
             Some(batched) => (batched.blur().is_some(), batched.substrates().len()),
             None => (false, 0),
         };
+        let folds: Vec<&str> = match item.batched {
+            Some(BatchedEffect::Shader(shader) | BatchedEffect::BlurThenShader(_, shader)) => {
+                shader.overrides().iter().map(|(name, _)| *name).collect()
+            }
+            _ => Vec::new(),
+        };
         log::warn!(
-            "[stage-diag] stage={stage} z={} capture=({:.0},{:.0},{:.0},{:.0}) visible=({:.0},{:.0},{:.0},{:.0}) batched={} blur={blur} substrates={substrates} key={:?}",
+            "[stage-diag] stage={stage} z={} capture=({:.0},{:.0},{:.0},{:.0}) visible=({:.0},{:.0},{:.0},{:.0}) batched={} blur={blur} substrates={substrates} folds={folds:?} key={:?}",
             item.z,
             capture.x,
             capture.y,
