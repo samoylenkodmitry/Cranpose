@@ -4,7 +4,7 @@ How a `RenderGraph` becomes pixels in the WGPU renderer, as it is now. The
 pixel-stability contract every rule serves is
 [liquid_scroll_pixel_stability.md](liquid_scroll_pixel_stability.md). Each
 rule names the test that fails without it; a rule without a test is not a
-rule. Measurements are in the last two sections only.
+rule. Numbers live in the last three sections only.
 
 ## Shape of a frame
 
@@ -347,10 +347,11 @@ step; every GPU reduction moves the plateau. Legs and reports live under
   1581e056): exact everywhere, lost every stable watch pair (-2.2, -1.8,
   -2.0); on Adreno a divergent branch around a fetch costs more than the
   fetch and stops the compiler issuing fetches early.
-- Declaring no substrate for a resting glass (reverted in 54376db3): the declaration is capture geometry; omitting it moved five
-  Adreno pixels one level against every build that declared it. The
-  exact removal keeps the geometry and skips only the blur passes, a
-  planner contract not designed.
+- Declaring no substrate for a resting glass (reverted in 54376db3): the
+  declaration is capture geometry; omitting it moved five Adreno pixels
+  one level against every build that declared it. The exact removal
+  keeps the geometry and skips only the blur passes, a planner contract
+  not designed.
 - The refraction curve as a value-carrying constant (branch
   `render/curve-probe`, d82d86a8): `refraction_curve * activity` is a
   public, animatable value, so every distinct float would key a pipeline
