@@ -7,8 +7,9 @@ use cranpose_liquid::{Glass, GlassDynamics, LiquidColors, LiquidShape};
 use cranpose_render_common::graph::{ProjectiveTransform, RenderGraph, RenderNode};
 use cranpose_render_wgpu::CapturedFrame;
 use cranpose_ui_graphics::{
-    Brush, Color, GraphicsLayer, LIQUID_GLASS_WGSL, Point, Rect, RenderEffect, RuntimeShader,
-    TileMode,
+    Brush, Color, GLASS_ACTIVITY_UNIFORM, GLASS_ADAPTIVE_FROST_UNIFORM, GraphicsLayer,
+    LIQUID_GLASS_WGSL, Point, Rect, RenderEffect, RuntimeShader, SubstrateSpec, TileMode,
+    specialize_liquid_glass,
 };
 use support::{brush_rect, solid_rect};
 
@@ -216,6 +217,82 @@ fn variants(source: &str) -> RenderGraph {
     support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children)
 }
 
+fn without_adaptive_block(source: &str) -> String {
+    let start = source
+        .find("    if adaptive_frost > 0.0 {\n")
+        .expect("the adaptive frost block");
+    let end = source[start..]
+        .find("\n    }\n")
+        .expect("the adaptive frost block's end")
+        + start
+        + "\n    }\n".len();
+    format!("{}{}", &source[..start], &source[end..])
+}
+
+fn with_substrates(effect: RenderEffect, substrates: Vec<SubstrateSpec>) -> RenderEffect {
+    match effect {
+        RenderEffect::Shader { mut shader } => {
+            shader.set_substrates(substrates);
+            RenderEffect::Shader { shader }
+        }
+        other => other,
+    }
+}
+
+fn frosted_at(effect: RenderEffect, frost: f32, activity: f32) -> RenderEffect {
+    match effect {
+        RenderEffect::Shader { mut shader } => {
+            shader.set_float(GLASS_ADAPTIVE_FROST_UNIFORM, frost);
+            shader.set_float(GLASS_ACTIVITY_UNIFORM, activity);
+            specialize_liquid_glass(&mut shader);
+            RenderEffect::Shader { shader }
+        }
+        other => other,
+    }
+}
+
+fn declared_substrates(effect: &RenderEffect) -> Vec<SubstrateSpec> {
+    match effect {
+        RenderEffect::Shader { shader } => shader.substrates().to_vec(),
+        _ => Vec::new(),
+    }
+}
+
+fn frosted_card(
+    frost: f32,
+    activity: f32,
+    source: &str,
+    substrates: Option<Vec<SubstrateSpec>>,
+) -> RenderGraph {
+    let colors = LiquidColors::dark(Color::from_rgb_u8(120, 140, 255));
+    let mut children = backdrop();
+    let node = rect(24.0, 20.0, 300.0, 200.0);
+    let effect = card_glass(LiquidShape::RoundedRect(18.0))
+        .adaptive_frost(Color::from_rgb_u8(40, 34, 70), 0.42)
+        .backdrop_effect(
+            &colors,
+            1.5,
+            GlassDynamics {
+                activity: Some(activity),
+                resting_tint: Some(Color::from_rgba_u8(40, 40, 80, 120)),
+                ..GlassDynamics::default()
+            },
+        );
+    let effect = frosted_at(effect, frost, activity);
+    let expected = vec![SubstrateSpec::Blur { radius_px: 24.0 }];
+    assert_eq!(
+        declared_substrates(&effect),
+        if frost > 0.0 { expected } else { Vec::new() },
+        "the control must declare exactly the substrate its frost and density imply"
+    );
+    let effect = match substrates {
+        Some(substrates) => with_substrates(effect, substrates),
+        None => effect,
+    };
+    children.push(glass_layer(node, effect, 1.0, Vec::new(), source));
+    support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children)
+}
+
 fn capture(
     renderer: &mut support::LockedRenderer,
     graph: RenderGraph,
@@ -312,4 +389,83 @@ fn a_lens_variant_and_a_resting_card_match_the_reference_shader() {
             scale,
         );
     }
+}
+
+fn assert_rest_agrees_and_activity_differs(
+    renderer: &mut support::LockedRenderer,
+    claim: &str,
+    rest: (RenderGraph, RenderGraph),
+    active: (RenderGraph, RenderGraph),
+) {
+    let resting = capture(renderer, rest.0, 1.0);
+    let other = capture(renderer, rest.1, 1.0);
+    let differing = support::differing_pixels(FRAME_WIDTH, &resting.pixels, &other.pixels);
+    assert!(
+        differing.is_empty(),
+        "{claim}: {}",
+        support::describe_differing(&differing)
+    );
+    assert!(
+        support::distinct_colors(&resting.pixels) > 64,
+        "the resting render is too flat to prove anything"
+    );
+    let active_a = capture(renderer, active.0, 1.0);
+    let active_b = capture(renderer, active.1, 1.0);
+    assert!(
+        !support::differing_pixels(FRAME_WIDTH, &active_a.pixels, &active_b.pixels).is_empty(),
+        "an active glass runs the block and reads its substrate, so the same comparison must \
+         see it"
+    );
+}
+
+#[test]
+fn a_resting_frosted_glass_never_runs_its_adaptive_block() {
+    let Ok(mut renderer) = support::headless_renderer() else {
+        eprintln!("skipping (headless WGPU init failed)");
+        return;
+    };
+    let cut = without_adaptive_block(LIQUID_GLASS_WGSL);
+    assert!(
+        cut.len() < LIQUID_GLASS_WGSL.len()
+            && LIQUID_GLASS_WGSL.contains("let adaptive_sample = sample_adaptive_neighborhood(")
+            && !cut.contains("let adaptive_sample = sample_adaptive_neighborhood("),
+        "the cut source must have lost the adaptive read and nothing else"
+    );
+    assert_rest_agrees_and_activity_differs(
+        &mut renderer,
+        "a resting glass returns before its adaptive block, so the shipped shader and the same \
+         source without that block must agree at the same capture geometry",
+        (
+            frosted_card(0.42, 0.0, LIQUID_GLASS_WGSL, None),
+            frosted_card(0.42, 0.0, &cut, None),
+        ),
+        (
+            frosted_card(0.42, 0.5, LIQUID_GLASS_WGSL, None),
+            frosted_card(0.42, 0.5, &cut, None),
+        ),
+    );
+}
+
+#[test]
+fn a_resting_frosted_glass_reads_no_substrate() {
+    let Ok(mut renderer) = support::headless_renderer() else {
+        eprintln!("skipping (headless WGPU init failed)");
+        return;
+    };
+    let blur = vec![SubstrateSpec::Blur { radius_px: 24.0 }];
+    assert_rest_agrees_and_activity_differs(
+        &mut renderer,
+        "a resting glass with a positive frost uniform declares its substrate and must render \
+         byte for byte like one whose declaration is made explicit: the declaration sets the \
+         capture geometry, and on Adreno a geometry change moves pixels even where the \
+         substrate is never read",
+        (
+            frosted_card(0.42, 0.0, LIQUID_GLASS_WGSL, None),
+            frosted_card(0.42, 0.0, LIQUID_GLASS_WGSL, Some(blur)),
+        ),
+        (
+            frosted_card(0.42, 0.5, LIQUID_GLASS_WGSL, None),
+            frosted_card(0.42, 0.5, LIQUID_GLASS_WGSL, Some(Vec::new())),
+        ),
+    );
 }

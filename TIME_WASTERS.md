@@ -1111,6 +1111,17 @@ establish equality and cannot claim a free skip from angle animation alone.
   GPU clock values which were never read. The app measurement harness already
   wakes on every UI step; this gap was in the separate offscreen probe.
 
+## zsh runs `for p in $pids` once over the whole string (2026-09-06)
+
+A PID list captured into a variable and looped with `for p in $pids; do
+kill $p; done` under zsh killed nothing, and `kill -9 $left` reported
+"illegal pid: 83786\n83799": zsh does not word-split unquoted
+expansions, so the loop body runs once with the newline-joined string.
+The second time it happened the surviving driver kept swiping a device
+inside another agent's reservation for ninety seconds. List PIDs
+literally, expand with `${=pids}`, or run the loop under `bash -c`, and
+re-check each PID with `ps -o pid= -p <pid>` before reporting anything
+stopped; a "nothing left" line from the same unsplit loop proves nothing.
 
 ## Whole device sequences need an exclusion lock
 

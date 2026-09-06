@@ -151,8 +151,10 @@ pub const LIQUID_GLASS_SPECIALIZATIONS: &[LiquidGlassSpecialization] = &[
 /// overrides for features that have become active. The compiled material carries only
 /// the features it uses. Byte-exact: a raised flag substitutes the value the
 /// uniform already holds, and the interior guard skips only terms whose
-/// weight is zero. An active adaptive frost declares the blurred substrate
-/// its neighbourhood reads.
+/// weight is zero. An adaptive frost declares the blurred substrate its
+/// neighbourhood reads whatever the activity: the declaration also sets the
+/// member's capture geometry, so a resting material keeps it although its
+/// shader returns before the read.
 pub fn specialize_liquid_glass(shader: &mut RuntimeShader) {
     let uniforms: Vec<f32> = shader.uniforms().to_vec();
     for specialization in LIQUID_GLASS_SPECIALIZATIONS {
@@ -620,6 +622,20 @@ mod tests {
             panic!("liquid glass must be one runtime shader");
         };
         shader.overrides().iter().map(|(flag, _)| *flag).collect()
+    }
+
+    #[test]
+    fn a_resting_glass_keeps_its_substrate_declaration() {
+        let mut shader = RuntimeShader::new(LIQUID_GLASS_WGSL);
+        shader.set_float(GLASS_ADAPTIVE_FROST_UNIFORM, 0.42);
+        shader.set_float(GLASS_EFFECT_DENSITY_UNIFORM, 2.0);
+        shader.set_float(GLASS_ACTIVITY_UNIFORM, 0.0);
+        specialize_liquid_glass(&mut shader);
+        assert_eq!(
+            shader.substrates().len(),
+            1,
+            "the declaration sets the capture geometry, which must not follow activity"
+        );
     }
 
     #[test]
