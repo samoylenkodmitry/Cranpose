@@ -1215,3 +1215,63 @@ padding unit. Dropping sampling-layout identity fails the shader probe;
 restoration passes and source hashes match. The earlier 528 snapshot with
 readiness passes full workspace tests, native/wasm Clippy, release web, and
 both CI robot partitions including all four framebuffer capture tests.
+
+
+## Fresh-main versus isolated kind ranges on watch Megaboss
+
+A is audited main0d195313; B is layout528-kind-spans, with the ownership
+experiment absent. Unchanged apps, native resolution, default runtime settings,
+sixty seconds per leg, ABAB then BABA with no cooling wait. All eight process
+and scene checks pass.
+
+| Leg | Variant | FPS | Temperature C |
+| --- | --- | --- | --- |
+| 1 | A | 49.367088 | 34.9 → 37.4 |
+| 2 | B | 53.331658 | 38.0 → 40.2 |
+| 3 | A | 42.808855 | 41.0 → 41.9 |
+| 4 | B | 40.985991 | 41.8 → 42.6 |
+| 5 | B | 27.613193 | 42.8 → 42.9 |
+| 6 | A | 28.609143 | 42.7 → 43.1 |
+| 7 | B | 27.603141 | 43.0 → 43.2 |
+| 8 | A | 26.069040 | 43.0 → 43.3 |
+
+Adjacent B-minus-A pairs: +3.964569, -1.822864, -0.995950, +1.534100 FPS.
+
+The hot candidate is stable at 27.613 and 27.603 FPS; adjacent main is 28.609
+and 26.069 FPS. One hot pair loses 3.48% and the other gains 5.88%. The gap is
+smaller than the readiness-only comparison, but no-regression acceptance is
+not established. All thermal crossings remain in the data. Kind ranges stay
+isolated pending further work and full final-source comparisons.
+
+
+### Current candidate attribution and rejected arc invariant move
+
+A separate 30-second sampling run of layout528-kind-spans, with fill-area
+diagnostics off, has median UI update 19.015 ms, scene production 12.055 ms,
+framework frame 13.81 ms, run upload 1.85 ms and renderer graph execution
+6.89 ms. The 29 GPU windows have median span 17.540 ms
+(range 17.010–24.360 ms). These stages overlap and their
+percentiles are not added. The diagnostic begins at 39.9 C and is not a
+steady-FPS acceptance comparison. Both CPU and GPU still exceed the budget.
+
+An external shader probe moves `(outer + inner) * 0.5` and
+`max((outer - inner) * 0.5, 0.0)` from each fragment to the flat vertex output.
+Input records, strip geometry, draw order and varying size are unchanged.
+At scale 0.75 its 665,856 bytes match; at 1.25, 24 channel bytes differ by one
+level on Adreno 702. That rejects the change before timing or production
+integration. Identical source arithmetic across shader stages does not
+establish identical pixel results. The extended endpoint variant is not
+adopted. The probe uses wgpu 29.0.4; the application uses its audited lockfile.
+
+
+### Scope of the earlier standalone CPU recorder numbers
+
+The early `record-bench` fixtures reconstruct a synthetic arc stream from
+captured GPU body/curve columns. Those columns omit the original source
+arguments. A later flag census confirms all 15,161 captured entries are
+arcs; the source reconstruction still cannot recover the omitted argument bits. Its paired recorder timings remain measurements of that synthetic
+workload; they are not a bit-faithful replay of the application or a substitute
+for the default app FPS matrices above. The eight-sweep unit has independent
+bit-preservation tests and real application comparisons. Further producer
+experiments must use the actual ArenaRenderer calls or a capture retaining
+every original argument and shape kind.

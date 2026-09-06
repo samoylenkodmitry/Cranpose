@@ -1041,3 +1041,26 @@ workspace member's source, not only a root `src` directory which may not exist.
 Two full renderer suites remained alive after layout snapshots changed, with multiple detached waiters reading the same overwritten log. A success marker after a grep pipeline is not the test command's exit status. Give each immutable snapshot a unique result path, retain actual exit codes, and terminate only verified superseded jobs. Run focused mutation proofs during review, then one full gate chain over the final source. Do not launch another full suite merely because a private function or its test changed while the preceding suite still runs.
 
 The held kind-range implementation predates opaque-prefix record windows. Applying its draw-loop changes blindly would redraw a prefix already supplied by the cache. Window offsets are relative to a run while segment starts are absolute table indices; preserve both and test nonzero, noncontiguous starts plus buffer continuation. A specialization image test must wait until its specialized pipeline actually draws, or it may compare two general fallback frames.
+
+
+### Moving arc constants across shader stages can change pixels
+
+The radius/half-width expressions from `sdf_arc_band` look invariant per
+primitive, but moving them to `shape_output` changes 24 channel bytes by one
+level at scale 1.25 on Adreno 702. Scale 0.75 alone was exact. Preserve the
+existing stage boundary until a design passes the complete fractional-scale
+contract; matching source expressions is insufficient. Banded geometry also
+still consumes `radii.xy/zw` in fragment coverage, so it cannot skip CPU arc
+trigonometry merely because its strip vertices use `arc_normalized`.
+
+
+### Worktree stashes share a list and can include the staged index
+
+A bare stash pop in Fable's worktree selected Codex's held storage experiment.
+Its tree also included already-staged readiness and documentation changes,
+despite the work being described as a one-file storage experiment. The conflict
+kept the entry and the clean shared source was restored. Inspect the message
+and tree first, resolve the stash to its immutable commit hash, and extract
+only the intended file when other staged work is present. Never assume a
+worktree has a private stash list or that a remembered index still names the
+same experiment.
