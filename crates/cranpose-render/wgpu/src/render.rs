@@ -3332,7 +3332,17 @@ impl GpuRenderer {
         view: &wgpu::TextureView,
         load_op: wgpu::LoadOp<wgpu::Color>,
     ) {
-        let pass = recorder.begin_color_pass("Clear Pass", view, load_op);
+        self.empty_pass(recorder, "Clear Pass", view, load_op);
+    }
+
+    pub(crate) fn empty_pass<C: FrameCommandRecorder>(
+        &self,
+        recorder: &mut C,
+        label: &'static str,
+        view: &wgpu::TextureView,
+        load_op: wgpu::LoadOp<wgpu::Color>,
+    ) {
+        let pass = recorder.begin_color_pass(label, view, load_op);
         drop(pass);
         recorder.record_pass();
     }

@@ -652,6 +652,8 @@ static NO_EFFECT_DOMAINS: DebugToggle = DebugToggle::new("CRANPOSE_NO_EFFECT_DOM
 static NO_FILL_CACHE: DebugToggle = DebugToggle::new("CRANPOSE_NO_FILL_CACHE");
 const ABLATION_LOG_PERIOD: u32 = 600;
 static NO_BACKDROP_CACHE: DebugToggle = DebugToggle::new("CRANPOSE_NO_BACKDROP_CACHE");
+static PROBE_PASSES: DebugToggle = DebugToggle::new("CRANPOSE_PROBE_PASSES");
+static PROBE_DRAW_PASSES: DebugToggle = DebugToggle::new("CRANPOSE_PROBE_DRAW_PASSES");
 
 fn declared_support(support: Option<Rect>) -> Option<Rect> {
     if NO_EFFECT_DOMAINS.flag() {
@@ -1689,9 +1691,63 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 page: None,
                 described: Vec::new(),
             };
-            self.render_layer(overlay, page, root_scale, wgpu::LoadOp::Load, &beneath)?;
+            self.render_layer(
+                overlay,
+                page.clone(),
+                root_scale,
+                wgpu::LoadOp::Load,
+                &beneath,
+            )?;
         }
+        for _ in 0..PROBE_PASSES.parse::<u32>().unwrap_or(0) {
+            self.renderer.empty_pass(
+                self.recorder,
+                "Probe Pass",
+                page.pass_target().view,
+                wgpu::LoadOp::Load,
+            );
+        }
+        self.probe_draw_passes(&page, root_scale)?;
         self.release_transients();
+        Ok(())
+    }
+
+    fn probe_draw_passes(&mut self, page: &Page, root_scale: f32) -> Result<(), String> {
+        let count = PROBE_DRAW_PASSES.parse::<u32>().unwrap_or(0);
+        if count == 0 {
+            return Ok(());
+        }
+        let blank = self.acquire_transient("Probe Blank", 1, 1);
+        self.renderer.clear_target(
+            self.recorder,
+            &blank.view,
+            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+        );
+        let texel = DeviceRect {
+            x: 0.0,
+            y: 0.0,
+            width: 1.0,
+            height: 1.0,
+        };
+        let blit = page_blit(&blank, [0.0, 0.0], texel, page.rect());
+        let segment = PassSegment {
+            scene: &self.empty_scene,
+            ops: &[],
+            composites: std::slice::from_ref(&blit),
+            offset: page.offset,
+            scissor: None,
+            first_run_window: None,
+        };
+        for _ in 0..count {
+            self.renderer.encode_pass(
+                self.recorder,
+                page.pass_target(),
+                std::slice::from_ref(&segment),
+                wgpu::LoadOp::Load,
+                root_scale,
+                "Probe Draw Pass",
+            )?;
+        }
         Ok(())
     }
 
