@@ -25,6 +25,12 @@ const MIN_BAND_WIDTH_PX: f32 = 1.0;
 const MIN_LINE_WIDTH_PX: f32 = 1.4;
 const LOWER_BOUND_SLACK: f32 = 0.98;
 const PIXEL_MARGIN: f32 = 1.0;
+/// How far past the rim's reach the hole's corner must sit, as a share of
+/// the corner radius left after that reach: the rounded rect inset by the
+/// reach keeps a corner of `corner - rim_high`, and the largest axis-aligned
+/// rectangle inside it touches that arc at 45°, `1 - 1/sqrt(2)` of the
+/// radius in from each edge.
+const CORNER_TANGENT: f32 = 1.0 - std::f32::consts::FRAC_1_SQRT_2;
 
 pub(crate) type Scissor = (u32, u32, u32, u32);
 
@@ -148,7 +154,7 @@ pub(crate) fn split_scissors(
         return None;
     }
     let reach = reach(shader, origin, layer_pixel_rect);
-    let rim_inset = reach.rim_high + reach.corner;
+    let rim_inset = reach.rim_high + (reach.corner - reach.rim_high).max(0.0) * CORNER_TANGENT;
     let interior = pixel_rect(
         (reach.inner_x + reach.interior_inset).floor() - PIXEL_MARGIN,
         (reach.inner_y + reach.interior_inset).floor() - PIXEL_MARGIN,
@@ -249,8 +255,20 @@ mod tests {
             .expect("a wide-cornered card splits");
         let bands: Vec<Scissor> = split.rim.iter().flatten().copied().collect();
         assert_eq!(bands.len(), 4);
-        let (hx0, hy0) = (bands[2].0 + bands[2].2, bands[0].1 + bands[0].3);
-        let (hx1, hy1) = (bands[3].0, bands[1].1);
+        assert_hole_corners_beyond_the_rim(&reach, &bands);
+    }
+
+    fn hole(bands: &[Scissor]) -> (u32, u32, u32, u32) {
+        (
+            bands[2].0 + bands[2].2,
+            bands[0].1 + bands[0].3,
+            bands[3].0,
+            bands[1].1,
+        )
+    }
+
+    fn assert_hole_corners_beyond_the_rim(reach: &Reach, bands: &[Scissor]) {
+        let (hx0, hy0, hx1, hy1) = hole(bands);
         let half = (reach.width * 0.5, reach.height * 0.5);
         let center = (reach.inner_x + half.0, reach.inner_y + half.1);
         for (x, y) in [
@@ -268,6 +286,41 @@ mod tests {
                 reach.rim_high
             );
         }
+    }
+
+    #[test]
+    fn a_short_wide_cornered_card_keeps_a_hole_whose_corners_lie_beyond_the_rim_reach() {
+        let mut shader = plain_card();
+        shader.set_float2(CONTAINER_UNIFORM, 200.0, 70.0);
+        shader.set_float2(CENTER_UNIFORM, 100.0, 35.0);
+        shader.set_float2(SIZE_UNIFORM, 200.0, 70.0);
+        shader.set_float(CORNER_RADIUS_UNIFORM, 20.0);
+        let rect = [0.0, 0.0, 445.0, 156.0];
+        let reach = reach(&shader, (0.0, 0.0), rect);
+        let whole_corner_hole = reach.height - 2.0 * (reach.rim_high + reach.corner);
+        assert!(
+            whole_corner_hole < 16.0,
+            "the case is a card whose hole inset by the whole corner is a sliver: {} px of {}",
+            whole_corner_hole,
+            reach.height
+        );
+        let split = split_scissors(&shader, (0.0, 0.0), rect, (0, 0, 445, 156))
+            .expect("a plain card splits");
+        let bands: Vec<Scissor> = split.rim.iter().flatten().copied().collect();
+        assert_eq!(
+            bands.len(),
+            4,
+            "the tangent inset leaves a hole: {:?}",
+            split.rim
+        );
+        let (hx0, hy0, hx1, hy1) = hole(&bands);
+        assert!(
+            (hx1 - hx0) * (hy1 - hy0) > 445 * 156 / 3,
+            "the hole covers a third of the card: {}x{}",
+            hx1 - hx0,
+            hy1 - hy0
+        );
+        assert_hole_corners_beyond_the_rim(&reach, &bands);
     }
 
     #[test]
