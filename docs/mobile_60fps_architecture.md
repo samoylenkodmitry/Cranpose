@@ -17,6 +17,14 @@ unit. Removing layout identity fails the shader probe; restoration passes with
 source hashes verified. The 46-binary Metal renderer suite also passes; final
 combined platform and device comparisons follow the shared merge.
 
+The final pure `a5710463` snapshot subsequently passes `just test`, native,
+wasm and Android Clippy, release web, release Android, and both CI robot
+partitions on Linux, including all four framebuffer capture tests. The exact
+iOS Clippy recipe also passes on Macm3. Source inventories are verified around
+the Linux recipes. Huawei Megaboss favors this snapshot against freshly rebuilt
+main in every pair; the other three final default workload comparisons remain
+required. These gates do not establish the unmet 60 FPS target.
+
 The two-owner storage experiment remains outside the active branch after a
 Huawei full-scroll regression. The ordered kind-range candidate is isolated,
 with exact pixel proofs passing on Macm3 and the watch. Watch proof counts are
@@ -84,7 +92,7 @@ rounding fact must remain visible in the evidence.
 
 | Workload | Evidence | Implication |
 | --- | --- | --- |
-| Huawei Megaboss | Earlier branch runs reach about 59.95 displayed fps | Preserve this result while fixing the watch; repeat on the combined build |
+| Huawei Megaboss | Final pure shared-a571 holds 59.812–59.875 FPS against fresh main's 56.485–57.657 across all eight valid legs, 41–46 C | Every pair favors the combined build by 2.177–3.389 FPS; preserve it while closing the other workloads |
 | Watch Megaboss | Integrated hot B A B A: 16.22 / 18.34 / 16.11 / 18.34 fps, B = shared runtime, A = main; 43.3–45.0 C | Acceptance fails; recover the lost performance before another runtime checkpoint is accepted |
 | Watch Showcase header | About 21.7 ms GPU before CPU blur kernels; glass about 9.5–11 ms in removal experiments | Reduce useful shading work and redundant evaluation; this is not evidence about cards during full scroll |
 | Huawei Showcase launch | Main 23.62 fps, checkpoint 3f948657 23.48 fps at 34 C | Earlier renderer changes provide no measured launch gain here |
@@ -518,5 +526,10 @@ for either resting or outer output; reflected outer colour does not feed the
 face colour. Explicit texture sampling has no implicit derivative dependency.
 Independent review finds no finite-input gate error. Frozen-reference tests
 pass on Metal, and three live-tap removal mutants fail before restoration.
-Adreno exactness and default full-scroll FPS remain required before adoption.
+On Adreno, all five reference tests pass, all five fail when live reflection
+taps are removed, and all five pass after restoration. Linux repeats the same
+fixed/broken/restored proof with verified source inventories. The native watch
+log retains wgpu's unconditional warning that the adapter lacks
+`DEPTH_BIAS_CLAMP`; that capability is not used by these tests. Default
+full-scroll FPS remains required before adoption.
 This unit preserves the material equations, coordinates and sample levels.

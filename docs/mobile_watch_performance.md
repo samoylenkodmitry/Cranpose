@@ -1315,3 +1315,26 @@ respectively, with a median of one merged upload range for each column.
 This is a fixed-rate data census, not an application timing or FPS result.
 It rejects the premise that most of this workload can share a whole immutable
 body column merely because angles animate.
+
+## Final shared-a571 versus fresh main: Huawei Megaboss
+
+A is the audited fresh-main `0d195313` rebuild; B is the pure shared runtime
+`a5710463`, with neither held ownership reuse nor kind spans. Both unchanged-app
+APKs use the same host and audited native libraries. Default settings, native
+resolution, sixty seconds per leg, ABAB then BABA, no cooling wait.
+
+| Leg | Variant | FPS | Temperature C |
+| --- | --- | --- | --- |
+| 1 | A | 57.075488 | 45.0 → 46.0 |
+| 2 | B | 59.811924 | 46.0 → 43.0 |
+| 3 | A | 57.656814 | 43.0 → 44.0 |
+| 4 | B | 59.833693 | 44.0 → 43.0 |
+| 5 | B | 59.854798 | 43.0 → 42.0 |
+| 6 | A | 56.529199 | 42.0 → 42.0 |
+| 7 | B | 59.874835 | 42.0 → 41.0 |
+| 8 | A | 56.485458 | 41.0 → 41.0 |
+
+All scene and process checks pass. B-minus-A pairs are +2.736436, +2.176879,
++3.325599 and +3.389377 FPS. This comparison favors the final shared runtime
+in every pair and places Huawei Megaboss near its display limit. It does not
+establish acceptance for watch Megaboss or either full-scroll Showcase workload.
