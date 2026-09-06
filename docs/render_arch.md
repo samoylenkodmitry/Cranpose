@@ -2187,6 +2187,16 @@ shallow card by 34 pixels, a one-pixel band at its edge, and nothing
 else. The specialization parity test compares the folded pipeline with
 the general one byte for byte.
 
+**Measured** (rim-only tree against rim plus this flag, same route,
+eight legs, no cooling, unchanged app sources). Mate 20 X: pairs +1.44,
++0.66, -0.52, +1.64 on a 40 fps frame. Pixel Watch 3, on its 24 fps
+plateau at 43 C: stable pairs +0.07 and +0.42; the other two pairs
+straddle throttle steps (31.4 against 25.0 cool-to-hot, 25.0 against
+16.6 into a deeper step) and carry no signal. The flag removes a fetch
+that was dead work, exactly and without a branch, and costs nothing on
+either device; it is not a frame-rate lever on Adreno, where the
+interior's plain fetch was cache-hot.
+
 ## What the showcase frame is made of, by removal (2026-09-06)
 
 `CRANPOSE_ABLATE` (property `debug.cranpose.ablate`, a comma list of
