@@ -1,54 +1,47 @@
 # Mobile 60 FPS: decision sheet
 
-**Target unmet. PR #617 is not ready for main.** Only Cranpose changes; preserve
-native resolution, effects, app sources and image correctness. Compare main
-`0d195313` with shared runtime `37bd0ce8`, integrated by both agents.
+**Target unmet; PR #617 is not ready for main.** Change Cranpose only. Preserve
+native resolution, effects, application code and main's picture correctness.
 
-## Measured checkpoint
+## Checkpoint
 
-Normal policy, unchanged release apps, 60-second legs, ABAB then BABA, no cooling.
-Ranges retain all completed legs; thermal transitions remain part of the result.
+Main `0d195313` versus shared `37bd0ce8`. Release apps; 60-second legs;
+ABAB then BABA without cooling. Heat and failed legs remain in the evidence.
 
-| Workload | Main FPS | Shared FPS | Decision |
+| Workload | Main FPS | Shared FPS | Result |
 | --- | --- | --- | --- |
-| Huawei Megaboss | 57.26–58.38 | 59.84–59.88 | Preserve shared gain |
-| Huawei full scroll | 25.12–29.06 | 39.50–45.30 | Preserve gain; below target |
-| Watch Megaboss | 39.51 down to 15.71 | 36.45 down to 16.82 | Mixed: first two pairs lose 3.06/2.92 FPS, final two gain 1.23/1.11 |
-| Watch full scroll | In progress | In progress | A preflight failure prevents acceptance of this sequence |
+| Huawei Megaboss | 57.26–58.38 | 59.84–59.88 | At the 60 Hz cap |
+| Huawei full scroll | 25.12–29.06 | 39.50–45.30 | Faster; short of 60 |
+| Watch Megaboss | 39.51→15.71 | 36.45→16.82 | First two pairs regress; hot pairs improve; 37.5→44.8°C |
+| Watch full scroll | Three valid pairs favor shared | Eight-leg sequence incomplete | Preflight failure blocks acceptance; below 60 |
 
-CPU profiles are diagnostics, separate from the FPS acceptance runs. Values are
-sample-weighted totals across app threads per presented frame, not energy.
+## Costs that constrain the design
 
-| Workload | Main CPU ms / million cycles | Shared CPU ms / million cycles | Conditions |
-| --- | --- | --- | --- |
-| Huawei Megaboss | 10.32 / 13.64 | 8.08 / 9.14 | 60 seconds; 41→41°C / 41→40°C |
-| Huawei full scroll | 22.13 / 32.54 | 11.56 / 16.29 | 60 seconds; both 35→35°C |
-| Watch Megaboss | 49.74 / 41.26 | 39.82 / 33.26 | Reverse B/A, 30 seconds; 43.3→43.5°C / 43.0→43.5°C |
+- **Watch glass:** shared scroll uses 39.5 ms of GPU work per frame: 32.7 ms
+  in layers and 6.6 ms in blur. Removing blur alone cannot reach 16.7 ms.
+- **Watch Megaboss:** shared needs about 20% fewer CPU cycles than main in both
+  measured orders. Discarding shape fragments gains only 2.0–2.8 FPS at 43–45°C.
+  Remaining frame time does not distinguish CPU, vertex and tiler costs.
+- **Main's reuse matters:** disabling its command feed on Huawei loses
+  2.4/3.5/5.9/5.0 FPS. First-pair upload medians rise 0.35→2.54 MB.
+  Later upload logs are incomplete; the switch changes more than bandwidth.
+- **Repeated construction:** 94% of Huawei scroll's sampled `memcmp` CPU time
+  comes through `RuntimeShader::new`. Watch caller attribution is pending.
 
-Watch CPU cycles also favor shared in the first A/B profile: 33.60M versus 41.98M.
-GPU timings remain thermally confounded: main's draw pass measured about 45 ms
-in one capture and 28 ms in another; shared measured 42 ms. No GPU speedup or
-regression is established by those unequal-clock captures.
+## Decisions
 
-## Architecture decision
+| Work | Evidence required before adoption | Owner |
+| --- | --- | --- |
+| Reuse glass samples with exactly equal coordinates | Frozen pixels on Adreno; broken guards fail; eight-leg FPS comparison | Fable + Codex |
+| Share immutable built-in shader state; stream override hashing | Equality/mutation tests fail when broken; ARM cost and app comparisons | Codex |
+| Recover main's semantic geometry reuse | Watch removal test; CPU/GPU attribution; exact transform/clip/order tests | Codex |
+| Change shape geometry | Vertex removal with same-leg timing; fragment bounds alone are insufficient | Fable |
 
-- **Keep the shared base.** CPU work and Huawei frame rate improved. Watch
-  sustained performance still fails the target and the no-regression gate.
-- **Reduce both CPU and GPU work.** Thread overlap alone cannot solve the measured
-  watch costs. Streaming remains held; every tested Huawei producer variant lost.
-- **Learn from main's reuse.** Megaboss upload snapshots have medians 0.285 MB on
-  main and 0.895 MB on shared; shared issues fewer draws. Main recognizes retained
-  transforms/recolors; shared compares packed bytes. Workload causality is unproven.
-- **Remove a measured cost before redesigning.** Fable's fragment replacements and
-  discards bound the shape path. They change coverage and compiler inputs, so their
-  difference is not an exact ALU/fill decomposition. Codex handles recording/upload
-  attribution. No new cache, worker architecture or representation is selected yet.
-- **Reject imaginary work.** The builder already seals shared ownership once;
-  arc normalization is not duplicated. Neither warrants another abstraction.
+Keep the shared base for investigation. Hold streaming, extra threads and new
+caches. Shared recording already seals ownership once and normalizes arcs once.
+CPU time, cycles, temperature and endpoint clocks are separate observations;
+none alone measures energy. Favor less total work over more overlap.
 
-Ship only after deliberately broken correctness tests fail, restored tests pass,
-existing pixel expectations remain intact, platform gates pass, and all four
-workloads show sustained 60 Hz presentation without regression. Battery temperature
-and endpoint clocks constrain interpretation; they do not measure energy.
-
-Exact artifacts and validation: [measurement index](mobile_watch_performance.md).
+**Merge to main only after:** broken correctness tests fail, restored tests pass,
+platform/robot gates pass, and all four workloads sustain 60 Hz without picture
+or FPS regression. Artifacts: [measurement index](mobile_watch_performance.md).
