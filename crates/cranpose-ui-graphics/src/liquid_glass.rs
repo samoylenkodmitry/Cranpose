@@ -147,8 +147,8 @@ pub const LIQUID_GLASS_SPECIALIZATIONS: &[LiquidGlassSpecialization] = &[
     },
 ];
 
-/// Raises every specialization flag whose feature the shader's uniforms
-/// leave inactive, so the pipeline compiled for this material carries only
+/// Recomputes the specialization flags from the current uniforms, removing
+/// overrides for features that have become active. The compiled material carries only
 /// the features it uses. Byte-exact: a raised flag substitutes the value the
 /// uniform already holds, and the interior guard skips only terms whose
 /// weight is zero. An active adaptive frost declares the blurred substrate
@@ -158,6 +158,8 @@ pub fn specialize_liquid_glass(shader: &mut RuntimeShader) {
     for specialization in LIQUID_GLASS_SPECIALIZATIONS {
         if (specialization.inactive)(&uniforms) {
             shader.set_override(specialization.flag, 1.0);
+        } else {
+            shader.clear_override(specialization.flag);
         }
     }
     shader.set_draw_split(Some(GLASS_RIM_DRAW_OVERRIDE));
@@ -638,6 +640,32 @@ mod tests {
             flags, sorted,
             "a plain pane uses no optional feature, so every flag folds"
         );
+    }
+
+    #[test]
+    fn respecializing_mutated_uniforms_matches_fresh_shader_and_preserves_caller_override() {
+        let mut shader = RuntimeShader::new(LIQUID_GLASS_WGSL);
+        shader.set_override("CALLER_OVERRIDE", 7.0);
+        specialize_liquid_glass(&mut shader);
+        shader.set_float(GLASS_RIM_STYLE_UNIFORM, 1.0);
+        specialize_liquid_glass(&mut shader);
+
+        let mut fresh = RuntimeShader::new(LIQUID_GLASS_WGSL);
+        fresh.set_override("CALLER_OVERRIDE", 7.0);
+        fresh.set_float(GLASS_RIM_STYLE_UNIFORM, 1.0);
+        specialize_liquid_glass(&mut fresh);
+        assert_eq!(shader.overrides(), fresh.overrides());
+        assert_eq!(shader.overrides_hash(), fresh.overrides_hash());
+        assert!(shader.overrides().contains(&("CALLER_OVERRIDE", 7.0)));
+
+        shader.set_float(GLASS_RIM_STYLE_UNIFORM, 0.0);
+        specialize_liquid_glass(&mut shader);
+        let mut inactive = RuntimeShader::new(LIQUID_GLASS_WGSL);
+        inactive.set_override("CALLER_OVERRIDE", 7.0);
+        specialize_liquid_glass(&mut inactive);
+        assert_eq!(shader.overrides(), inactive.overrides());
+        assert_eq!(shader.overrides_hash(), inactive.overrides_hash());
+        assert!(shader.overrides().contains(&("CALLER_OVERRIDE", 7.0)));
     }
 
     #[test]
