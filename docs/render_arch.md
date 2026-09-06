@@ -348,10 +348,13 @@ step; every GPU reduction moves the plateau. Legs and reports live under
   -2.0); on Adreno a divergent branch around a fetch costs more than the
   fetch and stops the compiler issuing fetches early.
 - Declaring no substrate for a resting glass (reverted in 54376db3): the
-  declaration is capture geometry; omitting it moved five Adreno pixels
-  one level against every build that declared it. The exact removal
-  keeps the geometry and skips only the blur passes, a planner contract
-  not designed.
+  declaration is capture geometry. A resting glass rendered with and
+  without the declaration differs by five Adreno pixels one level apart
+  (the first test's two arms); the predicate itself never changed a
+  material-built glass, whose frost is already zero at activity 0, and
+  the omission mutant on the explicit test fails the declaration
+  assertion, not pixels. The exact removal keeps the geometry and skips
+  only the blur passes, a planner contract not designed.
 - The refraction curve as a value-carrying constant (branch
   `render/curve-probe`, d82d86a8): `refraction_curve * activity` is a
   public, animatable value, so every distinct float would key a pipeline
