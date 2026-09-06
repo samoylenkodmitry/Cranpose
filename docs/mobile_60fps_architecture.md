@@ -25,17 +25,20 @@ ABAB then BABA without cooling. Heat and failed legs remain in the evidence.
 - **Main's reuse matters:** disabling its command feed on Huawei loses
   2.4/3.5/5.9/5.0 FPS. First-pair upload medians rise 0.35→2.54 MB.
   Later upload logs are incomplete; the switch changes more than bandwidth.
-- **Small shader changes held:** factory/hash microbenchmarks improve, but
-  Huawei app pairs are +0.16/−1.86/−1.54/−0.24 FPS. Exact ray reuse also lacks a Huawei win.
+- **CPU work skipped by main:** forcing retained geometry materialization,
+  while preserving its GPU feed, adds 40–55% main-thread cycles on Huawei;
+  FPS stays 57–58 at 31→39°C. Watch measurement pending.
+- **Hot watch Megaboss:** discarding shape fragments cuts GPU span 58→26 ms
+  while FPS stays 14–15 at 43.7–45.3°C. CPU work still limits this case.
 
 ## Decisions
 
 | Work | Evidence required before adoption | Owner |
 | --- | --- | --- |
-| Exact ray reuse | Metal/Adreno pixels pass; both broken guards fail. Watch FPS pending | Fable |
-| Factory/hash | Equality/isolation and ARM cost pass; watch app FPS pending | Codex |
-| Reuse before geometry preparation | Main feed removal on watch; actual changing-frame match cost; pixel invariants | Codex |
-| Glass coverage and pass dependencies | Actual source regions, scratch radii/taps and stage dependencies; remove redundant work to test cause | Fable |
+| Exact ray reuse | Reverted: exact pixels, no FPS gain on either GPU | Fable |
+| Factory/hash | Held: Huawei +0.16/−1.86/−1.54/−0.24 FPS; watch +8.16/+0.87/+0.32/+0.55, first pair crosses a thermal step | Codex |
+| Reuse before geometry preparation | Watch materialization cost; actual animated input reuse; pixel invariants | Codex |
+| Glass / shape GPU work | Stages reflect real dependencies; blur taps already paired. Measure specialization cost | Fable |
 
 **Architecture candidate:** semantic records → reuse verdict → compile changed
 ranges → backend buffers. Main can skip lowering; shared lowers before reuse.

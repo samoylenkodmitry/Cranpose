@@ -15,15 +15,17 @@ SurfaceFlinger frames, temperatures, properties and failures.
 | `showcase-profileable-pair.json` | Profiling copies differ only by manifest profileability; 393 other payloads unchanged |
 | `profd-*-showcase-*`, `watch-main-shared-gpu-repeat-*` | GPU timings; inspect clocks/heat before comparing |
 | `huawei-main-feed-removal-{matrix,analysis}.json` | Main feed removal loses every pair; later upload logs incomplete |
+| `{watch,huawei}-main-lowering-removal-{matrix,analysis}.json` | Same main APK retains GPU feed while rebuilding retained CPU geometry; Huawei complete, watch pending; no main GPU pass timings |
+| `main-lowering-correctness-proof.json` | Existing feed/pixel parity passes; leaked temporary geometry fails; restored passes |
 | `{watch,huawei}-showcase-current-memory-stack-*/memory-callers.json` | Current ten-second stacks attribute most memcmp to RuntimeShader construction |
 | `override-hash-correctness-proof.json` | Original encoding passes; missing separator fails; restored passes |
-| `override-hash-huawei-matrix.json`, `shader-factory-{watch,huawei}-matrix.json` | Eight-leg ARM microbenchmarks; not app FPS |
+| `override-hash-{huawei,watch-short}-matrix.json`, `shader-factory-{watch,huawei}-matrix.json` | Eight-leg ARM microbenchmarks; not app FPS |
 | `shader-factory-correctness-proof.json` | Direct-equivalence test passes; corrupt template fails; restored passes |
-| `shader-cpu-app-pair.json`, `huawei-shader-cpu-checkpoint-matrix.json` | Exact three-file control/candidate; unchanged app payloads; Huawei has no consistent FPS gain |
+| `shader-cpu-app-pair.json`, `{watch,huawei}-shader-cpu-checkpoint-matrix.json` | Exact three-file pair; unchanged app payloads; eight valid legs each. Watch gains, Huawei mixed; held |
 | `watch-glass-coincident-0d63a76f-proof.json` | Adreno exact candidate passes eight frozen fixtures; both broken guards fail; restored passes |
 | `cranpose-shared-rim-56328905-{gates,ios-gates}.json` | Shared platform/robot gates pass; `37bd0ce8` correction also passes |
 | `cranpose-override-hash-stream-39c8804a-*-gates.json` | Hash platform gates and 166 robot tests pass |
-| `cranpose-shader-factory-2bb5c900-*-gates.json` | Factory platform gates pass; robots pending; Mac disk-guard failure retained separately |
+| `cranpose-shader-factory-2bb5c900-{gates,local-mac-gates}.json` | Platform gates and 166 robot tests pass; separate Mac disk-guard failure retained |
 | `sequence-ownership.jsonl` | Whole-sequence device ownership shared with Fable |
 
 Fable owns the `shape`, `shape_fill`, `glass_dispersion`, `glass_refraction`
