@@ -572,10 +572,12 @@ const HALF_MODELS: &[HalfModel] = &[
     }),
 ];
 
+type Model<T, const N: usize> = (&'static str, Box<dyn Fn(u32, u32) -> [T; N]>);
+
 fn census<T: PartialEq + std::fmt::Debug + Copy, const N: usize>(
     label: &str,
     observed: impl Fn(usize) -> [T; N],
-    models: &[(&'static str, Box<dyn Fn(u32, u32) -> [T; N]>)],
+    models: &[Model<T, N>],
 ) -> (usize, String) {
     let mut report = format!("{label}\n");
     let mut best = usize::MAX;
@@ -623,7 +625,7 @@ fn unorm_census(gpu: &Gpu) -> (usize, String) {
         .flat_map(|i| destination_unorm(i as u32 % SIZE, i as u32 / SIZE))
         .collect();
     let bytes = gpu.blend(wgpu::TextureFormat::Rgba8Unorm, &destination);
-    let models: Vec<(&'static str, Box<dyn Fn(u32, u32) -> [u8; 4]>)> = UNORM_MODELS
+    let models: Vec<Model<u8, 4>> = UNORM_MODELS
         .iter()
         .map(|(name, model)| {
             let model = *model;
@@ -652,7 +654,7 @@ fn half_census(gpu: &Gpu) -> (usize, String) {
         .flat_map(|v| v.to_le_bytes())
         .collect();
     let bytes = gpu.blend(wgpu::TextureFormat::Rgba16Float, &destination);
-    let models: Vec<(&'static str, Box<dyn Fn(u32, u32) -> [f16; 4]>)> = HALF_MODELS
+    let models: Vec<Model<f16, 4>> = HALF_MODELS
         .iter()
         .map(|(name, model)| {
             let model = *model;
