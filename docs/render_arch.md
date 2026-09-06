@@ -2147,3 +2147,35 @@ zero differing pixels across five scenes; raising the flag for a lens
 too breaks the lens scene by 7,227 pixels and nothing else, and the
 specialization parity test compares the folded pipeline with the general
 one byte for byte.
+
+## An active glass drops its resting path statically (2026-09-06)
+
+`GLASS_RESTING_OFF` is raised when uniform 111, the material activity,
+is at least 1, which is every glass whose dynamics leave activity at
+its default: the showcase's `GlassSurface` cards and its icon buttons
+(`touched_up` sets the touch uniform, not activity); `LiquidCard`
+(activity 0) and the widgets that animate activity keep the flag low.
+The flag guards the activity read, and two `select`s on pipeline
+constants take the plain backdrop path out of the interior pipeline:
+`resting_output` is selected to zero under the flag, and `outer_output`
+is selected to zero under the flag together with `GLASS_RIM_DRAW == 1`.
+With both, the interior pipeline of an active material has no live
+consumer of the plain fetch and the compiler removes it; nothing is
+decided per pixel, which is what the rejected tap gate got wrong on
+Adreno. The interior claim is exact because at activity 1 the coverage
+ramp is `max(lens / 32, 1)` while the interior guard places every
+interior pixel at least `lens / 4 + 1` inside, so coverage is
+`smoothstep(0, 1, 1) = 1` exactly and the outer coverage is exactly 0;
+below activity 1 the ramp can reach 8 dp and exceed a shallow lens's
+guard, which is why the select needs both constants.
+
+**Gates.** The frozen fixture declares the override without reading it,
+so the reference computes from the uniform while the shipped shader
+folds; `glass_reference_shader` stays at zero across five scenes, and
+the reference scene gained a shallow resting card (refraction depth
+0.05, activity 0.5) whose coverage ramp reaches into its interior draw.
+Raising the flag for a resting glass breaks the resting scene by 35,848
+pixels; dropping the resting condition from the outer select breaks the
+shallow card by 34 pixels, a one-pixel band at its edge, and nothing
+else. The specialization parity test compares the folded pipeline with
+the general one byte for byte.

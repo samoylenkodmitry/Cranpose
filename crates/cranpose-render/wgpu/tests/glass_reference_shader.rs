@@ -213,6 +213,24 @@ fn variants(source: &str) -> RenderGraph {
         Vec::new(),
         source,
     ));
+    let shallow = rect(240.0, 20.0, 100.0, 90.0);
+    children.push(glass_layer(
+        shallow,
+        card_glass(LiquidShape::RoundedRect(12.0))
+            .refraction_depth(0.05)
+            .backdrop_effect(
+                &colors,
+                1.5,
+                GlassDynamics {
+                    activity: Some(0.5),
+                    resting_tint: Some(Color::from_rgba_u8(80, 40, 40, 120)),
+                    ..GlassDynamics::default()
+                },
+            ),
+        1.0,
+        Vec::new(),
+        source,
+    ));
     support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children)
 }
 
