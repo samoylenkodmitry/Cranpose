@@ -497,6 +497,7 @@ pub(crate) fn segment_draws_anything(
         viewport_rect,
         root_scale,
         (target.width, target.height),
+        false,
     )
     .is_empty()
 }
@@ -516,6 +517,7 @@ fn merge_items<'a>(
     viewport_rect: Rect,
     root_scale: f32,
     target_size: (u32, u32),
+    skip_text: bool,
 ) -> Vec<Item<'a>> {
     let mut items = Vec::with_capacity(segment.ops.len() + segment.composites.len());
     let mut composites = segment.composites.iter().peekable();
@@ -546,6 +548,7 @@ fn merge_items<'a>(
                 }
             }
             DrawOpKind::Image(index) => items.push(Item::Image(index)),
+            DrawOpKind::Text(_) if skip_text => {}
             DrawOpKind::Text(index) => items.push(Item::Text(&segment.scene.texts[index])),
             DrawOpKind::Shadow(index) => {
                 let shadow = &segment.scene.shadow_draws[index];
@@ -612,7 +615,13 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
         };
         let viewport_rect = segment_viewport_rect(self.target, segment, self.root_scale);
         let uniform_slot = renderer.claim_uniform_slot(viewport);
-        let items = merge_items(segment, viewport_rect, self.root_scale, self.target_size());
+        let items = merge_items(
+            segment,
+            viewport_rect,
+            self.root_scale,
+            self.target_size(),
+            renderer.ablation.text,
+        );
         let run = SegmentRun {
             segment,
             viewport,

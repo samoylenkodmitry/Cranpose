@@ -136,6 +136,11 @@ pub const LIQUID_GLASS_SPECIALIZATIONS: &[LiquidGlassSpecialization] = &[
         inactive: |u| slot(u, 127) <= 0.0,
     },
     LiquidGlassSpecialization {
+        flag: "GLASS_RIM_STYLE_OFF",
+        slots: &[GLASS_RIM_STYLE_UNIFORM],
+        inactive: |u| slot(u, GLASS_RIM_STYLE_UNIFORM) <= 0.0,
+    },
+    LiquidGlassSpecialization {
         flag: "GLASS_INTERIOR_GUARD",
         slots: &[],
         inactive: |_| true,
@@ -218,6 +223,10 @@ pub const GLASS_OPTICAL_ZOOM_UNIFORM: usize = 89;
 /// the SDF center, in dp — a leaning lens magnifies about the content it
 /// rides, not its shifted silhouette.
 pub const GLASS_OPTICAL_ZOOM_ANCHOR_UNIFORM: usize = 128;
+/// Uniform slot selecting the rim style: 0 is the regular surface rim, 1
+/// the lens rim whose meniscus reflects, transmits with loss and carries
+/// the long-edge specular.
+pub const GLASS_RIM_STYLE_UNIFORM: usize = 28;
 /// Uniform slot containing continuous optical activity (identity at zero).
 pub const GLASS_ACTIVITY_UNIFORM: usize = 111;
 /// Uniform slot containing the base surface tint that remains when optical

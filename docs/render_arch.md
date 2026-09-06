@@ -2107,3 +2107,43 @@ zero, alternating rounds, temperature logged; the watch with the
    unchanged exact tests, and, on the recording side, Codex's prepared
    dynamic runs; the joint plan is `docs/mobile_60fps_architecture.md`. Each with its gate red first, the robots
    green, both scenes hot A B A B and B A B A on the full-scroll gesture.
+
+## A glass tap gate loses on Adreno (2026-09-06)
+
+The showcase material is `Glass::regular()`: rim style 0, activity 1,
+dispersion 1, adaptive frost 0.42, no optical blur. Per pixel it fetches
+the plain backdrop, three transmitted paths, the frost substrate, and in
+the rim draw five reflection taps. Two of those fetches are dead on most
+pixels: at activity 1 the plain backdrop only reaches the output through
+the outer coverage, zero wherever coverage is exactly 1, and with rim
+style 0 the reflection only reaches it through the bevel term under that
+same outer coverage. Gating both fetches behind their weights was
+byte-exact against the frozen reference on Metal, Adreno and Linux, and
+lost every stable pair on the Pixel Watch 3 (-2.21, -1.75, -2.02 fps on
+a 31 fps hot frame, same route, eight legs). The skipped taps read the
+neighbourhood the transmitted taps already brought into the cache, so a
+divergent branch around a fetch costs more than the fetch and keeps the
+compiler from issuing every fetch at the top of the shader. The gates
+are not shipped. What stays is the reference scene they were proven
+against: a lens-variant card (rim style 1, every reflection tap live) and
+a resting card (activity 0.5, the plain path live), so any later edit to
+either path is judged on both branches.
+
+## The rim style folds for every regular glass (2026-09-06)
+
+`GLASS_RIM_STYLE_OFF` is raised when uniform 28 is not positive, which is
+every `Glass::regular()` and `Glass::clear()`; a `Glass::lens()` keeps it
+live. Both reads of the slot go through `fixed_or`, the guard's border
+ramp and `rim_style` itself, so the compiler folds every `* rim_style`
+and `mix(a, b, rim_style)` term of the face and rim lighting to `a`: the
+meniscus transmission loss, the face reflection weight, the long-edge
+specular, the etalon gain, the optical bevel band, the face lift and the
+tint interior mix. No fetch is gated; a raised flag substitutes the value
+the uniform already holds, so the picture is the same by the same
+argument as the other flags. Proof shape: the frozen fixture declares the
+override but never reads it, so the reference renders from the uniform
+while the shipped shader folds, and `glass_reference_shader` requires
+zero differing pixels across five scenes; raising the flag for a lens
+too breaks the lens scene by 7,227 pixels and nothing else, and the
+specialization parity test compares the folded pipeline with the general
+one byte for byte.

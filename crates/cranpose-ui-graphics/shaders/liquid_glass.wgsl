@@ -124,6 +124,7 @@ override GLASS_FULL_TRANSMISSION: bool = false;
 override GLASS_DISPERSION_OFF: bool = false;
 override GLASS_ADAPTIVE_FROST_OFF: bool = false;
 override GLASS_INK_OFF: bool = false;
+override GLASS_RIM_STYLE_OFF: bool = false;
 // The interior guard: every rim term (meniscus, bevel, border line,
 // specular, the opposite-wall reflection) is a product with a band weight
 // that is exactly zero deeper inside the shape than `rim_reach`, so a
@@ -804,7 +805,7 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
     // bands and their ramp, the border line, the surface rim, and the fold
     // band, each as wide as the code below makes it, plus a pixel.
     let guard_ramp = floored_band_width(lens_refraction * 0.25);
-    let guard_border_ramp = max(lens_refraction / max(mix(16.0, 8.0, clamp(get_float(28u), 0.0, 1.0)), 1.0), MIN_LINE_WIDTH_PX);
+    let guard_border_ramp = max(lens_refraction / max(mix(16.0, 8.0, clamp(fixed_or(get_float(28u), 0.0, GLASS_RIM_STYLE_OFF), 0.0, 1.0)), 1.0), MIN_LINE_WIDTH_PX);
     let guard_fold = fixed_or(get_float(88u), 0.0, GLASS_FOLD_OFF) * optical_scale;
     let rim_reach = max(
         max(1.5 * gradient_extent + guard_ramp, floored_band_width(gradient_extent)),
@@ -908,7 +909,7 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
     //   sample = focus + p·lens_scale/m — the magnified face, the
     //   descending-branch inversion at the rim and the rim line all come
     //   from the same displacement field, with no band boundaries.
-    let rim_style = clamp(get_float(28u), 0.0, 1.0);
+    let rim_style = clamp(fixed_or(get_float(28u), 0.0, GLASS_RIM_STYLE_OFF), 0.0, 1.0);
     // Materials may push past 1 for stronger chromatic splits (the toggle
     // hold runs 1.1); the spread factor keeps the split proportional.
     let dispersion_strength = clamp(fixed_or(get_float(95u), 0.0, GLASS_DISPERSION_OFF), 0.0, 2.0);
