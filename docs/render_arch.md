@@ -412,6 +412,7 @@ against the tree without it:
 | default curve fold 81af46dc (reverted ebdd15ea) | -0.8, -0.9, -4.1, +1.6 | not run |
 | curve as constant, probe only d82d86a8 | +2.7, +2.3, +3.3, +2.0 | not run |
 | coincident-ray reuse 0d63a76f (exact on Metal and Adreno, mutants red; reverted, no return) | -4.7 (43.97 outlier base), -1.4, -0.2, +1.7 | -0.0, -0.1, -0.2, -6.1 (crossing) on base 24.2-24.5 at 42 C |
+| prefix copied into the page 1e8329c2 (a page-covering cached prefix is copied into the page before its first pass loads, in place of a blended full-page composite) | -1.5, +1.6, -2.1, +0.2 on base 37-40 at 33-34 C: nil on Mali | +1.85, +2.81 on the 25-27 plateau at 42.8-43.0 C; span 34.8 → 31.3 and 37.7 → 32.0 ms, Layer Pass 0 4.7-5.9 → 2.4 ms, so the blended page quad cost what the probe said; one copy leg fell to the 18 plateau at 43.3 C (17.98 vs 25.72, Layer Pass 0 9.6 against that plateau's 11.8, kept as thermally confounded); one copy leg void, its preflight return never reached the start text |
 
 Watch plateaus: 42-43 fps cool, 31 at 41-42 C, 24 at 43, 16 at the next
 step; every GPU reduction moves the plateau.

@@ -5,7 +5,7 @@ use cranpose_core::location_key;
 use cranpose_liquid::prelude::*;
 use cranpose_macros::composable;
 use cranpose_render_common::Renderer;
-use cranpose_render_wgpu::{CapturedFrame, RenderStatsSnapshot};
+use cranpose_render_wgpu::{CapturedFrame, RenderStatsSnapshot, WgpuRenderer};
 use cranpose_ui::{
     Modifier,
     widgets::{Box, BoxSpec},
@@ -92,18 +92,34 @@ fn GlassCardScene() {
 }
 
 fn capture_card(unspecialized: bool) -> Result<CapturedFrame, String> {
-    cranpose_render_wgpu::set_debug_toggle(TOGGLE, unspecialized.then_some("1"));
-    let captured = capture_card_with_current_toggles();
-    cranpose_render_wgpu::set_debug_toggle(TOGGLE, None);
-    captured
-}
-
-fn capture_card_with_current_toggles() -> Result<CapturedFrame, String> {
-    capture_card_and_stats().map(|(frame, _)| frame)
+    capture_card_and_stats_under(unspecialized.then_some(TOGGLE)).map(|(frame, _)| frame)
 }
 
 fn capture_card_and_stats() -> Result<(CapturedFrame, RenderStatsSnapshot), String> {
-    let (_lock, mut renderer) = support::headless_renderer_parts()?;
+    capture_card_and_stats_under(None)
+}
+
+/// The toggles are process-global, so one raised for a capture is raised
+/// only while this capture holds the GPU lock: set after the lock, cleared
+/// before it is released, or a concurrent capture in this binary renders
+/// under it.
+fn capture_card_and_stats_under(
+    toggle: Option<&'static str>,
+) -> Result<(CapturedFrame, RenderStatsSnapshot), String> {
+    let (_lock, renderer) = support::headless_renderer_parts()?;
+    if let Some(toggle) = toggle {
+        cranpose_render_wgpu::set_debug_toggle(toggle, Some("1"));
+    }
+    let captured = render_card_and_stats(renderer);
+    if let Some(toggle) = toggle {
+        cranpose_render_wgpu::set_debug_toggle(toggle, None);
+    }
+    captured
+}
+
+fn render_card_and_stats(
+    mut renderer: WgpuRenderer,
+) -> Result<(CapturedFrame, RenderStatsSnapshot), String> {
     let app_context = cranpose_ui::AppContext::new();
     renderer.attach_app_context_services(&app_context);
     let mut shell = AppShell::new(
@@ -232,10 +248,8 @@ fn a_scissor_split_glass_matches_whole_quads_byte_for_byte_and_shades_fewer_pixe
             return;
         }
     };
-    cranpose_render_wgpu::set_debug_toggle(NO_SPLIT, Some("1"));
-    let whole = capture_card_and_stats();
-    cranpose_render_wgpu::set_debug_toggle(NO_SPLIT, None);
-    let (whole, whole_stats) = whole.expect("headless WGPU init failed mid-suite");
+    let (whole, whole_stats) =
+        capture_card_and_stats_under(Some(NO_SPLIT)).expect("headless WGPU init failed mid-suite");
     assert_eq!(
         split_stats.shader_pixels, whole_stats.shader_pixels,
         "the split shades the same composite area once"
