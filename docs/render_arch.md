@@ -2247,13 +2247,15 @@ substrate's blur triples are the second cost on both devices (+3.4 to
 +3.9 on the watch, +1.7 to +6.1 on the Mate 20 X). The header blur and
 text are within the noise on both.
 
-## A resting glass declares no frost substrate, and what that moves on Adreno (2026-09-06)
+## A resting glass keeps its unread frost substrate (2026-09-06)
 
 A material at activity 0 returns before its adaptive block, so the blur
-substrate its frost declared was rendered every frame and never read;
-`specialize_liquid_glass` now declares the substrate only when the
-activity uniform is positive (`LiquidCard` and any widget resting at 0;
-the showcase has no resting glass). The claim "never read" is proven
+substrate its frost declares is rendered every frame and never read
+(`LiquidCard` and any widget resting at 0; the showcase has no resting
+glass). Declaring it only for a positive activity was tried and
+reverted the same day: the declaration also sets the member's capture
+geometry, and that is what a picture depends on. The claim "never read"
+is proven
 at equal capture geometry: `glass_reference_shader` renders a resting
 frosted card with the shipped shader and with the same source minus its
 adaptive block and requires zero differing pixels, and renders the same
@@ -2264,10 +2266,15 @@ Adreno it failed by five pixels one level apart: a member with a blur
 substrate gets its capture expanded by the blur margin, so omitting the
 substrate shrinks and shifts the capture, and Adreno's texture
 coordinate rounding then moves a few pixels where Metal and llvmpipe do
-not. That is the rule's real effect on a resting glass's picture: exact
-against the same build's never-cache reference, one level off at a few
-pixels against a build that still declared the substrate, on Adreno.
-The shared tree holds the rule until that trade is judged.
+not. That is what dropping the declaration does to a resting glass's
+picture: exact against the same build's never-cache reference, one
+level off at a few pixels against every build that declared the
+substrate, on Adreno. So the declaration stays, pinned by a unit test,
+and the wasted blur remains: the exact removal keeps the geometry and
+skips only the work, a planner that knows a member's substrate is
+declared but unread this frame and renders no blur triple into its side
+slot. That is a material-to-planner contract not yet designed; it is
+not a showcase cost.
 
 ## The default refraction curve folds; every other value stays a uniform (2026-09-06)
 

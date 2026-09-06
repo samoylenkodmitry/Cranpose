@@ -8,7 +8,7 @@ use cranpose_render_common::graph::{ProjectiveTransform, RenderGraph, RenderNode
 use cranpose_render_wgpu::CapturedFrame;
 use cranpose_ui_graphics::{
     Brush, Color, GraphicsLayer, LIQUID_GLASS_WGSL, Point, Rect, RenderEffect, RuntimeShader,
-    TileMode,
+    SubstrateSpec, TileMode,
 };
 use support::{brush_rect, solid_rect};
 
@@ -246,7 +246,21 @@ fn without_adaptive_block(source: &str) -> String {
     format!("{}{}", &source[..start], &source[end..])
 }
 
-fn frosted_card(activity: f32, source: &str) -> RenderGraph {
+fn with_substrates(effect: RenderEffect, substrates: Vec<SubstrateSpec>) -> RenderEffect {
+    match effect {
+        RenderEffect::Shader { mut shader } => {
+            shader.set_substrates(substrates);
+            RenderEffect::Shader { shader }
+        }
+        other => other,
+    }
+}
+
+fn frosted_card(
+    activity: f32,
+    source: &str,
+    substrates: Option<Vec<SubstrateSpec>>,
+) -> RenderGraph {
     let colors = LiquidColors::dark(Color::from_rgb_u8(120, 140, 255));
     let mut children = backdrop();
     let node = rect(24.0, 20.0, 300.0, 200.0);
@@ -261,6 +275,10 @@ fn frosted_card(activity: f32, source: &str) -> RenderGraph {
                 ..GlassDynamics::default()
             },
         );
+    let effect = match substrates {
+        Some(substrates) => with_substrates(effect, substrates),
+        None => effect,
+    };
     children.push(glass_layer(node, effect, 1.0, Vec::new(), source));
     support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children)
 }
@@ -363,6 +381,33 @@ fn a_lens_variant_and_a_resting_card_match_the_reference_shader() {
     }
 }
 
+fn assert_rest_agrees_and_activity_differs(
+    renderer: &mut support::LockedRenderer,
+    claim: &str,
+    rest: (RenderGraph, RenderGraph),
+    active: (RenderGraph, RenderGraph),
+) {
+    let resting = capture(renderer, rest.0, 1.0);
+    let other = capture(renderer, rest.1, 1.0);
+    let differing = support::differing_pixels(FRAME_WIDTH, &resting.pixels, &other.pixels);
+    assert!(
+        differing.is_empty(),
+        "{claim}: {}",
+        support::describe_differing(&differing)
+    );
+    assert!(
+        support::distinct_colors(&resting.pixels) > 64,
+        "the resting render is too flat to prove anything"
+    );
+    let active_a = capture(renderer, active.0, 1.0);
+    let active_b = capture(renderer, active.1, 1.0);
+    assert!(
+        !support::differing_pixels(FRAME_WIDTH, &active_a.pixels, &active_b.pixels).is_empty(),
+        "an active glass runs the block and reads its substrate, so the same comparison must \
+         see it"
+    );
+}
+
 #[test]
 fn a_resting_frosted_glass_never_runs_its_adaptive_block() {
     let Ok(mut renderer) = support::headless_renderer() else {
@@ -376,23 +421,40 @@ fn a_resting_frosted_glass_never_runs_its_adaptive_block() {
             && !cut.contains("let adaptive_sample = sample_adaptive_neighborhood("),
         "the cut source must have lost the adaptive read and nothing else"
     );
-    let resting = capture(&mut renderer, frosted_card(0.0, LIQUID_GLASS_WGSL), 1.0);
-    let resting_cut = capture(&mut renderer, frosted_card(0.0, &cut), 1.0);
-    let differing = support::differing_pixels(FRAME_WIDTH, &resting.pixels, &resting_cut.pixels);
-    assert!(
-        differing.is_empty(),
-        "a resting glass returns before its adaptive block, so the shipped shader and the \
-         same source without that block must agree at the same capture geometry: {}",
-        support::describe_differing(&differing)
+    assert_rest_agrees_and_activity_differs(
+        &mut renderer,
+        "a resting glass returns before its adaptive block, so the shipped shader and the same \
+         source without that block must agree at the same capture geometry",
+        (
+            frosted_card(0.0, LIQUID_GLASS_WGSL, None),
+            frosted_card(0.0, &cut, None),
+        ),
+        (
+            frosted_card(0.5, LIQUID_GLASS_WGSL, None),
+            frosted_card(0.5, &cut, None),
+        ),
     );
-    assert!(
-        support::distinct_colors(&resting.pixels) > 64,
-        "the resting render is too flat to prove anything"
-    );
-    let active = capture(&mut renderer, frosted_card(0.5, LIQUID_GLASS_WGSL), 1.0);
-    let active_cut = capture(&mut renderer, frosted_card(0.5, &cut), 1.0);
-    assert!(
-        !support::differing_pixels(FRAME_WIDTH, &active.pixels, &active_cut.pixels).is_empty(),
-        "an active glass runs the block, so the same comparison must see it"
+}
+
+#[test]
+fn a_resting_frosted_glass_reads_no_substrate() {
+    let Ok(mut renderer) = support::headless_renderer() else {
+        eprintln!("skipping (headless WGPU init failed)");
+        return;
+    };
+    let blur = vec![SubstrateSpec::Blur { radius_px: 24.0 }];
+    assert_rest_agrees_and_activity_differs(
+        &mut renderer,
+        "a resting glass as specialized must render byte for byte like one with its blur \
+         substrate declared: the declaration sets the capture geometry, and on Adreno a \
+         geometry change moves pixels even where the substrate is never read",
+        (
+            frosted_card(0.0, LIQUID_GLASS_WGSL, None),
+            frosted_card(0.0, LIQUID_GLASS_WGSL, Some(blur)),
+        ),
+        (
+            frosted_card(0.5, LIQUID_GLASS_WGSL, None),
+            frosted_card(0.5, LIQUID_GLASS_WGSL, Some(Vec::new())),
+        ),
     );
 }
