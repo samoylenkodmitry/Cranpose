@@ -1,11 +1,22 @@
 # Architecture for sustained mobile 60 fps
 
 Status: architecture candidates under verification, 2026-09-06. The 60 fps target is not achieved.
-Both working branches share `a5710463`, including the reviewed effect-domain
-contract, frozen shader reference, portable artifact collection, Android
-window-thread repair, opaque prefix reuse and backdrop source/order repair.
-Main reference is freshly rebuilt `0d195313`. Fable and Codex reviewed the plan
-together; `render_arch.md` retains the underlying experiment record.
+Both working branches share `56328905`: the `a5710463` renderer, reference tests,
+and reviewed `36dab4ae` rim specialization. Fable merged this common ground as
+`5e09cb38`. The activity and resting-substrate units remain separate on Fable's
+branch while their device evidence is completed. Main reference remains the
+freshly rebuilt `0d195313`. The shared watch Megaboss regression against main
+is still an acceptance failure. `render_arch.md` retains the experiment record.
+
+The next architecture decisions follow the measured critical paths:
+
+| Boundary | Decision | Evidence required next |
+| --- | --- | --- |
+| Glass material execution | Use the existing finite specialization rules to remove only provably inactive work; preserve live sample coordinates and arithmetic | Activity fixed/mutant/restored passes on watch; complete its full comparison against rim-only |
+| Ordered shape execution | Keep the fixed-arc distance exit isolated; combine it with the held ordered-kind candidate only as a measured experiment | Native watch exact proof, unchanged Megaboss and full-scroll comparisons, and a fresh-main control |
+| Frame publication | Retain the existing two outstanding packets, one active and one waiting | Watch packet timelines with presentation worker on and off; no deeper queue without a demonstrated serialization cause |
+| Source capture | Retain the full declared input region for Regular glass | An output-conditioned bound must prove every live transmitted and opposite-side reflected sample, including filtering and capture phase |
+| Shared acceptance | Keep app sources, native geometry and exact pixel contracts fixed | Finish the combined platform board and all four automatic-policy device workloads |
 
 The independent pipeline-readiness and exact eight-sweep unit is committed as
 `079c66f5` and merged with Fable’s `cc8a420b` layout repair in `a5710463`.
@@ -315,8 +326,8 @@ must justify their complete scheduling and merge cost.
 
 ### 3. Schedule only after proving a serialization bottleneck
 
-Joint decision after track 0. The current depth-one publication protocol protects
-surface epochs, scene ownership and cancellation. Do not increase queue depth
+Joint decision after track 0. The current publication protocol permits two outstanding packets, one active
+and one waiting, and protects surface epochs, scene ownership and cancellation. Do not increase queue depth
 just to make a throughput number look better while input latency grows.
 
 If the timeline proves useful recording is blocked behind acquisition or a
@@ -641,3 +652,63 @@ adjacent frames' producer and consumer spans. Present-call completion remains
 distinct from SurfaceFlinger presentation, and elapsed renderer spans may
 include submission backpressure. These diagnostics do not join the application
 FPS builds or justify a deeper frame queue on their own.
+
+
+### Huawei packet timelines and fixed-arc repeat
+
+The uninterrupted fixed-arc-only full-scroll repeat uses the whole-sequence lock.
+Its shared/candidate/shared/candidate/candidate/shared/candidate/shared readings
+are 38.254701, 39.555355, 39.439090, 39.528839, 40.770413, 40.066477,
+39.075233 and 37.902089 FPS. Each sixty-second leg completes forty gestures.
+Temperatures before/after are 38/38, 37/38, 38/38, 38/38, 39/38, 39/40,
+40/40 and 39/39 C. All four candidate-minus-control pairs are positive:
++1.300654, +0.089749, +0.703936 and +1.173144 FPS. This replaces the
+interfered sequence as attribution evidence; watch acceptance remains open.
+
+Four separate diagnostic runs instrument pure `a5710463`, without the rim unit,
+using the same producer and consumer clock. These runs also enable profiling;
+they are not an acceptance comparison. Per-packet medians are:
+
+| Workload / presentation worker | Update | Acquire | Render execution | Present call | Actual diagnostic presents |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Huawei full scroll / on | 3.896 ms | 0.371 ms | 6.018 ms | 17.492 ms | 37.825 FPS |
+| Huawei full scroll / off | 4.316 ms | 0.396 ms | 6.430 ms | 12.717 ms | 37.623 FPS |
+| Huawei Megaboss / on | 6.085 ms | 12.547 ms | 1.573 ms | 1.317 ms | 59.906 FPS |
+| Huawei Megaboss / off | 6.106 ms | 7.704 ms | 1.549 ms | 0.935 ms | 59.912 FPS |
+
+The scroll producer is short relative to the display period. The consumer spends
+substantial time in presentation, which can include GPU or compositor backpressure;
+this does not establish its exact cause or turn that time into CPU work. The
+worker-on scroll handoff has median lower/upper bounds of 11.595/12.090 ms.
+Increasing queued work would not make the measured consumer faster. Continue
+material execution work while the watch timeline resolves its different budget.
+Do not sum these medians into a synthetic frame or use them as GPU timestamps.
+
+The worker-on scroll log omits 132 packet IDs in four intervals. The analyzer
+records those gaps and excludes cross-gap period, latency-overlap and producer-gap
+statistics; individual observed packets retain their own valid spans. A missing-ID
+self-test fails before this guard and passes after it. Synchronous logs have no
+packet IDs, so they cannot prove adjacent frames or support stall-tail claims.
+The synchronous Megaboss log has far fewer samples than actual presents and an
+apparent 8.77-second gap; that gap is not evidence of a stalled application.
+Raw logs, source inventories and independent SurfaceFlinger counts are retained.
+
+### Regular glass source reach
+
+Zero input padding is not a per-output sampling radius. The transmitted path
+can move a sample towards the optical center, and the live bevel reflection
+can read the opposite side of the surface. `rim_style == 0` removes the meniscus
+reflection but leaves the bevel's 0.035 coefficient. An active interior proof
+can remove zero-weight outer output for that pipeline; it cannot remove the
+rim's live reflected source. Adaptive neighborhoods add their own filter reach.
+The current single rectangular sample domain does not represent independently
+clamped source pieces. A smaller capture or blur region is unsupported until
+an output-conditioned bound preserves all taps, clamp edges and capture phase.
+
+
+The activity unit `22aece9d` passes the native watch frozen-reference proof:
+five fixed tests pass; forcing activity on for resting glass fails with 35,868
+differing pixels; removing the resting guard from the interior output fails
+with 257 differing pixels; restoring the unit passes all five tests. The same
+fixed/two-mutant/restored sequence passes on Metal and Linux. Watch performance
+is measured separately against rim-only; the proof does not establish speed.

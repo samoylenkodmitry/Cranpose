@@ -1136,3 +1136,19 @@ renderer execution, packet latency and physical display periods distinct.
 telemetry's acquire column includes publication and worker wait. Adding
 those reported spans or calling all of them useful CPU work misattributes
 the bottleneck.
+
+
+## Diagnostic log gaps and text-removal route checks (2026-09-06)
+
+A frame log is not a complete presentation history. Huawei packet traces omitted
+132 IDs in one full-scroll run; a synchronous Megaboss log had an apparent
+8.77-second gap while SurfaceFlinger continued near 60 FPS. Verify neighboring
+packet IDs before calculating adjacent-frame spans, retain gap counts, and label
+synchronous traces as unable to prove adjacency. Do not diagnose a renderer stall
+from missing log messages or substitute logged-frame counts for actual presents.
+
+A text-removal diagnostic cannot pass a route-start check based on OCR of that
+text. The watch text attribution stopped after its invalid second leg; the raw
+result stays invalid. Establish a valid independent route check before using such
+a diagnostic, or leave its attribution unavailable. Missing startup `pidof` output
+before log capture does not itself prove either a framework crash or a launch race.
