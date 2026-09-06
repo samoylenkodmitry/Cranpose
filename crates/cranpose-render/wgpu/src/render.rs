@@ -908,14 +908,6 @@ pub(crate) enum RunTier {
     Arena,
 }
 
-/// What every record of a draw agrees on, fixed into its pipeline as
-/// shader constants so the fragment program carries only the branches
-/// the draw can take: the shape kind when the segment holds one kind, a
-/// solid-only brush, and whether the placement clips. The general
-/// pipeline (`ShapeVariant::GENERAL`) keeps every branch and shades every
-/// record the same, which `shape_variant_parity.rs` pins. The diagnostic
-/// shape ablation is part of the variant so a switched frame's general
-/// fallback is switched too.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct ShapeVariant {
     kind: Option<u8>,

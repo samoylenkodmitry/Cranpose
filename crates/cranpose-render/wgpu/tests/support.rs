@@ -641,9 +641,6 @@ pub fn region_pixels(frame: &CapturedFrame, region: Rect) -> Vec<u8> {
     out
 }
 
-/// `graph` captured once every shape pipeline it needs is compiled: the
-/// capture repeats while a draw fell back to a general pipeline, and the
-/// last two captures must agree byte for byte before one is returned.
 pub fn settled_capture(renderer: &mut LockedRenderer, graph: &RenderGraph) -> Vec<u8> {
     let mut passes = Vec::new();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
