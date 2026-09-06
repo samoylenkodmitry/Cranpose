@@ -1,28 +1,43 @@
 use crate::{ArcGeometry, TAU};
 
-#[derive(Clone, Debug, Default)]
-struct AngleTrig {
-    last: Option<(u32, (f32, f32))>,
+#[derive(Clone, Debug)]
+struct AngleTrig<const N: usize> {
+    keys: [u32; N],
+    values: [(f32, f32); N],
+    len: usize,
+    next: usize,
 }
 
-impl AngleTrig {
+impl<const N: usize> Default for AngleTrig<N> {
+    fn default() -> Self {
+        Self {
+            keys: [0; N],
+            values: [(0.0, 0.0); N],
+            len: 0,
+            next: 0,
+        }
+    }
+}
+
+impl<const N: usize> AngleTrig<N> {
     fn resolve(&mut self, angle: f32) -> (f32, f32) {
         let key = angle.to_bits();
-        if let Some((held, result)) = self.last
-            && held == key
-        {
-            return result;
+        if let Some(index) = self.keys[..self.len].iter().position(|held| *held == key) {
+            return self.values[index];
         }
         let result = angle.sin_cos();
-        self.last = Some((key, result));
+        self.keys[self.next] = key;
+        self.values[self.next] = result;
+        self.len = (self.len + 1).min(N);
+        self.next = (self.next + 1) % N;
         result
     }
 }
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ArcTrigCache {
-    mid: AngleTrig,
-    half: AngleTrig,
+    mid: AngleTrig<1>,
+    half: AngleTrig<8>,
 }
 
 impl ArcTrigCache {
@@ -79,6 +94,32 @@ mod tests {
                 cache.resolve(&geometry).map(f32::to_bits),
                 expected.map(f32::to_bits)
             );
+        }
+    }
+
+    #[test]
+    fn interleaved_sweeps_preserve_bits_through_reuse_and_eviction() {
+        let mut cache = ArcTrigCache::default();
+        let sweeps = [0.13, 0.29, 0.53, 0.79, 1.01, 1.37, 1.73, 2.11, 2.57, 3.19];
+        for frame in 0..7 {
+            for index in [0, 3, 1, 5, 7, 2, 6, 4, 0, 7, 3, 9, 8, 1, 6, 9, 0] {
+                let geometry = ArcGeometry {
+                    center: Point::ZERO,
+                    inner_radius: 10.0,
+                    outer_radius: 12.0,
+                    start_angle: frame as f32 * 0.031 + index as f32 * 0.17,
+                    sweep_angle: sweeps[index],
+                    cap: StrokeCap::Butt,
+                };
+                let half = geometry.sweep_angle * 0.5;
+                let (mid_sin, mid_cos) = (geometry.start_angle + half).sin_cos();
+                let (half_sin, half_cos) = half.sin_cos();
+                assert_eq!(
+                    cache.resolve(&geometry).map(f32::to_bits),
+                    [mid_sin, mid_cos, half_sin.max(0.0), half_cos].map(f32::to_bits),
+                    "frame {frame}, sweep {index}"
+                );
+            }
         }
     }
 }

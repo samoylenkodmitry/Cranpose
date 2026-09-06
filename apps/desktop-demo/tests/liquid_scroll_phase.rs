@@ -1,4 +1,5 @@
-use std::sync::Arc;
+#[path = "../../../crates/cranpose-render/wgpu/tests/support/device.rs"]
+mod gpu_test_device;
 
 use cranpose_app_shell::AppShell;
 use cranpose_render_wgpu::WgpuRenderer;
@@ -18,32 +19,14 @@ fn physical(logical: u32) -> u32 {
 }
 
 fn headless_renderer() -> Option<WgpuRenderer> {
-    let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
-    instance_descriptor.backends = wgpu::Backends::all();
-    let instance = wgpu::Instance::new(instance_descriptor);
-    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::LowPower,
-        compatible_surface: None,
-        force_fallback_adapter: false,
-    }))
-    .ok()?;
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("Liquid Scroll Phase Test Device"),
-        required_features: cranpose_render_wgpu::optional_device_features(&adapter),
-        required_limits: wgpu::Limits::default(),
-        experimental_features: wgpu::ExperimentalFeatures::disabled(),
-        memory_hints: wgpu::MemoryHints::default(),
-        trace: wgpu::Trace::Off,
-    }))
+    let device = gpu_test_device::HeadlessDevice::request(
+        wgpu::Backends::all(),
+        wgpu::Limits::default(),
+        "Liquid Scroll Phase Test Device",
+    )
     .ok()?;
     let mut renderer = WgpuRenderer::new(desktop_app::fonts::DEMO_FONTS);
-    renderer.init_gpu(
-        Arc::new(device),
-        Arc::new(queue),
-        wgpu::TextureFormat::Bgra8UnormSrgb,
-        adapter.get_info().backend,
-        adapter.get_downlevel_capabilities().flags,
-    );
+    device.attach(&mut renderer, wgpu::TextureFormat::Bgra8UnormSrgb);
     Some(renderer)
 }
 
