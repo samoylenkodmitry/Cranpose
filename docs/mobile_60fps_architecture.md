@@ -22,8 +22,10 @@ wasm and Android Clippy, release web, release Android, and both CI robot
 partitions on Linux, including all four framebuffer capture tests. The exact
 iOS Clippy recipe also passes on Macm3. Source inventories are verified around
 the Linux recipes. Huawei Megaboss favors this snapshot against freshly rebuilt
-main in every pair; the other three final default workload comparisons remain
-required. These gates do not establish the unmet 60 FPS target.
+main in every pair. The subsequent phone full-scroll comparison also favors
+shared, while watch Megaboss still loses 1.16% and 5.52% in the final hot pairs.
+Watch full scroll favors shared in every pair, ending near 31.8 versus main
+21.2 FPS. These gates do not establish the unmet 60 FPS target.
 
 The two-owner storage experiment remains outside the active branch after a
 Huawei full-scroll regression. The ordered kind-range candidate is isolated,
@@ -59,7 +61,11 @@ resolution, effects, animation, density and release features. Both workloads
 must sustain the physical display's 60 Hz rate on Huawei Mate 20 X and Pixel
 Watch 3. Faster cold frames cannot compensate for slower sustained frames.
 Every retained change must avoid an FPS regression against main and the last
-accepted checkpoint in either application on either device.
+accepted checkpoint in either application on either device. Current paired
+matrices explicitly enable the presentation thread in both arms. They preserve
+native picture settings but do not verify the automatic core-count policy,
+which disables that thread below six cores; automatic-policy acceptance remains
+required before claiming default behavior.
 
 Showcase acceptance means traversing the entire list, forward and backward,
 with every body from Sun through Proxima Centauri b entering the visible region.
@@ -93,10 +99,11 @@ rounding fact must remain visible in the evidence.
 | Workload | Evidence | Implication |
 | --- | --- | --- |
 | Huawei Megaboss | Final pure shared-a571 holds 59.812–59.875 FPS against fresh main's 56.485–57.657 across all eight valid legs, 41–46 C | Every pair favors the combined build by 2.177–3.389 FPS; preserve it while closing the other workloads |
-| Watch Megaboss | Integrated hot B A B A: 16.22 / 18.34 / 16.11 / 18.34 fps, B = shared runtime, A = main; 43.3–45.0 C | Acceptance fails; recover the lost performance before another runtime checkpoint is accepted |
+| Watch Megaboss | Final pure shared-a571 hot pairs: 25.701 versus main 26.003, and 25.686 versus main 27.187 FPS; 42.8–43.3 C | Acceptance fails; recover the lost performance before another runtime checkpoint is accepted |
+| Watch Showcase full scroll | Final pure shared-a571 holds 30.011–31.823 FPS versus fresh main 14.363–21.261 across eight valid full-route legs, 41.6–42.5 C | Every pair improves, while the 60 FPS deadline remains unmet |
 | Watch Showcase header | About 21.7 ms GPU before CPU blur kernels; glass about 9.5–11 ms in removal experiments | Reduce useful shading work and redundant evaluation; this is not evidence about cards during full scroll |
 | Huawei Showcase launch | Main 23.62 fps, checkpoint 3f948657 23.48 fps at 34 C | Earlier renderer changes provide no measured launch gain here |
-| Huawei Showcase full scroll | Main 24.99–25.27 fps, shared runtime 34.25–34.82 fps across A B A B then B A B A, 33–36 C | Consistent improvement on the verified full route; the remaining deadline gap is substantial |
+| Huawei Showcase full scroll | Final pure shared-a571: 40.182–41.486 FPS versus fresh main 27.029–27.332 across eight valid full-route legs, 42–45 C | Consistent improvement on the verified full route; the remaining deadline gap is substantial |
 | Huawei Showcase diagnostic | Removing glass leaves about 34 ms of a roughly 50 ms fenced frame; removing page operations leaves about 40 ms | A glass-only improvement cannot close the entire phone gap; fenced times are diagnostic and include lost overlap |
 | Watch effect passes | Discard-at-entry blur passes about 0.04 ms each | A large rewrite justified only by pass-count overhead is unsupported |
 | Parallel recording, compute raster, GPU expansion | Complete device prototypes lose performance or exactness | Do not repeat these designs based on an isolated microbenchmark |
@@ -530,6 +537,85 @@ On Adreno, all five reference tests pass, all five fail when live reflection
 taps are removed, and all five pass after restoration. Linux repeats the same
 fixed/broken/restored proof with verified source inventories. The native watch
 log retains wgpu's unconditional warning that the adapter lacks
-`DEPTH_BIAS_CLAMP`; that capability is not used by these tests. Default
-full-scroll FPS remains required before adoption.
-This unit preserves the material equations, coordinates and sample levels.
+`DEPTH_BIAS_CLAMP`; that capability is not used by these tests. Full-scroll FPS
+rejects this unit: all four watch pairs lose, with the
+stable hot pairs losing 1.75–2.21 FPS; Huawei pairs are mixed. Fable removes the
+gates in `1581e056` while retaining the stronger reference scene. The independent
+rim-style specialization `36dab4ae` uses the existing override mechanism and
+remains under device verification. Runtime branch cost is a hypothesis consistent
+with the regression, not a measured attribution of the lost time.
+
+
+## Arc coverage feasibility boundary
+
+The arc candidate returns the existing butt-cap plane distance before the
+radial distance calculation when that plane is at least 0.5 device pixels. The original
+function finishes with the maximum of that plane and its radial distance, so
+normal finite inputs in the early-return domain already have zero coverage and
+are discarded. Live fragment equations and every non-butt path remain intact.
+
+An Adreno probe on 15,007 captured arcs preserves every channel byte for mixed
+caps and forced butt, round and square caps at four scales. Moving the threshold
+to -1 changes 39,864 channel bytes; restoration passes. Its short timing legs
+vary substantially and lack per-leg wake-state verification, so they do not
+establish an app gain. A follow-up
+probe explicitly wakes and verifies the watch before and after each timing leg,
+and includes both general and fixed arc pipelines. With all wake checks passing,
+the general pipeline saves 0.165–0.492 ms in every pair. Fixed-kind pairs are
++0.344, -1.922, -0.368 and -0.230 ms (candidate minus baseline), including the
+first loss. All 16 pixel cases per pipeline and timed captures remain exact.
+These are feasibility timings, distinct from the completed application runs.
+
+The repository regression compares full shader output against a frozen copy of
+only the original arc distance function. It covers thin and wide strokes, cap
+styles, clipping, fractional scales, both pipeline kinds, and translated edge
+positions aligned near the conservative rejection boundary. Baseline passes,
+the threshold mutant fails on pixels, and restoration passes on Linux and Metal.
+The tessellation test retains its original exact comparison. The committed
+test-only unit is merged into Fable's branch as `862cd459`; the
+production arc shader remains unchanged on the Codex branch.
+
+The complete watch Megaboss sequence favors the candidate by 0.407, 0.479 and
+0.419 FPS in the three hot pairs, with an initial thermal-crossing loss retained.
+Huawei Megaboss stays at the display cap with differences below one frame over
+sixty seconds. Huawei full scroll has two positive and two negative pairs:
++0.169, +0.615, -0.680 and -1.541 FPS. This does not pass the no-regression gate.
+The candidate remains isolated. A bounded follow-up can restrict the exit to
+the existing fixed-arc pipeline, leaving mixed general drawing unchanged; it
+must prove that isolation and repeat the whole application comparisons.
+Neither these results nor the held kind-range results establish recovery
+against main.
+
+
+## Field reuse does not justify a recording rewrite
+
+A field census uses the unchanged application's actual producer at fixed
+60/s and 20/s update rates. Splitting the current body/curve representation
+into three proposed groups saves only 1.273% and 0.189% of estimated upload
+bytes respectively. Six independent 16-byte groups have a larger ceiling,
+17.423% and 16.944%, but their added append, comparison and binding costs
+remain unmeasured. These byte counts do not establish time saved. The three
+groups do not justify a public recording-layout rewrite, and the six-group
+idea requires a complete-path prototype before adoption.
+
+The captured frame has no consecutive identical geometry when colour is
+excluded. Its fifteen duplicate geometries are separated in draw order, so
+combining successive equivalent paints does not offer a supported shortcut.
+
+## Draw-wide material specialization
+
+The rejected runtime tap gates are not a basis for changing output equations.
+Fable's isolated rim-style override uses the existing pipeline constants; the
+Huawei full-scroll sequence favors it in all four pairs. On Adreno, all five
+frozen-reference tests pass, a deliberately unconditional rim-style-off mutant
+fails the live lens scene, and all five pass after restoration. Watch FPS
+remains under measurement, so the candidate is not yet accepted.
+
+A further hypothesis freezes fully active material state at the draw boundary.
+Only if the existing interior discard margin proves coverage is exactly one
+may that pipeline specialize the coverage result and eliminate zero-weight
+work at compilation. Resting cards retain their feathered coverage. The proof
+must cover fractional scale, deformation and the minimum ramp width, followed
+by a deliberately broken reference test and complete device comparisons. This
+is an experiment within the existing override architecture, not a new shader
+compiler or an accepted speedup.

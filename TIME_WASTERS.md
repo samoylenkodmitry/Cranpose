@@ -1082,3 +1082,15 @@ skips unchanged 4 KiB chunks. `CommandRecorder::reusing` can retain capacities,
 but `finish` publishes a new `Arc`; it does not preserve the pointer identity
 used by an unchanged recording's fast path. A body-identity cache still has to
 establish equality and cannot claim a free skip from angle animation alone.
+
+
+- **Wake and verify each leg of a watch GPU probe.** A shell-rendered offscreen
+  scene can keep producing valid pixels after the screen state changes. Waking
+  only once before a multi-leg program leaves its later timing conditions
+  unverified: the first arc probe ranged from 24 to 51 ms and suggested a large
+  shader gain. With wake input before each timing leg and an Awake assertion
+  before and after it, the general-pipeline pairs differed by only 0.165–0.492
+  ms around a 24 ms baseline. Retain the original measurements and their missing
+  state check; do not attribute their large swings to the code change or infer
+  GPU clock values which were never read. The app measurement harness already
+  wakes on every UI step; this gap was in the separate offscreen probe.
