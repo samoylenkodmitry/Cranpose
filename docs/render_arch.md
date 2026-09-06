@@ -2188,14 +2188,17 @@ else. The specialization parity test compares the folded pipeline with
 the general one byte for byte.
 
 **Measured** (rim-only tree against rim plus this flag, same route,
-eight legs, no cooling, unchanged app sources). Mate 20 X: pairs +1.44,
-+0.66, -0.52, +1.64 on a 40 fps frame. Pixel Watch 3, on its 24 fps
-plateau at 43 C: stable pairs +0.07 and +0.42; the other two pairs
-straddle throttle steps (31.4 against 25.0 cool-to-hot, 25.0 against
-16.6 into a deeper step) and carry no signal. The flag removes a fetch
-that was dead work, exactly and without a branch, and costs nothing on
-either device; it is not a frame-rate lever on Adreno, where the
-interior's plain fetch was cache-hot.
+eight legs A B A B then B A B A, no cooling, unchanged app sources,
+every leg retained). Mate 20 X: pairs +1.44, +0.66, -0.52, +1.64 on a
+40 fps frame at 37 to 39 C; the third pair loses with both arms at 38 C.
+Pixel Watch 3: pairs -6.43, +0.07, +0.42, +8.42; the first pair crosses
+from 31.4 cool to 25.0 hot and the fourth from 25.0 into the 16.6 step,
+so the flag's own effect is read from the two pairs on the 24 fps
+plateau at 43 C, where it is within a half frame per second. Exactness
+is proven; speed is mixed, one Mali pair down, and the earlier tap gates
+showed that removing work the shader never used does not by itself
+protect a build from losing frames. The flag is held out of the shared
+tree until a repeat establishes no material loss.
 
 ## What the showcase frame is made of, by removal (2026-09-06)
 
