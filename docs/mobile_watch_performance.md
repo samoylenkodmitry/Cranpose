@@ -1,38 +1,36 @@
-# Mobile renderer: measurement index
+# Mobile renderer: evidence index
 
-Decision: [60 FPS sheet](mobile_60fps_architecture.md). Raw root:
-`/tmp/cranpose-mobile-watch-60fps`. Reports retain APK hashes, scene validation,
-SurfaceFlinger frames and histograms, temperatures, properties and failures.
+Decision: [60 FPS sheet](mobile_60fps_architecture.md). Raw evidence:
+`/tmp/cranpose-mobile-watch-60fps`. Reports retain binaries, scene checks,
+SurfaceFlinger frames, temperatures, properties and failures.
 
-| Evidence under the raw root | Meaning |
+| Artifact under the raw root | What it proves |
 | --- | --- |
-| `main-shared-profile-pair-20260906.json` | Eight audited release APKs; main `0d195313`, shared `37bd0ce8`; later integration changes only docs/tests |
-| `{watch,huawei}-main-shared-checkpoint-matrix.json` | Complete eight-leg Megaboss comparisons under normal policy |
-| `watch-main-shared-checkpoint-analysis.json` | Mixed paired FPS result, presentation tails and thermal status rising 0→4 |
-| `prof-huawei-showcase-{1..8}-*` | Complete normal-policy scroll comparison: every shared leg faster |
-| `prof-watch-showcase-*` | Current watch scroll sequence; preflight failure retained, no acceptance claim |
-| `watch-main-shared-cpu-leaf-*`, `watch-main-shared-cpu-hot-*` | Full 60-second A/B and 30-second reverse B/A CPU profiles; shared uses about 20% fewer cycles/frame in both orders |
-| `huawei-main-shared-cpu-*` | Megaboss CPU profiles; shared reduces CPU time and cycles |
-| `huawei-showcase-cpu-profileonly-*` | Full-scroll CPU profiles; driver worker 8.28→2.67 ms/frame, presentation thread 8.09→4.35, main thread 4.34→3.59 |
-| `showcase-profileable-pair.json` | CPU-only APK copies: only shell profileability added; all 393 other payloads byte-identical, decoded manifest equivalence, signatures/alignment checked |
-| `watch-main-shared-gpu-repeat-*`, `profd-*-showcase-*` | GPU/pass diagnostics; compare temperatures/clocks before attributing differences |
-| `cranpose-shared-rim-56328905-{gates,ios-gates}.json` | Workspace/native/wasm/Android/iOS gates and both robot partitions pass; `37bd0ce8` correction gates also pass |
-| `watch-glass-explicit-669c85a0-proof.json` | Fixed 7 pass; omission mutant fails declarations; wrong-curve mutant fails pixels; restored 7 pass, exact references unchanged |
-| `sequence-ownership.jsonl` | Complete-device leases shared with Fable |
+| `main-shared-profile-pair-20260906.json` | Audited release APKs: main `0d195313`, shared `37bd0ce8`; unchanged application sources |
+| `{watch,huawei}-main-shared-checkpoint-{matrix,analysis}.json` | Complete eight-leg Megaboss comparisons; watch result mixed |
+| `prof-huawei-showcase-{1..8}-*` | Complete scroll comparison; all shared legs faster, below 60 |
+| `prof-watch-showcase-*` | Incomplete watch sequence; failed preflight prevents acceptance |
+| `watch-main-shared-cpu-{leaf,hot}-*`, `huawei-main-shared-cpu-*` | Megaboss CPU time/cycles; watch shared uses about 20% fewer cycles in both orders |
+| `{watch,huawei}-showcase-cpu-profileonly-*` | Full-scroll CPU diagnostics; Huawei shared halves cycles, watch change smaller |
+| `showcase-profileable-pair.json` | Profiling copies differ only by manifest profileability; 393 other payloads unchanged |
+| `profd-*-showcase-*`, `watch-main-shared-gpu-repeat-*` | GPU timings; inspect clocks/heat before comparing |
+| `huawei-main-feed-removal-{matrix,analysis}.json` | Main feed removal loses every pair; later upload logs incomplete |
+| `huawei-showcase-current-memory-stack-{A,B}/memory-callers.json` | Ten-second early-scroll stacks attribute most memcmp to RuntimeShader construction |
+| `override-hash-correctness-proof.json` | Original encoding passes; missing separator fails; restored passes |
+| `override-hash-huawei-matrix.json` | Eight-leg ARM hash microbenchmark; about 30% faster, not app FPS |
+| `shader-factory-correctness-proof.json` | Direct-equivalence test passes; corrupt template fails; restored passes |
+| `shader-factory-package-tests.log` | 340 graphics/liquid tests pass without warnings |
+| `glass-coincident-0d63a76f-*-watch-test-provenance.json` | Exact candidate and two broken-guard binaries; source and native hashes verified; device proof pending |
+| `cranpose-shared-rim-56328905-{gates,ios-gates}.json` | Shared platform/robot gates pass; `37bd0ce8` correction also passes |
+| `cranpose-override-hash-stream-39c8804a-*-gates.json` | Hash candidate gates; robot partitions still pending |
+| `sequence-ownership.jsonl` | Whole-sequence device ownership shared with Fable |
 
-CPU captures validate the recorded 200 Hz event attributes and exact installed
-native payloads. The deliberately corrupted high-rate capture is rejected.
-Profiler runs are not FPS acceptance. Leaf samples leave vendor/kernel symbols
-partly unresolved; they do not measure allocation counts or energy.
+Fable owns the `shape`, `shape_fill`, `glass_dispersion`, `glass_refraction`
+removal matrices and exact coincident-ray app comparison. These change material
+or coverage and bound costs; they cannot prove picture-preserving performance.
 
-Presentation percentile values are histogram bucket labels, not exact durations.
-GPU windows are frame-weighted and logs are sliced by byte offset. Frequency
-samples inside the driver precede app shutdown; earlier outer-script samples
-may describe idle clocks. Failed TLS captures remain invalid, including cleanup
-failures; the finalizer now preserves the primary report and has red/green tests.
-
-Held/rejected: streaming, owner reuse, shape spans, activity/finite-curve folds,
-body interning, GPU template fetch and approximate shader arithmetic. Reopen only
-with new causal evidence. Prior matrices with the presentation thread explicitly
-enabled and incomplete normal-policy runs remain raw evidence, not acceptance.
-Historical analysis is available in Git at `01eb24cf`.
+CPU captures validate 200 Hz event attributes and exact installed native payloads.
+Profiles are diagnostics, not FPS acceptance. Leaf samples do not identify callers;
+DWARF captures are limited to ten seconds. Temperature and endpoint clocks do not
+measure energy or continuous frequency. Presentation percentiles are bucket labels.
+Failed runs remain invalid. No software-display FPS is used for device acceptance.
