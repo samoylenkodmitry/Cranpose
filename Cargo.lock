@@ -1128,7 +1128,6 @@ dependencies = [
  "cranpose-render-common",
  "cranpose-ui",
  "cranpose-ui-graphics",
- "half",
  "log",
  "naga",
  "png",
