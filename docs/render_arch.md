@@ -295,10 +295,12 @@ substrate declaration).
   `glass`, `substrates`, `blur`, `text`, `shape`, `shape_fill`;
   `ablation.rs`) removes one kind of renderer work in the same binary;
   `shape` makes every shape fragment its vertex colour inside its clip
-  (fill and blend kept, coverage and brush removed) and `shape_fill`
-  discards it (fill removed too), so the two deltas separate the shape
-  fragment program from its fill. The parsed set is logged on change and
-  every 600 frames while a switch is on. `CRANPOSE_NO_FILL_CACHE`,
+  (blend kept, coverage and brush removed) and `shape_fill` discards it.
+  Both are bounds on the fragment path, not a subtraction: `shape` also
+  writes every pixel the coverage would have discarded, and a fragment
+  that only discards lets the compiler drop the varyings and vertex work
+  feeding it. Read them beside the vertex and fill counts. The parsed set
+  is logged on change and every 600 frames while a switch is on. `CRANPOSE_NO_FILL_CACHE`,
   `CRANPOSE_NO_BACKDROP_CACHE`, `CRANPOSE_NO_EFFECT_DOMAINS` are the
   reference toggles. Android maps `debug.cranpose.<name>` properties to
   these in `android_frame_telemetry.rs`.
