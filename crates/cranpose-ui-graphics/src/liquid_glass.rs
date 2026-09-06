@@ -146,14 +146,6 @@ pub const LIQUID_GLASS_SPECIALIZATIONS: &[LiquidGlassSpecialization] = &[
         inactive: |u| slot(u, GLASS_ACTIVITY_UNIFORM) >= 1.0,
     },
     LiquidGlassSpecialization {
-        flag: "GLASS_REFRACTION_CURVE_DEFAULT",
-        slots: &[GLASS_REFRACTION_CURVE_UNIFORM],
-        inactive: |u| {
-            let curve = slot(u, GLASS_REFRACTION_CURVE_UNIFORM);
-            curve <= 0.0 || curve == GLASS_REFRACTION_CURVE_DEFAULT
-        },
-    },
-    LiquidGlassSpecialization {
         flag: "GLASS_INTERIOR_GUARD",
         slots: &[],
         inactive: |_| true,
@@ -214,10 +206,6 @@ pub const GLASS_ADAPTIVE_FROST_UNIFORM: usize = 91;
 pub const GLASS_BLUR_RADIUS_UNIFORM: usize = 93;
 /// Uniform slot containing the normalized wcKSRD ray-return exponent.
 pub const GLASS_REFRACTION_CURVE_UNIFORM: usize = 94;
-/// The ray-return exponent the shader uses when the slot is unset, and the
-/// one value `GLASS_REFRACTION_CURVE_DEFAULT` folds; every other value stays
-/// a uniform so an animated curve keys one pipeline.
-pub const GLASS_REFRACTION_CURVE_DEFAULT: f32 = 0.25;
 /// Uniform slot containing normalized wcKSRD spectral dispersion strength.
 pub const GLASS_DISPERSION_UNIFORM: usize = 95;
 /// Uniform slot controlling displacement of the transmitted backdrop path.
@@ -653,32 +641,6 @@ mod tests {
             1,
             "the declaration sets the capture geometry, which must not follow activity"
         );
-    }
-
-    #[test]
-    fn only_the_default_refraction_curve_folds_and_other_values_share_one_key() {
-        let hash_for = |curve: f32| {
-            let mut shader = RuntimeShader::new(LIQUID_GLASS_WGSL);
-            shader.set_float(GLASS_REFRACTION_CURVE_UNIFORM, curve);
-            specialize_liquid_glass(&mut shader);
-            let folded = shader
-                .overrides()
-                .iter()
-                .any(|(flag, _)| *flag == "GLASS_REFRACTION_CURVE_DEFAULT");
-            (folded, shader.overrides_hash())
-        };
-        assert!(hash_for(0.25).0, "the default folds");
-        assert!(hash_for(0.0).0, "an unset slot is the default");
-        let (folded, animated_a) = hash_for(0.26);
-        assert!(!folded, "any other value stays a uniform");
-        let (_, animated_b) = hash_for(0.27);
-        let (_, card) = hash_for(0.62);
-        assert_eq!(
-            animated_a, animated_b,
-            "an animated curve keys one pipeline"
-        );
-        assert_eq!(animated_a, card);
-        assert_ne!(animated_a, hash_for(0.25).1);
     }
 
     #[test]
