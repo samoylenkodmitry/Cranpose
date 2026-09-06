@@ -327,6 +327,18 @@ impl RuntimeShader {
         }
     }
 
+    /// Removes a pipeline override by name, returning whether one was present.
+    pub fn clear_override(&mut self, name: &str) -> bool {
+        let Ok(index) = self
+            .overrides
+            .binary_search_by(|(existing, _)| (*existing).cmp(name))
+        else {
+            return false;
+        };
+        self.overrides.remove(index);
+        true
+    }
+
     /// The pipeline-overridable constants fixed by [`Self::set_override`],
     /// ordered by name.
     pub fn overrides(&self) -> &[(&'static str, f64)] {
@@ -861,6 +873,22 @@ mod tests {
         shader.set_override("ALPHA", 0.0);
         shader.set_override("ZETA", 2.0);
         assert_eq!(shader.overrides(), &[("ALPHA", 0.0), ("ZETA", 2.0)]);
+    }
+
+    #[test]
+    fn clear_override_removes_present_name_and_preserves_remaining_set() {
+        let mut shader = super::RuntimeShader::new("");
+        shader.set_override("ZETA", 1.0);
+        shader.set_override("ALPHA", 2.0);
+        let mut expected = super::RuntimeShader::new("");
+        expected.set_override("ALPHA", 2.0);
+        assert!(shader.clear_override("ZETA"));
+        assert!(!shader.clear_override("MISSING"));
+        assert_eq!(shader.overrides(), &[("ALPHA", 2.0)]);
+        assert_eq!(shader.overrides_hash(), expected.overrides_hash());
+        assert!(shader.clear_override("ALPHA"));
+        assert!(shader.overrides().is_empty());
+        assert_eq!(shader.overrides_hash(), 0);
     }
 
     #[test]
