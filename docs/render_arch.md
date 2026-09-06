@@ -2243,3 +2243,30 @@ fetches behind per-pixel branches loses on Adreno, and the frost
 substrate's blur triples are the second cost on both devices (+3.4 to
 +3.9 on the watch, +1.7 to +6.1 on the Mate 20 X). The header blur and
 text are within the noise on both.
+
+## Where the exact shader levers end (2026-09-06)
+
+After the rim fold and the activity flag, every fetch and every term
+left in the showcase material's interior and rim pipelines is live for
+some pixel of every frame, and the two devices disagree about what a
+dead-looking fetch costs: on Adreno a cache-hot fetch is free and a
+branch around it is not, on Mali folded arithmetic is worth a fifth of
+what it is worth on Adreno. The frost substrate is the one remaining
+block whose work is often zero per pixel (the correction vanishes where
+the blurred, toned backdrop luma sits 0.58 or more from the label's,
+which on a dark page is most of every card), and it cannot be skipped
+exactly: the decision to render the blur passes is made on the CPU
+before the capture exists, a bound from the capture's texels is broken
+by every star (a 0.95-luma dot two pixels wide), and a bound from the
+blurred substrate is the blur itself. A readback would make the skip
+depend on the previous frame's picture, which is not the exactness bar.
+
+What is left is therefore not a shader edit. The watch's frame on the
+full-scroll route is its thermal plateau (31 fps at 41 to 42 C, 24 at
+43, 16 at the next step), so every reduction of GPU work moves the
+plateau rather than the cold frame; the exact reductions available are
+fewer pixels (a glass whose interior is covered by an opaque draw above
+it could scissor that interior away; the showcase has none) and fewer
+passes (the per-stage blur triple is three passes per stratum on a
+device where a pass is cheap). A cheaper material by design changes the
+picture and is the application's decision, not the renderer's.
