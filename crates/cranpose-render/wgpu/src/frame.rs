@@ -1267,6 +1267,114 @@ struct PlannedSubstrate {
     atlas_slot: Option<TexelRect>,
 }
 
+#[derive(Clone, Default)]
+struct SideSlots {
+    blur: Option<TexelRect>,
+    substrates: Vec<TexelRect>,
+}
+
+struct AtlasView<'a> {
+    layout: &'a StageLayout,
+    atlas: usize,
+    members: Vec<(usize, AtlasPlacement)>,
+}
+
+impl AtlasView<'_> {
+    fn size(&self) -> (u32, u32) {
+        self.layout.atlas_sizes[self.atlas]
+    }
+
+    fn side_size(&self) -> (u32, u32) {
+        self.layout.side_sizes[self.atlas]
+    }
+
+    fn substrates(&self, index: usize) -> &[PlannedSubstrate] {
+        &self.layout.substrates[index]
+    }
+
+    fn side(&self, index: usize) -> &SideSlots {
+        &self.layout.side[index]
+    }
+}
+
+struct StageLayout {
+    atlas_sizes: Vec<(u32, u32)>,
+    placements: Vec<Option<AtlasPlacement>>,
+    substrates: Vec<Vec<PlannedSubstrate>>,
+    side_sizes: Vec<(u32, u32)>,
+    side: Vec<SideSlots>,
+}
+
+impl StageLayout {
+    fn signature(&self, index: usize) -> u64 {
+        let mut hasher = capture_hasher();
+        match self.placements[index] {
+            Some(placement) => {
+                1u8.hash(&mut hasher);
+                self.atlas_sizes[placement.atlas].hash(&mut hasher);
+                (placement.x, placement.y).hash(&mut hasher);
+                self.side_sizes[placement.atlas].hash(&mut hasher);
+            }
+            None => 0u8.hash(&mut hasher),
+        }
+        for planned in &self.substrates[index] {
+            match planned.spec {
+                SubstrateSpec::Average { block } => {
+                    0u8.hash(&mut hasher);
+                    block.hash(&mut hasher);
+                }
+                SubstrateSpec::Blur { radius_px } => {
+                    1u8.hash(&mut hasher);
+                    radius_px.to_bits().hash(&mut hasher);
+                }
+            }
+            planned.size.hash(&mut hasher);
+            planned.atlas_slot.hash(&mut hasher);
+        }
+        self.side[index].blur.hash(&mut hasher);
+        self.side[index].substrates.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    fn atlas_views(&self) -> Vec<AtlasView<'_>> {
+        (0..self.atlas_sizes.len())
+            .map(|atlas| AtlasView {
+                layout: self,
+                atlas,
+                members: self
+                    .placements
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, placement)| {
+                        placement
+                            .filter(|placement| placement.atlas == atlas)
+                            .map(|placement| (index, placement))
+                    })
+                    .collect(),
+            })
+            .collect()
+    }
+
+    fn restrict(&self, indices: &[usize]) -> Self {
+        Self {
+            atlas_sizes: self.atlas_sizes.clone(),
+            placements: indices
+                .iter()
+                .map(|index| self.placements[*index])
+                .collect(),
+            substrates: indices
+                .iter()
+                .map(|index| self.substrates[*index].clone())
+                .collect(),
+            side_sizes: self.side_sizes.clone(),
+            side: indices
+                .iter()
+                .map(|index| self.side[*index].clone())
+                .collect(),
+        }
+    }
+}
+
 /// What a stage renders beside its capture atlas: the texture holding the
 /// blurred regions, per atlas member the downscaled slot its blur wrote,
 /// and per member the regions of its substrates in the texture it reads.
@@ -1303,10 +1411,17 @@ struct Atlas {
 }
 
 impl Atlas {
-    fn padded_size(&self) -> (u32, u32) {
-        let round = |value: u32| value.div_ceil(ATLAS_SIZE_STEP).max(1) * ATLAS_SIZE_STEP;
-        (round(self.width), round(self.height))
+    fn padded_size(&self, limit: u32) -> (u32, u32) {
+        (
+            padded_dimension(self.width, limit),
+            padded_dimension(self.height, limit),
+        )
     }
+}
+
+fn padded_dimension(value: u32, limit: u32) -> u32 {
+    let step = (value.max(ATLAS_SIZE_STEP).next_power_of_two() / 8).max(ATLAS_SIZE_STEP);
+    value.max(1).div_ceil(step).saturating_mul(step).min(limit)
 }
 
 /// Shelf packing of regions edge to edge into as few atlases as the
@@ -1807,12 +1922,16 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                     rect: item.capture_rect,
                 })
                 .collect();
-            let items = self.take_uncached(pass, &mut pending[start..end]);
+            let layout = {
+                let stage_items: Vec<&PendingBackdrop<'_>> = pending[start..end].iter().collect();
+                self.plan_stage(&stage_items, pass.scale)
+            };
+            let (items, indices) = self.take_uncached(pass, &mut pending[start..end], &layout);
             if !items.is_empty() {
                 if diagnose {
                     log_stage(stage, &items);
                 }
-                let mut outputs = self.run_stage(pass, &items)?;
+                let mut outputs = self.run_stage(pass, &items, &layout.restrict(&indices))?;
                 self.admit_backdrops(&items, &mut outputs);
                 pass.pending.extend(outputs);
             }
@@ -1826,18 +1945,23 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         &mut self,
         pass: &mut LayerPass<'_>,
         items: &'a mut [PendingBackdrop<'scene>],
-    ) -> Vec<&'a PendingBackdrop<'scene>> {
+        layout: &StageLayout,
+    ) -> (Vec<&'a PendingBackdrop<'scene>>, Vec<usize>) {
         let mut kept = Vec::with_capacity(items.len());
+        let mut indices = Vec::with_capacity(items.len());
         let mut hits = Vec::new();
-        for item in items {
-            item.key = self.backdrop_cache_key(pass, item);
+        for (index, item) in items.iter_mut().enumerate() {
+            item.key = self.backdrop_cache_key(pass, item, layout.signature(index));
             match self.cached_backdrop(item) {
                 Some(composite) => hits.push(composite),
-                None => kept.push(&*item),
+                None => {
+                    kept.push(&*item);
+                    indices.push(index);
+                }
             }
         }
         pass.pending.extend(hits);
-        kept
+        (kept, indices)
     }
 
     /// The cache key of a backdrop whose result can be reused: the hash of
@@ -1849,6 +1973,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         &self,
         pass: &mut LayerPass<'_>,
         item: &PendingBackdrop<'_>,
+        layout: u64,
     ) -> Option<LayerRasterCacheKey> {
         let node_id = item.node_id?;
         item.batched.as_ref()?;
@@ -1895,6 +2020,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         if !hash_capture_composites(pass.pending_below(item.z), window, &mut hasher) {
             return None;
         }
+        layout.hash(&mut hasher);
         let [x, y, width, height] = item.layer_pixel_rect();
         Some(LayerRasterCacheKey::backdrop_effect(
             Some(node_id),
@@ -2003,17 +2129,10 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         &mut self,
         pass: &mut LayerPass<'_>,
         items: &[&PendingBackdrop<'_>],
+        layout: &StageLayout,
     ) -> Result<Vec<ResolvedComposite>, String> {
         let scale = pass.scale;
-        let (packer, placements, substrates) = self.pack_stage(items);
-        let atlases: Vec<Rc<OffscreenTarget>> = packer
-            .atlases
-            .iter()
-            .map(|atlas| {
-                let (width, height) = atlas.padded_size();
-                self.acquire_transient("Backdrop Capture Atlas", width, height)
-            })
-            .collect();
+        let placements = &layout.placements;
         let mut singles: Vec<Option<Rc<OffscreenTarget>>> = vec![None; items.len()];
         let stage_end = items.iter().map(|item| item.z).max().unwrap_or(0);
         self.flush_page(pass, stage_end)?;
@@ -2024,17 +2143,14 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             }
         }
         let mut outputs = Vec::with_capacity(items.len());
-        for (atlas_index, texture) in atlases.iter().enumerate() {
-            let members: Vec<(usize, AtlasPlacement)> = placements
-                .iter()
-                .enumerate()
-                .filter_map(|(index, placement)| {
-                    placement
-                        .filter(|placement| placement.atlas == atlas_index)
-                        .map(|placement| (index, placement))
-                })
-                .collect();
-            let regions: Vec<CaptureRegion> = members
+        for view in layout.atlas_views() {
+            if view.members.is_empty() {
+                continue;
+            }
+            let (width, height) = view.size();
+            let texture = &self.acquire_transient("Backdrop Capture Atlas", width, height);
+            let regions: Vec<CaptureRegion> = view
+                .members
                 .iter()
                 .map(|(index, placement)| CaptureRegion {
                     z: items[*index].z,
@@ -2043,13 +2159,13 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 })
                 .collect();
             self.capture_regions(pass, &regions, texture, "Backdrop Capture Atlas Pass")?;
-            let member_substrates: Vec<&[PlannedSubstrate]> = members
-                .iter()
-                .map(|(index, _)| substrates[*index].as_slice())
-                .collect();
-            let side =
-                self.stage_side_regions(texture, items, &members, &member_substrates, scale)?;
-            outputs.extend(stage_composites(texture, side.as_ref(), items, &members));
+            let side = self.stage_side_regions(texture, items, &view, scale)?;
+            outputs.extend(stage_composites(
+                texture,
+                side.as_ref(),
+                items,
+                &view.members,
+            ));
         }
         for (index, item) in items.iter().enumerate() {
             if let Some(capture) = singles[index].take() {
@@ -2139,13 +2255,6 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         })
     }
 
-    /// Packs every batched item of a stage into as few atlases as the
-    /// dimension limit allows, tallest first; an unbatched item gets no
-    /// placement and captures alone. The substrates a shader over the atlas
-    /// declared get their slots in the same atlas, packed after the
-    /// captures; a substrate the atlas cannot hold is dropped with the ones
-    /// after it, and the shader samples its capture instead. A shader after
-    /// a blur reads the result texture, where its substrates are rendered.
     fn pack_stage(
         &self,
         items: &[&PendingBackdrop<'_>],
@@ -2156,8 +2265,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
     ) {
         let limit = self.renderer.max_texture_dim().min(MAX_ATLAS_DIM);
         let mut packer = AtlasPacker::new(limit);
-        let mut order: Vec<usize> = (0..items.len()).collect();
-        order.sort_by_key(|index| std::cmp::Reverse(items[*index].capture_rect.pixel_size().1));
+        let order: Vec<usize> = (0..items.len()).collect();
         let mut placements: Vec<Option<AtlasPlacement>> = vec![None; items.len()];
         for index in &order {
             let item = items[*index];
@@ -2198,36 +2306,80 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         (packer, placements, substrates)
     }
 
-    /// Renders what the members of one capture atlas read beside it. The
-    /// blur pass pair runs over the blurred members: the scratch and the
-    /// result hold each region downscaled by its blur, packed by height so
-    /// both stay as small as the regions themselves, and a composite of a
-    /// blurred member reads the result as the capture's pixels. The
-    /// substrates of the shader members render into the result by the same
-    /// passes, a blurred one as one more region of the pass pair, an
-    /// averaged one by the downsample pass, and the ones a shader over the
-    /// atlas reads are copied back into their atlas slots.
+    fn plan_stage(&self, items: &[&PendingBackdrop<'_>], scale: f32) -> StageLayout {
+        let (packer, placements, substrates) = self.pack_stage(items);
+        let limit = self.renderer.max_texture_dim().min(MAX_ATLAS_DIM);
+        let atlas_sizes: Vec<(u32, u32)> = packer
+            .atlases
+            .iter()
+            .map(|atlas| atlas.padded_size(limit))
+            .collect();
+        let mut side_sizes = vec![(0, 0); atlas_sizes.len()];
+        let mut side: Vec<SideSlots> = vec![SideSlots::default(); items.len()];
+        for (atlas_index, side_size) in side_sizes.iter_mut().enumerate() {
+            let members: Vec<usize> = (0..items.len())
+                .filter(|index| {
+                    placements[*index].is_some_and(|placement| placement.atlas == atlas_index)
+                })
+                .collect();
+            let blurred: Vec<(usize, BlurSpec)> = members
+                .iter()
+                .filter_map(|index| Some((*index, items[*index].batched?.blur()?)))
+                .collect();
+            let mut side_packer = AtlasPacker::new(limit);
+            let mut first_atlas = |width: u32, height: u32| {
+                side_packer
+                    .place(width, height)
+                    .filter(|slot| slot.atlas == 0)
+                    .map(|slot| (slot.x, slot.y, width, height))
+            };
+            for (index, blur) in blurred {
+                let (width, height) = items[index].capture_rect.pixel_size();
+                let (scaled_width, scaled_height) =
+                    blur_scratch_size(blur.radius_x * scale, blur.radius_y * scale, width, height);
+                side[index].blur = first_atlas(scaled_width, scaled_height);
+            }
+            for index in &members {
+                for planned in &substrates[*index] {
+                    if let Some(slot) = first_atlas(planned.size.0, planned.size.1) {
+                        side[*index].substrates.push(slot);
+                    }
+                }
+            }
+            *side_size = side_packer
+                .atlases
+                .first()
+                .map_or((0, 0), |atlas| atlas.padded_size(limit));
+        }
+        StageLayout {
+            atlas_sizes,
+            placements,
+            substrates,
+            side_sizes,
+            side,
+        }
+    }
+
     fn stage_side_regions(
         &mut self,
         atlas: &Rc<OffscreenTarget>,
         items: &[&PendingBackdrop<'_>],
-        members: &[(usize, AtlasPlacement)],
-        substrates: &[&[PlannedSubstrate]],
+        view: &AtlasView<'_>,
         scale: f32,
     ) -> Result<Option<StageSideRegions>, String> {
-        let mut blurred: Vec<(usize, BlurSpec)> = members
+        let members = &view.members;
+        let blurred: Vec<(usize, BlurSpec)> = members
             .iter()
             .enumerate()
             .filter_map(|(member, (index, _))| Some((member, items[*index].batched?.blur()?)))
             .collect();
-        if blurred.is_empty() && substrates.iter().all(|planned| planned.is_empty()) {
+        if blurred.is_empty()
+            && members
+                .iter()
+                .all(|(index, _)| view.substrates(*index).is_empty())
+        {
             return Ok(None);
         }
-        blurred.sort_by_key(|(member, _)| {
-            std::cmp::Reverse(items[members[*member].0].capture_rect.pixel_size().1)
-        });
-        let limit = self.renderer.max_texture_dim().min(MAX_ATLAS_DIM);
-        let mut packer = AtlasPacker::new(limit);
         let mut slots = vec![None; members.len()];
         let mut regions = Vec::with_capacity(blurred.len());
         for (member, blur) in blurred {
@@ -2235,15 +2387,9 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             let (width, height) = items[index].capture_rect.pixel_size();
             let radius_x = blur.radius_x * scale;
             let radius_y = blur.radius_y * scale;
-            let (scaled_width, scaled_height) =
-                blur_scratch_size(radius_x, radius_y, width, height);
-            let Some(slot) = packer.place(scaled_width, scaled_height) else {
+            let Some(scratch) = view.side(index).blur else {
                 return Err("a blurred region outgrew the atlas that held it".into());
             };
-            if slot.atlas != 0 {
-                return Err("blurred regions of one atlas spilled into a second".into());
-            }
-            let scratch = (slot.x, slot.y, scaled_width, scaled_height);
             slots[member] = Some(scratch);
             regions.push(BlurRegion {
                 source: (placement.x, placement.y, width, height),
@@ -2260,15 +2406,11 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         for (member, (index, placement)) in members.iter().enumerate() {
             let (source_width, source_height) = items[*index].capture_rect.pixel_size();
             let source = (placement.x, placement.y, source_width, source_height);
-            for (order, planned) in substrates[member].iter().enumerate() {
+            for (order, planned) in view.substrates(*index).iter().enumerate() {
                 let (width, height) = planned.size;
-                let Some(slot) = packer.place(width, height) else {
+                let Some(scratch) = view.side(*index).substrates.get(order).copied() else {
                     return Err("a substrate outgrew the atlas that held it".into());
                 };
-                if slot.atlas != 0 {
-                    return Err("substrates of one atlas spilled into a second".into());
-                }
-                let scratch = (slot.x, slot.y, width, height);
                 let read = member_read_texels(items[*index], *placement, scale);
                 match planned.spec {
                     SubstrateSpec::Average { block } => averaged.push(SubstrateRegion {
@@ -2295,13 +2437,16 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 }));
             }
         }
-        let (width, height) = packer.atlases[0].padded_size();
+        let (width, height) = view.side_size();
         let scratch = self.acquire_transient("Backdrop Blur Scratch", width, height);
         let result = self.acquire_transient("Backdrop Blur Result", width, height);
         let device = self.renderer.device.clone();
-        self.renderer
-            .effect_renderer
-            .record_substrates(substrates.iter().map(|planned| planned.len() as u32).sum());
+        self.renderer.effect_renderer.record_substrates(
+            members
+                .iter()
+                .map(|(index, _)| view.substrates(*index).len() as u32)
+                .sum(),
+        );
         self.renderer.effect_renderer.encode_blur_atlas_passes(
             self.recorder,
             &device,
@@ -3530,5 +3675,23 @@ mod tests {
                 assert!(a.intersect(*b).is_none(), "parts overlap: {a:?} {b:?}");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod atlas_padding_tests {
+    use super::{ATLAS_SIZE_STEP, padded_dimension};
+
+    #[test]
+    fn padded_dimensions_step_by_an_eighth_of_their_magnitude_and_never_exceed_the_limit() {
+        assert_eq!(padded_dimension(1, 4096), ATLAS_SIZE_STEP);
+        assert_eq!(padded_dimension(17, 4096), 32);
+        assert_eq!(padded_dimension(300, 4096), 320);
+        assert_eq!(padded_dimension(1080, 4096), 1280);
+        assert_eq!(padded_dimension(2072, 4096), 2560);
+        assert_eq!(padded_dimension(4000, 4096), 4096);
+        assert_eq!(padded_dimension(2100, 3000), 2560);
+        assert_eq!(padded_dimension(2900, 3000), 3000);
+        assert_eq!(padded_dimension(24, 20), 20);
     }
 }

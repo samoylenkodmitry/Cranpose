@@ -1841,6 +1841,67 @@ bright glyph pixels of "Gla" in every row's text on the cold frame
 against row 0's (row 5 had none, row 0 sixty-two) and was red before the
 change.
 
+## A backdrop's key names its place in the stage (2026-09-06, early)
+
+Codex's Linux run of the nine-glass admission test was one level off
+between the settled frame and a never-caching frame, while the Mac was
+exact. The region map a member reads its capture through is
+`region.xy / dims` and `region.zw / dims`, so a member's bytes depend on
+its slot and on the atlas and side texture sizes; the alone-versus-packed
+parity tests have always allowed one level of that drift. Retention
+replayed bytes computed under the layout of the admitting frame, and a
+hit removes its member from the stage before it is packed, so the other
+members' slots moved between the admitting frame and the frame that
+served the hit, and their fresh bytes were no longer the retained ones.
+
+**What the renderer does now.** `run_stages` plans every stage over all
+its items before any is served from the cache (`plan_stage`): the atlas
+placements, the substrate slots and, per atlas, the side packing of blur
+scratch slots and substrate slots. The plan is a pure function of the
+stage's items, the layout a renderer that never caches computes for the
+same frame; misses take their slots from it instead of packing again
+(`StageLayout::restrict`), and each member's key hashes its own part of
+it (`StageLayout::signature`): its placement, the padded atlas and side
+sizes, its substrate slots and its blur slot. A neighbour joining,
+leaving or moving in z changes the layout and so the keys, which miss
+and are re-admitted by the gate two frames later. Two packing policies
+keep hits under a co-member's animation without leaving that purity:
+members pack in stage (z) order rather than by descending height, so a
+later member's size change moves no earlier slot, and atlas and side
+sizes pad in steps of an eighth of the next power of two above them
+(never past the packer's limit), so a small size change rarely moves the
+dimensions while the padding adds less than a quarter (2072 pads to
+2560, +23.6%; a 16-texel floor applies to the smallest).
+
+**Gates.** `backdrop_atlas_parity.rs` adds a stage of nine identified
+glasses admitted and settled, then one removed, one added back and the
+order rotated, every frame whole-frame at exact zero against a
+never-caching renderer (`CRANPOSE_NO_BACKDROP_CACHE`) of the same graph,
+each settling back into the cache within a few frames; the nine-glass
+test and the animated-overlay test (still rows cached while the overlay's
+blur radius pulses) are unchanged and green. Those byte proofs depend on
+a sampler that drifts, which Apple's does not and, once the packing
+policies above were in, Linux no longer did either: Codex ran the tree
+with `layout.hash(&mut hasher)` deleted from `backdrop_cache_key` and
+all 24 tests still passed there. The proof that holds on every platform
+is `a_shader_reading_its_place_in_the_atlas_is_re_rendered_when_a_neighbour_moves_it`:
+a shader is entitled to read its source region (`u[59]`) and
+`textureDimensions`, and the probe paints both; six such glasses settle
+at an atlas of 2048, a seventh widens it to 4096 and the first then
+leaves, every frame exact against the never-caching renderer. Without
+the layout in the key the first frame after the seventh replays six
+stale results, red on the Mac as on Linux. Padded sizes are bounded by
+the packer's limit (`padded_dimensions_step_by_an_eighth...` pins the
+steps and a limit that is not a power of two), and a stage allocates an
+atlas only when one of its misses lands in it:
+`a_stage_spanning_two_atlases_allocates_only_the_atlas_its_misses_land_in`
+puts two 2040 x 2030 glasses side by side on a 4200-wide page, so
+neither two captures on one shelf nor two shelves fit the 4096 limit and
+each capture takes an atlas of its own, repaints a rect under one of
+them, and checks the partial-hit frame acquires one atlas and one side
+pair fewer than the cold frame and is exact; acquiring the atlas before
+the membership check turns it red.
+
 ## Order
 
 Every step ships with its contract proven red first, the robot suite

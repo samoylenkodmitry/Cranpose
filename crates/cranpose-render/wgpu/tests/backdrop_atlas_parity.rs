@@ -784,6 +784,243 @@ fn independent_cached_glasses(identified: bool) -> RenderGraph {
     support::page_graph(1104, 720, children)
 }
 
+fn identified_glasses_with(present: &[usize], effect: impl Fn() -> RenderEffect) -> RenderGraph {
+    let mut children = support::striped_page(1104, 720);
+    for index in present {
+        let mut layer = shared_test_support::layer_node(
+            rect(0.0, 0.0, 300.0, 160.0),
+            ProjectiveTransform::translation(
+                32.0 + (index % 3) as f32 * 368.0,
+                32.0 + (index / 3) as f32 * 240.0,
+            ),
+            GraphicsLayer {
+                backdrop_effect: Some(effect()),
+                clip: true,
+                shape: LayerShape::Rounded(RoundedCornerShape::uniform(12.0)),
+                ..GraphicsLayer::default()
+            },
+            vec![inset_content(300.0, 160.0, 12.0)],
+        );
+        layer.node_id = Some(index + 1);
+        children.push(RenderNode::Layer(Box::new(layer)));
+    }
+    support::page_graph(1104, 720, children)
+}
+
+fn identified_glasses(present: &[usize]) -> RenderGraph {
+    identified_glasses_with(present, || RenderEffect::blur(12.0))
+}
+
+fn layout_probe() -> RenderEffect {
+    let mut shader = RuntimeShader::new(&format!(
+        "{}\n{}",
+        RUNTIME_SHADER_PRELUDE_WGSL,
+        r#"@fragment
+fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
+    let region = u[59u];
+    let dims = vec2<f32>(textureDimensions(input_texture));
+    return vec4<f32>(region.x / 4096.0, region.y / 4096.0, dims.x / 4096.0, 1.0);
+}
+"#
+    ));
+    shader.set_batched_source(true);
+    RenderEffect::Shader { shader }
+}
+
+fn layout_probe_glasses(present: &[usize]) -> RenderGraph {
+    identified_glasses_with(present, layout_probe)
+}
+
+struct NeighbourHarness {
+    cached: support::LockedRenderer,
+    reference: cranpose_render_wgpu::WgpuRenderer,
+    graph: fn(&[usize]) -> RenderGraph,
+}
+
+impl NeighbourHarness {
+    fn new(graph: fn(&[usize]) -> RenderGraph) -> Option<Self> {
+        let cached = support::headless_renderer().ok()?;
+        let reference = support::headless_renderer_beside_locked().ok()?;
+        Some(Self {
+            cached,
+            reference,
+            graph,
+        })
+    }
+
+    fn settle(&mut self, present: &[usize]) {
+        for _ in 0..12 {
+            support::capture_graph(&mut self.cached, (self.graph)(present), 1104, 720);
+        }
+        let stats = self.cached.last_frame_stats().expect("frame stats");
+        assert_eq!(
+            stats.layer_cache_misses, 0,
+            "the stage must settle: {stats:?}"
+        );
+    }
+
+    fn assert_exact(&mut self, label: &str, present: &[usize]) -> u32 {
+        let frame = support::capture_graph(&mut self.cached, (self.graph)(present), 1104, 720);
+        let misses = self
+            .cached
+            .last_frame_stats()
+            .expect("frame stats")
+            .layer_cache_misses;
+        cranpose_render_wgpu::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", Some("1"));
+        self.reference.scene_mut().graph = Some((self.graph)(present));
+        let reference = self
+            .reference
+            .capture_frame_with_scale(1104, 720, 1.0)
+            .expect("reference capture");
+        cranpose_render_wgpu::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", None);
+        assert_eq!(
+            support::max_channel_delta(&frame.pixels, &reference.pixels),
+            0,
+            "{label}: a frame with {} cached glasses must be the bytes of a renderer that never caches",
+            present.len() as u32 - misses
+        );
+        misses
+    }
+
+    fn assert_exact_until_warm(&mut self, label: &str, present: &[usize]) {
+        let mut warm = 0;
+        for frame in 0..8 {
+            let misses = self.assert_exact(&format!("{label}, frame {frame}"), present);
+            if misses == 0 {
+                warm += 1;
+            }
+            if warm == 2 {
+                return;
+            }
+        }
+        panic!("{label}: the stage never settled back into the cache");
+    }
+}
+
+const ALL_NINE: [usize; 9] = [0, 1, 2, 3, 4, 5, 6, 7, 8];
+
+#[test]
+fn a_neighbour_leaving_the_stage_keeps_every_frame_exact() {
+    let Some(mut harness) = NeighbourHarness::new(identified_glasses) else {
+        return;
+    };
+    harness.settle(&ALL_NINE);
+    harness.assert_exact("all nine settled", &ALL_NINE);
+    harness.assert_exact_until_warm("glass 4 removed", &[0, 1, 2, 3, 5, 6, 7, 8]);
+}
+
+#[test]
+fn a_neighbour_joining_the_stage_keeps_every_frame_exact() {
+    let Some(mut harness) = NeighbourHarness::new(identified_glasses) else {
+        return;
+    };
+    harness.settle(&[0, 1, 2, 3, 5, 6, 7, 8]);
+    harness.assert_exact_until_warm("glass 4 added", &ALL_NINE);
+}
+
+#[test]
+fn neighbours_reordered_in_the_stage_keep_every_frame_exact() {
+    let Some(mut harness) = NeighbourHarness::new(identified_glasses) else {
+        return;
+    };
+    harness.settle(&ALL_NINE);
+    harness.assert_exact_until_warm("rotated order", &[8, 0, 1, 2, 3, 4, 5, 6, 7]);
+    harness.assert_exact_until_warm("original order again", &ALL_NINE);
+}
+
+#[test]
+fn a_shader_reading_its_place_in_the_atlas_is_re_rendered_when_a_neighbour_moves_it() {
+    let Some(mut harness) = NeighbourHarness::new(layout_probe_glasses) else {
+        return;
+    };
+    harness.settle(&[0, 1, 2, 3, 4, 5]);
+    harness.assert_exact("six settled", &[0, 1, 2, 3, 4, 5]);
+    harness.assert_exact_until_warm(
+        "a seventh widens the atlas past a power of two",
+        &[0, 1, 2, 3, 4, 5, 6],
+    );
+    harness.assert_exact_until_warm(
+        "the first leaves and every slot shifts",
+        &[1, 2, 3, 4, 5, 6],
+    );
+}
+
+fn two_atlas_stage(marked: bool) -> RenderGraph {
+    let mut children = support::striped_page(4200, 2100);
+    children.push(RenderNode::Layer(Box::new(
+        shared_test_support::layer_node(
+            rect(0.0, 0.0, 900.0, 900.0),
+            ProjectiveTransform::translation(2400.0, 400.0),
+            GraphicsLayer::default(),
+            vec![support::solid_rect(
+                rect(0.0, 0.0, 900.0, 900.0),
+                if marked {
+                    Color(0.95, 0.30, 0.10, 1.0)
+                } else {
+                    Color(0.10, 0.30, 0.95, 1.0)
+                },
+            )],
+        ),
+    )));
+    for (index, left) in [20.0, 2076.0].into_iter().enumerate() {
+        let mut layer = shared_test_support::layer_node(
+            rect(0.0, 0.0, 2040.0, 2030.0),
+            ProjectiveTransform::translation(left, 40.0),
+            GraphicsLayer {
+                backdrop_effect: Some(RenderEffect::blur(12.0)),
+                clip: true,
+                shape: LayerShape::Rounded(RoundedCornerShape::uniform(12.0)),
+                ..GraphicsLayer::default()
+            },
+            vec![inset_content(2040.0, 2030.0, 12.0)],
+        );
+        layer.node_id = Some(index + 1);
+        children.push(RenderNode::Layer(Box::new(layer)));
+    }
+    support::page_graph(4200, 2100, children)
+}
+
+#[test]
+fn a_stage_spanning_two_atlases_allocates_only_the_atlas_its_misses_land_in() {
+    let Ok(mut renderer) = support::headless_renderer() else {
+        return;
+    };
+    let Ok(mut reference) = support::headless_renderer_beside_locked() else {
+        return;
+    };
+    let mut render = |marked: bool| {
+        let frame = support::capture_graph(&mut renderer, two_atlas_stage(marked), 4200, 2100);
+        (renderer.last_frame_stats().expect("frame stats"), frame)
+    };
+    let (cold, _) = render(false);
+    assert_eq!(cold.layer_cache_misses, 2);
+    for _ in 0..4 {
+        render(false);
+    }
+    let (settled, _) = render(false);
+    assert_eq!(settled.layer_cache_misses, 0, "{settled:?}");
+    let (partial, frame) = render(true);
+    assert_eq!(partial.layer_cache_hits, 1, "{partial:?}");
+    assert_eq!(partial.layer_cache_misses, 1, "{partial:?}");
+    assert!(
+        partial.transient_texture_bytes + 40_000_000 < cold.transient_texture_bytes,
+        "a partial hit must not allocate the atlas its hit member alone occupied: cold {} bytes, partial {} bytes",
+        cold.transient_texture_bytes,
+        partial.transient_texture_bytes
+    );
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", Some("1"));
+    reference.scene_mut().graph = Some(two_atlas_stage(true));
+    let expected = reference
+        .capture_frame_with_scale(4200, 2100, 1.0)
+        .expect("reference capture");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", None);
+    assert_eq!(
+        support::max_channel_delta(&frame.pixels, &expected.pixels),
+        0,
+        "the partial-hit frame must be the bytes of a renderer that never caches"
+    );
+}
+
 #[test]
 fn independent_glasses_are_admitted_over_several_frames_without_changing_pixels() {
     let Ok(mut renderer) = support::headless_renderer() else {
