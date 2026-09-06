@@ -369,6 +369,8 @@ By removal, same APK (`CRANPOSE_ABLATE`), fps switched minus base per pair:
 | text | -1.0, +2.6, +1.4, +0.1 | unmeasurable: the route validates by OCR of text |
 | shape (flat colour) | +1.8, +3.0, +1.6, +1.5 | +3.5, +2.3, +11.2 (plateau crossing), +2.9 on base 24-27 at 42-43 C |
 | shape_fill (discard) | +0.5, +3.5, +1.6, +1.5 | +1.3, +1.2, +1.9, +1.3 on base 24 at 42-43 C |
+| probe: 8 empty Load/Store passes | not run | 0.01 ms/frame for all eight (elided or free); fps +1.4, +0.4 |
+| probe: 8 passes each blitting a transparent texel over the page | not run | 16.2 ms/frame = 2.0 ms per full-page pass; span 39.6 → 55.3, fps 24.2 → 17.8 at 42 C. The frame's own rows: a populated pass with tiny draws 0.09 ms, a blur pass ~0.4 ms, so the pass floor is ~0.1 ms and 2 ms is the blit's 0.2 MP of fragments. Pass merging is not a lever; taps × pixels is, even at one tap |
 | glass_dispersion (two of four fetches) | +3.3, +0.6, -2.4, +2.5 at 39-42 C | +2.2, -10.0, -7.2, +13.4 across the 36 and 24 plateaus; +1.2..+2.6 within one |
 | glass_refraction (physical refraction arithmetic) | -1.8, +1.7, -0.9, -0.8 | +0.8, +0.3, -0.6, -0.0 on base 24.4 at 42.5 C |
 | shape_variants=0 on Orbit (general 15-location pipeline for solid records) | -1.5, -0.6, -1.6, -1.0 on the 60 Hz cap, no spans | -10.3, -8.2, -8.2, -7.9 on 14.6-17.1; span 146-147 ms against 48-58 at 43-45 C |

@@ -1222,3 +1222,15 @@ The dispersion block of `liquid_glass.wgsl` was read through `grep -v '^\s*//'` 
 
 Set `CRANPOSE_SEGMENT_SURFACE` after constructing the headless renderer,
 and assert nonzero cache composites before interpreting a cache comparison.
+
+## A device switch that is not in the property table measures the control
+
+2026-09-06: four 25 s watch legs of a "probe draw passes" diagnostic came back
+identical to the control, which read like "a populated pass costs nothing".
+The `CRANPOSE_*` toggle existed and its Mac test passed, but only
+`debug.cranpose.probe_passes` had been added to `PROPERTY_BACKED_ENV_VARS`
+in `crates/cranpose/src/android_frame_telemetry.rs`; the draw arm's property
+was never forwarded. Before reading any device diagnostic, prove the switch
+was live in that run: the `[GPU-PASS]` rows must carry the label the switch
+adds, or the stats line must show the counter it moves. A nil delta with no
+such trace is an unmapped switch, not a result.
