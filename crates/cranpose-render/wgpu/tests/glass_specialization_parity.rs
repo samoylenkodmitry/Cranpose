@@ -20,6 +20,7 @@ const SCALE: f32 = 2.0;
 const FRAME_WIDTH: u32 = (VIEW_WIDTH * SCALE) as u32;
 const FRAME_HEIGHT: u32 = (VIEW_HEIGHT * SCALE) as u32;
 const TOGGLE: &str = "CRANPOSE_NO_SHADER_SPECIALIZATION";
+const NO_SPLIT: &str = "CRANPOSE_NO_GLASS_SPLIT_SCISSORS";
 
 /// The showcase's card material: refracting, dispersing, adaptive frost,
 /// no blur.
@@ -219,5 +220,37 @@ fn a_specialized_glass_pipeline_matches_the_general_one_byte_for_byte() {
         FRAME_WIDTH,
         &specialized.pixels,
         &general.pixels,
+    );
+}
+
+#[test]
+fn a_scissor_split_glass_matches_whole_quads_byte_for_byte_and_shades_fewer_pixels() {
+    let (split, split_stats) = match capture_card_and_stats() {
+        Ok(captured) => captured,
+        Err(err) => {
+            eprintln!("skipping glass split parity: {err}");
+            return;
+        }
+    };
+    cranpose_render_wgpu::set_debug_toggle(NO_SPLIT, Some("1"));
+    let whole = capture_card_and_stats();
+    cranpose_render_wgpu::set_debug_toggle(NO_SPLIT, None);
+    let (whole, whole_stats) = whole.expect("headless WGPU init failed mid-suite");
+    assert_eq!(
+        split_stats.shader_pixels, whole_stats.shader_pixels,
+        "the split shades the same composite area once"
+    );
+    assert!(
+        split_stats.glass_rasterized_pixels * 10 < whole_stats.glass_rasterized_pixels * 9,
+        "the split must rasterise fewer glass fragments: split {} vs whole {}",
+        split_stats.glass_rasterized_pixels,
+        whole_stats.glass_rasterized_pixels
+    );
+    support::assert_same_bytes(
+        "rim bands and inset interior scissors vs whole quads; a scissor only removes \
+         fragments the shader discards, never one it shades",
+        FRAME_WIDTH,
+        &split.pixels,
+        &whole.pixels,
     );
 }

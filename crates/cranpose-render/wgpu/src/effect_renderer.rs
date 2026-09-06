@@ -2,12 +2,14 @@ use std::cell::Cell;
 
 use cranpose_render_common::geometry::{BLUR_TAP_PAIRS, BlurKernel, blur_scratch_block};
 use cranpose_ui_graphics::{BlendMode, MAX_SUBSTRATES, RenderEffect, RuntimeShader, TileMode};
+use smallvec::SmallVec;
 
 use crate::{
     frame_graph::{
         BufferUpload, FrameCommandRecorder, FrameCommandStats, FrameTextureDescriptor,
         UniformUpload, UploadAllocatorId, UploadAllocatorSpec,
     },
+    glass_split::split_scissors,
     gpu_stats::FrameStats,
     lazy_resource::LazyGpuResource,
     offscreen::{OffscreenPool, OffscreenTarget},
@@ -117,6 +119,7 @@ pub(crate) struct EffectRenderer {
     pub(crate) debug_composites: Cell<u32>,
     pub(crate) debug_effects: Cell<u32>,
     pub(crate) debug_shader_pixels: Cell<u64>,
+    pub(crate) debug_glass_rasterized_pixels: Cell<u64>,
     pub(crate) debug_blur_pixels: Cell<u64>,
 }
 
@@ -654,6 +657,7 @@ pub(crate) struct PreparedShaderDraw<'a> {
     uniform: UniformUpload,
     scissor: Option<(u32, u32, u32, u32)>,
     dest_viewport: (f32, f32, f32, f32),
+    layer_pixel_rect: [f32; 4],
     variants: &'static [ShaderDrawVariant],
 }
 
@@ -963,6 +967,7 @@ impl EffectRenderer {
             debug_composites: Cell::new(0),
             debug_effects: Cell::new(0),
             debug_shader_pixels: Cell::new(0),
+            debug_glass_rasterized_pixels: Cell::new(0),
             debug_blur_pixels: Cell::new(0),
         }
     }
@@ -1162,6 +1167,9 @@ impl EffectRenderer {
             .shader_pixels
             .set(stats.shader_pixels.get() + self.debug_shader_pixels.get());
         stats
+            .glass_rasterized_pixels
+            .set(stats.glass_rasterized_pixels.get() + self.debug_glass_rasterized_pixels.get());
+        stats
             .blur_pixels
             .set(stats.blur_pixels.get() + self.debug_blur_pixels.get());
         self.debug_command_stats.set(FrameCommandStats::default());
@@ -1170,6 +1178,7 @@ impl EffectRenderer {
         self.debug_composites.set(0);
         self.debug_effects.set(0);
         self.debug_shader_pixels.set(0);
+        self.debug_glass_rasterized_pixels.set(0);
         self.debug_blur_pixels.set(0);
     }
 
@@ -1698,6 +1707,7 @@ impl EffectRenderer {
                 uniform,
                 scissor: item.scissor,
                 dest_viewport: item.dest_viewport,
+                layer_pixel_rect: item.layer_pixel_rect,
                 variants,
             });
         }
@@ -1716,9 +1726,31 @@ impl EffectRenderer {
         let (x, y, width, height) = draw.dest_viewport;
         pass.set_viewport(x, y, width, height, 0.0, 1.0);
         let scissor = draw.scissor.unwrap_or((0, 0, viewport.0, viewport.1));
-        pass.set_scissor_rect(scissor.0, scissor.1, scissor.2, scissor.3);
         self.debug_shader_pixels
             .set(self.debug_shader_pixels.get() + shaded_pixels((x, y, width, height), scissor));
+        let split = (draw.variants.len() > 1)
+            .then(|| {
+                let quad = (
+                    x.floor().max(0.0) as u32,
+                    y.floor().max(0.0) as u32,
+                    (x + width).ceil().max(0.0) as u32,
+                    (y + height).ceil().max(0.0) as u32,
+                );
+                let x1 = quad.2.min(scissor.0 + scissor.2);
+                let y1 = quad.3.min(scissor.1 + scissor.3);
+                let x0 = quad.0.max(scissor.0);
+                let y0 = quad.1.max(scissor.1);
+                (x1 > x0 && y1 > y0).then(|| {
+                    split_scissors(
+                        draw.shader,
+                        (x, y),
+                        draw.layer_pixel_rect,
+                        (x0, y0, x1 - x0, y1 - y0),
+                    )
+                })
+            })
+            .flatten()
+            .flatten();
         for variant in draw.variants {
             let pipeline = self
                 .shader_cache
@@ -1733,7 +1765,21 @@ impl EffectRenderer {
                 )
                 .expect("shader batch pipeline was prevalidated");
             pass.set_pipeline(pipeline);
-            pass.draw(0..4, 0..1);
+            let regions: SmallVec<[(u32, u32, u32, u32); 4]> = match (variant, &split) {
+                (ShaderDrawVariant::Interior, Some(split)) => split.interior.into_iter().collect(),
+                (ShaderDrawVariant::Rim, Some(split)) => {
+                    split.rim.iter().flatten().copied().collect()
+                }
+                _ => std::iter::once(scissor).collect(),
+            };
+            for region in regions {
+                pass.set_scissor_rect(region.0, region.1, region.2, region.3);
+                self.debug_glass_rasterized_pixels.set(
+                    self.debug_glass_rasterized_pixels.get()
+                        + shaded_pixels((x, y, width, height), region),
+                );
+                pass.draw(0..4, 0..1);
+            }
         }
         pass.set_viewport(0.0, 0.0, viewport.0 as f32, viewport.1 as f32, 0.0, 1.0);
         pass.set_scissor_rect(0, 0, viewport.0, viewport.1);
