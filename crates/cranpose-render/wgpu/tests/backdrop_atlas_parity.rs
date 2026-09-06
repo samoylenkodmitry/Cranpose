@@ -343,6 +343,22 @@ fn block_mean(page: &CapturedFrame, block: (usize, usize)) -> [f32; 3] {
     mean
 }
 
+fn assert_first_glass_averages(page: &CapturedFrame, frame: &CapturedFrame) {
+    for y in 2..12 {
+        for x in 14..(GLASS_WIDTH as usize - 14) {
+            let actual = pixel_at(frame, GLASS_LEFT + x as f32, GLASS_TOP + y as f32);
+            let expected = block_mean(page, (x / 4, y / 4));
+            for channel in 0..3 {
+                let delta = (f32::from(actual[channel]) - expected[channel]).abs();
+                assert!(
+                    delta <= 2.0,
+                    "the probe at ({x}, {y}) paints {actual:?}, its block averages {expected:?}"
+                );
+            }
+        }
+    }
+}
+
 /// The substrate a batched shader is handed is its capture at a quarter of
 /// its resolution, every texel the mean of a 4 x 4 block, packed in the
 /// same texture: the probe paints each pixel's block mean, read from the
@@ -367,19 +383,33 @@ fn a_shader_reads_its_capture_averaged_into_blocks_of_four_through_the_substrate
             )
         }),
     );
-    for y in 2..12 {
-        for x in 14..(GLASS_WIDTH as usize - 14) {
-            let actual = pixel_at(&frame, GLASS_LEFT + x as f32, GLASS_TOP + y as f32);
-            let expected = block_mean(&page, (x / 4, y / 4));
-            for channel in 0..3 {
-                let delta = (f32::from(actual[channel]) - expected[channel]).abs();
-                assert!(
-                    delta <= 2.0,
-                    "the probe at ({x}, {y}) paints {actual:?}, its block averages {expected:?}"
-                );
-            }
+    assert_first_glass_averages(&page, &frame);
+}
+
+#[test]
+fn a_blurred_neighbour_preserves_averaged_substrates() {
+    let mut renderer = match support::headless_renderer() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!("skipping fragment atlas substrate regression: {err}");
+            return;
         }
-    }
+    };
+    let page = capture(&mut renderer, glasses_page(0, glass_shader));
+    let mut children = striped_page();
+    children.push(glass_layer(
+        0,
+        support::substrate_probe(
+            SubstrateSpec::Average { block: 4 },
+            SubstrateProbeRead::BlockTexel,
+        ),
+    ));
+    children.push(glass_layer(1, RenderEffect::blur(BLUR_RADIUS)));
+    let frame = capture(
+        &mut renderer,
+        support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children),
+    );
+    assert_first_glass_averages(&page, &frame);
 }
 
 /// A blurred glass reads its blur downscaled, and its rounded mask is

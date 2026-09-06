@@ -4,6 +4,7 @@ Signature → cause → what to do. One lesson per line, no incident history.
 
 ## Triage before blaming the code
 
+- **A blurred neighbour turns an averaged substrate black:** the atlas result holds both outputs. Its vertical blur must load when average regions already occupy that texture; clearing the attachment erases them outside the blur scissor.
 - **A launched app has no PID after a fixed delay:** poll process readiness with a deadline; cleanup must cover launches before PID discovery, or the abandoned game keeps heating the device.
 - **The first audio cue is absent while later game cues arrive:** do not restart whole FPS matrices around a one-time log message. Use an observed presentation boundary for both arms and label that window separately from audio-gated results.
 - **A skipped backdrop read passes a pixel mutant over a sharp background:** SrcOver can reconstruct the same sharp backdrop through destination blending. Use a blurred capture so dropping its read exposes different pixels; also verify the fixture contains the shader region being optimized.

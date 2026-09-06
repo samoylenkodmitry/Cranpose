@@ -6,6 +6,7 @@ SurfaceFlinger frames, temperatures, properties and failures.
 
 | Artifact under the raw root | What it proves |
 | --- | --- |
+| `mixed-atlas-substrate-correctness.json` | Mixed blur/average atlas regression: before preservation, expected RGB ~234/124/68 became black. Red reported from the agent run; original raw log not retained. Shared block-mean guard and all 21 atlas tests pass after the fix |
 | `arc-bounds-direct-v1-device-analysis.json` | Direct body/curve recording plus tighter arc quads. Watch game-window deltas −2.677/+0.670/+0.837/+0.957 FPS (42.5→43.9°C); separate presentation-window deltas −13.821/+0.551/+4.839/+0.754 (41.9→43.8°C). First pairs cross throttling; presentation pair three also crosses, favouring the candidate. Five pairs with matching endpoint clocks gain 2.2–5.8%. Huawei presentation-window +0.075/+0.024/+0.121/+0.099, 32→33°C. All eight legs valid in each matrix |
 | `arc-quad-bounds-{red,restored}.log`, `watch-arc-quad-bounds-v1-oracle/`, `arc-bounds-direct-recording-payload-proof.json` | Removing cap padding fails the original-quad pixel guard; restored passes on Metal and Adreno. Direct recording preserves all 14,973 fixture body/curve rows byte for byte; swapped radii fail the recording guard |
 | `watch-band-margin-half-v1/`, `watch-butt-quad-v1/` | Frozen Megaboss arc fixture GPU reductions: margin 25.64→20.87 ms (35.1→35.0°C); butt bound 21.42→18.64 ms (33.3°C). Four positive pairs each; exact pixels on Metal/Adreno. These are GPU probes, not app FPS |

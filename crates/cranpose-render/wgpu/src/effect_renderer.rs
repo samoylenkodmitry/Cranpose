@@ -1228,6 +1228,7 @@ impl EffectRenderer {
         pass_id: UploadAllocatorId,
         dest_view: &wgpu::TextureView,
         dest_size: (u32, u32),
+        load_op: wgpu::LoadOp<wgpu::Color>,
         draws: &[BlurDraw<'_>],
     ) {
         let written: u64 = draws
@@ -1252,11 +1253,7 @@ impl EffectRenderer {
                 )
             })
             .collect();
-        let mut pass = recorder.begin_color_pass(
-            label,
-            dest_view,
-            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-        );
+        let mut pass = recorder.begin_color_pass(label, dest_view, load_op);
         let mut bound = None;
         for (draw, uniform) in draws.iter().zip(&uniforms) {
             let pipeline = draw.pipeline();
@@ -1374,6 +1371,7 @@ impl EffectRenderer {
                 UploadAllocatorId::BlurDownsample,
                 &small.view,
                 scratch_size,
+                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                 &[BlurDraw {
                     source,
                     uniforms: Self::blur_uniforms(
@@ -1400,6 +1398,7 @@ impl EffectRenderer {
             UploadAllocatorId::BlurHorizontal,
             &scratch.view,
             scratch_size,
+            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
             &[BlurDraw {
                 source: horizontal_source,
                 uniforms: Self::blur_uniforms(
@@ -1421,6 +1420,7 @@ impl EffectRenderer {
             UploadAllocatorId::BlurVertical,
             dest_view,
             dest_size,
+            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
             &[BlurDraw {
                 source: scratch,
                 uniforms: Self::blur_uniforms(
@@ -1513,6 +1513,7 @@ impl EffectRenderer {
                 UploadAllocatorId::BlurDownsample,
                 &result.view,
                 (result.width, result.height),
+                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                 &downsample,
             );
         }
@@ -1550,6 +1551,7 @@ impl EffectRenderer {
             UploadAllocatorId::BlurHorizontal,
             &scratch.view,
             (scratch.width, scratch.height),
+            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
             &horizontal,
         );
         let vertical: Vec<BlurDraw<'_>> = regions
@@ -1575,6 +1577,11 @@ impl EffectRenderer {
             UploadAllocatorId::BlurVertical,
             &result.view,
             (result.width, result.height),
+            if substrates.is_empty() {
+                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
+            } else {
+                wgpu::LoadOp::Load
+            },
             &vertical,
         );
         self.record_blur_pass();
