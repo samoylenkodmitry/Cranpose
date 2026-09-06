@@ -340,6 +340,7 @@ By removal, same APK (`CRANPOSE_ABLATE`), fps switched minus base per pair:
 | shape_fill (discard) | +0.5, +3.5, +1.6, +1.5 | +1.3, +1.2, +1.9, +1.3 on base 24 at 42-43 C |
 | glass_dispersion (two of four fetches) | +3.3, +0.6, -2.4, +2.5 at 39-42 C | +2.2, -10.0, -7.2, +13.4 across the 36 and 24 plateaus; +1.2..+2.6 within one |
 | glass_refraction (physical refraction arithmetic) | -1.8, +1.7, -0.9, -0.8 | +0.8, +0.3, -0.6, -0.0 on base 24.4 at 42.5 C |
+| shape_variants=0 on Orbit (general 15-location pipeline for solid records) | -1.5, -0.6, -1.6, -1.0 on the 60 Hz cap, no spans | -10.3, -8.2, -8.2, -7.9 on 14.6-17.1; span 146-147 ms against 48-58 at 43-45 C |
 
 The stage pipeline is the frame on both GPUs and its material path is
 nearly all of it; the material-to-blit switch removes arithmetic and
@@ -373,7 +374,26 @@ against the tree without it:
 | coincident-ray reuse 0d63a76f (exact on Metal and Adreno, mutants red; reverted, no return) | -4.7 (43.97 outlier base), -1.4, -0.2, +1.7 | -0.0, -0.1, -0.2, -6.1 (crossing) on base 24.2-24.5 at 42 C |
 
 Watch plateaus: 42-43 fps cool, 31 at 41-42 C, 24 at 43, 16 at the next
-step; every GPU reduction moves the plateau. Legs and reports live under
+step; every GPU reduction moves the plateau.
+
+Interface: `shape.wgsl` crosses 14 locations (56 components) into the
+general fragment and 7 (28) into `fs_solid`; main crosses 15. wgpu-types
+30 allows 16 by default and 15 on downlevel and WebGL2. naga's GLSL of
+every non-solid variant still declares all locations: the pipeline
+constants fold branches and never the interface, and only the solid
+entry narrows it. Main reads its 102-shape and 256-stop uniform arrays
+in the vertex stage only; neither branch reads a record in the fragment,
+and WebGL2 has no storage buffer to read one from.
+
+Showcase header, from the Mac runner at watch size (its stats line equals
+the device's): the search bar, chips and button are glass folded to one
+or two live features; the top bar is the gradient blur (three substrates
+at 36, 18 and 9 px) whose 36 px reach captures the search bar and forces
+the second stage; the button's capture over that chip forces the third.
+At rest the three stage-0 items are keyed but the app's 50 ms ambient
+steps change the content beneath them every one or two frames, and the
+items above them are never keyed over transient composites; the scroll
+cannot hit in any case. Legs and reports live under
 `/tmp/cranpose-mobile-watch-60fps/` and the session scratchpads.
 
 ## Rejected and held, with the reason
