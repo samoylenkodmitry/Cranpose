@@ -156,8 +156,9 @@ pub const LIQUID_GLASS_SPECIALIZATIONS: &[LiquidGlassSpecialization] = &[
 /// leave inactive, so the pipeline compiled for this material carries only
 /// the features it uses. Byte-exact: a raised flag substitutes the value the
 /// uniform already holds, and the interior guard skips only terms whose
-/// weight is zero. An active adaptive frost declares the blurred substrate
-/// its neighbourhood reads.
+/// weight is zero. An adaptive frost on an active material declares the
+/// blurred substrate its neighbourhood reads; a resting material (activity
+/// 0) returns before that read and declares none.
 pub fn specialize_liquid_glass(shader: &mut RuntimeShader) {
     let uniforms: Vec<f32> = shader.uniforms().to_vec();
     for specialization in LIQUID_GLASS_SPECIALIZATIONS {
@@ -166,7 +167,9 @@ pub fn specialize_liquid_glass(shader: &mut RuntimeShader) {
         }
     }
     shader.set_draw_split(Some(GLASS_RIM_DRAW_OVERRIDE));
-    let substrates = if slot(&uniforms, GLASS_ADAPTIVE_FROST_UNIFORM) > 0.0 {
+    let substrates = if slot(&uniforms, GLASS_ADAPTIVE_FROST_UNIFORM) > 0.0
+        && slot(&uniforms, GLASS_ACTIVITY_UNIFORM) > 0.0
+    {
         vec![SubstrateSpec::Blur {
             radius_px: GLASS_ADAPTIVE_NEIGHBOURHOOD_DP
                 * slot(&uniforms, GLASS_EFFECT_DENSITY_UNIFORM).max(1.0),
@@ -623,6 +626,27 @@ mod tests {
             panic!("liquid glass must be one runtime shader");
         };
         shader.overrides().iter().map(|(flag, _)| *flag).collect()
+    }
+
+    #[test]
+    fn a_resting_glass_declares_no_substrate() {
+        let mut shader = RuntimeShader::new(LIQUID_GLASS_WGSL);
+        shader.set_float(GLASS_ADAPTIVE_FROST_UNIFORM, 0.42);
+        shader.set_float(GLASS_EFFECT_DENSITY_UNIFORM, 2.0);
+        shader.set_float(GLASS_ACTIVITY_UNIFORM, 0.0);
+        specialize_liquid_glass(&mut shader);
+        assert!(
+            shader.substrates().is_empty(),
+            "a resting glass returns before its adaptive block: {:?}",
+            shader.substrates()
+        );
+        shader.set_float(GLASS_ACTIVITY_UNIFORM, 0.25);
+        specialize_liquid_glass(&mut shader);
+        assert_eq!(
+            shader.substrates().len(),
+            1,
+            "any activity reads the substrate"
+        );
     }
 
     #[test]

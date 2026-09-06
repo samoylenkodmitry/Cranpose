@@ -8,7 +8,7 @@ use cranpose_render_common::graph::{ProjectiveTransform, RenderGraph, RenderNode
 use cranpose_render_wgpu::CapturedFrame;
 use cranpose_ui_graphics::{
     Brush, Color, GraphicsLayer, LIQUID_GLASS_WGSL, Point, Rect, RenderEffect, RuntimeShader,
-    TileMode,
+    SubstrateSpec, TileMode,
 };
 use support::{brush_rect, solid_rect};
 
@@ -234,6 +234,45 @@ fn variants(source: &str) -> RenderGraph {
     support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children)
 }
 
+fn with_substrates(effect: RenderEffect, substrates: Vec<SubstrateSpec>) -> RenderEffect {
+    match effect {
+        RenderEffect::Shader { mut shader } => {
+            shader.set_substrates(substrates);
+            RenderEffect::Shader { shader }
+        }
+        other => other,
+    }
+}
+
+fn frosted_card(activity: f32, substrates: Option<Vec<SubstrateSpec>>) -> RenderGraph {
+    let colors = LiquidColors::dark(Color::from_rgb_u8(120, 140, 255));
+    let mut children = backdrop();
+    let node = rect(24.0, 20.0, 300.0, 200.0);
+    let effect = card_glass(LiquidShape::RoundedRect(18.0))
+        .adaptive_frost(Color::from_rgb_u8(40, 34, 70), 0.42)
+        .backdrop_effect(
+            &colors,
+            1.5,
+            GlassDynamics {
+                activity: Some(activity),
+                resting_tint: Some(Color::from_rgba_u8(40, 40, 80, 120)),
+                ..GlassDynamics::default()
+            },
+        );
+    let effect = match substrates {
+        Some(substrates) => with_substrates(effect, substrates),
+        None => effect,
+    };
+    children.push(glass_layer(
+        node,
+        effect,
+        1.0,
+        Vec::new(),
+        LIQUID_GLASS_WGSL,
+    ));
+    support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children)
+}
+
 fn capture(
     renderer: &mut support::LockedRenderer,
     graph: RenderGraph,
@@ -330,4 +369,32 @@ fn a_lens_variant_and_a_resting_card_match_the_reference_shader() {
             scale,
         );
     }
+}
+
+#[test]
+fn a_resting_frosted_glass_reads_no_substrate() {
+    let Ok(mut renderer) = support::headless_renderer() else {
+        eprintln!("skipping (headless WGPU init failed)");
+        return;
+    };
+    let blur = vec![SubstrateSpec::Blur { radius_px: 24.0 }];
+    let resting = capture(&mut renderer, frosted_card(0.0, None), 1.0);
+    let resting_forced = capture(&mut renderer, frosted_card(0.0, Some(blur)), 1.0);
+    let differing = support::differing_pixels(FRAME_WIDTH, &resting.pixels, &resting_forced.pixels);
+    assert!(
+        differing.is_empty(),
+        "a resting glass returns before its adaptive block, so a substrate handed to it \
+         must change nothing: {}",
+        support::describe_differing(&differing)
+    );
+    assert!(
+        support::distinct_colors(&resting.pixels) > 64,
+        "the resting render is too flat to prove anything"
+    );
+    let active = capture(&mut renderer, frosted_card(0.5, None), 1.0);
+    let active_bare = capture(&mut renderer, frosted_card(0.5, Some(Vec::new())), 1.0);
+    assert!(
+        !support::differing_pixels(FRAME_WIDTH, &active.pixels, &active_bare.pixels).is_empty(),
+        "an active glass reads its substrate, so the same comparison must see it"
+    );
 }
