@@ -30,6 +30,12 @@ telemetry and a nonblack screenshot accompany each run. Thermal overrides are
 never used. The game progresses during each window, so intervals must match;
 a rising late-window fps is not evidence of a renderer improvement by itself.
 
+The paired `run_app_matrix.py` sequences explicitly enable the presentation
+thread in both arms while preserving native picture settings. They do not test
+the automatic core-count policy, which disables that thread below six available
+cores. Automatic-policy verification remains required for a default-behavior
+claim; the pinned-policy comparisons remain valid for their stated setting.
+
 Two runs were invalidated because the concurrent showcase task took the watch
 foreground: `watch-columns-diagnostic` and `watch-baseline-b`. The measurement
 harness rejects foreground loss, process replacement and multiple app surfaces.
@@ -1320,7 +1326,7 @@ body column merely because angles animate.
 
 A is the audited fresh-main `0d195313` rebuild; B is the pure shared runtime
 `a5710463`, with neither held ownership reuse nor kind spans. Both unchanged-app
-APKs use the same host and audited native libraries. Default settings, native
+APKs use the same host and audited native libraries. Presentation thread enabled, native
 resolution, sixty seconds per leg, ABAB then BABA, no cooling wait.
 
 | Leg | Variant | FPS | Temperature C |
@@ -1338,3 +1344,112 @@ All scene and process checks pass. B-minus-A pairs are +2.736436, +2.176879,
 +3.325599 and +3.389377 FPS. This comparison favors the final shared runtime
 in every pair and places Huawei Megaboss near its display limit. It does not
 establish acceptance for watch Megaboss or either full-scroll Showcase workload.
+
+
+## Final shared-a571 versus fresh main: Huawei Showcase full scroll
+
+A is fresh main `0d195313`; B is pure shared runtime `a5710463`. Both APKs retain the unchanged Showcase source and native density, with the presentation thread enabled. Each of eight consecutive legs includes the verified entire-list preflight and forty timed gestures over sixty seconds. No cooling wait.
+
+| Leg | Variant | FPS | Temperature C |
+| --- | --- | --- | --- |
+| 1 | A | 27.305151 | 42.0 → 42.0 |
+| 2 | B | 40.848740 | 42.0 → 44.0 |
+| 3 | A | 27.130231 | 44.0 → 44.0 |
+| 4 | B | 41.486398 | 43.0 → 44.0 |
+| 5 | B | 40.800888 | 43.0 → 44.0 |
+| 6 | A | 27.332286 | 43.0 → 43.0 |
+| 7 | B | 40.181848 | 42.0 → 45.0 |
+| 8 | A | 27.028518 | 43.0 → 43.0 |
+
+Every process and route check passes. B-minus-A pairs are +13.543590, +14.356167, +13.468602 and +13.153330 FPS. The final shared runtime consistently improves this workload, while its 40.182–41.486 FPS remains below the required display rate.
+
+
+## Final shared-a571 versus fresh main: watch Megaboss
+
+A is fresh main `0d195313`; B is pure shared runtime `a5710463`, excluding the held ownership and kind-span experiments. Both unchanged-app APKs use native picture settings and density, with the presentation thread enabled. Eight consecutive sixty-second legs run ABAB then BABA with no cooling wait.
+
+| Leg | Variant | FPS | Temperature C |
+| --- | --- | --- | --- |
+| 1 | A | 45.951024 | 39.3 → 41.0 |
+| 2 | B | 38.057567 | 41.2 → 42.0 |
+| 3 | A | 40.331886 | 42.0 → 42.8 |
+| 4 | B | 25.704486 | 42.9 → 43.0 |
+| 5 | B | 25.701211 | 42.8 → 43.0 |
+| 6 | A | 26.003484 | 42.8 → 43.1 |
+| 7 | B | 25.686347 | 43.0 → 43.2 |
+| 8 | A | 27.187163 | 43.0 → 43.3 |
+
+Every process and scene check passes. B-minus-A pairs are -7.893456, -14.627400, -0.302273, -1.500816 FPS. The final hot pairs lose 1.16% and 5.52%; the shared runtime still fails the no-regression requirement against main, and the 60 FPS target remains unmet.
+
+
+## Final shared-a571 versus fresh main: watch Showcase full scroll
+
+A is fresh main `0d195313`; B is pure shared runtime `a5710463`. Native picture settings, presentation thread enabled in both arms, unchanged app source. Each leg verifies the entire-list route and return, then measures sixty seconds with forty gestures; ABAB then BABA runs consecutively without a cooling wait.
+
+| Leg | Variant | FPS | Temperature C |
+| --- | --- | --- | --- |
+| 1 | A | 14.362859 | 42.5 → 42.0 |
+| 2 | B | 30.010521 | 41.7 → 41.6 |
+| 3 | A | 20.859593 | 41.6 → 41.6 |
+| 4 | B | 31.823331 | 41.7 → 41.7 |
+| 5 | B | 31.803964 | 41.8 → 41.7 |
+| 6 | A | 21.261237 | 41.8 → 41.7 |
+| 7 | B | 31.759685 | 41.8 → 41.8 |
+| 8 | A | 21.194993 | 41.8 → 41.8 |
+
+All process and route checks pass. B-minus-A pairs are +15.647663, +10.963738, +10.542727, +10.564691 FPS. Every pair favors shared, including the first hot control after Megaboss; no leg is discarded for its thermal state. The final shared legs remain near 31.8 FPS, below the required display rate.
+
+
+## Arc butt-plane early rejection: unchanged Megaboss apps
+
+A is pure shared `a5710463`; B adds only the shader early return, with the exact regression test in the immutable source snapshot. Both use native picture settings with presentation thread enabled. Each device runs eight consecutive sixty-second legs, ABAB then BABA, with every temperature retained.
+
+### Watch
+
+| Leg | Variant | FPS | Temperature C |
+| --- | --- | --- | --- |
+| 1 | A | 47.864263 | 40.2 → 41.6 |
+| 2 | B | 38.518699 | 41.9 → 42.5 |
+| 3 | A | 25.716668 | 42.5 → 42.7 |
+| 4 | B | 26.124097 | 42.7 → 42.8 |
+| 5 | B | 26.118921 | 42.6 → 42.9 |
+| 6 | A | 25.640361 | 42.7 → 42.9 |
+| 7 | B | 26.103631 | 42.7 → 43.0 |
+| 8 | A | 25.684317 | 42.9 → 43.0 |
+
+B-minus-A pairs: -9.345564, +0.407429, +0.478560, +0.419314 FPS.
+
+### Huawei
+
+| Leg | Variant | FPS | Temperature C |
+| --- | --- | --- | --- |
+| 1 | A | 59.892797 | 37.0 → 37.0 |
+| 2 | B | 59.886231 | 37.0 → 37.0 |
+| 3 | A | 59.895531 | 37.0 → 37.0 |
+| 4 | B | 59.908678 | 37.0 → 37.0 |
+| 5 | B | 59.899159 | 37.0 → 37.0 |
+| 6 | A | 59.891227 | 37.0 → 37.0 |
+| 7 | B | 59.873153 | 37.0 → 37.0 |
+| 8 | A | 59.872604 | 37.0 → 37.0 |
+
+B-minus-A pairs: -0.006565, +0.013147, +0.007932, +0.000549 FPS.
+
+The three hot watch pairs improve by approximately 1.6–1.9%; the first thermal-crossing loss remains part of the record. Huawei stays at its display limit, with every pair within one frame over a sixty-second window. Neither result establishes no regression against main or acceptance for Showcase; those remaining comparisons cannot be inferred from the isolated shader timings.
+
+
+## Arc butt-plane early rejection: Huawei Showcase full scroll
+
+A is pure shared `a5710463`; B adds only the isolated arc early return. Native picture settings, unchanged app source, presentation thread enabled in both arms. All eight consecutive sixty-second legs pass the full-route preflight, process checks and forty timed gestures. No cooling wait.
+
+| Leg | Variant | FPS | Temperature C |
+| --- | --- | --- | --- |
+| 1 | A | 38.046564 | 36.0 → 37.0 |
+| 2 | B | 38.215940 | 36.0 → 37.0 |
+| 3 | A | 38.634666 | 36.0 → 37.0 |
+| 4 | B | 39.249683 | 37.0 → 37.0 |
+| 5 | B | 38.272716 | 37.0 → 37.0 |
+| 6 | A | 38.952410 | 37.0 → 37.0 |
+| 7 | B | 37.158604 | 38.0 → 37.0 |
+| 8 | A | 38.700070 | 38.0 → 38.0 |
+
+B-minus-A pairs are +0.169375, +0.615018, -0.679693 and -1.541466 FPS. Two pairs improve and two regress, including the final pair losing about four percent. The candidate remains outside the shared runtime; hot Megaboss gains do not establish full-scroll acceptance.
