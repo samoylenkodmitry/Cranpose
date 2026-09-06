@@ -17,6 +17,7 @@ use cranpose_ui_graphics::{
 };
 
 use crate::{
+    ablation::Ablation,
     capture_hash::{CaptureWindow, capture_hasher, hash_capture_composites, hash_capture_ops},
     collect::{ChildLayer, LayerScene, uniform_scale_translation},
     debug_toggles::DebugToggle,
@@ -1182,6 +1183,7 @@ fn stage_composites(
     side: Option<&StageSideRegions>,
     items: &[&PendingBackdrop<'_>],
     members: &[(usize, AtlasPlacement)],
+    glass_as_blit: bool,
 ) -> Vec<ResolvedComposite> {
     members
         .iter()
@@ -1206,7 +1208,15 @@ fn stage_composites(
                 };
             let substrate_regions =
                 side.map_or([None; MAX_SUBSTRATES], |side| side.substrates[member]);
+            let blit = ResolvedCompositeKind::Blit {
+                alpha: 1.0,
+                blend_mode: BlendMode::SrcOver,
+                rounded_mask: item.rounded_mask,
+                sample_mode: CompositeSampleMode::Nearest,
+                source_viewport: Some(region),
+            };
             let kind = match item.batched.expect("packed items are batched") {
+                _ if glass_as_blit => blit,
                 BatchedEffect::Blur(_) => ResolvedCompositeKind::Blit {
                     alpha: 1.0,
                     blend_mode: BlendMode::SrcOver,
@@ -1580,6 +1590,11 @@ enum Event {
 
 impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
     pub(crate) fn new(renderer: &'r mut GpuRenderer, recorder: &'c mut C) -> Self {
+        let ablation = Ablation::current();
+        if ablation != renderer.ablation {
+            log::warn!("[ablation] CRANPOSE_ABLATE switches: {ablation:?}");
+            renderer.ablation = ablation;
+        }
         Self {
             renderer,
             recorder,
@@ -1705,7 +1720,9 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             match event {
                 Event::Backdrop(index) => {
                     let backdrop = &scene.backdrop_layers[index];
-                    if let Some(item) = plan_backdrop(backdrop, z, scale, target_rect) {
+                    if !self.renderer.ablation.stages
+                        && let Some(item) = plan_backdrop(backdrop, z, scale, target_rect)
+                    {
                         pass.stages.push(item);
                     }
                 }
@@ -2165,6 +2182,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 side.as_ref(),
                 items,
                 &view.members,
+                self.renderer.ablation.glass,
             ));
         }
         for (index, item) in items.iter().enumerate() {
@@ -2373,6 +2391,11 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             .enumerate()
             .filter_map(|(member, (index, _))| Some((member, items[*index].batched?.blur()?)))
             .collect();
+        let blurred = if self.renderer.ablation.blur {
+            Vec::new()
+        } else {
+            blurred
+        };
         if blurred.is_empty()
             && members
                 .iter()
@@ -2407,6 +2430,10 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             let (source_width, source_height) = items[*index].capture_rect.pixel_size();
             let source = (placement.x, placement.y, source_width, source_height);
             for (order, planned) in view.substrates(*index).iter().enumerate() {
+                if self.renderer.ablation.substrates {
+                    member_regions[member][order] = Some(region_tuple(source));
+                    continue;
+                }
                 let (width, height) = planned.size;
                 let Some(scratch) = view.side(*index).substrates.get(order).copied() else {
                     return Err("a substrate outgrew the atlas that held it".into());
@@ -2436,6 +2463,13 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                     None => scratch,
                 }));
             }
+        }
+        if regions.is_empty() && averaged.is_empty() {
+            return Ok(Some(StageSideRegions {
+                result: Rc::clone(atlas),
+                blurred: slots,
+                substrates: member_regions,
+            }));
         }
         let (width, height) = view.side_size();
         let scratch = self.acquire_transient("Backdrop Blur Scratch", width, height);
@@ -2842,7 +2876,8 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let translation = grid.filter(|_| (child.surface_scale - 1.0).abs() <= 1e-4);
         let (dest, visible_device) = child_device_placement(child, snap, scale, pass.target_rect());
 
-        if let Some(backdrop) = &child.backdrop
+        if !self.renderer.ablation.stages
+            && let Some(backdrop) = &child.backdrop
             && let Some(visible) = visible_device
             && let Some(support) =
                 child_composite_support(child, backdrop.output_support(), snap, scale, visible)

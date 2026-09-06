@@ -30,6 +30,7 @@ use web_time::Instant;
 
 use crate::{
     DebugCpuAllocationStats,
+    ablation::Ablation,
     collect::LayerScene,
     debug_toggles::DebugToggle,
     draw_pass::{PassSegment, PassTarget, ResolvedComposite, ResolvedCompositeKind, SourceContent},
@@ -1741,6 +1742,7 @@ pub struct GpuRenderer {
     deferred_offscreen_releases: Vec<OffscreenTarget>,
     pub(crate) effect_renderer: EffectRenderer,
     pub(crate) layer_cache: LayerCache,
+    pub(crate) ablation: Ablation,
     pub(crate) backdrop_gates: HashMap<NodeId, AdmissionGate>,
     pub(crate) fill_gates: HashMap<DrawCommandId, AdmissionGate>,
     transparent_sources: HashMap<(u32, u32), Rc<OffscreenTarget>>,
@@ -1937,6 +1939,7 @@ impl GpuRenderer {
             deferred_offscreen_releases: Vec::new(),
             effect_renderer,
             layer_cache: LayerCache::new(),
+            ablation: Ablation::default(),
             backdrop_gates: HashMap::new(),
             fill_gates: HashMap::new(),
             transparent_sources: HashMap::new(),

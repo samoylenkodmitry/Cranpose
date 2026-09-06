@@ -1041,3 +1041,21 @@ workspace member's source, not only a root `src` directory which may not exist.
 Two full renderer suites remained alive after layout snapshots changed, with multiple detached waiters reading the same overwritten log. A success marker after a grep pipeline is not the test command's exit status. Give each immutable snapshot a unique result path, retain actual exit codes, and terminate only verified superseded jobs. Run focused mutation proofs during review, then one full gate chain over the final source. Do not launch another full suite merely because a private function or its test changed while the preceding suite still runs.
 
 The held kind-range implementation predates opaque-prefix record windows. Applying its draw-loop changes blindly would redraw a prefix already supplied by the cache. Window offsets are relative to a run while segment starts are absolute table indices; preserve both and test nonzero, noncontiguous starts plus buffer continuation. A specialization image test must wait until its specialized pipeline actually draws, or it may compare two general fallback frames.
+
+## Worktrees share one stash list; `git stash pop` takes the newest, whoever made it (2026-09-06)
+
+Two agents in two worktrees of the same repository share `.git`, so
+`git stash list` interleaves both agents' entries and a bare `git stash
+pop` applied the other agent's held work onto this tree (three
+conflicted docs, one staged source). Address stashes by index after
+reading their messages (`git stash list --format='%gd %s'`), `apply`
+rather than `pop`, and drop by index once the tree holds the change.
+
+## zsh names the pipeline status array `pipestatus` (2026-09-06)
+
+A gate chain that printed `${PIPESTATUS[0]}` after each piped step
+logged empty exit codes under zsh, so "chain done" carried no per-step
+status; the summary lines looked complete. Use `$pipestatus[1]` in zsh,
+or run the step in bash, and check the log shows numbers before
+trusting it.
+
