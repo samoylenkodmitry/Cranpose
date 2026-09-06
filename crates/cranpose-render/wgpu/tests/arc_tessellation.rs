@@ -215,7 +215,7 @@ impl ArcRaster {
             pass.draw_indexed(0..indices.len() as u32, 0, 0..self.count);
         }
         self.queue.submit([encoder.finish()]);
-        support::read_texture_rgba8(&self.device, &self.queue, &self.texture)
+        support::read_texture(&self.device, &self.queue, &self.texture)
     }
 }
 

@@ -1,6 +1,6 @@
 mod support;
 
-use support::{page::*, read_texture_rgba8};
+use support::{page::*, read_texture};
 
 const FRAME_WIDTH: u32 = 320;
 const FRAME_HEIGHT: u32 = 240;
@@ -90,7 +90,7 @@ fn render_frames() -> Option<Frames> {
     assert_eq!(shell.renderer().device_error_count_for_tests(), 0);
     Some(Frames {
         captured: captured.pixels,
-        presented: read_texture_rgba8(&device, &queue, &texture),
+        presented: read_texture(&device, &queue, &texture),
     })
 }
 

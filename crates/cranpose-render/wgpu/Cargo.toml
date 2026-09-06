@@ -110,6 +110,7 @@ cranpose-macros = { path = "../../cranpose-macros" }
 # Unit tests exercise the embedded fallback font and GL portability validation
 # on every platform, independent of the production feature set.
 cranpose-render-common = { path = "../common", features = ["embedded-default-font"] }
+half = "2.7.1"
 naga = { version = "29.0.3", features = ["wgsl-in", "glsl-out"] }
 png = "0.18.1"
 pollster = "0.4.0"

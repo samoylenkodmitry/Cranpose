@@ -319,16 +319,19 @@ pub fn draw_run_graph(size: u32, scope: cranpose_ui_graphics::DrawScopeDefault) 
     ))
 }
 
-/// A render-attachment texture of `format` and its default view, the shape
-/// every presentable-target test hands to the renderer.
-pub fn read_texture_rgba8(
+/// The texture's texels, tightly packed row by row in its own format.
+pub fn read_texture(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     texture: &wgpu::Texture,
 ) -> Vec<u8> {
     let width = texture.width();
     let height = texture.height();
-    let unpadded = width * 4;
+    let bytes_per_texel = texture
+        .format()
+        .block_copy_size(None)
+        .expect("an uncompressed colour format");
+    let unpadded = width * bytes_per_texel;
     let padded = unpadded.next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
     let buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("test readback"),
@@ -380,6 +383,8 @@ pub fn read_texture_rgba8(
     pixels
 }
 
+/// A render-attachment texture of `format` and its default view, the shape
+/// every presentable-target test hands to the renderer.
 pub fn render_target(
     device: &wgpu::Device,
     width: u32,
@@ -1094,7 +1099,7 @@ pub fn present_and_read(
     assert_eq!(outcome, PresentOutcome::Presented);
     let device = renderer.try_device().expect("device");
     let queue = renderer.try_queue_for_tests().expect("queue");
-    read_texture_rgba8(device, queue, &texture)
+    read_texture(device, queue, &texture)
 }
 
 /// What a reference blur reads past the image: the edge pixel again, or

@@ -361,6 +361,40 @@ the exactness bar is byte identity against a never-caching render of the
 same build, on Metal, Linux and the acceptance GPU (Adreno 702), whose
 sampler rounds where the others do not.
 
+## The attachment's blend arithmetic (2026-09-06)
+
+`blend_model_census.rs` draws a full-screen premultiplied src-over of
+sub-step source values (from an RGBA32F texture, so no shader arithmetic
+intervenes) over a known destination and matches the readback against
+candidate arithmetic models. Findings, retained so no draw is folded into
+the one beneath it without them:
+
+- Adreno 702 (Vulkan), Rgba8Unorm: exact. The source is converted to 8 bits
+  in f32 arithmetic with round half up, then blended; the float blend and
+  the fixed-point `(x + 127) / 255` blend coincide, 0 of 262,144 channels
+  differ. A shader can reproduce this attachment bit for bit with integer
+  arithmetic. Rgba16Float: no listed model.
+- Apple M5 (Metal), Rgba8Unorm: no model. The exact-arithmetic model misses
+  577 channels and every residue is an exact tie (n + ½ in rationals) that
+  the attachment resolves by an f32-scale operation order no candidate
+  reproduces; f32 orderings miss more (1,045+), so the unit computes above
+  f32 precision. Rgba16Float: no model (130,146 misses). The opaque store
+  rounds half up.
+- Identities every exactness argument rests on hold on both: a zero
+  premultiplied source leaves the attachment byte for byte, an opaque source
+  stores as its own conversion.
+
+Consequence for the fused header hypothesis (gradient-blur composite plus
+the covering translucent gradient rect as one draw, the intermediate
+quantization reproduced in the shader): feasible bit for bit on Adreno
+only, impossible on Apple by any f32 shader arithmetic, so it would be a
+per-GPU path gated by a runtime census, and its ceiling on the watch is the
+rect draw's raster and blend share, about 0.6 ms (the gradient's own ALU
+moves into the composite; the material switch prices the rect's material at
+~1.1 fps of the shape switch's 2.3-3.5, the discard switch its raster at
+~0.5 fps). Rejected on that ratio; the census stays as the guard and the
+evidence.
+
 ## Measured (showcase full-scroll route, 60 s legs, 40 gestures)
 
 By removal, same APK (`CRANPOSE_ABLATE`), fps switched minus base per pair:
