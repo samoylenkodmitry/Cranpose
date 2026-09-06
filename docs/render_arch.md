@@ -2186,3 +2186,50 @@ pixels; dropping the resting condition from the outer select breaks the
 shallow card by 34 pixels, a one-pixel band at its edge, and nothing
 else. The specialization parity test compares the folded pipeline with
 the general one byte for byte.
+
+## What the showcase frame is made of, by removal (2026-09-06)
+
+`CRANPOSE_ABLATE` (property `debug.cranpose.ablate`, a comma list of
+`stages`, `glass`, `substrates`, `blur`, `text`) removes one kind of
+renderer work at a time in the same APK, so a switched leg against an
+unswitched leg of the same binary is causal. Full-scroll route, eight
+legs per switch, A B A B then B A B A without cooling, the switched
+legs' logcat carries the parsed set every 600 frames. `stages` drops the
+capture/substrate/composite pipeline whole; `glass` keeps the pipeline
+and draws each glass composite as a nearest blit of its region instead
+of the material; `substrates` hands the material the unblurred capture
+where it declared a blur; `blur` skips the header's backdrop blur
+levels; `text` skips text draws.
+
+Mate 20 X (f2dc2bb7, base 40 to 42 fps at 38 to 45 C):
+
+| switch off | base fps | switched fps | pairs (switched - base) | C | legs |
+|---|---:|---:|---|---|---|
+| stages | 41.84 (4) | 52.75 (4) | +10.01, +9.84, +11.23, +12.53 | 38.0->43.0 C | all valid |
+| glass | 41.03 (4) | 51.43 (4) | +9.04, +9.45, +12.71, +10.40 | 43.0->45.0 C | all valid |
+| substrates | 41.13 (4) | 45.93 (4) | +5.97, +6.14, +1.67, +5.42 | 44.0->45.0 C | all valid |
+| blur | 40.12 (4) | 41.80 (4) | +3.63, +0.65, +3.20, -0.74 | 41.0->42.0 C | all valid |
+| text | 40.17 (4) | 40.97 (4) | -0.96, +2.60, +1.44, +0.14 | 41.0->42.0 C | all valid |
+
+Pixel Watch 3 (same tree, base 31 to 43 fps, 35 to 42 C, the cool legs
+before the thermal crossing near 41 C are the 42 to 43 values):
+
+| switch off | base fps | switched fps | pairs (switched - base) | C | legs |
+|---|---:|---:|---|---|---|
+| stages | 37.82 (4) | 55.88 (4) | +12.65, +13.54, +21.83, +24.23 | 34.7->41.3 C | all valid |
+| glass | 29.59 (4) | 52.73 (4) | +19.87, +21.20, +20.27, +31.22 | 41.0->41.7 C | all valid |
+| substrates | 31.65 (4) | 35.32 (4) | +3.43, +3.46, +3.92, +3.89 | 41.9->41.9 C | all valid |
+| blur | 31.74 (2) | 29.42 (4) | +0.62, +0.82, invalid, invalid | 42.0->41.9 C | legs 6 and 8 (base) failed preflight in the deep hot state |
+| text | unavailable: the route validates its start by OCR of the header text, so a text-less frame cannot pass preflight |
+
+Reading. On both GPUs the stage pipeline is the frame, and inside it the
+material path is nearly all of it: replacing the material by a blit
+recovers the whole stages gain on the Mate 20 X and most of it on the
+watch. That attribution names the material path, not fetches against
+arithmetic; the exact levers that followed sorted that out by
+measurement: uniform-folded arithmetic (`GLASS_RIM_STYLE_OFF`) is worth
++5 fps hot on the watch and +1 on the Mate 20 X, gating cache-hot
+fetches behind per-pixel branches loses on Adreno, and the frost
+substrate's blur triples are the second cost on both devices (+3.4 to
++3.9 on the watch, +1.7 to +6.1 on the Mate 20 X). The header blur and
+text are within the noise on both.
