@@ -1,25 +1,30 @@
 # Architecture for sustained mobile 60 fps
 
 Status: architecture candidates under verification, 2026-09-06. The 60 fps target is not achieved.
-Both working branches share `64107979`, including the reviewed effect-domain
+Both working branches share `a5710463`, including the reviewed effect-domain
 contract, frozen shader reference, portable artifact collection, Android
 window-thread repair, opaque prefix reuse and backdrop source/order repair.
 Main reference is freshly rebuilt `0d195313`. Fable and Codex reviewed the plan
 together; `render_arch.md` retains the underlying experiment record.
 
-The independent pipeline-readiness and exact eight-sweep unit is staged for
-integration. Immutable layout repair `528815a3` combined with that unit passes
+The independent pipeline-readiness and exact eight-sweep unit is committed as
+`079c66f5` and merged with Fable’s `cc8a420b` layout repair in `a5710463`.
+Immutable layout repair `528815a3` combined with that unit passes
 the complete Linux workspace, native/wasm Clippy, release web and both CI robot
 partitions, including all four framebuffer capture tests. Final reviewed layout
 snapshot `ee467612` also passes 26 focused Linux atlas/glass tests and its padding
 unit. Removing layout identity fails the shader probe; restoration passes with
-source hashes verified. Fable's final commit and combined integration follow.
+source hashes verified. The 46-binary Metal renderer suite also passes; final
+combined platform and device comparisons follow the shared merge.
 
 The two-owner storage experiment remains outside the active branch after a
 Huawei full-scroll regression. The ordered kind-range candidate is isolated,
 with exact pixel proofs passing on Macm3 and the watch. Watch proof counts are
 two span tests, two pending-to-ready tests and five opaque-prefix tests. Its
-first default app comparison against fresh main is running; it is not accepted.
+eight-leg watch comparison ends with candidate 27.613/27.603 FPS and adjacent
+main 28.609/26.069 FPS. One hot pair loses 3.48%, the other gains 5.88%. The
+comparison does not establish the required absence of a regression, and the
+candidate remains unaccepted.
 
 The fresh-main versus independent-readiness watch Megaboss comparison fails
 acceptance: the shared runtime is 11.522% and 9.739% slower in the hot reverse
@@ -450,3 +455,30 @@ lower-priority experiment until this measured path is resolved.
 A refreshed prototype preserves the opaque-prefix record-window contract in both retained and arena uploads. Relative run windows are applied to absolute table segments before a persistent cursor traverses 128-record continuations. It retains the original semantic band class, draw order, blend and gradient facts. Tests include noncontiguous segment starts and windows inside specialized ranges. GPU comparisons wait for actual specialization and check every intervening frame. On Macm3, removing the window start trim makes the unit proof fail; assigning the wrong shape kind makes the pixel proof fail. Restored unit, span, variant and prefix tests pass. Unchanged Orbit and Showcase binaries are built from immutable layout528/readiness control and kind-range candidate inventories in both Android ABIs. This candidate is isolated outside the active worktree. The watch passes both span tests, both pipeline-transition tests and all five prefix tests. Default app FPS and the remaining combined correctness gates decide adoption.
 
 A conservative strip-bounding-box census rejects zero of the 15,161 records in the captured Megaboss frame. It scales radii before adding the one-device-pixel margin. This only tests bounding boxes, not exact triangle intersection, and provides no measured saving for a culling rewrite.
+
+
+### Record construction boundary after the shared merge
+
+The current kind candidate's clean CPU sample attributes 11.79% self cycles to
+`push_arc_band`, 10.59% to `push_shape`, 4.34% to `normalized_band`, and 1.51%
+to `sincosf`. Its emitted ARMv7 code builds a 112-byte ShapeRecord on the caller
+stack, calls `push_shape`, then copies the body and curve through another stack
+temporary before writing the owned columns. This is a concrete repeated-data
+boundary, distinct from allocation reuse and shader work.
+
+First remove the call boundary in an isolated build and measure the complete
+app with the same source otherwise. If it saves meaningful work, compare the
+resulting machine code with a direct column writer; preserve materialized source
+arguments, every brush and blend fact, semantic segment classes and fingerprint
+bytes. A larger recording rewrite requires that evidence. Worker queues add
+input ownership and publication costs and remain a lower-ranked option until
+this copy boundary is resolved. No speedup is assumed from fewer source lines
+or fewer conceptual copies.
+
+The previous GPU-column-derived CPU fixtures are synthetic, not original-argument
+replays. Use actual ArenaRenderer calls or a complete source capture for the
+next producer experiment. The fragment radius-hoist probe is rejected after
+24 channel bytes differ at scale 1.25 on the watch; shader-stage changes must
+pass the same fractional-scale pixel contract before timing or integration.
+
+A second conservative census tests the captured rings against radial clip bounds. None of the 15,161 arc records has the viewport entirely inside its hole or outside its outer radius, so it supplies no culling opportunity. Only 15 full GPU records are duplicates; no duplicate-work optimization is supported by that count.

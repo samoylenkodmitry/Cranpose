@@ -1059,3 +1059,24 @@ status; the summary lines looked complete. Use `$pipestatus[1]` in zsh,
 or run the step in bash, and check the log shows numbers before
 trusting it.
 
+### Moving arc constants across shader stages can change pixels
+
+The radius/half-width expressions from `sdf_arc_band` look invariant per
+primitive, but moving them to `shape_output` changes 24 channel bytes by one
+level at scale 1.25 on Adreno 702. Scale 0.75 alone was exact. Preserve the
+existing stage boundary until a design passes the complete fractional-scale
+contract; matching source expressions is insufficient. Banded geometry also
+still consumes `radii.xy/zw` in fragment coverage, so it cannot skip CPU arc
+trigonometry merely because its strip vertices use `arc_normalized`.
+
+
+### Worktree stashes share a list and can include the staged index
+
+A bare stash pop in Fable's worktree selected Codex's held storage experiment.
+Its tree also included already-staged readiness and documentation changes,
+despite the work being described as a one-file storage experiment. The conflict
+kept the entry and the clean shared source was restored. Inspect the message
+and tree first, resolve the stash to its immutable commit hash, and extract
+only the intended file when other staged work is present. Never assume a
+worktree has a private stash list or that a remembered index still names the
+same experiment.
