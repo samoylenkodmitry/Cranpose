@@ -261,31 +261,26 @@ renderer draws a glass as two pipelines, interior and rim
 under the interior guard. Flags: loupe, fold, scene shapes, wobble,
 ellipse blend, strain, zoom anchor, touch, content mask, optical blur,
 shadow, zoom, physical refraction, full transmission, dispersion, adaptive
-frost, ink, interior guard, rim style (`GLASS_RIM_STYLE_OFF`, commit
-36dab4ae: every `Glass::regular()`), resting (`GLASS_RESTING_OFF`, commit
-22aece9d: activity 1, with two `select`s on pipeline constants that make
-the interior pipeline's plain-backdrop fetch dead code), and the default
-refraction curve (`GLASS_REFRACTION_CURVE_DEFAULT`, commit 81af46dc: slot
-94 at 0.25 or unset; every other value stays a uniform so an animated
-curve keys one pipeline). The adaptive frost declares the blur substrate
-whatever the activity (see Stages).
+frost, ink, interior guard, and rim style (`GLASS_RIM_STYLE_OFF`, commit
+36dab4ae: every `Glass::regular()` and `Glass::clear()`; a lens keeps it
+live). The adaptive frost declares the blur substrate whatever the
+activity (see Stages).
 
 Contracts. `glass_reference_shader.rs` renders each scene with the frozen
 `tests/fixtures/liquid_glass_reference.wgsl` and the shipped shader and
 requires zero differing pixels; the fixture declares every override and
 reads none of the folded ones, so it computes from the uniforms while the
 shipped shader folds, and a wrong fold is red (rim style raised for a
-lens: 7,227 px; resting raised for a resting glass: 35,848 px; the
-interior claim without its activity condition: 34 px on Metal, 257 on
-Adreno; the default curve raised for a 0.62 card: 8,926 to 34,075 px).
-Scenes: cards on the page and child paths, at 1.5x and 0.75x, lenses with
-blur and substrates, a lens-variant card with a resting card and a shallow
-resting card, and the resting-substrate pair. `glass_specialization_parity.rs`
+lens: 7,227 px). Scenes: cards on the page and child paths, at 1.5x and
+0.75x, lenses with blur and substrates, a lens-variant card with a resting
+card, and the resting-substrate pair (a positive frost uniform with
+activity 0 set on the shader and re-specialized, the control asserted to
+declare its substrate before rendering). `glass_specialization_parity.rs`
 compares the folded pipeline with the general one byte for byte. The
 liquid crate's unit tests pin the flag table (every override declared,
 every guarded slot read through its flag, the plain pane raises every
-flag, re-specialization matches a fresh shader, a fully active curve other
-than the default keys one pipeline with an animating one).
+flag, re-specialization matches a fresh shader, a resting glass keeps its
+substrate declaration).
 
 ## Diagnostics
 
@@ -338,7 +333,8 @@ against the tree without it:
 |---|---|---|
 | opaque prefix e520addf | +2.3, +3.1, +2.8, +4.4 | +2.0 cool; +2.1, +2.2 hot |
 | rim style fold 36dab4ae | +1.2, +0.5, +0.8, +2.4 | -4.6 (crossing), +5.2, +5.2, +5.0 |
-| activity flag 22aece9d (held) | +1.4, +0.7, -0.5, +1.6 | -6.4 (crossing), +0.1, +0.4, +8.4 (step) |
+| activity flag 22aece9d (reverted b297137b) | +1.4, +0.7, -0.5, +1.6 | -6.4 (crossing), +0.1, +0.4, +8.4 (step) |
+| default curve fold 81af46dc (reverted ebdd15ea) | -0.8, -0.9, -4.1, +1.6 | not run |
 | curve as constant, probe only d82d86a8 | +2.7, +2.3, +3.3, +2.0 | not run |
 
 Watch plateaus: 42-43 fps cool, 31 at 41-42 C, 24 at 43, 16 at the next
@@ -360,9 +356,15 @@ step; every GPU reduction moves the plateau. Legs and reports live under
   public, animatable value, so every distinct float would key a pipeline
   (`a_value_carrying_curve_override_keys_one_pipeline_per_curve_value`).
   Attribution only.
-- Activity flag 22aece9d: exact; speed mixed (one Mali pair down at equal
-  temperature); held out of the shared tree until a repeat shows no
-  material loss.
+- Activity flag 22aece9d (reverted in b297137b): exact, static (two
+  `select`s on pipeline constants made the interior's plain fetch dead
+  code; the interior claim needs the activity condition, 34 px on Metal
+  and 257 on Adreno without it); speed mixed with one Mali pair down at
+  equal temperature. Not accepted.
+- Default refraction-curve fold 81af46dc (reverted in ebdd15ea): exact
+  (the fold raised for a 0.62 card differs by 8,926 to 34,075 px), folds
+  only `Glass::regular()`'s 0.25, three of four Mali pairs down. Not
+  accepted.
 - Skipping the frost substrate where the correction is zero: not exact;
   the blur is scheduled before the capture exists and any capture-side
   luma bound is broken by stars, planets and text.
