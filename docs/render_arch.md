@@ -2148,6 +2148,13 @@ too breaks the lens scene by 7,227 pixels and nothing else, and the
 specialization parity test compares the folded pipeline with the general
 one byte for byte.
 
+**Measured** (same route, eight legs A B A B then B A B A, no cooling,
+the f2dc2bb7 tree with and without the flag, unchanged app sources).
+Pixel Watch 3: base 31.3-31.8 fps hot, flag 36.6-36.9; stable hot pairs
++5.22, +5.24, +5.03 (the first pair straddles the thermal crossing, cool
+base 42.4 against hot flag 37.8). Mate 20 X: pairs +1.24, +0.46, +0.77,
++2.37 on a 39 fps frame.
+
 ## An active glass drops its resting path statically (2026-09-06)
 
 `GLASS_RESTING_OFF` is raised when uniform 111, the material activity,
