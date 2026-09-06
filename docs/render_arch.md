@@ -2249,28 +2249,35 @@ text are within the noise on both.
 
 ## A resting glass keeps its unread frost substrate (2026-09-06)
 
-A material at activity 0 returns before its adaptive block, so the blur
-substrate its frost declares is rendered every frame and never read
-(`LiquidCard` and any widget resting at 0; the showcase has no resting
-glass). Declaring it only for a positive activity was tried and
-reverted the same day: the declaration also sets the member's capture
-geometry, and that is what a picture depends on. The claim "never read"
-is proven
+A material at activity 0 returns before its adaptive block. Through the
+material boundary that case never carries a substrate at all:
+`material.rs` writes the frost uniform as `adaptive_frost * activity`,
+so a resting `LiquidCard` reaches the specializer with frost 0 and
+declares nothing; only a shader given a positive frost uniform with
+activity 0 directly can hold an unread substrate. Declaring the
+substrate only for a positive activity was tried and reverted the same
+day: for material-built glass it changed nothing, and for the direct
+case the declaration also sets the member's capture geometry, which is
+what a picture depends on. The claim "never read" is proven
 at equal capture geometry: `glass_reference_shader` renders a resting
 frosted card with the shipped shader and with the same source minus its
 adaptive block and requires zero differing pixels, and renders the same
 card at activity 0.5 both ways and requires a difference, so the
-comparison is shown to see the block when it runs. The first version of
-that test compared "no substrate" against "substrate forced on", and on
-Adreno it failed by five pixels one level apart: a member with a blur
-substrate gets its capture expanded by the blur margin, so omitting the
-substrate shrinks and shifts the capture, and Adreno's texture
-coordinate rounding then moves a few pixels where Metal and llvmpipe do
-not. That is what dropping the declaration does to a resting glass's
-picture: exact against the same build's never-cache reference, one
-level off at a few pixels against every build that declared the
-substrate, on Adreno. So the declaration stays, pinned by a unit test,
-and the wasted blur remains: the exact removal keeps the geometry and
+comparison is shown to see the block when it runs. Both tests set the frost and activity
+uniforms on the shader explicitly and re-run the specializer, and assert
+that the control declares exactly the substrate its frost and density
+imply before anything is rendered. The first version of the geometry
+test built its control through the material at activity 0, so its
+control had frost 0 and no declaration while the other arm forced a 24
+px blur, and on Adreno it failed by five pixels one level apart: a
+member with a blur substrate gets its capture expanded by the blur
+margin, so the two arms sampled through different capture geometries,
+and Adreno's texture coordinate rounding moves a few pixels there where
+Metal and llvmpipe do not. That is what any omission of a declared
+substrate does to a picture: exact against the same build's never-cache
+reference, one level off at a few pixels against every build that
+declared it, on Adreno. So the declaration stays, pinned by a unit
+test, and the wasted blur remains: the exact removal keeps the geometry and
 skips only the work, a planner that knows a member's substrate is
 declared but unread this frame and renders no blur triple into its side
 slot. That is a material-to-planner contract not yet designed; it is

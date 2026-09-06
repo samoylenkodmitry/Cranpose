@@ -7,8 +7,9 @@ use cranpose_liquid::{Glass, GlassDynamics, LiquidColors, LiquidShape};
 use cranpose_render_common::graph::{ProjectiveTransform, RenderGraph, RenderNode};
 use cranpose_render_wgpu::CapturedFrame;
 use cranpose_ui_graphics::{
-    Brush, Color, GraphicsLayer, LIQUID_GLASS_WGSL, Point, Rect, RenderEffect, RuntimeShader,
-    SubstrateSpec, TileMode,
+    Brush, Color, GLASS_ACTIVITY_UNIFORM, GLASS_ADAPTIVE_FROST_UNIFORM, GraphicsLayer,
+    LIQUID_GLASS_WGSL, Point, Rect, RenderEffect, RuntimeShader, SubstrateSpec, TileMode,
+    specialize_liquid_glass,
 };
 use support::{brush_rect, solid_rect};
 
@@ -256,7 +257,27 @@ fn with_substrates(effect: RenderEffect, substrates: Vec<SubstrateSpec>) -> Rend
     }
 }
 
+fn frosted_at(effect: RenderEffect, frost: f32, activity: f32) -> RenderEffect {
+    match effect {
+        RenderEffect::Shader { mut shader } => {
+            shader.set_float(GLASS_ADAPTIVE_FROST_UNIFORM, frost);
+            shader.set_float(GLASS_ACTIVITY_UNIFORM, activity);
+            specialize_liquid_glass(&mut shader);
+            RenderEffect::Shader { shader }
+        }
+        other => other,
+    }
+}
+
+fn declared_substrates(effect: &RenderEffect) -> Vec<SubstrateSpec> {
+    match effect {
+        RenderEffect::Shader { shader } => shader.substrates().to_vec(),
+        _ => Vec::new(),
+    }
+}
+
 fn frosted_card(
+    frost: f32,
     activity: f32,
     source: &str,
     substrates: Option<Vec<SubstrateSpec>>,
@@ -275,6 +296,13 @@ fn frosted_card(
                 ..GlassDynamics::default()
             },
         );
+    let effect = frosted_at(effect, frost, activity);
+    let expected = vec![SubstrateSpec::Blur { radius_px: 24.0 }];
+    assert_eq!(
+        declared_substrates(&effect),
+        if frost > 0.0 { expected } else { Vec::new() },
+        "the control must declare exactly the substrate its frost and density imply"
+    );
     let effect = match substrates {
         Some(substrates) => with_substrates(effect, substrates),
         None => effect,
@@ -426,12 +454,12 @@ fn a_resting_frosted_glass_never_runs_its_adaptive_block() {
         "a resting glass returns before its adaptive block, so the shipped shader and the same \
          source without that block must agree at the same capture geometry",
         (
-            frosted_card(0.0, LIQUID_GLASS_WGSL, None),
-            frosted_card(0.0, &cut, None),
+            frosted_card(0.42, 0.0, LIQUID_GLASS_WGSL, None),
+            frosted_card(0.42, 0.0, &cut, None),
         ),
         (
-            frosted_card(0.5, LIQUID_GLASS_WGSL, None),
-            frosted_card(0.5, &cut, None),
+            frosted_card(0.42, 0.5, LIQUID_GLASS_WGSL, None),
+            frosted_card(0.42, 0.5, &cut, None),
         ),
     );
 }
@@ -445,16 +473,17 @@ fn a_resting_frosted_glass_reads_no_substrate() {
     let blur = vec![SubstrateSpec::Blur { radius_px: 24.0 }];
     assert_rest_agrees_and_activity_differs(
         &mut renderer,
-        "a resting glass as specialized must render byte for byte like one with its blur \
-         substrate declared: the declaration sets the capture geometry, and on Adreno a \
-         geometry change moves pixels even where the substrate is never read",
+        "a resting glass with a positive frost uniform declares its substrate and must render \
+         byte for byte like one whose declaration is made explicit: the declaration sets the \
+         capture geometry, and on Adreno a geometry change moves pixels even where the \
+         substrate is never read",
         (
-            frosted_card(0.0, LIQUID_GLASS_WGSL, None),
-            frosted_card(0.0, LIQUID_GLASS_WGSL, Some(blur)),
+            frosted_card(0.42, 0.0, LIQUID_GLASS_WGSL, None),
+            frosted_card(0.42, 0.0, LIQUID_GLASS_WGSL, Some(blur)),
         ),
         (
-            frosted_card(0.5, LIQUID_GLASS_WGSL, None),
-            frosted_card(0.5, LIQUID_GLASS_WGSL, Some(Vec::new())),
+            frosted_card(0.42, 0.5, LIQUID_GLASS_WGSL, None),
+            frosted_card(0.42, 0.5, LIQUID_GLASS_WGSL, Some(Vec::new())),
         ),
     );
 }
