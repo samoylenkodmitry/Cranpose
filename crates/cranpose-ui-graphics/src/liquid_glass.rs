@@ -111,7 +111,7 @@ pub const LIQUID_GLASS_SPECIALIZATIONS: &[LiquidGlassSpecialization] = &[
         inactive: |u| slot(u, GLASS_OPTICAL_ZOOM_UNIFORM) <= 1.0,
     },
     LiquidGlassSpecialization {
-        flag: "GLASS_PHYSICAL_REFRACTION_OFF",
+        flag: GLASS_PHYSICAL_REFRACTION_OFF_FLAG,
         slots: &[GLASS_PHYSICAL_REFRACTION_DEPTH_ENABLED_UNIFORM],
         inactive: |u| slot(u, GLASS_PHYSICAL_REFRACTION_DEPTH_ENABLED_UNIFORM) <= 0.5,
     },
@@ -121,7 +121,7 @@ pub const LIQUID_GLASS_SPECIALIZATIONS: &[LiquidGlassSpecialization] = &[
         inactive: |u| slot(u, GLASS_TRANSMISSION_REFRACTION_UNIFORM) >= 1.0,
     },
     LiquidGlassSpecialization {
-        flag: "GLASS_DISPERSION_OFF",
+        flag: GLASS_DISPERSION_OFF_FLAG,
         slots: &[GLASS_DISPERSION_UNIFORM],
         inactive: |u| slot(u, GLASS_DISPERSION_UNIFORM) <= 0.0,
     },
@@ -180,6 +180,12 @@ pub fn specialize_liquid_glass(shader: &mut RuntimeShader) {
 /// draw the glass as its interior and its rim, each without the other's
 /// fetches.
 pub const GLASS_RIM_DRAW_OVERRIDE: &str = "GLASS_RIM_DRAW";
+
+/// The fold raised when a material's dispersion is zero.
+pub const GLASS_DISPERSION_OFF_FLAG: &str = "GLASS_DISPERSION_OFF";
+
+/// The fold raised when a material's physical refraction is disabled.
+pub const GLASS_PHYSICAL_REFRACTION_OFF_FLAG: &str = "GLASS_PHYSICAL_REFRACTION_OFF";
 
 /// The reach of the adaptive frost's neighbourhood in dp: the renderer
 /// blurs the capture by this radius at the effect's density and the shader

@@ -1605,6 +1605,10 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             log::warn!("[ablation] CRANPOSE_ABLATE switches: {ablation:?}");
         }
         renderer.ablation = ablation;
+        renderer
+            .effect_renderer
+            .shader_cache
+            .set_forced_flags(ablation.glass_flags.forced_flags());
         Self {
             renderer,
             recorder,

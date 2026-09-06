@@ -1,4 +1,7 @@
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    hash::{Hash, Hasher},
+};
 
 use cranpose_ui_graphics::RuntimeShader;
 use naga::ShaderStage;
@@ -50,6 +53,7 @@ impl ShaderDrawVariant {
 type PipelineKey = (
     u64,
     u64,
+    u64,
     RuntimeShaderPipelineMode,
     Option<(&'static str, ShaderDrawVariant)>,
 );
@@ -59,6 +63,8 @@ pub(crate) struct ShaderPipelineCache {
     cache: HashMap<PipelineKey, wgpu::RenderPipeline>,
     disabled: HashSet<u64>,
     pipeline_cache: Option<wgpu::PipelineCache>,
+    forced: Vec<&'static str>,
+    forced_hash: u64,
 }
 
 impl ShaderPipelineCache {
@@ -67,7 +73,42 @@ impl ShaderPipelineCache {
             backend,
             cache: HashMap::new(),
             disabled: HashSet::new(),
+            forced: Vec::new(),
+            forced_hash: 0,
             pipeline_cache,
+        }
+    }
+
+    pub fn set_forced_flags(&mut self, flags: impl Iterator<Item = &'static str>) {
+        let mut forced: Vec<&'static str> = flags.collect();
+        forced.sort_unstable();
+        if forced == self.forced {
+            return;
+        }
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        forced.hash(&mut hasher);
+        self.forced_hash = if forced.is_empty() {
+            0
+        } else {
+            hasher.finish()
+        };
+        self.forced = forced;
+    }
+
+    fn force_declared_flags(
+        &self,
+        shader: &RuntimeShader,
+        constants: &mut Vec<(&'static str, f64)>,
+    ) {
+        let source = shader.source();
+        for flag in &self.forced {
+            if !source.contains(&format!("override {flag}:")) {
+                continue;
+            }
+            match constants.iter_mut().find(|(name, _)| name == flag) {
+                Some(constant) => constant.1 = 1.0,
+                None => constants.push((flag, 1.0)),
+            }
         }
     }
 
@@ -83,7 +124,7 @@ impl ShaderPipelineCache {
         variant: ShaderDrawVariant,
     ) -> Option<&wgpu::RenderPipeline> {
         let source_hash = shader.source_hash();
-        let mut constants: Vec<(&str, f64)> = if shader_specialization_enabled() {
+        let mut constants: Vec<(&'static str, f64)> = if shader_specialization_enabled() {
             shader.overrides().to_vec()
         } else {
             Vec::new()
@@ -93,6 +134,7 @@ impl ShaderPipelineCache {
         } else {
             shader.overrides_hash()
         };
+        self.force_declared_flags(shader, &mut constants);
         let split = shader.draw_split().zip(variant.constant());
         if let Some((name, value)) = split {
             constants.push((name, value));
@@ -100,6 +142,7 @@ impl ShaderPipelineCache {
         let cache_key = (
             source_hash,
             overrides_hash,
+            self.forced_hash,
             mode,
             split.map(|(name, _)| (name, variant)),
         );

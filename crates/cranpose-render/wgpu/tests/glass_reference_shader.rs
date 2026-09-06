@@ -58,12 +58,16 @@ fn resourced(effect: &RenderEffect, source: &str) -> RenderEffect {
 }
 
 fn card_glass(shape: LiquidShape) -> Glass {
+    card_glass_with_dispersion(shape, 1.0)
+}
+
+fn card_glass_with_dispersion(shape: LiquidShape, dispersion: f32) -> Glass {
     Glass::regular()
         .shape(shape)
         .blur_radius(0.0)
         .refraction_depth(0.58)
         .refraction_curve(0.62)
-        .dispersion(1.0)
+        .dispersion(dispersion)
         .transmission_refraction(0.72)
         .highlight(0.72)
         .adaptive_frost(Color::from_rgb_u8(230, 230, 250), 0.42)
@@ -183,6 +187,10 @@ fn lenses(source: &str) -> RenderGraph {
 }
 
 fn variants(source: &str) -> RenderGraph {
+    variants_with_dispersion(source, 1.0)
+}
+
+fn variants_with_dispersion(source: &str, dispersion: f32) -> RenderGraph {
     let colors = LiquidColors::dark(Color::from_rgb_u8(120, 140, 255));
     let mut children = backdrop();
     let lens = rect(24.0, 20.0, 200.0, 90.0);
@@ -191,7 +199,7 @@ fn variants(source: &str) -> RenderGraph {
         Glass::lens()
             .shape(LiquidShape::RoundedRect(18.0))
             .blur_radius(0.0)
-            .dispersion(1.0)
+            .dispersion(dispersion)
             .highlight(0.72)
             .backdrop_effect(&colors, 1.5, GlassDynamics::default()),
         1.0,
@@ -201,7 +209,7 @@ fn variants(source: &str) -> RenderGraph {
     let resting = rect(24.0, 130.0, 300.0, 90.0);
     children.push(glass_layer(
         resting,
-        card_glass(LiquidShape::RoundedRect(4.0)).backdrop_effect(
+        card_glass_with_dispersion(LiquidShape::RoundedRect(4.0), dispersion).backdrop_effect(
             &colors,
             1.5,
             GlassDynamics {
@@ -467,5 +475,41 @@ fn a_resting_frosted_glass_reads_no_substrate() {
             frosted_card(0.42, 0.5, LIQUID_GLASS_WGSL, None),
             frosted_card(0.42, 0.5, LIQUID_GLASS_WGSL, Some(Vec::new())),
         ),
+    );
+}
+
+#[test]
+fn a_forced_dispersion_fold_renders_the_dispersive_card_as_its_dispersion_zero_twin() {
+    let Ok(mut renderer) = support::headless_renderer() else {
+        eprintln!("skipping (headless WGPU init failed)");
+        return;
+    };
+    const SWITCH: &str = "CRANPOSE_ABLATE";
+    let dispersive = || variants_with_dispersion(LIQUID_GLASS_WGSL, 1.0);
+    let base = capture(&mut renderer, dispersive(), 1.0);
+    cranpose_render_wgpu::set_debug_toggle(SWITCH, Some("glass_dispersion"));
+    let forced = capture(&mut renderer, dispersive(), 1.0);
+    cranpose_render_wgpu::set_debug_toggle(SWITCH, None);
+    let twin = capture(
+        &mut renderer,
+        variants_with_dispersion(LIQUID_GLASS_WGSL, 0.0),
+        1.0,
+    );
+    let restored = capture(&mut renderer, dispersive(), 1.0);
+
+    let removed = support::differing_pixels(FRAME_WIDTH, &base.pixels, &forced.pixels);
+    assert!(
+        !removed.is_empty(),
+        "`glass_dispersion` must remove the chromatic split of a dispersion 1.0 lens"
+    );
+    let off_by = support::differing_pixels(FRAME_WIDTH, &forced.pixels, &twin.pixels);
+    assert!(
+        off_by.is_empty(),
+        "the forced GLASS_DISPERSION_OFF must render the bytes of the same lens with dispersion 0; a difference means the shader reads the dispersion slot outside its fold: {}",
+        support::describe_differing(&off_by)
+    );
+    assert_eq!(
+        restored.pixels, base.pixels,
+        "clearing the switch must return the dispersive pipeline"
     );
 }

@@ -292,15 +292,22 @@ substrate declaration).
   watch does, Mali does not), `CRANPOSE_GPU_STAGE_DIAG`,
   `CRANPOSE_WGPU_RENDER_STAGE_TELEMETRY_MS`.
 - `CRANPOSE_ABLATE` (`debug.cranpose.ablate`, a comma list of `stages`,
-  `glass`, `substrates`, `blur`, `text`, `shape`, `shape_fill`;
-  `ablation.rs`) removes one kind of renderer work in the same binary;
+  `glass`, `substrates`, `blur`, `text`, `shape`, `shape_fill`,
+  `glass_dispersion`, `glass_refraction`; `ablation.rs`) removes one
+  kind of renderer work in the same binary;
   `shape` makes every shape fragment its vertex colour inside its clip
   (blend kept, coverage and brush removed) and `shape_fill` discards it.
   Both are bounds on the fragment path, not a subtraction: `shape` also
   writes every pixel the coverage would have discarded, and a fragment
   that only discards lets the compiler drop the varyings and vertex work
-  feeding it. Read them beside the vertex and fill counts. The parsed set
-  is logged on change and every 600 frames while a switch is on. `CRANPOSE_NO_FILL_CACHE`,
+  feeding it. Read them beside the vertex and fill counts. The two glass
+  names force an existing exact fold (`GLASS_DISPERSION_OFF`,
+  `GLASS_PHYSICAL_REFRACTION_OFF`) onto every glass pipeline through the
+  shader cache's key, so the switched material is exactly the material
+  with that property at zero and nothing else (`glass_reference_shader.rs`
+  proves the dispersion one at zero pixels against the dispersion-zero
+  twin). The parsed set is logged on change and every 600 frames while a
+  switch is on. `CRANPOSE_NO_FILL_CACHE`,
   `CRANPOSE_NO_BACKDROP_CACHE`, `CRANPOSE_NO_EFFECT_DOMAINS` are the
   reference toggles. Android maps `debug.cranpose.<name>` properties to
   these in `android_frame_telemetry.rs`.
@@ -329,10 +336,16 @@ By removal, same APK (`CRANPOSE_ABLATE`), fps switched minus base per pair:
 | substrates | +6.0, +6.1, +1.7, +5.4 | +3.4, +3.5, +3.9, +3.9 |
 | header blur | +3.6, +0.7, +3.2, -0.7 | +0.6, +0.8, two legs invalid hot |
 | text | -1.0, +2.6, +1.4, +0.1 | unmeasurable: the route validates by OCR of text |
+| shape (flat colour) | +1.8, +3.0, +1.6, +1.5 | +3.5, +2.3, +11.2 (plateau crossing), +2.9 on base 24-27 at 42-43 C |
+| shape_fill (discard) | +0.5, +3.5, +1.6, +1.5 | +1.3, +1.2, +1.9, +1.3 on base 24 at 42-43 C |
 
 The stage pipeline is the frame on both GPUs and its material path is
 nearly all of it; the material-to-blit switch removes arithmetic and
-fetches together and names the path, not which. Exact levers, each
+fetches together and names the path, not which. The shape fragment path
+is a tenth of the watch frame and a twentieth of the Mali one; on Adreno
+the discard-only bound gains less than the flat write, so the two are
+bounds on that path and not its parts. Orbit on the Mate 20 X sits on the
+60 Hz cap under both (59.9 either way). Exact levers, each
 against the tree without it:
 
 | change | Mate 20 X | Pixel Watch 3 |
