@@ -6,15 +6,15 @@ mod shared_test_support;
 use cranpose_render_common::{
     Renderer,
     graph::{
-        DrawPrimitiveNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform,
-        RenderGraph, RenderNode,
+        DrawPrimitiveNode, DrawRunNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase,
+        ProjectiveTransform, RenderGraph, RenderNode,
     },
     image_compare::image_difference_stats,
 };
 use cranpose_render_wgpu::CapturedFrame;
 use cranpose_ui_graphics::{
-    Brush, Color, CornerRadii, DrawPrimitive, GraphicsLayer, Point, Rect, Stroke, StrokeCap,
-    StrokeJoin,
+    Brush, Color, CornerRadii, DrawPrimitive, DrawScope, DrawScopeDefault, GraphicsLayer, Point,
+    Rect, Size, Stroke, StrokeCap, StrokeJoin,
 };
 
 const FRAME: u32 = 480;
@@ -235,6 +235,75 @@ fn pixel(frame: &CapturedFrame, x: u32, y: u32) -> [u8; 4] {
         frame.pixels[at + 2],
         frame.pixels[at + 3],
     ]
+}
+
+fn short_arcs() -> Vec<RenderNode> {
+    let mut scope = DrawScopeDefault::new(Size::new(FRAME as f32, FRAME as f32));
+    for radius in [32.0, 100.0, 200.0] {
+        for index in 0..36 {
+            let cap = [StrokeCap::Butt, StrokeCap::Round, StrokeCap::Square][index % 3];
+            let width = [0.25, 1.0, 3.5][(index / 3) % 3];
+            scope.draw_arc(
+                Brush::solid(Color(0.2 + index as f32 / 60.0, 0.7, 0.9, 0.6)),
+                Point::new(CENTER + 0.125, CENTER - 0.375),
+                radius,
+                index as f32 * cranpose_ui_graphics::TAU / 36.0,
+                [0.012, -0.055, 0.095][(index / 9) % 3],
+                Stroke::new(width).with_cap(cap),
+            );
+        }
+    }
+    let recording = scope.finish();
+    assert!(
+        recording
+            .shapes()
+            .iter()
+            .filter(|r| r.is_banded() && r.band_segments() == 1)
+            .count()
+            > 60
+    );
+    let segments = recording.all_segments();
+    vec![RenderNode::DrawRun(DrawRunNode::for_command_shared(
+        PrimitivePhase::BeforeChildren,
+        None,
+        std::rc::Rc::new(recording),
+        segments,
+    ))]
+}
+
+#[test]
+fn short_arc_quads_preserve_the_pixels_of_full_disc_rasterization() {
+    let graph = frame_of(short_arcs());
+    let frames = [
+        wgpu::Limits::default(),
+        wgpu::Limits {
+            max_storage_buffers_per_shader_stage: 0,
+            ..wgpu::Limits::default()
+        },
+    ]
+    .map(|limits| {
+        let mut renderer = support::headless_renderer_with_limits(limits).expect("arc parity GPU");
+        renderer.scene_mut().graph = Some(graph.clone());
+        [0.5, 1.0, 2.75].map(|scale| {
+            let side = (FRAME as f32 * scale) as u32;
+            renderer
+                .capture_frame_with_scale(side, side, scale)
+                .expect("scaled arc capture")
+        })
+    });
+    for (actual, expected) in frames[0].iter().zip(&frames[1]) {
+        let stats = image_difference_stats(
+            &actual.pixels,
+            &expected.pixels,
+            actual.width,
+            actual.height,
+            2,
+        );
+        assert_eq!(
+            stats.differing_pixels, 0,
+            "short arcs lost coverage: {stats:?}"
+        );
+    }
 }
 
 /// Records draw in the order they were recorded whatever geometry each

@@ -415,18 +415,6 @@ fn vs_record_solid(
     return solid_output(record_vertex(record, vertex_idx));
 }
 
-// A wide arc, or a stroked circle, rasterizes as a strip of `segments`
-// quads around its ring instead of the disc's quad; the record's arc
-// fields carry the ring either way. The strip covers every pixel the
-// fragment stage anti-aliases: the ring is padded by `BAND_MARGIN`, the
-// sweep by the angle that padding subtends at the padded inner radius
-// (the record carries where the padded sweep starts and how far it
-// runs, computed once when it was recorded), the outer vertices ride
-// out so the polygon circumscribes the padded outer circle, and the
-// inner vertices sit on the padded inner circle, whose chords only ever
-// fall inside it. The device position of the
-// vertex at strip boundary `boundary` of the record, outer when `side`
-// is one.
 fn band_position(
     record: ShapeRecord,
     placement: Placement,
@@ -440,6 +428,17 @@ fn band_position(
     let outer = record.arc_geometry.w * scale;
     let mid = (outer + inner) * 0.5;
     let ring_half = max((outer - inner) * 0.5, 0.0) + BAND_MARGIN;
+    if (segments == 1u) {
+        let half_width = mid * record.radii.z + ring_half;
+        let x = select(-half_width, half_width, boundary == 1u);
+        let y = select(mid * record.radii.w - ring_half, mid + ring_half, side == 1u);
+        let sin_mid = record.radii.x;
+        let cos_mid = record.radii.y;
+        return center + vec2<f32>(
+            -sin_mid * x + cos_mid * y,
+            cos_mid * x + sin_mid * y,
+        );
+    }
     let outer_padded = mid + ring_half;
     let inner_padded = max(mid - ring_half, 0.0);
     let range_start = record.arc_normalized.z;
