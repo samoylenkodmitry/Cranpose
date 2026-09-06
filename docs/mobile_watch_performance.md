@@ -8,6 +8,8 @@ SurfaceFlinger frames, temperatures, properties and failures.
 | --- | --- |
 | `oriented-arc-first10-analysis.json`, `{watch,huawei}-oriented-arc-v1-first10-matrix.json` | Complete short Megaboss pairs: watch +7–11% at matching endpoint clocks; first pair crosses throttling; Huawei unchanged. Requested 10 s, actual elapsed retained |
 | `arc-quad-pixel-proof.json`, `arc-quad-{band-fill,coverage}.log` | Missing cap padding fails; restored pixel and analytic coverage pass |
+| `run-surfaces-held-proof.json`, `orbit-first10-arc-opacity.json` | Span image prototype held for picture error; 99.78% of game arcs translucent; no device matrix spent on it |
+| `short-scroll-scope-audit.json` | Ten-second watch pinning/gradient samples cover only the opening; full traversal requires 16 measured swipes |
 | `{watch,huawei}-semantic-v1-matrix.json` | Geometry reuse: no native FPS gain; stashed |
 | `main-shared-profile-pair-20260906.json` | Audited release APKs: main `0d195313`, shared `37bd0ce8`; unchanged application sources |
 | `{watch,huawei}-main-shared-checkpoint-{matrix,analysis}.json` | Complete eight-leg Megaboss comparisons; watch result mixed |
