@@ -3,11 +3,6 @@ use cranpose_ui_graphics::{
     band_class_segments, strip_vertices,
 };
 
-/// The strip a banded arc rasterizes as: `segments` quads between the
-/// padded inner circle and a polygon circumscribing the padded outer
-/// circle, over the padded sweep. Mirrors `band_position` in `shape.wgsl`: the
-/// fill estimate and the coverage proof read the same geometry the GPU
-/// draws.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct BandStrip {
     pub(crate) center: [f32; 2],
@@ -16,6 +11,7 @@ pub(crate) struct BandStrip {
     pub(crate) range_start: f32,
     pub(crate) step: f32,
     pub(crate) segments: u32,
+    quad: Option<[[f32; 2]; 4]>,
 }
 
 impl BandStrip {
@@ -33,13 +29,38 @@ impl BandStrip {
         let range_start = record.arc_normalized[2];
         let range = record.arc_normalized[3];
         let step = range / segments as f32;
+        let quad = (segments == 1).then(|| {
+            let [sin_mid, cos_mid, sin_half, cos_half] = record.radii;
+            let half_width = mid * sin_half + ring_half;
+            std::array::from_fn(|index| {
+                let x = if index / 2 == 1 {
+                    half_width
+                } else {
+                    -half_width
+                };
+                let y = if index % 2 == 1 {
+                    mid + ring_half
+                } else {
+                    mid * cos_half - ring_half
+                };
+                [
+                    center[0] + (-sin_mid * x + cos_mid * y),
+                    center[1] + (cos_mid * x + sin_mid * y),
+                ]
+            })
+        });
         Self {
             center,
             inner: inner_padded,
-            outer_vertex: outer_padded / (step * 0.5).cos(),
+            outer_vertex: if quad.is_some() {
+                0.0
+            } else {
+                outer_padded / (step * 0.5).cos()
+            },
             range_start,
             step,
             segments,
+            quad,
         }
     }
 
@@ -47,6 +68,9 @@ impl BandStrip {
     /// places it: boundary `index / 2`, outer when odd.
     #[cfg(test)]
     fn vertex(&self, index: u32) -> [f32; 2] {
+        if let Some(quad) = self.quad {
+            return quad[index as usize];
+        }
         let radius = if index % 2 == 1 {
             self.outer_vertex
         } else {
@@ -57,11 +81,10 @@ impl BandStrip {
         [self.center[0] + cos * radius, self.center[1] + sin * radius]
     }
 
-    /// The device pixels the strip rasterizes: every quad is the trapezoid
-    /// between the two radii over one step, so the sum needs one sine, not
-    /// a walk over the vertices (the arena's 17,600 arcs are re-estimated
-    /// whenever their tables change).
     pub(crate) fn area(&self) -> f64 {
+        if let Some([a, b, c, d]) = self.quad {
+            return triangle_area(a, b, c) + triangle_area(c, b, d);
+        }
         let quad = 0.5
             * (f64::from(self.outer_vertex) * f64::from(self.outer_vertex)
                 - f64::from(self.inner) * f64::from(self.inner))
@@ -96,7 +119,6 @@ impl BandStrip {
     }
 }
 
-#[cfg(test)]
 fn triangle_area(a: [f32; 2], b: [f32; 2], c: [f32; 2]) -> f64 {
     let (ax, ay) = (f64::from(a[0]), f64::from(a[1]));
     let (bx, by) = (f64::from(b[0]), f64::from(b[1]));
