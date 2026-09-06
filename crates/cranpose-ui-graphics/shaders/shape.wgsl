@@ -219,6 +219,7 @@ const PLACEMENT_PAINTED: u32 = 8u;
 // A band's slack beyond its ring, in device pixels, so every pixel the
 // fragment stage anti-aliases lies inside the strip.
 const BAND_MARGIN: f32 = 1.0;
+const BAND_QUAD_MARGIN: f32 = 0.5 + 1.0 / 16.0;
 const BAND_ANGULAR_PAD: f32 = 0.001;
 const INFINITE_GRADIENT_POINT: f32 = 1.0e30;
 
@@ -487,10 +488,14 @@ fn band_position(
     let inner = record.arc_geometry.z * scale;
     let outer = record.arc_geometry.w * scale;
     let mid = (outer + inner) * 0.5;
-    let ring_half = max((outer - inner) * 0.5, 0.0) + BAND_MARGIN;
+    let margin = select(BAND_MARGIN, BAND_QUAD_MARGIN, segments == 1u);
+    let ring_half = max((outer - inner) * 0.5, 0.0) + margin;
     if (segments == 1u) {
         let half_width = mid * record.radii.z + ring_half;
-        let x = select(-half_width, half_width, boundary == 1u);
+        let cap = (record.flags >> RECORD_BAND_CAP_SHIFT) & 3u;
+        let cap_width = (mid + ring_half) * record.radii.z + margin * record.radii.w;
+        let width = select(half_width, min(half_width, cap_width), cap == STROKE_CAP_BUTT);
+        let x = select(-width, width, boundary == 1u);
         let y = select(mid * record.radii.w - ring_half, mid + ring_half, side == 1u);
         let sin_mid = record.radii.x;
         let cos_mid = record.radii.y;

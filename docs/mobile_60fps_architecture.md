@@ -1,38 +1,30 @@
 # Mobile 60 FPS
 
-**Unmet. PR #617 is not ready for main.** Cranpose changes only; preserve apps,
-native resolution, effects and main’s picture correctness.
+**Unmet. PR #617 is not ready for main.** Cranpose only; preserve resolution,
+effects and coverage. Shared `72f1dd63` beats main `0d195313` in four opening-game
+pairs on both devices: watch +10.88–14.48 FPS (36.9–41.9°C), Huawei +1.20–10.59
+(31–32°C). Shared watch 38.2–48.5 FPS; Huawei 59.5–59.7.
 
-| Previous 60-second baseline | Main | Shared renderer |
+| Work | Measured cost or result | Decision |
 | --- | --- | --- |
-| Huawei Megaboss | 57–58 FPS | ~60 FPS |
-| Huawei full scroll | 25–29 | 40–45 |
-| Watch Megaboss | 40→16 | 36→17; early pairs regress |
-| Watch full scroll | Slower in three valid pairs | Below 60; full comparison incomplete |
+| Megaboss CPU | 20–21 ms/frame; recording dominates | Remove repeated preparation before adding concurrency |
+| Arc recording + bounds | Direct GPU columns; tighter one-quad padding and butt-cap bound. Five pairs with matching endpoint clocks gain 2.2–5.8%; thermal crossings include losses | Checkpoint; original GPU layout and exact pixel guards |
+| Megaboss GPU | Padding-only diagnostic: 21–26 ms/frame. Frozen arc fixture: padding −4.77 ms, butt bound another −2.78 ms | CPU and GPU both need cuts; fixture speed is not app FPS |
+| Showcase GPU | Hot: 31.4 ms; cards 11.6, header ~10, blur 6, page 2.4 | Preserve effects; remove redundant shading and passes |
+| Compute blur | Huawei ~37→21 FPS; watch loses device | Reject prototype; preserved in stash `59a4098e` |
 
-Megaboss comparisons use the first 10 seconds from launch, ABAB BABA,
-without cooling; keep temperatures and failed legs. Watch full scroll requires
-16 measured swipes (~24 seconds); ten-second watch scrolls cover the opening.
-Prior hot budgets:
-Megaboss main thread 37.7 ms, GPU ~58 ms; Showcase GPU 59.5 ms
-(glass 24, substrate blur ~9.5, other work ~26). These costs overlap.
+**Next experiment:** exact radius/sweep preparation reuse. Captured Megaboss
+frame: 14,973 arcs, 281 radius/sweep tuples; 16-entry reuse hits 98.1%.
+Start angles stay per arc. Measure lookup cost before changing production.
 
-**Current decisions**
-- Geometry reuse: removed from the working branch. Mac recording −7%;
-  hot-watch FPS tied at 16.85–16.88. More cache machinery did not help.
-- Short arcs (`7839ac18`): same shading, cheaper vertices. Matched-clock watch
-  pairs +9.9/+11.0/+7.0%; Huawei within ±0.12 FPS. First pair crosses throttling.
-  Cap-padding mutant fails; restored pixels/coverage pass.
-- Backdrops: pin immediately; release when the key changes or node vanishes.
-  Mac cache 3–7 entries/4 MB, zero steady allocation. Short scroll pairs:
-  watch opening −0.36 to +0.59 FPS; Huawei full scroll −0.48 to +6.10. Below 60.
-- Span images: prototype stashed. Translucent grouping reaches 3 channel
-  levels of error; main reaches 1 in the corresponding fixture. Removing
-  translucency passes, but only 0.22% of first-ten-second game arcs are opaque.
+**Larger design:** main matches persistent ranges before preparation and retains
+GPU geometry. A restored motion path must place fresh and retained vertices and
+evaluate their SDFs in the same local coordinates; dither stays device anchored.
+Image caching after preparation loses 6.3–7.6 FPS and adds draws: rejected.
+Smaller curve layouts, global vertex pulling and queue threading also lost.
 
-**Next:** Fable's gradient-specific shader interface, with unchanged shading.
-Span reuse needs main's blending fidelity before more FPS measurements.
-Use the existing surface cache; do not add another matcher tree or threads
-to compensate for repeated work.
-
-Raw results: [measurement index](mobile_watch_performance.md).
+**Gate:** 10-second opening, ABAB BABA, temperatures on every leg, no cooling.
+Audio-launch and first-presentation windows stay separately labelled. Retain
+thermal crossings and failed legs. Full watch scroll: 16 forward swipes, 1.5 s
+apart. Performance guards must fail when their skipped work affects correctness.
+Raw comparisons, exact binaries and guard results: [evidence index](mobile_watch_performance.md).

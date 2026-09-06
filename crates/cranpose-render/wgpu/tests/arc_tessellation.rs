@@ -217,6 +217,26 @@ impl ArcRaster {
         self.queue.submit([encoder.finish()]);
         support::read_texture(&self.device, &self.queue, &self.texture)
     }
+
+    fn assert_matches(
+        &self,
+        reference: &wgpu::RenderPipeline,
+        current: &wgpu::RenderPipeline,
+        segments: u32,
+        values: &[f32; 36],
+    ) {
+        let expected = self.capture(reference, segments, values);
+        let actual = self.capture(current, segments, values);
+        assert!(
+            support::distinct_colors(&expected) > 16,
+            "empty reference scene"
+        );
+        let differing = expected.iter().zip(&actual).filter(|(a, b)| a != b).count();
+        assert_eq!(
+            differing, 0,
+            "arc pixels changed under placement {values:?}"
+        );
+    }
 }
 
 fn placement(scale: f32, offset: [f32; 2], clipped: bool) -> [f32; 36] {
@@ -330,18 +350,38 @@ fn arc_coverage_matches_the_frozen_distance_function() {
         for scale in [0.75, 1.0, 1.25, 2.0] {
             for clipped in [false, true] {
                 let values = placement(scale, [0.375, 25.75 / scale - 25.5], clipped);
-                let expected = raster.capture(&reference, segments, &values);
-                let actual = raster.capture(&current, segments, &values);
-                assert!(
-                    support::distinct_colors(&expected) > 16,
-                    "empty reference scene"
-                );
-                let differing = expected.iter().zip(&actual).filter(|(a, b)| a != b).count();
-                assert_eq!(
-                    differing, 0,
-                    "arc coverage changed: kind={kind}, scale={scale}, clipped={clipped}"
-                );
+                raster.assert_matches(&reference, &current, segments, &values);
             }
+        }
+    }
+}
+
+#[test]
+fn arc_quad_bounds_preserve_the_original_coverage() {
+    let _lock = support::gpu_test_lock();
+    let raster = ArcRaster::new(&arcs());
+    let mut replaced = 0;
+    let reference: String = SHAPE_WGSL
+        .lines()
+        .map(|line| {
+            if line.starts_with("const BAND_QUAD_MARGIN:") {
+                replaced += 1;
+                "const BAND_QUAD_MARGIN: f32 = 1.0;\n".to_owned()
+            } else if line.trim().starts_with("let width = select(half_width,") {
+                replaced += 1;
+                "let width = half_width;\n".to_owned()
+            } else {
+                format!("{line}\n")
+            }
+        })
+        .collect();
+    assert_eq!(replaced, 2);
+    let reference = pipeline(&raster.device, &reference, 1, -1);
+    let current = pipeline(&raster.device, SHAPE_WGSL, 1, -1);
+    for scale in [0.25, 0.75, 1.0, 1.25, 2.75] {
+        for clipped in [false, true] {
+            let values = placement(scale, [0.37, -0.19], clipped);
+            raster.assert_matches(&reference, &current, 1, &values);
         }
     }
 }

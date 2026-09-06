@@ -117,31 +117,15 @@ impl ShapeRecords {
         self.sources.reserve(additional);
     }
 
-    pub(crate) fn push(&mut self, record: ShapeRecord) {
-        self.bodies.push(ShapeRecordBody {
-            rect: record.rect,
-            color: record.color,
-            stroke_width: record.stroke_width,
-            flags: record.flags,
-            brush: record.brush,
-            placement: record.reserved,
-            arc_geometry: [
-                record.arc[0],
-                record.arc[1],
-                record.arc_band[2],
-                record.arc_band[3],
-            ],
-        });
-        self.curves.push(ShapeRecordCurve {
-            radii: record.radii,
-            arc_normalized: record.arc_normalized,
-        });
-        self.sources.push([
-            record.arc[2],
-            record.arc[3],
-            record.arc_band[0],
-            record.arc_band[1],
-        ]);
+    pub(crate) fn push(
+        &mut self,
+        body: ShapeRecordBody,
+        curve: ShapeRecordCurve,
+        source: [f32; 4],
+    ) {
+        self.bodies.push(body);
+        self.curves.push(curve);
+        self.sources.push(source);
     }
 }
 
@@ -189,6 +173,25 @@ mod tests {
         }
     }
 
+    fn append_sample(records: &mut ShapeRecords) {
+        records.push(
+            ShapeRecordBody {
+                rect: [1.0, 2.0, 3.0, 4.0],
+                color: [0.2, 0.4, 0.6, 0.8],
+                stroke_width: 9.0,
+                flags: 10,
+                brush: 11,
+                placement: 12,
+                arc_geometry: [13.0, 14.0, 19.0, 20.0],
+            },
+            ShapeRecordCurve {
+                radii: [5.0, 6.0, 7.0, 8.0],
+                arc_normalized: [21.0, 22.0, 23.0, 24.0],
+            },
+            [15.0, 16.0, 17.0, 18.0],
+        );
+    }
+
     #[test]
     fn columns_preserve_every_record_bit_and_gpu_field() {
         let record = sample();
@@ -203,8 +206,19 @@ mod tests {
         let mut records = ShapeRecords::default();
         assert!(records.is_empty());
         assert_eq!(records.get(0), None);
-        records.push(record);
-        records.push(special);
+        append_sample(&mut records);
+        let mut body = records.bodies()[0];
+        body.arc_geometry = [f32::NEG_INFINITY, -0.0, 1.0, 2.0];
+        records.push(
+            body,
+            records.curves()[0],
+            [
+                special.arc[2],
+                special.arc[3],
+                special.arc_band[0],
+                special.arc_band[1],
+            ],
+        );
         assert_eq!(records.len(), 2);
         assert_eq!(records.iter().len(), 2);
         for (actual, expected) in records.iter().zip([record, special]) {
@@ -227,14 +241,14 @@ mod tests {
     #[test]
     fn clearing_and_reserving_keep_columns_aligned_without_reallocating() {
         let mut records = ShapeRecords::with_capacity(4);
-        records.push(sample());
+        append_sample(&mut records);
         let capacity = records.capacity();
         let bytes = records.heap_bytes();
         let bodies = records.bodies().as_ptr();
         let curves = records.curves().as_ptr();
         records.clear();
         records.reserve(2);
-        records.push(sample());
+        append_sample(&mut records);
         assert_eq!(records.capacity(), capacity);
         assert_eq!(records.heap_bytes(), bytes);
         assert_eq!(records.bodies().as_ptr(), bodies);

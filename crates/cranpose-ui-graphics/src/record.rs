@@ -9,8 +9,8 @@ use bytemuck::{Pod, Zeroable};
 
 use crate::{
     ArcGeometry, BlendMode, Brush, Color, CornerRadii, DrawPrimitive, FxHasher, Point, Rect,
-    RenderHash, ShapeRecords, Stroke, StrokeCap, StrokeJoin, TAU, TileMode, arc_band,
-    arc_trig_cache::ArcTrigCache,
+    RenderHash, ShapeRecordBody, ShapeRecordCurve, ShapeRecords, Stroke, StrokeCap, StrokeJoin,
+    TAU, TileMode, arc_band, arc_trig_cache::ArcTrigCache,
 };
 
 /// The kind bits of [`ShapeRecord::flags`]: a plain rect.
@@ -68,6 +68,9 @@ pub const ARC_BAND_MIN_INNER_RADIUS: f32 = 1.0;
 /// edge the fragment stage anti-aliases lies inside the strip. `band_position`
 /// in `shape.wgsl` pads by the same amount.
 pub const BAND_MARGIN: f32 = 1.0;
+/// Device-pixel padding for an arc's oriented quad: half-pixel antialias
+/// support plus a sixteenth pixel for rasterization rounding.
+pub const BAND_QUAD_MARGIN: f32 = 0.5 + 1.0 / 16.0;
 /// The radians a band's strip extends past each end of its sweep beyond
 /// the angle the ring's padded half-width subtends at its padded inner
 /// radius, which covers every cap and the margin; float slack only.
@@ -309,13 +312,7 @@ impl ShapeRecord {
 
     /// Which coverage program the fragment stage runs for this record.
     pub fn fragment_kind(&self) -> u32 {
-        if self.kind() == RECORD_KIND_ARC {
-            FRAGMENT_KIND_ARC
-        } else if self.is_stroked() {
-            FRAGMENT_KIND_STROKE
-        } else {
-            FRAGMENT_KIND_FILL
-        }
+        fragment_kind(self.flags)
     }
 
     pub fn stroke(&self) -> Option<Stroke> {
@@ -373,12 +370,7 @@ impl ShapeRecord {
 
     /// The rect as stored: loose for a scope-recorded arc.
     pub fn stored_rect(&self) -> Rect {
-        Rect {
-            x: self.rect[0],
-            y: self.rect[1],
-            width: self.rect[2],
-            height: self.rect[3],
-        }
+        row_rect(self.rect)
     }
 
     /// The rect the materialised primitive carries: the tight band bounds
@@ -414,6 +406,16 @@ impl ShapeRecord {
             sweep_angle: self.arc_normalized[1],
             cap: self.band_cap(),
         })
+    }
+}
+
+fn fragment_kind(flags: u32) -> u32 {
+    if (flags >> KIND_SHIFT) & TWO_BITS == RECORD_KIND_ARC {
+        FRAGMENT_KIND_ARC
+    } else if flags & STROKED_BIT != 0 {
+        FRAGMENT_KIND_STROKE
+    } else {
+        FRAGMENT_KIND_FILL
     }
 }
 
@@ -854,18 +856,21 @@ impl ShapeRecorder {
     ) -> Rect {
         let (handle, color) = self.intern_brush(brush);
         self.push_shape(
-            ShapeRecord {
+            ShapeRecordBody {
                 rect: rect_row(rect),
-                radii: [0.0; 4],
                 color,
                 stroke_width: stroke.map_or(0.0, |stroke| stroke.width),
                 flags: pack_flags(RECORD_KIND_RECT, stroke, blend, StrokeCap::Butt),
                 brush: handle,
-                reserved: 0,
-                arc: [0.0; 4],
-                arc_band: [0.0; 4],
+                placement: 0,
+                arc_geometry: [0.0; 4],
+            },
+            ShapeRecordCurve {
+                radii: [0.0; 4],
                 arc_normalized: [0.0; 4],
             },
+            [0.0; 4],
+            blend,
             None,
         )
     }
@@ -880,8 +885,8 @@ impl ShapeRecorder {
     ) -> Rect {
         let (handle, color) = self.intern_brush(brush);
         let mut flags = pack_flags(RECORD_KIND_ROUND_RECT, stroke, blend, StrokeCap::Butt);
-        let mut arc = [0.0; 4];
-        let mut arc_band = [0.0; 4];
+        let mut arc_geometry = [0.0; 4];
+        let mut source = [0.0; 4];
         let mut arc_normalized = [0.0; 4];
         let mut bucket = None;
         if let Some(ring) = stroked_circle_ring(rect, radii, stroke)
@@ -890,34 +895,37 @@ impl ShapeRecorder {
                 band_bucket_for(&ring, &band, expand_rect(rect, ring.half_thickness()))
         {
             flags |= ARC_BANDED_BIT;
-            arc = [
+            arc_geometry = [
                 ring.center.x,
                 ring.center.y,
-                ring.mid_radius(),
                 ring.inner_radius,
+                ring.outer_radius,
             ];
-            arc_band = [0.0, TAU, ring.inner_radius, ring.outer_radius];
+            source = [ring.mid_radius(), ring.inner_radius, 0.0, TAU];
             arc_normalized = [0.0, TAU, band.range_start, band.range];
             bucket = Some(ring_bucket);
         }
         self.push_shape(
-            ShapeRecord {
+            ShapeRecordBody {
                 rect: rect_row(rect),
+                color,
+                stroke_width: stroke.map_or(0.0, |stroke| stroke.width),
+                flags,
+                brush: handle,
+                placement: 0,
+                arc_geometry,
+            },
+            ShapeRecordCurve {
                 radii: [
                     radii.top_left,
                     radii.top_right,
                     radii.bottom_right,
                     radii.bottom_left,
                 ],
-                color,
-                stroke_width: stroke.map_or(0.0, |stroke| stroke.width),
-                flags,
-                brush: handle,
-                reserved: 0,
-                arc,
-                arc_band,
                 arc_normalized,
             },
+            source,
+            blend,
             bucket,
         )
     }
@@ -960,21 +968,22 @@ impl ShapeRecorder {
         }
         let radii = self.arc_trig.resolve(geometry);
         self.push_shape(
-            ShapeRecord {
+            ShapeRecordBody {
                 rect: rect_row(rect),
-                radii,
                 color,
                 stroke_width: args.stroke.map_or(0.0, |stroke| stroke.width),
                 flags,
                 brush: handle,
-                reserved: 0,
-                arc: [args.center.x, args.center.y, args.radius, args.inner_radius],
-                arc_band: [
-                    args.start_angle,
-                    args.sweep_angle,
+                placement: 0,
+                arc_geometry: [
+                    args.center.x,
+                    args.center.y,
                     geometry.inner_radius,
                     geometry.outer_radius,
                 ],
+            },
+            ShapeRecordCurve {
+                radii,
                 arc_normalized: [
                     geometry.start_angle,
                     geometry.sweep_angle,
@@ -982,38 +991,50 @@ impl ShapeRecorder {
                     ring.range,
                 ],
             },
+            [
+                args.radius,
+                args.inner_radius,
+                args.start_angle,
+                args.sweep_angle,
+            ],
+            args.blend_mode,
             bucket,
         )
     }
 
-    /// Appends `record`, stamped with `band_bucket` as its band class when
-    /// it draws as a band, and extends the open segment or opens one. A
-    /// segment is one draw at its largest band class's strip, in record
-    /// order; it takes a record of another class while the quads that
-    /// strip leaves pinned stay within [`SEGMENT_WASTE_QUADS`], and is cut
-    /// past that. The tables are taken once per record.
     #[inline]
-    fn push_shape(&mut self, mut record: ShapeRecord, band_bucket: Option<usize>) -> Rect {
-        let coverage = expand_rect(record.stored_rect(), record.half_stroke());
+    fn push_shape(
+        &mut self,
+        mut body: ShapeRecordBody,
+        curve: ShapeRecordCurve,
+        source: [f32; 4],
+        blend: BlendMode,
+        band_bucket: Option<usize>,
+    ) -> Rect {
+        let half_stroke = if body.flags & STROKED_BIT != 0 {
+            body.stroke_width * 0.5
+        } else {
+            0.0
+        };
+        let coverage = expand_rect(row_rect(body.rect), half_stroke);
         self.include_bounds(coverage);
         let index = self.tables.shapes.len() as u32;
-        let blend = record.blend_mode();
-        let gradient = record.is_gradient();
+        let gradient = body.brush != 0;
         let brush_bit = 1u8
-            << match record.brush {
+            << match body.brush {
                 0 => 0,
                 index => self.tables.brushes[index as usize - 1].kind,
             };
-        let kind_bit = 1u8 << record.fragment_kind();
+        let kind_bit = 1u8 << fragment_kind(body.flags);
         let band_class = band_bucket.unwrap_or(0) as u8;
-        record.flags |= u32::from(band_class) << BAND_CLASS_SHIFT;
+        body.flags |= u32::from(band_class) << BAND_CLASS_SHIFT;
         let extend = self.note_segment_key(RecordLane::Shapes, blend, gradient)
             && self.segment_takes_class(band_class);
         if !extend {
             self.segment_waste = 0;
         }
         let tables = self.tables_mut();
-        tables.shapes.push(record);
+        tables.shapes.push(body, curve, source);
         extend_segment_in(
             tables,
             extend,
@@ -1813,6 +1834,15 @@ fn union_rect(a: Rect, b: Rect) -> Rect {
 
 fn rect_row(rect: Rect) -> [f32; 4] {
     [rect.x, rect.y, rect.width, rect.height]
+}
+
+fn row_rect(row: [f32; 4]) -> Rect {
+    Rect {
+        x: row[0],
+        y: row[1],
+        width: row[2],
+        height: row[3],
+    }
 }
 
 /// The band a primitive's arc arguments describe, normalised as the
