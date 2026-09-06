@@ -216,10 +216,22 @@ reference below and not by re-tessellation.
   a hash of everything the capture reads (`capture_hash.rs`, geometry
   relative to the capture; composites by what their texture holds through
   `SourceContent::Retained(hash)` / `Transient`, never by pointer). A key
-  seen on two consecutive frames is admitted by its `AdmissionGate`; the
+  is admitted by its `AdmissionGate` the first frame it is seen: the
   admitting frame draws the composite it would have drawn anyway and pins
   its sources (the stage texture, the substrate or blur slot) with the
-  composite's resolved kind. A hit replays that kind at the backdrop's
+  composite's resolved kind. A pin costs no pass, so the gate never waits
+  and never ratchets (`AdmissionCost::Pin`; the prefix gate is
+  `AdmissionCost::Copy` and keeps its one-frame wait with doubling); the
+  per-frame pixel budget goes to the longest-held keys first, so a key
+  changing every frame cannot starve a still one. Because a stage is keyed
+  after the stage below is admitted, a stacked header is fully keyed in
+  its first frame. Measured on the Mac count runner (204 px, still header,
+  per-item stage diag): uncached items per frame 6.00 to 4.63; before, 129
+  of 300 stage-0 misses carried the previous frame's key and every stage-1
+  and stage-2 item was unkeyed behind a transient; after, no miss at any
+  stage carries the previous frame's key, and the remaining stage-1 and
+  stage-2 keys change every frame with the content drawn between the
+  stages. A hit replays that kind at the backdrop's
   current dest, scissor, mask and layer rect (`replayed_kind`): same
   texels, same shader, same uniforms, so the bytes are the never-caching
   renderer's. No result is ever copied (a copied result rounded twice and

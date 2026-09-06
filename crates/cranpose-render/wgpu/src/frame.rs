@@ -1521,20 +1521,33 @@ pub(crate) struct FrameExecutor<'r, 'c, C: FrameCommandRecorder> {
 
 const MAX_ADMISSION_PATIENCE: u32 = 16;
 
+enum AdmissionCost {
+    Pin,
+    Copy { patience: u32 },
+}
+
 pub(crate) struct AdmissionGate {
     key: LayerRasterCacheKey,
     run: u32,
-    patience: u32,
+    cost: AdmissionCost,
     unread: bool,
     seen: bool,
 }
 
 impl AdmissionGate {
-    fn new(key: LayerRasterCacheKey) -> Self {
+    fn pinned(key: LayerRasterCacheKey) -> Self {
+        Self::with_cost(key, AdmissionCost::Pin)
+    }
+
+    fn copied(key: LayerRasterCacheKey) -> Self {
+        Self::with_cost(key, AdmissionCost::Copy { patience: 1 })
+    }
+
+    fn with_cost(key: LayerRasterCacheKey, cost: AdmissionCost) -> Self {
         Self {
             key,
             run: 1,
-            patience: 1,
+            cost,
             unread: false,
             seen: true,
         }
@@ -1546,8 +1559,8 @@ impl AdmissionGate {
             self.run = self.run.saturating_add(1);
             return;
         }
-        if self.unread {
-            self.patience = (self.patience * 2).min(MAX_ADMISSION_PATIENCE);
+        if let (true, AdmissionCost::Copy { patience }) = (self.unread, &mut self.cost) {
+            *patience = (*patience * 2).min(MAX_ADMISSION_PATIENCE);
         }
         self.key = key;
         self.run = 1;
@@ -1555,7 +1568,10 @@ impl AdmissionGate {
     }
 
     fn admits(&self) -> bool {
-        self.run > self.patience
+        match self.cost {
+            AdmissionCost::Pin => true,
+            AdmissionCost::Copy { patience } => self.run > patience,
+        }
     }
 
     fn admitted(&mut self) {
@@ -1564,8 +1580,14 @@ impl AdmissionGate {
 
     fn hit(&mut self, key: LayerRasterCacheKey) {
         self.observe(key);
-        self.patience = 1;
+        if let AdmissionCost::Copy { patience } = &mut self.cost {
+            *patience = 1;
+        }
         self.unread = false;
+    }
+
+    fn run(&self) -> u32 {
+        self.run
     }
 
     pub(crate) fn end_frame(&mut self) -> bool {
@@ -1881,10 +1903,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 gate.get_mut().observe(prefix.key);
                 gate.get().admits()
             }
-            Entry::Vacant(slot) => {
-                slot.insert(AdmissionGate::new(prefix.key));
-                false
-            }
+            Entry::Vacant(slot) => slot.insert(AdmissionGate::copied(prefix.key)).admits(),
         };
         let pixels = u64::from(pixel_width) * u64::from(pixel_height);
         let budget = u64::from(page_size.0) * u64::from(page_size.1);
@@ -2106,6 +2125,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         items: &[&PendingBackdrop<'_>],
         outputs: &mut [ResolvedComposite],
     ) {
+        let mut candidates = Vec::with_capacity(items.len());
         for item in items {
             let (Some(key), Some(node_id)) = (item.key, item.node_id) else {
                 continue;
@@ -2114,43 +2134,58 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             self.renderer
                 .frame_stats
                 .record_layer_cache_miss(&key, width, height);
-            let admits = match self.renderer.backdrop_gates.entry(node_id) {
-                Entry::Occupied(mut gate) => {
-                    gate.get_mut().observe(key);
-                    gate.get().admits()
+            let gate = match self.renderer.backdrop_gates.entry(node_id) {
+                Entry::Occupied(gate) => {
+                    let gate = gate.into_mut();
+                    gate.observe(key);
+                    gate
                 }
-                Entry::Vacant(slot) => {
-                    slot.insert(AdmissionGate::new(key));
-                    false
-                }
+                Entry::Vacant(slot) => slot.insert(AdmissionGate::pinned(key)),
             };
-            if !admits || self.admitted_pixels >= MAX_BACKDROP_ADMISSION_PIXELS {
-                continue;
+            if gate.admits() {
+                candidates.push((gate.run(), item, key, node_id));
             }
-            let Some(output) = outputs
-                .iter_mut()
-                .find(|composite| composite.z_index == item.z)
-            else {
-                continue;
-            };
-            let Some(descriptor) = self.transient_descriptor(&output.source) else {
-                continue;
-            };
-            let retained = Retained::composite(Rc::clone(&output.source), output.kind.clone());
-            if !self
-                .renderer
-                .layer_cache
-                .insert(key, retained, Some(descriptor))
-            {
-                continue;
-            }
-            self.admitted_pixels += u64::from(width) * u64::from(height);
-            self.renderer.frame_stats.record_backdrop_admission();
-            if let Some(gate) = self.renderer.backdrop_gates.get_mut(&node_id) {
-                gate.admitted();
-            }
-            output.content = SourceContent::retained(&key);
         }
+        candidates.sort_by_key(|(run, ..)| std::cmp::Reverse(*run));
+        for (_, item, key, node_id) in candidates {
+            if self.admitted_pixels >= MAX_BACKDROP_ADMISSION_PIXELS {
+                return;
+            }
+            self.admit_backdrop(item, key, node_id, outputs);
+        }
+    }
+
+    fn admit_backdrop(
+        &mut self,
+        item: &PendingBackdrop<'_>,
+        key: LayerRasterCacheKey,
+        node_id: NodeId,
+        outputs: &mut [ResolvedComposite],
+    ) {
+        let Some(output) = outputs
+            .iter_mut()
+            .find(|composite| composite.z_index == item.z)
+        else {
+            return;
+        };
+        let Some(descriptor) = self.transient_descriptor(&output.source) else {
+            return;
+        };
+        let retained = Retained::composite(Rc::clone(&output.source), output.kind.clone());
+        if !self
+            .renderer
+            .layer_cache
+            .insert(key, retained, Some(descriptor))
+        {
+            return;
+        }
+        let (width, height) = item.capture_rect.pixel_size();
+        self.admitted_pixels += u64::from(width) * u64::from(height);
+        self.renderer.frame_stats.record_backdrop_admission();
+        if let Some(gate) = self.renderer.backdrop_gates.get_mut(&node_id) {
+            gate.admitted();
+        }
+        output.content = SourceContent::retained(&key);
     }
 
     fn transient_descriptor(
@@ -3575,13 +3610,13 @@ mod tests {
     #[test]
     fn a_gate_admits_a_key_that_held_for_more_than_its_patience() {
         let key = gate_key(1);
-        let mut gate = AdmissionGate::new(key);
+        let mut gate = AdmissionGate::copied(key);
         assert!(!gate.admits(), "a key seen once is only remembered");
         gate.observe(key);
         assert!(gate.admits(), "the second frame of a key admits it");
         gate.admitted();
         gate.hit(key);
-        assert_eq!(gate.patience, 1);
+        assert_eq!(patience(&gate), 1);
         assert!(gate.end_frame(), "a gate seen this frame stays");
         assert!(!gate.end_frame(), "a gate not seen since goes");
     }
@@ -3590,7 +3625,7 @@ mod tests {
     fn a_cached_key_between_misses_breaks_the_other_keys_consecutive_run() {
         let first = gate_key(1);
         let other = gate_key(2);
-        let mut gate = AdmissionGate::new(first);
+        let mut gate = AdmissionGate::copied(first);
         gate.observe(first);
         assert!(gate.admits());
         gate.admitted();
@@ -3630,34 +3665,74 @@ mod tests {
 
     #[test]
     fn a_gate_waits_twice_as_long_after_an_admission_nothing_read_back() {
-        let mut gate = AdmissionGate::new(gate_key(0));
+        let mut gate = AdmissionGate::copied(gate_key(0));
         assert_eq!(
             admissions_over(&mut gate, std::iter::repeat_n(2, 40)),
             1,
             "a key that never holds a third frame is admitted once"
         );
-        assert_eq!(gate.patience, 2);
-        let mut gate = AdmissionGate::new(gate_key(0));
+        assert_eq!(patience(&gate), 2);
+        let mut gate = AdmissionGate::copied(gate_key(0));
         assert_eq!(
             admissions_over(&mut gate, std::iter::repeat_n(3, 12)),
             12,
             "a key that holds a third frame is read back once per admission"
         );
         assert_eq!(
-            gate.patience, 1,
+            patience(&gate),
+            1,
             "an admission read back does not double the patience"
         );
     }
 
     #[test]
+    fn a_pinned_gate_admits_every_uncached_frame_and_counts_the_hold() {
+        let mut gate = AdmissionGate::pinned(gate_key(0));
+        assert!(gate.admits(), "a pin costs no pass, so first sight admits");
+        assert_eq!(
+            admissions_over(&mut gate, std::iter::repeat_n(2, 40)),
+            40,
+            "every two-frame hold is pinned on its first frame and replayed on its second"
+        );
+        assert_eq!(
+            gate.run(),
+            2,
+            "the replay counted as a second frame of the hold"
+        );
+        let mut gate = AdmissionGate::pinned(gate_key(0));
+        assert_eq!(
+            admissions_over(&mut gate, std::iter::repeat_n(1, 40)),
+            40,
+            "an unread pin costs nothing to repeat, so a key changing every frame is pinned \
+             every frame"
+        );
+        assert_eq!(gate.run(), 1);
+        for _ in 0..4 {
+            gate.observe(gate_key(99));
+        }
+        assert_eq!(
+            gate.run(),
+            4,
+            "a held key's run is what the admission budget ranks by"
+        );
+    }
+
+    fn patience(gate: &AdmissionGate) -> u32 {
+        match gate.cost {
+            AdmissionCost::Pin => 0,
+            AdmissionCost::Copy { patience } => patience,
+        }
+    }
+
+    #[test]
     fn a_gate_never_waits_longer_than_the_cap() {
-        let mut gate = AdmissionGate::new(gate_key(0));
+        let mut gate = AdmissionGate::copied(gate_key(0));
         let admissions = admissions_over(&mut gate, [2, 3, 5, 9, 17, 17, 17]);
         assert_eq!(
             admissions, 7,
             "each hold one frame past the patience is admitted on its last frame"
         );
-        assert_eq!(gate.patience, MAX_ADMISSION_PATIENCE);
+        assert_eq!(patience(&gate), MAX_ADMISSION_PATIENCE);
     }
 
     fn gate_key(content: u64) -> LayerRasterCacheKey {

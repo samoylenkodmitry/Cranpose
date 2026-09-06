@@ -1035,31 +1035,44 @@ fn independent_glasses_are_admitted_over_several_frames_without_changing_pixels(
         );
         (renderer.last_frame_stats().expect("frame stats"), frame)
     };
-    let (first, _) = render(true);
+    let (first, first_frame) = render(true);
     assert_eq!(first.layer_cache_misses, 9);
-    assert_eq!(first.backdrop_admissions, 0);
     let mut admitted = 0;
     let mut frames = 0;
-    while admitted < first.layer_cache_misses {
-        let (frame, _) = render(true);
+    let mut admitting = vec![first_frame];
+    let mut stats = first;
+    loop {
         assert!(
-            frame.backdrop_admissions > 0,
+            stats.backdrop_admissions > 0,
             "admissions stalled at frame {frames}"
         );
         assert!(
-            frame.backdrop_admissions <= 3,
-            "frame {frames} admitted {} glasses",
-            frame.backdrop_admissions
+            stats.backdrop_admissions <= 3,
+            "frame {frames} pinned {} glasses past the per-frame budget",
+            stats.backdrop_admissions
         );
-        admitted += frame.backdrop_admissions;
+        admitted += stats.backdrop_admissions;
         frames += 1;
-        assert!(frames <= first.layer_cache_misses);
+        if admitted >= first.layer_cache_misses {
+            break;
+        }
+        assert!(frames < first.layer_cache_misses);
+        let (next, frame) = render(true);
+        admitting.push(frame);
+        stats = next;
     }
     assert!(frames >= 3);
     let (settled, settled_frame) = render(true);
     assert_eq!(settled.layer_cache_misses, 0);
     assert_eq!(settled.layer_cache_hits, first.layer_cache_misses);
     let (_, reference) = render(false);
+    for (index, frame) in admitting.iter().enumerate() {
+        assert_eq!(
+            support::max_channel_delta(&frame.pixels, &reference.pixels),
+            0,
+            "admitting frame {index} must be the bytes of the same scene drawn without caching"
+        );
+    }
     assert_eq!(
         support::max_channel_delta(&settled_frame.pixels, &reference.pixels),
         0,

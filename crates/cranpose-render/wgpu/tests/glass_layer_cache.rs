@@ -476,7 +476,7 @@ fn a_cold_frame_draws_every_row_text_over_its_glass() {
 }
 
 #[test]
-fn a_glass_whose_backdrop_changes_every_other_frame_stops_being_admitted() {
+fn a_glass_whose_backdrop_holds_two_frames_is_replayed_on_the_second() {
     let Some((_lock, mut harness)) = harness() else {
         return;
     };
@@ -489,19 +489,26 @@ fn a_glass_whose_backdrop_changes_every_other_frame_stops_being_admitted() {
         settled.misses, 0,
         "the warm-up must leave the scene cached: {settled:?}"
     );
-    let mut admissions = 0;
-    for step in 1..=20 {
+    let mut fresh = GlassHarness::new(
+        support::headless_renderer_beside_locked().expect("second headless renderer"),
+    );
+    for step in 1..=4 {
         let input = SceneInput {
             drift: step as f32 * 0.01,
             ..still
         };
-        for _ in 0..2 {
-            admissions += harness.stats(input).admissions;
-        }
+        let first = harness.stats(input);
+        let (second, frame) = harness.frame(input);
+        assert!(
+            second.misses == 0 && second.hits > 0,
+            "step {step}: the second frame of a hold must replay the backdrop pinned on its \
+             first: first {first:?} second {second:?}"
+        );
+        let reference = never_cached_frame(&mut fresh, input);
+        assert_eq!(
+            max_channel_delta(&frame.pixels, &reference.pixels),
+            0,
+            "step {step}: the replayed frame must be the bytes of a renderer that never cached"
+        );
     }
-    assert!(
-        admissions <= 2,
-        "the overlay's backdrop changed every second frame for forty frames and was admitted \
-         {admissions} times, each a whole resolve into a retained surface nothing read back"
-    );
 }
