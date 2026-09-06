@@ -641,6 +641,36 @@ pub fn region_pixels(frame: &CapturedFrame, region: Rect) -> Vec<u8> {
     out
 }
 
+/// `graph` captured once every shape pipeline it needs is compiled: the
+/// capture repeats while a draw fell back to a general pipeline, and the
+/// last two captures must agree byte for byte before one is returned.
+pub fn settled_capture(renderer: &mut LockedRenderer, graph: &RenderGraph) -> Vec<u8> {
+    let mut passes = Vec::new();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while passes.len() < 3 {
+        renderer.scene_mut().graph = Some(graph.clone());
+        let captured = renderer
+            .capture_frame(SIZE, SIZE)
+            .unwrap_or_else(|err| panic!("capture failed: {err:?}"));
+        assert_eq!((captured.width, captured.height), (SIZE, SIZE));
+        let stats = renderer.last_frame_stats().expect("frame statistics");
+        if stats.shape_pipeline_fallback_draws > 0 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "specialization did not finish"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            continue;
+        }
+        passes.push(captured.pixels);
+    }
+    assert_eq!(
+        passes[1], passes[2],
+        "same-graph control passes must be byte-stable before the cross-arm compare"
+    );
+    passes.pop().unwrap()
+}
+
 pub fn distinct_colors(pixels: &[u8]) -> usize {
     let mut colors: Vec<[u8; 4]> = pixels.as_chunks::<4>().0.to_vec();
     colors.sort_unstable();

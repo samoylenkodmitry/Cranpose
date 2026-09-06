@@ -2,6 +2,12 @@ use cranpose_render_common::debug_toggles::DebugToggle;
 
 static ABLATE: DebugToggle = DebugToggle::new("CRANPOSE_ABLATE");
 
+#[derive(Clone, Copy, Default, PartialEq, Eq, Hash, Debug)]
+pub(crate) struct ShapeAblation {
+    pub(crate) material: bool,
+    pub(crate) fill: bool,
+}
+
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 pub(crate) struct Ablation {
     pub(crate) stages: bool,
@@ -9,6 +15,7 @@ pub(crate) struct Ablation {
     pub(crate) blur: bool,
     pub(crate) substrates: bool,
     pub(crate) text: bool,
+    pub(crate) shape: ShapeAblation,
 }
 
 impl Ablation {
@@ -25,6 +32,8 @@ impl Ablation {
                 "blur" => ablation.blur = true,
                 "substrates" => ablation.substrates = true,
                 "text" => ablation.text = true,
+                "shape" => ablation.shape.material = true,
+                "shape_fill" => ablation.shape.fill = true,
                 _ => {}
             }
         }
@@ -34,7 +43,7 @@ impl Ablation {
 
 #[cfg(test)]
 mod tests {
-    use super::Ablation;
+    use super::{Ablation, ShapeAblation};
 
     #[test]
     fn names_switch_their_work_off_and_unknown_names_change_nothing() {
@@ -44,6 +53,16 @@ mod tests {
             Ablation {
                 glass: true,
                 text: true,
+                ..Ablation::default()
+            }
+        );
+        assert_eq!(
+            Ablation::parse("shape_fill, shape"),
+            Ablation {
+                shape: ShapeAblation {
+                    material: true,
+                    fill: true,
+                },
                 ..Ablation::default()
             }
         );

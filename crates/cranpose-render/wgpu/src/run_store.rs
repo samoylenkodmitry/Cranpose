@@ -1226,7 +1226,7 @@ mod tests {
         let key = crate::render::ShapePipelineKey {
             blend_mode: segment.blend,
             tier: crate::render::RunTier::Arena,
-            variant: crate::render::ShapeVariant::of_segment(&segment, false),
+            variant: crate::render::ShapeVariant::of_segment(&segment, false, Default::default()),
         };
         let mut staging = ArenaStaging::default();
         for (record, class) in [0, 0, 3, 3, 0].into_iter().enumerate() {

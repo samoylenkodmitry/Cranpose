@@ -1,11 +1,8 @@
 mod support;
 
-use cranpose_render_common::{
-    Renderer,
-    graph::{
-        DrawPrimitiveNode, DrawRunNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase,
-        RenderGraph, RenderNode,
-    },
+use cranpose_render_common::graph::{
+    DrawPrimitiveNode, DrawRunNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase,
+    RenderGraph, RenderNode,
 };
 use cranpose_ui_graphics::{DrawScope, DrawScopeDefault, Rect};
 use support::{SIZE, record_mixed_scene, record_solid_scene};
@@ -46,33 +43,6 @@ fn graph_for(record: fn(&mut DrawScopeDefault), clip: Option<Rect>) -> RenderGra
     })
 }
 
-fn render_arm(renderer: &mut support::LockedRenderer, graph: &RenderGraph) -> Vec<u8> {
-    let mut passes = Vec::new();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    while passes.len() < 3 {
-        renderer.scene_mut().graph = Some(graph.clone());
-        let captured = renderer
-            .capture_frame(SIZE, SIZE)
-            .unwrap_or_else(|err| panic!("capture failed: {err:?}"));
-        assert_eq!((captured.width, captured.height), (SIZE, SIZE));
-        let stats = renderer.last_frame_stats().expect("frame statistics");
-        if stats.shape_pipeline_fallback_draws > 0 {
-            assert!(
-                std::time::Instant::now() < deadline,
-                "specialization did not finish"
-            );
-            std::thread::sleep(std::time::Duration::from_millis(5));
-            continue;
-        }
-        passes.push(captured.pixels);
-    }
-    assert_eq!(
-        passes[1], passes[2],
-        "same-graph control passes must be byte-stable before the cross-arm compare"
-    );
-    passes.pop().unwrap()
-}
-
 const TOGGLE: &str = "CRANPOSE_SHAPE_VARIANTS";
 const MAX_DIVERGING_BYTES: usize = 16;
 const MAX_DIVERGING_LEVEL: u8 = 2;
@@ -86,9 +56,9 @@ fn assert_variants_match_general(name: &str, graph: RenderGraph) {
         }
     };
     cranpose_render_wgpu::set_debug_toggle(TOGGLE, None);
-    let specialized = render_arm(&mut renderer, &graph);
+    let specialized = support::settled_capture(&mut renderer, &graph);
     cranpose_render_wgpu::set_debug_toggle(TOGGLE, Some("0"));
-    let general = render_arm(&mut renderer, &graph);
+    let general = support::settled_capture(&mut renderer, &graph);
     cranpose_render_wgpu::set_debug_toggle(TOGGLE, None);
 
     assert_eq!(specialized.len(), general.len());

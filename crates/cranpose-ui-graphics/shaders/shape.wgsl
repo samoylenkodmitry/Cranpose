@@ -474,6 +474,8 @@ const SHAPE_KIND_ARC: u32 = 2u;
 override SHAPE_KIND_FIXED: i32 = -1;
 override SHAPE_SOLID: bool = false;
 override SHAPE_CLIPPED: bool = true;
+override SHAPE_FLAT: bool = false;
+override SHAPE_DISCARD: bool = false;
 
 const STROKE_CAP_BUTT: u32 = 0u;
 const STROKE_CAP_SQUARE: u32 = 2u;
@@ -779,6 +781,9 @@ fn sample_gradient(gradient_start: u32, count: u32, t: f32) -> vec4<f32> {
 /// pixels apart by up to 2/255 (the macOS CI runner, on Metal, saw none of
 /// it). The pipeline constants fold branches; they never copy code.
 fn shape_coverage_alpha(input: VertexOutput) -> f32 {
+    if (SHAPE_DISCARD) {
+        discard;
+    }
     let world_pos = input.world_pos.xy;
     let rect_pos = input.clip_position.xy + uniforms.viewport_offset;
 
@@ -795,6 +800,9 @@ fn shape_coverage_alpha(input: VertexOutput) -> f32 {
             world_pos.y < clip_top || world_pos.y > clip_bottom) {
             discard;
         }
+    }
+    if (SHAPE_FLAT) {
+        return 1.0;
     }
 
     if (SHAPE_BANDS) {
@@ -877,6 +885,9 @@ fn fs_solid(input: SolidOutput) -> @location(0) vec4<f32> {
 
 fn fragment(input: VertexOutput) -> vec4<f32> {
     let alpha = shape_coverage_alpha(input);
+    if (SHAPE_FLAT) {
+        return input.color;
+    }
 
     // Re-derived rather than threaded out of the coverage pass: both are pure
     // functions of `input`, so the compiler folds them back together.

@@ -30,7 +30,7 @@ use web_time::Instant;
 
 use crate::{
     DebugCpuAllocationStats,
-    ablation::Ablation,
+    ablation::{Ablation, ShapeAblation},
     collect::LayerScene,
     debug_toggles::DebugToggle,
     draw_pass::{PassSegment, PassTarget, ResolvedComposite, ResolvedCompositeKind, SourceContent},
@@ -913,12 +913,15 @@ pub(crate) enum RunTier {
 /// the draw can take: the shape kind when the segment holds one kind, a
 /// solid-only brush, and whether the placement clips. The general
 /// pipeline (`ShapeVariant::GENERAL`) keeps every branch and shades every
-/// record the same, which `shape_variant_parity.rs` pins.
+/// record the same, which `shape_variant_parity.rs` pins. The diagnostic
+/// shape ablation is part of the variant so a switched frame's general
+/// fallback is switched too.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct ShapeVariant {
     kind: Option<u8>,
     solid: bool,
     clipped: bool,
+    ablation: ShapeAblation,
 }
 
 impl ShapeVariant {
@@ -926,16 +929,35 @@ impl ShapeVariant {
         kind: None,
         solid: false,
         clipped: true,
+        ablation: ShapeAblation {
+            material: false,
+            fill: false,
+        },
     };
 
-    pub(crate) fn of_segment(segment: &RecordSegment, clipped: bool) -> Self {
+    pub(crate) fn of_segment(
+        segment: &RecordSegment,
+        clipped: bool,
+        ablation: ShapeAblation,
+    ) -> Self {
         if !shape_variants_enabled() {
-            return Self::GENERAL;
+            return Self {
+                ablation,
+                ..Self::GENERAL
+            };
         }
         Self {
             kind: segment.uniform_kind().map(|kind| kind as u8),
             solid: !segment.gradient,
             clipped,
+            ablation,
+        }
+    }
+
+    fn general(self) -> Self {
+        Self {
+            ablation: self.ablation,
+            ..Self::GENERAL
         }
     }
 }
@@ -963,11 +985,14 @@ impl ShapePipelineKey {
     }
 
     pub(crate) fn general(self) -> Self {
-        Self::general_for(self.blend_mode, self.tier)
+        Self {
+            variant: self.variant.general(),
+            ..self
+        }
     }
 
     pub(crate) fn is_general(self) -> bool {
-        self.variant == ShapeVariant::GENERAL
+        self.variant == self.variant.general()
     }
 }
 
@@ -991,6 +1016,8 @@ pub(crate) fn create_shape_pipeline(
         ("SHAPE_CLIPPED", f64::from(u8::from(variant.clipped))),
         ("TIER_ARENA", f64::from(u8::from(tier == RunTier::Arena))),
         ("SHAPE_BANDS", f64::from(u8::from(mode.storage))),
+        ("SHAPE_FLAT", f64::from(u8::from(variant.ablation.material))),
+        ("SHAPE_DISCARD", f64::from(u8::from(variant.ablation.fill))),
     ];
     let vertex_entry = if variant.solid {
         "vs_record_solid"
@@ -3074,11 +3101,16 @@ impl GpuRenderer {
         self.run_store.is_stored(run)
     }
 
-    fn run_pipeline_key(segment: &RecordSegment, clipped: bool, tier: RunTier) -> ShapePipelineKey {
+    fn run_pipeline_key(
+        segment: &RecordSegment,
+        clipped: bool,
+        tier: RunTier,
+        ablation: ShapeAblation,
+    ) -> ShapePipelineKey {
         ShapePipelineKey {
             blend_mode: supported_blend_mode(segment.blend),
             tier,
-            variant: ShapeVariant::of_segment(segment, clipped),
+            variant: ShapeVariant::of_segment(segment, clipped, ablation),
         }
     }
 
@@ -3117,11 +3149,12 @@ impl GpuRenderer {
             self.viewport_uniforms
                 .claim(&self.device, &self.uniform_bind_group_layout, &uniforms);
         let clipped = run.placement.clip.is_some();
+        let ablation = self.ablation.shape;
         let mut draws = SmallVec::new();
         self.run_store.stored_run_draws(
             &self.device,
             run,
-            &mut |segment| Self::run_pipeline_key(segment, clipped, RunTier::Store),
+            &mut |segment| Self::run_pipeline_key(segment, clipped, RunTier::Store, ablation),
             &mut draws,
         );
         window_draws(&mut draws, window);
@@ -3151,11 +3184,12 @@ impl GpuRenderer {
         root_scale: f32,
     ) -> u32 {
         let clipped = run.placement.clip.is_some();
+        let ablation = self.ablation.shape;
         let mut keys: SmallVec<[ShapePipelineKey; 4]> = SmallVec::new();
         let taken = self
             .run_store
             .append_arena(chunk, run, window, root_scale, &mut |segment| {
-                let key = Self::run_pipeline_key(segment, clipped, RunTier::Arena);
+                let key = Self::run_pipeline_key(segment, clipped, RunTier::Arena, ablation);
                 if !keys.contains(&key) {
                     keys.push(key);
                 }

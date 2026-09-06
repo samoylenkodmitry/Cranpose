@@ -292,9 +292,13 @@ substrate declaration).
   watch does, Mali does not), `CRANPOSE_GPU_STAGE_DIAG`,
   `CRANPOSE_WGPU_RENDER_STAGE_TELEMETRY_MS`.
 - `CRANPOSE_ABLATE` (`debug.cranpose.ablate`, a comma list of `stages`,
-  `glass`, `substrates`, `blur`, `text`; `ablation.rs`) removes one kind
-  of renderer work in the same binary; the parsed set is logged on change
-  and every 600 frames while a switch is on. `CRANPOSE_NO_FILL_CACHE`,
+  `glass`, `substrates`, `blur`, `text`, `shape`, `shape_fill`;
+  `ablation.rs`) removes one kind of renderer work in the same binary;
+  `shape` makes every shape fragment its vertex colour inside its clip
+  (fill and blend kept, coverage and brush removed) and `shape_fill`
+  discards it (fill removed too), so the two deltas separate the shape
+  fragment program from its fill. The parsed set is logged on change and
+  every 600 frames while a switch is on. `CRANPOSE_NO_FILL_CACHE`,
   `CRANPOSE_NO_BACKDROP_CACHE`, `CRANPOSE_NO_EFFECT_DOMAINS` are the
   reference toggles. Android maps `debug.cranpose.<name>` properties to
   these in `android_frame_telemetry.rs`.
