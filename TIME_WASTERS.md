@@ -1163,3 +1163,14 @@ text. The watch text attribution stopped after its invalid second leg; the raw
 result stays invalid. Establish a valid independent route check before using such
 a diagnostic, or leave its attribution unavailable. Missing startup `pidof` output
 before log capture does not itself prove either a framework crash or a launch race.
+
+
+## Check active command kinds before blaming duplicate recording
+
+`draw_with_content` records both placements, but Cranpose `Canvas` constructs a
+Behind command. The unchanged Orbit/Showcase workloads do not call
+`draw_with_content`; source evidence of the generic duplicate path is not
+attribution for their per-frame preparation cost. Also, an `&mut dyn DrawScope`
+borrow does not forbid handing separately owned raw chunks to workers. The
+actual thread boundary is the owned data, and text primitives retain a non-Send
+`Rc<str>` which must stay with their owning thread.

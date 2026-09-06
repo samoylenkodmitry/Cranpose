@@ -1453,3 +1453,43 @@ A is pure shared `a5710463`; B adds only the isolated arc early return. Native p
 | 8 | A | 38.700070 | 38.0 → 38.0 |
 
 B-minus-A pairs are +0.169375, +0.615018, -0.679693 and -1.541466 FPS. Two pairs improve and two regress, including the final pair losing about four percent. The candidate remains outside the shared runtime; hot Megaboss gains do not establish full-scroll acceptance.
+
+
+## Re-specialization correction and automatic phone control
+
+Shared commit `37bd0ce8`, merged by Fable as `82e829d5`, removes a previously
+raised glass override when its uniform changes and no longer satisfies the
+specialization rule. The deliberately stale-rim case fails before the fix;
+restoration preserves the active material, unrelated caller overrides and the
+fresh material key. All 223 graphics unit tests, Metal glass/reference/atlas
+proofs, native macOS Clippy and the exact iOS Clippy recipe pass. Both unchanged
+apps reproduce from a 2,007-file framework inventory, with seventy Orbit and
+fifteen Showcase app files verified unchanged and native APK payloads audited.
+
+The Huawei full-scroll comparison below uses automatic presentation policy,
+cleared diagnostic properties and forty timed swipes per sixty-second leg.
+A is reviewed rim checkpoint `56328905`; B adds the re-specialization correction.
+The sequence runs ABAB then BABA without a cooling wait.
+
+| Leg | Source | Displayed FPS | Battery C before → after |
+| --- | --- | ---: | --- |
+| 1 | A | 38.180108 | 39.0 → 39.0 |
+| 2 | B | 39.394792 | 39.0 → 39.0 |
+| 3 | A | 40.171429 | 40.0 → 39.0 |
+| 4 | B | 39.963180 | 39.0 → 39.0 |
+| 5 | B | 38.898608 | 39.0 → 40.0 |
+| 6 | A | 39.372043 | 39.0 → 41.0 |
+| 7 | B | 38.864769 | 39.0 → 39.0 |
+| 8 | A | 38.304306 | 39.0 → 39.0 |
+
+All eight process, scene and route checks pass. B-minus-A pairs are +1.214684,
+-0.208250, -0.473435 and +0.560463 FPS. This mixed comparison establishes neither
+a speed gain nor the final absence of a regression against main. The correction
+is required for material correctness; its complete shared checkpoint still
+needs all four workload acceptance comparisons.
+
+The narrow fixed-kind butt-arc distance exit passes the real ARMv7 watch
+reference test: two tests fixed, the deliberately lowered rejection threshold
+fails with 133 differing bytes, and two tests restored. This complements its
+Metal and Linux exact proofs. The automatic-policy watch Megaboss comparison
+is pending. Production shape shader source remains unchanged.

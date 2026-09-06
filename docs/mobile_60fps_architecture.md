@@ -1,10 +1,12 @@
 # Architecture for sustained mobile 60 fps
 
 Status: architecture candidates under verification, 2026-09-06. The 60 fps target is not achieved.
-Both working branches share `56328905`: the `a5710463` renderer, reference tests,
-and reviewed `36dab4ae` rim specialization. Fable merged this common ground as
-`5e09cb38`. The activity and resting-substrate units remain separate on Fable's
-branch while their device evidence is completed. Main reference remains the
+Both working branches share `37bd0ce8`: the `a5710463` renderer, reference tests,
+reviewed `36dab4ae` rim specialization, and the red-proven correction for stale
+material overrides after re-specialization. Fable merged this common ground as
+`82e829d5`. Activity and resting-substrate units remain separate on Fable's
+branch. Activity passes exact pixel proofs but its paired speed results are
+mixed, so it is held outside the shared checkpoint. Main reference remains the
 freshly rebuilt `0d195313`. The shared watch Megaboss regression against main
 is still an acceptance failure. `render_arch.md` retains the experiment record.
 
@@ -12,9 +14,9 @@ The next architecture decisions follow the measured critical paths:
 
 | Boundary | Decision | Evidence required next |
 | --- | --- | --- |
-| Glass material execution | Use the existing finite specialization rules to remove only provably inactive work; preserve live sample coordinates and arithmetic | Activity fixed/mutant/restored passes on watch; complete its full comparison against rim-only |
-| Ordered shape execution | Keep the fixed-arc distance exit isolated; combine it with the held ordered-kind candidate only as a measured experiment | Native watch exact proof, unchanged Megaboss and full-scroll comparisons, and a fresh-main control |
-| Frame publication | Retain the existing two outstanding packets, one active and one waiting | Watch packet timelines with presentation worker on and off; no deeper queue without a demonstrated serialization cause |
+| Glass material execution | Use the existing finite specialization rules to remove only provably inactive work; preserve live sample coordinates and arithmetic | Activity exactness is proven on watch; repeat its mixed speed comparison against rim-only before adoption |
+| Ordered shape execution | Keep the fixed-arc distance exit isolated; combine it with the held ordered-kind candidate only as a measured experiment | Native watch exact proof passes; finish automatic-policy Megaboss and full-scroll comparisons, then a fresh-main control |
+| Frame publication | Retain the existing two outstanding packets, one active and one waiting | Watch Megaboss preparation exceeds the deadline with little idle time; retain queue depth and test preparation overlapping command production |
 | Source capture | Retain the full declared input region for Regular glass | An output-conditioned bound must prove every live transmitted and opposite-side reflected sample, including filtering and capture phase |
 | Shared acceptance | Keep app sources, native geometry and exact pixel contracts fixed | Finish the combined platform board and all four automatic-policy device workloads |
 
@@ -712,3 +714,57 @@ differing pixels; removing the resting guard from the interior output fails
 with 257 differing pixels; restoring the unit passes all five tests. The same
 fixed/two-mutant/restored sequence passes on Metal and Linux. Watch performance
 is measured separately against rim-only; the proof does not establish speed.
+
+
+## Watch timelines select the preparation boundary
+
+The `frame-trace-a571` diagnostic stamps producer update, publication, target
+acquisition, renderer execution and present calls on the same monotonic clock.
+The following are medians of individual spans, not additive stage percentiles
+or GPU timestamps. Logs come from separate runs at the reported temperatures;
+these runs cannot establish a causal comparison of presentation policies.
+
+| Workload / presentation worker | Battery C before → after | Update ms | Renderer execution ms | Present call ms | Actual displayed FPS |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Watch Megaboss / enabled | 43.2 → 44.6 | 43.862 | 11.295 | 47.331 | 16.800 |
+| Watch Megaboss / disabled, resumed | 41.9 → 43.6 | 39.129 | 7.437 | 4.363 | 19.396 |
+| Watch full scroll / enabled, resumed | 43.7 → 43.7 | 12.841 | 21.908 | 48.963 | 15.386 |
+
+The synchronous Megaboss trace has only 0.385 ms median between the previous
+packet ending and the next update starting. Correcting a missed-callback
+period cannot remove its measured preparation work. The full-scroll worker
+trace has a 44.424–45.439 ms median bound on publication-to-consumer handoff;
+presentation and rendering are backpressured. Renderer execution includes
+possible submission waits and must not be called pure GPU cost. The enabled
+worker logs have contiguous packet IDs. Synchronous logs have no packet IDs,
+so absence of a logging gap cannot be proven from their cross-frame spans.
+
+The first synchronous watch Megaboss trace lost foreground during an ADB
+disconnection and is invalid. The resumed synchronous full-scroll trace failed
+its untimed return-to-search-field check and never entered measurement. Both
+reports remain retained. Three valid traces do not constitute a completed
+four-case timeline matrix or automatic-policy acceptance.
+
+A separate Huawei full-scroll removal probe substitutes the panel's observed
+16,666,666 ns period for the callback-delta fallback. All eight legs verify that
+panel period and forty swipes. Display-period minus callback-period paired
+results are -0.844, +2.464, +2.755 and +0.449 FPS, at 37–39 C. This mixed
+attribution does not justify a production scheduling rewrite. The diagnostic
+property and frame tracing remain absent from shared source.
+
+The next preparation experiment owns incoming draw arguments inside a framework
+`DrawScope` adapter, sends filled chunks while the unchanged producer continues,
+and publishes ordered immutable chunk owners after terminal completion. It
+must measure the entire producer/preparation/publication interval. It must not
+precollect a static stream, concatenate output columns, infer common rotation,
+or hide later per-chunk renderer costs. Text measurement remains synchronous;
+text's non-Send `Rc<str>` stays on the producer. A borrowed draw scope does not
+prevent sending a separate owned chunk to a worker. Full event replay, retained
+readers, content boundaries and deliberately reversed completion order are the
+correctness gates before any device feasibility claim. No production recorder
+change has been accepted from this investigation.
+
+The apparent duplicate `WithContent` recording is not the active apps' path:
+Cranpose's `Canvas` uses `draw_behind`, and the unchanged Orbit and Showcase
+sources do not call `draw_with_content`. Removing that duplication cannot be
+presented as a fix for these profiles.
