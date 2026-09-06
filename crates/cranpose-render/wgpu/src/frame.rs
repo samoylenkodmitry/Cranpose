@@ -650,6 +650,7 @@ impl PendingBackdrop<'_> {
 static STAGE_DIAG: DebugToggle = DebugToggle::new("CRANPOSE_GPU_STAGE_DIAG");
 static NO_EFFECT_DOMAINS: DebugToggle = DebugToggle::new("CRANPOSE_NO_EFFECT_DOMAINS");
 static NO_FILL_CACHE: DebugToggle = DebugToggle::new("CRANPOSE_NO_FILL_CACHE");
+const ABLATION_LOG_PERIOD: u32 = 600;
 static NO_BACKDROP_CACHE: DebugToggle = DebugToggle::new("CRANPOSE_NO_BACKDROP_CACHE");
 
 fn declared_support(support: Option<Rect>) -> Option<Rect> {
@@ -1591,10 +1592,19 @@ enum Event {
 impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
     pub(crate) fn new(renderer: &'r mut GpuRenderer, recorder: &'c mut C) -> Self {
         let ablation = Ablation::current();
-        if ablation != renderer.ablation {
+        let changed = ablation != renderer.ablation;
+        renderer.ablation_frames = if changed {
+            0
+        } else {
+            renderer.ablation_frames.wrapping_add(1)
+        };
+        if ablation != Ablation::default()
+            && renderer.ablation_frames.is_multiple_of(ABLATION_LOG_PERIOD)
+            || changed
+        {
             log::warn!("[ablation] CRANPOSE_ABLATE switches: {ablation:?}");
-            renderer.ablation = ablation;
         }
+        renderer.ablation = ablation;
         Self {
             renderer,
             recorder,
