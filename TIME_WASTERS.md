@@ -1174,3 +1174,30 @@ attribution for their per-frame preparation cost. Also, an `&mut dyn DrawScope`
 borrow does not forbid handing separately owned raw chunks to workers. The
 actual thread boundary is the owned data, and text primitives retain a non-Send
 `Rc<str>` which must stay with their owning thread.
+
+
+## An unread substrate can still determine the picture (2026-09-06)
+
+A resting LiquidGlass shader returns before reading its adaptive frost blur.
+The first fixture also passed through the material builder, which writes frost
+multiplied by activity. Its resting case therefore had zero frost and declared
+no substrate even before the added activity predicate. Comparing that against
+a forced 24 px blur changed five Adreno pixels by one channel level through
+capture geometry. Removing curve specialization and then the activity predicate
+both retained the same five pixels; neither was the isolated cause. Construct
+the intended shader input with positive frost and independent zero activity,
+assert its declaration, and only then mutate the predicate. Keep exact pixel
+comparison and the geometry-sensitive regression test. A same-geometry shader
+premise alone does not prove the safety of changing capture geometry.
+
+## Producer overlap does not by itself validate parallel recording (2026-09-06)
+
+The live, unchanged ArenaRenderer probe really starts workers while the producer
+continues, unlike the earlier precollected experiment. Two workers / 512 events
+save watch median time but worsen every paired p99 and slow Huawei. One worker /
+1,024 events is slower still. Two workers / 2,048 events improve watch median
+and p99 with nine published owners per frame. These are complete producer and
+preparation timings, not renderer or FPS acceptance. The test-only primitive
+materialization oracle is not a necessary production stage: consume the
+published shape tables directly. The missing measurement is actual graph,
+upload and draw cost, with exact pixels across changed chunk boundaries.
