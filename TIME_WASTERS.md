@@ -1201,3 +1201,12 @@ preparation timings, not renderer or FPS acceptance. The test-only primitive
 materialization oracle is not a necessary production stage: consume the
 published shape tables directly. The missing measurement is actual graph,
 upload and draw cost, with exact pixels across changed chunk boundaries.
+
+## Simpleperf sampling flags are ordered (2026-09-06)
+
+Place `-f 200` before `-e cpu-cycles,cpu-clock`: frequency applies only to
+following events. The reverse order silently samples both at 4,000 Hz and
+overloads watch captures. Verify recorded event attributes, not just the command
+text. A mutated 4,000 Hz attribute must fail the collector guard. Capture SF and
+temperature before profiler finalization; use leaf samples for full-minute CPU
+self time, with short stack captures only where needed.
