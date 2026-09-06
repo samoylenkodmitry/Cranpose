@@ -375,6 +375,7 @@ By removal, same APK (`CRANPOSE_ABLATE`), fps switched minus base per pair:
 | glass_dispersion (two of four fetches) | +3.3, +0.6, -2.4, +2.5 at 39-42 C | +2.2, -10.0, -7.2, +13.4 across the 36 and 24 plateaus; +1.2..+2.6 within one |
 | glass_refraction (physical refraction arithmetic) | -1.8, +1.7, -0.9, -0.8 | +0.8, +0.3, -0.6, -0.0 on base 24.4 at 42.5 C |
 | shape_variants=0 on Orbit (general 15-location pipeline for solid records) | -1.5, -0.6, -1.6, -1.0 on the 60 Hz cap, no spans | -10.3, -8.2, -8.2, -7.9 on 14.6-17.1; span 146-147 ms against 48-58 at 43-45 C |
+| opaque prefix cache off (debug.cranpose.no_fill_cache=1: the page's opaque prefix drawn from its records every frame instead of one blit of the cached texture) | -2.37, -2.83, -1.26 on base 37.3-37.6 at 33-34 C; first pair +0.12 | 24-27 plateau at 42.6-43.2 C: -2.51, -1.80, -2.48; Layer Pass 0 4.43-5.45 ms/frame cached vs 7.35-8.74 uncached, span 34.2-36.8 vs 38.7-39.6 ms; the first pair (+7.03) is a 17.50 fps cache leg run straight after another owner's hot legs (Layer Pass 1 15.8 ms, Layer Pass 0 11.8), thermally confounded. The prefix's records cost 2.5 blit-pages of fragments, so the cache stays: the one-tap blit is the cheaper side on both GPUs, refuting the guess that a page of blit costs what a page of gradient does |
 
 The stage pipeline is the frame on both GPUs and its material path is
 nearly all of it; the material-to-blit switch removes arithmetic and

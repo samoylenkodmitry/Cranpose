@@ -125,9 +125,9 @@ fn reach(shader: &RuntimeShader, origin: (f32, f32), layer_pixel_rect: [f32; 4])
 fn intersect(a: Scissor, b: Scissor) -> Option<Scissor> {
     let x0 = a.0.max(b.0);
     let y0 = a.1.max(b.1);
-    let x1 = (a.0 + a.2).min(b.0 + b.2);
-    let y1 = (a.1 + a.3).min(b.1 + b.3);
-    (x1 > x0 && y1 > y0).then_some((x0, y0, x1 - x0, y1 - y0))
+    let width = (a.0 + a.2).min(b.0 + b.2).checked_sub(x0)?;
+    let height = (a.1 + a.3).min(b.1 + b.3).checked_sub(y0)?;
+    (width > 0 && height > 0).then_some((x0, y0, width, height))
 }
 
 fn pixel_rect(x0: f32, y0: f32, x1: f32, y1: f32) -> Option<Scissor> {
@@ -294,5 +294,18 @@ mod tests {
         let split = split_scissors(&shader, (0.0, 0.0), [0.0, 0.0, 30.0, 12.0], (0, 0, 30, 12))
             .expect("a plain card splits");
         assert_eq!(split.rim, [Some((0, 0, 30, 12)), None, None, None]);
+    }
+
+    #[test]
+    fn a_card_whose_hole_and_interior_lie_outside_the_bounds_keeps_the_rim_over_the_bounds() {
+        let shader = plain_card();
+        let bounds = (0, 0, 720, 70);
+        let split = split_scissors(&shader, (30.0, 40.0), [10.0, 20.0, 600.0, 240.0], bounds)
+            .expect("a plain card splits");
+        assert_eq!(
+            split.interior, None,
+            "no interior pixel is inside the bounds"
+        );
+        assert_eq!(split.rim, [Some(bounds), None, None, None]);
     }
 }
