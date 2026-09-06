@@ -47,6 +47,7 @@ struct Spec {
     first: First,
     alpha: f32,
     effect_beneath: bool,
+    covers_page: bool,
 }
 
 impl Spec {
@@ -55,6 +56,27 @@ impl Spec {
             first,
             alpha: 1.0,
             effect_beneath: false,
+            covers_page: false,
+        }
+    }
+
+    const fn covering_page(self) -> Self {
+        Self {
+            covers_page: true,
+            ..self
+        }
+    }
+
+    fn layer_rect(self) -> Rect {
+        if self.covers_page {
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: FRAME_WIDTH as f32,
+                height: FRAME_HEIGHT as f32,
+            }
+        } else {
+            LAYER
         }
     }
 }
@@ -77,7 +99,8 @@ fn radial(stops: Vec<(f32, Color)>, tile_mode: TileMode) -> Brush {
 }
 
 fn primitives(spec: Spec, phase: u32) -> Vec<cranpose_ui_graphics::DrawPrimitive> {
-    let mut scope = DrawScopeDefault::new(Size::new(LAYER.width, LAYER.height));
+    let layer = spec.layer_rect();
+    let mut scope = DrawScopeDefault::new(Size::new(layer.width, layer.height));
     let dark = Color::from_rgb_u8(4, 4, 10);
     match spec.first {
         First::Radial => scope.draw_rect(radial(stops(dark), TileMode::Clamp)),
@@ -139,8 +162,8 @@ fn primitives(spec: Spec, phase: u32) -> Vec<cranpose_ui_graphics::DrawPrimitive
     }
     for star in 0..40u32 {
         let drift = (phase * 7 + star * 3) as f32;
-        let x = (star as f32 * 41.3 + drift) % LAYER.width;
-        let y = (star as f32 * 23.7 + drift * 0.5) % LAYER.height;
+        let x = (star as f32 * 41.3 + drift) % layer.width;
+        let y = (star as f32 * 23.7 + drift * 0.5) % layer.height;
         scope.draw_circle(
             Brush::solid(Color::from_rgba_u8(
                 255,
@@ -165,14 +188,15 @@ fn graph(spec: Spec, phase: u32) -> RenderGraph {
         }),
         primitives(spec, phase),
     );
+    let placed = spec.layer_rect();
     let layer = RenderNode::Layer(Box::new(shared_test_support::layer_node(
         Rect {
             x: 0.0,
             y: 0.0,
-            width: LAYER.width,
-            height: LAYER.height,
+            width: placed.width,
+            height: placed.height,
         },
-        ProjectiveTransform::translation(LAYER.x, LAYER.y),
+        ProjectiveTransform::translation(placed.x, placed.y),
         GraphicsLayer {
             alpha: spec.alpha,
             ..GraphicsLayer::default()
@@ -312,6 +336,20 @@ fn assert_cold_then_warm(pair: &mut Pair, label: &str, spec: Spec, scale: f32) {
             warm.shape_fill_pixels,
             reference.shape_fill_pixels
         );
+        let copied = if spec.covers_page {
+            (
+                reference.copy_count + 1,
+                reference.copy_pixels + u64::from(FRAME_WIDTH) * u64::from(FRAME_HEIGHT),
+            )
+        } else {
+            (reference.copy_count, reference.copy_pixels)
+        };
+        assert_eq!(
+            (warm.copy_count, warm.copy_pixels),
+            copied,
+            "{label}: frame {phase} copies a page-covering prefix into the page and composites \
+             a partial one"
+        );
     }
 }
 
@@ -345,6 +383,17 @@ fn the_reuse_holds_at_fractional_and_integer_scales_and_past_the_page_edge() {
     };
     assert_cold_then_warm(&mut pair, "radial at 1.5x", Spec::of(First::Radial), 1.5);
     assert_cold_then_warm(&mut pair, "radial at 3x", Spec::of(First::Radial), 3.0);
+}
+
+#[test]
+fn a_prefix_covering_the_page_is_copied_in_place_of_the_composite_at_every_scale() {
+    let Some(mut pair) = Pair::new() else {
+        return;
+    };
+    let spec = Spec::of(First::Radial).covering_page();
+    assert_cold_then_warm(&mut pair, "covering at 1x", spec, 1.0);
+    assert_cold_then_warm(&mut pair, "covering at 1.5x", spec, 1.5);
+    assert_cold_then_warm(&mut pair, "covering at 3x", spec, 3.0);
 }
 
 #[test]

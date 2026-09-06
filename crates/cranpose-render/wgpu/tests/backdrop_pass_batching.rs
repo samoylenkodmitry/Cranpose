@@ -237,6 +237,9 @@ const FRAME_PASSES: u32 = 2;
 /// One resolve stage: the blur pass pair shared by every blurred glass in
 /// the stage; its captures are copies of the page, not passes.
 const STAGE_PASSES: u32 = 2;
+/// The page's cached opaque prefix arrives by one copy into the page before
+/// its first pass loads.
+const PREFIX_COPIES: u32 = 1;
 
 #[test]
 fn every_fixed_glass_shares_one_capture_atlas_and_one_blur_pair() {
@@ -254,13 +257,13 @@ fn every_fixed_glass_shares_one_capture_atlas_and_one_blur_pair() {
     );
     assert_eq!(
         single_steady,
-        (FRAME_PASSES + STAGE_PASSES, 1),
+        (FRAME_PASSES + STAGE_PASSES, PREFIX_COPIES + 1),
         "one fixed glass costs the final pass, one copy of the page and one blur pair: \
          single={single:?}"
     );
     assert_eq!(
         triple_steady,
-        (single_steady.0, 3),
+        (single_steady.0, PREFIX_COPIES + 3),
         "extra fixed glasses that read the same content join the same stage and add a copy \
          each, no pass; their shader tails draw in the frame's final pass: single={single:?} \
          triple={triple:?}"

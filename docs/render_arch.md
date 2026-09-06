@@ -270,10 +270,15 @@ reference below and not by re-tessellation.
   placement, snap, clip, scale bits, clear colour, format, rect and page
   origin. Admitted on the second consecutive frame: the page's first pass
   splits, the rect is drawn alone and copied back (same-format copy), and
-  later frames composite the copy nearest at the same integer rect ahead
-  of the run's remaining records (`PassSegment::first_run_window`).
+  later frames bring the copy back ahead of the run's remaining records
+  (`PassSegment::first_run_window`): a prefix that covers the page is
+  copied into the page and the pass loads it, one that does not is
+  composited at the same integer rect over the pass's clear. The copy
+  exists because a blended full-page quad is a page of fragments (2.0 ms
+  on the watch, see the probe row) while a copy command is not a pass and
+  fits with the frame's captures in the span outside the pass rows.
   Exact because the bytes are opaque, same-format and unmasked, so
-  src-over is the identity. `CRANPOSE_NO_FILL_CACHE`
+  src-over is the identity and the copy is the same texels. `CRANPOSE_NO_FILL_CACHE`
   (`debug.cranpose.no_fill_cache`) is the reference toggle;
   `opaque_prefix_cache.rs` requires byte identity at three scales and
   refuses every disqualifier (each requirement red-proven).

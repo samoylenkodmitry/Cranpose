@@ -68,6 +68,10 @@ impl DeviceRect {
         (self.x, self.y, self.width, self.height)
     }
 
+    fn size(self) -> [f32; 2] {
+        [self.width, self.height]
+    }
+
     fn intersect(self, other: Self) -> Option<Self> {
         let left = self.x.max(other.x);
         let top = self.y.max(other.y);
@@ -335,36 +339,55 @@ impl Page {
         origin: [f32; 2],
     ) -> Option<TextureRegionCopy<'a>> {
         let source = [rect.x - self.offset[0], rect.y - self.offset[1]];
-        let coords = [
-            source[0],
-            source[1],
-            rect.width,
-            rect.height,
-            origin[0],
-            origin[1],
-        ];
-        if coords
-            .iter()
-            .any(|value| value.fract() != 0.0 || *value < 0.0)
-        {
-            return None;
-        }
-        let size = [rect.width as u32, rect.height as u32];
-        let source_origin = [source[0] as u32, source[1] as u32];
-        let dest_origin = [origin[0] as u32, origin[1] as u32];
-        let fits = |origin: [u32; 2], target: &OffscreenTarget| {
-            origin[0] + size[0] <= target.width && origin[1] + size[1] <= target.height
-        };
-        (fits(source_origin, &self.texture) && fits(dest_origin, dest)).then_some(
-            TextureRegionCopy {
-                source: &self.texture,
-                source_origin,
-                dest,
-                dest_origin,
-                size,
-            },
-        )
+        grid_copy(&self.texture, source, dest, origin, rect.size())
     }
+
+    /// `source`'s texels from its origin copied into the page within `rect`,
+    /// when the rect lies on whole texels inside the page and the copy fits.
+    fn copy_from<'a>(
+        &'a self,
+        source: &'a OffscreenTarget,
+        rect: DeviceRect,
+    ) -> Option<TextureRegionCopy<'a>> {
+        let dest = [rect.x - self.offset[0], rect.y - self.offset[1]];
+        grid_copy(source, [0.0, 0.0], &self.texture, dest, rect.size())
+    }
+}
+
+fn grid_copy<'a>(
+    source: &'a OffscreenTarget,
+    source_origin: [f32; 2],
+    dest: &'a OffscreenTarget,
+    dest_origin: [f32; 2],
+    size: [f32; 2],
+) -> Option<TextureRegionCopy<'a>> {
+    let coords = [
+        source_origin[0],
+        source_origin[1],
+        size[0],
+        size[1],
+        dest_origin[0],
+        dest_origin[1],
+    ];
+    if coords
+        .iter()
+        .any(|value| value.fract() != 0.0 || *value < 0.0)
+    {
+        return None;
+    }
+    let size = [size[0] as u32, size[1] as u32];
+    let source_origin = [source_origin[0] as u32, source_origin[1] as u32];
+    let dest_origin = [dest_origin[0] as u32, dest_origin[1] as u32];
+    let fits = |origin: [u32; 2], target: &OffscreenTarget| {
+        origin[0] + size[0] <= target.width && origin[1] + size[1] <= target.height
+    };
+    (fits(source_origin, source) && fits(dest_origin, dest)).then_some(TextureRegionCopy {
+        source,
+        source_origin,
+        dest,
+        dest_origin,
+        size,
+    })
 }
 
 /// One layer's render in progress: the page it draws into, the strata it has
@@ -1961,8 +1984,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             if let Some(gate) = self.renderer.fill_gates.get_mut(&prefix.command) {
                 gate.hit(prefix.key);
             }
-            composites.push(prefix_blit(&prefix, retained.texture));
-            composites.sort_by_key(|composite| composite.z_index);
+            self.replay_prefix(pass, &prefix, retained.texture, composites, load_op);
             return Ok(Some(1..u32::MAX));
         }
         self.renderer
@@ -2032,6 +2054,39 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         }
         *load_op = Some(wgpu::LoadOp::Load);
         Ok(Some(1..u32::MAX))
+    }
+
+    /// Brings a retained prefix back: copied into the page ahead of a pass
+    /// that loads it when the prefix covers the page, composited over the
+    /// pass's clear otherwise.
+    fn replay_prefix(
+        &mut self,
+        pass: &LayerPass<'_>,
+        prefix: &OpaquePrefix,
+        texture: Rc<OffscreenTarget>,
+        composites: &mut Vec<ResolvedComposite>,
+        load_op: &mut Option<wgpu::LoadOp<wgpu::Color>>,
+    ) {
+        let (x, y, width, height) = prefix.device_rect;
+        let rect = DeviceRect {
+            x,
+            y,
+            width,
+            height,
+        };
+        match (rect == pass.page.rect())
+            .then(|| pass.page.copy_from(&texture, rect))
+            .flatten()
+        {
+            Some(copy) => {
+                self.recorder.copy_texture_region(copy);
+                *load_op = Some(wgpu::LoadOp::Load);
+            }
+            None => {
+                composites.push(prefix_blit(prefix, texture));
+                composites.sort_by_key(|composite| composite.z_index);
+            }
+        }
     }
 
     fn run_stages(&mut self, pass: &mut LayerPass<'_>) -> Result<(), String> {
