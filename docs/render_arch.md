@@ -2129,3 +2129,21 @@ against: a lens-variant card (rim style 1, every reflection tap live) and
 a resting card (activity 0.5, the plain path live), so any later edit to
 either path is judged on both branches.
 
+## The rim style folds for every regular glass (2026-09-06)
+
+`GLASS_RIM_STYLE_OFF` is raised when uniform 28 is not positive, which is
+every `Glass::regular()` and `Glass::clear()`; a `Glass::lens()` keeps it
+live. Both reads of the slot go through `fixed_or`, the guard's border
+ramp and `rim_style` itself, so the compiler folds every `* rim_style`
+and `mix(a, b, rim_style)` term of the face and rim lighting to `a`: the
+meniscus transmission loss, the face reflection weight, the long-edge
+specular, the etalon gain, the optical bevel band, the face lift and the
+tint interior mix. No fetch is gated; a raised flag substitutes the value
+the uniform already holds, so the picture is the same by the same
+argument as the other flags. Proof shape: the frozen fixture declares the
+override but never reads it, so the reference renders from the uniform
+while the shipped shader folds, and `glass_reference_shader` requires
+zero differing pixels across five scenes; raising the flag for a lens
+too breaks the lens scene by 7,227 pixels and nothing else, and the
+specialization parity test compares the folded pipeline with the general
+one byte for byte.
