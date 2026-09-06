@@ -189,7 +189,7 @@ mod tests {
     #[test]
     fn shape_vertices_receive_every_record_field_from_its_column() {
         let module = naga::front::wgsl::parse_str(&storage_shape_shader()).unwrap();
-        for entry_name in ["vs_record", "vs_record_solid"] {
+        for entry_name in ["vs_record", "vs_record_solid", "vs_record_gradient_fill"] {
             let entry = module
                 .entry_points
                 .iter()
@@ -245,12 +245,12 @@ mod tests {
 
     #[test]
     fn shape_shader_validates_for_webgl() {
-        for entry in ["vs_record", "vs_record_solid"] {
+        for entry in ["vs_record", "vs_record_solid", "vs_record_gradient_fill"] {
             if let Err(err) = validate_glsl_portability(super::SHADER, entry, ShaderStage::Vertex) {
                 panic!("shape.wgsl `{entry}` must lower to GLSL ES 300: {err}");
             }
         }
-        for entry in ["fs_main", "fs_solid"] {
+        for entry in ["fs_main", "fs_solid", "fs_gradient_fill"] {
             if let Err(err) = validate_glsl_portability(super::SHADER, entry, ShaderStage::Fragment)
             {
                 panic!("shape.wgsl `{entry}` must lower to GLSL ES 300: {err}");
@@ -290,7 +290,7 @@ mod tests {
 
     #[test]
     fn shape_fragment_inputs_fit_the_gles_varying_floor() {
-        for entry_point in ["fs_main", "fs_solid"] {
+        for entry_point in ["fs_main", "fs_solid", "fs_gradient_fill"] {
             let locations = fragment_input_locations(super::SHADER, entry_point);
             let highest = locations.last().copied().expect("fragment inputs");
             assert!(
@@ -308,6 +308,11 @@ mod tests {
             7,
             "a solid batch carries the coverage vectors and nothing of the brush"
         );
+        assert_eq!(
+            fragment_input_locations(super::SHADER, "fs_gradient_fill").len(),
+            11,
+            "a gradient fill batch carries no colour, stroke or arc vectors"
+        );
     }
 
     #[test]
@@ -323,6 +328,9 @@ mod tests {
             "fn vs_record_solid(",
             "fn band_position(",
             "fn fs_solid(",
+            "fn vs_record_gradient_fill(",
+            "fn fs_gradient_fill(",
+            "override BRUSH_KIND_FIXED: i32",
             "override TIER_ARENA: bool",
         ] {
             assert!(

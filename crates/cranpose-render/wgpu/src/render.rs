@@ -22,8 +22,8 @@ use cranpose_render_common::{
     },
 };
 use cranpose_ui_graphics::{
-    BlendMode, ColorFilter, FxHasher, ImageBitmap, ImageSampling, Point, RecordSegment, Rect,
-    RenderHash, TileMode,
+    BlendMode, ColorFilter, FRAGMENT_KIND_FILL, FxHasher, ImageBitmap, ImageSampling, Point,
+    RecordSegment, Rect, RenderHash, TileMode,
 };
 use smallvec::SmallVec;
 use web_time::Instant;
@@ -911,6 +911,7 @@ pub(crate) enum RunTier {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct ShapeVariant {
     kind: Option<u8>,
+    brush: Option<u8>,
     solid: bool,
     clipped: bool,
     ablation: ShapeAblation,
@@ -919,6 +920,7 @@ pub(crate) struct ShapeVariant {
 impl ShapeVariant {
     const GENERAL: Self = Self {
         kind: None,
+        brush: None,
         solid: false,
         clipped: true,
         ablation: ShapeAblation {
@@ -940,9 +942,24 @@ impl ShapeVariant {
         }
         Self {
             kind: segment.uniform_kind().map(|kind| kind as u8),
+            brush: segment
+                .gradient
+                .then(|| segment.uniform_brush())
+                .flatten()
+                .map(|brush| brush as u8),
             solid: !segment.gradient,
             clipped,
             ablation,
+        }
+    }
+
+    fn entries(self) -> (&'static str, &'static str) {
+        if self.solid {
+            ("vs_record_solid", "fs_solid")
+        } else if self.kind == Some(FRAGMENT_KIND_FILL as u8) && !self.ablation.material {
+            ("vs_record_gradient_fill", "fs_gradient_fill")
+        } else {
+            ("vs_record", "fs_main")
         }
     }
 
@@ -1004,6 +1021,7 @@ pub(crate) fn create_shape_pipeline(
     } = key;
     let constants = [
         ("SHAPE_KIND_FIXED", variant.kind.map_or(-1.0, f64::from)),
+        ("BRUSH_KIND_FIXED", variant.brush.map_or(-1.0, f64::from)),
         ("SHAPE_SOLID", f64::from(u8::from(variant.solid))),
         ("SHAPE_CLIPPED", f64::from(u8::from(variant.clipped))),
         ("TIER_ARENA", f64::from(u8::from(tier == RunTier::Arena))),
@@ -1011,12 +1029,7 @@ pub(crate) fn create_shape_pipeline(
         ("SHAPE_FLAT", f64::from(u8::from(variant.ablation.material))),
         ("SHAPE_DISCARD", f64::from(u8::from(variant.ablation.fill))),
     ];
-    let vertex_entry = if variant.solid {
-        "vs_record_solid"
-    } else {
-        "vs_record"
-    };
-    let fragment_entry = if variant.solid { "fs_solid" } else { "fs_main" };
+    let (vertex_entry, fragment_entry) = variant.entries();
     let instance_layout = record_vertex_layouts();
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("Shape Shader"),

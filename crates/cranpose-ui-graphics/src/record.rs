@@ -491,6 +491,9 @@ pub struct RecordSegment {
     pub count: u32,
     pub blend: BlendMode,
     pub gradient: bool,
+    /// One bit per `BRUSH_KIND_*` present in the segment; bit 0 stands for
+    /// the records drawn without a brush.
+    pub brushes: u8,
     /// One bit per `FRAGMENT_KIND_*` present in the segment.
     pub kinds: u8,
     /// The band class every record of the segment is drawn at: the index
@@ -507,6 +510,12 @@ impl RecordSegment {
     /// The one kind every record of the segment has, if they agree.
     pub fn uniform_kind(&self) -> Option<u32> {
         (self.kinds.count_ones() == 1).then(|| self.kinds.trailing_zeros())
+    }
+
+    /// The one brush kind every record of the segment paints with, if they
+    /// agree; zero when none of them has a brush.
+    pub fn uniform_brush(&self) -> Option<u32> {
+        (self.brushes.count_ones() == 1).then(|| self.brushes.trailing_zeros())
     }
 }
 
@@ -706,6 +715,7 @@ fn extend_segment_in(tables: &mut RecordTables, extend: bool, opened: RecordSegm
     if extend {
         let last = tables.segments.last_mut().expect("a keyed segment exists");
         last.count += 1;
+        last.brushes |= opened.brushes;
         last.kinds |= opened.kinds;
         last.band_class = last.band_class.max(opened.band_class);
         return;
@@ -828,6 +838,7 @@ impl ShapeRecorder {
             count: 1,
             blend: BlendMode::SrcOver,
             gradient: false,
+            brushes: 0,
             kinds: 0,
             band_class: 0,
         });
@@ -988,6 +999,11 @@ impl ShapeRecorder {
         let index = self.tables.shapes.len() as u32;
         let blend = record.blend_mode();
         let gradient = record.is_gradient();
+        let brush_bit = 1u8
+            << match record.brush {
+                0 => 0,
+                index => self.tables.brushes[index as usize - 1].kind,
+            };
         let kind_bit = 1u8 << record.fragment_kind();
         let band_class = band_bucket.unwrap_or(0) as u8;
         record.flags |= u32::from(band_class) << BAND_CLASS_SHIFT;
@@ -1007,6 +1023,7 @@ impl ShapeRecorder {
                 count: 1,
                 blend,
                 gradient,
+                brushes: brush_bit,
                 kinds: kind_bit,
                 band_class,
             },
@@ -1035,6 +1052,7 @@ impl ShapeRecorder {
                 count: 1,
                 blend,
                 gradient,
+                brushes: 0,
                 kinds: kind_bit,
                 band_class: 0,
             },
@@ -2209,6 +2227,54 @@ mod tests {
         assert_eq!(
             recording.segments()[1].uniform_kind(),
             Some(FRAGMENT_KIND_FILL)
+        );
+    }
+
+    #[test]
+    fn a_segment_reports_its_one_brush_kind_and_none_for_a_mixed_or_empty_mask() {
+        let mut recording = CommandRecorder::default();
+        recording.push_rect(
+            rect(0.0, 0.0, 1.0, 1.0),
+            &linear_explicit(),
+            None,
+            BlendMode::SrcOver,
+        );
+        recording.push_rect(
+            rect(1.0, 0.0, 1.0, 1.0),
+            &linear_explicit(),
+            None,
+            BlendMode::SrcOver,
+        );
+        recording.push_rect(rect(2.0, 0.0, 1.0, 1.0), &solid(), None, BlendMode::SrcOver);
+        recording.push_rect(
+            rect(3.0, 0.0, 1.0, 1.0),
+            &linear_explicit(),
+            None,
+            BlendMode::SrcOver,
+        );
+        recording.push_rect(
+            rect(4.0, 0.0, 1.0, 1.0),
+            &radial(),
+            None,
+            BlendMode::SrcOver,
+        );
+        recording.push_other(text());
+        let recording = recording.finish();
+        let brushes: Vec<(u8, Option<u32>)> = recording
+            .segments()
+            .iter()
+            .map(|segment| (segment.brushes, segment.uniform_brush()))
+            .collect();
+        assert_eq!(
+            brushes,
+            vec![
+                (1 << BRUSH_KIND_LINEAR, Some(BRUSH_KIND_LINEAR)),
+                (1, Some(0)),
+                ((1 << BRUSH_KIND_LINEAR) | (1 << BRUSH_KIND_RADIAL), None),
+                (0, None),
+            ],
+            "two linears agree, a solid run has no brush, a linear beside a radial \
+             disagree, and a lane without shape records carries an empty mask"
         );
     }
 

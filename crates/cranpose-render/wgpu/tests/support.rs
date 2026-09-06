@@ -849,6 +849,130 @@ pub fn record_mixed_scene(scope: &mut DrawScopeDefault) {
 
 /// A layer node with every field spelled out, for contract tests that
 /// build graphs by hand.
+pub fn record_gradient_fill_scene(scope: &mut DrawScopeDefault) {
+    use cranpose_ui_graphics::{CornerRadii, TileMode};
+    let tile_modes = [
+        TileMode::Clamp,
+        TileMode::Repeated,
+        TileMode::Mirror,
+        TileMode::Decal,
+    ];
+    let separator = |scope: &mut DrawScopeDefault, y: f32| {
+        scope.draw_rect_at(
+            Rect {
+                x: 118.0,
+                y,
+                width: 8.0,
+                height: 4.0,
+            },
+            Brush::solid(Color(0.5, 0.5, 0.5, 1.0)),
+        );
+    };
+    scope.draw_rect_at(
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: SIZE as f32,
+            height: SIZE as f32,
+        },
+        Brush::linear_gradient_with_tile_mode(
+            vec![
+                Color(0.05, 0.05, 0.2, 1.0),
+                Color(0.2, 0.05, 0.1, 1.0),
+                Color(0.02, 0.15, 0.1, 1.0),
+            ],
+            Point::new(0.0, 0.0),
+            Point::new(SIZE as f32, SIZE as f32 * 0.5),
+            TileMode::Clamp,
+        ),
+    );
+    for (row, tile_mode) in tile_modes.into_iter().enumerate() {
+        let y = 8.0 + row as f32 * 58.0;
+        scope.draw_round_rect_at(
+            Rect {
+                x: 8.0,
+                y,
+                width: 110.0,
+                height: 50.0,
+            },
+            Brush::linear_gradient_with_tile_mode(
+                vec![
+                    Color(1.0, 0.2, 0.1, 1.0),
+                    Color(0.1, 0.9, 0.3, 0.9),
+                    Color(0.2, 0.3, 1.0, 1.0),
+                    Color(0.9, 0.9, 0.1, 0.6),
+                ],
+                Point::new(20.0, y),
+                Point::new(60.0, y + 30.0),
+                tile_mode,
+            ),
+            CornerRadii::uniform(6.0 + row as f32 * 4.0),
+        );
+    }
+    scope.draw_round_rect_at(
+        Rect {
+            x: 8.0,
+            y: 240.0,
+            width: 110.0,
+            height: 12.0,
+        },
+        Brush::linear_gradient_stops(
+            vec![
+                (0.0, Color(0.1, 0.1, 0.1, 1.0)),
+                (0.15, Color(0.9, 0.2, 0.2, 1.0)),
+                (0.3, Color(0.2, 0.9, 0.2, 1.0)),
+                (0.55, Color(0.2, 0.2, 0.9, 1.0)),
+                (0.8, Color(0.9, 0.9, 0.2, 1.0)),
+                (1.0, Color(0.9, 0.9, 0.9, 1.0)),
+            ],
+            Point::new(8.0, 240.0),
+            Point::new(118.0, 252.0),
+            TileMode::Clamp,
+        ),
+        CornerRadii::uniform(4.0),
+    );
+    separator(scope, 0.0);
+    for (row, tile_mode) in tile_modes.into_iter().enumerate() {
+        let y = 8.0 + row as f32 * 58.0;
+        scope.draw_round_rect_at(
+            Rect {
+                x: 126.0,
+                y,
+                width: 110.0,
+                height: 50.0,
+            },
+            Brush::radial_gradient_tiled(
+                vec![
+                    Color(0.9, 0.5, 0.1, 1.0),
+                    Color(0.1, 0.2, 0.7, 0.8),
+                    Color(0.6, 0.1, 0.5, 1.0),
+                ],
+                Point::new(181.0, y + 25.0),
+                22.0,
+                tile_mode,
+            ),
+            CornerRadii::uniform(3.0 + row as f32 * 5.0),
+        );
+    }
+    separator(scope, 236.0);
+    scope.draw_rect_at(
+        Rect {
+            x: 126.0,
+            y: 240.0,
+            width: 110.0,
+            height: 12.0,
+        },
+        Brush::sweep_gradient(
+            vec![
+                Color(0.9, 0.1, 0.1, 1.0),
+                Color(0.1, 0.9, 0.1, 1.0),
+                Color(0.1, 0.1, 0.9, 1.0),
+            ],
+            Point::new(181.0, 246.0),
+        ),
+    );
+}
+
 pub fn contract_layer(
     node_id: Option<NodeId>,
     cache_policy: cranpose_render_common::graph::CachePolicy,

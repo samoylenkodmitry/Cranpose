@@ -1220,6 +1220,7 @@ mod tests {
             count: 1,
             blend: BlendMode::SrcOver,
             gradient: false,
+            brushes: 1,
             kinds: 4,
             band_class: 0,
         };

@@ -192,8 +192,17 @@ reference below and not by re-tessellation.
   the cache retires it (`take_released`).
 - Shape pipelines: one per (blend mode, vertex stage, `ShapeVariant`);
   batches cut by blend mode, brush table and brush class only
-  (`shape_variant_parity.rs`). Runtime-shader pipelines are keyed by
-  source, overrides and paddings (`hash_runtime_shader`).
+  (`shape_variant_parity.rs`). A variant fixes the segment's uniform shape
+  kind (`SHAPE_KIND_FIXED`) and uniform brush kind (`BRUSH_KIND_FIXED`,
+  from `RecordSegment::brushes`), and picks its entry pair by what the
+  batch carries: `fs_solid` (no brush, 7 locations), `fs_gradient_fill`
+  (brushed fills: no colour, stroke or arc vectors, 11 locations), else
+  `fs_main` (15). Every entry ends in the one `fragment` function, so a
+  variant only folds branches the batch cannot take; the parity contracts
+  hold at zero bytes on Metal, and a wrong varying or a wrong fixed brush
+  fails them by 10^5 bytes (proved 2026-09-06, restored). Runtime-shader
+  pipelines are keyed by source, overrides and paddings
+  (`hash_runtime_shader`).
 
 ## Caches
 
@@ -399,11 +408,13 @@ Watch plateaus: 42-43 fps cool, 31 at 41-42 C, 24 at 43, 16 at the next
 step; every GPU reduction moves the plateau.
 
 Interface: `shape.wgsl` crosses 14 locations (56 components) into the
-general fragment and 7 (28) into `fs_solid`; main crosses 15. wgpu-types
-30 allows 16 by default and 15 on downlevel and WebGL2. naga's GLSL of
-every non-solid variant still declares all locations: the pipeline
-constants fold branches and never the interface, and only the solid
-entry narrows it. Main reads its 102-shape and 256-stop uniform arrays
+general fragment, 11 (44) into `fs_gradient_fill` and 7 (28) into
+`fs_solid`; main crosses 15. wgpu-types 30 allows 16 by default and 15 on
+downlevel and WebGL2. naga's GLSL of a variant declares all of its
+entry's locations: the pipeline constants fold branches and never the
+interface, so narrowing needs an entry of its own; the showcase's page
+fills are radial and its arena fills linear, and both now take the
+gradient-fill entry. Main reads its 102-shape and 256-stop uniform arrays
 in the vertex stage only; neither branch reads a record in the fragment,
 and WebGL2 has no storage buffer to read one from.
 

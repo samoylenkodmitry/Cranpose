@@ -75,6 +75,58 @@ fn full_output(solid: SolidOutput) -> VertexOutput {
     return output;
 }
 
+struct GradientFillOutput {
+    @builtin(position) clip_position: vec4<f32>,
+    @location(0) world_pos: vec4<f32>,
+    @location(1) @interpolate(flat) rect: vec4<f32>,
+    @location(2) @interpolate(flat) radii: vec4<f32>,
+    @location(3) @interpolate(flat) clip_rect: vec4<f32>,
+    @location(4) @interpolate(flat) gradient_params: vec4<f32>,
+    @location(5) @interpolate(flat) brush: vec4<u32>,
+    @location(6) @interpolate(flat) stop_offsets: vec4<f32>,
+    @location(7) @interpolate(flat) stop_color0: vec4<f32>,
+    @location(8) @interpolate(flat) stop_color1: vec4<f32>,
+    @location(9) @interpolate(flat) stop_color2: vec4<f32>,
+    @location(10) @interpolate(flat) stop_color3: vec4<f32>,
+}
+
+fn gradient_fill_output(full: VertexOutput) -> GradientFillOutput {
+    var output: GradientFillOutput;
+    output.clip_position = full.clip_position;
+    output.world_pos = full.world_pos;
+    output.rect = full.rect;
+    output.radii = full.radii;
+    output.clip_rect = full.clip_rect;
+    output.gradient_params = full.gradient_params;
+    output.brush = full.brush;
+    output.stop_offsets = full.stop_offsets;
+    output.stop_color0 = full.stop_color0;
+    output.stop_color1 = full.stop_color1;
+    output.stop_color2 = full.stop_color2;
+    output.stop_color3 = full.stop_color3;
+    return output;
+}
+
+fn full_from_gradient_fill(fill: GradientFillOutput) -> VertexOutput {
+    var output: VertexOutput;
+    output.clip_position = fill.clip_position;
+    output.color = vec4<f32>(0.0);
+    output.world_pos = fill.world_pos;
+    output.rect = fill.rect;
+    output.radii = fill.radii;
+    output.gradient_params = fill.gradient_params;
+    output.clip_rect = fill.clip_rect;
+    output.stroke_params = vec4<f32>(0.0);
+    output.arc_params = vec4<f32>(0.0);
+    output.brush = fill.brush;
+    output.stop_offsets = fill.stop_offsets;
+    output.stop_color0 = fill.stop_color0;
+    output.stop_color1 = fill.stop_color1;
+    output.stop_color2 = fill.stop_color2;
+    output.stop_color3 = fill.stop_color3;
+    return output;
+}
+
 // Where a recording lands on the device: the logical offset of its record
 // space (the layer origin with the rigid snap delta folded in), the root
 // scale, the clip, the dither origin and the paint every record takes.
@@ -415,6 +467,14 @@ fn vs_record_solid(
     return solid_output(record_vertex(record, vertex_idx));
 }
 
+@vertex
+fn vs_record_gradient_fill(
+    @builtin(vertex_index) vertex_idx: u32,
+    record: ShapeRecord,
+) -> GradientFillOutput {
+    return gradient_fill_output(record_vertex(record, vertex_idx));
+}
+
 fn band_position(
     record: ShapeRecord,
     placement: Placement,
@@ -475,6 +535,7 @@ override SHAPE_SOLID: bool = false;
 override SHAPE_CLIPPED: bool = true;
 override SHAPE_FLAT: bool = false;
 override SHAPE_DISCARD: bool = false;
+override BRUSH_KIND_FIXED: i32 = -1;
 
 const STROKE_CAP_BUTT: u32 = 0u;
 const STROKE_CAP_SQUARE: u32 = 2u;
@@ -882,6 +943,11 @@ fn fs_solid(input: SolidOutput) -> @location(0) vec4<f32> {
     return fragment(full_output(input));
 }
 
+@fragment
+fn fs_gradient_fill(input: GradientFillOutput) -> @location(0) vec4<f32> {
+    return fragment(full_from_gradient_fill(input));
+}
+
 fn fragment(input: VertexOutput) -> vec4<f32> {
     let alpha = shape_coverage_alpha(input);
     if (SHAPE_FLAT) {
@@ -898,7 +964,8 @@ fn fragment(input: VertexOutput) -> vec4<f32> {
 
     // Apply gradient if needed; a solid batch fixes the brush to solid and the
     // whole ladder folds away.
-    let brush_type = select(input.brush.x, 0u, SHAPE_SOLID);
+    let carried_brush = select(input.brush.x, 0u, SHAPE_SOLID);
+    let brush_type = select(carried_brush, u32(max(BRUSH_KIND_FIXED, 0)), BRUSH_KIND_FIXED >= 0);
     let gradient_tile_mode = input.brush.w;
     if (brush_type == 1u) {
         // Linear gradient projected from start.xy to end.xy
