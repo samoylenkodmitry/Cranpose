@@ -181,6 +181,41 @@ fn lenses(source: &str) -> RenderGraph {
     support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children)
 }
 
+fn variants(source: &str) -> RenderGraph {
+    let colors = LiquidColors::dark(Color::from_rgb_u8(120, 140, 255));
+    let mut children = backdrop();
+    let lens = rect(24.0, 20.0, 200.0, 90.0);
+    children.push(glass_layer(
+        lens,
+        Glass::lens()
+            .shape(LiquidShape::RoundedRect(18.0))
+            .blur_radius(0.0)
+            .dispersion(1.0)
+            .highlight(0.72)
+            .backdrop_effect(&colors, 1.5, GlassDynamics::default()),
+        1.0,
+        Vec::new(),
+        source,
+    ));
+    let resting = rect(24.0, 130.0, 300.0, 90.0);
+    children.push(glass_layer(
+        resting,
+        card_glass(LiquidShape::RoundedRect(4.0)).backdrop_effect(
+            &colors,
+            1.5,
+            GlassDynamics {
+                activity: Some(0.5),
+                resting_tint: Some(Color::from_rgba_u8(40, 40, 80, 120)),
+                ..GlassDynamics::default()
+            },
+        ),
+        1.0,
+        Vec::new(),
+        source,
+    ));
+    support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children)
+}
+
 fn capture(
     renderer: &mut support::LockedRenderer,
     graph: RenderGraph,
@@ -261,4 +296,20 @@ fn lenses_with_blur_and_substrates_match_the_reference_shader() {
     };
     assert_matches_reference(&mut renderer, "lenses", lenses, 1.0);
     assert_matches_reference(&mut renderer, "lenses at 1.5x", lenses, 1.5);
+}
+
+#[test]
+fn a_lens_variant_and_a_resting_card_match_the_reference_shader() {
+    let Ok(mut renderer) = support::headless_renderer() else {
+        eprintln!("skipping (headless WGPU init failed)");
+        return;
+    };
+    for scale in [1.0, 1.5] {
+        assert_matches_reference(
+            &mut renderer,
+            "lens variant and resting card",
+            variants,
+            scale,
+        );
+    }
 }
