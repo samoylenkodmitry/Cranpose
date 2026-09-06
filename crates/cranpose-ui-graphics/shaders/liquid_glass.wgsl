@@ -125,7 +125,6 @@ override GLASS_DISPERSION_OFF: bool = false;
 override GLASS_ADAPTIVE_FROST_OFF: bool = false;
 override GLASS_INK_OFF: bool = false;
 override GLASS_RIM_STYLE_OFF: bool = false;
-override GLASS_RESTING_OFF: bool = false;
 // The interior guard: every rim term (meniscus, bevel, border line,
 // specular, the opposite-wall reflection) is a product with a band weight
 // that is exactly zero deeper inside the shape than `rim_reach`, so a
@@ -698,7 +697,7 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
     let uv = input.uv;
     let map = region_map();
     let tex_size = logical_extent();
-    let material_activity = clamp(fixed_or(get_float(111u), 1.0, GLASS_RESTING_OFF), 0.0, 1.0);
+    let material_activity = clamp(get_float(111u), 0.0, 1.0);
 
     // Effect layer pixel rect injected by the renderer at uniform slot 62
     // (x_offset, y_offset, width, height) in viewport pixels.
@@ -859,7 +858,7 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
     let plain_path = textureSampleLevel(input_texture, input_sampler, map_uv(map, uv), 0.0);
     let resting_frost = plain_path * (1.0 - resting_tint.a)
         + vec4<f32>(resting_tint.rgb * resting_tint.a, resting_tint.a);
-    let resting_output = select(resting_frost * resting_weight, vec4<f32>(0.0), GLASS_RESTING_OFF);
+    let resting_output = resting_frost * resting_weight;
     if material_activity <= 0.0 {
         return resting_output;
     }
@@ -1428,11 +1427,7 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
     // suppressed under the glass itself and therefore cannot darken its face.
     let shadow_out = shadow_alpha * (1.0 - surface_coverage);
     let face_output = vec4<f32>(rgb, alpha) * coverage;
-    let outer_output = select(
-        vec4<f32>(outer_rgb, plain_path.a) * outer_coverage,
-        vec4<f32>(0.0),
-        GLASS_RESTING_OFF && GLASS_RIM_DRAW == 1,
-    );
+    let outer_output = vec4<f32>(outer_rgb, plain_path.a) * outer_coverage;
     return (face_output + outer_output) * material_activity
         + resting_output
         + vec4<f32>(0.0, 0.0, 0.0, shadow_out);

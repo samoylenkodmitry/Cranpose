@@ -125,7 +125,6 @@ override GLASS_DISPERSION_OFF: bool = false;
 override GLASS_ADAPTIVE_FROST_OFF: bool = false;
 override GLASS_INK_OFF: bool = false;
 override GLASS_RIM_STYLE_OFF: bool = false;
-override GLASS_RESTING_OFF: bool = false;
 // The interior guard: every rim term (meniscus, bevel, border line,
 // specular, the opposite-wall reflection) is a product with a band weight
 // that is exactly zero deeper inside the shape than `rim_reach`, so a

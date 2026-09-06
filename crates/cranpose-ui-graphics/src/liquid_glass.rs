@@ -141,11 +141,6 @@ pub const LIQUID_GLASS_SPECIALIZATIONS: &[LiquidGlassSpecialization] = &[
         inactive: |u| slot(u, GLASS_RIM_STYLE_UNIFORM) <= 0.0,
     },
     LiquidGlassSpecialization {
-        flag: "GLASS_RESTING_OFF",
-        slots: &[GLASS_ACTIVITY_UNIFORM],
-        inactive: |u| slot(u, GLASS_ACTIVITY_UNIFORM) >= 1.0,
-    },
-    LiquidGlassSpecialization {
         flag: "GLASS_INTERIOR_GUARD",
         slots: &[],
         inactive: |_| true,
