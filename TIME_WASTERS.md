@@ -1234,3 +1234,17 @@ was never forwarded. Before reading any device diagnostic, prove the switch
 was live in that run: the `[GPU-PASS]` rows must carry the label the switch
 adds, or the stats line must show the counter it moves. A nil delta with no
 such trace is an unmapped switch, not a result.
+
+## A render parity test red only on the CI Mac is a debug-toggle race
+
+2026-09-06, twice: `shape_variant_parity` and then
+`glass_specialization_parity` went red on macm3 and green here, with counts
+from the wrong arm (one draw variant where two were expected, 144,000
+rasterised pixels against 288,000). `cranpose_render_wgpu::set_debug_toggle`
+is process-global and a test binary runs its tests on parallel threads; a
+toggle raised before the capture takes `support::gpu_test_lock` is seen by
+whichever sibling test is capturing at that instant, and the busier
+two-runner Mac overlaps them where this machine does not. Take the lock
+first, raise the toggle, capture, clear it, then drop the guard
+(`headless_renderer_parts_configured` does this in one call). Do not read
+such a failure as a GPU or driver difference.
