@@ -608,8 +608,11 @@ The rejected runtime tap gates are not a basis for changing output equations.
 Fable's isolated rim-style override uses the existing pipeline constants; the
 Huawei full-scroll sequence favors it in all four pairs. On Adreno, all five
 frozen-reference tests pass, a deliberately unconditional rim-style-off mutant
-fails the live lens scene, and all five pass after restoration. Watch FPS
-remains under measurement, so the candidate is not yet accepted.
+fails the live lens scene, and all five pass after restoration. The completed watch sequence has three hot gains of 5.22–5.24 and 5.03 FPS,
+with candidate legs near 36.6–36.9 FPS. Its first thermal-crossing pair loses
+4.56 FPS and remains in the record. This supports the material-path saving
+on both devices; final integration against main and the 60 FPS target remain
+open.
 
 A further hypothesis freezes fully active material state at the draw boundary.
 Only if the existing interior discard margin proves coverage is exactly one
@@ -619,3 +622,22 @@ must cover fractional scale, deformation and the minimum ramp width, followed
 by a deliberately broken reference test and complete device comparisons. This
 is an experiment within the existing override architecture, not a new shader
 compiler or an accepted speedup.
+
+
+## Current measurement ownership and timeline
+
+The arc-only follow-up's first Huawei sequence is ineligible after a second
+team driver installed and exercised Showcase during the intended uninterrupted
+comparison. All original readings remain recorded. Repeat all eight legs
+under a shared per-device sequence lock; per-leg process and route checks
+do not establish this stronger contract. The activity specialization runs
+next, followed by the repeated arc comparison.
+
+An isolated diagnostic snapshot carries each packet's producer update start,
+publication return, consumer acquisition start, render end and present-call
+end on the same monotonic clock. Worker start can precede publication return,
+so report handoff bounds instead of a false exact wait. Measure overlap between
+adjacent frames' producer and consumer spans. Present-call completion remains
+distinct from SurfaceFlinger presentation, and elapsed renderer spans may
+include submission backpressure. These diagnostics do not join the application
+FPS builds or justify a deeper frame queue on their own.

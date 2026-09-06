@@ -1094,3 +1094,29 @@ establish equality and cannot claim a free skip from angle animation alone.
   state check; do not attribute their large swings to the code change or infer
   GPU clock values which were never read. The app measurement harness already
   wakes on every UI step; this gap was in the separate offscreen probe.
+
+
+## Whole device sequences need an exclusion lock
+
+On 2026-09-06 a teammate's automatic APK-completion driver started during
+another Huawei ABAB/BABA sequence despite a reservation heading. Per-leg
+locks, stable process checks and full-scroll preflights cannot establish
+uninterrupted ownership across eight legs. The entire affected arc-fixed
+sequence is ineligible; keep its raw records and rerun the whole sequence.
+Both team drivers must hold the same per-device sequence lock around the
+entire measurement command. Per-command locks remain separate so nesting
+does not self-deadlock. Handoff headings describe status; they are not an
+exclusion mechanism.
+
+## Publish return is not the enqueue instant
+
+The presentation worker can acquire a frame after its sender enqueues it but
+before `publish_frame` returns to that sender. A trace timestamp sampled
+after the return therefore cannot be subtracted from consumer start as an
+exact queue wait, or asserted to precede it. Bound handoff time using a
+known point before enqueue and the publish-return timestamp. Keep CPU update,
+renderer execution, packet latency and physical display periods distinct.
+`AppShell` update already contains scene construction, and the Android
+telemetry's acquire column includes publication and worker wait. Adding
+those reported spans or calling all of them useful CPU work misattributes
+the bottleneck.
