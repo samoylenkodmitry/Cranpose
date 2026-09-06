@@ -2306,6 +2306,35 @@ test compares folded and general pipelines byte for byte. Not measured
 yet; the probe's attribution on the cards decides whether the curve's
 uniform load is worth anything before this fold is timed.
 
+## A carried material constant needs bounded admission (2026-09-06)
+
+Carrying the refraction curve as a pipeline constant is worth +2.0 to
++3.3 fps on the Mate 20 X's 40 fps frame (base 7b28e2fd against the
+probe d82d86a8, eight legs, every pair up), three times the activity
+flag, because `pow(interior, curve)` with a constant exponent folds
+where a uniform exponent does not. It cannot ship as a rule-table
+entry: the curve is `refraction_curve * activity` at the material
+boundary and `refraction_curve` is public, so the value can animate
+with activity at 1 and every distinct float would key its own
+pipeline. Activity is not a proof of parameter stability, and the
+finite fold of the natural default (0.25, above) captures nothing for a
+material at 0.62.
+
+The production form is an admission gate on the material, not a
+predicate on a uniform: a per-node gate that carries a slot's value as
+a constant only after the value has repeated for a run of frames, caps
+the carried variants per shader source at a small number with the
+uniform beyond the cap, and drops the constant the frame the value
+moves, through the re-specialization path that already clears stale
+flags. Its costs are the first compile of each admitted value (the
+same class of switch the rim and activity flags make) and one more
+piece of per-node state beside the backdrop admission gates. Its tests
+are the ones the other flags have (fixture identity with a
+wrong-constant mutant) plus a key-count test over an animated
+sequence: a sweeping value keys one pipeline, a settled value keys one
+more, the cap holds. It is not designed here; the attribution is the
+reason to design it.
+
 ## Where the exact shader levers end (2026-09-06)
 
 After the rim fold and the activity flag, every fetch and every term
