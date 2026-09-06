@@ -1,8 +1,11 @@
 #![allow(dead_code)]
 
+#[path = "support/device.rs"]
+mod device;
+
 use std::{
     ops::{Deref, DerefMut},
-    sync::{Arc, Mutex, MutexGuard, mpsc},
+    sync::{Mutex, MutexGuard, mpsc},
     time::Duration,
 };
 
@@ -157,8 +160,20 @@ impl LockedRenderer {
 }
 
 pub fn headless_renderer() -> Result<LockedRenderer, String> {
+    headless_renderer_with_limits(wgpu::Limits::default())
+}
+
+pub fn headless_renderer_with_limits(limits: wgpu::Limits) -> Result<LockedRenderer, String> {
+    headless_renderer_configured(limits, wgpu::Backends::all())
+}
+
+pub fn headless_renderer_configured(
+    limits: wgpu::Limits,
+    backends: wgpu::Backends,
+) -> Result<LockedRenderer, String> {
     let lock = lock_gpu_test();
-    let mut renderer = create_headless_renderer()?;
+    let mut renderer =
+        create_headless_renderer_configured(wgpu::TextureFormat::Bgra8UnormSrgb, limits, backends)?;
     let app_context = AppContext::new();
     renderer.attach_app_context_services(&app_context);
     Ok(LockedRenderer {
@@ -204,31 +219,12 @@ pub fn headless_renderer_parts_configured<T>(
 }
 
 pub fn reinit_gpu(renderer: &mut LockedRenderer) -> Result<(), String> {
-    let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
-    instance_descriptor.backends = wgpu::Backends::all();
-    let instance = wgpu::Instance::new(instance_descriptor);
-    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::LowPower,
-        compatible_surface: None,
-        force_fallback_adapter: false,
-    }))
-    .map_err(|err| format!("adapter request failed: {err:?}"))?;
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("Replacement Contract Test Device"),
-        required_features: cranpose_render_wgpu::optional_device_features(&adapter),
-        required_limits: wgpu::Limits::default(),
-        experimental_features: wgpu::ExperimentalFeatures::disabled(),
-        memory_hints: wgpu::MemoryHints::default(),
-        trace: wgpu::Trace::Off,
-    }))
-    .map_err(|err| format!("device request failed: {err:?}"))?;
-    renderer.init_gpu(
-        Arc::new(device),
-        Arc::new(queue),
-        wgpu::TextureFormat::Bgra8UnormSrgb,
-        adapter.get_info().backend,
-        adapter.get_downlevel_capabilities().flags,
-    );
+    device::HeadlessDevice::request(
+        wgpu::Backends::all(),
+        wgpu::Limits::default(),
+        "Replacement Contract Test Device",
+    )?
+    .attach(renderer, wgpu::TextureFormat::Bgra8UnormSrgb);
     Ok(())
 }
 
@@ -251,33 +247,25 @@ fn create_headless_renderer() -> Result<WgpuRenderer, String> {
 fn create_headless_renderer_with_format(
     surface_format: wgpu::TextureFormat,
 ) -> Result<WgpuRenderer, String> {
-    let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
-    instance_descriptor.backends = wgpu::Backends::all();
-    let instance = wgpu::Instance::new(instance_descriptor);
-    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::LowPower,
-        compatible_surface: None,
-        force_fallback_adapter: false,
-    }))
-    .map_err(|err| format!("adapter request failed: {err:?}"))?;
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("Shared Render Contract Test Device"),
-        required_features: cranpose_render_wgpu::optional_device_features(&adapter),
-        required_limits: wgpu::Limits::default(),
-        experimental_features: wgpu::ExperimentalFeatures::disabled(),
-        memory_hints: wgpu::MemoryHints::default(),
-        trace: wgpu::Trace::Off,
-    }))
-    .map_err(|err| format!("device request failed: {err:?}"))?;
+    create_headless_renderer_with_format_and_limits(surface_format, wgpu::Limits::default())
+}
 
+fn create_headless_renderer_with_format_and_limits(
+    surface_format: wgpu::TextureFormat,
+    limits: wgpu::Limits,
+) -> Result<WgpuRenderer, String> {
+    create_headless_renderer_configured(surface_format, limits, wgpu::Backends::all())
+}
+
+fn create_headless_renderer_configured(
+    surface_format: wgpu::TextureFormat,
+    limits: wgpu::Limits,
+    backends: wgpu::Backends,
+) -> Result<WgpuRenderer, String> {
+    let device =
+        device::HeadlessDevice::request(backends, limits, "Shared Render Contract Test Device")?;
     let mut renderer = WgpuRenderer::new(&[TEST_FONT]);
-    renderer.init_gpu(
-        Arc::new(device),
-        Arc::new(queue),
-        surface_format,
-        adapter.get_info().backend,
-        adapter.get_downlevel_capabilities().flags,
-    );
+    device.attach(&mut renderer, surface_format);
     Ok(renderer)
 }
 

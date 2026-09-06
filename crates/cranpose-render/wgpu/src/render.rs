@@ -58,6 +58,7 @@ use crate::{
         CompositorScene, DrawOp, DrawOpKind, ImageDraw, RunDraw, ShadowDraw, SnapAnchor, TextDraw,
     },
     shaders,
+    shape_pipelines::{ShapePipelineFactory, ShapePipelines},
 };
 const MAX_SHADOW_SURFACE_CACHE_ITEMS: usize = 512;
 const MAX_TRANSPARENT_SOURCES: usize = 16;
@@ -951,7 +952,25 @@ pub(crate) struct ShapePipelineKey {
     pub(crate) variant: ShapeVariant,
 }
 
-fn create_shape_pipeline(
+impl ShapePipelineKey {
+    pub(crate) fn general_for(blend_mode: BlendMode, tier: RunTier) -> Self {
+        Self {
+            blend_mode,
+            tier,
+            variant: ShapeVariant::GENERAL,
+        }
+    }
+
+    pub(crate) fn general(self) -> Self {
+        Self::general_for(self.blend_mode, self.tier)
+    }
+
+    pub(crate) fn is_general(self) -> bool {
+        self.variant == ShapeVariant::GENERAL
+    }
+}
+
+pub(crate) fn create_shape_pipeline(
     device: &wgpu::Device,
     cache: Option<&wgpu::PipelineCache>,
     surface_format: wgpu::TextureFormat,
@@ -1692,7 +1711,7 @@ pub struct GpuRenderer {
     screenshot_converter: OutputConverter,
     adapter_backend: wgpu::Backend,
     pipeline_cache: Option<wgpu::PipelineCache>,
-    shape_pipelines: HashMap<ShapePipelineKey, wgpu::RenderPipeline>,
+    shape_pipelines: ShapePipelines,
     image_pipeline: LazyGpuResource<wgpu::RenderPipeline>,
     image_pipeline_dst_out: LazyGpuResource<wgpu::RenderPipeline>,
     glyph_atlas_pipeline: LazyGpuResource<wgpu::RenderPipeline>,
@@ -1853,6 +1872,17 @@ impl GpuRenderer {
         let effects_ms = instant_ms(effects_started, Instant::now());
         let mut frame_graph_executor = WgpuFrameGraphExecutor::new();
         frame_graph_executor.init_pass_timing(&device, &queue);
+        let shape_pipelines = ShapePipelines::new(
+            ShapePipelineFactory {
+                device: Arc::clone(&device),
+                cache: pipeline_cache.clone(),
+                format: composition_format,
+                uniform_layout: uniform_bind_group_layout.clone(),
+                run_layout: run_store.layout().clone(),
+                mode: run_store.mode(),
+            },
+            adapter_backend,
+        );
 
         let renderer = Self {
             device,
@@ -1867,7 +1897,7 @@ impl GpuRenderer {
             screenshot_converter,
             adapter_backend,
             pipeline_cache,
-            shape_pipelines: HashMap::new(),
+            shape_pipelines,
             image_pipeline: LazyGpuResource::new("image/src-over"),
             image_pipeline_dst_out: LazyGpuResource::new("image/dst-out"),
             glyph_atlas_pipeline: LazyGpuResource::new("glyph/atlas"),
@@ -1920,8 +1950,7 @@ impl GpuRenderer {
             frame_count: 0,
         };
         log::info!(
-            "[gpu-init] {:?} renderer ready in {:.1} ms (effects {:.1} ms); \
-             pipelines build on first use",
+            "[gpu-init] {:?} renderer ready in {:.1} ms (effects {:.1} ms)",
             adapter_backend,
             instant_ms(construction_started, Instant::now()),
             effects_ms,
@@ -1929,22 +1958,8 @@ impl GpuRenderer {
         renderer
     }
 
-    /// The pipeline for `key`, created on first use; creation happens at
-    /// batch preparation so a draw only looks its pipeline up.
     fn ensure_shape_pipeline(&mut self, key: ShapePipelineKey) {
-        if self.shape_pipelines.contains_key(&key) {
-            return;
-        }
-        let pipeline = create_shape_pipeline(
-            &self.device,
-            self.pipeline_cache.as_ref(),
-            self.composition_format,
-            &self.uniform_bind_group_layout,
-            self.run_store.layout(),
-            key,
-            self.run_store.mode(),
-        );
-        self.shape_pipelines.insert(key, pipeline);
+        self.shape_pipelines.ensure(key);
     }
 
     fn image_pipeline(&self, blend_mode: BlendMode) -> &wgpu::RenderPipeline {
@@ -2276,6 +2291,7 @@ impl GpuRenderer {
         }
         returns.frame_id = packet.frame_id;
         let render_start = Instant::now();
+        self.shape_pipelines.begin_frame();
         self.viewport_uniforms.begin_frame();
         self.run_store.begin_frame(gpu_stats_enabled());
 
@@ -3182,10 +3198,19 @@ impl GpuRenderer {
         }
         let mut bound_class = None;
         for draw in draws {
-            let pipeline = self
+            let (pipeline, fallback) = self
                 .shape_pipelines
-                .get(&draw.key)
+                .get(draw.key)
                 .ok_or_else(|| format!("shape pipeline {:?} was not prepared", draw.key))?;
+            if fallback {
+                self.frame_stats
+                    .shape_pipeline_fallback_draws
+                    .set(self.frame_stats.shape_pipeline_fallback_draws.get() + 1);
+            } else if !draw.key.is_general() {
+                self.frame_stats
+                    .shape_specialized_draws
+                    .set(self.frame_stats.shape_specialized_draws.get() + 1);
+            }
             if bound_class != Some(draw.band_class) {
                 pass.set_index_buffer(
                     self.run_store.strip_index_buffer(draw.band_class).slice(..),

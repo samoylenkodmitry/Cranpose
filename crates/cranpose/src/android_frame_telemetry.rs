@@ -32,7 +32,7 @@ fn property_flag(name: &str) -> bool {
     }
 }
 
-const PROPERTY_BACKED_ENV_VARS: [(&str, &str); 27] = [
+const PROPERTY_BACKED_ENV_VARS: &[(&str, &str)] = &[
     ("debug.cranpose.recomp_diag", "CRANPOSE_RECOMP_DIAG"),
     (
         "debug.cranpose.layout_ms",
@@ -61,6 +61,10 @@ const PROPERTY_BACKED_ENV_VARS: [(&str, &str); 27] = [
     ("debug.cranpose.adpf", "CRANPOSE_ADPF"),
     ("debug.cranpose.encode_delay_ms", "CRANPOSE_ENCODE_DELAY_MS"),
     ("debug.cranpose.shape_variants", "CRANPOSE_SHAPE_VARIANTS"),
+    (
+        "debug.cranpose.async_shape_pipelines",
+        "CRANPOSE_ASYNC_SHAPE_PIPELINES",
+    ),
     ("debug.cranpose.catchup_pacing", "CRANPOSE_CATCHUP_PACING"),
     (
         "debug.cranpose.update_stage_ms",
@@ -99,7 +103,7 @@ const PROPERTY_BACKED_ENV_VARS: [(&str, &str); 27] = [
 ];
 
 pub(crate) fn seed_env_from_system_properties() {
-    for (property, variable) in PROPERTY_BACKED_ENV_VARS {
+    for &(property, variable) in PROPERTY_BACKED_ENV_VARS {
         if std::env::var_os(variable).is_some() {
             continue;
         }

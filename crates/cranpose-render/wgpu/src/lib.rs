@@ -40,6 +40,7 @@ mod run_store;
 mod scene;
 mod shader_cache;
 mod shaders;
+mod shape_pipelines;
 #[cfg(test)]
 mod test_support;
 

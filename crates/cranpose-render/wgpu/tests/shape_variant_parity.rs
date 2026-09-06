@@ -48,12 +48,22 @@ fn graph_for(record: fn(&mut DrawScopeDefault), clip: Option<Rect>) -> RenderGra
 
 fn render_arm(renderer: &mut support::LockedRenderer, graph: &RenderGraph) -> Vec<u8> {
     let mut passes = Vec::new();
-    for _ in 0..3 {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while passes.len() < 3 {
         renderer.scene_mut().graph = Some(graph.clone());
         let captured = renderer
             .capture_frame(SIZE, SIZE)
             .unwrap_or_else(|err| panic!("capture failed: {err:?}"));
         assert_eq!((captured.width, captured.height), (SIZE, SIZE));
+        let stats = renderer.last_frame_stats().expect("frame statistics");
+        if stats.shape_pipeline_fallback_draws > 0 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "specialization did not finish"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            continue;
+        }
         passes.push(captured.pixels);
     }
     assert_eq!(

@@ -119,6 +119,10 @@ pub struct FrameStatsSnapshot {
     /// before it shades a pixel, so this bounds a frame as fill does.
     pub shape_vertices: u64,
     pub shape_passes: u32,
+    /// Shape draws using a general pipeline while their specialization compiles.
+    pub shape_pipeline_fallback_draws: u32,
+    /// Shape draws using a completed specialized pipeline.
+    pub shape_specialized_draws: u32,
     pub image_passes: u32,
     pub text_passes: u32,
     /// Shape, image, glyph and composite draws recorded this frame. The
@@ -363,6 +367,8 @@ pub(crate) struct FrameStats {
     pub shape_fill_pixels_by_class: Cell<[u64; ShapeFill::CLASSES]>,
     pub shape_vertices: Cell<u64>,
     pub shape_passes: Cell<u32>,
+    pub shape_pipeline_fallback_draws: Cell<u32>,
+    pub shape_specialized_draws: Cell<u32>,
     pub image_passes: Cell<u32>,
     pub text_passes: Cell<u32>,
     pub draw_calls: Cell<u32>,
@@ -744,6 +750,8 @@ impl FrameStats {
             shape_fill_pixels_by_class: self.shape_fill_pixels_by_class.get(),
             shape_vertices: self.shape_vertices.get(),
             shape_passes: self.shape_passes.get(),
+            shape_pipeline_fallback_draws: self.shape_pipeline_fallback_draws.get(),
+            shape_specialized_draws: self.shape_specialized_draws.get(),
             image_passes: self.image_passes.get(),
             text_passes: self.text_passes.get(),
             draw_calls: self.draw_calls.get(),
@@ -813,6 +821,8 @@ impl FrameStats {
         self.shape_fill_pixels_by_class.set([0; ShapeFill::CLASSES]);
         self.shape_vertices.set(0);
         self.shape_passes.set(0);
+        self.shape_pipeline_fallback_draws.set(0);
+        self.shape_specialized_draws.set(0);
         self.image_passes.set(0);
         self.text_passes.set(0);
         self.draw_calls.set(0);
@@ -961,6 +971,8 @@ mod tests {
             ..FrameCommandStats::default()
         });
         stats.bump_shapes();
+        stats.shape_pipeline_fallback_draws.set(3);
+        stats.shape_specialized_draws.set(5);
         stats.blur_passes.set(1);
         stats.offscreen_total_bytes.set(1024);
         stats.offscreen_pool_bytes.set(2048);
@@ -996,6 +1008,8 @@ mod tests {
         );
         let snapshot = stats.snapshot();
 
+        assert_eq!(snapshot.shape_pipeline_fallback_draws, 3);
+        assert_eq!(snapshot.shape_specialized_draws, 5);
         assert_eq!(snapshot.isolated_layer_renders, 1);
         assert_eq!(snapshot.isolated_layer_pixels, 56);
         assert_eq!(snapshot.upload_bytes, 64);
@@ -1024,6 +1038,8 @@ mod tests {
 
         stats.reset();
 
+        assert_eq!(stats.snapshot().shape_pipeline_fallback_draws, 0);
+        assert_eq!(stats.snapshot().shape_specialized_draws, 0);
         assert_eq!(stats.layer_cache_hits.get(), 0);
         assert_eq!(stats.layer_cache_misses.get(), 0);
         assert_eq!(stats.layer_cache_hit_pixels.get(), 0);

@@ -1,15 +1,43 @@
 # Architecture for sustained mobile 60 fps
 
-Status: planning and measurement, 2026-09-05. The 60 fps target is not achieved.
-The runtime checkpoint is `f4b83bbf`, combining the renderer work through
-`44e3ca4d` with owned recording. Publication merge `d61ac06a` adds the shared
-bytemuck manifest requirement and measurement documentation with the same
-application runtime. Main reference: `0d195313`. Fable and Codex reviewed this
-plan together; `render_arch.md` retains the underlying experiment record.
-Both working branches reached `77deb8fe`. Its gates pass, but the full-minute
-watch Megaboss comparison fails acceptance: the shared runtime is slower than
-main in the hot reverse-order legs. The PR must not land until this regression
-and the remaining workload coverage are resolved.
+Status: architecture candidates under verification, 2026-09-06. The 60 fps target is not achieved.
+Both working branches share `64107979`, including the reviewed effect-domain
+contract, frozen shader reference, portable artifact collection, Android
+window-thread repair, opaque prefix reuse and backdrop source/order repair.
+Main reference is freshly rebuilt `0d195313`. Fable and Codex reviewed the plan
+together; `render_arch.md` retains the underlying experiment record.
+
+The independent pipeline-readiness and exact eight-sweep unit is staged for
+integration. Immutable layout repair `528815a3` combined with that unit passes
+the complete Linux workspace, native/wasm Clippy, release web and both CI robot
+partitions, including all four framebuffer capture tests. Final reviewed layout
+snapshot `ee467612` also passes 26 focused Linux atlas/glass tests and its padding
+unit. Removing layout identity fails the shader probe; restoration passes with
+source hashes verified. Fable's final commit and combined integration follow.
+
+The two-owner storage experiment remains outside the active branch after a
+Huawei full-scroll regression. The ordered kind-range candidate is isolated,
+with exact pixel proofs passing on Macm3 and the watch. Watch proof counts are
+two span tests, two pending-to-ready tests and five opaque-prefix tests. Its
+first default app comparison against fresh main is running; it is not accepted.
+
+The fresh-main versus independent-readiness watch Megaboss comparison fails
+acceptance: the shared runtime is 11.522% and 9.739% slower in the hot reverse
+pairs (25.063 versus 28.327 and 16.950 versus 18.779 FPS). PR #617 must not land
+until this regression is resolved. Fresh-main full-scroll comparisons favor
+the independent unit in every pair: approximately 29.7 versus 21 FPS on the
+watch and 36.7–39.9 versus 26.1–29.0 FPS on Huawei. All eight legs on each device
+pass full-route checks with forty timed gestures. These controls precede the
+prefix/source/layout units; they do not establish final combined acceptance.
+The target remains sustained 60 Hz in all four workloads.
+
+A source-timestamp audit reproduces both Megaboss shared071 controls and the
+watch Showcase control byte-for-byte. It does not reproduce the Huawei Showcase
+shared071 control: Cargo had reused a previous native library. That specific
+readiness full-scroll comparison is withdrawn as attribution evidence. Its
+replacement uses the freshly reproduced control and favors readiness in all
+four pairs by +0.787, +0.881, +2.247 and +0.663 FPS. The independent ownership-fix builds
+recompiled the relevant framework crates in both ABIs.
 
 ## Contract and workload
 
@@ -25,13 +53,19 @@ with every body from Sun through Proxima Centauri b entering the visible region.
 Header-only motion is a separate workload. On the watch, a 20 dp list margin
 is 40 physical pixels at density 320. The previous gesture started at x=36,
 outside that list; alternating direction also kept it around the header.
-Dragging inside the unobscured list at (100,236) to (100,76) brings the Sun
-and Mercury cards into view without an app change. Huawei accessibility queries and three screenshots confirm all 14 bodies across
-launch and two forward swipes at (300,1500) to (300,600), 300 ms, with the
-query interval allowing the fling to settle. Reverse coverage and a fixed timed
-route still need verification. The watch traversal still needs semantic
-checkpoints through the last card. The phone uses its own measured bounds, not
-scaled watch coordinates.
+The watch uses (100,236) to (100,76), 50 ms flings at 1.5-second cadence.
+Twelve forward and twelve reverse steps reached Proxima and the header during
+discovery, but two hot shared-runtime legs later stopped within the first card
+on return. The replacement route uses sixteen steps each way and checks the
+untimed return screenshot for the visible search field before timing starts.
+All eight initial replacement-route starts pass. A later flat-background diagnostic misses one untimed return. The harness now allows up to sixteen additional reverse gestures, saves each attempt, and verifies the same search field before timing; it does not relabel that failed leg. Twelve visible
+accessibility labels plus continuous video of Sun and Moon establish coverage
+of all fourteen bodies; the video is route evidence, not an FPS measurement.
+Huawei uses (300,1500) to (300,600), 300 ms, two forward and two reverse flings
+at the same cadence. Its semantic checkpoints cover all bodies and the return.
+Both routes preserve native resolution and density. Each acceptance leg includes
+an untimed endpoint preflight followed by sixty seconds and forty gestures;
+accessibility queries and video recording are absent from the timed window.
 
 Correctness covers live animation, input, draw order, clipping, blend order,
 colour space, text, backdrop dependencies and resource lifetime. Existing exact
@@ -49,6 +83,7 @@ rounding fact must remain visible in the evidence.
 | Watch Megaboss | Integrated hot B A B A: 16.22 / 18.34 / 16.11 / 18.34 fps, B = shared runtime, A = main; 43.3–45.0 C | Acceptance fails; recover the lost performance before another runtime checkpoint is accepted |
 | Watch Showcase header | About 21.7 ms GPU before CPU blur kernels; glass about 9.5–11 ms in removal experiments | Reduce useful shading work and redundant evaluation; this is not evidence about cards during full scroll |
 | Huawei Showcase launch | Main 23.62 fps, checkpoint 3f948657 23.48 fps at 34 C | Earlier renderer changes provide no measured launch gain here |
+| Huawei Showcase full scroll | Main 24.99–25.27 fps, shared runtime 34.25–34.82 fps across A B A B then B A B A, 33–36 C | Consistent improvement on the verified full route; the remaining deadline gap is substantial |
 | Huawei Showcase diagnostic | Removing glass leaves about 34 ms of a roughly 50 ms fenced frame; removing page operations leaves about 40 ms | A glass-only improvement cannot close the entire phone gap; fenced times are diagnostic and include lost overlap |
 | Watch effect passes | Discard-at-entry blur passes about 0.04 ms each | A large rewrite justified only by pass-count overhead is unsupported |
 | Parallel recording, compute raster, GPU expansion | Complete device prototypes lose performance or exactness | Do not repeat these designs based on an isolated microbenchmark |
@@ -157,7 +192,30 @@ rim glow, fractional scale, nonzero origins and scroll. A reduced domain which
 clips even one permitted effect pixel is invalid. Use the existing SDF coverage
 and specialization tests, add worst-case support cases, deliberately shrink the
 bound to show them fail, then restore it. Estimated header opportunity is about
-1 ms; full-scroll benefit is not yet known.
+1 ms; the initial lens-support A/B found no measurable app gain. Cover-mode
+cards declare no support, so that candidate does not reduce their shading.
+
+Output support and input sample domain are independent contracts. Input padding
+limits reads outside the effect rect; it does not bound displacement from an
+output pixel. A shader with tiny central output and padding zero may sample a
+far corner inside the full input rect. Pruning its preceding blur to the output
+rect is incorrect. Fable reproduced this with a failing GPU test and added
+an explicit sample-domain declaration, defaulting to the full input. The liquid
+material must not declare a narrower sample domain until zoom, refraction,
+mirror and loupe reads have a proven bound. Keep the capture coordinate system
+and downsample phase unchanged: changing them already caused one-level pixel
+differences in an exact comparison.
+
+Deformation support must use the absolute affine matrix applied to half-extents,
+including off-axis strain. A 200-by-200 square strained by 2 and 0.5 at 22.5
+degrees reaches 231.066 along x, beyond a scalar 204 declaration. Wobble, bulge
+and coverage ramps also need the inverse-minimum-strain factor used by the SDF.
+Fable reproduced both review failures before applying the corrected bounds.
+A third red test pins repeated blur reads at capture edges: a wrapped axis
+requires the opposite edge to be written too. Both declarations participate in
+render identity. The corrected unit is committed as `6034b0de`; Huawei full
+scroll shows no measurable gain or loss, and this exact tree remains unmeasured
+on the watch.
 
 Static expensive draws need reuse below a whole command/layer: Showcase records
 an unchanged opaque radial background and moving stars in one draw callback.
@@ -183,15 +241,49 @@ Measure the complete recording-to-submission interval, including allocation,
 retained-reader reuse, scene traversal, brush remapping and uploads. Do not use
 an append-only loop as the adoption test.
 
-The next architectural decision is the lowering of dense changing runs. Compare
-actual device costs of current instance records with a compact prepared vertex
-stream generated from the same record representation, using the same fragment
-coverage, order and hardware blending. This is a bounded feasibility experiment,
-not a commitment to a second engine. It differs from the rejected GPU expansion
-by testing total CPU preparation plus upload plus GPU consumption, with a vertex
-stage that consumes prepared values. Only choose a lowering if it wins the full
-critical path on both devices or a device-capability/cost rule reliably selects
-the faster form without frame-to-frame oscillation. No hardcoded app threshold.
+The device ownership probe exposes a broken reuse boundary: the pool checks
+only the outer `Rc`, while the present packet and stored GPU run still retain
+the inner `Arc<ShapeRecorder>`. It takes the newest slot, allocates replacement
+columns, and then rotates an empty slot into the spare. Of 1,408 large-command
+acquisitions, 1,405 followed that path and only three reused storage. Requiring
+both ownership layers to be free restores the existing two-slot cycle: the
+removal probe reuses columns in 1,900 of 1,920 acquisitions. No extra buffer
+count or deeper frame queue is needed. Tests must preserve held frame data and
+clear all shapes and content markers before writing into a released recording.
+These ownership counters are diagnostic. Default Megaboss comparisons are
+effectively flat on both devices, but Huawei full-scroll B-minus-A pairs are
+-0.293, -0.751, -2.819 and -2.780 FPS. The final hot pairs lose about seven
+percent. The source and red-proven tests are stashed, and the fix cannot join
+the shared branch until its complete-path regression is resolved.
+
+The held experiment lowers long homogeneous shape spans to the existing
+specialized coverage pipeline. Actual Megaboss recording contains five long arc
+spans of 813–3,211 records within a mixed segment; a few foreign shapes prevent
+the entire segment from selecting the arc pipeline. An exact watch probe with
+15,007 captured arcs measures about 3–4.6 ms less submit-to-fence time with the
+arc pipeline at 37.5 C. This is a feasibility bound, not app FPS.
+
+The prepared iterator specializes only spans of at least 256 records and leaves
+short interleavings together. It preserves original record order, fingerprints,
+brushes, blending and strip geometry, and serves both retained and arena paths.
+The exact GPU test covers overlapping translucent shapes, gradients, clipping,
+fractional scale, changing record counts and the 128-record uniform-buffer
+continuation used by the web fallback. Moving arc centres in a specialized
+continuation makes 6,501 bytes differ; restoration passes. Misclassifying the intervening
+rectangles as arcs makes 32,277 bytes differ; restoration passes. Complete app
+A/B measurements decide whether extra draw calls, scanning and compilation
+outweigh the shader saving. The full-minute app proof improves the final hot shared-runtime pair by about
+11%, but remains 1.4–3.2% below main in the subsequent hot comparison. It stays
+uncommitted. Review replaced repeated uniform-chunk prefix scans with a
+persistent span cursor; the index/order mutant fails and both GPU paths pass.
+The app matrices precede that repair, so its performance is still unmeasured.
+
+Exact body interning is rejected: shrinking 960,448 body bytes to 78,972 costs
+more GPU time and 16–23 ms of ARMv7 hashing. Fragment-stage template lookup and
+full GPU vertex expansion also lose. A future representation must beat the
+complete recording-to-submission and GPU path, with no approximate angles or
+app-specific dispatch. Preserve one recording representation and measure a
+bounded prototype before adding another lowering.
 
 Retain all original argument bits on the CPU. Do not infer common rotation from
 approximately equal angles or quantize motion. Keep cancellation, growth,
@@ -259,7 +351,10 @@ Fable merges the verified integration checkpoint into the publication branch
 for CI, then Codex incorporates that common head before the next unit. Both
 compare against main and the last accepted checkpoint.
 Shared device reservations and host locks prevent overlapping measurement.
-No uncommitted teammate source is a build input.
+Build a committed revision or an explicitly shared immutable source snapshot
+with a hash manifest. A teammate's changing working files are not build inputs.
+Snapshot-based correctness proofs may precede a commit; adoption still requires
+the complete proof, gates and device comparisons.
 
 Each unit finishes its architecture, public documentation, exactness proof and
 regression mitigation before the next is stacked on it. Run the repository's
@@ -269,3 +364,89 @@ The final acceptance artifact contains complete route coverage, frame-time and
 FPS comparisons for all four workloads, every leg's temperatures, unchanged
 correctness expectations and the exact source SHA. Until that matrix passes,
 report the measured gap rather than calling a partial speedup 60 fps.
+
+
+## Current next experiments
+
+The next work is divided by measured cause, with each unit reviewed before it
+joins the shared branch:
+
+| Owner | Boundary | Evidence and implementation decision |
+| --- | --- | --- |
+| Fable | Opaque page prefix | Exact in-place capture and same-format reuse are committed as `e520addf`. Full-scroll cache-toggle means are 38.75 versus 41.88 FPS on Huawei; the watch's hot adjacent pairs gain about 2.1–2.2 FPS, with a negative thermal-crossing pair retained. Default combined-build acceptance against main remains required. |
+| Fable | Backdrop admission and draw order | Commit `64107979` pins the original source atlas and sampling coordinates, with one budget/lifetime entry per allocation. Every backdrop awaiting capture blocks later drawing in its capture region. Exact focused comparisons, the full renderer suite and Clippy pass; the combined Linux workspace run follows integration. |
+| Codex | Recording storage lifetime | The both-owner eligibility experiment restores 1,900/1,920 reuses and passes red-proven held-snapshot/clear tests, but loses about seven percent in Huawei's hot full-scroll pairs. It is stashed outside the active branch. Storage counters are insufficient adoption evidence. |
+| Codex | Repeated arc calculations | The exact eight-entry half-sweep cache reduces the full watch drawing/finish/reuse CPU probe by roughly 0.27 ms. Interleaving and eviction tests have deliberately wrong-slot RED and restored GREEN proofs. A larger radius/sweep template is rejected: even 98.18% hits increase the full probe from about 7.00 to 10.18 ms. |
+| Codex | Pipeline readiness | Vulkan specialization compiles on a bounded worker while a correct general blend/tier pipeline draws. Pending-to-ready pixels are exact on watch and Linux. Shared-071 versus candidate Huawei Megaboss stays at about 59.9 FPS; hot watch Megaboss pairs are effectively flat near 25.1 FPS. The corrected Huawei full-scroll comparison favors the candidate in every pair by +0.663–2.247 FPS. Watch full scroll finishes at about 29.6–29.8 FPS on both arms, with the early thermal crossing retained. Main-versus-combined acceptance remains required. |
+
+The clean watch profile, with expensive fill-area diagnostics disabled, has
+about 21 ms UI update, 15.6 ms framework frame work and 24 ms GPU execution.
+The recorded run-upload stage is about 2.0 ms; enabling fill-area estimates
+adds about 4.4 ms of ARMv7 trigonometry to that stage. Instrumentation is
+excluded from acceptance. A four-leg fragment-removal diagnostic reports GPU
+medians 18.53/11.03/24.02/22.69 ms as the device changes clocks; its fifth leg
+pauses before timing, so it is incomplete and establishes no accepted FPS gain.
+
+
+Fable rejected the cards' split-draw geometry after the unchanged shader
+reference exposed 788–1,407 changed pixels, each by one level; retaining
+interpolated coordinates instead changed 18,510 pixels. Its 1.2% Huawei gain
+does not justify that drift. The next ranked target is exact reuse of proven
+opaque drawing within a mixed static/animated recording. Account for the
+cache lookup and copy, and preserve complete invalidation keys.
+Codex owns the remaining main-versus-span watch loss, complete full-scroll
+coverage, and removal of optional shape-specialization compilation from an
+active frame. Compilation already caused a 1,058 ms stall and an application pause.
+A prepared general pipeline may serve a record until an exact specialization
+is ready; never skip the draw. The device-lock feasibility probe passed: 234–276 complete render/fence cycles occur during each compilation, with 6.62–24.83 ms worst active frames. This is not app FPS. The implementation keeps one compiler active, at most one request queued and one result waiting for publication, deduplicates pending keys, cancels queued work when its renderer leaves, and keeps the existing frame queue depth. General lookup preserves blend, table tier and layout; a deliberately wrong blend makes 34,364 bytes differ in the transition test. Only optional shape specializations compile on the Vulkan worker. SrcOver general pipelines for both tiers are prepared at renderer construction; the essential general pipeline for another blend is still created synchronously on first use. That first-use cost remains a limitation. Web, Metal and GL keep their existing synchronous path. App measurements must still account for CPU contention and thermal behavior.
+
+The vertex-kind and smaller-curve probes produce no stable one-millisecond
+prize, so neither prompts a renderer rewrite. Every next prototype must target
+an attributed cost and be rejected when the complete path does not improve.
+The target remains sustained 60 Hz with the same pictures and applications.
+
+### Execution boundary for the next larger recording experiment
+
+The rejected parallel recorder gathered every input before starting workers.
+It paid producer and preparation costs in sequence, then added metadata and
+chunk handling. A streaming design is distinct only if a filled input chunk
+starts preparation while subsequent draw calls are still producing records.
+Its feasibility test must time that complete interval and preserve the public
+draw API, original argument bits and global paint order. Prepared columns must
+remain owned through publication and upload without a final concatenation or
+a second per-record metadata scan. Small recordings and wasm still need one
+coherent synchronous representation. This is a bounded investigation, not an
+accepted implementation or a promised saving.
+
+After the retention/order unit and pipeline unit share a tested commit, repeat
+the four default workload comparisons against main before stacking another
+renderer experiment. Retain any negative thermal-crossing pairs and frame-time
+tails. Recovering main's throughput is a gate; reaching a sustained 16.67 ms
+display period remains the goal.
+
+### Dynamic drawing after the ownership fix
+
+The next bounded comparison is between the held renderer-side span iterator
+and discovering the same long homogeneous ranges while recording. A semantic
+segment must retain its blend, brush class, content boundary and original band
+class. Kind ranges may choose an exact specialized shader inside that segment;
+they must not change its strip geometry or reorder short intervening shapes.
+Producing this metadata alongside append could remove the later scan, but adds
+work to every draw call. Compare complete recording, publication, preparation
+and upload costs before choosing either boundary. Do not infer a gain from the
+number of scans removed.
+
+Use the existing captured arc stream and mixed-shape GPU proof. Exercise growth,
+shrink, held readers, content boundaries, fractional clipping, brush changes
+and uniform-buffer continuation. Deliberately corrupt the selected kind and a
+continuation offset to establish that the picture tests fail. Preserve source
+argument bits and the original segment band class in both designs. Only after
+those checks pass does a default app comparison decide whether the additional
+draws improve the hot main comparison. Streaming workers remain a separate,
+lower-priority experiment until this measured path is resolved.
+
+### Current isolated kind-range verification
+
+A refreshed prototype preserves the opaque-prefix record-window contract in both retained and arena uploads. Relative run windows are applied to absolute table segments before a persistent cursor traverses 128-record continuations. It retains the original semantic band class, draw order, blend and gradient facts. Tests include noncontiguous segment starts and windows inside specialized ranges. GPU comparisons wait for actual specialization and check every intervening frame. On Macm3, removing the window start trim makes the unit proof fail; assigning the wrong shape kind makes the pixel proof fail. Restored unit, span, variant and prefix tests pass. Unchanged Orbit and Showcase binaries are built from immutable layout528/readiness control and kind-range candidate inventories in both Android ABIs. This candidate is isolated outside the active worktree. The watch passes both span tests, both pipeline-transition tests and all five prefix tests. Default app FPS and the remaining combined correctness gates decide adoption.
+
+A conservative strip-bounding-box census rejects zero of the 15,161 records in the captured Megaboss frame. It scales radii before adding the one-device-pixel margin. This only tests bounding boxes, not exact triangle intersection, and provides no measured saving for a culling rewrite.

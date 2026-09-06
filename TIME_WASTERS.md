@@ -883,7 +883,6 @@ recording architecture on the strength of a compression ratio.
 ## A device matrix in a harness background task is cut at ten minutes; a pattern kill hits the teammate's leg
 
 An A B A B + B A B A matrix of 60 s legs runs about 13 minutes. Claude Code's background Bash tasks are limited to 10 minutes, so run the driver detached (`python3 -c 'subprocess.Popen([...], start_new_session=True)'`; macOS ships no `setsid`) and watch its log. When two agents run the same `measure_orbit.py` from the shared mailbox on one Mac, `pkill -f measure_orbit.py` kills both: the other agent's leg dies without its cleanup, leaving the device's debug properties, SurfaceFlinger timestats and the app as they were. Stop only the PID you launched.
-||||||| 77deb8fe
 
 ## Trimming a fullscreen-strip shader draw to a quad or a ring is never byte-exact
 
@@ -906,3 +905,139 @@ the hook does, on the index.
 first leg on the leg that passed no properties. Expand optional arrays
 as `${args[@]+"${args[@]}"}`.
 
+
+
+## A route verified once did not return to the same start when hot (2026-09-05)
+
+Twelve 50 ms forward/reverse flings reached Proxima and the header in watch
+Showcase discovery. In the eight full-minute comparison, shared-runtime legs
+5 and 7 returned only to the first card at about 42 C. Stable PID, foreground
+and forty input commands did not catch that changed starting workload. A local
+OCR check of the untimed return screenshot recognizes the search field in all
+six correct starts and rejects both wrong starts. Require that check before
+timing, and allow sufficient endpoint runway on the fixed route. Keep querying
+and recording overhead outside the FPS window; a discovery screenshot alone
+does not validate every later hot leg.
+
+## A foreground Megaboss can pause itself after a pipeline compilation stall (2026-09-05)
+
+Cranorbit's unchanged frame effect pauses a playing session after a gap of at
+least one second. A watch leg compiled a rounded-rectangle pipeline for 1,058 ms
+before showing PAUSED and voting for zero frames. PID and foreground stayed
+stable. Relaunching the same APK reduced that compilation to 12 ms and the
+game remained active. Keep the failed startup evidence, check the scene before
+timing, and distinguish missing presents from a foreign application. A
+KeepScreenOn window-thread exception also occurred, but does not establish the
+cause of that pause.
+
+## Android worker-thread tests must actually call the API on a worker (2026-09-05)
+
+Pixel Watch lacks android.test.InstrumentationTestRunner even when its SDK
+stubs compile. Use the packaged AndroidX runner. ActivityScenario.onActivity
+dispatches to the UI thread even when called from a worker: placing it inside
+a FutureTask does not test an off-thread API call. Capture the activity first,
+call the method directly on the worker, propagate failures through a bounded
+future, and read the resulting flags on the UI thread. Assert enable and
+disable separately so a no-op implementation cannot pass. Build a separate
+test application identity when an installed demo has another signing key;
+do not erase its data to get the test installed.
+
+
+## GNU stat and overlapping roots can break the build-cache sweep (2026-09-05)
+
+On GNU stat, `stat -f %m` selects filesystem mode and may emit nonnumeric
+output before the timestamp fallback. Require a successful command and a
+numeric timestamp. Fixture tests need portable `dd bs=1048576` and a local
+unsigned seed commit so host signing preferences do not prevent the test.
+A root scan can rediscover a Git worktree target; deduplicate canonical target
+paths before accounting so the sweep does not promise the same space twice.
+The broken Linux sweep left only 7.6 GB available; the repaired sweep reclaimed
+94.1 GB of eligible tagged caches while protecting the primary checkout.
+
+
+## Pin the complete Rust toolchain name for device builds (2026-09-06)
+
+On macm3, `1.98` and `1.98.0` are separately installed rustup aliases with
+separate target sets. The former had ARMv7 only; the repository's pinned
+`1.98.0` already had both Android targets. Use the exact channel from
+rust-toolchain.toml. Inspect `rustup toolchain list` before querying a guessed
+alias: even target-list queries can install a missing toolchain.
+Cranorbit's store packaging guard rejects benchmark arenas by design. For a
+framework-only native comparison, build `cranposeBuildNativeRelease` and use
+the same previously verified isolated benchmark host APK for both arms.
+Do not accidentally invoke store packaging or edit the application's source.
+
+
+## Validate new files and the remote source inventory before accepting gates (2026-09-06)
+
+The diff-based complexity gate does not see an untracked Rust file. Stage new
+files before running precommit. Extracting a source archive over an earlier
+remote experiment also leaves removed source files behind: an untracked span
+integration test still ran after the span implementation was stashed locally.
+Preserve those files outside the active archive and compare a tracked-source
+hash manifest plus the remote Rust/WGSL inventory before trusting the build.
+Do not delete build caches or teammate work to repair a source mismatch.
+
+## An empty Bash array can stop a measurement without waking its watcher (2026-09-06)
+
+The Mac's Bash 3.2 under `set -u` treats an empty array expansion as unbound.
+Both prefix matrices stopped after the first property-bearing leg when the
+next leg used an empty property array. Their detached log watchers waited for
+a success marker that would never arrive. The driver must handle the empty
+case and publish termination status on every exit. Preserve interrupted legs
+and restart with new labels; a silent watcher is not measurement progress.
+
+## A high cache hit rate does not establish cheaper arc preparation (2026-09-06)
+
+The captured arc stream hits an exact sixteen-entry radius/sweep template
+98.18% of the time. Caching its band padding and bucket still increases the
+complete watch drawing/finish/reuse probe from 6.99–7.02 to 10.15–10.21 ms
+across A B A B then B A B A, with identical record fingerprints and 38.4 C
+after the first leg. Linear lookup and entry handling cost more than the
+arithmetic they remove. The prototype was restored out of the active source.
+Measure the whole recording path before adopting another memoization table.
+
+The preserved rejected parallel prototype stores its preparation module
+in the stash's untracked third parent. Its workers start only when the scope
+flushes, after gathering all inputs. Reviewing only the tracked diff misses
+that behavior. A proposal to overlap preparation with production must account
+for the producer, chunk publication, segment boundaries and final upload;
+parallel preparation of an already-built input array is not that measurement.
+
+## Outer recording ownership does not prove its shape columns are reusable (2026-09-06)
+
+The draw-command pool holds `Rc<CommandRecording>`, but the renderer separately
+retains `Arc<ShapeRecorder>`. Checking only the outer count takes the newest
+slot while its columns remain shared. Re-recording allocates fresh columns;
+publication then rotates the already-taken slot into the spare, so the older
+capacity never survives. On-device counters show 1,405 shared-inner takes and
+only three reuses in 1,408 large recordings. Requiring both ownership layers
+to be free restores 1,900 reuses in 1,920 acquisitions with the same two slots.
+An isolated sole-owner drawing benchmark misses this allocation churn. Trace
+both owners before proposing workers or adding more spare buffers.
+
+## Keep source archives portable and check the extracted inventory (2026-09-06)
+
+The Mac's tar included AppleDouble metadata beside all 2,005 source files.
+Linux extracted `._foo.rs` files, and emitted thousands of extended-attribute
+warnings. Construct source archives with Python's tarfile using the tracked
+file inventory, then verify hashes and unexpected Rust/WGSL files before a
+build. Preserve stray metadata outside the source tree. `os.rename` cannot
+move between filesystems; choose a destination on the same filesystem or use
+a move implementation that handles that boundary. Stop a source preparation
+script on errors before starting dependent commands.
+
+Matching source hashes alone does not prove Cargo rebuilt an archived source
+switch. An archive preserving timestamps older than the last build made the
+combined Showcase build finish in 0.20 seconds and return the previous native
+library unchanged. Audit the extracted content, refresh the complete source
+inventory's modification times, and then build. Record resolved framework
+dependency paths and packaged native hashes. Preserve a suspect artifact and
+its logs; do not count it as the new candidate's measurement. Hash every app
+workspace member's source, not only a root `src` directory which may not exist.
+
+## Replaced gate jobs need distinct results and explicit termination (2026-09-06)
+
+Two full renderer suites remained alive after layout snapshots changed, with multiple detached waiters reading the same overwritten log. A success marker after a grep pipeline is not the test command's exit status. Give each immutable snapshot a unique result path, retain actual exit codes, and terminate only verified superseded jobs. Run focused mutation proofs during review, then one full gate chain over the final source. Do not launch another full suite merely because a private function or its test changed while the preceding suite still runs.
+
+The held kind-range implementation predates opaque-prefix record windows. Applying its draw-loop changes blindly would redraw a prefix already supplied by the cache. Window offsets are relative to a run while segment starts are absolute table indices; preserve both and test nonzero, noncontiguous starts plus buffer continuation. A specialization image test must wait until its specialized pipeline actually draws, or it may compare two general fallback frames.
