@@ -24,6 +24,9 @@ Signature → cause → what to do. One lesson per line, no incident history.
 
 ## Host and display gates
 
+- **`cargo ndk --message-format=json-render-diagnostics` builds but stdout has no artifacts:** verify one fresh target executable by build time, source inventory and SHA; do not select a stale binary by filename.
+- **GC reclaims logical GB but disk stays full:** APFS sharing or snapshots can retain blocks; verify `df`, keep the disk guard, and use another build host.
+
 - **A first offscreen GPU control can be much slower than the warmed control:** on the watch, the same frozen raster draw measured 41 ms first and 14–16 ms after a compute experiment. Alternate the unchanged control after every variant; a few warm-up frames do not establish stable clocks.
 
 - **Thermal guard has TWO knobs**: `CRANPOSE_HOST_MAX_TEMP_C` (default 90) trips, `CRANPOSE_HOST_RESUME_TEMP_C` (default 85) releases. Raising only MAX is useless when ambient sits above RESUME — one spike arms a wait for a cooldown that never comes, and the run dies `host_not_ready` after `CRANPOSE_HOST_MAX_WAIT_SECS` (300). On a busy desktop use `CRANPOSE_HOST_MAX_TEMP_C=97 CRANPOSE_HOST_RESUME_TEMP_C=93` and a longer wait. `host_not_ready` with no robot binary launched is an environmental block — report it, do not wait it out. Schedule robot suites LAST, never beside a cargo/gradle build.

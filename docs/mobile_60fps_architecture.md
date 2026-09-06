@@ -19,28 +19,28 @@ ABAB then BABA without cooling. Heat and failed legs remain in the evidence.
 
 - **Watch glass:** shared scroll uses 39.5 ms of GPU work per frame: 32.7 ms
   in layers and 6.6 ms in blur. Removing blur alone cannot reach 16.7 ms.
-- **Watch Megaboss:** shared needs about 20% fewer CPU cycles than main in both
-  measured orders. Discarding shape fragments gains only 2.0–2.8 FPS at 43–45°C.
-  Remaining frame time does not distinguish CPU, vertex and tiler costs.
+- **Watch Megaboss CPU:** shared main thread 37.67 ms/frame; arc preparation
+  and packing account for 13.04 ms. Main records raw arcs in 1.54 ms but spends
+  4.92 ms matching spans. These self samples do not prove a net reuse saving.
 - **Main's reuse matters:** disabling its command feed on Huawei loses
   2.4/3.5/5.9/5.0 FPS. First-pair upload medians rise 0.35→2.54 MB.
   Later upload logs are incomplete; the switch changes more than bandwidth.
-- **Repeated construction:** 94% of Huawei scroll's sampled `memcmp` CPU time
-  comes through `RuntimeShader::new`. Watch caller attribution is pending.
+- **Small shader changes held:** factory/hash microbenchmarks improve, but
+  Huawei app pairs are +0.16/−1.86/−1.54/−0.24 FPS. Exact ray reuse also lacks a Huawei win.
 
 ## Decisions
 
 | Work | Evidence required before adoption | Owner |
 | --- | --- | --- |
-| Reuse glass samples with exactly equal coordinates | Frozen pixels on Adreno; broken guards fail; eight-leg FPS comparison | Fable + Codex |
-| Share immutable built-in shader state; stream override hashing | Equality/mutation tests fail when broken; ARM cost and app comparisons | Codex |
-| Recover main's semantic geometry reuse | Watch removal test; CPU/GPU attribution; exact transform/clip/order tests | Codex |
-| Change shape geometry | Vertex removal with same-leg timing; fragment bounds alone are insufficient | Fable |
+| Exact ray reuse | Metal/Adreno pixels pass; both broken guards fail. Watch FPS pending | Fable |
+| Factory/hash | Equality/isolation and ARM cost pass; watch app FPS pending | Codex |
+| Reuse before geometry preparation | Main feed removal on watch; actual changing-frame match cost; pixel invariants | Codex |
+| Glass coverage and pass dependencies | Actual source regions, scratch radii/taps and stage dependencies; remove redundant work to test cause | Fable |
 
-Keep the shared base for investigation. Hold streaming, extra threads and new
-caches. Shared recording already seals ownership once and normalizes arcs once.
-CPU time, cycles, temperature and endpoint clocks are separate observations;
-none alone measures energy. Favor less total work over more overlap.
+**Architecture candidate:** semantic records → reuse verdict → compile changed
+ranges → backend buffers. Main can skip lowering; shared lowers before reuse.
+Keep one validity owner; preserve order, transforms, clips, paint and resources.
+Hold streaming and extra threads. Measure total work and heat; timing is not energy.
 
 **Merge to main only after:** broken correctness tests fail, restored tests pass,
 platform/robot gates pass, and all four workloads sustain 60 Hz without picture
