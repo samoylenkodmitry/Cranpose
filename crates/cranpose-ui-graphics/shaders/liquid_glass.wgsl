@@ -126,6 +126,7 @@ override GLASS_ADAPTIVE_FROST_OFF: bool = false;
 override GLASS_INK_OFF: bool = false;
 override GLASS_RIM_STYLE_OFF: bool = false;
 override GLASS_RESTING_OFF: bool = false;
+override GLASS_REFRACTION_CURVE_DEFAULT: bool = false;
 // The interior guard: every rim term (meniscus, bevel, border line,
 // specular, the opposite-wall reflection) is a product with a band weight
 // that is exactly zero deeper inside the shape than `rim_reach`, so a
@@ -915,7 +916,7 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
     // hold runs 1.1); the spread factor keeps the split proportional.
     let dispersion_strength = clamp(fixed_or(get_float(95u), 0.0, GLASS_DISPERSION_OFF), 0.0, 2.0);
     let loupe_mode = fixed_or(get_float(80u), 0.0, GLASS_LOUPE_OFF);
-    var refraction_curve = get_float(94u);
+    var refraction_curve = fixed_or(get_float(94u), 0.25, GLASS_REFRACTION_CURVE_DEFAULT);
     if refraction_curve <= 0.0 {
         refraction_curve = 0.25;
     }

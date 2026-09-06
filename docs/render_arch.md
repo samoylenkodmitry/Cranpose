@@ -2247,6 +2247,29 @@ substrate's blur triples are the second cost on both devices (+3.4 to
 +3.9 on the watch, +1.7 to +6.1 on the Mate 20 X). The header blur and
 text are within the noise on both.
 
+## The default refraction curve folds; every other value stays a uniform (2026-09-06)
+
+Uniform 94 is the ray-return exponent, `refraction_curve * activity` at
+the material boundary: 0.25 for `Glass::regular()`'s default (the
+showcase's icon buttons, and the shader's own fallback for an unset
+slot), 0.62 for the showcase's cards, and a continuum for any widget
+that animates activity. A value-carrying pipeline constant would key a
+pipeline per distinct float under that animation, so it lives only on
+the branch `render/curve-probe` (d82d86a8) as an attribution probe,
+with a unit test pinning three values to three keys. What ships is the
+finite fold: `GLASS_REFRACTION_CURVE_DEFAULT` is raised when the slot is
+0.25 or unset and substitutes that constant for the one read of the
+slot; 0.26, 0.27 and 0.62 share one pipeline key, so an animated curve
+compiles nothing new. The pow, the fallback and every dependency are
+untouched. Proof shape as for the other flags: the frozen fixture
+declares the override and never reads it, `glass_reference_shader`
+stays at zero across six scenes (the lenses scene is the folded path),
+raising the fold for every curve renders a 0.62 card with 0.25 and
+fails the four card scenes by 8,926 to 34,075 pixels, and the parity
+test compares folded and general pipelines byte for byte. Not measured
+yet; the probe's attribution on the cards decides whether the curve's
+uniform load is worth anything before this fold is timed.
+
 ## Where the exact shader levers end (2026-09-06)
 
 After the rim fold and the activity flag, every fetch and every term
