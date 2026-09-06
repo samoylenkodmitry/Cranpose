@@ -854,10 +854,7 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
     // tint-only resting output reads as an opaque plank — stars behind a
     // resting bar simply vanished instead of glowing through the frost.
     let resting_weight = (1.0 - material_activity) * coverage;
-    var plain_path = vec4<f32>(0.0);
-    if resting_weight > 0.0 || outer_coverage > 0.0 {
-        plain_path = textureSampleLevel(input_texture, input_sampler, map_uv(map, uv), 0.0);
-    }
+    let plain_path = textureSampleLevel(input_texture, input_sampler, map_uv(map, uv), 0.0);
     let resting_frost = plain_path * (1.0 - resting_tint.a)
         + vec4<f32>(resting_tint.rgb * resting_tint.a, resting_tint.a);
     let resting_output = resting_frost * resting_weight;
@@ -1188,32 +1185,8 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
     // The meniscus returns the ray from the opposite wall of the same glass
     // body. This is the mirrored image visible along the target's long edges;
     // its weight is the wcKSRD gradient band, not a painted bevel mask.
-    let long_edge_return = 0.40 + 0.60 * pow(abs(outward_normal.y), 1.5);
-    let meniscus_reflection = clamp(
-        face_meniscus
-            * long_edge_return
-            * rim_style
-            * 0.24,
-        0.0,
-        0.24,
-    ) * select(1.0, 0.0, loupe_mode > 0.5);
-    let bevel_reflection = clamp(
-        bevel_meniscus
-            * long_edge_return
-            * mix(0.035, 0.065, rim_style),
-        0.0,
-        0.08,
-    ) * select(1.0, 0.0, loupe_mode > 0.5);
-    // Rim reflectivity (uniform 121, 0 = unset -> full): the toggle's
-    // reference rim draws this line, the segmented lens body is invisible.
-    var rim_reflectivity = get_float(121u);
-    if rim_reflectivity <= 0.0 {
-        rim_reflectivity = 1.0;
-    }
-    let face_reflection = meniscus_reflection * rim_reflectivity;
-    let outer_reflection = bevel_reflection * rim_reflectivity;
     var reflection_rgb = vec3<f32>(0.0);
-    if (in_rim && (face_reflection > 0.0 || (outer_reflection > 0.0 && outer_coverage > 0.0))) {
+    if (in_rim) {
         let reflection_displacement = opposite_side_reflection_displacement(
             p,
             outward_normal,
@@ -1239,8 +1212,30 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
     }
     // The opposite-wall return belongs to an interactive lens. Applying it
     // to a regular surface duplicates the rim as a darker band inside it.
-    rgb = mix(rgb, reflection_rgb, face_reflection);
-    outer_rgb = mix(outer_rgb, reflection_rgb, outer_reflection);
+    let long_edge_return = 0.40 + 0.60 * pow(abs(outward_normal.y), 1.5);
+    let meniscus_reflection = clamp(
+        face_meniscus
+            * long_edge_return
+            * rim_style
+            * 0.24,
+        0.0,
+        0.24,
+    ) * select(1.0, 0.0, loupe_mode > 0.5);
+    let bevel_reflection = clamp(
+        bevel_meniscus
+            * long_edge_return
+            * mix(0.035, 0.065, rim_style),
+        0.0,
+        0.08,
+    ) * select(1.0, 0.0, loupe_mode > 0.5);
+    // Rim reflectivity (uniform 121, 0 = unset -> full): the toggle's
+    // reference rim draws this line, the segmented lens body is invisible.
+    var rim_reflectivity = get_float(121u);
+    if rim_reflectivity <= 0.0 {
+        rim_reflectivity = 1.0;
+    }
+    rgb = mix(rgb, reflection_rgb, meniscus_reflection * rim_reflectivity);
+    outer_rgb = mix(outer_rgb, reflection_rgb, bevel_reflection * rim_reflectivity);
 
 
     let inner_meniscus = clamp(
