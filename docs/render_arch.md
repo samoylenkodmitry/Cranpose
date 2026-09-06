@@ -2107,3 +2107,42 @@ zero, alternating rounds, temperature logged; the watch with the
    unchanged exact tests, and, on the recording side, Codex's prepared
    dynamic runs; the joint plan is `docs/mobile_60fps_architecture.md`. Each with its gate red first, the robots
    green, both scenes hot A B A B and B A B A on the full-scroll gesture.
+
+## A glass tap is fetched only where its weight is not zero (2026-09-06)
+
+The showcase material is `Glass::regular()`: rim style 0, activity 1,
+dispersion 1, adaptive frost 0.42, no optical blur. Per pixel the
+material fetched the plain backdrop, three transmitted paths (the
+achromatic path and the red and blue paths dispersion displaces), the
+frost substrate, and in the rim draw five reflection taps: five taps in
+the interior draw, ten in the rim. The Mate 20 X attribution matrix says
+that is the stage cost there: replacing the material by a blit recovers
+the same ten fps that removing the stages entirely does.
+
+Two of those fetches were dead on most of their pixels. The plain
+backdrop enters the output through the resting weight,
+`(1 - activity) * coverage`, and through the outer coverage,
+`optical_coverage * (1 - coverage)`; at activity 1 the first is zero
+everywhere, and coverage is exactly 1 wherever `-d` exceeds the
+coverage ramp (a thirty-second of the lens, at least a pixel), which is
+the whole interior draw and the inner part of the rim draw. The
+reflection path enters through the face reflection weight,
+`face_meniscus * long_edge_return * rim_style * 0.24`, zero for rim
+style 0, and through the bevel reflection, which only reaches the output
+multiplied by the outer coverage. Both fetches now sit behind the weights
+that consume them: the plain path is sampled when the resting weight or
+the outer coverage is positive, the reflection path when the face weight
+is positive or the outer weight is positive under positive outer
+coverage. Where a gate is closed the skipped value entered the output
+only as `mix(x, v, 0)` or `v * 0` with finite `v`, so the bytes are the
+reference's bytes; where a gate is open the code is unchanged. A lens
+(rim style 1) keeps every reflection tap over the whole meniscus; a
+resting or animating glass (activity below 1) keeps the plain path.
+
+**Gates.** `glass_reference_shader` renders each scene with the frozen
+`tests/fixtures/liquid_glass_reference.wgsl` and the shipped shader and
+requires zero differing pixels; a new scene holds a lens-variant card and
+a resting card so both open branches are exercised. Three mutants each
+fail every scene: never fetching the reflection (343 to 2726 pixels),
+never fetching the plain path (1321 to 4441), and gating the reflection
+on the face weight alone (343 to 740, the outer band).
