@@ -1002,7 +1002,7 @@ impl ShapeRecorder {
         )
     }
 
-    #[inline]
+    #[inline(always)]
     fn push_shape(
         &mut self,
         mut body: ShapeRecordBody,
@@ -1847,6 +1847,7 @@ fn row_rect(row: [f32; 4]) -> Rect {
 
 /// The band a primitive's arc arguments describe, normalised as the
 /// fragment stage draws it.
+#[inline(always)]
 pub fn normalized_band(args: &ArcRecordArgs<'_>) -> ArcGeometry {
     let (band_inner, band_outer, cap) = arc_band(args.radius, args.inner_radius, args.stroke);
     ArcGeometry::new(
