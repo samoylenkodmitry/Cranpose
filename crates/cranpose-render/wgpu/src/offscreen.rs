@@ -343,8 +343,9 @@ mod tests {
     }
 
     #[test]
-    fn the_budget_bounds_full_screen_surfaces() {
-        let full_screen = target_bytes(1080, 2244, composition_bytes_per_pixel());
+    fn the_byte_budget_bounds_full_screen_float_surfaces() {
+        let pool = OffscreenPool::new_with_limit(wgpu::TextureFormat::Rgba16Float, 4096);
+        let full_screen = target_bytes(1080, 2244, pool.bytes_per_pixel());
         let held = MAX_POOLED_BYTES / full_screen;
         assert!(
             (2..=8).contains(&held),

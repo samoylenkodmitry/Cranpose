@@ -4,6 +4,7 @@
 - just test, just clippy, just fmt # `just` lists every gate; CI runs these same recipes
 - just hooks # once per clone: the pre-commit hook runs `just precommit` (fmt-check, typos, complexity-gate, duplication-gate), the fast gates CI would otherwise fail minutes later
 - KISS, DRY, SOLID. don't copy-paste lazily
+- Follow [the performance coding guide](docs/performance_coding_guide.md): reduce measured work, preserve correctness, validate on shipped targets.
 - Use `cargo add <crate>` to add dependencies.
 - Use `cargo upgrade` to upgrade dependencies.
 - Use `anyhow` for error handling in application code; use `thiserror` for library code.

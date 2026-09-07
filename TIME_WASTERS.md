@@ -1295,3 +1295,20 @@ to isolate a runtime choice, and assert every unrelated property matches.
   source label matches. Source hashes alone do not prove binary provenance;
   check the native compilation log and payload against the preceding build.
   This affected experimental V4 Orbit and resolved-band V2; neither shipped.
+
+## Verify the optimized path before device FPS sweeps
+
+A diagnostic capture must show the intended work changed. `page-origin-v2`
+executed zero bounded Huawei page passes; its mixed FPS cannot measure copy
+versus attachment-load cost. Inspect selected-run bounds and path counters
+before spending eight thermal legs on a candidate.
+
+`record_path_goldens` uses desktop float-attachment fixtures. Forcing 8-bit
+composition changes 1–2 channel levels and fails six fixtures. Run those
+fixtures in their normal configuration; compare native 8-bit output against
+an 8-bit reference. Do not rewrite goldens or widen tolerances for the override.
+
+Android only forwards properties listed in
+`crates/cranpose/src/android_frame_telemetry.rs`. `getprop` showing `1` does
+not prove a new `DebugToggle` received it. Reuse the registered scene diagnostic
+or add the bridge before building; require a renderer log marker as proof.
