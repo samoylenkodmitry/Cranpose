@@ -1286,3 +1286,12 @@ The positive mean is dominated by the final control throttling. Hold
 detailed stage logging. It cannot merely label an experimental run: watch
 frame cost rises from roughly 17 to 25 ms. Use one `--property` override
 to isolate a runtime choice, and assert every unrelated property matches.
+
+- **Snapshot extraction can silently reuse a stale native binary.** A unit
+  test refreshes source timestamps, then a build extracts the same archive
+  again with old timestamps. A hash comparison against the already-current
+  source sees no changes, so Cargo reuses the preceding Android build.
+  Refresh every extracted source file after every extraction, even when the
+  source label matches. Source hashes alone do not prove binary provenance;
+  check the native compilation log and payload against the preceding build.
+  This affected experimental V4 Orbit and resolved-band V2; neither shipped.
