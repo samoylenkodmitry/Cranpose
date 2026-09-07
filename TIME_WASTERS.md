@@ -7,6 +7,7 @@
 - Put Android measurement details in [device measurement](docs/device_measurement.md).
 - Put experiment results in [mobile performance evidence](docs/mobile_watch_performance.md), with one conclusion and evidence link per row.
 - Fix Cargo output discovery in [#618](https://github.com/samoylenkodmitry/Cranpose/issues/618).
+- Deduplicate nested Cargo targets during GC in [#622](https://github.com/samoylenkodmitry/Cranpose/issues/622).
 - Version the Android measurement tools in [#619](https://github.com/samoylenkodmitry/Cranpose/issues/619).
 - Track macOS FPS limits in [#505](https://github.com/samoylenkodmitry/Cranpose/issues/505).
 - Track repeated robot scroll input in [#544](https://github.com/samoylenkodmitry/Cranpose/issues/544).

@@ -2781,8 +2781,8 @@ fn log_desktop_present_mode(
 
 fn desired_frame_latency(mode: FramePacingMode) -> u32 {
     match mode {
-        FramePacingMode::Vsync | FramePacingMode::Hard60 | FramePacingMode::Hard120 => 1,
-        FramePacingMode::NoVsync => 2,
+        FramePacingMode::Vsync | FramePacingMode::NoVsync => 2,
+        FramePacingMode::Hard60 | FramePacingMode::Hard120 => 1,
     }
 }
 
