@@ -1,6 +1,6 @@
 use cranpose_ui_graphics::{
-    BAND_MARGIN, BAND_QUAD_MARGIN, FRAGMENT_KIND_ARC, Point, QUAD_VERTICES, RecordLane,
-    RecordTables, ShapeRecord, StrokeCap, band_class_segments, strip_vertices,
+    BAND_MARGIN, BAND_QUAD_MARGIN, FRAGMENT_KIND_ARC, Point, QUAD_VERTICES, RecordTables,
+    ShapeRecord, StrokeCap, strip_vertices,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -201,20 +201,19 @@ impl ShapeFill {
         self.vertices += u64::from(class_segments.map_or(QUAD_VERTICES, strip_vertices));
     }
 
-    /// The fill of `tables` under `offset` at `scale`, segment by segment
-    /// so each record is charged the stride it is drawn at.
-    pub(crate) fn of_tables(tables: &RecordTables, offset: Point, scale: f32, bands: bool) -> Self {
+    pub(crate) fn of_draws(
+        tables: &RecordTables,
+        offset: Point,
+        scale: f32,
+        draws: impl Iterator<Item = (std::ops::Range<u32>, Option<u32>)>,
+    ) -> Self {
         let mut fill = Self::default();
-        for segment in &tables.segments {
-            if segment.lane != RecordLane::Shapes {
-                continue;
-            }
-            let class_segments = bands.then(|| band_class_segments(segment.band_class));
+        for (records, class_segments) in draws {
             for record in tables
                 .shapes
                 .iter()
-                .skip(segment.start as usize)
-                .take(segment.count as usize)
+                .skip(records.start as usize)
+                .take(records.len())
             {
                 fill.add_record(&record, offset, scale, class_segments);
             }
@@ -231,7 +230,7 @@ impl ShapeFill {
 mod tests {
     use cranpose_ui_graphics::{
         ARC_BAND_MIN_RADIUS, Brush, Color, DrawScope, DrawScopeDefault, Size, Stroke, StrokeCap,
-        TAU,
+        TAU, band_class_segments,
     };
 
     use super::*;
@@ -335,6 +334,38 @@ mod tests {
     }
 
     #[test]
+    fn fill_excludes_records_outside_the_draw_window() {
+        let mut scope = DrawScopeDefault::new(Size::new(100.0, 100.0));
+        for width in [10.0, 30.0] {
+            scope.draw_rect_at(
+                cranpose_ui_graphics::Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width,
+                    height: 20.0,
+                },
+                Brush::solid(Color::WHITE),
+            );
+        }
+        let recording = scope.finish();
+        let selected = ShapeFill::of_draws(
+            recording.tables(),
+            Point::ZERO,
+            1.0,
+            [(1..2, Some(1))].into_iter(),
+        );
+        assert_eq!(selected.total(), 600.0);
+        assert_eq!(selected.vertices, 4);
+        let empty = ShapeFill::of_draws(
+            recording.tables(),
+            Point::ZERO,
+            1.0,
+            [(2..2, Some(1))].into_iter(),
+        );
+        assert_eq!(empty, ShapeFill::default());
+    }
+
+    #[test]
     fn every_pixel_the_arc_shader_shades_lies_inside_its_strip() {
         let brush = Brush::solid(Color::WHITE);
         let records = recorded_arcs(|scope| {
@@ -430,8 +461,16 @@ mod tests {
         );
         let recording = scope.finish();
         let tables = recording.tables();
-        let banded = ShapeFill::of_tables(tables, Point::default(), 1.0, true);
-        let quads = ShapeFill::of_tables(tables, Point::default(), 1.0, false);
+        let draws = |bands: bool| {
+            tables.segments.iter().map(move |segment| {
+                (
+                    segment.start..segment.start + segment.count,
+                    bands.then(|| band_class_segments(segment.band_class)),
+                )
+            })
+        };
+        let banded = ShapeFill::of_draws(tables, Point::default(), 1.0, draws(true));
+        let quads = ShapeFill::of_draws(tables, Point::default(), 1.0, draws(false));
         assert_eq!(banded.pixels[0], 200.0);
         assert_eq!(quads.pixels[0], 200.0);
         assert!(banded.pixels[4] < 2.0 * 6284.0 * 8.0);

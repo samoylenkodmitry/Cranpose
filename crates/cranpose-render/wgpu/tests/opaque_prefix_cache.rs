@@ -48,6 +48,7 @@ struct Spec {
     alpha: f32,
     effect_beneath: bool,
     covers_page: bool,
+    stars: u32,
 }
 
 impl Spec {
@@ -57,6 +58,7 @@ impl Spec {
             alpha: 1.0,
             effect_beneath: false,
             covers_page: false,
+            stars: 40,
         }
     }
 
@@ -160,7 +162,7 @@ fn primitives(spec: Spec, phase: u32) -> Vec<cranpose_ui_graphics::DrawPrimitive
             scope.draw_rect(radial(stops(dark), TileMode::Clamp));
         }
     }
-    for star in 0..40u32 {
+    for star in 0..spec.stars {
         let drift = (phase * 7 + star * 3) as f32;
         let x = (star as f32 * 41.3 + drift) % layer.width;
         let y = (star as f32 * 23.7 + drift * 0.5) % layer.height;
@@ -308,7 +310,14 @@ fn assert_cold_then_warm(pair: &mut Pair, label: &str, spec: Spec, scale: f32) {
         0,
         "{label}: nothing is cached on the first frame"
     );
-    let (second, _) = pair.frame(label, spec, 1, scale);
+    let (second, reference) = pair.frame(label, spec, 1, scale);
+    assert!(
+        second
+            .shape_fill_pixels
+            .abs_diff(reference.shape_fill_pixels)
+            <= 1,
+        "{label}: admission must count both the prefix and remaining shapes",
+    );
     assert_eq!(
         second.prefix_admissions, 1,
         "{label}: the second same frame admits the prefix"
@@ -374,6 +383,18 @@ fn an_opaque_gradient_ahead_of_moving_stars_is_drawn_once_and_reused_byte_for_by
         return;
     };
     assert_cold_then_warm(&mut pair, "three-stop radial", Spec::of(First::Radial), 1.0);
+}
+
+#[test]
+fn stored_run_fill_counts_only_the_uncached_draw_window() {
+    let Some(mut pair) = Pair::new() else {
+        return;
+    };
+    let spec = Spec {
+        stars: 128,
+        ..Spec::of(First::Radial)
+    };
+    assert_cold_then_warm(&mut pair, "stored radial prefix", spec, 1.0);
 }
 
 #[test]

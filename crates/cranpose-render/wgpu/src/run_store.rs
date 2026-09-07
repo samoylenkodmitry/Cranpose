@@ -422,6 +422,7 @@ pub(crate) struct StoredRun {
     fill: Option<ShapeFill>,
     fill_scale_bits: u32,
     fill_offset_bits: [u32; 2],
+    fill_window: [u32; 4],
     last_used_frame: u64,
 }
 
@@ -926,6 +927,8 @@ impl RunStore {
         recorder: &mut impl FrameCommandRecorder,
         run: &RunDraw,
         root_scale: f32,
+        window: &std::ops::Range<u32>,
+        draws: &[RunDrawCall],
     ) -> (FrameCommandStats, Option<ShapeFill>) {
         let command = run.command.expect("a stored run has a command");
         let paint = PaintKey::of(&run.placement);
@@ -951,6 +954,7 @@ impl RunStore {
             fill: None,
             fill_scale_bits: 0,
             fill_offset_bits: [0; 2],
+            fill_window: [0; 4],
             last_used_frame: 0,
         });
         let first_use = entry.last_used_frame == 0;
@@ -997,6 +1001,9 @@ impl RunStore {
                 first_use || fresh[BRUSH_BUFFER],
             );
             stops_changed |= fresh[STOP_BUFFER] || previous.stops != tables.stops;
+            if self.fill_stats && previous.segments != tables.segments {
+                entry.fill = None;
+            }
             entry.recorder = Arc::clone(&run.recorder);
         }
         let changed = stats.upload_bytes > 0 || stops_changed;
@@ -1011,21 +1018,41 @@ impl RunStore {
                 .write(device, recorder, STOP_BUFFER, scratch_stops);
             entry.paint = paint;
         }
-        let offset_bits = [
-            run.placement.offset.x.to_bits(),
-            run.placement.offset.y.to_bits(),
-        ];
-        if changed
-            || entry.fill_scale_bits != root_scale.to_bits()
-            || entry.fill_offset_bits != offset_bits
-        {
+        if changed {
             entry.fill = None;
-            entry.fill_scale_bits = root_scale.to_bits();
-            entry.fill_offset_bits = offset_bits;
         }
         let fill = self.fill_stats.then(|| {
+            let offset_bits = [
+                run.placement.offset.x.to_bits(),
+                run.placement.offset.y.to_bits(),
+            ];
+            let fill_window = [
+                run.segments.start,
+                run.segments.end,
+                window.start,
+                window.end,
+            ];
+            if entry.fill_scale_bits != root_scale.to_bits()
+                || entry.fill_offset_bits != offset_bits
+                || entry.fill_window != fill_window
+            {
+                entry.fill = None;
+                entry.fill_scale_bits = root_scale.to_bits();
+                entry.fill_offset_bits = offset_bits;
+                entry.fill_window = fill_window;
+            }
             *entry.fill.get_or_insert_with(|| {
-                ShapeFill::of_tables(run.tables(), run.placement.offset, root_scale, true)
+                ShapeFill::of_draws(
+                    run.tables(),
+                    run.placement.offset,
+                    root_scale,
+                    draws.iter().map(|draw| {
+                        (
+                            draw.records.clone(),
+                            Some(band_class_segments(draw.band_class)),
+                        )
+                    }),
+                )
             })
         });
         (stats, fill)

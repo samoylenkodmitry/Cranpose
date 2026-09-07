@@ -3138,10 +3138,20 @@ impl GpuRenderer {
         window: &std::ops::Range<u32>,
     ) -> StoreRunBatch {
         let command = run.command.expect("a stored run has a command");
+        let clipped = run.placement.clip.is_some();
+        let ablation = self.ablation.shape;
+        let mut draws = SmallVec::new();
+        self.run_store.stored_run_draws(
+            &self.device,
+            run,
+            &mut |segment| Self::run_pipeline_key(segment, clipped, RunTier::Store, ablation),
+            &mut draws,
+        );
+        window_draws(&mut draws, window);
         let upload_start = Instant::now();
-        let (upload, fill) = self
-            .run_store
-            .upload_stored(&self.device, recorder, run, root_scale);
+        let (upload, fill) =
+            self.run_store
+                .upload_stored(&self.device, recorder, run, root_scale, window, &draws);
         if let Some(total_ms) = should_log_wgpu_render_stage(upload_start, Instant::now()) {
             log::warn!(
                 "[wgpu-render-stage:run-upload] total_ms={total_ms:.2} bytes={} records={}",
@@ -3161,16 +3171,6 @@ impl GpuRenderer {
         let uniform_slot =
             self.viewport_uniforms
                 .claim(&self.device, &self.uniform_bind_group_layout, &uniforms);
-        let clipped = run.placement.clip.is_some();
-        let ablation = self.ablation.shape;
-        let mut draws = SmallVec::new();
-        self.run_store.stored_run_draws(
-            &self.device,
-            run,
-            &mut |segment| Self::run_pipeline_key(segment, clipped, RunTier::Store, ablation),
-            &mut draws,
-        );
-        window_draws(&mut draws, window);
         for draw in &draws {
             self.ensure_shape_pipeline(draw.key);
         }
