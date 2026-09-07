@@ -7,6 +7,7 @@ not application FPS; startup and first-presentation windows are distinct.
 
 | Result | Evidence relative to root |
 | --- | --- |
+| Cranscan Settings scroll added to required Huawei/watch measurements; main/SOTA results pending | [20-second route and conditions](mobile_60fps_architecture.md); app reference `c61958e` (1.0.22), identical app payload and state required in both builds |
 | Broad source audit: effective consuming profiles checked; hot watch allocation/free totals 5.27 CPU ms/frame, including 1.60 in vendor driver, 41.9→42.3°C | [Coding rules](performance_coding_guide.md); `source-audit/audit.json`, `source-audit/allocator-attribution.json`; sampled time, not allocation counts |
 | Watch instruction-cache diagnostic: 1,636 samples, zero lost; sampled miss weight 37.9% libc, 24.8% Adreno, 34.0% application library (includes app and dependencies). ARMv7 executable sections vs main: Showcase −3.26%, Megaboss −3.66% | `source-audit/instruction-cache-attribution.json`, `source-audit/native-section-sizes.json`; interrupt skid limits instruction attribution. Invalid grouped-counter files retained in `source-audit/pmu-validity.json`; no CPI or cross-device inference |
 | Removing observer callback/iterator allocations held: watch full scroll 54.77→54.60 FPS, three small gains/one loss, 33.8→41.0°C; Huawei 31.29→31.25, two gains/two losses, 31–32°C. All routes complete | `observer-alloc-v2-held.json`; missing large-collection notifications fail the new guard; restored eleven checks pass. Both apps/ABIs compile without warnings; unchanged app payloads |

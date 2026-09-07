@@ -3,6 +3,9 @@
 **Target unmet: 16.67 ms/frame.** Cranpose internals may change; Jetpack Compose
 API, application sources and picture correctness stay fixed.
 
+**Required workloads on Huawei and Pixel Watch:** Cranorbit Megaboss,
+Showcase full scroll, and **Cranscan Settings scroll**.
+
 | Constraint | Evidence | Next action |
 | --- | --- | --- |
 | Watch CPU | Latest profile: 18.17 ms/frame; main thread 17.22; arc recording + draw scope 5.77 | Remove repeated preparation and memory traffic; keep direct GPU columns |
@@ -25,3 +28,10 @@ seconds; Huawei includes launch. Scroll must expose the last card. Run ABAB
 BABA, record temperature before/after every leg, retain failures, never wait
 for cooling. Every optimization must fail a correctness guard when deliberately
 broken. [Measurements and captures](mobile_watch_performance.md).
+
+**Cranscan Settings:** measure 20 seconds of continuous scrolling from
+“On-device intelligence” through “Version, licenses, credits, library stats.”
+and back. Verify both endpoints and use the same gesture sequence, app revision,
+features, data and expanded sections for main and SOTA. Preserve each run's FPS,
+temperatures, route completion and paired screenshots. Do not change settings
+or start downloads during the route; record background work already in progress.
