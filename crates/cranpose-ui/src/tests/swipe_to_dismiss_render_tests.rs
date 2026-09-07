@@ -1,10 +1,13 @@
 use std::rc::Rc;
 
 use cranpose_core::NodeId;
-use cranpose_ui_graphics::{DrawPrimitive, Point, Size as ViewportSize, Size as PrimSize};
+use cranpose_ui_graphics::{Brush, DrawPrimitive, Point, Size as ViewportSize, Size as PrimSize};
 
 use super::*;
-use crate::modifier::{Color, ModifierNodeSlices, PointerEvent, PointerEventKind};
+use crate::{
+    modifier::{Color, ModifierNodeSlices, PointerEvent, PointerEventKind},
+    widgets::Canvas,
+};
 
 const BIN_RED: Color = Color(1.0, 0.0, 0.0, 1.0);
 
@@ -124,8 +127,8 @@ fn applied_translation_x(slices: &ModifierNodeSlices) -> f32 {
         .translation_x
 }
 
-fn count_bin_primitives(tree: &crate::LayoutTree) -> usize {
-    fn walk(node: &crate::LayoutBox, count: &mut usize) {
+fn count_color_primitives(tree: &crate::LayoutTree, expected: Color) -> usize {
+    fn walk(node: &crate::LayoutBox, expected: Color, count: &mut usize) {
         let size = PrimSize {
             width: node.rect.width,
             height: node.rect.height,
@@ -133,18 +136,21 @@ fn count_bin_primitives(tree: &crate::LayoutTree) -> usize {
         for primitive in
             crate::execute_draw_commands(node.node_data.modifier_slices().draw_commands(), size)
         {
-            if let DrawPrimitive::Rect { brush, .. } = primitive
-                && format!("{brush:?}").contains("1.0, 0.0, 0.0")
+            if let DrawPrimitive::Rect {
+                brush: Brush::Solid(color),
+                ..
+            } = primitive
+                && color == expected
             {
                 *count += 1;
             }
         }
         for child in &node.children {
-            walk(child, count);
+            walk(child, expected, count);
         }
     }
     let mut count = 0;
-    walk(tree.root(), &mut count);
+    walk(tree.root(), expected, &mut count);
     count
 }
 
@@ -165,6 +171,91 @@ fn up(x: f32) -> PointerEvent {
 
 fn root_height(composition: &mut TestComposition, root: NodeId) -> f32 {
     layout_tree(composition, root).root().rect.height
+}
+
+#[test]
+fn recomposing_swipe_canvas_updates_drawing_without_remeasurement() {
+    let mut composition = run_test_composition(|| {});
+    let key = cranpose_core::location_key(file!(), line!(), column!());
+    for (frame, color) in [Color::RED, Color::GREEN, Color::BLUE]
+        .into_iter()
+        .enumerate()
+    {
+        composition
+            .render(key, move || {
+                SwipeToDismissBox(
+                    Modifier::empty().fill_max_width().height(48.0),
+                    || {},
+                    move || {
+                        Canvas(Modifier::empty().fill_max_size(), move |scope| {
+                            scope.draw_rect(Brush::Solid(color));
+                        });
+                    },
+                );
+            })
+            .expect("compose changing canvas");
+        let root = composition.root().expect("root");
+        if frame == 0 {
+            measure_row(&mut composition, root);
+        }
+        composition
+            .flush_pending_node_updates()
+            .expect("apply dirty flags");
+        let needs_layout = {
+            let mut applier = composition.applier_mut();
+            crate::layout::tree_needs_layout(&mut *applier, root).expect("layout state")
+        };
+        assert!(
+            !needs_layout,
+            "frame {frame}: changing draw content must not dirty measurement"
+        );
+        assert_eq!(
+            count_color_primitives(&layout_tree(&mut composition, root), color),
+            1,
+            "frame {frame}: updated canvas must draw without another measurement"
+        );
+    }
+}
+
+#[test]
+fn replacement_swipe_state_and_resizing_use_the_current_content_width() {
+    let mut composition = run_test_composition(|| {});
+    let key = cranpose_core::location_key(file!(), line!(), column!());
+    let active_slot = Rc::new(std::cell::RefCell::new(None));
+    for (selected, width) in [(0, 100.0), (1, 100.0), (1, 140.0)] {
+        let output = Rc::clone(&active_slot);
+        composition
+            .render(key, move || {
+                let first = rememberSwipeDismissState();
+                let second = rememberSwipeDismissState();
+                let active = if selected == 0 { first } else { second };
+                *output.borrow_mut() = Some(active.clone());
+                SwipeToDismiss(
+                    Modifier::empty().width(width).height(48.0).padding(10.0),
+                    SwipeToDismissSpec::default().with_state(active),
+                    || {},
+                    || {
+                        Canvas(Modifier::empty().fill_max_size(), |scope| {
+                            scope.draw_rect(Brush::Solid(Color::RED));
+                        });
+                    },
+                );
+            })
+            .expect("compose controller and dimensions");
+        let root = composition.root().expect("root");
+        measure_row(&mut composition, root);
+        let tree = layout_tree(&mut composition, root);
+        let handler = pointer_handler(&tree);
+        handler(down(10.0));
+        handler(move_to(300.0));
+        let active = active_slot.borrow().as_ref().expect("swipe state").clone();
+        assert_eq!(
+            active.offset(),
+            width - 20.0,
+            "state {selected}, width {width}"
+        );
+        active.reset();
+    }
 }
 
 #[test]
@@ -214,7 +305,7 @@ fn background_only_draws_while_displaced() {
 
     let tree = layout_tree(&mut composition, root);
     assert_eq!(
-        count_bin_primitives(&tree),
+        count_color_primitives(&tree, BIN_RED),
         0,
         "background must not draw at offset 0"
     );
@@ -229,7 +320,7 @@ fn background_only_draws_while_displaced() {
     measure_row(&mut composition, root);
     let displaced = layout_tree(&mut composition, root);
     assert!(
-        count_bin_primitives(&displaced) > 0,
+        count_color_primitives(&displaced, BIN_RED) > 0,
         "background must draw while the row is displaced"
     );
 }
@@ -265,7 +356,7 @@ fn dismissed_row_hides_background_and_collapses_to_zero_height() {
 
     let settled = layout_tree(&mut composition, root);
     assert_eq!(
-        count_bin_primitives(&settled),
+        count_color_primitives(&settled, BIN_RED),
         0,
         "no red background strip may linger after a dismiss"
     );
@@ -294,7 +385,7 @@ fn dismissed_row_inside_lazy_column_leaves_no_lingering_strip() {
         .expect("recompose after capture");
     measure_row(&mut composition, root);
     assert!(
-        count_bin_primitives(&layout_tree(&mut composition, root)) > 0,
+        count_color_primitives(&layout_tree(&mut composition, root), BIN_RED) > 0,
         "the swipe must reveal the bin background mid-drag"
     );
 
@@ -315,7 +406,7 @@ fn dismissed_row_inside_lazy_column_leaves_no_lingering_strip() {
 
     let settled = layout_tree(&mut composition, root);
     assert_eq!(
-        count_bin_primitives(&settled),
+        count_color_primitives(&settled, BIN_RED),
         0,
         "no red background strip may linger after a dismiss inside a LazyColumn"
     );
