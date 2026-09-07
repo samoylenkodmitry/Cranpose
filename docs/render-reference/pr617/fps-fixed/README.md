@@ -1,5 +1,6 @@
 # SOTA FPS after the renderer fix
 
+- LeetCodeDaily [paired comparison](../leet-paired/README.md): Main 26.92 FPS, SOTA 41.20 FPS on the same display and route.
 - Measured on 2026-09-07 with Cranpose `8944038b`; all four samples per workload remain in the mean.
 - These SOTA-only samples establish current performance; different temperatures and no paired baseline prevent a speedup claim.
 - All three workloads remain below 60 FPS; [raw counters, durations and temperatures](summary.json) retain full precision.
