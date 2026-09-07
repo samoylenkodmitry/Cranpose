@@ -7,6 +7,7 @@ not application FPS; startup and first-presentation windows are distinct.
 
 | Result | Evidence relative to root |
 | --- | --- |
+| Main vs SOTA `500f78a8`, game 20 s: watch 38.55→58.88 FPS; Huawei launch 55.73→58.32, four gains each. Huawei complete scroll 23.62→31.49. Watch 20 s route 20.21→48.05; main fails two hot endpoints (retained), SOTA completes four; resumed after leg 6 | `main-sota20-analysis.json`, `main-sota20-payload-proof.json`; all per-leg temperatures and failed routes preserved. [Original paired captures](render-reference/pr617/captures.json) |
 | Shared beats main: opening game, four pairs each device | `shared72-main-game10-analysis.json` |
 | Direct columns + arc bounds: five watch pairs at matching endpoint clocks gain 2.2–5.8%; thermal crossings include losses | `arc-bounds-direct-v1-device-analysis.json` |
 | Exact arc pixels; padding/radius mutants fail | `arc-quad-bounds-{red,restored}.log`, `watch-arc-quad-bounds-v1-oracle/`, `direct-columns-radius-swap-red.log` |
