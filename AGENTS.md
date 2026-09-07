@@ -2,6 +2,7 @@
 
 - no unsafe
 - just test, just clippy, just fmt # `just` lists every gate; CI runs these same recipes
+- just hooks # once per clone: the pre-commit hook runs `just precommit` (fmt-check, typos, complexity-gate, duplication-gate), the fast gates CI would otherwise fail minutes later
 - KISS, DRY, SOLID. don't copy-paste lazily
 - Use `cargo add <crate>` to add dependencies.
 - Use `cargo upgrade` to upgrade dependencies.
@@ -121,3 +122,8 @@
 - never invent a feature subset to check a target; run the exact command CI runs. `--features ios` without `renderer-wgpu` gates `ios.rs` out and invents three dead-code warnings that exist in no shipped build, and the same slip on the web target invents a compile error
 - a system dialog (iOS document picker, permission sheets) can only be checked on a device: it decides what to enable from what the app asked for and hands nothing back. Do not ask a human to eyeball it once per iteration — drive it from a UI test. cranamp's `platform/ios/run-uitests.sh` is the shape: launch args open the dialog so no coordinate-tapping is needed, and it prints every row with `enabled=`
 - iOS on-device UI tests need USB and `Settings > Developer > Enable UI Automation`. Over a network pairing the runner dies with "Timed out while enabling automation mode" before any test body runs, which reads exactly like the toggle being off
+- device fps comparisons run A B A B and then B A B A back to back, never
+  waiting for the device to cool: the alternation rules out every ambient
+  condition, and a build that heats the device more is itself part of the
+  signal, so a throttled fourth leg is data, not a void run. Log the
+  temperature before and after every leg and report it with the numbers

@@ -1,8 +1,7 @@
 use cranpose_ui::{
-    Modifier, RecordedRenderScene, ZoomState, command_draw_scope_retained,
-    command_draw_scope_reusing, format_layout_tree, format_modifier_chain, format_render_scene,
-    format_screen_summary, log_layout_tree, log_modifier_chain, log_render_scene,
-    log_screen_summary, measure_layout, run_test_composition,
+    Modifier, RecordedRenderScene, ZoomState, command_draw_scope_reusing, format_layout_tree,
+    format_modifier_chain, format_render_scene, format_screen_summary, log_layout_tree,
+    log_modifier_chain, log_render_scene, log_screen_summary, measure_layout, run_test_composition,
 };
 use cranpose_ui_graphics::Size;
 
@@ -79,32 +78,19 @@ fn the_modifier_chain_formatter_reports_how_many_nodes_it_walked() {
 
 #[test]
 fn a_reusing_draw_scope_gives_the_callers_buffer_back() {
-    let storage = Vec::with_capacity(64);
-    let capacity = storage.capacity();
+    let mut storage = cranpose_ui_graphics::CommandRecorder::default();
+    storage.reserve_shapes(64);
+    let storage = storage.finish();
+    let capacity = storage.shape_capacity();
 
     let finished = command_draw_scope_reusing(Size::new(10.0, 10.0), storage).finish();
     assert!(
-        finished.primitives.capacity() >= capacity,
+        finished.shape_capacity() >= capacity,
         "the scope handed back a buffer with less capacity than it was given"
     );
     assert!(
-        finished.primitives.is_empty(),
+        finished.is_empty(),
         "a scope nobody drew into produced primitives"
-    );
-}
-
-#[test]
-fn a_retained_draw_scope_gives_back_both_of_the_buffers_it_was_given() {
-    let recording = cranpose_ui_graphics::CommandRecording::default();
-    let out = Vec::with_capacity(32);
-    let finished = command_draw_scope_retained(Size::new(10.0, 10.0), recording, out).finish();
-    assert!(
-        finished.primitives.capacity() >= 32,
-        "the retained form shrank the output buffer it was handed"
-    );
-    assert_eq!(
-        finished.content_markers, 0,
-        "a scope nobody drew into recorded a content marker"
     );
 }
 

@@ -111,11 +111,13 @@ fn main() {
                 "consumed transition did not recompose the subscribed root"
             );
             assert!(
-                consumed_render.draw_calls == 0
-                    && consumed_render.upload_bytes < baseline_render.upload_bytes
-                    && consumed_render.layer_cache_hits > 0
-                    && consumed_render.layer_cache_misses == 0,
-                "consumed indicator expanded retained rendering work: baseline={baseline_render:?} consumed={consumed_render:?}"
+                consumed_render.pass_count == baseline_render.pass_count
+                    && consumed_render.pass_pixels == baseline_render.pass_pixels
+                    && consumed_render.draw_calls <= baseline_render.draw_calls
+                    && consumed_render.upload_bytes <= baseline_render.upload_bytes
+                    && consumed_render.isolated_layer_renders == 0
+                    && consumed_render.transient_texture_bytes == 0,
+                "consumed indicator expanded rendering work over the still page: baseline={baseline_render:?} consumed={consumed_render:?}"
             );
             robot.exit().expect("exit idle transition work robot");
         })

@@ -25,6 +25,6 @@ fn projective_blit_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     let source_pos = vec2<f32>(source_x, source_y);
-    return composite_sample(source_pos, blit.source_size, blit.sampling.x, vec2<f32>(0.0, 0.0))
+    return composite_sample(source_pos, blit.source_size, blit.sampling.x)
         * blit.alpha.x;
 }

@@ -1,8 +1,5 @@
 pub const SHADER: &str = cranpose_ui_graphics::framework_shaders::SHAPE_WGSL;
 
-pub const SOLID_TRIM_APPENDIX: &str =
-    cranpose_ui_graphics::framework_shaders::SHAPE_SOLID_TRIM_WGSL;
-
 pub const IMAGE_SHADER: &str = cranpose_ui_graphics::framework_shaders::IMAGE_WGSL;
 
 pub const GLYPH_ATLAS_SHADER: &str = cranpose_ui_graphics::framework_shaders::GLYPH_ATLAS_WGSL;
@@ -16,17 +13,37 @@ pub const SDF_ROUNDED_RECT_FN: &str =
 pub const COMPOSITE_SAMPLE_FN: &str =
     cranpose_ui_graphics::framework_shaders::COMPOSITE_SAMPLE_FN_WGSL;
 
+pub(crate) const RUN_TABLE_DECLARATIONS: [(&str, &str); 3] = [
+    (
+        "var<uniform> brushes: array<BrushRecord, 256>;",
+        "var<storage, read> brushes: array<BrushRecord>;",
+    ),
+    (
+        "var<uniform> gradient_stops: array<GradientStop, 256>;",
+        "var<storage, read> gradient_stops: array<GradientStop>;",
+    ),
+    (
+        "var<uniform> placements: array<Placement, 64>;",
+        "var<storage, read> placements: array<Placement>;",
+    ),
+];
+
+pub(crate) fn storage_shape_shader() -> String {
+    let mut source = SHADER.to_string();
+    for (uniform, storage) in RUN_TABLE_DECLARATIONS {
+        assert!(
+            source.contains(uniform),
+            "shape.wgsl must declare `{uniform}`"
+        );
+        source = source.replace(uniform, storage);
+    }
+    source
+}
+
 pub fn blur_shader() -> String {
     format!(
         "{FULLSCREEN_QUAD_VS}{}",
         cranpose_ui_graphics::framework_shaders::BLUR_FS_WGSL
-    )
-}
-
-pub fn blur_rounded_mask_shader() -> String {
-    format!(
-        "{FULLSCREEN_QUAD_VS}{}",
-        cranpose_ui_graphics::framework_shaders::BLUR_ROUNDED_MASK_FS_WGSL
     )
 }
 
@@ -117,6 +134,13 @@ mod tests {
             entry_point: entry_point.to_string(),
             multiview: None,
         };
+        let (module, module_info) = naga::back::pipeline_constants::process_overrides(
+            &module,
+            &module_info,
+            Some((shader_stage, entry_point)),
+            &naga::back::PipelineConstants::default(),
+        )
+        .map_err(|err| format!("override resolution failed: {err}"))?;
         let mut writer = glsl::Writer::new(
             &mut glsl_source,
             &module,
@@ -142,20 +166,8 @@ mod tests {
         let shader = super::blur_shader();
         assert!(validate_glsl_portability(&shader, "fullscreen_vs", ShaderStage::Vertex).is_ok());
         assert!(validate_glsl_portability(&shader, "blur_fs", ShaderStage::Fragment).is_ok());
-    }
-
-    #[test]
-    fn blur_rounded_mask_shader_validates_for_webgpu() {
-        assert!(validate_wgsl_module(&super::blur_rounded_mask_shader()).is_ok());
-    }
-
-    #[test]
-    fn blur_rounded_mask_shader_validates_for_webgl() {
-        let shader = super::blur_rounded_mask_shader();
-        assert!(validate_glsl_portability(&shader, "fullscreen_vs", ShaderStage::Vertex).is_ok());
         assert!(
-            validate_glsl_portability(&shader, "blur_rounded_mask_fs", ShaderStage::Fragment)
-                .is_ok()
+            validate_glsl_portability(&shader, "blur_downsample_fs", ShaderStage::Fragment).is_ok()
         );
     }
 
@@ -165,35 +177,84 @@ mod tests {
     }
 
     #[test]
-    fn shape_shader_validates_for_webgpu() {
+    fn shape_shader_validates_for_webgpu_in_both_table_forms() {
         if let Err(err) = validate_wgsl_module(super::SHADER) {
             panic!("shape.wgsl must validate for WebGPU: {err}");
+        }
+        if let Err(err) = validate_wgsl_module(&storage_shape_shader()) {
+            panic!("shape.wgsl with storage tables must validate for WebGPU: {err}");
+        }
+    }
+
+    #[test]
+    fn shape_vertices_receive_every_record_field_from_its_column() {
+        let module = naga::front::wgsl::parse_str(&storage_shape_shader()).unwrap();
+        for entry_name in ["vs_record", "vs_record_solid", "vs_record_gradient_fill"] {
+            let entry = module
+                .entry_points
+                .iter()
+                .find(|entry| entry.name == entry_name)
+                .unwrap();
+            let argument = entry
+                .function
+                .arguments
+                .iter()
+                .find(|argument| argument.name.as_deref() == Some("record"))
+                .expect("native vertices must receive the record through instance attributes");
+            let naga::TypeInner::Struct { members, span } = &module.types[argument.ty].inner else {
+                panic!("the instance input must be a shape record");
+            };
+            let layouts = crate::record_columns::record_vertex_layouts();
+            assert_eq!(members.len(), 9);
+            assert_eq!(
+                layouts
+                    .iter()
+                    .map(|layout| layout.array_stride)
+                    .sum::<u64>(),
+                u64::from(*span)
+            );
+            assert!(
+                layouts
+                    .iter()
+                    .all(|layout| layout.step_mode == wgpu::VertexStepMode::Instance)
+            );
+            for (index, member) in members.iter().enumerate() {
+                assert!(
+                    matches!(member.binding, Some(naga::Binding::Location { location, .. }) if location == index as u32)
+                );
+                let (layout, attribute) = layouts
+                    .iter()
+                    .find_map(|layout| {
+                        layout
+                            .attributes
+                            .iter()
+                            .find(|attribute| attribute.shader_location == index as u32)
+                            .map(|attribute| (layout, attribute))
+                    })
+                    .expect("the field must have an instance attribute");
+                assert!(attribute.offset + attribute.format.size() <= layout.array_stride);
+                let format = match member.name.as_deref().unwrap() {
+                    "flags" | "brush" | "placement" => wgpu::VertexFormat::Uint32,
+                    "stroke_width" => wgpu::VertexFormat::Float32,
+                    _ => wgpu::VertexFormat::Float32x4,
+                };
+                assert_eq!(attribute.format, format);
+            }
         }
     }
 
     #[test]
     fn shape_shader_validates_for_webgl() {
-        if let Err(err) = validate_glsl_portability(super::SHADER, "vs_main", ShaderStage::Vertex) {
-            panic!("shape.wgsl vertex stage must lower to GLSL ES 300: {err}");
+        for entry in ["vs_record", "vs_record_solid", "vs_record_gradient_fill"] {
+            if let Err(err) = validate_glsl_portability(super::SHADER, entry, ShaderStage::Vertex) {
+                panic!("shape.wgsl `{entry}` must lower to GLSL ES 300: {err}");
+            }
         }
-        if let Err(err) = validate_glsl_portability(super::SHADER, "fs_main", ShaderStage::Fragment)
-        {
-            panic!("shape.wgsl fragment stage must lower to GLSL ES 300: {err}");
-        }
-    }
-
-    #[test]
-    fn trimmed_shape_shader_validates_for_webgpu_and_lowers_to_glsl() {
-        let source = format!("{}\n{}", super::SHADER, super::SOLID_TRIM_APPENDIX);
-        if let Err(err) = validate_wgsl_module(&source) {
-            panic!("shape.wgsl + shape_solid_trim.wgsl must validate for WebGPU: {err}");
-        }
-        if let Err(err) = validate_glsl_portability(&source, "vs_solid", ShaderStage::Vertex) {
-            panic!("trimmed solid vertex stage must lower to GLSL ES 300: {err}");
-        }
-        if let Err(err) = validate_glsl_portability(&source, "fs_solid_trim", ShaderStage::Fragment)
-        {
-            panic!("trimmed solid fragment stage must lower to GLSL ES 300: {err}");
+        for entry in ["fs_main", "fs_solid", "fs_gradient_fill"] {
+            if let Err(err) = validate_glsl_portability(super::SHADER, entry, ShaderStage::Fragment)
+            {
+                panic!("shape.wgsl `{entry}` must lower to GLSL ES 300: {err}");
+            }
         }
     }
 
@@ -229,15 +290,8 @@ mod tests {
 
     #[test]
     fn shape_fragment_inputs_fit_the_gles_varying_floor() {
-        for (source, entry_point) in [
-            (super::SHADER.to_string(), "fs_main"),
-            (super::SHADER.to_string(), "fs_solid"),
-            (
-                format!("{}\n{}", super::SHADER, super::SOLID_TRIM_APPENDIX),
-                "fs_solid_trim",
-            ),
-        ] {
-            let locations = fragment_input_locations(&source, entry_point);
+        for entry_point in ["fs_main", "fs_solid", "fs_gradient_fill"] {
+            let locations = fragment_input_locations(super::SHADER, entry_point);
             let highest = locations.last().copied().expect("fragment inputs");
             assert!(
                 highest < GLES_VARYING_VECTOR_FLOOR,
@@ -249,15 +303,35 @@ mod tests {
             deduplicated.dedup();
             assert_eq!(deduplicated, locations, "{entry_point} reuses a location");
         }
+        assert_eq!(
+            fragment_input_locations(super::SHADER, "fs_solid").len(),
+            7,
+            "a solid batch carries the coverage vectors and nothing of the brush"
+        );
+        assert_eq!(
+            fragment_input_locations(super::SHADER, "fs_gradient_fill").len(),
+            11,
+            "a gradient fill batch carries no colour, stroke or arc vectors"
+        );
     }
 
     #[test]
-    fn shape_shader_declares_the_stroke_and_arc_parameters() {
+    fn shape_shader_declares_the_record_layout_the_recorder_writes() {
         for needle in [
-            "stroke_params: vec4<f32>",
-            "arc_params: vec4<f32>",
+            "struct ShapeRecord {",
+            "struct BrushRecord {",
+            "struct GradientStop {",
+            "struct Placement {",
             "fn sdf_arc_band(",
             "fn sdf_stroked_rounded_rect(",
+            "fn vs_record(",
+            "fn vs_record_solid(",
+            "fn band_position(",
+            "fn fs_solid(",
+            "fn vs_record_gradient_fill(",
+            "fn fs_gradient_fill(",
+            "override BRUSH_KIND_FIXED: i32",
+            "override TIER_ARENA: bool",
         ] {
             assert!(
                 super::SHADER.contains(needle),
@@ -267,15 +341,13 @@ mod tests {
     }
 
     #[test]
-    fn resized_shape_shader_still_validates_for_both_targets() {
-        let resized = super::SHADER
-            .replace("array<ShapeData, 102>", "array<ShapeData, 409>")
-            .replace("array<GradientStop, 256>", "array<GradientStop, 1024>");
-        assert!(
-            resized.contains("array<ShapeData, 409>"),
-            "array length literal drifted from `shape_shader_source`"
-        );
-        assert!(validate_wgsl_module(&resized).is_ok());
-        assert!(validate_glsl_portability(&resized, "fs_main", ShaderStage::Fragment).is_ok());
+    fn the_uniform_chunk_sizes_in_the_shader_match_the_run_store() {
+        use crate::run_store::{BRUSH_CHUNK, PLACEMENT_CHUNK, STOP_CHUNK};
+        for (uniform, _) in RUN_TABLE_DECLARATIONS {
+            assert!(super::SHADER.contains(uniform), "missing `{uniform}`");
+        }
+        assert!(super::SHADER.contains(&format!("array<BrushRecord, {BRUSH_CHUNK}>")));
+        assert!(super::SHADER.contains(&format!("array<GradientStop, {STOP_CHUNK}>")));
+        assert!(super::SHADER.contains(&format!("array<Placement, {PLACEMENT_CHUNK}>")));
     }
 }

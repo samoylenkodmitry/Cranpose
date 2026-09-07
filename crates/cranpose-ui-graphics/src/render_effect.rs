@@ -5,7 +5,7 @@
 
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
-use crate::LayerShape;
+use crate::{LayerShape, Rect};
 
 const RUNTIME_SHADER_INLINE_UNIFORMS: usize = 16;
 
@@ -70,6 +70,15 @@ impl Default for BlurredEdgeTreatment {
     }
 }
 
+/// The vertex stage and bindings every runtime shader starts from: a
+/// fullscreen triangle whose `uv` spans the input, the input texture and
+/// sampler at group 0, and the 64 uniform vectors at group 1. A shader
+/// source is this prelude followed by an `effect_fs` fragment stage.
+pub const RUNTIME_SHADER_PRELUDE_WGSL: &str = concat!(
+    include_str!("../shaders/fullscreen_quad_vs.wgsl"),
+    include_str!("../shaders/runtime_shader_bindings.wgsl"),
+);
+
 /// A custom WGSL shader effect, analogous to Android's `RuntimeShader`.
 ///
 /// The shader source must be a complete WGSL module that declares:
@@ -81,8 +90,31 @@ impl Default for BlurredEdgeTreatment {
 ///
 /// Float uniforms are packed linearly into the `u` array. Access them in WGSL
 /// as `u[index / 4][index % 4]` for individual floats, or `u[index / 4].xy`
-/// for vec2, etc. User uniforms may use indices `0..248`; slots `248..256`
-/// are reserved for renderer metadata.
+/// for vec2, etc. User uniforms may use indices `0..224`; slots `224..256`
+/// are reserved for renderer metadata:
+///
+/// | slots     | content                                                     |
+/// |-----------|-------------------------------------------------------------|
+/// | 224..236  | substrate regions `(x, y, w, h)` in input texels, the third at 224, the second at 228, the first at 232; zero = none |
+/// | 236..240  | source region `(x, y, w, h)` in input texels; zero = whole  |
+/// | 240..244  | composite mask rect `(x, y, w, h)` in region pixels; zero = none |
+/// | 244..248  | composite mask corner radii (top-left, top-right, bottom-left, bottom-right) |
+/// | 248..252  | effect rect `(x, y, w, h)` in region pixels                 |
+/// | 252..254  | logical size the input represents; zero = its texel size   |
+/// | 254       | composite alpha                                             |
+///
+/// A shader that reads the source region, mask and alpha slots declares it
+/// with [`set_batched_source`](Self::set_batched_source); one that reads a
+/// low-frequency copy of its source declares each with
+/// [`set_substrates`](Self::set_substrates) and samples it through its
+/// substrate region, held to that region's texel centers, so one tap
+/// stands for a neighbourhood the shader would otherwise walk tap by tap.
+/// The renderer then
+/// packs its input edge to edge beside other effects' inputs in one texture
+/// and draws it straight into the final pass with its clip applied. Such a
+/// shader holds every sample coordinate to its region's texel centers: the
+/// texels beside the region belong to other effects, or to no one. Every
+/// other shader is given the whole texture as its input and `uv` spans it.
 ///
 /// RuntimeShader pipelines operate on premultiplied-alpha textures. Custom
 /// shaders should preserve premultiplied output semantics.
@@ -94,6 +126,56 @@ pub struct RuntimeShader {
     overrides: Vec<(&'static str, f64)>,
     input_padding: f32,
     output_padding: f32,
+    batched_source: bool,
+    substrates: Vec<SubstrateSpec>,
+    draw_split: Option<&'static str>,
+    domains: Option<Box<ShaderDomains>>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct ShaderDomains {
+    output_support: Option<Rect>,
+    sample_domain: Option<Rect>,
+}
+
+fn finite_rect(rect: Option<Rect>) -> Option<Rect> {
+    rect.filter(|rect| {
+        rect.x.is_finite()
+            && rect.y.is_finite()
+            && rect.width.is_finite()
+            && rect.height.is_finite()
+    })
+}
+
+/// The most substrates one shader may declare.
+pub const MAX_SUBSTRATES: usize = 3;
+
+/// A low-frequency copy of a shader's source the renderer packs beside it
+/// and hands the shader through a reserved substrate region slot.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SubstrateSpec {
+    /// The source averaged in blocks of `block` x `block` texels, one
+    /// substrate texel per block.
+    Average { block: u32 },
+    /// The source blurred by a Gaussian of `radius_px` device pixels, kept
+    /// at the blur's scratch resolution.
+    Blur { radius_px: f32 },
+}
+
+impl SubstrateSpec {
+    fn hash_bits<H: std::hash::Hasher>(&self, state: &mut H) {
+        use std::hash::Hash;
+        match self {
+            Self::Average { block } => {
+                0u8.hash(state);
+                block.hash(state);
+            }
+            Self::Blur { radius_px } => {
+                1u8.hash(state);
+                radius_px.to_bits().hash(state);
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -178,7 +260,22 @@ impl RuntimeShader {
     /// The final slots are reserved for renderer-managed data.
     pub const MAX_UNIFORMS: usize = 256;
     /// First renderer-reserved uniform slot.
-    pub const RESERVED_UNIFORM_START: usize = 248;
+    pub const RESERVED_UNIFORM_START: usize = 224;
+    /// Reserved slots of the substrate regions `(x, y, w, h)` in input
+    /// texels, in declaration order.
+    pub const SUBSTRATE_REGION_UNIFORMS: [usize; MAX_SUBSTRATES] = [232, 228, 224];
+    /// Reserved slot of the source region `(x, y, w, h)` in input texels.
+    pub const SOURCE_REGION_UNIFORM: usize = 236;
+    /// Reserved slot of the composite mask rect `(x, y, w, h)` in region pixels.
+    pub const MASK_RECT_UNIFORM: usize = 240;
+    /// Reserved slot of the composite mask corner radii.
+    pub const MASK_RADII_UNIFORM: usize = 244;
+    /// Reserved slot of the effect rect `(x, y, w, h)` in region pixels.
+    pub const EFFECT_RECT_UNIFORM: usize = 248;
+    /// Reserved slot of the logical size the input represents.
+    pub const LOGICAL_SIZE_UNIFORM: usize = 252;
+    /// Reserved slot of the composite alpha.
+    pub const ALPHA_UNIFORM: usize = 254;
     /// Maximum user-addressable uniform count.
     pub const MAX_USER_UNIFORMS: usize = Self::RESERVED_UNIFORM_START;
 
@@ -187,14 +284,7 @@ impl RuntimeShader {
     pub fn new(wgsl_source: &str) -> Self {
         let (source, source_hash) =
             cached_shader_source(std::panic::Location::caller(), wgsl_source);
-        Self {
-            source,
-            source_hash,
-            uniforms: RuntimeShaderUniforms::new(),
-            overrides: Vec::new(),
-            input_padding: 0.0,
-            output_padding: 0.0,
-        }
+        Self::with_source(source, source_hash)
     }
 
     /// Create a RuntimeShader from shared WGSL source code.
@@ -203,6 +293,10 @@ impl RuntimeShader {
     /// that rebuild only their uniform payload every frame.
     pub fn from_shared_source(source: Arc<str>) -> Self {
         let source_hash = cached_shared_shader_source_hash(&source);
+        Self::with_source(source, source_hash)
+    }
+
+    fn with_source(source: Arc<str>, source_hash: u64) -> Self {
         Self {
             source,
             source_hash,
@@ -210,6 +304,10 @@ impl RuntimeShader {
             overrides: Vec::new(),
             input_padding: 0.0,
             output_padding: 0.0,
+            batched_source: false,
+            substrates: Vec::new(),
+            draw_split: None,
+            domains: None,
         }
     }
 
@@ -227,6 +325,18 @@ impl RuntimeShader {
             Ok(index) => self.overrides[index].1 = value,
             Err(index) => self.overrides.insert(index, (name, value)),
         }
+    }
+
+    /// Removes a pipeline override by name, returning whether one was present.
+    pub fn clear_override(&mut self, name: &str) -> bool {
+        let Ok(index) = self
+            .overrides
+            .binary_search_by(|(existing, _)| (*existing).cmp(name))
+        else {
+            return false;
+        };
+        self.overrides.remove(index);
+        true
     }
 
     /// The pipeline-overridable constants fixed by [`Self::set_override`],
@@ -280,6 +390,56 @@ impl RuntimeShader {
     /// Returns the declared output padding in logical pixels.
     pub fn output_padding(&self) -> f32 {
         self.output_padding
+    }
+
+    /// Declares the rect outside which the shader writes nothing: every
+    /// pixel its coverage can make nonzero at its current uniforms, the
+    /// output padding's reach included, in logical pixels with the origin
+    /// at the effect rect's top-left. A renderer composites only the part
+    /// of the effect rect inside it; the capture it reads stays whole, so a
+    /// node that carries headroom around a smaller material pays the
+    /// composite for the material alone. It says nothing about sampling:
+    /// see [`Self::set_sample_domain`]. `None`, the default, means the
+    /// whole effect rect and its output padding. A rect with a non-finite
+    /// side clears the declaration.
+    pub fn set_output_support(&mut self, support: Option<Rect>) {
+        self.set_domains(ShaderDomains {
+            output_support: finite_rect(support),
+            sample_domain: self.sample_domain(),
+        });
+    }
+
+    /// The declared output support, when the shader gave one.
+    pub fn output_support(&self) -> Option<Rect> {
+        self.domains
+            .as_ref()
+            .and_then(|domains| domains.output_support)
+    }
+
+    fn set_domains(&mut self, domains: ShaderDomains) {
+        self.domains = (domains != ShaderDomains::default()).then(|| Box::new(domains));
+    }
+
+    /// Declares the rect outside which the shader never samples its input,
+    /// in logical pixels with the origin at the effect rect's top-left. A
+    /// renderer may leave the input outside it unresolved: a blur feeding
+    /// this shader need only write the domain. The default, `None`, is the
+    /// whole effect rect and its input padding, which the input padding
+    /// contract already promises; an output support says nothing about
+    /// sampling, so a shader that shades a small region but reads a far
+    /// one keeps the default. A rect with a non-finite side clears it.
+    pub fn set_sample_domain(&mut self, domain: Option<Rect>) {
+        self.set_domains(ShaderDomains {
+            output_support: self.output_support(),
+            sample_domain: finite_rect(domain),
+        });
+    }
+
+    /// The declared sample domain, when the shader gave one.
+    pub fn sample_domain(&self) -> Option<Rect> {
+        self.domains
+            .as_ref()
+            .and_then(|domains| domains.sample_domain)
     }
 
     /// Set a single float uniform at the given index.
@@ -347,6 +507,66 @@ impl RuntimeShader {
         Ok(())
     }
 
+    /// Declares that the shader reads the reserved source region, mask and
+    /// alpha slots and samples only within its region's texel centers, so the
+    /// renderer may hand it an input region packed edge to edge beside others
+    /// and draw it straight into the final pass with its clip applied.
+    pub fn set_batched_source(&mut self, batched: bool) {
+        self.batched_source = batched;
+    }
+
+    /// Whether the shader reads the reserved source region, mask and alpha
+    /// slots.
+    pub fn batched_source(&self) -> bool {
+        self.batched_source
+    }
+
+    /// Declares the low-frequency copies of its source the shader reads
+    /// through the reserved substrate region slots, in slot order. Only a
+    /// batched shader packed with its stage is handed them; a shader
+    /// without finds the slots zero and samples the source itself.
+    ///
+    /// # Panics
+    ///
+    /// When more than [`MAX_SUBSTRATES`] are declared.
+    pub fn set_substrates(&mut self, substrates: Vec<SubstrateSpec>) {
+        assert!(
+            substrates.len() <= MAX_SUBSTRATES,
+            "a runtime shader declares at most {MAX_SUBSTRATES} substrates"
+        );
+        self.substrates = substrates;
+    }
+
+    /// The substrates the shader declared, in slot order.
+    pub fn substrates(&self) -> &[SubstrateSpec] {
+        &self.substrates
+    }
+
+    /// Hashes the declared substrates and the draw split into `state`.
+    pub fn hash_substrates<H: std::hash::Hasher>(&self, state: &mut H) {
+        use std::hash::Hash;
+        self.substrates.len().hash(state);
+        for substrate in &self.substrates {
+            substrate.hash_bits(state);
+        }
+        self.draw_split.hash(state);
+    }
+
+    /// Declares an `override NAME: i32` the renderer sets to 1 and 2 to draw
+    /// the shader twice in the final pass, once for its interior and once
+    /// for its rim, each pipeline compiled without the other's work and
+    /// discarding the other's fragments before its fetches. Nothing else
+    /// about the draw changes: the two draws partition the pixels the one
+    /// draw shaded and land on the same bits.
+    pub fn set_draw_split(&mut self, override_name: Option<&'static str>) {
+        self.draw_split = override_name;
+    }
+
+    /// The override selecting the interior or the rim draw, when declared.
+    pub fn draw_split(&self) -> Option<&'static str> {
+        self.draw_split
+    }
+
     /// Get the WGSL source code.
     pub fn source(&self) -> &str {
         &self.source
@@ -410,6 +630,10 @@ impl PartialEq for RuntimeShader {
                 .all(|(a, b)| a.0 == b.0 && a.1.to_bits() == b.1.to_bits())
             && self.input_padding.to_bits() == other.input_padding.to_bits()
             && self.output_padding.to_bits() == other.output_padding.to_bits()
+            && self.batched_source == other.batched_source
+            && self.substrates == other.substrates
+            && self.draw_split == other.draw_split
+            && self.domains == other.domains
     }
 }
 
@@ -615,6 +839,29 @@ impl RenderEffect {
             }
         }
     }
+
+    /// The rect outside which this effect writes nothing, in its logical
+    /// space with the origin at its rect's top-left, when the stage that
+    /// produces its output declared one; blur and offset write their whole
+    /// rect and declare none.
+    pub fn output_support(&self) -> Option<Rect> {
+        match self {
+            RenderEffect::Blur { .. } | RenderEffect::Offset { .. } => None,
+            RenderEffect::Shader { shader } => shader.output_support(),
+            RenderEffect::Chain { second, .. } => second.output_support(),
+        }
+    }
+
+    /// The rect outside which the stage that produces this effect's output
+    /// never samples what it is given, when it declared one; the whole
+    /// input otherwise. A blur samples everything it writes and more.
+    pub fn sample_domain(&self) -> Option<Rect> {
+        match self {
+            RenderEffect::Blur { .. } | RenderEffect::Offset { .. } => None,
+            RenderEffect::Shader { shader } => shader.sample_domain(),
+            RenderEffect::Chain { second, .. } => second.sample_domain(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -626,6 +873,22 @@ mod tests {
         shader.set_override("ALPHA", 0.0);
         shader.set_override("ZETA", 2.0);
         assert_eq!(shader.overrides(), &[("ALPHA", 0.0), ("ZETA", 2.0)]);
+    }
+
+    #[test]
+    fn clear_override_removes_present_name_and_preserves_remaining_set() {
+        let mut shader = super::RuntimeShader::new("");
+        shader.set_override("ZETA", 1.0);
+        shader.set_override("ALPHA", 2.0);
+        let mut expected = super::RuntimeShader::new("");
+        expected.set_override("ALPHA", 2.0);
+        assert!(shader.clear_override("ZETA"));
+        assert!(!shader.clear_override("MISSING"));
+        assert_eq!(shader.overrides(), &[("ALPHA", 2.0)]);
+        assert_eq!(shader.overrides_hash(), expected.overrides_hash());
+        assert!(shader.clear_override("ALPHA"));
+        assert!(shader.overrides().is_empty());
+        assert_eq!(shader.overrides_hash(), 0);
     }
 
     #[test]
@@ -919,5 +1182,76 @@ mod tests {
         assert_eq!(treatment.shape(), Some(rounded));
         assert!(treatment.clip());
         assert_eq!(treatment.tile_mode(), TileMode::Clamp);
+    }
+
+    #[test]
+    fn an_effect_chains_output_support_is_the_support_of_the_stage_that_writes_its_output() {
+        let mut shader = RuntimeShader::new("fn glass_fs() {}");
+        assert_eq!(shader.output_support(), None);
+        let support = Rect {
+            x: 4.0,
+            y: 6.0,
+            width: 30.0,
+            height: 12.0,
+        };
+        shader.set_output_support(Some(support));
+        assert_eq!(shader.output_support(), Some(support));
+        let effect = RenderEffect::blur(3.0).then(RenderEffect::Shader {
+            shader: shader.clone(),
+        });
+        assert_eq!(effect.output_support(), Some(support));
+        let effect = RenderEffect::Shader {
+            shader: shader.clone(),
+        }
+        .then(RenderEffect::blur(3.0));
+        assert_eq!(effect.output_support(), None);
+        assert_eq!(RenderEffect::blur(3.0).output_support(), None);
+    }
+
+    #[test]
+    fn a_sample_domain_is_the_writers_and_a_blur_declares_none() {
+        let mut shader = RuntimeShader::new("fn glass_fs() {}");
+        let domain = Rect {
+            x: -2.0,
+            y: -2.0,
+            width: 20.0,
+            height: 12.0,
+        };
+        let plain = shader.clone();
+        shader.set_sample_domain(Some(domain));
+        assert_ne!(shader, plain);
+        assert_eq!(shader.sample_domain(), Some(domain));
+        let effect = RenderEffect::blur(3.0).then(RenderEffect::Shader {
+            shader: shader.clone(),
+        });
+        assert_eq!(effect.sample_domain(), Some(domain));
+        assert_eq!(RenderEffect::blur(3.0).output_support(), None);
+        assert_eq!(RenderEffect::blur(3.0).sample_domain(), None);
+        shader.set_sample_domain(Some(Rect {
+            x: f32::INFINITY,
+            ..domain
+        }));
+        assert_eq!(shader.sample_domain(), None);
+    }
+
+    #[test]
+    fn a_non_finite_output_support_clears_the_declaration_and_a_support_tells_shaders_apart() {
+        let mut shader = RuntimeShader::new("fn glass_fs() {}");
+        let plain = shader.clone();
+        shader.set_output_support(Some(Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 10.0,
+            height: 10.0,
+        }));
+        assert_ne!(shader, plain);
+        shader.set_output_support(Some(Rect {
+            x: 0.0,
+            y: 0.0,
+            width: f32::NAN,
+            height: 10.0,
+        }));
+        assert_eq!(shader.output_support(), None);
+        assert_eq!(shader, plain);
     }
 }

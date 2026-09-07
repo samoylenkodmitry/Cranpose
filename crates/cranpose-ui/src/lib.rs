@@ -78,8 +78,8 @@ pub use debug::{
 pub use density::{Density, DensityMeasureScope, density, local_density};
 pub use draggable::{DragDeltaHandler, DraggableState, rememberDraggableState};
 pub use draw::{
-    DrawCacheBuilder, DrawCommand, DrawCommandFn, command_draw_scope, command_draw_scope_retained,
-    command_draw_scope_reusing, execute_draw_commands,
+    DrawCacheBuilder, DrawCommand, DrawCommandFn, command_draw_scope, command_draw_scope_reusing,
+    execute_draw_commands,
 };
 #[doc(hidden)]
 pub use focus_dispatch::{

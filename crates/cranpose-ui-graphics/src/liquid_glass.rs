@@ -6,7 +6,7 @@
 //! The wcKSRD optical program samples both sharp and blurred rays from one
 //! captured backdrop so displacement never reveals a second scene layer.
 
-use crate::{Color, RenderEffect, RuntimeShader};
+use crate::{Color, RenderEffect, RuntimeShader, SubstrateSpec};
 
 /// One pipeline-overridable flag of `liquid_glass.wgsl` and the uniform
 /// slots it folds away.
@@ -15,7 +15,10 @@ use crate::{Color, RenderEffect, RuntimeShader};
 /// replaces that uniform read with the feature's inactive value, which is
 /// the value the uniform holds when `inactive` reports true, so the
 /// specialized pipeline computes exactly what the general one did and the
-/// compiler removes the dead feature. See [`specialize_liquid_glass`].
+/// compiler removes the dead feature. A flag with no slots is an
+/// optimization the reference pipeline leaves off and every material
+/// raises: it skips only work whose result is exactly zero. See
+/// [`specialize_liquid_glass`].
 #[derive(Clone, Copy, Debug)]
 pub struct LiquidGlassSpecialization {
     /// The `override NAME: bool` declared by the shader.
@@ -108,7 +111,7 @@ pub const LIQUID_GLASS_SPECIALIZATIONS: &[LiquidGlassSpecialization] = &[
         inactive: |u| slot(u, GLASS_OPTICAL_ZOOM_UNIFORM) <= 1.0,
     },
     LiquidGlassSpecialization {
-        flag: "GLASS_PHYSICAL_REFRACTION_OFF",
+        flag: GLASS_PHYSICAL_REFRACTION_OFF_FLAG,
         slots: &[GLASS_PHYSICAL_REFRACTION_DEPTH_ENABLED_UNIFORM],
         inactive: |u| slot(u, GLASS_PHYSICAL_REFRACTION_DEPTH_ENABLED_UNIFORM) <= 0.5,
     },
@@ -118,42 +121,88 @@ pub const LIQUID_GLASS_SPECIALIZATIONS: &[LiquidGlassSpecialization] = &[
         inactive: |u| slot(u, GLASS_TRANSMISSION_REFRACTION_UNIFORM) >= 1.0,
     },
     LiquidGlassSpecialization {
-        flag: "GLASS_DISPERSION_OFF",
+        flag: GLASS_DISPERSION_OFF_FLAG,
         slots: &[GLASS_DISPERSION_UNIFORM],
         inactive: |u| slot(u, GLASS_DISPERSION_UNIFORM) <= 0.0,
     },
     LiquidGlassSpecialization {
         flag: "GLASS_ADAPTIVE_FROST_OFF",
-        slots: &[91],
-        inactive: |u| slot(u, 91) <= 0.0,
+        slots: &[GLASS_ADAPTIVE_FROST_UNIFORM],
+        inactive: |u| slot(u, GLASS_ADAPTIVE_FROST_UNIFORM) <= 0.0,
     },
     LiquidGlassSpecialization {
         flag: "GLASS_INK_OFF",
         slots: &[127],
         inactive: |u| slot(u, 127) <= 0.0,
     },
+    LiquidGlassSpecialization {
+        flag: "GLASS_RIM_STYLE_OFF",
+        slots: &[GLASS_RIM_STYLE_UNIFORM],
+        inactive: |u| slot(u, GLASS_RIM_STYLE_UNIFORM) <= 0.0,
+    },
+    LiquidGlassSpecialization {
+        flag: "GLASS_INTERIOR_GUARD",
+        slots: &[],
+        inactive: |_| true,
+    },
 ];
 
-/// Raises every specialization flag whose feature the shader's uniforms
-/// leave inactive, so the pipeline compiled for this material carries only
+/// Recomputes the specialization flags from the current uniforms, removing
+/// overrides for features that have become active. The compiled material carries only
 /// the features it uses. Byte-exact: a raised flag substitutes the value the
-/// uniform already holds.
+/// uniform already holds, and the interior guard skips only terms whose
+/// weight is zero. An adaptive frost declares the blurred substrate its
+/// neighbourhood reads whatever the activity: the declaration also sets the
+/// member's capture geometry, so a resting material keeps it although its
+/// shader returns before the read.
 pub fn specialize_liquid_glass(shader: &mut RuntimeShader) {
     let uniforms: Vec<f32> = shader.uniforms().to_vec();
     for specialization in LIQUID_GLASS_SPECIALIZATIONS {
         if (specialization.inactive)(&uniforms) {
             shader.set_override(specialization.flag, 1.0);
+        } else {
+            shader.clear_override(specialization.flag);
         }
     }
+    shader.set_draw_split(Some(GLASS_RIM_DRAW_OVERRIDE));
+    let substrates = if slot(&uniforms, GLASS_ADAPTIVE_FROST_UNIFORM) > 0.0 {
+        vec![SubstrateSpec::Blur {
+            radius_px: GLASS_ADAPTIVE_NEIGHBOURHOOD_DP
+                * slot(&uniforms, GLASS_EFFECT_DENSITY_UNIFORM).max(1.0),
+        }]
+    } else {
+        Vec::new()
+    };
+    shader.set_substrates(substrates);
 }
+
+/// The `override NAME: i32` of `liquid_glass.wgsl` the renderer sets to
+/// draw the glass as its interior and its rim, each without the other's
+/// fetches.
+pub const GLASS_RIM_DRAW_OVERRIDE: &str = "GLASS_RIM_DRAW";
+
+/// The fold raised when a material's dispersion is zero.
+pub const GLASS_DISPERSION_OFF_FLAG: &str = "GLASS_DISPERSION_OFF";
+
+/// The fold raised when a material's physical refraction is disabled.
+pub const GLASS_PHYSICAL_REFRACTION_OFF_FLAG: &str = "GLASS_PHYSICAL_REFRACTION_OFF";
+
+/// The reach of the adaptive frost's neighbourhood in dp: the renderer
+/// blurs the capture by this radius at the effect's density and the shader
+/// reads that substrate once where it sampled nine points this far apart.
+pub const GLASS_ADAPTIVE_NEIGHBOURHOOD_DP: f32 = 16.0;
 
 /// Wraps a fully configured `liquid_glass.wgsl` shader as a render effect,
 /// specialized to the features its uniforms enable.
 pub fn liquid_glass_runtime_effect(mut shader: RuntimeShader) -> RenderEffect {
     specialize_liquid_glass(&mut shader);
+    shader.set_batched_source(true);
     RenderEffect::runtime_shader(shader)
 }
 
+/// Uniform slot containing the adaptive frost strength; its neighbourhood
+/// reads the substrate the renderer packs beside the source.
+pub const GLASS_ADAPTIVE_FROST_UNIFORM: usize = 91;
 /// Uniform slot containing wcKSRD-owned backdrop blur reach in physical pixels.
 pub const GLASS_BLUR_RADIUS_UNIFORM: usize = 93;
 /// Uniform slot containing the normalized wcKSRD ray-return exponent.
@@ -184,6 +233,10 @@ pub const GLASS_OPTICAL_ZOOM_UNIFORM: usize = 89;
 /// the SDF center, in dp — a leaning lens magnifies about the content it
 /// rides, not its shifted silhouette.
 pub const GLASS_OPTICAL_ZOOM_ANCHOR_UNIFORM: usize = 128;
+/// Uniform slot selecting the rim style: 0 is the regular surface rim, 1
+/// the lens rim whose meniscus reflects, transmits with loss and carries
+/// the long-edge specular.
+pub const GLASS_RIM_STYLE_UNIFORM: usize = 28;
 /// Uniform slot containing continuous optical activity (identity at zero).
 pub const GLASS_ACTIVITY_UNIFORM: usize = 111;
 /// Uniform slot containing the base surface tint that remains when optical
@@ -547,7 +600,7 @@ mod tests {
                 }
             }
             assert!(
-                guarded_reads > 0,
+                guarded_reads > 0 || specialization.slots.is_empty(),
                 "`{}` guards no uniform read; the flag would fold nothing",
                 specialization.flag
             );
@@ -555,6 +608,7 @@ mod tests {
         let declared: Vec<&str> = LIQUID_GLASS_WGSL
             .lines()
             .filter_map(|line| line.strip_prefix("override "))
+            .filter(|rest| rest.contains(": bool"))
             .filter_map(|rest| rest.split(':').next())
             .collect();
         for flag in &declared {
@@ -577,6 +631,20 @@ mod tests {
     }
 
     #[test]
+    fn a_resting_glass_keeps_its_substrate_declaration() {
+        let mut shader = RuntimeShader::new(LIQUID_GLASS_WGSL);
+        shader.set_float(GLASS_ADAPTIVE_FROST_UNIFORM, 0.42);
+        shader.set_float(GLASS_EFFECT_DENSITY_UNIFORM, 2.0);
+        shader.set_float(GLASS_ACTIVITY_UNIFORM, 0.0);
+        specialize_liquid_glass(&mut shader);
+        assert_eq!(
+            shader.substrates().len(),
+            1,
+            "the declaration sets the capture geometry, which must not follow activity"
+        );
+    }
+
+    #[test]
     fn a_plain_pane_raises_every_flag() {
         let flags = raised_flags(&liquid_glass_effect(
             &rect(),
@@ -594,6 +662,32 @@ mod tests {
             flags, sorted,
             "a plain pane uses no optional feature, so every flag folds"
         );
+    }
+
+    #[test]
+    fn respecializing_mutated_uniforms_matches_fresh_shader_and_preserves_caller_override() {
+        let mut shader = RuntimeShader::new(LIQUID_GLASS_WGSL);
+        shader.set_override("CALLER_OVERRIDE", 7.0);
+        specialize_liquid_glass(&mut shader);
+        shader.set_float(GLASS_RIM_STYLE_UNIFORM, 1.0);
+        specialize_liquid_glass(&mut shader);
+
+        let mut fresh = RuntimeShader::new(LIQUID_GLASS_WGSL);
+        fresh.set_override("CALLER_OVERRIDE", 7.0);
+        fresh.set_float(GLASS_RIM_STYLE_UNIFORM, 1.0);
+        specialize_liquid_glass(&mut fresh);
+        assert_eq!(shader.overrides(), fresh.overrides());
+        assert_eq!(shader.overrides_hash(), fresh.overrides_hash());
+        assert!(shader.overrides().contains(&("CALLER_OVERRIDE", 7.0)));
+
+        shader.set_float(GLASS_RIM_STYLE_UNIFORM, 0.0);
+        specialize_liquid_glass(&mut shader);
+        let mut inactive = RuntimeShader::new(LIQUID_GLASS_WGSL);
+        inactive.set_override("CALLER_OVERRIDE", 7.0);
+        specialize_liquid_glass(&mut inactive);
+        assert_eq!(shader.overrides(), inactive.overrides());
+        assert_eq!(shader.overrides_hash(), inactive.overrides_hash());
+        assert!(shader.overrides().contains(&("CALLER_OVERRIDE", 7.0)));
     }
 
     #[test]

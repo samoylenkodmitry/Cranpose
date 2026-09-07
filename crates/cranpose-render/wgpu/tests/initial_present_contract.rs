@@ -1,7 +1,7 @@
 mod support;
 
 use cranpose_render_wgpu::{clear_to_default_background, offscreen_render_target_for_tests};
-use support::read_texture_rgba8;
+use support::read_texture;
 
 fn headless_device() -> Option<(wgpu::Device, wgpu::Queue)> {
     let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
@@ -38,7 +38,7 @@ fn clears_every_pixel_to_the_frameworks_default_background() {
 
     clear_to_default_background(&device, &queue, &view);
 
-    let pixels = read_texture_rgba8(&device, &queue, &texture);
+    let pixels = read_texture(&device, &queue, &texture);
 
     let expected: [u8; 4] = [
         (cranpose_render_common::FRAME_CLEAR_COLOR[0] * 255.0).round() as u8,

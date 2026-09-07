@@ -134,8 +134,8 @@ fn assert_animation_jitter(robot: &cranpose::Robot) {
         feature_stats_rgba(&first, crop_region, is_orange_box_pixel).unwrap_or_else(|| {
             robot_exit::fail_without_shutdown("orange animation box pixels not found")
         });
-    let base_y = first_stats.centroid_y();
-    println!("orange frame=base stats={first_stats:?} centroid_y={base_y:.2}");
+    let base_y = first_stats.bounds_center_y();
+    println!("orange frame=base stats={first_stats:?} bounds_center_y={base_y:.2}");
 
     for frame in 0..8 {
         let _ = robot.wait_for_present_frame();
@@ -147,8 +147,8 @@ fn assert_animation_jitter(robot: &cranpose::Robot) {
             feature_stats_rgba(&image, crop_region, is_orange_box_pixel).unwrap_or_else(|| {
                 robot_exit::fail_without_shutdown("orange animation box pixels disappeared")
             });
-        let dy = stats.centroid_y() - base_y;
-        println!("orange frame={frame} stats={stats:?} centroid_y_delta={dy:.2}");
+        let dy = stats.bounds_center_y() - base_y;
+        println!("orange frame={frame} stats={stats:?} bounds_center_y_delta={dy:.2}");
         if dy.abs() > 1.5 {
             robot_exit::fail_without_shutdown(&format!(
                 "orange Scale + Fade box jumped vertically: delta={dy:.2}"

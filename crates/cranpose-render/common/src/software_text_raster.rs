@@ -3870,6 +3870,7 @@ fn draw_mask_glyph(
                 brush_rect,
                 brush_rect.x + px as f32 + 0.5,
                 brush_rect.y + py as f32 + 0.5,
+                cranpose_ui_graphics::Point::default(),
             );
             let alpha = coverage * sample[3] * brush_alpha_multiplier;
             if alpha <= 0.0 {

@@ -1,11 +1,12 @@
-use std::{
-    cell::{Cell, OnceCell},
-    fmt,
-};
+mod buffer_uploads;
 
+use std::fmt;
+
+use buffer_uploads::BufferUploads;
 use web_time::Instant;
 
 use crate::{
+    debug_toggles::DebugToggle,
     offscreen::OffscreenTarget,
     pass_timing::{GpuPassTimingReport, PassTimer},
 };
@@ -26,6 +27,86 @@ pub(crate) struct FrameCommandStats {
     pub(crate) transient_texture_bytes: u64,
     pub(crate) retained_texture_bytes: u64,
     pub(crate) upload_bytes: u64,
+    pub(crate) upload_writes: u32,
+    pub(crate) copy_count: u32,
+    pub(crate) copy_pixels: u64,
+    pub(crate) transient_acquires: u32,
+    pub(crate) transient_news: u32,
+}
+
+impl std::ops::AddAssign for FrameCommandStats {
+    fn add_assign(&mut self, other: Self) {
+        self.encoder_count += other.encoder_count;
+        self.submit_count += other.submit_count;
+        self.pass_count += other.pass_count;
+        self.pass_pixels += other.pass_pixels;
+        self.transient_texture_bytes += other.transient_texture_bytes;
+        self.retained_texture_bytes += other.retained_texture_bytes;
+        self.upload_bytes += other.upload_bytes;
+        self.upload_writes += other.upload_writes;
+        self.copy_count += other.copy_count;
+        self.copy_pixels += other.copy_pixels;
+        self.transient_acquires += other.transient_acquires;
+        self.transient_news += other.transient_news;
+    }
+}
+
+/// A region of one texture copied texel for texel into another of a
+/// copy-compatible format, outside any pass.
+#[derive(Clone, Copy)]
+pub(crate) struct TextureRegionCopy<'a> {
+    pub(crate) source: &'a OffscreenTarget,
+    pub(crate) source_origin: [u32; 2],
+    pub(crate) dest: &'a OffscreenTarget,
+    pub(crate) dest_origin: [u32; 2],
+    pub(crate) size: [u32; 2],
+}
+
+/// Whether a region can be copied between the two textures: their formats
+/// are equal up to the sRGB suffix.
+pub(crate) fn copy_compatible(a: &OffscreenTarget, b: &OffscreenTarget) -> bool {
+    a.format().remove_srgb_suffix() == b.format().remove_srgb_suffix()
+}
+
+#[derive(Clone, Copy, Default)]
+pub(crate) struct TextureCopyStats {
+    count: u32,
+    pixels: u64,
+}
+
+impl TextureCopyStats {
+    fn note(&mut self, size: [u32; 2]) {
+        self.count = self.count.saturating_add(1);
+        self.pixels = self
+            .pixels
+            .saturating_add(u64::from(size[0]) * u64::from(size[1]));
+    }
+}
+
+fn texel_copy_info(target: &OffscreenTarget, origin: [u32; 2]) -> wgpu::TexelCopyTextureInfo<'_> {
+    wgpu::TexelCopyTextureInfo {
+        texture: target.texture(),
+        mip_level: 0,
+        origin: wgpu::Origin3d {
+            x: origin[0],
+            y: origin[1],
+            z: 0,
+        },
+        aspect: wgpu::TextureAspect::All,
+    }
+}
+
+fn encode_texture_region_copy(encoder: &mut wgpu::CommandEncoder, copy: TextureRegionCopy<'_>) {
+    encoder.copy_texture_to_texture(
+        texel_copy_info(copy.source, copy.source_origin),
+        texel_copy_info(copy.dest, copy.dest_origin),
+        wgpu::Extent3d {
+            width: copy.size[0],
+            height: copy.size[1],
+            depth_or_array_layers: 1,
+        },
+    );
+    note_texture_copy(copy.size);
 }
 
 #[derive(Debug)]
@@ -268,6 +349,8 @@ impl FrameTextureDescriptor {
 #[derive(Default)]
 pub(crate) struct TransientTexturePool {
     available: Vec<PooledTransientTexture>,
+    acquires: u32,
+    news: u32,
 }
 
 struct PooledTransientTexture {
@@ -275,7 +358,9 @@ struct PooledTransientTexture {
     target: OffscreenTarget,
 }
 
-const MAX_RETAINED_TRANSIENT_TEXTURES: usize = 16;
+const MAX_RETAINED_TRANSIENT_TEXTURES: usize = 64;
+
+const MAX_RETAINED_TRANSIENT_BYTES: u64 = 32 * 1024 * 1024;
 
 impl TransientTexturePool {
     fn acquire(
@@ -283,14 +368,16 @@ impl TransientTexturePool {
         device: &wgpu::Device,
         descriptor: FrameTextureDescriptor,
     ) -> OffscreenTarget {
+        self.acquires = self.acquires.saturating_add(1);
         if let Some(index) = self
             .available
             .iter()
             .position(|entry| entry.descriptor.is_pool_compatible_with(descriptor))
         {
-            return self.available.swap_remove(index).target;
+            return self.available.remove(index).target;
         }
 
+        self.news = self.news.saturating_add(1);
         OffscreenTarget::new_labeled(
             device,
             descriptor.format,
@@ -301,10 +388,21 @@ impl TransientTexturePool {
     }
 
     fn release(&mut self, descriptor: FrameTextureDescriptor, target: OffscreenTarget) {
-        if self.available.len() < MAX_RETAINED_TRANSIENT_TEXTURES {
-            self.available
-                .push(PooledTransientTexture { descriptor, target });
+        self.available
+            .push(PooledTransientTexture { descriptor, target });
+        let mut bytes = self.estimated_bytes();
+        while self.available.len() > MAX_RETAINED_TRANSIENT_TEXTURES
+            || (bytes > MAX_RETAINED_TRANSIENT_BYTES && self.available.len() > 1)
+        {
+            bytes = bytes.saturating_sub(self.available.remove(0).descriptor.estimated_bytes());
         }
+    }
+
+    fn take_counts(&mut self) -> (u32, u32) {
+        (
+            std::mem::take(&mut self.acquires),
+            std::mem::take(&mut self.news),
+        )
     }
 
     fn len(&self) -> usize {
@@ -340,7 +438,7 @@ pub(crate) struct PassContext<'pass> {
     transient_textures: &'pass mut TransientTexturePool,
     pending_transient_releases: &'pass mut Vec<(FrameTextureDescriptor, OffscreenTarget)>,
     transient_texture_bytes: &'pass mut u64,
-    staged_upload_cursor: &'pass mut u64,
+    copies: &'pass mut TextureCopyStats,
     pass_count: u32,
     pass_timer: Option<&'pass PassTimer>,
 }
@@ -435,6 +533,14 @@ impl WgpuFrameGraphExecutor {
         self.transient_textures.len()
     }
 
+    pub(crate) fn release_transient(
+        &mut self,
+        descriptor: FrameTextureDescriptor,
+        target: OffscreenTarget,
+    ) {
+        self.transient_textures.release(descriptor, target);
+    }
+
     pub(crate) fn retained_texture_bytes(&self) -> u64 {
         self.transient_textures.estimated_bytes()
     }
@@ -459,24 +565,6 @@ impl WgpuFrameGraphExecutor {
         }
     }
 
-    pub(crate) fn upload_buffer(
-        &self,
-        queue: &wgpu::Queue,
-        buffer: &wgpu::Buffer,
-        offset: u64,
-        data: &[u8],
-    ) -> FrameCommandStats {
-        if data.is_empty() {
-            return FrameCommandStats::default();
-        }
-        queue.write_buffer(buffer, offset, data);
-        note_upload_write();
-        FrameCommandStats {
-            upload_bytes: data.len() as u64,
-            ..FrameCommandStats::default()
-        }
-    }
-
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn begin<'a>(
         &'a mut self,
@@ -490,6 +578,7 @@ impl WgpuFrameGraphExecutor {
             uploads: &mut self.upload_allocators,
             transient_releases: PendingTransientReleases::new(&mut self.transient_textures),
             transient_texture_bytes: 0,
+            copies: TextureCopyStats::default(),
             pass_count: 0,
             pass_timer: self.pass_timer.as_ref(),
         }
@@ -506,7 +595,7 @@ impl WgpuFrameGraphExecutor {
         }
         let mut pass_count = 0u32;
         let mut transient_texture_bytes = 0u64;
-        let mut staged_upload_cursor = 0u64;
+        let mut copies = TextureCopyStats::default();
         let mut pending_transient_releases = Vec::new();
         let mut encoder = Self::create_command_encoder(device, graph.label);
 
@@ -522,7 +611,7 @@ impl WgpuFrameGraphExecutor {
                 &mut encoder,
                 &mut pending_transient_releases,
                 &mut transient_texture_bytes,
-                &mut staged_upload_cursor,
+                &mut copies,
                 0,
                 pass,
             ) {
@@ -550,7 +639,7 @@ impl WgpuFrameGraphExecutor {
                     &mut encoder,
                     &mut pending_transient_releases,
                     &mut transient_texture_bytes,
-                    &mut staged_upload_cursor,
+                    &mut copies,
                     pass_index,
                     pass,
                 ) {
@@ -571,12 +660,16 @@ impl WgpuFrameGraphExecutor {
             release_pending_transients(&mut self.transient_textures, pending_transient_releases);
             return Err(FrameGraphError::NoDeclaredPasses);
         }
+        self.upload_allocators.buffers.finish();
         if fence_profile::enabled() {
             fence_profile::end_frame(device, queue, &mut encoder);
         }
-        let submission = Self::submit_with_timing(queue, encoder);
+        let uploads = self.upload_allocators.flush(queue);
+        let (submission, upload_writes) = Self::submit_with_timing(queue, encoder);
+        self.upload_allocators.buffers.recall();
         release_pending_transients(&mut self.transient_textures, pending_transient_releases);
         let retained_texture_bytes = self.retained_texture_bytes();
+        let (transient_acquires, transient_news) = self.transient_textures.take_counts();
         Ok(FrameGraphExecution {
             submission,
             stats: FrameCommandStats {
@@ -586,7 +679,12 @@ impl WgpuFrameGraphExecutor {
                 pass_pixels: take_render_pass_pixels(),
                 transient_texture_bytes,
                 retained_texture_bytes,
-                ..FrameCommandStats::default()
+                copy_count: copies.count,
+                copy_pixels: copies.pixels,
+                upload_bytes: uploads.upload_bytes,
+                upload_writes,
+                transient_acquires,
+                transient_news,
             },
         })
     }
@@ -599,7 +697,7 @@ impl WgpuFrameGraphExecutor {
         encoder: &mut wgpu::CommandEncoder,
         pending_transient_releases: &mut Vec<(FrameTextureDescriptor, OffscreenTarget)>,
         transient_texture_bytes: &mut u64,
-        staged_upload_cursor: &mut u64,
+        copies: &mut TextureCopyStats,
         pass_index: usize,
         pass: PassNode<'_>,
     ) -> Result<u32, FrameGraphError> {
@@ -613,7 +711,7 @@ impl WgpuFrameGraphExecutor {
             transient_textures: &mut self.transient_textures,
             pending_transient_releases,
             transient_texture_bytes,
-            staged_upload_cursor,
+            copies,
             pass_count: 0,
             pass_timer: self.pass_timer.as_ref(),
         };
@@ -629,15 +727,16 @@ impl WgpuFrameGraphExecutor {
         device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label })
     }
 
-    fn submit(queue: &wgpu::Queue, encoder: wgpu::CommandEncoder) -> wgpu::SubmissionIndex {
-        let _ = take_upload_write_calls();
-        queue.submit(std::iter::once(encoder.finish()))
+    /// Submits the frame and returns how many buffer writes it carried.
+    fn submit(queue: &wgpu::Queue, encoder: wgpu::CommandEncoder) -> (wgpu::SubmissionIndex, u32) {
+        let submission = queue.submit(std::iter::once(encoder.finish()));
+        (submission, take_upload_write_calls())
     }
 
     fn submit_with_timing(
         queue: &wgpu::Queue,
         encoder: wgpu::CommandEncoder,
-    ) -> wgpu::SubmissionIndex {
+    ) -> (wgpu::SubmissionIndex, u32) {
         let Some(threshold_ms) = frame_graph_pass_telemetry_threshold_ms() else {
             return Self::submit(queue, encoder);
         };
@@ -663,12 +762,31 @@ impl WgpuFrameGraphExecutor {
                  upload_writes={upload_writes} passes={pass_total}{split}"
             );
         }
-        submission
+        (submission, upload_writes)
     }
 }
 
 std::thread_local! {
     static UPLOAD_WRITE_CALLS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Writes `data` into `buffer` at `offset` ahead of the next submit and
+/// accounts for it as an upload; an empty write is skipped.
+pub(crate) fn write_buffer(
+    queue: &wgpu::Queue,
+    buffer: &wgpu::Buffer,
+    offset: u64,
+    data: &[u8],
+) -> FrameCommandStats {
+    if data.is_empty() {
+        return FrameCommandStats::default();
+    }
+    queue.write_buffer(buffer, offset, data);
+    note_upload_write();
+    FrameCommandStats {
+        upload_bytes: data.len() as u64,
+        ..FrameCommandStats::default()
+    }
 }
 
 fn note_upload_write() {
@@ -716,6 +834,21 @@ pub(crate) fn note_render_pass(descriptor: &wgpu::RenderPassDescriptor<'_>) {
     });
 }
 
+/// Accounts one texture copy in the stage telemetry's ordered pass list.
+fn note_texture_copy(size: [u32; 2]) {
+    if frame_graph_pass_telemetry_threshold_ms().is_none() {
+        return;
+    }
+    let label = format!("Copy {}x{}", size[0], size[1]);
+    RENDER_PASS_LABELS.with(|labels| {
+        let mut labels = labels.borrow_mut();
+        match labels.last_mut() {
+            Some((name, count)) if *name == label => *count += 1,
+            _ => labels.push((label, 1)),
+        }
+    });
+}
+
 fn take_render_pass_pixels() -> u64 {
     RENDER_PASS_PIXELS.with(|total| total.replace(0))
 }
@@ -724,9 +857,12 @@ fn take_render_pass_labels() -> Vec<(String, u32)> {
     RENDER_PASS_LABELS.with(|labels| std::mem::take(&mut *labels.borrow_mut()))
 }
 
+static RENDER_STAGE_TELEMETRY_MS: DebugToggle =
+    DebugToggle::new("CRANPOSE_WGPU_RENDER_STAGE_TELEMETRY_MS");
+
 pub(crate) fn frame_graph_pass_telemetry_threshold_ms() -> Option<f64> {
-    crate::debug_toggles::debug_toggle("CRANPOSE_WGPU_RENDER_STAGE_TELEMETRY_MS")
-        .and_then(|raw| raw.parse::<f64>().ok())
+    RENDER_STAGE_TELEMETRY_MS
+        .parse::<f64>()
         .filter(|threshold| *threshold >= 0.0)
 }
 
@@ -746,11 +882,42 @@ fn log_frame_graph_pass_timing(start: Instant, label: Option<&'static str>, pass
 }
 
 pub(crate) trait FrameCommandRecorder {
-    fn encoder(&mut self) -> &mut wgpu::CommandEncoder;
+    fn stage_buffer_copy(
+        &mut self,
+        device: &wgpu::Device,
+        buffer: &wgpu::Buffer,
+        offset: u64,
+        bytes: &[u8],
+    ) -> FrameCommandStats;
+
     fn begin_timed_render_pass(
         &mut self,
         descriptor: &wgpu::RenderPassDescriptor<'_>,
     ) -> wgpu::RenderPass<'_>;
+
+    /// A pass with one color attachment that loads with `load_op` and
+    /// stores, the shape of every pass this renderer records.
+    fn begin_color_pass<'p>(
+        &'p mut self,
+        label: &'static str,
+        view: &wgpu::TextureView,
+        load_op: wgpu::LoadOp<wgpu::Color>,
+    ) -> wgpu::RenderPass<'p> {
+        self.begin_timed_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some(label),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: load_op,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            ..Default::default()
+        })
+    }
     fn upload_uniform(
         &mut self,
         id: UploadAllocatorId,
@@ -758,16 +925,13 @@ pub(crate) trait FrameCommandRecorder {
         device: &wgpu::Device,
         layout: &wgpu::BindGroupLayout,
         bytes: &[u8],
-        uploaded_bytes: &Cell<u64>,
-    ) -> wgpu::BindGroup;
-    fn upload_vertex(
+    ) -> UniformUpload;
+    fn upload_buffer(
         &mut self,
-        id: UploadAllocatorId,
         spec: UploadAllocatorSpec,
         device: &wgpu::Device,
         bytes: &[u8],
-        uploaded_bytes: &Cell<u64>,
-    ) -> wgpu::Buffer;
+    ) -> BufferUpload;
     fn acquire_transient_offscreen(
         &mut self,
         device: &wgpu::Device,
@@ -778,7 +942,8 @@ pub(crate) trait FrameCommandRecorder {
         descriptor: FrameTextureDescriptor,
         target: OffscreenTarget,
     );
-    fn allocate_staged_upload_bytes(&mut self, bytes: u64) -> u64;
+    /// Copies a region between two textures of copy-compatible formats.
+    fn copy_texture_region(&mut self, copy: TextureRegionCopy<'_>);
     fn record_passes(&mut self, count: u32);
 
     fn record_pass(&mut self) {
@@ -789,8 +954,20 @@ pub(crate) trait FrameCommandRecorder {
 }
 
 impl FrameCommandRecorder for PassContext<'_> {
-    fn encoder(&mut self) -> &mut wgpu::CommandEncoder {
-        self.encoder
+    fn stage_buffer_copy(
+        &mut self,
+        device: &wgpu::Device,
+        buffer: &wgpu::Buffer,
+        offset: u64,
+        bytes: &[u8],
+    ) -> FrameCommandStats {
+        FrameCommandStats {
+            upload_bytes: self
+                .uploads
+                .buffers
+                .write(device, self.encoder, buffer, offset, bytes),
+            ..FrameCommandStats::default()
+        }
     }
 
     fn begin_timed_render_pass(
@@ -798,6 +975,7 @@ impl FrameCommandRecorder for PassContext<'_> {
         descriptor: &wgpu::RenderPassDescriptor<'_>,
     ) -> wgpu::RenderPass<'_> {
         if fence_profile::enabled() {
+            self.uploads.buffers.finish();
             let bucket = fence_profile::bucket_label(descriptor);
             fence_profile::split(self.device, self.queue_handle, self.encoder, Some(&bucket));
         }
@@ -811,29 +989,17 @@ impl FrameCommandRecorder for PassContext<'_> {
         device: &wgpu::Device,
         layout: &wgpu::BindGroupLayout,
         bytes: &[u8],
-        uploaded_bytes: &Cell<u64>,
-    ) -> wgpu::BindGroup {
-        self.uploads.upload_uniform(
-            id,
-            spec,
-            device,
-            self.queue_handle,
-            layout,
-            bytes,
-            uploaded_bytes,
-        )
+    ) -> UniformUpload {
+        self.uploads.upload_uniform(id, spec, device, layout, bytes)
     }
 
-    fn upload_vertex(
+    fn upload_buffer(
         &mut self,
-        id: UploadAllocatorId,
         spec: UploadAllocatorSpec,
         device: &wgpu::Device,
         bytes: &[u8],
-        uploaded_bytes: &Cell<u64>,
-    ) -> wgpu::Buffer {
-        self.uploads
-            .upload_vertex(id, spec, device, self.queue_handle, bytes, uploaded_bytes)
+    ) -> BufferUpload {
+        self.uploads.upload_buffer(spec, device, bytes)
     }
 
     fn acquire_transient_offscreen(
@@ -854,10 +1020,9 @@ impl FrameCommandRecorder for PassContext<'_> {
         self.pending_transient_releases.push((descriptor, target));
     }
 
-    fn allocate_staged_upload_bytes(&mut self, bytes: u64) -> u64 {
-        let aligned = align_u64_to(*self.staged_upload_cursor, wgpu::COPY_BUFFER_ALIGNMENT);
-        *self.staged_upload_cursor = aligned.saturating_add(bytes);
-        aligned
+    fn copy_texture_region(&mut self, copy: TextureRegionCopy<'_>) {
+        encode_texture_region_copy(self.encoder, copy);
+        self.copies.note(copy.size);
     }
 
     fn record_passes(&mut self, count: u32) {
@@ -876,16 +1041,13 @@ pub(crate) struct WgpuFrameEncoder<'a> {
     uploads: &'a mut FrameUploadAllocators,
     transient_releases: PendingTransientReleases<'a>,
     transient_texture_bytes: u64,
+    copies: TextureCopyStats,
     pass_count: u32,
     pass_timer: Option<&'a PassTimer>,
 }
 
 #[cfg(target_arch = "wasm32")]
 impl WgpuFrameEncoder<'_> {
-    pub(crate) fn encoder(&mut self) -> &mut wgpu::CommandEncoder {
-        &mut self.encoder
-    }
-
     pub(crate) fn record_passes(&mut self, count: u32) {
         self.pass_count = self.pass_count.saturating_add(count);
     }
@@ -897,10 +1059,15 @@ impl WgpuFrameEncoder<'_> {
     pub(crate) fn finish(self) -> FrameGraphExecution {
         let pass_count = self.pass_count;
         let transient_texture_bytes = self.transient_texture_bytes;
+        let copies = self.copies;
         let mut transient_releases = self.transient_releases;
-        let submission = WgpuFrameGraphExecutor::submit(self.queue, self.encoder);
+        self.uploads.buffers.finish();
+        let uploads = self.uploads.flush(self.queue);
+        let (submission, upload_writes) = WgpuFrameGraphExecutor::submit(self.queue, self.encoder);
+        self.uploads.buffers.recall();
         transient_releases.release_pending();
         let retained_texture_bytes = transient_releases.retained_texture_bytes();
+        let (transient_acquires, transient_news) = transient_releases.take_counts();
         FrameGraphExecution {
             submission,
             stats: FrameCommandStats {
@@ -910,7 +1077,12 @@ impl WgpuFrameEncoder<'_> {
                 pass_pixels: take_render_pass_pixels(),
                 transient_texture_bytes,
                 retained_texture_bytes,
-                ..FrameCommandStats::default()
+                copy_count: copies.count,
+                copy_pixels: copies.pixels,
+                upload_bytes: uploads.upload_bytes,
+                upload_writes,
+                transient_acquires,
+                transient_news,
             },
         }
     }
@@ -951,6 +1123,10 @@ impl<'a> PendingTransientReleases<'a> {
     fn retained_texture_bytes(&self) -> u64 {
         self.transient_textures.estimated_bytes()
     }
+
+    fn take_counts(&mut self) -> (u32, u32) {
+        self.transient_textures.take_counts()
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -962,8 +1138,23 @@ impl Drop for PendingTransientReleases<'_> {
 
 #[cfg(target_arch = "wasm32")]
 impl FrameCommandRecorder for WgpuFrameEncoder<'_> {
-    fn encoder(&mut self) -> &mut wgpu::CommandEncoder {
-        Self::encoder(self)
+    fn stage_buffer_copy(
+        &mut self,
+        device: &wgpu::Device,
+        buffer: &wgpu::Buffer,
+        offset: u64,
+        bytes: &[u8],
+    ) -> FrameCommandStats {
+        FrameCommandStats {
+            upload_bytes: self.uploads.buffers.write(
+                device,
+                &mut self.encoder,
+                buffer,
+                offset,
+                bytes,
+            ),
+            ..FrameCommandStats::default()
+        }
     }
 
     fn begin_timed_render_pass(
@@ -980,22 +1171,17 @@ impl FrameCommandRecorder for WgpuFrameEncoder<'_> {
         device: &wgpu::Device,
         layout: &wgpu::BindGroupLayout,
         bytes: &[u8],
-        uploaded_bytes: &Cell<u64>,
-    ) -> wgpu::BindGroup {
-        self.uploads
-            .upload_uniform(id, spec, device, self.queue, layout, bytes, uploaded_bytes)
+    ) -> UniformUpload {
+        self.uploads.upload_uniform(id, spec, device, layout, bytes)
     }
 
-    fn upload_vertex(
+    fn upload_buffer(
         &mut self,
-        id: UploadAllocatorId,
         spec: UploadAllocatorSpec,
         device: &wgpu::Device,
         bytes: &[u8],
-        uploaded_bytes: &Cell<u64>,
-    ) -> wgpu::Buffer {
-        self.uploads
-            .upload_vertex(id, spec, device, self.queue, bytes, uploaded_bytes)
+    ) -> BufferUpload {
+        self.uploads.upload_buffer(spec, device, bytes)
     }
 
     fn acquire_transient_offscreen(
@@ -1017,12 +1203,13 @@ impl FrameCommandRecorder for WgpuFrameEncoder<'_> {
         self.transient_releases.push_release(descriptor, target);
     }
 
-    fn record_passes(&mut self, count: u32) {
-        Self::record_passes(self, count);
+    fn copy_texture_region(&mut self, copy: TextureRegionCopy<'_>) {
+        encode_texture_region_copy(&mut self.encoder, copy);
+        self.copies.note(copy.size);
     }
 
-    fn allocate_staged_upload_bytes(&mut self, _bytes: u64) -> u64 {
-        0
+    fn record_passes(&mut self, count: u32) {
+        Self::record_passes(self, count);
     }
 
     fn recorded_pass_count(&self) -> u32 {
@@ -1122,35 +1309,54 @@ fn add_pass_dependency(
     dependents[dependency].push(pass_index);
 }
 
-struct UploadSlot {
-    buffer: wgpu::Buffer,
-    size: u64,
-    bind_group: OnceCell<wgpu::BindGroup>,
+/// One upload of a frame's uniform block: the arena's bind group over the
+/// block's size and the dynamic offset the block sits at.
+#[derive(Clone)]
+pub(crate) struct UniformUpload {
+    pub(crate) bind_group: wgpu::BindGroup,
+    pub(crate) offset: u32,
 }
 
+/// One upload of a frame's vertex or index data: the arena's buffer and
+/// the byte range the data occupies.
+#[derive(Clone)]
+pub(crate) struct BufferUpload {
+    pub(crate) buffer: wgpu::Buffer,
+    pub(crate) offset: u64,
+    pub(crate) len: u64,
+}
+
+impl BufferUpload {
+    pub(crate) fn slice(&self) -> wgpu::BufferSlice<'_> {
+        self.buffer.slice(self.offset..self.offset + self.len)
+    }
+}
+
+/// Which uniform block a pass binds: each keeps its own bind group over
+/// the frame's uniform buffer, sized to its block.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum UploadAllocatorId {
     BlurHorizontal,
     BlurVertical,
+    BlurDownsample,
     Offset,
     Blit,
     ProjectiveBlitUniform,
-    ProjectiveBlitVertex,
     EffectUniform,
-    BlurRoundedMask,
 }
 
 impl UploadAllocatorId {
+    const COUNT: usize = 7;
+
     fn index(self) -> usize {
         match self {
             Self::BlurHorizontal => 0,
             Self::BlurVertical => 1,
-            Self::Offset => 2,
-            Self::Blit => 3,
-            Self::ProjectiveBlitUniform => 4,
-            Self::ProjectiveBlitVertex => 5,
+            Self::BlurDownsample => 2,
+            Self::Offset => 3,
+            Self::Blit => 4,
+            Self::ProjectiveBlitUniform => 5,
             Self::EffectUniform => 6,
-            Self::BlurRoundedMask => 7,
         }
     }
 }
@@ -1159,11 +1365,21 @@ impl UploadAllocatorId {
 enum UploadAllocatorKind {
     Uniform,
     Vertex,
+    Index,
+}
+
+impl UploadAllocatorKind {
+    fn ring(self) -> usize {
+        match self {
+            Self::Uniform => 0,
+            Self::Vertex => 1,
+            Self::Index => 2,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct UploadAllocatorSpec {
-    buffer_label: &'static str,
     bind_group_label: Option<&'static str>,
     size: u64,
     kind: UploadAllocatorKind,
@@ -1171,333 +1387,434 @@ pub(crate) struct UploadAllocatorSpec {
 
 impl UploadAllocatorSpec {
     pub(crate) fn uniform(
-        buffer_label: &'static str,
+        _buffer_label: &'static str,
         bind_group_label: &'static str,
         size: u64,
     ) -> Self {
         Self {
-            buffer_label,
             bind_group_label: Some(bind_group_label),
             size,
             kind: UploadAllocatorKind::Uniform,
         }
     }
 
-    pub(crate) fn vertex(buffer_label: &'static str, size: u64) -> Self {
+    pub(crate) fn vertex(_buffer_label: &'static str, size: u64) -> Self {
         Self {
-            buffer_label,
             bind_group_label: None,
             size,
             kind: UploadAllocatorKind::Vertex,
         }
     }
+
+    pub(crate) fn index(_buffer_label: &'static str, size: u64) -> Self {
+        Self {
+            bind_group_label: None,
+            size,
+            kind: UploadAllocatorKind::Index,
+        }
+    }
 }
 
-#[derive(Default)]
+const MIN_UPLOAD_BUFFER_BYTES: u64 = 64 * 1024;
+const UPLOAD_SHRINK_FACTOR: u64 = 4;
+
+/// Where an upload lands in a ring: at an offset of the ring's current
+/// buffer, or at the start of a larger buffer the ring opens for it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum UploadPlacement {
+    At(u64),
+    Grow(u64),
+}
+
+/// Places `len` bytes read through a binding of `binding` bytes after
+/// `cursor` in a buffer of `capacity`: aligned to `alignment`, and in a
+/// new buffer of at least double the capacity when they do not fit.
+pub(crate) fn place_upload(
+    cursor: u64,
+    len: u64,
+    binding: u64,
+    alignment: u64,
+    capacity: Option<u64>,
+) -> UploadPlacement {
+    let offset = align_u64_to(cursor, alignment);
+    let span = align_u64_to(len.max(binding).max(1), wgpu::COPY_BUFFER_ALIGNMENT);
+    match capacity {
+        Some(capacity) if offset + span <= capacity => UploadPlacement::At(offset),
+        _ => UploadPlacement::Grow(
+            span.max(capacity.map_or(0, |capacity| capacity * 2))
+                .max(MIN_UPLOAD_BUFFER_BYTES),
+        ),
+    }
+}
+
+struct UploadGeneration {
+    buffer: wgpu::Buffer,
+    capacity: u64,
+    bytes: Vec<u8>,
+    bind_groups: [Option<wgpu::BindGroup>; UploadAllocatorId::COUNT],
+}
+
+/// One usage's uploads of a frame, in order, in one buffer: a buffer that
+/// fills mid-frame is kept beside a larger one until the frame ends, so
+/// every draw already recorded keeps the buffer it was bound to, and the
+/// next frame starts in the larger one alone.
+struct UploadRing {
+    usage: wgpu::BufferUsages,
+    label: &'static str,
+    alignment: u64,
+    generations: Vec<UploadGeneration>,
+}
+
+impl UploadRing {
+    fn new(usage: wgpu::BufferUsages, label: &'static str, alignment: u64) -> Self {
+        Self {
+            usage,
+            label,
+            alignment,
+            generations: Vec::new(),
+        }
+    }
+
+    fn upload(&mut self, device: &wgpu::Device, binding: u64, bytes: &[u8]) -> (usize, u64) {
+        let len = bytes.len() as u64;
+        let current = self.generations.last();
+        let placement = place_upload(
+            current.map_or(0, |generation| generation.bytes.len() as u64),
+            len,
+            binding,
+            self.alignment,
+            current.map(|generation| generation.capacity),
+        );
+        let offset = match placement {
+            UploadPlacement::At(offset) => offset,
+            UploadPlacement::Grow(capacity) => {
+                self.generations.push(UploadGeneration {
+                    buffer: device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some(self.label),
+                        size: capacity,
+                        usage: self.usage,
+                        mapped_at_creation: false,
+                    }),
+                    capacity,
+                    bytes: Vec::with_capacity(capacity as usize),
+                    bind_groups: Default::default(),
+                });
+                0
+            }
+        };
+        let generation = self.generations.len() - 1;
+        let target = &mut self.generations[generation].bytes;
+        target.resize(offset as usize, 0);
+        target.extend_from_slice(bytes);
+        (generation, offset)
+    }
+
+    fn flush(&mut self, queue: &wgpu::Queue) -> FrameCommandStats {
+        let mut stats = FrameCommandStats::default();
+        for generation in &mut self.generations {
+            let padded = align_u64_to(generation.bytes.len() as u64, wgpu::COPY_BUFFER_ALIGNMENT);
+            generation.bytes.resize(padded as usize, 0);
+            stats += write_buffer(queue, &generation.buffer, 0, &generation.bytes);
+        }
+        self.reset();
+        stats
+    }
+
+    fn reset(&mut self) {
+        let staged = self
+            .generations
+            .iter()
+            .map(|generation| generation.bytes.len() as u64)
+            .sum();
+        let keep = self.generations.len().saturating_sub(1);
+        self.generations.drain(..keep);
+        if let Some(last) = self.generations.last()
+            && !ring_outlives_frame(last.capacity, staged)
+        {
+            self.generations.clear();
+        }
+        for generation in &mut self.generations {
+            generation.bytes.clear();
+        }
+    }
+}
+
+fn ring_outlives_frame(capacity: u64, staged: u64) -> bool {
+    staged == 0
+        || capacity <= MIN_UPLOAD_BUFFER_BYTES
+        || staged.saturating_mul(UPLOAD_SHRINK_FACTOR) >= capacity
+}
+
+/// Where a frame's uploads live: one buffer per usage, filled in the order
+/// the passes ask and written to the GPU once before the frame's submit.
+/// A uniform block is read through the buffer's bind group at a dynamic
+/// offset, so a frame of a hundred blocks costs one staging write, not a
+/// hundred buffers and their barriers.
 pub(crate) struct FrameUploadAllocators {
-    allocators: Vec<Option<UploadAllocator>>,
+    buffers: BufferUploads,
+    rings: [UploadRing; 3],
+}
+
+impl Default for FrameUploadAllocators {
+    fn default() -> Self {
+        Self {
+            buffers: BufferUploads::default(),
+            rings: [
+                UploadRing::new(
+                    wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    "Frame Uniform Uploads",
+                    0,
+                ),
+                UploadRing::new(
+                    wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    "Frame Vertex Uploads",
+                    wgpu::COPY_BUFFER_ALIGNMENT,
+                ),
+                UploadRing::new(
+                    wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+                    "Frame Index Uploads",
+                    wgpu::COPY_BUFFER_ALIGNMENT,
+                ),
+            ],
+        }
+    }
 }
 
 impl FrameUploadAllocators {
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn upload_uniform(
         &mut self,
         id: UploadAllocatorId,
         spec: UploadAllocatorSpec,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
         layout: &wgpu::BindGroupLayout,
         bytes: &[u8],
-        uploaded_bytes: &Cell<u64>,
-    ) -> wgpu::BindGroup {
+    ) -> UniformUpload {
         debug_assert_eq!(
             spec.kind,
             UploadAllocatorKind::Uniform,
             "upload_uniform requires a uniform allocator spec"
         );
-        self.allocator_mut(id, spec)
-            .upload_uniform(device, queue, layout, bytes, uploaded_bytes)
-            .clone()
-    }
-
-    pub(crate) fn upload_vertex(
-        &mut self,
-        id: UploadAllocatorId,
-        spec: UploadAllocatorSpec,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        bytes: &[u8],
-        uploaded_bytes: &Cell<u64>,
-    ) -> wgpu::Buffer {
-        debug_assert_eq!(
-            spec.kind,
-            UploadAllocatorKind::Vertex,
-            "upload_vertex requires a vertex allocator spec"
-        );
-        self.allocator_mut(id, spec)
-            .upload_vertex(device, queue, bytes, uploaded_bytes)
-            .clone()
-    }
-
-    pub(crate) fn reset(&mut self) {
-        for allocator in self.allocators.iter_mut().flatten() {
-            allocator.reset();
+        let ring = &mut self.rings[UploadAllocatorKind::Uniform.ring()];
+        if ring.alignment == 0 {
+            ring.alignment = u64::from(device.limits().min_uniform_buffer_offset_alignment)
+                .max(wgpu::COPY_BUFFER_ALIGNMENT);
         }
-    }
-
-    fn allocator_mut(
-        &mut self,
-        id: UploadAllocatorId,
-        spec: UploadAllocatorSpec,
-    ) -> &mut UploadAllocator {
-        let index = id.index();
-        if self.allocators.len() <= index {
-            self.allocators.resize_with(index + 1, || None);
-        }
-        let allocator = self.allocators[index].get_or_insert_with(|| UploadAllocator::new(spec));
-        debug_assert!(
-            allocator.matches(spec),
-            "frame upload allocator id reused with a different spec"
-        );
-        allocator
-    }
-}
-
-pub(crate) struct UploadAllocator {
-    buffer_label: &'static str,
-    bind_group_label: Option<&'static str>,
-    size: u64,
-    usage: wgpu::BufferUsages,
-    cursor: usize,
-    slots: Vec<UploadSlot>,
-    frame_peak_size: u64,
-    retained_size: u64,
-}
-
-const OVERSIZED_SLOT_COLLAPSE_FACTOR: u64 = 4;
-
-impl UploadAllocator {
-    fn new(spec: UploadAllocatorSpec) -> Self {
-        match spec.kind {
-            UploadAllocatorKind::Uniform => Self::uniform(
-                spec.buffer_label,
-                spec.bind_group_label.unwrap_or("Uniform Upload Bind Group"),
-                spec.size,
-            ),
-            UploadAllocatorKind::Vertex => Self::vertex(spec.buffer_label, spec.size),
-        }
-    }
-
-    pub(crate) fn uniform(
-        buffer_label: &'static str,
-        bind_group_label: &'static str,
-        size: u64,
-    ) -> Self {
-        Self {
-            buffer_label,
-            bind_group_label: Some(bind_group_label),
-            size,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            cursor: 0,
-            slots: Vec::new(),
-            frame_peak_size: 0,
-            retained_size: 0,
-        }
-    }
-
-    pub(crate) fn vertex(buffer_label: &'static str, size: u64) -> Self {
-        Self {
-            buffer_label,
-            bind_group_label: None,
-            size,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            cursor: 0,
-            slots: Vec::new(),
-            frame_peak_size: 0,
-            retained_size: 0,
-        }
-    }
-
-    pub(crate) fn reset(&mut self) {
-        self.cursor = 0;
-        if self.frame_peak_size > 0 {
-            self.retained_size = if self
-                .frame_peak_size
-                .saturating_mul(OVERSIZED_SLOT_COLLAPSE_FACTOR)
-                <= self.retained_size
-            {
-                self.frame_peak_size
-            } else {
-                self.retained_size.max(self.frame_peak_size)
-            };
-            self.frame_peak_size = 0;
-        }
-        let retain_limit = self.size.max(self.retained_size);
-        self.slots
-            .retain(|slot| Self::should_retain_slot_size(retain_limit, slot.size));
-    }
-
-    fn matches(&self, spec: UploadAllocatorSpec) -> bool {
-        self.buffer_label == spec.buffer_label
-            && self.bind_group_label == spec.bind_group_label
-            && self.size == spec.size
-            && match spec.kind {
-                UploadAllocatorKind::Uniform => self.usage.contains(wgpu::BufferUsages::UNIFORM),
-                UploadAllocatorKind::Vertex => self.usage.contains(wgpu::BufferUsages::VERTEX),
-            }
-    }
-
-    pub(crate) fn upload_uniform<'a>(
-        &'a mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        layout: &wgpu::BindGroupLayout,
-        bytes: &[u8],
-        uploaded_bytes: &Cell<u64>,
-    ) -> &'a wgpu::BindGroup {
-        debug_assert!(
-            self.usage.contains(wgpu::BufferUsages::UNIFORM),
-            "upload_uniform requires a uniform allocator"
-        );
-        let index = self.upload(device, queue, bytes, uploaded_bytes);
-        let label = self.bind_group_label.unwrap_or("Uniform Upload Bind Group");
-        self.slots[index].bind_group.get_or_init(|| {
+        let binding = align_u64_to(spec.size.max(bytes.len() as u64), 16);
+        let (generation, offset) = ring.upload(device, binding, bytes);
+        let generation = &mut ring.generations[generation];
+        let bind_group = generation.bind_groups[id.index()].get_or_insert_with(|| {
             device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some(label),
+                label: spec.bind_group_label,
                 layout,
                 entries: &[wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: self.slots[index].buffer.as_entire_binding(),
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &generation.buffer,
+                        offset: 0,
+                        size: wgpu::BufferSize::new(binding),
+                    }),
                 }],
             })
-        })
+        });
+        UniformUpload {
+            bind_group: bind_group.clone(),
+            offset: u32::try_from(offset).expect("a frame's uniform uploads fit a dynamic offset"),
+        }
     }
 
-    pub(crate) fn upload_vertex<'a>(
-        &'a mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        bytes: &[u8],
-        uploaded_bytes: &Cell<u64>,
-    ) -> &'a wgpu::Buffer {
-        debug_assert!(
-            self.usage.contains(wgpu::BufferUsages::VERTEX),
-            "upload_vertex requires a vertex allocator"
-        );
-        let index = self.upload(device, queue, bytes, uploaded_bytes);
-        &self.slots[index].buffer
-    }
-
-    fn upload(
+    pub(crate) fn upload_buffer(
         &mut self,
+        spec: UploadAllocatorSpec,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
         bytes: &[u8],
-        uploaded_bytes: &Cell<u64>,
-    ) -> usize {
-        let required_size = self.required_slot_size(bytes.len());
-        self.frame_peak_size = self.frame_peak_size.max(required_size);
-        if self.cursor == self.slots.len() {
-            self.slots.push(self.create_slot(device, required_size));
-        }
-        let index = self.cursor;
-        self.cursor += 1;
-        if self.slots[index].size < required_size {
-            self.slots[index] = self.create_slot(device, required_size);
-        }
-        queue.write_buffer(&self.slots[index].buffer, 0, bytes);
-        note_upload_write();
-        uploaded_bytes.set(uploaded_bytes.get().saturating_add(bytes.len() as u64));
-        index
-    }
-
-    fn create_slot(&self, device: &wgpu::Device, size: u64) -> UploadSlot {
-        UploadSlot {
-            buffer: device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(self.buffer_label),
-                size,
-                usage: self.usage,
-                mapped_at_creation: false,
-            }),
-            size,
-            bind_group: OnceCell::new(),
+    ) -> BufferUpload {
+        debug_assert_ne!(
+            spec.kind,
+            UploadAllocatorKind::Uniform,
+            "upload_buffer takes a vertex or index allocator spec"
+        );
+        let ring = &mut self.rings[spec.kind.ring()];
+        let (generation, offset) = ring.upload(device, spec.size, bytes);
+        BufferUpload {
+            buffer: ring.generations[generation].buffer.clone(),
+            offset,
+            len: bytes.len() as u64,
         }
     }
 
-    fn required_slot_size(&self, byte_len: usize) -> u64 {
-        self.size.max(align_u64_to(
-            byte_len.max(1) as u64,
-            wgpu::COPY_BUFFER_ALIGNMENT,
-        ))
+    /// Writes the frame's uploads, one write per ring, ahead of the submit.
+    pub(crate) fn flush(&mut self, queue: &wgpu::Queue) -> FrameCommandStats {
+        let mut stats = FrameCommandStats::default();
+        for ring in &mut self.rings {
+            stats += ring.flush(queue);
+        }
+        stats
     }
 
-    fn should_retain_slot_size(retain_limit: u64, slot_size: u64) -> bool {
-        slot_size <= retain_limit
-    }
-
-    #[cfg(test)]
-    fn slot_count(&self) -> usize {
-        self.slots.len()
+    pub(crate) fn reset(&mut self) {
+        self.buffers.reset();
+        for ring in &mut self.rings {
+            ring.reset();
+        }
     }
 }
 
 #[cfg(test)]
+pub(crate) fn upload_test_device() -> (
+    std::sync::MutexGuard<'static, ()>,
+    wgpu::Device,
+    wgpu::Queue,
+) {
+    static DEVICE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let lock = DEVICE_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let instance = wgpu::Instance::default();
+    let adapter = pollster::block_on(instance.request_adapter(&Default::default()))
+        .expect("headless adapter");
+    let (device, queue) =
+        pollster::block_on(adapter.request_device(&Default::default())).expect("headless device");
+    (lock, device, queue)
+}
+
+#[cfg(test)]
+fn read_uploaded_bytes(
+    device: &wgpu::Device,
+    readback: &wgpu::Buffer,
+    submission: wgpu::SubmissionIndex,
+) -> Vec<u8> {
+    readback.map_async(wgpu::MapMode::Read, .., |result| {
+        result.expect("readback map")
+    });
+    device
+        .poll(wgpu::PollType::Wait {
+            submission_index: Some(submission),
+            timeout: None,
+        })
+        .expect("copy completion");
+    let bytes = readback.get_mapped_range(..).to_vec();
+    readback.unmap();
+    bytes
+}
+
+#[cfg(test)]
 mod tests {
-    use super::{FrameTextureDescriptor, UploadAllocator, WgpuFrameGraph, build_pass_schedule};
+    use super::{
+        FrameTextureDescriptor, MIN_UPLOAD_BUFFER_BYTES, UploadPlacement, WgpuFrameGraph,
+        build_pass_schedule, place_upload, ring_outlives_frame,
+    };
 
     #[test]
-    fn upload_allocator_reset_rewinds_cursor() {
-        let mut allocator = UploadAllocator::uniform("test buffer", "test bind group", 64);
-        allocator.cursor = 3;
-        allocator.reset();
-        assert_eq!(allocator.cursor, 0);
-        assert_eq!(allocator.slot_count(), 0);
+    fn a_ring_outlives_the_frames_that_fill_a_quarter_of_it() {
+        let capacity = 16 * MIN_UPLOAD_BUFFER_BYTES;
+        assert!(ring_outlives_frame(capacity, capacity / 4));
+        assert!(ring_outlives_frame(capacity, capacity));
+        assert!(!ring_outlives_frame(capacity, capacity / 4 - 1));
+        assert!(!ring_outlives_frame(capacity, 1));
     }
 
     #[test]
-    fn upload_allocator_grows_slot_size_for_large_payloads() {
-        let allocator = UploadAllocator::uniform("test buffer", "test bind group", 64);
+    fn a_ring_at_the_floor_and_a_ring_after_an_empty_frame_stay() {
+        assert!(ring_outlives_frame(MIN_UPLOAD_BUFFER_BYTES, 1));
+        assert!(ring_outlives_frame(16 * MIN_UPLOAD_BUFFER_BYTES, 0));
+    }
 
-        assert_eq!(allocator.required_slot_size(8), 64);
+    #[test]
+    fn frame_uploads_grow_preserve_bytes_and_release_oversized_generations() {
+        let (_lock, device, queue) = super::upload_test_device();
+        let mut ring = super::UploadRing::new(
+            wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+            "Upload Growth Test",
+            256,
+        );
+        let large = vec![2; MIN_UPLOAD_BUFFER_BYTES as usize * 4 + 4];
+        let small = [1; 16];
+        let last = [3; 16];
+        let mut sources = Vec::new();
+        for bytes in [&small[..], &large, &last[..]] {
+            let (generation, offset) = ring.upload(&device, bytes.len() as u64, bytes);
+            sources.push((ring.generations[generation].buffer.clone(), offset));
+        }
+        assert_eq!(ring.generations.len(), 3);
+        ring.flush(&queue);
+        let readback = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: 48,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut encoder = device.create_command_encoder(&Default::default());
+        for (index, (source, offset)) in sources.into_iter().enumerate() {
+            encoder.copy_buffer_to_buffer(&source, offset, &readback, index as u64 * 16, 16);
+        }
+        let submission = queue.submit([encoder.finish()]);
         assert_eq!(
-            allocator.required_slot_size(65),
-            super::align_u64_to(65, wgpu::COPY_BUFFER_ALIGNMENT)
+            super::read_uploaded_bytes(&device, &readback, submission),
+            [&small[..], &large[..16], &last[..]].concat()
+        );
+        assert_eq!(ring.generations.len(), 1);
+        ring.upload(&device, 16, &small);
+        ring.flush(&queue);
+        assert!(
+            ring.generations.is_empty(),
+            "a small frame must release the oversized generation"
+        );
+        ring.upload(&device, 16, &last);
+        assert_eq!(ring.generations[0].capacity, MIN_UPLOAD_BUFFER_BYTES);
+    }
+
+    #[test]
+    fn an_upload_lands_aligned_after_the_last_one() {
+        assert_eq!(
+            place_upload(100, 64, 64, 256, Some(4096)),
+            UploadPlacement::At(256)
+        );
+        assert_eq!(
+            place_upload(0, 12, 0, 4, Some(4096)),
+            UploadPlacement::At(0)
+        );
+        assert_eq!(
+            place_upload(12, 12, 0, 4, Some(4096)),
+            UploadPlacement::At(12)
         );
     }
 
     #[test]
-    fn upload_allocator_does_not_retain_oversized_slots_after_reset() {
-        assert!(UploadAllocator::should_retain_slot_size(64, 64));
-        assert!(!UploadAllocator::should_retain_slot_size(64, 256));
+    fn an_upload_past_the_buffer_opens_one_at_least_twice_as_large() {
+        assert_eq!(
+            place_upload(99_950, 64, 64, 256, Some(100_000)),
+            UploadPlacement::Grow(200_000)
+        );
+        assert_eq!(
+            place_upload(0, 64, 64, 256, None),
+            UploadPlacement::Grow(MIN_UPLOAD_BUFFER_BYTES)
+        );
+        assert_eq!(
+            place_upload(4000, 64, 64, 256, Some(4096)),
+            UploadPlacement::Grow(MIN_UPLOAD_BUFFER_BYTES)
+        );
+        assert_eq!(
+            place_upload(
+                0,
+                3 * MIN_UPLOAD_BUFFER_BYTES,
+                64,
+                256,
+                Some(MIN_UPLOAD_BUFFER_BYTES)
+            ),
+            UploadPlacement::Grow(3 * MIN_UPLOAD_BUFFER_BYTES)
+        );
     }
 
     #[test]
-    fn upload_allocator_keeps_slots_a_steady_scene_asks_for_every_frame() {
-        let mut allocator = UploadAllocator::uniform("test buffer", "test bind group", 64);
-        allocator.frame_peak_size = 256;
-        allocator.reset();
-        assert!(UploadAllocator::should_retain_slot_size(
-            allocator.size.max(allocator.retained_size),
-            256
-        ));
-        allocator.frame_peak_size = 256;
-        allocator.reset();
-        assert_eq!(allocator.retained_size, 256);
-    }
-
-    #[test]
-    fn upload_allocator_releases_a_slot_once_demand_collapses() {
-        let mut allocator = UploadAllocator::uniform("test buffer", "test bind group", 64);
-        allocator.frame_peak_size = 1024;
-        allocator.reset();
-        assert_eq!(allocator.retained_size, 1024);
-        allocator.frame_peak_size = 256;
-        allocator.reset();
-        assert_eq!(allocator.retained_size, 256);
-        assert!(!UploadAllocator::should_retain_slot_size(
-            allocator.size.max(allocator.retained_size),
-            1024
-        ));
+    fn a_binding_wider_than_its_bytes_reserves_the_binding() {
+        assert_eq!(
+            place_upload(98_000, 16, 1024, 64, Some(100_000)),
+            UploadPlacement::At(98_048)
+        );
+        assert_eq!(
+            place_upload(99_000, 16, 1024, 64, Some(100_000)),
+            UploadPlacement::Grow(200_000)
+        );
     }
 
     #[test]

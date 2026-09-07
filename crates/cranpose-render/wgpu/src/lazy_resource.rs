@@ -2,11 +2,6 @@ use std::sync::OnceLock;
 
 use web_time::Instant;
 
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) type SharedPassPipeline = std::sync::Arc<PassPipeline>;
-#[cfg(target_arch = "wasm32")]
-pub(crate) type SharedPassPipeline = std::rc::Rc<PassPipeline>;
-
 pub(crate) struct LazyGpuResource<T> {
     label: &'static str,
     value: OnceLock<T>,
@@ -41,41 +36,6 @@ impl<T> LazyGpuResource<T> {
     #[cfg(test)]
     fn initialized(&self) -> bool {
         self.value.get().is_some()
-    }
-}
-
-pub(crate) struct PassPipeline {
-    flat: LazyGpuResource<wgpu::RenderPipeline>,
-    depth: LazyGpuResource<wgpu::RenderPipeline>,
-}
-
-impl PassPipeline {
-    pub(crate) fn new(flat_label: &'static str, depth_label: &'static str) -> SharedPassPipeline {
-        SharedPassPipeline::new(Self {
-            flat: LazyGpuResource::new(flat_label),
-            depth: LazyGpuResource::new(depth_label),
-        })
-    }
-
-    pub(crate) fn get_or_init(
-        &self,
-        backend: wgpu::Backend,
-        depth: bool,
-        create: impl FnOnce(bool) -> wgpu::RenderPipeline,
-    ) -> &wgpu::RenderPipeline {
-        if depth {
-            self.depth.get_or_init(backend, || create(true))
-        } else {
-            self.flat.get_or_init(backend, || create(false))
-        }
-    }
-
-    pub(crate) fn get(&self, depth: bool) -> Option<&wgpu::RenderPipeline> {
-        if depth {
-            self.depth.get()
-        } else {
-            self.flat.get()
-        }
     }
 }
 

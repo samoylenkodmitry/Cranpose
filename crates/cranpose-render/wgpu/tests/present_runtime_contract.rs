@@ -8,68 +8,33 @@ use std::{
 use cranpose_core::NodeId;
 use cranpose_render_common::{
     Renderer,
-    graph::{
-        CachePolicy, DrawCommandId, DrawPrimitiveNode, IsolationReasons, LayerNode, PrimitiveEntry,
-        PrimitiveNode, PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode,
-    },
-    raster_cache::LayerRasterCacheHashes,
-    style_shared::DrawPlacement,
+    graph::{CachePolicy, LayerNode, ProjectiveTransform, RenderGraph, RenderNode},
 };
 use cranpose_render_wgpu::{CancelReason, PresentOutcome, PublishOutcome, WgpuRenderer};
-use cranpose_ui_graphics::{Brush, Color, GraphicsLayer, Point, Rect};
+use cranpose_ui_graphics::{Color, Rect};
 
 const WIDTH: u32 = 128;
 const HEIGHT: u32 = 96;
 
 fn test_layer(node_id: Option<NodeId>, children: Vec<RenderNode>) -> LayerNode {
-    LayerNode {
+    support::contract_layer(
         node_id,
-        wraps: None,
-        local_bounds: Rect {
+        CachePolicy::None,
+        Rect {
             x: 0.0,
             y: 0.0,
             width: WIDTH as f32,
             height: HEIGHT as f32,
         },
-        transform_to_parent: ProjectiveTransform::identity(),
-        motion_context_animated: false,
-        translated_content_context: false,
-        translated_content_offset: Point::default(),
-        content_offset: Point::default(),
-        scene_children_origin: Point::default(),
-        scene_children_layer_translation: Point::default(),
-        graphics_layer: GraphicsLayer::default(),
-        clip_to_bounds: false,
-        shadow_clip: None,
-        hit_test: None,
-        has_hit_targets: false,
-        has_origin_sinks: false,
-        isolation: IsolationReasons::default(),
-        cache_policy: CachePolicy::None,
-        cache_hashes: LayerRasterCacheHashes::default(),
-        cache_hashes_valid: false,
+        ProjectiveTransform::identity(),
         children,
-    }
-}
-
-fn rect_primitive(rect: Rect, color: Color) -> RenderNode {
-    RenderNode::Primitive(PrimitiveEntry {
-        phase: PrimitivePhase::BeforeChildren,
-        node: PrimitiveNode::Draw(DrawPrimitiveNode {
-            primitive: cranpose_ui_graphics::DrawPrimitive::Rect {
-                rect,
-                brush: Brush::solid(color),
-                stroke: None,
-            },
-            clip: None,
-        }),
-    })
+    )
 }
 
 fn direct_graph() -> RenderGraph {
     RenderGraph::new(test_layer(
         Some(7_700),
-        vec![rect_primitive(
+        vec![support::rect_primitive(
             Rect {
                 x: 16.0,
                 y: 12.0,
@@ -94,14 +59,6 @@ fn shadowed_child_graph() -> RenderGraph {
         Some(7_702),
         vec![RenderNode::Layer(Box::new(child))],
     ))
-}
-
-fn command_for(node_id: usize) -> DrawCommandId {
-    DrawCommandId {
-        node_id,
-        command_index: 0,
-        placement: DrawPlacement::Behind,
-    }
 }
 
 fn surface_config(width: u32, height: u32) -> wgpu::SurfaceConfiguration {
@@ -190,7 +147,7 @@ fn a_surface_never_sits_configured_with_nothing_presented_to_it() {
         downlevel,
     );
 
-    let (_, _, presented_before, placeholder_before) = renderer
+    let (_, presented_before, placeholder_before) = renderer
         .present_status_snapshot_for_tests()
         .expect("threaded mode must expose the status snapshot");
     assert_eq!(
@@ -206,7 +163,7 @@ fn a_surface_never_sits_configured_with_nothing_presented_to_it() {
     ack.try_recv()
         .expect("the attach must ack only after the placeholder clear runs");
 
-    let (_, _, presented_frames, placeholder_frames) = renderer
+    let (_, presented_frames, placeholder_frames) = renderer
         .present_status_snapshot_for_tests()
         .expect("threaded mode must expose the status snapshot");
     assert_eq!(
@@ -225,7 +182,7 @@ fn a_surface_never_sits_configured_with_nothing_presented_to_it() {
     );
     runtime.pump();
     assert_eq!(renderer.drain_present_returns(), 1);
-    let (_, _, presented_frames, placeholder_frames) = renderer
+    let (_, presented_frames, placeholder_frames) = renderer
         .present_status_snapshot_for_tests()
         .expect("threaded mode must expose the status snapshot");
     assert_eq!(presented_frames, 1);
@@ -346,10 +303,6 @@ fn reconfigure_cancels_waiting_packet_before_ack() {
     );
     ack.try_recv()
         .expect("the ack must have fired — after the cancelled returns were sent");
-    assert!(
-        renderer.has_retained_direct_scene_for_tests(),
-        "the cancelled packet's scene must return to the producer pool"
-    );
 
     assert_eq!(
         renderer.publish_frame(WIDTH * 2, HEIGHT * 2),
@@ -380,14 +333,11 @@ fn drop_surface_cancels_waiting_packet_with_buffers_returned() {
     runtime.pump();
     ack.try_recv().expect("attach must ack after the pump");
     renderer.scene_mut().graph = Some(direct_graph());
-    cranpose_render_wgpu::inject_feed_capture_for_tests(command_for(7_731), 0, 0, 1);
 
     assert_eq!(
         renderer.publish_frame(WIDTH, HEIGHT),
         PublishOutcome::Published
     );
-    let (_, awaiting) = cranpose_render_wgpu::planner_replay_queue_stats_for_tests();
-    assert_eq!(awaiting, 1, "the packet's plan must carry the capture");
 
     renderer.note_surface_reconfigured();
     let ack = renderer
@@ -403,21 +353,6 @@ fn drop_surface_cancels_waiting_packet_with_buffers_returned() {
         "a packet waiting when the surface died cancels as SurfaceUnavailable"
     );
     ack.try_recv().expect("drop must ack after the cancel");
-    assert!(
-        renderer.has_retained_direct_scene_for_tests(),
-        "the cancelled packet's scene must return to the producer pool"
-    );
-    let (_, awaiting) = cranpose_render_wgpu::planner_replay_queue_stats_for_tests();
-    assert_eq!(
-        awaiting, 0,
-        "the cancelled frame's awaiting entries must purge — no ack can \
-         ever confirm them"
-    );
-    let (captures_cap, _, _) = cranpose_render_wgpu::recycled_ops_capacities_for_tests();
-    assert!(
-        captures_cap >= 1,
-        "the cancelled batch's capture buffer must recycle with capacity intact"
-    );
 
     assert_eq!(
         renderer.publish_frame(WIDTH, HEIGHT),
@@ -429,120 +364,6 @@ fn drop_surface_cancels_waiting_packet_with_buffers_returned() {
         vec![(2, PresentOutcome::Cancelled(CancelReason::SurfaceEpoch))],
         "after the drop the producer's epoch is ahead of the runtime's \
          (DropSurface carries none), so the next packet cancels for it"
-    );
-    assert!(renderer.has_retained_direct_scene_for_tests());
-}
-
-#[test]
-fn confirmations_capacity_rides_next_packet_back_to_store() {
-    let (_lock, mut renderer, device, queue, backend, downlevel) =
-        inline_runtime_or_skip!("confirmations round-trip");
-    let mut runtime = renderer.init_gpu_inline_for_tests(
-        device,
-        queue,
-        wgpu::TextureFormat::Bgra8UnormSrgb,
-        backend,
-        downlevel,
-    );
-    let ack = renderer
-        .send_attach_offscreen_unacked_for_tests(WIDTH, HEIGHT)
-        .expect("inline runtime must accept controls");
-    runtime.pump();
-    ack.try_recv().expect("attach must ack after the pump");
-    renderer.scene_mut().graph = Some(direct_graph());
-
-    const SEEDED_CAPACITY: usize = 7;
-    renderer.seed_recycled_confirmations_for_tests(SEEDED_CAPACITY);
-
-    assert_eq!(
-        renderer.publish_frame(WIDTH, HEIGHT),
-        PublishOutcome::Published
-    );
-    assert_eq!(
-        renderer.pending_recycled_confirmations_capacity_for_tests(),
-        None,
-        "the packet must take the parked buffer with it"
-    );
-    runtime.pump();
-    assert_eq!(
-        runtime.store_ack_confirmations_capacity(),
-        0,
-        "the frame's ack must have taken the adopted buffer out of the store"
-    );
-    assert_eq!(renderer.drain_present_returns(), 1);
-    assert_eq!(
-        renderer.pending_recycled_confirmations_capacity_for_tests(),
-        Some(SEEDED_CAPACITY),
-        "the drained ack must park the buffer with its capacity preserved \
-         through store adoption and the planner drain — no per-frame alloc"
-    );
-
-    assert_eq!(
-        renderer.publish_frame(WIDTH, HEIGHT),
-        PublishOutcome::Published
-    );
-    assert_eq!(
-        renderer.pending_recycled_confirmations_capacity_for_tests(),
-        None
-    );
-    runtime.pump();
-    assert_eq!(renderer.drain_present_returns(), 1);
-    assert_eq!(
-        renderer.pending_recycled_confirmations_capacity_for_tests(),
-        Some(SEEDED_CAPACITY)
-    );
-}
-
-#[test]
-fn early_replay_ack_precedes_returns() {
-    let (_lock, mut renderer, device, queue, backend, downlevel) =
-        inline_runtime_or_skip!("early replay ack");
-    let mut runtime = renderer.init_gpu_inline_for_tests(
-        device,
-        queue,
-        wgpu::TextureFormat::Bgra8UnormSrgb,
-        backend,
-        downlevel,
-    );
-    let ack = renderer
-        .send_attach_offscreen_unacked_for_tests(WIDTH, HEIGHT)
-        .expect("inline runtime must accept controls");
-    runtime.pump();
-    ack.try_recv().expect("attach must ack after the pump");
-    renderer.scene_mut().graph = Some(direct_graph());
-
-    const SEEDED_CAPACITY: usize = 5;
-    renderer.seed_recycled_confirmations_for_tests(SEEDED_CAPACITY);
-    assert_eq!(
-        renderer.publish_frame(WIDTH, HEIGHT),
-        PublishOutcome::Published
-    );
-    runtime.pump();
-
-    assert_eq!(
-        renderer.drain_replay_acks(),
-        1,
-        "the frame's ack must be available WITHOUT draining its returns"
-    );
-    assert_eq!(
-        renderer.pending_recycled_confirmations_capacity_for_tests(),
-        Some(SEEDED_CAPACITY),
-        "the ack alone must complete the capacity round-trip"
-    );
-    assert_eq!(
-        drain_outcomes(&mut renderer),
-        vec![(1, PresentOutcome::Presented)],
-        "the returns still arrive whole behind the ack"
-    );
-    assert_eq!(
-        renderer.drain_replay_acks(),
-        0,
-        "exactly one ack per consumed Direct packet"
-    );
-    assert_eq!(
-        renderer.pending_recycled_confirmations_capacity_for_tests(),
-        Some(SEEDED_CAPACITY),
-        "the returns carry no second ack; nothing double-applies"
     );
 }
 
@@ -576,7 +397,7 @@ fn needs_frame_warmup_reads_present_thread_atomic() {
     runtime.pump();
     assert_eq!(renderer.drain_present_returns(), 1);
 
-    let (atomic_warmup, _, _, _) = renderer
+    let (atomic_warmup, _, _) = renderer
         .present_status_snapshot_for_tests()
         .expect("threaded mode must expose the status snapshot");
     assert!(
@@ -600,7 +421,7 @@ fn needs_frame_warmup_reads_present_thread_atomic() {
         runtime.pump();
         assert_eq!(renderer.drain_present_returns(), 1);
     }
-    let (atomic_warmup, _, _, _) = renderer
+    let (atomic_warmup, _, _) = renderer
         .present_status_snapshot_for_tests()
         .expect("threaded mode must expose the status snapshot");
     assert_eq!(renderer.needs_frame_warmup(), atomic_warmup);
@@ -646,7 +467,6 @@ fn real_thread_runtime_smoke() {
         )],
         "a surfaceless runtime must refuse the packet, not drop it"
     );
-    assert!(renderer.has_retained_direct_scene_for_tests());
 
     renderer.note_surface_reconfigured();
     assert!(
@@ -667,7 +487,7 @@ fn real_thread_runtime_smoke() {
         vec![(2, PresentOutcome::Presented)],
         "the real present thread must render against the offscreen target"
     );
-    let (_, _, presented_frames, _) = renderer
+    let (_, presented_frames, _) = renderer
         .present_status_snapshot_for_tests()
         .expect("threaded mode must expose the status snapshot");
     assert_eq!(presented_frames, 1);

@@ -118,10 +118,6 @@ fn uncaptured_device_error_poisons_one_frame_then_recovers() {
         PresentOutcome::Cancelled(CancelReason::DeviceError),
         "the frame after an uncaptured device error must cancel, not encode"
     );
-    assert!(
-        renderer.has_retained_direct_scene_for_tests(),
-        "the cancelled packet's scene must return to the producer pool"
-    );
 
     let packet = renderer
         .build_frame_packet_for_tests(WIDTH, HEIGHT)

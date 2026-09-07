@@ -29,20 +29,20 @@ use std::{
 
 use cranpose_animation::{Animatable, AnimationType, Spring, spring};
 use cranpose_core::{
-    NodeId, Owned, OwnedMutableState, RuntimeHandle, SlotId, internal::FrameCallbackRegistration,
+    NodeId, Owned, OwnedMutableState, RuntimeHandle, internal::FrameCallbackRegistration,
     with_current_composer,
 };
 use cranpose_foundation::DRAG_THRESHOLD;
-use cranpose_ui_layout::Placement;
+use cranpose_ui_layout::{Measurable, MeasurePolicy, MeasureResult, MeasureScope, Placement};
 
 use crate::{
     composable,
+    layout::policies::BoxMeasurePolicy,
     modifier::{GraphicsLayer, Modifier, PointerEvent, PointerEventKind},
-    subcompose_layout::{Constraints, SubcomposeLayoutScope, SubcomposeMeasureScope},
+    subcompose_layout::Constraints,
     widgets::{
         box_widget::{Box, BoxSpec},
-        layout::{BoxWithConstraints, SubcomposeLayout},
-        scopes::BoxWithConstraintsScope,
+        layout::Layout,
     },
 };
 
@@ -725,6 +725,80 @@ fn watch_collapse(controller: &Rc<SwipeToDismissController>) {
     *controller.collapse_watcher.borrow_mut() = Some(registration);
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum SwipeLayoutPhase {
+    Row,
+    Collapse,
+}
+
+#[derive(Clone)]
+struct SwipeMeasurePolicy {
+    controller: Rc<SwipeToDismissController>,
+    phase: SwipeLayoutPhase,
+}
+
+impl PartialEq for SwipeMeasurePolicy {
+    fn eq(&self, other: &Self) -> bool {
+        self.phase == other.phase && Rc::ptr_eq(&self.controller, &other.controller)
+    }
+}
+
+impl MeasurePolicy for SwipeMeasurePolicy {
+    fn measure(
+        &self,
+        scope: &dyn MeasureScope,
+        measurables: &[Box<dyn Measurable>],
+        constraints: Constraints,
+    ) -> MeasureResult {
+        if self.phase == SwipeLayoutPhase::Row {
+            self.controller.width_px.set(constraints.max_width);
+            return BoxMeasurePolicy::new(crate::Alignment::TOP_START, false).measure(
+                scope,
+                measurables,
+                constraints,
+            );
+        }
+        let child_constraints = Constraints {
+            min_height: 0.0,
+            ..constraints
+        };
+        let mut placements = Vec::with_capacity(measurables.len());
+        let mut width = 0.0_f32;
+        let mut natural_height = 0.0_f32;
+        for measurable in measurables {
+            let placeable = measurable.measure(child_constraints);
+            width = width.max(placeable.width());
+            natural_height = natural_height.max(placeable.height());
+            placeable.place(0.0, 0.0);
+            placements.push(Placement::new(placeable.node_id(), 0.0, 0.0, 0));
+        }
+        let width = width.clamp(constraints.min_width, constraints.max_width);
+        let height = (natural_height * self.controller.collapse_fraction().clamp(0.0, 1.0))
+            .clamp(0.0, constraints.max_height);
+        MeasureResult::new(crate::modifier::Size { width, height }, placements)
+    }
+
+    fn min_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], height: f32) -> f32 {
+        BoxMeasurePolicy::new(crate::Alignment::TOP_START, false)
+            .min_intrinsic_width(measurables, height)
+    }
+
+    fn max_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], height: f32) -> f32 {
+        BoxMeasurePolicy::new(crate::Alignment::TOP_START, false)
+            .max_intrinsic_width(measurables, height)
+    }
+
+    fn min_intrinsic_height(&self, measurables: &[Box<dyn Measurable>], width: f32) -> f32 {
+        BoxMeasurePolicy::new(crate::Alignment::TOP_START, false)
+            .min_intrinsic_height(measurables, width)
+    }
+
+    fn max_intrinsic_height(&self, measurables: &[Box<dyn Measurable>], width: f32) -> f32 {
+        BoxMeasurePolicy::new(crate::Alignment::TOP_START, false)
+            .max_intrinsic_height(measurables, width)
+    }
+}
+
 /// Wraps `content` so it can be swiped away horizontally.
 ///
 /// Dragging moves the content with the finger (clamped to one content width
@@ -783,67 +857,49 @@ where
     let gesture_modifier = swipe_gesture_modifier(modifier, Rc::clone(&controller));
 
     let controller_for_layout = Rc::clone(&controller);
-    let node = SubcomposeLayout(Modifier::empty(), move |scope, constraints| {
-        let collapse = controller_for_layout.collapse_fraction().clamp(0.0, 1.0);
-
-        let gesture_modifier = gesture_modifier.clone();
-        let background = background.clone();
-        let content = Rc::clone(&content);
-        let controller_for_row = Rc::clone(&controller_for_layout);
-        let measurables = scope.subcompose(SlotId::new(0), (), move || {
+    let node = Layout(
+        Modifier::empty(),
+        SwipeMeasurePolicy {
+            phase: SwipeLayoutPhase::Collapse,
+            controller: Rc::clone(&controller_for_layout),
+        },
+        move || {
             let background = background.clone();
             let content = Rc::clone(&content);
-            let controller_for_row = Rc::clone(&controller_for_row);
-            BoxWithConstraints(gesture_modifier.clone(), move |row_scope| {
-                controller_for_row
-                    .width_px
-                    .set(row_scope.constraints().max_width);
-
-                if controller_for_row.revealed() {
-                    if let Some(background) = &background {
-                        let background = Rc::clone(background);
-                        let side = controller_for_row.revealed_side();
-                        Box(Modifier::empty(), BoxSpec::new(), move || {
-                            (background.borrow_mut())(side);
-                        });
+            let controller_for_row = Rc::clone(&controller_for_layout);
+            let gesture_modifier = gesture_modifier.clone();
+            Layout(
+                gesture_modifier,
+                SwipeMeasurePolicy {
+                    phase: SwipeLayoutPhase::Row,
+                    controller: Rc::clone(&controller_for_row),
+                },
+                move || {
+                    if controller_for_row.revealed() {
+                        if let Some(background) = &background {
+                            let background = Rc::clone(background);
+                            let side = controller_for_row.revealed_side();
+                            Box(Modifier::empty(), BoxSpec::new(), move || {
+                                (background.borrow_mut())(side);
+                            });
+                        }
                     }
-                }
-
-                let content = Rc::clone(&content);
-                let controller_for_layer = Rc::clone(&controller_for_row);
-                Box(
-                    Modifier::empty().graphics_layer(move || GraphicsLayer {
-                        translation_x: controller_for_layer.current_offset(),
-                        ..GraphicsLayer::default()
-                    }),
-                    BoxSpec::new(),
-                    move || {
-                        (content.borrow_mut())();
-                    },
-                );
-            });
-        });
-
-        let child_constraints = Constraints {
-            min_width: constraints.min_width,
-            max_width: constraints.max_width,
-            min_height: 0.0,
-            max_height: constraints.max_height,
-        };
-        let mut width = 0.0_f32;
-        let mut natural_height = 0.0_f32;
-        let mut placements = Vec::with_capacity(measurables.len());
-        for measurable in measurables {
-            let placeable = scope.measure(measurable, child_constraints);
-            width = width.max(placeable.width());
-            natural_height = natural_height.max(placeable.height());
-            placeable.place(0.0, 0.0);
-            placements.push(Placement::new(placeable.node_id(), 0.0, 0.0, 0));
-        }
-        width = width.clamp(constraints.min_width, constraints.max_width);
-        let height = (natural_height * collapse).clamp(0.0, constraints.max_height);
-        scope.layout(width, height, placements)
-    });
+                    let content = Rc::clone(&content);
+                    let controller_for_layer = Rc::clone(&controller_for_row);
+                    Box(
+                        Modifier::empty().graphics_layer(move || GraphicsLayer {
+                            translation_x: controller_for_layer.current_offset(),
+                            ..GraphicsLayer::default()
+                        }),
+                        BoxSpec::new(),
+                        move || {
+                            (content.borrow_mut())();
+                        },
+                    );
+                },
+            );
+        },
+    );
     controller.node_id.set(Some(node));
     node
 }

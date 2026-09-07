@@ -62,6 +62,7 @@ pub(crate) fn apply_draw_commands(
                     layer_bounds,
                     layer,
                     clip,
+                    None,
                     scene,
                     blend_mode,
                     false,
@@ -96,7 +97,7 @@ pub(crate) fn apply_draw_commands(
                 );
             }
             DrawPrimitive::Shadow(shadow_prim) => {
-                super::push_shadow_primitive(shadow_prim, layer_bounds, layer, clip, scene);
+                super::push_shadow_primitive(shadow_prim, layer_bounds, layer, clip, None, scene);
             }
         }
     }
@@ -202,9 +203,7 @@ mod tests {
         ));
 
         let layer = GraphicsLayer {
-            scale: 1.0,
-            scale_x: 2.0,
-            scale_y: 0.5,
+            alpha: 0.5,
             ..Default::default()
         };
         let mut scene = CompositorScene::new();
@@ -227,11 +226,17 @@ mod tests {
             &mut scene,
         );
 
-        let shape = scene.shapes[0].shape.expect("rounded shape");
-        let radii = shape.radii();
-        assert!((radii.top_left - 5.0).abs() < 1e-6);
-        assert!((radii.top_right - 5.0).abs() < 1e-6);
-        assert!((radii.bottom_right - 5.0).abs() < 1e-6);
-        assert!((radii.bottom_left - 5.0).abs() < 1e-6);
+        scene.flush_loose();
+        let run = &scene.runs[0];
+        let record = run.tables().shapes.get(0).unwrap();
+        assert_eq!(record.radii, [10.0; 4], "the record keeps the app's radii");
+        assert_eq!(
+            run.placement.offset,
+            cranpose_ui_graphics::Point::new(0.0, 0.0)
+        );
+        assert!(
+            (record.color[3] - 0.5).abs() < 1e-6,
+            "a loose primitive carries the layer's paint in its brush"
+        );
     }
 }

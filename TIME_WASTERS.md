@@ -4,6 +4,16 @@ Signature → cause → what to do. One lesson per line, no incident history.
 
 ## Triage before blaming the code
 
+- **A blurred neighbour turns an averaged substrate black:** the atlas result holds both outputs. Its vertical blur must load when average regions already occupy that texture; clearing the attachment erases them outside the blur scissor.
+- **A launched app has no PID after a fixed delay:** poll process readiness with a deadline; cleanup must cover launches before PID discovery, or the abandoned game keeps heating the device.
+- **The first audio cue is absent while later game cues arrive:** do not restart whole FPS matrices around a one-time log message. Use an observed presentation boundary for both arms and label that window separately from audio-gated results.
+- **A skipped backdrop read passes a pixel mutant over a sharp background:** SrcOver can reconstruct the same sharp backdrop through destination blending. Use a blurred capture so dropping its read exposes different pixels; also verify the fixture contains the shader region being optimized.
+
+- **A restored source file still runs another build:** `rsync -a` and repeated archive extraction restore earlier timestamps, so Cargo can reuse a newer artifact. Preserve unchanged files when activating snapshots; touch changed sources. Verify the intended shader is embedded in each native binary, then run its pixel guard.
+- **Identity capture differs by one byte on lavapipe:** a bilinear sample from a half-float texture can add rounding even at a nominal texel centre. Isolate each capture; an identity fixture that requires exact bytes should use `textureLoad`. Keep the pixel assertion strict and leave material sampling unchanged.
+- **Fewer upload bytes with more writes can be slower:** measure allocation calls as well as bytes. On Adreno 702, pooled staging helps dozens of scattered writes but leaves a single dense write unchanged. Packing columns after recording adds a CPU conversion; write the columns in the recorder.
+- **Compute blending differs from the attachment:** Adreno 702 quantizes source RGBA before blending into RGBA8. Quantizing only the accumulated destination differs even when the blend equation is identical. Prove the attachment rule with overlapping random colours before building a tile renderer.
+
 - **Rebase first.** `git fetch origin main && git log --oneline origin/main -3` costs seconds. Four "broken on main" robots were four commits already fixed upstream. A stashed clean tree proves the failure is not in *your* changes — it says nothing about your base being current.
 - **Confirm a cause by REMOVING it and re-running, before writing the fix.** Binary-search by cutting half the code.
 - **A/B two revisions on ONE machine, back to back.** Byte-identical output (same SHA-256, empty `ImageChops.difference` bbox) ends the question. Two machines — or one machine hours apart — compares host state as much as code.
@@ -16,6 +26,11 @@ Signature → cause → what to do. One lesson per line, no incident history.
 - "No test names it" and "no code calls it" are different questions. Uncalled *and* untested is dead; called but untested wants a test. Deleting on the first signal broke four modifier files (`InspectorInfo::add_dimension`: four callers, no test).
 
 ## Host and display gates
+
+- **`cargo ndk --message-format=json-render-diagnostics` builds but stdout has no artifacts:** verify one fresh target executable by build time, source inventory and SHA; do not select a stale binary by filename.
+- **GC reclaims logical GB but disk stays full:** APFS sharing or snapshots can retain blocks; verify `df`, keep the disk guard, and use another build host.
+
+- **A first offscreen GPU control can be much slower than the warmed control:** on the watch, the same frozen raster draw measured 41 ms first and 14–16 ms after a compute experiment. Alternate the unchanged control after every variant; a few warm-up frames do not establish stable clocks.
 
 - **Thermal guard has TWO knobs**: `CRANPOSE_HOST_MAX_TEMP_C` (default 90) trips, `CRANPOSE_HOST_RESUME_TEMP_C` (default 85) releases. Raising only MAX is useless when ambient sits above RESUME — one spike arms a wait for a cooldown that never comes, and the run dies `host_not_ready` after `CRANPOSE_HOST_MAX_WAIT_SECS` (300). On a busy desktop use `CRANPOSE_HOST_MAX_TEMP_C=97 CRANPOSE_HOST_RESUME_TEMP_C=93` and a longer wait. `host_not_ready` with no robot binary launched is an environmental block — report it, do not wait it out. Schedule robot suites LAST, never beside a cargo/gradle build.
 - **Robot over ssh needs an explicit `DISPLAY`.** Without it every test fails "neither WAYLAND_DISPLAY nor WAYLAND_SOCKET nor DISPLAY is set" — 153 failures that look catastrophic are one env var. `DISPLAY=:0` on samarch-1; `run_robot_test.sh` needs one even for `CRANPOSE_HEADLESS=1` (winit still builds an event loop).
@@ -54,6 +69,7 @@ Signature → cause → what to do. One lesson per line, no incident history.
 - **Do not accept `pkill` as the explanation for a *signal 9* death.** `pkill`/`kill` default to SIGTERM (15), so a plain `pkill -f` produces "terminated by signal 15". Signal 9 needs an explicit `-9`/`-KILL`, an OOM kill, or something else — and a vanished `target/` is a delete, not a signal, so the two symptoms need two different culprits. Read the signal number before blaming a neighbour, and do not let one confirmed kill absorb every unexplained death near it.
 - **zsh does not word-split unquoted expansions**, and ssh logs into zsh on *both* build hosts — samarch-1 is Linux but its login shell is zsh too, so this is not a macOS-only trap and reading it as one is what makes it bite twice. `for f in $(git grep -l ...)` passes the whole list as one argument ("File name too long"); `security list-keychains -s $keep` passes one space-prefixed path and corrupts the search list. The nastiest shape is a **loop that silently does nothing and then reports success**: `kill -TERM $pids` hands `kill` one bogus argument (suppressed by `2>/dev/null`), and the verification `for p in $pids; do [ -d /proc/$p ] && ...; done` iterates *once* over the whole string, finds no such directory, and prints "still alive: none". Nothing was killed and the instrument swore otherwise — it cost a full cancel-and-kill cycle on a wedged robot job that held the exclusive host lock the entire time. Wrap remote scripts in `bash -lc "..."`; use `-lz` with `xargs -0` or `IFS=$'\n'`. Verify a kill by re-reading /proc from a *separately* invoked shell, never from the same one that did the killing.
 - **`cmd 2>&1 | tail -c N > log` reports tail's exit status** — a 59-error compile failure arrives as "exit 0". Append `; echo "EXIT_CODE:$?" >> log` inside the detached command and read the log, never the wrapper.
+- **Codex model ids are not a family**: sol, terra and luna are `gpt-5.6-*`, astra is `gpt-6-astra`; `gpt-5.6-astra` returns a 400 after the whole prompt is sent. The binary lists what it knows: `strings $(readlink -f $(which codex)) | grep -o 'gpt-[0-9.]*-[a-z]*' | sort -u`.
 - **`codex exec "<prompt>"` reads *additional* stdin when stdin is not a tty** and hangs at "Reading additional input from stdin..." forever (ten hours, once). Always `< /dev/null` it in detached launchers, and write the exit sentinel unconditionally — under `set -e` a non-zero exit kills the script before the sentinel and the waiter polls an orphan log forever.
 - **`git grep` reads the index, so it cannot see files the branch just added.** A 278-site rename silently skipped three new crates and the build failed on an import the rename reported success over. Drive tree-wide renames from `find`, or `git add -A` first, and always re-grep for the OLD name afterwards.
 - **A single `ps` snapshot is not liveness.** Liveness = two CPU samples spaced apart AND newest-artifact mtime advancing AND the output file growing. Give every wait loop a staleness deadline (~10 min without new artifacts → investigate/kill). Check for orphaned Xvfb/app/cargo processes after any background session.
@@ -583,6 +599,34 @@ than the period, then jump. Measure GPU time with the whole-frame fence, or
 compare `pass_px` and the Mac's `CRANPOSE_GPU_PASS_TIMING` occupancy, never
 the present column.
 
+## A fence cannot time the GPU here either; inject CPU delay and read the period
+
+The whole-frame fence reports 43 ms per frame on a scene running at 52 fps
+unfenced (cranorbit MEGA BOSS, 2026-09-04), so on this device it has a
+round-trip floor larger than the frame and cannot rank anything. What does
+discriminate is `debug.cranpose.encode_delay_ms`: a sleep on the present
+thread between acquire and encode. If the period does not move, the GPU is
+the frame and the CPU hides under it (showcase: +20 ms cost nothing, +40 ms
+cost a frame, so the GPU frame is ~40 ms and present blocks on the previous
+frame, not this one); if it moves one for one from zero, the present thread
+is the frame and the present block is `gpu - encode` (cranorbit: GPU ~19 ms
+behind an 8 ms present column). Two alternating rounds, temperature logged.
+
+## The swapchain image's usage is not what makes the showcase slower on Vulkan than GL
+
+Rendering into an offscreen 8-bit page and blitting it (two more full-page
+passes, a temporary toggle on `presentable_root_usages`) measured 23.9-24.0
+fps against 24.0-24.5 direct, two alternating rounds (2026-09-04). Framebuffer compression on the swapchain
+image is not the ten milliseconds GL saves on this driver; do not spend time
+on the page's usage flags.
+
+## Splitting shape batches by kind is a regression on a studded arena
+
+A batch key of (blend, brush table, kind, solid, clip) turned cranorbit's one
+arena batch into 293 draws with 293 buffer writes and band tessellations:
+12 fps. Derive a pipeline variant from a batch's content instead and keep
+the batch; a mixed batch simply takes the general pipeline.
+
 ## An uber-shader's OFF features cost more than its ON ones on Mali
 
 The liquid glass fragment program gates a dozen optional features on
@@ -648,3 +692,579 @@ because that file is only compiled for the Android target; the first thing
 that caught it was the phone APK build six seconds in. When you add a row,
 bump the length in the same edit and build the APK before pushing: the
 "Android release build" CI job is the only gate that compiles it.
+
+## A pixel test's failure numbers name the mechanism it expects
+
+`translated_text_wrapper_preserves_local_picture...` failed with 241
+differing pixels against a bound of 240 and a max channel sum of 267 after
+the renderer's direct path drew the text raster at the same device position
+in both frames. That pair of numbers is a snapped raster read back through a
+bilinear sample at a 0.35 px phase: 267 = 3 x 89 = 3 x 0.35 x 255. The test
+was not asserting rigid motion, it was asserting the supersampled "motion
+stable capture" surface the old planner composited at fractional offsets.
+Before chasing a raster bug, decode the reported diff against the sampling
+the assertion applies; when it reproduces a resample of a correct raster the
+test encodes a removed mechanism and needs a new contract, not a fix.
+
+## Deleting a test by `rfind("#[test]")` walks into the previous module
+
+A script that removed tests by searching backwards for the nearest `#[test]`
+from a matched string deleted the `FinishedRecording` struct and half of
+`DrawScopeDefault` in `geometry.rs`: the match was in a doc comment above
+the item, so the search jumped into an earlier test module. Bound the search
+to the `#[cfg(test)] mod tests` slice and end an item at the first `\n}\n`
+at column zero, never by counting braces through string literals, and keep
+a pristine copy of the file (`git show HEAD:<path>`) to rebuild from.
+
+## Pass count, not fill, is the frame cost on every tiler you ship to
+
+The resolve-then-compose renderer halved the showcase's pass pixels and
+still fell from 24 to 14 fps on the Mate 20 X: 65 small passes against 30.
+Metal on the Mac charges the same shape of cost — the pass-timing report
+showed ~0.5 ms for a 40x40 blur pass — so the Mac build is the instrument:
+`CRANPOSE_GPU_PASS_TIMING=1 CRANPOSE_GPU_STATS=1 ./cranpose-showcase` prints
+a per-label pass inventory (`[GPU-PASS] Shader Effect Pass 14ms x30 | ...`)
+that the phone cannot (no timestamp queries, and its logcat drops the
+`[GPU f#]` lines under scroll). Read that inventory before touching a
+shader: the fix was batching captures and blurs into atlas passes and
+drawing shader tails in the final pass, which no ALU work would have found.
+
+## Attributing Mali frame time without GPU timestamps (2026-09-03)
+
+The Mate 20 X exposes no timestamp queries, and reading the Mac pass
+inventory for it misleads twice: Metal's per-pass "occupancy" sums pass
+durations that overlap (the `span` is the real GPU time), and a pass that
+is cheap on Apple silicon (an atlas-sized blur pair, a re-shaded glass
+inside a capture) is bandwidth or ALU on Mali. What worked, in one APK
+build: a temporary `CRANPOSE_ABLATE` toggle mapped to
+`debug.cranpose.ablate`, read in frame.rs and draw_pass.rs, that drops one
+thing per run (all backdrops, the blur pair, the capture draws, the shapes
+or blits or shader composites inside captures, the shader-only children),
+then `setprop` per variant and the frame telemetry's present p50. The
+differences add up to the frame, so one build answers every "what does X
+cost" question; three separate hypothesis builds before it answered none.
+Take the toggle out before committing: it is a debug branch in the hot path.
+
+## A rule that helps one path can hurt the other (2026-09-03)
+
+The tail-recapture rule (a shader tail read by more than half its area
+resolves into a texture) was written for shader-only children, where the
+alternative is a two-pass surface. Applied to backdrop glasses it dropped
+them out of the atlas into per-glass capture and effect passes, and the
+Mac inventory grew four unbatched captures per frame. Any rule that decides
+between "stay batched" and "resolve alone" must be measured on both kinds
+of item before it ships.
+
+## Reproduce a robot scroll failure headlessly before writing fixtures (2026-09-03)
+
+Three robot runners failed on CI's X11 host. Two hours went into guessing
+the failing element from diff crops and building four render-graph
+fixtures (layer shadows, cutout shadows, a glass over a shadow) that never
+turned red, then got deleted. What answered in ten minutes was composing
+the real demo page in an `AppShell` over a headless renderer at the CI
+density, driving its scroll state by one physical pixel and comparing
+shifted frames -- `apps/desktop-demo/tests/liquid_scroll_phase.rs`. It
+reproduced the exact 8 800-pixel flicker on the Mac, and every fix could be
+checked in seconds instead of a queued samarch-1 run. The robot log's
+first-diff pixel names a symptom, not the element: read-tail resolve
+regions, gradient dither and shadow bands all showed up as "1 LSB on a
+card". Start from the scene, not from the pixel.
+
+## An ablation worktree keeps every earlier ablation (2026-09-03)
+
+Device ablations were built from a scratch worktree so the live tree stayed
+clean, and the worktree was "synced" by copying the files `git status`
+listed in the live tree. After the live work was committed, `git status`
+listed nothing for `frame.rs`, so the worktree kept the previous ablation's
+`frame.rs` under every later build. A toggle APK meant to split a 22 ms
+capture cost then measured its "none" variant at 32 ms against the live
+tree's 46 ms, and two hours went into the wrong question (a build-location
+confound) before a `diff` of the two trees showed the stale ablation. Sync
+an ablation tree with `diff -rq` against the live tree, or rebuild it from
+the commit plus one patch, and never trust a "none" variant that does not
+reproduce the live baseline first.
+
+## A benchmark APK collides with the store build on a device (2026-09-04)
+
+The Pixel Watch 3 and the Pixel 9 Pro carry cranorbit from the store
+(versionCode 109, release key). A benchmark release build has versionCode
+1 and the debug signer, so every `adb install -r` fails: downgrade first,
+signature mismatch after any version bump, and neither `-d` nor a higher
+version code gets past the key on a user build. The only ways through are
+uninstalling the user's game with its saves, or a different application
+id. cranorbit's debug build already carried `.debug` for exactly this
+reason; `-PbenchArena=true` now carries `.bench` in the release build.
+Check `dumpsys package <id> | grep -E "versionCode|signatures"` before the
+first install on someone's device, and give a measurement build its own
+id rather than fighting the installer. Also: `simpleperf record` on the
+watch fails with "Event type 'cpu-clock' is not supported" for every
+event; the kernel ships without perf events. Profile there with the
+`debug.cranpose.*_stage_ms` properties.
+
+- ARMv7 record append probes (2026-09-05): forcing column append out of line costs ~10%; the supported thumbv7neon Android target gives no measurable gain. The 15,161-arc probe needs parallel preparation for a substantial CPU gain. Evidence and limitations: `docs/mobile_watch_performance.md`.
+
+- Android toolchain aliases (2026-09-05): `RUSTUP_TOOLCHAIN=1.98` follows the patch channel and downloaded 1.98.1 without the installed Android targets. Use the repository's exact `1.98.0` pin for external app copies too; their own default toolchain need not match Cranpose.
+
+- **Every watch showcase APK is armeabi-v7a, and a plain
+  `./gradlew :app:assembleRelease` builds arm64 (2026-09-05, one void A/B).**
+  The showcase's `build.gradle.kts` pins `releaseAbis` to `arm64-v8a`; the
+  watch builds get their 32-bit library from a scratch script that seds the
+  pin to `armeabi-v7a` around the Gradle call and back. Build a comparison
+  APK with the default and you pair a 32-bit baseline with a 64-bit
+  candidate: both install and run on the Pixel Watch 3, both scroll at the
+  same fps, and nothing in the logs says which ABI ran. Before an A/B on
+  any device, `unzip -l` both APKs and read the `lib/<abi>/` line; a build
+  whose stats line cannot show the change (here `acq=0` where the new code
+  counts transients) is the other tell. Gradle's stripped library also
+  never hashes equal to `target/<triple>/release/*.so`, so a hash mismatch
+  there proves nothing.
+
+- Parallel shape preparation (2026-09-05): borrowed-input microbenchmarks did not predict the public DrawScope cost. A complete queued/chunked implementation passed record and GPU parity, including deliberately reversed chunks and wrong upload offsets, but regressed both physical devices. ARMv7, 15,161 rotating arcs: Huawei baseline ~1.84 ms versus 6.3-7.2 ms; watch ~7.52 ms versus 8.1-10.2 ms. Two workers were slower, 128-byte separation of worker state did not help, and removing the metadata merge still did not beat the watch baseline. Borrowing tables once per batch also failed to improve the watch. The implementation is stashed, not retained. Benchmark complete public recording with changing inputs before adding a scheduler; all evidence is summarized in `docs/mobile_watch_performance.md`.
+
+## Huawei shell Vulkan probe cannot enumerate the app's adapter
+
+On the Mate 20 X, a standalone ARM64 wgpu 29.0.4 executable launched by adb
+returns `request_adapter: NotFound`; the same device runs the Showcase APK
+through Vulkan. Matching the app's empty instance flags does not resolve it.
+The standalone ARMv7 probe works on Adreno702. Use an APK for Huawei shader
+validation; do not mistake this shell-probe limitation for app GPU availability.
+
+## 2026-09-05: a chained scratch build ran on a tree the patch step had not touched
+
+A watch ablation run measured nothing because the APK had no toggle: the
+patch script's first pattern no longer matched (an earlier patch had
+already changed the same property table), it exited non-zero, and a `;`
+between the patch and the gradle step let gradle build the unpatched tree
+anyway; my grep of the build output for `error|gradle exit` hid the
+traceback. Two device runs and a rebuild were lost. Chain a build on the
+patch with `&&`, and before any device run grep the built tree for the
+marker the run depends on (the property row, the override name) and the
+device log for the line proving the toggle reached the process
+(`debug.cranpose.<name> -> CRANPOSE_<NAME>=...`); a run without that line
+is void, as the silent-instrument rule says.
+
+## The watch list swipe started in the list's margin, so a day of watch numbers was the header at rest (2026-09-05)
+
+Every watch showcase measurement on 2026-09-05 swiped from (36, 300) to
+(60, 80). On the Pixel Watch 3's native 408 x 408 at density 320 the
+list's 20 dp margin is 40 px, so x = 36 never touched the list; the
+frames were the header under a touch, with no scroll, and the planet
+cards never entered the frame. The screenshots showed the header every
+time and were read as "the swipe is too short" instead of "the swipe
+missed". Codex found it by dragging inside the list: (100, 236) to
+(100, 76), same direction, reaches the Sun card by the third drag. The
+desktop API-count runner scaled the same coordinates and shared the
+flaw. Before trusting a gesture on a new device or density, take one
+screenshot after it and confirm the content moved; a gesture that
+produces frames is not a gesture that scrolls.
+
+## The headless robot path renders nothing a wgpu-core trace can count (2026-09-05)
+
+`SHOWCASE_ROBOT_HEADLESS=1` made the API-count runner emit 113 lines
+and zero submits after two rebuilds chasing a log-level cap that did
+not exist. The earlier trace had been taken over a visible window. Run
+trace counts with `SHOWCASE_ROBOT_HEADLESS=0`.
+
+## Passing gates and isolated recording gains missed a hot workload regression (2026-09-05)
+
+The shared renderer passed every gate and reduced complete public recording
+cost, but full-minute watch Megaboss A B A B then B A B A found about 16.1 fps
+against main's 18.3 at 43–45 C. Main still composites cached segments which the
+record renderer redraws. Removing main's cache drops it to 15.74 fps; restoring
+it gives 17.95 in the next, slightly hotter leg. The exact expectations forbid
+transplanting its permissive rotation resampling. Before accepting an ownership
+or record-layout improvement, complete the same hot application comparison;
+neither passing pixels nor a faster append benchmark establishes throughput.
+
+## Repeated record bodies do not establish a faster GPU representation (2026-09-05)
+
+The arena's 15,007-arc sample contains only 296 unique bodies. Exact interning
+cuts their bytes from 960 KB to 79 KB, but indirect vertex reads take about
+36 ms against the unchanged attributes' 35 ms on the hot watch. Moving those
+reads into fragments to shrink varyings costs 46–49 ms against 23–26 ms
+interleaved controls. Both preserve every byte; the wrong-index mutant fails.
+Measure GPU consumption and complete CPU preparation before changing the
+recording architecture on the strength of a compression ratio.
+
+## A device matrix in a harness background task is cut at ten minutes; a pattern kill hits the teammate's leg
+
+An A B A B + B A B A matrix of 60 s legs runs about 13 minutes. Claude Code's background Bash tasks are limited to 10 minutes, so run the driver detached (`python3 -c 'subprocess.Popen([...], start_new_session=True)'`; macOS ships no `setsid`) and watch its log. When two agents run the same `measure_orbit.py` from the shared mailbox on one Mac, `pkill -f measure_orbit.py` kills both: the other agent's leg dies without its cleanup, leaving the device's debug properties, SurfaceFlinger timestats and the app as they were. Stop only the PID you launched.
+
+## Trimming a fullscreen-strip shader draw to a quad or a ring is never byte-exact
+
+Two hours on 2026-09-05: the glass split draws rasterized as an interior quad and a rim ring rendered byte-for-byte against the same shader drawn whole (the parity test was green and red-provable), yet against the previous shader source they flipped ~1% of glass pixels by one level with uv from `@builtin(position)` and 18,510 pixels with the interpolated varying: a varying's plane equation is per triangle, so different triangles over a pixel give different ULPs, and position-derived uv differs from the old interpolated value as well. A parity test that compares two arms sharing the new math proves nothing about the old picture. Freeze the previous shader source as a fixture and compare against it (`glass_reference_shader.rs`), and cut fragment work only with scissors on the unchanged strip.
+
+## `just precommit` on a clean-looking tree does not see untracked files (2026-09-06)
+
+The complexity and duplication gates diff against `origin/main`, and an
+untracked new file is not in that diff, so `just precommit` reported
+"clean" on a tree whose new `opaque_prefix.rs` was 53 against the
+limit of 20; the pre-commit hook then rejected the commit, after the
+suite, clippy and clippy-wasm had all been run on that tree. Stage new
+files (`git add`) before running `just precommit`, or run it exactly as
+the hook does, on the index.
+
+## bash 3.2 under `set -u` treats an empty array as unbound (2026-09-06)
+
+`"${args[@]}"` with `args=()` aborts a `set -u` script on macOS's bash
+3.2 (`args[@]: unbound variable`); two device matrices died after their
+first leg on the leg that passed no properties. Expand optional arrays
+as `${args[@]+"${args[@]}"}`.
+
+
+
+## A route verified once did not return to the same start when hot (2026-09-05)
+
+Twelve 50 ms forward/reverse flings reached Proxima and the header in watch
+Showcase discovery. In the eight full-minute comparison, shared-runtime legs
+5 and 7 returned only to the first card at about 42 C. Stable PID, foreground
+and forty input commands did not catch that changed starting workload. A local
+OCR check of the untimed return screenshot recognizes the search field in all
+six correct starts and rejects both wrong starts. Require that check before
+timing, and allow sufficient endpoint runway on the fixed route. Keep querying
+and recording overhead outside the FPS window; a discovery screenshot alone
+does not validate every later hot leg.
+
+## A foreground Megaboss can pause itself after a pipeline compilation stall (2026-09-05)
+
+Cranorbit's unchanged frame effect pauses a playing session after a gap of at
+least one second. A watch leg compiled a rounded-rectangle pipeline for 1,058 ms
+before showing PAUSED and voting for zero frames. PID and foreground stayed
+stable. Relaunching the same APK reduced that compilation to 12 ms and the
+game remained active. Keep the failed startup evidence, check the scene before
+timing, and distinguish missing presents from a foreign application. A
+KeepScreenOn window-thread exception also occurred, but does not establish the
+cause of that pause.
+
+## Android worker-thread tests must actually call the API on a worker (2026-09-05)
+
+Pixel Watch lacks android.test.InstrumentationTestRunner even when its SDK
+stubs compile. Use the packaged AndroidX runner. ActivityScenario.onActivity
+dispatches to the UI thread even when called from a worker: placing it inside
+a FutureTask does not test an off-thread API call. Capture the activity first,
+call the method directly on the worker, propagate failures through a bounded
+future, and read the resulting flags on the UI thread. Assert enable and
+disable separately so a no-op implementation cannot pass. Build a separate
+test application identity when an installed demo has another signing key;
+do not erase its data to get the test installed.
+
+
+## GNU stat and overlapping roots can break the build-cache sweep (2026-09-05)
+
+On GNU stat, `stat -f %m` selects filesystem mode and may emit nonnumeric
+output before the timestamp fallback. Require a successful command and a
+numeric timestamp. Fixture tests need portable `dd bs=1048576` and a local
+unsigned seed commit so host signing preferences do not prevent the test.
+A root scan can rediscover a Git worktree target; deduplicate canonical target
+paths before accounting so the sweep does not promise the same space twice.
+The broken Linux sweep left only 7.6 GB available; the repaired sweep reclaimed
+94.1 GB of eligible tagged caches while protecting the primary checkout.
+
+
+## Pin the complete Rust toolchain name for device builds (2026-09-06)
+
+On macm3, `1.98` and `1.98.0` are separately installed rustup aliases with
+separate target sets. The former had ARMv7 only; the repository's pinned
+`1.98.0` already had both Android targets. Use the exact channel from
+rust-toolchain.toml. Inspect `rustup toolchain list` before querying a guessed
+alias: even target-list queries can install a missing toolchain.
+Cranorbit's store packaging guard rejects benchmark arenas by design. For a
+framework-only native comparison, build `cranposeBuildNativeRelease` and use
+the same previously verified isolated benchmark host APK for both arms.
+Do not accidentally invoke store packaging or edit the application's source.
+
+
+## Validate new files and the remote source inventory before accepting gates (2026-09-06)
+
+The diff-based complexity gate does not see an untracked Rust file. Stage new
+files before running precommit. Extracting a source archive over an earlier
+remote experiment also leaves removed source files behind: an untracked span
+integration test still ran after the span implementation was stashed locally.
+Preserve those files outside the active archive and compare a tracked-source
+hash manifest plus the remote Rust/WGSL inventory before trusting the build.
+Do not delete build caches or teammate work to repair a source mismatch.
+
+## An empty Bash array can stop a measurement without waking its watcher (2026-09-06)
+
+The Mac's Bash 3.2 under `set -u` treats an empty array expansion as unbound.
+Both prefix matrices stopped after the first property-bearing leg when the
+next leg used an empty property array. Their detached log watchers waited for
+a success marker that would never arrive. The driver must handle the empty
+case and publish termination status on every exit. Preserve interrupted legs
+and restart with new labels; a silent watcher is not measurement progress.
+
+## A high cache hit rate does not establish cheaper arc preparation (2026-09-06)
+
+The captured arc stream hits an exact sixteen-entry radius/sweep template
+98.18% of the time. Caching its band padding and bucket still increases the
+complete watch drawing/finish/reuse probe from 6.99–7.02 to 10.15–10.21 ms
+across A B A B then B A B A, with identical record fingerprints and 38.4 C
+after the first leg. Linear lookup and entry handling cost more than the
+arithmetic they remove. The prototype was restored out of the active source.
+Measure the whole recording path before adopting another memoization table.
+
+The preserved rejected parallel prototype stores its preparation module
+in the stash's untracked third parent. Its workers start only when the scope
+flushes, after gathering all inputs. Reviewing only the tracked diff misses
+that behavior. A proposal to overlap preparation with production must account
+for the producer, chunk publication, segment boundaries and final upload;
+parallel preparation of an already-built input array is not that measurement.
+
+## Outer recording ownership does not prove its shape columns are reusable (2026-09-06)
+
+The draw-command pool holds `Rc<CommandRecording>`, but the renderer separately
+retains `Arc<ShapeRecorder>`. Checking only the outer count takes the newest
+slot while its columns remain shared. Re-recording allocates fresh columns;
+publication then rotates the already-taken slot into the spare, so the older
+capacity never survives. On-device counters show 1,405 shared-inner takes and
+only three reuses in 1,408 large recordings. Requiring both ownership layers
+to be free restores 1,900 reuses in 1,920 acquisitions with the same two slots.
+An isolated sole-owner drawing benchmark misses this allocation churn. Trace
+both owners before proposing workers or adding more spare buffers.
+
+## Keep source archives portable and check the extracted inventory (2026-09-06)
+
+The Mac's tar included AppleDouble metadata beside all 2,005 source files.
+Linux extracted `._foo.rs` files, and emitted thousands of extended-attribute
+warnings. Construct source archives with Python's tarfile using the tracked
+file inventory, then verify hashes and unexpected Rust/WGSL files before a
+build. Preserve stray metadata outside the source tree. `os.rename` cannot
+move between filesystems; choose a destination on the same filesystem or use
+a move implementation that handles that boundary. Stop a source preparation
+script on errors before starting dependent commands.
+
+Matching source hashes alone does not prove Cargo rebuilt an archived source
+switch. An archive preserving timestamps older than the last build made the
+combined Showcase build finish in 0.20 seconds and return the previous native
+library unchanged. Audit the extracted content, refresh the complete source
+inventory's modification times, and then build. Record resolved framework
+dependency paths and packaged native hashes. Preserve a suspect artifact and
+its logs; do not count it as the new candidate's measurement. Hash every app
+workspace member's source, not only a root `src` directory which may not exist.
+
+## Replaced gate jobs need distinct results and explicit termination (2026-09-06)
+
+Two full renderer suites remained alive after layout snapshots changed, with multiple detached waiters reading the same overwritten log. A success marker after a grep pipeline is not the test command's exit status. Give each immutable snapshot a unique result path, retain actual exit codes, and terminate only verified superseded jobs. Run focused mutation proofs during review, then one full gate chain over the final source. Do not launch another full suite merely because a private function or its test changed while the preceding suite still runs.
+
+The held kind-range implementation predates opaque-prefix record windows. Applying its draw-loop changes blindly would redraw a prefix already supplied by the cache. Window offsets are relative to a run while segment starts are absolute table indices; preserve both and test nonzero, noncontiguous starts plus buffer continuation. A specialization image test must wait until its specialized pipeline actually draws, or it may compare two general fallback frames.
+
+## Worktrees share one stash list; `git stash pop` takes the newest, whoever made it (2026-09-06)
+
+Two agents in two worktrees of the same repository share `.git`, so
+`git stash list` interleaves both agents' entries and a bare `git stash
+pop` applied the other agent's held work onto this tree (three
+conflicted docs, one staged source). Address stashes by index after
+reading their messages (`git stash list --format='%gd %s'`), `apply`
+rather than `pop`, and drop by index once the tree holds the change.
+
+## zsh names the pipeline status array `pipestatus` (2026-09-06)
+
+A gate chain that printed `${PIPESTATUS[0]}` after each piped step
+logged empty exit codes under zsh, so "chain done" carried no per-step
+status; the summary lines looked complete. Use `$pipestatus[1]` in zsh,
+or run the step in bash, and check the log shows numbers before
+trusting it.
+
+### Moving arc constants across shader stages can change pixels
+
+The radius/half-width expressions from `sdf_arc_band` look invariant per
+primitive, but moving them to `shape_output` changes 24 channel bytes by one
+level at scale 1.25 on Adreno 702. Scale 0.75 alone was exact. Preserve the
+existing stage boundary until a design passes the complete fractional-scale
+contract; matching source expressions is insufficient. Banded geometry also
+still consumes `radii.xy/zw` in fragment coverage, so it cannot skip CPU arc
+trigonometry merely because its strip vertices use `arc_normalized`.
+
+
+### Worktree stashes share a list and can include the staged index
+
+A bare stash pop in Fable's worktree selected Codex's held storage experiment.
+Its tree also included already-staged readiness and documentation changes,
+despite the work being described as a one-file storage experiment. The conflict
+kept the entry and the clean shared source was restored. Inspect the message
+and tree first, resolve the stash to its immutable commit hash, and extract
+only the intended file when other staged work is present. Never assume a
+worktree has a private stash list or that a remembered index still names the
+same experiment.
+
+### A recording function's self samples do not measure its call overhead
+
+The watch attributed 10.59% self cycles to `push_shape`. Forcing it inline
+removed the call and reduced the caller's local stack space, but complete
+ABAB/BABA app pairs after the thermal crossing changed by -0.082, -0.026 and
++0.032 FPS near 27.6 FPS. The change is rejected. The sampled function does
+useful work even when the call disappears; do not infer a direct-column or
+worker rewrite's gain from the symbol's self percentage.
+
+### Dynamic arc drawing does not imply unchanged body columns
+
+An actual unchanged-app producer census finds only 2/180 entire body columns
+unchanged at 20 updates/s, and 51/540 at 60/s. Current upload comparison already
+skips unchanged 4 KiB chunks. `CommandRecorder::reusing` can retain capacities,
+but `finish` publishes a new `Arc`; it does not preserve the pointer identity
+used by an unchanged recording's fast path. A body-identity cache still has to
+establish equality and cannot claim a free skip from angle animation alone.
+
+
+- **Wake and verify each leg of a watch GPU probe.** A shell-rendered offscreen
+  scene can keep producing valid pixels after the screen state changes. Waking
+  only once before a multi-leg program leaves its later timing conditions
+  unverified: the first arc probe ranged from 24 to 51 ms and suggested a large
+  shader gain. With wake input before each timing leg and an Awake assertion
+  before and after it, the general-pipeline pairs differed by only 0.165–0.492
+  ms around a 24 ms baseline. Retain the original measurements and their missing
+  state check; do not attribute their large swings to the code change or infer
+  GPU clock values which were never read. The app measurement harness already
+  wakes on every UI step; this gap was in the separate offscreen probe.
+
+## zsh runs `for p in $pids` once over the whole string (2026-09-06)
+
+A PID list captured into a variable and looped with `for p in $pids; do
+kill $p; done` under zsh killed nothing, and `kill -9 $left` reported
+"illegal pid: 83786\n83799": zsh does not word-split unquoted
+expansions, so the loop body runs once with the newline-joined string.
+The second time it happened the surviving driver kept swiping a device
+inside another agent's reservation for ninety seconds. List PIDs
+literally, expand with `${=pids}`, or run the loop under `bash -c`, and
+re-check each PID with `ps -o pid= -p <pid>` before reporting anything
+stopped; a "nothing left" line from the same unsplit loop proves nothing.
+
+## Whole device sequences need an exclusion lock
+
+On 2026-09-06 a teammate's automatic APK-completion driver started during
+another Huawei ABAB/BABA sequence despite a reservation heading. Per-leg
+locks, stable process checks and full-scroll preflights cannot establish
+uninterrupted ownership across eight legs. The entire affected arc-fixed
+sequence is ineligible; keep its raw records and rerun the whole sequence.
+Both team drivers must hold the same per-device sequence lock around the
+entire measurement command. Per-command locks remain separate so nesting
+does not self-deadlock. Handoff headings describe status; they are not an
+exclusion mechanism.
+
+## Publish return is not the enqueue instant
+
+The presentation worker can acquire a frame after its sender enqueues it but
+before `publish_frame` returns to that sender. A trace timestamp sampled
+after the return therefore cannot be subtracted from consumer start as an
+exact queue wait, or asserted to precede it. Bound handoff time using a
+known point before enqueue and the publish-return timestamp. Keep CPU update,
+renderer execution, packet latency and physical display periods distinct.
+`AppShell` update already contains scene construction, and the Android
+telemetry's acquire column includes publication and worker wait. Adding
+those reported spans or calling all of them useful CPU work misattributes
+the bottleneck.
+
+
+## Diagnostic log gaps and text-removal route checks (2026-09-06)
+
+A frame log is not a complete presentation history. Huawei packet traces omitted
+132 IDs in one full-scroll run; a synchronous Megaboss log had an apparent
+8.77-second gap while SurfaceFlinger continued near 60 FPS. Verify neighboring
+packet IDs before calculating adjacent-frame spans, retain gap counts, and label
+synchronous traces as unable to prove adjacency. Do not diagnose a renderer stall
+from missing log messages or substitute logged-frame counts for actual presents.
+
+A text-removal diagnostic cannot pass a route-start check based on OCR of that
+text. The watch text attribution stopped after its invalid second leg; the raw
+result stays invalid. Establish a valid independent route check before using such
+a diagnostic, or leave its attribution unavailable. Missing startup `pidof` output
+before log capture does not itself prove either a framework crash or a launch race.
+
+
+## Check active command kinds before blaming duplicate recording
+
+`draw_with_content` records both placements, but Cranpose `Canvas` constructs a
+Behind command. The unchanged Orbit/Showcase workloads do not call
+`draw_with_content`; source evidence of the generic duplicate path is not
+attribution for their per-frame preparation cost. Also, an `&mut dyn DrawScope`
+borrow does not forbid handing separately owned raw chunks to workers. The
+actual thread boundary is the owned data, and text primitives retain a non-Send
+`Rc<str>` which must stay with their owning thread.
+
+
+## An unread substrate can still determine the picture (2026-09-06)
+
+A resting LiquidGlass shader returns before reading its adaptive frost blur.
+The first fixture also passed through the material builder, which writes frost
+multiplied by activity. Its resting case therefore had zero frost and declared
+no substrate even before the added activity predicate. Comparing that against
+a forced 24 px blur changed five Adreno pixels by one channel level through
+capture geometry. Removing curve specialization and then the activity predicate
+both retained the same five pixels; neither was the isolated cause. Construct
+the intended shader input with positive frost and independent zero activity,
+assert its declaration, and only then mutate the predicate. Keep exact pixel
+comparison and the geometry-sensitive regression test. A same-geometry shader
+premise alone does not prove the safety of changing capture geometry.
+
+## Producer overlap does not by itself validate parallel recording (2026-09-06)
+
+The live, unchanged ArenaRenderer probe really starts workers while the producer
+continues, unlike the earlier precollected experiment. Two workers / 512 events
+save watch median time but worsen every paired p99 and slow Huawei. One worker /
+1,024 events is slower still. Two workers / 2,048 events improve watch median
+and p99 with nine published owners per frame. These are complete producer and
+preparation timings, not renderer or FPS acceptance. The test-only primitive
+materialization oracle is not a necessary production stage: consume the
+published shape tables directly. The missing measurement is actual graph,
+upload and draw cost, with exact pixels across changed chunk boundaries.
+
+## Simpleperf sampling flags are ordered (2026-09-06)
+
+Place `-f 200` before `-e cpu-cycles,cpu-clock`: frequency applies only to
+following events. The reverse order silently samples both at 4,000 Hz and
+overloads watch captures. Verify recorded event attributes, not just the command
+text. A mutated 4,000 Hz attribute must fail the collector guard. Capture SF and
+temperature before profiler finalization; use leaf samples for full-minute CPU
+self time, with short stack captures only where needed.
+
+## Arc lookup throughput must be measured on the watch (2026-09-07)
+
+Radius/sweep repetition in Megaboss does not justify a dictionary: exact direct
+lookup saves 4–6% on the Mac but loses all four watch pairs by 3–5%, at stable
+34.7–34.6°C. Use the actual input stream and consume identical outputs in both
+arms. Source and native measurements: `watch-arc-scalar-direct` in the mobile
+evidence root. Reject this cache; remove preparation without an extra search.
+
+## Reading a block with `grep -v '//'` hides the comment lines an exact-match edit needs (2026-09-06)
+
+The dispersion block of `liquid_glass.wgsl` was read through `grep -v '^\s*//'` to skip its comments, then edited with a Python `assert source.count(block) == 1` anchor built from that filtered text. The anchor never matched: eleven comment lines sit between `if dispersion_strength > 0.0 {` and `let index_spread`, and the assertion aborted before writing, so a whole proof chain ran on the unedited shader (green, "mutants" green, restore of a file that was never written) and reported success. Read the exact bytes (`sed -n`) before building an anchor, or anchor on the two comment-free fragments either side of a comment run and substitute each separately; a chain that edits must check `git diff --stat` before it tests.
+
+## Main's headless helper disables segment surfaces (2026-09-06)
+
+Set `CRANPOSE_SEGMENT_SURFACE` after constructing the headless renderer,
+and assert nonzero cache composites before interpreting a cache comparison.
+
+## A device switch that is not in the property table measures the control
+
+2026-09-06: four 25 s watch legs of a "probe draw passes" diagnostic came back
+identical to the control, which read like "a populated pass costs nothing".
+The `CRANPOSE_*` toggle existed and its Mac test passed, but only
+`debug.cranpose.probe_passes` had been added to `PROPERTY_BACKED_ENV_VARS`
+in `crates/cranpose/src/android_frame_telemetry.rs`; the draw arm's property
+was never forwarded. Before reading any device diagnostic, prove the switch
+was live in that run: the `[GPU-PASS]` rows must carry the label the switch
+adds, or the stats line must show the counter it moves. A nil delta with no
+such trace is an unmapped switch, not a result.
+
+## A render parity test red only on the CI Mac is a debug-toggle race
+
+2026-09-06, twice: `shape_variant_parity` and then
+`glass_specialization_parity` went red on macm3 and green here, with counts
+from the wrong arm (one draw variant where two were expected, 144,000
+rasterised pixels against 288,000). `cranpose_render_wgpu::set_debug_toggle`
+is process-global and a test binary runs its tests on parallel threads; a
+toggle raised before the capture takes `support::gpu_test_lock` is seen by
+whichever sibling test is capturing at that instant, and the busier
+two-runner Mac overlaps them where this machine does not. Take the lock
+first, raise the toggle, capture, clear it, then drop the guard
+(`headless_renderer_parts_configured` does this in one call). Do not read
+such a failure as a GPU or driver difference.
+
+## Huawei startup logs are not a readiness signal
+
+Huawei can omit the renderer-ready message even from a live log stream while
+Megaboss presents at 59 FPS. A log-gated first-frame measurement then wastes
+30 seconds and fails without querying SurfaceFlinger. Use a fixed ten-second
+launch window there; label it separately from post-startup windows. Preserve
+failed runs. Evidence: `/tmp/cranpose-mobile-watch-60fps/`
+`huawei-swipe-inline-normalization-v1-live-opening10-5-B/`.

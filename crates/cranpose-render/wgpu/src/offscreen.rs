@@ -50,7 +50,6 @@ pub(crate) fn create_2d_texture(
 }
 
 pub(crate) struct OffscreenTarget {
-    texture: wgpu::Texture,
     pub view: wgpu::TextureView,
     pub width: u32,
     pub height: u32,
@@ -88,13 +87,20 @@ impl OffscreenTarget {
         );
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         Self {
-            texture,
             view,
             width,
             height,
             bytes_per_pixel: crate::frame_graph::texture_format_bytes_per_pixel(format),
             cached_bind_group: OnceCell::new(),
         }
+    }
+
+    pub(crate) fn texture(&self) -> &wgpu::Texture {
+        self.view.texture()
+    }
+
+    pub(crate) fn format(&self) -> wgpu::TextureFormat {
+        self.texture().format()
     }
 
     fn matches_size(&self, width: u32, height: u32) -> bool {
@@ -125,10 +131,6 @@ impl OffscreenTarget {
         })
     }
 
-    pub(crate) fn texture(&self) -> &wgpu::Texture {
-        &self.texture
-    }
-
     /// Wraps a swapchain image as the frame's root target so the scene
     /// renders into it directly, with no composition copy behind it.
     pub(crate) fn from_surface(texture: wgpu::Texture, view: wgpu::TextureView) -> Self {
@@ -136,7 +138,6 @@ impl OffscreenTarget {
         let height = texture.height();
         let format = texture.format().remove_srgb_suffix();
         Self {
-            texture,
             view,
             width,
             height,
@@ -146,7 +147,8 @@ impl OffscreenTarget {
     }
 }
 
-pub(crate) fn composition_bytes_per_pixel() -> u64 {
+/// Bytes one pixel of the renderer's composition format occupies.
+pub fn composition_bytes_per_pixel() -> u64 {
     crate::frame_graph::texture_format_bytes_per_pixel(composition_format())
 }
 
@@ -279,7 +281,7 @@ impl OffscreenPool {
                 visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
+                    has_dynamic_offset: true,
                     min_binding_size: None,
                 },
                 count: None,
