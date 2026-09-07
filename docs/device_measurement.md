@@ -20,6 +20,9 @@
 - Megaboss can pause after a long pipeline compilation despite stable PID and foreground; verify scene state and retain the failed startup.
 - Record physical presents and route completion separately; SurfaceFlinger cadence alone cannot prove smooth content motion.
 - Repeated adb swipes introduce input delays; record actual gesture timing and idle intervals instead of calling them renderer stalls.
+- Android input helpers use `InputManagerGlobal` on API 34 and later; confirm injection failures from stderr and logcat.
+- Android `screencap` selects PNG encoding for `.png` paths; use a different extension and validate the header when collecting raw pixels.
+- Review original captures when OCR rejects a visible label; preserve the automatic result and record any manual correction separately.
 - Android forwards only registered properties in `android_frame_telemetry.rs`; prove a diagnostic changed its marker or counter inside the process.
 - Acceptance runs disable detailed diagnostics; per-item logging overhead varies with the work the optimization removes.
 - `[GPU f#N]` describes one sampled frame, not a window average; use consecutive-frame totals to assess periodic cache misses.

@@ -1,0 +1,1591 @@
+{
+  "date": "2026-09-07",
+  "sources": {
+    "app": {
+      "commit": "c61958e1af5591a2fddfd7f3563c2f5757fb778e",
+      "archive_sha256": "64136872a22040bc813ec6a819e876d3f9cbd2fbcd1645b157bd100720599f7b"
+    },
+    "main": {
+      "commit": "0d195313f26a288e435878d9da40fc79d1821434",
+      "archive_sha256": "3063b5390eaa3a07944f5695d33bbeb28b8988b8c0f0feb3fe7d37c348934aef"
+    },
+    "sota": {
+      "commit": "010d3836b8a408c3bc2603d37cca7a0b5f1480ac",
+      "archive_sha256": "3e622344080e1f7b814a378c760f9e9048e3765cd2e67e877724ad775cbb551e"
+    }
+  },
+  "package": "com.cranscan.app.codex",
+  "comparison": "Different framework native libraries in one common SOTA Android host; unchanged Cranscan 1.0.22 sources and 428 equal non-native payload files within each device pair.",
+  "build": {
+    "host": "macm3",
+    "rust": "1.98.0",
+    "ndk": "28.2.13676358",
+    "api": 26,
+    "profile": {
+      "name": "release",
+      "opt_level": 3,
+      "lto": true,
+      "codegen_units": 1
+    },
+    "warning_free": false,
+    "warnings": [
+      "Four unused optional framework patches in the measurement configuration.",
+      "Frozen Cranscan ARMv7 unused asked_now variable.",
+      "Frozen vendored llama-cpp-2 ARM64 unused imports, deprecated API and missing documentation."
+    ],
+    "equal_app_source_files": 1270,
+    "app_source_inventory_sha256": "a273723096fb5a3400514a64a0fc2e40bbf56e7deca642b916b36ffe2c749676",
+    "commands": {
+      "0d195313f26a288e435878d9da40fc79d1821434/arm64-v8a": [
+        "cargo",
+        "ndk",
+        "--platform",
+        "26",
+        "-t",
+        "arm64-v8a",
+        "-o",
+        "target/android",
+        "build",
+        "--locked",
+        "--release",
+        "--no-default-features",
+        "--features",
+        "android,renderer-wgpu,ai-inprocess",
+        "-p",
+        "cranscan",
+        "--lib"
+      ],
+      "0d195313f26a288e435878d9da40fc79d1821434/armeabi-v7a": [
+        "cargo",
+        "ndk",
+        "--platform",
+        "26",
+        "-t",
+        "armeabi-v7a",
+        "-o",
+        "target/android",
+        "build",
+        "--locked",
+        "--release",
+        "--no-default-features",
+        "--features",
+        "android,renderer-wgpu",
+        "-p",
+        "cranscan",
+        "--lib"
+      ],
+      "010d3836b8a408c3bc2603d37cca7a0b5f1480ac/arm64-v8a": [
+        "cargo",
+        "ndk",
+        "--platform",
+        "26",
+        "-t",
+        "arm64-v8a",
+        "-o",
+        "target/android",
+        "build",
+        "--locked",
+        "--release",
+        "--no-default-features",
+        "--features",
+        "android,renderer-wgpu,ai-inprocess",
+        "-p",
+        "cranscan",
+        "--lib"
+      ],
+      "010d3836b8a408c3bc2603d37cca7a0b5f1480ac/armeabi-v7a": [
+        "cargo",
+        "ndk",
+        "--platform",
+        "26",
+        "-t",
+        "armeabi-v7a",
+        "-o",
+        "target/android",
+        "build",
+        "--locked",
+        "--release",
+        "--no-default-features",
+        "--features",
+        "android,renderer-wgpu",
+        "-p",
+        "cranscan",
+        "--lib"
+      ]
+    }
+  },
+  "dependency_verification": {
+    "post_build_lock_sha256": "9218b930602538ac7e1d6bf059f6afd5c414539ad8619d0f59cf4f64839a1d6c",
+    "package_names_versions_sources_equal": true,
+    "packages": 719,
+    "timing": "Post-build default-feature offline resolution only; build-time lockfiles were not separately preserved. Source archives and native hashes were recorded during builds."
+  },
+  "dependency_edge_difference": "SOTA adds cranpose-ui-graphics -> bytemuck; post-build package names, versions and sources match, but lockfile bytes differ.",
+  "payload_pairs": {
+    "watch": {
+      "common_payload_equal": true,
+      "native_distinct": true,
+      "abi": "armeabi-v7a",
+      "payload_files": 428,
+      "main": "9f99bf88feda16cdf574374f1f69ba677a3d68d8b4ecd6b6e3e444977458d6f4",
+      "sota": "b08a96a8fbd570f1ebd2044d5d72203d1264bae44783e6ea687bd79acff4ec11",
+      "main_apk_sha256": "eb0efab9138e699d6c7c928f9963f54140a8b7ccf1c1467111f98433309896af",
+      "common_inventory_sha256": "3ebee5673e61ede9438d84d9e758800541f9415328c1a91557b3e0ad0f4b8f83",
+      "sota_apk_sha256": "7a42bf058b0fedb21e4d7b40a75d756a0800218c84428a8b14e24ccf8410f5e7"
+    },
+    "huawei": {
+      "common_payload_equal": true,
+      "native_distinct": true,
+      "abi": "arm64-v8a",
+      "payload_files": 428,
+      "main": "d5ff50f6f8987502589ce2d326ff2a37f079d53823957012fa3eb93a1f7837c0",
+      "sota": "9d5e575802e8d44f5c4141898211ad3e91bc5703f4bef8de51a56fb1fb7b0c74",
+      "main_apk_sha256": "5d9108e2bf30ee7df79e8c5fac56315b55083857d53c74e4cd79912980ce0be1",
+      "common_inventory_sha256": "7acd8dcfe834c834e35db8648fafcf41bcb1a07656f9abf8de3693435fc0c0e8",
+      "sota_apk_sha256": "a1259cb9794899f31643796e3c0b255976e8c5b6f390a98ecbec04fe54acae77"
+    }
+  },
+  "fps_definition": "SurfaceFlinger active application layer totalFrames / device monotonic elapsed seconds; nominal 20-second round trip includes turnaround capture and timestats dump overhead.",
+  "protocol": "One device lock for ABAB then BABA; no cooling waits; install -r preserves data; detailed diagnostics disabled and prior debug properties restored; wake before each gesture and capture.",
+  "limitations": [
+    "Physical presentation cadence does not prove continuously correct content.",
+    "Watch sequence has roughly one second of turnaround capture overhead and incomplete PR traversals; do not label it four successful full-scroll comparisons.",
+    "Pre-route CPU snapshots do not rule out work starting during the timed route.",
+    "Build-time lockfiles were not preserved separately; dependency equality was checked after the builds."
+  ],
+  "devices": {
+    "huawei": {
+      "sequence": "huawei-abab-baba-v4",
+      "route": {
+        "settings_tap": [
+          943,
+          2094
+        ],
+        "forward": [
+          150,
+          1850,
+          450,
+          4,
+          2100,
+          2450
+        ],
+        "start": "On-device intelligence",
+        "turn": "Version, licenses, credits, library stats.",
+        "return": "On-device intelligence"
+      },
+      "protocol_sha256": {
+        "CranscanRoute.java": "f67343830d064efbe525202e105624660950d0e6bf55c846abfb1661b71d6ad2",
+        "classes.dex": "ed2ada54d338f94d003d034f2e92dc1112dddd05237acde816a1716519e4669d",
+        "device.py": "dddab9d1554f263165d316b7fcbb30a3b07b7cd058da68f1998ef6185e2e82a2",
+        "huawei-route.json": "528bdffd9c2901db63d3820ba9288b1c6fcf41f7f724ed3d652b4be4a71e745d",
+        "measure.py": "c27d6103bee10a0dfb277a8681c1c77dfd94f884d40eb5cc4b6a41991b5621b4"
+      },
+      "data": {
+        "documents": 15,
+        "device_ai": "off",
+        "backup": "off"
+      },
+      "features": [
+        "android",
+        "renderer-wgpu",
+        "ai-inprocess"
+      ],
+      "runs": [
+        {
+          "leg": 1,
+          "variant": "main",
+          "frames": 1046,
+          "elapsed_s": 20.047,
+          "fps": 52.17738314959844,
+          "route_complete": true,
+          "automated_route_complete": true,
+          "automated_failure": null,
+          "capture_review": null,
+          "temperature_before": {
+            "battery_c": 33.0,
+            "thermal_status": 0
+          },
+          "temperature_after": {
+            "battery_c": 33.0,
+            "thermal_status": 0
+          },
+          "pre_route_cpu_samples": [
+            "3336 u0_a163      10 -10 6.6G 573M 300M S  0.0  10.1   0:01.39 com.cranscan.app.codex",
+            "3336 u0_a163      10 -10 6.6G 573M 300M S  0.0  10.1   0:01.39 com.cranscan.app.codex"
+          ],
+          "timing_markers": [
+            "elapsed_ms=9801",
+            "capture_elapsed_ms=147",
+            "elapsed_ms=9800",
+            "dump_elapsed_ms=45",
+            "measurement_elapsed_ms=20047"
+          ],
+          "endpoint_text": {
+            "raw_ocr_record": "/devices/huawei/runs/0/endpoint_text"
+          },
+          "captures": {
+            "start": {
+              "path": "huawei/1-main/start.png",
+              "sha256": "28a4c97382cd8a83348050b0a7eb4a957ad0220968e9f0fae6e3ea1c730f3441",
+              "raw_source_sha256": "28a4c97382cd8a83348050b0a7eb4a957ad0220968e9f0fae6e3ea1c730f3441"
+            },
+            "turn": {
+              "path": "huawei/1-main/turn.png",
+              "sha256": "1c265ff44b13a61463959f4f019d232a9e00d278e15a3fd7b1e27dccd0ed4cab",
+              "raw_source_sha256": "1c265ff44b13a61463959f4f019d232a9e00d278e15a3fd7b1e27dccd0ed4cab"
+            },
+            "end": {
+              "path": "huawei/1-main/end.png",
+              "sha256": "6e86a9c517aab47ee2cbab8bc3f4f745a7f4eef20b324f2af2c99e093a3dc1e0",
+              "raw_source_sha256": "6e86a9c517aab47ee2cbab8bc3f4f745a7f4eef20b324f2af2c99e093a3dc1e0"
+            }
+          },
+          "surfaceflinger": {
+            "path": "huawei/1-main/surfaceflinger.txt",
+            "sha256": "e8849558e46a59d3f883ccecad37d32fa9e6917c7efe52e8a0f3bb3d4c225524",
+            "raw_source_sha256": "afac232d4cb2900efc8212d7a3630ed033b38e73eb6755b136f976ce544f507a"
+          },
+          "collector_duration_check_passed": true
+        },
+        {
+          "leg": 2,
+          "variant": "sota",
+          "frames": 1085,
+          "elapsed_s": 20.032,
+          "fps": 54.16333865814696,
+          "route_complete": true,
+          "automated_route_complete": true,
+          "automated_failure": null,
+          "capture_review": null,
+          "temperature_before": {
+            "battery_c": 33.0,
+            "thermal_status": 0
+          },
+          "temperature_after": {
+            "battery_c": 33.0,
+            "thermal_status": 0
+          },
+          "pre_route_cpu_samples": [
+            "4107 u0_a163      10 -10 6.5G 582M 299M S 27.5  10.3   0:01.31 com.cranscan.app.codex",
+            "4107 u0_a163      10 -10 6.5G 582M 299M S  0.0  10.3   0:01.39 com.cranscan.app.codex"
+          ],
+          "timing_markers": [
+            "elapsed_ms=9800",
+            "capture_elapsed_ms=152",
+            "elapsed_ms=9800",
+            "dump_elapsed_ms=31",
+            "measurement_elapsed_ms=20032"
+          ],
+          "endpoint_text": {
+            "raw_ocr_record": "/devices/huawei/runs/1/endpoint_text"
+          },
+          "captures": {
+            "start": {
+              "path": "huawei/2-sota/start.png",
+              "sha256": "a80557af432252153b91c6915f46f4cec43842f63cbadd451a3483eb36e62305",
+              "raw_source_sha256": "a80557af432252153b91c6915f46f4cec43842f63cbadd451a3483eb36e62305"
+            },
+            "turn": {
+              "path": "huawei/2-sota/turn.png",
+              "sha256": "b729c475f0e1d08eaa4cb4947b24528f6598c6fdaa47cbb5d7bfa3921201298a",
+              "raw_source_sha256": "b729c475f0e1d08eaa4cb4947b24528f6598c6fdaa47cbb5d7bfa3921201298a"
+            },
+            "end": {
+              "path": "huawei/2-sota/end.png",
+              "sha256": "ba152b95db5b9c10433d60685b844b6cb2d0d46b649867a0dea185f8cf3f6b0b",
+              "raw_source_sha256": "ba152b95db5b9c10433d60685b844b6cb2d0d46b649867a0dea185f8cf3f6b0b"
+            }
+          },
+          "surfaceflinger": {
+            "path": "huawei/2-sota/surfaceflinger.txt",
+            "sha256": "562fb9c1cb7f1b477a124642c5712de1937f59c5f37966083ce0b3d8f987d730",
+            "raw_source_sha256": "ca71f11155273bb18c04d5bbeb6269bf8176f048e88efe123fafe29ec7eede85"
+          },
+          "collector_duration_check_passed": true
+        },
+        {
+          "leg": 3,
+          "variant": "main",
+          "frames": 1070,
+          "elapsed_s": 20.034,
+          "fps": 53.40920435260058,
+          "route_complete": true,
+          "automated_route_complete": true,
+          "automated_failure": null,
+          "capture_review": null,
+          "temperature_before": {
+            "battery_c": 33.0,
+            "thermal_status": 0
+          },
+          "temperature_after": {
+            "battery_c": 33.0,
+            "thermal_status": 0
+          },
+          "pre_route_cpu_samples": [
+            "4641 u0_a163      10 -10 6.7G 575M 299M S  0.0  10.2   0:01.14 com.cranscan.app.codex",
+            "4641 u0_a163      10 -10 6.6G 574M 299M S  5.0  10.1   0:01.14 com.cranscan.app.codex"
+          ],
+          "timing_markers": [
+            "elapsed_ms=9800",
+            "capture_elapsed_ms=159",
+            "elapsed_ms=9800",
+            "dump_elapsed_ms=34",
+            "measurement_elapsed_ms=20034"
+          ],
+          "endpoint_text": {
+            "raw_ocr_record": "/devices/huawei/runs/2/endpoint_text"
+          },
+          "captures": {
+            "start": {
+              "path": "huawei/3-main/start.png",
+              "sha256": "5a02d597231e5ee655ef9e9258b362a86c07068a1e936d5875cc5dbe54c19ea0",
+              "raw_source_sha256": "5a02d597231e5ee655ef9e9258b362a86c07068a1e936d5875cc5dbe54c19ea0"
+            },
+            "turn": {
+              "path": "huawei/3-main/turn.png",
+              "sha256": "d590259211ed00c0f8766d9490ecbfd9701bf27280e4016c92fd0a9aa15bd5b9",
+              "raw_source_sha256": "d590259211ed00c0f8766d9490ecbfd9701bf27280e4016c92fd0a9aa15bd5b9"
+            },
+            "end": {
+              "path": "huawei/3-main/end.png",
+              "sha256": "32be23fbdb8d61458570630bc6d134ecf03822ed80546c8432c690bc11a41733",
+              "raw_source_sha256": "32be23fbdb8d61458570630bc6d134ecf03822ed80546c8432c690bc11a41733"
+            }
+          },
+          "surfaceflinger": {
+            "path": "huawei/3-main/surfaceflinger.txt",
+            "sha256": "64c7a1d263b89a8b60e137189e5e92c3978ea1c794fdcd6941c5e98314b78c6d",
+            "raw_source_sha256": "678b0bde61558272c39115f3ffb61ecad313f4cf96379788045ad88a03e434a6"
+          },
+          "collector_duration_check_passed": true
+        },
+        {
+          "leg": 4,
+          "variant": "sota",
+          "frames": 1086,
+          "elapsed_s": 20.034,
+          "fps": 54.20784666067685,
+          "route_complete": true,
+          "automated_route_complete": true,
+          "automated_failure": null,
+          "capture_review": null,
+          "temperature_before": {
+            "battery_c": 33.0,
+            "thermal_status": 0
+          },
+          "temperature_after": {
+            "battery_c": 33.0,
+            "thermal_status": 0
+          },
+          "pre_route_cpu_samples": [
+            "5147 u0_a163      10 -10 6.5G 549M 264M S 10.3   9.7   0:01.35 com.cranscan.app.codex",
+            "5147 u0_a163      10 -10 6.5G 547M 264M S  0.0   9.7   0:01.38 com.cranscan.app.codex"
+          ],
+          "timing_markers": [
+            "elapsed_ms=9800",
+            "capture_elapsed_ms=165",
+            "elapsed_ms=9801",
+            "dump_elapsed_ms=33",
+            "measurement_elapsed_ms=20034"
+          ],
+          "endpoint_text": {
+            "raw_ocr_record": "/devices/huawei/runs/3/endpoint_text"
+          },
+          "captures": {
+            "start": {
+              "path": "huawei/4-sota/start.png",
+              "sha256": "b7945a181bdbb7f4e3756a9ec14591e28669f622719baa7f17c4de7587ab17c3",
+              "raw_source_sha256": "b7945a181bdbb7f4e3756a9ec14591e28669f622719baa7f17c4de7587ab17c3"
+            },
+            "turn": {
+              "path": "huawei/4-sota/turn.png",
+              "sha256": "0df98809bfad95163d47ed89dfe263bfa2e894579f49aae6eb82d6a16573db1b",
+              "raw_source_sha256": "0df98809bfad95163d47ed89dfe263bfa2e894579f49aae6eb82d6a16573db1b"
+            },
+            "end": {
+              "path": "huawei/4-sota/end.png",
+              "sha256": "df507dddd33e9e07ba6592f6419086880d531805003d82d5f5a35cf70960853c",
+              "raw_source_sha256": "df507dddd33e9e07ba6592f6419086880d531805003d82d5f5a35cf70960853c"
+            }
+          },
+          "surfaceflinger": {
+            "path": "huawei/4-sota/surfaceflinger.txt",
+            "sha256": "fa408e476b6fbb1436330cfba7d1eeb4f11b63bbb5164e3a6ad07dde8fbc7ce7",
+            "raw_source_sha256": "4be51aeff98fccd4310a221a425163bda8b1f10f18d24f8447bfb8f3e8406d57"
+          },
+          "collector_duration_check_passed": true
+        },
+        {
+          "leg": 5,
+          "variant": "sota",
+          "frames": 1081,
+          "elapsed_s": 20.03,
+          "fps": 53.96904643035447,
+          "route_complete": true,
+          "automated_route_complete": true,
+          "automated_failure": null,
+          "capture_review": null,
+          "temperature_before": {
+            "battery_c": 33.0,
+            "thermal_status": 0
+          },
+          "temperature_after": {
+            "battery_c": 33.0,
+            "thermal_status": 0
+          },
+          "pre_route_cpu_samples": [
+            "5732 u0_a163      10 -10 6.6G 582M 299M S  0.0  10.3   0:01.31 com.cranscan.app.codex",
+            "5732 u0_a163      10 -10 6.6G 582M 299M S  4.0  10.3   0:01.31 com.cranscan.app.codex"
+          ],
+          "timing_markers": [
+            "elapsed_ms=9800",
+            "capture_elapsed_ms=187",
+            "elapsed_ms=9800",
+            "dump_elapsed_ms=30",
+            "measurement_elapsed_ms=20030"
+          ],
+          "endpoint_text": {
+            "raw_ocr_record": "/devices/huawei/runs/4/endpoint_text"
+          },
+          "captures": {
+            "start": {
+              "path": "huawei/5-sota/start.png",
+              "sha256": "793b4b4a7a283939742cae436bbf316ed950ff63e4c6772f261bb31281ebd22b",
+              "raw_source_sha256": "793b4b4a7a283939742cae436bbf316ed950ff63e4c6772f261bb31281ebd22b"
+            },
+            "turn": {
+              "path": "huawei/5-sota/turn.png",
+              "sha256": "d334cc49439e001c51ccc38fe481be1c1d17fb7da13e10894b4d230d8349800c",
+              "raw_source_sha256": "d334cc49439e001c51ccc38fe481be1c1d17fb7da13e10894b4d230d8349800c"
+            },
+            "end": {
+              "path": "huawei/5-sota/end.png",
+              "sha256": "b479ab7719cd36ea29116f5e9156661ecce4acdda2876ee695e63d3da7663ae2",
+              "raw_source_sha256": "b479ab7719cd36ea29116f5e9156661ecce4acdda2876ee695e63d3da7663ae2"
+            }
+          },
+          "surfaceflinger": {
+            "path": "huawei/5-sota/surfaceflinger.txt",
+            "sha256": "df726d39769b7c5e5fea8634d5849f5ae8e1bf21558b9f0ff01e759ee9ad23cd",
+            "raw_source_sha256": "f23a9dfb924b54902d2033798907a399f221f016e92af1f9eb7290b60c8054ae"
+          },
+          "collector_duration_check_passed": true
+        },
+        {
+          "leg": 6,
+          "variant": "main",
+          "frames": 1042,
+          "elapsed_s": 20.029,
+          "fps": 52.02456438164661,
+          "route_complete": true,
+          "automated_route_complete": true,
+          "automated_failure": null,
+          "capture_review": null,
+          "temperature_before": {
+            "battery_c": 33.0,
+            "thermal_status": 0
+          },
+          "temperature_after": {
+            "battery_c": 34.0,
+            "thermal_status": 0
+          },
+          "pre_route_cpu_samples": [
+            "6213 u0_a163      10 -10 6.6G 572M 298M S  0.0  10.1   0:01.13 com.cranscan.app.codex",
+            "6213 u0_a163      10 -10 6.6G 572M 298M S  4.0  10.1   0:01.13 com.cranscan.app.codex"
+          ],
+          "timing_markers": [
+            "elapsed_ms=9800",
+            "capture_elapsed_ms=288",
+            "elapsed_ms=9800",
+            "dump_elapsed_ms=29",
+            "measurement_elapsed_ms=20029"
+          ],
+          "endpoint_text": {
+            "raw_ocr_record": "/devices/huawei/runs/5/endpoint_text"
+          },
+          "captures": {
+            "start": {
+              "path": "huawei/6-main/start.png",
+              "sha256": "d21731a6f06b3de289033c157ae4903efc97ffa94fe81533279e7b8b24e2a9e2",
+              "raw_source_sha256": "d21731a6f06b3de289033c157ae4903efc97ffa94fe81533279e7b8b24e2a9e2"
+            },
+            "turn": {
+              "path": "huawei/6-main/turn.png",
+              "sha256": "da683637d89e6da71e9960b1b88792843226cbe121c729f0d2b07e68b8425969",
+              "raw_source_sha256": "da683637d89e6da71e9960b1b88792843226cbe121c729f0d2b07e68b8425969"
+            },
+            "end": {
+              "path": "huawei/6-main/end.png",
+              "sha256": "3a26dbff2f504dd6057db7f9928704824fa3042f23f5a63031c0ed2ada75847e",
+              "raw_source_sha256": "3a26dbff2f504dd6057db7f9928704824fa3042f23f5a63031c0ed2ada75847e"
+            }
+          },
+          "surfaceflinger": {
+            "path": "huawei/6-main/surfaceflinger.txt",
+            "sha256": "b84e67327413d531567ca5c52a0f281059b7f6b6bb700337b3aff0f987b4b189",
+            "raw_source_sha256": "ac287dd59bf410d1edbffe2c98786f42c6b6306b5ca6d5535e8ae6511d29d161"
+          },
+          "collector_duration_check_passed": true
+        },
+        {
+          "leg": 7,
+          "variant": "sota",
+          "frames": 1078,
+          "elapsed_s": 20.032,
+          "fps": 53.813897763578275,
+          "route_complete": false,
+          "automated_route_complete": false,
+          "automated_failure": "Missing visible route text: ['intelligence']",
+          "capture_review": null,
+          "temperature_before": {
+            "battery_c": 34.0,
+            "thermal_status": 0
+          },
+          "temperature_after": {
+            "battery_c": 33.0,
+            "thermal_status": 0
+          },
+          "pre_route_cpu_samples": [
+            "6689 u0_a163      10 -10 6.6G 581M 299M S  0.0  10.3   0:01.40 com.cranscan.app.codex",
+            "6689 u0_a163      10 -10 6.6G 581M 299M S  0.0  10.3   0:01.40 com.cranscan.app.codex"
+          ],
+          "timing_markers": [
+            "elapsed_ms=9800",
+            "capture_elapsed_ms=157",
+            "elapsed_ms=9800",
+            "dump_elapsed_ms=31",
+            "measurement_elapsed_ms=20032"
+          ],
+          "endpoint_text": {
+            "raw_ocr_record": "/devices/huawei/runs/6/endpoint_text"
+          },
+          "captures": {
+            "start": {
+              "path": "huawei/7-sota/start.png",
+              "sha256": "80fe5bbea48dcd73b4124c0b2ec0695f4656607fe42d95c19dc8343c6091627a",
+              "raw_source_sha256": "80fe5bbea48dcd73b4124c0b2ec0695f4656607fe42d95c19dc8343c6091627a"
+            },
+            "turn": {
+              "path": "huawei/7-sota/turn.png",
+              "sha256": "ad3a3764598a8d3122f9563e5ad85be856d29942a3939fdc32b3b7e8cde6c645",
+              "raw_source_sha256": "ad3a3764598a8d3122f9563e5ad85be856d29942a3939fdc32b3b7e8cde6c645"
+            },
+            "end": {
+              "path": "huawei/7-sota/end.png",
+              "sha256": "d1a0d5e903c728e02aaa0bcb5e93472c49e0ad65207e665ba83bb659b12db60d",
+              "raw_source_sha256": "d1a0d5e903c728e02aaa0bcb5e93472c49e0ad65207e665ba83bb659b12db60d"
+            }
+          },
+          "surfaceflinger": {
+            "path": "huawei/7-sota/surfaceflinger.txt",
+            "sha256": "00da927d749c2de0acc2cb834dbb2801b630490d9ff4e9777a0c0933182613fa",
+            "raw_source_sha256": "da68178b5272dd0a85e25b6662f84c133bca7f39b0489b3d86833edfb747efbf"
+          },
+          "failure_observations": [
+            {
+              "elapsed_s": 1.0847910420270637,
+              "text": {
+                "raw_ocr_record": "/devices/huawei/runs/6/failure_observations/0/text"
+              }
+            },
+            {
+              "elapsed_s": 2.130251958966255,
+              "text": {
+                "raw_ocr_record": "/devices/huawei/runs/6/failure_observations/1/text"
+              }
+            },
+            {
+              "elapsed_s": 3.1612969590350986,
+              "text": {
+                "raw_ocr_record": "/devices/huawei/runs/6/failure_observations/2/text"
+              }
+            },
+            {
+              "elapsed_s": 4.174216917017475,
+              "text": {
+                "raw_ocr_record": "/devices/huawei/runs/6/failure_observations/3/text"
+              }
+            }
+          ],
+          "last_failure_capture": {
+            "path": "huawei/7-sota/failure-observation-3.png",
+            "sha256": "c11d65b1bc05cb9effdbe734912e2ffbc981fa2eaf707416673085f8b2538d06",
+            "raw_source_sha256": "c11d65b1bc05cb9effdbe734912e2ffbc981fa2eaf707416673085f8b2538d06"
+          },
+          "collector_duration_check_passed": true,
+          "automated_failure_raw_ocr_record": "/devices/huawei/runs/6/automated_failure"
+        },
+        {
+          "leg": 8,
+          "variant": "main",
+          "frames": 1038,
+          "elapsed_s": 20.033,
+          "fps": 51.814506064992756,
+          "route_complete": true,
+          "automated_route_complete": true,
+          "automated_failure": null,
+          "capture_review": null,
+          "temperature_before": {
+            "battery_c": 33.0,
+            "thermal_status": 0
+          },
+          "temperature_after": {
+            "battery_c": 35.0,
+            "thermal_status": 0
+          },
+          "pre_route_cpu_samples": [
+            "7528 u0_a163      10 -10 6.7G 573M 297M S  0.0  10.1   0:01.25 com.cranscan.app.codex",
+            "7528 u0_a163      10 -10 6.7G 573M 297M S  0.0  10.1   0:01.25 com.cranscan.app.codex"
+          ],
+          "timing_markers": [
+            "elapsed_ms=9800",
+            "capture_elapsed_ms=168",
+            "elapsed_ms=9800",
+            "dump_elapsed_ms=32",
+            "measurement_elapsed_ms=20033"
+          ],
+          "endpoint_text": {
+            "raw_ocr_record": "/devices/huawei/runs/7/endpoint_text"
+          },
+          "captures": {
+            "start": {
+              "path": "huawei/8-main/start.png",
+              "sha256": "4b7fc1262cd36e11d43292ca1a228bbd1dc811b74c28c1ecd8d0a4e98419721d",
+              "raw_source_sha256": "4b7fc1262cd36e11d43292ca1a228bbd1dc811b74c28c1ecd8d0a4e98419721d"
+            },
+            "turn": {
+              "path": "huawei/8-main/turn.png",
+              "sha256": "e164f1cfbf61c500fc5c8a66a6cb7eb24b7fa081da11f3acebb94966e2cc8b67",
+              "raw_source_sha256": "e164f1cfbf61c500fc5c8a66a6cb7eb24b7fa081da11f3acebb94966e2cc8b67"
+            },
+            "end": {
+              "path": "huawei/8-main/end.png",
+              "sha256": "9e1a7485d2c19da6cd1931af604852e164a601a1c9cc7a7bfc4b9d96939e6c23",
+              "raw_source_sha256": "9e1a7485d2c19da6cd1931af604852e164a601a1c9cc7a7bfc4b9d96939e6c23"
+            }
+          },
+          "surfaceflinger": {
+            "path": "huawei/8-main/surfaceflinger.txt",
+            "sha256": "ea64194b281f2985b0d5ed2c703c6a8ae92ea6c70709ea7771295189fdd5e8f3",
+            "raw_source_sha256": "536917000385c89e81d7cfe0c1d315d120ea40da10577727b489b388e0ae73dc"
+          },
+          "collector_duration_check_passed": true
+        }
+      ],
+      "summary": {
+        "means_all_runs_fps": {
+          "main": 52.3564144872096,
+          "sota": 54.03853237818914
+        },
+        "delta_fps": 1.6821178909795407,
+        "delta_percent": 3.212821021940826,
+        "route_completions": {
+          "main": 4,
+          "sota": 3
+        },
+        "pairs": [
+          {
+            "main_leg": 1,
+            "sota_leg": 2,
+            "delta_fps": 1.9859555085485212,
+            "both_routes_complete": true
+          },
+          {
+            "main_leg": 3,
+            "sota_leg": 4,
+            "delta_fps": 0.7986423080762677,
+            "both_routes_complete": true
+          },
+          {
+            "main_leg": 6,
+            "sota_leg": 5,
+            "delta_fps": 1.9444820487078545,
+            "both_routes_complete": true
+          },
+          {
+            "main_leg": 8,
+            "sota_leg": 7,
+            "delta_fps": 1.9993916985855194,
+            "both_routes_complete": false
+          }
+        ],
+        "battery_range_c": [
+          33.0,
+          35.0
+        ]
+      },
+      "properties_restored": true
+    },
+    "watch": {
+      "sequence": "watch-abab-baba-v1",
+      "route": {
+        "settings_tap": [
+          348,
+          330
+        ],
+        "prime": [
+          100,
+          260,
+          60,
+          3,
+          800,
+          820
+        ],
+        "forward": [
+          100,
+          260,
+          60,
+          50,
+          170,
+          196
+        ],
+        "reverse": [
+          44,
+          200,
+          222
+        ],
+        "capture": "host",
+        "start": "On-device intelligence",
+        "turn": "Version, licenses, credits, library stats.",
+        "return": "On-device intelligence"
+      },
+      "protocol_sha256": {
+        "CranscanRoute.java": "f67343830d064efbe525202e105624660950d0e6bf55c846abfb1661b71d6ad2",
+        "classes.dex": "ed2ada54d338f94d003d034f2e92dc1112dddd05237acde816a1716519e4669d",
+        "device.py": "dddab9d1554f263165d316b7fcbb30a3b07b7cd058da68f1998ef6185e2e82a2",
+        "measure.py": "c27d6103bee10a0dfb277a8681c1c77dfd94f884d40eb5cc4b6a41991b5621b4",
+        "watch-route.json": "8f6907229b97a608b086e3418fe2312a4a03c071ab5753f9d870e93e76da72ad"
+      },
+      "data": {
+        "documents": 0,
+        "device_ai": "unavailable in shipped ARMv7 feature set",
+        "backup": "off"
+      },
+      "features": [
+        "android",
+        "renderer-wgpu"
+      ],
+      "runs": [
+        {
+          "leg": 1,
+          "variant": "main",
+          "frames": 946,
+          "elapsed_s": 21.044,
+          "fps": 44.953430906671734,
+          "route_complete": true,
+          "automated_route_complete": false,
+          "automated_failure": "Missing visible route text: ['intelligence']",
+          "capture_review": {
+            "route_complete": true,
+            "reason": "Original return capture visibly contains On-device intelligence; OCR transcribed intelligence as intellidence. The unchanged capture, automated rejection and follow-up captures are preserved."
+          },
+          "temperature_before": {
+            "battery_c": 37.4,
+            "thermal_status": 0
+          },
+          "temperature_after": {
+            "battery_c": 38.3,
+            "thermal_status": 1
+          },
+          "pre_route_cpu_samples": [
+            "26837 u0_a82       -2   0 1.3G 260M  91M S  0.0  14.9   0:09.74 com.cranscan.app.codex",
+            "26837 u0_a82       -2   0 1.3G 260M  91M S  0.0  14.9   0:09.74 com.cranscan.app.codex"
+          ],
+          "timing_markers": [
+            "elapsed_ms=9800",
+            "capture_elapsed_ms=1435",
+            "elapsed_ms=9768",
+            "dump_elapsed_ms=39",
+            "measurement_elapsed_ms=21044"
+          ],
+          "endpoint_text": {
+            "raw_ocr_record": "/devices/watch/runs/0/endpoint_text"
+          },
+          "captures": {
+            "start": {
+              "path": "watch/1-main/start.png",
+              "sha256": "02fbc53ba8448249fe235b70314330b83b7c493bbfc1fda5f6874e15c315c44e",
+              "raw_source_sha256": "02fbc53ba8448249fe235b70314330b83b7c493bbfc1fda5f6874e15c315c44e"
+            },
+            "turn": {
+              "path": "watch/1-main/turn.png",
+              "sha256": "11445ad446d50e14dbe7438af813e85fdd8af179604407b08b3dc2953fabd4b4",
+              "raw_source_sha256": "11445ad446d50e14dbe7438af813e85fdd8af179604407b08b3dc2953fabd4b4"
+            },
+            "end": {
+              "path": "watch/1-main/end.png",
+              "sha256": "0a80b8ba6a1f3de651e466a8b3d0195ee399a4a0aec2a53900b122fcf4f98d8b",
+              "raw_source_sha256": "0a80b8ba6a1f3de651e466a8b3d0195ee399a4a0aec2a53900b122fcf4f98d8b"
+            }
+          },
+          "surfaceflinger": {
+            "path": "watch/1-main/surfaceflinger.txt",
+            "sha256": "7f2e68b717f8f6c93ad215068e835af734dde3a911c74d948b31150d91d1b999",
+            "raw_source_sha256": "97683a3ae666e1f6dbd88f001d8b9e12c263edfd2d437aa9834f76ad2bdfa9cb"
+          },
+          "failure_observations": [
+            {
+              "elapsed_s": 1.3100212920689955,
+              "text": {
+                "raw_ocr_record": "/devices/watch/runs/0/failure_observations/0/text"
+              }
+            },
+            {
+              "elapsed_s": 2.5101161249913275,
+              "text": {
+                "raw_ocr_record": "/devices/watch/runs/0/failure_observations/1/text"
+              }
+            },
+            {
+              "elapsed_s": 3.6652067920658737,
+              "text": {
+                "raw_ocr_record": "/devices/watch/runs/0/failure_observations/2/text"
+              }
+            },
+            {
+              "elapsed_s": 5.044793125009164,
+              "text": {
+                "raw_ocr_record": "/devices/watch/runs/0/failure_observations/3/text"
+              }
+            }
+          ],
+          "last_failure_capture": {
+            "path": "watch/1-main/failure-observation-3.png",
+            "sha256": "255e92864d0c3a278aee098f4bb94559cbdd231f24a0a75bb61bb26983c2edf8",
+            "raw_source_sha256": "255e92864d0c3a278aee098f4bb94559cbdd231f24a0a75bb61bb26983c2edf8"
+          },
+          "collector_duration_check_passed": true,
+          "automated_failure_raw_ocr_record": "/devices/watch/runs/0/automated_failure"
+        },
+        {
+          "leg": 2,
+          "variant": "sota",
+          "frames": 509,
+          "elapsed_s": 20.908,
+          "fps": 24.34474842165678,
+          "route_complete": false,
+          "automated_route_complete": false,
+          "automated_failure": "Missing visible route text: ['licenses', 'credits', 'library', 'stats']",
+          "capture_review": null,
+          "temperature_before": {
+            "battery_c": 38.3,
+            "thermal_status": 2
+          },
+          "temperature_after": {
+            "battery_c": 38.3,
+            "thermal_status": 2
+          },
+          "pre_route_cpu_samples": [
+            "27403 u0_a82       -2   0 1.4G 282M 102M S  0.0  16.1   0:20.98 com.cranscan.app.codex",
+            "27403 u0_a82       -2   0 1.4G 282M 102M S  1.0  16.1   0:20.98 com.cranscan.app.codex"
+          ],
+          "timing_markers": [
+            "elapsed_ms=9800",
+            "capture_elapsed_ms=1252",
+            "elapsed_ms=9769",
+            "dump_elapsed_ms=85",
+            "measurement_elapsed_ms=20908"
+          ],
+          "endpoint_text": {
+            "raw_ocr_record": "/devices/watch/runs/1/endpoint_text"
+          },
+          "captures": {
+            "start": {
+              "path": "watch/2-sota/start.png",
+              "sha256": "5ff27609d631a0c15d4bc72e6c8ab64b3b3d7535b776b7af51653615c5626846",
+              "raw_source_sha256": "5ff27609d631a0c15d4bc72e6c8ab64b3b3d7535b776b7af51653615c5626846"
+            },
+            "turn": {
+              "path": "watch/2-sota/turn.png",
+              "sha256": "70f1bed5bb8d155acf61f83cabc4b188eeae1952c6ef993d1e520b77d3f6826b",
+              "raw_source_sha256": "70f1bed5bb8d155acf61f83cabc4b188eeae1952c6ef993d1e520b77d3f6826b"
+            },
+            "end": {
+              "path": "watch/2-sota/end.png",
+              "sha256": "410e79a3f6fd1474efd3d086f3f80b5953ff1ed90a0a6f52a9957925aee1714e",
+              "raw_source_sha256": "410e79a3f6fd1474efd3d086f3f80b5953ff1ed90a0a6f52a9957925aee1714e"
+            }
+          },
+          "surfaceflinger": {
+            "path": "watch/2-sota/surfaceflinger.txt",
+            "sha256": "4767e74d35b64d57c06b2e0825944b307c01380552017afedbdeaf7f8e662743",
+            "raw_source_sha256": "9a5430c3b49f7773637223c2ccd6c91760db57577ed171faf147c05868c6e8f6"
+          },
+          "failure_observations": [
+            {
+              "elapsed_s": 1.2769045419991016,
+              "text": {
+                "raw_ocr_record": "/devices/watch/runs/1/failure_observations/0/text"
+              }
+            },
+            {
+              "elapsed_s": 2.6323126670904458,
+              "text": {
+                "raw_ocr_record": "/devices/watch/runs/1/failure_observations/1/text"
+              }
+            },
+            {
+              "elapsed_s": 3.956663875025697,
+              "text": {
+                "raw_ocr_record": "/devices/watch/runs/1/failure_observations/2/text"
+              }
+            },
+            {
+              "elapsed_s": 5.359191875089891,
+              "text": {
+                "raw_ocr_record": "/devices/watch/runs/1/failure_observations/3/text"
+              }
+            }
+          ],
+          "last_failure_capture": {
+            "path": "watch/2-sota/failure-observation-3.png",
+            "sha256": "30a7e345cc1ecdbea6b618367ea2fc81ed6448c56a0119752b950e40ee28804c",
+            "raw_source_sha256": "30a7e345cc1ecdbea6b618367ea2fc81ed6448c56a0119752b950e40ee28804c"
+          },
+          "collector_duration_check_passed": true,
+          "automated_failure_raw_ocr_record": "/devices/watch/runs/1/automated_failure"
+        },
+        {
+          "leg": 3,
+          "variant": "main",
+          "frames": 984,
+          "elapsed_s": 21.143,
+          "fps": 46.54022607955351,
+          "route_complete": true,
+          "automated_route_complete": true,
+          "automated_failure": null,
+          "capture_review": null,
+          "temperature_before": {
+            "battery_c": 38.3,
+            "thermal_status": 2
+          },
+          "temperature_after": {
+            "battery_c": 40.2,
+            "thermal_status": 2
+          },
+          "pre_route_cpu_samples": [
+            "28034 u0_a82       -2   0 1.3G 260M  89M S  0.0  14.8   0:11.07 com.cranscan.app.codex",
+            "28034 u0_a82       -2   0 1.3G 259M  88M S  0.0  14.8   0:11.07 com.cranscan.app.codex"
+          ],
+          "timing_markers": [
+            "elapsed_ms=9801",
+            "capture_elapsed_ms=1532",
+            "elapsed_ms=9768",
+            "dump_elapsed_ms=41",
+            "measurement_elapsed_ms=21143"
+          ],
+          "endpoint_text": {
+            "raw_ocr_record": "/devices/watch/runs/2/endpoint_text"
+          },
+          "captures": {
+            "start": {
+              "path": "watch/3-main/start.png",
+              "sha256": "fb137ad808b78a16fba37918f05cad039deff5bfd151b72fa879f959173751d9",
+              "raw_source_sha256": "fb137ad808b78a16fba37918f05cad039deff5bfd151b72fa879f959173751d9"
+            },
+            "turn": {
+              "path": "watch/3-main/turn.png",
+              "sha256": "c0acafb9eef8e673f0fd2da744618de936cb62f4eb2e6faf04348265755d2c00",
+              "raw_source_sha256": "c0acafb9eef8e673f0fd2da744618de936cb62f4eb2e6faf04348265755d2c00"
+            },
+            "end": {
+              "path": "watch/3-main/end.png",
+              "sha256": "12396777a3aa5a0f1e486e36dcd687f61f217d213e30d4ff6baabf1c1d724044",
+              "raw_source_sha256": "12396777a3aa5a0f1e486e36dcd687f61f217d213e30d4ff6baabf1c1d724044"
+            }
+          },
+          "surfaceflinger": {
+            "path": "watch/3-main/surfaceflinger.txt",
+            "sha256": "9ffcea469047acc223c9a0c1ebaec9b214fc946487155b6a6425b5358a03aaca",
+            "raw_source_sha256": "1fe6579b8b27045a31c335310aa4d2f39fac3eb839861d7a0adf07da82bb37d8"
+          },
+          "collector_duration_check_passed": true
+        },
+        {
+          "leg": 4,
+          "variant": "sota",
+          "frames": 671,
+          "elapsed_s": 21.182,
+          "fps": 31.677839675195923,
+          "route_complete": true,
+          "automated_route_complete": true,
+          "automated_failure": null,
+          "capture_review": null,
+          "temperature_before": {
+            "battery_c": 41.0,
+            "thermal_status": 3
+          },
+          "temperature_after": {
+            "battery_c": 41.0,
+            "thermal_status": 3
+          },
+          "pre_route_cpu_samples": [
+            "28396 u0_a82       -2   0 1.3G 266M  91M S  0.0  15.2   0:16.32 com.cranscan.app.codex",
+            "28396 u0_a82       -2   0 1.3G 264M  89M S  0.0  15.1   0:16.32 com.cranscan.app.codex"
+          ],
+          "timing_markers": [
+            "elapsed_ms=9800",
+            "capture_elapsed_ms=1551",
+            "elapsed_ms=9768",
+            "dump_elapsed_ms=60",
+            "measurement_elapsed_ms=21182"
+          ],
+          "endpoint_text": {
+            "raw_ocr_record": "/devices/watch/runs/3/endpoint_text"
+          },
+          "captures": {
+            "start": {
+              "path": "watch/4-sota/start.png",
+              "sha256": "baa46c4786e57d706b53f9a16f6fda8e543c2ca6d217b56deb7115156b33315d",
+              "raw_source_sha256": "baa46c4786e57d706b53f9a16f6fda8e543c2ca6d217b56deb7115156b33315d"
+            },
+            "turn": {
+              "path": "watch/4-sota/turn.png",
+              "sha256": "f7d8d768277bd6edc2dd9b184ad53f310169bee09a0e008c3f011a476c7cb2c9",
+              "raw_source_sha256": "f7d8d768277bd6edc2dd9b184ad53f310169bee09a0e008c3f011a476c7cb2c9"
+            },
+            "end": {
+              "path": "watch/4-sota/end.png",
+              "sha256": "193e300862689b1cbc9c8bbc7ee121fe933f4dfa363c3ede9e2ae5738a78ea22",
+              "raw_source_sha256": "193e300862689b1cbc9c8bbc7ee121fe933f4dfa363c3ede9e2ae5738a78ea22"
+            }
+          },
+          "surfaceflinger": {
+            "path": "watch/4-sota/surfaceflinger.txt",
+            "sha256": "54e02408749323ba0ca8cb3daa8ee80c5199ae29adfbeffaad659e24b8201dc8",
+            "raw_source_sha256": "267b4c0f9fc60985b97bda996cf469fb0f664fdab7c7ac46c6b169fb5ce5218f"
+          },
+          "collector_duration_check_passed": true
+        },
+        {
+          "leg": 5,
+          "variant": "sota",
+          "frames": 722,
+          "elapsed_s": 21.068,
+          "fps": 34.26998291247389,
+          "route_complete": true,
+          "automated_route_complete": true,
+          "automated_failure": null,
+          "capture_review": null,
+          "temperature_before": {
+            "battery_c": 41.0,
+            "thermal_status": 3
+          },
+          "temperature_after": {
+            "battery_c": 42.2,
+            "thermal_status": 3
+          },
+          "pre_route_cpu_samples": [
+            "28988 u0_a82       -2   0 1.3G 269M  94M S  0.0  15.4   0:17.91 com.cranscan.app.codex",
+            "28988 u0_a82       -2   0 1.3G 269M  94M S  0.0  15.4   0:17.91 com.cranscan.app.codex"
+          ],
+          "timing_markers": [
+            "elapsed_ms=9801",
+            "capture_elapsed_ms=1412",
+            "elapsed_ms=9768",
+            "dump_elapsed_ms=83",
+            "measurement_elapsed_ms=21068"
+          ],
+          "endpoint_text": {
+            "raw_ocr_record": "/devices/watch/runs/4/endpoint_text"
+          },
+          "captures": {
+            "start": {
+              "path": "watch/5-sota/start.png",
+              "sha256": "f58dba8ab7c1cafbf533422ac96d7bcb392fb1f230e218c3742dbcb88eeb22e3",
+              "raw_source_sha256": "f58dba8ab7c1cafbf533422ac96d7bcb392fb1f230e218c3742dbcb88eeb22e3"
+            },
+            "turn": {
+              "path": "watch/5-sota/turn.png",
+              "sha256": "f7d8d768277bd6edc2dd9b184ad53f310169bee09a0e008c3f011a476c7cb2c9",
+              "raw_source_sha256": "f7d8d768277bd6edc2dd9b184ad53f310169bee09a0e008c3f011a476c7cb2c9"
+            },
+            "end": {
+              "path": "watch/5-sota/end.png",
+              "sha256": "f02dc4e2a7bc7947db4eaada98dea77966e18f3e97d246d1b79a0b53c57573d9",
+              "raw_source_sha256": "f02dc4e2a7bc7947db4eaada98dea77966e18f3e97d246d1b79a0b53c57573d9"
+            }
+          },
+          "surfaceflinger": {
+            "path": "watch/5-sota/surfaceflinger.txt",
+            "sha256": "d8f32992fd297043a7efde7fa8fe574b88b99328561bf485cea9c7b6950be7a9",
+            "raw_source_sha256": "d20f4725ed046facb8792f5ea790568dd872ecc11dbc1ab162c3c1b88d096481"
+          },
+          "collector_duration_check_passed": true
+        },
+        {
+          "leg": 6,
+          "variant": "main",
+          "frames": 536,
+          "elapsed_s": 21.583,
+          "fps": 24.83436037622203,
+          "route_complete": true,
+          "automated_route_complete": true,
+          "automated_failure": null,
+          "capture_review": null,
+          "temperature_before": {
+            "battery_c": 42.2,
+            "thermal_status": 3
+          },
+          "temperature_after": {
+            "battery_c": 42.2,
+            "thermal_status": 3
+          },
+          "pre_route_cpu_samples": [
+            "29384 u0_a82       -2   0 1.4G 257M  86M S  0.0  14.7   0:28.08 com.cranscan.app.codex",
+            "29384 u0_a82       -2   0 1.4G 257M  86M S  0.0  14.7   0:28.08 com.cranscan.app.codex"
+          ],
+          "timing_markers": [
+            "elapsed_ms=9800",
+            "capture_elapsed_ms=1929",
+            "elapsed_ms=9768",
+            "dump_elapsed_ms=81",
+            "measurement_elapsed_ms=21583"
+          ],
+          "endpoint_text": {
+            "raw_ocr_record": "/devices/watch/runs/5/endpoint_text"
+          },
+          "captures": {
+            "start": {
+              "path": "watch/6-main/start.png",
+              "sha256": "ae4fb00f4297adec9a39d5492b88d2d7cbbfd6ee92d05cd62f53fce345d0d7c8",
+              "raw_source_sha256": "ae4fb00f4297adec9a39d5492b88d2d7cbbfd6ee92d05cd62f53fce345d0d7c8"
+            },
+            "turn": {
+              "path": "watch/6-main/turn.png",
+              "sha256": "11445ad446d50e14dbe7438af813e85fdd8af179604407b08b3dc2953fabd4b4",
+              "raw_source_sha256": "11445ad446d50e14dbe7438af813e85fdd8af179604407b08b3dc2953fabd4b4"
+            },
+            "end": {
+              "path": "watch/6-main/end.png",
+              "sha256": "9cbcb48b17ec3fafb777ada13c5d1e367f13f3c6faedc142f7ecd4cff3608fec",
+              "raw_source_sha256": "9cbcb48b17ec3fafb777ada13c5d1e367f13f3c6faedc142f7ecd4cff3608fec"
+            }
+          },
+          "surfaceflinger": {
+            "path": "watch/6-main/surfaceflinger.txt",
+            "sha256": "67ac97c747e2806c9687fa7cc0a27b6c87c6e7712c082b2b1fb5aaf340b90570",
+            "raw_source_sha256": "6a93026d620b88d00ac7be89b9adfb580989e3a64c54610106a947d779a0467f"
+          },
+          "collector_duration_check_passed": true
+        },
+        {
+          "leg": 7,
+          "variant": "sota",
+          "frames": 420,
+          "elapsed_s": 22.966,
+          "fps": 18.28790385787686,
+          "route_complete": true,
+          "automated_route_complete": false,
+          "automated_failure": "22.966",
+          "capture_review": {
+            "route_complete": true,
+            "reason": "Original turnaround and return captures show both required labels; the collector rejected elapsed_s=22.966 before evaluating endpoints. Timing rejection remains recorded; this correction establishes only route completion."
+          },
+          "temperature_before": {
+            "battery_c": 42.8,
+            "thermal_status": 3
+          },
+          "temperature_after": {
+            "battery_c": 42.8,
+            "thermal_status": 3
+          },
+          "pre_route_cpu_samples": [
+            "29793 u0_a82       -2   0 1.3G 272M  97M S  0.0  15.6   0:19.18 com.cranscan.app.codex",
+            "29793 u0_a82       -2   0 1.3G 267M  92M S  0.0  15.3   0:19.18 com.cranscan.app.codex"
+          ],
+          "timing_markers": [
+            "elapsed_ms=9804",
+            "capture_elapsed_ms=3293",
+            "elapsed_ms=9768",
+            "dump_elapsed_ms=93",
+            "measurement_elapsed_ms=22966"
+          ],
+          "endpoint_text": {
+            "raw_ocr_record": "/devices/watch/runs/6/endpoint_text"
+          },
+          "captures": {
+            "start": {
+              "path": "watch/7-sota/start.png",
+              "sha256": "5ff27609d631a0c15d4bc72e6c8ab64b3b3d7535b776b7af51653615c5626846",
+              "raw_source_sha256": "5ff27609d631a0c15d4bc72e6c8ab64b3b3d7535b776b7af51653615c5626846"
+            },
+            "turn": {
+              "path": "watch/7-sota/turn.png",
+              "sha256": "f7d8d768277bd6edc2dd9b184ad53f310169bee09a0e008c3f011a476c7cb2c9",
+              "raw_source_sha256": "f7d8d768277bd6edc2dd9b184ad53f310169bee09a0e008c3f011a476c7cb2c9"
+            },
+            "end": {
+              "path": "watch/7-sota/end.png",
+              "sha256": "9fb2563a02e1c6f1b67fdde669bf76795da66a268a6288fa86887ba95a45750b",
+              "raw_source_sha256": "9fb2563a02e1c6f1b67fdde669bf76795da66a268a6288fa86887ba95a45750b"
+            }
+          },
+          "surfaceflinger": {
+            "path": "watch/7-sota/surfaceflinger.txt",
+            "sha256": "15a4e142caec3cef4f80d2e0546a58e2c7ac25e5da7378ff2b1c4e1c91a54275",
+            "raw_source_sha256": "3ba189724d22c646b745fb3d2a489b89fb0cc25400df7c9cf26d18195d624b95"
+          },
+          "failure_observations": [
+            {
+              "elapsed_s": 2.0921289580874145,
+              "text": {
+                "raw_ocr_record": "/devices/watch/runs/6/failure_observations/0/text"
+              }
+            },
+            {
+              "elapsed_s": 4.176263333065435,
+              "text": {
+                "raw_ocr_record": "/devices/watch/runs/6/failure_observations/1/text"
+              }
+            },
+            {
+              "elapsed_s": 6.383539790986106,
+              "text": {
+                "raw_ocr_record": "/devices/watch/runs/6/failure_observations/2/text"
+              }
+            },
+            {
+              "elapsed_s": 8.485107291024178,
+              "text": {
+                "raw_ocr_record": "/devices/watch/runs/6/failure_observations/3/text"
+              }
+            }
+          ],
+          "last_failure_capture": {
+            "path": "watch/7-sota/failure-observation-3.png",
+            "sha256": "5a10988868aac9f277fe2a635bb6600d0e29b5aa425f45d1a91d4406d30c1857",
+            "raw_source_sha256": "5a10988868aac9f277fe2a635bb6600d0e29b5aa425f45d1a91d4406d30c1857"
+          },
+          "collector_duration_check_passed": false
+        },
+        {
+          "leg": 8,
+          "variant": "main",
+          "frames": 522,
+          "elapsed_s": 21.939,
+          "fps": 23.79324490633119,
+          "route_complete": true,
+          "automated_route_complete": true,
+          "automated_failure": null,
+          "capture_review": null,
+          "temperature_before": {
+            "battery_c": 42.8,
+            "thermal_status": 3
+          },
+          "temperature_after": {
+            "battery_c": 42.8,
+            "thermal_status": 3
+          },
+          "pre_route_cpu_samples": [
+            "30392 u0_a82       -2   0 1.3G 258M  87M S  0.0  14.7   0:15.23 com.cranscan.app.codex",
+            "30392 u0_a82       -2   0 1.3G 258M  87M S  0.0  14.7   0:15.23 com.cranscan.app.codex"
+          ],
+          "timing_markers": [
+            "elapsed_ms=9800",
+            "capture_elapsed_ms=2294",
+            "elapsed_ms=9768",
+            "dump_elapsed_ms=70",
+            "measurement_elapsed_ms=21939"
+          ],
+          "endpoint_text": {
+            "raw_ocr_record": "/devices/watch/runs/7/endpoint_text"
+          },
+          "captures": {
+            "start": {
+              "path": "watch/8-main/start.png",
+              "sha256": "02fbc53ba8448249fe235b70314330b83b7c493bbfc1fda5f6874e15c315c44e",
+              "raw_source_sha256": "02fbc53ba8448249fe235b70314330b83b7c493bbfc1fda5f6874e15c315c44e"
+            },
+            "turn": {
+              "path": "watch/8-main/turn.png",
+              "sha256": "11445ad446d50e14dbe7438af813e85fdd8af179604407b08b3dc2953fabd4b4",
+              "raw_source_sha256": "11445ad446d50e14dbe7438af813e85fdd8af179604407b08b3dc2953fabd4b4"
+            },
+            "end": {
+              "path": "watch/8-main/end.png",
+              "sha256": "0f7116ab932824c1454d1aa4637de6c31775c231681d63f639d0dab46ac19051",
+              "raw_source_sha256": "0f7116ab932824c1454d1aa4637de6c31775c231681d63f639d0dab46ac19051"
+            }
+          },
+          "surfaceflinger": {
+            "path": "watch/8-main/surfaceflinger.txt",
+            "sha256": "c75e026512c9539415aa3b2d16a95021ad016fbad2a01a7b718015b94dad9f91",
+            "raw_source_sha256": "5a3f9b338b107a3d511f881c6d9642d4185805695c1474417cd3aa65a256ee8e"
+          },
+          "collector_duration_check_passed": true
+        }
+      ],
+      "summary": {
+        "means_all_runs_fps": {
+          "main": 35.03031556719462,
+          "sota": 27.145118716800866
+        },
+        "delta_fps": -7.885196850393754,
+        "delta_percent": -22.509636932240838,
+        "route_completions": {
+          "main": 4,
+          "sota": 3
+        },
+        "pairs": [
+          {
+            "main_leg": 1,
+            "sota_leg": 2,
+            "delta_fps": -20.608682485014953,
+            "both_routes_complete": false
+          },
+          {
+            "main_leg": 3,
+            "sota_leg": 4,
+            "delta_fps": -14.86238640435759,
+            "both_routes_complete": true
+          },
+          {
+            "main_leg": 6,
+            "sota_leg": 5,
+            "delta_fps": 9.435622536251863,
+            "both_routes_complete": true
+          },
+          {
+            "main_leg": 8,
+            "sota_leg": 7,
+            "delta_fps": -5.50534104845433,
+            "both_routes_complete": true
+          }
+        ],
+        "battery_range_c": [
+          37.4,
+          42.8
+        ]
+      },
+      "properties_restored": true
+    }
+  },
+  "earlier_failure": {
+    "sequence": "huawei-abab-baba-v3",
+    "leg": 7,
+    "variant": "sota",
+    "observation": "Blank Settings body after the return; visible navigation and a small header icon; duration and cause unresolved because this earlier collector stopped the app after failure.",
+    "capture": {
+      "path": "huawei-earlier-blank-end.png",
+      "sha256": "381c41fd59188e5e3b05d9b8bcd9495d31470d450ff6349fc43e23eda9726222",
+      "raw_source_sha256": "381c41fd59188e5e3b05d9b8bcd9495d31470d450ff6349fc43e23eda9726222"
+    },
+    "elapsed_s": 20.042
+  },
+  "earlier_attempts": [
+    {
+      "directory": "huawei-abab-baba-v1",
+      "runs": [
+        {
+          "variant": "main",
+          "fps": 52.60793611180434,
+          "elapsed_s": 20.035,
+          "route_complete": true,
+          "invalid_reason": null
+        },
+        {
+          "variant": "sota",
+          "fps": null,
+          "elapsed_s": null,
+          "route_complete": null,
+          "invalid_reason": "Missing visible route text: ['intelligence']",
+          "invalid_reason_raw_ocr_record": "/earlier_attempts/0/runs/1/invalid_reason"
+        }
+      ]
+    },
+    {
+      "directory": "huawei-abab-baba-v2",
+      "runs": [
+        {
+          "variant": "main",
+          "fps": 52.304479689752895,
+          "elapsed_s": 20.113,
+          "route_complete": true,
+          "invalid_reason": null
+        },
+        {
+          "variant": "sota",
+          "fps": 50.98117541319219,
+          "elapsed_s": 20.027,
+          "route_complete": true,
+          "invalid_reason": null
+        },
+        {
+          "variant": "main",
+          "fps": 52.542793351525674,
+          "elapsed_s": 20.155,
+          "route_complete": true,
+          "invalid_reason": null
+        },
+        {
+          "variant": "sota",
+          "fps": null,
+          "elapsed_s": null,
+          "route_complete": null,
+          "invalid_reason": "Missing visible route text: ['intelligence']",
+          "invalid_reason_raw_ocr_record": "/earlier_attempts/1/runs/3/invalid_reason"
+        }
+      ]
+    },
+    {
+      "directory": "huawei-abab-baba-v3",
+      "runs": [
+        {
+          "variant": "main",
+          "fps": 52.04071449955094,
+          "elapsed_s": 20.042,
+          "route_complete": true,
+          "invalid_reason": null
+        },
+        {
+          "variant": "sota",
+          "fps": 54.16333865814696,
+          "elapsed_s": 20.032,
+          "route_complete": true,
+          "invalid_reason": null
+        },
+        {
+          "variant": "main",
+          "fps": 52.51335296760345,
+          "elapsed_s": 20.033,
+          "route_complete": true,
+          "invalid_reason": null
+        },
+        {
+          "variant": "sota",
+          "fps": 53.86919620569146,
+          "elapsed_s": 20.03,
+          "route_complete": true,
+          "invalid_reason": null
+        },
+        {
+          "variant": "sota",
+          "fps": 53.92328029131541,
+          "elapsed_s": 20.047,
+          "route_complete": true,
+          "invalid_reason": null
+        },
+        {
+          "variant": "main",
+          "fps": 51.54690618762475,
+          "elapsed_s": 20.04,
+          "route_complete": true,
+          "invalid_reason": null
+        },
+        {
+          "variant": "sota",
+          "fps": null,
+          "elapsed_s": 20.042,
+          "route_complete": null,
+          "invalid_reason": "Missing visible route text: ['intelligence']",
+          "invalid_reason_raw_ocr_record": "/earlier_attempts/2/runs/6/invalid_reason"
+        }
+      ]
+    },
+    {
+      "directory": "huawei-preflight-v1",
+      "runs": [
+        {
+          "variant": "main",
+          "fps": 51.470845181340145,
+          "elapsed_s": 20.80789612501394,
+          "route_complete": true,
+          "invalid_reason": null
+        }
+      ]
+    },
+    {
+      "directory": "huawei-preflight-v2",
+      "runs": [
+        {
+          "variant": "main",
+          "fps": 52.24920382165605,
+          "elapsed_s": 20.096,
+          "route_complete": true,
+          "invalid_reason": null
+        }
+      ]
+    },
+    {
+      "directory": "watch-preflight-v1",
+      "runs": [
+        {
+          "variant": "main",
+          "fps": null,
+          "elapsed_s": null,
+          "route_complete": null,
+          "invalid_reason": "Missing visible route text: ['intelligence']",
+          "invalid_reason_raw_ocr_record": "/earlier_attempts/5/runs/0/invalid_reason"
+        }
+      ]
+    },
+    {
+      "directory": "watch-preflight-v2",
+      "runs": [
+        {
+          "variant": "main",
+          "fps": null,
+          "elapsed_s": 20.549,
+          "route_complete": null,
+          "invalid_reason": "Missing visible route text: ['licenses', 'credits', 'library', 'stats']",
+          "invalid_reason_raw_ocr_record": "/earlier_attempts/6/runs/0/invalid_reason"
+        }
+      ]
+    },
+    {
+      "directory": "watch-preflight-v3",
+      "runs": [
+        {
+          "variant": "main",
+          "fps": null,
+          "elapsed_s": 21.59,
+          "route_complete": null,
+          "invalid_reason": "Missing visible route text: ['intelligence']",
+          "invalid_reason_raw_ocr_record": "/earlier_attempts/7/runs/0/invalid_reason"
+        }
+      ]
+    },
+    {
+      "directory": "watch-preflight-v4",
+      "runs": [
+        {
+          "variant": "main",
+          "fps": null,
+          "elapsed_s": 20.822,
+          "route_complete": null,
+          "invalid_reason": "218103808"
+        }
+      ]
+    },
+    {
+      "directory": "watch-preflight-v5",
+      "runs": [
+        {
+          "variant": "main",
+          "fps": 43.81580862729875,
+          "elapsed_s": 20.609,
+          "route_complete": true,
+          "invalid_reason": null
+        }
+      ]
+    },
+    {
+      "directory": "watch-preflight-v6",
+      "runs": [
+        {
+          "variant": "main",
+          "fps": 48.436308161708624,
+          "elapsed_s": 20.976,
+          "route_complete": true,
+          "invalid_reason": null
+        }
+      ]
+    }
+  ],
+  "raw_ocr": {
+    "path": "raw-ocr.json",
+    "sha256": "9a2d412f41ae4381a3154f47e67d506b5df93afb1e0dda926b41f2e4ac5fe78c",
+    "description": "Uncorrected machine-recognized text and original failure messages; intentionally excluded from spelling checks."
+  }
+}
