@@ -1766,7 +1766,7 @@ pub fn run(
             idle_timeout
         };
 
-        app.poll_events(poll_duration, |event| {
+        app.poll_events(crate::android_poll::poll_timeout(poll_duration), |event| {
             if let PollEvent::Main(main_event) = event {
                 match main_event {
                     MainEvent::InitWindow { .. } => {

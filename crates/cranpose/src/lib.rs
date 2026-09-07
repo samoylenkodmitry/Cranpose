@@ -71,6 +71,11 @@ mod android_panic_hook;
 mod android_perf_hint;
 #[cfg(any(
     test,
+    all(feature = "android", feature = "renderer-wgpu", target_os = "android")
+))]
+mod android_poll;
+#[cfg(any(
+    test,
     all(feature = "android", feature = "playbilling", target_os = "android")
 ))]
 mod android_purchase_wire;
