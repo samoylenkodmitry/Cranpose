@@ -1,0 +1,77 @@
+use cranpose::Robot;
+use std::{path::PathBuf, time::{Duration, Instant}};
+
+pub(super) fn run(robot: &Robot) -> Result<(), String> {
+    let output = PathBuf::from(std::env::var("PR617_PERF_OUTPUT").map_err(|e| e.to_string())?);
+    std::fs::create_dir_all(&output).map_err(|e| e.to_string())?;
+    robot.pump_frames(8)?;
+    robot.mouse_move(super::APP_WIDTH as f32 - 42.0, super::APP_HEIGHT as f32 * 0.6)?;
+    let center = super::APP_HEIGHT as f32 * 0.58;
+    let mut aligned = false;
+    for _ in 0..80 {
+        let delta = if let Some((_, y, _, height)) = robot.find_text_bounds("Rust Code")? {
+            let offset = y + height * 0.5 - center;
+            if offset.abs() < 12.0 {
+                aligned = true;
+                break;
+            }
+            -offset.clamp(-240.0, 240.0)
+        } else {
+            -240.0
+        };
+        robot.mouse_scroll_and_wait_for_frame(0.0, delta)?;
+    }
+    if !aligned {
+        let nodes = robot.get_semantics()?;
+        std::fs::write(output.join("unresolved.txt"), Robot::format_semantics(&nodes, 0)).map_err(|e| e.to_string())?;
+        return Err("Rust Code did not reach the measured viewport".to_string());
+    }
+    save(robot, output.join("start.png"))?;
+    std::fs::write(output.join("ready"), "ready").map_err(|e| e.to_string())?;
+    if std::env::var_os("PR617_PERF_WAIT_FOR_GO").is_some() {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !output.join("go").exists() {
+            if Instant::now() > deadline {
+                return Err("Recording coordinator did not release the route".to_string());
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+    robot.reset_fps_stats()?;
+    let before = robot.fps_stats()?;
+    let start = Instant::now();
+    let duration = Duration::from_secs(20);
+    let interval = Duration::from_secs_f64(1.0 / 60.0);
+    let mut next = start;
+    let mut position = 0.0_f32;
+    let mut inputs = 0_u32;
+    while start.elapsed() < duration {
+        let seconds = start.elapsed().as_secs_f32().min(20.0);
+        let phase = seconds % 4.0;
+        let target = if phase < 2.0 { phase } else { 4.0 - phase } * -480.0;
+        robot.mouse_scroll(0.0, target - position)?;
+        position = target;
+        inputs += 1;
+        next += interval;
+        std::thread::sleep(next.saturating_duration_since(Instant::now()));
+    }
+    let after = robot.fps_stats()?;
+    let elapsed = start.elapsed().as_secs_f64();
+    let frames = after.frame_count.saturating_sub(before.frame_count);
+    let result = format!(
+        "{{\"frames\":{frames},\"seconds\":{elapsed},\"fps\":{},\"inputs\":{inputs},\"rolling_p95_ms\":{},\"rolling_p99_ms\":{},\"work_avg_ms\":{}}}\n",
+        frames as f64 / elapsed, after.p95_ms, after.p99_ms, after.work_avg_ms,
+    );
+    std::fs::write(output.join("result.json"), &result).map_err(|e| e.to_string())?;
+    println!("PR617_LEET_FPS {result}");
+    robot.mouse_scroll_and_wait_for_frame(0.0, -position)?;
+    save(robot, output.join("return.png"))?;
+    robot.exit()
+}
+
+fn save(robot: &Robot, path: PathBuf) -> Result<(), String> {
+    let frame = robot.screenshot()?;
+    let image = image::RgbaImage::from_raw(frame.width, frame.height, frame.pixels)
+        .ok_or_else(|| "Invalid captured image".to_string())?;
+    image.save(path).map_err(|e| e.to_string())
+}

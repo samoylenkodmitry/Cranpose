@@ -1,0 +1,15 @@
+{
+  "binary_sha256": "448d7fb6d6c459c27461f6e0c0f6144658fb9179c75ec8a90a687b90f2a822c4",
+  "recording": false,
+  "pacing": "Vsync",
+  "data_directory": "/Users/dmitriisamoilenko/leetcodedaily-pr617-sota/perf-data",
+  "result": {
+    "frames": 825,
+    "seconds": 20.002558708,
+    "fps": 41.24472333982163,
+    "inputs": 1200,
+    "rolling_p95_ms": 37.16296,
+    "rolling_p99_ms": 49.400414,
+    "work_avg_ms": 27.707335
+  }
+}

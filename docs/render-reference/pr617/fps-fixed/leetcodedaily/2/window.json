@@ -1,0 +1,19 @@
+[
+  {
+    "kCGWindowAlpha": 1,
+    "kCGWindowBounds": {
+      "Height": 1592,
+      "Width": 1480,
+      "X": 860,
+      "Y": 36
+    },
+    "kCGWindowIsOnscreen": true,
+    "kCGWindowLayer": 0,
+    "kCGWindowMemoryUsage": 2368,
+    "kCGWindowNumber": 16713,
+    "kCGWindowOwnerName": "leetcodedaily",
+    "kCGWindowOwnerPID": 16130,
+    "kCGWindowSharingState": 0,
+    "kCGWindowStoreType": 1
+  }
+]

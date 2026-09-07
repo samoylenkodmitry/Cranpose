@@ -1,0 +1,139 @@
+{
+  "huawei": {
+    "runs": [
+      {
+        "run": "huawei-run-1",
+        "fps": 54.26047022413018,
+        "frames": 1087,
+        "seconds": 20.033,
+        "route_complete": true,
+        "failure": null,
+        "temperature_before_c": 32.0,
+        "temperature_after_c": 31.0
+      },
+      {
+        "run": "huawei-run-2",
+        "fps": 53.66681643452649,
+        "frames": 1075,
+        "seconds": 20.031,
+        "route_complete": true,
+        "failure": null,
+        "temperature_before_c": 32.0,
+        "temperature_after_c": 32.0
+      },
+      {
+        "run": "huawei-run-3",
+        "fps": 54.040555389072026,
+        "frames": 1082,
+        "seconds": 20.022,
+        "route_complete": true,
+        "failure": null,
+        "temperature_before_c": 32.0,
+        "temperature_after_c": 32.0
+      },
+      {
+        "run": "huawei-run-4",
+        "fps": 54.50639488409273,
+        "frames": 1091,
+        "seconds": 20.016,
+        "route_complete": true,
+        "failure": null,
+        "temperature_before_c": 32.0,
+        "temperature_after_c": 33.0
+      }
+    ],
+    "mean_fps": 54.118559232955356,
+    "weighted_fps": 54.11849891388479
+  },
+  "watch": {
+    "runs": [
+      {
+        "run": "watch-run-1",
+        "fps": 34.25529979073788,
+        "frames": 753,
+        "seconds": 21.982,
+        "route_complete": true,
+        "failure": null,
+        "temperature_before_c": 33.5,
+        "temperature_after_c": 34.3
+      },
+      {
+        "run": "watch-run-2",
+        "fps": 40.805760813291286,
+        "frames": 867,
+        "seconds": 21.247,
+        "route_complete": false,
+        "failure": "Return heading partly below navigation bar",
+        "temperature_before_c": 35.3,
+        "temperature_after_c": 35.9
+      },
+      {
+        "run": "watch-run-3",
+        "fps": 45.5175048956393,
+        "frames": 953,
+        "seconds": 20.937,
+        "route_complete": true,
+        "failure": null,
+        "temperature_before_c": 36.0,
+        "temperature_after_c": 36.4
+      },
+      {
+        "run": "watch-run-4",
+        "fps": 46.448877324853036,
+        "frames": 964,
+        "seconds": 20.754,
+        "route_complete": true,
+        "failure": null,
+        "temperature_before_c": 36.3,
+        "temperature_after_c": 36.8
+      }
+    ],
+    "mean_fps": 41.756860706130375,
+    "weighted_fps": 41.65096561469618
+  },
+  "leetcodedaily": {
+    "runs": [
+      {
+        "run": 1,
+        "frames": 836,
+        "seconds": 20.012945292,
+        "fps": 41.77296184056345,
+        "inputs": 1200,
+        "rolling_p95_ms": 34.022793,
+        "rolling_p99_ms": 49.979958,
+        "work_avg_ms": 27.956005
+      },
+      {
+        "run": 2,
+        "frames": 821,
+        "seconds": 20.017188917,
+        "fps": 41.01475004328651,
+        "inputs": 1200,
+        "rolling_p95_ms": 47.355377,
+        "rolling_p99_ms": 49.985874,
+        "work_avg_ms": 28.59883
+      },
+      {
+        "run": 3,
+        "frames": 818,
+        "seconds": 20.017604875,
+        "fps": 40.864029693262694,
+        "inputs": 1200,
+        "rolling_p95_ms": 34.238583,
+        "rolling_p99_ms": 49.811584,
+        "work_avg_ms": 27.24245
+      },
+      {
+        "run": 4,
+        "frames": 825,
+        "seconds": 20.002558708,
+        "fps": 41.24472333982163,
+        "inputs": 1200,
+        "rolling_p95_ms": 37.16296,
+        "rolling_p99_ms": 49.400414,
+        "work_avg_ms": 27.707335
+      }
+    ],
+    "mean_fps": 41.22411622923357
+  }
+}

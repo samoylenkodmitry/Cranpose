@@ -18,4 +18,4 @@
 - Offline check: `python3 scripts/android_surface_robot.py --video VIDEO --scale DEVICE_DENSITY_DIVIDED_BY_160 --output OUTPUT` retains per-frame results and failure transitions.
 - Guard validation: `just test-android-surface-contract` accepts every row offset and rejects marker cutouts, card cutouts and blank frames.
 - Evidence: [per-frame results and build hashes](render-reference/pr617/artifacts/evidence.json) and [before/after videos](https://github.com/samoylenkodmitry/Cranpose/pull/617#issuecomment-5573688025) retain the failing recordings.
-- Acceptance: Huawei motion verification passes; FPS measurements remain paused and these results make no performance claim.
+- Acceptance: Huawei motion verification passes; [fresh FPS measurements](render-reference/pr617/fps-fixed/README.md) remain below 60 FPS.

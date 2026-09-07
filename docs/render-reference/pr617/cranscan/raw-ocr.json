@@ -103,5 +103,80 @@
   "/earlier_attempts/2/runs/6/invalid_reason": "Missing visible route text: ['intelligence'] in '349 0 library items scan insights settings'",
   "/earlier_attempts/5/runs/0/invalid_reason": "Missing visible route text: ['intelligence'] in '$ base line curr encv none librar items scan insight settin'",
   "/earlier_attempts/6/runs/0/invalid_reason": "Missing visible route text: ['licenses', 'credits', 'library', 'stats'] in 'devic e: know n (nor mal) \u2022 holds al when librar items scan insight settin s'",
-  "/earlier_attempts/7/runs/0/invalid_reason": "Missing visible route text: ['intelligence'] in 'settings librar items scan insight settin as on thic'"
+  "/earlier_attempts/7/runs/0/invalid_reason": "Missing visible route text: ['intelligence'] in 'settings librar items scan insight settin as on thic'",
+  "fixed_sota_8944038b": {
+    "huawei/1": {
+      "start_text": "7:29 settings on-device al \u2022 off local backup \u2022 off on-device intelligence al models receipts, text, and categorization xa b ocr languages cyrillic + latin receipt cutting which model finds the paper in a photo confidence threshold minimum confidence to auto-categorize library items scan \u2022 b/s ... on this device \u2022 receipts are never uploaded on-device > 1 language > accurate > 80% - + insights settings",
+      "turn_text": "7:30 inis pnone puts cranscan to sieep as soon as the screen goes to another app, so a long import stops halfway. let it run without that limit and the pages finish. open the phone setting thermal guard \u2022 device: known(normal) \u2022 holds all when hot; scans always run battery guard battery: 100%; charging battery charging off saver al suggestions pause below 20% unplugged. scans always process. unlock cranscan \u203a one-time purchase \u2022 no subscription, no account 15 of 15 free documents used cranscan 1.0.22 \u203a version, licenses, credits, library stats. library items scan insights settings",
+      "end_text": "7:30 settings on-device al \u2022 off local backup \u2022 off on-device intelligence al models receipts, text, and categorization xa b ocr languages cyrillic + latin receipt cutting which model finds the paper in a photo confidence threshold minimum confidence to auto-categorize library items scan ... on this device \u2022 receipts are never uploaded on-device > 1 language > accurate > 80% - + insights settings",
+      "invalid_reason": null,
+      "failure_observations": null
+    },
+    "huawei/2": {
+      "start_text": "7:33 settings on-device al \u2022 off local backup \u2022 off on-device intelligence al models receipts, text, and categorization xa b ocr languages cyrillic + latin receipt cutting which model finds the paper in a photo confidence threshold minimum confidence to auto-categorize library items scan ... on this device \u2022 receipts are never uploaded on-device > 1 language > accurate > 80% - + insights settings",
+      "turn_text": "7:33 inis pnone puts cranscan to sieep as soon as the screen goes to another app, so a long import stops halfway. let it run without that limit and the pages finish. open the phone setting thermal guard \u2022 device: known(normal) - holds al when hot; scans always run battery guard battery: 100%; charging battery charging off saver al suggestions pause below 20% unplugged. scans always process. unlock cranscan \u203a one-time purchase \u2022 no subscription, no account 15 of 15 free documents used cranscan 1.0.22 \u203a version, licenses, credits, library stats. library items scan insights settings",
+      "end_text": "7:3 settings on-device al \u2022 off local backup \u2022 off on-device intelligence al models receipts, text, and categorization xa b ocr languages cyrillic + latin receipt cutting which model finds the paper in a photo confidence threshold minimum confidence to auto-categorize library items scan \u2022 b/s ... on this device \u2022 receipts are never uploaded on-device > 1 language > accurate > 80% - + insights settings",
+      "invalid_reason": null,
+      "failure_observations": null
+    },
+    "huawei/3": {
+      "start_text": "7:36 settings on-device al \u2022 off local backup \u2022 off on-device intelligence al models receipts, text, and categorization xa b ocr languages cyrillic + latin receipt cutting which model finds the paper in a photo confidence threshold minimum confidence to auto-categorize library items scan \u2022\u2022\u2022 on this device \u2022 receipts are never uploaded on-device > 1 language > accurate > 80% - + insights settings",
+      "turn_text": "7:36 s36 (100\u20224 mnis pnone puts dldllocdn lo sicep ds soun ds the screen goes to another app, so a long import stops halfway. let it run without that limit and the pages finish. open the phone setting thermal guard \u2022 device: known(normal) \u2022 holds ai when hot; scans always run battery guard battery: 100%; charging battery charging off saver al suggestions pause below 20% unplugged. scans always process. unlock cranscan \u203a one-time purchase \u2022 no subscription, no account 15 of 15 free documents used cranscan 1.0.22 \u203a version, licenses, credits, library stats. library items scan insights settings",
+      "end_text": "7:36 settings on-device al \u2022 off local backup \u2022 off on-device intelligence al models receipts, text, and categorization xa b ocr languages cyrillic + latin receipt cutting which model finds the paper in a photo confidence threshold minimum confidence to auto-categorize library items scan \u2022 3/5 ... on this device \u2022 receipts are never uploaded on-device > 1 language > accurate > 80% - + insights settings",
+      "invalid_reason": null,
+      "failure_observations": null
+    },
+    "huawei/4": {
+      "start_text": "7:39 \u0105 settings on-device al \u2022 off local backup \u2022 off on-device intelligence al models receipts, text, and categorization xa b ocr languages cyrillic + latin receipt cutting which model finds the paper in a photo confidence threshold minimum confidence to auto-categorize library items scan \u2022 kis ... on this device \u2022 receipts are never uploaded on-device > 1 language > accurate > 80% - + insights settings",
+      "turn_text": "739 :36(1004 unone puls sieep ds the screen goes to another app, so a long import stops halfway. let it run without that limit and the pages finish. open the phone setting thermal guard device: known(normal) \u2022 holds al when hot; scans always run battery guard battery: 100%; charging battery charging off saver al suggestions pause below 20% unplugged. scans always process. unlock cranscan \u203a one-time purchase \u2022 no subscription, no account 15 of 15 free documents used cranscan 1.0.22 \u203a version, licenses, credits, library stats. library items scan insights settings",
+      "end_text": "7:39 \u0105 settings on-device al \u2022 off local backup \u2022 off on-device intelligence al models receipts, text, and categorization xa b ocr languages cyrillic + latin receipt cutting which model finds the paper in a photo confidence threshold minimum confidence to auto-categorize library items scan \u2022 375 ... on this device \u2022 receipts are never uploaded on-device > 1 language > accurate > 80% - + insights settings",
+      "invalid_reason": null,
+      "failure_observations": null
+    },
+    "watch/1": {
+      "start_text": "uploade d on-device intelligence librar items scan insight settin",
+      "turn_text": "cranscan 1.0.22 \u203a version, licenses, credits, library stats. librar items scan insight settin",
+      "end_text": "\u2022 off \u2022 off \u2022 never uploade on-device intelligence librar items scan insight settin",
+      "invalid_reason": null,
+      "failure_observations": null
+    },
+    "watch/2": {
+      "start_text": "uploade on-device intelligence librar items scan insight settin",
+      "turn_text": "cranscan 1.0.22 \u203a version, licenses, credits, library stats. librar items scan insight settin",
+      "end_text": "on-dev ice al \u2022 off local backup \u2022 off receipts are \u2022 never uploade on-device librar items scan insight settin",
+      "invalid_reason": "Missing visible route text: ['intelligence'] in 'on-dev ice al \u2022 off local backup \u2022 off receipts are \u2022 never uploade on-device librar items scan insight settin'",
+      "failure_observations": [
+        {
+          "elapsed_s": 1.3160083750262856,
+          "text": "on-dev local ice al backup \u2022 off \u2022 off aevice receipts are \u2022 never uploade d on-nevice librar items scan insight settin"
+        },
+        {
+          "elapsed_s": 2.617939749965444,
+          "text": "on-dev local ice al backup \u2022 off \u2022 off aevice receipts are \u2022 never uploade d on-nevice librar items scan insight settin"
+        },
+        {
+          "elapsed_s": 3.8533675000071526,
+          "text": "on-dev local ice al backup \u2022 off \u2022 off aevice receipts are \u2022 never uploade d on-nevice librar items scan insight settin"
+        },
+        {
+          "elapsed_s": 5.033980041043833,
+          "text": "on-dev local ice al backup \u2022 off \u2022 off aevice receipts are \u2022 never uploade d on-nevice librar items scan insight settin"
+        }
+      ]
+    },
+    "watch/3": {
+      "start_text": "uploade d on-device intelligence librar items scan insight settin",
+      "turn_text": "cranscan 1.0.22 \u203a version, licenses, credits, library stats. librar items scan insight settin",
+      "end_text": "\u2022 off \u2022 off \u2022 never uploade d on-device intelligence librar items scan insight settin",
+      "invalid_reason": null,
+      "failure_observations": null
+    },
+    "watch/4": {
+      "start_text": "uploade on-device intelligence librar items scan insight settin",
+      "turn_text": "cranscan 1.0.22 \u203a version, licenses, credits, library stats. librar items scan insight settin",
+      "end_text": "on-device intelligence librar items scan insight settin s",
+      "invalid_reason": null,
+      "failure_observations": null
+    }
+  }
 }

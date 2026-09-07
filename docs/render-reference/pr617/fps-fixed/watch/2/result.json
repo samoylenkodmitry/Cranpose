@@ -1,0 +1,104 @@
+{
+  "variant": "sota",
+  "device": "watch",
+  "route": {
+    "settings_tap": [
+      348,
+      330
+    ],
+    "prime": [
+      100,
+      260,
+      60,
+      3,
+      800,
+      820
+    ],
+    "forward": [
+      100,
+      260,
+      60,
+      50,
+      170,
+      196
+    ],
+    "reverse": [
+      44,
+      200,
+      222
+    ],
+    "capture": "host",
+    "start": "On-device intelligence",
+    "turn": "Version, licenses, credits, library stats.",
+    "return": "On-device intelligence"
+  },
+  "properties": {
+    "debug.cranpose.adpf": "",
+    "debug.cranpose.vsync_probe": "",
+    "debug.cranpose.no_fill_cache": "",
+    "debug.cranpose.frame_trace": "",
+    "debug.cranpose.frame_telemetry": "",
+    "debug.cranpose.shape_spans": "",
+    "debug.cranpose.frame_stage_ms": "",
+    "debug.cranpose.pass_timing": "",
+    "debug.cranpose.composition_8bit": "",
+    "debug.cranpose.blur_render_passes": "",
+    "debug.cranpose.layout_ms": "",
+    "debug.cranpose.survive_gpu_errors": "",
+    "debug.cranpose.command_feed": "",
+    "debug.cranpose.shape_ablate": "",
+    "debug.cranpose.probe_passes": "",
+    "debug.cranpose.a11y_sync": "",
+    "debug.cranpose.catchup_pacing": "",
+    "debug.cranpose.encode_delay_ms": "",
+    "debug.cranpose.gpu_backend": "",
+    "debug.cranpose.skip_shadows": "",
+    "debug.cranpose.glass_ablate": "",
+    "debug.cranpose.shadow_cache_diag": "",
+    "debug.cranpose.update_stage_ms": "",
+    "debug.cranpose.probe_draw_passes": "",
+    "debug.cranpose.no_glass_split_scissors": "",
+    "debug.cranpose.recomp_diag": "",
+    "debug.cranpose.async_shape_pipelines": "",
+    "debug.cranpose.materialize_retained": "",
+    "debug.cranpose.no_shader_specialization": "",
+    "debug.cranpose.dirty_diag": "",
+    "debug.cranpose.ablate": "",
+    "debug.cranpose.shape_variants": "",
+    "debug.cranpose.async_haptics": "",
+    "debug.cranpose.render_stage_ms": "",
+    "debug.cranpose.pipeline_disk_cache": "",
+    "debug.cranpose.segment_surface": "",
+    "debug.cranpose.gpu_stats": "",
+    "debug.cranpose.present_thread": "",
+    "debug.cranpose.gpu_shadow_cache_diag": "",
+    "debug.cranpose.scene_update_diag": "",
+    "debug.cranpose.core_pin": "",
+    "debug.cranpose.gpu_fence_profile": "",
+    "debug.cranpose.gpu_stage_diag": ""
+  },
+  "measurement_before": {
+    "temperature_c": 35.3,
+    "battery": "Current Battery Service state:\n  AC powered: true\n  USB powered: false\n  Wireless powered: false\n  Dock powered: false\n  Max charging current: 600000\n Time when the latest updated value of the Max charging current was sent via battery changed broadcast: +6d11h10m21s629ms\n  Max charging voltage: 5400000\n  Charge counter: 324000\n  status: 5\n  health: 2\n  present: true\n  level: 100\n  scale: 100\n  voltage: 4436\n Time when the latest updated value of the voltage was sent via battery changed broadcast: +6d11h43m16s127ms\n The last voltage value sent via the battery changed broadcast: 4435\n  temperature: 353\n  technology: Li-ion\n  Charging state: 4\n  Charging policy: 1\n  Capacity level: 2\n",
+    "thermalservice": "IsStatusOverride: false\nThermalEventListeners:\n\tcallbacks: 5\n\tkilled: false\n\tbroadcasts count: -1\nThermalStatusListeners:\n\tcallbacks: 5\n\tkilled: false\n\tbroadcasts count: -1\nThermal Status: 0\nCached temperatures:\n\tTemperature{mValue=38.497, mType=3, mName=audio-therm, mStatus=0}\n\tTemperature{mValue=35.5, mType=2, mName=battery, mStatus=0}\n\tTemperature{mValue=41.500004, mType=0, mName=gpu, mStatus=0}\n\tTemperature{mValue=41.9, mType=0, mName=wlan, mStatus=0}\n\tTemperature{mValue=41.500004, mType=0, mName=mdm-0, mStatus=0}\n\tTemperature{mValue=40.9, mType=0, mName=mdm-1, mStatus=0}\n\tTemperature{mValue=45.000004, mType=0, mName=cpuss-0, mStatus=0}\n\tTemperature{mValue=44.300003, mType=0, mName=cpuss-1, mStatus=0}\n\tTemperature{mValue=40.458, mType=3, mName=sdm-skin-therm, mStatus=0}\nHAL Ready: true\nHAL connection:\n\tThermalHAL AIDL 3  connected: yes\nCurrent temperatures from HAL:\n\tTemperature{mValue=40.2, mType=0, mName=mdm-0, mStatus=0}\n\tTemperature{mValue=40.2, mType=0, mName=gpu, mStatus=0}\n\tTemperature{mValue=40.9, mType=0, mName=wlan, mStatus=0}\n\tTemperature{mValue=39.800003, mType=0, mName=mdm-1, mStatus=0}\n\tTemperature{mValue=41.9, mType=0, mName=cpuss-0, mStatus=0}\n\tTemperature{mValue=36.452003, mType=3, mName=sdm-skin-therm, mStatus=0}\n\tTemperature{mValue=36.458, mType=3, mName=audio-therm, mStatus=0}\n\tTemperature{mValue=35.4, mType=2, mName=battery, mStatus=0}\n\tTemperature{mValue=40.9, mType=0, mName=cpuss-1, mStatus=0}\nCurrent cooling devices from HAL:\nTemperature static thresholds from HAL:\n\tTemperatureThreshold{mType=0, mName=mdm-0, mHotThrottlingThresholds=[NaN, NaN, NaN, NaN, NaN, NaN, 80.0], mColdThrottlingThresholds=[NaN, NaN, NaN, NaN, NaN, NaN, NaN]}\n\tTemperatureThreshold{mType=0, mName=gpu, mHotThrottlingThresholds=[NaN, NaN, NaN, NaN, NaN, NaN, 80.0], mColdThrottlingThresholds=[NaN, NaN, NaN, NaN, NaN, NaN, NaN]}\n\tTemperatureThreshold{mType=0, mName=wlan, mHotThrottlingThresholds=[NaN, NaN, NaN, NaN, NaN, NaN, 80.0], mColdThrottlingThresholds=[NaN, NaN, NaN, NaN, NaN, NaN, NaN]}\n\tTemperatureThreshold{mType=0, mName=mdm-1, mHotThrottlingThresholds=[NaN, NaN, NaN, NaN, NaN, NaN, 80.0], mColdThrottlingThresholds=[NaN, NaN, NaN, NaN, NaN, NaN, NaN]}\n\tTemperatureThreshold{mType=0, mName=cpuss-0, mHotThrottlingThresholds=[NaN, NaN, NaN, NaN, NaN, NaN, 80.0], mColdThrottlingThresholds=[NaN, NaN, NaN, NaN, NaN, NaN, NaN]}\n\tTemperatureThreshold{mType=3, mName=sdm-skin-therm, mHotThrottlingThresholds=[NaN, 41.0, 42.0, 43.0, 44.0, 45.0, 46.0], mColdThrottlingThresholds=[NaN, NaN, NaN, NaN, NaN, NaN, NaN]}\n\tTemperatureThreshold{mType=3, mName=audio-therm, mHotThrottlingThresholds=[NaN, 39.0, 40.0, 42.0, 44.0, 46.0, 48.0], mColdThrottlingThresholds=[NaN, NaN, NaN, NaN, NaN, NaN, NaN]}\n\tTemperatureThreshold{mType=2, mName=battery, mHotThrottlingThresholds=[NaN, NaN, NaN, NaN, NaN, NaN, 60.0], mColdThrottlingThresholds=[NaN, NaN, NaN, NaN, NaN, NaN, NaN]}\n\tTemperatureThreshold{mType=0, mName=cpuss-1, mHotThrottlingThresholds=[NaN, NaN, NaN, NaN, NaN, NaN, 80.0], mColdThrottlingThresholds=[NaN, NaN, NaN, NaN, NaN, NaN, NaN]}\nTemperature headroom thresholds:\n[NaN, 0.9, 0.93333334, 1.0, 1.0333333, 1.0666667, 1.1]\n"
+  },
+  "after": {
+    "temperature_c": 35.9,
+    "battery": "Current Battery Service state:\n  AC powered: true\n  USB powered: false\n  Wireless powered: false\n  Dock powered: false\n  Max charging current: 600000\n Time when the latest updated value of the Max charging current was sent via battery changed broadcast: +6d11h10m21s629ms\n  Max charging voltage: 5400000\n  Charge counter: 324000\n  status: 5\n  health: 2\n  present: true\n  level: 100\n  scale: 100\n  voltage: 4435\n Time when the latest updated value of the voltage was sent via battery changed broadcast: +6d11h43m16s127ms\n The last voltage value sent via the battery changed broadcast: 4435\n  temperature: 359\n  technology: Li-ion\n  Charging state: 4\n  Charging policy: 1\n  Capacity level: 2\n",
+    "thermalservice": "IsStatusOverride: false\nThermalEventListeners:\n\tcallbacks: 5\n\tkilled: false\n\tbroadcasts count: -1\nThermalStatusListeners:\n\tcallbacks: 5\n\tkilled: false\n\tbroadcasts count: -1\nThermal Status: 0\nCached temperatures:\n\tTemperature{mValue=38.497, mType=3, mName=audio-therm, mStatus=0}\n\tTemperature{mValue=35.5, mType=2, mName=battery, mStatus=0}\n\tTemperature{mValue=41.500004, mType=0, mName=gpu, mStatus=0}\n\tTemperature{mValue=41.9, mType=0, mName=wlan, mStatus=0}\n\tTemperature{mValue=41.500004, mType=0, mName=mdm-0, mStatus=0}\n\tTemperature{mValue=40.9, mType=0, mName=mdm-1, mStatus=0}\n\tTemperature{mValue=45.000004, mType=0, mName=cpuss-0, mStatus=0}\n\tTemperature{mValue=44.300003, mType=0, mName=cpuss-1, mStatus=0}\n\tTemperature{mValue=40.458, mType=3, mName=sdm-skin-therm, mStatus=0}\nHAL Ready: true\nHAL connection:\n\tThermalHAL AIDL 3  connected: yes\nCurrent temperatures from HAL:\n\tTemperature{mValue=42.2, mType=0, mName=mdm-0, mStatus=0}\n\tTemperature{mValue=43.2, mType=0, mName=gpu, mStatus=0}\n\tTemperature{mValue=43.2, mType=0, mName=wlan, mStatus=0}\n\tTemperature{mValue=41.500004, mType=0, mName=mdm-1, mStatus=0}\n\tTemperature{mValue=44.300003, mType=0, mName=cpuss-0, mStatus=0}\n\tTemperature{mValue=37.279003, mType=3, mName=sdm-skin-therm, mStatus=0}\n\tTemperature{mValue=37.333, mType=3, mName=audio-therm, mStatus=0}\n\tTemperature{mValue=36.100002, mType=2, mName=battery, mStatus=0}\n\tTemperature{mValue=44.300003, mType=0, mName=cpuss-1, mStatus=0}\nCurrent cooling devices from HAL:\nTemperature static thresholds from HAL:\n\tTemperatureThreshold{mType=0, mName=mdm-0, mHotThrottlingThresholds=[NaN, NaN, NaN, NaN, NaN, NaN, 80.0], mColdThrottlingThresholds=[NaN, NaN, NaN, NaN, NaN, NaN, NaN]}\n\tTemperatureThreshold{mType=0, mName=gpu, mHotThrottlingThresholds=[NaN, NaN, NaN, NaN, NaN, NaN, 80.0], mColdThrottlingThresholds=[NaN, NaN, NaN, NaN, NaN, NaN, NaN]}\n\tTemperatureThreshold{mType=0, mName=wlan, mHotThrottlingThresholds=[NaN, NaN, NaN, NaN, NaN, NaN, 80.0], mColdThrottlingThresholds=[NaN, NaN, NaN, NaN, NaN, NaN, NaN]}\n\tTemperatureThreshold{mType=0, mName=mdm-1, mHotThrottlingThresholds=[NaN, NaN, NaN, NaN, NaN, NaN, 80.0], mColdThrottlingThresholds=[NaN, NaN, NaN, NaN, NaN, NaN, NaN]}\n\tTemperatureThreshold{mType=0, mName=cpuss-0, mHotThrottlingThresholds=[NaN, NaN, NaN, NaN, NaN, NaN, 80.0], mColdThrottlingThresholds=[NaN, NaN, NaN, NaN, NaN, NaN, NaN]}\n\tTemperatureThreshold{mType=3, mName=sdm-skin-therm, mHotThrottlingThresholds=[NaN, 41.0, 42.0, 43.0, 44.0, 45.0, 46.0], mColdThrottlingThresholds=[NaN, NaN, NaN, NaN, NaN, NaN, NaN]}\n\tTemperatureThreshold{mType=3, mName=audio-therm, mHotThrottlingThresholds=[NaN, 39.0, 40.0, 42.0, 44.0, 46.0, 48.0], mColdThrottlingThresholds=[NaN, NaN, NaN, NaN, NaN, NaN, NaN]}\n\tTemperatureThreshold{mType=2, mName=battery, mHotThrottlingThresholds=[NaN, NaN, NaN, NaN, NaN, NaN, 60.0], mColdThrottlingThresholds=[NaN, NaN, NaN, NaN, NaN, NaN, NaN]}\n\tTemperatureThreshold{mType=0, mName=cpuss-1, mHotThrottlingThresholds=[NaN, NaN, NaN, NaN, NaN, NaN, 80.0], mColdThrottlingThresholds=[NaN, NaN, NaN, NaN, NaN, NaN, NaN]}\nTemperature headroom thresholds:\n[NaN, 0.9, 0.93333334, 1.0, 1.0333333, 1.0666667, 1.1]\n"
+  },
+  "layers": [
+    {
+      "name": "VRI-com.cranscan.app.codex/dev.cranpose.android.CranposeActivity#26676",
+      "frames": 867
+    }
+  ],
+  "frames": 867,
+  "fps": 40.805760813291286,
+  "elapsed_s": 21.247,
+  "route_complete": false,
+  "background_cpu": "Tasks: 1 total,   0 running,   1 sleeping,   0 stopped,   0 zombie\n  Mem:  1786776K total,  1741928K used,    44848K free,      776K buffers\n Swap:  1572860K total,   424016K used,  1148844K free,   577944K cached\n400%cpu  41%user  17%nice 124%sys 197%idle  10%iow   7%irq   3%sirq   0%host\n  PID USER         PR  NI VIRT  RES  SHR S[%CPU] %MEM     TIME+ ARGS\n 7284 u0_a82       -2   0 1.3G 263M  88M S  0.0  15.0   0:10.89 com.cranscan.app.codex\n\n\n\nTasks: 1 total,   0 running,   1 sleeping,   0 stopped,   0 zombie\n  Mem:  1786776K total,  1746288K used,    40488K free,      740K buffers\n Swap:  1572860K total,   428624K used,  1144236K free,   583192K cached\n400%cpu  16%user  16%nice  43%sys 310%idle   6%iow   5%irq   4%sirq   0%host\n  PID USER         PR  NI VIRT  RES  SHR S[%CPU] %MEM     TIME+ ARGS\n 7284 u0_a82       -2   0 1.3G 262M  87M S  0.0  15.0   0:10.89 com.cranscan.app.codex\n",
+  "raw_report_sha256": "247d10d6bb659bea05c515a472201eb4d8bb018ef670d2c50865e05e788c6bad",
+  "failure": "Return heading partly below navigation bar",
+  "gesture_log": "gesture=0 start=12 end=183\ngesture=1 start=213 end=384\ngesture=2 start=402 end=574\ngesture=3 start=611 end=782\ngesture=4 start=787 end=961\ngesture=5 start=984 end=1158\ngesture=6 start=1179 end=1350\ngesture=7 start=1377 end=1549\ngesture=8 start=1579 end=1754\ngesture=9 start=1769 end=1943\ngesture=10 start=1967 end=2143\ngesture=11 start=2166 end=2342\ngesture=12 start=2356 end=2530\ngesture=13 start=2556 end=2727\ngesture=14 start=2750 end=2930\ngesture=15 start=2944 end=3118\ngesture=16 start=3141 end=3315\ngesture=17 start=3335 end=3507\ngesture=18 start=3531 end=3703\ngesture=19 start=3728 end=3902\ngesture=20 start=3924 end=4097\ngesture=21 start=4119 end=4292\ngesture=22 start=4316 end=4488\ngesture=23 start=4510 end=4681\ngesture=24 start=4707 end=4880\ngesture=25 start=4903 end=5076\ngesture=26 start=5099 end=5272\ngesture=27 start=5295 end=5467\ngesture=28 start=5492 end=5663\ngesture=29 start=5691 end=5866\ngesture=30 start=5887 end=6061\ngesture=31 start=6084 end=6255\ngesture=32 start=6275 end=6447\ngesture=33 start=6474 end=6645\ngesture=34 start=6667 end=6838\ngesture=35 start=6863 end=7036\ngesture=36 start=7060 end=7233\ngesture=37 start=7256 end=7427\ngesture=38 start=7453 end=7627\ngesture=39 start=7651 end=7825\ngesture=40 start=7843 end=8018\ngesture=41 start=8042 end=8213\ngesture=42 start=8235 end=8407\ngesture=43 start=8430 end=8601\ngesture=44 start=8627 end=8798\ngesture=45 start=8822 end=8995\ngesture=46 start=9018 end=9189\ngesture=47 start=9215 end=9388\ngesture=48 start=9411 end=9583\ngesture=49 start=9608 end=9780\nelapsed_ms=9801\nCAPTURE_READY\ncapture_elapsed_ms=1619\ngesture=0 start=3 end=205\ngesture=1 start=226 end=428\ngesture=2 start=447 end=648\ngesture=3 start=669 end=870\ngesture=4 start=890 end=1091\ngesture=5 start=1113 end=1314\ngesture=6 start=1335 end=1538\ngesture=7 start=1558 end=1759\ngesture=8 start=1784 end=1985\ngesture=9 start=2002 end=2204\ngesture=10 start=2223 end=2424\ngesture=11 start=2446 end=2648\ngesture=12 start=2667 end=2869\ngesture=13 start=2888 end=3091\ngesture=14 start=3112 end=3314\ngesture=15 start=3332 end=3533\ngesture=16 start=3554 end=3756\ngesture=17 start=3777 end=3978\ngesture=18 start=3999 end=4200\ngesture=19 start=4221 end=4423\ngesture=20 start=4444 end=4646\ngesture=21 start=4665 end=4867\ngesture=22 start=4886 end=5088\ngesture=23 start=5109 end=5310\ngesture=24 start=5330 end=5531\ngesture=25 start=5553 end=5754\ngesture=26 start=5775 end=5976\ngesture=27 start=5997 end=6199\ngesture=28 start=6220 end=6421\ngesture=29 start=6442 end=6644\ngesture=30 start=6663 end=6864\ngesture=31 start=6885 end=7088\ngesture=32 start=7106 end=7307\ngesture=33 start=7328 end=7529\ngesture=34 start=7551 end=7754\ngesture=35 start=7772 end=7973\ngesture=36 start=7994 end=8196\ngesture=37 start=8218 end=8420\ngesture=38 start=8438 end=8640\ngesture=39 start=8661 end=8862\ngesture=40 start=8883 end=9086\ngesture=41 start=9105 end=9306\ngesture=42 start=9326 end=9528\ngesture=43 start=9549 end=9750\nelapsed_ms=9768\n"
+}

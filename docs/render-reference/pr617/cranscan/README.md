@@ -1,6 +1,6 @@
 # Cranscan Settings measurements
 
-- These measurements precede the [renderer artifact fix](../../../cranscan_render_regression.md); motion verification passes on Huawei, but FPS remeasurement remains paused and 60 FPS remains unmet.
+- These measurements precede the [renderer artifact fix](../../../cranscan_render_regression.md); [fresh SOTA measurements](../fps-fixed/README.md) remain below 60 FPS.
 - Track the Huawei blank body in [#620](https://github.com/samoylenkodmitry/Cranpose/issues/620), the watch regression in [#621](https://github.com/samoylenkodmitry/Cranpose/issues/621), and reusable measurement tooling in [#619](https://github.com/samoylenkodmitry/Cranpose/issues/619).
 - Compare main `0d195313` with PR `010d3836` using unchanged Cranscan `c61958e` (1.0.22), Rust 1.98.0, release optimization 3, full LTO and one codegen unit on macm3.
 - Both arms use the same SOTA Android host, signer, package, data and 428 non-native payload files; this isolates native framework changes rather than comparing independently built Android hosts.

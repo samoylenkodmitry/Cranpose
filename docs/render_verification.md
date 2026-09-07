@@ -12,7 +12,7 @@
 - `robot.screenshot()` redraws offscreen; inspect swapchain artifacts with a windowed runner and an external capture.
 - Use exact button semantics for clicks and log resolved bounds; substring presence matches can select unrelated offscreen text.
 - Assert popup presence through semantics; translucent white-on-white pixels do not support arbitrary difference floors.
-- Pin the intended frame pacing mode explicitly; robot defaults can otherwise make a mode-switch test exercise no change.
+- Set explicit frame pacing before `with_test_driver`; its NoVsync default invalidates normal-VSync FPS measurements and mode-switch tests.
 - Use deterministic animation clocks; large screenshot captures and sequential move/capture loops disturb continuous motion.
 - Check scene state and motion before cache counters; a scroll clamped at offset zero can make every cache assertion pass.
 - Compare each incrementally scrolled picture with a fresh render at the same position; featureless glass lanes cannot establish motion.

@@ -1,0 +1,7 @@
+{
+  "frames_checked": 1462,
+  "suspect_frames": 0,
+  "worst_frame": 904,
+  "maximum_paper_fraction": 0.008218304141050922,
+  "limitation": "Detects background-colored cutouts in card rows with both white edges visible; does not prove every visual feature correct."
+}
