@@ -12,6 +12,7 @@ API, application sources and picture correctness stay fixed.
 | Heat | Watch scroll crosses throttling near 41°C; both builds slow down | Keep hot legs. Reject changes that improve a cool sample but worsen paired throughput |
 | Scheduling | Highest-capacity pair: Huawei scroll 31.51→32.38, mixed; game 58.30→58.25 | Keep wider CPU set; extra affinity restriction has no reliable gain |
 | Allocation | Hot watch scroll, 41.9→42.3°C: 5.27 CPU ms/frame; 2.42 attributed to framework/wgpu, 1.60 to vendor driver. Observer allocation removal: watch 54.77→54.60 FPS, Huawei 31.29→31.25 | Hold prototype. Attribute cache misses, allocation sizes/lifetimes and driver costs; unresolved samples remain unresolved |
+| Instruction cache | Watch diagnostic: sampled miss weight 37.9% Android libc, 24.8% Adreno, 34.0% application library. Executable code is already 3.3–3.7% smaller than main | Inspect allocation and command submission callers. Total code size and sampled PCs do not establish a cache bottleneck |
 | Builds | Megaboss release uses optimization 3, full LTO, one codegen unit; Showcase uses Cargo release defaults | Consumer profiles control library code. Cranpose profile edits cannot change these unchanged apps |
 
 **Architecture:** prepare immutable data once; record only changing data; resolve

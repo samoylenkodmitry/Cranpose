@@ -1312,3 +1312,13 @@ Android only forwards properties listed in
 `crates/cranpose/src/android_frame_telemetry.rs`. `getprop` showing `1` does
 not prove a new `DebugToggle` received it. Reuse the registered scene diagnostic
 or add the bridge before building; require a renderer log marker as proof.
+
+Use a unique device output path for each `simpleperf stat` capture: app-mode
+output can retain a previous file's tail. Two `Total test time` rows invalidate
+the file. Group events used in ratios and check running coverage; Huawei's
+first five-event capture counted only 21–22% of enabled time.
+
+The compiler-cache daemon serves multiple jobs. Start it without
+`RUNNER_TRACKING_ID`; keep compilation itself tracked. A capture job's cleanup
+killed the shared server at 12:31:16 UTC while the budget job compiled, causing
+connection resets. Both startup paths use `start_shared_sccache`.

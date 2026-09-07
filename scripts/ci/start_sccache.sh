@@ -16,8 +16,11 @@
 # same binary against the same daemon.
 set -euo pipefail
 
-home="$(eval echo "~$(id -un)")"
-sccache_bin="$home/.cargo/bin/sccache"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$script_dir/../dev_build_common.sh"
+
+sccache_home="$(eval echo "~$(id -un)")"
+sccache_bin="$sccache_home/.cargo/bin/sccache"
 
 if [ ! -x "$sccache_bin" ]; then
     # Unset the wrapper for the bootstrap build: cargo would otherwise try to
@@ -45,7 +48,7 @@ wait_for_server() {
     return 1
 }
 
-"$sccache_bin" --start-server >/dev/null 2>&1 || true
+start_shared_sccache "$sccache_bin" >/dev/null 2>&1 || true
 
 # Nothing here stops a server it did not start. An earlier version of this
 # script reclaimed the port -- `--stop-server` then `--start-server` -- when the

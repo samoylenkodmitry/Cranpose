@@ -213,6 +213,7 @@ test-robot-discovery:
 
 # The shell helpers agents run by hand, pinned so they cannot rot.
 test-shell-helpers:
+    bash scripts/ci/sccache_lifetime_test.sh
     scripts/wait_until_quiet_test.sh
     scripts/dev/target_gc_test.sh
 
