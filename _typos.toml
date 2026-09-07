@@ -12,7 +12,6 @@ extend-exclude = [
   # Captured third-party text used as robot fixtures. Its spelling is the
   # upstream document's, and correcting it would break the comparison.
   "apps/desktop-demo/robot-fixtures/**",
-  "docs/render-reference/pr617/cranscan/raw-ocr.json",
   # Screenshot and recording scratch space, not source.
   "example/**",
   ".claude/**",

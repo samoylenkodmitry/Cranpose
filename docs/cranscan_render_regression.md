@@ -17,5 +17,5 @@
 - Setup: build and install `just android`; the host robot requires ADB, scrcpy, FFmpeg, Python, NumPy and Pillow.
 - Offline check: `python3 scripts/android_surface_robot.py --video VIDEO --scale DEVICE_DENSITY_DIVIDED_BY_160 --output OUTPUT` retains per-frame results and failure transitions.
 - Guard validation: `just test-android-surface-contract` accepts every row offset and rejects marker cutouts, card cutouts and blank frames.
-- Evidence: [per-frame results and build hashes](render-reference/pr617/artifacts/evidence.json) and [before/after videos](https://github.com/samoylenkodmitry/Cranpose/pull/617#issuecomment-5573688025) retain the failing recordings.
-- Acceptance: Huawei motion verification passes; [fresh FPS measurements](render-reference/pr617/fps-fixed/README.md) remain below 60 FPS.
+- Evidence: [per-frame results and build hashes](https://github.com/user-attachments/files/31923864/pr617-renderer-frames.zip) and [before/after videos](https://github.com/samoylenkodmitry/Cranpose/pull/617#issuecomment-5573688025) retain the failing recordings.
+- Acceptance: Huawei motion verification passes; [fresh FPS measurements](https://github.com/user-attachments/files/31923866/pr617-fixed-sota-fps.zip) remain below 60 FPS.
