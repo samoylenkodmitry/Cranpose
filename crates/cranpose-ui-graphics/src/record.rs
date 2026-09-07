@@ -192,6 +192,9 @@ impl BandRing {
     #[inline]
     fn segments(&self) -> u32 {
         let exact = self.range * self.segments_per_radian;
+        if exact <= BAND_MIN_SEGMENTS as f32 {
+            return BAND_MIN_SEGMENTS;
+        }
         let floor = exact as u32;
         let needed = if (floor as f32) < exact {
             floor + 1
@@ -2598,6 +2601,33 @@ mod band_tests {
         let ring = BandRing::new(20.0, 22.0, 0.0, 0.01);
         assert_eq!(ring.segments(), BAND_MIN_SEGMENTS);
         assert_eq!(band_bucket(BAND_MIN_SEGMENTS), 0);
+    }
+
+    #[test]
+    fn minimum_band_keeps_segment_boundaries_exact() {
+        let mut values = vec![f32::NAN, -1.0, -0.0, 0.0, f32::MIN_POSITIVE];
+        for segments in ARC_BUCKET_SEGMENTS {
+            let boundary = segments as f32;
+            values.extend([
+                f32::from_bits(boundary.to_bits() - 1),
+                boundary,
+                f32::from_bits(boundary.to_bits() + 1),
+            ]);
+        }
+        for range in values {
+            let ring = BandRing {
+                mid: 0.0,
+                ring_half: 0.0,
+                range_start: 0.0,
+                range,
+                segments_per_radian: 1.0,
+            };
+            let expected = (range.ceil() as u32)
+                .max(BAND_MIN_SEGMENTS)
+                .next_power_of_two()
+                .min(ARC_BUCKET_SEGMENTS[ARC_BUCKETS - 1]);
+            assert_eq!(ring.segments(), expected, "segment count at {range:?}");
+        }
     }
 
     #[test]
