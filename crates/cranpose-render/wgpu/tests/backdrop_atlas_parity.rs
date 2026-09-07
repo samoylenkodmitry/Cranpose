@@ -1033,7 +1033,8 @@ fn a_stage_spanning_two_atlases_allocates_only_the_atlas_its_misses_land_in() {
     assert_eq!(partial.layer_cache_hits, 1, "{partial:?}");
     assert_eq!(partial.layer_cache_misses, 1, "{partial:?}");
     assert!(
-        partial.transient_texture_bytes + 40_000_000 < cold.transient_texture_bytes,
+        cold.transient_texture_bytes > 0
+            && partial.transient_texture_bytes <= cold.transient_texture_bytes / 2,
         "a partial hit must not allocate the atlas its hit member alone occupied: cold {} bytes, partial {} bytes",
         cold.transient_texture_bytes,
         partial.transient_texture_bytes
