@@ -13,7 +13,7 @@ Pairs are mixed. Watch scroll throttles in both arms at **39.3→41.9°C**.
 | Cost | Fact | Decision |
 | --- | --- | --- |
 | Watch layout | Width-only swipe subcomposition ran every frame | Ordinary stable measurement removes it; layout falls to ~0 ms, CPU 22.6→18.6 ms/frame |
-| Watch recording | Post-inlining: recorder 4.70 ms, scope 1.40; total app CPU 17.87 ms/frame | Exact one-quad return improves every watch game pair; keep direct GPU columns |
+| Watch recording | Latest profile: recorder 4.32 ms, scope 1.45; total app CPU 18.17 ms/frame at 38.0–38.5°C | Keep direct GPU columns and exact one-quad classification; smaller compiled code alone did not improve throughput |
 | Watch app counter | Primitive-counter TLS ~1.1 ms before layout change | Outside Cranpose-only scope; exclude from promised savings |
 | Showcase shading | Substrate specialization helps watch but loses slightly on Huawei warm scroll | Hold; exact pixels alone do not prove a performance win |
 | Geometry lifetime | Two recording generations already permit buffer reuse | No new pool, snapshot or thread |

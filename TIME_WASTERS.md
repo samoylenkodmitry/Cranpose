@@ -1268,3 +1268,21 @@ Megaboss presents at 59 FPS. A log-gated first-frame measurement then wastes
 launch window there; label it separately from post-startup windows. Preserve
 failed runs. Evidence: `/tmp/cranpose-mobile-watch-60fps/`
 `huawei-swipe-inline-normalization-v1-live-opening10-5-B/`.
+
+## Arc padding and code size need device proof
+
+Omitting it breaks `arc_pixels_are_independent_of_strip_tessellation`;
+restoring it passes all three arc pixel tests. Extra selection predicates also
+lose every watch game pair: −0.92, −0.33, −6.18, −0.89 FPS at 33.2–39.6°C.
+Reject `scope-quad-v1`; removing a divide does not prove less device work.
+Compile-time bounds shrink the hot path from 3,208 to 2,236 bytes, but lose
+0.89 and 1.08 FPS in the first two watch pairs at matching endpoint clocks.
+The positive mean is dominated by the final control throttling. Hold
+`typed-arc-bounds-v1`; code size is not throughput.
+
+## A diagnostic flag changes the measured workload
+
+`measure_orbit.py --diagnostic` enables GPU statistics, pass timing and
+detailed stage logging. It cannot merely label an experimental run: watch
+frame cost rises from roughly 17 to 25 ms. Use one `--property` override
+to isolate a runtime choice, and assert every unrelated property matches.
