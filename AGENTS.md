@@ -51,6 +51,7 @@
 - Compare revisions on one host with matching toolchains, features, app sources, assets, settings, data and package identity.
 - Hold the shared per-device lock for the entire FPS sequence; run ABAB then BABA without cooling waits and log temperatures before and after every run.
 - Verify scroll motion and both route endpoints for every run; preserve failed runs and record background work and instrumentation state.
+- Check every recorded motion frame for rendering regressions; clean endpoints cannot establish correctness.
 - Measure production FPS on a physical display; Xvfb presentation measures software presentation.
 - Wake the Pixel Watch before every step and assert `mWakefulness=Awake` before trusting captures or timing.
 - Check system dialogs with device UI tests; iOS tests require USB and Settings > Developer > Enable UI Automation.

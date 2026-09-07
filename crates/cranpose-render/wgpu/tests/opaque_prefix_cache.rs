@@ -345,19 +345,10 @@ fn assert_cold_then_warm(pair: &mut Pair, label: &str, spec: Spec, scale: f32) {
             warm.shape_fill_pixels,
             reference.shape_fill_pixels
         );
-        let copied = if spec.covers_page {
-            (
-                reference.copy_count + 1,
-                reference.copy_pixels + u64::from(FRAME_WIDTH) * u64::from(FRAME_HEIGHT),
-            )
-        } else {
-            (reference.copy_count, reference.copy_pixels)
-        };
         assert_eq!(
             (warm.copy_count, warm.copy_pixels),
-            copied,
-            "{label}: frame {phase} copies a page-covering prefix into the page and composites \
-             a partial one"
+            (reference.copy_count, reference.copy_pixels),
+            "{label}: frame {phase} draws every cached prefix in painter order"
         );
     }
 }
@@ -407,7 +398,7 @@ fn the_reuse_holds_at_fractional_and_integer_scales_and_past_the_page_edge() {
 }
 
 #[test]
-fn a_prefix_covering_the_page_is_copied_in_place_of_the_composite_at_every_scale() {
+fn a_prefix_covering_the_page_is_composited_at_every_scale() {
     let Some(mut pair) = Pair::new() else {
         return;
     };

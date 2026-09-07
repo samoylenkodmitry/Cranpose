@@ -38,7 +38,8 @@ use crate::{
     frame::{AdmissionGate, FrameExecutor},
     frame_graph::{
         BufferUpload, FrameCommandRecorder, FrameCommandStats, FrameTextureDescriptor,
-        UploadAllocatorSpec, WgpuFrameGraph, WgpuFrameGraphExecutor, write_buffer,
+        FrameUploadAllocators, UniformUpload, UploadAllocatorId, UploadAllocatorSpec,
+        WgpuFrameGraph, WgpuFrameGraphExecutor, write_buffer,
     },
     frame_packet::{CancelReason, FramePacket, PresentOutcome, RenderReturns},
     geometry::{
@@ -90,7 +91,6 @@ pub(crate) const CLEAR_COLOR: wgpu::Color = wgpu::Color {
     b: cranpose_render_common::FRAME_CLEAR_COLOR[2] as f64,
     a: cranpose_render_common::FRAME_CLEAR_COLOR[3] as f64,
 };
-const INITIAL_VIEWPORT_UNIFORM_SLOTS: usize = 128;
 const MAX_TEXTURE_CACHE_ITEMS: usize = 256;
 const MAX_IMAGE_TEXTURE_CACHE_BYTES: usize = 256 * 1024 * 1024;
 
@@ -1541,67 +1541,16 @@ fn image_index_spec() -> UploadAllocatorSpec {
     UploadAllocatorSpec::index("Image Index Buffer", std::mem::size_of::<u32>() as u64)
 }
 
-/// One frame's viewport uniforms. Every pass, and every retained glyph run
-/// (which carries its own raster-space origin), claims a slot; the slots are
-/// dynamic offsets into one buffer and reach the GPU in a single write when
-/// the frame is flushed.
-struct ViewportUniformRing {
-    buffer: wgpu::Buffer,
-    bind_group: wgpu::BindGroup,
-    stride: usize,
-    capacity: usize,
-    cursor: usize,
-    written: Vec<u8>,
+#[derive(Default)]
+struct ViewportUniforms {
+    uploads: FrameUploadAllocators,
+    slots: Vec<UniformUpload>,
 }
 
-impl ViewportUniformRing {
-    fn new(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, capacity: usize) -> Self {
-        let stride = align_usize_to(
-            std::mem::size_of::<Uniforms>(),
-            (device.limits().min_uniform_buffer_offset_alignment as usize)
-                .max(wgpu::COPY_BUFFER_ALIGNMENT as usize),
-        );
-        let (buffer, bind_group) = Self::create(device, layout, stride, capacity);
-        Self {
-            buffer,
-            bind_group,
-            stride,
-            capacity,
-            cursor: 0,
-            written: Vec::new(),
-        }
-    }
-
-    fn create(
-        device: &wgpu::Device,
-        layout: &wgpu::BindGroupLayout,
-        stride: usize,
-        capacity: usize,
-    ) -> (wgpu::Buffer, wgpu::BindGroup) {
-        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Viewport Uniform Buffer"),
-            size: (stride * capacity) as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Viewport Uniform Bind Group"),
-            layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: &buffer,
-                    offset: 0,
-                    size: wgpu::BufferSize::new(std::mem::size_of::<Uniforms>() as u64),
-                }),
-            }],
-        });
-        (buffer, bind_group)
-    }
-
+impl ViewportUniforms {
     fn begin_frame(&mut self) {
-        self.cursor = 0;
-        self.written.clear();
+        self.slots.clear();
+        self.uploads.reset();
     }
 
     fn claim(
@@ -1610,31 +1559,32 @@ impl ViewportUniformRing {
         layout: &wgpu::BindGroupLayout,
         uniforms: &Uniforms,
     ) -> usize {
-        let slot = self.cursor;
-        self.cursor += 1;
-        if slot >= self.capacity {
-            self.capacity = (self.capacity * 2).max(slot + 1);
-            let (buffer, bind_group) = Self::create(device, layout, self.stride, self.capacity);
-            self.buffer = buffer;
-            self.bind_group = bind_group;
-        }
-        let offset = self.stride * slot;
-        self.written.resize(offset + self.stride, 0);
-        let bytes = bytemuck::bytes_of(uniforms);
-        self.written[offset..offset + bytes.len()].copy_from_slice(bytes);
+        let slot = self.slots.len();
+        self.slots.push(self.uploads.upload_uniform(
+            UploadAllocatorId::Viewport,
+            UploadAllocatorSpec::uniform(
+                "Viewport Uniform Buffer",
+                "Viewport Uniform Bind Group",
+                std::mem::size_of::<Uniforms>() as u64,
+            ),
+            device,
+            layout,
+            bytemuck::bytes_of(uniforms),
+        ));
         slot
     }
 
-    fn dynamic_offset(&self, slot: usize) -> Result<u32, String> {
-        if slot >= self.cursor {
-            return Err("viewport uniform slot was never claimed this frame".to_string());
-        }
-        u32::try_from(self.stride * slot)
-            .map_err(|_| "viewport uniform offset exceeds the dynamic offset range".to_string())
+    fn bind(&self, pass: &mut wgpu::RenderPass<'_>, slot: usize) -> Result<(), String> {
+        let uniform = self
+            .slots
+            .get(slot)
+            .ok_or_else(|| "viewport uniform slot was never claimed this frame".to_string())?;
+        pass.set_bind_group(0, &uniform.bind_group, &[uniform.offset]);
+        Ok(())
     }
 
-    fn flush(&self, queue: &wgpu::Queue) -> FrameCommandStats {
-        write_buffer(queue, &self.buffer, 0, &self.written)
+    fn flush(&mut self, queue: &wgpu::Queue) -> FrameCommandStats {
+        self.uploads.flush(queue)
     }
 }
 
@@ -1753,7 +1703,7 @@ pub struct GpuRenderer {
     image_nearest_sampler: wgpu::Sampler,
     image_linear_sampler: wgpu::Sampler,
     text_fonts: SoftwareTextFontSet,
-    viewport_uniforms: ViewportUniformRing,
+    viewport_uniforms: ViewportUniforms,
     run_store: RunStore,
     image_texture_cache: BoundedLruCache<u64, CachedImageTexture>,
     image_texture_cache_bytes: usize,
@@ -1880,11 +1830,7 @@ impl GpuRenderer {
             &image_nearest_sampler,
             TEXT_GLYPH_ATLAS_MIN_SIZE,
         );
-        let viewport_uniforms = ViewportUniformRing::new(
-            &device,
-            &uniform_bind_group_layout,
-            INITIAL_VIEWPORT_UNIFORM_SLOTS,
-        );
+        let viewport_uniforms = ViewportUniforms::default();
 
         #[cfg(not(target_arch = "wasm32"))]
         let pipeline_cache = crate::pipeline_disk_cache::load(&device);
@@ -3239,11 +3185,7 @@ impl GpuRenderer {
         self.frame_stats.add_draw_calls(draws.len() as u32);
         let (x, y, width, height) = scissor.unwrap_or((0, 0, target_size.0, target_size.1));
         pass.set_scissor_rect(x, y, width, height);
-        pass.set_bind_group(
-            0,
-            &self.viewport_uniforms.bind_group,
-            &[self.viewport_uniforms.dynamic_offset(uniform_slot)?],
-        );
+        self.viewport_uniforms.bind(pass, uniform_slot)?;
         pass.set_bind_group(1, tables.bind_group, &tables.offsets[2..]);
         for (slot, buffer) in tables.records.into_iter().enumerate() {
             pass.set_vertex_buffer(slot as u32, buffer.slice(u64::from(tables.offsets[slot])..));
@@ -3361,11 +3303,7 @@ impl GpuRenderer {
         self.frame_stats.bump_images();
         self.frame_stats.add_draw_calls(cmds.len() as u32);
         pass.set_pipeline(self.image_pipeline(blend_mode));
-        pass.set_bind_group(
-            0,
-            &self.viewport_uniforms.bind_group,
-            &[self.viewport_uniforms.dynamic_offset(uniform_slot)?],
-        );
+        self.viewport_uniforms.bind(pass, uniform_slot)?;
         pass.set_index_buffer(image_slot.indices.slice(), wgpu::IndexFormat::Uint32);
         pass.set_vertex_buffer(0, image_slot.vertices.slice());
         for cmd in cmds {
@@ -3398,7 +3336,6 @@ impl GpuRenderer {
         self.frame_stats.add_draw_calls(cmds.len() as u32);
         pass.set_pipeline(self.glyph_atlas_pipeline());
         pass.set_bind_group(1, &self.text_glyph_atlas.bind_group, &[]);
-        let uniform_offset = self.viewport_uniforms.dynamic_offset(uniform_slot)?;
         let mut shared_bound = false;
         for cmd in cmds {
             let Some((x, y, width, height)) = bounded_scissor(cmd.scissor, bound) else {
@@ -3413,11 +3350,7 @@ impl GpuRenderer {
                     if !shared_bound {
                         let slot = image_slot
                             .ok_or_else(|| "shared glyph draw without an image slot".to_string())?;
-                        pass.set_bind_group(
-                            0,
-                            &self.viewport_uniforms.bind_group,
-                            &[uniform_offset],
-                        );
+                        self.viewport_uniforms.bind(pass, uniform_slot)?;
                         pass.set_index_buffer(slot.indices.slice(), wgpu::IndexFormat::Uint32);
                         pass.set_vertex_buffer(0, slot.vertices.slice());
                         shared_bound = true;
@@ -3433,11 +3366,7 @@ impl GpuRenderer {
                         .text_glyph_gpu_run_cache
                         .peek(&cache_key)
                         .ok_or_else(|| "retained glyph buffer missing from cache".to_string())?;
-                    pass.set_bind_group(
-                        0,
-                        &self.viewport_uniforms.bind_group,
-                        &[self.viewport_uniforms.dynamic_offset(retained_slot)?],
-                    );
+                    self.viewport_uniforms.bind(pass, retained_slot)?;
                     pass.set_index_buffer(cached.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
                     pass.set_vertex_buffer(0, cached.vertex_buffer.slice(..));
                     pass.draw_indexed(0..cached.index_count, 0, 0..1);
@@ -4585,11 +4514,6 @@ fn blend_rgba_pixel(dst: &mut [u8], src: &[u8]) {
 }
 
 fn align_to(value: u32, alignment: u32) -> u32 {
-    debug_assert!(alignment > 0);
-    value.div_ceil(alignment) * alignment
-}
-
-fn align_usize_to(value: usize, alignment: usize) -> usize {
     debug_assert!(alignment > 0);
     value.div_ceil(alignment) * alignment
 }

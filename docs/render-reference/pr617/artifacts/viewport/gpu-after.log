@@ -1,0 +1,16 @@
+host lock: took the shared lock on /tmp/cranpose-host-capacity.lock immediately
+   Compiling cranpose-render-wgpu v0.1.115 (/home/s/develop/projects/cranpose-pr617-regression/crates/cranpose-render/wgpu)
+    Finished `ci` profile [unoptimized + debuginfo] target(s) in 3.00s
+     Running tests/viewport_uniform_growth.rs (target/ci/deps/viewport_uniform_growth-0c3a4821ce4a6dca)
+
+running 1 test
+[ERROR] GENERAL [Loader Message (0x0)]
+	loader_scanned_icd_add: Could not get 'vkCreateInstance' via 'vk_icdGetInstanceProcAddr' for ICD libGLX_nvidia.so.0
+[ERROR] 	objects: (type: INSTANCE, hndl: 0x7f51a0149970, name: ?)
+[ERROR] GENERAL [Loader Message (0x0)]
+	loader_icd_scan: Failed loading library associated with ICD JSON libGLX_nvidia.so.0. Ignoring this JSON
+[ERROR] 	objects: (type: INSTANCE, hndl: 0x7f51a0149970, name: ?)
+test the_first_frame_keeps_every_viewport_when_uniform_storage_grows ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.23s
+

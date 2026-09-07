@@ -1,0 +1,21 @@
+# Android surface rendering regression
+
+- Reproducer: an opaque page, scrolling white cards with blue markers, and fixed blurred bars reproduce Cranscan’s blank body and rectangular cutouts in the Cranpose Android fixture.
+- Motion evidence: the original fixture recording has 709 corrupt frames out of 1,323; adjacent frames 18–20 show intact, damaged and intact content.
+- Native evidence: device PNGs contain the same background-colored cutouts, excluding video encoding as their source.
+- Scene evidence: body draw batches and on-screen accessibility bounds remain present while the corresponding pixels disappear.
+- Copy ablation: replacing whole-page prefix replay copies with ordered composites passes all 1,309 recorded frames; an 8-bit intermediate surface passes all 1,195 frames.
+- Standalone red: the Cranpose Android robot catches 266 corrupt frames out of 1,325 after the fixture covers the entire surface despite layout rounding.
+- Standalone green: the unchanged robot checks all 1,296 frames across 199 scroll positions with zero missing marker or card pixels after the fix.
+- Cranscan verification: two fixed Settings routes check 2,849 frames with no detected card cutouts; the same scan flags 494 of 1,311 frames in the original PR video.
+- Scan limits: the Cranscan scan detects background-colored holes inside visible cards; the standalone fixture separately rejects blank bodies and missing markers.
+- Scope: the failure requires the direct Android presentation surface in the observed runs; its underlying Vulkan or device-driver mechanism is not established.
+- Renderer fix: cached backgrounds join the ordinary painter-ordered composite pass, preserving caching without transfer writes into the presentation surface.
+- Separate viewport fix: stable upload generations retain every encoded viewport binding when uniform storage grows; GPU and robot tests fail before the fix and pass afterward.
+- Motion guard: `just robot-android-surface SERIAL OUTPUT` records the installed demo’s full scroll route and checks every decoded frame’s marker and card interiors.
+- Fixture coverage: extend the opaque fill beyond rounded layout bounds so a one-pixel uncovered surface edge cannot silently select the partial-prefix path.
+- Setup: build and install `just android`; the host robot requires ADB, scrcpy, FFmpeg, Python, NumPy and Pillow.
+- Offline check: `python3 scripts/android_surface_robot.py --video VIDEO --scale DEVICE_DENSITY_DIVIDED_BY_160 --output OUTPUT` retains per-frame results and failure transitions.
+- Guard validation: `just test-android-surface-contract` accepts every row offset and rejects marker cutouts, card cutouts and blank frames.
+- Evidence: [per-frame results and build hashes](render-reference/pr617/artifacts/evidence.json) and [before/after videos](https://github.com/samoylenkodmitry/Cranpose/pull/617#issuecomment-5573688025) retain the failing recordings.
+- Acceptance: Huawei motion verification passes; FPS measurements remain paused and these results make no performance claim.

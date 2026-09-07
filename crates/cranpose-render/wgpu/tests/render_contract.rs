@@ -594,7 +594,7 @@ fn text_rendering_uses_cached_raster_image_batches() {
         render_source.contains("run_store: RunStore")
             && render_source.contains("vertices: BufferUpload")
             && render_source.contains("indices: BufferUpload")
-            && render_source.contains("viewport_uniforms: ViewportUniformRing"),
+            && render_source.contains("slots: Vec<UniformUpload>"),
         "draw batches must own retained runs and frame upload ranges"
     );
 }

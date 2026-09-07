@@ -1,0 +1,31 @@
+Hardware frame-rate contracts: relaxed (presented cadence belongs to the display, not the tree)
+  set CRANPOSE_ROBOT_FORCE_HARDWARE_PERF_CONTRACTS=1 to enforce them
+Cleaning up...
+Building desktop-app examples with profile 'robot'...
+Using local rustc wrapper: /home/s/.cargo/bin/sccache
+Using local tmpdir: /home/s/.cache/cranpose/tmp
+Using local cargo build jobs: 1
+   Compiling cranpose-render-wgpu v0.1.115 (/home/s/develop/projects/cranpose-pr617-regression/crates/cranpose-render/wgpu)
+   Compiling cranpose v0.1.115 (/home/s/develop/projects/cranpose-pr617-regression/crates/cranpose)
+   Compiling desktop-app v0.1.0 (/home/s/develop/projects/cranpose-pr617-regression/apps/desktop-demo)
+   Compiling cranpose-testing v0.1.115 (/home/s/develop/projects/cranpose-pr617-regression/crates/cranpose-testing)
+    Finished `robot` profile [optimized] target(s) in 1m 13s
+host lock: took the exclusive host lock immediately
+============================================
+Running Robot Test Suite
+Found 1 robot tests
+Running tests sequentially
+Log file: robot_test.log
+============================================
+Running robot_viewport_uniform_growth...
+  [PASS] robot_viewport_uniform_growth
+
+============================================
+Test Suite Summary
+============================================
+Total: 1
+Passed: 1
+Failed: 0
+Skipped (host capability): 0
+
+[OK] All 1 tests PASSED!

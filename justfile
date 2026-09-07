@@ -402,6 +402,12 @@ robot-build: _disk-guard
 robot-one example:
     ./run_robot_test.sh --sequential --example {{example}}
 
+robot-android-surface serial output:
+    python3 scripts/android_surface_robot.py --serial {{quote(serial)}} --output {{quote(output)}}
+
+test-android-surface-contract:
+    python3 scripts/android_surface_frames_test.py
+
 # The four external-framebuffer captures are excluded here: a GPU swapchain
 # under Xvfb never lands pixels in the X server's buffer, so they can only read
 # their screenshots on software present.

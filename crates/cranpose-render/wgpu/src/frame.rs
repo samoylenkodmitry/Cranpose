@@ -341,17 +341,6 @@ impl Page {
         let source = [rect.x - self.offset[0], rect.y - self.offset[1]];
         grid_copy(&self.texture, source, dest, origin, rect.size())
     }
-
-    /// `source`'s texels from its origin copied into the page within `rect`,
-    /// when the rect lies on whole texels inside the page and the copy fits.
-    fn copy_from<'a>(
-        &'a self,
-        source: &'a OffscreenTarget,
-        rect: DeviceRect,
-    ) -> Option<TextureRegionCopy<'a>> {
-        let dest = [rect.x - self.offset[0], rect.y - self.offset[1]];
-        grid_copy(source, [0.0, 0.0], &self.texture, dest, rect.size())
-    }
 }
 
 fn grid_copy<'a>(
@@ -1984,7 +1973,8 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             if let Some(gate) = self.renderer.fill_gates.get_mut(&prefix.command) {
                 gate.hit(prefix.key);
             }
-            self.replay_prefix(pass, &prefix, retained.texture, composites, load_op);
+            composites.push(prefix_blit(&prefix, retained.texture));
+            composites.sort_by_key(|composite| composite.z_index);
             return Ok(Some(1..u32::MAX));
         }
         self.renderer
@@ -2054,39 +2044,6 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         }
         *load_op = Some(wgpu::LoadOp::Load);
         Ok(Some(1..u32::MAX))
-    }
-
-    /// Brings a retained prefix back: copied into the page ahead of a pass
-    /// that loads it when the prefix covers the page, composited over the
-    /// pass's clear otherwise.
-    fn replay_prefix(
-        &mut self,
-        pass: &LayerPass<'_>,
-        prefix: &OpaquePrefix,
-        texture: Rc<OffscreenTarget>,
-        composites: &mut Vec<ResolvedComposite>,
-        load_op: &mut Option<wgpu::LoadOp<wgpu::Color>>,
-    ) {
-        let (x, y, width, height) = prefix.device_rect;
-        let rect = DeviceRect {
-            x,
-            y,
-            width,
-            height,
-        };
-        match (rect == pass.page.rect())
-            .then(|| pass.page.copy_from(&texture, rect))
-            .flatten()
-        {
-            Some(copy) => {
-                self.recorder.copy_texture_region(copy);
-                *load_op = Some(wgpu::LoadOp::Load);
-            }
-            None => {
-                composites.push(prefix_blit(prefix, texture));
-                composites.sort_by_key(|composite| composite.z_index);
-            }
-        }
     }
 
     fn run_stages(&mut self, pass: &mut LayerPass<'_>) -> Result<(), String> {

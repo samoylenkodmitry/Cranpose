@@ -1,0 +1,207 @@
+{
+  "date": "2026-09-07",
+  "device": {
+    "model": "Huawei Mate 20 X",
+    "android": "10",
+    "gpu": "Mali-G76",
+    "pixels": [
+      1080,
+      2244
+    ],
+    "scale": 3
+  },
+  "framework_base": "ced6ac171a81ecffb275389c807a2178404370be",
+  "fixed_source_sha256": {
+    "Cargo.lock": "c812a49b5f027841e7159dacd2bdf9bc4a641dae7346c2d2d582edb769f1b6ac",
+    "crates/cranpose-render/wgpu/src/frame.rs": "5e5c5fed9e5c2f46ebddbecd65c2f0b4fd740f87c51df0219aca4cff1fb26b36",
+    "crates/cranpose-render/wgpu/src/frame_graph.rs": "d931389444e008ac9f1a9e8020e3a02a5420805b097c4667543737e802e7c2f9",
+    "crates/cranpose-render/wgpu/src/render.rs": "fa1cfbcfb67ef52821d548e5f11f02a4b4f147a8a36cad6bd568a60f0286dfd8"
+  },
+  "standalone_fixture_sha256": "ed68620b2e2503c3635d28fc07c78e007e8f87a18a0b25b69e3712a986654091",
+  "standalone_before_delta": "Fixed source with frame.rs restored from the framework base; viewport fix and fixture unchanged.",
+  "standalone_command": "just robot-android-surface SERIAL OUTPUT",
+  "consumer": {
+    "app_base": "c61958e",
+    "app_delta": "Isolated test_screen fixture entry; production Settings route and services unchanged.",
+    "framework_archive_sha256": "5e9f7524bdc27beb501e6e39d0540c9cea43410ce4e810cd507ac33961842628",
+    "command": [
+      "cargo",
+      "ndk",
+      "--platform",
+      "26",
+      "-t",
+      "arm64-v8a",
+      "-o",
+      "target/android",
+      "build",
+      "--locked",
+      "--release",
+      "--no-default-features",
+      "--features",
+      "android,renderer-wgpu,ai-inprocess",
+      "-p",
+      "cranscan",
+      "--lib"
+    ],
+    "native_sha256": "a58455c38a8cd52f1f5517bae24635afaad42e81614b7898fddbec51f260361c",
+    "apk_sha256": "420a0bd226956cdb120278c218e21e05f33c21eb1c7bedca099a9dba554adac2",
+    "rust": "1.98.0",
+    "optimization": 3,
+    "lto": "fat",
+    "codegen_units": 1,
+    "warnings": "19 warnings in the frozen vendored llama dependency; not a zero-warning consumer build."
+  },
+  "method": {
+    "decoding": "Every ffprobe-listed frame decoded at native resolution without frame-rate resampling; CSV retains each presentation timestamp.",
+    "fixture": "scripts/android_surface_frames.py checks blue marker and white card interiors at every scroll phase, rejecting >3% missing pixels and fewer than 20 scroll positions.",
+    "cranscan": {
+      "body_y": [
+        450,
+        1900
+      ],
+      "card_edge_x": [
+        [
+          56,
+          72
+        ],
+        [
+          1008,
+          1024
+        ]
+      ],
+      "white": "All channels >=249 and channel range <=6; both edges have >80% white pixels.",
+      "card_interior_x": [
+        96,
+        984
+      ],
+      "background_gutter_x": [
+        2,
+        20
+      ],
+      "background": "Most frequent gutter RGB per frame; interior pixels within 2 per channel count as cutouts.",
+      "failure_threshold": "More than 1% background-colored pixels in selected card interiors.",
+      "limitation": "Only detects card cutouts where both white card edges remain visible; does not prove every feature or blank-body absence."
+    },
+    "manual_review": "Failure transitions, native PNGs and worst fixed-route candidates inspected visually.",
+    "fps": "No FPS measurements collected for these runs."
+  },
+  "runs": {
+    "standalone-before": {
+      "video_sha256": "da1261def26e09782e98696d6e935228f44c1152384a269b7efcbc41748db529",
+      "summary": {
+        "frames_checked": 1325,
+        "failing_frames": 266,
+        "first_failure": {
+          "frame": 23,
+          "seconds": 2.071189,
+          "phase": 238,
+          "missing_marker_fraction": 0.8654846335697399,
+          "missing_card_fraction": 1.0,
+          "failing": true
+        },
+        "distinct_scroll_positions": 234,
+        "maximum_missing_marker_fraction": 1.0,
+        "maximum_missing_card_fraction": 1.0
+      },
+      "every_frame_csv": "standalone-before/every-frame.csv",
+      "apk_sha256": "e9464924884181348397efb9afab808f4e0715b280d377e2f540a4191c88d028",
+      "native_sha256": "2be7e3a90c100a6ee65fee73a4ec6fd1f97d6e5916c5affdf873320b6f45f2e3",
+      "installed_apk_sha256_verified": true,
+      "video_url": "https://github.com/user-attachments/assets/45451d5d-03b7-46a7-9195-54232e0af941"
+    },
+    "standalone-after": {
+      "video_sha256": "7faaad7d5826204b763d6f03f3b7f4cb20b3b2187b1feaf37910f67aaca139f4",
+      "summary": {
+        "frames_checked": 1296,
+        "failing_frames": 0,
+        "first_failure": null,
+        "distinct_scroll_positions": 199,
+        "maximum_missing_marker_fraction": 0.0,
+        "maximum_missing_card_fraction": 0.0
+      },
+      "every_frame_csv": "standalone-after/every-frame.csv",
+      "apk_sha256": "6ddcf92f0879a8720e146e660a264e90f80efac49b3a958d50b53758c1bfd97a",
+      "native_sha256": "3c0ebd4282a488dec7ab5ae7d3c2b71f453c638f4d0606e3318726e03f5aebde",
+      "installed_apk_sha256_verified": true,
+      "video_url": "https://github.com/user-attachments/assets/e5488ec4-eff3-45d3-aa7c-2b040557b6ec"
+    },
+    "fixture-before": {
+      "video_sha256": "a2083b7a27df8bf35c77a3c58fff353785f0773ea78463a6fe313340bc4f0eb1",
+      "summary": {
+        "frames_checked": 1323,
+        "failing_frames": 709,
+        "first_failure": {
+          "frame": 19,
+          "seconds": 2.3987,
+          "phase": 55,
+          "missing_marker_fraction": 0.7156862745098039,
+          "missing_card_fraction": 0.8552152919182177,
+          "failing": true
+        },
+        "distinct_scroll_positions": 241,
+        "maximum_missing_marker_fraction": 1.0,
+        "maximum_missing_card_fraction": 1.0
+      },
+      "every_frame_csv": "fixture-before/every-frame.csv",
+      "video_url": "https://github.com/user-attachments/assets/9abc58c8-f715-4618-ae4e-66ace8be410a"
+    },
+    "fixture-composite-ablation": {
+      "video_sha256": "a4ed267bff3175b2480d510b89b29e9624dfd5058423a4212d14eb079a8fde71",
+      "summary": {
+        "frames_checked": 1309,
+        "failing_frames": 0,
+        "first_failure": null,
+        "distinct_scroll_positions": 184,
+        "maximum_missing_marker_fraction": 0.0,
+        "maximum_missing_card_fraction": 0.0
+      },
+      "every_frame_csv": "fixture-composite-ablation/every-frame.csv"
+    },
+    "fixture-intermediate-ablation": {
+      "video_sha256": "c25d6a7affebe2f1f2289d092e297c1e3089dffbb4c1ae422aca4ecf37f7db4a",
+      "summary": {
+        "frames_checked": 1195,
+        "failing_frames": 0,
+        "first_failure": null,
+        "distinct_scroll_positions": 174,
+        "maximum_missing_marker_fraction": 0.0,
+        "maximum_missing_card_fraction": 3.1005444556253536e-06
+      },
+      "every_frame_csv": "fixture-intermediate-ablation/every-frame.csv"
+    },
+    "cranscan-before": {
+      "video_sha256": "efdbc8b6eed1ef97fd060b5c0c8c4531da3d6441eef05c049fca308d88073d14",
+      "summary": {
+        "frames_checked": 1311,
+        "suspect_frames": 494,
+        "worst_frame": 825,
+        "maximum_paper_fraction": 1.0,
+        "limitation": "Detects background-colored cutouts in card rows with both white edges visible; does not prove every visual feature correct."
+      },
+      "every_frame_csv": "cranscan-before/every-frame.csv"
+    },
+    "cranscan-after-1": {
+      "video_sha256": "cdf68ae44611122571436ef0a9d90997f99460a1979e2ac585c429d3b3a96d94",
+      "summary": {
+        "frames_checked": 1397,
+        "suspect_frames": 0,
+        "worst_frame": 896,
+        "maximum_paper_fraction": 0.008381951043439187,
+        "limitation": "Detects background-colored cutouts in card rows with both white edges visible; does not prove every visual feature correct."
+      },
+      "every_frame_csv": "cranscan-after-1/every-frame.csv",
+      "video_url": "https://github.com/user-attachments/assets/abc75860-825c-4558-a087-bdedec4af2b1"
+    },
+    "cranscan-after-2": {
+      "video_sha256": "1aaf4e715513c047d682696d8649bb6339f6e0753e853a5ee4b36955f4dbedd3",
+      "summary": {
+        "frames_checked": 1452,
+        "suspect_frames": 0,
+        "worst_frame": 906,
+        "maximum_paper_fraction": 0.009248939661310795,
+        "limitation": "Detects background-colored cutouts in card rows with both white edges visible; does not prove every visual feature correct."
+      },
+      "every_frame_csv": "cranscan-after-2/every-frame.csv"
+    }
+  }
+}

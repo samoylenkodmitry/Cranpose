@@ -1,0 +1,15 @@
+{
+  "frames_checked": 1323,
+  "failing_frames": 709,
+  "first_failure": {
+    "frame": 19,
+    "seconds": 2.3987,
+    "phase": 55,
+    "missing_marker_fraction": 0.7156862745098039,
+    "missing_card_fraction": 0.8552152919182177,
+    "failing": true
+  },
+  "distinct_scroll_positions": 241,
+  "maximum_missing_marker_fraction": 1.0,
+  "maximum_missing_card_fraction": 1.0
+}

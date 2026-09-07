@@ -1343,10 +1343,11 @@ pub(crate) enum UploadAllocatorId {
     Blit,
     ProjectiveBlitUniform,
     EffectUniform,
+    Viewport,
 }
 
 impl UploadAllocatorId {
-    const COUNT: usize = 7;
+    const COUNT: usize = 8;
 
     fn index(self) -> usize {
         match self {
@@ -1357,6 +1358,7 @@ impl UploadAllocatorId {
             Self::Blit => 4,
             Self::ProjectiveBlitUniform => 5,
             Self::EffectUniform => 6,
+            Self::Viewport => 7,
         }
     }
 }

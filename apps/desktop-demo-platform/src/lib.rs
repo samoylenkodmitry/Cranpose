@@ -9,18 +9,28 @@ use cranpose::AppLauncher;
     all(feature = "web", target_arch = "wasm32", feature = "renderer-wgpu")
 ))]
 fn create_app() -> AppLauncher {
+    let dev_controls = cranpose::launch_args().string("test_screen") != Some("surface_prefix");
     AppLauncher::new()
         .with_title("Cranpose Demo")
         .with_size(800, 600)
         .with_web_fill_viewport(true)
         .with_fonts(desktop_demo::fonts::DEMO_FONTS)
-        .with_fps_counter(true)
-        .with_frame_pacing_controls(true)
+        .with_fps_counter(dev_controls)
+        .with_frame_pacing_controls(dev_controls)
 }
 
 cranpose::android_main! {
     launcher: create_app(),
-    content: desktop_demo::app::combined_app,
+    content: android_content,
+}
+
+#[cfg(all(feature = "android", target_os = "android", feature = "renderer-wgpu"))]
+fn android_content() {
+    if cranpose::launch_args().string("test_screen") == Some("surface_prefix") {
+        desktop_demo::test_screens::surface_prefix_repro::SurfacePrefixReproScreen();
+    } else {
+        desktop_demo::app::combined_app();
+    }
 }
 
 #[cfg(all(feature = "web", target_arch = "wasm32"))]
