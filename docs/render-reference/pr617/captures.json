@@ -1,0 +1,61 @@
+{
+  "note": "Original device screenshots. Live animations and game progress vary; screenshots are visual context, not a pixel-equality test.",
+  "captures": {
+    "watch-megaboss-main.png": {
+      "source": "/tmp/cranpose-mobile-watch-60fps/watch-main-sota-opening20-1-A/screen.png",
+      "capture": "end of 20-second game window",
+      "apk_sha256": "e1b62f0c16906fecb67e3bdd61684a0843f8678424fe7cb7c74afc3f648ff3ec",
+      "image_sha256": "d22153de7a6f7b3139ae309698aa959edee68e57d9f60c90f4269eb91c09216a",
+      "framework_commit": "0d195313f26a288e435878d9da40fc79d1821434"
+    },
+    "watch-megaboss-sota.png": {
+      "source": "/tmp/cranpose-mobile-watch-60fps/watch-main-sota-opening20-2-B/screen.png",
+      "capture": "end of 20-second game window",
+      "apk_sha256": "a94bbae03b4823be1c1a86eb9ce47be96a0cba45961fd00a409059178de3247b",
+      "image_sha256": "c163bb8701406088d1ccffaa3f229473b4075914958e154511e58de28c7aa4f9",
+      "framework_commit": "500f78a80c1cfd2c111a86a4890044c3f90400fa"
+    },
+    "huawei-megaboss-main.png": {
+      "source": "/tmp/cranpose-mobile-watch-60fps/huawei-main-sota-launch20-1-A/screen.png",
+      "capture": "end of 20-second game window",
+      "apk_sha256": "8731dc88d23b3e2707d5256c5015166239f09c79fd7739233837b57db9a9ae70",
+      "image_sha256": "145429d8172576cc844c089a79d08c72267cf820e8f6654072dd75ecc3b9f26b",
+      "framework_commit": "0d195313f26a288e435878d9da40fc79d1821434"
+    },
+    "huawei-megaboss-sota.png": {
+      "source": "/tmp/cranpose-mobile-watch-60fps/huawei-main-sota-launch20-2-B/screen.png",
+      "capture": "end of 20-second game window",
+      "apk_sha256": "45f22f7b8469cade373c83cc676de9385af4274168026bc7789734b9cb33d45c",
+      "image_sha256": "2980bf579a0a04cfd5c0e82c2fc3d8828c297c79488301eb8914ae81a580d80f",
+      "framework_commit": "500f78a80c1cfd2c111a86a4890044c3f90400fa"
+    },
+    "watch-showcase-main.png": {
+      "source": "/tmp/cranpose-mobile-watch-60fps/watch-main-sota-full-scroll-continuous20-1-A/preflight-top.png",
+      "capture": "opening",
+      "apk_sha256": "adc1efa13a470d391645651b1e881ea5f0636fc17d074d8d63f7f431b57fa4b6",
+      "image_sha256": "a33bc1c7dc0d1ebd5c7aa8ccaa7bff6b142e0228b7db46a2a4c4e567e69fc1a0",
+      "framework_commit": "0d195313f26a288e435878d9da40fc79d1821434"
+    },
+    "watch-showcase-sota.png": {
+      "source": "/tmp/cranpose-mobile-watch-60fps/watch-main-sota-full-scroll-continuous20-2-B/preflight-top.png",
+      "capture": "opening",
+      "apk_sha256": "203f599fd18e60735ce9f1d7eb6d8f4e6ad098798da52fa3e82d0e7dd9d53e1e",
+      "image_sha256": "8e5899b1af0053079aa72a5759e2f27c1b2f0617fb5dee9726134ca97786570a",
+      "framework_commit": "500f78a80c1cfd2c111a86a4890044c3f90400fa"
+    },
+    "huawei-showcase-main.png": {
+      "source": "/tmp/cranpose-mobile-watch-60fps/huawei-main-sota-full-scroll-1-A/preflight-top.png",
+      "capture": "opening",
+      "apk_sha256": "6ab485a6b7c617e9e92acd6b73aeb1dac92420025ae0f7c08ad7499cc7a8cbb0",
+      "image_sha256": "1be904f3a343a870feac3c8b6b00ad1ca09d81f3cb1ff47c18a390a06897e8ee",
+      "framework_commit": "0d195313f26a288e435878d9da40fc79d1821434"
+    },
+    "huawei-showcase-sota.png": {
+      "source": "/tmp/cranpose-mobile-watch-60fps/huawei-main-sota-full-scroll-2-B/preflight-top.png",
+      "capture": "opening",
+      "apk_sha256": "ac4adf1286798ff41838a2856d4334d1491dc37003c60ade7dff860b568b580c",
+      "image_sha256": "09bc7fa9a9ddf73e78284eae367273d904ff565eb4b0701c8d5fdfcebaedee7c",
+      "framework_commit": "500f78a80c1cfd2c111a86a4890044c3f90400fa"
+    }
+  }
+}
