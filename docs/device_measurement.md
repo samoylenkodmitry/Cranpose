@@ -1,0 +1,40 @@
+# Device measurement
+
+- Follow the [mobile acceptance protocol](mobile_60fps_architecture.md) and retain results in [mobile performance evidence](mobile_watch_performance.md).
+- Hold the shared sequence lock for all eight ABAB BABA runs; per-command locks and reservation messages cannot protect a whole comparison.
+- Install both revisions over one isolated benchmark package; keep its data, assets, signer, ABI, app revision and feature set identical.
+- Record the consuming workspace's effective release profile, full toolchain, resolved framework paths and packaged native hashes.
+- Refresh extracted source timestamps and verify the complete inventory; matching source hashes alone do not prove Cargo rebuilt the library.
+- Compare the actual packaged native payloads; Gradle stripping can legitimately change a build-output hash.
+- Cranscan uses `-PcranscanTestInstall=true` for `.codex`; native libraries belong in its configured `target/android` packaging directory.
+- Cranscan's ARMv7 release excludes `ai-inprocess`; its ARM64 release includes it, so compare like-for-like within each device.
+- Check background inference, indexing and sync before each route; record their state instead of attributing their CPU load to rendering.
+- Prove the first gesture moves content and verify every run's starting and ending labels, including hot runs.
+- Use route checks independent of anything a diagnostic removes; OCR cannot validate text deliberately removed by that experiment.
+- Keep endpoint captures outside FPS timing where possible; record any capture interruption inside a required round trip.
+- Wake before each watch step and assert Awake around captures and probes; offscreen rendering can continue after the display sleeps.
+- Watch crown input is `adb shell input rotaryencoder scroll --axis SCROLL,<n>`; ring menus also accept screen-edge taps.
+- Secure Huawei keyguard can produce an activity error, empty PNG or a live surfaceless app; inspect keyguard state and never end a run with KEYCODE_SLEEP.
+- Poll PID readiness with a deadline and include partially launched apps in cleanup; a fixed delay does not establish readiness.
+- Huawei can omit startup log messages while presenting; distinguish launch-inclusive windows from observed-presentation windows.
+- Megaboss can pause after a long pipeline compilation despite stable PID and foreground; verify scene state and retain the failed startup.
+- Record physical presents and route completion separately; SurfaceFlinger cadence alone cannot prove smooth content motion.
+- Repeated adb swipes introduce input delays; record actual gesture timing and idle intervals instead of calling them renderer stalls.
+- Android forwards only registered properties in `android_frame_telemetry.rs`; prove a diagnostic changed its marker or counter inside the process.
+- Acceptance runs disable detailed diagnostics; per-item logging overhead varies with the work the optimization removes.
+- `[GPU f#N]` describes one sampled frame, not a window average; use consecutive-frame totals to assess periodic cache misses.
+- Preserve live log streams and check packet continuity; missing log messages do not establish missing presents or stalls.
+- Keep update, renderer execution, publication latency and display periods distinct; overlapping spans cannot be summed as CPU work.
+- Publish return may follow consumer acquisition; bound handoff time around enqueue instead of subtracting reversed trace timestamps.
+- Huawei Mali-G76 Vulkan lacks timestamp queries; fence profiles disturb execution and cannot establish native GPU frame time.
+- Use controlled device ablations for attribution; neither desktop pass timings nor reduced pass/fill counters prove device speed.
+- Tiler benchmarks must prevent opaque overdraw elimination from discarding the work they intend to time.
+- Measure complete recording, upload and GPU consumption; cache hit rates, smaller code and compressed records are not throughput results.
+- Huawei shell wgpu probes may lack the APK's adapter access; validate its shaders through an APK.
+- Check simpleperf event support on the actual build; place `-f` before `-e` and verify recorded sampling attributes.
+- Use unique simpleperf output paths, reject repeated summaries, group ratio events and check counter running coverage.
+- Capture temperatures and SurfaceFlinger results before profiler finalization; label profiled timings as diagnostics.
+- Android worker tests must call the API directly on a worker; `ActivityScenario.onActivity` always dispatches onto the UI thread.
+- Use the AndroidX instrumentation runner on the watch and test both enable and disable paths.
+- iOS system-dialog tests require USB and enabled UI Automation; network-paired runner timeouts can occur before any test starts.
+- Prefer in-process iOS telemetry for repeated profiles; use unique Instruments trace paths when a trace is needed.

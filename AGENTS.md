@@ -1,130 +1,59 @@
-# Agent Notes for cranpose
+# Agent Notes for Cranpose
 
-- no unsafe
-- just test, just clippy, just fmt # `just` lists every gate; CI runs these same recipes
-- just hooks # once per clone: the pre-commit hook runs `just precommit` (fmt-check, typos, complexity-gate, duplication-gate), the fast gates CI would otherwise fail minutes later
-- KISS, DRY, SOLID. don't copy-paste lazily
-- Follow [the performance coding guide](docs/performance_coding_guide.md): reduce measured work, preserve correctness, validate on shipped targets.
-- Use `cargo add <crate>` to add dependencies.
-- Use `cargo upgrade` to upgrade dependencies.
-- Use `anyhow` for error handling in application code; use `thiserror` for library code.
-- Write unit tests for all public functions and methods.
-- Write integration tests in the `tests` directory.
-- Follow idiomatic Rust naming conventions (snake_case for variables and functions, CamelCase for types and traits).
-- CamelCase for #[composable] functions
-- Use `Result<T, E>` for functions that can fail; prefer specific error types over `Box<dyn Error>`.
-- Use `Option<T>` for values that can be absent.
-- Use `async`/`await` for asynchronous code; prefer `tokio` as the async runtime.
-- do proper review mitigation; don't short-cut and do a honest professional work; be very strict to your code & architecture decisions; keep repo clean and don't put unfinished parts here; fix everything
-- do not create a half-migrated state of the repo; don't "deprecate"; always change the existing code
-- just android # :app:assembleRelease in apps/android-demo/android
-- just web # always --release; the fast path skips the wasm size budget
-- (+robot tests)
-- instead of accepting the shortcut always choose to fix the underlying architecture issue
-- do not avoid and do not defer the big architecture refactoring when necessary
-- if there is a bug start with writing a failing test that will catch it so we never regress to it again in the future
-- do a code review; look for any shortcuts, laziness, taking the easy path instead of doing the hard necessary work, poor architectural choices, everything that will shoot in the foot, poorly written code like it was a deadline 1 minute before end of the work day; but not invent the problems if there arent any- don't fear the significant arch change; everything is still pre-alpha; this is the right time for a big change
-- do not ever git reset, always stash if needed
-- do not ever remove recursively by \r\m \-\r\f, prefer mv to some _old name
-- never chain a delete with anything else. A removal runs as its own command,
-  never joined by `&&`, `;` or `|`, never inside a loop body that also does
-  other work, and never after a `cd` in the same command. A chained delete is
-  reviewed as one line but executes with whatever state the earlier part left
-  behind, so a failed `cd` or an unset variable silently changes what gets
-  removed. Run the delete alone, then verify the result in a separate command
-- all tests should pass, its never *not yours*
-- zero warnings on all build/clippy/test commands, never *was pre-existing*
-- the #[cfg(feature = "robot-app")] is forbidden
-- reference JC kt repo (androidx/androidx, the actual Jetpack Compose source) on
-  samarch-1 at /media/huge/projects/android/androidx -- NOT /media/huge/composerepo/,
-  which does not exist and misdirected an earlier session. It is a fork (`origin` =
-  samoylenkodmitry/androidx, `upstream` = androidx/androidx) on branch androidx-main,
-  and it is STALE: as of 2026-08-29 its compose/*/api/current.txt is still at commit
-  be18a1188a13a253d2a6784f812815c88454775c, dated 2023-06-26 (~Compose 1.5.0-beta era).
-  Treat anything read from it as true as of mid-2023, not current, until someone
-  re-syncs it -- see docs/compose_api_parity.md for what that staleness costs.
-- use samarch-1 or the mac by ssh for builds where possible: `ssh samarch-1`
-  (Linux, Android SDK at /home/s/develop/sdk, X11 for the robot suite) and
-  `ssh macm3` (macOS, Apple toolchains). They are faster than this machine and
-  keep long compiles off it. Note both hosts log in over ssh with zsh -- samarch-1
-  is Linux but its login shell is zsh as well -- and zsh does not word-split
-  unquoted expansions, so wrap remote scripts in `bash -lc "..."`. Skipping that
-  on the Linux host does not error: loops iterate once over the whole string and
-  report success having done nothing.
-- the CI runner names mislead. `mac-idle-Cranpose` is this Mac: it registers
-  only while nobody is at the keyboard and exists for signing, so offline is its
-  normal state, it is not spare macOS capacity, and bringing it up is not a way
-  to speed CI. macm3 hosts two runners for this repo, `dmitriis-mac-Cranpose`
-  and `macm3-cranpose-2`, so macOS jobs run two at a time there rather than
-  serialising on one. The Linux heavy pool is two --
-  `samarch-1-cranpose` and `samarch-1-cranpose-2`; the Macs carry
-  `cranpose-heavy` as well but do not match `[self-hosted, Linux, ...]`. A deep
-  queue is queueing, not a stall: the jobs API lags the runner by minutes, so
-  read that runner's own `_diag/Runner_*.log` for JobDispatcher lines and check
-  its load before diagnosing one.
-- reclaim build artifacts with `just gc` (report) and `just gc-apply` (reclaim);
-  never hand-delete a `target/` or `build/` directory. Each agent worktree
-  builds a full Rust target tree (15-100GB for this workspace) and nothing used
-  to reclaim them; on 2026-08-29 they reached ~350GB across `.claude/worktrees/`
-  and filled this Mac to 100%, which hard-stopped a running agent
-  mid-investigation. Do not judge for yourself when a worktree is finished:
-  `cargo test` writes nothing to `target/` while it RUNS the binaries it has
-  already built, so an idle-looking `target/` may belong to a suite that is
-  mid-run, and deleting it gives a neighbour `could not execute process
-  target/ci/deps/<test>-<hash> ... No such file or directory (os error 2)`,
-  which reads exactly like a test bug and is not one. `just gc` decides from
-  live processes and write recency instead of from anyone's belief about being
-  done: it protects any worktree with a live process, protects any target
-  written recently, only ever removes directories carrying cargo's own
-  `CACHEDIR.TAG` marker, and is dry-run by default. It sweeps the repository you
-  are standing in, so run it from the worktree you mean. Never remove a
-  worktree's source or anything uncommitted. Check `df -h /` before a large
-  build -- `just test`, `just clippy`, `just web`, `just android` and
-  `just robot` do it for you and refuse rather than dying as
-  `No space left on device`
-- `scripts/ci/with_host_lock.sh` gates samarch-1's CPU: `--shared` for a
-  build (any number concurrently), `--exclusive` for a measurement or a robot
-  suite (one at a time, nothing else running beside it). It is flock-based, so
-  a crash or a cancelled job releases it immediately -- no stale PID file, no
-  cleanup step to skip. This applies to work done by `ssh samarch-1` exactly
-  as much as to CI; it is the same machine and the same two runners either
-  way. Take the lock rather than watching load and waiting for a quiet
-  moment -- the lock queues you, and waiting for quiet on a shared host is
-  polling for a moment that may never arrive.
-- perf scripts are perf*.sh at project root
-- e2e robot headless tests is `just robot` (should all pass)
-- run_robot_test.sh manages the samarch-1 host lock itself; wrapping it in
-  with_host_lock.sh self-deadlocks (the inner acquisition waits forever on
-  your outer hold) and starves every CI job on the host while it hangs.
-  Invoke it bare — the lock exists to serialize robot suites, and the
-  script is already the lock taker
-- do not use big models as subagents (opus, codex xhigh thinking, etc), only small fast & cheap to not waste tokens
-- no 'backwards compatibility' is allowed; we in a pre-alpha
-- no comments in style "now it is like that" - we are not writing history
-- code comments are forbidden; documentation of the public API surface is required. `///`/`//!` stay only on items reachable as `pub` from a crate root of a published crate; everything else, including doc comments on private or test-only items, is a comment and goes
-- duplicated code (10+ lines) without architecture is forbidden
-- 'legacy'/'old way' etc not allowed. we are in a pre-alpha, everything is fresh, clean, single instance
-- be aware of what you've done by looking at git status
-- don't call anything 'migration'. Say no to half-states. Only complete entropy annihilation is allowed.
-- don't hardcode things
-- parallelization and SIMD where appropriate (note: the wasm target must not be forgotten)
-- if you spot you wasted too much time on something, please put the discovered info into TIME_WASTERS.md so save future time for everyone
-- not "if you want to"; should be "the proper fix for production-grade ui-framework"; not "I WANT"; should be "this is wrong, this is right, this is the cause, this has to be re-architectured and be rewritten"
-- for non-trivial bugs: explore → document findings → rank suspicions with evidence → propose re-architecture options → implement → diagnostic verify → iterate until confirmed fixed. no one-shot guessing.
-- confirm a suspected cause by REMOVING it and re-running, before writing the fix. (binary search by cutting half of the code until the only thin cause left)
-- performance should not degrade correctness: a performance change ships with a correctness test that fails when the optimization is wrong -- a benchmark proving it is fast is not that test. Prove the test red first by deliberately breaking the optimization; a correctness test that has never failed is decoration. If you cannot write a test that would catch your optimization being wrong, you do not know what work it is skipping, and it does not ship. When speed and correctness genuinely conflict, correctness wins and the speed is given back until a design has both. (2026-08-29: four optimizations landed, three caused user-visible regressions -- an unreadable nav bar, rows frozen under an expanded action strip, a blur cache showing a stale image during scroll -- each validated only by an instrument measuring the optimized thing, not the risk)
-- for a UI bug that reproduces on a device, write the robot e2e test FIRST.
-- device testing on the Pixel Watch over adb: the watch dozes between commands and silently drops injected input, and a dozing screen captures as black PNG. Send `input keyevent KEYCODE_WAKEUP` before every step and check `dumpsys power | grep mWakefulness` before believing a screenshot. The rotary crown is `adb shell input rotaryencoder scroll --axis SCROLL,<n>`, and ring menus also take taps on the screen edge.
-- `gh` has more than one account here and the active one flips. When a repo starts 404ing or a rerun says "must have admin rights", run  `gh auth switch --user samoylenkodmitry` 
-- should never workaround bugs instead of fixing the root issue
-- gates live in the justfile and CI calls the same recipes; change a gate there, never inline in a workflow
-- frame-rate numbers measured under xvfb are software presentation, not the GPU (26 fps against 67 on the same scene); measure fps on a real display
-- before diagnosing any red test, `git fetch origin main` and rebase: a stale base is indistinguishable from a regression, and today four "broken on main" robot tests were four commits already fixed upstream
-- never invent a feature subset to check a target; run the exact command CI runs. `--features ios` without `renderer-wgpu` gates `ios.rs` out and invents three dead-code warnings that exist in no shipped build, and the same slip on the web target invents a compile error
-- a system dialog (iOS document picker, permission sheets) can only be checked on a device: it decides what to enable from what the app asked for and hands nothing back. Do not ask a human to eyeball it once per iteration — drive it from a UI test. cranamp's `platform/ios/run-uitests.sh` is the shape: launch args open the dialog so no coordinate-tapping is needed, and it prints every row with `enabled=`
-- iOS on-device UI tests need USB and `Settings > Developer > Enable UI Automation`. Over a network pairing the runner dies with "Timed out while enabling automation mode" before any test body runs, which reads exactly like the toggle being off
-- device fps comparisons run A B A B and then B A B A back to back, never
-  waiting for the device to cool: the alternation rules out every ambient
-  condition, and a build that heats the device more is itself part of the
-  signal, so a throttled fourth leg is data, not a void run. Log the
-  temperature before and after every leg and report it with the numbers
+- No unsafe code.
+- Use KISS, DRY and SOLID; duplicated code of ten or more lines needs a shared abstraction.
+- Fix root causes completely; do not leave partial changes, deprecated paths or compatibility layers in this pre-alpha repository.
+- Review architecture, correctness and maintainability before completion; fix supported problems without inventing new ones.
+- Follow the [performance coding guide](docs/performance_coding_guide.md); reduce measured work and preserve exact pictures on shipped targets.
+- Use `cargo add` for dependencies and `cargo upgrade` for upgrades.
+- Use `anyhow` in applications and `thiserror` in libraries.
+- Use specific `Result<T, E>` errors for failure and `Option<T>` for absence.
+- Use idiomatic Rust names; composable functions use CamelCase.
+- Prefer `async`/`await` and Tokio for asynchronous work.
+- Document every public API reachable from a published crate root; all other code comments are forbidden.
+- Write unit tests for all public functions and methods; put integration tests in `tests/`.
+- Do not hardcode configuration; consider parallelism and SIMD where measured benefits hold, including wasm.
+- `#[cfg(feature = "robot-app")]` is forbidden.
+- Use plain, direct explanations; omit historical labels, "migration", and conditional offers to fix known problems.
+- Use only small, fast, inexpensive models when subagents are requested.
+- Check `git status` and the current branch before work and before completion; isolate concurrent edits in a worktree.
+- Before diagnosing a red test, fetch `origin main` and rebase; confirm claimed fixes are ancestors of `HEAD`.
+- Check existing PRs for a reported failure before writing a duplicate fix.
+- Never use `git reset`; preserve work with a stash when needed.
+- Worktrees share stashes: inspect contents, resolve the immutable stash hash, and apply only the intended work.
+- Never use recursive forced removal; preserve source under another name instead.
+- Run each removal as a standalone command, then verify separately; never chain it with another operation or loop body.
+- Reclaim build artifacts only with `just gc` and `just gc-apply`; never remove `target/`, `build/`, source or uncommitted work by hand.
+- Check `df -h /` before large builds; recent writes and live processes both protect another task's artifacts.
+- Install hooks once per clone with `just hooks`; stage new files before `just precommit` so diff checks include them.
+- Run `just fmt`, `just test`, `just clippy`, `just web`, `just android` and `just robot` as applicable; all tests pass with zero warnings.
+- Use the exact CI recipes and shipped features; change checks in `justfile`, never inline in workflows.
+- `just web` always uses release mode; `just android` assembles the Android demo release; root `perf*.sh` scripts run performance checks.
+- Prefer SSH builds on `samarch-1` or `macm3`; see [host details](docs/development_troubleshooting.md).
+- Both SSH hosts use zsh: upload a script and run it with Bash, or quote `bash -lc` without premature variable expansion.
+- On samarch-1, use `scripts/ci/with_host_lock.sh --shared` for builds and `--exclusive` for measurements; acquire the lock instead of polling load.
+- Invoke `run_robot_test.sh` bare: it takes the host lock itself, and an outer lock self-deadlocks.
+- Run GPU scenarios and robot suites sequentially; do not launch competing Cargo commands against one target directory.
+- Attribute processes by checkout and ancestry; stop only your own exact process tree and verify its termination separately.
+- Never stop or restart a shared daemon owned by another job; a timeout is not proof it stopped.
+- Use `scripts/wait_until_quiet.sh` for process waits; every detached command needs an exit status and a staleness deadline.
+- Preserve command failures and stderr; a pipeline's final command or an absent error message does not prove success.
+- Verify automated edits against exact source bytes and inspect the diff before dependent builds or tests.
+- Build immutable source snapshots; verify full source inventories, resolved dependencies and native hashes, and refresh timestamps after archive extraction.
+- Check downstream consumers before removing public APIs; missing test names or local callers do not prove an API unused.
+- For nontrivial bugs: explore, record evidence, rank causes, compare architecture options, implement, verify and iterate.
+- Confirm a suspected cause by removing it and rerunning before writing the fix.
+- Start bugs with a failing regression test; for a device UI bug, write the robot e2e test first.
+- Prove every optimization's correctness test fails when the optimization is deliberately broken; correctness takes priority over speed.
+- Verify every guard accepts valid input and rejects its intended failures; assert tests ran and the intended path executed.
+- Require positive evidence for completion: all expected checks pass on the intended SHA, and a reported merge is verified by its resulting commit and content.
+- Batch completed changes before pushing; do not repeatedly supersede CI or cancel another task's run on a shared ref.
+- Compare revisions on one host with matching toolchains, features, app sources, assets, settings, data and package identity.
+- Hold the shared per-device lock for the entire FPS sequence; run ABAB then BABA without cooling waits and log temperatures before and after every run.
+- Verify scroll motion and both route endpoints for every run; preserve failed runs and record background work and instrumentation state.
+- Measure production FPS on a physical display; Xvfb presentation measures software presentation.
+- Wake the Pixel Watch before every step and assert `mWakefulness=Awake` before trusting captures or timing.
+- Check system dialogs with device UI tests; iOS tests require USB and Settings > Developer > Enable UI Automation.
+- On GitHub 404 or unexpected permission errors, run `gh auth switch --user samoylenkodmitry`.
+- Check Jetpack Compose sources at samarch-1 `/media/huge/projects/android/androidx`; verify freshness before treating this mid-2023 checkout as current.
+- Route new lessons through [TIME_WASTERS.md](TIME_WASTERS.md); use short one-liners and remove duplicates or resolved incident notes.
