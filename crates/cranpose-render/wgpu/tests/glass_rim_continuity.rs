@@ -9,19 +9,15 @@ use cranpose_liquid::prelude::*;
 use cranpose_macros::composable;
 use cranpose_render_common::{
     Renderer,
-    graph::{
-        DrawPrimitiveNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform,
-        RenderGraph, RenderNode,
-    },
+    graph::{ProjectiveTransform, RenderGraph, RenderNode},
 };
 use cranpose_render_wgpu::CapturedFrame;
 use cranpose_ui::{
     Modifier,
     widgets::{Box, BoxSpec},
 };
-use cranpose_ui_graphics::{
-    Brush, Color, DrawPrimitive, GraphicsLayer, Rect, RenderEffect, RuntimeShader,
-};
+use cranpose_ui_graphics::{Color, GraphicsLayer, Rect, RenderEffect, RuntimeShader};
+use support::solid_rect;
 
 const FRAME_WIDTH: u32 = 128;
 const FRAME_HEIGHT: u32 = 96;
@@ -39,20 +35,6 @@ const PANE: Rect = Rect {
     width: 96.0,
     height: 64.0,
 };
-
-fn solid_rect(rect: Rect, color: Color) -> RenderNode {
-    RenderNode::Primitive(PrimitiveEntry {
-        phase: PrimitivePhase::BeforeChildren,
-        node: PrimitiveNode::Draw(DrawPrimitiveNode {
-            primitive: DrawPrimitive::Rect {
-                rect,
-                brush: Brush::solid(color),
-                stroke: None,
-            },
-            clip: None,
-        }),
-    })
-}
 
 fn regular_capsule_glass_scene() -> RenderGraph {
     let mut tail = RuntimeShader::new(cranpose_ui_graphics::LIQUID_GLASS_WGSL);

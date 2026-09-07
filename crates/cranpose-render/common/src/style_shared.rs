@@ -1,10 +1,10 @@
-use std::rc::Rc;
+use std::{ops::Range, rc::Rc};
 
 use cranpose_foundation::PointerEvent;
 use cranpose_ui::{Brush, DrawCommand, DrawCommandFn, LayoutNodeData, ModifierNodeSlices};
 use cranpose_ui_graphics::{
     BlendMode, Color, ColorFilter, CommandRecording, CompositingStrategy, CornerRadii,
-    DrawPrimitive, FinishedRecording, GraphicsLayer, Point, RoundedCornerShape, Size,
+    DrawPrimitive, GraphicsLayer, Point, RoundedCornerShape, Size,
 };
 
 use crate::layer_transform::{layer_scale_x, layer_scale_y, layer_uniform_scale};
@@ -310,276 +310,41 @@ pub fn primitives_for_placement(
     placement: DrawPlacement,
     size: Size,
 ) -> Vec<DrawPrimitive> {
-    primitives_for_placement_reusing(command, placement, size, Vec::new())
+    recording_for_placement_reusing(command, placement, size, CommandRecording::default())
+        .map(|(recording, segments)| recording.primitives(segments).collect())
+        .unwrap_or_default()
 }
 
-/// [`primitives_for_placement`] recording into `storage` the caller retains
-/// between frames. A command that re-records every frame keeps one buffer
-/// whose capacity was earned on earlier frames; only the rare marker-bearing
-/// recording pays for a second output vector.
-pub fn primitives_for_placement_reusing(
+/// Records `command` into `storage`, a recording the caller kept from an
+/// earlier frame so its buffers keep the capacity they earned, and names
+/// the segments `placement` draws: everything for a behind or overlay
+/// command, the part before or after the last content marker for a
+/// with-content command. `None` when the command has no `placement` half,
+/// in which case nothing was recorded.
+pub fn recording_for_placement_reusing(
     command: &DrawCommand,
     placement: DrawPlacement,
     size: Size,
-    storage: Vec<DrawPrimitive>,
-) -> Vec<DrawPrimitive> {
-    primitives_for_placement_retained(
-        command,
-        placement,
-        size,
-        CommandRecording::default(),
-        storage,
-    )
-    .0
-}
-
-/// The full retained form: the compact recording buffers come from and
-/// return to the caller alongside the materialized primitives, so a command
-/// re-recording every frame allocates nothing in the steady state.
-pub fn primitives_for_placement_retained(
-    command: &DrawCommand,
-    placement: DrawPlacement,
-    size: Size,
-    recording: CommandRecording,
-    storage: Vec<DrawPrimitive>,
-) -> (Vec<DrawPrimitive>, CommandRecording) {
-    let mut no_replay = None;
-    let (primitives, recording, _) = primitives_for_placement_verified(
-        command,
-        placement,
-        size,
-        recording,
-        storage,
-        &mut no_replay,
-        None,
-    );
-    (primitives, recording)
-}
-
-/// The replay half of [`primitives_for_placement_verified`]'s contract: the
-/// command's verification state plus the stale-transition seam. The caller
-/// (the scene builder, which owns the per-command registry) says whether a
-/// valid previous-frame emission is on hand; verification answers whether
-/// this frame collapsed out of its capture and was therefore NOT emitted —
-/// nothing materialized, the caller must re-emit its saved emission.
-pub struct CommandReplayContext<'a> {
-    pub state: &'a mut cranpose_ui_graphics::CommandReplayState,
-    /// In: the previous build emitted a replay frame the caller saved,
-    /// still valid under the current recording generation and retained
-    /// feed epoch, and the stale-transition flag is on.
-    pub stale_available: bool,
-    /// Out: verification collapsed out of an established capture while
-    /// `stale_available` held, so the recording was finished via
-    /// [`cranpose_ui_graphics::DrawScopeDefault::finish_recording_only`]
-    /// — no primitives, no frame — and the caller re-emits its saved
-    /// emission in place of this frame's.
-    pub serve_stale: bool,
-}
-
-/// [`primitives_for_placement_retained`] with per-command similarity
-/// verification: when `replay` carries the command's state, the freshly
-/// recorded compact form advances it BEFORE materialization, yielding the
-/// frame's retained/dynamic span structure in primitive space. Rendering
-/// still materializes everything — consuming the spans (and skipping
-/// materialization for retained ones) is the renderer-side half of the
-/// retention work. The frame is only returned for marker-free recordings:
-/// content splitting reindexes the primitive vector, and no game-scale
-/// command records content markers.
-pub fn primitives_for_placement_verified(
-    command: &DrawCommand,
-    placement: DrawPlacement,
-    size: Size,
-    recording: CommandRecording,
-    storage: Vec<DrawPrimitive>,
-    replay: &mut Option<CommandReplayContext<'_>>,
-    command_id: Option<crate::graph::DrawCommandId>,
-) -> (
-    Vec<DrawPrimitive>,
-    CommandRecording,
-    Option<cranpose_ui_graphics::CommandReplayFrame>,
-) {
-    let filter_content = |primitives: Vec<DrawPrimitive>, markers: u32| {
-        if markers == 0 {
-            return primitives;
-        }
-        let mut out = Vec::with_capacity(primitives.len());
-        out.extend(
-            primitives
-                .into_iter()
-                .filter(|primitive| !matches!(primitive, DrawPrimitive::Content)),
-        );
-        out
-    };
-
-    let split_with_content = |primitives: Vec<DrawPrimitive>, placement, markers: u32| {
-        let last_content_idx = if markers == 0 {
-            None
-        } else {
-            primitives
-                .iter()
-                .rposition(|primitive| matches!(primitive, DrawPrimitive::Content))
-        };
-        let Some(last_content_idx) = last_content_idx else {
-            return if matches!(placement, DrawPlacement::Overlay) {
-                filter_content(primitives, markers)
-            } else {
-                Vec::new()
-            };
-        };
-
-        let mut out = Vec::with_capacity(primitives.len());
-        out.extend(
-            primitives
-                .into_iter()
-                .enumerate()
-                .filter_map(|(index, primitive)| {
-                    if matches!(primitive, DrawPrimitive::Content) {
-                        return None;
-                    }
-                    let is_before = index < last_content_idx;
-                    match placement {
-                        DrawPlacement::Behind if is_before => Some(primitive),
-                        DrawPlacement::Overlay if !is_before => Some(primitive),
-                        _ => None,
-                    }
-                }),
-        );
-        out
-    };
-
-    fn record_into(
-        func: &DrawCommandFn,
-        size: Size,
-        recording: CommandRecording,
-        storage: Vec<DrawPrimitive>,
-        replay: &mut Option<CommandReplayContext<'_>>,
-        command: Option<crate::graph::DrawCommandId>,
-    ) -> (
-        FinishedRecording,
-        Option<cranpose_ui_graphics::CommandReplayFrame>,
-    ) {
-        let mut scope = cranpose_ui::command_draw_scope_retained(size, recording, storage);
+    storage: CommandRecording,
+) -> Option<(CommandRecording, Range<u32>)> {
+    let record = move |func: &DrawCommandFn| {
+        let mut scope = cranpose_ui::command_draw_scope_reusing(size, storage);
         func(&mut scope);
-        let Some(ctx) = replay.as_mut() else {
-            return (scope.finish(), None);
-        };
-        let state = &mut *ctx.state;
-        let outcome =
-            state.advance_pooled(scope.recorded(), crate::scene_builder::verify_executor());
-        let diag = if cranpose_core::env_flag!("CRANPOSE_COMMAND_REPLAY_DIAG") {
-            if let cranpose_ui_graphics::ReplayOutcome::Spans(spans) = &outcome {
-                let (mut retained, mut dynamic) = (0usize, 0usize);
-                for span in spans {
-                    match span {
-                        cranpose_ui_graphics::ReplaySpan::Retained { .. } => retained += 1,
-                        cranpose_ui_graphics::ReplaySpan::Dynamic {
-                            tape_start,
-                            tape_end,
-                        } => dynamic += tape_end - tape_start,
-                    }
-                }
-                Some((
-                    scope.recorded().len(),
-                    retained,
-                    dynamic,
-                    state.segments().len(),
-                    state.stats(),
-                    state.optimistic_commits(),
-                    state.prefix_commits(),
-                ))
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-        if !state.segments().is_empty() {
-            thread_local! {
-                static VERIFIED_FRAMES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-            }
-            let frames = VERIFIED_FRAMES.with(|cell| {
-                let next = cell.get().wrapping_add(1);
-                cell.set(next);
-                next
-            });
-            if frames.is_multiple_of(256) {
-                let (deaths, splits) = state.stats();
-                log::warn!(
-                    "[command-replay] health: {} segments, pooled commits {} + prefix {}, \
-                     lifetime deaths {} splits {}",
-                    state.segments().len(),
-                    state.optimistic_commits(),
-                    state.prefix_commits(),
-                    deaths,
-                    splits,
-                );
-            }
-        }
-        let center = state.center();
-        let markers = scope.content_marker_count();
-        if ctx.stale_available && markers == 0 && state.collapsed_from_captured() {
-            ctx.serve_stale = true;
-            if cranpose_core::env_flag!("CRANPOSE_COMMAND_REPLAY_DIAG") {
-                log::warn!(
-                    "[command-replay] stale transition: collapse frame of {} records \
-                     re-serves the previous emission",
-                    scope.recorded().len(),
-                );
-            }
-            return (scope.finish_recording_only(), None);
-        }
-        let mut bypass = |slot: u32| {
-            markers == 0
-                && command.is_some_and(|id| crate::scene_builder::retained_slot_confirmed(id, slot))
-        };
-        let (finished, frame) = scope.finish_replay(center, outcome, &mut bypass);
-        if let Some((records, retained, dynamic, segments, (deaths, splits), pooled, prefix)) = diag
-        {
-            log::warn!(
-                "[command-replay] {} records: {} retained spans, {} dynamic records, \
-                 {} materialized; {} segments alive, lifetime deaths {} splits {}, \
-                 pooled commits {} + prefix {}",
-                records,
-                retained,
-                dynamic,
-                finished.primitives.len(),
-                segments,
-                deaths,
-                splits,
-                pooled,
-                prefix,
-            );
-        }
-        (finished, frame)
-    }
+        scope.finish()
+    };
     match (placement, command) {
-        (DrawPlacement::Behind, DrawCommand::Behind(func)) => {
-            let (finished, frame) = record_into(func, size, recording, storage, replay, command_id);
-            let frame = (finished.content_markers == 0).then_some(frame).flatten();
-            (
-                filter_content(finished.primitives, finished.content_markers),
-                finished.recording,
-                frame,
-            )
-        }
-        (DrawPlacement::Overlay, DrawCommand::Overlay(func)) => {
-            let (finished, frame) = record_into(func, size, recording, storage, replay, command_id);
-            let frame = (finished.content_markers == 0).then_some(frame).flatten();
-            (
-                filter_content(finished.primitives, finished.content_markers),
-                finished.recording,
-                frame,
-            )
+        (DrawPlacement::Behind, DrawCommand::Behind(func))
+        | (DrawPlacement::Overlay, DrawCommand::Overlay(func)) => {
+            let recording = record(func);
+            let segments = recording.all_segments();
+            Some((recording, segments))
         }
         (_, DrawCommand::WithContent(func)) => {
-            let (finished, _) = record_into(func, size, recording, storage, replay, None);
-            (
-                split_with_content(finished.primitives, placement, finished.content_markers),
-                finished.recording,
-                None,
-            )
+            let recording = record(func);
+            let segments = recording.content_split(placement == DrawPlacement::Behind);
+            Some((recording, segments))
         }
-        _ => (Vec::new(), recording, None),
+        _ => None,
     }
 }
 
@@ -647,8 +412,11 @@ mod tests {
         let size = Size::new(10.0, 10.0);
         for placement in [DrawPlacement::Behind, DrawPlacement::Overlay] {
             let fresh = primitives_for_placement(&command, placement, size);
-            let dirty = vec![DrawPrimitive::Content; 8];
-            let reused = primitives_for_placement_reusing(&command, placement, size, dirty);
+            let dirty = CommandRecording::from_primitives(vec![DrawPrimitive::Content; 8]);
+            let (recording, segments) =
+                recording_for_placement_reusing(&command, placement, size, dirty)
+                    .expect("a with-content command records for both placements");
+            let reused: Vec<DrawPrimitive> = recording.primitives(segments).collect();
             assert_eq!(fresh, reused);
         }
     }

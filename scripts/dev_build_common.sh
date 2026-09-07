@@ -17,6 +17,10 @@ is_ci_env() {
     [ -n "${CI:-}" ] || [ -n "${GITHUB_ACTIONS:-}" ]
 }
 
+start_shared_sccache() {
+    env -u RUNNER_TRACKING_ID "$1" --start-server
+}
+
 enable_local_sccache() {
     local sccache_bin="${RUSTC_WRAPPER:-}"
 
@@ -47,7 +51,7 @@ enable_local_sccache() {
         *) return 0 ;;
     esac
     command -v "$sccache_bin" >/dev/null 2>&1 || return 0
-    "$sccache_bin" --start-server >/dev/null 2>&1 || true
+    start_shared_sccache "$sccache_bin" >/dev/null 2>&1 || true
 
     # sccache cannot cache an incremental compile, and this workspace asks for
     # one: [profile.robot] sets `incremental = true` and [profile.ci] inherits

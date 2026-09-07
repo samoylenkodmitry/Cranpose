@@ -162,6 +162,9 @@ fn exact_floor(x: f32) -> f32 {
 /// into range.
 #[inline]
 fn wrap_angle_tau(x: f32) -> f32 {
+    if (0.0..TAU).contains(&x) {
+        return x;
+    }
     let wrapped = x - exact_floor(x * (1.0 / TAU)) * TAU;
     if wrapped >= TAU {
         wrapped - TAU
@@ -203,6 +206,7 @@ const FAST_TRIG_ERR: f32 = 1.3e-3;
 
 impl ArcGeometry {
     /// Normalizing constructor. Never panics and never stores a NaN.
+    #[inline]
     pub fn new(
         center: Point,
         inner_radius: f32,
@@ -407,6 +411,7 @@ impl ArcGeometry {
 ///
 /// Non-finite input collapses to an empty band so the caller drops the draw
 /// instead of pushing NaN down the pipeline.
+#[inline]
 pub fn arc_band(radius: f32, inner_radius: f32, stroke: Option<Stroke>) -> (f32, f32, StrokeCap) {
     match stroke {
         Some(stroke) => {

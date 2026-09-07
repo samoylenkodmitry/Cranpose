@@ -1,20 +1,18 @@
-
 // Shared structs
 //
-// Everything the fragment shader needs from ShapeData rides here as a flat
-// varying instead of being re-fetched from the uniform array per fragment.
-// The vertex shader runs six times per shape; the fragment shader runs once
-// per covered pixel — thousands of times more in an overdraw-heavy scene —
-// and a dynamically indexed uniform array cannot be promoted to registers,
-// so every one of those fragment fetches was a real memory load on the
-// GPU's load/store pipe. Flat varyings move that traffic to the (otherwise
-// idle) varying interpolator. Only the gradient-stop array is still fetched
-// per fragment, and solid brushes never touch it.
+// Everything the fragment shader needs from a record rides here as a flat
+// varying instead of being re-fetched per fragment. The vertex shader runs
+// a few times per record; the fragment shader runs once per covered pixel —
+// thousands of times more in an overdraw-heavy scene — and a dynamically
+// indexed array cannot be promoted to registers, so every one of those
+// fragment fetches was a real memory load. Flat varyings move that traffic
+// to the (otherwise idle) varying interpolator. Only the gradient-stop walk
+// for ramps longer than four stops is still fetched per fragment, and solid
+// brushes never touch it.
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) color: vec4<f32>,
-    @location(1) uv: vec2<f32>,
-    @location(2) world_pos: vec2<f32>,
+    @location(2) world_pos: vec4<f32>,
     @location(3) @interpolate(flat) rect: vec4<f32>,
     @location(4) @interpolate(flat) radii: vec4<f32>,
     @location(5) @interpolate(flat) gradient_params: vec4<f32>,
@@ -29,260 +27,497 @@ struct VertexOutput {
     @location(14) @interpolate(flat) stop_color3: vec4<f32>,
 }
 
+// What a solid batch's fragments need: `VertexOutput` without the brush
+// and its stops. A tiling GPU writes every vertex's varyings to memory
+// and reads them back per primitive, so a scene of many small solid
+// shapes pays for each vector here, whether or not a fragment reads it.
+struct SolidOutput {
+    @builtin(position) clip_position: vec4<f32>,
+    @location(0) color: vec4<f32>,
+    @location(2) world_pos: vec4<f32>,
+    @location(3) @interpolate(flat) rect: vec4<f32>,
+    @location(4) @interpolate(flat) radii: vec4<f32>,
+    @location(5) @interpolate(flat) clip_rect: vec4<f32>,
+    @location(6) @interpolate(flat) stroke_params: vec4<f32>,
+    @location(7) @interpolate(flat) arc_params: vec4<f32>,
+}
+
+fn solid_output(full: VertexOutput) -> SolidOutput {
+    var output: SolidOutput;
+    output.clip_position = full.clip_position;
+    output.color = full.color;
+    output.world_pos = full.world_pos;
+    output.rect = full.rect;
+    output.radii = full.radii;
+    output.clip_rect = full.clip_rect;
+    output.stroke_params = full.stroke_params;
+    output.arc_params = full.arc_params;
+    return output;
+}
+
+fn full_output(solid: SolidOutput) -> VertexOutput {
+    var output: VertexOutput;
+    output.clip_position = solid.clip_position;
+    output.color = solid.color;
+    output.world_pos = solid.world_pos;
+    output.rect = solid.rect;
+    output.radii = solid.radii;
+    output.clip_rect = solid.clip_rect;
+    output.stroke_params = solid.stroke_params;
+    output.arc_params = solid.arc_params;
+    output.gradient_params = vec4<f32>(0.0);
+    output.brush = vec4<u32>(0u);
+    output.stop_offsets = vec4<f32>(0.0);
+    output.stop_color0 = vec4<f32>(0.0);
+    output.stop_color1 = vec4<f32>(0.0);
+    output.stop_color2 = vec4<f32>(0.0);
+    output.stop_color3 = vec4<f32>(0.0);
+    return output;
+}
+
+struct GradientFillOutput {
+    @builtin(position) clip_position: vec4<f32>,
+    @location(0) world_pos: vec4<f32>,
+    @location(1) @interpolate(flat) rect: vec4<f32>,
+    @location(2) @interpolate(flat) radii: vec4<f32>,
+    @location(3) @interpolate(flat) clip_rect: vec4<f32>,
+    @location(4) @interpolate(flat) gradient_params: vec4<f32>,
+    @location(5) @interpolate(flat) brush: vec4<u32>,
+    @location(6) @interpolate(flat) stop_offsets: vec4<f32>,
+    @location(7) @interpolate(flat) stop_color0: vec4<f32>,
+    @location(8) @interpolate(flat) stop_color1: vec4<f32>,
+    @location(9) @interpolate(flat) stop_color2: vec4<f32>,
+    @location(10) @interpolate(flat) stop_color3: vec4<f32>,
+}
+
+fn gradient_fill_output(full: VertexOutput) -> GradientFillOutput {
+    var output: GradientFillOutput;
+    output.clip_position = full.clip_position;
+    output.world_pos = full.world_pos;
+    output.rect = full.rect;
+    output.radii = full.radii;
+    output.clip_rect = full.clip_rect;
+    output.gradient_params = full.gradient_params;
+    output.brush = full.brush;
+    output.stop_offsets = full.stop_offsets;
+    output.stop_color0 = full.stop_color0;
+    output.stop_color1 = full.stop_color1;
+    output.stop_color2 = full.stop_color2;
+    output.stop_color3 = full.stop_color3;
+    return output;
+}
+
+fn full_from_gradient_fill(fill: GradientFillOutput) -> VertexOutput {
+    var output: VertexOutput;
+    output.clip_position = fill.clip_position;
+    output.color = vec4<f32>(0.0);
+    output.world_pos = fill.world_pos;
+    output.rect = fill.rect;
+    output.radii = fill.radii;
+    output.gradient_params = fill.gradient_params;
+    output.clip_rect = fill.clip_rect;
+    output.stroke_params = vec4<f32>(0.0);
+    output.arc_params = vec4<f32>(0.0);
+    output.brush = fill.brush;
+    output.stop_offsets = fill.stop_offsets;
+    output.stop_color0 = fill.stop_color0;
+    output.stop_color1 = fill.stop_color1;
+    output.stop_color2 = fill.stop_color2;
+    output.stop_color3 = fill.stop_color3;
+    return output;
+}
+
+// Where a recording lands on the device: the logical offset of its record
+// space (the layer origin with the rigid snap delta folded in), the root
+// scale, the clip, the dither origin and the paint every record takes.
+//
+//   flags bit 0  canonicalize: the placement is rigidly snapped, so every
+//                device coordinate rounds to the 1/16 px grid
+//   flags bit 1  clip: `clip` holds a device clip rect
+//   flags bit 2  color filter: `color_matrix`/`color_offset` apply
+//   flags bit 3  painted: the layer's alpha or filter applies, so a solid
+//                colour is quantized to 8-bit sRGB first, as the CPU
+//                brush resolution did; an unpainted colour passes as is
+struct Placement {
+    offset: vec2<f32>,
+    root_scale: f32,
+    flags: u32,
+    clip: vec4<f32>,
+    dither_origin: vec2<f32>,
+    alpha: f32,
+    reserved: f32,
+    color_matrix: mat4x4<f32>,
+    color_offset: vec4<f32>,
+}
+
 struct Uniforms {
     viewport: vec2<f32>,
     viewport_offset: vec2<f32>,
+    placement: Placement,
 }
 
 @group(0) @binding(0)
 var<uniform> uniforms: Uniforms;
 
-// Per-batch similarity transform: rotate by the angle whose (cos, sin) is
-// `rot` and scale by `scale`, both about `center`, all in device pixels.
-// Replayed shape batches (cached slots re-drawn under an accumulated
-// rotation/breathing transform) set a real value; every freshly converted
-// batch binds a shared identity, which is bit-exact — multiplying by 1.0 and
-// adding 0.0 leaves every coordinate untouched.
-//
-// Only the quad corners are transformed. Every SDF below evaluates in
-// rect-local space reconstructed from `uv` (see `rect_pos` in `fs_main`), and
-// uv interpolation across an affinely transformed quad reproduces that local
-// space exactly, so radii, stroke widths, arc trig and gradient params all
-// stay valid untouched. The one deliberate approximation: the smoothstep
-// anti-aliasing half-width is a capture-space half pixel, so it reads as
-// `scale` screen pixels — the breathing transforms this rides stay within a
-// few percent of 1.
-// `paint_select` = 1.0 makes the vertex stage read each shape's color from
-// the retained paint buffer instead of `ShapeData.color`. Replayed batches
-// set it (their recolors land in the slot's paint buffer; the captured
-// ShapeData is immutable); every fresh batch leaves it 0.0. Only the
-// storage-mode source rewrite declares the paint array and reads the flag —
-// in this base text the field is inert padding, which keeps the uniform
-// variant valid for WebGL.
-struct SimilarityTransform {
-    center: vec2<f32>,
-    rot: vec2<f32>,
-    scale: f32,
-    paint_select: f32,
-    _pad1: vec2<f32>,
+struct ShapeRecord {
+    @location(0) rect: vec4<f32>,
+    @location(1) radii: vec4<f32>,
+    @location(2) color: vec4<f32>,
+    @location(3) stroke_width: f32,
+    @location(4) flags: u32,
+    @location(5) brush: u32,
+    @location(6) placement: u32,
+    @location(7) arc_geometry: vec4<f32>,
+    @location(8) arc_normalized: vec4<f32>,
 }
+
+struct BrushRecord {
+    kind: u32,
+    tile_mode: u32,
+    stop_start: u32,
+    stop_count: u32,
+    params: vec4<f32>,
+    explicit_start: u32,
+    explicit_len: u32,
+    reserved: vec2<u32>,
+}
+
+struct GradientStop {
+    color: vec4<f32>,
+    position: vec4<f32>,
+}
+
+@group(1) @binding(1)
+var<uniform> brushes: array<BrushRecord, 256>;
 
 @group(1) @binding(2)
-var<uniform> similarity: SimilarityTransform;
+var<uniform> gradient_stops: array<GradientStop, 256>;
 
-// Vertex shader
-//
-// There is no vertex buffer: each shape is six unindexed vertices whose
-// corner positions, color and UVs are pulled from `shape_data` by
-// `vertex_index`. Corner numbering matches the quad the CPU records:
-// 0 = top-left, 1 = top-right, 2 = bottom-left, 3 = bottom-right, drawn as
-// triangles (0, 1, 2) and (2, 1, 3).
-@vertex
-fn vs_main(@builtin(vertex_index) vertex_idx: u32) -> VertexOutput {
-    var output: VertexOutput;
+@group(1) @binding(3)
+var<uniform> placements: array<Placement, 64>;
 
-    let shape_idx = vertex_idx / 6u;
-    let slot = vertex_idx % 6u;
-    var corner: u32;
-    switch slot {
-        case 0u: { corner = 0u; }
-        case 1u, 4u: { corner = 1u; }
-        case 2u, 3u: { corner = 2u; }
-        default: { corner = 3u; }
+const RECORD_KIND_ROUND_RECT: u32 = 1u;
+const RECORD_KIND_ARC: u32 = 2u;
+const RECORD_STROKED: u32 = 4u;
+const RECORD_CAP_SHIFT: u32 = 3u;
+const RECORD_JOIN_SHIFT: u32 = 5u;
+const RECORD_BAND_CAP_SHIFT: u32 = 16u;
+const RECORD_ARC_DEGENERATE: u32 = 262144u;
+const RECORD_ARC_BANDED: u32 = 1048576u;
+const RECORD_BAND_CLASS_SHIFT: u32 = 21u;
+const RECORD_BAND_CLASS_MASK: u32 = 7u;
+
+const BRUSH_LINEAR: u32 = 1u;
+const BRUSH_RADIAL: u32 = 2u;
+const BRUSH_SWEEP: u32 = 3u;
+
+const PLACEMENT_CANONICALIZE: u32 = 1u;
+const PLACEMENT_CLIPPED: u32 = 2u;
+const PLACEMENT_FILTERED: u32 = 4u;
+const PLACEMENT_PAINTED: u32 = 8u;
+
+// A band's slack beyond its ring, in device pixels, so every pixel the
+// fragment stage anti-aliases lies inside the strip.
+const BAND_MARGIN: f32 = 1.0;
+const BAND_QUAD_MARGIN: f32 = 0.5 + 1.0 / 16.0;
+const BAND_ANGULAR_PAD: f32 = 0.001;
+const INFINITE_GRADIENT_POINT: f32 = 1.0e30;
+
+// Which tier a pipeline draws from. The store tier draws one recording from
+// its retained buffers under the placement in `uniforms`; the arena tier
+// draws many small recordings copied into one buffer, each record naming
+// its placement.
+override TIER_ARENA: bool = false;
+// Whether banded arcs draw as strips on this tier; false on the uniform
+// floor, which draws every record as its quad.
+override SHAPE_BANDS: bool = true;
+fn record_placement(record: ShapeRecord) -> Placement {
+    if (TIER_ARENA) {
+        return placements[record.placement];
     }
-
-    let shape = shape_data[shape_idx];
-    var position: vec2<f32>;
-    switch corner {
-        case 0u: { position = shape.quad01.xy; }
-        case 1u: { position = shape.quad01.zw; }
-        case 2u: { position = shape.quad23.xy; }
-        default: { position = shape.quad23.zw; }
-    }
-
-    // Screen-clockwise rotation in y-down device space: matches the arc
-    // convention above (start_angle increases clockwise), so a batch replayed
-    // with rotation delta lands where freshly emitted arcs at
-    // `start_angle + delta` would.
-    let rel = position - similarity.center;
-    position = similarity.center + vec2<f32>(
-        rel.x * similarity.rot.x - rel.y * similarity.rot.y,
-        rel.x * similarity.rot.y + rel.y * similarity.rot.x,
-    ) * similarity.scale;
-
-    // Convert from pixel coordinates to clip space (viewport_offset shifts the origin
-    // so that a sub-region of the viewport maps to the full NDC range)
-    let x = ((position.x - uniforms.viewport_offset.x) / uniforms.viewport.x) * 2.0 - 1.0;
-    let y = 1.0 - ((position.y - uniforms.viewport_offset.y) / uniforms.viewport.y) * 2.0;
-
-    output.clip_position = vec4<f32>(x, y, 0.0, 1.0);
-    output.color = shape.color;
-    output.uv = vec2<f32>(f32(corner & 1u), f32(corner >> 1u));
-    output.world_pos = position;
-    output.rect = shape.rect;
-    output.radii = shape.radii;
-    output.gradient_params = shape.gradient_params;
-    output.clip_rect = shape.clip_rect;
-    output.stroke_params = shape.stroke_params;
-    output.arc_params = shape.arc_params;
-    output.brush = vec4<u32>(
-        shape.brush_type,
-        shape.gradient_start,
-        shape.gradient_count,
-        shape.gradient_tile_mode,
-    );
-    let stops = load_inline_gradient_stops(shape.gradient_start, shape.gradient_count);
-    output.stop_offsets = stops.offsets;
-    output.stop_color0 = stops.color0;
-    output.stop_color1 = stops.color1;
-    output.stop_color2 = stops.color2;
-    output.stop_color3 = stops.color3;
-
-    return output;
+    return uniforms.placement;
 }
 
-// Instanced quad path for ordinary shape batches (storage mode only): one
-// instance per shape, four vertices fetched through the static index buffer
-// [0, 1, 2, 2, 1, 3] — the exact triangle pair `vs_main`'s six-slot expansion
-// produces, same diagonal, same winding — so per-shape vertex work drops from
-// six executions (and six ShapeData reads) to four. `shape_idx` comes from
-// the instance index instead of `vertex_index / 6`.
-//
-// BIT-EXACTNESS REQUIREMENT: every expression below is copied verbatim from
-// `vs_main` — identical corner mapping, identical uv derivation, identical
-// transform arithmetic. That is what makes the instanced path rasterize
-// bit-identically to the six-vertex path at the identity transform. Under a
-// rotating similarity the backend compiler may contract the multiply-adds
-// differently per entry point (the P1a lesson, measured on Metal), which is
-// a single ulp of position and the tiny envelope `instanced_quad_parity`
-// pins.
-//
-// Uniform/WebGL devices never create a pipeline with this entry point (GL
-// base-instance semantics for `instance_index` under a non-zero
-// first_instance are a portability hazard); in that variant it is dead code,
-// which keeps the base text valid for WebGL.
-@vertex
-fn vs_shape_instanced(
-    @builtin(vertex_index) corner_idx: u32,
-    @builtin(instance_index) instance_idx: u32,
+// The device coordinate the CPU would have written: rounded to the 1/16
+// device pixel grid when the placement is snapped, so a rigidly moving
+// subtree lands on the same sub-pixel phase every frame.
+fn canonical(value: f32) -> f32 {
+    return sign(value) * floor(abs(value) * 16.0 + 0.5) / 16.0;
+}
+
+fn device_coordinate(value: f32, canonicalize: bool) -> f32 {
+    return select(value, canonical(value), canonicalize);
+}
+
+struct RecordGeometry {
+    // The device rect the record rasterizes: the stroke's outer half
+    // included, canonicalized under a snapped placement.
+    rect: vec4<f32>,
+    canonicalize: bool,
+    scale: f32,
+}
+
+fn record_geometry(record: ShapeRecord, placement: Placement) -> RecordGeometry {
+    let kind = record.flags & 3u;
+    let stroked = (record.flags & RECORD_STROKED) != 0u && kind != RECORD_KIND_ARC;
+    let half_width = select(0.0, record.stroke_width * 0.5, stroked);
+    let scale = placement.root_scale;
+    let canonicalize = (placement.flags & PLACEMENT_CANONICALIZE) != 0u;
+    let left = device_coordinate((record.rect.x - half_width + placement.offset.x) * scale, canonicalize);
+    let top = device_coordinate((record.rect.y - half_width + placement.offset.y) * scale, canonicalize);
+    let right = device_coordinate(
+        (record.rect.x + record.rect.z + half_width + placement.offset.x) * scale, canonicalize);
+    let bottom = device_coordinate(
+        (record.rect.y + record.rect.w + half_width + placement.offset.y) * scale, canonicalize);
+    var geometry: RecordGeometry;
+    geometry.rect = vec4<f32>(left, top, right - left, bottom - top);
+    geometry.canonicalize = canonicalize;
+    geometry.scale = scale;
+    return geometry;
+}
+
+// The colour a record paints with under its placement. An unpainted
+// placement passes the colour through; a painting one quantizes it to
+// 8-bit sRGB, applies the layer alpha and then the colour filter, in the
+// order the CPU brush resolution applies them.
+fn paint(color: vec4<f32>, placement: Placement) -> vec4<f32> {
+    if ((placement.flags & PLACEMENT_PAINTED) == 0u) {
+        return color;
+    }
+    var painted = floor(clamp(color, vec4<f32>(0.0), vec4<f32>(1.0)) * 255.0 + 0.5) / 255.0;
+    painted.a = clamp(painted.a * placement.alpha, 0.0, 1.0);
+    if ((placement.flags & PLACEMENT_FILTERED) != 0u) {
+        painted = clamp(placement.color_matrix * painted + placement.color_offset,
+                        vec4<f32>(0.0), vec4<f32>(1.0));
+    }
+    return painted;
+}
+
+// A gradient endpoint: relative to the record's device rect, with an
+// infinite coordinate meaning the rect's far edge (positive) or origin.
+fn resolve_gradient_point(origin: f32, extent: f32, value: f32) -> f32 {
+    if (abs(value) < INFINITE_GRADIENT_POINT) {
+        return origin + value;
+    }
+    return select(origin, origin + extent, value > 0.0);
+}
+
+fn resolved_radii(record: ShapeRecord, scale: f32) -> vec4<f32> {
+    let limit = max(min(record.rect.z, record.rect.w) * 0.5, 0.0);
+    // The record stores top-left, top-right, bottom-right, bottom-left; the
+    // fragment stage reads top-left, top-right, bottom-left, bottom-right.
+    let stored = vec4<f32>(record.radii.x, record.radii.y, record.radii.w, record.radii.z);
+    return clamp(stored, vec4<f32>(0.0), vec4<f32>(limit)) * scale;
+}
+
+fn shape_output(
+    record: ShapeRecord,
+    placement: Placement,
+    geometry: RecordGeometry,
+    position: vec2<f32>,
 ) -> VertexOutput {
     var output: VertexOutput;
+    output.clip_position = clip_position(position);
+    output.color = paint(record.color, placement);
+    output.world_pos = vec4<f32>(position, position - placement.dither_origin);
+    output.rect = geometry.rect;
+    let scale = geometry.scale;
+    let kind = record.flags & 3u;
+    let stroked = (record.flags & RECORD_STROKED) != 0u;
 
-    let shape_idx = instance_idx;
-    let corner = corner_idx;
-
-    let shape = shape_data[shape_idx];
-    var position: vec2<f32>;
-    switch corner {
-        case 0u: { position = shape.quad01.xy; }
-        case 1u: { position = shape.quad01.zw; }
-        case 2u: { position = shape.quad23.xy; }
-        default: { position = shape.quad23.zw; }
+    if (kind == RECORD_KIND_ARC) {
+        output.radii = record.radii;
+        let cap = (record.flags >> RECORD_BAND_CAP_SHIFT) & 3u;
+        output.stroke_params = vec4<f32>(
+            0.0,
+            f32(SHAPE_KIND_ARC | (cap << 2u)),
+            record.arc_geometry.w * scale,
+            record.arc_geometry.z * scale,
+        );
+        output.arc_params = vec4<f32>(
+            (record.arc_geometry.x + placement.offset.x) * scale,
+            (record.arc_geometry.y + placement.offset.y) * scale,
+            record.arc_normalized.x,
+            record.arc_normalized.y,
+        );
+    } else {
+        if (kind == RECORD_KIND_ROUND_RECT) {
+            output.radii = resolved_radii(record, scale);
+        } else {
+            output.radii = vec4<f32>(0.0);
+        }
+        if (stroked) {
+            let cap = (record.flags >> RECORD_CAP_SHIFT) & 3u;
+            let join = (record.flags >> RECORD_JOIN_SHIFT) & 3u;
+            output.stroke_params = vec4<f32>(
+                max(record.stroke_width, 0.0) * scale,
+                f32(SHAPE_KIND_STROKE | (cap << 2u) | (join << 4u)),
+                0.0,
+                0.0,
+            );
+        } else {
+            output.stroke_params = vec4<f32>(0.0);
+        }
+        output.arc_params = vec4<f32>(0.0);
     }
 
-    let rel = position - similarity.center;
-    position = similarity.center + vec2<f32>(
-        rel.x * similarity.rot.x - rel.y * similarity.rot.y,
-        rel.x * similarity.rot.y + rel.y * similarity.rot.x,
-    ) * similarity.scale;
+    if (SHAPE_CLIPPED && (placement.flags & PLACEMENT_CLIPPED) != 0u) {
+        output.clip_rect = placement.clip;
+    } else {
+        output.clip_rect = vec4<f32>(0.0);
+    }
 
-    let x = ((position.x - uniforms.viewport_offset.x) / uniforms.viewport.x) * 2.0 - 1.0;
-    let y = 1.0 - ((position.y - uniforms.viewport_offset.y) / uniforms.viewport.y) * 2.0;
-
-    output.clip_position = vec4<f32>(x, y, 0.0, 1.0);
-    output.color = shape.color;
-    output.uv = vec2<f32>(f32(corner & 1u), f32(corner >> 1u));
-    output.world_pos = position;
-    output.rect = shape.rect;
-    output.radii = shape.radii;
-    output.gradient_params = shape.gradient_params;
-    output.clip_rect = shape.clip_rect;
-    output.stroke_params = shape.stroke_params;
-    output.arc_params = shape.arc_params;
-    output.brush = vec4<u32>(
-        shape.brush_type,
-        shape.gradient_start,
-        shape.gradient_count,
-        shape.gradient_tile_mode,
-    );
-    let stops = load_inline_gradient_stops(shape.gradient_start, shape.gradient_count);
-    output.stop_offsets = stops.offsets;
-    output.stop_color0 = stops.color0;
-    output.stop_color1 = stops.color1;
-    output.stop_color2 = stops.color2;
-    output.stop_color3 = stops.color3;
-
+    output.gradient_params = vec4<f32>(0.0);
+    output.brush = vec4<u32>(0u);
+    if (!SHAPE_SOLID && record.brush != 0u) {
+        let brush = brushes[record.brush - 1u];
+        let rect = geometry.rect;
+        let canonicalize = geometry.canonicalize;
+        let params = brush.params * scale;
+        if (brush.kind == BRUSH_LINEAR) {
+            output.gradient_params = vec4<f32>(
+                device_coordinate(resolve_gradient_point(rect.x, rect.z, params.x), canonicalize),
+                device_coordinate(resolve_gradient_point(rect.y, rect.w, params.y), canonicalize),
+                device_coordinate(resolve_gradient_point(rect.x, rect.z, params.z), canonicalize),
+                device_coordinate(resolve_gradient_point(rect.y, rect.w, params.w), canonicalize),
+            );
+        } else if (brush.kind == BRUSH_RADIAL) {
+            output.gradient_params = vec4<f32>(
+                device_coordinate(rect.x + params.x, canonicalize),
+                device_coordinate(rect.y + params.y, canonicalize),
+                max(params.z, 1.1920929e-7),
+                0.0,
+            );
+        } else {
+            output.gradient_params = vec4<f32>(
+                device_coordinate(rect.x + params.x, canonicalize),
+                device_coordinate(rect.y + params.y, canonicalize),
+                0.0,
+                0.0,
+            );
+        }
+        output.brush = vec4<u32>(brush.kind, brush.stop_start, brush.stop_count, brush.tile_mode);
+        let stops = load_inline_gradient_stops(brush.stop_start, brush.stop_count);
+        output.stop_offsets = stops.offsets;
+        output.stop_color0 = stops.color0;
+        output.stop_color1 = stops.color1;
+        output.stop_color2 = stops.color2;
+        output.stop_color3 = stops.color3;
+    }
     return output;
 }
 
-// Mesh vertex path for retained arc/ring slots (storage mode only): instead
-// of expanding six ShapeData corners per shape, a mesh captured alongside the
-// slot supplies positions that cover only the arc band's antialiasing
-// footprint, with `uv` precomputed on the CPU from the same affine rect map
-// the quad corners define. Uniform-mode devices never bind a pipeline with
-// this entry point; in that variant it is dead code, which keeps the base
-// text valid for WebGL.
-struct MeshVertexInput {
-    @location(0) position: vec2<f32>,
-    @location(1) uv: vec2<f32>,
-    @location(2) shape_idx: u32,
-}
-
-// BIT-EXACTNESS REQUIREMENT: the transform below must stay expression-for-
-// expression identical to `vs_main`. Passthrough mesh vertices carry the
-// exact quad corner values, and identical arithmetic is what makes their
-// clip positions — and so their rasterization — bit-identical to the legacy
-// path at the identity transform (measured on Metal). Under a rotating
-// similarity the backend compiler may still contract the multiply-adds
-// differently per entry point, which is one ulp of position and part of the
-// small measured envelope in `arc_mesh_parity`.
-@vertex
-fn vs_mesh(in: MeshVertexInput) -> VertexOutput {
+// Six vertices at one point: nothing rasterizes.
+fn collapsed() -> VertexOutput {
     var output: VertexOutput;
-
-    let shape_idx = in.shape_idx;
-    let shape = shape_data[shape_idx];
-    var position = in.position;
-
-    let rel = position - similarity.center;
-    position = similarity.center + vec2<f32>(
-        rel.x * similarity.rot.x - rel.y * similarity.rot.y,
-        rel.x * similarity.rot.y + rel.y * similarity.rot.x,
-    ) * similarity.scale;
-
-    let x = ((position.x - uniforms.viewport_offset.x) / uniforms.viewport.x) * 2.0 - 1.0;
-    let y = 1.0 - ((position.y - uniforms.viewport_offset.y) / uniforms.viewport.y) * 2.0;
-
-    output.clip_position = vec4<f32>(x, y, 0.0, 1.0);
-    output.color = shape.color;
-    output.uv = in.uv;
-    output.world_pos = position;
-    output.rect = shape.rect;
-    output.radii = shape.radii;
-    output.gradient_params = shape.gradient_params;
-    output.clip_rect = shape.clip_rect;
-    output.stroke_params = shape.stroke_params;
-    output.arc_params = shape.arc_params;
-    output.brush = vec4<u32>(
-        shape.brush_type,
-        shape.gradient_start,
-        shape.gradient_count,
-        shape.gradient_tile_mode,
-    );
-    let stops = load_inline_gradient_stops(shape.gradient_start, shape.gradient_count);
-    output.stop_offsets = stops.offsets;
-    output.stop_color0 = stops.color0;
-    output.stop_color1 = stops.color1;
-    output.stop_color2 = stops.color2;
-    output.stop_color3 = stops.color3;
-
+    output.clip_position = vec4<f32>(0.0, 0.0, 0.0, 1.0);
     return output;
 }
 
-// Fragment shader structs and data
+// Vertex stage
 //
-// `stroke_params.y` packs three 2-bit fields so the struct stays at ten
-// vec4-sized slots (160 bytes) instead of eleven:
+fn record_vertex(record: ShapeRecord, local: u32) -> VertexOutput {
+    if ((record.flags & RECORD_ARC_DEGENERATE) != 0u) {
+        return collapsed();
+    }
+    let placement = record_placement(record);
+    let geometry = record_geometry(record, placement);
+    if (SHAPE_BANDS && (record.flags & RECORD_ARC_BANDED) != 0u) {
+        let segments = 1u << ((record.flags >> RECORD_BAND_CLASS_SHIFT) & RECORD_BAND_CLASS_MASK);
+        if (local >= segments * 2u + 2u) {
+            return pinned(band_position(record, placement, segments, 1u, segments));
+        }
+        let position = band_position(record, placement, local >> 1u, local & 1u, segments);
+        return shape_output(record, placement, geometry, position);
+    }
+    if (local >= 4u) {
+        return pinned(geometry.rect.xy + geometry.rect.zw);
+    }
+    let uv = vec2<f32>(f32(local >> 1u), f32(local & 1u));
+    let position = geometry.rect.xy + uv * geometry.rect.zw;
+    return shape_output(record, placement, geometry, position);
+}
+
+fn clip_position(position: vec2<f32>) -> vec4<f32> {
+    let x = ((position.x - uniforms.viewport_offset.x) / uniforms.viewport.x) * 2.0 - 1.0;
+    let y = 1.0 - ((position.y - uniforms.viewport_offset.y) / uniforms.viewport.y) * 2.0;
+    return vec4<f32>(x, y, 0.0, 1.0);
+}
+
+// A vertex past the record's own, at the device position of its last
+// one: nothing rasterizes between them.
+fn pinned(position: vec2<f32>) -> VertexOutput {
+    var output: VertexOutput;
+    output.clip_position = clip_position(position);
+    return output;
+}
+
+@vertex
+fn vs_record(
+    @builtin(vertex_index) vertex_idx: u32,
+    record: ShapeRecord,
+) -> VertexOutput {
+    return record_vertex(record, vertex_idx);
+}
+
+@vertex
+fn vs_record_solid(
+    @builtin(vertex_index) vertex_idx: u32,
+    record: ShapeRecord,
+) -> SolidOutput {
+    return solid_output(record_vertex(record, vertex_idx));
+}
+
+@vertex
+fn vs_record_gradient_fill(
+    @builtin(vertex_index) vertex_idx: u32,
+    record: ShapeRecord,
+) -> GradientFillOutput {
+    return gradient_fill_output(record_vertex(record, vertex_idx));
+}
+
+fn band_position(
+    record: ShapeRecord,
+    placement: Placement,
+    boundary: u32,
+    side: u32,
+    segments: u32,
+) -> vec2<f32> {
+    let scale = placement.root_scale;
+    let center = (record.arc_geometry.xy + placement.offset) * scale;
+    let inner = record.arc_geometry.z * scale;
+    let outer = record.arc_geometry.w * scale;
+    let mid = (outer + inner) * 0.5;
+    let margin = select(BAND_MARGIN, BAND_QUAD_MARGIN, segments == 1u);
+    let ring_half = max((outer - inner) * 0.5, 0.0) + margin;
+    if (segments == 1u) {
+        let half_width = mid * record.radii.z + ring_half;
+        let cap = (record.flags >> RECORD_BAND_CAP_SHIFT) & 3u;
+        let cap_width = (mid + ring_half) * record.radii.z + margin * record.radii.w;
+        let width = select(half_width, min(half_width, cap_width), cap == STROKE_CAP_BUTT);
+        let x = select(-width, width, boundary == 1u);
+        let y = select(mid * record.radii.w - ring_half, mid + ring_half, side == 1u);
+        let sin_mid = record.radii.x;
+        let cos_mid = record.radii.y;
+        return center + vec2<f32>(
+            -sin_mid * x + cos_mid * y,
+            cos_mid * x + sin_mid * y,
+        );
+    }
+    let outer_padded = mid + ring_half;
+    let inner_padded = max(mid - ring_half, 0.0);
+    let range_start = record.arc_normalized.z;
+    let range = record.arc_normalized.w;
+    let step = range / f32(segments);
+    let outer_vertex = outer_padded / cos(step * 0.5);
+    let radius = select(inner_padded, outer_vertex, side == 1u);
+    let angle = range_start + step * f32(boundary);
+    return center + vec2<f32>(cos(angle), sin(angle)) * radius;
+}
+
+// Fragment shader
+//
+// `stroke_params.y` packs three 2-bit fields:
 //
 //   bits 0-1  shape kind : 0 = fill, 1 = stroked rect/round-rect, 2 = arc band
 //   bits 2-3  stroke cap : 0 = butt, 1 = round, 2 = square   (arcs only)
@@ -291,43 +526,21 @@ fn vs_mesh(in: MeshVertexInput) -> VertexOutput {
 // Angle convention for arcs: radians, 0 = +X, increasing CLOCKWISE on screen
 // (y-down device space) — the same convention the sweep-gradient branch below
 // gets from atan2(dy, dx).
-struct ShapeData {
-    rect: vec4<f32>,            // x, y, width, height
-    radii: vec4<f32>,           // rects: top_left, top_right, bottom_left, bottom_right
-                                // arcs: mid-angle (sin, cos), half-sweep (sin, cos)
-    gradient_params: vec4<f32>, // linear: start.xy,end.xy; radial: center.xy,radius,unused
-    clip_rect: vec4<f32>,       // clip_x, clip_y, clip_width, clip_height (0,0,0,0 = no clip)
-    stroke_params: vec4<f32>,   // stroke width, packed flags, arc outer radius, arc inner radius
-    arc_params: vec4<f32>,      // arc center.xy, start_angle, sweep_angle
-    quad01: vec4<f32>,          // device-space quad corners 0 (xy) and 1 (zw)
-    quad23: vec4<f32>,          // device-space quad corners 2 (xy) and 3 (zw)
-    color: vec4<f32>,           // vertex color (solid brush color or first gradient stop)
-    brush_type: u32,            // 0=solid, 1=linear_gradient, 2=radial_gradient, 3=sweep
-    gradient_start: u32,
-    gradient_count: u32,
-    gradient_tile_mode: u32,    // 0=Clamp, 1=Repeated, 2=Mirror, 3=Decal
-}
-
-struct GradientStop {
-    color: vec4<f32>,
-    position: vec4<f32>,
-}
-
-// Use uniform buffers for WebGL compatibility
-// Note: WebGL has a minimum uniform buffer size of 16KB
-// ShapeData is 160 bytes now (quad corners + color ride along), so 102 shapes =
-// 16320 bytes, the most that fits the 16KB floor. Native pipelines rewrite
-// both array lengths from the real device limits — see `shape_shader_source`,
-// which string-replaces these exact literals.
-@group(1) @binding(0)
-var<uniform> shape_data: array<ShapeData, 102>;
-
-@group(1) @binding(1)
-var<uniform> gradient_stops: array<GradientStop, 256>;
-
 const SHAPE_KIND_FILL: u32 = 0u;
 const SHAPE_KIND_STROKE: u32 = 1u;
 const SHAPE_KIND_ARC: u32 = 2u;
+
+// Pipeline constants a batch fixes when every record it draws agrees: the
+// shape kind (-1 keeps the per-record ladder), whether every brush is solid,
+// and whether any record carries a clip. A fixed value folds the branches
+// the batch cannot take out of the program; the record data stays the same,
+// so the general program and every specialised one shade one record alike.
+override SHAPE_KIND_FIXED: i32 = -1;
+override SHAPE_SOLID: bool = false;
+override SHAPE_CLIPPED: bool = true;
+override SHAPE_FLAT: bool = false;
+override SHAPE_DISCARD: bool = false;
+override BRUSH_KIND_FIXED: i32 = -1;
 
 const STROKE_CAP_BUTT: u32 = 0u;
 const STROKE_CAP_SQUARE: u32 = 2u;
@@ -412,10 +625,10 @@ fn sdf_stroked_rounded_rect(
 // half-planes.
 //
 // The two direction vectors are (sin, cos) of the sweep's midpoint angle and
-// of the half sweep. They are constants of the shape, so the CPU computes
-// them once per shape (see `convert_shape_into_slots`) instead of this
-// shader paying four transcendentals on every fragment — in an arc-heavy
-// scene that is by far the largest ALU term of the whole pipeline.
+// of the half sweep. They are constants of the shape, so the vertex stage
+// computes them once per vertex (`arc_trig`) instead of this shader paying
+// four transcendentals on every fragment — in an arc-heavy scene that is by
+// far the largest ALU term of the whole pipeline.
 fn sdf_arc_band(
     p: vec2<f32>,
     center: vec2<f32>,
@@ -489,7 +702,10 @@ fn remap_gradient_t(raw_t: f32, tile_mode: u32) -> GradientSample {
 // which carries the derivation and the tests; the CPU sampler bins by these
 // same scene device coordinates, so the two backends dither a gradient the
 // same way. `world_pos` rather than `@builtin(position)` for exactly that
-// reason — on Android the two read the same pixel anyway.
+// reason — on Android the two read the same pixel anyway. The coordinate is
+// the device position relative to the record's dither origin (`world_pos.zw`):
+// a subtree moving rigidly by whole pixels carries its pattern with it, and a
+// record outside any motion anchor keeps the origin at zero, Skia's phase.
 fn gradient_dither(device_pos: vec2<f32>) -> f32 {
     let x = u32(max(floor(device_pos.x), 0.0)) + 1u;
     let y = u32(max(floor(device_pos.y), 0.0)) + 1u;
@@ -623,29 +839,40 @@ fn sample_gradient(gradient_start: u32, count: u32, t: f32) -> vec4<f32> {
 /// ladder down to an alpha, and the two discards that end a fragment before
 /// anything is shaded.
 ///
-/// Both fragment entry points call this so the arithmetic exists once. It was
-/// duplicated line for line into `fs_solid` on the argument that identical
-/// source in the same order makes the compiler emit identical instructions;
-/// on Vulkan it did not, and `solid_fs_parity` measured three pixels apart by
-/// up to 2/255 (the macOS CI runner, on Metal, saw none of it).
+/// One function for every specialisation, so the arithmetic exists once. An
+/// earlier solid-only entry duplicated it line for line on the argument that
+/// identical source in the same order makes the compiler emit identical
+/// instructions; on Vulkan it did not, and the parity test measured three
+/// pixels apart by up to 2/255 (the macOS CI runner, on Metal, saw none of
+/// it). The pipeline constants fold branches; they never copy code.
 fn shape_coverage_alpha(input: VertexOutput) -> f32 {
-    let world_pos = input.world_pos;
-    // Local layer-space pixel coordinate derived from uv, independent of
-    // world-space quad deformation (rotation/perspective).
-    let rect_pos = input.rect.xy + input.uv * input.rect.zw;
+    if (SHAPE_DISCARD) {
+        discard;
+    }
+    let world_pos = input.world_pos.xy;
+    let rect_pos = input.clip_position.xy + uniforms.viewport_offset;
 
     // Apply clipping: if clip_rect has non-zero size, clip to it
     let clip_w = input.clip_rect.z;
     let clip_h = input.clip_rect.w;
-    if (clip_w > 0.0 && clip_h > 0.0) {
+    if (SHAPE_CLIPPED && clip_w > 0.0 && clip_h > 0.0) {
         let clip_left = input.clip_rect.x;
         let clip_top = input.clip_rect.y;
         let clip_right = clip_left + clip_w;
         let clip_bottom = clip_top + clip_h;
 
-        // Discard fragments outside clip rect
         if (world_pos.x < clip_left || world_pos.x > clip_right ||
             world_pos.y < clip_top || world_pos.y > clip_bottom) {
+            discard;
+        }
+    }
+    if (SHAPE_FLAT) {
+        return 1.0;
+    }
+
+    if (SHAPE_BANDS) {
+        if (rect_pos.x < input.rect.x || rect_pos.x > input.rect.x + input.rect.z ||
+            rect_pos.y < input.rect.y || rect_pos.y > input.rect.y + input.rect.w) {
             discard;
         }
     }
@@ -660,7 +887,7 @@ fn shape_coverage_alpha(input: VertexOutput) -> f32 {
     // and blend state, so they batch together with fills instead of splitting
     // the batch.
     let flags = u32(max(input.stroke_params.y, 0.0));
-    let shape_kind = flags & 3u;
+    let shape_kind = select(flags & 3u, u32(max(SHAPE_KIND_FIXED, 0)), SHAPE_KIND_FIXED >= 0);
     let stroke_cap = (flags >> 2u) & 3u;
     let stroke_join = (flags >> 4u) & 3u;
 
@@ -713,19 +940,37 @@ fn shape_coverage_alpha(input: VertexOutput) -> f32 {
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
+    return fragment(input);
+}
+
+@fragment
+fn fs_solid(input: SolidOutput) -> @location(0) vec4<f32> {
+    return fragment(full_output(input));
+}
+
+@fragment
+fn fs_gradient_fill(input: GradientFillOutput) -> @location(0) vec4<f32> {
+    return fragment(full_from_gradient_fill(input));
+}
+
+fn fragment(input: VertexOutput) -> vec4<f32> {
     let alpha = shape_coverage_alpha(input);
+    if (SHAPE_FLAT) {
+        return input.color;
+    }
 
     // Re-derived rather than threaded out of the coverage pass: both are pure
     // functions of `input`, so the compiler folds them back together.
-    let world_pos = input.world_pos;
-    let rect_pos = input.rect.xy + input.uv * input.rect.zw;
-
+    let world_pos = input.world_pos.xy;
+    let rect_pos = input.clip_position.xy + uniforms.viewport_offset;
 
     var color = input.color;
     var is_gradient = false;
 
-    // Apply gradient if needed
-    let brush_type = input.brush.x;
+    // Apply gradient if needed; a solid batch fixes the brush to solid and the
+    // whole ladder folds away.
+    let carried_brush = select(input.brush.x, 0u, SHAPE_SOLID);
+    let brush_type = select(carried_brush, u32(max(BRUSH_KIND_FIXED, 0)), BRUSH_KIND_FIXED >= 0);
     let gradient_tile_mode = input.brush.w;
     if (brush_type == 1u) {
         // Linear gradient projected from start.xy to end.xy
@@ -775,26 +1020,10 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     // to band, and Skia leaves it alone too, which is why solid fills already
     // land byte-for-byte on the Compose build's.
     if (is_gradient && color.a > 0.0) {
-        let offset = gradient_dither(world_pos) * (1.0 / 255.0);
+        let offset = gradient_dither(input.world_pos.zw) * (1.0 / 255.0);
         color = vec4<f32>(clamp(color.rgb + vec3<f32>(offset), vec3<f32>(0.0), vec3<f32>(1.0)),
                           color.a);
     }
 
-    return vec4<f32>(color.rgb, color.a * alpha);
-}
-
-/// `fs_main` for a draw known to contain only solid brushes.
-///
-/// Coverage is the shared function above, so this entry differs from `fs_main`
-/// by exactly what it leaves out: gradient projection, stop interpolation, tile
-/// remapping and dither. A solid fragment through `fs_main` takes none of those
-/// branches at runtime anyway; what this removes is their cost of existing —
-/// the register footprint and gradient-stop indexing the shader core budgets
-/// for on every fragment of an arc-heavy scene. A batch selects this entry only
-/// when its gradient stop count is zero, so `brush_type` could only ever be 0.
-@fragment
-fn fs_solid(input: VertexOutput) -> @location(0) vec4<f32> {
-    let alpha = shape_coverage_alpha(input);
-    let color = input.color;
     return vec4<f32>(color.rgb, color.a * alpha);
 }

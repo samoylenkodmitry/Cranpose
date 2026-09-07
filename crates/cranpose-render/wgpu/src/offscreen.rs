@@ -50,7 +50,6 @@ pub(crate) fn create_2d_texture(
 }
 
 pub(crate) struct OffscreenTarget {
-    texture: wgpu::Texture,
     pub view: wgpu::TextureView,
     pub width: u32,
     pub height: u32,
@@ -88,13 +87,20 @@ impl OffscreenTarget {
         );
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         Self {
-            texture,
             view,
             width,
             height,
             bytes_per_pixel: crate::frame_graph::texture_format_bytes_per_pixel(format),
             cached_bind_group: OnceCell::new(),
         }
+    }
+
+    pub(crate) fn texture(&self) -> &wgpu::Texture {
+        self.view.texture()
+    }
+
+    pub(crate) fn format(&self) -> wgpu::TextureFormat {
+        self.texture().format()
     }
 
     fn matches_size(&self, width: u32, height: u32) -> bool {
@@ -125,10 +131,6 @@ impl OffscreenTarget {
         })
     }
 
-    pub(crate) fn texture(&self) -> &wgpu::Texture {
-        &self.texture
-    }
-
     /// Wraps a swapchain image as the frame's root target so the scene
     /// renders into it directly, with no composition copy behind it.
     pub(crate) fn from_surface(texture: wgpu::Texture, view: wgpu::TextureView) -> Self {
@@ -136,7 +138,6 @@ impl OffscreenTarget {
         let height = texture.height();
         let format = texture.format().remove_srgb_suffix();
         Self {
-            texture,
             view,
             width,
             height,
@@ -146,7 +147,8 @@ impl OffscreenTarget {
     }
 }
 
-pub(crate) fn composition_bytes_per_pixel() -> u64 {
+/// Bytes one pixel of the renderer's composition format occupies.
+pub fn composition_bytes_per_pixel() -> u64 {
     crate::frame_graph::texture_format_bytes_per_pixel(composition_format())
 }
 
@@ -279,7 +281,7 @@ impl OffscreenPool {
                 visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
+                    has_dynamic_offset: true,
                     min_binding_size: None,
                 },
                 count: None,
@@ -341,8 +343,9 @@ mod tests {
     }
 
     #[test]
-    fn the_budget_bounds_full_screen_surfaces() {
-        let full_screen = target_bytes(1080, 2244, composition_bytes_per_pixel());
+    fn the_byte_budget_bounds_full_screen_float_surfaces() {
+        let pool = OffscreenPool::new_with_limit(wgpu::TextureFormat::Rgba16Float, 4096);
+        let full_screen = target_bytes(1080, 2244, pool.bytes_per_pixel());
         let held = MAX_POOLED_BYTES / full_screen;
         assert!(
             (2..=8).contains(&held),

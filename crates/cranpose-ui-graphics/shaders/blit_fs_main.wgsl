@@ -13,7 +13,6 @@ fn blit_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     }
     let dest_pos = input.position.xy;
     var source_pos = source_origin + input.uv * source_size;
-    var resolve_span = blit.resolve_span.xy;
     if use_dest_viewport {
         let viewport_max = blit.dest_viewport.xy + blit.dest_viewport.zw;
         if dest_pos.x < blit.dest_viewport.x || dest_pos.y < blit.dest_viewport.y ||
@@ -26,8 +25,19 @@ fn blit_fs(input: VertexOutput) -> @location(0) vec4<f32> {
             source_origin.y + local_dest.y * source_size.y / blit.dest_viewport.w,
         );
     }
+    if use_source_viewport {
+        // Held to the viewport's texel centers: a viewport is one packed
+        // region of the texture, and a bilinear tap at its edge reads as a
+        // dedicated texture's clamp-to-edge would, never a neighbour's texels.
+        let half_texel = vec2<f32>(0.5);
+        source_pos = clamp(
+            source_pos,
+            source_origin + half_texel,
+            source_origin + source_size - half_texel,
+        );
+    }
     let sampled =
-        composite_sample(source_pos, tex_size, blit.sampling.x, resolve_span) * blit.alpha.x;
+        composite_sample(source_pos, tex_size, blit.sampling.x) * blit.alpha.x;
     if (blit.mask_enabled.x <= 0.5) {
         return sampled;
     }

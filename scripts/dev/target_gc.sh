@@ -65,6 +65,7 @@ include_main=0
 min_size_mb=100
 repo_arg=""
 extra_roots=()
+seen_targets=""
 
 usage() {
     cat <<'USAGE'
@@ -120,7 +121,18 @@ is_cargo_target_dir() {
 }
 
 mtime_of() {
-    stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0
+    local value
+    if value="$(stat -f %m "$1" 2>/dev/null)" \
+        && [[ "$value" =~ ^[0-9]+$ ]]; then
+        printf '%s\n' "$value"
+        return 0
+    fi
+    if value="$(stat -c %Y "$1" 2>/dev/null)" \
+        && [[ "$value" =~ ^[0-9]+$ ]]; then
+        printf '%s\n' "$value"
+        return 0
+    fi
+    printf '0\n'
 }
 
 # The newest of the target root, its profile directories, and their fingerprint
@@ -311,6 +323,12 @@ EOF
 
 emit_candidate() {
     local target="$1" wt="$2" locked="$3" size_mb last protect="" wt_real now
+    local target_real
+    target_real="$(cd "$target" 2>/dev/null && pwd -P || echo "$target")"
+    case $'\n'"$seen_targets"$'\n' in
+        *$'\n'"$target_real"$'\n'*) return 0 ;;
+    esac
+    seen_targets+="$target_real"$'\n'
     local live=0
     worktree_has_live_process "$wt" && live=1
     size_mb="$(dir_size_mb "$target")"

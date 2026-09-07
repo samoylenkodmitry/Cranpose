@@ -43,6 +43,7 @@ categories = ["gui"]
 [workspace.dependencies]
 # Force android-activity to use native-activity feature across all workspace crates
 android-activity = { version = "0.6", features = ["native-activity"] }
+bytemuck = { version = "1.25", features = ["derive"] }
 cranpose-animation = { path = "crates/cranpose-animation", version = "0.1.115" }
 cranpose-liquid = { path = "crates/cranpose-liquid", version = "0.1.115" }
 cranpose = { path = "crates/cranpose", version = "0.1.115", default-features = false }

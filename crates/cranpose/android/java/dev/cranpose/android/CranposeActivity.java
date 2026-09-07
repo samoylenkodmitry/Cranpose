@@ -149,11 +149,13 @@ public class CranposeActivity extends NativeActivity {
         nativeOnMediaCommand(command, positionMs);
     }
     public void cranposeSetKeepScreenOn(boolean enabled) {
-        if (enabled) {
-            getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        } else {
-            getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        }
+        runOnUiThread(() -> {
+            if (enabled) {
+                getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+            } else {
+                getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+            }
+        });
     }
     public void cranposeMoveToBackground() { moveTaskToBack(true); }
 
@@ -2077,6 +2079,7 @@ public class CranposeActivity extends NativeActivity {
             public void onConfigurationChanged(android.content.res.Configuration configuration) {}
 
             @Override
+            @SuppressWarnings("deprecation")
             public void onLowMemory() {
                 nativeOnTrimMemory(TRIM_MEMORY_COMPLETE);
             }

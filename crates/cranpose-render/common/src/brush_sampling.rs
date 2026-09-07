@@ -1,4 +1,4 @@
-use cranpose_ui_graphics::{Brush, Color, Rect, TileMode};
+use cranpose_ui_graphics::{Brush, Color, Point, Rect, TileMode};
 
 const TRANSPARENT: Color = Color(0.0, 0.0, 0.0, 0.0);
 
@@ -103,7 +103,14 @@ fn sample_tiled_gradient_rgba(
 }
 
 #[doc(hidden)]
-pub fn sample_brush_rgba(brush: &Brush, rect: Rect, x: f32, y: f32) -> [f32; 4] {
+pub fn sample_brush_rgba(
+    brush: &Brush,
+    rect: Rect,
+    x: f32,
+    y: f32,
+    dither_origin: Point,
+) -> [f32; 4] {
+    let dither = Point::new(x - dither_origin.x, y - dither_origin.y);
     match brush {
         Brush::Solid(color) => color_to_rgba(*color),
         Brush::LinearGradient {
@@ -121,7 +128,7 @@ pub fn sample_brush_rgba(brush: &Brush, rect: Rect, x: f32, y: f32) -> [f32; 4] 
             let dy = ey - sy;
             let denom = (dx * dx + dy * dy).max(f32::EPSILON);
             let t = ((x - sx) * dx + (y - sy) * dy) / denom;
-            sample_tiled_gradient_rgba(t, *tile_mode, colors, stops.as_deref(), x, y)
+            sample_tiled_gradient_rgba(t, *tile_mode, colors, stops.as_deref(), dither.x, dither.y)
         }
         Brush::RadialGradient {
             colors,
@@ -137,7 +144,7 @@ pub fn sample_brush_rgba(brush: &Brush, rect: Rect, x: f32, y: f32) -> [f32; 4] 
             let dy = y - cy;
             let distance = (dx * dx + dy * dy).sqrt();
             let t = distance / radius;
-            sample_tiled_gradient_rgba(t, *tile_mode, colors, stops.as_deref(), x, y)
+            sample_tiled_gradient_rgba(t, *tile_mode, colors, stops.as_deref(), dither.x, dither.y)
         }
         Brush::SweepGradient {
             colors,
@@ -152,8 +159,8 @@ pub fn sample_brush_rgba(brush: &Brush, rect: Rect, x: f32, y: f32) -> [f32; 4] 
             let t = (angle / std::f32::consts::TAU + 0.5).clamp(0.0, 1.0);
             dither_gradient(
                 color_to_rgba(interpolate_colors(colors, stops.as_deref(), t)),
-                x,
-                y,
+                dither.x,
+                dither.y,
             )
         }
     }
@@ -263,7 +270,7 @@ mod tests {
         let brush =
             Brush::linear_gradient_range(Vec::new(), Point::new(0.0, 0.0), Point::new(100.0, 0.0));
         assert_eq!(
-            sample_brush_rgba(&brush, sample_rect(), 50.0, 10.0),
+            sample_brush_rgba(&brush, sample_rect(), 50.0, 10.0, Point::default()),
             [0.0, 0.0, 0.0, 0.0]
         );
     }
@@ -277,7 +284,13 @@ mod tests {
         );
         for y in 0..4 {
             for x in 0..4 {
-                let sampled = sample_brush_rgba(&brush, sample_rect(), 120.0 + x as f32, y as f32);
+                let sampled = sample_brush_rgba(
+                    &brush,
+                    sample_rect(),
+                    120.0 + x as f32,
+                    y as f32,
+                    Point::default(),
+                );
                 let bytes: Vec<u8> = sampled.iter().map(|c| (c * 255.0).round() as u8).collect();
                 assert_eq!(bytes, vec![0, 0, 255, 255], "cell ({x}, {y})");
             }
@@ -342,7 +355,7 @@ mod tests {
         for y in 0..4 {
             for x in 0..4 {
                 assert_eq!(
-                    sample_brush_rgba(&brush, sample_rect(), x as f32, y as f32),
+                    sample_brush_rgba(&brush, sample_rect(), x as f32, y as f32, Point::default()),
                     [0.25, 0.5, 0.75, 1.0],
                 );
             }
@@ -360,7 +373,8 @@ mod tests {
         let mut levels = std::collections::BTreeSet::new();
         for y in 0..4 {
             for x in 0..4 {
-                let sampled = sample_brush_rgba(&brush, sample_rect(), x as f32, y as f32);
+                let sampled =
+                    sample_brush_rgba(&brush, sample_rect(), x as f32, y as f32, Point::default());
                 levels.insert((sampled[0] * 255.0).round() as u8);
             }
         }

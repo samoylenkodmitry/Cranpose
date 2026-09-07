@@ -7,14 +7,12 @@ use std::sync::Arc;
 
 use cranpose_render_common::{
     Renderer,
-    graph::{
-        DrawPrimitiveNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform,
-        RenderGraph, RenderNode,
-    },
+    graph::{ProjectiveTransform, RenderGraph},
 };
 use cranpose_render_wgpu::WgpuRenderer;
 use cranpose_ui::AppContext;
-use cranpose_ui_graphics::{Brush, Color, DrawPrimitive, GraphicsLayer, Rect};
+use cranpose_ui_graphics::{Color, GraphicsLayer, Rect};
+use support::solid_rect;
 
 fn downlevel_uniform_renderer() -> Result<(WgpuRenderer, Arc<wgpu::Device>), String> {
     let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
@@ -51,20 +49,6 @@ fn downlevel_uniform_renderer() -> Result<(WgpuRenderer, Arc<wgpu::Device>), Str
         adapter.get_downlevel_capabilities().flags,
     );
     Ok((renderer, device))
-}
-
-fn solid_rect(rect: Rect, color: Color) -> RenderNode {
-    RenderNode::Primitive(PrimitiveEntry {
-        phase: PrimitivePhase::BeforeChildren,
-        node: PrimitiveNode::Draw(DrawPrimitiveNode {
-            primitive: DrawPrimitive::Rect {
-                rect,
-                brush: Brush::solid(color),
-                stroke: None,
-            },
-            clip: None,
-        }),
-    })
 }
 
 fn many_shapes_graph(shape_count: usize, width: f32, height: f32) -> RenderGraph {

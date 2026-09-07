@@ -1,9 +1,16 @@
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use web_time::Instant;
 
+use crate::debug_toggles::DebugToggle;
+
+static DISK_CACHE: DebugToggle = DebugToggle::new("CRANPOSE_PIPELINE_DISK_CACHE");
+
 fn disk_cache_enabled() -> bool {
-    crate::debug_toggles::debug_toggle("CRANPOSE_PIPELINE_DISK_CACHE").as_deref() != Some("0")
+    !DISK_CACHE.equals("0")
 }
 
 pub(crate) fn file_path() -> Option<PathBuf> {
@@ -75,19 +82,81 @@ pub(crate) fn persist(cache: &wgpu::PipelineCache, path: &Path) {
     }
 }
 
-pub(crate) fn spawn_persist_schedule(cache: wgpu::PipelineCache) {
+/// Pipelines created since the process started, bumped by every pipeline
+/// creation so the persist watcher knows when the cache has grown.
+static PIPELINES_CREATED: AtomicU64 = AtomicU64::new(0);
+
+pub(crate) fn note_pipeline_created() {
+    PIPELINES_CREATED.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Decides, once a tick, whether the cache should be written: after the
+/// pipeline count has grown since the last write and then held still for a
+/// whole tick, so a burst of compiles is written once, after its last one,
+/// and a variant first reached late in a session reaches the disk too.
+#[derive(Default)]
+struct PersistWatch {
+    persisted: u64,
+    seen: u64,
+}
+
+impl PersistWatch {
+    fn observe(&mut self, created: u64) -> bool {
+        let quiet = created == self.seen;
+        self.seen = created;
+        if quiet && created != self.persisted {
+            self.persisted = created;
+            return true;
+        }
+        false
+    }
+}
+
+const PERSIST_TICK: std::time::Duration = std::time::Duration::from_secs(2);
+
+pub(crate) fn spawn_persist_watcher(cache: wgpu::PipelineCache) {
     let Some(path) = file_path() else {
         return;
     };
     let spawned = std::thread::Builder::new()
         .name("cranpose-pl-cache".into())
         .spawn(move || {
-            std::thread::sleep(std::time::Duration::from_secs(8));
-            persist(&cache, &path);
-            std::thread::sleep(std::time::Duration::from_secs(20));
-            persist(&cache, &path);
+            let mut watch = PersistWatch::default();
+            loop {
+                std::thread::sleep(PERSIST_TICK);
+                if watch.observe(PIPELINES_CREATED.load(Ordering::Relaxed)) {
+                    persist(&cache, &path);
+                }
+            }
         });
     if let Err(error) = spawned {
         log::warn!("[pipeline-cache] persist thread failed to spawn: {error}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PersistWatch;
+
+    #[test]
+    fn a_burst_of_pipelines_persists_once_after_it_goes_quiet() {
+        let mut watch = PersistWatch::default();
+        assert!(!watch.observe(0));
+        assert!(!watch.observe(3), "still growing");
+        assert!(!watch.observe(5), "still growing");
+        assert!(watch.observe(5), "quiet for a tick with new pipelines");
+        assert!(!watch.observe(5), "written already");
+    }
+
+    #[test]
+    fn a_pipeline_reached_late_in_a_session_persists_too() {
+        let mut watch = PersistWatch::default();
+        watch.observe(19);
+        assert!(watch.observe(19));
+        for _ in 0..20 {
+            assert!(!watch.observe(19));
+        }
+        assert!(!watch.observe(20));
+        assert!(watch.observe(20));
     }
 }

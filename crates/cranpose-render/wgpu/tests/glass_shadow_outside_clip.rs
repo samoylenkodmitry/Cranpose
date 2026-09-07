@@ -38,23 +38,8 @@ fn ClippedGlassCardPage() {
 
 fn capture(shadow: bool) -> Option<Vec<u8>> {
     SHADOW.store(shadow, Ordering::Relaxed);
-    let (_lock, mut shell) = support::app_shell_for(
-        ClippedGlassCardPage,
-        FRAME_WIDTH,
-        FRAME_HEIGHT,
-        wgpu::TextureFormat::Bgra8UnormSrgb,
-        |_| {},
-    )?;
-    shell
-        .renderer()
-        .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
-        .expect("warm-up capture should succeed");
-    let frame = shell
-        .renderer()
-        .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
-        .expect("frame capture should succeed");
-    assert_eq!(shell.renderer().device_error_count_for_tests(), 0);
-    Some(frame.pixels)
+    support::warm_app_frame(ClippedGlassCardPage, FRAME_WIDTH, FRAME_HEIGHT)
+        .map(|(frame, _)| frame.pixels)
 }
 
 fn inside_card(x: usize, y: usize) -> bool {

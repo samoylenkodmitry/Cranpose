@@ -24,9 +24,6 @@ const DEFAULT_PROFILE_DURATION_SECS: u64 = 20;
 const DEFAULT_HEADLESS_PROFILE_DURATION_SECS: u64 = 5;
 const DEFAULT_PROFILE_SCROLL_STEPS: usize = 10;
 const DEFAULT_HEADLESS_PROFILE_SCROLL_STEPS: usize = 3;
-const MAX_MIXED_DIRECT_LAYER_PIXELS: u64 = 400_000;
-const MAX_MIXED_DIRECT_LAYER_LOGICAL_HEIGHT: f32 = 600.0;
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum MeasureMode {
     Profile,
@@ -120,7 +117,7 @@ fn log_stage_render_stats(robot: &cranpose::Robot, stage: &str) {
     match robot.get_render_stats() {
         Ok(Some(stats)) => {
             println!(
-                "VISUAL_RENDER stage={} submits={} offscreen_acquires={} offscreen_news={} offscreen_total_bytes={} upload_bytes={} isolated_layer_renders={} isolated_layer_pixels={} cache_hits={} cache_misses={} cache_evictions={} blur_passes={} composite_passes={} effect_applies={} shape_passes={} image_passes={} text_passes={}",
+                "VISUAL_RENDER stage={} submits={} offscreen_acquires={} offscreen_news={} offscreen_total_bytes={} upload_bytes={} isolated_layer_renders={} isolated_layer_pixels={} cache_hits={} cache_misses={} blur_passes={} composite_passes={} effect_applies={} shape_passes={} image_passes={} text_passes={}",
                 stage,
                 stats.submits,
                 stats.offscreen_acquires,
@@ -131,7 +128,6 @@ fn log_stage_render_stats(robot: &cranpose::Robot, stage: &str) {
                 stats.isolated_layer_pixels,
                 stats.layer_cache_hits,
                 stats.layer_cache_misses,
-                stats.layer_cache_evictions,
                 stats.blur_passes,
                 stats.composite_passes,
                 stats.effect_applies,
@@ -141,7 +137,7 @@ fn log_stage_render_stats(robot: &cranpose::Robot, stage: &str) {
             );
             for (index, layer) in stats.top_isolated_layers().enumerate() {
                 println!(
-                    "VISUAL_ISOLATED stage={} rank={} node={:?} rect=({:.1},{:.1},{:.1},{:.1}) target={}x{} reasons={}",
+                    "VISUAL_ISOLATED stage={} rank={} node={:?} rect=({:.1},{:.1},{:.1},{:.1}) target={}x{}",
                     stage,
                     index,
                     layer.node_id,
@@ -150,52 +146,12 @@ fn log_stage_render_stats(robot: &cranpose::Robot, stage: &str) {
                     layer.logical_rect.width,
                     layer.logical_rect.height,
                     layer.width,
-                    layer.height,
-                    layer.reasons.display()
+                    layer.height
                 );
             }
         }
         Ok(None) => println!("VISUAL_RENDER stage={} unavailable", stage),
         Err(err) => println!("VISUAL_RENDER stage={} error={}", stage, err),
-    }
-}
-
-fn assert_no_large_mixed_direct_layers(robot: &cranpose::Robot, stage: &str) {
-    let stats = match robot.get_render_stats() {
-        Ok(Some(stats)) => stats,
-        Ok(None) => fatal(
-            robot,
-            &format!("render stats unavailable while checking stage '{stage}'"),
-        ),
-        Err(err) => fatal(
-            robot,
-            &format!("failed to read render stats for stage '{stage}': {err}"),
-        ),
-    };
-
-    for layer in stats.top_isolated_layers() {
-        if !layer.reasons.mixed_direct_content {
-            continue;
-        }
-        let pixel_area = (layer.width as u64) * (layer.height as u64);
-        if pixel_area > MAX_MIXED_DIRECT_LAYER_PIXELS
-            || layer.logical_rect.height > MAX_MIXED_DIRECT_LAYER_LOGICAL_HEIGHT
-        {
-            fatal(
-                robot,
-                &format!(
-                    "stage '{stage}' still has an oversized mixed-content isolated layer: node={:?} rect=({:.1},{:.1},{:.1},{:.1}) target={}x{} reasons={}",
-                    layer.node_id,
-                    layer.logical_rect.x,
-                    layer.logical_rect.y,
-                    layer.logical_rect.width,
-                    layer.logical_rect.height,
-                    layer.width,
-                    layer.height,
-                    layer.reasons.display()
-                ),
-            );
-        }
     }
 }
 
@@ -289,7 +245,6 @@ fn run_visual_compare(robot: &cranpose::Robot) {
         fatal(robot, "could not find 'Shaders' tab button");
     }
     wait_for_stage(robot, settle_ms, "shaders_open");
-    assert_no_large_mixed_direct_layers(robot, "shaders_open");
 
     if find_text_in_semantics(robot, "Shaders & Effects").is_none() {
         fatal(robot, "Shaders tab heading did not appear");
@@ -306,7 +261,6 @@ fn run_visual_compare(robot: &cranpose::Robot) {
         std::thread::sleep(Duration::from_millis(scroll_delay_ms));
         let stage = format!("scroll_down_{}", step);
         wait_for_stage(robot, settle_ms, &stage);
-        assert_no_large_mixed_direct_layers(robot, &stage);
     }
 
     if find_text_in_semantics(robot, "Effect Semantics Checks").is_none() {
@@ -338,7 +292,6 @@ fn run_profile(robot: &cranpose::Robot, duration: Duration, scroll_steps: usize,
     }
     std::thread::sleep(Duration::from_millis(500));
     println!("  ✓ Entered Shaders tab");
-    assert_no_large_mixed_direct_layers(robot, "profile_open");
     log_stage_fps(robot, "profile_open");
     log_stage_render_stats(robot, "profile_open");
 

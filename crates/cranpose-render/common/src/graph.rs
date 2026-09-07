@@ -1,4 +1,4 @@
-use std::{collections::HashSet, mem::size_of, rc::Rc};
+use std::{collections::HashSet, mem::size_of, ops::Range, rc::Rc};
 
 use cranpose_core::NodeId;
 use cranpose_foundation::PointerEvent;
@@ -6,7 +6,9 @@ use cranpose_ui::{
     GraphicsLayer, Point, Rect, RenderEffect, RoundedCornerShape, TextLayoutOptions, TextStyle,
     text::AnnotatedString,
 };
-use cranpose_ui_graphics::{BlendMode, ColorFilter, DrawPrimitive, ShadowPrimitive};
+use cranpose_ui_graphics::{
+    BlendMode, ColorFilter, CommandRecording, DrawPrimitive, RecordingSummary, ShadowPrimitive,
+};
 
 use crate::{raster_cache::LayerRasterCacheHashes, style_shared::DrawPlacement};
 
@@ -431,25 +433,21 @@ pub struct DrawRunNode {
     /// with no per-command provenance (hand-built tests).
     pub command: Option<DrawCommandId>,
     /// Shared, not owned: the recording registry keyed by [`DrawCommandId`]
-    /// keeps a handle to the same buffer, so its capacity survives this
+    /// keeps a handle to the same recording, so its buffers survive this
     /// node being dropped on the next rebuild and the command re-records
-    /// into it instead of growing a fresh vector. Nothing mutates a run's
-    /// primitives after construction, which is what makes sharing sound.
-    pub primitives: std::rc::Rc<Vec<DrawPrimitive>>,
-    /// Content facts consumers keep asking per frame, answered once at
-    /// construction. Surface planning used to rescan every primitive of
-    /// every run per frame to learn "does it contain text?" — for a
-    /// 17k-primitive game canvas with no text, that was two full walks per
-    /// frame that could never early-exit.
+    /// into them. Nothing mutates a recording after construction, which is
+    /// what makes sharing sound.
+    pub recording: Rc<CommandRecording>,
+    /// The segments of the recording this run draws: one placement's part
+    /// of a with-content command, or the whole recording.
+    pub segments: Range<u32>,
+    /// Content facts consumers keep asking per frame, answered while
+    /// recording and never by rescanning.
     pub summary: DrawRunSummary,
-    /// The command's verified retained/dynamic span structure for the frame
-    /// this node was built, in primitive space. A renderer that retains by
-    /// identity draws the run span by span — retained spans from slots
-    /// keyed (command, slot), dynamic spans from `primitives` — instead of
-    /// walking the whole vector. `None` means no verification ran or
-    /// nothing was retained: the run is all ordinary primitives.
-    pub replay: Option<Box<cranpose_ui_graphics::CommandReplayFrame>>,
 }
+
+/// What a run contains, answered while recording.
+pub type DrawRunSummary = RecordingSummary;
 
 impl DrawRunNode {
     pub fn new(phase: PrimitivePhase, primitives: Vec<DrawPrimitive>) -> Self {
@@ -461,101 +459,43 @@ impl DrawRunNode {
         command: Option<DrawCommandId>,
         primitives: Vec<DrawPrimitive>,
     ) -> Self {
-        Self::for_command_shared(phase, command, std::rc::Rc::new(primitives))
+        let recording = CommandRecording::from_primitives(primitives);
+        let segments = recording.all_segments();
+        Self::for_command_shared(phase, command, Rc::new(recording), segments)
     }
 
     pub fn for_command_shared(
         phase: PrimitivePhase,
         command: Option<DrawCommandId>,
-        primitives: std::rc::Rc<Vec<DrawPrimitive>>,
+        recording: Rc<CommandRecording>,
+        segments: Range<u32>,
     ) -> Self {
-        Self::for_command_replayed(phase, command, primitives, None)
-    }
-
-    pub fn for_command_replayed(
-        phase: PrimitivePhase,
-        command: Option<DrawCommandId>,
-        primitives: std::rc::Rc<Vec<DrawPrimitive>>,
-        replay: Option<Box<cranpose_ui_graphics::CommandReplayFrame>>,
-    ) -> Self {
-        debug_assert!(
-            replay.as_ref().is_none_or(|frame| {
-                frame.fallback.is_some()
-                    || !frame.spans.iter().any(|span| {
-                        matches!(
-                            span,
-                            cranpose_ui_graphics::FrameSpan::Retained {
-                                capture: false,
-                                range,
-                                ..
-                            } if range.1 <= range.0
-                        )
-                    })
-            }),
-            "a replay frame with bypassed spans must own its fallback recording"
-        );
-        let mut summary = DrawRunSummary::scan(&primitives);
-        if replay.as_ref().is_some_and(|frame| {
-            frame
-                .spans
-                .iter()
-                .any(|span| matches!(span, cranpose_ui_graphics::FrameSpan::Retained { .. }))
-        }) {
-            summary.has_non_shadow = true;
-        }
+        let summary = recording.summary_in(&segments);
         Self {
             phase,
             command,
-            primitives,
+            recording,
+            segments,
             summary,
-            replay,
         }
     }
-}
 
-/// One-pass discriminant census of a draw run, recursing through `Blend`
-/// wrappers the same way the per-primitive predicates it replaces did.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct DrawRunSummary {
-    /// Any `Text` primitive, including inside `Blend` — glyph masks want
-    /// rigid snapping.
-    pub has_text: bool,
-    pub has_shadow: bool,
-    /// Any primitive besides `Shadow` (direct drawable content).
-    pub has_non_shadow: bool,
-    /// Any `Image` or `Text`, including inside `Blend` — content that
-    /// resamples badly on a fractionally offset surface.
-    pub has_pixel_sensitive: bool,
-}
+    /// The run's primitives, materialised from the recording in order.
+    pub fn primitives(&self) -> impl Iterator<Item = DrawPrimitive> + '_ {
+        self.recording.primitives(self.segments.clone())
+    }
 
-impl DrawRunSummary {
-    pub fn scan(primitives: &[DrawPrimitive]) -> Self {
-        fn unwrap_blend(mut primitive: &DrawPrimitive) -> &DrawPrimitive {
-            while let DrawPrimitive::Blend {
-                primitive: inner, ..
-            } = primitive
-            {
-                primitive = inner;
-            }
-            primitive
-        }
-        let mut summary = Self::default();
-        for primitive in primitives {
-            if matches!(primitive, DrawPrimitive::Shadow(_)) {
-                summary.has_shadow = true;
-                continue;
-            }
-            summary.has_non_shadow = true;
-            match unwrap_blend(primitive) {
-                DrawPrimitive::Text(_) => {
-                    summary.has_text = true;
-                    summary.has_pixel_sensitive = true;
-                }
-                DrawPrimitive::Image { .. } => summary.has_pixel_sensitive = true,
-                _ => {}
-            }
-        }
-        summary
+    /// The rect every entry of the run can reach.
+    pub fn coverage_rects(&self) -> impl Iterator<Item = Rect> + '_ {
+        self.recording.coverage_rects(self.segments.clone())
+    }
+
+    pub fn len(&self) -> usize {
+        self.recording.len_in(&self.segments)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.recording.is_empty_in(&self.segments)
     }
 }
 
@@ -577,7 +517,7 @@ impl RenderGraph {
                 .iter()
                 .map(|child| match child {
                     RenderNode::Primitive(_) => 1,
-                    RenderNode::DrawRun(run) => run.primitives.len(),
+                    RenderNode::DrawRun(run) => run.len(),
                     RenderNode::Layer(child_layer) => count_layer(child_layer),
                 })
                 .sum::<usize>()
@@ -628,9 +568,11 @@ fn render_node_heap_bytes(node: &RenderNode) -> usize {
     match node {
         RenderNode::Primitive(entry) => primitive_entry_heap_bytes(entry),
         RenderNode::DrawRun(run) => {
-            size_of::<DrawPrimitive>() * run.primitives.capacity()
+            run.recording.pod_heap_bytes()
+                + std::mem::size_of_val(run.recording.others())
                 + run
-                    .primitives
+                    .recording
+                    .others()
                     .iter()
                     .map(draw_primitive_heap_bytes)
                     .sum::<usize>()

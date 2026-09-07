@@ -164,6 +164,14 @@ complexity-gate base="origin/main":
 duplication-gate base="origin/main":
     cargo xtask duplication-gate --base {{base}}
 
+# The gates fast enough to run before every commit: what `.githooks/pre-commit`
+# runs. Everything here finishes in seconds against a warm xtask build.
+precommit: fmt-check typos complexity-gate duplication-gate
+
+# Point git at the repository's hooks. Once per clone.
+hooks:
+    git config core.hooksPath .githooks
+
 # --- test ------------------------------------------------------------------
 
 # `--profile ci` keeps the debuginfo that the local dev profile strips, so a
@@ -205,6 +213,7 @@ test-robot-discovery:
 
 # The shell helpers agents run by hand, pinned so they cannot rot.
 test-shell-helpers:
+    bash scripts/ci/sccache_lifetime_test.sh
     scripts/wait_until_quiet_test.sh
     scripts/dev/target_gc_test.sh
 
@@ -392,6 +401,12 @@ robot-build: _disk-guard
 # One robot example by name.
 robot-one example:
     ./run_robot_test.sh --sequential --example {{example}}
+
+robot-android-surface serial output:
+    python3 scripts/android_surface_robot.py --serial {{quote(serial)}} --output {{quote(output)}}
+
+test-android-surface-contract:
+    python3 scripts/android_surface_frames_test.py
 
 # The four external-framebuffer captures are excluded here: a GPU swapchain
 # under Xvfb never lands pixels in the X server's buffer, so they can only read

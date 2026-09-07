@@ -1,7 +1,12 @@
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    hash::{Hash, Hasher},
+};
 
 use cranpose_ui_graphics::RuntimeShader;
 use naga::ShaderStage;
+
+use crate::debug_toggles::DebugToggle;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum RuntimeShaderPipelineMode {
@@ -18,15 +23,48 @@ impl RuntimeShaderPipelineMode {
     }
 }
 
-fn shader_specialization_enabled() -> bool {
-    crate::debug_toggles::debug_toggle("CRANPOSE_NO_SHADER_SPECIALIZATION").as_deref() != Some("1")
+static NO_SHADER_SPECIALIZATION: DebugToggle =
+    DebugToggle::new("CRANPOSE_NO_SHADER_SPECIALIZATION");
+
+pub(crate) fn shader_specialization_enabled() -> bool {
+    !NO_SHADER_SPECIALIZATION.equals("1")
 }
+
+/// Which of a shader's draws a pipeline serves: the one draw, or the
+/// interior and the rim of a shader that declared a draw split, each
+/// compiled with the split override set to its number.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum ShaderDrawVariant {
+    Whole,
+    Interior,
+    Rim,
+}
+
+impl ShaderDrawVariant {
+    fn constant(self) -> Option<f64> {
+        match self {
+            Self::Whole => None,
+            Self::Interior => Some(1.0),
+            Self::Rim => Some(2.0),
+        }
+    }
+}
+
+type PipelineKey = (
+    u64,
+    u64,
+    u64,
+    RuntimeShaderPipelineMode,
+    Option<(&'static str, ShaderDrawVariant)>,
+);
 
 pub(crate) struct ShaderPipelineCache {
     backend: wgpu::Backend,
-    cache: HashMap<(u64, u64, RuntimeShaderPipelineMode, bool), wgpu::RenderPipeline>,
+    cache: HashMap<PipelineKey, wgpu::RenderPipeline>,
     disabled: HashSet<u64>,
     pipeline_cache: Option<wgpu::PipelineCache>,
+    forced: Vec<&'static str>,
+    forced_hash: u64,
 }
 
 impl ShaderPipelineCache {
@@ -35,7 +73,42 @@ impl ShaderPipelineCache {
             backend,
             cache: HashMap::new(),
             disabled: HashSet::new(),
+            forced: Vec::new(),
+            forced_hash: 0,
             pipeline_cache,
+        }
+    }
+
+    pub fn set_forced_flags(&mut self, flags: impl Iterator<Item = &'static str>) {
+        let mut forced: Vec<&'static str> = flags.collect();
+        forced.sort_unstable();
+        if forced == self.forced {
+            return;
+        }
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        forced.hash(&mut hasher);
+        self.forced_hash = if forced.is_empty() {
+            0
+        } else {
+            hasher.finish()
+        };
+        self.forced = forced;
+    }
+
+    fn force_declared_flags(
+        &self,
+        shader: &RuntimeShader,
+        constants: &mut Vec<(&'static str, f64)>,
+    ) {
+        let source = shader.source();
+        for flag in &self.forced {
+            if !source.contains(&format!("override {flag}:")) {
+                continue;
+            }
+            match constants.iter_mut().find(|(name, _)| name == flag) {
+                Some(constant) => constant.1 = 1.0,
+                None => constants.push((flag, 1.0)),
+            }
         }
     }
 
@@ -48,20 +121,31 @@ impl ShaderPipelineCache {
         texture_bind_group_layout: &wgpu::BindGroupLayout,
         uniform_bind_group_layout: &wgpu::BindGroupLayout,
         mode: RuntimeShaderPipelineMode,
-        depth: bool,
+        variant: ShaderDrawVariant,
     ) -> Option<&wgpu::RenderPipeline> {
         let source_hash = shader.source_hash();
-        let constants: &[(&str, f64)] = if shader_specialization_enabled() {
-            shader.overrides()
+        let mut constants: Vec<(&'static str, f64)> = if shader_specialization_enabled() {
+            shader.overrides().to_vec()
         } else {
-            &[]
+            Vec::new()
         };
         let overrides_hash = if constants.is_empty() {
             0
         } else {
             shader.overrides_hash()
         };
-        let cache_key = (source_hash, overrides_hash, mode, depth);
+        self.force_declared_flags(shader, &mut constants);
+        let split = shader.draw_split().zip(variant.constant());
+        if let Some((name, value)) = split {
+            constants.push((name, value));
+        }
+        let cache_key = (
+            source_hash,
+            overrides_hash,
+            self.forced_hash,
+            mode,
+            split.map(|(name, _)| (name, variant)),
+        );
         if self.disabled.contains(&source_hash) {
             return None;
         }
@@ -85,46 +169,19 @@ impl ShaderPipelineCache {
                 immediate_size: 0,
             });
 
-            crate::render::create_render_pipeline_logged(
+            crate::render::create_fullscreen_strip_pipeline(
                 device,
                 self.pipeline_cache.as_ref(),
-                &format!("runtime-shader mode={mode:?} depth={depth}"),
-                wgpu::RenderPipelineDescriptor {
-                    label: Some("RuntimeShader Effect Pipeline"),
-                    layout: Some(&pipeline_layout),
-                    vertex: wgpu::VertexState {
-                        module: &shader_module,
-                        entry_point: Some("fullscreen_vs"),
-                        buffers: &[],
-                        compilation_options: wgpu::PipelineCompilationOptions {
-                            constants,
-                            ..wgpu::PipelineCompilationOptions::default()
-                        },
-                    },
-                    fragment: Some(wgpu::FragmentState {
-                        module: &shader_module,
-                        entry_point: Some("effect_fs"),
-                        targets: &[Some(wgpu::ColorTargetState {
-                            format,
-                            blend: Some(mode.blend_state()),
-                            write_mask: wgpu::ColorWrites::ALL,
-                        })],
-                        compilation_options: wgpu::PipelineCompilationOptions {
-                            constants,
-                            ..wgpu::PipelineCompilationOptions::default()
-                        },
-                    }),
-                    primitive: wgpu::PrimitiveState {
-                        topology: wgpu::PrimitiveTopology::TriangleStrip,
-                        strip_index_format: None,
-                        front_face: wgpu::FrontFace::Ccw,
-                        cull_mode: None,
-                        ..Default::default()
-                    },
-                    depth_stencil: crate::display_clip::content_depth_state(depth),
-                    multisample: wgpu::MultisampleState::default(),
-                    multiview_mask: None,
-                    cache: None,
+                &format!("runtime-shader mode={mode:?} variant={variant:?}"),
+                "RuntimeShader Effect Pipeline",
+                &pipeline_layout,
+                &shader_module,
+                "effect_fs",
+                &constants,
+                wgpu::ColorTargetState {
+                    format,
+                    blend: Some(mode.blend_state()),
+                    write_mask: wgpu::ColorWrites::ALL,
                 },
             )
         };
@@ -266,35 +323,21 @@ mod tests {
     use super::validate_runtime_shader_source;
     use crate::pipeline::GPU_TEXT_BRUSH_EFFECT_SHADER;
 
-    const VALID_SHADER: &str = r#"
-struct VertexOutput {
-    @builtin(position) position: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-}
-
-@vertex
-fn fullscreen_vs(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
-    var output: VertexOutput;
-    let x = f32(i32(vertex_index & 1u) * 2 - 1);
-    let y = f32(i32(vertex_index >> 1u) * 2 - 1);
-    output.uv = vec2<f32>(x * 0.5 + 0.5, 1.0 - (y * 0.5 + 0.5));
-    output.position = vec4<f32>(x, y, 0.0, 1.0);
-    return output;
-}
-
-@group(0) @binding(0) var input_texture: texture_2d<f32>;
-@group(0) @binding(1) var input_sampler: sampler;
-@group(1) @binding(0) var<uniform> u: array<vec4<f32>, 64>;
-
-@fragment
+    fn valid_shader() -> String {
+        format!(
+            "{}\n{}",
+            cranpose_ui_graphics::RUNTIME_SHADER_PRELUDE_WGSL,
+            r#"@fragment
 fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     return textureSample(input_texture, input_sampler, input.uv);
 }
-"#;
+"#
+        )
+    }
 
     #[test]
     fn validator_accepts_valid_runtime_shader() {
-        assert!(validate_runtime_shader_source(VALID_SHADER, wgpu::Backend::Vulkan).is_ok());
+        assert!(validate_runtime_shader_source(&valid_shader(), wgpu::Backend::Vulkan).is_ok());
     }
 
     #[test]

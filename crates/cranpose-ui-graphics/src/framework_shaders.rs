@@ -7,10 +7,6 @@
 /// Batched shape shader. The uniform array lengths in the source are the
 /// wasm/downlevel defaults; native pipelines rewrite them per device class.
 pub const SHAPE_WGSL: &str = include_str!("../shaders/shape.wgsl");
-/// Trimmed-varying solid entries (`CRANPOSE_SOLID_TRIM_VARYINGS` opt-in),
-/// appended to [`SHAPE_WGSL`] by the shape pipeline builders when the trim
-/// is on. Never compiled alone.
-pub const SHAPE_SOLID_TRIM_WGSL: &str = include_str!("../shaders/shape_solid_trim.wgsl");
 pub const IMAGE_WGSL: &str = include_str!("../shaders/image.wgsl");
 pub const GLYPH_ATLAS_WGSL: &str = include_str!("../shaders/glyph_atlas.wgsl");
 
@@ -22,7 +18,6 @@ pub const SDF_ROUNDED_RECT_FN_WGSL: &str = include_str!("../shaders/sdf_rounded_
 pub const COMPOSITE_SAMPLE_FN_WGSL: &str = include_str!("../shaders/composite_sample_fn.wgsl");
 
 pub const BLUR_FS_WGSL: &str = include_str!("../shaders/blur_fs.wgsl");
-pub const BLUR_ROUNDED_MASK_FS_WGSL: &str = include_str!("../shaders/blur_rounded_mask_fs.wgsl");
 pub const OFFSET_FS_WGSL: &str = include_str!("../shaders/offset_fs.wgsl");
 pub const BLIT_FS_WGSL: &str = include_str!("../shaders/blit_fs.wgsl");
 pub const BLIT_FS_MAIN_WGSL: &str = include_str!("../shaders/blit_fs_main.wgsl");

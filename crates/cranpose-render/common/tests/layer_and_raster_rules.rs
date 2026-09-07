@@ -2,7 +2,6 @@ use cranpose_render_common::{
     image_compare::pixel_difference,
     layer_transform::apply_layer_affine_to_point,
     raster_cache::ScaleBucket,
-    scene_builder::{set_verify_executor, verify_executor},
     style_shared::{ResolvedBrush, resolve_layer_brush},
 };
 use cranpose_ui_graphics::{Brush, Color, GraphicsLayer, Point, Rect};
@@ -112,16 +111,6 @@ fn two_different_scales_do_not_share_one_raster_bucket() {
         ScaleBucket::from_scale(2.0).raw(),
         "1x and 2x sharing a bucket would serve a blurry raster to one of them"
     );
-}
-
-#[test]
-fn verification_is_serial_until_an_executor_is_lent() {
-    assert!(
-        verify_executor().is_none(),
-        "a verify executor was installed on a thread nobody lent one to"
-    );
-    set_verify_executor(None);
-    assert!(verify_executor().is_none());
 }
 
 #[test]

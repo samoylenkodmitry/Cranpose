@@ -999,15 +999,14 @@ fn log_render_stats(robot: &cranpose::Robot, step: usize) {
             );
             for (index, layer) in stats.top_isolated_layers().enumerate() {
                 println!(
-                    "isolated_layer step={step} rank={index} node={:?} rect=({:.1},{:.1},{:.1},{:.1}) target={}x{} reasons={}",
+                    "isolated_layer step={step} rank={index} node={:?} rect=({:.1},{:.1},{:.1},{:.1}) target={}x{}",
                     layer.node_id,
                     layer.logical_rect.x,
                     layer.logical_rect.y,
                     layer.logical_rect.width,
                     layer.logical_rect.height,
                     layer.width,
-                    layer.height,
-                    layer.reasons.display()
+                    layer.height
                 );
             }
         }

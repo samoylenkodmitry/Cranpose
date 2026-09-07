@@ -5,7 +5,7 @@ use cranpose_core::location_key;
 use cranpose_liquid::prelude::*;
 use cranpose_macros::composable;
 use cranpose_render_common::Renderer;
-use cranpose_render_wgpu::CapturedFrame;
+use cranpose_render_wgpu::{CapturedFrame, RenderStatsSnapshot, WgpuRenderer};
 use cranpose_ui::{
     Modifier,
     widgets::{Box, BoxSpec},
@@ -20,12 +20,19 @@ const SCALE: f32 = 2.0;
 const FRAME_WIDTH: u32 = (VIEW_WIDTH * SCALE) as u32;
 const FRAME_HEIGHT: u32 = (VIEW_HEIGHT * SCALE) as u32;
 const TOGGLE: &str = "CRANPOSE_NO_SHADER_SPECIALIZATION";
+const NO_SPLIT: &str = "CRANPOSE_NO_GLASS_SPLIT_SCISSORS";
 
+/// The showcase's card material: refracting, dispersing, adaptive frost,
+/// no blur.
 fn card_glass() -> Glass {
     Glass::regular()
         .shape(LiquidShape::RoundedRect(20.0))
         .blur_radius(0.0)
+        .refraction_depth(0.58)
+        .refraction_curve(0.62)
         .dispersion(1.0)
+        .transmission_refraction(0.72)
+        .highlight(0.72)
         .adaptive_frost(Color::WHITE, 0.42)
 }
 
@@ -85,14 +92,34 @@ fn GlassCardScene() {
 }
 
 fn capture_card(unspecialized: bool) -> Result<CapturedFrame, String> {
-    cranpose_render_wgpu::set_debug_toggle(TOGGLE, unspecialized.then_some("1"));
-    let captured = capture_card_with_current_toggles();
-    cranpose_render_wgpu::set_debug_toggle(TOGGLE, None);
+    capture_card_and_stats_under(unspecialized.then_some(TOGGLE)).map(|(frame, _)| frame)
+}
+
+fn capture_card_and_stats() -> Result<(CapturedFrame, RenderStatsSnapshot), String> {
+    capture_card_and_stats_under(None)
+}
+
+/// The toggles are process-global, so one raised for a capture is raised
+/// only while this capture holds the GPU lock: set after the lock, cleared
+/// before it is released, or a concurrent capture in this binary renders
+/// under it.
+fn capture_card_and_stats_under(
+    toggle: Option<&'static str>,
+) -> Result<(CapturedFrame, RenderStatsSnapshot), String> {
+    let (_lock, renderer) = support::headless_renderer_parts()?;
+    if let Some(toggle) = toggle {
+        cranpose_render_wgpu::set_debug_toggle(toggle, Some("1"));
+    }
+    let captured = render_card_and_stats(renderer);
+    if let Some(toggle) = toggle {
+        cranpose_render_wgpu::set_debug_toggle(toggle, None);
+    }
     captured
 }
 
-fn capture_card_with_current_toggles() -> Result<CapturedFrame, String> {
-    let (_lock, mut renderer) = support::headless_renderer_parts()?;
+fn render_card_and_stats(
+    mut renderer: WgpuRenderer,
+) -> Result<(CapturedFrame, RenderStatsSnapshot), String> {
     let app_context = cranpose_ui::AppContext::new();
     renderer.attach_app_context_services(&app_context);
     let mut shell = AppShell::new(
@@ -116,7 +143,30 @@ fn capture_card_with_current_toggles() -> Result<CapturedFrame, String> {
         "the device recorded a validation error, so the frame is whatever the failed \
          pipeline left behind"
     );
-    Ok(frame)
+    let stats = shell
+        .renderer()
+        .last_frame_stats()
+        .ok_or_else(|| "the capture recorded no frame stats".to_string())?;
+    Ok((frame, stats))
+}
+
+/// The card's adaptive frost reads a wide neighbourhood of its capture; the
+/// renderer packs that capture averaged to a quarter of its size beside it
+/// and the material declares it wants that substrate, so the frame carries
+/// exactly one.
+#[test]
+fn a_card_glass_with_adaptive_frost_is_handed_one_substrate() {
+    let (_, stats) = match capture_card_and_stats() {
+        Ok(captured) => captured,
+        Err(err) => {
+            eprintln!("skipping substrate count: {err}");
+            return;
+        }
+    };
+    assert_eq!(
+        stats.substrates, 1,
+        "the card's capture must be averaged into one substrate: {stats:?}"
+    );
 }
 
 #[test]
@@ -186,5 +236,35 @@ fn a_specialized_glass_pipeline_matches_the_general_one_byte_for_byte() {
         FRAME_WIDTH,
         &specialized.pixels,
         &general.pixels,
+    );
+}
+
+#[test]
+fn a_scissor_split_glass_matches_whole_quads_byte_for_byte_and_shades_fewer_pixels() {
+    let (split, split_stats) = match capture_card_and_stats() {
+        Ok(captured) => captured,
+        Err(err) => {
+            eprintln!("skipping glass split parity: {err}");
+            return;
+        }
+    };
+    let (whole, whole_stats) =
+        capture_card_and_stats_under(Some(NO_SPLIT)).expect("headless WGPU init failed mid-suite");
+    assert_eq!(
+        split_stats.shader_pixels, whole_stats.shader_pixels,
+        "the split shades the same composite area once"
+    );
+    assert!(
+        split_stats.glass_rasterized_pixels * 10 < whole_stats.glass_rasterized_pixels * 9,
+        "the split must rasterise fewer glass fragments: split {} vs whole {}",
+        split_stats.glass_rasterized_pixels,
+        whole_stats.glass_rasterized_pixels
+    );
+    support::assert_same_bytes(
+        "rim bands and inset interior scissors vs whole quads; a scissor only removes \
+         fragments the shader discards, never one it shades",
+        FRAME_WIDTH,
+        &split.pixels,
+        &whole.pixels,
     );
 }

@@ -6,136 +6,9 @@ use cranpose_render_common::raster_cache::{
 };
 use cranpose_ui_graphics::Rect;
 
-use crate::{
-    frame_graph::FrameCommandStats,
-    surface_requirements::{SurfaceRequirement, SurfaceRequirementSet},
-};
+use crate::{debug_toggles::DebugToggle, frame_graph::FrameCommandStats, run_geometry::ShapeFill};
 
 const TOP_ISOLATED_LAYER_LIMIT: usize = 8;
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct LayerSurfaceReasons {
-    pub explicit_offscreen: bool,
-    pub effect: bool,
-    pub backdrop: bool,
-    pub group_opacity: bool,
-    pub blend_mode: bool,
-    pub shape_clip: bool,
-    pub immediate_shadow: bool,
-    pub text_local_surface: bool,
-    pub motion_stable_capture: bool,
-    pub mixed_direct_content: bool,
-    pub non_translation_transform: bool,
-    pub pixel_stable_composite: bool,
-}
-
-impl LayerSurfaceReasons {
-    pub fn has_any(self) -> bool {
-        self.explicit_offscreen
-            || self.effect
-            || self.backdrop
-            || self.group_opacity
-            || self.blend_mode
-            || self.shape_clip
-            || self.text_local_surface
-            || self.motion_stable_capture
-            || self.non_translation_transform
-    }
-
-    pub fn labels(self) -> impl Iterator<Item = &'static str> {
-        let mut labels = [None; 12];
-        let mut len = 0usize;
-
-        if self.explicit_offscreen {
-            labels[len] = Some("explicit_offscreen");
-            len += 1;
-        }
-        if self.effect {
-            labels[len] = Some("effect");
-            len += 1;
-        }
-        if self.backdrop {
-            labels[len] = Some("backdrop");
-            len += 1;
-        }
-        if self.group_opacity {
-            labels[len] = Some("group_opacity");
-            len += 1;
-        }
-        if self.blend_mode {
-            labels[len] = Some("blend_mode");
-            len += 1;
-        }
-        if self.shape_clip {
-            labels[len] = Some("shape_clip");
-            len += 1;
-        }
-        if self.immediate_shadow {
-            labels[len] = Some("immediate_shadow");
-            len += 1;
-        }
-        if self.text_local_surface {
-            labels[len] = Some("text_local_surface");
-            len += 1;
-        }
-        if self.motion_stable_capture {
-            labels[len] = Some("motion_stable_capture");
-            len += 1;
-        }
-        if self.mixed_direct_content {
-            labels[len] = Some("mixed_direct_content");
-            len += 1;
-        }
-        if self.non_translation_transform {
-            labels[len] = Some("non_translation_transform");
-            len += 1;
-        }
-        if self.pixel_stable_composite {
-            labels[len] = Some("pixel_stable_composite");
-            len += 1;
-        }
-
-        labels.into_iter().flatten().take(len)
-    }
-
-    pub fn display(self) -> String {
-        let mut joined = String::new();
-        for (index, label) in self.labels().enumerate() {
-            if index > 0 {
-                joined.push('+');
-            }
-            joined.push_str(label);
-        }
-        if joined.is_empty() {
-            joined.push_str("none");
-        }
-        joined
-    }
-
-    pub fn has_renderer_forced_surface(self) -> bool {
-        self.text_local_surface || self.non_translation_transform
-    }
-}
-
-impl From<SurfaceRequirementSet> for LayerSurfaceReasons {
-    fn from(requirements: SurfaceRequirementSet) -> Self {
-        Self {
-            explicit_offscreen: requirements.contains(SurfaceRequirement::ExplicitOffscreen),
-            effect: requirements.contains(SurfaceRequirement::RenderEffect),
-            backdrop: requirements.contains(SurfaceRequirement::Backdrop),
-            group_opacity: requirements.contains(SurfaceRequirement::GroupOpacity),
-            blend_mode: requirements.contains(SurfaceRequirement::BlendMode),
-            shape_clip: requirements.contains(SurfaceRequirement::ShapeClip),
-            immediate_shadow: requirements.contains(SurfaceRequirement::ImmediateShadow),
-            text_local_surface: requirements.contains(SurfaceRequirement::TextMaterialMask),
-            motion_stable_capture: requirements.contains(SurfaceRequirement::MotionStableCapture),
-            mixed_direct_content: requirements.contains(SurfaceRequirement::MixedDirectContent),
-            non_translation_transform: requirements
-                .contains(SurfaceRequirement::NonTranslationTransform),
-            pixel_stable_composite: requirements.contains(SurfaceRequirement::PixelStableComposite),
-        }
-    }
-}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct IsolatedLayerStat {
@@ -143,7 +16,6 @@ pub struct IsolatedLayerStat {
     pub logical_rect: Rect,
     pub width: u32,
     pub height: u32,
-    pub reasons: LayerSurfaceReasons,
 }
 
 impl IsolatedLayerStat {
@@ -164,7 +36,6 @@ impl Default for IsolatedLayerStat {
             },
             width: 0,
             height: 0,
-            reasons: LayerSurfaceReasons::default(),
         }
     }
 }
@@ -178,17 +49,24 @@ pub struct FrameStatsSnapshot {
     /// Sum of every render pass's first color target area: the tile traffic a
     /// tiling GPU pays whatever the passes draw.
     pub pass_pixels: u64,
+    /// Texture regions copied outside any pass, and their texels.
+    pub copy_count: u32,
+    pub copy_pixels: u64,
     pub offscreen_acquires: u32,
     pub offscreen_news: u32,
     pub offscreen_total_bytes: u64,
     pub transient_texture_bytes: u64,
     pub retained_texture_bytes: u64,
     pub upload_bytes: u64,
+    /// Buffer writes the frame staged: uploads that reach the GPU as one
+    /// write each, however many draws they carry.
+    pub upload_writes: u32,
     pub isolated_layer_renders: u32,
     pub isolated_layer_pixels: u64,
     pub layer_cache_hits: u32,
+    /// Passes that drew fix-ups over copied capture regions.
+    pub capture_fixup_passes: u32,
     pub layer_cache_misses: u32,
-    pub layer_cache_evictions: u32,
     pub layer_cache_hit_pixels: u64,
     pub layer_cache_miss_pixels: u64,
     /// Hits per key kind, indexed by `LayerRasterCacheKey::kind_slot`.
@@ -206,17 +84,54 @@ pub struct FrameStatsSnapshot {
     pub shadow_fully_occluded_composites: u32,
     pub shadow_text_blur_fallbacks: u32,
     pub blur_passes: u32,
+    /// Backdrop stages resolved: every stage flushes the page and captures
+    /// once, so the layer pass count is one more than this.
+    pub stages: u32,
+    /// Backdrops whose stage texture the layer cache pinned this frame, so
+    /// later frames replay their composites from it.
+    pub backdrop_admissions: u32,
+    /// Opaque page prefixes copied into the layer cache this frame.
+    pub prefix_admissions: u32,
+    /// Captures averaged into a quarter-size substrate for a shader's wide
+    /// taps.
+    pub substrates: u32,
+    /// Passes that draw at least one resolved composite: a final pass holding
+    /// twelve glass tails counts once, a composite resolved into its own
+    /// texture counts its own pass.
     pub composite_passes: u32,
     pub effect_applies: u32,
+    /// Pixels shaded by runtime shader composites: what every glass surface
+    /// costs a tiling GPU per frame, each capture that re-shades one included.
+    pub shader_pixels: u64,
+    pub glass_rasterized_pixels: u64,
+    /// Pixels the blur passes write: every downsample, horizontal and
+    /// vertical pass of a backdrop's blur and of its substrates, within
+    /// the scissor the pass was given.
+    pub blur_pixels: u64,
+    /// Pixels the shape draws rasterize: a band drawn as a mesh counts its
+    /// mesh, everything else its quad. Fill rate is what a scene of rings
+    /// costs a tiling GPU, however few draws it takes.
+    pub shape_fill_pixels: u64,
+    /// `shape_fill_pixels` split by shape kind and brush, in the order of
+    /// `ShapeFill::LABELS`: which records a fill-bound frame pays for.
+    pub shape_fill_pixels_by_class: [u64; ShapeFill::CLASSES],
+    /// Vertices the shape draws run through the vertex stage: six per quad,
+    /// six per band segment. A tiling GPU stores every vertex's varyings
+    /// before it shades a pixel, so this bounds a frame as fill does.
+    pub shape_vertices: u64,
     pub shape_passes: u32,
+    /// Shape draws using a general pipeline while their specialization compiles.
+    pub shape_pipeline_fallback_draws: u32,
+    /// Shape draws using a completed specialized pipeline.
+    pub shape_specialized_draws: u32,
     pub image_passes: u32,
     pub text_passes: u32,
-    /// Shape, image and glyph `draw_indexed` calls recorded this frame. The
-    /// `*_passes` counters above count *batches*, so a single image batch
-    /// reports `image_passes=1` however many images it draws; this counts what
-    /// the driver actually sees. Composite and effect quads are not included —
-    /// they are one draw each and already counted by `composite_passes`,
-    /// `blur_passes` and `effect_applies`.
+    /// Shape, image, glyph and composite draws recorded this frame. The
+    /// `*_passes` counters above count *batches* or passes, so a single image
+    /// batch reports `image_passes=1` however many images it draws; this
+    /// counts what the driver actually sees. Blur and effect quads are not
+    /// included: they are one draw each and already counted by `blur_passes`
+    /// and `effect_applies`.
     pub draw_calls: u32,
     pub text_image_cache_hits: u32,
     pub text_image_cache_misses: u32,
@@ -238,12 +153,28 @@ pub struct FrameStatsSnapshot {
 }
 
 impl FrameStatsSnapshot {
+    fn shape_fill_by_class_text(&self) -> String {
+        let mut text = String::new();
+        for (label, pixels) in ShapeFill::LABELS
+            .iter()
+            .zip(self.shape_fill_pixels_by_class)
+        {
+            if pixels > 0 {
+                use std::fmt::Write;
+                let _ = write!(text, " {label}={:.2}MP", pixels as f64 / 1_000_000.0);
+            }
+        }
+        text
+    }
+
     pub(crate) fn with_command_stats_added(mut self, stats: FrameCommandStats) -> Self {
         self.submits = self.submits.saturating_add(stats.submit_count);
         self.encoder_count = self.encoder_count.saturating_add(stats.encoder_count);
         self.submit_count = self.submit_count.saturating_add(stats.submit_count);
         self.pass_count = self.pass_count.saturating_add(stats.pass_count);
         self.pass_pixels = self.pass_pixels.saturating_add(stats.pass_pixels);
+        self.copy_count = self.copy_count.saturating_add(stats.copy_count);
+        self.copy_pixels = self.copy_pixels.saturating_add(stats.copy_pixels);
         self.transient_texture_bytes = self
             .transient_texture_bytes
             .saturating_add(stats.transient_texture_bytes);
@@ -251,7 +182,24 @@ impl FrameStatsSnapshot {
             .retained_texture_bytes
             .max(stats.retained_texture_bytes);
         self.upload_bytes = self.upload_bytes.saturating_add(stats.upload_bytes);
+        self.upload_writes = self.upload_writes.saturating_add(stats.upload_writes);
+        self.offscreen_acquires = self
+            .offscreen_acquires
+            .saturating_add(stats.transient_acquires);
+        self.offscreen_news = self.offscreen_news.saturating_add(stats.transient_news);
         self
+    }
+
+    /// The largest isolated surface of the frame as `WxH@(x,y)` in device
+    /// pixels and logical origin, or `-`.
+    fn top_isolated_display(&self) -> String {
+        match &self.top_isolated_layers[0] {
+            Some(top) => format!(
+                "{}x{}@({:.0},{:.0})",
+                top.width, top.height, top.logical_rect.x, top.logical_rect.y
+            ),
+            None => "-".to_string(),
+        }
     }
 
     pub fn top_isolated_layers(self) -> impl Iterator<Item = IsolatedLayerStat> {
@@ -292,12 +240,12 @@ impl FrameStatsSnapshot {
         let layer_cache_mb = self.layer_cache_bytes as f64 / (1024.0 * 1024.0);
         let isolated_layer_mpx = self.isolated_layer_pixels as f64 / 1_000_000.0;
         eprintln!(
-            "[GPU f#{}] encoders={} submits={} passes={} pass_px={:.2}MP | offscreen: acq={} new={} {:.1}MB pool={}({:.1}MB) retained={:.1}MB | \
-             uploads={:.2}MB | \
-             isolated_layers={} area={:.2}MP | \
-             layer_cache: hit={} miss={} {:.1}% evict={} hit_px={:.2}MP miss_px={:.2}MP size={}({:.1}MB) hit_by_kind={} miss_px_by_kind={} | \
+            "[GPU f#{}] encoders={} submits={} passes={} pass_px={:.2}MP copies={} copy_px={:.2}MP | offscreen: acq={} new={} {:.1}MB pool={}({:.1}MB) retained={:.1}MB | \
+             uploads={:.2}MB writes={} | \
+             isolated_layers={} area={:.2}MP top={} | \
+             layer_cache: hit={} miss={} {:.1}% hit_px={:.2}MP miss_px={:.2}MP size={}({:.1}MB) hit_by_kind={} miss_px_by_kind={} | \
              shadow_cache: shape_hit={} shape_miss={} hit_px={:.2}MP miss_px={:.2}MP text_blur_fallback={} | \
-             blur={} composite={} effect={} | shape={} image={} text={} draws={} | \
+             stages={} admit={} blur={} substrate={} composite={} effect={} shader_px={:.2}MP glass_raster_px={:.2}MP blur_px={:.2}MP | shape={} shape_fill_px={:.2}MP{} shape_verts={} image={} text={} draws={} | \
              text_img_cache: hit={} miss={} hit_px={:.2}MP miss_px={:.2}MP raster={:.2}MB | \
              text_glyph_atlas: hit={} miss={} miss_px={:.2}MP | \
              caches: text_pool={} img={} txt={}",
@@ -306,6 +254,8 @@ impl FrameStatsSnapshot {
             self.submit_count,
             self.pass_count,
             self.pass_pixels as f64 / 1_000_000.0,
+            self.copy_count,
+            self.copy_pixels as f64 / 1_000_000.0,
             self.offscreen_acquires,
             self.offscreen_news,
             mb,
@@ -313,12 +263,13 @@ impl FrameStatsSnapshot {
             pool_mb,
             retained_mb,
             upload_mb,
+            self.upload_writes,
             self.isolated_layer_renders,
             isolated_layer_mpx,
+            self.top_isolated_display(),
             self.layer_cache_hits,
             self.layer_cache_misses,
             self.layer_cache_hit_rate(),
-            self.layer_cache_evictions,
             layer_cache_hit_mpx,
             layer_cache_miss_mpx,
             self.layer_cache_size,
@@ -330,10 +281,19 @@ impl FrameStatsSnapshot {
             shadow_cache_hit_mpx,
             shadow_cache_miss_mpx,
             self.shadow_text_blur_fallbacks,
+            self.stages,
+            self.backdrop_admissions,
             self.blur_passes,
+            self.substrates,
             self.composite_passes,
             self.effect_applies,
+            self.shader_pixels as f64 / 1_000_000.0,
+            self.glass_rasterized_pixels as f64 / 1_000_000.0,
+            self.blur_pixels as f64 / 1_000_000.0,
             self.shape_passes,
+            self.shape_fill_pixels as f64 / 1_000_000.0,
+            self.shape_fill_by_class_text(),
+            self.shape_vertices,
             self.image_passes,
             self.text_passes,
             self.draw_calls,
@@ -351,7 +311,7 @@ impl FrameStatsSnapshot {
         );
         for (index, layer) in self.top_isolated_layers().enumerate() {
             eprintln!(
-                "  [isolated #{index}] node={:?} rect=({:.1},{:.1},{:.1},{:.1}) target={}x{} reasons={}",
+                "  [isolated #{index}] node={:?} rect=({:.1},{:.1},{:.1},{:.1}) target={}x{}",
                 layer.node_id,
                 layer.logical_rect.x,
                 layer.logical_rect.y,
@@ -359,7 +319,6 @@ impl FrameStatsSnapshot {
                 layer.logical_rect.height,
                 layer.width,
                 layer.height,
-                layer.reasons.display(),
             );
         }
     }
@@ -372,18 +331,20 @@ pub(crate) struct FrameStats {
     pub command_submit_count: Cell<u32>,
     pub command_pass_count: Cell<u32>,
     pub command_pass_pixels: Cell<u64>,
+    pub command_copy_count: Cell<u32>,
+    pub command_copy_pixels: Cell<u64>,
     pub command_transient_texture_bytes: Cell<u64>,
     pub command_retained_texture_bytes: Cell<u64>,
     pub command_upload_bytes: Cell<u64>,
     pub offscreen_acquires: Cell<u32>,
     pub offscreen_news: Cell<u32>,
     pub offscreen_total_bytes: Cell<u64>,
-    pub upload_bytes: Cell<u64>,
+    pub upload_writes: Cell<u32>,
     pub isolated_layer_renders: Cell<u32>,
     pub isolated_layer_pixels: Cell<u64>,
     pub layer_cache_hits: Cell<u32>,
+    pub capture_fixup_passes: Cell<u32>,
     pub layer_cache_misses: Cell<u32>,
-    pub layer_cache_evictions: Cell<u32>,
     pub layer_cache_hit_pixels: Cell<u64>,
     pub layer_cache_miss_pixels: Cell<u64>,
     pub layer_cache_hits_by_kind: [Cell<u32>; LAYER_RASTER_CACHE_KIND_COUNT],
@@ -396,9 +357,21 @@ pub(crate) struct FrameStats {
     pub shadow_fully_occluded_composites: Cell<u32>,
     pub shadow_text_blur_fallbacks: Cell<u32>,
     pub blur_passes: Cell<u32>,
+    pub stages: Cell<u32>,
+    pub backdrop_admissions: Cell<u32>,
+    pub prefix_admissions: Cell<u32>,
+    pub substrates: Cell<u32>,
     pub composite_passes: Cell<u32>,
     pub effect_applies: Cell<u32>,
+    pub shader_pixels: Cell<u64>,
+    pub glass_rasterized_pixels: Cell<u64>,
+    pub blur_pixels: Cell<u64>,
+    pub shape_fill_pixels: Cell<u64>,
+    pub shape_fill_pixels_by_class: Cell<[u64; ShapeFill::CLASSES]>,
+    pub shape_vertices: Cell<u64>,
     pub shape_passes: Cell<u32>,
+    pub shape_pipeline_fallback_draws: Cell<u32>,
+    pub shape_specialized_draws: Cell<u32>,
     pub image_passes: Cell<u32>,
     pub text_passes: Cell<u32>,
     pub draw_calls: Cell<u32>,
@@ -420,11 +393,28 @@ pub(crate) struct FrameStats {
     top_isolated_layers: RefCell<[Option<IsolatedLayerStat>; TOP_ISOLATED_LAYER_LIMIT]>,
     top_isolated_layer_count: Cell<usize>,
     shadow_shape_cache_miss_log_count: Cell<u32>,
-    #[cfg(debug_assertions)]
-    missed_layer_cache_keys: RefCell<Vec<LayerRasterCacheKey>>,
 }
 
 impl FrameStats {
+    pub fn record_capture_fixup_pass(&self) {
+        self.capture_fixup_passes
+            .set(self.capture_fixup_passes.get().saturating_add(1));
+    }
+
+    pub fn record_stages(&self, count: u32) {
+        self.stages.set(self.stages.get().saturating_add(count));
+    }
+
+    pub fn record_backdrop_admission(&self) {
+        self.backdrop_admissions
+            .set(self.backdrop_admissions.get().saturating_add(1));
+    }
+
+    pub fn record_prefix_admission(&self) {
+        self.prefix_admissions
+            .set(self.prefix_admissions.get().saturating_add(1));
+    }
+
     pub fn record_command_stats(&self, stats: FrameCommandStats) {
         self.submits
             .set(self.submits.get().saturating_add(stats.submit_count));
@@ -448,6 +438,16 @@ impl FrameStats {
                 .get()
                 .saturating_add(stats.pass_pixels),
         );
+        self.command_copy_count.set(
+            self.command_copy_count
+                .get()
+                .saturating_add(stats.copy_count),
+        );
+        self.command_copy_pixels.set(
+            self.command_copy_pixels
+                .get()
+                .saturating_add(stats.copy_pixels),
+        );
         self.command_transient_texture_bytes.set(
             self.command_transient_texture_bytes
                 .get()
@@ -462,6 +462,18 @@ impl FrameStats {
             self.command_upload_bytes
                 .get()
                 .saturating_add(stats.upload_bytes),
+        );
+        self.upload_writes
+            .set(self.upload_writes.get().saturating_add(stats.upload_writes));
+        self.offscreen_acquires.set(
+            self.offscreen_acquires
+                .get()
+                .saturating_add(stats.transient_acquires),
+        );
+        self.offscreen_news.set(
+            self.offscreen_news
+                .get()
+                .saturating_add(stats.transient_news),
         );
     }
 
@@ -485,18 +497,12 @@ impl FrameStats {
         );
     }
 
-    pub fn record_upload_bytes(&self, bytes: u64) {
-        self.upload_bytes
-            .set(self.upload_bytes.get().saturating_add(bytes));
-    }
-
     pub fn record_isolated_layer_render(
         &self,
         width: u32,
         height: u32,
         node_id: Option<NodeId>,
         logical_rect: Rect,
-        reasons: LayerSurfaceReasons,
     ) {
         self.isolated_layer_renders
             .set(self.isolated_layer_renders.get().saturating_add(1));
@@ -510,7 +516,6 @@ impl FrameStats {
             logical_rect,
             width,
             height,
-            reasons,
         });
     }
 
@@ -527,8 +532,6 @@ impl FrameStats {
     }
 
     pub fn record_layer_cache_miss(&self, key: &LayerRasterCacheKey, width: u32, height: u32) {
-        #[cfg(debug_assertions)]
-        self.missed_layer_cache_keys.borrow_mut().push(*key);
         let slot = key.kind_slot();
         let by_kind = &self.layer_cache_misses_by_kind[slot];
         by_kind.set(by_kind.get().saturating_add(1));
@@ -545,16 +548,6 @@ impl FrameStats {
                 .get()
                 .saturating_add((width as u64) * (height as u64)),
         );
-    }
-
-    #[cfg(debug_assertions)]
-    pub fn take_missed_layer_cache_keys(&self) -> Vec<LayerRasterCacheKey> {
-        self.missed_layer_cache_keys.take()
-    }
-
-    pub fn record_layer_cache_eviction(&self) {
-        self.layer_cache_evictions
-            .set(self.layer_cache_evictions.get().saturating_add(1));
     }
 
     pub fn record_shadow_shape_cache_hit(&self, composited_pixels: u64) {
@@ -631,6 +624,21 @@ impl FrameStats {
             .set(self.shadow_text_blur_fallbacks.get().saturating_add(1));
     }
 
+    pub fn add_shape_fill(&self, fill: ShapeFill) {
+        self.shape_fill_pixels.set(
+            self.shape_fill_pixels
+                .get()
+                .saturating_add(fill.total().round() as u64),
+        );
+        let mut by_class = self.shape_fill_pixels_by_class.get();
+        for (total, pixels) in by_class.iter_mut().zip(fill.pixels) {
+            *total = total.saturating_add(pixels.round() as u64);
+        }
+        self.shape_fill_pixels_by_class.set(by_class);
+        self.shape_vertices
+            .set(self.shape_vertices.get().saturating_add(fill.vertices));
+    }
+
     pub fn bump_shapes(&self) {
         self.shape_passes.set(self.shape_passes.get() + 1);
     }
@@ -700,6 +708,8 @@ impl FrameStats {
             submit_count: self.command_submit_count.get(),
             pass_count: self.command_pass_count.get(),
             pass_pixels: self.command_pass_pixels.get(),
+            copy_count: self.command_copy_count.get(),
+            copy_pixels: self.command_copy_pixels.get(),
             offscreen_acquires: self.offscreen_acquires.get(),
             offscreen_news: self.offscreen_news.get(),
             offscreen_total_bytes: self.offscreen_total_bytes.get(),
@@ -709,15 +719,13 @@ impl FrameStats {
                 .saturating_add(self.command_transient_texture_bytes.get()),
             retained_texture_bytes: retained_texture_bytes
                 .saturating_add(self.command_retained_texture_bytes.get()),
-            upload_bytes: self
-                .upload_bytes
-                .get()
-                .saturating_add(self.command_upload_bytes.get()),
+            upload_bytes: self.command_upload_bytes.get(),
+            upload_writes: self.upload_writes.get(),
             isolated_layer_renders: self.isolated_layer_renders.get(),
             isolated_layer_pixels: self.isolated_layer_pixels.get(),
             layer_cache_hits: self.layer_cache_hits.get(),
+            capture_fixup_passes: self.capture_fixup_passes.get(),
             layer_cache_misses: self.layer_cache_misses.get(),
-            layer_cache_evictions: self.layer_cache_evictions.get(),
             layer_cache_hit_pixels: self.layer_cache_hit_pixels.get(),
             layer_cache_miss_pixels: self.layer_cache_miss_pixels.get(),
             layer_cache_hits_by_kind: self.layer_cache_hits_by_kind.each_ref().map(Cell::get),
@@ -733,9 +741,21 @@ impl FrameStats {
             shadow_fully_occluded_composites: self.shadow_fully_occluded_composites.get(),
             shadow_text_blur_fallbacks: self.shadow_text_blur_fallbacks.get(),
             blur_passes: self.blur_passes.get(),
+            stages: self.stages.get(),
+            backdrop_admissions: self.backdrop_admissions.get(),
+            prefix_admissions: self.prefix_admissions.get(),
+            substrates: self.substrates.get(),
             composite_passes: self.composite_passes.get(),
             effect_applies: self.effect_applies.get(),
+            shader_pixels: self.shader_pixels.get(),
+            glass_rasterized_pixels: self.glass_rasterized_pixels.get(),
+            blur_pixels: self.blur_pixels.get(),
+            shape_fill_pixels: self.shape_fill_pixels.get(),
+            shape_fill_pixels_by_class: self.shape_fill_pixels_by_class.get(),
+            shape_vertices: self.shape_vertices.get(),
             shape_passes: self.shape_passes.get(),
+            shape_pipeline_fallback_draws: self.shape_pipeline_fallback_draws.get(),
+            shape_specialized_draws: self.shape_specialized_draws.get(),
             image_passes: self.image_passes.get(),
             text_passes: self.text_passes.get(),
             draw_calls: self.draw_calls.get(),
@@ -765,18 +785,20 @@ impl FrameStats {
         self.command_submit_count.set(0);
         self.command_pass_count.set(0);
         self.command_pass_pixels.set(0);
+        self.command_copy_count.set(0);
+        self.command_copy_pixels.set(0);
         self.command_transient_texture_bytes.set(0);
         self.command_retained_texture_bytes.set(0);
         self.command_upload_bytes.set(0);
+        self.upload_writes.set(0);
         self.offscreen_acquires.set(0);
         self.offscreen_news.set(0);
         self.offscreen_total_bytes.set(0);
-        self.upload_bytes.set(0);
         self.isolated_layer_renders.set(0);
         self.isolated_layer_pixels.set(0);
         self.layer_cache_hits.set(0);
+        self.capture_fixup_passes.set(0);
         self.layer_cache_misses.set(0);
-        self.layer_cache_evictions.set(0);
         self.layer_cache_hit_pixels.set(0);
         self.layer_cache_miss_pixels.set(0);
         for slot in 0..LAYER_RASTER_CACHE_KIND_COUNT {
@@ -791,9 +813,21 @@ impl FrameStats {
         self.shadow_fully_occluded_composites.set(0);
         self.shadow_text_blur_fallbacks.set(0);
         self.blur_passes.set(0);
+        self.stages.set(0);
+        self.backdrop_admissions.set(0);
+        self.prefix_admissions.set(0);
+        self.substrates.set(0);
         self.composite_passes.set(0);
         self.effect_applies.set(0);
+        self.shader_pixels.set(0);
+        self.glass_rasterized_pixels.set(0);
+        self.blur_pixels.set(0);
+        self.shape_fill_pixels.set(0);
+        self.shape_fill_pixels_by_class.set([0; ShapeFill::CLASSES]);
+        self.shape_vertices.set(0);
         self.shape_passes.set(0);
+        self.shape_pipeline_fallback_draws.set(0);
+        self.shape_specialized_draws.set(0);
         self.image_passes.set(0);
         self.text_passes.set(0);
         self.draw_calls.set(0);
@@ -826,10 +860,6 @@ impl FrameStats {
     }
 
     fn record_top_isolated_layer(&self, layer: IsolatedLayerStat) {
-        if !layer.reasons.has_any() {
-            return;
-        }
-
         let mut top_layers = self.top_isolated_layers.borrow_mut();
         let len = self.top_isolated_layer_count.get();
         let insert_at = top_layers[..len]
@@ -862,10 +892,10 @@ impl FrameStats {
     }
 }
 
+static GPU_STATS: DebugToggle = DebugToggle::new("CRANPOSE_GPU_STATS");
+
 pub(crate) fn gpu_stats_enabled() -> bool {
-    crate::debug_toggles::debug_toggle("CRANPOSE_GPU_STATS")
-        .map(|v| matches!(v.as_str(), "1" | "true" | "yes"))
-        .unwrap_or(false)
+    GPU_STATS.flag()
 }
 
 pub(crate) fn print_gpu_memory_report(device: &wgpu::Device, frame_count: u64) {
@@ -894,10 +924,10 @@ pub(crate) fn print_gpu_memory_report(device: &wgpu::Device, frame_count: u64) {
     );
 }
 
+static SHADOW_CACHE_DIAG: DebugToggle = DebugToggle::new("CRANPOSE_GPU_SHADOW_CACHE_DIAG");
+
 fn shadow_cache_diagnostics_enabled() -> bool {
-    crate::debug_toggles::debug_toggle("CRANPOSE_GPU_SHADOW_CACHE_DIAG")
-        .map(|v| matches!(v.as_str(), "1" | "true" | "yes"))
-        .unwrap_or(false)
+    SHADOW_CACHE_DIAG.flag()
 }
 
 fn by_kind_display<T: Copy + Default + PartialEq>(
@@ -929,30 +959,31 @@ mod tests {
             },
             (5, 6),
             cranpose_render_common::raster_cache::ScaleBucket::from_scale(1.0),
+            cranpose_ui_graphics::Point::default(),
         )
     }
 
     #[test]
     fn layer_cache_counters_accumulate_and_reset() {
         let stats = FrameStats::default();
-        stats.record_upload_bytes(512);
         stats.record_command_stats(FrameCommandStats {
             encoder_count: 1,
             submit_count: 1,
             pass_count: 2,
-            pass_pixels: 0,
             transient_texture_bytes: 256,
             retained_texture_bytes: 128,
             upload_bytes: 64,
+            ..FrameCommandStats::default()
         });
         stats.bump_shapes();
+        stats.shape_pipeline_fallback_draws.set(3);
+        stats.shape_specialized_draws.set(5);
         stats.blur_passes.set(1);
         stats.offscreen_total_bytes.set(1024);
         stats.offscreen_pool_bytes.set(2048);
         stats.record_layer_cache_hit(&test_layer_cache_key(), 10, 20);
         stats.record_layer_cache_hit(&test_layer_cache_key(), 3, 4);
         stats.record_layer_cache_miss(&test_layer_cache_key(), 5, 6);
-        stats.record_layer_cache_eviction();
         stats.record_shadow_shape_cache_hit(72);
         stats.record_shadow_shape_cache_miss(10, 11);
         stats.record_shadow_text_blur_fallback();
@@ -961,7 +992,6 @@ mod tests {
 
         assert_eq!(stats.layer_cache_hits.get(), 2);
         assert_eq!(stats.layer_cache_misses.get(), 1);
-        assert_eq!(stats.layer_cache_evictions.get(), 1);
         assert_eq!(stats.layer_cache_hit_pixels.get(), 212);
         assert_eq!(stats.layer_cache_miss_pixels.get(), 30);
         assert_eq!(stats.shadow_shape_cache_hits.get(), 1);
@@ -980,16 +1010,14 @@ mod tests {
                 width: 4.0,
                 height: 5.0,
             },
-            LayerSurfaceReasons {
-                text_local_surface: true,
-                ..LayerSurfaceReasons::default()
-            },
         );
         let snapshot = stats.snapshot();
 
+        assert_eq!(snapshot.shape_pipeline_fallback_draws, 3);
+        assert_eq!(snapshot.shape_specialized_draws, 5);
         assert_eq!(snapshot.isolated_layer_renders, 1);
         assert_eq!(snapshot.isolated_layer_pixels, 56);
-        assert_eq!(snapshot.upload_bytes, 576);
+        assert_eq!(snapshot.upload_bytes, 64);
         assert_eq!(snapshot.encoder_count, 1);
         assert_eq!(snapshot.submit_count, 1);
         assert_eq!(snapshot.pass_count, 2);
@@ -1015,9 +1043,10 @@ mod tests {
 
         stats.reset();
 
+        assert_eq!(stats.snapshot().shape_pipeline_fallback_draws, 0);
+        assert_eq!(stats.snapshot().shape_specialized_draws, 0);
         assert_eq!(stats.layer_cache_hits.get(), 0);
         assert_eq!(stats.layer_cache_misses.get(), 0);
-        assert_eq!(stats.layer_cache_evictions.get(), 0);
         assert_eq!(stats.layer_cache_hit_pixels.get(), 0);
         assert_eq!(stats.layer_cache_miss_pixels.get(), 0);
         assert_eq!(stats.shadow_shape_cache_hits.get(), 0);
@@ -1030,7 +1059,6 @@ mod tests {
         assert_eq!(stats.text_image_cache_hit_pixels.get(), 0);
         assert_eq!(stats.text_image_cache_miss_pixels.get(), 0);
         assert_eq!(stats.text_image_raster_bytes.get(), 0);
-        assert_eq!(stats.upload_bytes.get(), 0);
         assert_eq!(stats.isolated_layer_renders.get(), 0);
         assert_eq!(stats.isolated_layer_pixels.get(), 0);
         assert_eq!(stats.top_isolated_layer_count.get(), 0);
@@ -1044,10 +1072,10 @@ mod tests {
             encoder_count: 2,
             submit_count: 2,
             pass_count: 5,
-            pass_pixels: 0,
             transient_texture_bytes: 1024,
             retained_texture_bytes: 2048,
             upload_bytes: 512,
+            ..FrameCommandStats::default()
         });
         stats.bump_shapes();
 
@@ -1078,10 +1106,10 @@ mod tests {
             encoder_count: 1,
             submit_count: 1,
             pass_count: 2,
-            pass_pixels: 0,
             transient_texture_bytes: 128,
             retained_texture_bytes: 512,
             upload_bytes: 64,
+            ..FrameCommandStats::default()
         });
         let snapshot = stats
             .snapshot()
@@ -1089,10 +1117,7 @@ mod tests {
                 encoder_count: 1,
                 submit_count: 1,
                 pass_count: 1,
-                pass_pixels: 0,
-                transient_texture_bytes: 0,
-                retained_texture_bytes: 0,
-                upload_bytes: 0,
+                ..FrameCommandStats::default()
             });
 
         assert_eq!(snapshot.submits, 2);
@@ -1118,90 +1143,6 @@ mod tests {
     }
 
     #[test]
-    fn layer_surface_reasons_report_runtime_only_bits() {
-        let reasons = LayerSurfaceReasons {
-            immediate_shadow: true,
-            text_local_surface: true,
-            mixed_direct_content: true,
-            ..LayerSurfaceReasons::default()
-        };
-
-        assert!(reasons.has_any());
-        assert!(reasons.has_renderer_forced_surface());
-        assert_eq!(
-            reasons.labels().collect::<Vec<_>>(),
-            vec![
-                "immediate_shadow",
-                "text_local_surface",
-                "mixed_direct_content"
-            ]
-        );
-        assert_eq!(
-            reasons.display(),
-            "immediate_shadow+text_local_surface+mixed_direct_content"
-        );
-    }
-
-    #[test]
-    fn immediate_shadow_only_is_diagnostic_not_isolating() {
-        let reasons = LayerSurfaceReasons {
-            immediate_shadow: true,
-            ..LayerSurfaceReasons::default()
-        };
-
-        assert!(!reasons.has_any());
-        assert!(!reasons.has_renderer_forced_surface());
-        assert_eq!(
-            reasons.labels().collect::<Vec<_>>(),
-            vec!["immediate_shadow"]
-        );
-        assert_eq!(reasons.display(), "immediate_shadow");
-    }
-
-    #[test]
-    fn mixed_direct_content_only_is_diagnostic_not_isolating() {
-        let reasons = LayerSurfaceReasons {
-            mixed_direct_content: true,
-            ..LayerSurfaceReasons::default()
-        };
-
-        assert!(!reasons.has_any());
-        assert!(!reasons.has_renderer_forced_surface());
-        assert_eq!(
-            reasons.labels().collect::<Vec<_>>(),
-            vec!["mixed_direct_content"]
-        );
-        assert_eq!(reasons.display(), "mixed_direct_content");
-    }
-
-    #[test]
-    fn has_any_matches_has_isolating_requirement_for_each_requirement() {
-        let all_requirements = [
-            SurfaceRequirement::ExplicitOffscreen,
-            SurfaceRequirement::RenderEffect,
-            SurfaceRequirement::Backdrop,
-            SurfaceRequirement::GroupOpacity,
-            SurfaceRequirement::BlendMode,
-            SurfaceRequirement::ShapeClip,
-            SurfaceRequirement::ImmediateShadow,
-            SurfaceRequirement::TextMaterialMask,
-            SurfaceRequirement::MotionStableCapture,
-            SurfaceRequirement::NonTranslationTransform,
-            SurfaceRequirement::MixedDirectContent,
-            SurfaceRequirement::PixelStableComposite,
-        ];
-        for requirement in all_requirements {
-            let set = SurfaceRequirementSet::default().with(requirement);
-            let reasons = LayerSurfaceReasons::from(set);
-            assert_eq!(
-                reasons.has_any(),
-                set.has_isolating_requirement(),
-                "has_any vs has_isolating_requirement mismatch for {requirement:?}"
-            );
-        }
-    }
-
-    #[test]
     fn top_isolated_layers_keep_largest_runtime_surfaces() {
         let stats = FrameStats::default();
         for index in 0..(TOP_ISOLATED_LAYER_LIMIT + 2) {
@@ -1214,10 +1155,6 @@ mod tests {
                     y: 0.0,
                     width: 10.0,
                     height: 10.0,
-                },
-                LayerSurfaceReasons {
-                    text_local_surface: true,
-                    ..LayerSurfaceReasons::default()
                 },
             );
         }

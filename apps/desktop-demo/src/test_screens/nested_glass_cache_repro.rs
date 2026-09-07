@@ -34,8 +34,9 @@ pub fn shader_phase_color(phase: f32) -> [u8; 4] {
 
 fn flat_color_shader(phase: f32) -> RuntimeShader {
     let source = format!(
-        "{}{FLAT_COLOR_FRAGMENT}",
-        crate::app::shader_rect::WGSL_PREAMBLE
+        "{}{}{FLAT_COLOR_FRAGMENT}",
+        cranpose_ui_graphics::RUNTIME_SHADER_PRELUDE_WGSL,
+        crate::app::shader_rect::WGSL_HELPERS
     );
     let mut shader = RuntimeShader::new(&source);
     shader.set_float(0, phase);

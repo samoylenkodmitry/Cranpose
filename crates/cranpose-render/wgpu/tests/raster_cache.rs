@@ -4,48 +4,15 @@ use cranpose_core::NodeId;
 use cranpose_render_common::{
     Renderer,
     graph::{
-        CachePolicy, DrawPrimitiveNode, IsolationReasons, LayerNode, PrimitiveEntry, PrimitiveNode,
-        PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode, TextPrimitiveNode,
+        CachePolicy, DrawPrimitiveNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase,
+        ProjectiveTransform, RenderGraph, RenderNode, TextPrimitiveNode,
     },
-    raster_cache::LayerRasterCacheHashes,
 };
 use cranpose_ui::{
     TextLayoutOptions, TextStyle,
     text::{AnnotatedString, SpanStyle},
 };
-use cranpose_ui_graphics::{Brush, Color, GraphicsLayer, Point, Rect};
-
-fn test_layer(
-    node_id: Option<NodeId>,
-    cache_policy: CachePolicy,
-    local_bounds: Rect,
-    transform_to_parent: ProjectiveTransform,
-    children: Vec<RenderNode>,
-) -> LayerNode {
-    LayerNode {
-        node_id,
-        wraps: None,
-        local_bounds,
-        transform_to_parent,
-        motion_context_animated: false,
-        translated_content_context: false,
-        translated_content_offset: Point::default(),
-        content_offset: Point::default(),
-        scene_children_origin: cranpose_ui_graphics::Point::default(),
-        scene_children_layer_translation: cranpose_ui_graphics::Point::default(),
-        graphics_layer: GraphicsLayer::default(),
-        clip_to_bounds: false,
-        shadow_clip: None,
-        hit_test: None,
-        has_hit_targets: false,
-        has_origin_sinks: false,
-        isolation: IsolationReasons::default(),
-        cache_policy,
-        cache_hashes: LayerRasterCacheHashes::default(),
-        cache_hashes_valid: false,
-        children,
-    }
-}
+use cranpose_ui_graphics::{Brush, Color, Rect};
 
 fn card_layer(node_id: NodeId, y: f32) -> LayerNode {
     let local_bounds = Rect {
@@ -65,7 +32,7 @@ fn card_layer(node_id: NodeId, y: f32) -> LayerNode {
             clip: None,
         }),
     };
-    let mut layer = test_layer(
+    let mut layer = support::contract_layer(
         Some(node_id),
         CachePolicy::Auto,
         local_bounds,
@@ -82,7 +49,7 @@ fn scroll_like_graph(offsets: &[f32]) -> RenderGraph {
         .enumerate()
         .map(|(index, y)| RenderNode::Layer(Box::new(card_layer(index + 1, *y))))
         .collect();
-    RenderGraph::new(test_layer(
+    RenderGraph::new(support::contract_layer(
         Some(10_000),
         CachePolicy::None,
         Rect {
@@ -97,7 +64,7 @@ fn scroll_like_graph(offsets: &[f32]) -> RenderGraph {
 }
 
 fn text_scroll_like_graph(y: f32) -> RenderGraph {
-    RenderGraph::new(test_layer(
+    RenderGraph::new(support::contract_layer(
         Some(20_000),
         CachePolicy::None,
         Rect {
@@ -117,7 +84,7 @@ fn text_scroll_like_graph(y: f32) -> RenderGraph {
 }
 
 fn repeated_text_graph() -> RenderGraph {
-    RenderGraph::new(test_layer(
+    RenderGraph::new(support::contract_layer(
         Some(20_001),
         CachePolicy::None,
         Rect {
@@ -166,7 +133,7 @@ fn text_layer(node_id: NodeId, x: f32, y: f32, text_value: &str) -> LayerNode {
             clip: None,
         })),
     };
-    test_layer(
+    support::contract_layer(
         Some(node_id),
         CachePolicy::None,
         local_bounds,
@@ -204,7 +171,6 @@ fn capture_frame_reuses_cached_child_layers_during_rigid_scroll() {
     assert_eq!(first_stats.layer_cache_misses, 4);
     assert_eq!(second_stats.layer_cache_hits, 4);
     assert_eq!(second_stats.layer_cache_misses, 0);
-    assert_eq!(second_stats.layer_cache_evictions, 0);
     assert!(
         second_stats.isolated_layer_renders < first_stats.isolated_layer_renders,
         "cached child layers should avoid repainting isolated child surfaces"
@@ -296,31 +262,17 @@ fn text_glyph_atlas_reuses_identical_content_across_node_ids() {
     );
 }
 
-const ANIMATED_SHADER_WGSL: &str = r#"
-struct VertexOutput {
-    @builtin(position) position: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-}
-
-@vertex
-fn fullscreen_vs(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
-    var output: VertexOutput;
-    let x = f32(i32(vertex_index & 1u) * 2 - 1);
-    let y = f32(i32(vertex_index >> 1u) * 2 - 1);
-    output.uv = vec2<f32>(x * 0.5 + 0.5, 1.0 - (y * 0.5 + 0.5));
-    output.position = vec4<f32>(x, y, 0.0, 1.0);
-    return output;
-}
-
-@group(0) @binding(0) var input_texture: texture_2d<f32>;
-@group(0) @binding(1) var input_sampler: sampler;
-@group(1) @binding(0) var<uniform> u: array<vec4<f32>, 64>;
-
-@fragment
+fn animated_shader_wgsl() -> String {
+    format!(
+        "{}\n{}",
+        cranpose_ui_graphics::RUNTIME_SHADER_PRELUDE_WGSL,
+        r#"@fragment
 fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     return vec4<f32>(u[0][0], 0.0, 0.0, 1.0);
 }
-"#;
+"#
+    )
+}
 
 fn shaded_runtime_shader_layer(node_id: NodeId, time: f32) -> LayerNode {
     let shaded_bounds = Rect {
@@ -329,9 +281,9 @@ fn shaded_runtime_shader_layer(node_id: NodeId, time: f32) -> LayerNode {
         width: 64.0,
         height: 48.0,
     };
-    let mut shader = cranpose_ui_graphics::RuntimeShader::new(ANIMATED_SHADER_WGSL);
+    let mut shader = cranpose_ui_graphics::RuntimeShader::new(&animated_shader_wgsl());
     shader.set_float(0, time);
-    let mut shaded = test_layer(
+    let mut shaded = support::contract_layer(
         Some(node_id),
         CachePolicy::Auto,
         shaded_bounds,
@@ -356,7 +308,7 @@ fn shaded_runtime_shader_layer(node_id: NodeId, time: f32) -> LayerNode {
 fn shader_inside_cached_container_graph(time: f32) -> RenderGraph {
     let shaded = shaded_runtime_shader_layer(30_001, time);
 
-    let mut container = test_layer(
+    let mut container = support::contract_layer(
         Some(30_000),
         CachePolicy::Auto,
         Rect {
@@ -371,7 +323,7 @@ fn shader_inside_cached_container_graph(time: f32) -> RenderGraph {
     container.clip_to_bounds = true;
     container.isolation.shape_clip = true;
 
-    RenderGraph::new(test_layer(
+    RenderGraph::new(support::contract_layer(
         Some(30_002),
         CachePolicy::None,
         Rect {
@@ -387,7 +339,7 @@ fn shader_inside_cached_container_graph(time: f32) -> RenderGraph {
 
 fn shader_layer_graph(time: f32) -> RenderGraph {
     let shaded = shaded_runtime_shader_layer(30_101, time);
-    RenderGraph::new(test_layer(
+    RenderGraph::new(support::contract_layer(
         Some(30_102),
         CachePolicy::None,
         Rect {
@@ -427,6 +379,7 @@ fn a_runtime_shader_layer_with_stable_uniforms_is_served_from_the_layer_cache() 
         .capture_frame(128, 96)
         .expect("second shader capture should succeed");
     let stats = renderer.last_frame_stats().expect("frame stats");
+    let cached_pass_count = stats.pass_count;
     assert_eq!(second.pixels, first.pixels);
     assert!(
         stats.layer_cache_hits >= 1 && stats.isolated_layer_renders == 0,
@@ -440,8 +393,18 @@ fn a_runtime_shader_layer_with_stable_uniforms_is_served_from_the_layer_cache() 
         .expect("third shader capture should succeed");
     let stats = renderer.last_frame_stats().expect("frame stats");
     assert!(
-        third.pixels != second.pixels && stats.isolated_layer_renders >= 1,
+        third.pixels != second.pixels,
         "a changed uniform must re-run the shader: {stats:?}"
+    );
+    assert!(
+        stats.layer_cache_hits >= 1 && stats.isolated_layer_renders == 0,
+        "the cache holds the layer's content, not its effect: a changed uniform re-runs the \
+         shader over the cached content and re-renders nothing: {stats:?}"
+    );
+    assert_eq!(
+        stats.pass_count, cached_pass_count,
+        "a runtime shader over cached content draws in the final pass, not in a pass of its \
+         own: {stats:?}"
     );
 }
 

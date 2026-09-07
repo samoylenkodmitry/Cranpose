@@ -22,8 +22,13 @@ fn is_blend_mode_supported(mode: BlendMode) -> bool {
     matches!(mode, BlendMode::SrcOver | BlendMode::DstOut)
 }
 
+fn snapped_anchor_origin(anchor: Point) -> Point {
+    Point::new(anchor.x.round(), anchor.y.round())
+}
+
 fn snap_delta_for_anchor(anchor: Point) -> Point {
-    Point::new(anchor.x.round() - anchor.x, anchor.y.round() - anchor.y)
+    let snapped = snapped_anchor_origin(anchor);
+    Point::new(snapped.x - anchor.x, snapped.y - anchor.y)
 }
 
 #[derive(Clone, Copy)]
@@ -180,6 +185,10 @@ fn draw_shape(
         .unwrap_or_default();
     let rect = draw.rect.translate(snap_delta.x, snap_delta.y);
     let clip = draw.clip;
+    let dither_origin = draw
+        .snap_anchor
+        .map(snapped_anchor_origin)
+        .unwrap_or_default();
     let rect = if draw.snap_to_pixel_grid {
         Rect {
             x: rect.x.round(),
@@ -261,7 +270,8 @@ fn draw_shape(
                 continue;
             }
 
-            let mut sample = sample_brush_rgba(&draw.brush, rect, center_x, center_y);
+            let mut sample =
+                sample_brush_rgba(&draw.brush, rect, center_x, center_y, dither_origin);
             sample[3] *= coverage;
             let alpha = sample[3];
             if alpha <= 0.0 {

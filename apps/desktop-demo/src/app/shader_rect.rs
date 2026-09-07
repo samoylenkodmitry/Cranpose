@@ -13,29 +13,14 @@ use cranpose_ui::{
     LinearArrangement, Modifier, PointerEventKind, PointerInputScope, Row, RowSpec, Text,
     TextStyle,
 };
-use cranpose_ui_graphics::{CompositingStrategy, RenderEffect, RuntimeShader};
+use cranpose_ui_graphics::{
+    CompositingStrategy, RenderEffect, RuntimeShader, RUNTIME_SHADER_PRELUDE_WGSL,
+};
 
-/// The fullscreen vertex stage, texture and uniform bindings every runtime
-/// shader in the demo starts from; a fragment stage is appended per effect.
-pub(crate) const WGSL_PREAMBLE: &str = r#"
-struct VertexOutput {
-    @builtin(position) position: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-}
-
-@vertex
-fn fullscreen_vs(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
-    var output: VertexOutput;
-    let x = f32(i32(vertex_index & 1u) * 2 - 1);
-    let y = f32(i32(vertex_index >> 1u) * 2 - 1);
-    output.uv = vec2<f32>(x * 0.5 + 0.5, 1.0 - (y * 0.5 + 0.5));
-    output.position = vec4<f32>(x, y, 0.0, 1.0);
-    return output;
-}
-
-@group(0) @binding(0) var input_texture: texture_2d<f32>;
-@group(0) @binding(1) var input_sampler: sampler;
-@group(1) @binding(0) var<uniform> u: array<vec4<f32>, 64>;
+/// The uniform readers and distance functions every runtime shader in the
+/// demo uses after the shared prelude; a fragment stage is appended per
+/// effect.
+pub(crate) const WGSL_HELPERS: &str = r#"
 
 fn get_float(index: u32) -> f32 {
     return u[index / 4u][index % 4u];
@@ -56,7 +41,7 @@ fn fire_halo_wgsl() -> Arc<str> {
     SOURCE
         .get_or_init(|| {
             Arc::<str>::from(format!(
-        r#"{preamble}
+        r#"{preamble}{helpers}
 
 const PI: f32 = 3.14159265358979;
 const TWO_PI: f32 = 6.28318530717959;
@@ -249,7 +234,8 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {{
     return vec4<f32>(out_rgb, out_a);
 }}
 "#,
-        preamble = WGSL_PREAMBLE
+        preamble = RUNTIME_SHADER_PRELUDE_WGSL,
+        helpers = WGSL_HELPERS
             ))
         })
         .clone()
@@ -260,7 +246,7 @@ fn halo_border_wgsl() -> Arc<str> {
     SOURCE
         .get_or_init(|| {
             Arc::<str>::from(format!(
-        r#"{preamble}
+        r#"{preamble}{helpers}
 
 @fragment
 fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {{
@@ -314,7 +300,8 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {{
     return vec4<f32>(out_rgb, out_a);
 }}
 "#,
-        preamble = WGSL_PREAMBLE
+        preamble = RUNTIME_SHADER_PRELUDE_WGSL,
+        helpers = WGSL_HELPERS
             ))
         })
         .clone()
