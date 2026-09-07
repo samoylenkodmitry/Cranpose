@@ -1,30 +1,37 @@
 # Mobile 60 FPS
 
-**Unmet. PR #617 is not ready for main.** Cranpose only; preserve resolution,
-effects and coverage. Shared `72f1dd63` beats main `0d195313` in four opening-game
-pairs on both devices: watch +10.88–14.48 FPS (36.9–41.9°C), Huawei +1.20–10.59
-(31–32°C). Shared watch 38.2–48.5 FPS; Huawei 59.5–59.7.
+**Target unmet.** Checkpoint `1767a226`; Cranpose only, unchanged pixels.
+Frame budget: **16.67 ms**. Shared game build beats main on both devices.
+Swipe layout: watch **47.3→56.1 FPS**, four gains, **35.1→41.0°C**.
+Recording inlining then reaches **57.7 FPS**; Huawei remains near 59.6 steady.
+Full scroll: watch **49.11→49.45**, Huawei **31.45→32.21 FPS**, mixed pairs.
 
-| Work | Measured cost or result | Decision |
+| Cost | Fact | Decision |
 | --- | --- | --- |
-| Megaboss CPU | 20–21 ms/frame; recording dominates | Remove repeated preparation before adding concurrency |
-| Arc recording + bounds | Direct GPU columns; tighter one-quad padding and butt-cap bound. Five pairs with matching endpoint clocks gain 2.2–5.8%; thermal crossings include losses | Checkpoint; original GPU layout and exact pixel guards |
-| Megaboss GPU | Padding-only diagnostic: 21–26 ms/frame. Frozen arc fixture: padding −4.77 ms, butt bound another −2.78 ms | CPU and GPU both need cuts; fixture speed is not app FPS |
-| Showcase GPU | Hot: 31.4 ms; cards 11.6, header ~10, blur 6, page 2.4 | Preserve effects; remove redundant shading and passes |
-| Compute blur | Huawei ~37→21 FPS; watch loses device | Reject prototype; preserved in stash `59a4098e` |
+| Watch layout | Width-only swipe subcomposition ran every frame | Ordinary stable measurement removes it; layout falls to ~0 ms, CPU 22.6→18.6 ms/frame |
+| Watch recording | Arc preparation 3.15 ms, column append 2.25, normalization 1.12 before inlining | Two compiler annotations win; preserve arithmetic and direct GPU columns |
+| Watch app counter | Primitive-counter TLS ~1.1 ms before layout change | Outside Cranpose-only scope; exclude from promised savings |
+| Showcase shading | Substrate specialization helps watch but loses slightly on Huawei warm scroll | Hold; exact pixels alone do not prove a performance win |
+| Geometry lifetime | Two recording generations already permit buffer reuse | No new pool, snapshot or thread |
+| Huawei scheduling | 1,500–2,400 idle iterations per 120 frames; scheduling ignores exhausted presentation credit | Measure removing blocked wakeups before designing the fix |
 
-**Next experiment:** exact radius/sweep preparation reuse. Captured Megaboss
-frame: 14,973 arcs, 281 radius/sweep tuples; 16-entry reuse hits 98.1%.
-Start angles stay per arc. Measure lookup cost before changing production.
+**Next:** reduce remaining recording calls and measure credit-aware wakeups.
+Swipe alone lost 0.43 FPS in Huawei scroll; the combined checkpoint recovers
+that workload. Showcase never calls swipe; code layout remains an unproven cause.
+No new rendering architecture is justified by the remaining CPU profile.
+Showcase still needs a separate GPU cost reduction.
 
-**Larger design:** main matches persistent ranges before preparation and retains
-GPU geometry. A restored motion path must place fresh and retained vertices and
-evaluate their SDFs in the same local coordinates; dither stays device anchored.
-Image caching after preparation loses 6.3–7.6 FPS and adds draws: rejected.
-Smaller curve layouts, global vertex pulling and queue threading also lost.
+**Held shader contract:** specialize actual bound regions; cache keys include
+presence. Absent glass regions stay dynamic: folding changed one watch pixel.
+No image cache, approximation or larger shader object (208 bytes).
 
-**Gate:** 10-second opening, ABAB BABA, temperatures on every leg, no cooling.
-Audio-launch and first-presentation windows stay separately labelled. Retain
-thermal crossings and failed legs. Full watch scroll: 16 forward swipes, 1.5 s
-apart. Performance guards must fail when their skipped work affects correctness.
-Raw comparisons, exact binaries and guard results: [evidence index](mobile_watch_performance.md).
+**Rejected by device evidence:** compute blur, moving-ring image caching,
+previous-row reuse, scalar dictionaries, smaller curve strides and extra recording threads.
+Manual normalized-band construction and isolated substrate specializations
+also failed to show a native improvement; their source remains held.
+
+**Acceptance:** ABAB BABA; temperatures before/after each leg; no cooling.
+Game: first 10 seconds. Scroll: visible final card. Keep failed/thermal legs.
+Huawei launch windows include startup; do not pool them with presentation windows.
+Correctness guards must fail when skipped work changes output.
+[Evidence](mobile_watch_performance.md).

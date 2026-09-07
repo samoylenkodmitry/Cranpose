@@ -1217,6 +1217,14 @@ text. A mutated 4,000 Hz attribute must fail the collector guard. Capture SF and
 temperature before profiler finalization; use leaf samples for full-minute CPU
 self time, with short stack captures only where needed.
 
+## Arc lookup throughput must be measured on the watch (2026-09-07)
+
+Radius/sweep repetition in Megaboss does not justify a dictionary: exact direct
+lookup saves 4–6% on the Mac but loses all four watch pairs by 3–5%, at stable
+34.7–34.6°C. Use the actual input stream and consume identical outputs in both
+arms. Source and native measurements: `watch-arc-scalar-direct` in the mobile
+evidence root. Reject this cache; remove preparation without an extra search.
+
 ## Reading a block with `grep -v '//'` hides the comment lines an exact-match edit needs (2026-09-06)
 
 The dispersion block of `liquid_glass.wgsl` was read through `grep -v '^\s*//'` to skip its comments, then edited with a Python `assert source.count(block) == 1` anchor built from that filtered text. The anchor never matched: eleven comment lines sit between `if dispersion_strength > 0.0 {` and `let index_spread`, and the assertion aborted before writing, so a whole proof chain ran on the unedited shader (green, "mutants" green, restore of a file that was never written) and reported success. Read the exact bytes (`sed -n`) before building an anchor, or anchor on the two comment-free fragments either side of a comment run and substitute each separately; a chain that edits must check `git diff --stat` before it tests.
@@ -1251,3 +1259,12 @@ two-runner Mac overlaps them where this machine does not. Take the lock
 first, raise the toggle, capture, clear it, then drop the guard
 (`headless_renderer_parts_configured` does this in one call). Do not read
 such a failure as a GPU or driver difference.
+
+## Huawei startup logs are not a readiness signal
+
+Huawei can omit the renderer-ready message even from a live log stream while
+Megaboss presents at 59 FPS. A log-gated first-frame measurement then wastes
+30 seconds and fails without querying SurfaceFlinger. Use a fixed ten-second
+launch window there; label it separately from post-startup windows. Preserve
+failed runs. Evidence: `/tmp/cranpose-mobile-watch-60fps/`
+`huawei-swipe-inline-normalization-v1-live-opening10-5-B/`.
