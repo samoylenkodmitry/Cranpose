@@ -10,6 +10,7 @@
 - Cranscan's ARMv7 release excludes `ai-inprocess`; its ARM64 release includes it, so compare like-for-like within each device.
 - Check background inference, indexing and sync before each route; record their state instead of attributing their CPU load to rendering.
 - Prove the first gesture moves content and verify every run's starting and ending labels, including hot runs.
+- Validate CranScan's footer by its version heading when a thermal-status toast covers the licenses caption; retain the original OCR result and capture.
 - Use route checks independent of anything a diagnostic removes; OCR cannot validate text deliberately removed by that experiment.
 - Keep endpoint captures outside FPS timing where possible; record any capture interruption inside a required round trip.
 - Wake before each watch step and assert Awake around captures and probes; offscreen rendering can continue after the display sleeps.

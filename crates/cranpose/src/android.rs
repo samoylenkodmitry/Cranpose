@@ -1260,45 +1260,6 @@ mod frame_latency_tests {
     }
 }
 
-fn resolve_present_thread(requested: Option<&str>, available_cores: usize) -> bool {
-    match requested.map(str::trim) {
-        Some("1") | Some("true") | Some("on") => true,
-        Some("0") | Some("false") | Some("off") => false,
-        _ => available_cores >= 6,
-    }
-}
-
-#[cfg(test)]
-mod present_thread_tests {
-    use super::resolve_present_thread;
-
-    #[test]
-    fn a_phone_with_idle_cores_overlaps_by_default() {
-        assert!(resolve_present_thread(None, 8));
-        assert!(resolve_present_thread(None, 6));
-    }
-
-    #[test]
-    fn a_small_saturated_part_stays_synchronous() {
-        assert!(!resolve_present_thread(None, 4));
-        assert!(!resolve_present_thread(None, 1));
-    }
-
-    #[test]
-    fn the_override_wins_in_both_directions_on_any_core_count() {
-        assert!(resolve_present_thread(Some("1"), 4));
-        assert!(resolve_present_thread(Some("on"), 1));
-        assert!(!resolve_present_thread(Some("0"), 8));
-        assert!(!resolve_present_thread(Some(" off "), 8));
-    }
-
-    #[test]
-    fn an_unparsable_override_falls_back_to_the_core_default() {
-        assert!(resolve_present_thread(Some("maybe"), 8));
-        assert!(!resolve_present_thread(Some(""), 4));
-    }
-}
-
 fn create_android_surface_config(
     surface: &wgpu::Surface<'static>,
     adapter: &wgpu::Adapter,
@@ -1563,7 +1524,7 @@ pub fn run(
         );
     }
 
-    let present_thread = resolve_present_thread(
+    let present_thread = crate::android_present_thread::android_uses_present_thread(
         std::env::var("CRANPOSE_PRESENT_THREAD").ok().as_deref(),
         machine_parallelism,
     );

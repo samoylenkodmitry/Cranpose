@@ -76,6 +76,11 @@ mod android_perf_hint;
 mod android_poll;
 #[cfg(any(
     test,
+    all(feature = "android", feature = "renderer-wgpu", target_os = "android")
+))]
+mod android_present_thread;
+#[cfg(any(
+    test,
     all(feature = "android", feature = "playbilling", target_os = "android")
 ))]
 mod android_purchase_wire;
