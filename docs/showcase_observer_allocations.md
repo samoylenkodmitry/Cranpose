@@ -28,4 +28,10 @@ The follow-up replay reports 1,208,283 allocations under `measured_frame`, versu
 
 Thirteen focused observer tests pass. The added test fails on allocating replacement storage; deliberately retaining the stale payload also fails it. It verifies the delivered payload, replacement callback and release of both payloads. Evidence uses the `scope-` filename prefix.
 
-Raw profiles, replay source, resolved dependency metadata, binaries and mutant logs are retained on samarch-1 under `/home/s/cranpose-profile-loop/`.
+## Huawei result
+
+The uninstrumented ABAB BABA comparison on the Huawei Mate 20 X gives **41.90 FPS before and 41.82 FPS after** both observer changes. There are two paired gains and two losses; this does not establish an FPS improvement. All eight routes complete. The device build uses the same Rust 1.98.0 compiler, NDK, application payload and release settings as the control, and emits no warnings. The latest candidate is installed after the comparison.
+
+This agrees with the earlier held observer experiment in [mobile performance evidence](mobile_watch_performance.md): reducing this allocation traffic has not established a Huawei frame-rate gain. Further work on the device frame budget needs attribution beyond these observer allocations.
+
+Raw profiles, replay source, resolved dependency metadata, binaries and mutant logs are retained on samarch-1 under `/home/s/cranpose-profile-loop/`. Local evidence is under `/Users/s/develop/performance-evidence/showcase-observer-20260909/`; `android.tar.gz` contains the Huawei comparison and build provenance.
