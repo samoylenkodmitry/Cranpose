@@ -137,6 +137,7 @@ override GLASS_INTERIOR_GUARD: bool = false;
 // 2 for the rim, each pipeline compiled without the other's work and
 // discarding the other's fragments before any fetch; 0 draws it whole.
 override GLASS_RIM_DRAW: i32 = 0;
+override GLASS_FULL_ACTIVITY: bool = false;
 
 fn fixed_or(value: f32, fixed: f32, is_fixed: bool) -> f32 {
     return select(value, fixed, is_fixed);
@@ -697,7 +698,7 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
     let uv = input.uv;
     let map = region_map();
     let tex_size = logical_extent();
-    let material_activity = clamp(get_float(111u), 0.0, 1.0);
+    let material_activity = clamp(fixed_or(get_float(111u), 1.0, GLASS_FULL_ACTIVITY), 0.0, 1.0);
 
     // Effect layer pixel rect injected by the renderer at uniform slot 62
     // (x_offset, y_offset, width, height) in viewport pixels.
@@ -829,7 +830,11 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
     let coverage_ramp = floored_band_width(
         mix(rest_feather, lens_refraction / 32.0, material_activity),
     );
-    let coverage = smoothstep(0.0, 1.0, clamp(-d / coverage_ramp, 0.0, 1.0));
+    let coverage = select(
+        smoothstep(0.0, 1.0, clamp(-d / coverage_ramp, 0.0, 1.0)),
+        1.0,
+        GLASS_RIM_DRAW == 1 && GLASS_FULL_ACTIVITY,
+    );
     let optical_coverage = smoothstep(
         0.0,
         1.0,
