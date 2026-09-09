@@ -1674,13 +1674,16 @@ pub(crate) fn upload_test_device() -> (
     let instance = wgpu::Instance::default();
     let adapter = pollster::block_on(instance.request_adapter(&Default::default()))
         .expect("headless adapter");
-    let (device, queue) =
-        pollster::block_on(adapter.request_device(&Default::default())).expect("headless device");
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        required_limits: adapter.limits(),
+        ..Default::default()
+    }))
+    .expect("headless device");
     (lock, device, queue)
 }
 
 #[cfg(test)]
-fn read_uploaded_bytes(
+pub(crate) fn read_uploaded_bytes(
     device: &wgpu::Device,
     readback: &wgpu::Buffer,
     submission: wgpu::SubmissionIndex,

@@ -5,7 +5,7 @@
 ## Harness and capture
 
 - Start from [robot testing](ROBOT_TESTING.md); run placement-sensitive runners through `run_robot_test.sh`.
-- Linux robot event loops require DISPLAY even headlessly; use CI's Xvfb configuration for correctness and a physical display for FPS.
+- Linux robot event loops require DISPLAY even headlessly. Over SSH, run both `just robot-gpu` and `just robot-captures`; those CI recipes provide Xvfb. Bare `just robot` requires a display supplied by the caller. Measure FPS on a physical display.
 - Set explicit Xvfb screen dimensions and test fractional scale separately; scale-1 assertions do not cover Xft.dpi-derived density.
 - macOS windowed tests need an awake compositor; distinguish present waits from unsettled composition using the diagnostic fields.
 - External X11 captures must verify `_NET_WM_PID` and position the window on an accessible monitor before input.
@@ -20,6 +20,7 @@
 - Compare each incrementally scrolled picture with a fresh render at the same position; featureless glass lanes cannot establish motion.
 - Reproduce the actual failing page headlessly at CI density before inventing simplified fixtures; see `liquid_scroll_phase.rs`.
 - Lock GPU tests before changing process-global debug toggles and restore them before releasing `support::gpu_test_lock`.
+- Headless GPU tests must request supported adapter limits. On Huawei, eight default color attachments exceed the GLES adapter's four; match the application's enabled backends when building Android library tests. [Device evidence](huawei_showcase_frame_budget.md).
 - Treat GPU-driver failures as hypotheses until the same binary, adapter and host conditions are checked; a clean-main failure alone proves no cause.
 
 ## Pixels and renderer contracts
@@ -41,6 +42,7 @@
 - Assert positive frost and zero activity independently when testing unused substrates; removing a substrate can still change capture geometry.
 - Shader-stage changes, triangle interpolation and neutral modifier nodes can alter fractional-scale rounding; require exact device parity.
 - Verify specialized pipelines actually drew before comparing them with general pipelines.
+- Exercise blur tile modes at packed source-region edges; transparent effect padding can make a forced-clamp mutant pixel-identical to repeated and mirrored modes.
 - Ownership checks must include both command recordings and retained shape columns; outer ownership alone does not prove reusable storage.
 - Make invalidation bypasses impossible through ownership and private fields; test moved solid siblings without full-rebuild fallback.
 - Proc-macro-generated syntax uses the macro crate's edition; mixed-site hygiene does not isolate bindings from call-site constants.

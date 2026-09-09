@@ -1,0 +1,158 @@
+{
+  "device": "Huawei Mate 20 X EVR-AL00, Mali-G76, 1080x2244 density 480",
+  "base": "f4ae9246",
+  "profiler": "Android simpleperf: cpu-clock/cpu-cycles at 200 Hz, DWARF call stacks, monotonic 4998 ms route windows",
+  "production_change": "Shared copy-on-write shader specialization, cached override hash, constants assembled only on pipeline misses",
+  "native_sha256": "d04c5002b879be12e163c55f73d8eeeed8187b8fa1297dd5f43e1b5f0158cc3d",
+  "apk_sha256": "2db54760277694c1aaadb286cfd7dc166b29076be583e3634c55022f6324cb92",
+  "acceptance": {
+    "sequence": "ABABBABA",
+    "eligible": true,
+    "mean_fps": {
+      "A": 41.31652661064426,
+      "B": 41.71460542608722
+    },
+    "legs": [
+      {
+        "slot": "A",
+        "fps": 40.816326530612244,
+        "temperature_before_c": 35.0,
+        "temperature_after_c": 35.0
+      },
+      {
+        "slot": "B",
+        "fps": 42.41696678671468,
+        "temperature_before_c": 35.0,
+        "temperature_after_c": 35.0
+      },
+      {
+        "slot": "A",
+        "fps": 42.016806722689076,
+        "temperature_before_c": 35.0,
+        "temperature_after_c": 35.0
+      },
+      {
+        "slot": "B",
+        "fps": 41.60832166433287,
+        "temperature_before_c": 35.0,
+        "temperature_after_c": 35.0
+      },
+      {
+        "slot": "B",
+        "fps": 41.416566626650656,
+        "temperature_before_c": 35.0,
+        "temperature_after_c": 35.0
+      },
+      {
+        "slot": "A",
+        "fps": 41.01640656262505,
+        "temperature_before_c": 35.0,
+        "temperature_after_c": 35.0
+      },
+      {
+        "slot": "B",
+        "fps": 41.416566626650656,
+        "temperature_before_c": 36.0,
+        "temperature_after_c": 36.0
+      },
+      {
+        "slot": "A",
+        "fps": 41.416566626650656,
+        "temperature_before_c": 36.0,
+        "temperature_after_c": 36.0
+      }
+    ]
+  },
+  "cpu": {
+    "status": "complete",
+    "acceptance_eligible": false,
+    "means": {
+      "A": {
+        "hash_cpu_ms_per_frame": 0.23418566787409958,
+        "total_cpu_ms_per_frame": 19.468171749294697
+      },
+      "B": {
+        "hash_cpu_ms_per_frame": 0.04121989667193407,
+        "total_cpu_ms_per_frame": 17.638145689059158
+      }
+    },
+    "legs": [
+      {
+        "leg": "1-A",
+        "slot": "A",
+        "frames": 209,
+        "hash_cpu_ms_per_frame": 0.3349282296650718,
+        "total_cpu_ms_per_frame": 19.16267942583732,
+        "cpu_clock_samples": 801
+      },
+      {
+        "leg": "2-B",
+        "slot": "B",
+        "frames": 221,
+        "hash_cpu_ms_per_frame": 0.04524886877828054,
+        "total_cpu_ms_per_frame": 15.972850678733032,
+        "cpu_clock_samples": 706
+      },
+      {
+        "leg": "3-A",
+        "slot": "A",
+        "frames": 206,
+        "hash_cpu_ms_per_frame": 0.21844660194174756,
+        "total_cpu_ms_per_frame": 19.75728155339806,
+        "cpu_clock_samples": 814
+      },
+      {
+        "leg": "4-B",
+        "slot": "B",
+        "frames": 223,
+        "hash_cpu_ms_per_frame": 0.02242152466367713,
+        "total_cpu_ms_per_frame": 15.739910313901346,
+        "cpu_clock_samples": 702
+      },
+      {
+        "leg": "5-B",
+        "slot": "B",
+        "frames": 205,
+        "hash_cpu_ms_per_frame": 0.07317073170731708,
+        "total_cpu_ms_per_frame": 19.5609756097561,
+        "cpu_clock_samples": 802
+      },
+      {
+        "leg": "6-A",
+        "slot": "A",
+        "frames": 210,
+        "hash_cpu_ms_per_frame": 0.21428571428571427,
+        "total_cpu_ms_per_frame": 18.928571428571427,
+        "cpu_clock_samples": 795
+      },
+      {
+        "leg": "7-B",
+        "slot": "B",
+        "frames": 208,
+        "hash_cpu_ms_per_frame": 0.02403846153846154,
+        "total_cpu_ms_per_frame": 19.278846153846153,
+        "cpu_clock_samples": 802
+      },
+      {
+        "leg": "8-A",
+        "slot": "A",
+        "frames": 207,
+        "hash_cpu_ms_per_frame": 0.16908212560386474,
+        "total_cpu_ms_per_frame": 20.02415458937198,
+        "cpu_clock_samples": 829
+      }
+    ]
+  },
+  "validation": {
+    "focused_correctness": "passed; independent missing-set and missing-clear invalidation mutants fail GPU pixels",
+    "work_guards": "25 to 1 hash computations; 108 to 6 constants constructions",
+    "huawei_gles_guards": "passed",
+    "fmt": "passed",
+    "clippy": "passed",
+    "test": "passed",
+    "web": "passed",
+    "android": "cancelled at user request",
+    "robots": "not started; deferred to CI/merge at user request"
+  },
+  "target_met": false
+}

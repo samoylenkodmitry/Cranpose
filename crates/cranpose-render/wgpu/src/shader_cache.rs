@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, hash_map::Entry},
     hash::{Hash, Hasher},
 };
 
@@ -59,6 +59,8 @@ type PipelineKey = (
 );
 
 pub(crate) struct ShaderPipelineCache {
+    #[cfg(test)]
+    constants_builds: usize,
     backend: wgpu::Backend,
     cache: HashMap<PipelineKey, wgpu::RenderPipeline>,
     disabled: HashSet<u64>,
@@ -70,6 +72,8 @@ pub(crate) struct ShaderPipelineCache {
 impl ShaderPipelineCache {
     pub fn new(backend: wgpu::Backend, pipeline_cache: Option<wgpu::PipelineCache>) -> Self {
         Self {
+            #[cfg(test)]
+            constants_builds: 0,
             backend,
             cache: HashMap::new(),
             disabled: HashSet::new(),
@@ -96,12 +100,12 @@ impl ShaderPipelineCache {
     }
 
     fn force_declared_flags(
-        &self,
+        forced: &[&'static str],
         shader: &RuntimeShader,
         constants: &mut Vec<(&'static str, f64)>,
     ) {
         let source = shader.source();
-        for flag in &self.forced {
+        for flag in forced {
             if !source.contains(&format!("override {flag}:")) {
                 continue;
             }
@@ -124,21 +128,13 @@ impl ShaderPipelineCache {
         variant: ShaderDrawVariant,
     ) -> Option<&wgpu::RenderPipeline> {
         let source_hash = shader.source_hash();
-        let mut constants: Vec<(&'static str, f64)> = if shader_specialization_enabled() {
-            shader.overrides().to_vec()
-        } else {
-            Vec::new()
-        };
-        let overrides_hash = if constants.is_empty() {
-            0
-        } else {
+        let specialize = shader_specialization_enabled();
+        let overrides_hash = if specialize {
             shader.overrides_hash()
+        } else {
+            0
         };
-        self.force_declared_flags(shader, &mut constants);
         let split = shader.draw_split().zip(variant.constant());
-        if let Some((name, value)) = split {
-            constants.push((name, value));
-        }
         let cache_key = (
             source_hash,
             overrides_hash,
@@ -150,8 +146,22 @@ impl ShaderPipelineCache {
             return None;
         }
 
-        if self.cache.contains_key(&cache_key) {
-            return self.cache.get(&cache_key);
+        let entry = match self.cache.entry(cache_key) {
+            Entry::Occupied(entry) => return Some(entry.into_mut()),
+            Entry::Vacant(entry) => entry,
+        };
+        #[cfg(test)]
+        {
+            self.constants_builds += 1;
+        }
+        let mut constants = if specialize {
+            shader.overrides().to_vec()
+        } else {
+            Vec::new()
+        };
+        Self::force_declared_flags(&self.forced, shader, &mut constants);
+        if let Some((name, value)) = split {
+            constants.push((name, value));
         }
 
         let Some(shader_module) = create_runtime_shader_module(device, shader, self.backend) else {
@@ -186,8 +196,7 @@ impl ShaderPipelineCache {
             )
         };
 
-        self.cache.insert(cache_key, pipeline);
-        self.cache.get(&cache_key)
+        Some(entry.insert(pipeline))
     }
 }
 
@@ -322,6 +331,52 @@ mod tests {
 
     use super::validate_runtime_shader_source;
     use crate::pipeline::GPU_TEXT_BRUSH_EFFECT_SHADER;
+
+    #[test]
+    fn warm_pipeline_lookups_do_not_rebuild_constants() {
+        use super::{RuntimeShaderPipelineMode, ShaderDrawVariant};
+        use crate::effect_renderer::EffectRenderer;
+
+        let (_lock, device, _queue) = crate::frame_graph::upload_test_device();
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let mut renderer =
+            EffectRenderer::new(&device, None, format, device.adapter_info().backend);
+        let mut shader = cranpose_ui_graphics::RuntimeShader::new(&format!(
+            "{}\noverride RED: bool = false;\noverride SPLIT: i32 = 0;",
+            valid_shader()
+        ));
+        shader.set_override("RED", 0.0);
+        shader.set_draw_split(Some("SPLIT"));
+        for forced in [false, true, false] {
+            renderer
+                .shader_cache
+                .set_forced_flags(forced.then_some("RED").into_iter());
+            for _ in 0..12 {
+                for variant in [
+                    ShaderDrawVariant::Whole,
+                    ShaderDrawVariant::Interior,
+                    ShaderDrawVariant::Rim,
+                ] {
+                    assert!(
+                        renderer
+                            .shader_cache
+                            .get_or_create(
+                                &device,
+                                &shader,
+                                format,
+                                &renderer.effect_texture_bind_group_layout,
+                                &renderer.effect_uniform_bind_group_layout,
+                                RuntimeShaderPipelineMode::Replace,
+                                variant,
+                            )
+                            .is_some()
+                    );
+                }
+            }
+        }
+        assert_eq!(renderer.shader_cache.cache.len(), 6);
+        assert_eq!(renderer.shader_cache.constants_builds, 6);
+    }
 
     fn valid_shader() -> String {
         format!(

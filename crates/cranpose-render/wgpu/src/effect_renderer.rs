@@ -2266,6 +2266,10 @@ fn composite_sampling_mode_value(sample_mode: CompositeSampleMode) -> f32 {
 }
 
 #[cfg(test)]
+#[path = "effect_renderer_tests.rs"]
+mod shader_tests;
+
+#[cfg(test)]
 mod tests {
     use super::BlurUniforms;
 

@@ -123,14 +123,27 @@ pub struct RuntimeShader {
     source: Arc<str>,
     source_hash: u64,
     uniforms: RuntimeShaderUniforms,
-    overrides: Vec<(&'static str, f64)>,
+    specialization: Option<Arc<ShaderSpecialization>>,
     input_padding: f32,
     output_padding: f32,
     batched_source: bool,
-    substrates: Vec<SubstrateSpec>,
-    draw_split: Option<&'static str>,
     domains: Option<Box<ShaderDomains>>,
 }
+
+#[derive(Clone, Debug, Default)]
+struct ShaderSpecialization {
+    overrides: Vec<(&'static str, f64)>,
+    overrides_hash: OnceLock<u64>,
+    substrates: Vec<SubstrateSpec>,
+    draw_split: Option<&'static str>,
+}
+
+static DEFAULT_SHADER_SPECIALIZATION: ShaderSpecialization = ShaderSpecialization {
+    overrides: Vec::new(),
+    overrides_hash: OnceLock::new(),
+    substrates: Vec::new(),
+    draw_split: None,
+};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 struct ShaderDomains {
@@ -163,6 +176,16 @@ pub enum SubstrateSpec {
 }
 
 impl SubstrateSpec {
+    fn same_bits(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Average { block: a }, Self::Average { block: b }) => a == b,
+            (Self::Blur { radius_px: a }, Self::Blur { radius_px: b }) => {
+                a.to_bits() == b.to_bits()
+            }
+            _ => false,
+        }
+    }
+
     fn hash_bits<H: std::hash::Hasher>(&self, state: &mut H) {
         use std::hash::Hash;
         match self {
@@ -301,14 +324,22 @@ impl RuntimeShader {
             source,
             source_hash,
             uniforms: RuntimeShaderUniforms::new(),
-            overrides: Vec::new(),
+            specialization: None,
             input_padding: 0.0,
             output_padding: 0.0,
             batched_source: false,
-            substrates: Vec::new(),
-            draw_split: None,
             domains: None,
         }
+    }
+
+    fn specialization(&self) -> &ShaderSpecialization {
+        self.specialization
+            .as_deref()
+            .unwrap_or(&DEFAULT_SHADER_SPECIALIZATION)
+    }
+
+    fn specialization_mut(&mut self) -> &mut ShaderSpecialization {
+        Arc::make_mut(self.specialization.get_or_insert_with(Arc::default))
     }
 
     /// Fixes a pipeline-overridable constant (`override NAME: T = ...;` in
@@ -318,45 +349,58 @@ impl RuntimeShader {
     /// own pipeline; renderers use this to fold a material's inactive
     /// features away without changing the shader text.
     pub fn set_override(&mut self, name: &'static str, value: f64) {
-        match self
-            .overrides
-            .binary_search_by(|(existing, _)| existing.cmp(&name))
-        {
-            Ok(index) => self.overrides[index].1 = value,
-            Err(index) => self.overrides.insert(index, (name, value)),
+        let position = self
+            .overrides()
+            .binary_search_by(|(existing, _)| existing.cmp(&name));
+        if position.is_ok_and(|index| self.overrides()[index].1.to_bits() == value.to_bits()) {
+            return;
+        }
+        let specialization = self.specialization_mut();
+        specialization.overrides_hash.take();
+        let overrides = &mut specialization.overrides;
+        match position {
+            Ok(index) => overrides[index].1 = value,
+            Err(index) => overrides.insert(index, (name, value)),
         }
     }
 
     /// Removes a pipeline override by name, returning whether one was present.
     pub fn clear_override(&mut self, name: &str) -> bool {
         let Ok(index) = self
-            .overrides
+            .overrides()
             .binary_search_by(|(existing, _)| (*existing).cmp(name))
         else {
             return false;
         };
-        self.overrides.remove(index);
+        let specialization = self.specialization_mut();
+        specialization.overrides_hash.take();
+        specialization.overrides.remove(index);
         true
     }
 
     /// The pipeline-overridable constants fixed by [`Self::set_override`],
     /// ordered by name.
     pub fn overrides(&self) -> &[(&'static str, f64)] {
-        &self.overrides
+        &self.specialization().overrides
     }
 
     /// Hash of the fixed override set; zero when no override is fixed.
     pub fn overrides_hash(&self) -> u64 {
-        if self.overrides.is_empty() {
+        let specialization = self.specialization();
+        if specialization.overrides.is_empty() {
             return 0;
         }
-        let mut bytes = Vec::new();
-        for (name, value) in &self.overrides {
-            bytes.extend_from_slice(name.as_bytes());
-            bytes.push(0);
-            bytes.extend_from_slice(&value.to_bits().to_le_bytes());
-        }
-        hash_shader_bytes(&bytes)
+        *specialization.overrides_hash.get_or_init(|| {
+            #[cfg(test)]
+            OVERRIDE_HASH_COMPUTATIONS.with(|count| count.set(count.get() + 1));
+            let mut bytes = Vec::new();
+            for (name, value) in &specialization.overrides {
+                bytes.extend_from_slice(name.as_bytes());
+                bytes.push(0);
+                bytes.extend_from_slice(&value.to_bits().to_le_bytes());
+            }
+            hash_shader_bytes(&bytes)
+        })
     }
 
     /// Declares how far the shader may sample outside its effect rect, in
@@ -534,22 +578,31 @@ impl RuntimeShader {
             substrates.len() <= MAX_SUBSTRATES,
             "a runtime shader declares at most {MAX_SUBSTRATES} substrates"
         );
-        self.substrates = substrates;
+        if self.substrates().len() == substrates.len()
+            && self
+                .substrates()
+                .iter()
+                .zip(&substrates)
+                .all(|(existing, incoming)| existing.same_bits(incoming))
+        {
+            return;
+        }
+        self.specialization_mut().substrates = substrates;
     }
 
     /// The substrates the shader declared, in slot order.
     pub fn substrates(&self) -> &[SubstrateSpec] {
-        &self.substrates
+        &self.specialization().substrates
     }
 
     /// Hashes the declared substrates and the draw split into `state`.
     pub fn hash_substrates<H: std::hash::Hasher>(&self, state: &mut H) {
         use std::hash::Hash;
-        self.substrates.len().hash(state);
-        for substrate in &self.substrates {
+        self.substrates().len().hash(state);
+        for substrate in self.substrates() {
             substrate.hash_bits(state);
         }
-        self.draw_split.hash(state);
+        self.draw_split().hash(state);
     }
 
     /// Declares an `override NAME: i32` the renderer sets to 1 and 2 to draw
@@ -559,12 +612,15 @@ impl RuntimeShader {
     /// about the draw changes: the two draws partition the pixels the one
     /// draw shaded and land on the same bits.
     pub fn set_draw_split(&mut self, override_name: Option<&'static str>) {
-        self.draw_split = override_name;
+        if self.draw_split() == override_name {
+            return;
+        }
+        self.specialization_mut().draw_split = override_name;
     }
 
     /// The override selecting the interior or the rim draw, when declared.
     pub fn draw_split(&self) -> Option<&'static str> {
-        self.draw_split
+        self.specialization().draw_split
     }
 
     /// Get the WGSL source code.
@@ -616,23 +672,28 @@ impl RuntimeShader {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    static OVERRIDE_HASH_COMPUTATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 impl PartialEq for RuntimeShader {
     fn eq(&self, other: &Self) -> bool {
         self.source_hash == other.source_hash
             && (Arc::ptr_eq(&self.source, &other.source)
                 || self.source.as_ref() == other.source.as_ref())
             && self.uniforms == other.uniforms
-            && self.overrides.len() == other.overrides.len()
+            && self.overrides().len() == other.overrides().len()
             && self
-                .overrides
+                .overrides()
                 .iter()
-                .zip(&other.overrides)
+                .zip(other.overrides())
                 .all(|(a, b)| a.0 == b.0 && a.1.to_bits() == b.1.to_bits())
             && self.input_padding.to_bits() == other.input_padding.to_bits()
             && self.output_padding.to_bits() == other.output_padding.to_bits()
             && self.batched_source == other.batched_source
-            && self.substrates == other.substrates
-            && self.draw_split == other.draw_split
+            && self.substrates() == other.substrates()
+            && self.draw_split() == other.draw_split()
             && self.domains == other.domains
     }
 }
@@ -903,6 +964,96 @@ mod tests {
         lowered.set_override("FLAG", 0.0);
         assert_ne!(raised.overrides_hash(), lowered.overrides_hash());
         assert_ne!(raised, lowered);
+    }
+
+    #[test]
+    fn unchanged_override_lookups_share_one_hash_computation() {
+        let mut shader = RuntimeShader::new("");
+        shader.set_override("FLAG", 1.0);
+        shader.set_override("SCALE", 0.5);
+        OVERRIDE_HASH_COMPUTATIONS.with(|count| count.set(0));
+        let expected = shader.overrides_hash();
+        for _ in 0..24 {
+            let mut copy = shader.clone();
+            copy.set_float(0, 7.0);
+            copy.set_override("FLAG", 1.0);
+            assert!(!copy.clear_override("ABSENT"));
+            assert_eq!(copy.overrides_hash(), expected);
+        }
+        assert_eq!(OVERRIDE_HASH_COMPUTATIONS.with(std::cell::Cell::get), 1);
+    }
+
+    #[test]
+    fn override_hash_tracks_clone_mutations_and_float_bits() {
+        fn independent_hash(shader: &RuntimeShader) -> u64 {
+            let bytes: Vec<u8> = shader
+                .overrides()
+                .iter()
+                .flat_map(|(name, value)| {
+                    name.bytes().chain([0]).chain(value.to_bits().to_le_bytes())
+                })
+                .collect();
+            if bytes.is_empty() {
+                0
+            } else {
+                hash_shader_bytes(&bytes)
+            }
+        }
+
+        let mut original = RuntimeShader::new("");
+        original.set_override("VALUE", 0.0);
+        let first = original.overrides_hash();
+        assert_eq!(first, independent_hash(&original));
+        for value in [
+            -0.0,
+            0.5,
+            f64::INFINITY,
+            f64::from_bits(0x7ff8_0000_0000_0001),
+        ] {
+            let mut changed = original.clone();
+            changed.set_override("VALUE", value);
+            assert_eq!(changed.overrides_hash(), independent_hash(&changed));
+            assert_ne!(changed.overrides_hash(), first);
+            changed.set_override("ADDED", 1.0);
+            assert_eq!(changed.overrides_hash(), independent_hash(&changed));
+            assert!(changed.clear_override("VALUE"));
+            assert_eq!(changed.overrides_hash(), independent_hash(&changed));
+            assert!(changed.clear_override("ADDED"));
+            assert_eq!(changed.overrides_hash(), 0);
+            assert_eq!(original.overrides_hash(), first);
+        }
+    }
+
+    #[test]
+    fn shader_clones_share_declarations_and_isolate_mutation() {
+        let mut shader = RuntimeShader::new("fn effect_fs() {}");
+        shader.set_override("FLAG", 1.0);
+        shader.set_substrates(vec![SubstrateSpec::Average { block: 4 }]);
+        shader.set_draw_split(Some("SPLIT"));
+        let support = Rect {
+            x: 1.0,
+            y: 2.0,
+            width: 30.0,
+            height: 40.0,
+        };
+        shader.set_output_support(Some(support));
+        let mut cloned = shader.clone();
+        assert_eq!(cloned.overrides().as_ptr(), shader.overrides().as_ptr());
+        assert_eq!(cloned.substrates().as_ptr(), shader.substrates().as_ptr());
+        cloned.set_float(0, 2.0);
+        assert!(shader.uniforms().is_empty());
+        assert_eq!(cloned.overrides().as_ptr(), shader.overrides().as_ptr());
+        cloned.set_override("FLAG", 2.0);
+        assert_eq!(cloned.substrates(), shader.substrates());
+        assert_eq!(cloned.draw_split(), shader.draw_split());
+        cloned.set_substrates(vec![SubstrateSpec::Average { block: 8 }]);
+        cloned.set_draw_split(None);
+        cloned.set_output_support(None);
+        assert_eq!(shader.overrides(), &[("FLAG", 1.0)]);
+        assert_eq!(shader.substrates(), &[SubstrateSpec::Average { block: 4 }]);
+        assert_eq!(shader.draw_split(), Some("SPLIT"));
+        assert_eq!(shader.output_support(), Some(support));
+        assert_ne!(cloned, shader);
     }
 
     use super::*;
@@ -1253,5 +1404,38 @@ mod tests {
         }));
         assert_eq!(shader.output_support(), None);
         assert_eq!(shader, plain);
+    }
+    #[test]
+    fn unchanged_shader_declarations_keep_their_storage() {
+        let mut shader = RuntimeShader::new("fn effect_fs() {}");
+        shader.set_substrates(Vec::new());
+        shader.set_draw_split(None);
+        assert!(!shader.clear_override("MISSING"));
+        assert!(shader.specialization.is_none());
+        shader.set_override("FLAG", 1.0);
+        let mut cloned = shader.clone();
+        cloned.set_override("FLAG", 1.0);
+        cloned.set_substrates(Vec::new());
+        cloned.set_draw_split(None);
+        assert!(!cloned.clear_override("MISSING"));
+        assert_eq!(cloned.overrides().as_ptr(), shader.overrides().as_ptr());
+    }
+
+    #[test]
+    fn shader_substrate_setters_preserve_float_bits_when_detaching() {
+        let mut original = RuntimeShader::new("fn effect_fs() {}");
+        original.set_substrates(vec![SubstrateSpec::Blur { radius_px: 0.0 }]);
+        let mut cloned = original.clone();
+        cloned.set_substrates(vec![SubstrateSpec::Blur { radius_px: 0.0 }]);
+        assert_eq!(cloned.substrates().as_ptr(), original.substrates().as_ptr());
+        cloned.set_substrates(vec![SubstrateSpec::Blur { radius_px: -0.0 }]);
+        let [SubstrateSpec::Blur { radius_px }] = cloned.substrates() else {
+            panic!("one blur substrate");
+        };
+        assert_eq!(radius_px.to_bits(), (-0.0_f32).to_bits());
+        let [SubstrateSpec::Blur { radius_px }] = original.substrates() else {
+            panic!("original blur substrate");
+        };
+        assert_eq!(radius_px.to_bits(), 0.0_f32.to_bits());
     }
 }
