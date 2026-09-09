@@ -722,6 +722,7 @@ impl ResolvedGlass {
         let mut shader = SHADER
             .get_or_init(|| {
                 let mut shader = RuntimeShader::new(LIQUID_GLASS_WGSL);
+                shader.set_float(GLASS_ACTIVITY_UNIFORM, 1.0);
                 specialize_liquid_glass(&mut shader);
                 shader
             })
@@ -1214,19 +1215,33 @@ mod tests {
     }
 
     #[test]
-    fn template_specialization_follows_each_materials_dispersion() {
-        for dispersion in [0.6, 0.0, 0.3, 0.0] {
+    fn template_specialization_follows_each_materials_dispersion_and_activity() {
+        for (dispersion, activity) in [(0.6, 0.0), (0.0, 0.5), (0.3, 1.0), (0.0, 0.0)] {
             let resolved = Glass::regular()
                 .dispersion(dispersion)
                 .resolve(&light_colors());
-            let shader = terminal_shader(resolved.backdrop_effect(1.0, GlassDynamics::default()));
-            assert_eq!(shader.uniforms()[GLASS_DISPERSION_UNIFORM], dispersion);
+            let shader = terminal_shader(resolved.backdrop_effect(
+                1.0,
+                GlassDynamics {
+                    activity: Some(activity),
+                    ..GlassDynamics::default()
+                },
+            ));
+            assert_eq!(
+                shader.uniforms()[GLASS_DISPERSION_UNIFORM],
+                dispersion * activity
+            );
+            assert_eq!(shader.uniforms()[GLASS_ACTIVITY_UNIFORM], activity);
+            assert_eq!(
+                shader.overrides().contains(&("GLASS_FULL_ACTIVITY", 1.0)),
+                activity == 1.0
+            );
             assert_eq!(
                 shader
                     .overrides()
                     .iter()
                     .any(|(name, _)| { *name == cranpose_ui_graphics::GLASS_DISPERSION_OFF_FLAG }),
-                dispersion == 0.0
+                dispersion * activity == 0.0
             );
         }
     }
