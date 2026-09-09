@@ -2,6 +2,7 @@
 
 - Requires Python 3.11+, Pillow, adb, cargo-ndk and the app’s Android NDK; video capture also requires ffmpeg and screenrecord or scrcpy.
 - Build immutable source archives and native provenance with `python3 scripts/android_benchmark_build.py --help`; keep reports outside the disposable build cache.
+- Set `RUSTUP_TOOLCHAIN` to the framework's pinned toolchain for both builds. Compilation runs inside the frozen application, whose toolchain file can otherwise select a different compiler; pair validation rejects that mismatch before device measurement.
 - Package one verified native ABI into an isolated signed APK with `python3 scripts/android_benchmark_package.py --help`; both revisions must share their application payload and build settings.
 - Compile the device input helper with `./perf_android.sh build-route --android-jar SDK/android.jar --d8 BUILD_TOOLS/d8 --output OUTPUT`.
 - Configure display size, density, input timing and distinct visible endpoints in a route JSON; examples live in [scripts/android/routes](../scripts/android/routes).

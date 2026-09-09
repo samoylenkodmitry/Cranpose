@@ -4,6 +4,7 @@
 API, application sources and picture correctness stay fixed.
 
 - Track the remaining device frame budgets in [#626](https://github.com/samoylenkodmitry/Cranpose/issues/626); renderer correctness fixes do not close this target.
+- [Huawei Showcase frame-budget measurements](huawei_showcase_frame_budget.md): two complete blur-specialization comparisons give +3.29% and −2.53%; retain the pixel guard and reject the added pipelines.
 
 **Required workloads on Huawei and Pixel Watch:** Cranorbit Megaboss,
 Showcase full scroll, and **Cranscan Settings scroll**.

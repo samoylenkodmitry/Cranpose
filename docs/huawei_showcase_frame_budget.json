@@ -1,0 +1,425 @@
+{
+  "date": "2026-09-09",
+  "device": "Huawei Mate 20 X EVR-AL00, Kirin 980 / Mali-G76",
+  "framework_base": "f4ae9246",
+  "application": "Unchanged Showcase 0.1.12",
+  "target": "60 Hz presentation and less than 8 ms of frame work",
+  "target_met": false,
+  "decision": "Reject blur tile pipeline specialization; retain the packed-domain pixel guard and adapter-supported test device limits.",
+  "route": {
+    "kind": "scroll",
+    "package": "com.cranpose.showcase",
+    "activity": "dev.cranpose.android.CranposeActivity",
+    "size": [
+      1080,
+      2244
+    ],
+    "density": 480,
+    "x": 300,
+    "y_start": 1770,
+    "y_end": 620,
+    "count": 3,
+    "duration_ms": 1660,
+    "period_ms": 1666,
+    "window_ms": 4998,
+    "timing_tolerance_ms": 100,
+    "start_text": "Search the",
+    "end_text": "Proxima Centauri b",
+    "motion_region": [
+      80,
+      380,
+      900,
+      1800
+    ]
+  },
+  "route_sha256": "1c6c0ebb7597e703861cecbd731e507e1e2f74beced7f1bc692eb19dd6724ac2",
+  "sequences": [
+    {
+      "name": "main-baseline-repeat",
+      "report_sha256": "505d24705e202f27f58975b46b3217a25594aa1cbb9d6d82e279962fe8cad0d3",
+      "status": "complete",
+      "acceptance_eligible": true,
+      "mean_fps": {
+        "A": 42.6381446433322,
+        "B": 44.31564584225369
+      },
+      "legs": [
+        {
+          "slot": "A",
+          "index": 1,
+          "fps": 41.01640656262505,
+          "frames": 205,
+          "elapsed_s": 4.998,
+          "native_sha256": "f2f007f766b52ba6feb36ddd3d1c9ec76f1429907358334f9c0bec6f3fcb2e38",
+          "temperature_c": [
+            32.0,
+            32.0
+          ]
+        },
+        {
+          "slot": "B",
+          "index": 2,
+          "fps": 43.21728691476591,
+          "frames": 216,
+          "elapsed_s": 4.998,
+          "native_sha256": "f2f007f766b52ba6feb36ddd3d1c9ec76f1429907358334f9c0bec6f3fcb2e38",
+          "temperature_c": [
+            32.0,
+            33.0
+          ]
+        },
+        {
+          "slot": "A",
+          "index": 3,
+          "fps": 41.01640656262505,
+          "frames": 205,
+          "elapsed_s": 4.998,
+          "native_sha256": "f2f007f766b52ba6feb36ddd3d1c9ec76f1429907358334f9c0bec6f3fcb2e38",
+          "temperature_c": [
+            33.0,
+            33.0
+          ]
+        },
+        {
+          "slot": "B",
+          "index": 4,
+          "fps": 41.60832166433287,
+          "frames": 208,
+          "elapsed_s": 4.999,
+          "native_sha256": "f2f007f766b52ba6feb36ddd3d1c9ec76f1429907358334f9c0bec6f3fcb2e38",
+          "temperature_c": [
+            32.0,
+            32.0
+          ]
+        },
+        {
+          "slot": "B",
+          "index": 5,
+          "fps": 41.21648659463785,
+          "frames": 206,
+          "elapsed_s": 4.998,
+          "native_sha256": "f2f007f766b52ba6feb36ddd3d1c9ec76f1429907358334f9c0bec6f3fcb2e38",
+          "temperature_c": [
+            33.0,
+            33.0
+          ]
+        },
+        {
+          "slot": "A",
+          "index": 6,
+          "fps": 41.300877893056665,
+          "frames": 207,
+          "elapsed_s": 5.012,
+          "native_sha256": "f2f007f766b52ba6feb36ddd3d1c9ec76f1429907358334f9c0bec6f3fcb2e38",
+          "temperature_c": [
+            33.0,
+            33.0
+          ]
+        },
+        {
+          "slot": "B",
+          "index": 7,
+          "fps": 51.22048819527811,
+          "frames": 256,
+          "elapsed_s": 4.998,
+          "native_sha256": "f2f007f766b52ba6feb36ddd3d1c9ec76f1429907358334f9c0bec6f3fcb2e38",
+          "temperature_c": [
+            33.0,
+            33.0
+          ]
+        },
+        {
+          "slot": "A",
+          "index": 8,
+          "fps": 47.21888755502201,
+          "frames": 236,
+          "elapsed_s": 4.998,
+          "native_sha256": "f2f007f766b52ba6feb36ddd3d1c9ec76f1429907358334f9c0bec6f3fcb2e38",
+          "temperature_c": [
+            33.0,
+            33.0
+          ]
+        }
+      ]
+    },
+    {
+      "name": "blur-comparison-repeat",
+      "report_sha256": "f6dbae64d34ea56bafe676558627315153e39b9463a787276ec98d413833e5f8",
+      "status": "complete",
+      "acceptance_eligible": true,
+      "mean_fps": {
+        "A": 44.40928710548594,
+        "B": 45.86834733893557
+      },
+      "legs": [
+        {
+          "slot": "A",
+          "index": 1,
+          "fps": 48.819527811124445,
+          "frames": 244,
+          "elapsed_s": 4.998,
+          "native_sha256": "ec918c3e782ac2ce1aeaa2876438a4dec726d73c8091517b23fd8b1424e066d1",
+          "temperature_c": [
+            33.0,
+            33.0
+          ]
+        },
+        {
+          "slot": "B",
+          "index": 2,
+          "fps": 43.41736694677871,
+          "frames": 217,
+          "elapsed_s": 4.998,
+          "native_sha256": "657d05475c2f0a83be36afb273b2e663e384c71f358cd06a910a48e17dd5ef9a",
+          "temperature_c": [
+            33.0,
+            33.0
+          ]
+        },
+        {
+          "slot": "A",
+          "index": 3,
+          "fps": 42.38304678128749,
+          "frames": 212,
+          "elapsed_s": 5.002,
+          "native_sha256": "ec918c3e782ac2ce1aeaa2876438a4dec726d73c8091517b23fd8b1424e066d1",
+          "temperature_c": [
+            33.0,
+            34.0
+          ]
+        },
+        {
+          "slot": "B",
+          "index": 4,
+          "fps": 51.22048819527811,
+          "frames": 256,
+          "elapsed_s": 4.998,
+          "native_sha256": "657d05475c2f0a83be36afb273b2e663e384c71f358cd06a910a48e17dd5ef9a",
+          "temperature_c": [
+            34.0,
+            34.0
+          ]
+        },
+        {
+          "slot": "B",
+          "index": 5,
+          "fps": 42.21688675470188,
+          "frames": 211,
+          "elapsed_s": 4.998,
+          "native_sha256": "657d05475c2f0a83be36afb273b2e663e384c71f358cd06a910a48e17dd5ef9a",
+          "temperature_c": [
+            34.0,
+            34.0
+          ]
+        },
+        {
+          "slot": "A",
+          "index": 6,
+          "fps": 41.61664665866346,
+          "frames": 208,
+          "elapsed_s": 4.998,
+          "native_sha256": "ec918c3e782ac2ce1aeaa2876438a4dec726d73c8091517b23fd8b1424e066d1",
+          "temperature_c": [
+            34.0,
+            34.0
+          ]
+        },
+        {
+          "slot": "B",
+          "index": 7,
+          "fps": 46.61864745898359,
+          "frames": 233,
+          "elapsed_s": 4.998,
+          "native_sha256": "657d05475c2f0a83be36afb273b2e663e384c71f358cd06a910a48e17dd5ef9a",
+          "temperature_c": [
+            34.0,
+            34.0
+          ]
+        },
+        {
+          "slot": "A",
+          "index": 8,
+          "fps": 44.817927170868344,
+          "frames": 224,
+          "elapsed_s": 4.998,
+          "native_sha256": "ec918c3e782ac2ce1aeaa2876438a4dec726d73c8091517b23fd8b1424e066d1",
+          "temperature_c": [
+            35.0,
+            35.0
+          ]
+        }
+      ]
+    },
+    {
+      "name": "blur-confirmation",
+      "report_sha256": "2f39de2bfa5b59aa10bab9cb59af5cfb301b7c261eac04fa960cd43a1e04a04d",
+      "status": "complete",
+      "acceptance_eligible": true,
+      "mean_fps": {
+        "A": 45.46409481976427,
+        "B": 44.31331444360101
+      },
+      "legs": [
+        {
+          "slot": "A",
+          "index": 1,
+          "fps": 50.42016806722689,
+          "frames": 252,
+          "elapsed_s": 4.998,
+          "native_sha256": "ec918c3e782ac2ce1aeaa2876438a4dec726d73c8091517b23fd8b1424e066d1",
+          "temperature_c": [
+            34.0,
+            34.0
+          ]
+        },
+        {
+          "slot": "B",
+          "index": 2,
+          "fps": 47.0188075230092,
+          "frames": 235,
+          "elapsed_s": 4.998,
+          "native_sha256": "657d05475c2f0a83be36afb273b2e663e384c71f358cd06a910a48e17dd5ef9a",
+          "temperature_c": [
+            34.0,
+            34.0
+          ]
+        },
+        {
+          "slot": "A",
+          "index": 3,
+          "fps": 40.408081616323265,
+          "frames": 202,
+          "elapsed_s": 4.999,
+          "native_sha256": "ec918c3e782ac2ce1aeaa2876438a4dec726d73c8091517b23fd8b1424e066d1",
+          "temperature_c": [
+            34.0,
+            34.0
+          ]
+        },
+        {
+          "slot": "B",
+          "index": 4,
+          "fps": 45.80916183236648,
+          "frames": 229,
+          "elapsed_s": 4.999,
+          "native_sha256": "657d05475c2f0a83be36afb273b2e663e384c71f358cd06a910a48e17dd5ef9a",
+          "temperature_c": [
+            34.0,
+            34.0
+          ]
+        },
+        {
+          "slot": "B",
+          "index": 5,
+          "fps": 42.016806722689076,
+          "frames": 210,
+          "elapsed_s": 4.998,
+          "native_sha256": "657d05475c2f0a83be36afb273b2e663e384c71f358cd06a910a48e17dd5ef9a",
+          "temperature_c": [
+            34.0,
+            34.0
+          ]
+        },
+        {
+          "slot": "A",
+          "index": 6,
+          "fps": 49.61984793917567,
+          "frames": 248,
+          "elapsed_s": 4.998,
+          "native_sha256": "ec918c3e782ac2ce1aeaa2876438a4dec726d73c8091517b23fd8b1424e066d1",
+          "temperature_c": [
+            34.0,
+            34.0
+          ]
+        },
+        {
+          "slot": "B",
+          "index": 7,
+          "fps": 42.40848169633927,
+          "frames": 212,
+          "elapsed_s": 4.999,
+          "native_sha256": "657d05475c2f0a83be36afb273b2e663e384c71f358cd06a910a48e17dd5ef9a",
+          "temperature_c": [
+            35.0,
+            35.0
+          ]
+        },
+        {
+          "slot": "A",
+          "index": 8,
+          "fps": 41.40828165633127,
+          "frames": 207,
+          "elapsed_s": 4.999,
+          "native_sha256": "ec918c3e782ac2ce1aeaa2876438a4dec726d73c8091517b23fd8b1424e066d1",
+          "temperature_c": [
+            35.0,
+            35.0
+          ]
+        }
+      ]
+    }
+  ],
+  "diagnostic_stages": {
+    "method": "Central complete 30-frame diagnostic windows, bounded by successive log flushes within BEGIN+1.5 to BEGIN+4.5 seconds. The full marker span minus measured route duration is below 1.5 seconds in both runs. These are elapsed stage spans, not scheduled CPU time or GPU timing; the present worker overlaps producer work and acquisition includes handoff delay.",
+    "routes": [
+      {
+        "route": "1",
+        "windows": 4,
+        "frames": 120,
+        "marker_span_s": 5.8620000000009895,
+        "helper_overhead_bound_s": 0.8640000000009893,
+        "means_ms": {
+          "period": 22.4925,
+          "poll": 6.965,
+          "update": 3.7,
+          "sync": 0.1225,
+          "acquire": 11.49,
+          "render": 6.2675,
+          "present": 15.76,
+          "cpu": 25.855
+        }
+      },
+      {
+        "route": "2",
+        "windows": 4,
+        "frames": 120,
+        "marker_span_s": 5.822999999996682,
+        "helper_overhead_bound_s": 0.8249999999966819,
+        "means_ms": {
+          "period": 21.7875,
+          "poll": 6.9875,
+          "update": 3.1975,
+          "sync": 0.15,
+          "acquire": 11.25,
+          "render": 5.6825,
+          "present": 15.7275,
+          "cpu": 24.7625
+        }
+      }
+    ]
+  },
+  "ineligible_sequences": {
+    "main-baseline": "PNG transfer timeout in leg 5",
+    "blur-comparison": "Native input route exceeded timing tolerance in leg 3",
+    "blur-gpu-counters": "Mali sampler failed to initialize in leg 2",
+    "blur-gpu-counters-repeat": "Mali sampler failed to initialize in leg 2"
+  },
+  "raw_evidence_directory": "/tmp/cranpose-huawei-20260909",
+  "retained_guard": "mixed_blur_tile_modes_preserve_dynamic_shader_pixels",
+  "guard_mutation": "Force production tiled_sample to clamp; the frozen uniform-driven reference stays unchanged.",
+  "validation": {
+    "workspace_tests_passed": 4885,
+    "workspace_tests_failed": 0,
+    "precommit": "passed",
+    "fmt": "passed",
+    "clippy": "passed",
+    "web_release": "passed; 12168009 / 14680064 bytes",
+    "android": "passed",
+    "robot_gpu_passed": 164,
+    "robot_captures_passed": 4,
+    "robot_capability_skips": 0,
+    "huawei_gles_pixel_guard": "passed",
+    "compiler_warnings": 0
+  },
+  "raw_evidence_archive": "/Users/s/develop/performance-evidence/huawei-showcase-20260909.tar.gz"
+}
