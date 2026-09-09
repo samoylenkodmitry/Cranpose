@@ -1369,23 +1369,21 @@ impl StageLayout {
         hasher.finish()
     }
 
-    fn atlas_views(&self) -> Vec<AtlasView<'_>> {
-        (0..self.atlas_sizes.len())
-            .map(|atlas| AtlasView {
-                layout: self,
-                atlas,
-                members: self
-                    .placements
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(index, placement)| {
-                        placement
-                            .filter(|placement| placement.atlas == atlas)
-                            .map(|placement| (index, placement))
-                    })
-                    .collect(),
-            })
-            .collect()
+    fn atlas_views(&self) -> impl Iterator<Item = AtlasView<'_>> {
+        (0..self.atlas_sizes.len()).map(|atlas| AtlasView {
+            layout: self,
+            atlas,
+            members: self
+                .placements
+                .iter()
+                .enumerate()
+                .filter_map(|(index, placement)| {
+                    placement
+                        .filter(|placement| placement.atlas == atlas)
+                        .map(|placement| (index, placement))
+                })
+                .collect(),
+        })
     }
 
     fn restrict(&self, indices: &[usize]) -> Self {
@@ -2426,19 +2424,16 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
     ) {
         let limit = self.renderer.max_texture_dim().min(MAX_ATLAS_DIM);
         let mut packer = AtlasPacker::new(limit);
-        let order: Vec<usize> = (0..items.len()).collect();
         let mut placements: Vec<Option<AtlasPlacement>> = vec![None; items.len()];
-        for index in &order {
-            let item = items[*index];
+        for (index, item) in items.iter().enumerate() {
             if item.batched.is_none() {
                 continue;
             }
             let (width, height) = item.capture_rect.pixel_size();
-            placements[*index] = packer.place(width, height);
+            placements[index] = packer.place(width, height);
         }
         let mut substrates: Vec<Vec<PlannedSubstrate>> = vec![Vec::new(); items.len()];
-        for index in order {
-            let item = items[index];
+        for (index, item) in items.iter().enumerate() {
             let Some(placement) = placements[index] else {
                 continue;
             };
@@ -2478,15 +2473,12 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let mut side_sizes = vec![(0, 0); atlas_sizes.len()];
         let mut side: Vec<SideSlots> = vec![SideSlots::default(); items.len()];
         for (atlas_index, side_size) in side_sizes.iter_mut().enumerate() {
-            let members: Vec<usize> = (0..items.len())
-                .filter(|index| {
-                    placements[*index].is_some_and(|placement| placement.atlas == atlas_index)
-                })
-                .collect();
-            let blurred: Vec<(usize, BlurSpec)> = members
-                .iter()
-                .filter_map(|index| Some((*index, items[*index].batched?.blur()?)))
-                .collect();
+            let members = (0..items.len()).filter(|index| {
+                placements[*index].is_some_and(|placement| placement.atlas == atlas_index)
+            });
+            let blurred = members
+                .clone()
+                .filter_map(|index| Some((index, items[index].batched?.blur()?)));
             let mut side_packer = AtlasPacker::new(limit);
             let mut first_atlas = |width: u32, height: u32| {
                 side_packer
@@ -2500,10 +2492,10 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                     blur_scratch_size(blur.radius_x * scale, blur.radius_y * scale, width, height);
                 side[index].blur = first_atlas(scaled_width, scaled_height);
             }
-            for index in &members {
-                for planned in &substrates[*index] {
+            for index in members {
+                for planned in &substrates[index] {
                     if let Some(slot) = first_atlas(planned.size.0, planned.size.1) {
-                        side[*index].substrates.push(slot);
+                        side[index].substrates.push(slot);
                     }
                 }
             }
