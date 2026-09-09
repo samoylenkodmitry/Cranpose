@@ -487,7 +487,7 @@ pub trait StateObject: Any {
         false
     }
 
-    fn observation_lease(&self) -> Option<Box<dyn Any>> {
+    fn observation_lease(&self) -> Option<Rc<dyn Any>> {
         None
     }
 
@@ -500,26 +500,9 @@ pub(crate) struct SnapshotMutableState<T> {
     id: ObjectId,
     weak_self: Mutex<Option<Weak<Self>>>,
     apply_observers: Mutex<Vec<Box<dyn Fn() + 'static>>>,
-    read_observation_count: Cell<usize>,
+    read_observation_lease: Rc<()>,
     scope_observation_count: Cell<usize>,
     subscriber_callbacks: RefCell<Vec<RcWeak<dyn Fn()>>>,
-}
-
-struct StateObservationLease<T: Clone + 'static> {
-    state: Weak<SnapshotMutableState<T>>,
-}
-
-impl<T: Clone + 'static> Drop for StateObservationLease<T> {
-    fn drop(&mut self) {
-        if let Some(state) = self.state.upgrade() {
-            let count = state
-                .read_observation_count
-                .get()
-                .checked_sub(1)
-                .expect("state observation lease count underflow");
-            state.read_observation_count.set(count);
-        }
-    }
 }
 
 impl<T> SnapshotMutableState<T> {
@@ -707,7 +690,7 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
             id: ObjectId::default(),
             weak_self: Mutex::new(None),
             apply_observers: Mutex::new(Vec::new()),
-            read_observation_count: Cell::new(0),
+            read_observation_lease: Rc::new(()),
             scope_observation_count: Cell::new(0),
             subscriber_callbacks: RefCell::new(Vec::new()),
         });
@@ -726,19 +709,13 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
         self.lock_apply_observers().push(observer);
     }
 
-    fn acquire_observation_lease(&self) -> Option<Box<dyn Any>> {
-        let state = self.lock_weak_self().as_ref()?.clone();
+    fn acquire_observation_lease(&self) -> Option<Rc<dyn Any>> {
         let was_empty = !self.has_subscribers();
-        let count = self
-            .read_observation_count
-            .get()
-            .checked_add(1)
-            .expect("state observation lease count overflow");
-        self.read_observation_count.set(count);
+        let lease = Rc::clone(&self.read_observation_lease);
         if was_empty {
             notify_subscriber_callbacks(&self.subscriber_callbacks);
         }
-        Some(Box::new(StateObservationLease { state }))
+        Some(lease)
     }
 
     fn add_scope_observer(&self) -> bool {
@@ -765,7 +742,7 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
     }
 
     fn has_subscribers(&self) -> bool {
-        self.read_observation_count.get() > 0 || self.scope_observation_count.get() > 0
+        Rc::strong_count(&self.read_observation_lease) > 1 || self.scope_observation_count.get() > 0
     }
 
     fn subscriber_callback(&self, callback: Rc<dyn Fn()>, notify: bool) {
@@ -1031,7 +1008,7 @@ impl<T: Clone + 'static> StateObject for SnapshotMutableState<T> {
         self.head.prepend(record);
     }
 
-    fn observation_lease(&self) -> Option<Box<dyn Any>> {
+    fn observation_lease(&self) -> Option<Rc<dyn Any>> {
         self.acquire_observation_lease()
     }
 
@@ -1479,7 +1456,7 @@ impl<T: Clone + 'static> State<T> {
 /// Keeps a [`State`] counted as subscribed while alive; see
 /// [`State::subscription_hold`].
 pub struct StateSubscriptionHold {
-    _lease: Option<Box<dyn Any>>,
+    _lease: Option<Rc<dyn Any>>,
 }
 
 impl<T: Clone + 'static> StateArenaHandle<T> for MutableState<T> {
@@ -2058,6 +2035,31 @@ mod tests {
         let third = StateObject::observation_lease(&*state).expect("third observation lease");
         assert_eq!(notifications.get(), 2);
         drop(third);
+    }
+
+    #[test]
+    fn observation_leases_preserve_clones_scope_counts_and_state_lifetimes() {
+        let first = SnapshotMutableState::new_in_arc(100i32, Arc::new(NeverEqual));
+        let second = SnapshotMutableState::new_in_arc(200i32, Arc::new(NeverEqual));
+        let lease = first.observation_lease().unwrap();
+        let clone = Rc::clone(&lease);
+        assert!(first.has_subscribers());
+        assert!(!second.has_subscribers());
+
+        drop(lease);
+        assert!(first.has_subscribers());
+        assert!(!first.add_scope_observer());
+        drop(clone);
+        assert!(first.has_subscribers());
+        first.remove_scope_observers(1);
+        assert!(!first.has_subscribers());
+
+        let lease = second.observation_lease().unwrap();
+        let weak = Arc::downgrade(&second);
+        drop(second);
+        assert!(weak.upgrade().is_none());
+        drop(lease);
+        assert!(!first.has_subscribers());
     }
 
     #[test]

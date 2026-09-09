@@ -677,12 +677,12 @@ impl ReadObservationStack {
 
 enum ObservedIds {
     Small(SmallVec<[ObservedState; MAX_OBSERVED_STATES]>),
-    Large(HashMap<StateObjectId, Option<Box<dyn Any>>>),
+    Large(HashMap<StateObjectId, Option<Rc<dyn Any>>>),
 }
 
 struct ObservedState {
     id: StateObjectId,
-    _lease: Option<Box<dyn Any>>,
+    _lease: Option<Rc<dyn Any>>,
 }
 
 impl ObservedIds {
