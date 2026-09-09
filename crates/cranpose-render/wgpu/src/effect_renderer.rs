@@ -87,6 +87,7 @@ pub(crate) struct EffectRenderer {
     blur_downsample_pipelines:
         [LazyGpuResource<wgpu::RenderPipeline>; BLUR_DOWNSAMPLE_BLOCKS.len()],
     blur_uniform_bind_group_layout: wgpu::BindGroupLayout,
+    blur_uniform_uploads: Vec<UniformUpload>,
 
     offset_shader: wgpu::ShaderModule,
     offset_pipeline_layout: wgpu::PipelineLayout,
@@ -956,6 +957,7 @@ impl EffectRenderer {
             blur_pipelines,
             blur_downsample_pipelines,
             blur_uniform_bind_group_layout,
+            blur_uniform_uploads: Vec::new(),
             offset_shader,
             offset_pipeline_layout,
             offset_pipeline,
@@ -1245,8 +1247,6 @@ impl EffectRenderer {
     }
 
     #[allow(clippy::too_many_arguments)]
-    /// Encodes one blur pass over `dest_view`: the draws in order, each
-    /// with its own source, uniforms and pipeline.
     fn encode_blur_pass<C: FrameCommandRecorder>(
         &mut self,
         recorder: &mut C,
@@ -1268,21 +1268,19 @@ impl EffectRenderer {
             .sum();
         self.debug_blur_pixels
             .set(self.debug_blur_pixels.get() + written);
-        let uniforms: Vec<UniformUpload> = draws
-            .iter()
-            .map(|draw| {
-                recorder.upload_uniform(
-                    pass_id,
-                    blur_uniform_spec(pass_id),
-                    device,
-                    &self.blur_uniform_bind_group_layout,
-                    bytemuck::bytes_of(&draw.uniforms),
-                )
-            })
-            .collect();
+        let mut uniforms = std::mem::take(&mut self.blur_uniform_uploads);
+        uniforms.extend(draws.iter().map(|draw| {
+            recorder.upload_uniform(
+                pass_id,
+                blur_uniform_spec(pass_id),
+                device,
+                &self.blur_uniform_bind_group_layout,
+                bytemuck::bytes_of(&draw.uniforms),
+            )
+        }));
         let mut pass = recorder.begin_color_pass(label, dest_view, load_op);
         let mut bound = None;
-        for (draw, uniform) in draws.iter().zip(&uniforms) {
+        for (draw, uniform) in draws.iter().zip(uniforms.drain(..)) {
             let pipeline = draw.pipeline();
             if bound != Some(pipeline) {
                 pass.set_pipeline(match pipeline {
@@ -1303,6 +1301,8 @@ impl EffectRenderer {
             }
             pass.draw(0..4, 0..1);
         }
+        drop(pass);
+        self.blur_uniform_uploads = uniforms;
     }
 
     /// The uniforms of one blur pass sampling `sampled`, reading its
