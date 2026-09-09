@@ -402,6 +402,51 @@ fn glass_interior_coverage_matches_the_reference_through_material_activity() {
 }
 
 #[test]
+fn surface_and_lens_rims_match_reference_at_physical_refraction_depths() {
+    let mut renderer = support::headless_renderer().expect("headless WGPU init failed");
+    let colors = LiquidColors::dark(Color::from_rgb_u8(120, 140, 255));
+    for glass in [Glass::regular(), Glass::lens()] {
+        for depth in [0.0, 40.0, 240.0] {
+            for activity in [0.2, 1.0] {
+                assert_matches_reference(
+                    &mut renderer,
+                    &format!(
+                        "{:?} rim at depth {depth}, activity {activity}",
+                        glass.variant
+                    ),
+                    |source| {
+                        let mut children = backdrop();
+                        let effect = glass
+                            .clone()
+                            .shape(LiquidShape::RoundedRect(18.0))
+                            .refraction_depth_dp(depth)
+                            .blur_radius(0.0)
+                            .shadow(false)
+                            .backdrop_effect(
+                                &colors,
+                                1.5,
+                                GlassDynamics {
+                                    activity: Some(activity),
+                                    ..GlassDynamics::default()
+                                },
+                            );
+                        children.push(glass_layer(
+                            rect(24.0, 20.0, 300.0, 200.0),
+                            effect,
+                            1.0,
+                            Vec::new(),
+                            source,
+                        ));
+                        support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children)
+                    },
+                    1.5,
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn lenses_with_blur_and_substrates_match_the_reference_shader() {
     let Ok(mut renderer) = support::headless_renderer() else {
         eprintln!("skipping (headless WGPU init failed)");
