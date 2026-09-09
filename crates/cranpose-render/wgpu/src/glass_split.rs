@@ -47,6 +47,7 @@ struct Reach {
     corner: f32,
     interior_inset: f32,
     rim_high: f32,
+    outer_outset: f32,
 }
 
 fn uniform(shader: &RuntimeShader, slot: usize) -> f32 {
@@ -134,6 +135,7 @@ fn reach(shader: &RuntimeShader, origin: (f32, f32), layer_pixel_rect: [f32; 4])
         corner: corner.max(0.0),
         interior_inset: rim_low * LOWER_BOUND_SLACK,
         rim_high,
+        outer_outset: gradient + PIXEL_MARGIN,
     }
 }
 
@@ -163,6 +165,25 @@ pub(crate) fn split_scissors(
         return None;
     }
     let reach = reach(shader, origin, layer_pixel_rect);
+    let bounds = if raised(shader, "GLASS_SHADOW_OFF") && raised(shader, "GLASS_ELLIPSE_BLEND_OFF")
+    {
+        let visible = pixel_rect(
+            (reach.inner_x - reach.outer_outset).floor(),
+            (reach.inner_y - reach.outer_outset).floor(),
+            (reach.inner_x + reach.width + reach.outer_outset).ceil(),
+            (reach.inner_y + reach.height + reach.outer_outset).ceil(),
+        )
+        .and_then(|rect| intersect(rect, bounds));
+        let Some(visible) = visible else {
+            return Some(SplitScissors {
+                interior: None,
+                rim: [None; 4],
+            });
+        };
+        visible
+    } else {
+        bounds
+    };
     let rim_inset = reach.rim_high + (reach.corner - reach.rim_high).max(0.0) * CORNER_TANGENT;
     let interior = pixel_rect(
         (reach.inner_x + reach.interior_inset).floor() - PIXEL_MARGIN,

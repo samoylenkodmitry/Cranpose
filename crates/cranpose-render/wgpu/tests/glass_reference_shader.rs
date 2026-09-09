@@ -3,7 +3,7 @@ mod support;
 #[path = "../src/test_support.rs"]
 mod shared_test_support;
 
-use cranpose_liquid::{Glass, GlassDynamics, LiquidColors, LiquidShape};
+use cranpose_liquid::{Glass, GlassDynamics, GlassMorph, LiquidColors, LiquidShape};
 use cranpose_render_common::graph::{ProjectiveTransform, RenderGraph, RenderNode};
 use cranpose_render_wgpu::CapturedFrame;
 use cranpose_ui_graphics::{
@@ -447,6 +447,42 @@ fn surface_and_lens_rims_match_reference_at_physical_refraction_depths() {
                 );
             }
         }
+    }
+}
+
+#[test]
+fn inset_glass_keeps_its_optical_halo_and_contact_shadow() {
+    let mut renderer = support::headless_renderer().expect("headless WGPU init failed");
+    let colors = LiquidColors::dark(Color::from_rgb_u8(120, 140, 255));
+    for shadow in [false, true] {
+        assert_matches_reference(
+            &mut renderer,
+            &format!("inset lens with shadow {shadow}"),
+            |source| {
+                let mut children = backdrop();
+                let node = rect(24.0, 20.0, 300.0, 200.0);
+                let effect = Glass::lens()
+                    .shape(LiquidShape::RoundedRect(30.0))
+                    .blur_radius(0.0)
+                    .shadow(shadow)
+                    .no_clip()
+                    .backdrop_effect(
+                        &colors,
+                        1.5,
+                        GlassDynamics {
+                            morph: Some(GlassMorph {
+                                node_size: (node.width, node.height),
+                                primary: (150.0, 100.0, 220.0, 120.0, 30.0),
+                                ..GlassMorph::default()
+                            }),
+                            ..GlassDynamics::default()
+                        },
+                    );
+                children.push(glass_layer(node, effect, 1.0, Vec::new(), source));
+                support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children)
+            },
+            1.5,
+        );
     }
 }
 
