@@ -16,6 +16,7 @@
 # macOS runners has no `-r`.
 nightly := `sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain-nightly.toml`
 stable := `sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml`
+benchmark_python := "target/python-benchmark/bin/python"
 
 default:
     @just --list --unsorted
@@ -211,12 +212,16 @@ test-ci-filters:
 test-robot-discovery:
     scripts/ci/robot_test_discovery_test.sh
 
+_benchmark-python:
+    test -x {{benchmark_python}} || python3 -m venv target/python-benchmark
+    {{benchmark_python}} -m pip install --disable-pip-version-check --requirement scripts/android_benchmark_requirements.txt
+
 # The shell helpers agents run by hand, pinned so they cannot rot.
-test-shell-helpers:
+test-shell-helpers: _benchmark-python
     bash scripts/ci/sccache_lifetime_test.sh
     scripts/wait_until_quiet_test.sh
     scripts/dev/target_gc_test.sh
-    python3 scripts/android_benchmark_test.py
+    {{benchmark_python}} scripts/android_benchmark_test.py
     python3 scripts/perf_report_test.py
 
 # Covers the shared/exclusive lock that keeps builds off the machine while a

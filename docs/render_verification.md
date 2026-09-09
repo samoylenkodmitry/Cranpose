@@ -29,6 +29,8 @@
 - Use scale 2 or higher when a glass fixture needs several pixels across its refraction band.
 - Identify a diagnostic node by size, position and frame before reasoning about its cache or geometry.
 - Trace state values through update, layout, scene construction and rendering to locate the first stale result.
+- After navigation, verify the rendered heading and current-page accessibility content independently; persistent tab labels can hide a stale page tree.
+- Changes to glass appearance require pixel parity with a sample iOS app launched in the simulator, including matching animation keyframes.
 - Inspect attachment formats when solids wash out but sampled images match; preserve the byte-exact color contract.
 - `Modifier::size` obeys incoming constraints; intentional overflow uses `required_size`.
 - Validate WGSL through the renderer's shader-cache tests; UI-only tests do not compile the shader.

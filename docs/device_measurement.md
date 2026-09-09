@@ -34,6 +34,10 @@
 - Publish return may follow consumer acquisition; bound handoff time around enqueue instead of subtracting reversed trace timestamps.
 - Huawei Mali-G76 Vulkan lacks timestamp queries; fence profiles disturb execution and cannot establish native GPU frame time.
 - Use controlled device ablations for attribution; neither desktop pass timings nor reduced pass/fill counters prove device speed.
+- Test screen-size hypotheses on the same Huawei build at native and reduced resolution with density, visible content and route recorded; phone-versus-watch FPS cannot isolate pixel cost.
+- Count invocations per frame against state changes and visible items; pair each removed call path with a correctness guard and device timings.
+- Report 60 Hz display cadence separately from the requested 120 FPS renderer budget of 8.33 ms; repeated presents do not prove distinct content frames.
+- Keep comparison reports to one Main-versus-SOTA table across all requested apps; link recordings and raw evidence instead of committing generated captures or a run diary.
 - Tiler benchmarks must prevent opaque overdraw elimination from discarding the work they intend to time.
 - Measure complete recording, upload and GPU consumption; cache hit rates, smaller code and compressed records are not throughput results.
 - Huawei shell wgpu probes may lack the APK's adapter access; validate its shaders through an APK.

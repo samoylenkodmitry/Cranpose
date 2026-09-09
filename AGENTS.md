@@ -19,6 +19,7 @@
 - Check `git status` and the current branch before work and before completion; isolate concurrent edits in a worktree.
 - Before diagnosing a red test, fetch `origin main` and rebase; confirm claimed fixes are ancestors of `HEAD`.
 - Check existing PRs for a reported failure before writing a duplicate fix.
+- Keep related fixes in one PR; finish requested code changes before optional measurements or PR prose.
 - Never use `git reset`; preserve work with a stash when needed.
 - Worktrees share stashes: inspect contents, resolve the immutable stash hash, and apply only the intended work.
 - Never use recursive forced removal; preserve source under another name instead.
@@ -26,7 +27,7 @@
 - Reclaim build artifacts only with `just gc` and `just gc-apply`; never remove `target/`, `build/`, source or uncommitted work by hand.
 - Check `df -h /` before large builds; recent writes and live processes both protect another task's artifacts.
 - Install hooks once per clone with `just hooks`; stage new files before `just precommit` so diff checks include them.
-- Run `just fmt`, `just test`, `just clippy`, `just web`, `just android` and `just robot` as applicable; all tests pass with zero warnings.
+- Follow the user's validation plan; otherwise run affected checks and batch full suites after related fixes, with zero warnings.
 - Use the exact CI recipes and shipped features; change checks in `justfile`, never inline in workflows.
 - `just web` always uses release mode; `just android` assembles the Android demo release; root `perf*.sh` scripts run performance checks.
 - Prefer SSH builds on `samarch-1` or `macm3`; see [host details](docs/development_troubleshooting.md).
@@ -42,11 +43,13 @@
 - Build immutable source snapshots; verify full source inventories, resolved dependencies and native hashes, and refresh timestamps after archive extraction.
 - Check downstream consumers before removing public APIs; missing test names or local callers do not prove an API unused.
 - For nontrivial bugs: explore, record evidence, rank causes, compare architecture options, implement, verify and iterate.
-- Confirm a suspected cause by removing it and rerunning before writing the fix.
+- Confirm a suspected cause by removing it and rerunning; withdraw FPS bottleneck claims when paired device results do not improve.
+- Reuse recorded experiments unless changed code, workload or evidence gives a concrete reason to repeat them.
 - Start bugs with a failing regression test; for a device UI bug, write the robot e2e test first.
 - Prove every optimization's correctness test fails when the optimization is deliberately broken; correctness takes priority over speed.
 - Verify every guard accepts valid input and rejects its intended failures; assert tests ran and the intended path executed.
-- Require positive evidence for completion: all expected checks pass on the intended SHA, and a reported merge is verified by its resulting commit and content.
+- Report code changes, verified regressions, CI status and unmet performance targets separately; verify merges by their resulting commit and content.
+- Close an issue only when its stated behavior is resolved; a merged PR or an empty issue list does not establish the performance target.
 - Batch completed changes before pushing; do not repeatedly supersede CI or cancel another task's run on a shared ref.
 - Compare revisions on one host with matching toolchains, features, app sources, assets, settings, data and package identity.
 - Hold the shared per-device lock for the entire FPS sequence; run ABAB then BABA without cooling waits and log temperatures before and after every run.
