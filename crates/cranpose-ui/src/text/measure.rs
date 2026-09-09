@@ -43,7 +43,8 @@ pub struct TextMetrics {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct PreparedTextLayout {
-    pub text: crate::text::AnnotatedString,
+    /// Shared display text after wrapping and overflow have been resolved.
+    pub text: Rc<crate::text::AnnotatedString>,
     pub visual_style: TextStyle,
     pub metrics: TextMetrics,
     pub did_overflow: bool,
@@ -1079,7 +1080,7 @@ pub fn prepare_text_layout_with_measurer_for_node<M: TextMeasurer + ?Sized>(
     };
 
     let prepared = PreparedTextLayout {
-        text: display_annotated,
+        text: Rc::new(display_annotated),
         visual_style: style.clone(),
         metrics: TextMetrics {
             width,
@@ -2832,6 +2833,46 @@ mod tests {
 
         assert_eq!(first.metrics, second.metrics);
         assert_eq!(prepare_calls.get(), 1);
+    }
+
+    #[test]
+    fn prepared_text_sharing_preserves_width_variants_and_owned_edits() {
+        let _app_context = crate::render_state::app_context_test_scope();
+        let service = TextService::from_measurer(Rc::new(MonospacedTextMeasurer));
+        let text = crate::text::AnnotatedString::builder()
+            .push_string_annotation("kind", "label")
+            .append("shared prepared text")
+            .pop()
+            .to_annotated_string();
+        let style = TextStyle::default();
+        let options = TextLayoutOptions {
+            overflow: TextOverflow::Ellipsis,
+            soft_wrap: false,
+            max_lines: 1,
+            ..Default::default()
+        };
+        let wide = service.prepare_with_options(None, &text, &style, options, Some(1000.0));
+        let mut narrow = service.prepare_with_options(None, &text, &style, options, Some(50.0));
+        let retained = narrow.clone();
+        let cached = service.prepare_with_options(None, &text, &style, options, Some(50.0));
+
+        assert_eq!(wide.text.as_ref(), &text);
+        assert_ne!(wide.text.text, narrow.text.text);
+        assert!(narrow.text.text.ends_with(ELLIPSIS));
+        assert!(!narrow.text.string_annotations.is_empty());
+        assert!(Rc::ptr_eq(&narrow.text, &retained.text));
+        assert!(Rc::ptr_eq(&narrow.text, &cached.text));
+        assert!(!Rc::ptr_eq(&wide.text, &narrow.text));
+
+        let edited = Rc::make_mut(&mut narrow.text);
+        edited.text = "edited".to_owned();
+        edited.string_annotations.clear();
+        let reloaded = service.prepare_with_options(None, &text, &style, options, Some(50.0));
+
+        assert_eq!(reloaded, retained);
+        assert_eq!(cached, retained);
+        assert_ne!(narrow.text, retained.text);
+        assert_eq!(wide.text.as_ref(), &text);
     }
 
     #[test]

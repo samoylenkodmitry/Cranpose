@@ -49,7 +49,7 @@ impl TextMeasurer for CountingPreparedTextMeasurer {
             self.prepare_calls.set(self.prepare_calls.get() + 1);
         }
         PreparedTextLayout {
-            text: text.clone(),
+            text: Rc::new(text.clone()),
             visual_style: style.clone(),
             metrics: self.measure(text, style),
             did_overflow: false,
@@ -105,7 +105,7 @@ impl TextMeasurer for TallMultilineTextMeasurer {
         _max_width: Option<f32>,
     ) -> PreparedTextLayout {
         PreparedTextLayout {
-            text: text.clone(),
+            text: Rc::new(text.clone()),
             visual_style: style.clone(),
             metrics: self.measure(text, style),
             did_overflow: false,
