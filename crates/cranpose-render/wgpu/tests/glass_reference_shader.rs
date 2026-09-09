@@ -32,7 +32,9 @@ fn resourced_shader(shader: &RuntimeShader, source: &str) -> RuntimeShader {
         copy.set_float(index, *value);
     }
     for (name, value) in shader.overrides() {
-        copy.set_override(name, *value);
+        if source.contains(&format!("override {name}:")) {
+            copy.set_override(name, *value);
+        }
     }
     copy.set_input_padding(shader.input_padding());
     copy.set_output_padding(shader.output_padding());
@@ -272,10 +274,21 @@ fn frosted_card(
     source: &str,
     substrates: Option<Vec<SubstrateSpec>>,
 ) -> RenderGraph {
+    frosted_card_with_depth(frost, activity, source, substrates, 0.58)
+}
+
+fn frosted_card_with_depth(
+    frost: f32,
+    activity: f32,
+    source: &str,
+    substrates: Option<Vec<SubstrateSpec>>,
+    depth: f32,
+) -> RenderGraph {
     let colors = LiquidColors::dark(Color::from_rgb_u8(120, 140, 255));
     let mut children = backdrop();
     let node = rect(24.0, 20.0, 300.0, 200.0);
     let effect = card_glass(LiquidShape::RoundedRect(18.0))
+        .refraction_depth(depth)
         .adaptive_frost(Color::from_rgb_u8(40, 34, 70), 0.42)
         .backdrop_effect(
             &colors,
@@ -371,6 +384,21 @@ fn cards_at_a_fractional_scale_match_the_reference_shader() {
         |s| cards(s, 0.9, true),
         0.75,
     );
+}
+
+#[test]
+fn glass_interior_coverage_matches_the_reference_through_material_activity() {
+    let mut renderer = support::headless_renderer().expect("headless WGPU init failed");
+    for activity in [0.0, 0.1, 0.5, 0.999_999, 1.0] {
+        for depth in [0.0, 0.04, 0.58, 2.0] {
+            assert_matches_reference(
+                &mut renderer,
+                &format!("activity {activity} with depth {depth}"),
+                |source| frosted_card_with_depth(0.42, activity, source, None, depth),
+                1.5,
+            );
+        }
+    }
 }
 
 #[test]

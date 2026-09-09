@@ -121,6 +121,11 @@ pub const LIQUID_GLASS_SPECIALIZATIONS: &[LiquidGlassSpecialization] = &[
         inactive: |u| slot(u, GLASS_TRANSMISSION_REFRACTION_UNIFORM) >= 1.0,
     },
     LiquidGlassSpecialization {
+        flag: "GLASS_FULL_ACTIVITY",
+        slots: &[GLASS_ACTIVITY_UNIFORM],
+        inactive: |u| slot(u, GLASS_ACTIVITY_UNIFORM) >= 1.0,
+    },
+    LiquidGlassSpecialization {
         flag: GLASS_DISPERSION_OFF_FLAG,
         slots: &[GLASS_DISPERSION_UNIFORM],
         inactive: |u| slot(u, GLASS_DISPERSION_UNIFORM) <= 0.0,
@@ -642,6 +647,20 @@ mod tests {
             1,
             "the declaration sets the capture geometry, which must not follow activity"
         );
+    }
+
+    #[test]
+    fn full_activity_specialization_tracks_the_clamped_activity() {
+        let mut shader = RuntimeShader::new(LIQUID_GLASS_WGSL);
+        for activity in [1.0, 0.999_999, 2.0, 0.5, 1.0, 0.0, -1.0, f32::NAN] {
+            shader.set_float(GLASS_ACTIVITY_UNIFORM, activity);
+            specialize_liquid_glass(&mut shader);
+            assert_eq!(
+                shader.overrides().contains(&("GLASS_FULL_ACTIVITY", 1.0)),
+                activity >= 1.0,
+                "activity {activity}"
+            );
+        }
     }
 
     #[test]
