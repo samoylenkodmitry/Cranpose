@@ -20,4 +20,12 @@ Twelve focused observer tests pass. New tests cover dependency sets crossing the
 
 Profilers: **heaptrack 1.5.0** for allocations, **Valgrind Callgrind 3.25.1** for executed call counts and instructions, and **Linux perf** for CPU samples. Callgrind instrumentation starts after warmup and ends before capture. Heaptrack analysis filters stacks containing `measured_frame`. Whole-process perf samples include startup and capture and are not used to claim this change's CPU saving.
 
-Raw profiles, replay source, resolved dependency metadata, binaries and mutant logs are retained on samarch-1 under `/home/s/cranpose-profile-loop/`. The next allocation candidate is `ScopeEntry::update`, which still allocates a replacement scope box roughly 42,400 times in this replay.
+## Scope storage follow-up
+
+Profiling the candidate identified 42,435 allocations in `ScopeEntry::update`. Replacing an owned scope's value inside its existing typed box removes those allocations while still replacing the payload and callback. Other storage types retain their existing construction behavior.
+
+The follow-up replay reports 1,208,283 allocations under `measured_frame`, versus 1,249,419 before this change: 41,136 fewer (3.29%). Combined with the iterator/callback change, the observed reduction is 130,692 allocations (9.76%, about 436 per frame). `ScopeEntry::update` accounts for zero allocation leaves after the change. Callgrind instructions decrease from 4,118,763,225 to 4,115,794,599 (0.07%); the final image hash remains identical. Peak heap is 389.19 MB; the three single runs do not establish a peak-memory improvement.
+
+Thirteen focused observer tests pass. The added test fails on allocating replacement storage; deliberately retaining the stale payload also fails it. It verifies the delivered payload, replacement callback and release of both payloads. Evidence uses the `scope-` filename prefix.
+
+Raw profiles, replay source, resolved dependency metadata, binaries and mutant logs are retained on samarch-1 under `/home/s/cranpose-profile-loop/`.

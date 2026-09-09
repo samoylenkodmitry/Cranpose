@@ -740,7 +740,13 @@ impl ScopeEntry {
     where
         T: Any + 'static,
     {
-        self.scope = ScopeStorage::from_value(new_scope);
+        if let ScopeStorage::Owned(stored) = &mut self.scope
+            && let Some(stored) = stored.downcast_mut::<T>()
+        {
+            *stored = new_scope;
+        } else {
+            self.scope = ScopeStorage::from_value(new_scope);
+        }
         self.on_changed = on_changed;
     }
 
@@ -826,6 +832,44 @@ mod tests {
 
     #[derive(Clone, Eq, Hash, PartialEq)]
     struct TestScope(&'static str);
+
+    #[test]
+    fn scope_update_reuses_storage_and_replaces_payload_and_callback() {
+        let first = Rc::new(String::from("first"));
+        let second = Rc::new(String::from("second"));
+        let delivered = Rc::new(RefCell::new(Vec::new()));
+        let mut entry = ScopeEntry::new(0, first.clone(), Rc::new(|_| panic!("stale callback")));
+        let ScopeStorage::Owned(stored) = &entry.scope else {
+            panic!("expected owned scope");
+        };
+        let address = stored.downcast_ref::<Rc<String>>().unwrap() as *const Rc<String>;
+        let received = delivered.clone();
+        entry.update(
+            second.clone(),
+            Rc::new(move |scope| {
+                received.borrow_mut().push(
+                    scope
+                        .downcast_ref::<Rc<String>>()
+                        .unwrap()
+                        .as_str()
+                        .to_owned(),
+                );
+            }),
+        );
+        assert_eq!(Rc::strong_count(&first), 1);
+        assert_eq!(Rc::strong_count(&second), 2);
+        entry.notify();
+        assert_eq!(*delivered.borrow(), vec!["second"]);
+        let ScopeStorage::Owned(stored) = &entry.scope else {
+            panic!("expected owned scope");
+        };
+        assert_eq!(
+            stored.downcast_ref::<Rc<String>>().unwrap() as *const Rc<String>,
+            address
+        );
+        drop(entry);
+        assert_eq!(Rc::strong_count(&second), 1);
+    }
 
     #[test]
     fn reobservation_across_storage_thresholds_replaces_dependencies_and_callbacks() {
