@@ -1,6 +1,6 @@
 use std::{collections::HashSet, rc::Rc};
 
-use cranpose_core::{MemoryApplier, NodeId};
+use cranpose_core::{MemoryApplier, Node, NodeId};
 use cranpose_ui::{
     DrawCommand, LayoutBox, LayoutNode, ModifierNodeSlices, Point, Rect, ResolvedModifiers, Size,
     SubcomposeLayoutNode, TextLayoutOptions, TextOverflow, TextPanResolver, prepare_text_layout,
@@ -10,6 +10,7 @@ use cranpose_ui_graphics::{
     CommandRecording, CompositingStrategy, GraphicsLayer, LayerShape, RoundedCornerShape,
     rounded_corner_alpha_mask_effect,
 };
+use smallvec::SmallVec;
 
 use crate::{
     graph::{
@@ -53,7 +54,7 @@ struct SnapshotNodeData {
     layout_state: cranpose_ui::widgets::LayoutState,
     modifier_slices: Rc<ModifierNodeSlices>,
     resolved_modifiers: ResolvedModifiers,
-    children: Vec<NodeId>,
+    children: SmallVec<[NodeId; 8]>,
 }
 
 /// Why a scoped scene update could not be applied, forcing the caller to throw
@@ -941,7 +942,8 @@ fn build_layer_node_from_applier(
 fn snapshot_node_data(applier: &mut MemoryApplier, node_id: NodeId) -> Option<SnapshotNodeData> {
     if let Ok(data) = applier.with_node::<LayoutNode, _>(node_id, |node| {
         let state = node.layout_state();
-        let children = node.children.clone();
+        let mut children = SmallVec::new();
+        node.collect_children_into(&mut children);
         let modifier_slices = node.modifier_slices_snapshot();
         SnapshotNodeData {
             layout_state: state,
@@ -956,7 +958,8 @@ fn snapshot_node_data(applier: &mut MemoryApplier, node_id: NodeId) -> Option<Sn
     applier
         .with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
             let state = node.layout_state();
-            let children = node.active_children();
+            let mut children = SmallVec::new();
+            node.collect_children_into(&mut children);
             let modifier_slices = node.modifier_slices_snapshot();
             SnapshotNodeData {
                 layout_state: state,
@@ -1769,6 +1772,44 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn scene_snapshot_preserves_children_beyond_inline_capacity_in_order() {
+        let mut composition = cranpose_ui::run_test_composition(|| {
+            Column(Modifier::empty(), ColumnSpec::default(), || {
+                for index in 0..12 {
+                    Text(
+                        format!("child-{index}"),
+                        Modifier::empty().height(20.0),
+                        TextStyle::default(),
+                    );
+                }
+            });
+        });
+        let root = composition.root().expect("root");
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        applier
+            .compute_layout(
+                root,
+                Size {
+                    width: 240.0,
+                    height: 300.0,
+                },
+            )
+            .expect("layout");
+        let graph = build_graph_from_applier(&mut applier, root, 1.0).expect("graph");
+        applier.clear_runtime_handle();
+        let mut labels = Vec::new();
+        collect_text_labels(&graph.root, &mut labels);
+        assert_eq!(
+            labels,
+            (0..12)
+                .map(|index| format!("child-{index}"))
+                .collect::<Vec<_>>()
+        );
+    }
 
     fn find_text_motion(layer: &LayerNode, label: &str) -> Option<Option<TextMotion>> {
         for child in &layer.children {
